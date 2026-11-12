@@ -1,5 +1,11 @@
 import { useLocale } from '../../shared/locale-context.js';
-import { forwardRef, useCallback, useImperativeHandle, useState } from 'react';
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useState,
+} from 'react';
 
 import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters/markdown';
 
@@ -52,6 +58,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
     locale: localeProp,
     labels,
     onActiveKeyChange,
+    onEditingChange,
     className,
     ...rest
   },
@@ -89,6 +96,11 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   const editing = useFilePreviewEditing(
     JSON.stringify([activeTab.key, levelKey, directory.activeLevel?.key]),
   );
+  // Notify the host after the draft state commits, including when a tab change
+  // invalidates an in-flight edit load.
+  useEffect(() => {
+    onEditingChange?.(editing.editing);
+  }, [editing.editing, onEditingChange]);
   const actions = useFilePreviewActions();
 
   const tabText = mergeLabels<typeof text>(text, activeTab.labels);

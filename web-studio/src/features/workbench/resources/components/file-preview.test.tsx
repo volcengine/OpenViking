@@ -158,7 +158,6 @@ function renderPreview(
   onNavigate?: (uri: string) => void,
   directoryOverview?: string,
   directoryAbstract?: string,
-  ide = false,
 ) {
   if (previewState.override?.fileType === 'jsonl')
     entry = {
@@ -194,7 +193,6 @@ function renderPreview(
 
   return render(
     <FilePreview
-      ide={ide}
       file={entry}
       onClose={vi.fn()}
       onNavigate={onNavigate}
@@ -491,7 +489,7 @@ describe('FilePreview Markdown rendering', () => {
   })
 
   it('switches IDE directory preview from L0 to L1', () => {
-    renderPreview(directory, vi.fn(), 'Overview body', 'Summary body', true)
+    renderPreview(directory, vi.fn(), 'Overview body', 'Summary body')
 
     expect(screen.getByText('Summary body')).toBeTruthy()
     expect(screen.queryByText('Overview body')).toBeNull()
@@ -1504,59 +1502,23 @@ describe('FilePreview complete-content editing', () => {
   })
 })
 
-describe('IDE file preview', () => {
+describe('File preview keyboard shortcuts', () => {
   afterEach(() => {
     cleanup()
     previewState.override = null
   })
 
-  it('keeps experience details in preview and raw markdown in source mode', async () => {
-    const toolbar = document.createElement('div')
-    document.body.append(toolbar)
-    render(
-      <QueryClientProvider client={new QueryClient()}>
-        <FilePreview
-          file={file}
-          ide
-          toolbarContainer={toolbar}
-          previewContent={<p>Experience details</p>}
-          onClose={vi.fn()}
-          showCloseButton={false}
-        />
-      </QueryClientProvider>,
-    )
-    expect(screen.getByText('Experience details')).toBeTruthy()
-    expect(
-      await screen.findByRole('button', { name: 'filePreview.markdownSource' }),
-    ).toBeTruthy()
-    expect(toolbar.childElementCount).toBe(0)
-    fireEvent.click(
-      await screen.findByRole('button', { name: 'filePreview.markdownSource' }),
-    )
-    expect(screen.queryByText('Experience details')).toBeNull()
-    fireEvent.click(
-      screen.getByRole('button', { name: 'filePreview.markdownPreview' }),
-    )
-    expect(screen.getByText('Experience details')).toBeTruthy()
-    cleanup()
-    toolbar.remove()
-  })
-
-  it('saves the editor content with the IDE keyboard shortcut and exits editing', async () => {
+  it('saves the editor content with the keyboard shortcut and exits editing', async () => {
     vi.mocked(getContentDownload).mockResolvedValue({
       data: '[Target](./target.md)',
     } as never)
     const onSaved = vi.fn()
     vi.mocked(saveFileContent).mockResolvedValue(undefined)
-    const toolbar = document.createElement('div')
-    document.body.append(toolbar)
     render(
       <QueryClientProvider client={new QueryClient()}>
         <FilePreview
           file={file}
-          ide
           onSaved={onSaved}
-          toolbarContainer={toolbar}
           onClose={vi.fn()}
           showCloseButton={false}
         />
@@ -1583,6 +1545,5 @@ describe('IDE file preview', () => {
     ).toBeTruthy()
     expect(onSaved).toHaveBeenCalledWith(file.uri)
     cleanup()
-    toolbar.remove()
   })
 })

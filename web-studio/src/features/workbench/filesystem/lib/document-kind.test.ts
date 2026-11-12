@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   isExperienceDirectory,
-  isExperienceFile,
+  needsExperienceDetailTab,
   sessionIdFromDirectory,
   usesWorkbenchDirectoryView,
 } from './document-kind'
@@ -38,14 +38,27 @@ describe('IDE document views', () => {
       isExperienceDirectory('viking://user/alice/memories/experiences-archive'),
     ).toBe(false)
   })
-  it('uses specialized previews only for experience markdown', () => {
+  it('uses a detail tab only for experience files outside the native board scope', () => {
     expect(
-      isExperienceFile('viking://user/alice/memories/experiences/review.md'),
+      needsExperienceDetailTab(
+        'viking://user/alice/memories/experiences/review.md',
+      ),
+    ).toBe(false)
+    expect(
+      needsExperienceDetailTab(
+        'viking://user/alice/peers/project/memories/experiences/review.md',
+      ),
     ).toBe(true)
     expect(
-      isExperienceFile('viking://user/alice/memories/experiences/data.json'),
+      needsExperienceDetailTab(
+        'viking://agent/memories/experiences/nested/review.md',
+      ),
+    ).toBe(true)
+    expect(
+      needsExperienceDetailTab(
+        'viking://user/alice/memories/experiences/data.json',
+      ),
     ).toBe(false)
-    expect(isExperienceFile('viking://resources/experiences.md')).toBe(false)
   })
   it('resolves session directories without mistaking nested files for sessions', () => {
     expect(

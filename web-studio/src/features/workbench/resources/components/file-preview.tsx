@@ -20,7 +20,6 @@ export function FilePreview({
   onSaved = noop,
   readOnly,
   defaultReadLimit,
-  previewContent,
   showCloseButton = true,
 }: ComponentProps<typeof LazyFilePreview>) {
   const { t } = useTranslation('resources')
@@ -38,7 +37,6 @@ export function FilePreview({
       onNavigate={onNavigate}
       onDirtyChange={onDirtyChange}
       onSaved={onSaved}
-      content={previewContent}
       extraActions={
         showCloseButton ? (
           <Button

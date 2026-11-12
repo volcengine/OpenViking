@@ -4,7 +4,8 @@ import styles from './workbench.module.css'
 import { WorkbenchDirectory } from './components/workbench-directory'
 import { ExperienceDetail } from '#/features/workbench/agent-experience/$experienceUri'
 import {
-  isExperienceFile,
+  needsExperienceDetailTab,
+  isSystemUri,
   usesWorkbenchDirectoryView,
 } from './lib/document-kind'
 import { useDocumentGuard } from './lib/use-document-guard'
@@ -15,7 +16,6 @@ import {
   MoreHorizontalIcon,
   ArrowLeftIcon,
   HistoryIcon,
-  CopyIcon,
   Trash2Icon,
   DownloadIcon,
   PanelRightCloseIcon,
@@ -36,15 +36,13 @@ import { useAppConnection } from '#/features/connection/hooks/use-app-connection
 import { useStudioService } from '#/features/connection/hooks/use-studio-service'
 import { AddResourceForm } from '#/features/workbench/resources/components/add-resource-page'
 import { FindPalette } from '#/features/workbench/resources/components/find-palette'
-import { SharedFilePreview } from './components/shared-file-preview'
+import { WorkbenchFileBrowser } from './components/workbench-file-browser'
+import { JsonlPreview } from '#/features/workbench/resources/components/structured-file-content'
 import {
   ResourceUploadProvider,
   useResourceUpload,
 } from '#/features/workbench/resources/hooks/use-resource-upload'
-import {
-  useInvalidateVikingFs,
-  useVikingFsList,
-} from '#/features/workbench/resources/hooks/viking-fm'
+import { useInvalidateVikingFs } from '#/features/workbench/resources/hooks/viking-fm'
 import { fetchFsStat } from '#/features/workbench/resources/lib/api'
 import {
   fileNameFromUri,
@@ -63,18 +61,12 @@ import {
 } from '#/shared/ui/dialog'
 
 import { AgentPanel } from '#/features/workbench/filesystem/components/agent-panel'
-import {
-  ContextExplorerHeader,
-  ContextTree,
-  FilesystemResizeHandle,
-} from '#/features/workbench/filesystem/components/context-explorer'
+import { FilesystemResizeHandle } from '#/features/workbench/filesystem/components/filesystem-resize-handle'
 import { DeleteDocumentDialog } from './components/delete-document-dialog'
 import { DataManagementDialog } from '#/features/workbench/filesystem/components/data-management-dialog'
 import { SnapshotComparisonDialog } from '#/features/workbench/filesystem/components/snapshot-comparison-dialog'
 import { WorkbenchConsole } from '#/features/workbench/filesystem/components/workbench-console'
 import {
-  FILESYSTEM_LEFT_WIDTH,
-  FILESYSTEM_LEFT_WIDTH_STORAGE_KEY,
   FILESYSTEM_MAIN_MIN_WIDTH,
   FILESYSTEM_RIGHT_COLLAPSED_STORAGE_KEY,
   FILESYSTEM_RIGHT_WIDTH,
@@ -89,13 +81,9 @@ import {
   clampNumber,
   cleanVikingUri,
   createEntryFromUri,
-  getAncestorUris,
   isDirectoryLevelFile,
-  mergeExpanded,
   normalizeFilesystemResourceUri,
-  readFilesystemExpandedUris,
   readStoredNumber,
-  writeFilesystemExpandedUris,
 } from '#/features/workbench/filesystem/lib/utils'
 
 const routeApi = getRouteApi('/filesystem')
@@ -134,12 +122,6 @@ function FilesystemWorkbench() {
   )
   const selectedFileRef = useRef(selectedFile)
   selectedFileRef.current = selectedFile
-  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(() =>
-    mergeExpanded(
-      new Set(readFilesystemExpandedUris(identityScopeKey)),
-      getAncestorUris(initialCurrentUri),
-    ),
-  )
   const [activePanel, setActivePanel] = useState<FilesystemPanel>(
     provider === 'volcengine' ? 'terminal' : (search.panel ?? 'agent'),
   )
@@ -178,14 +160,6 @@ function FilesystemWorkbench() {
   } | null>(null)
   const [transferTab, setTransferTab] = useState<'import' | 'export'>('export')
   const layoutRef = useRef<HTMLDivElement>(null)
-  const [leftWidth, setLeftWidth] = useState(() =>
-    readStoredNumber(
-      FILESYSTEM_LEFT_WIDTH_STORAGE_KEY,
-      FILESYSTEM_LEFT_WIDTH.default,
-      FILESYSTEM_LEFT_WIDTH.min,
-      FILESYSTEM_LEFT_WIDTH.max,
-    ),
-  )
   const [rightWidth, setRightWidth] = useState(() =>
     readStoredNumber(
       FILESYSTEM_RIGHT_WIDTH_STORAGE_KEY,
@@ -194,9 +168,7 @@ function FilesystemWorkbench() {
       FILESYSTEM_RIGHT_WIDTH.max,
     ),
   )
-  const [resizingPane, setResizingPane] = useState<'context' | 'action' | null>(
-    null,
-  )
+  const [resizing, setResizing] = useState(false)
   const [rightCollapsed, setRightCollapsed] = useState(
     () =>
       provider === 'opensource' &&
@@ -215,18 +187,12 @@ function FilesystemWorkbench() {
       }),
     [],
   )
-  const isDraggingPaneRef = useRef(false)
   const activeResizeTeardownRef = useRef<(() => void) | null>(null)
-  const leftWidthRef = useRef(leftWidth)
   const rightWidthRef = useRef(rightWidth)
-  leftWidthRef.current = leftWidth
   rightWidthRef.current = rightWidth
 
-  const listQuery = useVikingFsList(currentUri, {
-    output: 'agent',
-    showAllHidden: true,
-    nodeLimit: 500,
-  })
+  const [refreshKey, setRefreshKey] = useState(0)
+  const refreshBrowser = useCallback(() => setRefreshKey((key) => key + 1), [])
   const { activeTaskCount, hasActiveTasks, isRefreshingTasks } =
     useResourceUpload()
   const { invalidateAll, invalidateList } = useInvalidateVikingFs()
@@ -264,14 +230,12 @@ function FilesystemWorkbench() {
     [navigate],
   )
 
+  const navigationVersion = useRef(0)
   useEffect(() => {
-    setExpandedKeys(
-      mergeExpanded(
-        new Set(readFilesystemExpandedUris(identityScopeKey)),
-        getAncestorUris(initialCurrentUri),
-      ),
-    )
-  }, [identityScopeKey, initialCurrentUri])
+    return () => {
+      navigationVersion.current += 1
+    }
+  }, [identityScopeKey, search.file, search.uri])
 
   useEffect(() => {
     const normalized = search.file
@@ -283,16 +247,7 @@ function FilesystemWorkbench() {
         ? createEntryFromUri(search.file, false)
         : createEntryFromUri(normalized, true),
     )
-    setExpandedKeys((prev) => mergeExpanded(prev, getAncestorUris(normalized)))
   }, [search.file, search.uri])
-
-  const handleExpandedKeysChange = useCallback(
-    (next: Set<string>) => {
-      setExpandedKeys(next)
-      writeFilesystemExpandedUris(identityScopeKey, next)
-    },
-    [identityScopeKey],
-  )
 
   useEffect(() => {
     if (provider === 'volcengine') {
@@ -325,8 +280,10 @@ function FilesystemWorkbench() {
       if (!cleaned) return
 
       const targetUri = normalizeFilesystemResourceUri(cleaned)
+      const version = ++navigationVersion.current
       try {
         const stat = await fetchFsStat(targetUri, { throwOnError: true })
+        if (version !== navigationVersion.current) return
         const isDir = stat.isDir || targetUri.endsWith('/')
         const normalized = isDir
           ? normalizeDirUri(targetUri)
@@ -343,59 +300,16 @@ function FilesystemWorkbench() {
           name: stat.name || fileNameFromUri(normalized),
           uri: normalized,
         })
-        setExpandedKeys((prev) =>
-          mergeExpanded(prev, getAncestorUris(nextCurrentUri)),
-        )
         syncSearch({
           file: isDir ? undefined : normalized,
           uri: nextCurrentUri,
         })
       } catch (error) {
-        showErrorToast(error, t('readFailed', { uri: cleaned }))
+        if (version === navigationVersion.current)
+          showErrorToast(error, t('readFailed', { uri: cleaned }))
       }
     },
     [syncSearch, t, confirmDocumentNavigation],
-  )
-
-  const handleSelectDirectory = useCallback(
-    (entry: VikingFsEntry) => {
-      const normalized = normalizeDirUri(entry.uri)
-      if (!confirmDocumentNavigation(normalized)) return
-      setCurrentUri(normalized)
-      setSelectedFile({ ...entry, isDir: true, uri: normalized })
-      setExpandedKeys((prev) =>
-        mergeExpanded(prev, getAncestorUris(normalized)),
-      )
-      syncSearch({ file: undefined, uri: normalized })
-    },
-    [syncSearch, confirmDocumentNavigation],
-  )
-
-  const handleSelectFile = useCallback(
-    (entry: VikingFsEntry) => {
-      const normalized = normalizeFileUri(entry.uri)
-      const targetUri = isDirectoryLevelFile(normalized)
-        ? normalizeDirUri(parentUri(normalized))
-        : normalized
-      if (!confirmDocumentNavigation(targetUri)) return
-      if (isDirectoryLevelFile(normalized)) {
-        const dirUri = normalizeDirUri(parentUri(normalized))
-        setCurrentUri(dirUri)
-        setSelectedFile(createEntryFromUri(dirUri, true))
-        setExpandedKeys((prev) => mergeExpanded(prev, getAncestorUris(dirUri)))
-        syncSearch({ file: undefined, uri: dirUri })
-        return
-      }
-
-      const nextCurrentUri = normalizeDirUri(parentUri(normalized))
-      setCurrentUri(nextCurrentUri)
-      setSelectedFile({ ...entry, isDir: false, uri: normalized })
-      setExpandedKeys((prev) =>
-        mergeExpanded(prev, getAncestorUris(nextCurrentUri)),
-      )
-      syncSearch({ file: normalized, uri: nextCurrentUri })
-    },
-    [syncSearch, confirmDocumentNavigation],
   )
 
   const handlePanelChange = useCallback(
@@ -426,13 +340,11 @@ function FilesystemWorkbench() {
 
   const handleNavigateDirectory = useCallback(
     (rawUri: string) => {
+      navigationVersion.current += 1
       const normalized = normalizeDirUri(rawUri)
       if (!confirmDocumentNavigation(normalized)) return
       setCurrentUri(normalized)
       setSelectedFile(createEntryFromUri(normalized, true))
-      setExpandedKeys((prev) =>
-        mergeExpanded(prev, getAncestorUris(normalized)),
-      )
       syncSearch({ file: undefined, uri: normalized })
     },
     [syncSearch, confirmDocumentNavigation],
@@ -491,68 +403,34 @@ function FilesystemWorkbench() {
   const layoutStyle = useMemo(
     () =>
       ({
-        '--filesystem-left-width': `${leftWidth}px`,
         '--filesystem-right-width': `${rightWidth}px`,
       }) as CSSProperties,
-    [leftWidth, rightWidth],
+    [rightWidth],
   )
 
   const handleResizeStart = useCallback(
-    (pane: 'context' | 'action', event: ReactPointerEvent<HTMLDivElement>) => {
+    (event: ReactPointerEvent<HTMLDivElement>) => {
       event.preventDefault()
       event.currentTarget.setPointerCapture(event.pointerId)
-      isDraggingPaneRef.current = true
-      setResizingPane(pane)
+      setResizing(true)
 
       const startX = event.clientX
-      const startLeftWidth = leftWidthRef.current
       const startRightWidth = rightWidthRef.current
       const layoutRect = layoutRef.current?.getBoundingClientRect()
 
-      const getMaxWidth = (
-        side: 'left' | 'right',
-        currentOppositeWidth: number,
-      ) => {
-        if (!layoutRect) {
-          return side === 'left'
-            ? FILESYSTEM_LEFT_WIDTH.max
-            : FILESYSTEM_RIGHT_WIDTH.max
-        }
-
-        const hardMax =
-          side === 'left'
-            ? FILESYSTEM_LEFT_WIDTH.max
-            : FILESYSTEM_RIGHT_WIDTH.max
-        const availableMax =
-          layoutRect.width - currentOppositeWidth - FILESYSTEM_MAIN_MIN_WIDTH
-        return Math.max(
-          side === 'left'
-            ? FILESYSTEM_LEFT_WIDTH.min
-            : FILESYSTEM_RIGHT_WIDTH.min,
-          Math.min(hardMax, availableMax),
-        )
-      }
+      const maxWidth = Math.max(
+        FILESYSTEM_RIGHT_WIDTH.min,
+        Math.min(
+          FILESYSTEM_RIGHT_WIDTH.max,
+          (layoutRect?.width ?? 0) - FILESYSTEM_MAIN_MIN_WIDTH,
+        ),
+      )
 
       const onMove = (moveEvent: PointerEvent) => {
-        const deltaX = moveEvent.clientX - startX
-        if (pane === 'context') {
-          const nextWidth = clampNumber(
-            startLeftWidth + deltaX,
-            FILESYSTEM_LEFT_WIDTH.min,
-            getMaxWidth('left', rightWidthRef.current),
-          )
-          setLeftWidth(nextWidth)
-          window.localStorage.setItem(
-            FILESYSTEM_LEFT_WIDTH_STORAGE_KEY,
-            String(nextWidth),
-          )
-          return
-        }
-
         const nextWidth = clampNumber(
-          startRightWidth - deltaX,
+          startRightWidth - (moveEvent.clientX - startX),
           FILESYSTEM_RIGHT_WIDTH.min,
-          getMaxWidth('right', leftWidthRef.current),
+          maxWidth,
         )
         setRightWidth(nextWidth)
         window.localStorage.setItem(
@@ -562,9 +440,8 @@ function FilesystemWorkbench() {
       }
 
       const onUp = () => {
-        isDraggingPaneRef.current = false
         activeResizeTeardownRef.current = null
-        setResizingPane(null)
+        setResizing(false)
         document.removeEventListener('pointermove', onMove)
         document.removeEventListener('pointerup', onUp)
         document.removeEventListener('pointercancel', onUp)
@@ -617,238 +494,196 @@ function FilesystemWorkbench() {
         </Button>
       </StudioHeaderActions>
       <div ref={layoutRef} className={styles.layout} style={layoutStyle}>
-        <aside className={styles.explorer}>
-          <ContextExplorerHeader
-            onAddResource={
-              canUseLocalTools ? () => setUploadDialogOpen(true) : undefined
-            }
-          />
-          <div className="min-h-0 flex-1">
-            <ContextTree
-              isRefreshing={listQuery.isFetching}
-              onOpenSearch={handleOpenSearch}
-              onRefresh={handleRefreshContextTree}
-              currentUri={currentUri}
-              selectedFileUri={
-                selectedFile && !selectedFile.isDir ? selectedFile.uri : null
-              }
-              expandedKeys={expandedKeys}
-              onExpandedKeysChange={handleExpandedKeysChange}
-              onSelectDirectory={handleSelectDirectory}
-              onSelectFile={handleSelectFile}
-            />
-          </div>
-        </aside>
-        <FilesystemResizeHandle
-          active={resizingPane === 'context'}
-          label={t('resizeContext')}
-          onPointerDown={(event) => handleResizeStart('context', event)}
-        />
-
-        <main className={styles.document}>
-          {selectedFile ? (
-            <SharedFilePreview
-              key={selectedFile.uri}
-              file={selectedFile}
-              onDirtyChange={handleDirtyChange}
-              onSaved={handleDocumentSaved}
-              onNavigate={(uri) => {
-                void revealResource(uri)
-              }}
-              defaultReadLimit={canUseLocalTools ? -1 : 10000}
-              extraActions={(previewActions) => (
-                <>
-                  <details className={styles.moreMenu}>
-                    <summary aria-label={t('ide.more')} title={t('ide.more')}>
-                      <MoreHorizontalIcon className="size-3.5" />
-                    </summary>
-                    <div
-                      className={styles.moreMenuContent}
-                      onClick={(event) => {
-                        if (
-                          (event.target as HTMLElement).closest(
-                            'button:not(:disabled)',
-                          )
-                        )
-                          event.currentTarget
-                            .closest('details')
-                            ?.removeAttribute('open')
-                      }}
-                    >
+        <WorkbenchFileBrowser
+          key={identityScopeKey}
+          uri={normalizeFileUri(selectedUri)}
+          defaultExpandedUri={normalizeFileUri(currentUri)}
+          onRefresh={handleRefreshContextTree}
+          onUriChange={(uri) => {
+            if (uri && uri !== normalizeFileUri(selectedUri))
+              void revealResource(uri)
+          }}
+          onSearch={handleOpenSearch}
+          onImportResources={
+            canUseLocalTools ? () => setUploadDialogOpen(true) : undefined
+          }
+          refreshKey={refreshKey}
+          onEditingChange={handleDirtyChange}
+          onSaved={handleDocumentSaved}
+          previewActions={
+            selectedFile ? (
+              <details className={styles.moreMenu}>
+                <summary aria-label={t('ide.more')} title={t('ide.more')}>
+                  <MoreHorizontalIcon className="size-3.5" />
+                </summary>
+                <div
+                  className={styles.moreMenuContent}
+                  onClick={(event) => {
+                    if (
+                      (event.target as HTMLElement).closest(
+                        'button:not(:disabled)',
+                      )
+                    )
+                      event.currentTarget
+                        .closest('details')
+                        ?.removeAttribute('open')
+                  }}
+                >
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setDataManagementMode('history')}
+                  >
+                    <HistoryIcon className="size-4" />
+                    <span>{t('dataManagement:historyMenu')}</span>
+                  </Button>
+                  {canTransferSelectedUri ? (
+                    <>
+                      <div
+                        role="separator"
+                        className={styles.moreMenuSeparator}
+                      />
                       <Button
                         type="button"
                         size="sm"
                         variant="ghost"
-                        disabled={
-                          !previewActions?.canCopyContent || previewActions.busy
-                        }
-                        onClick={async () => {
-                          const copied = await previewActions?.copyContent()
-                          if (copied)
-                            toast.success(t('dataManagement:copySucceeded'))
-                          else toast.error(t('dataManagement:copyFailed'))
+                        onClick={() => {
+                          setTransferTab('import')
+                          setDataManagementMode('transfer')
                         }}
                       >
-                        <CopyIcon className="size-4" />
-                        <span>{t('dataManagement:copyContent')}</span>
+                        <DownloadIcon className="size-4" />
+                        <span>{t('dataManagement:importMenu')}</span>
                       </Button>
                       <Button
                         type="button"
                         size="sm"
                         variant="ghost"
-                        onClick={() => setDataManagementMode('history')}
+                        onClick={() => {
+                          setTransferTab('export')
+                          setDataManagementMode('transfer')
+                        }}
                       >
-                        <HistoryIcon className="size-4" />
-                        <span>{t('dataManagement:historyMenu')}</span>
+                        <UploadIcon className="size-4" />
+                        <span>{t('dataManagement:exportMenu')}</span>
                       </Button>
-                      {canTransferSelectedUri ? (
-                        <>
-                          <div
-                            role="separator"
-                            className={styles.moreMenuSeparator}
-                          />
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => {
-                              setTransferTab('import')
-                              setDataManagementMode('transfer')
-                            }}
-                          >
-                            <DownloadIcon className="size-4" />
-                            <span>{t('dataManagement:importMenu')}</span>
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => {
-                              setTransferTab('export')
-                              setDataManagementMode('transfer')
-                            }}
-                          >
-                            <UploadIcon className="size-4" />
-                            <span>{t('dataManagement:exportMenu')}</span>
-                          </Button>
-                        </>
-                      ) : null}
-                      {canUseLocalTools && selectedIsDirectory ? (
-                        <div
-                          role="separator"
-                          className={styles.moreMenuSeparator}
-                        />
-                      ) : null}
-                      {canUseLocalTools && selectedIsDirectory ? (
-                        <Button
-                          type="button"
-                          size="sm"
-                          aria-label={t('explorer.addResource')}
-                          variant="ghost"
-                          onClick={() => setUploadDialogOpen(true)}
-                        >
-                          <UploadIcon className="size-4" />
-                          <span>{t('explorer.addResource')}</span>
-                        </Button>
-                      ) : null}
-                      {canUseLocalTools &&
-                        selectedIsDirectory &&
-                        /^viking:\/\/(?:resources(?:\/|$)|user\/[^/]+\/resources(?:\/|$))/.test(
-                          selectedUri,
-                        ) && (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            aria-label={t('compile:compileThisFolder')}
-                            onClick={() =>
-                              void navigate({
-                                to: '/compile/new',
-                                search: { from: selectedUri },
-                              })
-                            }
-                          >
-                            <WandSparkles className="size-4" />
-                            <span>{t('compile:compileThisFolder')}</span>
-                          </Button>
-                        )}
-                      {!selectedIsDirectory ? (
-                        <>
-                          <div
-                            role="separator"
-                            className={styles.moreMenuSeparator}
-                          />
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="ghost"
-                            className={styles.moreMenuDanger}
-                            onClick={() =>
-                              setDeleteTarget({
-                                uri: selectedFile.uri,
-                                name: selectedFile.name,
-                                dirty: dirtyRef.current,
-                              })
-                            }
-                          >
-                            <Trash2Icon className="size-4" />
-                            <span>{t('dataManagement:deleteDocument')}</span>
-                          </Button>
-                        </>
-                      ) : null}
-                    </div>
-                  </details>
-                  {canUseCliPanel && (isCompactLayout || rightCollapsed) ? (
+                    </>
+                  ) : null}
+                  {canUseLocalTools && selectedIsDirectory ? (
+                    <div
+                      role="separator"
+                      className={styles.moreMenuSeparator}
+                    />
+                  ) : null}
+                  {canUseLocalTools && selectedIsDirectory ? (
                     <Button
+                      type="button"
+                      size="sm"
+                      aria-label={t('explorer.addResource')}
                       variant="ghost"
-                      size="icon-sm"
-                      title={t('actionPanel.expand')}
-                      onClick={() =>
-                        isCompactLayout
-                          ? handleOpenActionPanel(activePanel)
-                          : toggleRightCollapsed()
-                      }
+                      onClick={() => setUploadDialogOpen(true)}
                     >
-                      <PanelRightOpenIcon className="size-4" />
+                      <UploadIcon className="size-4" />
+                      <span>{t('explorer.addResource')}</span>
                     </Button>
                   ) : null}
-                </>
-              )}
-              content={
-                selectedIsDirectory &&
-                usesWorkbenchDirectoryView(selectedUri) ? (
+                  {canUseLocalTools &&
+                    selectedIsDirectory &&
+                    /^viking:\/\/(?:resources(?:\/|$)|user\/[^/]+\/resources(?:\/|$))/.test(
+                      selectedUri,
+                    ) && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        aria-label={t('compile:compileThisFolder')}
+                        onClick={() =>
+                          void navigate({
+                            to: '/compile/new',
+                            search: { from: selectedUri },
+                          })
+                        }
+                      >
+                        <WandSparkles className="size-4" />
+                        <span>{t('compile:compileThisFolder')}</span>
+                      </Button>
+                    )}
+                  {!selectedIsDirectory && !isSystemUri(selectedUri) ? (
+                    <>
+                      <div
+                        role="separator"
+                        className={styles.moreMenuSeparator}
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className={styles.moreMenuDanger}
+                        onClick={() =>
+                          setDeleteTarget({
+                            uri: selectedFile.uri,
+                            name: selectedFile.name,
+                            dirty: dirtyRef.current,
+                          })
+                        }
+                      >
+                        <Trash2Icon className="size-4" />
+                        <span>{t('dataManagement:deleteDocument')}</span>
+                      </Button>
+                    </>
+                  ) : null}
+                </div>
+              </details>
+            ) : undefined
+          }
+          renderResourceTab={({ uri, isDirectory, content }) => {
+            const directoryUri = normalizeDirUri(uri)
+            if (isDirectory && usesWorkbenchDirectoryView(directoryUri)) {
+              return {
+                title: t('ide.directoryContents'),
+                content: (
                   <WorkbenchDirectory
-                    key={selectedUri}
-                    uri={selectedUri}
-                    onNavigate={(uri) => {
-                      void revealResource(uri)
-                    }}
+                    key={uri}
+                    uri={directoryUri}
+                    onNavigate={revealResource}
                   />
-                ) : isExperienceFile(selectedFile.uri) ? (
-                  <ExperienceDetail experienceUri={selectedFile.uri} embedded />
-                ) : undefined
+                ),
               }
-            />
-          ) : canUseCliPanel && (isCompactLayout || rightCollapsed) ? (
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              title={t('actionPanel.expand')}
-              onClick={() =>
-                isCompactLayout
-                  ? handleOpenActionPanel(activePanel)
-                  : toggleRightCollapsed()
+            }
+            if (needsExperienceDetailTab(uri)) {
+              return {
+                title: t('ide.experienceDetails'),
+                content: <ExperienceDetail experienceUri={uri} embedded />,
               }
-            >
-              <PanelRightOpenIcon className="size-4" />
-            </Button>
-          ) : null}
-        </main>
+            }
+            if (/\.jsonl$/i.test(uri) && content !== undefined) {
+              return {
+                title: t('ide.structuredPreview'),
+                content: <JsonlPreview content={content} />,
+              }
+            }
+          }}
+        />
+        {canUseCliPanel && (isCompactLayout || rightCollapsed) ? (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            title={t('actionPanel.expand')}
+            onClick={() =>
+              isCompactLayout
+                ? handleOpenActionPanel(activePanel)
+                : toggleRightCollapsed()
+            }
+          >
+            <PanelRightOpenIcon className="size-4" />
+          </Button>
+        ) : null}
         {canUseCliPanel && !rightCollapsed ? (
           <FilesystemResizeHandle
-            active={resizingPane === 'action'}
+            active={resizing}
             label={t('resizeAction')}
-            onPointerDown={(event) => handleResizeStart('action', event)}
+            onPointerDown={handleResizeStart}
           />
         ) : null}
 
@@ -858,6 +693,7 @@ function FilesystemWorkbench() {
               activePanel={activePanel}
               onCollapse={toggleRightCollapsed}
               onOpenResource={revealResource}
+              onFilesystemWrite={refreshBrowser}
               onPanelChange={handlePanelChange}
               onSessionChange={(sessionId) =>
                 syncSearch({ session: sessionId })
@@ -874,6 +710,7 @@ function FilesystemWorkbench() {
           activePanel={activePanel}
           onClose={() => setActionPanelOpen(false)}
           onOpenResource={revealResource}
+          onFilesystemWrite={refreshBrowser}
           onPanelChange={handlePanelChange}
           onSessionChange={(sessionId) => syncSearch({ session: sessionId })}
           open={actionPanelOpen}
@@ -901,6 +738,7 @@ function FilesystemWorkbench() {
                 <AddResourceForm
                   onSubmitted={() => {
                     handleUploadDialogOpenChange(false)
+                    refreshBrowser()
                     void invalidateList()
                     toast.success(t('addResource.submitted'))
                   }}
@@ -924,6 +762,7 @@ function FilesystemWorkbench() {
               setCurrentUri(directory)
               syncSearch({ file: undefined, uri: directory })
             }
+            refreshBrowser()
             toast.success(t('dataManagement:documentDeleted'))
             void invalidateAll()
           }}
@@ -942,7 +781,10 @@ function FilesystemWorkbench() {
           initialTransferTab={transferTab}
           onClose={() => setDataManagementMode(null)}
           onCompare={() => setDataManagementMode('compare')}
-          onChanged={() => void invalidateAll()}
+          onChanged={() => {
+            refreshBrowser()
+            void invalidateAll()
+          }}
           uri={dataManagementMode === 'transfer' ? transferUri : selectedUri}
           isDirectory={dataManagementMode === 'transfer' || selectedIsDirectory}
         />
@@ -984,6 +826,7 @@ function FilesystemActionPanel({
   activePanel,
   onCollapse,
   onOpenResource,
+  onFilesystemWrite,
   onPanelChange,
   onSessionChange,
   sessionId,
@@ -992,6 +835,7 @@ function FilesystemActionPanel({
   activePanel: FilesystemPanel
   onCollapse: () => void
   onOpenResource: ResourceOpenHandler
+  onFilesystemWrite: () => void
   onPanelChange: (panel: FilesystemPanel) => void
   onSessionChange: (sessionId: string) => void
   sessionId?: string
@@ -1015,6 +859,7 @@ function FilesystemActionPanel({
     <FilesystemActionContent
       activePanel={activePanel}
       onOpenResource={onOpenResource}
+      onFilesystemWrite={onFilesystemWrite}
       onPanelChange={onPanelChange}
       onSessionChange={onSessionChange}
       sessionId={sessionId}
@@ -1028,6 +873,7 @@ function FilesystemMobileActionScreen({
   activePanel,
   onClose,
   onOpenResource,
+  onFilesystemWrite,
   onPanelChange,
   onSessionChange,
   open,
@@ -1037,6 +883,7 @@ function FilesystemMobileActionScreen({
   activePanel: FilesystemPanel
   onClose: () => void
   onOpenResource: ResourceOpenHandler
+  onFilesystemWrite: () => void
   onPanelChange: (panel: FilesystemPanel) => void
   onSessionChange: (sessionId: string) => void
   open: boolean
@@ -1051,6 +898,7 @@ function FilesystemMobileActionScreen({
       <FilesystemActionContent
         activePanel={activePanel}
         onOpenResource={onOpenResource}
+        onFilesystemWrite={onFilesystemWrite}
         onPanelChange={onPanelChange}
         onSessionChange={onSessionChange}
         sessionId={sessionId}
@@ -1075,6 +923,7 @@ function FilesystemMobileActionScreen({
 function FilesystemActionContent({
   activePanel,
   onOpenResource,
+  onFilesystemWrite,
   onPanelChange,
   onSessionChange,
   sessionId,
@@ -1084,6 +933,7 @@ function FilesystemActionContent({
 }: {
   activePanel: FilesystemPanel
   onOpenResource: ResourceOpenHandler
+  onFilesystemWrite: () => void
   onPanelChange: (panel: FilesystemPanel) => void
   onSessionChange: (sessionId: string) => void
   sessionId?: string
@@ -1103,6 +953,7 @@ function FilesystemActionContent({
       <WorkbenchConsole
         mode="command"
         onOpenResource={onOpenResource}
+        onFilesystemWrite={onFilesystemWrite}
         toolbar={toolbar}
       />
     )
@@ -1118,6 +969,7 @@ function FilesystemActionContent({
             onPanelChange(mode === 'conversation' ? 'agent' : 'terminal')
           }
           onOpenResource={onOpenResource}
+          onFilesystemWrite={onFilesystemWrite}
           toolbar={toolbar}
         />
       )}

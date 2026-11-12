@@ -10,7 +10,6 @@ import { cleanVikingUri } from '#/shared/lib/viking-uri'
 
 import {
   FILESYSTEM_AGENT_SESSIONS_STORAGE_KEY,
-  FILESYSTEM_EXPANDED_URIS_STORAGE_KEY,
   ROOT_URI,
 } from '#/features/workbench/filesystem/lib/constants'
 
@@ -59,11 +58,9 @@ export function readStoredNumber(
   return Number.isFinite(value) ? clampNumber(value, min, max) : fallback
 }
 
-export function readStoredJsonArray<T>(
+function readStoredJsonArray<T>(
   key: string,
   validator: (value: unknown) => T | undefined,
-  limit?: number,
-  fromEnd = false,
 ): T[] {
   if (typeof window === 'undefined') return []
 
@@ -71,18 +68,16 @@ export function readStoredJsonArray<T>(
     const raw = window.localStorage.getItem(key)
     const parsed: unknown = raw ? JSON.parse(raw) : []
     if (!Array.isArray(parsed)) return []
-    const values = parsed.flatMap((item) => {
+    return parsed.flatMap((item) => {
       const value = validator(item)
       return value === undefined ? [] : [value]
     })
-    if (limit === undefined) return values
-    return fromEnd ? values.slice(-limit) : values.slice(0, limit)
   } catch {
     return []
   }
 }
 
-export function writeStoredJson(key: string, value: unknown): void {
+function writeStoredJson(key: string, value: unknown): void {
   if (typeof window === 'undefined') return
   try {
     window.localStorage.setItem(key, JSON.stringify(value))
@@ -139,33 +134,6 @@ export function registerFilesystemAgentSessionId(
   return next
 }
 
-export function readFilesystemExpandedUris(identityScopeKey: string): string[] {
-  return readStoredJsonArray(
-    createIdentityStorageKey(
-      FILESYSTEM_EXPANDED_URIS_STORAGE_KEY,
-      identityScopeKey,
-    ),
-    (uri) =>
-      typeof uri === 'string' && uri.startsWith(ROOT_URI)
-        ? normalizeDirUri(uri)
-        : undefined,
-    500,
-  )
-}
-
-export function writeFilesystemExpandedUris(
-  identityScopeKey: string,
-  uris: Iterable<string>,
-): void {
-  writeStoredJson(
-    createIdentityStorageKey(
-      FILESYSTEM_EXPANDED_URIS_STORAGE_KEY,
-      identityScopeKey,
-    ),
-    [...uris],
-  )
-}
-
 export function createEntryFromUri(uri: string, isDir: boolean): VikingFsEntry {
   const normalized = isDir ? normalizeDirUri(uri) : normalizeFileUri(uri)
   return {
@@ -196,15 +164,6 @@ export function getAncestorUris(uri: string): string[] {
   }
 
   return ancestors
-}
-
-export function mergeExpanded(
-  current: Set<string>,
-  uris: string[],
-): Set<string> {
-  const next = new Set(current)
-  for (const uri of uris) next.add(uri)
-  return next
 }
 
 export function isDirectoryLevelFile(uri: string): boolean {

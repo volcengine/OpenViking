@@ -8,7 +8,7 @@ import type { ReactNode } from 'react'
 
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { useInvalidateVikingFs } from '#/features/workbench/resources/hooks/viking-fm'
-import { getOvClient, isOvClientError } from '#/shared/api/ov-client/index'
+import { requestWorkbenchModule } from '../lib/module-request'
 import type { ResourceOpenHandler } from '../lib/types'
 import styles from '../workbench.module.css'
 
@@ -28,51 +28,33 @@ export function WorkbenchConsole({
   mode,
   onModeChange,
   onOpenResource,
+  onFilesystemWrite,
   toolbar,
 }: {
   conversation?: Partial<VikingBotProps>
   mode: ConsoleMode
   onModeChange?: (mode: ConsoleMode) => void
   onOpenResource: ResourceOpenHandler
+  onFilesystemWrite?: () => void
   toolbar: ReactNode
 }) {
   const { identityScopeKey } = useAppConnection()
   const { invalidateAll } = useInvalidateVikingFs()
   const request = useCallback<typeof fetch>(
     async (input, init) => {
-      // Console builds the API request. Studio applies the active data-plane
-      // connection, authentication, and gateway routing to that request.
+      const response = await requestWorkbenchModule(input, init)
       const url = new URL(String(input), window.location.origin)
-      const method = init?.method ?? 'GET'
-      try {
-        const { status, data } = await getOvClient().instance.request({
-          url: url.pathname + url.search,
-          method,
-          data: init?.body,
-          headers: Object.fromEntries(new Headers(init?.headers)),
-          signal: init?.signal ?? undefined,
-        })
-        if (method !== 'GET' && filesystemWrites.has(url.pathname)) {
-          void invalidateAll()
-        }
-        return new Response(JSON.stringify(data), { status })
-      } catch (error) {
-        if (!isOvClientError(error) || !error.statusCode) throw error
-        // Keep Studio's error envelope available to the shared Console client.
-        const body = {
-          status: 'error',
-          error: {
-            code: error.code,
-            message: error.message,
-            details: error.details,
-          },
-        }
-        return new Response(JSON.stringify(body), {
-          status: error.statusCode >= 400 ? error.statusCode : 400,
-        })
+      if (
+        response.ok &&
+        init?.method !== 'GET' &&
+        filesystemWrites.has(url.pathname)
+      ) {
+        void invalidateAll()
+        onFilesystemWrite?.()
       }
+      return response
     },
-    [invalidateAll],
+    [invalidateAll, onFilesystemWrite],
   )
 
   return (

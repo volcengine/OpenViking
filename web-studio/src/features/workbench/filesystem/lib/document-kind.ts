@@ -5,8 +5,13 @@ export function isExperienceDirectory(uri: string): boolean {
   )
 }
 
-export function isExperienceFile(uri: string): boolean {
-  return isExperienceDirectory(uri) && /\.md$/i.test(uri)
+export function needsExperienceDetailTab(uri: string): boolean {
+  // FileBrowser already supplies the board for direct user experience files.
+  return (
+    isExperienceDirectory(uri) &&
+    /\.md$/i.test(uri) &&
+    !/^viking:\/\/user\/[^/]+\/memories\/experiences\/[^/]+\.md$/i.test(uri)
+  )
 }
 
 export function sessionIdFromDirectory(uri: string): string | null {

@@ -146,6 +146,8 @@ The module loads its own data through `useFileBrowser`, so the host supplies no 
 
 `labels.formatCharacterCount(count)` overrides the preview footer’s character count. It follows `locale` by default.
 
+Use `onSearch` to open a host search dialog, `previewActions` to append toolbar actions, and `renderResourceTab` to add a specialized tab alongside the native preview. `onEditingChange` reports when the editor opens or closes, and `onSaved(uri)` reports a successful save. Change `refreshKey` after external writes to reload the tree and preview. `onRefresh` runs after a user-triggered refresh.
+
 ## Built-in dashboards
 
 Discovery and configuration matching use URIs resolved by the native API in the current authenticated scope, including `viking://~/...` roots and Wiki child-file aliases. Dashboard URIs and host callbacks keep the supplied spelling. The example controls switch between canonical and `~` URIs for the same file.

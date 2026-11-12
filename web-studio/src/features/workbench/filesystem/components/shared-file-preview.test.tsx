@@ -106,29 +106,6 @@ it('loads truncated previews but edits and saves full content, and clears the na
   act(() => tab.editing!.onCancel!('draft'))
   expect(props.onDirtyChange).toHaveBeenLastCalledWith(false)
 })
-it('keeps special directory content available when summaries fail', async () => {
-  mocks.directory.mockRejectedValue(new Error('summary unavailable'))
-  setup({
-    file: { ...file, isDir: true },
-    content: <div>Directory entries</div>,
-  })
-  await waitFor(() => expect(latest().tabs[1].kind).toBe('content'))
-  expect(latest().tabs[0].kind).toBe('content')
-})
-it('shows the system directory listing without requesting L0/L1 summaries', () => {
-  setup({
-    file: {
-      ...file,
-      uri: 'viking://system/compile/example-skills/daily-report/',
-      name: 'daily-report',
-      isDir: true,
-    },
-    content: <div>SKILL.md</div>,
-  })
-  expect(latest().tabs).toHaveLength(1)
-  expect(latest().tabs[0].kind).toBe('content')
-  expect(mocks.directory).not.toHaveBeenCalled()
-})
 it('downloads image previews through the authenticated client and disables editing', async () => {
   mocks.download.mockResolvedValue({ data: new Blob(['image']) })
   setup({

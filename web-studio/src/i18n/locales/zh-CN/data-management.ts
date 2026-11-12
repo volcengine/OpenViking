@@ -9,9 +9,6 @@ const dataManagement = {
   deleteFailed: '删除失败：{{error}}',
   documentDeleted: '文档已删除',
 
-  copyContent: '复制内容',
-  copySucceeded: '内容已复制',
-  copyFailed: '复制失败，请重试',
   historyMenu: '查看历史版本',
   importMenu: '导入 .ovpack',
   exportMenu: '导出 .ovpack',

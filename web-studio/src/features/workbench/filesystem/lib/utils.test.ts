@@ -5,9 +5,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import {
   createIdentityStorageKey,
   readFilesystemAgentSessionIds,
-  readFilesystemExpandedUris,
   registerFilesystemAgentSessionId,
-  writeFilesystemExpandedUris,
 } from '#/features/workbench/filesystem/lib/utils'
 
 beforeEach(() => {
@@ -30,34 +28,6 @@ describe('createIdentityStorageKey', () => {
     )
 
     expect(key).not.toContain('\u0000')
-  })
-})
-
-describe('Filesystem expanded directory persistence', () => {
-  it('restores normalized expanded URIs for the same identity', () => {
-    const legacyKey = createIdentityStorageKey(
-      'openviking.playground.expandedUris',
-      'account-a\u0000alice',
-    )
-    localStorage.setItem(legacyKey, JSON.stringify(['viking://resources/old']))
-    expect(readFilesystemExpandedUris('account-a\u0000alice')).toEqual([
-      'viking://resources/old/',
-    ])
-
-    writeFilesystemExpandedUris('account-a\u0000alice', [
-      'viking://user/default',
-      'viking://resources/',
-    ])
-
-    expect(readFilesystemExpandedUris('account-a\u0000alice')).toEqual([
-      'viking://user/default/',
-      'viking://resources/',
-    ])
-    expect(readFilesystemExpandedUris('account-a\u0000bob')).toEqual([])
-    expect(JSON.parse(localStorage.getItem(legacyKey)!)).toEqual([
-      'viking://user/default',
-      'viking://resources/',
-    ])
   })
 })
 

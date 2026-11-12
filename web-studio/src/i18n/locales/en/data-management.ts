@@ -10,9 +10,6 @@ const dataManagement = {
   deleteFailed: 'Could not delete document: {{error}}',
   documentDeleted: 'Document deleted',
 
-  copyContent: 'Copy content',
-  copySucceeded: 'Content copied',
-  copyFailed: 'Could not copy content. Please try again.',
   historyMenu: 'View version history',
   importMenu: 'Import .ovpack',
   exportMenu: 'Export .ovpack',

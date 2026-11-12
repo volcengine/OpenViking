@@ -14,7 +14,6 @@ import { useQuery } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import styles from '../workbench.module.css'
-import { isSystemUri } from '../lib/document-kind'
 import { getAncestorUris, getErrorMessage } from '../lib/utils'
 import { useCustomPreviewEditing } from '../lib/use-custom-preview-editing'
 import { CopyIcon, FileTextIcon, PencilIcon } from 'lucide-react'
@@ -44,30 +43,25 @@ const DIRECTORY_LEVELS = [
   { key: 'l1', label: 'L1', sidecar: '.overview.md' },
 ] as const
 
-type PreviewMenuActions = Pick<
-  FilePreviewActions,
-  'busy' | 'canCopyContent' | 'copyContent'
->
 type PreviewToolbarActions = Pick<
   FilePreviewActions,
   | 'viewMode'
   | 'setViewMode'
   | 'canSwitchView'
   | 'editing'
+  | 'busy'
   | 'canEdit'
   | 'startEditing'
   | 'saveEditing'
   | 'cancelEditing'
-> &
-  PreviewMenuActions
+>
 
 interface Props {
   file: VikingFsEntry
   onNavigate?: (uri: string) => void
   onDirtyChange: (dirty: boolean) => void
   onSaved: (uri: string) => void
-  extraActions?: ReactNode | ((actions: PreviewMenuActions | null) => ReactNode)
-  content?: ReactNode
+  extraActions?: ReactNode
   readOnly?: boolean
   defaultReadLimit?: number
 }
@@ -78,7 +72,6 @@ export function SharedFilePreview({
   onDirtyChange,
   onSaved,
   extraActions,
-  content,
   readOnly = false,
   defaultReadLimit = -1,
 }: Props) {
@@ -117,10 +110,8 @@ export function SharedFilePreview({
     allowedUri !== file.uri
   const kind = detectFileType(file.uri)
   const binary = kind === 'image' || kind === 'binary'
-  const directoryListOnly =
-    file.isDir && Boolean(content) && isSystemUri(file.uri)
   const query = useQuery({
-    enabled: !needsLoad && !directoryListOnly,
+    enabled: !needsLoad,
     queryKey: [
       'studio-shared-preview',
       identityScopeKey,
@@ -186,10 +177,8 @@ export function SharedFilePreview({
       : fileText
   const customFilePreview =
     !file.isDir &&
-    Boolean(
-      content ||
-      (fileText !== undefined && (kind === 'jsonl' || kind === 'markdown')),
-    )
+    fileText !== undefined &&
+    (kind === 'jsonl' || kind === 'markdown')
   const copy = async (value: string | undefined) => {
     if (!value) return false
     try {
@@ -240,8 +229,6 @@ export function SharedFilePreview({
     setViewMode: (mode) =>
       setSourceScope(mode === 'source' ? currentScope : null),
     canSwitchView: customFilePreview,
-    canCopyContent: Boolean(sourceMode ? fileText : displayText),
-    copyContent: () => copy(sourceMode ? fileText : displayText),
   }
   const renderActions = (actions: PreviewToolbarActions) => {
     actionsRef.current = actions
@@ -311,9 +298,7 @@ export function SharedFilePreview({
             </Button>
           )
         ) : null}
-        {typeof extraActions === 'function'
-          ? extraActions(actions)
-          : extraActions}
+        {extraActions}
       </div>
     )
   }
@@ -380,15 +365,6 @@ export function SharedFilePreview({
   }
   let tab: FilePreviewTab
   if (file.isDir) {
-    const summary = level === 'l1' ? summaries?.overview : summaries?.abstract
-    const summaryActions =
-      typeof extraActions === 'function'
-        ? extraActions({
-            busy: false,
-            canCopyContent: Boolean(summary),
-            copyContent: () => copy(summary),
-          })
-        : extraActions
     tab = {
       ...common,
       kind: 'content',
@@ -427,7 +403,7 @@ export function SharedFilePreview({
             {t('filePreview.loadingContent')}
           </p>
         ),
-        summaryActions,
+        extraActions,
       ),
     }
   } else if (customFilePreview) {
@@ -449,17 +425,14 @@ export function SharedFilePreview({
         <pre className="whitespace-pre-wrap px-4 py-3 font-mono text-xs leading-5 wrap-anywhere">
           {fileText}
         </pre>
+      ) : kind === 'jsonl' ? (
+        <JsonlPreview content={fileText} />
       ) : (
-        (content ??
-        (kind === 'jsonl' ? (
-          <JsonlPreview content={fileText ?? ''} />
-        ) : (
-          <StudioMarkdownPreview
-            content={fileText ?? ''}
-            uri={file.uri}
-            onNavigate={onNavigate}
-          />
-        )))
+        <StudioMarkdownPreview
+          content={fileText}
+          uri={file.uri}
+          onNavigate={onNavigate}
+        />
       )
     tab = {
       ...common,
@@ -531,30 +504,11 @@ export function SharedFilePreview({
       ),
     }
   }
-  const customContent = file.isDir ? content : undefined
-  const tabs: [FilePreviewTab, ...FilePreviewTab[]] = customContent
-    ? [
-        {
-          key: `${file.uri}:content`,
-          kind: 'content',
-          title: file.name,
-          content: renderContent(
-            customContent,
-            typeof extraActions === 'function'
-              ? extraActions(null)
-              : extraActions,
-          ),
-        },
-        ...(directoryListOnly
-          ? []
-          : [{ ...tab, title: t('filePreview.markdownSource') }]),
-      ]
-    : [tab]
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <FilePreview
         key={`${identityScopeKey}:${file.uri}`}
-        tabs={tabs}
+        tabs={[tab]}
         locale={i18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'}
         labels={{
           copyPath: t('filesystem:copyUri'),

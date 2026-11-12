@@ -35,6 +35,7 @@ export interface FileBrowserTreePaneProps {
   locale: Locale;
   dashboardLabels?: FileBrowserDashboardLabels;
   onSearch?: () => void;
+  onRefresh?: () => void;
   browser: FileBrowserApi;
   rootUri: string;
   treeLabels: FileTreeLabels | undefined;
@@ -49,6 +50,7 @@ export function FileBrowserTreePane({
   locale,
   dashboardLabels,
   onSearch,
+  onRefresh,
   browser,
   rootUri,
   treeLabels,
@@ -70,7 +72,9 @@ export function FileBrowserTreePane({
         canRefresh={browser.isReady}
         placeholder={searchPlaceholder}
         refreshLabel={refreshLabel}
-        onRefresh={() => void browser.actions.refresh()}
+        onRefresh={() => {
+          void browser.actions.refresh().then(onRefresh);
+        }}
       />
       <div className="ov-file-browser__tree-scroll">
         {browser.dashboardError ? (

@@ -17,30 +17,12 @@
   min-height: 0;
   gap: 8px;
 }
-.explorer {
-  display: flex;
-  flex-direction: column;
-  width: var(--filesystem-left-width);
-  min-width: 240px;
-  flex-shrink: 0;
-  overflow: hidden;
-  background: var(--background);
-  border-radius: 16px 0 0 16px;
-}
-.document {
-  display: flex;
+.fileBrowser {
   flex: 1;
-  flex-direction: column;
   min-width: 0;
-  min-height: 0;
-  overflow: hidden;
   background: var(--background);
-  border: 1px solid #edeef3;
-  border-radius: 0 12px 12px 0;
-  margin-left: -8px;
-}
-.document :global(.ov-file-preview__tab-row) {
-  padding-block-start: 6px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
 }
 .fileTypeIcon {
   color: var(--studio-file-icon-light);
@@ -237,8 +219,7 @@
 :global(.dark) .workbench {
   color: var(--foreground);
 }
-:global(.dark)
-  :is(.document, .documentTabs, .activeTab, .documentToolbar, .directoryEntry) {
+:global(.dark) .directoryEntry {
   border-color: var(--border);
 }
 :global(.dark) :is(.directoryEntry:hover, .moreMenu summary) {
@@ -253,15 +234,16 @@
   .layout {
     flex-direction: column;
   }
-  .explorer {
-    width: 100%;
-    min-height: 200px;
-    max-height: 35%;
-    border-radius: 12px;
+  .fileBrowser {
+    flex-direction: column;
   }
-  .document {
-    margin-left: 0;
-    border-radius: 12px;
+  .fileBrowser :global(.ov-file-browser__tree) {
+    width: 100%;
+    min-height: 144px;
+    max-height: 35%;
+  }
+  .fileBrowser :global(.ov-file-browser__resizer) {
+    display: none;
   }
   .workbench {
     padding: 0 8px 8px;
