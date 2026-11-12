@@ -323,9 +323,13 @@ RecallResultPtr RangedMap::get_topk_result_with_slot_data_center1d(
       }
     }
     slot_r++;
-    offset_r = std::upper_bound(slots_[slot_r].value_vec.begin(),
-                                slots_[slot_r].value_vec.end(), center1d) -
-               slots_[slot_r].value_vec.begin();
+    if (slot_r == (int)slots_.size()) {
+      offset_r = 0;
+    } else {
+      offset_r = std::upper_bound(slots_[slot_r].value_vec.begin(),
+                                  slots_[slot_r].value_vec.end(), center1d) -
+                 slots_[slot_r].value_vec.begin();
+    }
   }
   // add values between lower bound and upper bound
   if (slot_l != -1) {
