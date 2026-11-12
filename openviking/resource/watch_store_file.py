@@ -178,15 +178,16 @@ class FileWatchStore(WatchStore):
                 normalized = True
             rows[task.task_id] = row
         if normalized:
-            await self._save(rows)
+            # Keep the readable backup until a normal save can rotate a valid primary.
+            await self._save(rows, preserve_backup=recovered)
         self._rows = {}
         self._index(rows)
 
-    async def _save(self, rows: dict[str, _Row]) -> None:
+    async def _save(self, rows: dict[str, _Row], *, preserve_backup: bool = False) -> None:
         await self._write_document(
             self.STORAGE_URI,
             self.STORAGE_TMP_URI,
-            self.STORAGE_BAK_URI,
+            None if preserve_backup else self.STORAGE_BAK_URI,
             {
                 "tasks": [row.to_storage_dict() for row in rows.values() if not row.deleted],
                 "updated_at": datetime.now().isoformat(),
@@ -198,7 +199,7 @@ class FileWatchStore(WatchStore):
         self,
         uri: str,
         tmp_uri: str,
-        bak_uri: str,
+        bak_uri: Optional[str],
         data: dict[str, Any],
         *,
         indent: Optional[int] = None,
@@ -210,7 +211,7 @@ class FileWatchStore(WatchStore):
         content = json.dumps(data, ensure_ascii=False, indent=indent)
         await self._fs.write_file(tmp_uri, content, ctx=ctx, auto_pathlock=False)
         try:
-            if await self._fs.exists(uri, ctx=ctx):
+            if bak_uri is not None and await self._fs.exists(uri, ctx=ctx):
                 try:
                     if await self._fs.exists(bak_uri, ctx=ctx):
                         await self._fs.rm(bak_uri, ctx=ctx, auto_pathlock=False)
