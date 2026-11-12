@@ -970,8 +970,8 @@ export class OpenVikingClient {
       memory_extraction_config: options.memoryExtractionConfig,
       telemetry: options.telemetry,
     });
-    if ("autoCommitPolicy" in options)
-      body.auto_commit_policy = options.autoCommitPolicy ?? null;
+    if (options.autoCommitPolicy !== undefined)
+      body.auto_commit_policy = options.autoCommitPolicy;
     return this.request("POST", "/api/v1/sessions", {
       body: mergeExtra(body, options.extra),
     });
@@ -995,8 +995,8 @@ export class OpenVikingClient {
       memory_extraction_config: options.memoryExtractionConfig,
       telemetry: options.telemetry,
     });
-    if ("autoCommitPolicy" in options)
-      body.auto_commit_policy = options.autoCommitPolicy ?? null;
+    if (options.autoCommitPolicy !== undefined)
+      body.auto_commit_policy = options.autoCommitPolicy;
     return this.request(
       "PATCH",
       `/api/v1/sessions/${pathPart(sessionId)}/config`,
