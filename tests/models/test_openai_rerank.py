@@ -169,13 +169,14 @@ class TestRerankBatch:
             "request_id": "abc123",
         }
 
-        with patch("openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response) as mock_post:
+        with patch.object(client, "_session") as mock_session:
+            mock_session.post.return_value = mock_response
             scores = client.rerank_batch("hello", ["doc1", "doc2"])
 
         assert scores == [0.95, 0.12]
 
         # Verify the request body was nested
-        _, kwargs = mock_post.call_args
+        _, kwargs = mock_session.post.call_args
         sent_body = kwargs["json"]
         assert "input" in sent_body
         assert sent_body["input"]["query"] == "hello"
@@ -203,13 +204,14 @@ class TestRerankBatch:
             ]
         }
 
-        with patch("openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response) as mock_post:
+        with patch.object(client, "_session") as mock_session:
+            mock_session.post.return_value = mock_response
             scores = client.rerank_batch("hello", ["doc1", "doc2"])
 
         assert scores == [0.88, 0.42]
 
         # Verify the request body was flat
-        _, kwargs = mock_post.call_args
+        _, kwargs = mock_session.post.call_args
         sent_body = kwargs["json"]
         assert sent_body["query"] == "hello"
         assert sent_body["documents"] == ["doc1", "doc2"]
@@ -234,12 +236,13 @@ class TestRerankBatch:
             ]
         }
 
-        with patch("openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response) as mock_post:
+        with patch.object(client, "_session") as mock_session:
+            mock_session.post.return_value = mock_response
             scores = client.rerank_batch("hello", ["doc1", "doc2"])
 
         assert scores == [0.88, 0.42]
 
-        _, kwargs = mock_post.call_args
+        _, kwargs = mock_session.post.call_args
         sent_body = kwargs["json"]
         assert sent_body["query"] == "hello"
         assert sent_body["documents"] == ["doc1", "doc2"]
@@ -264,7 +267,8 @@ class TestRerankBatch:
             }
         }
 
-        with patch("openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response):
+        with patch.object(client, "_session") as mock_session:
+            mock_session.post.return_value = mock_response
             scores = client.rerank_batch("hello", ["doc1", "doc2"])
 
         assert scores == [0.77, 0.33]
@@ -295,7 +299,8 @@ class TestRerankBatch:
             ]
         }
 
-        with patch("openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response):
+        with patch.object(client, "_session") as mock_session:
+            mock_session.post.return_value = mock_response
             scores = client.rerank_batch("hello", ["doc0", "doc1", "doc2"])
 
         assert scores == [0.0, 0.55, 0.0]
