@@ -131,23 +131,6 @@ export function useFileBrowser({
     [openTree],
   );
 
-  const preview = useFsPreview({
-    client,
-    // 非受控模式下 currentUri 是 null，真正选中的是 pendingUri；预览要跟着
-    // 实际选中的资源走，否则内部维护的选中永远不会加载预览。
-    //
-    // Under the uncontrolled mode `currentUri` is null and `pendingUri` holds the
-    // real selection, so the preview follows that instead — otherwise a selection
-    // the module owns would never load anything.
-    uri: blocked ? null : activeUri,
-    resourceType,
-    labels: summaryLabels ?? resolveSummaryLabels(locale),
-    formatCharacterCount: formatCharacterCount ?? text.formatCharacterCount,
-    openParent,
-    generation: refreshGeneration,
-    requestOptions,
-  });
-
   const rows = tree.rows;
 
   const openPath = tree.openPath;
@@ -175,6 +158,28 @@ export function useFileBrowser({
     dashboardKinds,
     renderDashboard,
     dashboardLabels,
+  });
+
+  const preview = useFsPreview({
+    client,
+    // 非受控模式下 currentUri 是 null，真正选中的是 pendingUri；预览要跟着
+    // 实际选中的资源走，否则内部维护的选中永远不会加载预览。
+    //
+    // Under the uncontrolled mode `currentUri` is null and `pendingUri` holds the
+    // real selection, so the preview follows that instead — otherwise a selection
+    // the module owns would never load anything.
+    uri: blocked ? null : activeUri,
+    resourceType,
+    labels: summaryLabels ?? resolveSummaryLabels(locale),
+    formatCharacterCount: formatCharacterCount ?? text.formatCharacterCount,
+    openParent,
+    generation: refreshGeneration,
+    requestOptions,
+    contentKind: boards.contentPending
+      ? 'pending'
+      : boards.isWiki
+        ? 'wiki'
+        : 'plain',
   });
 
   const selectedId = activeUri;
@@ -228,6 +233,7 @@ export function useFileBrowser({
           setRefreshing(false);
         }
       },
+      openUri: openResource,
       openDashboard: openDashboard,
       setPreviewKey: (key: string) => {
         if (activeUri && key === dashboardKey(activeUri))
@@ -246,6 +252,7 @@ export function useFileBrowser({
     // replace `actions` and with it the `operations` handed to `FileTree`.
     [
       setActiveKey,
+      openResource,
       open,
       toggleExpand,
       loadMore,
@@ -277,6 +284,7 @@ export function useFileBrowser({
     treeError: tree.error,
     previewError,
     dashboards: boards.dashboards,
+    previewDashboard: boards.current,
     dashboardError: boards.error,
     previewTabs: mergeDashboardTab(preview.tabs, boards.tab, Boolean(blocked)),
     previewKey:

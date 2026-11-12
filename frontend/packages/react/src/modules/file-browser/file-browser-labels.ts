@@ -1,3 +1,6 @@
+import workflowEn from './locales/preview-workflow.en-US.js';
+import workflowZh from './locales/preview-workflow.zh-CN.js';
+import type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
 import { resolveLocale, type Locale } from '../../shared/locale.js';
 import enUS from './locales/en-US.js';
 import zhCN from './locales/zh-CN.js';
@@ -11,7 +14,7 @@ import type { FileBrowserLabels } from './types.js';
 /** 模块外壳自己渲染的文案，其余透传给树与预览。 */
 export type ShellLabels = Omit<
   FileBrowserLabels,
-  'tree' | 'preview' | 'entries' | 'dashboard' | 'acl'
+  'tree' | 'preview' | 'actionBar' | 'dashboard' | 'acl' | 'workflows'
 >;
 
 /**
@@ -22,6 +25,7 @@ export type ShellLabels = Omit<
 
 /** 解析后的外壳文案，外加透传给两个组件的文案。 */
 export interface ResolvedLabels extends Required<ShellLabels> {
+  workflow: FileBrowserWorkflowLabels;
   tree: FileTreeLabels | undefined;
   previewLabels: FileBrowserLabels['preview'];
 }
@@ -33,6 +37,11 @@ export function resolveLabels(
 ): ResolvedLabels {
   return {
     ...resolveLocale(LOCALES, locale, labels),
+    workflow: resolveLocale(
+      { 'en-US': workflowEn, 'zh-CN': workflowZh },
+      locale,
+      labels?.workflows,
+    ),
     tree: labels?.tree,
     previewLabels: labels?.preview,
   };
@@ -45,9 +54,7 @@ export function resolvePreviewLabels(text: ResolvedLabels): FilePreviewLabels {
     copyPath: text.copyPath,
     previewMode: text.previewMode,
     sourceMode: text.sourceMode,
-    copyContent: text.copyContent,
     viewSwitch: text.viewSwitch,
-    download: text.download,
     ...text.previewLabels,
   };
 }

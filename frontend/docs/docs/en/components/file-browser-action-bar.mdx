@@ -1,0 +1,74 @@
+# FileBrowserActionBar
+
+The action bar at the top of the file browsing area, with two fixed actions (connect an agent and import resources) whose visibility and behavior your app controls.
+
+## When to use
+
+- You need "Connect agent" and "Import resources" actions at the top of the file browsing area.
+- You want to decide what happens after a click. The component only renders the actions and notifies your app: it sends no requests and does not need `OpenVikingProvider`.
+- When you use [FileBrowser](../modules/file-browser), the action bar is built in and needs no separate setup.
+
+## Import
+
+```tsx
+import { FileBrowserActionBar } from '@openviking/react/components/file-browser-action-bar';
+import '@openviking/react/components/file-browser-action-bar/style.css';
+```
+
+## Examples
+
+### Basic usage
+
+The three bars show both actions, only "Import resources", and only "Connect agent". Click "Connect agent" to slide in the `AgentConnect` drawer from the right.
+
+```tsx file="../../_demos/file-browser-action-bar-basic.tsx" preview
+
+```
+
+The import callbacks in the example are empty functions, and the `apiKey` is for demonstration only.
+
+### Custom import action
+
+Wrap the default import button with `renderImportResources`. Click "Import resources" and the status line below the bar updates, which shows that `onImportResources` still fires after wrapping.
+
+```tsx file="../../_demos/file-browser-action-bar-custom.tsx" preview
+
+```
+
+The example uses a `span` to stand in for a host component; in your app you can use your own `Popover` or similar.
+
+## API
+
+### FileBrowserActionBar
+
+| Property              | Description                                                                                                                                                  | Type                                                                    | Default                        |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- | ------------------------------ |
+| agentConnect          | Shows "Connect agent"; a click opens [AgentConnect](./agent-connect) in a right-side drawer, with props passed through and `locale` following the bar        | `AgentConnectProps`                                                     | -                              |
+| onConnectAgent        | Called when "Connect agent" is clicked; without `agentConnect`, passing it alone shows the action and your app handles the rest                              | `() => void`                                                            | -                              |
+| onImportResources     | Shows "Import resources" and is called when it is clicked                                                                                                    | `() => void`                                                            | -                              |
+| renderImportResources | Shows "Import resources"; `trigger` is the default button (already bound to `onImportResources`), which you can wrap or replace, or return `null` to hide it | `(trigger: ReactElement<ComponentPropsWithRef<'button'>>) => ReactNode` | -                              |
+| labels                | Overrides interface text                                                                                                                                     | `FileBrowserActionBarLabels`                                            | -                              |
+| locale                | Interface language, see [Internationalization](../guide/i18n)                                                                                                | `'zh-CN' \| 'en-US'`                                                    | Inherited, otherwise `'en-US'` |
+| className, style      | Appearance and layout; other HTML attributes are passed to the root element                                                                                  | HTML attributes                                                         | -                              |
+
+### FileBrowserActionBarLabels
+
+| Property        | Description                                                           | Type     | Default                                                |
+| --------------- | --------------------------------------------------------------------- | -------- | ------------------------------------------------------ |
+| connectAgent    | Text of the "Connect agent" action, also the drawer's accessible name | `string` | `'Connect agent'` (`en-US`), `'连接 Agent'` (`zh-CN`)  |
+| importResources | Text of the "Import resources" action                                 | `string` | `'Import resources'` (`en-US`), `'导入资源'` (`zh-CN`) |
+| close           | Accessible name of the drawer's close button                          | `string` | `'Close'` (`en-US`), `'关闭'` (`zh-CN`)                |
+
+## Notes
+
+- `style.css` already includes the styles of the built-in `AgentConnect` drawer, so you do not import the `agent-connect` styles separately.
+- "Connect agent" shows when you pass `agentConnect` or `onConnectAgent`, and "Import resources" shows when you pass `onImportResources` or `renderImportResources`. With no visible action, the component renders nothing.
+- When both actions are visible there is a divider between them; with a single action there is none.
+- When `renderImportResources` returns `null`, `undefined` or a boolean, "Import resources" is hidden. When it returns a replacement node that does not contain `trigger`, `onImportResources` no longer applies and your app handles the click.
+- `trigger` is a `button` element that forwards its ref, so it can be the direct child of your `Popover` or a similar component.
+- The drawer renders under `document.body` and slides in from the right. It is at most 1000px wide and never wider than the viewport; its content is at least 720px wide, so a narrower viewport scrolls horizontally inside the drawer.
+- Click the close button, click the backdrop or press Esc to close the drawer. While it is open, focus stays inside the drawer and the page cannot scroll; when it closes, focus returns to the "Connect agent" button.
+- The drawer uses the `--ov-ui-color-*` theme variables that apply at the trigger button, so overriding them on a local container needs no extra work for the drawer.
+- The bar is 32px high and as wide as its parent. The two actions share the width equally, and text that is too long is truncated with an ellipsis.
+- The background uses `--ov-ui-color-primary-light`, and the text and divider use `--ov-ui-color-primary`. Override these two variables to change the colors; see [Getting started](../guide/getting-started) for theming.
+- Types are exported from `@openviking/react/components/file-browser-action-bar`; the package root exports only the component and `FileBrowserActionBarProps`.

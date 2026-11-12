@@ -1,9 +1,9 @@
-import { Button } from '../../shared/components/button/button.js';
+import { Button } from '../../shared/primitives/button/button.js';
 import type { Locale } from '../../shared/locale.js';
 import { dashboardLabels as resolveDashboardLabels } from './dashboard-labels.js';
 
-import { FileBrowserEntries } from '../../components/file-browser-entries/index.js';
-import type { FileBrowserEntriesProps } from '../../components/file-browser-entries/index.js';
+import { FileBrowserActionBar } from '../../components/file-browser-action-bar/index.js';
+import type { FileBrowserActionBarProps } from '../../components/file-browser-action-bar/index.js';
 import { FileTree } from '../../components/file-tree/index.js';
 import type {
   FileTreeEntryRow,
@@ -16,7 +16,7 @@ import { fileTypeIcon } from './fs-icon.js';
 import type { FileBrowserApi, FileBrowserDashboardLabels } from './types.js';
 
 /**
- * 左栏：内置入口条、搜索行与目录树。
+ * 左栏：内置操作栏、搜索行与目录树。
  *
  * 宽度由外层的可拖拽分隔条决定，因此这里只铺满自己的盒子，不设宽度；树内容
  * 比栏宽时横向滚动，而不是把名称截成省略号。
@@ -29,7 +29,7 @@ import type { FileBrowserApi, FileBrowserDashboardLabels } from './types.js';
  */
 export interface FileBrowserTreePaneProps {
   entries: Pick<
-    FileBrowserEntriesProps,
+    FileBrowserActionBarProps,
     'agentConnect' | 'onImportResources' | 'renderImportResources' | 'labels'
   >;
   locale: Locale;
@@ -58,7 +58,7 @@ export function FileBrowserTreePane({
 }: FileBrowserTreePaneProps) {
   return (
     <>
-      <FileBrowserEntries
+      <FileBrowserActionBar
         {...entries}
         locale={locale}
         className="ov-file-browser__entries"

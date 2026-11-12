@@ -1,47 +1,115 @@
 # ExperienceDashboard 经验看板
 
-`ExperienceDashboard` 是纯 UI 组件，展示 Agent 经验列表、应用效果、来源和可选测试材料。组件不感知接口，不需要 Provider；取数与数据适配由 [FileBrowser](../modules/file-browser) 的内部 Hook 或宿主完成。布局、卡片和 SVG 参考火山版 `release/openviking/2026-11-12`。
+展示 Agent 经验的使用情况：目录视图列出经验文件，文件视图展示单个经验的应用效果、来源轨迹和测试材料。
 
-## 示例
+## 何时使用
+
+- 需要在文件浏览中查看经验的使用效果，并跳转到具体的经验或轨迹时。
+- 需要自己决定数据来源、分页和页面布局时：组件只负责展示，不发起请求，也不需要 `OpenVikingProvider`。
+- 使用 [FileBrowser](../modules/file-browser) 时，看板已经内置，不需要单独接入。
+
+## 引入
+
+```tsx
+import { ExperienceDashboard } from '@openviking/react/components/experience-dashboard';
+import '@openviking/react/components/experience-dashboard/style.css';
+```
+
+## 代码演示
+
+### 基础用法
+
+切换「经验目录」「经验文件」「宿主数据」「失败状态」查看四种状态，页签支持方向键和 Home/End。「宿主数据」补充了应用效果指标和测试材料：未提供 `effect` 时指标显示「—」，提供 `testMaterials` 后才出现「测试」页签。
 
 ```tsx file="../../_demos/experience-dashboard-basic.tsx" preview
 
 ```
 
-固定展示数据可切换目录、文件、补充指标及失败状态。缺少指标时显示“—”，已提供的零值显示 `0`；只有提供 `testMaterials` 时显示测试页签。
+示例使用固定数据：点击经验名称进入文件视图，点击轨迹名称只显示收到的 URI。
 
-## 接入
+## API
 
-```tsx
-import { ExperienceDashboard } from '@openviking/react/components/experience-dashboard';
-import '@openviking/react/components/experience-dashboard/style.css';
+### ExperienceDashboard
 
-<ExperienceDashboard uri="experience-id" kind="file" data={{}} />;
-```
+| 参数             | 说明                                                                                                                         | 类型                                                                                                        | 默认值                   |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------ |
+| uri              | 当前资源的 URI，变化时重置页签、时间范围等内部状态                                                                           | `string`                                                                                                    | 必填                     |
+| kind             | 展示模式，不根据 `uri` 推断：`directory` 列出经验文件，`file` 展示单个经验的看板                                             | `'directory' \| 'file'`                                                                                     | 必填                     |
+| data             | 展示数据，没有数据的区域显示 `states` 对应的状态                                                                             | `ExperienceDashboardData`                                                                                   | `{}`                     |
+| tab              | 文件视图的当前页签：`impact` 应用效果、`source` 来源追溯、`test` 测试。传入后受控，需要在 `onTabChange` 里更新               | `'impact' \| 'source' \| 'test'`                                                                            | `'impact'`               |
+| days             | 文件视图「应用效果」页签的统计时间范围，单位为天，可选 `7`、`30`，`0` 表示全部时间。传入后受控，需要在 `onDaysChange` 里更新 | `number`                                                                                                    | `7`                      |
+| page             | 当前页码，从 0 开始                                                                                                          | `number`                                                                                                    | `0`                      |
+| hasMore          | 是否还有下一页                                                                                                               | `boolean`                                                                                                   | `false`                  |
+| startIndex       | 当前页之前已有的经验数，目录视图的序号从 `startIndex + 1` 开始                                                               | `number`                                                                                                    | `0`                      |
+| states           | 各区域的加载与错误状态，键的含义见「注意」                                                                                   | `Partial<Record<'list' \| 'outcomes' \| 'trajectories' \| 'sources' \| 'tests', ExperienceDashboardState>>` | `{}`                     |
+| onTabChange      | 切换页签时触发，参数为目标页签                                                                                               | `(tab: 'impact' \| 'source' \| 'test') => void`                                                             | -                        |
+| onDaysChange     | 切换统计时间范围时触发，参数为所选天数；组件不按范围过滤 `data`，请在回调里重新加载数据                                      | `(days: number) => void`                                                                                    | -                        |
+| onPageChange     | 点击上一页或下一页时触发，参数为目标页码；省略时翻页按钮禁用                                                                 | `(page: number) => void`                                                                                    | -                        |
+| onOpenUri        | 点击经验或轨迹名称、测试材料的「打开」按钮时触发，参数为对应的 URI；省略时这些按钮禁用                                       | `(uri: string) => void`                                                                                     | -                        |
+| labels           | 覆盖界面文案                                                                                                                 | `Partial<ExperienceDashboardLabels>`                                                                        | -                        |
+| locale           | 界面语言，规则见[国际化](../guide/i18n)                                                                                      | `'zh-CN' \| 'en-US'`                                                                                        | 继承上级，默认 `'en-US'` |
+| className、style | 外观与布局，其余 HTML 属性透传到根元素                                                                                       | HTML 属性                                                                                                   | -                        |
 
-组件只上报交互意图，不发起请求。URI 变化会重置本地交互；接口状态、分页及响应过期处理由外层完成。
+### ExperienceDashboardData
 
-## 属性
+| 参数            | 说明                                                                                                        | 类型                                                                                                      | 默认值 |
+| --------------- | ----------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ------ |
+| experiences     | 目录视图的经验列表                                                                                          | `readonly ExperienceItem[]`                                                                               | -      |
+| total           | 经验总数，显示在目录视图的标题后，省略时不显示                                                              | `number`                                                                                                  | -      |
+| effect          | 应用效果指标：注入上下文次数、检索召回次数，以及 0 到 1 的注入率（显示为百分比）；省略时三项指标都显示「—」 | `{ injectionCount: number; recallCount: number; injectionRate: number }`                                  | -      |
+| outcomes        | 任务结果分布，固定按任务成功、部分成功、未完成、失败、未知的顺序显示，未提供的结果按 0 计                   | `readonly { outcome: 'success' \| 'partial' \| 'unfinished' \| 'failure' \| 'unknown'; count: number }[]` | -      |
+| trajectories    | 「应用效果」页签中的应用轨迹，按传入顺序显示                                                                | `readonly ExperienceTrajectory[]`                                                                         | -      |
+| trajectoryTotal | 应用轨迹总数，显示在标题后，省略时不显示                                                                    | `number`                                                                                                  | -      |
+| sources         | 「来源追溯」页签中生成该经验的轨迹，按传入顺序显示                                                          | `readonly ExperienceTrajectory[]`                                                                         | -      |
+| testMaterials   | 测试材料，字段见下方 `data.testMaterials`；提供后（包括空数组）才显示「测试」页签                           | `readonly { id: string; title: string; content: string; taskQuery?: string; uri?: string }[]`             | -      |
 
-| 属性                 | 类型 / 默认值                                             | 说明                                                                                             |
-| -------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `uri`                | `string`，必填                                            | 当前资源标识                                                                                     |
-| `kind`               | `directory` / `file`，必填                                | 明确展示列表或文件看板；不根据 URI 猜测资源类型                                                  |
-| `data`               | `ExperienceDashboardData`                                 | 展示模型：经验、指标、结果分布、轨迹、来源、测试材料                                             |
-| `tab`                | `impact` / `source` / `test`                              | 受控页签；省略时组件本地维护，默认 `impact`                                                      |
-| `days`               | `number`                                                  | 受控时间范围；省略时本地维护，默认 `7`；`0` 表示全部                                             |
-| `page`               | `number`，默认 `0`                                        | 当前页，从零开始                                                                                 |
-| `hasMore`            | `boolean`，默认 `false`                                   | 是否还有下一页                                                                                   |
-| `startIndex`         | `number`，默认 `0`                                        | 当前列表之前已有多少条，用于行序号                                                               |
-| `states`             | 分区状态对象                                              | `list`、`outcomes`、`trajectories`、`sources`、`tests` 各自接收 `{ loading?, error?, onRetry? }` |
-| `locale`             | `en-US` / `zh-CN`，省略时继承语言作用域，最终默认 `en-US` | 默认文案与相对时间                                                                               |
-| `onTabChange`        | `(tab) => void`                                           | 页签切换意图                                                                                     |
-| `onDaysChange`       | `(days: number) => void`                                  | 时间范围切换意图                                                                                 |
-| `onPageChange`       | `(page: number) => void`                                  | 翻页意图；省略时翻页按钮禁用                                                                     |
-| `onOpenUri`          | `(uri: string) => void`                                   | 打开资源意图                                                                                     |
-| `labels`             | `Partial<ExperienceDashboardLabels>`                      | 覆盖文案                                                                                         |
-| `className`、`style` | HTML 属性                                                 | 布局与样式，其余 HTML 属性透传                                                                   |
+### ExperienceItem
 
-受控 `tab` 和 `days` 由调用方在回调后更新；组件不修改它们。各分区的错误和重试互相独立。UI 内置页签键盘交互、轨迹展示、测试材料复制和窄容器滚动，业务 Hook 不作为公开 API。
+| 参数            | 说明                                                                                                  | 类型     | 默认值 |
+| --------------- | ----------------------------------------------------------------------------------------------------- | -------- | ------ |
+| uri             | 经验文件的 URI，同时作为列表项的 key，需要唯一                                                        | `string` | 必填   |
+| name            | 经验名称，点击时触发 `onOpenUri`                                                                      | `string` | 必填   |
+| modTime         | 最近修改时间，可被 `Date.parse` 解析的字符串；不足 7 天显示相对时间，更早显示日期，无法解析时原样显示 | `string` | -      |
+| injectionCount  | 被注入上下文的次数，省略时显示「—」                                                                   | `number` | -      |
+| recallCount     | 被召回的次数，省略时显示「—」                                                                         | `number` | -      |
+| description     | 经验描述，列表不显示                                                                                  | `string` | -      |
+| trajectoryCount | 关联的轨迹数，列表不显示                                                                              | `number` | -      |
 
-文案覆盖为 `undefined` 时继承默认值，空字符串保留为显式覆盖。测试材料更新保留当前页签与时间范围；移除测试材料时，仅失效的测试页签回退到应用效果。
+### ExperienceTrajectory
+
+| 参数        | 说明                                       | 类型     | 默认值 |
+| ----------- | ------------------------------------------ | -------- | ------ |
+| uri         | 轨迹的 URI，同时作为列表项的 key，需要唯一 | `string` | 必填   |
+| name        | 轨迹名称，点击时触发 `onOpenUri`           | `string` | 必填   |
+| description | 轨迹说明                                   | `string` | -      |
+| created_at  | 创建时间，按传入的字符串原样显示           | `string` | -      |
+| updated_at  | 更新时间，界面不显示                       | `string` | -      |
+
+### data.testMaterials
+
+`data.testMaterials` 数组中每一项的字段。
+
+| 参数      | 说明                                                                                      | 类型     | 默认值 |
+| --------- | ----------------------------------------------------------------------------------------- | -------- | ------ |
+| id        | 材料的唯一标识                                                                            | `string` | 必填   |
+| title     | 材料标题                                                                                  | `string` | 必填   |
+| content   | 材料正文，按行显示：`User:`、`Assistant:` 开头的行突出角色，`# ` 开头的行加粗；可一键复制 | `string` | 必填   |
+| taskQuery | 任务描述                                                                                  | `string` | -      |
+| uri       | 来源轨迹的 URI；提供后显示复制按钮和「打开」按钮，点击「打开」触发 `onOpenUri`            | `string` | -      |
+
+### ExperienceDashboardState
+
+| 参数    | 说明                                                   | 类型            | 默认值  |
+| ------- | ------------------------------------------------------ | --------------- | ------- |
+| loading | 区域没有数据时显示加载状态，优先于错误状态             | `boolean`       | `false` |
+| error   | 区域没有数据时显示错误状态和 `error.message`           | `Error \| null` | -       |
+| onRetry | 点击「重试」时触发，组件不自行发起请求；省略时按钮禁用 | `() => void`    | -       |
+
+## 注意
+
+- `states` 按区域设置，仅在该区域没有数据时显示，各区域的错误和重试互相独立：`list` 对应目录视图的经验列表，`outcomes` 对应任务结果分布，`trajectories` 对应应用轨迹，`sources` 对应来源追溯，`tests` 对应测试材料。
+- 分页控件在 `page > 0` 或 `hasMore` 为 `true` 时出现：目录视图翻的是经验列表，文件视图只在「应用效果」页签出现，翻的是应用轨迹。对应区域的 `loading` 为 `true` 时翻页按钮禁用。
+- 测试材料更新时保留当前页签和时间范围；`testMaterials` 变为 `undefined` 时，已选中的「测试」页签回退到「应用效果」。
+- 复制使用 `navigator.clipboard.writeText`，它只在 HTTPS 或 localhost 下可用；不可用或被浏览器拒绝时，按钮显示「复制失败」。
+- 组件高度为 `100%`，内容超出时在组件内部滚动，请给父容器设置高度。目录视图的表格最小宽度为 560px，容器更窄时横向滚动。
+- 类型从 `@openviking/react/components/experience-dashboard` 导出，包括 `ExperienceDashboardTab` 和 `ExperienceOutcome`；包根入口只导出组件和 `ExperienceDashboardProps`。

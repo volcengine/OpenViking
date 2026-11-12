@@ -13,6 +13,7 @@ import {
   toDirectoryTab,
   type DirectorySummary,
 } from './fs-model.js';
+import { isSystemUri } from './preview-policy.js';
 import { readDirectory } from './fs-read-directory.js';
 import { createPreviewImageResolver } from './fs-preview-images.js';
 import { readFile } from './fs-read-file.js';
@@ -45,6 +46,7 @@ export interface UseFsPreviewOptions {
    * repeatedly. The three-state value is a stable string, so that cannot happen.
    */
   resourceType?: 'directory' | 'file' | 'unknown';
+  contentKind?: 'plain' | 'wiki' | 'pending';
   /** 目录两级摘要的标题。Titles of the two summary levels. */
   labels?: { l0: string; l1: string; failure: string };
   /** 字符数文案；独立 Hook 默认英文。Character count copy; standalone Hooks default to English. */
@@ -82,6 +84,7 @@ export function useFsPreview({
   client,
   uri,
   resourceType = 'file',
+  contentKind = 'plain',
   labels = resolveSummaryLabels('en-US'),
   formatCharacterCount = resolveLabels(undefined, 'en-US').formatCharacterCount,
   openParent,
@@ -122,11 +125,11 @@ export function useFsPreview({
     // stays put and only the body shows the loading state. Setting null would make
     // the whole preview area disappear and reappear, flashing on every switch.
     setTabs([loadingTab(uri, resourceType !== 'file')]);
-    setActiveKey(uri);
     setActiveKey(null);
     setError(null);
     setCharacterCount(undefined);
     const options = { ...requestOptions, signal: controller.signal };
+    if (contentKind === 'pending') return () => controller.abort();
 
     // 类型未知时先问一次 `fs/stat`。仅凭「不在已知目录集合里」就按文件处理是错的：
     // 集合只覆盖已加载的层，宿主直接传一个尚未展开过的目录 URI 时它就是空的，
@@ -145,12 +148,22 @@ export function useFsPreview({
           : resourceType === 'directory';
       if (controller.signal.aborted) throw abortError();
       return isDir
-        ? { summary: await readDirectory(client, uri, options) }
+        ? {
+            summary: isSystemUri(uri)
+              ? { abstract: '', overview: '' }
+              : await readDirectory(client, uri, options),
+          }
         : {
-            tab: await readFile(client, uri, options, openParent, () => {
-              if (!controller.signal.aborted)
-                setSaveGeneration((value) => value + 1);
-            }),
+            tab: await readFile(
+              client,
+              uri,
+              options,
+              openParent,
+              () =>
+                !controller.signal.aborted &&
+                setSaveGeneration((value) => value + 1),
+              contentKind === 'wiki',
+            ),
           };
     })();
 
@@ -186,8 +199,8 @@ export function useFsPreview({
         setTabs([tab]);
         setActiveKey(tab.key);
         // 设计稿底部显示字符数；接口不返回行数与更新时间，先给字符数。
-        const body = tab.source.content ?? '';
-        setCharacterCount(body.length);
+        const body = tab.source.content;
+        setCharacterCount(typeof body === 'string' ? body.length : undefined);
       },
       (cause: unknown) => {
         if (isAbort(cause) || controller.signal.aborted) return;
@@ -201,6 +214,7 @@ export function useFsPreview({
     client,
     uri,
     resourceType,
+    contentKind,
     openParent,
     generation,
     saveGeneration,

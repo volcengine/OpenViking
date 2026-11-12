@@ -260,13 +260,13 @@ async def test_attrs_returns_memory_fields_and_tags(monkeypatch):
                 }
             ]
 
+    fs = FSService(vikingdb=FakeVectorManager())
+    monkeypatch.setattr(fs, "stat", fake_stat)
+    monkeypatch.setattr(fs, "read", fake_read)
     monkeypatch.setattr(
         filesystem,
         "get_service",
-        lambda: SimpleNamespace(
-            fs=SimpleNamespace(stat=fake_stat, read=fake_read),
-            vikingdb_manager=FakeVectorManager(),
-        ),
+        lambda: SimpleNamespace(fs=fs),
     )
 
     response = await filesystem.attrs(
@@ -290,13 +290,12 @@ async def test_system_attrs_returns_empty_tags_without_querying_vector_store(mon
     uri = "viking://system/memory/memory_templates/custom/demo.md"
     stat = AsyncMock(return_value={"isDir": False})
     vector_filter = AsyncMock(side_effect=AssertionError("system attrs must not query vectors"))
+    fs = FSService(vikingdb=SimpleNamespace(filter=vector_filter))
+    monkeypatch.setattr(fs, "stat", stat)
     monkeypatch.setattr(
         filesystem,
         "get_service",
-        lambda: SimpleNamespace(
-            fs=SimpleNamespace(stat=stat),
-            vikingdb_manager=SimpleNamespace(filter=vector_filter),
-        ),
+        lambda: SimpleNamespace(fs=fs),
     )
     ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
 

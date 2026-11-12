@@ -1,6 +1,17 @@
+import type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
+export type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
+import type {
+  FileBrowserPreviewActions,
+  FileBrowserPreviewSlots,
+} from './preview-types.js';
+export type {
+  FileBrowserPreviewActions,
+  FileBrowserPreviewSlots,
+  FileBrowserPreviewActionContext,
+} from './preview-types.js';
 import type { Locale } from '../../shared/locale.js';
 import type { AgentConnectProps } from '../../components/agent-connect/index.js';
-import type { FileBrowserEntriesLabels } from '../../components/file-browser-entries/index.js';
+import type { FileBrowserActionBarLabels } from '../../components/file-browser-action-bar/index.js';
 import type { FileBrowserDashboard } from './dashboard-model.js';
 import type {
   FilePreviewLabels,
@@ -41,6 +52,8 @@ export interface FileBrowserDashboardLabels {
 }
 
 export interface FileBrowserLabels {
+  workflows?: Partial<FileBrowserWorkflowLabels>;
+  systemDirectory?: string;
   accessDenied?: string;
   traverseOnly?: string;
   /** 权限管理文案。Permission management copy. */
@@ -83,6 +96,14 @@ export interface FileBrowserLabels {
   download?: string;
   /** 版本历史按钮的无障碍名称。Accessible name of the version-history button. */
   history?: string;
+  importPack?: string;
+  exportPack?: string;
+  deleteFile?: string;
+  deleteTitle?: string;
+  deleteMessage?: (name: string) => string;
+  deleteFailed?: string;
+  deleteCancel?: string;
+  deleteConfirm?: string;
   /** 视图切换分组的无障碍名称。Accessible name of the view-switch group. */
   viewSwitch?: string;
   /** 树与详情之间分隔条的无障碍名称。Accessible name of the divider between the tree and the detail. */
@@ -102,8 +123,8 @@ export interface FileBrowserLabels {
    * generated yet", and the two call for different actions.
    */
   summaryFailed?: string;
-  /** 入口条与接入抽屉文案。Copy of the entry row and connection drawer. */
-  entries?: FileBrowserEntriesLabels;
+  /** 操作栏与接入抽屉文案。Copy of the action bar and connection drawer. */
+  actionBar?: FileBrowserActionBarLabels;
   /** 目录树文案。Copy of the file tree. */
   tree?: FileTreeLabels;
   dashboard?: FileBrowserDashboardLabels;
@@ -115,19 +136,19 @@ export interface FileBrowserLabels {
  * 文件浏览模块的属性。
  *
  * 模块自己通过 Hook 取数，props 里没有数据字段：宿主给配置、受控的当前资源、
- * 接入配置、导入交互、文案与请求配置。入口条、目录、搜索、预览页签与行级
+ * 接入配置、导入交互、文案与请求配置。操作栏、目录、搜索、预览页签与行级
  * 状态都在模块内维护，包含基础搜索弹窗与接口调用。
  *
- * 模块包含文件树、文件预览与顶部入口。命令面板属于 `console`。
+ * 模块包含文件树、文件预览与顶部操作栏。命令面板属于 `console`。
  *
  * Props of the file browser module.
  *
  * The module loads its own data through a Hook, so no prop carries data: the
  * host supplies configuration, the controlled current resource, import interactions,
- * copy and request configuration. The entry row, directory, search, preview tabs
+ * copy and request configuration. The action bar, directory, search, preview tabs
  * and per-row state all live inside the module, including basic search UI and requests.
  *
- * The module includes the file tree, file preview and top entries. The command panel
+ * The module includes the file tree, file preview and top action bar. The command panel
  * belongs to `console`.
  */
 export interface FileBrowserProps extends Omit<
@@ -139,8 +160,10 @@ export interface FileBrowserProps extends Omit<
    * Shared-resource ACL, off by default. Shows effective permissions and manages grants in a Modal.
    */
   acl?: boolean | FileBrowserAclOptions;
-  /** 隐藏文件编辑入口。Disables editing in the preview. */
+  /** 禁用预览编辑、导入与文件删除。Disables preview editing, import and file deletion. */
   readOnly?: boolean;
+  /** 内置预览操作的显隐开关，默认按资源能力显示。Visibility flags for native preview operations. */
+  previewActions?: FileBrowserPreviewActions;
   /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
   locale?: Locale;
   /**
@@ -219,6 +242,14 @@ export interface FileBrowserProps extends Omit<
     trigger: ReactElement<ComponentPropsWithRef<'button'>>,
   ) => ReactNode;
   /**
+   * 文件与目录的预览操作区。actions 替换默认按钮（含编辑态保存、取消），null 隐藏；
+   * extraActions 追加到默认工具栏。自定义 actions 时需自行渲染追加操作与编辑按钮。
+   * File and directory preview actions. actions replaces the defaults (including
+   * Save/Cancel); null hides them. extraActions appends to the default toolbar.
+   * Custom actions render their own extras and editing controls.
+   */
+  previewSlots?: FileBrowserPreviewSlots;
+  /**
    * 可替换文案，未提供的项使用当前 locale 的内置文案。
    * Replaceable copy; omitted fields follow locale.
    */
@@ -240,6 +271,7 @@ export interface FileBrowserProps extends Omit<
  */
 export interface FileBrowserApi {
   dashboards: ReadonlyMap<string, FileBrowserDashboard>;
+  previewDashboard?: FileBrowserDashboard;
   dashboardError: Error | null;
   /** 按渲染顺序排列的可见行。Visible rows in render order. */
   rows: readonly FileTreeRow[];
@@ -282,6 +314,7 @@ export interface FileBrowserApi {
 
 /** 模块 Hook 暴露的操作。Operations the module Hook exposes. */
 export interface FileBrowserActions {
+  openUri: (uri: string) => Promise<void>;
   openDashboard: (uri: string) => void;
   /** 选中条目。Selects an entry. */
   select: (row: FileTreeEntryRow) => Promise<void>;

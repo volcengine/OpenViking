@@ -13,7 +13,11 @@ const messages: typeof enUS = {
   } satisfies Required<
     Omit<
       ConsoleLabels,
-      'tui' | 'vikingBot' | 'commandTitle' | 'commandDescription' | 'quickStart'
+      | 'commandConsole'
+      | 'vikingBot'
+      | 'commandTitle'
+      | 'commandDescription'
+      | 'quickStart'
     >
   >,
   commands: {
@@ -63,7 +67,7 @@ const messages: typeof enUS = {
     'add-memory': {
       description: '将事实、偏好或协作约定写入指定会话，再提交会话以提取记忆。',
       examples: [
-        'ov add-memory "评审文档优先用表格对比方案" --session-id ov-tui-demo',
+        'ov add-memory "评审文档优先用表格对比方案" --session-id ov-command-console-demo',
       ],
     },
     find: {

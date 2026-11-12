@@ -146,7 +146,7 @@ it('shows the path pattern returned by the server', async () => {
   ).toBeTruthy()
 })
 
-it('filters the overview by rule name and restores both groups when cleared', async () => {
+it('filters the overview by rule name and restores all editable templates when cleared', async () => {
   api.fetch.mockResolvedValue({ account_id: 'acme', templates: [] })
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -158,7 +158,7 @@ it('filters the overview by rule name and restores both groups when cleared', as
   )
   expect(
     await screen.findAllByRole('button', { name: /memoryTemplates.fileName/ }),
-  ).toHaveLength(6)
+  ).toHaveLength(4)
   const search = screen.getByRole('searchbox')
   fireEvent.change(search, { target: { value: 'profile' } })
   expect(
@@ -174,5 +174,5 @@ it('filters the overview by rule name and restores both groups when cleared', as
   fireEvent.change(search, { target: { value: '' } })
   expect(
     screen.getAllByRole('button', { name: /memoryTemplates.fileName/ }),
-  ).toHaveLength(6)
+  ).toHaveLength(4)
 })

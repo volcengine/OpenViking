@@ -1,5 +1,5 @@
 import { useCallback, useId, useRef, useState } from 'react';
-import { Popover } from '../../shared/components/popover/popover.js';
+import { Popover } from '../../shared/primitives/popover/popover.js';
 import FilterIcon from '../../../../icons/svg/dashboards/severity-filter.svg?react';
 import ChevronIcon from '../../../../icons/svg/dashboards/filter-chevron.svg?react';
 import type { WikiConflict, WikiDashboardLabels } from './types.js';

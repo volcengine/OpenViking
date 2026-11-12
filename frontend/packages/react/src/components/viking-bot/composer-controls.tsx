@@ -1,9 +1,9 @@
-import { Button } from '../../shared/components/button/button.js';
+import { Button } from '../../shared/primitives/button/button.js';
 import type { SenderProps } from '@ark-design/ui/sender';
 import type { ButtonHTMLAttributes } from 'react';
 import SendSvg from '../../../../icons/svg/viking-bot/send.svg?react';
 import AttachSvg from '../../../../icons/svg/viking-bot/attach.svg?react';
-import { Tooltip } from '../../shared/components/tooltip/index.js';
+import { Tooltip } from '../../shared/primitives/tooltip/index.js';
 
 type SubmitProps = Parameters<NonNullable<SenderProps['renderSubmit']>>[0];
 

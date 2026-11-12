@@ -14,7 +14,7 @@ export interface DirectoryTourStep {
   target: string;
   title: ReactNode;
   description: ReactNode;
-  /** Standard semantic targets include Figma artwork. Pass null to omit it. */
+  /** Standard semantic targets include a built-in illustration. Pass null to omit it. */
   illustration?: ReactNode;
   /** Card width in CSS pixels; defaults to 270 and is viewport-constrained. */
   cardWidth?: number;

@@ -46,7 +46,7 @@
 .ov-agent-connect,
 .ov-console,
 .ov-divider,
-.ov-file-browser-entries,
+.ov-file-browser-action-bar,
 .ov-drawer,
 .ov-modal,
 .ov-file-browser,
@@ -56,7 +56,7 @@
 .ov-popover,
 .ov-scope-switcher,
 .ov-tooltip,
-.ov-tui,
+.ov-command-console,
 .ov-viking-bot,
 .ov-viking-bot__popover,
 .ov-viking-bot__reference-picker--mention,
@@ -100,10 +100,10 @@
   --ov-ui-bg-4-default: #f6f7fa;
   --ov-ui-bg-5-default: #f1f2f9;
   --ov-ui-plain-button-hover-default: #f5f5fc;
-  --ov-ui-tui-input-text-default: #4d5368;
-  --ov-ui-tui-guide-text-default: #787c91;
-  --ov-ui-tui-quick-bg-default: #f7f7f9;
-  --ov-ui-tui-quick-hover-default: #eff1f6;
+  --ov-ui-command-console-input-text-default: #4d5368;
+  --ov-ui-command-console-guide-text-default: #787c91;
+  --ov-ui-command-console-quick-bg-default: #f7f7f9;
+  --ov-ui-command-console-quick-hover-default: #eff1f6;
 
   /* Code surfaces used by the reference conversation renderer. */
   --ov-ui-code-bg-default: #fbfbfc;
@@ -115,6 +115,8 @@
   --ov-ui-focus-default: #5252ff;
   --ov-ui-fill-hover-default: #f1f2f9;
   --ov-ui-status-error-default: #c43838;
+  --ov-ui-danger-default: #e31b54;
+  --ov-ui-warning-solid-default: #ff952b;
   --ov-ui-warning-default: #b26a00;
   --ov-ui-warning-light-default: #fff0b3;
 
@@ -183,7 +185,7 @@ html.dark .ov-experience-dashboard,
 .dark .ov-agent-connect,
 .dark .ov-console,
 .dark .ov-divider,
-.dark .ov-file-browser-entries,
+.dark .ov-file-browser-action-bar,
 .dark .ov-drawer,
 .dark .ov-modal,
 .dark .ov-file-browser,
@@ -193,7 +195,7 @@ html.dark .ov-experience-dashboard,
 .dark .ov-popover,
 .dark .ov-scope-switcher,
 .dark .ov-tooltip,
-.dark .ov-tui,
+.dark .ov-command-console,
 .dark .ov-viking-bot,
 .dark .ov-viking-bot__popover,
 .dark .ov-viking-bot__reference-picker--mention,
@@ -222,14 +224,15 @@ html.dark .ov-experience-dashboard,
   --ov-ui-bg-4-default: #202227;
   --ov-ui-bg-5-default: #23252a;
   --ov-ui-plain-button-hover-default: var(--ov-ui-bg-4-default);
-  --ov-ui-tui-input-text-default: var(--ov-ui-text-1-default);
-  --ov-ui-tui-guide-text-default: var(--ov-ui-text-2-default);
-  --ov-ui-tui-quick-bg-default: var(--ov-ui-bg-4-default);
-  --ov-ui-tui-quick-hover-default: var(--ov-ui-bg-5-default);
+  --ov-ui-command-console-input-text-default: var(--ov-ui-text-1-default);
+  --ov-ui-command-console-guide-text-default: var(--ov-ui-text-2-default);
+  --ov-ui-command-console-quick-bg-default: var(--ov-ui-bg-4-default);
+  --ov-ui-command-console-quick-hover-default: var(--ov-ui-bg-5-default);
 
   --ov-ui-focus-default: #5f5fff;
   --ov-ui-fill-hover-default: #23252a;
   --ov-ui-status-error-default: #ff9595;
+  --ov-ui-danger-default: #ff668a;
   --ov-ui-warning-default: #e0a04a;
   --ov-ui-warning-light-default: #3a2f14;
 
@@ -317,6 +320,16 @@ html.dark .ov-textarea {
   --ov-ui-connect-notice-default: var(--ov-ui-text-2-default);
 }
 
+.ov-file-preview {
+  --ov-ui-preview-backdrop-default: #f8f8f8;
+  --ov-ui-preview-dot-default: rgb(0 0 0 / 8%);
+}
+
+html.dark .ov-file-preview {
+  --ov-ui-preview-backdrop-default: var(--ov-ui-bg-4-default);
+  --ov-ui-preview-dot-default: rgb(255 255 255 / 12%);
+}
+
 /* Shared dashboards: mapped from the 2026-11-12 console release, with host-overridable semantics. */
 .ov-wiki-dashboard,
 .ov-experience-dashboard,
@@ -345,7 +358,7 @@ html.dark .ov-file-browser {
   --ov-ui-dashboard-success-default: var(--ov-ui-status-success-default);
 }
 
-/* Directory guidance: six Figma popover illustrations and floating surface. */
+/* Directory guidance: six popover illustrations and floating surface. */
 .ov-directory-tour {
   --ov-ui-tour-surface-default: #ffffff;
   --ov-ui-tour-border-default: #c9cbd4;

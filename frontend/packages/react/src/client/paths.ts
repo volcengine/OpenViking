@@ -28,6 +28,14 @@ export const OV_PATHS = {
   fsAttrs: '/api/v1/fs/attrs',
   compile: '/api/v1/compile',
   compileConfigs: '/api/v1/compile/configs',
+  compileConfig: '/api/v1/compile/config',
+  compileConfigUpdate: '/api/v1/compile/config/update',
+  snapshotLog: '/api/v1/snapshot/log',
+  snapshotVersions: '/api/v1/snapshot/versions',
+  snapshotShow: '/api/v1/snapshot/show',
+  resourceTempUpload: '/api/v1/resources/temp_upload',
+  packImport: '/api/v1/pack/import',
+  packExport: '/api/v1/pack/export',
   experienceTrajectories: '/api/v1/agent-evolution/experiences/trajectories',
   experienceOutcomes: '/api/v1/agent-evolution/experiences/outcomes',
   /** 读取条目状态。Read an entry's status. */
@@ -39,6 +47,7 @@ export const OV_PATHS = {
   /** 移动或重命名。Move or rename. */
   fsMv: '/api/v1/fs/mv',
   fsCp: '/api/v1/fs/cp',
+  /** 删除文件或目录。Remove a file or directory. */
   fsRm: '/api/v1/fs',
   /** 读取文件正文。Read file content. */
   contentRead: '/api/v1/content/read',

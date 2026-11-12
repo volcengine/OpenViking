@@ -1,33 +1,39 @@
-# Modules
+# Blocks
 
-FileBrowser coordinates directory browsing, search and preview. Console provides a native command panel, alongside the ScopeCascade coordinator. Data and state Hooks are internal. Conversation services remain host-owned.
+Blocks ship with their own data loading and state: import one from `@openviking/react` and place it in your page to get a complete feature, such as a file browser, a command panel or a cascading selector.
 
-Modules load native API data through their Hooks. Hosts supply configuration and controlled values; modules report changes through callbacks. FileBrowser loads data privately and supplies display models to the two pure UI dashboards.
+## When to use
 
-| Module                           | Component     | Target capability |
-| -------------------------------- | ------------- | ----------------- |
-| [`file-browser`](./file-browser) | `FileBrowser` | File browser.     |
-| [`console`](./console)           | `Console`     | Console.          |
+- You want a file browser or command panel where the block handles requests, paging and state: FileBrowser and Console call the OpenViking native API through `OpenVikingProvider`.
+- You need to pick a library, a space and a user in turn: ScopeCascade loads through the three functions you provide and does not call the OpenViking native API.
+- You only need plain views and load the data yourself: use the [business components](../components/), which do not need `OpenVikingProvider`.
 
-## Preview
+## Block list
 
-This example uses the public module entries and the aggregate module stylesheet. The grid belongs to this documentation example; applications choose their own layout.
+| Block                           | Description                                                                                                                                                                                                                                                              | Import path                               | Request configuration                                 |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------- | ----------------------------------------------------- |
+| [FileBrowser](./file-browser)   | A file browser that combines a directory tree, search and a file preview. It reads OpenViking directories and content itself and supports editing, `.ovpack` import and export, version history and permission management, with built-in Wiki and experience dashboards. | `@openviking/react/modules/file-browser`  | Needs `OpenVikingProvider`; supports `requestOptions` |
+| [Console](./console)            | A panel with two modes: conversation mode shows VikingBot, with the conversation service connected by your app, and command mode sends `ov` commands to the OpenViking native API and shows the results.                                                                 | `@openviking/react/modules/console`       | Needs `OpenVikingProvider`; supports `requestOptions` |
+| [ScopeCascade](./scope-cascade) | A three-level selector for library, space and user: when a parent changes, its descendants are cleared and reloaded, and `onChange` reports the complete identity once all three levels are selected.                                                                    | `@openviking/react/modules/scope-cascade` | No `OpenVikingProvider` needed; no `requestOptions`   |
 
-```tsx file="../../_demos/modules-basic.tsx" preview
+## Import
 
+```tsx
+import { FileBrowser } from '@openviking/react/modules/file-browser';
+import '@openviking/react/modules/file-browser/style.css';
 ```
 
-## Import and styles
+The subpath of a block is `modules`: import it from `@openviking/react/modules/<name>`; the table above has the full paths. The root entry `@openviking/react` also exports the block component and its main Props type, such as `FileBrowser` and `FileBrowserProps`; other types, such as Labels, Slots and enums, come from the subpath only. There is no aggregate `@openviking/react/modules` entry.
 
-Import a component and its Props / Labels / Slots types from `@openviking/react/modules/<module>`. Module component bodies and their main Props types are also exported from `@openviking/react`; Labels, Slots and the enum types come from the subpath only.
+JavaScript imports do not load CSS. Pick one of these stylesheet entries; each works on its own:
 
-JavaScript does not load CSS. Import `@openviking/react/modules/<module>/style.css` for one module, `@openviking/react/modules/style.css` for all modules, or `@openviking/react/style.css` for the full library. Each stylesheet works independently. There is no aggregate `@openviking/react/modules` JavaScript entry.
+- `@openviking/react/modules/<name>/style.css`: one block, including the styles of the components it uses.
+- `@openviking/react/modules/style.css`: all blocks.
+- `@openviking/react/style.css`: the whole library.
 
-Requests inherit `OpenVikingProvider` from `@openviking/react/client`; Hooks are internal implementation details. FileBrowser loads directories automatically; Console issues requests only when a command is submitted.
+## Request configuration
 
-## Provider
-
-Modules do not accept a client through props; their Hooks read it from context. Wrap every module in the `OpenVikingProvider` from `@openviking/react/client` and configure the service address, identity and credentials once there. A module outside a Provider cannot request with usable configuration: `FileBrowser` stays empty without sending anything, and `Console` falls back to a default same-origin client that carries no identity.
+FileBrowser and Console request the OpenViking native API through the nearest `OpenVikingProvider`, so they must sit inside one. Put a single Provider at your app root and configure the service address and credentials there once; the blocks take no such props:
 
 ```tsx
 import { OpenVikingProvider } from '@openviking/react/client';
@@ -35,25 +41,64 @@ import { FileBrowser } from '@openviking/react/modules/file-browser';
 import { Console } from '@openviking/react/modules/console';
 import '@openviking/react/modules/style.css';
 
-<OpenVikingProvider
-  locale="en-US"
-  baseURL={endpoint}
-  apiKey={apiKey}
-  accountId={accountId}
-  userId={userId}
-  resourceId={libraryId}
->
+<OpenVikingProvider baseURL={endpoint} apiKey={apiKey}>
   <FileBrowser />
   <Console />
 </OpenVikingProvider>;
 ```
 
-The Provider distributes the configuration through context: modules do not take `baseURL` or credentials as props, and a module that addresses another library overrides only that field through `requestOptions`. Nesting another Provider overrides just the fields it declares and inherits the rest.
+Without a Provider, FileBrowser sends no requests and its tree stays in the loading state, while Console uses a same-origin default client that carries no identity.
 
-## Host responsibilities
+ScopeCascade does not use the shared client, has no `requestOptions` and does not need a Provider; inside a Provider it inherits only the `locale`.
 
-Hosts own page layout, authentication, account scope, routing, and permissions. Product onboarding, resource and Skill import flows, and synchronization settings remain in the host. Administration is outside these module boundaries.
+### OpenVikingProvider
 
-## Scope cascade
+An omitted field inherits from the outer Provider; in the outermost Provider it takes the value in the Default column.
 
-[ScopeCascade](./scope-cascade) accepts three host API adapters and owns requests and cascading internally; each selector subscribes independently.
+| Property    | Description                                                                                                                                                                    | Type                                          | Default                        |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------- | ------------------------------ |
+| baseURL     | Service address with an optional gateway prefix, excluding `/api/v1`; an empty string means same-origin requests                                                               | `string`                                      | `''`                           |
+| apiKey      | Credential, sent as the `X-API-Key` header; the commercial edition authenticates with a browser cookie, so omit it there                                                       | `string \| (() => string \| Promise<string>)` | -                              |
+| accountId   | OpenViking account ID, which corresponds to the data space, sent as the `X-OpenViking-Account` header                                                                          | `string \| (() => string \| Promise<string>)` | -                              |
+| userId      | User ID within the account, sent as the `X-OpenViking-User` header                                                                                                             | `string \| (() => string \| Promise<string>)` | -                              |
+| resourceId  | Current library ID, which decides the library a request addresses, sent as the `V-Resource-Id` header                                                                          | `string \| (() => string \| Promise<string>)` | -                              |
+| credentials | The `credentials` option passed to `fetch`, which decides whether cookies are sent; cross-origin requests still follow the server's CORS rules and the browser's cookie policy | `'include' \| 'same-origin' \| 'omit'`        | `'include'`                    |
+| signal      | Aborts requests; in-flight requests are cancelled when it fires                                                                                                                | `AbortSignal`                                 | -                              |
+| fetch       | Replaces the global `fetch`, for tests, tracing or environments without a global `fetch`                                                                                       | `typeof fetch`                                | Global `fetch`                 |
+| locale      | Interface language of the subtree, see [Internationalization](../guide/i18n)                                                                                                   | `'zh-CN' \| 'en-US'`                          | Inherited, otherwise `'en-US'` |
+| children    | The subtree that uses this request configuration                                                                                                                               | `ReactNode`                                   | -                              |
+
+- The identity fields `apiKey`, `accountId`, `userId` and `resourceId` also accept a function that is evaluated on every request, so it can read a rotated credential.
+- `fetch`, `signal` and function-valued identity fields are compared by reference. A change creates a new client and the blocks that use it reset, so keep them referentially stable.
+- Mounting the Provider sends no request and reads no credential stored in the browser.
+
+### Overriding the request configuration
+
+FileBrowser and Console accept an optional `requestOptions` prop of type `OvRequestOptions`, exported from `@openviking/react/client`. Use it to change the request configuration of one block only, for example to point it at another library:
+
+```tsx
+const otherLibrary = { resourceId: 'library-b' };
+
+<FileBrowser requestOptions={otherLibrary} />;
+```
+
+`OvRequestOptions` contains `baseURL`, `apiKey`, `accountId`, `userId`, `resourceId` and `signal`, with the same meanings as in the table above; `credentials` and `fetch` can be set on the Provider only. The rules:
+
+- Fields are resolved one by one, from highest priority to lowest: the block's `requestOptions`, the nearest `OpenVikingProvider`, then the library defaults.
+- With nested Providers, the inner one overrides only the fields it declares and inherits the rest from the outer one.
+- An omitted or `undefined` field inherits; `baseURL: ''` explicitly means same-origin.
+- Passing `''` for an identity field clears the inherited value, and the request no longer sends that header.
+- An override affects that one block only: it does not change the Provider or any other block.
+- Keep the `requestOptions` object referentially stable by defining it outside the component or with `useMemo`; the Notes of each block page describe what happens when it changes.
+
+## Examples
+
+### Basic usage
+
+Places FileBrowser and Console side by side, with the styles from `modules/style.css`.
+
+```tsx file="../../_demos/modules-basic.tsx" preview
+
+```
+
+The example is not wrapped in `OpenVikingProvider` and only shows the styles: FileBrowser's tree stays in the loading state and Console carries no identity. The grid belongs to the example; your app chooses its own layout.

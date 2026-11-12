@@ -1,4 +1,4 @@
-import { Button } from '../../shared/components/button/button.js';
+import { Button } from '../../shared/primitives/button/button.js';
 import type { DirectoryTourProps, DirectoryTourStep } from './types.js';
 import { resolveLocale } from '../../shared/locale.js';
 import enUS from './locales/en-US.js';

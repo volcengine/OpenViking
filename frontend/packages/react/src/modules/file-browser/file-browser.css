@@ -1,13 +1,13 @@
 /**
- * 文件浏览模块的样式，对齐控制台设计稿：左侧目录树，右侧详情区。
+ * 文件浏览模块的样式：左侧目录树，右侧详情区。
  *
  * 两栏之间是一条可拖拽的分隔条，树宽由 `--ov-file-browser-tree-width` 给出，
  * 默认 352px，拖动时由组件改这个变量。没有外层卡片——树与详情各自铺满，由
  * 宿主决定外框。颜色全部从包级主题基线派生；只有纯几何量（栏宽、行高、圆角）
  * 直接赋值。
  *
- * Styles of the file browser module, matching the console design: the tree on the
- * left, the detail pane on the right.
+ * Styles of the file browser module: the tree on the left, the detail pane on the
+ * right.
  *
  * A draggable divider sits between them and the tree width comes from
  * `--ov-file-browser-tree-width`, 352px by default, which the component rewrites
@@ -30,7 +30,7 @@
   font: inherit;
 }
 
-/* ── 左栏：入口条、搜索行、目录树 ─────────────────────────────────── */
+/* ── 左栏：操作栏、搜索行、目录树 ─────────────────────────────────── */
 
 .ov-file-browser__tree {
   display: flex;
@@ -64,7 +64,7 @@
   content: '';
 }
 
-/* 入口条：主色浅底，两个入口等分，中间一根半透明竖线。 */
+/* 操作栏：主色浅底，两个操作等分，中间一根半透明竖线。 */
 /* 搜索行复用文件树入口；仅由宿主处理搜索交互。 */
 .ov-file-browser .ov-file-browser__toolbar {
   gap: 6px;
@@ -97,6 +97,7 @@
 
 /* ── 右栏：详情 ─────────────────────────────────────────────────── */
 
+.ov-file-browser__preview-pane,
 .ov-file-browser__detail {
   display: flex;
   flex: 1;
@@ -337,4 +338,8 @@
 .ov-file-browser__dashboard:focus-visible {
   outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
   outline-offset: 1px;
+}
+
+.ov-file-browser__preview-action--danger {
+  color: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
 }

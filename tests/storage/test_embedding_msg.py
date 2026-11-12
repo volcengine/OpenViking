@@ -162,11 +162,11 @@ def test_field_patch_roundtrip_and_resolution():
 
     existing = {
         "context_type": "memory",
-        "search_tags": ["env=old", "memory_type=events"],
+        "search_tags": ["env=old", "memory_type=events", "c++=cpp"],
         "md5": "old-md5",
     }
     assert restored.resolve(existing) == {
-        "search_tags": ["memory_type=events", "env=old", "scope=new"],
+        "search_tags": ["memory_type=events", "env=old", "c++=cpp", "scope=new"],
         "md5": "new-md5",
     }
     assert restored.seed_fields["vector"] == [0.1, 0.2]

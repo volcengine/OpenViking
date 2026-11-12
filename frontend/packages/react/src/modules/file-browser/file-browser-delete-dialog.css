@@ -1,0 +1,60 @@
+.ov-file-browser-delete {
+  --ov-ui-modal-width: 460px;
+}
+.ov-file-browser-delete .ov-modal__body {
+  padding: 20px 24px;
+}
+.ov-file-browser-delete__title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 28px 0 0;
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 26px;
+}
+.ov-file-browser-delete__warning {
+  display: inline-flex;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(
+    --ov-ui-color-warning-solid,
+    var(--ov-ui-warning-solid-default)
+  );
+  color: var(
+    --ov-ui-color-text-on-primary,
+    var(--ov-ui-text-on-primary-default)
+  );
+}
+.ov-file-browser-delete__message {
+  margin: 16px 0 20px;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+  font-size: 14px;
+  line-height: 22px;
+  overflow-wrap: anywhere;
+}
+.ov-file-browser-delete__error {
+  color: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.ov-file-browser-delete__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.ov-file-browser-delete__confirm.ov-button--primary {
+  border-color: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
+  background: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
+  color: var(
+    --ov-ui-color-text-on-primary,
+    var(--ov-ui-text-on-primary-default)
+  );
+}
+.ov-file-browser-delete__confirm.ov-button--primary:hover:not(:disabled) {
+  filter: brightness(0.92);
+}

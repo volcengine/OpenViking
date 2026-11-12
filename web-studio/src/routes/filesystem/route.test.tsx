@@ -4,7 +4,7 @@ import type { FileBrowserProps } from '@openviking/react/modules/file-browser'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import type { ComponentType, PropsWithChildren, ReactNode } from 'react'
+import type { ComponentType, PropsWithChildren } from 'react'
 import {
   afterEach,
   beforeAll,
@@ -94,14 +94,12 @@ vi.mock('#/features/workbench/resources/hooks/use-resource-upload', () => ({
 vi.mock(
   '#/features/workbench/filesystem/components/workbench-file-browser',
   () => ({
-    WorkbenchFileBrowser: (
-      props: FileBrowserProps & { previewActions?: ReactNode },
-    ) => {
+    WorkbenchFileBrowser: (props: FileBrowserProps) => {
       mocks.preview(props)
       return (
         <>
           <div data-testid="preview">{props.uri}</div>
-          {props.previewActions}
+          {props.previewSlots?.extraActions}
         </>
       )
     },

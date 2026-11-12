@@ -1,6 +1,15 @@
 /* The console shell owns the border and background; the renderer fills it. */
 .ov-file-preview {
   container-type: inline-size;
+  --ov-ui-file-preview-backdrop: var(
+    --ov-ui-color-preview-backdrop,
+    var(--ov-ui-preview-backdrop-default)
+  );
+  --ov-ui-file-preview-dots: radial-gradient(
+    circle,
+    var(--ov-ui-color-preview-dot, var(--ov-ui-preview-dot-default)) 0.6px,
+    transparent 0.7px
+  );
   background: var(--ov-ui-file-preview-surface);
   color: var(--ov-ui-file-preview-text);
 }
@@ -66,6 +75,26 @@
   background: var(--ov-ui-file-preview-surface);
   color: inherit;
 }
+/* FileViewer's fallback uses Arco buttons; keep their styling local to the viewer. */
+.ov-file-preview__viewer .ark-agentic-file-viewer__fallback > .arco-btn {
+  min-block-size: 28px;
+  padding: 4px 12px;
+  border: 1px solid var(--ov-ui-file-preview-border);
+  border-radius: 6px;
+  background: var(--ov-ui-file-preview-surface);
+  color: var(--ov-ui-file-preview-text);
+  font: inherit;
+  cursor: pointer;
+}
+.ov-file-preview__viewer .ark-agentic-file-viewer__fallback > .arco-btn:hover {
+  background: var(--ov-ui-file-preview-row-hover);
+}
+.ov-file-preview__viewer
+  .ark-agentic-file-viewer__fallback
+  > .arco-btn:focus-visible {
+  outline: 2px solid var(--ov-ui-file-preview-focus-ring);
+  outline-offset: 2px;
+}
 .ov-file-preview .ark-agentic-file-viewer-image {
   min-height: 0;
   overflow: hidden;
@@ -76,8 +105,17 @@
   overflow: hidden;
 }
 .ov-file-preview .ark-agentic-file-viewer-markdown {
-  background: var(--ov-ui-file-preview-surface);
+  background: var(--ov-ui-file-preview-dots) 0 0 / 10px 10px
+    var(--ov-ui-file-preview-backdrop);
   color: inherit;
+}
+
+/* Only the document surround receives dots; the pages keep their own surface. */
+.ov-file-preview [data-document-backdrop='true'] {
+  --agentic-file-viewer-internal-document-backdrop: var(
+      --ov-ui-file-preview-dots
+    )
+    0 0 / 10px 10px var(--ov-ui-file-preview-backdrop);
 }
 .ov-file-preview .ark-agentic-file-viewer-markdown__content img {
   max-width: 100%;
@@ -258,4 +296,18 @@
   flex: 1 1 auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.ov-file-preview__copy-path {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.ov-file-preview__copy-path .ov-button {
+  min-inline-size: 24px;
+  min-block-size: 24px;
+}
+.ov-file-preview__copy-status {
+  font-size: 12px;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
 }

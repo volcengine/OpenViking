@@ -10,7 +10,7 @@ import {
   showsInlineDescription,
 } from './file-tree-info.js';
 import { resolveInfoCopy } from './file-tree-info-labels.js';
-import { Popover } from '../../shared/components/popover/index.js';
+import { Popover } from '../../shared/primitives/popover/index.js';
 import { resolveFileTreeInfoCopy } from './file-tree-info-tooltip.js';
 import { FileTreeTooltipContent } from './file-tree-tooltip-surface.js';
 import type { FileTreeRowContext } from './file-tree-row-context.js';

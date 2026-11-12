@@ -114,6 +114,7 @@ export interface OvRequestSpec {
    */
   path: string;
   query?: Readonly<Record<string, OvQueryValue>>;
+  /** JSON data or FormData for native multipart uploads; FormData sets its own boundary. */
   body?: unknown;
   /**
    * 响应体的读取方式。省略时为 `json`：解析原生外壳并返回 `result`。需要原始
@@ -232,12 +233,12 @@ export interface OvStreamSpec extends Omit<OvRequestSpec, 'responseType'> {
 }
 
 /**
- * 已建立的流。异步迭代得到事件，`abort` 中止请求后迭代器以 `AbortError` 拒绝。
+ * 已建立的流。异步迭代得到事件，`abort` 中止请求后迭代器正常结束。
  * 响应体边读边消费，因此只能迭代一次。
  *
  * An open stream. Iterating yields events; `abort` stops the request and the
- * iterator then rejects with an `AbortError`. The body is consumed as it is
- * read, so it can be iterated only once.
+ * iterator then ends without an error. The body is consumed as it is read, so
+ * it can be iterated only once.
  */
 export interface OvStream extends AsyncIterable<OvStreamEvent> {
   /** 中止请求并释放连接。Aborts the request and releases the connection. */

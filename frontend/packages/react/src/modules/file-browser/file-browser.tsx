@@ -2,10 +2,8 @@ import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
 import { useCallback, useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 
-import { ResizableHandle } from '../../shared/components/resizable/index.js';
-import { FileBrowserDetail } from './file-browser-detail.js';
-import { FileBrowserEmpty } from './file-browser-empty.js';
-import { FileBrowserFailure } from './file-browser-failure.js';
+import { ResizableHandle } from '../../shared/primitives/resizable/index.js';
+import { FileBrowserPreviewPane } from './file-browser-preview-pane.js';
 import {
   TREE_DEFAULT_WIDTH,
   TREE_MIN_WIDTH,
@@ -27,13 +25,13 @@ export type {
 } from './types.js';
 
 /**
- * 文件浏览模块的组合视图，对齐控制台设计稿：左侧目录树（入口条、搜索行、树），
+ * 文件浏览模块的组合视图：左侧目录树（操作栏、搜索行、树），
  * 右侧详情区（面包屑、标题行、正文、底部元信息）。两栏之间有一条可拖拽的
  * 分隔条，拖动改树宽；取数与联动都在 {@link useFileBrowser} 里，这里只组装
  * 视图。
  *
- * The file browser module's composite view, matching the console design: the tree
- * on the left (entry row, search row, tree) and the detail pane on the right
+ * The file browser module's composite view: the tree
+ * on the left (action bar, search row, tree) and the detail pane on the right
  * (breadcrumb, header, body, footer). A draggable divider between them resizes the
  * tree; loading and coordination live in {@link useFileBrowser}, and this only
  * assembles the view.
@@ -49,9 +47,11 @@ export function FileBrowser({
   renderDashboard,
   acl,
   readOnly,
+  previewActions,
   onUriChange,
   onImportResources,
   renderImportResources,
+  previewSlots,
   labels,
   requestOptions,
   className,
@@ -171,7 +171,7 @@ export function FileBrowser({
               agentConnect,
               onImportResources,
               renderImportResources,
-              labels: labels?.entries,
+              labels: labels?.actionBar,
             }}
             onSearch={() => setSearchOpen(true)}
             browser={browser}
@@ -193,46 +193,18 @@ export function FileBrowser({
           className="ov-file-browser__resizer"
         />
 
-        {browser.previewTabs && browser.previewTabs.length > 0 ? (
-          <FileBrowserDetail
-            tabs={browser.previewTabs}
-            activeKey={browser.previewKey}
-            locale={locale}
-            labels={previewLabels}
-            footer={browser.previewFooter}
-            titleExtra={permissions.titleExtra}
-            extraActions={permissions.actions}
-            readOnly={readOnly || !permissions.canEdit}
-            onActiveKeyChange={browser.actions.setPreviewKey}
-          />
-        ) : // 读失败与「没选中」是两件事：前者有选中的资源却取不到内容，必须显示
-        // 原因与重试；后者才是空态插画。把失败画成空态会让一次 403 看起来像「还
-        // 没选文件」。
-        //
-        // A read failure and "nothing selected" are two different things: the former
-        // has a selected resource it could not load and needs the reason plus a retry,
-        // while only the latter is the empty-state artwork. Painting a failure as the
-        // empty state makes a 403 look like "no file selected yet".
-        browser.currentUri && browser.previewError ? (
-          <div className="ov-file-browser__detail">
-            <FileBrowserFailure
-              message={text.error}
-              detail={browser.previewError.message}
-              retryLabel={text.retry}
-              onRetry={() => void browser.actions.refresh()}
-            />
-          </div>
-        ) : (
-          <div className="ov-file-browser__detail">
-            {browser.currentUri ? (
-              <p className="ov-file-browser__hint" role="status">
-                {text.loading}
-              </p>
-            ) : (
-              <FileBrowserEmpty label={text.empty} />
-            )}
-          </div>
-        )}
+        <FileBrowserPreviewPane
+          browser={browser}
+          permissions={permissions}
+          rootUri={rootUri}
+          locale={locale}
+          text={text}
+          previewLabels={previewLabels}
+          readOnly={readOnly}
+          previewActions={previewActions}
+          previewSlots={previewSlots}
+          requestOptions={requestOptions}
+        />
       </div>
       {permissions.drawer}
       <FileBrowserSearch

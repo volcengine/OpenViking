@@ -19,6 +19,7 @@ for (const name of [
   'Node',
   'Element',
   'HTMLElement',
+  'HTMLImageElement',
   'MutationObserver',
 ]) {
   globalThis[name] = name === 'window' ? dom.window : dom.window[name];
@@ -111,7 +112,12 @@ export function recordingFetch(handler) {
       // The remaining query parameters stay available: some cases answer differently
       // depending on an argument such as `limit`.
       query: Object.fromEntries(parsed.searchParams),
-      body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      body:
+        init?.body instanceof FormData
+          ? init.body
+          : init?.body
+            ? JSON.parse(String(init.body))
+            : undefined,
       init,
     };
     calls.push(call);

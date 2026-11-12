@@ -44,7 +44,11 @@ const messages = {
   } satisfies Required<
     Omit<
       ConsoleLabels,
-      'tui' | 'vikingBot' | 'commandTitle' | 'commandDescription' | 'quickStart'
+      | 'commandConsole'
+      | 'vikingBot'
+      | 'commandTitle'
+      | 'commandDescription'
+      | 'quickStart'
     >
   >,
   commands,
@@ -67,7 +71,7 @@ const messages = {
       description:
         'Add a fact, preference, or convention to a session, then commit the session to extract memory.',
       examples: [
-        'ov add-memory "Prefer tables for comparing options in reviews" --session-id ov-tui-demo',
+        'ov add-memory "Prefer tables for comparing options in reviews" --session-id ov-command-console-demo',
       ],
     },
     find: {

@@ -387,12 +387,11 @@ class OpenVikingConfig(BaseModel):
     watch_leader_provider: Literal["auto", "local", "cache"] = Field(
         default="auto",
         description=(
-            "Watch scheduler leader provider. 'auto' keeps the storage-derived default "
-            "(local for file WatchStore, cache-backed distributed leader otherwise); "
-            "'local' and 'cache' explicitly select the leader mode."
+            "Deprecated; will be removed in the next version. Use "
+            "storage.agfs.coordination.provider instead; explicit coordination takes precedence."
         ),
+        json_schema_extra={"deprecated": True},
     )
-
     reconcile_system_assets_on_startup: bool = Field(
         default=True,
         description=(
@@ -451,6 +450,21 @@ class OpenVikingConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _normalize_watch_leader_provider(self) -> "OpenVikingConfig":
+        if "watch_leader_provider" in self.model_fields_set:
+            _get_config_logger().warning(
+                "Config field 'watch_leader_provider' is deprecated and will be removed "
+                "in the next version; use 'storage.agfs.coordination.provider' instead."
+            )
+        coordination = self.storage.agfs.coordination
+        uses_cache = self.watch_leader_provider == "cache" or (
+            self.watch_leader_provider == "auto" and self.storage.watch_store.provider != "file"
+        )
+        if uses_cache and "provider" not in coordination.model_fields_set:
+            self.storage.agfs.coordination = coordination.model_copy(update={"provider": "cache"})
+        return self
+
+    @model_validator(mode="after")
     def _validate_cache_runtime_config(self) -> "OpenVikingConfig":
         """Require the shared cache Provider whenever AGFS selects a cache-backed runtime."""
         agfs = self.storage.agfs
@@ -459,6 +473,7 @@ class OpenVikingConfig(BaseModel):
             agfs.cachefs.backend == "cache"
             or agfs.queuefs.backend == "cache"
             or agfs.pathlock.provider == "cache"
+            or agfs.coordination.provider == "cache"
             or backups.get("provider", "filesystem") == "cache"
         )
         if uses_canonical_cache and self.cache is None:

@@ -1701,6 +1701,33 @@ class AsyncHTTPClient:
         )
         return self._handle_response_data(response).get("result", {})
 
+    async def batch_set_tags(
+        self,
+        uris: List[str],
+        tags: Optional[List[str]] = None,
+        mode: str = "replace",
+        recursive: bool = False,
+        options: Optional[SetTagsOptions] = None,
+    ) -> Dict[str, Any]:
+        fixed: Dict[str, Any] = {
+            "uris": [VikingURI.normalize(uri) for uri in uris],
+            "mode": mode,
+            "recursive": recursive,
+        }
+        if tags is not None:
+            fixed["tags"] = tags
+        payload = self._build_options_payload(
+            options,
+            SetTagsOptions,
+            fixed=fixed,
+        )
+        response = await self._request(
+            "POST",
+            "/api/v1/content/batch_set_tags",
+            json=payload,
+        )
+        return self._handle_response_data(response).get("result", {})
+
     async def acl_get(self, uri: str) -> Dict[str, Any]:
         response = await self._http.get("/api/v1/acl", params={"uri": VikingURI.normalize(uri)})
         return self._handle_response_data(response).get("result", {})
@@ -3327,6 +3354,24 @@ class SyncHTTPClient:
     ) -> Dict[str, Any]:
         return run_async(
             self._async_client.set_tags(uri, tags, mode=mode, recursive=recursive, options=options)
+        )
+
+    def batch_set_tags(
+        self,
+        uris: List[str],
+        tags: Optional[List[str]] = None,
+        mode: str = "replace",
+        recursive: bool = False,
+        options: Optional[SetTagsOptions] = None,
+    ) -> Dict[str, Any]:
+        return run_async(
+            self._async_client.batch_set_tags(
+                uris,
+                tags,
+                mode=mode,
+                recursive=recursive,
+                options=options,
+            )
         )
 
     def acl_get(self, uri: str) -> Dict[str, Any]:

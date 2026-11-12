@@ -53,16 +53,6 @@ export function toFileSource(
   return undefined;
 }
 
-/** 取页签上可用于复制的正文；拿不到时返回 `undefined`。 */
-export function readCopyableText(
-  source: FilePreviewSource,
-): string | undefined {
-  const { content } = source;
-  return typeof content === 'string' && content.length > 0
-    ? content
-    : undefined;
-}
-
 /**
  * 判断文件是否为严格空文件。
  *

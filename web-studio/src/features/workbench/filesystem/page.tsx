@@ -470,7 +470,7 @@ function FilesystemWorkbench() {
     }
   }, [])
 
-  const previewActions = selectedFile ? (
+  const previewMenu = selectedFile ? (
     <details key={selectedUri} className={styles.moreMenu}>
       <summary aria-label={t('ide.more')} title={t('ide.more')}>
         <MoreHorizontalIcon className="size-3.5" />
@@ -625,7 +625,12 @@ function FilesystemWorkbench() {
         <WorkbenchFileBrowser
           key={`${identityScopeKey}:${refreshKey}`}
           readOnly
-          previewActions={previewActions}
+          previewActions={{
+            history: false,
+            importPack: false,
+            exportPack: false,
+          }}
+          previewSlots={{ extraActions: previewMenu }}
           uri={normalizeFileUri(selectedUri)}
           defaultExpandedUri={normalizeFileUri(currentUri)}
           onUriChange={(uri) => {

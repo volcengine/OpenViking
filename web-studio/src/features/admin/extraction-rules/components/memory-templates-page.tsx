@@ -1,5 +1,4 @@
 import userIllustration from '#/assets/memory-templates/user.svg'
-import agentIllustration from '#/assets/memory-templates/agent.svg'
 import { UserSpaceSwitcher } from '#/features/admin/users/components/user-space-switcher'
 import { Input } from '#/shared/ui/input'
 import { Tooltip, TooltipContent, TooltipTrigger } from '#/shared/ui/tooltip'
@@ -27,7 +26,6 @@ import {
   ArrowLeftIcon,
   ChevronDownIcon,
   ArrowRightIcon,
-  BotIcon,
   CircleHelpIcon,
   SearchIcon,
   SquareUserRoundIcon,
@@ -54,24 +52,6 @@ const editableFields: Record<EditableMemoryType, string[]> = {
     'description',
     'fields.event_name.description',
     'fields.summary.description',
-    'content_template',
-  ],
-  soul: [
-    'description',
-    'fields.core_truths.description',
-    'fields.boundaries.description',
-    'fields.vibe.description',
-    'fields.continuity.description',
-    'content_template',
-  ],
-  identity: [
-    'description',
-    'fields.creature.description',
-    'fields.name.description',
-    'fields.vibe.description',
-    'fields.avatar.description',
-    'fields.emoji.description',
-    'fields.introduction.description',
     'content_template',
   ],
 }
@@ -259,22 +239,9 @@ export function MemoryTemplatesPage() {
             <TemplateGroup
               title={t('memoryTemplates.userGroup')}
               hint={t('memoryTemplates.userGroupHint')}
-              types={editableMemoryTypes.slice(0, 4)}
               templates={templatesQuery.data.templates}
               onSelect={choose}
               search={search}
-              illustration={userIllustration}
-              kind="user"
-            />
-            <TemplateGroup
-              title={t('memoryTemplates.agentGroup')}
-              hint={t('memoryTemplates.agentGroupHint')}
-              types={editableMemoryTypes.slice(4)}
-              templates={templatesQuery.data.templates}
-              onSelect={choose}
-              search={search}
-              illustration={agentIllustration}
-              kind="agent"
             />
             {search.trim() &&
             !editableMemoryTypes.some((type) =>
@@ -463,38 +430,31 @@ export function MemoryTemplatesPage() {
 function TemplateGroup({
   title,
   hint,
-  types,
   templates,
   onSelect,
   search,
-  illustration,
-  kind,
 }: {
   title: string
   hint: string
-  types: readonly EditableMemoryType[]
   templates: MemoryTemplate[]
   onSelect: (memoryType: EditableMemoryType) => void
   search: string
-  illustration: string
-  kind: 'user' | 'agent'
 }) {
   const { t } = useTranslation('settings')
-  const visibleTypes = types.filter((type) =>
+  const visibleTypes = editableMemoryTypes.filter((type) =>
     `${t(`memoryTemplates.${type}`)} ${t(`memoryTemplates.overviewHints.${type}`)}`
       .toLocaleLowerCase()
       .includes(search.trim().toLocaleLowerCase()),
   )
   if (!visibleTypes.length) return null
-  const Icon = kind === 'user' ? SquareUserRoundIcon : BotIcon
   return (
     <section className="memory-template-group" aria-label={title}>
-      <div className="memory-template-illustration" data-kind={kind}>
-        <img src={illustration} alt="" />
+      <div className="memory-template-illustration" data-kind="user">
+        <img src={userIllustration} alt="" />
       </div>
       <div className="memory-template-group-content">
         <h2>
-          <Icon aria-hidden="true" />
+          <SquareUserRoundIcon aria-hidden="true" />
           <span>{title}</span>
           <span className="memory-template-group-hint">· {hint}</span>
         </h2>
