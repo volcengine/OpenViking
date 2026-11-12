@@ -52,7 +52,7 @@ Create `~/.openviking/ov.conf` in your home configuration directory:
 }
 ```
 
-For `provider: "openai-codex"`, `vlm.api_key` is optional when Codex OAuth is already available.
+For `provider: "openai-codex"`, `vlm.api_key` is optional when Codex OAuth is already available. A standard OpenAI API key is also supported when `vlm.api_base` is `https://api.openai.com/v1`; see [VLM settings](#vlm).
 
 Top-level `service_name` defaults to `"openviking-server"`. It isolates coordination
 state and provides Redis namespaces for cache-backed modules. OTel `service_name`
@@ -809,10 +809,10 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `api_key` | str | API key. Optional for `openai-codex` when Codex OAuth is available, and optional for `litellm` routes that use provider-native credentials |
+| `api_key` | str | API key. Optional for `openai-codex` with Codex OAuth; a standard OpenAI API key requires `api_base: "https://api.openai.com/v1"`. Optional for `litellm` routes that use provider-native credentials |
 | `forward_api_key` | bool | LiteLLM only. Overrides whether `api_key` is forwarded to LiteLLM. By default, OpenViking does not forward placeholder keys for native AWS/GCP routes such as `bedrock/`, `sagemaker/`, and `vertex_ai/`; set to `true` when intentionally using a LiteLLM API-key route such as Bedrock bearer-token auth |
 | `model` | str | Model name |
-| `api_base` | str | API endpoint (optional) |
+| `api_base` | str | API endpoint (optional). For `openai-codex`, defaults to the ChatGPT Codex backend; set `https://api.openai.com/v1` with a standard OpenAI API key |
 | `temperature` | float or null | Sampling temperature (default: `null`). Omit or set to `null` to leave it out of requests and use the provider default |
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
 | `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `32`) |
@@ -854,12 +854,35 @@ When the VLM configuration reports `is_available() == false`, generic file summa
 **Supported providers:**
 - `volcengine`: Volcengine VLM API
 - `openai`: OpenAI-compatible VLM API
-- `openai-codex`: Codex VLM via ChatGPT/Codex OAuth
+- `openai-codex`: Responses API via ChatGPT/Codex OAuth or an explicit API key and endpoint
 - `kimi`: Kimi Coding subscription endpoint with built-in provider defaults
 - `glm`: Z.AI GLM Coding Plan endpoint with OpenAI-compatible requests
 - `litellm`: LiteLLM VLM API, including explicit LiteLLM routes such as `bedrock/`, `sagemaker/`, `vertex_ai/`, and `azure/`
 
-For `openai-codex`, authenticate through `openviking-server init`, then verify with `openviking-server doctor`.
+For `openai-codex` with OAuth, authenticate through `openviking-server init`, then verify with `openviking-server doctor`.
+
+**Responses API with an API key**
+
+To use a standard OpenAI API key with the Responses API, set both `api_key` and
+`api_base` in the `openai-codex` configuration. An explicit key skips Codex OAuth.
+Merge this `vlm` section into `ov.conf`, replacing the key and model placeholders:
+
+```json
+{
+  "vlm": {
+    "provider": "openai-codex",
+    "api_key": "YOUR_OPENAI_API_KEY",
+    "api_base": "https://api.openai.com/v1",
+    "model": "YOUR_RESPONSES_MODEL",
+    "reasoning_effort": "medium"
+  }
+}
+```
+
+Choose a Responses model that supports your tools and reasoning effort. This route
+uses `/v1/responses`; `provider: "openai"` uses Chat Completions. Setting only
+`api_key` does not select the OpenAI API endpoint: without `api_base`, the Codex
+backend remains the default.
 
 For `litellm`, `api_key` can be omitted when the underlying route authenticates through
 environment or provider-native credentials, such as AWS IAM/IRSA for Bedrock and

@@ -27,6 +27,17 @@ try {
                 './src/components/file-browser-action-bar/index.ts',
               'file-browser': './src/modules/file-browser/use-file-browser.ts',
               console: './src/modules/console/use-console.ts',
+              'bot-chat': './src/modules/viking-bot/chat-controller.ts',
+              'bot-sessions': './src/modules/viking-bot/sessions-controller.ts',
+              'bot-aggregate': './src/modules/viking-bot/aggregate.ts',
+              'bot-events': './src/modules/viking-bot/native-events.ts',
+              'bot-client': './src/client/client.ts',
+              'bot-service': './src/modules/viking-bot/native-service.ts',
+              'bot-submit': './src/components/viking-bot/composer-controls.tsx',
+              'bot-composer-events':
+                './src/components/viking-bot/composer-events.ts',
+              'console-conversation':
+                './src/modules/console/use-conversation.tsx',
               provider: './src/client/provider.tsx',
               'reference-tags':
                 './src/components/viking-bot/composer-reference-tags.tsx',
