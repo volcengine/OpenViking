@@ -3,9 +3,9 @@
 
 import pytest
 
-from openviking.integrations.github_radar.collector import collect_prs
-from openviking.integrations.github_radar.gh_cli import GhCliError
-from openviking.integrations.github_radar.models import RadarConfig, RadarState
+from openviking.resource.github_radar.collector import collect_prs
+from openviking.resource.github_radar.gh_cli import GhCliError
+from openviking.resource.github_radar.models import RadarConfig, RadarState
 from openviking_cli.exceptions import InvalidArgumentError
 
 

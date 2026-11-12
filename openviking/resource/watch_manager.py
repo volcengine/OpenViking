@@ -101,6 +101,7 @@ class WatchManager:
         tracker: Any = None,
         resource_service: Any = None,
         runtime_config_manager: Any = None,
+        vlm_resolver: Any = None,
     ) -> None:
         if locks is None:
             if viking_fs is None:
@@ -112,6 +113,7 @@ class WatchManager:
         self._tracker = tracker
         self._resource_service = resource_service
         self._runtime_config_manager = runtime_config_manager
+        self._vlm_resolver = vlm_resolver
         self._trigger_locks: KeyedAsyncLockPool[str] = KeyedAsyncLockPool()
         self._deletion_guard: Optional[Callable[[str, str], Any]] = None
 
@@ -740,7 +742,7 @@ class WatchManager:
         from openviking.resource.pr_radar_runner import PrRadarRunner
 
         try:
-            runner = PrRadarRunner(self._viking_fs)
+            runner = PrRadarRunner(self._viking_fs, vlm_resolver=self._vlm_resolver)
             result = await runner.maybe_run(task, ctx)
             if result.status in {"skipped", "failed"}:
                 logger.warning(
@@ -749,10 +751,20 @@ class WatchManager:
                     task.task_id,
                     result.reason,
                 )
+            elif result.status == "accumulating":
+                logger.info(
+                    "[WatchManager] PR radar accumulating %s PR(s) for watch %s: %s",
+                    result.pr_count,
+                    task.task_id,
+                    result.reason,
+                )
             elif result.status == "published":
                 logger.info(
-                    "[WatchManager] PR radar published %s PR(s) to %s for watch %s",
+                    "[WatchManager] PR radar published %s PR(s) (%s) window %s ~ %s to %s for watch %s",
                     result.pr_count,
+                    result.report_mode,
+                    result.window_start or "?",
+                    result.window_end or "?",
                     result.target_uri,
                     task.task_id,
                 )

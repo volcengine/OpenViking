@@ -12,7 +12,7 @@ watermark in a state file under the report directory. A radar failure must
 never fail the watch run that hosts it.
 """
 
-from openviking.integrations.github_radar.models import (
+from openviking.resource.github_radar.models import (
     PR_RADAR_CONFIG_KEY,
     PrSignal,
     RadarConfig,

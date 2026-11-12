@@ -21,9 +21,16 @@ PR_RADAR_CONFIG_KEY = "pr_radar"
 
 _DEFAULT_BACKFILL_DAYS = 7
 _DEFAULT_MAX_PRS_PER_RUN = 50
+_DEFAULT_MAX_PENDING_PRS = 200
+_DEFAULT_SUMMARY_BATCH_BYTES = 60_000
+# Collection runs on every watch trigger (typically hourly); the digest window
+# is independent and defaults to daily, so a large backfill catches up across
+# hourly collection passes instead of spanning multiple daily reports.
+_DEFAULT_DIGEST_INTERVAL_MINUTES = 24 * 60
 _BODY_MAX_CHARS = 8000
 _TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
 STATE_FILENAME = ".radar-state.json"
+SIGNALS_FILENAME = ".radar-signals.jsonl"
 LATEST_REPORT_NAME = "latest.md"
 REPORTS_DIRNAME = "reports"
 
@@ -71,6 +78,10 @@ class RadarConfig:
     target_uri: Optional[str] = None
     backfill_days: int = _DEFAULT_BACKFILL_DAYS
     max_prs_per_run: int = _DEFAULT_MAX_PRS_PER_RUN
+    max_pending_prs: int = _DEFAULT_MAX_PENDING_PRS
+    summary_enabled: bool = False
+    summary_batch_bytes: int = _DEFAULT_SUMMARY_BATCH_BYTES
+    digest_interval_minutes: int = _DEFAULT_DIGEST_INTERVAL_MINUTES
 
     @classmethod
     def from_kwargs(cls, processor_kwargs: Optional[Dict[str, Any]]) -> "RadarConfig":
@@ -85,6 +96,19 @@ class RadarConfig:
         target_uri = raw.get("target_uri")
         if target_uri is not None and not isinstance(target_uri, str):
             raise InvalidArgumentError(f"{PR_RADAR_CONFIG_KEY}.target_uri must be a string")
+        if isinstance(target_uri, str):
+            target_uri = target_uri.strip()
+            # Fail fast at watch creation: an invalid scheme would otherwise
+            # survive validation and make every radar trigger fail permanently.
+            # All valid targets (explicit or derived from the watch URI) are
+            # ``viking://`` resources. A blank value means "derive from watch".
+            if target_uri and not target_uri.startswith("viking://"):
+                raise InvalidArgumentError(
+                    f"{PR_RADAR_CONFIG_KEY}.target_uri must start with 'viking://', "
+                    f"got {target_uri!r}"
+                )
+            if not target_uri:
+                target_uri = None
 
         def _positive_int(name: str, default: int) -> int:
             value = raw.get(name, default)
@@ -96,11 +120,22 @@ class RadarConfig:
 
         backfill_days = _positive_int("backfill_days", _DEFAULT_BACKFILL_DAYS)
         max_prs_per_run = _positive_int("max_prs_per_run", _DEFAULT_MAX_PRS_PER_RUN)
+        max_pending_prs = _positive_int("max_pending_prs", _DEFAULT_MAX_PENDING_PRS)
+        summary_batch_bytes = _positive_int(
+            "summary_batch_bytes", _DEFAULT_SUMMARY_BATCH_BYTES
+        )
+        digest_interval_minutes = _positive_int(
+            "digest_interval_minutes", _DEFAULT_DIGEST_INTERVAL_MINUTES
+        )
         return cls(
             enabled=enabled,
             target_uri=target_uri.strip() if isinstance(target_uri, str) else None,
             backfill_days=backfill_days,
             max_prs_per_run=max_prs_per_run,
+            max_pending_prs=max_pending_prs,
+            summary_enabled=bool(raw.get("summary_enabled", False)),
+            summary_batch_bytes=summary_batch_bytes,
+            digest_interval_minutes=digest_interval_minutes,
         )
 
     def first_run_floor(self) -> str:
@@ -111,14 +146,23 @@ class RadarConfig:
 class RadarState:
     """Persistent watermark stored next to the reports (``.radar-state.json``).
 
-    GitHub's ``since`` query is inclusive (``>=``), so PRs whose ``updated_at``
-    equals the watermark are returned again on the next poll. Their numbers are
-    remembered in :attr:`issues_seen` and filtered instead of blindly bumping the
-    watermark by a second, which would silently skip same-second updates.
+    Two independent watermarks:
+
+      * :attr:`issues_since` / :attr:`issues_seen` -- collection watermark,
+        how far the gh issues endpoint has been read. GitHub's ``since`` query
+        is inclusive (``>=``), so PRs whose ``updated_at`` equals the
+        watermark are returned again on the next poll; their numbers are
+        remembered in ``issues_seen`` and filtered instead of blindly bumping
+        the watermark by a second.
+      * :attr:`last_digest_at` -- digest watermark, the right edge of the last
+        published report window. Empty means the initial backfill window has
+        not been digested yet. Subsequent windows are anchored on the watch's
+        ``created_at`` and advance by ``watch_interval`` per digest.
     """
 
     issues_since: str = ""
     issues_seen: List[str] = field(default_factory=list)
+    last_digest_at: str = ""
 
     @classmethod
     def from_dict(cls, data: Any) -> "RadarState":
@@ -128,10 +172,15 @@ class RadarState:
         return cls(
             issues_since=str(data.get("issues_since") or ""),
             issues_seen=[str(item) for item in seen] if isinstance(seen, list) else [],
+            last_digest_at=str(data.get("last_digest_at") or ""),
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        return {"issues_since": self.issues_since, "issues_seen": list(self.issues_seen)}
+        return {
+            "issues_since": self.issues_since,
+            "issues_seen": list(self.issues_seen),
+            "last_digest_at": self.last_digest_at,
+        }
 
 
 @dataclass(frozen=True)
@@ -154,6 +203,29 @@ class PrSignal:
     @property
     def source_ref(self) -> str:
         return f"#{self.number}"
+
+    _ROW_FIELDS = (
+        "number",
+        "title",
+        "url",
+        "state",
+        "draft",
+        "author",
+        "created_at",
+        "updated_at",
+        "merged_at",
+        "closed_at",
+        "labels",
+        "body",
+    )
+
+    def to_row(self) -> Dict[str, Any]:
+        """JSON-safe dict for the append-only signal store (one jsonl line)."""
+        return {name: getattr(self, name) for name in self._ROW_FIELDS}
+
+    @classmethod
+    def from_row(cls, row: Dict[str, Any]) -> "PrSignal":
+        return cls(**{name: row[name] for name in cls._ROW_FIELDS if name in row})
 
     @staticmethod
     def clip_body(raw: Any) -> str:

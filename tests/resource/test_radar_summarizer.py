@@ -1,0 +1,224 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+
+import json
+
+import pytest
+
+from openviking.resource.github_radar.models import PrSignal
+from openviking.resource.github_radar.summarizer import RadarSummarizer
+
+REPO = "volcengine/OpenViking"
+
+
+def _pr(number: int, body: str = "hello") -> PrSignal:
+    ts = "2026-11-10T08:00:00Z"
+    return PrSignal(
+        number=number,
+        title=f"PR {number}",
+        url=f"https://github.com/volcengine/OpenViking/pull/{number}",
+        state="open",
+        draft=False,
+        author="alice",
+        created_at=ts,
+        updated_at=ts,
+        merged_at=None,
+        closed_at=None,
+        labels=[],
+        body=body,
+    )
+
+
+class FakeVLM:
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.prompts: list[str] = []
+
+    async def get_completion_async(self, prompt):
+        self.prompts.append(prompt)
+        if isinstance(self._responses[0], Exception):
+            raise self._responses.pop(0)
+        return json.dumps(self._responses.pop(0), ensure_ascii=False)
+
+
+class FakeResolver:
+    def __init__(self, handle):
+        self._handle = handle
+        self.requested_accounts: list[str] = []
+
+    async def get_vlm(self, account_id):
+        self.requested_accounts.append(account_id)
+        return self._handle
+
+
+def _triage_response(numbers):
+    return {
+        "items": [
+            {
+                "number": number,
+                "topic": "gateway",
+                "severity": "high",
+                "summary_zh": f"摘要 {number}",
+                "impact": f"影响 {number}",
+                "recommended_action": f"动作 {number}",
+            }
+            for number in numbers
+        ]
+    }
+
+
+def _synthesis_response():
+    return {
+        "editorial_note": "本期以 gateway 改造为主",
+        "sections": [
+            {
+                "topic": "gateway",
+                "overview_zh": "多个 gateway PR 共同收敛工具访问控制",
+                "highlight_numbers": [11, 99],
+            }
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_summarize_drops_unknown_pr_numbers():
+    handle = FakeVLM(
+        [
+            # 99 is not in the collected set and must be discarded.
+            _triage_response([11, 12, 99]),
+            _synthesis_response(),
+        ]
+    )
+    summarizer = RadarSummarizer(FakeResolver(handle), batch_bytes=60_000)
+    summary = await summarizer.summarize(REPO, [_pr(11), _pr(12)], "acct-1")
+
+    assert summary is not None
+    assert set(summary.triage) == {11, 12}
+    assert summary.synthesis is not None
+    # Unknown highlight number is filtered; only the real PR survives.
+    assert summary.synthesis.sections[0].highlight_numbers == [11]
+
+
+@pytest.mark.asyncio
+async def test_summarize_normalizes_bad_severity():
+    handle = FakeVLM(
+        [
+            {
+                "items": [
+                    {
+                        "number": 11,
+                        "topic": "gateway",
+                        "severity": "catastrophic",
+                        "summary_zh": "摘要",
+                        "impact": "影响",
+                    }
+                ]
+            },
+            {
+                "editorial_note": "安静的一天",
+                "sections": [
+                    {"topic": "gateway", "overview_zh": "综述", "highlight_numbers": [11]}
+                ],
+            },
+        ]
+    )
+    summarizer = RadarSummarizer(FakeResolver(handle), batch_bytes=60_000)
+    summary = await summarizer.summarize(REPO, [_pr(11)], "acct-1")
+
+    assert summary is not None
+    assert summary.triage[11].severity == "low"
+
+
+@pytest.mark.asyncio
+async def test_vlm_failure_returns_none():
+    handle = FakeVLM([RuntimeError("model unavailable")])
+    summarizer = RadarSummarizer(FakeResolver(handle), batch_bytes=60_000)
+    assert await summarizer.summarize(REPO, [_pr(11)], "acct-1") is None
+
+
+@pytest.mark.asyncio
+async def test_synthesis_failure_keeps_triage_only():
+    handle = FakeVLM(
+        [
+            _triage_response([11]),
+            # Sections reference an unknown topic -> synthesis rejected.
+            {
+                "editorial_note": "x",
+                "sections": [
+                    {"topic": "nonexistent", "overview_zh": "y", "highlight_numbers": [11]}
+                ],
+            },
+        ]
+    )
+    summarizer = RadarSummarizer(FakeResolver(handle), batch_bytes=60_000)
+    summary = await summarizer.summarize(REPO, [_pr(11)], "acct-1")
+
+    assert summary is not None
+    assert 11 in summary.triage
+    assert summary.synthesis is None
+
+
+@pytest.mark.asyncio
+async def test_batching_splits_oversized_payloads():
+    big_body = "x" * 20_000
+    prs = [_pr(11, body=big_body), _pr(12, body=big_body)]
+    handle = FakeVLM(
+        [
+            _triage_response([11]),
+            _triage_response([12]),
+            _synthesis_response(),
+        ]
+    )
+    # Each PR serializes past the small budget, so one triage call per PR.
+    summarizer = RadarSummarizer(FakeResolver(handle), batch_bytes=500)
+    summary = await summarizer.summarize(REPO, prs, "acct-1")
+
+    assert summary is not None
+    assert set(summary.triage) == {11, 12}
+    # Two triage calls + one synthesis call.
+    assert len(handle.prompts) == 3
+
+
+@pytest.mark.asyncio
+async def test_empty_pr_list_is_a_noop():
+    handle = FakeVLM([])
+    summarizer = RadarSummarizer(FakeResolver(handle), batch_bytes=60_000)
+    assert await summarizer.summarize(REPO, [], "acct-1") is None
+    assert handle.prompts == []
+
+
+@pytest.mark.asyncio
+async def test_triage_batch_failure_keeps_earlier_batch_rows():
+    big_body = "x" * 20_000
+    prs = [_pr(11, body=big_body), _pr(12, body=big_body)]
+    handle = FakeVLM(
+        [
+            _triage_response([11]),
+            RuntimeError("model unavailable"),  # second triage batch fails
+            _synthesis_response(),
+        ]
+    )
+    # Small budget forces one triage call per PR.
+    summarizer = RadarSummarizer(FakeResolver(handle), batch_bytes=500)
+    summary = await summarizer.summarize(REPO, prs, "acct-1")
+
+    assert summary is not None
+    # Rows from the successful first batch survive; the failed PR is skipped.
+    assert set(summary.triage) == {11}
+    assert summary.synthesis is not None
+
+
+@pytest.mark.asyncio
+async def test_synthesis_exception_keeps_triage_only_result():
+    handle = FakeVLM(
+        [
+            _triage_response([11]),
+            RuntimeError("model unavailable"),  # synthesis transport failure
+        ]
+    )
+    summarizer = RadarSummarizer(FakeResolver(handle), batch_bytes=60_000)
+    summary = await summarizer.summarize(REPO, [_pr(11)], "acct-1")
+
+    assert summary is not None
+    assert 11 in summary.triage
+    assert summary.synthesis is None

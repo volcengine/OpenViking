@@ -606,6 +606,7 @@ class OpenVikingService:
             viking_fs=self._viking_fs,
             resource_service=self._resource_service,
             runtime_config_manager=self._runtime_config_manager,
+            vlm_resolver=self._vlm_resolver,
         )
         await self._watch_manager.initialize()
         self._watch_runtime = WatchRuntime(

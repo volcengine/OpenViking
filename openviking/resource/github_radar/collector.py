@@ -19,8 +19,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set
 
-from openviking.integrations.github_radar.gh_cli import GhCli, GhCliError
-from openviking.integrations.github_radar.models import (
+from openviking.resource.github_radar.gh_cli import GhCli, GhCliError
+from openviking.resource.github_radar.models import (
     PrSignal,
     RadarConfig,
     RadarState,
