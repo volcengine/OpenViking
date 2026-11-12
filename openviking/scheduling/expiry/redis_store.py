@@ -65,7 +65,23 @@ def create_redis_client(config: ExpiryRedisConfig, *, retry=None):
     if retry is not None:
         kwargs["retry"] = retry
     if config.mode == "standalone":
-        return redis_async.Redis.from_url(endpoint, **kwargs)
+        return redis_async.Redis.from_url(endpoint, db=config.db, **kwargs)
+    elif config.mode == "sentinel":
+        # 私有化 HA 只扩展连接装配；租约、CAS 和重试仍由原 Expiry Store 负责。
+        from redis.asyncio.sentinel import Sentinel
+        nodes = []
+        for raw in config.endpoints:
+            parsed = urlsplit(raw if "://" in raw else "redis://" + raw)
+            nodes.append((parsed.hostname, parsed.port))
+        sentinel = Sentinel(nodes, sentinel_kwargs={
+            "password": config.sentinel_password or None,
+            "socket_timeout": config.socket_timeout_seconds,
+            "socket_connect_timeout": config.connect_timeout_seconds,
+            "ssl": config.tls,
+        })
+        return sentinel.master_for(
+            config.master_name, db=config.db, ssl=config.tls, **kwargs
+        )
     else:
         from redis.asyncio.cluster import ClusterNode, RedisCluster
         from redis.backoff import NoBackoff

@@ -116,7 +116,9 @@ async def readiness_check(request: Request):
         )
 
     checks = {}
-    state_backend = getattr(service._agfs_client, "shared_state_backend", None)
+    state_client = getattr(service, "_agfs_client", None)
+    state_backend = getattr(state_client, "shared_state_backend", None)
+    serverless = getattr(getattr(service, "_config", None), "runtime_mode", "dedicated") == "serverless"
 
     # 1. AGFS: probe filesystem access
     try:
@@ -126,20 +128,33 @@ async def readiness_check(request: Request):
 
     # 2. VectorDB: health_check()
     try:
-        viking_fs = get_viking_fs()
-        storage = viking_fs._get_vector_store()
-        if storage:
-            healthy = await storage.health_check()
-            checks["vectordb"] = "ok" if healthy else "unhealthy"
+        if serverless:
+            # Provider preparation is independent of every business collection.
+            providers = (
+                service.runtime_config_manager,
+                service.embedding_provider,
+                service.vlm_resolver,
+                service.vector_config_resolver,
+                service.vikingdb_manager,
+            )
+            checks["providers"] = "ok" if all(p is not None for p in providers) else "not_initialized"
         else:
-            checks["vectordb"] = "not_configured"
+            viking_fs = get_viking_fs()
+            storage = viking_fs._get_vector_store()
+            if storage:
+                healthy = await storage.health_check()
+                checks["vectordb"] = "ok" if healthy else "unhealthy"
+            else:
+                checks["vectordb"] = "not_configured"
     except Exception as e:
-        checks["vectordb"] = f"error: {e}"
+        checks["providers" if serverless else "vectordb"] = f"error: {e}"
 
     # 3. APIKeyManager: check if loaded
     try:
         manager = getattr(request.app.state, "api_key_manager", None)
         if manager is not None:
+            if serverless:
+                await manager.list_accounts(limit=1)
             checks["api_key_manager"] = "ok"
         else:
             checks["api_key_manager"] = "not_configured"
@@ -155,24 +170,47 @@ async def readiness_check(request: Request):
     except Exception as e:
         checks["embedding"] = f"error: {e}"
 
-    # 5. Ollama: connectivity check if configured
-    try:
-        from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
-        from openviking_cli.utils.ollama import check_ollama_running, detect_ollama_in_config
+    if serverless:
+        from openviking.service.task_tracker import get_task_tracker
 
-        ov_config = OpenVikingConfigSingleton.get_instance()
-        uses_ollama, ollama_host, ollama_port = detect_ollama_in_config(ov_config)
-        if uses_ollama:
-            if check_ollama_running(ollama_host, ollama_port):
-                checks["ollama"] = "ok"
+        async def probe_queue():
+            if service._queue_manager is None:
+                raise RuntimeError("Queue manager is not initialized")
+            await service._queue_manager.size(service._queue_manager.EMBEDDING)
+
+        async def probe_pathlock():
+            await service.viking_fs._async_agfs.pathlock_observe()
+
+        for name, probe in (
+            ("task_store", lambda: get_task_tracker().list_tasks(limit=1)),
+            ("queue", probe_queue),
+            ("pathlock", probe_pathlock),
+        ):
+            try:
+                await probe()
+                checks[name] = "ok"
+            except Exception as e:
+                checks[name] = f"error: {e}"
+
+    # Dedicated instances retain the cluster model connectivity probe.
+    if not serverless:
+        try:
+            from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+            from openviking_cli.utils.ollama import check_ollama_running, detect_ollama_in_config
+
+            ov_config = OpenVikingConfigSingleton.get_instance()
+            uses_ollama, ollama_host, ollama_port = detect_ollama_in_config(ov_config)
+            if uses_ollama:
+                if check_ollama_running(ollama_host, ollama_port):
+                    checks["ollama"] = "ok"
+                else:
+                    checks["ollama"] = f"unreachable at {ollama_host}:{ollama_port}"
             else:
-                checks["ollama"] = f"unreachable at {ollama_host}:{ollama_port}"
-        else:
-            checks["ollama"] = "not_configured"
-    except Exception as e:
-        checks["ollama"] = f"error: {e}"
+                checks["ollama"] = "not_configured"
+        except Exception as e:
+            checks["ollama"] = f"error: {e}"
 
-    state_check = getattr(service._agfs_client, "check_state", None)
+    state_check = getattr(state_client, "check_state", None)
     if state_check is not None:
         try:
             await state_check()
@@ -184,7 +222,7 @@ async def readiness_check(request: Request):
     status_code = 200 if all_ok else 503
     content = {"status": "ready" if all_ok else "not_ready", "checks": checks, "shared_state": state_backend}
     # provider可报告已验证schema身份，私有化迁移准出使用；原生流程不在这里建表。
-    schema = getattr(service._agfs_client, "shared_schema", None)
+    schema = getattr(state_client, "shared_schema", None)
     if isinstance(schema, dict):
         content["shared_schema"] = {key: schema.get(key) for key in ("version", "checksum")}
     return JSONResponse(

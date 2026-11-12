@@ -14,7 +14,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class ExpiryRedisConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
-    mode: Literal["standalone", "cluster"] = "standalone"
+    mode: Literal["standalone", "cluster", "sentinel"] = "standalone"
+    db: int = Field(default=0, ge=0)
+    master_name: str = ""
+    sentinel_password: str = Field(default="", repr=False)
     endpoints: list[str] = Field(default_factory=list)
     username: str = ""
     password_env: str = ""
@@ -32,6 +35,10 @@ class ExpiryRedisConfig(BaseModel):
             raise ValueError("Redis password and password_env are mutually exclusive")
         if self.mode == "standalone" and len(self.endpoints) > 1:
             raise ValueError("standalone Redis accepts at most one endpoint")
+        if self.mode == "sentinel" and (not self.master_name or not self.endpoints):
+            raise ValueError("Sentinel requires endpoints and master_name")
+        if self.mode != "sentinel" and (self.master_name or self.sentinel_password):
+            raise ValueError("Sentinel credentials require sentinel mode")
         schemes: set[str] = set()
         for endpoint in self.endpoints:
             normalized = (
