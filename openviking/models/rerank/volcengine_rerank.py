@@ -243,6 +243,11 @@ class RerankClient(RerankBase):
 
             return JevRerankClient.from_config(config)
 
+        if provider == "tei":
+            from openviking.models.rerank.tei_rerank import TEIRerankClient
+
+            return TEIRerankClient.from_config(config)
+
         return cls(
             ak=config.ak,
             sk=config.sk,
