@@ -4,6 +4,7 @@
 @import './dropdown/dropdown.css';
 @import '../../shared/primitives/tooltip/tooltip.css';
 @import './file-preview.css';
+@import './file-preview-editor.css';
 @import '@ark-design/ui/file-viewer/style/index.css';
 @import '@ark-design/ui/markdown-renderer/style/index.css';
 @import './file-preview-console.css';

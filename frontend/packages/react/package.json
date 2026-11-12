@@ -156,6 +156,7 @@
     "@ark-design/ui": "0.0.0-beta.7",
     "@rsbuild/plugin-react": "^2.1.1",
     "@rslib/core": "^1.0.5",
+    "@types/prismjs": "^1.26.6",
     "@types/react-transition-group": "^4.4.12"
   },
   "peerDependenciesMeta": {
@@ -164,7 +165,11 @@
     }
   },
   "dependencies": {
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.15",
     "dayjs": "^1.11.23",
+    "prismjs": "^1.30.0",
     "react-focus-lock": "^2.13.7",
     "react-markdown": "^10.1.0",
     "react-transition-group": "^4.4.5",

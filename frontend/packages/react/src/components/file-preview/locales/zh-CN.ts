@@ -16,6 +16,8 @@ const messages = {
   editFile: '编辑文件',
   save: '保存编辑',
   editor: '编辑正文',
+  editorLoadFailed: '编辑器加载失败',
+  highlightFailed: '语法高亮加载失败',
   leaveEditing: '取消编辑',
   retry: '重试',
   loadFailed: '文件加载失败',

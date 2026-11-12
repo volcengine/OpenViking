@@ -553,8 +553,12 @@ export interface FilePreviewLabels {
   edit?: string;
   editFile?: string;
   save?: string;
-  /** 编辑区文本框的无障碍名称。Accessible name of the editor textarea. */
+  /** 编辑区文本框的无障碍名称。Accessible name of the editor. */
   editor?: string;
+  /** 编辑器加载失败时的提示。Message shown when the editor fails to load. */
+  editorLoadFailed?: string;
+  /** 语法高亮加载失败时的提示。Message shown when syntax highlighting fails to load. */
+  highlightFailed?: string;
   /** 读取失败后退出编辑态的按钮文案。Label of the button that leaves editing after a failed load. */
   leaveEditing?: string;
   /** 重试按钮文案。Retry button label. */
