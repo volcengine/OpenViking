@@ -399,6 +399,7 @@ Give vikingbot its own email account. It polls the inbox over **IMAP** and repli
 > - `allowFrom`: leave it empty to accept email from anyone, or restrict it to specific senders.
 > - `smtpUseTls` and `smtpUseSsl` default to `true` and `false`, respectively. Those defaults are correct for Gmail on port 587 with STARTTLS, so you do not need to set them explicitly.
 > - If you only want to read and analyze email without sending automatic replies, set `"autoReplyEnabled": false`.
+> - Automatic messages do not trigger replies. VikingBot marks its replies with `Auto-Submitted: auto-replied` to prevent responder loops.
 
 ```json
 {

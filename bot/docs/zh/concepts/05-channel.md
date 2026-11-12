@@ -390,6 +390,7 @@ vikingbot gateway
 > - `allowFrom`：留空以接受来自任何人的邮件，或限制到特定发件人。
 > - `smtpUseTls` 和 `smtpUseSsl` 分别默认为 `true` / `false`，这对 Gmail（端口 587 + STARTTLS）是正确的。无需显式设置它们。
 > - 如果您只想读取/分析邮件而不发送自动回复，请设置 `"autoReplyEnabled": false`。
+> - 自动邮件不会触发回复。VikingBot 会用 `Auto-Submitted: auto-replied` 标记回复，以防止自动回复循环。
 
 ```json
 {

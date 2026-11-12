@@ -143,6 +143,7 @@ class EmailChannel(BaseChannel):
         )
         email_msg["To"] = to_addr
         email_msg["Subject"] = subject
+        email_msg["Auto-Submitted"] = "auto-replied"
         email_msg.set_content(msg.content or "")
 
         in_reply_to = self._last_message_id_by_chat.get(to_addr)
@@ -201,6 +202,7 @@ class EmailChannel(BaseChannel):
             mark_seen=self.config.mark_seen,
             dedupe=True,
             limit=0,
+            skip_automatic=True,
         )
 
     def fetch_messages_between_dates(
@@ -227,6 +229,7 @@ class EmailChannel(BaseChannel):
             mark_seen=False,
             dedupe=False,
             limit=max(1, int(limit)),
+            skip_automatic=False,
         )
 
     def _fetch_messages(
@@ -235,6 +238,7 @@ class EmailChannel(BaseChannel):
         mark_seen: bool,
         dedupe: bool,
         limit: int,
+        skip_automatic: bool,
     ) -> list[dict[str, Any]]:
         """Fetch messages by arbitrary IMAP search criteria."""
         messages: list[dict[str, Any]] = []
@@ -272,6 +276,14 @@ class EmailChannel(BaseChannel):
                     continue
 
                 parsed = BytesParser(policy=policy.default).parsebytes(raw_bytes)
+                if skip_automatic and self._is_automatic_message(parsed):
+                    logger.info("Skip automatic email to prevent an auto-reply loop")
+                    if dedupe and uid:
+                        self._remember_processed_uid(uid)
+                    if mark_seen:
+                        client.store(imap_id, "+FLAGS", "\\Seen")
+                    continue
+
                 sender = parseaddr(parsed.get("From", ""))[1].strip().lower()
                 if not sender:
                     continue
@@ -311,10 +323,7 @@ class EmailChannel(BaseChannel):
                 )
 
                 if dedupe and uid:
-                    self._processed_uids.add(uid)
-                    # mark_seen is the primary dedup; this set is a safety net
-                    if len(self._processed_uids) > self._MAX_PROCESSED_UIDS:
-                        self._processed_uids.clear()
+                    self._remember_processed_uid(uid)
 
                 if mark_seen:
                     client.store(imap_id, "+FLAGS", "\\Seen")
@@ -352,6 +361,21 @@ class EmailChannel(BaseChannel):
                 if m:
                     return m.group(1)
         return ""
+
+    @staticmethod
+    def _is_automatic_message(msg: Any) -> bool:
+        values = msg.get_all("Auto-Submitted", [])
+        for value in values:
+            match = re.match(r"\s*([!#$%&'*+\-.^_`|~0-9A-Za-z]+)", str(value))
+            if not match or match.group(1).casefold() != "no":
+                return True
+        return False
+
+    def _remember_processed_uid(self, uid: str) -> None:
+        self._processed_uids.add(uid)
+        # mark_seen is the primary dedup; this set is a safety net
+        if len(self._processed_uids) > self._MAX_PROCESSED_UIDS:
+            self._processed_uids.clear()
 
     @staticmethod
     def _decode_header_value(value: str) -> str:
