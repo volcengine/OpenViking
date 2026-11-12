@@ -6,7 +6,7 @@ Public UI components, composed modules accept optional `locale: 'zh-CN' | 'en-US
 
 React foundations for OpenViking AI application interfaces: build tooling, documentation, layered directories, and scoped styles. FileTree, Tui and FilePreview provide working views, alongside five file-type icons. FileBrowser coordinates browsing, previews and dashboards; Console provides a native command panel; ScopeCascade provides an integrated cascade selector.
 
-This package inherits the repository's AGPL-3.0-only license. The release workflow publishes it to npm when a `react@<version>` tag matches the version in this package's manifest.
+This package inherits the repository's AGPL-3.0-only license. The release workflow publishes it to npm when the Changesets version PR is merged, or when a `react@<version>` tag matches this package's version.
 
 ## Module map
 
@@ -23,7 +23,7 @@ This package inherits the repository's AGPL-3.0-only license. The release workfl
 | [client](./src/client/index.ts)                                        | `@openviking/react/client`                    | Framework-neutral request client: `createOvClient`, `OvClient`, `OvClientError`                     |
 | [hooks](./src/hooks/README.md), [utils](./src/utils/README.md)         | Internal only                                 | Cross-module Hooks and pure utilities                                                               |
 
-Components implement their reviewed contracts incrementally. FileTree renders every documented row type with keyboard interaction; FilePreview implements the tab shell, header actions and the plain-text preview and editing foundation, with its body not yet wired to FileViewer. ScopeSwitcher is a stateless layout container; independently rendered ScopeSelector children own visibility, with host-owned per-level data subscriptions, search and requests. Tui renders records, results and the input. AgentConnect follows the Figma layout with built-in bilingual agent and developer integration content, host-provided credentials and locale, optional controlled selection and clipboard feedback. VikingBot provides a working view pending design review. Limits are described in each component's own docs. The package also ships five file-type icons, `ArrowRightIcon` and the three scope-level icons (`LibraryIcon`, `SpaceIcon`, `UserIcon`).
+Components implement their reviewed contracts incrementally. FileTree renders every documented row type with keyboard interaction; FilePreview implements the tab shell, customizable header actions and text editing, with native image/video previews and lazily loaded FileViewer adapters for other supported formats. FileBrowser supplies resource-specific native operations and boolean visibility controls. ScopeSwitcher is a stateless layout container; independently rendered ScopeSelector children own visibility, with host-owned per-level data subscriptions, search and requests. Tui renders records, results and the input. AgentConnect follows the Figma layout with built-in bilingual agent and developer integration content, host-provided credentials and locale, optional controlled selection and clipboard feedback. VikingBot provides a working view pending design review. Limits are described in each component's own docs. The package also ships five file-type icons, `ArrowRightIcon` and the three scope-level icons (`LibraryIcon`, `SpaceIcon`, `UserIcon`).
 
 Components receive view data and state through props and express user intent through callbacks, following the [component directory conventions](./src/components/AGENTS.md). [modules](./src/modules/README.md) plan Hooks and views per business capability: Hooks load data, hold state and expose operations, and composite views wire them into components. Full pages and product-specific flows belong to the host; the admin console is out of scope for this phase. `console` exports a native command panel; its orchestration Hook stays internal and conversation data and callbacks are supplied by the host. `file-browser` provides browsing, preview and dashboard coordination.
 
@@ -100,3 +100,13 @@ Dynamic messages use typed formatter functions; dates and numbers use `Intl`. `n
 Set `locale` on `OpenVikingProvider` for a subtree. Optional module and component Props override the nearest scope, then fall back to `en-US`. Standalone Hooks also inherit the Provider. The private `src/shared/locale-context.tsx` is shared across public entries and remains separate from request-client configuration, so language changes preserve requests and state.
 
 The internal Input, Button, Modal and Drawer adapt Arco Design logic (MIT); its notice ships in `LICENSE.arco-design`. Input and Button visual rules are adapted from the console's `@arco-design/theme-ve-o-aml-design@0.0.36` (MIT), rather than Arco's default skin. They have no public component entry.
+
+## Authentication forms
+
+`EmailLoginForm`, `ApiKeyLoginForm`, `PasswordResetRequestForm`, `PasswordSetupForm`,
+`LoginMethodSelector` and `InvitationConfirmation` are request-free React views.
+Import components from the package root or their individual `components/<kebab-case-name>`
+entries and import the matching `style.css`. Optional actions and agreements are configured
+by the host. Password strength, asynchronous loading/errors, mail delivery, session/CSRF,
+invitation routing and persistence are host responsibilities. No internal UI or theme
+packages are required. See the authentication form examples in the UI documentation.

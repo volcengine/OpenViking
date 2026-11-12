@@ -1,36 +1,26 @@
 import { Button } from '../../shared/components/button/button.js';
-import type { ReactNode } from 'react';
 import { Tooltip } from '../../shared/components/tooltip/tooltip.js';
+import type { WikiDashboardAction } from './types.js';
 
 export function WikiActionButton({
-  label,
-  hint,
+  icon,
+  tooltip,
+  disabled,
   onClick,
-  children,
-  ...aria
-}: {
-  label: string;
-  hint: string;
-  onClick?: () => void;
-  children: ReactNode;
-  'aria-expanded'?: boolean;
-  'aria-controls'?: string;
-}) {
+}: Omit<WikiDashboardAction, 'key'>) {
+  const inactive = disabled || !onClick;
   return (
-    <Tooltip content={hint}>
+    <Tooltip content={tooltip}>
       <Button
         size="mini"
         type="text"
         iconOnly
-        {...aria}
         htmlType="button"
-        aria-label={label}
-        aria-disabled={!onClick || undefined}
-        aria-description={!onClick ? hint : undefined}
-        onClick={() => onClick?.()}
-      >
-        {children}
-      </Button>
+        aria-label={tooltip}
+        aria-disabled={inactive || undefined}
+        icon={icon}
+        onClick={onClick}
+      />
     </Tooltip>
   );
 }

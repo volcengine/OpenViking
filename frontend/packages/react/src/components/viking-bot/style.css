@@ -6,6 +6,7 @@
 @import './viking-bot-interaction.css';
 @import '@ark-design/ui/message-list/style/index.css';
 @import '@ark-design/ui/bubble/style/index.css';
+@import '@ark-design/ui/user-message-file-list/style/index.css';
 @import '@ark-design/ui/activity-timeline/style/index.css';
 @import '@ark-design/ui/markdown-renderer/style/index.css';
 @import '@ark-design/ui/sender/style/index.css';
@@ -14,4 +15,5 @@
 @import '../file-tree/style.css';
 @import '../../shared/components/tooltip/style.css';
 @import './viking-bot-features.css';
+@import './composer-reference-tags.css';
 @import './viking-bot-messages.css';

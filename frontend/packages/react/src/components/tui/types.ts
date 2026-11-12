@@ -493,6 +493,14 @@ export interface TuiLabels {
   formatHoursAgo?: (hours: number) => string;
 }
 
+/** 空态快捷入口。One empty-state shortcut. */
+export interface TuiQuickCommand {
+  /** 匹配 commands 的名称，复用其说明。Name matched in commands to reuse its copy. */
+  name: string;
+  /** 原样填入的完整命令；空字符串清空输入，不回退到命令前缀。Full input text; an empty string clears the input without a prefix fallback. */
+  value: string;
+}
+
 /**
  * 当前命令记录、结果与输入区的公开接口；会话、历史面板和外层工具栏由宿主组合。
  * 提供命令补全、参数提示与帮助。
@@ -535,15 +543,15 @@ export interface TuiProps extends Omit<
    */
   emptyState?: ReactNode;
   /**
-   * 内置空态展示的快捷命令名称，按数组顺序取自 `commands`，未命中的名称跳过，
-   * 重复名称只保留首次出现。
-   * 点击后填入输入框并聚焦，不提交命令。
-   * Quick command names rendered by the built-in empty state, resolved from
-   * `commands` in array order; unknown names are skipped and repeats keep their
-   * first occurrence. Selecting one fills
-   * and focuses the input without submitting.
+   * 内置空态快捷入口；name 按顺序匹配 commands 并复用 summary/description，
+   * 未命中的名称跳过，重复名称只保留首次出现。
+   * 点击后原样填入 value 并聚焦，不添加前缀、不提交；空字符串清空输入。
+   * Built-in empty-state shortcuts. Names resolve copy from commands in order;
+   * unknown names are skipped and repeats keep their first occurrence.
+   * Selection fills value verbatim and focuses without adding a prefix or
+   * submitting. An empty value clears the input.
    */
-  quickCommands?: readonly string[];
+  quickCommands?: readonly TuiQuickCommand[];
   /** 宿主提供的命令目录；省略时无候选和参数帮助，仍可提交文本。 */
   commands?: readonly TuiCommandDefinition[];
   /** 宿主提供的分组名称与顺序；未声明的组按目录顺序追加。 */

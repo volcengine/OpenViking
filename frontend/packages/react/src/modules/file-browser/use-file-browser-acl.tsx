@@ -101,6 +101,8 @@ export function useFileBrowserAcl({
     enabled && permission?.key === key ? permission.level : undefined;
   const text = aclLabels(locale, labels);
   return {
+    canDelete: !enabled || level === 'manage',
+    canEdit: !enabled || level === 'write' || level === 'manage',
     titleExtra:
       enabled && permission?.key === key && permission.error ? (
         <span className="ov-file-browser-acl__lookup-error" role="status">
@@ -115,20 +117,12 @@ export function useFileBrowserAcl({
           </Button>
         </span>
       ) : level ? (
-        <AclTag level={level} text={text} onManage={() => setOpened(key)} />
-      ) : null,
-    actions:
-      level === 'manage' ? (
-        <Button
-          size="small"
-          type="default"
-          ref={triggerRef}
-          htmlType="button"
-          className="ov-file-browser-acl__manage"
-          onClick={() => setOpened(key)}
-        >
-          {text.manage}
-        </Button>
+        <AclTag
+          level={level}
+          text={text}
+          triggerRef={triggerRef}
+          onManage={() => setOpened(key)}
+        />
       ) : null,
     drawer:
       enabled && uri && context && level === 'manage' ? (

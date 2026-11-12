@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 
-import type { FilePreviewTab } from '../../components/file-preview/index.js';
+import type {
+  FilePreviewDirectoryTab,
+  FilePreviewTab,
+} from '../../components/file-preview/index.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { directoryIcon } from './fs-icon.js';
 import { resolveLabels, resolveSummaryLabels } from './file-browser-labels.js';
@@ -10,7 +13,9 @@ import {
   toDirectoryTab,
   type DirectorySummary,
 } from './fs-model.js';
+import { isSystemUri } from './preview-policy.js';
 import { readDirectory } from './fs-read-directory.js';
+import { createPreviewImageResolver } from './fs-preview-images.js';
 import { readFile } from './fs-read-file.js';
 import { abortError, resolveIsDirectory } from './fs-stat.js';
 
@@ -87,11 +92,13 @@ export function useFsPreview({
   const [directory, setDirectory] = useState<{
     uri: string;
     summary: DirectorySummary;
+    resolveImage: FilePreviewDirectoryTab['resolveImage'];
   } | null>(null);
   const [tabs, setTabs] = useState<FilePreviewTab[] | null>(null);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [characterCount, setCharacterCount] = useState<number>();
+  const [saveGeneration, setSaveGeneration] = useState(0);
 
   // 当前资源决定要读什么。资源切换必须取消上一次读取，否则慢的旧响应会覆盖新
   // 资源的页签；卸载时同样取消。
@@ -139,8 +146,17 @@ export function useFsPreview({
           : resourceType === 'directory';
       if (controller.signal.aborted) throw abortError();
       return isDir
-        ? { summary: await readDirectory(client, uri, options) }
-        : { tab: await readFile(client, uri, options, openParent) };
+        ? {
+            summary: isSystemUri(uri)
+              ? { abstract: '', overview: '' }
+              : await readDirectory(client, uri, options),
+          }
+        : {
+            tab: await readFile(client, uri, options, openParent, () => {
+              if (!controller.signal.aborted)
+                setSaveGeneration((value) => value + 1);
+            }),
+          };
     })();
 
     // 成功也要复查是否已被取消：目录的两级摘要里，一级先回来、另一级还在路上
@@ -158,7 +174,16 @@ export function useFsPreview({
       (result) => {
         if (controller.signal.aborted) return;
         if (result.summary) {
-          setDirectory({ uri, summary: result.summary });
+          setDirectory({
+            uri,
+            summary: result.summary,
+            resolveImage: createPreviewImageResolver(
+              client,
+              uri,
+              true,
+              options,
+            ),
+          });
           setActiveKey(uri);
           return;
         }
@@ -166,8 +191,8 @@ export function useFsPreview({
         setTabs([tab]);
         setActiveKey(tab.key);
         // 设计稿底部显示字符数；接口不返回行数与更新时间，先给字符数。
-        const body = tab.source.content ?? '';
-        setCharacterCount(body.length);
+        const body = tab.source.content;
+        setCharacterCount(typeof body === 'string' ? body.length : undefined);
       },
       (cause: unknown) => {
         if (isAbort(cause) || controller.signal.aborted) return;
@@ -177,17 +202,28 @@ export function useFsPreview({
     );
 
     return () => controller.abort();
-  }, [client, uri, resourceType, openParent, generation, requestOptions]);
+  }, [
+    client,
+    uri,
+    resourceType,
+    openParent,
+    generation,
+    saveGeneration,
+    requestOptions,
+  ]);
 
   const directoryTab =
     directory?.uri === uri
-      ? toDirectoryTab(
-          directory.uri,
-          directory.summary,
-          labels,
-          openParent,
-          directoryIcon(),
-        )
+      ? {
+          ...toDirectoryTab(
+            directory.uri,
+            directory.summary,
+            labels,
+            openParent,
+            directoryIcon(),
+          ),
+          resolveImage: directory.resolveImage,
+        }
       : undefined;
   const count = directoryTab
     ? (directoryTab.levels[0].source.content ?? '').length

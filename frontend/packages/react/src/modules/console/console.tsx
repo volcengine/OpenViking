@@ -6,18 +6,16 @@ import {
   VikingBotSessionActions,
 } from '../../components/viking-bot/index.js';
 import { useConsole } from './use-console.js';
+import { consoleCommandGroups, consoleQuickCommands } from './commands.js';
 import { consoleLabels } from './labels.js';
 import { ConsoleToolbar } from './console-toolbar.js';
 import type { ConsoleProps } from './types.js';
-
-/** 终端空态默认展示的快捷命令，顺序即展示顺序。 */
-const DEFAULT_QUICK_COMMANDS = ['help', 'ls', 'find', 'read', 'status'];
 
 export function Console({
   mode,
   defaultMode,
   locale: localeProp,
-  quickCommands = DEFAULT_QUICK_COMMANDS,
+  quickCommands,
   scopeKey,
   requestOptions,
   onModeChange,
@@ -75,6 +73,8 @@ export function Console({
             <VikingBotSessionActions
               sessions={sessions}
               extra={headerActions}
+              onOpenUri={conversationProps.onOpenUri ?? onOpenUri}
+              onCopy={conversationProps.onCopy}
               labels={botLabels}
               locale={botLocale}
             />
@@ -118,9 +118,10 @@ export function Console({
             records={state.records}
             value={state.command}
             commands={state.commands}
+            commandGroups={consoleCommandGroups(locale)}
             locale={locale}
             disabled={state.isExecuting}
-            quickCommands={quickCommands}
+            quickCommands={quickCommands ?? consoleQuickCommands(locale)}
             onValueChange={state.setCommand}
             onSubmit={(command) => void state.execute(command)}
             onOpenUri={onOpenUri}

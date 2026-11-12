@@ -12,18 +12,6 @@ KEY_PLACEHOLDER = "{api_key}"
 # Largest integer JSON readers, Studio included, hold exactly.
 JSON_INT_MAX = 2**53
 
-# OpenViking MCP tools that change data; new profiles offer only the read-only ones.
-WRITE_TOOLS = (
-    "remember",
-    "write",
-    "edit",
-    "add_resource",
-    "add_skill",
-    "forget",
-    "set_acl",
-    "cancel_watch",
-)
-
 
 def validation_detail(error: ValidationError) -> str:
     """Each problem with the field it concerns, without echoing submitted values."""
@@ -70,7 +58,7 @@ class Policy(BaseModel):
     context_window: int | None = Field(default=None, ge=1024, le=JSON_INT_MAX)
     gateway_tools: bool = True
     # MCP tool names; tools the server adds later stay enabled.
-    disabled_tools: list[str] = Field(default_factory=lambda: list(WRITE_TOOLS))
+    disabled_tools: list[str] = Field(default_factory=list)
     # None means no limit, as in an agent harness's own tool loop.
     tool_max_rounds: int | None = Field(default=None, ge=1, le=JSON_INT_MAX)
     tool_timeout_seconds: float = Field(default=30, gt=0, le=120)

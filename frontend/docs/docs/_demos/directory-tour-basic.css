@@ -55,3 +55,9 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.ov-directory-tour-sizing__custom {
+  width: 400px;
+  max-width: 190px;
+  max-height: 110px;
+}

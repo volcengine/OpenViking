@@ -228,7 +228,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | Studio 名称 | API 名称 | 默认值 | 取值范围 | 含义 |
 | --- | --- | --- | --- | --- |
 | OpenViking 工具 | `gateway_tools` | `true` | | 为 Chat Completions、完整历史的 Responses 和 Anthropic Messages 提供 OpenViking 工具。 |
-| 工具（未勾选的项） | `disabled_tools` | 会修改数据的 8 个工具 | OpenViking 工具原名，不带 `openviking_` | 新对话不提供这些工具，其余可用工具都提供，包括以后新增的。 |
+| 工具（未勾选的项） | `disabled_tools` | `[]`（不排除） | OpenViking 工具原名，不带 `openviking_` | 新对话不提供这些工具，其余可用工具都提供，包括以后新增的。 |
 | 显示工具调用 | `show_tool_calls` | `true` | | 每次 OpenViking 工具调用都在回复里加一行提示。 |
 | 每次请求的工具轮数 | `tool_max_rounds` | `null`（不限） | 1 及以上 | 工具调用达到这个轮数后，拒绝继续调用 OpenViking 工具。 |
 | 单次调用超时 | `tool_timeout_seconds` | `30`（秒） | 大于 0，最多 120 | 超时的调用向模型返回错误。 |
@@ -236,7 +236,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | 总时长 | `tool_total_seconds` | `null`（不限） | 大于 0 | 超过这个秒数模型仍在调用工具时，请求失败。 |
 | Token 预算 | `tool_total_tokens` | `null`（不限） | 1,024 及以上 | 工具调用和结果在一次请求中最多增加的估算 token 数，用完后拒绝继续调用 OpenViking 工具。 |
 
-API 请求省略 `disabled_tools` 时使用默认列表；列表为空且 `gateway_tools` 开启时，提供全部可用工具。
+API 请求省略 `disabled_tools` 时使用空列表，`gateway_tools` 开启时提供全部可用工具。
 
 ## 上游设置 {#upstream-settings}
 

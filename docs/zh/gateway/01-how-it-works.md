@@ -108,7 +108,7 @@ Relevant memory from OpenViking. It is this user's own saved history (past conve
 
 ## OpenViking 工具 {#openviking-tools}
 
-开启 OpenViking 工具后，模型在回答过程中可以自己检索、读取 OpenViking 记忆，管理员允许时还能写入；新建的上下文配置默认开启工具，但只勾选只读工具。工具调用由网关执行，往返记录会在之后的轮次里原样放回，所以客户端不用声明或执行这些工具，每次调用只看到一行提示。详见[网关中的 OpenViking 工具](04-openviking-tools.md#agentic-memory-for-any-client)。
+开启 OpenViking 工具后，模型在回答过程中可以自己检索、读取和写入 OpenViking 记忆；新建的上下文配置默认开启工具并勾选全部工具，管理员可以取消勾选其中任意一个。工具调用由网关执行，往返记录会在之后的轮次里原样放回，所以客户端不用声明或执行这些工具，每次调用只看到一行提示。详见[网关中的 OpenViking 工具](04-openviking-tools.md#agentic-memory-for-any-client)。
 
 ## 使用须知 {#what-to-expect}
 

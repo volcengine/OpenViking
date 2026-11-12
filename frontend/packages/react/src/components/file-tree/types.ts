@@ -8,10 +8,9 @@ import type {
 } from 'react';
 
 /**
- * 所有行的公共字段。行是按宿主展平后的顺序渲染的，因此 `id` 与 `depth` 每行都要有。
+ * 所有行的公共字段。宿主负责展平行，因此每行都需要 `id` 与 `depth`。
  *
- * Fields shared by every row. Rows render in the host-flattened order, so each
- * one carries its own `id` and `depth`.
+ * Fields shared by every host-flattened row. Each row carries its own `id` and `depth`.
  */
 export interface FileTreeRowBase {
   /**
@@ -42,11 +41,10 @@ export interface FileTreeChildRow extends FileTreeRowBase {
 
 /**
  * 树中一条可见的行。宿主把自己的树状态展开成有序行列表后传入，
- * 因此展开、分页、加载、错误行都由调用方决定，组件不感知树结构。
+ * 展开、分页、加载、错误行都由调用方决定。
  *
  * One visible row of the tree. The host flattens its own tree state into this
- * ordered list, so expansion, pagination, loading and error rows all come from
- * the caller and the component never inspects the tree structure.
+ * ordered list and supplies expansion, pagination, loading and error rows.
  */
 export type FileTreeRow =
   | FileTreeEntryRow
@@ -547,6 +545,11 @@ export interface FileTreeProps extends Omit<
    * Visible rows in render order.
    */
   rows: readonly FileTreeRow[];
+  /**
+   * 默认按传入顺序渲染。设为 `context` 时，只按 Viking URI 首段调整根目录及其子树。
+   * Defaults to input order. `context` reorders root directory branches by Viking URI namespace.
+   */
+  rootOrder?: 'input' | 'context';
   /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
   locale?: Locale;
   /**

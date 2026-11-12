@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
-import { mount, click, type } from './helpers/tui-dom.mjs';
+import { mount, click } from './helpers/tui-dom.mjs';
 
 const commands = [
   {
@@ -32,7 +32,11 @@ const actions = (container) => [
 test('quick commands render in host order with name and summary or description', async () => {
   const view = await mount({
     commands,
-    quickCommands: ['find', 'ls', 'status'],
+    quickCommands: [
+      { name: 'find', value: '' },
+      { name: 'ls', value: '' },
+      { name: 'status', value: '' },
+    ],
   });
   try {
     assert.ok(hero(view.container));
@@ -56,7 +60,10 @@ test('quick commands render in host order with name and summary or description',
 test('unknown quick command names are skipped without dropping the rest', async () => {
   const view = await mount({
     commands,
-    quickCommands: ['missing', 'ls'],
+    quickCommands: [
+      { name: 'missing', value: '' },
+      { name: 'ls', value: '' },
+    ],
   });
   try {
     assert.deepEqual(
@@ -77,7 +84,10 @@ test('no empty-state props and no resolved quick command show nothing', async ()
   } finally {
     await empty.dispose();
   }
-  const unknown = await mount({ commands, quickCommands: ['missing'] });
+  const unknown = await mount({
+    commands,
+    quickCommands: [{ name: 'missing', value: '' }],
+  });
   try {
     assert.equal(unknown.container.querySelector('.ov-tui__empty'), null);
   } finally {
@@ -85,14 +95,25 @@ test('no empty-state props and no resolved quick command show nothing', async ()
   }
 });
 
-test('selecting a quick command fills the input prefix and focuses the composer', async () => {
-  const view = await mount({ commands, quickCommands: ['ls', 'status'] });
+test('quick selection preserves the full value, focuses without submitting and honors empty values', async () => {
+  const submitted = [];
+  const value = '  /ls "viking://resources/a b.md" --limit 3  ';
+  const view = await mount({
+    commands,
+    quickCommands: [
+      { name: 'ls', value },
+      { name: 'status', value: '' },
+    ],
+    onSubmit: (command) => submitted.push(command),
+  });
   try {
     await click(actions(view.container)[0]);
-    assert.equal(view.input.value, 'ov ls ');
+    assert.equal(view.input.value, value);
     assert.equal(document.activeElement, view.input);
-    await type(view.input, `${view.input.value}viking://demo`);
-    assert.equal(view.input.value, 'ov ls viking://demo');
+    await click(actions(view.container)[1]);
+    assert.equal(view.input.value, '');
+    assert.equal(document.activeElement, view.input);
+    assert.deepEqual(submitted, []);
     // 填入不提交，记录仍为空，空态继续显示。
     assert.equal(actions(view.container).length, 2);
   } finally {
@@ -103,7 +124,7 @@ test('selecting a quick command fills the input prefix and focuses the composer'
 test('a host node replaces the built-in empty state and keeps quick commands out', async () => {
   const view = await mount({
     commands,
-    quickCommands: ['ls'],
+    quickCommands: [{ name: 'ls', value: '' }],
     emptyState: createElement('p', null, 'Host empty'),
   });
   try {
@@ -119,7 +140,7 @@ test('a host node replaces the built-in empty state and keeps quick commands out
 test('a null empty state hides the region even with quick commands', async () => {
   const view = await mount({
     commands,
-    quickCommands: ['ls'],
+    quickCommands: [{ name: 'ls', value: '' }],
     emptyState: null,
   });
   try {
@@ -133,7 +154,7 @@ test('a null empty state hides the region even with quick commands', async () =>
 test('disabled and read-only instances render quick commands that cannot be picked', async () => {
   const disabled = await mount({
     commands,
-    quickCommands: ['ls'],
+    quickCommands: [{ name: 'ls', value: '' }],
     disabled: true,
   });
   try {
@@ -141,7 +162,10 @@ test('disabled and read-only instances render quick commands that cannot be pick
   } finally {
     await disabled.dispose();
   }
-  const readOnly = await mount({ commands, quickCommands: ['ls'] }, false);
+  const readOnly = await mount(
+    { commands, quickCommands: [{ name: 'ls', value: '' }] },
+    false,
+  );
   try {
     assert.equal(actions(readOnly.container)[0].disabled, true);
     await click(actions(readOnly.container)[0]);
@@ -154,7 +178,11 @@ test('disabled and read-only instances render quick commands that cannot be pick
 test('duplicate names render once and a removed command disappears on update', async () => {
   const view = await mount({
     commands,
-    quickCommands: ['ls', 'ls', 'find'],
+    quickCommands: [
+      { name: 'ls', value: '' },
+      { name: 'ls', value: '' },
+      { name: 'find', value: '' },
+    ],
   });
   try {
     const names = () =>
@@ -162,7 +190,10 @@ test('duplicate names render once and a removed command disappears on update', a
         (button) => button.querySelector('.ov-tui__empty-name').textContent,
       );
     assert.deepEqual(names(), ['ls', 'find']);
-    await view.render({ commands, quickCommands: ['find'] });
+    await view.render({
+      commands,
+      quickCommands: [{ name: 'find', value: '' }],
+    });
     assert.deepEqual(names(), ['find']);
   } finally {
     await view.dispose();

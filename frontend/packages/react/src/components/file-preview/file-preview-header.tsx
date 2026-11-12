@@ -1,10 +1,17 @@
 import type { ReactNode } from 'react';
 
+import { FilePreviewToolbar } from './file-preview-toolbar.js';
 import { FilePreviewLevelTabs } from './file-preview-level-tabs.js';
 import { FilePreviewBreadcrumb } from './file-preview-breadcrumb.js';
 import { FilePreviewCopyPath } from './file-preview-copy-path.js';
 import { getPathFileName, splitPathSegments } from './file-preview-path.js';
-import type { FilePreviewActions, FilePreviewLevel } from './types.js';
+import type {
+  FilePreviewActions,
+  FilePreviewActionSource,
+  FilePreviewLabels,
+  FilePreviewLevel,
+  FilePreviewToolbarOptions,
+} from './types.js';
 
 /**
  * 标题行需要的最少信息。它按字段而不是按页签类型取值，文件页签与目录页签因此
@@ -25,29 +32,17 @@ export interface FilePreviewHeaderProps {
   /** 标题行动作区，节点或接收上下文的函数。 */
   /** The header action area: a node, or a function of the actions context. */
   slotActions?: ReactNode | ((actions: FilePreviewActions) => ReactNode);
+  extraActions?: ReactNode;
+  actionItems?: FilePreviewActionSource;
+  toolbar?: FilePreviewToolbarOptions;
   actions: FilePreviewActions;
   levels?: readonly FilePreviewLevel[];
   levelKey?: string;
   onLevelChange?: (key: string) => void;
-  text: { copyPath: string; showHiddenPath: string };
+  text: Required<FilePreviewLabels>;
   onOpenParent: (uri: string) => void;
 }
 
-/**
- * 内容区标题行：路径面包屑、复制路径与宿主提供的动作区。
- *
- * 复制路径是外壳的一部分——有 `source.path` 的文件在任何宿主下都需要它，因此
- * 内置在面包屑末尾。其余动作（复制正文、下载、视图切换、编辑）依赖宿主的产品
- * 语义与文案，由宿主在 `slots.actions` 里用 `actions` 上下文自行渲染。
- *
- * The content header: the path breadcrumb, copy-path, and a host-supplied action
- * area.
- *
- * Copy-path belongs to the shell — any file with a `source.path` needs it under
- * every host — so it sits at the end of the breadcrumb. The other actions (copy
- * body, download, view switch, edit) carry host product semantics and copy, and
- * the host renders them in `slots.actions` from the `actions` context.
- */
 export function FilePreviewHeader({
   levels,
   levelKey,
@@ -57,6 +52,9 @@ export function FilePreviewHeader({
   canOpenParent,
   titleExtra,
   slotActions,
+  extraActions,
+  actionItems,
+  toolbar,
   actions,
   text,
   onOpenParent,
@@ -64,7 +62,20 @@ export function FilePreviewHeader({
   const segments = splitPathSegments(path);
   const title = getPathFileName(path) ?? fileName;
   const actionNode: ReactNode =
-    typeof slotActions === 'function' ? slotActions(actions) : slotActions;
+    typeof slotActions === 'function' ? (
+      slotActions(actions)
+    ) : slotActions === undefined ? (
+      <FilePreviewToolbar
+        key={path ?? fileName}
+        options={toolbar}
+        actionItems={actionItems}
+        actions={actions}
+        text={text}
+        extraActions={extraActions}
+      />
+    ) : (
+      slotActions
+    );
 
   return (
     <>
@@ -78,11 +89,14 @@ export function FilePreviewHeader({
             disabled={actions.busy}
             onOpen={onOpenParent}
           />
-          {actions.canCopyPath ? (
+          {toolbar?.copyPath !== false && actions.canCopyPath ? (
             <FilePreviewCopyPath
+              key={path}
               label={text.copyPath}
+              successLabel={text.copied}
+              failureLabel={text.copyFailed}
               disabled={actions.busy}
-              onClick={() => void actions.copyPath()}
+              onClick={actions.copyPath}
             />
           ) : null}
           {titleExtra}

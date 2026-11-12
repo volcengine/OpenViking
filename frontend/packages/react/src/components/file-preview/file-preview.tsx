@@ -1,3 +1,5 @@
+import { FilePreviewCommandProvider } from './file-preview-command-state.js';
+import { mediaKind } from './file-preview-media.js';
 import { useLocale } from '../../shared/locale-context.js';
 import { forwardRef, useCallback, useImperativeHandle, useState } from 'react';
 
@@ -49,6 +51,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
     tabs,
     activeKey,
     defaultActiveKey,
+    toolbar,
     locale: localeProp,
     labels,
     onActiveKeyChange,
@@ -72,6 +75,12 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   const directory = useDirectoryLevel(
     activeTab.kind === 'directory' ? activeTab : undefined,
   );
+  const identity = JSON.stringify([
+    activeTab.key,
+    levelKey,
+    directory.activeLevel?.key,
+    activeTab.kind === 'file' ? mediaKind(activeTab.source) : undefined,
+  ]);
   const {
     viewMode,
     setViewMode,
@@ -80,15 +89,11 @@ export const FilePreview: FilePreviewComponent = forwardRef<
     viewerHandle,
     onHandleChange,
     onViewModesChange,
-  } = useFilePreviewViewState(
-    JSON.stringify([activeTab.key, levelKey, directory.activeLevel?.key]),
-  );
+  } = useFilePreviewViewState(identity);
   const { tabId, panelId, panelProps } = useFilePreviewIds(activeTab.key);
   // 编辑态跟着实际渲染的页签走，理由见 `switchTab`。
   // Editing follows the tab that actually renders; see `switchTab`.
-  const editing = useFilePreviewEditing(
-    JSON.stringify([activeTab.key, levelKey, directory.activeLevel?.key]),
-  );
+  const editing = useFilePreviewEditing(identity);
   const actions = useFilePreviewActions();
 
   const tabText = mergeLabels<typeof text>(text, activeTab.labels);
@@ -157,7 +162,8 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   // Switchable only when the adapter declares both; images, media and PDFs have
   // no source view.
   const canSwitchView =
-    Boolean(fileTab) &&
+    Boolean(fileTab || directoryTab) &&
+    !(fileTab && mediaKind(fileTab.source)) &&
     viewModes.includes('preview') &&
     viewModes.includes('source');
 
@@ -222,31 +228,36 @@ export const FilePreview: FilePreviewComponent = forwardRef<
 
         onSelect={(key) => void switchTab(key)}
       />
-      <FilePreviewPanels
-        contentTab={contentTab}
-        directoryTab={level.directoryTab}
-        fileTab={fileTab}
-        panelProps={panelProps}
-        panelClass="ov-file-preview__panel"
-        levelKey={levelKey}
-        onLevelChange={(key) => {
-          if (editing.saving || editing.loadingEdit || key === levelKey) return;
-          // Controlled requests may be declined; reset only when the rendered level changes.
-          if (fileTab?.activeLevelKey === undefined) editing.discard(activeTab);
-          selectLevel(key);
-        }}
-        text={tabText}
-        locale={locale}
-        actions={actions}
-        actionContext={actionContext}
-        editing={editing}
-        viewMode={viewMode}
-        setViewMode={setViewMode}
-        onHandleChange={onHandleChange}
-        onViewModesChange={onViewModesChange}
-        linkClickHandler={linkClickHandler}
-        activeTab={activeTab}
-      />
+      <FilePreviewCommandProvider tab={selectedTab}>
+        <FilePreviewPanels
+          toolbar={toolbar}
+          contentTab={contentTab}
+          directoryTab={level.directoryTab}
+          fileTab={fileTab}
+          panelProps={panelProps}
+          panelClass="ov-file-preview__panel"
+          levelKey={levelKey}
+          onLevelChange={(key) => {
+            if (editing.saving || editing.loadingEdit || key === levelKey)
+              return;
+            // Controlled requests may be declined; reset only when the rendered level changes.
+            if (fileTab?.activeLevelKey === undefined)
+              editing.discard(activeTab);
+            selectLevel(key);
+          }}
+          text={tabText}
+          locale={locale}
+          actions={actions}
+          actionContext={actionContext}
+          editing={editing}
+          viewMode={viewMode}
+          setViewMode={setViewMode}
+          onHandleChange={onHandleChange}
+          onViewModesChange={onViewModesChange}
+          linkClickHandler={linkClickHandler}
+          activeTab={activeTab}
+        />
+      </FilePreviewCommandProvider>
     </div>
   );
 });

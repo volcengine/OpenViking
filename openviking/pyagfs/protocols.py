@@ -133,11 +133,20 @@ class AGFSSyncClientProtocol(Protocol):
     ) -> Awaitable[str | None]:
         """Try to acquire leadership and return an opaque lease reference."""
 
-    def leader_validate(self) -> None:
-        """Validate that distributed leadership is available."""
+    def leader_validate_async(self) -> Awaitable[None]:
+        """Initialize and validate coordination leadership asynchronously."""
 
     def leader_renew_async(self, lease_ref: str, ttl_secs: float) -> Awaitable[bool]:
         """Renew leadership while its hidden ownership token still matches."""
 
     def leader_release_async(self, lease_ref: str) -> Awaitable[None]:
         """Release leadership while its hidden ownership token still matches."""
+
+    def revision_allocate_async(self, key: str) -> Awaitable[int]:
+        """Reserve a monotonically increasing revision."""
+
+    def revision_publish_async(self, key: str, revision: int) -> Awaitable[int]:
+        """Publish persisted work and return the latest revision."""
+
+    def revision_latest_async(self, key: str) -> Awaitable[int]:
+        """Return the latest published revision, or zero."""

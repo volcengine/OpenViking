@@ -1,7 +1,10 @@
+import { Tooltip } from '../../shared/components/tooltip/index.js';
+import CliTitle from '../../../../icons/svg/tui/cli-title.svg?react';
 import { ArrowRightIcon } from '../../icons/index.js';
 import type { ReactNode } from 'react';
 import type { TuiCommandDefinition } from './command-catalog.js';
-import type { ResolvedTuiLabels } from './tui-labels.js';
+import type { TuiQuickCommand } from './types.js';
+import { DEFAULT_TUI_LABELS, type ResolvedTuiLabels } from './tui-labels.js';
 
 /**
  * 按名称从宿主目录中取快捷命令，保持传入顺序，未命中的名称直接跳过。
@@ -11,11 +14,19 @@ import type { ResolvedTuiLabels } from './tui-labels.js';
  * occurrence so one command never renders as sibling nodes with the same key.
  */
 export function pickTuiCommands(
-  names: readonly string[] = [],
+  shortcuts: readonly TuiQuickCommand[] = [],
   commands: readonly TuiCommandDefinition[],
-): readonly TuiCommandDefinition[] {
+): readonly (TuiCommandDefinition & TuiQuickCommand)[] {
   const byName = new Map(commands.map((command) => [command.name, command]));
-  return [...new Set(names)].flatMap((name) => byName.get(name) ?? []);
+  const firstByName = new Map<string, TuiQuickCommand>();
+  for (const shortcut of shortcuts) {
+    if (!firstByName.has(shortcut.name))
+      firstByName.set(shortcut.name, shortcut);
+  }
+  return [...firstByName.values()].flatMap((shortcut) => {
+    const command = byName.get(shortcut.name);
+    return command ? [{ ...command, value: shortcut.value }] : [];
+  });
 }
 
 /**
@@ -33,10 +44,10 @@ export function TuiEmptyRegion({
   onPick,
 }: {
   emptyState?: ReactNode;
-  commands: readonly TuiCommandDefinition[];
+  commands: readonly (TuiCommandDefinition & TuiQuickCommand)[];
   labels: ResolvedTuiLabels;
   disabled?: boolean;
-  onPick: (command: TuiCommandDefinition) => void;
+  onPick: (value: string) => void;
 }) {
   if (emptyState !== undefined) {
     return emptyState === null ? null : (
@@ -44,31 +55,54 @@ export function TuiEmptyRegion({
     );
   }
   if (!commands.length) return null;
+  const showTitleArtwork = labels.emptyTitle === DEFAULT_TUI_LABELS.emptyTitle;
   return (
     <div className="ov-tui__empty ov-tui__empty--hero">
-      <h3 className="ov-tui__empty-title">{labels.emptyTitle}</h3>
+      <h3
+        className="ov-tui__empty-title"
+        data-artwork={showTitleArtwork || undefined}
+      >
+        {showTitleArtwork ? (
+          <>
+            <span className="ov-tui__empty-title-label">
+              {labels.emptyTitle}
+            </span>
+            <CliTitle
+              className="ov-tui__empty-title-artwork"
+              aria-hidden="true"
+              focusable="false"
+            />
+          </>
+        ) : (
+          labels.emptyTitle
+        )}
+      </h3>
       <p className="ov-tui__empty-subtitle">{labels.emptyDescription}</p>
       <p className="ov-tui__empty-quick-label">{labels.quickStart}</p>
       <ul className="ov-tui__empty-list">
         {commands.map((command) => (
           <li key={command.name} className="ov-tui__empty-item">
-            <button
-              type="button"
-              className="ov-tui__empty-action"
+            <Tooltip
+              content={command.description}
+              placement="top"
               disabled={disabled}
-              onClick={() => onPick(command)}
+              className="ov-tui__quick-tooltip"
             >
-              <ArrowRightIcon width={14} height={14} focusable="false" />
-              <span className="ov-tui__empty-content">
-                <span className="ov-tui__empty-name">{command.name}</span>
-                <span
-                  className="ov-tui__empty-desc"
-                  title={command.summary ?? command.description}
-                >
-                  {command.summary ?? command.description}
+              <button
+                type="button"
+                className="ov-tui__empty-action"
+                disabled={disabled}
+                onClick={() => onPick(command.value)}
+              >
+                <ArrowRightIcon width={14} height={14} focusable="false" />
+                <span className="ov-tui__empty-content">
+                  <span className="ov-tui__empty-name">{command.name}</span>
+                  <span className="ov-tui__empty-desc">
+                    {command.summary ?? command.description}
+                  </span>
                 </span>
-              </span>
-            </button>
+              </button>
+            </Tooltip>
           </li>
         ))}
       </ul>

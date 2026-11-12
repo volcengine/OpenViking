@@ -4,15 +4,11 @@ import { createTuiDemoRecord } from '#tui-demo-result';
 import { Tui } from '@openviking/react/components/tui';
 import type { TuiRecord } from '@openviking/react/components/tui';
 import '@openviking/react/components/tui/style.css';
-import { createTuiCommands, createTuiCommandGroups } from '#tui-commands';
-
-const quickCommandNames = [
-  'add-resource',
-  'add-skill',
-  'add-memory',
-  'find',
-  'compile',
-];
+import {
+  createTuiCommands,
+  createTuiCommandGroups,
+  createTuiQuickCommands,
+} from '#tui-commands';
 
 export default function TuiEmpty() {
   const locale = useLang() === 'zh' ? 'zh-CN' : 'en-US';
@@ -26,7 +22,7 @@ export default function TuiEmpty() {
         locale={locale}
         commands={createTuiCommands(locale)}
         commandGroups={createTuiCommandGroups(locale)}
-        quickCommands={quickCommandNames}
+        quickCommands={createTuiQuickCommands(locale)}
         onValueChange={setValue}
         onSubmit={(command) => {
           const createdAtMs = Date.now();

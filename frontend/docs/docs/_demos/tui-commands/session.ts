@@ -70,27 +70,4 @@ export const SESSION_COMMANDS: readonly TuiCommandEntry[] = [
     ],
     examples: ['/export viking://projects/acme ./acme.ovpack'],
   },
-  {
-    name: 'compile',
-    group: 'interactive',
-    description: 'Compile source materials with a VikingBot skill',
-    usage: '/compile --from <uri> --to <uri> --skill <uri>',
-    skeleton: 'write',
-    options: [
-      {
-        token: '--from <uri>',
-        required: true,
-        description: 'Source file or directory',
-      },
-      { token: '--to <uri>', required: true, description: 'Target directory' },
-      {
-        token: '--skill <uri>',
-        required: true,
-        description: 'Skill URI or the literal memory',
-      },
-    ],
-    examples: [
-      '/compile --from viking://resources/acme --to viking://wiki --skill memory',
-    ],
-  },
 ];

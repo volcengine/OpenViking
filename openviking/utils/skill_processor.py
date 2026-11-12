@@ -773,7 +773,6 @@ class SkillProcessor:
             overview=overview,
             ctx=ctx,
             lock=lease_ref,
-            is_stale=lambda: False,
             metadata={"generated_by": {"component": "SkillProcessor", "trigger": "skill_ingest"}},
         )
 

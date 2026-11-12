@@ -1,3 +1,5 @@
+import { nativePreviewDemoResponse } from '#file-browser-native-demo';
+import { image } from '#file-preview-console-data';
 import {
   dashboardDemoResponse,
   DEMO_WIKI,
@@ -33,6 +35,8 @@ const PREFERENCES = `${MEMORIES}/preferences`;
 const ENTITIES = `${MEMORIES}/entities`;
 const RESOURCES = `${USER}/resources`;
 const NOTES = `${RESOURCES}/notes`;
+export const DEMO_PREVIEW_FILE = `${NOTES}/rollout.md`;
+const DEMO_PREVIEW_IMAGE = `${NOTES}/cli.svg`;
 
 /**
  * 目录内容。故意留几个长名称，用来演示树宽收窄后靠横向滚动而不是省略号。
@@ -73,7 +77,11 @@ const DIRS: Record<string, Entry[]> = {
     { uri: `${RESOURCES}/2026-Q4-context-management-retrospective.md` },
     { uri: `${RESOURCES}/design-system-alignment-notes.md` },
   ],
-  [NOTES]: [{ uri: `${NOTES}/rollout.md` }],
+  [NOTES]: [
+    { uri: DEMO_PREVIEW_FILE },
+    { uri: DEMO_PREVIEW_IMAGE },
+    { uri: `${NOTES}/demo.webm` },
+  ],
 };
 
 /** 文件正文。Body copy of each file. */
@@ -92,8 +100,8 @@ const FILES: Record<string, string> = {
     '# Q4 retrospective\n\nThe tree moved to lazy loading per directory, which cut the first paint.\n',
   [`${RESOURCES}/design-system-alignment-notes.md`]:
     '# Design alignment\n\nColours come from the console theme; components never hard-code them.\n',
-  [`${NOTES}/rollout.md`]:
-    '# Rollout\n\nStage first, then production once the release ticket passes.\n',
+  [DEMO_PREVIEW_FILE]:
+    '# Rollout\n\nStage first, then production once the release ticket passes.\n\n![CLI](./cli.svg)\n\n| Check | Result |\n| --- | --- |\n| First open | Ready |',
 };
 
 /** 目录的两级摘要。The two summary levels of a directory. */
@@ -161,14 +169,45 @@ export function offlineFetch(
   if (url.searchParams.has('uri')) url.searchParams.set('uri', uri);
   const body = typeof init?.body === 'string' ? init.body : '';
 
+  const native = nativePreviewDemoResponse(url, init);
+  if (native) return Promise.resolve(native);
   const board = dashboardDemoResponse(url);
   if (board) return Promise.resolve(board);
 
   switch (url.pathname) {
+    case '/api/v1/fs': {
+      if (init?.method !== 'DELETE')
+        return Promise.resolve(new Response(null, { status: 405 }));
+      delete FILES[uri];
+      for (const [directory, entries] of Object.entries(DIRS))
+        DIRS[directory] = entries.filter((entry) => entry.uri !== uri);
+      return Promise.resolve(ok({ uri }));
+    }
     case '/api/v1/fs/ls':
       return Promise.resolve(ok(DIRS[uri] ?? []));
+    case '/api/v1/fs/stat':
+      return Promise.resolve(ok({ uri, isDir: uri in DIRS }));
+    case '/api/v1/content/download':
+      return Promise.resolve(
+        uri === DEMO_PREVIEW_IMAGE
+          ? new Response(
+              decodeURIComponent(image.slice(image.indexOf(',') + 1)),
+              {
+                headers: { 'content-type': 'image/svg+xml' },
+              },
+            )
+          : new Response(FILES[uri] ?? '# Offline demo'),
+      );
     case '/api/v1/content/read':
       return Promise.resolve(ok(FILES[uri] ?? ''));
+    case '/api/v1/content/write': {
+      const { uri: target, content } = JSON.parse(body) as {
+        uri: string;
+        content: string;
+      };
+      FILES[target.replace(/^viking:\/\/~(?=\/|$)/, USER)] = content;
+      return Promise.resolve(ok({}));
+    }
     case '/api/v1/content/abstract':
       return Promise.resolve(ok(SUMMARIES[uri]?.l0 ?? ''));
     case '/api/v1/content/overview':

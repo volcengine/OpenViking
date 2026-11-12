@@ -32,11 +32,14 @@ test('new session remains available when empty and cancels pending work without 
 });
 
 test('scope, identity and new-session resets cannot restore a prior keyboard draft', async () => {
-  const host = await mount(async () => ok({ state: 'ready' }));
+  const quickCommands = [{ name: 'status', value: 'ov status ' }];
+  const host = await mount(async () => ok({ state: 'ready' }), {
+    quickCommands,
+  });
   try {
     for (const reset of [
-      () => host.render({ scopeKey: 'next' }),
-      () => host.render({}, { userId: 'next-user' }),
+      () => host.render({ scopeKey: 'next', quickCommands }),
+      () => host.render({ quickCommands }, { userId: 'next-user' }),
       () => host.press('New session'),
       () => host.execute('ov clear'),
     ]) {
@@ -50,6 +53,7 @@ test('scope, identity and new-session resets cannot restore a prior keyboard dra
         ...host.container.querySelectorAll('.ov-tui__empty-action'),
       ].find((button) => button.textContent.includes('status'));
       await click(status);
+      assert.equal(host.input.value, 'ov status ');
       await key(host.input, 'Enter', { ctrlKey: true });
       await host.press('Command history');
       await click(
