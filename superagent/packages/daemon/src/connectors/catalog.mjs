@@ -85,7 +85,7 @@ const MANIFESTS = Object.freeze({
       'message.react': {},
       'message.retract': {},
     },
-    queries: ['chat.list', 'chat.messages', 'message.search', 'thread.messages', 'message.media'],
+    queries: ['chat.list', 'chat.messages', 'chat.messages.newer', 'message.search', 'thread.messages', 'message.media'],
     auth_schema: EMPTY_SCHEMA,
     config_schema: EMPTY_SCHEMA,
   }),

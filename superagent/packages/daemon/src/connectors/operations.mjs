@@ -13,6 +13,7 @@ const OPERATIONS = {
   'message.media': (client, input) => client.getMedia(input),
   'chat.list': (client, input) => client.listChats(input),
   'chat.messages': (client, input) => client.listChatMessages(input),
+  'chat.messages.newer': (client, input) => client.newerMessages(input),
   'message.search': (client, input) => client.searchMessages(input),
   'thread.messages': (client, input) => client.listThreadMessages(input),
   'chat.members.list': (client, input) => client.listChatMembers(input.chat_id, input),
