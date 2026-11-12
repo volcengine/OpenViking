@@ -151,19 +151,6 @@
   padding: 10px 12px;
   border-bottom: 1px solid var(--ov-ui-history-border);
 }
-.ov-file-history__confirm {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--ov-ui-history-border);
-  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
-}
-.ov-file-history__confirm p {
-  margin: 0;
-}
 .ov-file-history__content {
   position: relative;
   isolation: isolate;

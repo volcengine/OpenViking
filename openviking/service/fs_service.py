@@ -7,7 +7,6 @@ Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, 
 """
 
 import asyncio
-import hashlib
 from collections.abc import Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
@@ -35,7 +34,6 @@ from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.privacy.session_restore import get_session_id_from_uri, restore_session_content
 from openviking.privacy.skill_restore import get_skill_name_from_uri, restore_skill_content
-from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext
@@ -52,7 +50,6 @@ from openviking.session.memory.account_templates import (
 )
 from openviking.session.memory.memory_updater import MemoryUpdater
 from openviking.session.memory.utils.content_visibility import visible_content
-from openviking.session.memory.utils.memory_fields import strip_memory_fields_trailer
 from openviking.storage.abstract_overview import (
     AbstractOverviewFormatError,
     body_for_preview,
@@ -80,9 +77,7 @@ from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.path_safety import validate_safe_viking_uri_path
 from openviking.utils.tags import normalize_search_tags
 from openviking_cli.exceptions import (
-    ConflictError,
     DeadlineExceededError,
-    FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
     NotInitializedError,
@@ -1785,10 +1780,6 @@ class FSService:
         edit_source: Literal["manual", "agent", "compile"] = "manual",
         commit_content: Optional[Callable[..., Awaitable[Any]]] = None,
         resolve_conflicts: bool = False,
-        version_message: str | None = None,
-        expected_content_sha256: str | None = None,
-        restored_from: str | None = None,
-        current_commit_id: str | None = None,
     ) -> Dict[str, Any]:
         """Write content and refresh it after persisting managed output versions.
 
@@ -1796,46 +1787,6 @@ class FSService:
         resolve_conflicts enables manual conflict resolution.
         """
         viking_fs = self._ensure_initialized()
-        snapshot: Dict[str, Any] = {}
-        if version_message is not None:
-            if (
-                mode != "replace"
-                or is_abstract_overview_uri(uri)
-                or namespace_policy_for_uri(uri).processing_mode
-                is NamespaceProcessingMode.FILE_ONLY
-            ):
-                raise InvalidArgumentError("Versioned save requires a regular file replacement")
-            if expected_content_sha256 is None:
-                raise InvalidArgumentError("Versioned save requires an expected content digest")
-
-            async def write_version(uris, *, lease_ref, write):
-                async def replace_and_commit():
-                    written, saved = await self._replace_and_snapshot(
-                        uris[0],
-                        ctx,
-                        lease_ref=lease_ref,
-                        write=write,
-                        message=version_message,
-                        expected_sha256=expected_content_sha256,
-                        current_commit_id=current_commit_id,
-                    )
-                    snapshot.update(saved)
-                    return written
-
-                if self.compile_versions is None:
-                    return await replace_and_commit()
-                return await self.compile_versions.record_write(
-                    uris,
-                    ctx,
-                    "restore" if restored_from else edit_source,
-                    lease_ref=lease_ref,
-                    write=replace_and_commit,
-                    explicit_snapshot=lambda: snapshot.get("commit_oid"),
-                    restored_from=restored_from,
-                    version_message=version_message,
-                )
-
-            commit_content = write_version
         if commit_content is None and self.compile_versions is not None:
             commit_content = partial(
                 self.compile_versions.record_write,
@@ -1862,118 +1813,10 @@ class FSService:
             acl=acl,
             resolve_conflicts=resolve_conflicts,
         )
-
-        async def perform_write():
-            if self.compile_versions is None or edit_source == "compile":
-                return await write()
-            return await self.compile_versions.record_operation(
-                [uri], ctx, f"{edit_source}_revise", {"mode": mode}, write
-            )
-
-        result = (
-            await run_to_completion(perform_write)
-            if version_message is not None
-            else await perform_write()
-        )
-        if version_message is not None:
-            result["snapshot"] = snapshot
-        return result
-
-    async def _replace_and_snapshot(
-        self,
-        uri: str,
-        ctx: RequestContext,
-        *,
-        lease_ref: Dict[str, Any],
-        write: Callable[[], Awaitable[Any]],
-        message: str,
-        expected_sha256: str,
-        current_commit_id: str | None,
-    ) -> tuple[Any, Dict[str, Any]]:
-        """Check the editor's base and save the snapshot within the content write lease."""
-        from openviking.service.compile_targets import retry_git
-
-        fs = self._ensure_initialized()
-        try:
-            before = await fs.read_file_bytes(uri, ctx=ctx)
-        except AGFSNotFoundError as exc:
-            raise NotFoundError(uri, "file") from exc
-        try:
-            visible = await self._make_content_visible(uri, before.decode("utf-8"), ctx)
-        except UnicodeDecodeError as exc:
-            raise InvalidArgumentError("Versioned editing requires UTF-8 text") from exc
-        if hashlib.sha256(visible.encode("utf-8")).hexdigest() != expected_sha256:
-            raise ConflictError("File content changed since it was opened", resource=uri)
-        if current_commit_id is not None:
-            history = await fs.log(paths=[uri], limit=1, ctx=ctx)
-            if not history or history[0]["oid"] != current_commit_id:
-                raise ConflictError("File version changed since history was opened", resource=uri)
-
-        try:
-            written = await write()
-            if before == await fs.read_file_bytes(uri, ctx=ctx):
-                return written, {"result": "noop"}
-            snapshot = await retry_git(
-                lambda: fs.commit(
-                    message=message, paths=[uri], ctx=ctx, lease_ref=lease_ref, require_tracked=True
-                )
-            )
-            if (
-                snapshot.get("ignored")
-                or not snapshot.get("commit_oid")
-                or snapshot.get("commit_oid") == "0" * 40
-            ):
-                raise FailedPreconditionError("File is excluded from version history")
-        except Exception:
-            # No refresh has been dispatched. Restore the previous bytes before
-            # releasing the exact lease if writing or creating the snapshot failed.
-            await fs.write_file_bytes(uri, before, ctx=ctx, lease_ref=lease_ref)
-            raise
-        return written, snapshot
-
-    async def restore_content_version(
-        self,
-        *,
-        uri: str,
-        restore_commit_id: str,
-        current_commit_id: str,
-        expected_content_sha256: str,
-        message: str | None,
-        ctx: RequestContext,
-    ) -> Dict[str, Any]:
-        """Restore one text file through the usual write and index refresh path."""
-        fs = self._ensure_initialized()
-        await fs._ensure_access(uri, ctx, action=AclAction.WRITE)
-        source_path = uri
-        if self.compile_versions is not None:
-            target = await self.compile_versions.owning_target(ctx.account_id, uri)
-            if target is not None:
-                index = await self.compile_versions.load(ctx.account_id, target["to"], uri)
-                source_path = next(
-                    (
-                        entry["snapshot_path"]
-                        for entry in (index or {}).get("versions", [])
-                        if entry["snapshot_id"] == restore_commit_id
-                    ),
-                    uri,
-                )
-        try:
-            historical = await fs.show(restore_commit_id, path=source_path, ctx=ctx)
-            content = historical.decode("utf-8")
-        except AGFSNotFoundError as exc:
-            raise NotFoundError(f"{restore_commit_id}:{uri}", "snapshot file") from exc
-        except UnicodeDecodeError as exc:
-            raise InvalidArgumentError("Version restore requires UTF-8 text") from exc
-        if classify_uri(uri).is_memory:
-            content = strip_memory_fields_trailer(content)
-        return await self.write(
-            uri,
-            content,
-            ctx,
-            version_message=message if message is not None else f"Restore {restore_commit_id[:12]}",
-            expected_content_sha256=expected_content_sha256,
-            restored_from=restore_commit_id,
-            current_commit_id=current_commit_id,
+        if self.compile_versions is None or edit_source == "compile":
+            return await write()
+        return await self.compile_versions.record_operation(
+            [uri], ctx, f"{edit_source}_revise", {"mode": mode}, write
         )
 
     async def batch_write(

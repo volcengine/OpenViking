@@ -60,21 +60,6 @@ class WriteContentRequest(BaseModel):
     edit_source: Literal["manual", "agent", "compile"] = "manual"
     # Mark this edit as conflict resolution.
     resolve_conflicts: bool = False
-    version_message: str | None = Field(default=None, max_length=1000)
-    expected_content_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
-
-    @model_validator(mode="after")
-    def validate_version_save(self) -> "WriteContentRequest":
-        if (self.version_message is None) != (self.expected_content_sha256 is None):
-            raise ValueError("version_message and expected_content_sha256 are required together")
-        if self.version_message is not None and (
-            self.mode != "replace"
-            or self.tags is not None
-            or self.tag_mode != "replace"
-            or self.acl is not None
-        ):
-            raise ValueError("version save requires replace without tag or ACL changes")
-        return self
 
 
 class BatchWriteOperation(BaseModel):
@@ -335,14 +320,6 @@ async def write(
             acl=request.acl,
             edit_source=request.edit_source,
             resolve_conflicts=request.resolve_conflicts,
-            **(
-                {
-                    "version_message": request.version_message,
-                    "expected_content_sha256": request.expected_content_sha256,
-                }
-                if request.version_message is not None
-                else {}
-            ),
         ),
     )
     return Response(

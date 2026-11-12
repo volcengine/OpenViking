@@ -56,6 +56,6 @@ export async function readFile(
   return {
     ...toFileTab({ uri }, content, MAX_LINES, icon, openParent, truncated),
     resolveImage: createPreviewImageResolver(client, uri, false, options),
-    editing: createFileEditing(client, uri, options, onSave, wiki),
+    editing: createFileEditing(client, uri, name, options, onSave, wiki),
   };
 }

@@ -208,7 +208,6 @@ class _SnapshotMixin:
         author_email: Optional[str] = None,
         ctx: Optional[RequestContext] = None,
         lease_ref: Optional[Dict[str, Any]] = None,
-        require_tracked: bool = False,
     ) -> Dict[str, Any]:
         """Create a git snapshot of the account's tree.
 
@@ -252,8 +251,6 @@ class _SnapshotMixin:
             "author_name": author_name or self._DEFAULT_GIT_AUTHOR_NAME,
             "author_email": author_email or self._DEFAULT_GIT_AUTHOR_EMAIL,
         }
-        if require_tracked:
-            kwargs["require_tracked"] = True
         if real_ctx.role == Role.ROOT or not paths:
             return await self._async_agfs.run("git_commit", **kwargs)
 

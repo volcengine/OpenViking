@@ -1881,16 +1881,8 @@ impl RAGFSBindingClient {
         let empty = PyDict::new(py);
         let kw = kwargs.unwrap_or(&empty);
         let req = git::parse_commit_request(kw)?;
-        let require_tracked = kw
-            .get_item("require_tracked")?
-            .map(|value| value.extract::<bool>())
-            .transpose()?
-            .unwrap_or(false);
-        let resp = py_detach_blocking(py, move || {
-            self.rt
-                .block_on(svc.commit_with_tracking(req, require_tracked))
-        })
-        .map_err(|e| git::map_git_error(py, e))?;
+        let resp = py_detach_blocking(py, move || self.rt.block_on(svc.commit(req)))
+            .map_err(|e| git::map_git_error(py, e))?;
         git::commit_response_to_pydict(py, resp)
     }
 

@@ -86,6 +86,8 @@ test('FileBrowser loads the full file, writes it, and reloads the displayed body
       assert.equal(request.uri, uri);
       assert.equal(request.mode, 'replace');
       assert.equal(request.content, '# Updated');
+      assert.equal(request.version_message, undefined);
+      assert.equal(request.expected_content_sha256, undefined);
       return ok({});
     }
     return ok([]);
@@ -115,15 +117,7 @@ test('FileBrowser loads the full file, writes it, and reloads the displayed body
     assert.equal(fullReads, 1);
     await setTextarea(view.container.querySelector('textarea'), '# Updated');
     await click(view, 'Save');
-    assert.equal(requests.countOf('/api/v1/content/write'), 0);
-    await click(
-      {
-        container: document.querySelector(
-          '.ov-file-preview-version-note [role="dialog"]',
-        ),
-      },
-      'Confirm',
-    );
+    assert.equal(document.querySelector('.ov-file-preview-version-note'), null);
     assert.equal(requests.countOf('/api/v1/content/write'), 1);
     assert.equal(requests.countOf('/api/v1/content/read'), reads + 1);
     await view.render(render(true));

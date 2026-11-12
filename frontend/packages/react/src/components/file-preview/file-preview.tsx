@@ -1,20 +1,13 @@
 import { FilePreviewCommandProvider } from './file-preview-command-state.js';
 import { mediaKind } from './file-preview-media.js';
 import { useLocale } from '../../shared/locale-context.js';
-import {
-  forwardRef,
-  useCallback,
-  useImperativeHandle,
-  useRef,
-  useState,
-} from 'react';
+import { forwardRef, useCallback, useImperativeHandle, useState } from 'react';
 
 import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters/markdown';
 
 import { mergeLabels } from '../../shared/locale.js';
 import { FilePreviewPanels } from './file-preview-panels.js';
 import { useFilePreviewViewState } from './use-file-preview-view-state.js';
-import { useFilePreviewSwitchTab } from './use-file-preview-switch-tab.js';
 import { useFilePreviewLevels } from './use-file-preview-levels.js';
 import { resolveFilePreviewLabels } from './file-preview-labels.js';
 import { FilePreviewTabRow } from './file-preview-tab-row.js';
@@ -23,14 +16,19 @@ import { useFilePreviewActionsContext } from './use-file-preview-actions-context
 import { useFilePreviewIds } from './use-file-preview-ids.js';
 import { useDirectoryLevel } from './use-directory-level.js';
 import { useFilePreviewEditing } from './use-file-preview-editing.js';
-import { FilePreviewVersionNote } from './file-preview-version-note.js';
 import type {
   FilePreviewComponent,
   FilePreviewContentTab,
   FilePreviewDirectoryTab,
+  FilePreviewFileTab,
   FilePreviewHandle,
   FilePreviewProps,
+  FilePreviewTab,
 } from './types.js';
+
+function isFileTab(tab: FilePreviewTab): tab is FilePreviewFileTab {
+  return tab.kind === 'file';
+}
 
 /**
  * 文件预览：页签行、内容区标题行与正文组成的外壳，正文由底座按格式渲染。
@@ -94,29 +92,59 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   // 编辑态跟着实际渲染的页签走，理由见 `switchTab`。
   // Editing follows the tab that actually renders; see `switchTab`.
   const editing = useFilePreviewEditing(identity);
-  const rootRef = useRef<HTMLDivElement>(null);
   const actions = useFilePreviewActions();
 
   const tabText = mergeLabels<typeof text>(text, activeTab.labels);
-  const fileTab = activeTab.kind === 'file' ? activeTab : undefined;
+  const fileTab = isFileTab(activeTab) ? activeTab : undefined;
   const directoryTab: FilePreviewDirectoryTab | undefined =
     activeTab.kind === 'directory' ? activeTab : undefined;
   const contentTab: FilePreviewContentTab | undefined =
     fileTab || directoryTab ? undefined : (activeTab as FilePreviewContentTab);
   // 文件页签恒显示 URI 行——路径、复制、视图切换与编辑都在那一行。
 
-  const switchTab = useFilePreviewSwitchTab({
-    activeKey,
-    activeTab,
-    currentKey,
-    editing,
-    onActiveKeyChange,
-    tabs,
-    setInternalKey,
-    setViewMode,
-    setViewModes,
-    viewerHandle,
-  });
+  const switchTab = useCallback(
+    (key: string) => {
+      if (editing.saving) return false;
+      // 只有「请求的 key 就是目标」才算已在该页签。当前页签被移除时 `currentKey`
+      // 仍指向它、`activeTab` 已回落到 `tabs[0]`，此时点 `tabs[0]` 必须放行让宿主
+      // 同步 `activeKey`，否则正文显示 B 而页签栏无选中项，无法修正。
+      // Only "requested key is the target" counts as already there; a stale
+      // `currentKey` must not block selecting the tab that actually renders.
+      if (key === currentKey && key === activeTab.key) return false;
+      const target = tabs.find((tab) => tab.key === key);
+      if (!target || target.disabled) return false;
+      // 请求的 key 过期、但目标就是当前实际渲染的页签时，只是把宿主的
+      // `activeKey` 同步到有效值，并没有离开这个页签——不能丢弃它的编辑态，
+      // 否则用户在 B 上编辑、点一下已选中的 B 就会丢掉草稿。
+      //
+      // When the requested key is stale but the target is the tab that already
+      // renders, this only syncs the host's `activeKey`; the user never left the
+      // tab, so its editing state must survive — otherwise editing B and clicking
+      // the already-selected B would drop the draft.
+      const syncingOnly = target.key === activeTab.key;
+      if (!syncingOnly) {
+        editing.discard(activeTab);
+        setViewMode('preview');
+        // 视图模式属于上一个页签的格式，切换后等新格式上报再决定是否显示切换。
+        setViewModes([]);
+        viewerHandle.current = null;
+      }
+      if (activeKey === undefined) setInternalKey(key);
+      onActiveKeyChange?.(key);
+      return true;
+    },
+    [
+      activeKey,
+      activeTab,
+      currentKey,
+      editing,
+      onActiveKeyChange,
+      tabs,
+      setViewMode,
+      setViewModes,
+      viewerHandle,
+    ],
+  );
 
   useImperativeHandle(
     ref,
@@ -187,7 +215,6 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   return (
     <div
       {...rest}
-      ref={rootRef}
       className={['ov-file-preview', className].filter(Boolean).join(' ')}
     >
       <FilePreviewTabRow
@@ -229,19 +256,6 @@ export const FilePreview: FilePreviewComponent = forwardRef<
           activeTab={activeTab}
         />
       </FilePreviewCommandProvider>
-      {editing.noteOpen && fileTab ? (
-        <FilePreviewVersionNote
-          locale={locale}
-          text={tabText}
-          triggerRef={rootRef}
-          saving={editing.saving}
-          error={editing.saveFailed ? tabText.saveFailed : undefined}
-          onClose={editing.closeNote}
-          onConfirm={async (message) => {
-            if (await editing.save(fileTab, message)) setViewMode('preview');
-          }}
-        />
-      ) : null}
     </div>
   );
 });

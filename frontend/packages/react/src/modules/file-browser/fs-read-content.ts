@@ -60,8 +60,6 @@ export async function readFileContent(
     truncated,
     // Only the business parser receives metadata; views and drafts receive content.
     wikiSource: wiki ? body : undefined,
-    // The server compares the visible read before the UI removes Wiki metadata.
-    revisionText: body,
     wiki,
   };
 }

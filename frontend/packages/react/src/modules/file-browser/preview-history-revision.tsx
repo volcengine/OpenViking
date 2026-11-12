@@ -1,7 +1,6 @@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import CopyIcon from '../../../../icons/svg/file-preview/copy.svg?react';
-import RestoreIcon from '../../../../icons/svg/file-preview/restore.svg?react';
 import { Button } from '../../shared/primitives/button/button.js';
 import {
   PreviewMutationError,
@@ -17,19 +16,12 @@ export function PreviewHistoryRevision({
   selectedPath,
   view,
   compare,
-  writable,
   changes,
   identical,
-  canRestore,
-  restore,
   copy,
   copied,
-  confirm,
   text,
   setView,
-  onStartRestore,
-  onCancelRestore,
-  onRestore,
   onCopy,
 }: {
   content: DashboardQuery<string>;
@@ -37,19 +29,12 @@ export function PreviewHistoryRevision({
   selectedPath?: string;
   view: 'preview' | 'source';
   compare: boolean;
-  writable: boolean;
   changes?: DiffLine[];
   identical: boolean;
-  canRestore: boolean;
-  restore: { pending: boolean; error?: unknown };
   copy: { pending: boolean; error?: unknown };
   copied: boolean;
-  confirm: boolean;
   text: FileBrowserWorkflowLabels & { loading: string; retry: string };
   setView: (view: 'preview' | 'source') => void;
-  onStartRestore: () => void;
-  onCancelRestore: () => void;
-  onRestore: () => void;
   onCopy: () => void;
 }) {
   const statusText = text;
@@ -78,21 +63,11 @@ export function PreviewHistoryRevision({
             ))}
           </div>
           <div className="ov-file-history__commands">
-            {writable ? (
-              <Button
-                size="small"
-                icon={<RestoreIcon aria-hidden="true" />}
-                disabled={!canRestore || restore.pending}
-                onClick={onStartRestore}
-              >
-                {text.restoreVersion}
-              </Button>
-            ) : null}
             <Button
               size="small"
               type="outline"
               icon={<CopyIcon aria-hidden="true" />}
-              disabled={content.data === undefined || restore.pending}
+              disabled={content.data === undefined}
               loading={copy.pending}
               onClick={onCopy}
             >
@@ -101,32 +76,9 @@ export function PreviewHistoryRevision({
           </div>
         </div>
         <PreviewMutationError error={copy.error} text={text} />
-        {confirm ? (
-          <div className="ov-file-history__confirm">
-            <p>{text.confirmRestore}</p>
-            <div className="ov-file-history__commands">
-              <Button
-                size="small"
-                disabled={restore.pending}
-                onClick={onCancelRestore}
-              >
-                {text.cancel}
-              </Button>
-              <Button
-                size="small"
-                type="primary"
-                loading={restore.pending}
-                onClick={onRestore}
-              >
-                {text.restoreVersion}
-              </Button>
-            </div>
-            <PreviewMutationError error={restore.error} text={text} />
-          </div>
-        ) : null}
         <div className="ov-file-history__content">
           <PreviewQueryState query={content} text={statusText} />
-          {compare || (writable && current.error) ? (
+          {compare ? (
             <PreviewQueryState query={current} text={statusText} />
           ) : null}
           {compare ? (

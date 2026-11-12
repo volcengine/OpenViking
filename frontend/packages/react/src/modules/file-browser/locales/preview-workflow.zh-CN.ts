@@ -7,8 +7,6 @@ export default {
   noChanges: '此版本与当前文件相同。',
   addedLines: '新增内容',
   removedLines: '删除内容',
-  restoreVersion: '回滚至此版本',
-  confirmRestore: '将当前文件恢复为所选版本，并生成一条新的历史记录。',
   copyOriginal: '复制原文',
   copied: '已复制',
   historyPreview: '预览',

@@ -433,7 +433,7 @@ await browserRef.current?.openResource(resultUri, { reveal: true });
 - `readOnly` 禁止所有写入，包括保存编译配置；开启 `acl` 后，编辑、导入和保存编译配置要求 `write` 或 `manage`，删除要求 `manage`。
 - 复制内容、下载、导出、历史版本和查看编译配置不受 `readOnly` 和 ACL 的限制。
 - 没有开启 `acl`，或资源不在 `viking://resources/` 下时，区块不探测权限，由服务端鉴权。
-- 历史版本：`GET /api/v1/snapshot/log` 读取该资源最近最多 500 条快照；Wiki 编译产物用 `GET /api/v1/snapshot/versions` 读取最多 100 个保留版本。可预览或复制历史正文、与当前文件对比；有写权限时，可将旧版本恢复为一个新版本。保存有改动的文本时可选填版本备注。恢复前会校验当前文件是否已被改动。
+- 历史版本：`GET /api/v1/snapshot/log` 读取该资源最近最多 500 条快照；Wiki 编译产物用 `GET /api/v1/snapshot/versions` 读取最多 100 个保留版本。可预览或复制历史正文，并与当前文件对比。历史弹窗为只读。
 - 编译配置：`GET /api/v1/compile/config` 读取，`POST /api/v1/compile/config/update` 保存来源目录、技能、指令、自动更新和每天或每周的定时更新。
 - 导入 .ovpack：先通过 `POST /api/v1/resources/temp_upload` 上传文件，再调用 `POST /api/v1/pack/import` 导入到当前目录；失败时保留所选文件，重试会重新上传。
 - 导出 .ovpack：调用 `POST /api/v1/pack/export`，把返回的内容保存为 `<名称>.ovpack`；下载使用 `GET /api/v1/content/download`。
