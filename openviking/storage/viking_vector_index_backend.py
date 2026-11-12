@@ -5,9 +5,9 @@
 from __future__ import annotations
 
 import asyncio
-import time
 import re
 import threading
+import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -1605,6 +1605,8 @@ class VikingVectorIndexBackend:
                         full_records[0].get("search_tags"),
                         updated_record["search_tags"],
                     )
+            except InvalidArgumentError:
+                raise
             except Exception as exc:
                 logger.warning(
                     "update_search_tags failed to merge exact record tags uri=%s "
@@ -1665,6 +1667,8 @@ class VikingVectorIndexBackend:
                         full_record.get("search_tags"),
                         updated_record["search_tags"],
                     )
+            except InvalidArgumentError:
+                raise
             except Exception as exc:
                 logger.warning(
                     "update_search_tags failed to merge leveled record tags uri=%s "
