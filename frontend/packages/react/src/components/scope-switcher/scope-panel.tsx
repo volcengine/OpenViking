@@ -1,4 +1,4 @@
-import { Input } from '../../shared/components/input/input.js';
+import { Input } from '../../shared/primitives/input/input.js';
 import { useCallback, type ReactNode } from 'react';
 import { moveScopeFocus } from './scope-keyboard.js';
 import CheckIcon from '../../../../icons/svg/scope-switcher/check.svg?react';

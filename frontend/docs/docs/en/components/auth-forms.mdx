@@ -1,81 +1,197 @@
-# Authentication forms
+# Auth forms
 
-Authentication views without requests, routing, storage or page layout. Built-in labels are available in English and Simplified Chinese.
+Six components that cover choosing a login method, logging in with an email or an API Key, requesting a password reset email, setting a password and confirming an invitation.
+
+## When to use
+
+- `EmailLoginForm`: users log in with an email and password, with an optional forgot-password entry.
+- `ApiKeyLoginForm`: users log in with an API Key. The input is masked by default and can be revealed.
+- `PasswordResetRequestForm`: users who forgot their password request a reset email, with support for resending and for showing the wait before the next send.
+- `PasswordSetupForm`: users set a password for the first time, or reset it from an email link.
+- `LoginMethodSelector`: your app offers several login methods and users pick one first.
+- `InvitationConfirmation`: show the details of an invitation and let users accept, decline or postpone it.
+- You handle requests, sessions and navigation yourself: these components only collect input, validate it and render. They send no requests and do not need `OpenVikingProvider`.
+
+## Import
+
+```tsx
+import { EmailLoginForm } from '@openviking/react/components/auth/email-login-form';
+import '@openviking/react/components/auth/email-login-form/style.css';
+
+import { ApiKeyLoginForm } from '@openviking/react/components/auth/api-key-login-form';
+import '@openviking/react/components/auth/api-key-login-form/style.css';
+
+import { PasswordResetRequestForm } from '@openviking/react/components/auth/password-reset-request-form';
+import '@openviking/react/components/auth/password-reset-request-form/style.css';
+
+import { PasswordSetupForm } from '@openviking/react/components/auth/password-setup-form';
+import '@openviking/react/components/auth/password-setup-form/style.css';
+
+import { LoginMethodSelector } from '@openviking/react/components/auth/login-method-selector';
+import '@openviking/react/components/auth/login-method-selector/style.css';
+
+import { InvitationConfirmation } from '@openviking/react/components/auth/invitation-confirmation';
+import '@openviking/react/components/auth/invitation-confirmation/style.css';
+```
+
+## Examples
+
+### Basic usage
+
+The example covers the pending state, error message, agreement confirmation and the sent state of the reset form. Click the buttons at the top to switch components, end a pending submission with "Complete simulation" or "Fail simulation", and uncheck "Configure agreements" to remove the agreement confirmation.
 
 ```tsx file="../../_demos/auth-forms.tsx" preview
 
 ```
 
-## Components
+The example only simulates state: it sends no requests and creates no accounts. The password rule on the setup form comes from the example's own `validatePassword`, not from the component.
 
-| Export                     | Purpose                         | Specific props                                                                                       |
-| -------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `LoginMethodSelector`      | Choose a login method           | `methods`, `onSelect`                                                                                |
-| `EmailLoginForm`           | Email/password login            | `defaultEmail`, `readOnlyEmail`, `forgotPassword`, `alternateLogin`, `onSubmit({ email, password })` |
-| `ApiKeyLoginForm`          | API Key login                   | `alternateLogin`, `onSubmit({ apiKey })`                                                             |
-| `PasswordResetRequestForm` | Request or resend a reset email | `defaultEmail`, `sentMessage: { email, message }`, `retryAfter`, `onSubmit({ email })`               |
-| `PasswordSetupForm`        | First-time or reset password    | `account`, `passwordHint`, `validatePassword`, `onSubmit({ password })`                              |
-| `InvitationConfirmation`   | Confirm an invitation           | `details`, `onAccept`, `decline`, `defer`, `acceptLabel`, `locale`                                   |
+## API
 
-## Imports
+### Common props
 
-```tsx
-import { EmailLoginForm } from '@openviking/react/components/email-login-form';
-import type {
-  EmailLoginFormProps,
-  AuthAgreements,
-  AuthLabels,
-} from '@openviking/react/components/email-login-form';
-import '@openviking/react/components/email-login-form/style.css';
-```
+`EmailLoginForm`, `ApiKeyLoginForm`, `PasswordResetRequestForm` and `PasswordSetupForm` all accept these props.
 
-Each component has its own kebab-case JS and `style.css` entry; `@openviking/react` also exports the six components and their main Props types. Shared configuration types are exported only from form subpaths. No UI framework or internal theme package is required. Styles use the existing `--ov-ui-color-*` theme variables; dark mode follows the host's `html.dark` class.
+| Property    | Description                                                                                                                                    | Type                  | Default                        |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | ------------------------------ |
+| loading     | Set while your app handles the submission: disables the inputs and submit button and shows a busy state                                        | `boolean`             | `false`                        |
+| disabled    | Disables the inputs and submit button                                                                                                          | `boolean`             | `false`                        |
+| error       | Error shown above the submit button; the component does not interpret backend error codes                                                      | `ReactNode`           | -                              |
+| title       | Form title, rendered as an `h2`                                                                                                                | `ReactNode`           | -                              |
+| description | Text below the title                                                                                                                           | `ReactNode`           | -                              |
+| back        | Back entry at the top of the form; hidden without `onClick`                                                                                    | `AuthAction`          | -                              |
+| agreements  | Agreement configuration; when `items` is not empty, shows an agreement checkbox and asks for confirmation before submitting if it is unchecked | `AuthAgreements`      | -                              |
+| labels      | Overrides interface text, see `AuthLabels` for the fields                                                                                      | `Partial<AuthLabels>` | -                              |
+| locale      | Interface language, see [Internationalization](../guide/i18n)                                                                                  | `'zh-CN' \| 'en-US'`  | Inherited, otherwise `'en-US'` |
+| className   | Class name added to the root element                                                                                                           | `string`              | -                              |
 
-## Form options
+### EmailLoginForm
 
-| Prop                    | Default             | Behavior                                                                                                      |
-| ----------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `loading` / `disabled`  | `false`             | Disable fields and submission; `loading` also exposes busy state                                              |
-| `error`                 | absent              | Host-provided visible error; no backend error-code interpretation                                             |
-| `title` / `description` | absent              | Optional form heading and description                                                                         |
-| `className`             | absent              | Additional root class                                                                                         |
-| `back`                  | absent              | Optional `{ label, onClick }` action                                                                          |
-| `agreements`            | absent              | No checkbox or agreement gate unless a nonempty items array is supplied                                       |
-| `locale`                | Provider or `en-US` | Override the nearest language scope with `zh-CN` or `en-US`                                                   |
-| `labels`                | Current locale      | Partial `AuthLabels`; `undefined` inherits, and an empty string hides the message without changing validation |
+Shared props are listed in Common props.
 
-Optional actions are shown only when they have an `onClick` handler. `forgotPassword`, `alternateLogin`, `decline` and `defer` use the same `{ label, onClick }` shape. Their callbacks do not imply any navigation or request.
+| Property       | Description                                                                                                       | Type                                                    | Default |
+| -------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- | ------- |
+| defaultEmail   | Initial value of the email input, only read on the first render                                                   | `string`                                                | `''`    |
+| readOnlyEmail  | Makes the email input read-only; its value is still validated and submitted                                       | `boolean`                                               | `false` |
+| forgotPassword | Forgot-password entry to the right of the password label; hidden without `onClick`                                | `AuthAction`                                            | -       |
+| alternateLogin | Entry at the bottom of the form that switches to another login method; hidden without `onClick`                   | `AuthAction`                                            | -       |
+| onSubmit       | Called after validation passes and any agreements are accepted; `email` is trimmed, `password` is passed as typed | `(values: { email: string; password: string }) => void` | -       |
 
-```tsx
-<EmailLoginForm
-  forgotPassword={{ label: 'Forgot password?', onClick: openReset }}
-  agreements={{
-    items: [{ label: 'Terms', href: 'https://example.com/terms' }],
-    confirmation: {
-      title: 'Read and agree',
-      description: 'Please review the linked terms before continuing.',
-      confirmText: 'Agree and continue',
-      cancelText: 'Cancel',
-    },
-  }}
-  loading={pending}
-  error={errorMessage}
-  onSubmit={handleLogin}
-/>
-```
+### ApiKeyLoginForm
 
-## Interaction contract
+Shared props are listed in Common props.
 
-Forms own input drafts, field errors, password visibility and agreement UI. Validation runs before agreement confirmation; cancel or Escape preserves values without submitting or checking the agreement. Agree checks the box and submits the current valid values. No agreement URLs, organization names or legal policies are hard-coded. Use a new React `key` when changing account or agreement policy, to discard previous drafts and acceptance.
+| Property       | Description                                                                                     | Type                                   | Default |
+| -------------- | ----------------------------------------------------------------------------------------------- | -------------------------------------- | ------- |
+| alternateLogin | Entry at the bottom of the form that switches to another login method; hidden without `onClick` | `AuthAction`                           | -       |
+| onSubmit       | Called after validation passes and any agreements are accepted; `apiKey` is passed as typed     | `(values: { apiKey: string }) => void` | -       |
 
-Email and API Key login require nonempty credentials; email also checks basic format. Login does not apply new-password strength rules. Password setup requires both entries and equality. Strength is host-defined: `validatePassword(password)` returns an error string, or `undefined` for valid input. Without it only required/equality checks apply. Password and API Key values are never persisted or logged by the components, and passwords are not trimmed.
+### PasswordResetRequestForm
 
-`defaultEmail` is initial-only. Remount with `key` to reset a form or clear secrets after an attempt. Submission callbacks express intent and return no service data. The host must set `loading` while an asynchronous operation is pending and pass failures through `error`; the components never retry mutations automatically. No success navigation is built in.
+Shared props are listed in Common props.
 
-Reset-email `sentMessage` is tied to its email so editing the input does not show success for a different address. `retryAfter` is a nonnegative remaining number of seconds supplied and updated by the host; the component renders the remaining wait and disables resubmission, but owns no timer or email delivery.
+| Property     | Description                                                                                                                                                   | Type                                    | Default |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | ------- |
+| defaultEmail | Initial value of the email input, only read on the first render                                                                                               | `string`                                | `''`    |
+| sentMessage  | Result of a sent email: while the input matches `email`, shows `message` and turns the submit button into a resend button                                     | `{ email: string; message: ReactNode }` | -       |
+| retryAfter   | Seconds left before the email can be sent again, which your app keeps updating; above 0 it disables the whole form and shows the seconds on the submit button | `number`                                | `0`     |
+| onSubmit     | Called after validation passes and any agreements are accepted; `email` is trimmed                                                                            | `(values: { email: string }) => void`   | -       |
 
-Invitation details are display-only `{ label, value }` rows. The host maps its own preview response to those rows and decides whether to show login, setup, confirmation or enter a workspace directly. `onAccept`, decline and defer never accept an invitation themselves.
+### PasswordSetupForm
 
-## Host responsibilities
+Shared props are listed in Common props.
 
-GetSession, Cookie/CSRF, authentication clients, token parsing, invitation state machines, account storage, cross-tab checks, password policy, mail delivery and routing remain outside these views. The runnable demo uses only fixed public data and simulated state, and never sends a request.
+| Property         | Description                                                                                                                                    | Type                                        | Default |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- | ------- |
+| account          | Account the password is set for, shown above the inputs with the `labels.account` caption below it                                             | `ReactNode`                                 | -       |
+| passwordHint     | Password rule hint shown below both inputs                                                                                                     | `ReactNode`                                 | -       |
+| validatePassword | Checks the new password: return an error message to reject it or `undefined` to accept it; without it only the required and match checks apply | `(password: string) => string \| undefined` | -       |
+| onSubmit         | Called after validation passes and any agreements are accepted; `password` is passed as typed                                                  | `(values: { password: string }) => void`    | -       |
+
+### LoginMethodSelector
+
+| Property    | Description                                                                                                                                                            | Type                                                                             | Default  |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------- |
+| methods     | Login methods shown as buttons in order: `id` is passed to `onSelect`, `label` is the button text, `icon` is shown before it, and `disabled` disables only that method | `readonly { id: string; label: string; icon?: ReactNode; disabled?: boolean }[]` | Required |
+| onSelect    | Called when a method is clicked, with its `id`                                                                                                                         | `(id: string) => void`                                                           | -        |
+| disabled    | Disables all methods                                                                                                                                                   | `boolean`                                                                        | `false`  |
+| title       | Title, rendered as an `h2`                                                                                                                                             | `ReactNode`                                                                      | -        |
+| description | Text below the title                                                                                                                                                   | `ReactNode`                                                                      | -        |
+| className   | Class name added to the root element                                                                                                                                   | `string`                                                                         | -        |
+
+### InvitationConfirmation
+
+| Property    | Description                                                                                  | Type                                             | Default                        |
+| ----------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------ | ------------------------------ |
+| details     | Invitation information, one row per item with `label` on the left and `value` on the right   | `readonly { label: string; value: ReactNode }[]` | Required                       |
+| onAccept    | Called when the accept button is clicked                                                     | `() => void`                                     | -                              |
+| acceptLabel | Text of the accept button; the default follows `locale`                                      | `string`                                         | `'Accept invitation'`          |
+| decline     | Entry for declining the invitation, shown after the accept button; hidden without `onClick`  | `AuthAction`                                     | -                              |
+| defer       | Entry for postponing the invitation, shown after the decline entry; hidden without `onClick` | `AuthAction`                                     | -                              |
+| loading     | Set while your app handles the acceptance: disables all buttons and shows a busy state       | `boolean`                                        | `false`                        |
+| disabled    | Disables all buttons                                                                         | `boolean`                                        | `false`                        |
+| error       | Error shown above the buttons                                                                | `ReactNode`                                      | -                              |
+| title       | Title, rendered as an `h2`                                                                   | `ReactNode`                                      | -                              |
+| description | Text below the title                                                                         | `ReactNode`                                      | -                              |
+| locale      | Interface language, see [Internationalization](../guide/i18n)                                | `'zh-CN' \| 'en-US'`                             | Inherited, otherwise `'en-US'` |
+| className   | Class name added to the root element                                                         | `string`                                         | -                              |
+
+### AuthAction
+
+| Property | Description                                                                     | Type         | Default  |
+| -------- | ------------------------------------------------------------------------------- | ------------ | -------- |
+| label    | Entry text; the component does not translate it, so supply the current language | `string`     | Required |
+| onClick  | Called on click; the entry is hidden when omitted                               | `() => void` | -        |
+
+### AuthAgreements
+
+| Property     | Description                                                                                                                                | Type                                                                                  | Default  |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- | -------- |
+| items        | Agreements shown as links that open in a new tab, next to the checkbox and in the confirmation dialog; an empty array turns agreements off | `readonly { label: string; href: string }[]`                                          | Required |
+| confirmation | Texts of the confirmation dialog; omitted fields fall back to the `agreementTitle`, `agreementDescription`, `agree` and `cancel` labels    | `{ title?: string; description?: string; confirmText?: string; cancelText?: string }` | -        |
+
+### AuthLabels
+
+Defaults are the built-in `en-US` texts.
+
+| Property             | Description                                                          | Type     | Default                                                                |
+| -------------------- | -------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------- |
+| email                | Label of the email input                                             | `string` | `'Email'`                                                              |
+| password             | Label of the login password input                                    | `string` | `'Password'`                                                           |
+| apiKey               | Label of the API Key input                                           | `string` | `'API Key'`                                                            |
+| newPassword          | Label of the new password input                                      | `string` | `'New password'`                                                       |
+| confirmation         | Label of the new password confirmation input                         | `string` | `'Confirm new password'`                                               |
+| showPassword         | Accessible name of the "show" button on password and API Key inputs  | `string` | `'Show password'`                                                      |
+| hidePassword         | Accessible name of the "hide" button on password and API Key inputs  | `string` | `'Hide password'`                                                      |
+| required             | Error shown when a required field is empty                           | `string` | `'This field is required.'`                                            |
+| invalidEmail         | Error shown when the email is empty or malformed                     | `string` | `'Enter a valid email address.'`                                       |
+| mismatch             | Error shown when the two passwords differ                            | `string` | `'Passwords do not match.'`                                            |
+| login                | Submit button of `EmailLoginForm` and `ApiKeyLoginForm`              | `string` | `'Log in'`                                                             |
+| send                 | Submit button of `PasswordResetRequestForm`                          | `string` | `'Send reset email'`                                                   |
+| resend               | Submit button of `PasswordResetRequestForm` after the email was sent | `string` | `'Resend email'`                                                       |
+| confirm              | Submit button of `PasswordSetupForm`                                 | `string` | `'Confirm and log in'`                                                 |
+| agreementPrefix      | Text before the agreement links next to the checkbox                 | `string` | `'I have read and agree to'`                                           |
+| agreementTitle       | Title of the confirmation dialog                                     | `string` | `'Read and accept the agreements'`                                     |
+| agreementDescription | Text of the confirmation dialog, followed by the agreement links     | `string` | `'Please read and accept the following agreements before continuing.'` |
+| agree                | Agree button of the confirmation dialog                              | `string` | `'Agree and continue'`                                                 |
+| cancel               | Cancel button of the confirmation dialog                             | `string` | `'Cancel'`                                                             |
+| account              | Caption below the account in `PasswordSetupForm`                     | `string` | `'Login account'`                                                      |
+
+## Notes
+
+- Submitting validates the input first, then handles agreements: with the box checked, `onSubmit` fires directly; otherwise a confirmation dialog opens, and agreeing checks the box and fires `onSubmit`.
+- The confirmation dialog is a native `<dialog>` opened with `showModal()`, so the browser must support it. Cancelling or pressing Esc closes it, keeps the input, leaves the box unchecked and does not submit.
+- The components send no requests and ignore the return value of `onSubmit`. Set `loading` while your app handles the submission, pass failures through `error`, and navigate after success yourself.
+- In the forms, `loading` and `disabled` disable the inputs, the submit button and `forgotPassword`, while `back` and `alternateLogin` stay clickable. In `InvitationConfirmation` they disable every button.
+- Inputs, field errors, password visibility and the agreement checkbox live inside the form. To clear them when the account or agreements change, remount the form with a new `key`.
+- The email must match a basic email format, and an empty email shows the invalid-email message too. Login passwords and API Keys are only checked for being non-empty, not against new-password rules.
+- `PasswordSetupForm` checks that both entries match. Password strength comes only from `validatePassword`; there is no default strength rule.
+- Setting `required`, `invalidEmail` or `mismatch` to an empty string hides that message only; the form still fails validation.
+- Passwords and API Keys stay in the input state: the components do not store, log or trim them. The email is trimmed before `onSubmit`.
+- Inputs set `autocomplete` so password managers can recognize them: `username` and `current-password` for email login, `new-password` for password setup, and `off` for the API Key.
+- `LoginMethodSelector` has no built-in text, so it has no `locale` or `labels`. `InvitationConfirmation` has one built-in string, the accept button, which you change with `acceptLabel`; it has no `labels` either.
+- `InvitationConfirmation` only renders `details`, and `onAccept`, `decline` and `defer` only notify your app. Your app loads the invitation, decides whether to show login, password setup or confirmation, and navigates.
+- Each component is at most 440px wide and shrinks with its container; centering and page layout are up to your app.
+- The six components share one stylesheet: every `style.css` entry has the same content, so import any one of them when a page uses several.
+- Colors come from the `--ov-ui-color-*` theme variables, and dark mode follows the `.dark` class on `<html>`; see [Getting started](../guide/getting-started).
+- Types are exported from each component's subpath: `AuthAction`, `AuthAgreements` and `AuthLabels` from the four form subpaths, and `AuthAction` also from `invitation-confirmation`. The package root exports only the six components and their Props types.

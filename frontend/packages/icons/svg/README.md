@@ -1,7 +1,6 @@
 # OpenViking supplemental file icons
 
-Original, unmodified SVG assets supplied by the designer in Figma:
-https://www.figma.com/design/ecpd1ZGHKRYibm1ODKEpM6/OpenViking-Console?node-id=8503-43900
+Original, unmodified SVG assets supplied by the designer.
 
 Video, audio, PDF, PPT and Word supplement the Pierre set. EPUB reuses Pierre text.
 All supplied assets are 16 × 16 and use the same artwork for light and dark backgrounds, as specified in the design.

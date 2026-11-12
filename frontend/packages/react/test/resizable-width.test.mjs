@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { clampResizableWidth } from '../src/shared/components/resizable/clamp.ts';
+import { clampResizableWidth } from '../src/shared/primitives/resizable/clamp.ts';
 import {
   TREE_DEFAULT_WIDTH,
   TREE_MIN_WIDTH,

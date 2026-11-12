@@ -1,4 +1,4 @@
-@import '../../shared/components/input/input.css';
+@import '../../shared/primitives/input/input.css';
 /**
  * 待确认交互区样式。颜色取自 `viking-bot.css` 里从主题基线派生的组件变量。
  *

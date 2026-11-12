@@ -77,8 +77,8 @@ test('Modal remains internal and has no root or subpath API', async () => {
   for (const path of [
     'components/modal',
     'components/modal/style.css',
-    'shared/components/modal/modal.js',
-    'shared/components/modal/style.css',
+    'shared/primitives/modal/modal.js',
+    'shared/primitives/modal/style.css',
   ]) {
     assert.throws(() => import.meta.resolve(`@openviking/react/${path}`), {
       code: 'ERR_PACKAGE_PATH_NOT_EXPORTED',

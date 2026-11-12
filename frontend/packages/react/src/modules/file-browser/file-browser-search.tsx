@@ -1,9 +1,9 @@
 import { useState, type RefObject } from 'react';
 import { useOvClient } from '../../client/provider.js';
 import type { OvRequestOptions } from '../../client/types.js';
-import { Button } from '../../shared/components/button/button.js';
-import { Input } from '../../shared/components/input/input.js';
-import { Modal } from '../../shared/components/modal/modal.js';
+import { Button } from '../../shared/primitives/button/button.js';
+import { Input } from '../../shared/primitives/input/input.js';
+import { Modal } from '../../shared/primitives/modal/modal.js';
 import type { Locale } from '../../shared/locale.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
 import { useFsSearch } from './use-fs-search.js';

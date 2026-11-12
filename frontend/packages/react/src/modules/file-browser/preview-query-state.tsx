@@ -1,6 +1,6 @@
 import type { DashboardQuery } from './use-dashboard-query.js';
 import type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
-import { Button } from '../../shared/components/button/button.js';
+import { Button } from '../../shared/primitives/button/button.js';
 
 export function PreviewQueryState<T>({
   query,

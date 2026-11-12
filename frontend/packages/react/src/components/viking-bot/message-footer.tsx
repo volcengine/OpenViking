@@ -1,4 +1,4 @@
-import { Button } from '../../shared/components/button/button.js';
+import { Button } from '../../shared/primitives/button/button.js';
 import { BubbleTools } from '@ark-design/ui/bubble';
 import { messageText } from './message-groups.js';
 import type { VikingBotLabels, VikingBotMessage } from './model.js';

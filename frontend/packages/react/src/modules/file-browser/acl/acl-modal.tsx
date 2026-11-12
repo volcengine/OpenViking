@@ -1,6 +1,6 @@
-import { Button } from '../../../shared/components/button/button.js';
+import { Button } from '../../../shared/primitives/button/button.js';
 import { useEffect, useId, useRef, type RefObject } from 'react';
-import { Modal } from '../../../shared/components/modal/modal.js';
+import { Modal } from '../../../shared/primitives/modal/modal.js';
 import type { Locale } from '../../../shared/locale.js';
 import type { OvIdentityValue } from '../../../client/types.js';
 import type {
