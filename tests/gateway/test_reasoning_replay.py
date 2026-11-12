@@ -6,7 +6,7 @@ from aiohttp import web
 from test_app import completion, enable_tools
 
 from openviking_gateway.models import Upstream
-from openviking_gateway.protocols import replays_reasoning
+from openviking_gateway.protocols import reasoning_record, reasoning_value, replays_reasoning
 from openviking_gateway.records import RecordKind as K
 from openviking_gateway.tool_protocols import ResponseCapture, hidden_chain
 
@@ -32,6 +32,30 @@ def test_vendor_defaults(vendor, value, expected):
         name="x", base_url="http://model", protocol="chat", vendor=vendor, replay_reasoning=value
     ).model_dump()
     assert replays_reasoning(upstream) is expected
+
+
+def test_reasoning_route_record_keeps_legacy_rows_and_fails_malformed_rows_closed():
+    body = {"model": "alias"}
+    upstream = {
+        "id": "u",
+        "vendor": "deepseek",
+        "base_url": "https://model.example/v1",
+        "aliases": {"alias": "model"},
+    }
+    value = {"reasoning_content": "think"}
+    record = reasoning_record(value, body, upstream)
+
+    assert reasoning_value(record, {"model": "model"}, upstream) == value
+    assert reasoning_value(record, {"model": "other"}, upstream) is None
+    assert reasoning_value(value, {"model": "other"}, upstream) is value
+    assert (
+        reasoning_value(
+            {"schema": "openviking.reasoning.route.v1", "route": "bad", "value": value},
+            body,
+            upstream,
+        )
+        is None
+    )
 
 
 async def configure_chat(client, admin, **fields):
@@ -119,6 +143,76 @@ async def test_chat_restores_dropped_reasoning_byte_for_byte(running_gateway, st
     assert orjson.dumps(third[:3]) == orjson.dumps(second[:3])
 
 
+async def test_chat_restores_reasoning_only_to_its_producing_route(
+    setup_kernel, credential, policy
+):
+    kernel, store, _, _ = setup_kernel
+    policy.update(recall=False, profile=False, capture=False, gateway_tools=False)
+    origin = {
+        "id": "upstream",
+        "vendor": "deepseek",
+        "base_url": "https://api.deepseek.com/v1",
+        "aliases": {"deepseek": "deepseek-chat"},
+    }
+    header = {"x-openviking-session": "reasoning-route"}
+    first = await kernel.prepare(
+        {"model": "deepseek", "messages": [QUESTION]},
+        "chat",
+        header,
+        credential,
+        origin,
+        policy,
+    )
+    reply = {
+        "role": "assistant",
+        "content": "Use blue.",
+        "reasoning_content": "DEEPSEEK_COT",
+    }
+    await relay(kernel, credential, first, ResponseCapture("chat", reply, complete=True))
+    visible = {"role": "assistant", "content": "Use blue."}
+    messages = [QUESTION, visible, FOLLOW_UP]
+
+    async def resumed(model, upstream=origin):
+        return await kernel.prepare(
+            {"model": model, "messages": messages},
+            "chat",
+            header,
+            credential,
+            upstream,
+            policy,
+        )
+
+    same_alias = await resumed("deepseek")
+    same_model = await resumed("deepseek-chat")
+    switched_model = await resumed("claude-sonnet")
+    switched_url = await resumed(
+        "deepseek-chat", {**origin, "base_url": "https://openrouter.ai/api/v1"}
+    )
+    switched_vendor = await resumed(
+        "deepseek-chat", {**origin, "vendor": "generic", "replay_reasoning": True}
+    )
+
+    for request in (same_alias, same_model):
+        assert request.body["messages"][1]["reasoning_content"] == "DEEPSEEK_COT"
+        assert "reasoning_route_mismatches" not in request.metrics
+    for request in (switched_model, switched_url, switched_vendor):
+        assert request.body["messages"][1] == visible
+        assert request.metrics["reasoning_route_mismatches"] == 1
+
+    records = await store.replay.read(first.scope, first.session, same_alias.body_chain)
+    stored = records[K.REASONING, same_alias.body_chain[1]]
+    assert stored == {
+        "schema": "openviking.reasoning.route.v1",
+        "route": {
+            "upstream_id": "upstream",
+            "vendor": "deepseek",
+            "base_url": "https://api.deepseek.com/v1",
+            "model": "deepseek-chat",
+        },
+        "value": {"reasoning_content": "DEEPSEEK_COT"},
+    }
+
+
 async def test_chat_keeps_reasoning_the_client_sent(running_gateway):
     app, client, admin, key, _, _ = running_gateway
     await configure_chat(client, admin, base_url=app.state.openviking_url + "/v1")
@@ -126,6 +220,35 @@ async def test_chat_keeps_reasoning_the_client_sent(running_gateway):
     reasoning_backend(app, requests)
     await chat_turns(client, key, "kept", ["One?", "Two?"], False, keep_reasoning=True)
     assert requests[1]["messages"][1]["reasoning_content"] == "Client copy."
+
+
+@pytest.mark.parametrize("reasoning", ["Client copy.", "", None])
+async def test_chat_keeps_reasoning_alias_without_adding_canonical_carrier(
+    running_gateway, reasoning
+):
+    app, client, admin, key, _, _ = running_gateway
+    await configure_chat(client, admin, base_url=str(app.state.config.openviking_url))
+    requests = []
+    reasoning_backend(app, requests)
+    headers = {"Authorization": "Bearer " + key["key"], "X-OpenViking-Session": "alias"}
+    messages = [{"role": "user", "content": "One?"}]
+    response = await client.post(
+        "/v1/chat/completions",
+        headers=headers,
+        json={"model": "model", "messages": messages},
+    )
+    assert response.status_code == 200, response.text
+    reply = {"role": "assistant", "content": "Answer: One?", "reasoning": reasoning}
+    messages.extend([reply, {"role": "user", "content": "Two?"}])
+
+    response = await client.post(
+        "/v1/chat/completions",
+        headers=headers,
+        json={"model": "model", "messages": messages},
+    )
+
+    assert response.status_code == 200, response.text
+    assert requests[1]["messages"][1] == reply
 
 
 async def test_option_off_restores_nothing_and_keeps_the_deepseek_gate(running_gateway):
@@ -379,6 +502,24 @@ async def test_responses_hidden_rounds_replay_when_the_client_drops_reasoning(
     fork = await prepare(kernel, credential, policy, "responses", [question, message, follow], "b")
     assert fork.session != first.session
     assert fork.body["input"] == expected
+    # A model switch keeps hidden calls and results but not the prior model's reasoning.
+    switched = await kernel.prepare(
+        {"model": "other", "store": False, "input": [question, message, follow]},
+        "responses",
+        {"x-openviking-session": "a"},
+        credential,
+        {"id": "upstream", "vendor": "ark"},
+        policy,
+    )
+    assert switched.tools_active
+    assert switched.metrics["reasoning_route_mismatches"] == 1
+    assert switched.body["input"] == [
+        first.body["input"][0],
+        call,
+        result,
+        message,
+        follow,
+    ]
 
 
 async def test_anthropic_omitted_hidden_history_reports_no_restored_thinking(

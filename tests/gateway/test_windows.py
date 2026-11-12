@@ -648,6 +648,12 @@ async def test_reset_continues_in_the_new_window(
             "messages": round_output(protocol, run.upstream[1]),
             "visible_count": len(visible),
             "upstream_id": protocol,
+            "reasoning_route": {
+                "upstream_id": protocol,
+                "vendor": "generic",
+                "base_url": str(app.state.config.openviking_url),
+                "model": "model",
+            },
         }
     }
     logs = (await client.get("/admin/logs", headers=admin)).json()

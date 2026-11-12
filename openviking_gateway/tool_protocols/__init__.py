@@ -89,7 +89,11 @@ def reply_chain(request, output: list[dict]) -> list[str]:
 
 
 def replay_hidden(
-    messages: list[dict], chain: list[str], records: dict, protocol: str
+    messages: list[dict],
+    chain: list[str],
+    records: dict,
+    protocol: str,
+    reasoning_route: dict | None = None,
 ) -> list[dict]:
     """Expand each matching visible span into its immutable native transcript."""
     result, offsets = [], []
@@ -100,5 +104,17 @@ def replay_hidden(
         if record:
             count = record["visible_count"]
             if 0 < count <= index + 1:
-                result[offsets[index + 1 - count] :] = record["messages"]
+                transcript = record["messages"]
+                if (
+                    reasoning_route is not None
+                    and "reasoning_route" in record
+                    and record["reasoning_route"] != reasoning_route
+                ):
+                    without_reasoning, _ = tool_protocol(protocol).split_reasoning(transcript)
+                    if without_reasoning is transcript:
+                        from ..protocols import strip_thinking
+
+                        without_reasoning = strip_thinking(transcript)
+                    transcript = without_reasoning
+                result[offsets[index + 1 - count] :] = transcript
     return tool_protocol(protocol).join_replayed_history(result)
