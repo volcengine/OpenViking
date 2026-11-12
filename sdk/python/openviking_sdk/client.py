@@ -728,6 +728,19 @@ class AsyncHTTPClient:
         return result.get("temp_file_id", "")
 
     def session(self, session_id: Optional[str] = None, must_exist: bool = False) -> Session:
+        """Return a session handle without performing any request.
+
+        This factory is synchronous, so it cannot await an existence check. A
+        requested ``must_exist`` is rejected instead of being ignored: a caller
+        that asked for the session to be validated must not silently receive a
+        handle for a session that may not exist. Use
+        ``await client.session_exists(session_id)`` to validate explicitly.
+        """
+        if session_id and must_exist:
+            raise ValueError(
+                "AsyncHTTPClient.session() cannot verify must_exist without performing I/O; "
+                "await session_exists(session_id) to validate the session explicitly."
+            )
         return Session(self, session_id or "")
 
     async def session_exists(self, session_id: str) -> bool:

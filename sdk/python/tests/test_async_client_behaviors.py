@@ -787,6 +787,57 @@ def test_sync_http_client_session_must_exist_propagates_not_found():
     mock_get.assert_called_once_with("missing-session")
 
 
+def test_async_http_client_session_rejects_must_exist():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+
+    with pytest.raises(ValueError) as exc_info:
+        client.session("demo-session", must_exist=True)
+
+    assert "session_exists" in str(exc_info.value)
+
+
+def test_async_http_client_session_rejects_must_exist_without_any_request():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(side_effect=AssertionError("session() must not perform I/O"))
+
+    with pytest.raises(ValueError):
+        client.session("demo-session", must_exist=True)
+
+    client._request.assert_not_called()
+
+
+def test_async_http_client_session_without_id_keeps_sync_parity():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+
+    session = client.session(must_exist=True)
+
+    assert isinstance(session, Session)
+    assert session.session_id == ""
+
+
+def test_async_http_client_session_returns_handle_without_must_exist():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+
+    session = client.session("demo-session")
+
+    assert isinstance(session, Session)
+    assert session.session_id == "demo-session"
+
+
+@pytest.mark.asyncio
+async def test_async_http_client_session_exists_supports_explicit_validation():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+
+    with patch.object(
+        client,
+        "get_session",
+        new=AsyncMock(return_value={"session_id": "demo-session"}),
+    ) as mock_get:
+        assert await client.session_exists("demo-session") is True
+
+    mock_get.assert_awaited_once_with("demo-session")
+
+
 def test_sync_session_commit_async_and_repr_match_sync_usage():
     client = SyncHTTPClient(url="http://localhost:1933")
     session = client.session("demo-session")
