@@ -82,8 +82,7 @@ pub async fn dispatch(
             let value = client
                 .snapshot_diff(&path, from_ref.as_deref(), &to_ref)
                 .await?;
-            print_diff(&value, output_format, compact);
-            Ok(())
+            print_diff(&value, output_format, compact)
         }
         SnapshotCmd::DiffPaths {
             paths,
@@ -100,8 +99,7 @@ pub async fn dispatch(
         }
         SnapshotCmd::IgnoreGet => {
             let value = client.snapshot_ignore_get().await?;
-            print_ignore_get(&value, output_format, compact);
-            Ok(())
+            print_ignore_get(&value, output_format, compact)
         }
         SnapshotCmd::IgnoreSet { content, file } => {
             let content = resolve_ignore_content(content.as_deref(), file.as_deref())?;
@@ -117,15 +115,14 @@ pub async fn dispatch(
     }
 }
 
-fn print_diff(value: &Value, output_format: OutputFormat, compact: bool) {
+fn print_diff(value: &Value, output_format: OutputFormat, compact: bool) -> Result<()> {
     if matches!(output_format, OutputFormat::Json) {
         output_success(value, output_format, compact);
-        return;
+        return Ok(());
     }
     let diff = value.get("diff_text").and_then(Value::as_str).unwrap_or("");
-    let mut stdout = std::io::stdout();
-    let _ = stdout.write_all(diff.as_bytes());
-    let _ = stdout.flush();
+    let stdout = std::io::stdout();
+    write_snapshot_output(&mut stdout.lock(), diff.as_bytes())
 }
 
 /// Resolve `.ovgitignore` content: `--file` takes precedence over `--content`;
@@ -140,16 +137,23 @@ fn resolve_ignore_content(content: Option<&str>, file: Option<&std::path::Path>)
     Ok(content.unwrap_or("").to_string())
 }
 
-fn print_ignore_get(value: &Value, output_format: OutputFormat, compact: bool) {
+fn print_ignore_get(value: &Value, output_format: OutputFormat, compact: bool) -> Result<()> {
     if matches!(output_format, OutputFormat::Json) {
         output_success(value, output_format, compact);
-        return;
+        return Ok(());
     }
     // Plain mode: print the raw content verbatim so it can be redirected to a file.
     let content = value.as_str().unwrap_or("");
-    let mut stdout = std::io::stdout();
-    let _ = stdout.write_all(content.as_bytes());
-    let _ = stdout.flush();
+    let stdout = std::io::stdout();
+    write_snapshot_output(&mut stdout.lock(), content.as_bytes())
+}
+
+fn write_snapshot_output(writer: &mut impl Write, bytes: &[u8]) -> Result<()> {
+    let result = writer.write_all(bytes).and_then(|()| writer.flush());
+    match result {
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        result => result.map_err(Into::into),
+    }
 }
 
 fn print_commit(value: &Value, output_format: OutputFormat, compact: bool) {
@@ -288,9 +292,69 @@ fn print_log(value: &Value, output_format: OutputFormat, compact: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::handle_show;
+    use super::{handle_show, write_snapshot_output};
     use crate::client::SnapshotShowResult;
+    use crate::error::Error;
     use crate::output::OutputFormat;
+    use std::io::{self, Write};
+
+    struct FailingWriter {
+        fail_on_flush: bool,
+        kind: io::ErrorKind,
+    }
+
+    impl Write for FailingWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if self.fail_on_flush {
+                Ok(bytes.len())
+            } else {
+                Err(io::Error::new(self.kind, "output failed"))
+            }
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            if self.fail_on_flush {
+                Err(io::Error::new(self.kind, "output failed"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn snapshot_output_preserves_bytes() {
+        let mut output = Vec::new();
+        write_snapshot_output(&mut output, b"snapshot output")
+            .expect("snapshot output should be written");
+        assert_eq!(output, b"snapshot output");
+    }
+
+    #[test]
+    fn snapshot_output_treats_broken_pipe_as_success() {
+        for fail_on_flush in [false, true] {
+            let mut writer = FailingWriter {
+                fail_on_flush,
+                kind: io::ErrorKind::BrokenPipe,
+            };
+            write_snapshot_output(&mut writer, b"snapshot output")
+                .expect("broken pipe should be normal pipeline completion");
+        }
+    }
+
+    #[test]
+    fn snapshot_output_propagates_other_errors() {
+        for fail_on_flush in [false, true] {
+            let mut writer = FailingWriter {
+                fail_on_flush,
+                kind: io::ErrorKind::WouldBlock,
+            };
+            let error = write_snapshot_output(&mut writer, b"snapshot output")
+                .expect_err("would-block output must fail");
+            assert!(
+                matches!(error, Error::Io(ref error) if error.kind() == io::ErrorKind::WouldBlock)
+            );
+        }
+    }
 
     #[test]
     fn json_blob_show_writes_requested_output_file() {
