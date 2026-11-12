@@ -6,13 +6,13 @@ import { Modal } from '../../shared/primitives/modal/modal.js';
 import type { Locale } from '../../shared/locale.js';
 import { FileBrowserSearchAdvanced } from './file-browser-search-advanced.js';
 import { FileBrowserSearchHeader } from './file-browser-search-header.js';
+import { FileBrowserSearchPreview } from './file-browser-search-preview.js';
+import { useSearchHighlight } from './use-search-highlight.js';
+import type { FileBrowserHandle } from './types.js';
 import { FileBrowserSearchResults } from './file-browser-search-results.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
-import {
-  buildScopeOptions,
-  flattenResult,
-  normalizeFilters,
-} from './search-model.js';
+import { buildScopeOptions, normalizeFilters } from './search-model.js';
+import { flattenResult } from './search-hit-order.js';
 import type { SearchFilters, SearchMode } from './search-types.js';
 import { DEFAULT_SEARCH_MODE, EMPTY_FILTERS } from './search-types.js';
 import { useFsSearch } from './use-fs-search.js';
@@ -31,7 +31,7 @@ interface FileBrowserSearchProps {
   advancedOpen: boolean;
   onToggleAdvanced: (open: boolean) => void;
   /** 打开结果：定位到树并加载预览。Opens a result: locates it in the tree and previews it. */
-  onOpenResource: (uri: string) => void;
+  onOpenResource: FileBrowserHandle['openResource'];
   onClose: () => void;
 }
 
@@ -64,6 +64,8 @@ export function FileBrowserSearch({
   const inputRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState('');
   const [query, setQuery] = useState('');
+  const [composing, setComposing] = useState(false);
+  const [generation, setGeneration] = useState(0);
   const [mode, setMode] = useState<SearchMode>(DEFAULT_SEARCH_MODE);
   const [filters, setFilters] = useState<SearchFilters>(EMPTY_FILTERS);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -89,10 +91,12 @@ export function FileBrowserSearch({
       : { ...filters, scopes: scopes_ };
   }, [filters, scopes]);
 
+  const awaitingQuery = open && !composing && draft.trim() !== query.trim();
   const search = useFsSearch({
     client,
     mode,
-    query: open ? query : '',
+    query: open && !composing && !awaitingQuery ? query : '',
+    generation,
     filters: effectiveFilters,
     rootUri,
     requestOptions,
@@ -105,10 +109,10 @@ export function FileBrowserSearch({
   // with no corresponding element event; a query or open change clears the previous
   // timer, as does unmounting.
   useEffect(() => {
-    if (!open) return;
+    if (!open || composing) return;
     const timer = setTimeout(() => setQuery(draft), DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [draft, open]);
+  }, [draft, open, composing]);
 
   // 打开时把焦点放进输入框：弹窗一出现就该能直接打字。
   // Moves focus into the input when the dialog opens, so typing can start at once.
@@ -125,23 +129,36 @@ export function FileBrowserSearch({
   const close = () => {
     setDraft('');
     setQuery('');
+    setComposing(false);
     setMode(DEFAULT_SEARCH_MODE);
     setFilters(EMPTY_FILTERS);
     setMenuOpen(false);
     onClose();
   };
 
-  const hits = flattenResult(search.result);
+  const hits = useMemo(() => flattenResult(search.result), [search.result]);
   const openResult = (uri: string) => {
-    onOpenResource(uri);
     close();
+    void onOpenResource(uri).catch(() => {});
   };
+  const retry = () => {
+    inputRef.current?.focus();
+    setGeneration((value) => value + 1);
+  };
+  const { active, activeIndex, listId, onKeyDown, onHighlight } =
+    useSearchHighlight(
+      hits,
+      composing,
+      openResult,
+      search.error ? retry : undefined,
+    );
 
   return (
     <Modal
       open={open}
       title={text.searchTitle}
       locale={locale}
+      closeLabel={text.searchDismiss}
       triggerRef={triggerRef}
       className={[
         'ov-file-browser-search',
@@ -157,6 +174,21 @@ export function FileBrowserSearch({
         text={text}
         inputRef={inputRef}
         advancedOpen={advancedOpen}
+        inputProps={{
+          role: 'combobox',
+          'aria-autocomplete': 'list',
+          'aria-expanded': !!active,
+          'aria-controls': active ? listId : undefined,
+          'aria-activedescendant': active
+            ? `${listId}-${activeIndex}`
+            : undefined,
+          onKeyDown,
+          onCompositionStart: () => setComposing(true),
+          onCompositionEnd: (event) => {
+            setDraft(event.currentTarget.value);
+            setComposing(false);
+          },
+        }}
         onChange={setDraft}
         onToggleAdvanced={() => onToggleAdvanced(!advancedOpen)}
       />
@@ -165,7 +197,22 @@ export function FileBrowserSearch({
           <FileBrowserSearchResults
             mode={mode}
             hits={hits}
-            loading={search.loading}
+            listId={listId}
+            activeIndex={activeIndex}
+            query={query.trim()}
+            onHighlight={onHighlight}
+            onRetry={retry}
+            preview={
+              active ? (
+                <FileBrowserSearchPreview
+                  client={client}
+                  entry={active}
+                  requestOptions={requestOptions}
+                  text={text}
+                />
+              ) : null
+            }
+            loading={search.loading || (awaitingQuery && !!draft.trim())}
             error={search.error}
             searched={search.result !== null}
             text={text}

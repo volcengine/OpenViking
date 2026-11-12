@@ -46,6 +46,10 @@ const messages = {
   searchSwitchMode: '切换',
   searchAdvancedLabel: '高级筛选',
   loading: '加载中…',
+  searchDismiss: 'Esc 退出',
+  searchPreview: '搜索结果预览',
+  searchPreviewEmpty: '暂无可预览内容',
+  searchPreviewFailed: '预览加载失败',
   searchLoading: '搜索中…',
   previewMode: '预览',
   sourceMode: '源码',
@@ -71,3 +75,5 @@ const messages = {
 } satisfies Required<ShellLabels>;
 
 export default messages;
+
+export const stackedEmpty = '从上方选中一个文件预览';

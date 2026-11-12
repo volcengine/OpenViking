@@ -80,10 +80,6 @@ export function useFsSearch({
   generation = 0,
   requestOptions,
 }: UseFsSearchOptions): SearchState {
-  const [result, setResult] = useState<SearchResult | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
-
   // 请求体按筛选的具体字段缓存，而不是依赖 `filters` 对象本身：调用方可能每次
   // 渲染都新建一个等价对象，把它当依赖会让 effect 反复重跑并取消上一次请求。
   //
@@ -106,54 +102,52 @@ export function useFsSearch({
     ],
   );
 
-  // 查询词、模式与筛选决定发什么请求。切换时必须取消上一次，否则慢的旧响应会
-  // 盖住新结果；清空查询时回到未搜索状态。
-  //
-  // Query, mode and filters decide the request. A switch has to cancel the previous
-  // one, or a slow old response overwrites the new result; an empty query returns to
-  // the pre-search state.
-  useEffect(() => {
-    if (!client || !query.trim()) {
-      setResult(null);
-      setLoading(false);
-      setError(null);
-      return;
-    }
-    const controller = new AbortController();
-    setLoading(true);
-    setError(null);
+  const request = useMemo(
+    () =>
+      client && query.trim()
+        ? { client, mode, body, generation, requestOptions }
+        : null,
+    [client, mode, body, generation, query, requestOptions],
+  );
+  const [response, setResponse] = useState<{
+    request: NonNullable<typeof request>;
+    result: SearchResult | null;
+    error: Error | null;
+  }>();
 
-    void client
+  // Cancel superseded requests and never render a previous mode, query or scope
+  // while waiting for the active request. A transport may ignore cancellation.
+  useEffect(() => {
+    if (!request) return;
+    const controller = new AbortController();
+    void request.client
       .request<unknown>({
         method: 'POST',
-        path: SEARCH_PATHS[mode],
-        body,
-        options: { ...requestOptions, signal: controller.signal },
+        path: SEARCH_PATHS[request.mode],
+        body: request.body,
+        options: { ...request.requestOptions, signal: controller.signal },
       })
-      // 成功也要复查取消状态：自定义 fetch 可以在 signal 已中止之后照常返回，
-      // 这时把结果写进去就会让上一个账号/上一次查询的数据盖住当前视图。失败同理，
-      // 一个已作废的请求不该把错误留给新的查询。
-      //
-      // Successes are re-checked for cancellation too: a custom fetch can resolve
-      // normally after its signal was aborted, and publishing that result would let the
-      // previous account or the previous query overwrite the current view. Failures
-      // likewise: a request that was discarded must not leave its error behind.
       .then(
         (raw) => {
-          if (controller.signal.aborted) return;
-          setResult(normalize(mode, raw));
-          setLoading(false);
+          if (!controller.signal.aborted)
+            setResponse({
+              request,
+              result: normalize(request.mode, raw),
+              error: null,
+            });
         },
         (cause: unknown) => {
-          if (isAbort(cause) || controller.signal.aborted) return;
-          setResult({ memories: [], resources: [], skills: [], total: 0 });
-          setError(toError(cause));
-          setLoading(false);
+          if (!controller.signal.aborted && !isAbort(cause))
+            setResponse({ request, result: null, error: toError(cause) });
         },
       );
-
     return () => controller.abort();
-  }, [client, mode, query, generation, requestOptions, body]);
+  }, [request]);
 
-  return { result, loading, error };
+  const current = request && response?.request === request ? response : null;
+  return {
+    result: current?.result ?? null,
+    loading: !!request && !current,
+    error: current?.error ?? null,
+  };
 }

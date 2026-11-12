@@ -1,4 +1,4 @@
-import type { RefObject } from 'react';
+import type { ComponentPropsWithoutRef, RefObject } from 'react';
 
 import FilterIcon from '../../../../icons/svg/dashboards/severity-filter.svg?react';
 import type { SearchMode } from './search-types.js';
@@ -28,6 +28,17 @@ export interface FileBrowserSearchHeaderProps {
   text: ResolvedLabels;
   inputRef: RefObject<HTMLInputElement | null>;
   advancedOpen: boolean;
+  inputProps: Pick<
+    ComponentPropsWithoutRef<'input'>,
+    | 'onKeyDown'
+    | 'onCompositionStart'
+    | 'onCompositionEnd'
+    | 'role'
+    | 'aria-controls'
+    | 'aria-expanded'
+    | 'aria-activedescendant'
+    | 'aria-autocomplete'
+  >;
   onChange: (value: string) => void;
   onToggleAdvanced: () => void;
 }
@@ -38,12 +49,14 @@ export function FileBrowserSearchHeader({
   text,
   inputRef,
   advancedOpen,
+  inputProps,
   onChange,
   onToggleAdvanced,
 }: FileBrowserSearchHeaderProps) {
   return (
     <div className="ov-file-browser-search__header">
       <input
+        {...inputProps}
         ref={inputRef}
         type="text"
         className="ov-file-browser-search__input"

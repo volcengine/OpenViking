@@ -1,4 +1,10 @@
 import type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
+import type { FileBrowserOpenResourceOptions } from './resource-navigation-types.js';
+export type {
+  FileBrowserComponent,
+  FileBrowserHandle,
+  FileBrowserOpenResourceOptions,
+} from './resource-navigation-types.js';
 export type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
 import type {
   FileBrowserPreviewActions,
@@ -123,6 +129,10 @@ export interface FileBrowserLabels {
   searchAdvancedLabel?: string;
   /** 搜索进行中的提示。Message shown while a search runs. */
   searchLoading?: string;
+  searchDismiss?: string;
+  searchPreview?: string;
+  searchPreviewEmpty?: string;
+  searchPreviewFailed?: string;
   /** 预览读取正文时的提示。Message shown while the preview reads a resource. */
   loading?: string;
   /** 分段器里的「预览」。The "preview" segment label. */
@@ -355,6 +365,10 @@ export interface FileBrowserApi {
 
 /** 模块 Hook 暴露的操作。Operations the module Hook exposes. */
 export interface FileBrowserActions {
+  openResource: (
+    uri: string,
+    options?: FileBrowserOpenResourceOptions,
+  ) => Promise<boolean>;
   openUri: (uri: string) => Promise<void>;
   openDashboard: (uri: string) => void;
   /** 选中条目。Selects an entry. */
@@ -369,12 +383,6 @@ export interface FileBrowserActions {
   refresh: () => Promise<void>;
   /** 切换预览页签。Switches the preview tab. */
   setPreviewKey: (key: string) => void;
-  /**
-   * 打开任意资源：选中它、逐级展开祖先，让预览跟上。搜索结果点击后走这条路径。
-   * Opens any resource: selects it, expands its ancestors level by level and lets the
-   * preview follow. A search result click goes through this.
-   */
-  openResource: (uri: string) => Promise<void>;
 }
 
 /** Internal options for the composed FileBrowser loader. */

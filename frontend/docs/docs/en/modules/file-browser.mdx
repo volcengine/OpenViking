@@ -388,6 +388,24 @@ All fields are optional, and omitted fields follow `locale`.
 - All YAML frontmatter, ordinary HTML comments and fenced Markdown examples survive. In a Markdown file with confirmed scope, an unclosed reserved trailer starting on its own line is hidden through the end of the file; markers quoted in YAML frontmatter, code fences or inline examples survive.
 - The refresh button reloads the expanded directories and the current preview.
 
+### Open and reveal a resource
+
+`FileBrowser` accepts a React 18/19 ref. Call `openResource` for import results, search results, or file links; the module opens the preview, expands ancestors, loads additional pages until the target is found, selects the row and scrolls it into view. It preserves other expanded branches. Repeating a call for the same URI scrolls again.
+
+```tsx
+import { useRef } from 'react';
+import { FileBrowser } from '@openviking/react/modules/file-browser';
+import type { FileBrowserHandle } from '@openviking/react/modules/file-browser';
+
+const browserRef = useRef<FileBrowserHandle>(null);
+
+<FileBrowser ref={browserRef} />;
+
+await browserRef.current?.openResource(resultUri, { reveal: true });
+```
+
+Reveal defaults to `true`; `{ reveal: false }` only requests a preview and resolves to `true` once the request is issued. Ordinary `uri` prop changes do not expand or scroll the tree. In controlled mode, update `uri` in `onUriChange` to accept the command. The promise resolves to `true` after the selected row has scrolled, or `false` when the target is missing, inaccessible, outside `rootUri`, superseded, or the component unmounts. The root itself has no tree row and returns `false` while its preview still opens. Listing failures reject; catch them to display host feedback. The promise does not wait for preview content to finish loading. Built-in search uses the same navigation entry.
+
 ### Search
 
 - The search box at the top of the left column opens the module's search dialog; `⌘K` is a real shortcut, and when a page mounts several instances only the one interacted with last responds.
@@ -401,10 +419,10 @@ All fields are optional, and omitted fields follow `locale`.
 | `grep`   | `/api/v1/search/grep`   | Regular expression | Directory (single), ignore case        |
 | `glob`   | `/api/v1/search/glob`   | File pattern       | Directory (single)                     |
 
-- Results deduplicate by URI, except `grep` — several matches in one file are distinct results, each with its own line number.
+- Semantic results rank by score and deduplicate by URI. `grep` keeps each match and its line number, even when several matches share a file.
 - A `glob` pattern without `/` gains a `**/` prefix; a directory match drops its trailing slash before navigation and records the directory fact on `isDir`.
 - Filter groups enable or disable with the mode. A disabled group stays visible but dimmed, with the reason beside its title. Directory candidates derive from `rootUri` with the `~` alias; selections invalidated by a root change are dropped.
-- Clicking a result closes the dialog, locates the resource in the tree and opens its preview.
+- Hover a result or use **↑ / ↓** to preview it. Click or press **Enter** to close the dialog, open the resource and reveal its tree row. The preview moves below the list on narrow screens.
 
 ### Preview actions
 
@@ -461,6 +479,8 @@ All fields are optional, and omitted fields follow `locale`.
 - When a search fails, the dialog keeps the endpoint's reason, and you can submit the same query again to retry.
 
 ### Tree width
+
+- When the container is narrower than 521px, the tree and preview stack and the horizontal resizer is hidden.
 
 - A draggable divider sits between the tree and the preview: drag it, or focus it and press the left and right arrow keys (16px each). Its accessible name comes from `labels.resizeTree`.
 - The tree is 352px wide by default and at least 200px. Its maximum is the smaller of 520px and the container width minus 321px (the preview keeps at least 320px, plus a 1px divider), so in a narrow column the tree shrinks instead of crowding out the preview.
