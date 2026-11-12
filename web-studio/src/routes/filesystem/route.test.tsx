@@ -3,7 +3,14 @@ import { FilePreview } from '@openviking/react/components/file-preview'
 import type { FileBrowserProps } from '@openviking/react/modules/file-browser'
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ComponentType, PropsWithChildren } from 'react'
 import {
@@ -188,7 +195,8 @@ vi.mock(
   }),
 )
 vi.mock('#/features/workbench/resources/components/find-palette', () => ({
-  FindPalette: () => null,
+  FindPalette: ({ open, scopeUri }: { open: boolean; scopeUri: string }) =>
+    open ? <div role="dialog">{scopeUri}</div> : null,
 }))
 
 const FilesystemRoute = Route.options.component as ComponentType & {
@@ -240,6 +248,37 @@ describe('filesystem workbench', () => {
     mocks.invalidateAll.mockReset().mockResolvedValue(undefined)
     mocks.navigate.mockReset()
     mocks.dataManagement.mockReset()
+  })
+
+  it.each([{ metaKey: true }, { ctrlKey: true }])(
+    'reserves K for FileBrowser and opens the current-directory palette with F (%j)',
+    (modifier) => {
+      renderFilesystem()
+
+      expect(fireEvent.keyDown(document.body, { key: 'k', ...modifier })).toBe(
+        true,
+      )
+      expect(screen.queryByRole('dialog')).toBeNull()
+
+      expect(fireEvent.keyDown(document.body, { key: 'f', ...modifier })).toBe(
+        false,
+      )
+      expect(screen.getByRole('dialog').textContent).toBe(parentDirectory)
+    },
+  )
+
+  it('leaves the find shortcut to CodeMirror when its editor has focus', () => {
+    renderFilesystem()
+    render(
+      <div className="cm-editor">
+        <textarea />
+      </div>,
+    )
+    const editor = screen.getByRole('textbox')
+    editor.focus()
+
+    expect(fireEvent.keyDown(editor, { key: 'f', metaKey: true })).toBe(true)
+    expect(screen.queryByRole('dialog')).toBeNull()
   })
 
   it('uses only native tabs for a direct user experience file', () => {

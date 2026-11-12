@@ -358,17 +358,13 @@ function FilesystemWorkbench() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
-        event.preventDefault()
-        setFindPaletteOpen((open) => !open)
+      // FileBrowser owns Cmd/Ctrl+K. Keep Cmd/Ctrl+F scoped to the current directory.
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'f')
         return
-      }
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
-        // Let CodeMirror keep its own in-file search when it has focus.
-        if ((event.target as HTMLElement | null)?.closest('.cm-editor')) return
-        event.preventDefault()
-        setFindPaletteOpen(true)
-      }
+      if (event.target instanceof Element && event.target.closest('.cm-editor'))
+        return
+      event.preventDefault()
+      setFindPaletteOpen(true)
     }
 
     document.addEventListener('keydown', handleKeyDown)
