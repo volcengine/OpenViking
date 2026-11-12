@@ -1534,13 +1534,13 @@ async def test_batch_set_tags_uses_dedicated_post_endpoint():
     client._handle_response = lambda _response: {"items": [], "failed": []}
     client._handle_response_data = lambda _response: {"result": {"items": [], "failed": []}}
 
-    await client.set_tags_batch(
+    await client.batch_set_tags(
         ["resources/a.md", "viking://resources/b.md"],
         ["count+=1"],
         mode="append",
     )
 
-    assert fake_http.post.await_args_list[0].args == ("/api/v1/content/set_tags_batch",)
+    assert fake_http.post.await_args_list[0].args == ("/api/v1/content/batch_set_tags",)
     assert fake_http.post.await_args_list[0].kwargs["json"] == {
         "uris": ["viking://resources/a.md", "viking://resources/b.md"],
         "tags": ["count+=1"],

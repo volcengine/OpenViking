@@ -561,12 +561,12 @@ pub(super) async fn dispatch(
                 mode,
                 recursive,
             } => handlers::handle_set_tags(uri, tags, mode, recursive, ctx).await,
-            AttrsCommands::SetTagsBatch {
+            AttrsCommands::BatchSetTags {
                 uris,
                 tags,
                 mode,
                 recursive,
-            } => handlers::handle_set_tags_batch(uris, tags, mode, recursive, ctx).await,
+            } => handlers::handle_batch_set_tags(uris, tags, mode, recursive, ctx).await,
         },
         Commands::Acl { action } => handlers::handle_acl(action, ctx).await,
         Commands::AddMemory { content } => handlers::handle_add_memory(content, ctx).await,

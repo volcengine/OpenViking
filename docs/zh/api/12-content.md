@@ -619,7 +619,7 @@ result = client.set_tags(
     recursive=True,
 )
 
-batch = client.set_tags_batch(
+batch = client.batch_set_tags(
     ["viking://resources/project/a.md", "viking://resources/project/b.md"],
     ["used_count+=1"],
     mode="append",
@@ -634,7 +634,7 @@ const result = await client.setTags(
   ["team=search", "env=prod"],
   { mode: "replace", recursive: true },
 );
-const batch = await client.setTagsBatch(
+const batch = await client.batchSetTags(
   ["viking://resources/project/a.md", "viking://resources/project/b.md"],
   ["used_count+=1"],
   { mode: "append" },
@@ -650,7 +650,7 @@ result, err := client.SetTags(
     []string{"team=search", "env=prod"},
     &openviking.SetTagsOptions{Mode: "replace", Recursive: true},
 )
-batch, err := client.SetTagsBatch(
+batch, err := client.BatchSetTags(
     ctx,
     []string{"viking://resources/project/a.md", "viking://resources/project/b.md"},
     []string{"used_count+=1"},
@@ -662,7 +662,7 @@ batch, err := client.SetTagsBatch(
 
 ```http
 POST /api/v1/content/set_tags
-POST /api/v1/content/set_tags_batch
+POST /api/v1/content/batch_set_tags
 Content-Type: application/json
 ```
 
@@ -690,7 +690,7 @@ ov set-tags viking://resources/project/ \
   --mode replace \
   --recursive
 
-ov attrs set-tags-batch \
+ov attrs batch-set-tags \
   viking://resources/project/a.md viking://resources/project/b.md \
   --tags used_count+=1 --mode append
 ```

@@ -392,7 +392,7 @@ JSON 输出 - 错误：
 | POST | `/api/v1/content/write` | 写入内容并刷新语义索引 |
 | POST | `/api/v1/content/batch-write` | 写入多个文件并刷新索引 |
 | POST | `/api/v1/content/set_tags` | 设置检索标签 |
-| POST | `/api/v1/content/set_tags_batch` | 批量设置 1～50 个 URI 的检索标签 |
+| POST | `/api/v1/content/batch_set_tags` | 批量设置 1～50 个 URI 的检索标签 |
 | POST | `/api/v1/content/ensure_directory_index` | 确保既有目录的索引就绪，仅在两层摘要都缺失时创建 L0 |
 | POST | `/api/v1/content/reindex` | 重建语义或向量索引 |
 

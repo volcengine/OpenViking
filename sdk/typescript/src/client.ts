@@ -921,7 +921,7 @@ export class OpenVikingClient {
     });
   }
   /** Set retrieval tags for multiple URIs. */
-  setTagsBatch(
+  batchSetTags(
     uris: string[],
     tags?: string[],
     options: SetTagsOptions = {},
@@ -933,7 +933,7 @@ export class OpenVikingClient {
       recursive: options.recursive ?? false,
       telemetry: options.telemetry,
     });
-    return this.request("POST", "/api/v1/content/set_tags_batch", {
+    return this.request("POST", "/api/v1/content/batch_set_tags", {
       body: mergeExtra(body, options.extra, [
         "uris",
         "tags",

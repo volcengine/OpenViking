@@ -388,8 +388,8 @@ func (c *Client) SetTags(ctx context.Context, uri string, tags []string, opts *S
 	return result, err
 }
 
-// SetTagsBatch updates retrieval tags for multiple URIs.
-func (c *Client) SetTagsBatch(ctx context.Context, uris []string, tags []string, opts *SetTagsOptions) (map[string]any, error) {
+// BatchSetTags updates retrieval tags for multiple URIs.
+func (c *Client) BatchSetTags(ctx context.Context, uris []string, tags []string, opts *SetTagsOptions) (map[string]any, error) {
 	if opts == nil {
 		opts = &SetTagsOptions{Mode: "replace"}
 	}
@@ -415,7 +415,7 @@ func (c *Client) SetTagsBatch(ctx context.Context, uris []string, tags []string,
 		return nil, err
 	}
 	var result map[string]any
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/content/set_tags_batch", nil, payload, &result)
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/content/batch_set_tags", nil, payload, &result)
 	return result, err
 }
 

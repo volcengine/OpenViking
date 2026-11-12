@@ -11,10 +11,10 @@ import pytest
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import content as content_router
 from openviking.server.routers.content import (
+    BatchSetTagsRequest,
     BatchWriteOperation,
     BatchWriteRequest,
     ReindexRequest,
-    SetTagsBatchRequest,
     SetTagsRequest,
     WriteContentRequest,
     batch_write,
@@ -40,8 +40,8 @@ def test_set_tags_request_requires_single_uri(targets):
 
 
 @pytest.mark.parametrize("size", [1, 50])
-def test_set_tags_batch_request_accepts_boundaries(size):
-    request = SetTagsBatchRequest(uris=["viking://resources/a.md"] * size)
+def test_batch_set_tags_request_accepts_boundaries(size):
+    request = BatchSetTagsRequest(uris=["viking://resources/a.md"] * size)
     assert len(request.uris) == size
 
 
@@ -54,8 +54,8 @@ def test_set_tags_batch_request_accepts_boundaries(size):
         {"uris": ["viking://resources/a.md"] * 51},
     ],
 )
-async def test_set_tags_batch_invalid_request_http(client, targets):
-    response = await client.post("/api/v1/content/set_tags_batch", json=targets)
+async def test_batch_set_tags_invalid_request_http(client, targets):
+    response = await client.post("/api/v1/content/batch_set_tags", json=targets)
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
 
@@ -435,7 +435,7 @@ async def test_set_tags_append_arithmetic_persists_values_and_preserves_resource
     assert await service.viking_fs.read_file(uri, ctx=ctx) == "original content"
 
 
-async def test_set_tags_batch_http_persists_actual_values(client, service):
+async def test_batch_set_tags_http_persists_actual_values(client, service):
     from openviking.storage.vector_ids import vector_record_id
     from openviking.utils.time_utils import get_current_timestamp
 
@@ -465,7 +465,7 @@ async def test_set_tags_batch_http_persists_actual_values(client, service):
     missing = f"{root}/missing.md"
     for count in (6, 7):
         response = await client.post(
-            "/api/v1/content/set_tags_batch",
+            "/api/v1/content/batch_set_tags",
             json={
                 "uris": [uris[0], missing, uris[0] + "/", uris[1], unindexed, "invalid"],
                 "tags": ["used_count+=1"],
@@ -490,7 +490,7 @@ async def test_set_tags_batch_http_persists_actual_values(client, service):
             assert values["team"] == "search"
 
     response = await client.post(
-        "/api/v1/content/set_tags_batch",
+        "/api/v1/content/batch_set_tags",
         json={"uris": uris, "tags": ["used_count=0", "last_used_at=0"], "mode": "append"},
     )
     assert response.status_code == 200, response.text
@@ -549,7 +549,7 @@ async def test_usage_reset_http_round_trip_for_file_and_directory(client, servic
     async def write(tags, mode):
         requests = [{"uris": targets}] if batch else [{"uri": uri} for uri in targets]
         for request in requests:
-            endpoint = "/api/v1/content/set_tags_batch" if batch else "/api/v1/fs/attrs/set_tags"
+            endpoint = "/api/v1/content/batch_set_tags" if batch else "/api/v1/fs/attrs/set_tags"
             response = await client.post(endpoint, json={**request, "tags": tags, "mode": mode})
             assert response.status_code == 200, response.text
             result = response.json()["result"]
@@ -635,7 +635,7 @@ async def test_usage_reset_http_batch_reports_failures_without_touching_foreign_
     app.dependency_overrides[get_request_context] = lambda: ctx
     try:
         response = await client.post(
-            "/api/v1/content/set_tags_batch",
+            "/api/v1/content/batch_set_tags",
             json={
                 "uris": [own, missing, foreign, unindexed],
                 "tags": ["used_count=0", "last_used_at=0"],

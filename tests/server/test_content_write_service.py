@@ -23,7 +23,7 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest.mark.asyncio
-async def test_set_tags_batch_normalizes_deduplicates_and_collects_failures(monkeypatch):
+async def test_batch_set_tags_normalizes_deduplicates_and_collects_failures(monkeypatch):
     from unittest.mock import AsyncMock
 
     from openviking.service.fs_service import FSService
@@ -44,7 +44,7 @@ async def test_set_tags_batch_normalizes_deduplicates_and_collects_failures(monk
 
     single = AsyncMock(side_effect=update)
     monkeypatch.setattr(fs, "set_tags", single)
-    result = await fs.set_tags_batch(
+    result = await fs.batch_set_tags(
         [good + "/", denied, good, skipped, "invalid"],
         ["used_count+=1"],
         "append",
@@ -62,7 +62,7 @@ async def test_set_tags_batch_normalizes_deduplicates_and_collects_failures(monk
 
 
 @pytest.mark.asyncio
-async def test_set_tags_batch_bounds_concurrency_and_preserves_order(monkeypatch):
+async def test_batch_set_tags_bounds_concurrency_and_preserves_order(monkeypatch):
     import asyncio
 
     from openviking.service.fs_service import FSService
@@ -85,7 +85,7 @@ async def test_set_tags_batch_bounds_concurrency_and_preserves_order(monkeypatch
 
     monkeypatch.setattr(fs, "set_tags", update)
     result = await asyncio.wait_for(
-        fs.set_tags_batch(uris, ["used_count+=1"], "append", False, ctx), timeout=5
+        fs.batch_set_tags(uris, ["used_count+=1"], "append", False, ctx), timeout=5
     )
     assert peak == 8
     assert [item["uri"] for item in result["items"]] == uris
@@ -93,7 +93,7 @@ async def test_set_tags_batch_bounds_concurrency_and_preserves_order(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_set_tags_batch_propagates_cancellation(monkeypatch):
+async def test_batch_set_tags_propagates_cancellation(monkeypatch):
     import asyncio
     from unittest.mock import AsyncMock
 
@@ -103,7 +103,7 @@ async def test_set_tags_batch_propagates_cancellation(monkeypatch):
     ctx = RequestContext(user=UserIdentifier("test", "alice"), role=Role.USER)
     monkeypatch.setattr(fs, "set_tags", AsyncMock(side_effect=asyncio.CancelledError))
     with pytest.raises(asyncio.CancelledError):
-        await fs.set_tags_batch(
+        await fs.batch_set_tags(
             ["viking://user/alice/resources/demo/a.md"],
             ["used_count+=1"],
             "append",
@@ -959,7 +959,7 @@ async def test_set_tags_append_forwards_ordered_arithmetic_operations():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sidecar", [None, ".abstract.md", ".overview.md"])
-async def test_set_tags_batch_updates_directory_levels(sidecar):
+async def test_batch_set_tags_updates_directory_levels(sidecar):
     from unittest.mock import AsyncMock
 
     from openviking.service.fs_service import FSService
@@ -979,7 +979,7 @@ async def test_set_tags_batch_updates_directory_levels(sidecar):
     vfs.vector_store = SimpleNamespace(update_search_tags=update)
     fs = FSService(viking_fs=vfs)
 
-    result = await fs.set_tags_batch([uri], ["used_count+=1"], "append", False, ctx)
+    result = await fs.batch_set_tags([uri], ["used_count+=1"], "append", False, ctx)
 
     assert result["failed"] == []
     assert result["items"][0]["updated_uris"] == [root] * len(levels)

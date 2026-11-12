@@ -2306,7 +2306,7 @@ func TestBatchSetTagsUsesDedicatedEndpoint(t *testing.T) {
 		if !ok || len(uris) != 2 || uris[0] != "viking://resources/a.md" || uris[1] != "viking://resources/b.md" {
 			t.Fatalf("uris = %#v", body["uris"])
 		}
-		if r.URL.Path != "/api/v1/content/set_tags_batch" {
+		if r.URL.Path != "/api/v1/content/batch_set_tags" {
 			t.Fatalf("set tags path = %s", r.URL.Path)
 		}
 		if body["mode"] != "append" {
@@ -2317,7 +2317,7 @@ func TestBatchSetTagsUsesDedicatedEndpoint(t *testing.T) {
 	defer closeServer()
 
 	uris := []string{"resources/a.md", "viking://resources/b.md"}
-	if _, err := client.SetTagsBatch(
+	if _, err := client.BatchSetTags(
 		context.Background(),
 		uris,
 		[]string{"count+=1"},

@@ -84,7 +84,7 @@ pub async fn set_tags(
     Ok(())
 }
 
-pub async fn set_tags_batch(
+pub async fn batch_set_tags(
     client: &HttpClient,
     uris: &[String],
     tags: Vec<String>,
@@ -93,9 +93,7 @@ pub async fn set_tags_batch(
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client
-        .set_tags_batch(uris, tags, mode, recursive)
-        .await?;
+    let result = client.batch_set_tags(uris, tags, mode, recursive).await?;
     crate::output::output_success(result, output_format, compact);
     Ok(())
 }

@@ -170,7 +170,7 @@ Implemented:
 | Skill management | `ListSkills`, `FindSkills`, `ValidateSkill`, `GetSkill`, `UpdateSkill`, `DeleteSkill` |
 | MCP servers and live context | `AddMCP`, `RemoveMCP`, `ListMCPs`, `FindMCPTools`, `ValidateMCP`, `GetMCP`, `SyncMCP`, `GetMCPStatus`, `InvokeMCPTool`, `MountMCPTool`, `BatchMountMCPTools`, `UnmountMCPTool`, `BatchUnmountMCPTools`, `ListMCPMounts` |
 | Watch management | `ListWatches`, `GetWatch`, `UpdateWatch`, `DeleteWatch`, `TriggerWatch` |
-| Filesystem and content | `List`, `ListPage`, `Tree`, `TreePage`, `Stat`, `Attrs`, `Mkdir`, `Remove`, `Move`, `Read`, `Abstract`, `Overview`, `Write`, `SetTags`, `SetTagsBatch`, `Reindex` |
+| Filesystem and content | `List`, `ListPage`, `Tree`, `TreePage`, `Stat`, `Attrs`, `Mkdir`, `Remove`, `Move`, `Read`, `Abstract`, `Overview`, `Write`, `SetTags`, `BatchSetTags`, `Reindex` |
 | Retrieval | `Find`, `Search`, `Grep`, `Glob` |
 | Sessions and tasks | `CreateSession`, `ListSessions`, `GetSession`, `UpdateSessionConfig`, `SessionExists`, `GetSessionContext`, `GetSessionArchive`, `DeleteSession`, `AddMessage`, `BatchAddMessages`, `CommitSession`, `GetTask`, `ListTasks` |
 | Packs | `ExportOVPack`, `BackupOVPack`, `ImportOVPack`, `RestoreOVPack` |

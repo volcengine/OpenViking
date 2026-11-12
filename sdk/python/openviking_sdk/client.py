@@ -1701,7 +1701,7 @@ class AsyncHTTPClient:
         )
         return self._handle_response_data(response).get("result", {})
 
-    async def set_tags_batch(
+    async def batch_set_tags(
         self,
         uris: List[str],
         tags: Optional[List[str]] = None,
@@ -1723,7 +1723,7 @@ class AsyncHTTPClient:
         )
         response = await self._request(
             "POST",
-            "/api/v1/content/set_tags_batch",
+            "/api/v1/content/batch_set_tags",
             json=payload,
         )
         return self._handle_response_data(response).get("result", {})
@@ -3356,7 +3356,7 @@ class SyncHTTPClient:
             self._async_client.set_tags(uri, tags, mode=mode, recursive=recursive, options=options)
         )
 
-    def set_tags_batch(
+    def batch_set_tags(
         self,
         uris: List[str],
         tags: Optional[List[str]] = None,
@@ -3365,7 +3365,7 @@ class SyncHTTPClient:
         options: Optional[SetTagsOptions] = None,
     ) -> Dict[str, Any]:
         return run_async(
-            self._async_client.set_tags_batch(
+            self._async_client.batch_set_tags(
                 uris,
                 tags,
                 mode=mode,

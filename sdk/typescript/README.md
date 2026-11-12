@@ -40,7 +40,7 @@ Batch tag operations use a dedicated POST endpoint:
 
 ```ts
 const attrs = await client.attrs("viking://resources/docs/a.md");
-const updated = await client.setTagsBatch(
+const updated = await client.batchSetTags(
   ["viking://resources/docs/a.md", "viking://resources/docs/b.md"],
   ["used_count+=1"],
   { mode: "append" },

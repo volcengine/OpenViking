@@ -443,7 +443,7 @@ impl HttpClient {
         self.post("/api/v1/fs/attrs/set_tags", &body).await
     }
 
-    pub async fn set_tags_batch(
+    pub async fn batch_set_tags(
         &self,
         uris: &[String],
         tags: Vec<String>,
@@ -456,7 +456,7 @@ impl HttpClient {
             "mode": mode,
             "recursive": recursive,
         });
-        self.post("/api/v1/content/set_tags_batch", &body).await
+        self.post("/api/v1/content/batch_set_tags", &body).await
     }
 
     pub async fn acl_get(&self, uri: &str) -> Result<Value> {

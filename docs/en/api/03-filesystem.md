@@ -482,7 +482,7 @@ ov attrs get viking://resources/docs/api.md tags
 ov attrs get viking://user/alice/memories/experiences/foo.md memory.resource_refs
 ov attrs set-tags viking://resources/docs/api.md --tags team=search,env=prod
 ov attrs set-tags viking://resources/docs --tags team=search --mode append --recursive
-ov attrs set-tags-batch viking://resources/docs/api.md viking://resources/docs/guide.md \
+ov attrs batch-set-tags viking://resources/docs/api.md viking://resources/docs/guide.md \
   --tags count+=1 --mode append
 ```
 

@@ -120,7 +120,7 @@ class SetTagsRequest(BaseModel):
     telemetry: TelemetryRequest = False
 
 
-class SetTagsBatchRequest(BaseModel):
+class BatchSetTagsRequest(BaseModel):
     """Request to update retrieval tags for a batch of files or directories."""
 
     model_config = ConfigDict(extra="forbid")
@@ -374,7 +374,7 @@ async def set_tags(
     tags = [] if request.mode == "clear" else request.tags or []
 
     async def update_tags():
-        result = await service.fs.set_tags_batch(
+        result = await service.fs.batch_set_tags(
             uris=[uri],
             tags=tags,
             mode=request.mode,
@@ -398,18 +398,18 @@ async def set_tags(
     ).model_dump(exclude_none=True)
 
 
-@router.post("/set_tags_batch")
-async def set_tags_batch(
-    request: SetTagsBatchRequest = Body(...),
+@router.post("/batch_set_tags")
+async def batch_set_tags(
+    request: BatchSetTagsRequest = Body(...),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Set explicit retrieval tags metadata for a batch of files or directories."""
     service = get_service()
     tags = [] if request.mode == "clear" else request.tags or []
     execution = await run_operation(
-        operation="content.set_tags_batch",
+        operation="content.batch_set_tags",
         telemetry=request.telemetry,
-        fn=lambda: service.fs.set_tags_batch(
+        fn=lambda: service.fs.batch_set_tags(
             uris=request.uris,
             tags=tags,
             mode=request.mode,

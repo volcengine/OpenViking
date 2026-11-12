@@ -28,7 +28,7 @@ pub(crate) enum AttrsCommands {
         recursive: bool,
     },
     /// Update explicit retrieval tags metadata for multiple URIs
-    SetTagsBatch {
+    BatchSetTags {
         /// Viking URIs
         #[arg(value_name = "uri", required = true, num_args = 1..)]
         uris: Vec<String>,

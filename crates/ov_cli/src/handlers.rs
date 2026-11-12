@@ -1511,7 +1511,7 @@ pub async fn handle_set_tags(
     .await
 }
 
-pub async fn handle_set_tags_batch(
+pub async fn handle_batch_set_tags(
     uris: Vec<String>,
     tags: Vec<String>,
     mode: String,
@@ -1519,7 +1519,7 @@ pub async fn handle_set_tags_batch(
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
-    commands::content::set_tags_batch(
+    commands::content::batch_set_tags(
         &client,
         &uris,
         tags,

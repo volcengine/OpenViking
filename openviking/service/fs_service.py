@@ -1895,7 +1895,7 @@ class FSService:
             ctx=ctx,
         )
 
-    async def set_tags_batch(
+    async def batch_set_tags(
         self,
         uris: list[str],
         tags: list[str],

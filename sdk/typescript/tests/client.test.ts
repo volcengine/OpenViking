@@ -799,14 +799,14 @@ describe("OpenVikingClient", () => {
       fetch: fetcher,
     });
 
-    await client.setTagsBatch(
+    await client.batchSetTags(
       ["resources/a.md", "viking://resources/b.md"],
       ["count+=1"],
       { mode: "append" },
     );
 
     expect(new URL(String(fetcher.mock.calls[0]![0])).pathname).toBe(
-      "/api/v1/content/set_tags_batch",
+      "/api/v1/content/batch_set_tags",
     );
     expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
       uris: ["viking://resources/a.md", "viking://resources/b.md"],
