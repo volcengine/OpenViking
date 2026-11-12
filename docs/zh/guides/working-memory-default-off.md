@@ -2,6 +2,24 @@
 
 OpenViking 现在默认 `working_memory.enabled=false`。commit 仍会保存原始消息并调度长期记忆抽取，但除非显式开启 WM，否则不会生成归档 overview 或保留 checkpoint 摘要。这个开关不影响长期记忆、recall、profile 或工具。
 
+## 设置服务端默认值
+
+若要为没有已保存策略的用户和会话默认开启 WM，请将以下配置合并到 `~/.openviking/ov.conf`：
+
+```json
+{
+  "server": {
+    "user_config_defaults": {
+      "memory_policy": {
+        "working_memory": {"enabled": true}
+      }
+    }
+  }
+}
+```
+
+`memory_policy` 和 `user_config_defaults` 都应放在 `server` 下；放在 `ov.conf` 根级会被视为未知字段。编辑 `ov.conf` 后需要重启服务端才会生效。已保存的用户或会话策略优先于此默认值；`enable_working_memory` 仍可单独覆盖某次 commit 的 WM 设置。
+
 ## 升级服务端与插件
 
 升级 OpenViking Python 包**不会**更新已安装在各 agent 宿主中的插件副本。请按各插件的安装说明逐个更新，然后重启对应宿主。如果某个会话依赖 OV 历史，请先完成这一步，再把它切换到宿主原生的历史管理。旧版接管（takeover）插件不支持新的默认值，服务端也无法绕过它们的轮询问题。

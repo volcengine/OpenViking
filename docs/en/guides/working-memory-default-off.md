@@ -5,6 +5,29 @@ raw messages and schedules long-term memory extraction. It does not generate an
 archive overview or a retention checkpoint summary unless WM is explicitly
 enabled. This is not a switch for long-term memory, recall, profiles, or tools.
 
+## Set a server-wide default
+
+To enable WM by default for users and sessions without a saved policy, merge
+this section into `~/.openviking/ov.conf`:
+
+```json
+{
+  "server": {
+    "user_config_defaults": {
+      "memory_policy": {
+        "working_memory": {"enabled": true}
+      }
+    }
+  }
+}
+```
+
+`memory_policy` and `user_config_defaults` are nested under `server`; placing
+either at the `ov.conf` root makes it an unknown field. Editing `ov.conf` takes
+effect after the server restarts. A saved user or session policy takes
+precedence over this default, and `enable_working_memory` can still override WM
+for an individual commit.
+
 ## Upgrade the server and plugins
 
 Updating the OpenViking Python package does **not** update copies installed in
