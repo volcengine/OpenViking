@@ -131,7 +131,6 @@ impl GitService {
                 source: source_oid,
             });
         }
-        #[cfg(feature = "snapshot_log")]
         let snapshot_log_paths =
             super::snapshot_log::restore_snapshot_log_paths(project_dir.as_deref(), &diff);
 
@@ -211,7 +210,6 @@ impl GitService {
             Err(other) => return Err(other.into()),
         }
 
-        #[cfg(feature = "snapshot_log")]
         self.try_append_snapshot_log(
             account,
             branch,

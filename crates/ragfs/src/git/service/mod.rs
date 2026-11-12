@@ -14,7 +14,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-#[cfg(feature = "snapshot_log")]
 use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 
@@ -40,7 +39,6 @@ mod commit;
 mod diff;
 mod log;
 mod restore;
-#[cfg(feature = "snapshot_log")]
 mod snapshot_log;
 mod show;
 mod validate;
@@ -74,10 +72,8 @@ pub struct GitService {
     /// fall back to an unconditional `write_object`.
     pub blob_exists_precheck: bool,
     /// Optional SnapshotLog provider for filtered history acceleration.
-    #[cfg(feature = "snapshot_log")]
     pub snapshot_log_store: Option<Arc<dyn crate::git::snapshot_log::SnapshotLogStore>>,
     /// In-process singleflight guard for SnapshotLog backfill tasks.
-    #[cfg(feature = "snapshot_log")]
     snapshot_log_backfills: Arc<Mutex<HashSet<(String, String)>>>,
 }
 
@@ -95,9 +91,7 @@ impl GitService {
             ref_store,
             index_store: None,
             blob_exists_precheck: true,
-            #[cfg(feature = "snapshot_log")]
             snapshot_log_store: None,
-            #[cfg(feature = "snapshot_log")]
             snapshot_log_backfills: Arc::new(Mutex::new(HashSet::new())),
         }
     }
@@ -117,9 +111,7 @@ impl GitService {
             ref_store,
             index_store,
             blob_exists_precheck: true,
-            #[cfg(feature = "snapshot_log")]
             snapshot_log_store: None,
-            #[cfg(feature = "snapshot_log")]
             snapshot_log_backfills: Arc::new(Mutex::new(HashSet::new())),
         }
     }
@@ -133,7 +125,6 @@ impl GitService {
     }
 
     /// Attach an optional SnapshotLog store for filtered log acceleration.
-    #[cfg(feature = "snapshot_log")]
     pub fn with_snapshot_log(
         mut self,
         store: Option<Arc<dyn crate::git::snapshot_log::SnapshotLogStore>>,
@@ -323,7 +314,6 @@ mod tests {
     include!("../tests/test_commit.rs");
     include!("../tests/test_show.rs");
     include!("../tests/test_log.rs");
-    #[cfg(feature = "snapshot_log")]
     include!("../tests/test_snapshot_log.rs");
     include!("../tests/test_restore.rs");
 }

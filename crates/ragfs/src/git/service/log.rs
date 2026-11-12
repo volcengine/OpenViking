@@ -16,7 +16,6 @@ impl GitService {
             return Ok(Vec::new());
         }
 
-        #[cfg(feature = "snapshot_log")]
         if req.paths.is_some() {
             if let Some(out) = self.log_with_snapshot_log(&req).await? {
                 return Ok(out);
@@ -102,7 +101,6 @@ impl GitService {
     }
 }
 
-#[cfg(feature = "snapshot_log")]
 impl GitService {
     /// Try SnapshotLog fast path for filtered log requests.
     async fn log_with_snapshot_log(
@@ -172,29 +170,10 @@ impl GitService {
             )
             .await?
         {
-            Some(mut tail) => {
+            Some(tail) => {
                 self.trigger_snapshot_log_backfill(&req.account, &req.branch);
-                if tail.len() >= req.limit {
-                    tail.truncate(req.limit);
-                    return Ok(Some(tail));
-                }
-                let remaining = req.limit - tail.len();
-                let Some(indexed) = self
-                    .load_snapshot_log_entries(store.as_ref(), req, latest.0, remaining)
-                    .await?
-                else {
-                    return Ok(None);
-                };
-                let mut seen: HashSet<ObjectId> = tail.iter().map(|entry| entry.oid).collect();
-                for entry in indexed {
-                    if seen.insert(entry.oid) {
-                        tail.push(entry);
-                    }
-                    if tail.len() >= req.limit {
-                        break;
-                    }
-                }
-                Ok(Some(tail))
+                self.merge_snapshot_log_tail(store.as_ref(), req, latest.0, tail)
+                    .await
             }
             None => {
                 let fresh_head = resolve_ref(
@@ -219,9 +198,10 @@ impl GitService {
                         )
                         .await?
                     {
-                        if tail.len() >= req.limit {
-                            return Ok(Some(tail));
-                        }
+                        self.trigger_snapshot_log_backfill(&req.account, &req.branch);
+                        return self
+                            .merge_snapshot_log_tail(store.as_ref(), req, latest.0, tail)
+                            .await;
                     }
                 }
                 warn!(
@@ -231,6 +211,37 @@ impl GitService {
                 Ok(None)
             }
         }
+    }
+
+    /// Merge tail-scan matches with indexed history behind the latest boundary.
+    async fn merge_snapshot_log_tail(
+        &self,
+        store: &dyn crate::git::snapshot_log::SnapshotLogStore,
+        req: &LogRequest,
+        latest_id: i64,
+        mut tail: Vec<LogEntry>,
+    ) -> Result<Option<Vec<LogEntry>>, GitError> {
+        if tail.len() >= req.limit {
+            tail.truncate(req.limit);
+            return Ok(Some(tail));
+        }
+        let remaining = req.limit - tail.len();
+        let Some(indexed) = self
+            .load_snapshot_log_entries(store, req, latest_id, remaining)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let mut seen: HashSet<ObjectId> = tail.iter().map(|entry| entry.oid).collect();
+        for entry in indexed {
+            if seen.insert(entry.oid) {
+                tail.push(entry);
+            }
+            if tail.len() >= req.limit {
+                break;
+            }
+        }
+        Ok(Some(tail))
     }
 
     /// Load SnapshotLog hits and project them to `LogEntry` values.

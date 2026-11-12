@@ -81,24 +81,15 @@ pub fn build_git_service(
         }
     };
 
-    #[cfg(feature = "snapshot_log")]
     let snapshot_log_store = build_snapshot_log_store(cfg)?;
-    #[cfg(not(feature = "snapshot_log"))]
-    if cfg.snapshot_log.provider != "none" {
-        return Err(PyRuntimeError::new_err(
-            "snapshot_log provider requested but ragfs-python built without `snapshot_log` feature",
-        ));
-    }
 
     let svc = GitService::with_index(vfs, object_store, ref_store, index_store)
         .with_blob_exists_precheck(cfg.tuning.blob_exists_precheck_enabled);
-    #[cfg(feature = "snapshot_log")]
     let svc = svc.with_snapshot_log(snapshot_log_store);
 
     Ok(Some(Arc::new(svc)))
 }
 
-#[cfg(feature = "snapshot_log")]
 fn build_snapshot_log_store(
     cfg: &GitConfig,
 ) -> PyResult<Option<Arc<dyn ragfs::git::SnapshotLogStore>>> {

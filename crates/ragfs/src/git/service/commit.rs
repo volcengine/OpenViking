@@ -152,7 +152,7 @@ impl GitService {
 
         // Lazily flatten prev_tree once if any explicit path requires it.
         let mut prev_paths_cache: Option<Vec<(String, ObjectId)>> = None;
-        #[cfg(feature = "snapshot_log")]
+        let collect_snapshot_log_paths = self.snapshot_log_store.is_some();
         let mut actual_changed_paths: Vec<String> = Vec::new();
 
         let candidates: Vec<String> = match &paths {
@@ -212,8 +212,9 @@ impl GitService {
                                             .await?;
                                         if credited_removed.insert(path.clone()) {
                                             changed += 1;
-                                            #[cfg(feature = "snapshot_log")]
-                                            actual_changed_paths.push(path.clone());
+                                            if collect_snapshot_log_paths {
+                                                actual_changed_paths.push(path.clone());
+                                            }
                                         }
                                     }
                                 }
@@ -260,8 +261,9 @@ impl GitService {
                                         .remove(self.object_store.as_ref(), &account, p)
                                         .await?;
                                     changed += 1;
-                                    #[cfg(feature = "snapshot_log")]
-                                    actual_changed_paths.push(p.clone());
+                                    if collect_snapshot_log_paths {
+                                        actual_changed_paths.push(p.clone());
+                                    }
                                 }
                             }
                         }
@@ -312,8 +314,9 @@ impl GitService {
                                         .remove(self.object_store.as_ref(), &account, p)
                                         .await?;
                                     changed += 1;
-                                    #[cfg(feature = "snapshot_log")]
-                                    actual_changed_paths.push(p.clone());
+                                    if collect_snapshot_log_paths {
+                                        actual_changed_paths.push(p.clone());
+                                    }
                                 }
                             }
                             if let Some(t) = prev_tree {
@@ -350,8 +353,9 @@ impl GitService {
                                             .await?;
                                         if credited_removed.insert(path.clone()) {
                                             changed += 1;
-                                            #[cfg(feature = "snapshot_log")]
-                                            actual_changed_paths.push(path.clone());
+                                            if collect_snapshot_log_paths {
+                                                actual_changed_paths.push(path.clone());
+                                            }
                                         }
                                     }
                                 }
@@ -401,8 +405,9 @@ impl GitService {
                                 .await?;
                             if credited_removed.insert(p.clone()) {
                                 changed += 1;
-                                #[cfg(feature = "snapshot_log")]
-                                actual_changed_paths.push(p.clone());
+                                if collect_snapshot_log_paths {
+                                    actual_changed_paths.push(p.clone());
+                                }
                             }
                         }
                     }
@@ -542,29 +547,26 @@ impl GitService {
                             .upsert(self.object_store.as_ref(), &account, &rel_path, oid)
                             .await?;
                         changed += 1;
-                        #[cfg(feature = "snapshot_log")]
-                        {
+                        if collect_snapshot_log_paths {
                             actual_changed_paths.push(rel_path.clone());
                             if prev_was_tree {
-                                if prev_paths_cache.is_none() {
-                                    if let Some(prev_tree_oid) = prev_tree {
-                                        prev_paths_cache = Some(
-                                            crate::git::tree_builder::flatten(
-                                                self.object_store.as_ref(),
-                                                &account,
-                                                prev_tree_oid,
-                                                &None,
-                                            )
-                                            .await?,
-                                        );
-                                    }
-                                }
                                 let pref = format!("{}/", rel_path);
                                 if let Some(prev_paths) = &prev_paths_cache {
                                     for (path, _) in prev_paths {
                                         if path.starts_with(&pref) {
                                             actual_changed_paths.push(path.clone());
                                         }
+                                    }
+                                } else if let Some((old_tree_oid, _)) = prev_entry.as_ref() {
+                                    let subtree_paths = crate::git::tree_builder::flatten(
+                                        self.object_store.as_ref(),
+                                        &account,
+                                        *old_tree_oid,
+                                        &None,
+                                    )
+                                    .await?;
+                                    for (path, _) in subtree_paths {
+                                        actual_changed_paths.push(format!("{pref}{path}"));
                                     }
                                 }
                             }
@@ -613,8 +615,9 @@ impl GitService {
                             .remove(self.object_store.as_ref(), &account, &rel_path)
                             .await?;
                         changed += 1;
-                        #[cfg(feature = "snapshot_log")]
-                        actual_changed_paths.push(rel_path.clone());
+                        if collect_snapshot_log_paths {
+                            actual_changed_paths.push(rel_path.clone());
+                        }
                     }
                     // The file is gone (or became a directory): drop its cached blob.
                     if self.index_store.is_some() {
@@ -680,9 +683,16 @@ impl GitService {
             Err(other) => return Err(other.into()),
         }
 
-        #[cfg(feature = "snapshot_log")]
-        self.try_append_snapshot_log(&account, &branch, prev_head, commit_oid, &actual_changed_paths)
+        if collect_snapshot_log_paths {
+            self.try_append_snapshot_log(
+                &account,
+                &branch,
+                prev_head,
+                commit_oid,
+                &actual_changed_paths,
+            )
             .await;
+        }
 
         // 8. Persist the new commit index. Soft-fail: a save error logs and
         //    continues — the commit itself has already succeeded; the worst

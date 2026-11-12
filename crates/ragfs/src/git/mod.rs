@@ -36,7 +36,6 @@ pub mod index_store;
 pub mod object_store;
 pub mod ref_store;
 pub mod service;
-#[cfg(feature = "snapshot_log")]
 pub mod snapshot_log;
 pub mod tree_builder;
 pub mod types;
@@ -52,7 +51,6 @@ pub use index_store::{CommitIndex, IndexStore, IndexStoreError};
 pub use object_store::ObjectStore;
 pub use ref_store::RefStore;
 pub use service::GitService;
-#[cfg(feature = "snapshot_log")]
 pub use snapshot_log::{
     MySqlSnapshotLogStore, SnapshotLogError, SnapshotLogHit, SnapshotLogRow, SnapshotLogStore,
     SqliteSnapshotLogStore,

@@ -13,10 +13,9 @@ name = "ragfs_python"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["extension-module", "s3", "snapshot_log"]
+default = ["extension-module", "s3"]
 extension-module = ["pyo3/extension-module"]
 s3 = ["ragfs/s3"]
-snapshot_log = ["ragfs/snapshot_log"]
 
 [dependencies]
 ragfs = { path = "../ragfs", features = ["cache"] }
