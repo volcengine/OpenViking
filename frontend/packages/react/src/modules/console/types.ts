@@ -14,6 +14,11 @@ import type {
 
 export type ConsoleMode = 'conversation' | 'command';
 
+export interface ConsoleCommandGuide {
+  description: string;
+  examples: readonly [string, ...string[]];
+}
+
 export interface ConsoleSlots {
   toolbar?: ReactNode;
   conversationContext?: ReactNode;

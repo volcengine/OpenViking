@@ -1,3 +1,4 @@
+import { getTuiCommandInputText } from './command-input.js';
 import type { TuiCommandDefinition } from './command-catalog.js';
 import type { ResolvedTuiLabels } from './tui-labels.js';
 
@@ -30,7 +31,9 @@ export function TuiParamHint({
   return (
     <div className="ov-tui__hint">
       <div className="ov-tui__hint-head">
-        <code className="ov-tui__hint-name">/{command.name}</code>
+        <code className="ov-tui__hint-name">
+          {getTuiCommandInputText(command)}
+        </code>
         <span className="ov-tui__hint-desc">{command.description}</span>
       </div>
       {examples?.length ? (

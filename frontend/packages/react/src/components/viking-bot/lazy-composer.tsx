@@ -33,7 +33,13 @@ export const VikingBotComposer = forwardRef<
   return (
     <Suspense
       fallback={
-        <div className="ov-viking-bot__composer ov-viking-bot__composer--loading" />
+        <div className="ov-viking-bot__composer ov-viking-bot__composer--loading">
+          {props.disabled && props.disabledReason ? (
+            <p className="ov-viking-bot__composer-hint" role="status">
+              {props.disabledReason}
+            </p>
+          ) : null}
+        </div>
       }
     >
       <View {...props} ref={ref} />

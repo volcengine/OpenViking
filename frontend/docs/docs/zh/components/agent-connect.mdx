@@ -12,7 +12,7 @@ Agent 接入视图。内置中英文接入内容与图标。调用方提供 `API
 
 「接入主流 Agent」展示 Codex、Claude Code、豆包工作、WorkBuddy、TRAE、Cursor、OpenClaw、Hermes Agent、OpenCode、DeepSeek Harness、DeerFlow、pi、ZCode、Kimi Code，共十四项。「开发自己的 Agent」展示 MCP、CLI、API、SDK，使用同一列表与详情布局。
 
-「境外」标签默认不展示；传入 `showOverseasTag={true}` 后，Codex、Claude Code、Cursor、OpenClaw、Hermes Agent、OpenCode、pi 的详情保留原接入标签并增加「境外」标签。DeerFlow 详情支持 MemoryManager 和 MCP 两种说明切换，复制当前说明；默认选中 MemoryManager。
+Codex 和 Claude Code 默认在 Plugin 旁展示「境外」标签。传入 `showOverseasTag={true}` 也会为 Cursor、OpenClaw、Hermes Agent、OpenCode 和 pi 展示该标签；传入 `false` 则隐藏所有「境外」标签。DeerFlow 详情支持 MemoryManager 和 MCP 两种说明切换，复制当前说明；默认选中 MemoryManager。
 
 CLI 详情提供「手动终端安装」「通过 AI Agent 安装」两个内部页签，默认手动安装；分别展示本地 CLI 操作步骤和发送给 AI Agent 的安装配置提示词。页签采用参考组件的下划线样式，复制当前页签正文，切换后复制反馈重置。
 
@@ -30,7 +30,7 @@ CLI 详情提供「手动终端安装」「通过 AI Agent 安装」两个内部
 | `locale`          | `'zh-CN' \| 'en-US'`                 | 继承上层 / en-US                                        | 标题、页签、目录、正文和反馈的语言。                                                 |
 | `baseUrl`         | `string`                             | `https://api.vikingdb.cn-beijing.volces.com/openviking` | 接入服务地址；拼接子路径及 API 示例变量时移除末尾斜杠，安装命令与独立地址保留原值。  |
 | `agreementUrl`    | `string`                             | —                                                       | 宿主协议链接；提供时显示可访问的协议引用，未提供时仅显示数据访问提示。               |
-| `showOverseasTag` | `boolean`                            | `false`                                                 | 是否展示适用 Agent 的「境外」标签。                                                  |
+| `showOverseasTag` | `boolean`                            | —                                                       | 未传时仅标记 Codex 和 Claude Code；`true` 标记全部适用条目，`false` 隐藏。           |
 | `activeTabId`     | `'mainstream' \| 'custom'`           | `mainstream`                                            | 可选受控页签；未传时由组件维护。                                                     |
 | `selectedId`      | `string`                             | 当前分组首项                                            | 可选受控条目；主流首项为 `codex`，开发首项为 `mcp`。不属于当前分组时显示该分组首项。 |
 | `onTabChange`     | `(tabId: AgentConnectTabId) => void` | —                                                       | 页签选择通知，方向键、Home、End 也会触发。                                           |

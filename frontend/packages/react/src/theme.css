@@ -85,6 +85,7 @@
   --ov-ui-text-1-default: #0b0b0f;
   --ov-ui-text-2-default: #3f3f51;
   --ov-ui-text-3-default: #6e718c;
+  --ov-ui-empty-description-default: #787891;
   --ov-ui-text-description-default: rgb(0 0 0 / 40%);
   --ov-ui-text-disabled-default: #a5a7bb;
 
@@ -98,6 +99,11 @@
   --ov-ui-bg-3-default: #f7f8fd;
   --ov-ui-bg-4-default: #f6f7fa;
   --ov-ui-bg-5-default: #f1f2f9;
+  --ov-ui-plain-button-hover-default: #f5f5fc;
+  --ov-ui-tui-input-text-default: #4d5368;
+  --ov-ui-tui-guide-text-default: #787c91;
+  --ov-ui-tui-quick-bg-default: #f7f7f9;
+  --ov-ui-tui-quick-hover-default: #eff1f6;
 
   /* Code surfaces used by the reference conversation renderer. */
   --ov-ui-code-bg-default: #fbfbfc;
@@ -203,6 +209,7 @@ html.dark .ov-experience-dashboard,
   --ov-ui-text-1-default: #c7ccd6;
   --ov-ui-text-2-default: #9da3af;
   --ov-ui-text-3-default: #737a87;
+  --ov-ui-empty-description-default: var(--ov-ui-text-3-default);
   --ov-ui-text-description-default: rgb(255 255 255 / 40%);
   --ov-ui-text-disabled-default: #42464e;
 
@@ -214,6 +221,11 @@ html.dark .ov-experience-dashboard,
   --ov-ui-bg-3-default: #1b1d21;
   --ov-ui-bg-4-default: #202227;
   --ov-ui-bg-5-default: #23252a;
+  --ov-ui-plain-button-hover-default: var(--ov-ui-bg-4-default);
+  --ov-ui-tui-input-text-default: var(--ov-ui-text-1-default);
+  --ov-ui-tui-guide-text-default: var(--ov-ui-text-2-default);
+  --ov-ui-tui-quick-bg-default: var(--ov-ui-bg-4-default);
+  --ov-ui-tui-quick-hover-default: var(--ov-ui-bg-5-default);
 
   --ov-ui-focus-default: #5f5fff;
   --ov-ui-fill-hover-default: #23252a;
@@ -331,4 +343,21 @@ html.dark .ov-file-browser {
   --ov-ui-dashboard-danger-default: var(--ov-ui-status-error-default);
   --ov-ui-dashboard-danger-light-default: var(--ov-ui-bg-5-default);
   --ov-ui-dashboard-success-default: var(--ov-ui-status-success-default);
+}
+
+/* Directory guidance: six Figma popover illustrations and floating surface. */
+.ov-directory-tour {
+  --ov-ui-tour-surface-default: #ffffff;
+  --ov-ui-tour-border-default: #c9cbd4;
+  --ov-ui-tour-muted-default: #787c91;
+  --ov-ui-tour-illustration-default: #f5f4f7;
+  --ov-ui-tour-illustration-memories-default: #f4f4f7;
+  --ov-ui-tour-illustration-shared-default: #f6f5f8;
+  --ov-ui-tour-illustration-experiences-default: #f4f4f5;
+  --ov-ui-tour-illustration-peers-default: #f7f7fd;
+}
+html.dark .ov-directory-tour {
+  --ov-ui-tour-surface-default: var(--ov-ui-bg-1-default);
+  --ov-ui-tour-border-default: var(--ov-ui-border-3-default);
+  --ov-ui-tour-muted-default: var(--ov-ui-text-3-default);
 }

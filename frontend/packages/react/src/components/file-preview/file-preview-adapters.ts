@@ -1,3 +1,4 @@
+import { fenceMarkdownFrontmatter } from './file-preview-frontmatter.js';
 import { code } from '@ark-design/ui/file-viewer/adapters/code';
 import { diff } from '@ark-design/ui/file-viewer/adapters/diff';
 import { html } from '@ark-design/ui/file-viewer/adapters/html';
@@ -60,6 +61,18 @@ export function createFilePreviewAdapterList({
     markdown({
       onLinkClick,
       rendererProps: {
+        sourcePlugins: (current) => [
+          ...current,
+          {
+            name: 'ov-yaml-frontmatter',
+            config: { priority: -1 },
+            modifier: ({ source }) => fenceMarkdownFrontmatter(source),
+            before: () => {},
+            after: () => {},
+            beforeEach: () => {},
+            afterEach: () => {},
+          },
+        ],
         astPlugins: (current) => [
           ...current,
           {

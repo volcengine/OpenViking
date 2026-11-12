@@ -2,6 +2,10 @@
 
 React imports these SVG files directly during its build.
 
+- `svg/tui/cli-title.svg` — the first-party OpenViking CLI title artwork used by
+  the Volcengine console. The 245 × 40 viewBox, paths and cursor are unchanged;
+  fills use `currentColor` for the host theme. Tui bundles it inline.
+
 - `svg/tui/copy.svg` — an original 16 × 16 outlined copy glyph drawn for this
   workspace. It inherits `currentColor`, follows the repository license and is
   bundled inline by Tui. The success state reuses `svg/scope-switcher/check.svg`.
