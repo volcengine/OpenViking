@@ -30,6 +30,14 @@ import { HANDLER_BUDGET_MS, describeSkip } from "./lib/takeover-core.mjs";
 /** This extension's directory, published for the experimental fork's probe. */
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Budget for the final commit on the exit path. The host awaits
+ * session_shutdown before releasing the terminal, so this waits at most a few
+ * seconds; anything not committed by then is already in the on-disk pending
+ * queue and replays at the next session start.
+ */
+const SHUTDOWN_COMMIT_BUDGET_MS = 3000;
+
 export default async function (pi: ExtensionAPI) {
   // --- Load config ---
   const cwd = process.cwd();
@@ -427,7 +435,11 @@ export default async function (pi: ExtensionAPI) {
     if (config.takeoverEnabled) {
       await takeover.shutdown();
     } else if (isCaptureEnabled(config)) {
-      await sync.commit();
+      // The host awaits this handler before releasing the terminal, so a slow
+      // commit must not hold the quit. Cutting the wait short loses nothing:
+      // a failed or timed-out commit is written to the on-disk pending queue
+      // (sync.commit queues by default) and replayed at the next session start.
+      await sync.commit({ timeoutMs: SHUTDOWN_COMMIT_BUDGET_MS });
     }
   });
 
