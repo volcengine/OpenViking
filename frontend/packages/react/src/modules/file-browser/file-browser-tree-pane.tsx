@@ -127,7 +127,7 @@ export function FileBrowserTreePane({
               fileTypeIcon(row.name)
             )
           }
-          renderDashboard={(row) => {
+          renderRowTrailing={(row) => {
             const dashboard = browser.dashboards.get(row.uri);
             return dashboard ? (
               <DashboardIndicator
