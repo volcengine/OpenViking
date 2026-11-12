@@ -5,7 +5,7 @@
 import asyncio
 import hashlib
 import re
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable
 from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass, replace
@@ -25,6 +25,7 @@ from openviking.privacy.sanitizer import (
     MIN_PROTECTED_VALUE_CHARS,
     PrivacyReplacement,
     PrivacySanitizer,
+    merge_privacy_spans,
 )
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.privacy.validation import validate_privacy_identifier
@@ -340,7 +341,7 @@ class _SessionExtraction(_PayloadTransformer):
         if self.rule_matcher is not None:
             spans.extend((match.start, match.end, None) for match in self.rule_matcher(text))
         replacements = []
-        for start, end, reference in _merge_spans(spans):
+        for start, end, reference in merge_privacy_spans(spans):
             if reference is None:
                 value = text[start:end]
                 reference = self.text_references.get(value)
@@ -366,25 +367,6 @@ class _SessionReferenceRewriter(_PayloadTransformer):
         if text is None:
             return text
         return _replace_spans(text, self.value_matcher(text))
-
-
-def _merge_spans(
-    spans: list[tuple[int, int, str | None]],
-) -> Iterator[tuple[int, int, str | None]]:
-    """Union overlapping hits; reuse a registered reference only for the full union."""
-    if not spans:
-        return
-    spans.sort(key=lambda span: (span[0], -span[1]))
-    start, end, reference = spans[0]
-    for left, right, candidate in spans[1:]:
-        if left >= end:
-            yield start, end, reference
-            start, end, reference = left, right, candidate
-        elif right > end:
-            end, reference = right, None
-        elif left == start and right == end and candidate is not None:
-            reference = candidate
-    yield start, end, reference
 
 
 def _replace_spans(text: str, replacements: Iterable[PrivacyReplacement]) -> str:

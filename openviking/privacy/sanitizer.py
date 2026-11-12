@@ -10,6 +10,7 @@ import json
 import os
 import time
 from collections import Counter
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Callable, Literal
@@ -49,6 +50,25 @@ class PrivacyReplacement:
     start: int
     end: int
     reference: str
+
+
+def merge_privacy_spans(
+    spans: list[tuple[int, int, str | None]],
+) -> Iterator[tuple[int, int, str | None]]:
+    """Union overlapping hits; reuse a reference only when it covers the full union."""
+    if not spans:
+        return
+    spans.sort(key=lambda span: (span[0], -span[1]))
+    start, end, reference = spans[0]
+    for left, right, candidate in spans[1:]:
+        if left >= end:
+            yield start, end, reference
+            start, end, reference = left, right, candidate
+        elif right > end:
+            end, reference = right, None
+        elif left == start and right == end and candidate is not None:
+            reference = candidate
+    yield start, end, reference
 
 
 @dataclass(frozen=True)

@@ -34,6 +34,7 @@ from openviking.privacy.sanitizer import (
     DEFAULT_SANITIZER_MAX_REPLACEMENTS,
     PrivacyReplacement,
     PrivacySanitizer,
+    merge_privacy_spans,
 )
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.privacy.skill_extractor import (
@@ -652,19 +653,18 @@ class SkillProcessor:
                         replacement.end,
                         build_placeholder(skill_dict["name"], field_reference.field),
                     )
-            replacements = list(registered)
-            index = 0
-            for match in preparation.matches:
-                while index < len(registered) and registered[index].end <= match.start:
-                    index += 1
-                # Registered fields retain priority over overlapping discoveries.
-                if index < len(registered) and registered[index].start < match.end:
-                    continue
+            spans = [(item.start, item.end, item.reference) for item in registered]
+            spans.extend((match.start, match.end, None) for match in preparation.matches)
+            replacements = []
+            for start, end, reference in merge_privacy_spans(spans):
                 if len(replacements) >= DEFAULT_SANITIZER_MAX_REPLACEMENTS:
                     raise ResourceExhaustedError(
                         "Content exceeds the Privacy sanitizer replacement limit"
                     )
-                value = content[match.start : match.end]
+                if reference is not None:
+                    replacements.append(PrivacyReplacement(start, end, reference))
+                    continue
+                value = content[start:end]
                 reference = references.get(value)
                 if reference is None:
                     for _ in range(8):
@@ -678,10 +678,10 @@ class SkillProcessor:
                     values[key] = value
                     reference = build_placeholder(skill_dict["name"], key)
                     references[value] = reference
-                replacements.append(PrivacyReplacement(match.start, match.end, reference))
+                replacements.append(PrivacyReplacement(start, end, reference))
             chunks: list[str] = []
             cursor = 0
-            for replacement in sorted(replacements, key=lambda item: item.start):
+            for replacement in replacements:
                 chunks.extend((content[cursor : replacement.start], replacement.reference))
                 cursor = replacement.end
             chunks.append(content[cursor:])

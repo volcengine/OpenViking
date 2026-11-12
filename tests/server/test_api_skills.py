@@ -1013,6 +1013,29 @@ async def test_skill_reupload_restores_manual_fields_for_each_member(client, ser
     assert rows(reader_values) in await service.fs.read(uri, ctx=reader)
 
 
+async def test_skill_discovers_complete_value_over_registered_prefix(client, service):
+    owner = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    original = "sk-ant-api03-aB3dE5gH7jK9mN2pQ4sT"
+    longer = original + "-v2"
+    await patch_user_config(
+        service.viking_fs, owner, UserSettingsPatch.model_validate({"privacy": {"mode": "auto"}})
+    )
+    await service.privacy_configs.upsert(owner, "credential", "gateway", {"key": original})
+    name = "registered-prefix"
+    response = await client.post(
+        "/api/v1/skills",
+        json={"data": _skill_md(name, "Overlapping credential", f'key="{longer}"'), "wait": True},
+    )
+    assert response.status_code == 200, response.text
+    uri = response.json()["result"]["uri"] + "/SKILL.md"
+    snapshot = await service.privacy_configs.get_current(owner, "skill", name)
+    assert list(snapshot.values.values()) == [longer]
+    await service.privacy_configs.patch_values(
+        owner, "credential", "gateway", {"key": "rotated-secret"}
+    )
+    assert f'key="{longer}"' in await service.fs.read(uri, ctx=owner)
+
+
 @pytest.mark.parametrize("mode", ["auto", "auto_strict"])
 @pytest.mark.parametrize("source_kind", ["original", "current", "reference"])
 @pytest.mark.parametrize("method", ["PUT", "POST"])
