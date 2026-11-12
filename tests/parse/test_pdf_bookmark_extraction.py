@@ -469,19 +469,19 @@ class TestConvertLocalBookmarks:
 
         pages = [
             _FakeFontPage(
-                page_number=0,
+                page_number=1,
                 chars=chars("Body text repeated", 10, 500) + chars("Heading", 14, 100),
             ),
             _FakeFontPage(
-                page_number=1,
+                page_number=2,
                 chars=chars("Another heading", 14, 120),
             ),
             _FakeFontPage(
-                page_number=2,
+                page_number=3,
                 chars=chars("Plain body", 10, 500),
             ),
             _FakeFontPage(
-                page_number=3,
+                page_number=4,
                 chars=chars("More body", 10, 500),
             ),
         ]
@@ -490,6 +490,7 @@ class TestConvertLocalBookmarks:
         headings = parser._detect_headings_by_font(fake_pdf)
 
         assert [heading["title"] for heading in headings] == ["Heading", "Another heading"]
+        assert [heading["page_num"] for heading in headings] == [1, 2]
         assert [page.close_count for page in pages] == [2, 1, 1, 1]
         assert [page.flush_count for page in pages] == [2, 1, 1, 1]
 
@@ -565,3 +566,72 @@ class TestExtractImages:
             )
             is None
         )
+
+
+def _write_font_heading_pdf(path: Path) -> None:
+    """Write a real four-page PDF with unique headings on its first and last pages."""
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R 10 0 R] /Count 4 >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    for page in range(1, 5):
+        commands = ""
+        if page in (1, 4):
+            commands += f"BT /F1 18 Tf 50 750 Td (Chapter {page}) Tj ET\n"
+        commands += (
+            f"BT /F1 10 Tf 50 650 Td (Page {page} body with enough small letters "
+            "to establish the dominant body font.) Tj ET\n"
+        )
+        stream = commands.encode()
+        objects.append(
+            (
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+                "/Resources << /Font << /F1 3 0 R >> >> "
+                f"/Contents {len(objects) + 2} 0 R >>"
+            ).encode()
+        )
+        objects.append(f"<< /Length {len(stream)} >>\nstream\n".encode() + stream + b"endstream")
+    data = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for number, obj in enumerate(objects, 1):
+        offsets.append(len(data))
+        data += f"{number} 0 obj\n".encode() + obj + b"\nendobj\n"
+    xref = len(data)
+    data += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode()
+    for offset in offsets:
+        data += f"{offset:010d} 00000 n \n".encode()
+    data += (
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n"
+    ).encode()
+    path.write_bytes(data)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("heading_detection", ["font", "auto"])
+async def test_real_pdf_font_headings_precede_their_own_pages(
+    tmp_path: Path, heading_detection: str
+):
+    from openviking.parse.output import LocalParseOutputStore
+    from openviking_cli.utils.config.parser_config import PDFConfig
+
+    source = tmp_path / "chapters.pdf"
+    _write_font_heading_pdf(source)
+    parser = PDFParser(PDFConfig(strategy="local", heading_detection=heading_detection))
+    result = await parser.parse(
+        source,
+        split_content=False,
+        parse_output_store=LocalParseOutputStore(str(tmp_path / "artifacts")),
+    )
+
+    assert result.warnings == []
+    assert result.meta["heading_source"] == "font_analysis"
+    assert result.meta["headings_found"] == 2
+    assert result.meta["pages_processed"] == 4
+    assert result.artifact_ref is not None
+    files = list(Path(result.artifact_ref.root).rglob("*.md"))
+    assert len(files) == 1
+    markdown = files[0].read_text()
+    assert markdown.index("# Chapter 1\n") < markdown.index("<!-- Page 1 -->")
+    assert markdown.index("<!-- Page 3 -->") < markdown.index("# Chapter 4\n")
+    assert markdown.index("# Chapter 4\n") < markdown.index("<!-- Page 4 -->")

@@ -607,7 +607,7 @@ class PDFParser(BaseParser):
 
             for page in pdf.pages:
                 try:
-                    page_num = page.page_number + 1
+                    page_num = page.page_number
                     chars = sorted(page.chars, key=lambda c: (c["top"], c["x0"]))
 
                     current_line_chars: list = []
