@@ -67,7 +67,7 @@ impl SnapshotLogStore for MySqlSnapshotLogStore {
         account: &str,
         branch: &str,
     ) -> Result<Option<(i64, String)>, SnapshotLogError> {
-        let row = sqlx::query_as::<_, (i64, String)>(
+        let row = sqlx::query_as::<_, (i64, Vec<u8>)>(
             "SELECT id, commit_oid FROM snapshot_log \
              WHERE account = ? AND branch = ? ORDER BY id DESC LIMIT 1",
         )
@@ -75,7 +75,8 @@ impl SnapshotLogStore for MySqlSnapshotLogStore {
         .bind(branch)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row)
+        row.map(|(id, commit_oid)| decode_commit_oid(commit_oid).map(|commit_oid| (id, commit_oid)))
+            .transpose()
     }
 
     /// Append rows after checking latest under `SELECT ... FOR UPDATE`.
@@ -89,7 +90,7 @@ impl SnapshotLogStore for MySqlSnapshotLogStore {
         validate_append(self.limits, account, branch, rows)?;
 
         let mut tx = self.pool.begin().await?;
-        let latest = sqlx::query_as::<_, (i64, String)>(
+        let latest = sqlx::query_as::<_, (i64, Vec<u8>)>(
             "SELECT id, commit_oid FROM snapshot_log \
              WHERE account = ? AND branch = ? ORDER BY id DESC LIMIT 1 FOR UPDATE",
         )
@@ -99,11 +100,16 @@ impl SnapshotLogStore for MySqlSnapshotLogStore {
         .await?;
         ensure_latest_matches(
             parent_commit_oid,
-            latest.as_ref().map(|(_, oid)| oid.as_str()),
+            latest
+                .as_ref()
+                .map(|(_, oid)| decode_commit_oid(oid.clone()))
+                .transpose()?
+                .as_deref(),
         )?;
         for chunk in rows.chunks(MYSQL_INSERT_BATCH_ROWS) {
-            let mut builder =
-                QueryBuilder::<MySql>::new("INSERT INTO snapshot_log (account, branch, path, commit_oid) ");
+            let mut builder = QueryBuilder::<MySql>::new(
+                "INSERT INTO snapshot_log (account, branch, path, commit_oid) ",
+            );
             builder.push_values(chunk, |mut row_builder, row| {
                 row_builder
                     .push_bind(account)
@@ -148,15 +154,37 @@ impl SnapshotLogStore for MySqlSnapshotLogStore {
             .push(" GROUP BY commit_oid ORDER BY last_id DESC LIMIT ")
             .push_bind(limit as i64);
         let rows = builder
-            .build_query_as::<(String, i64)>()
+            .build_query_as::<(Vec<u8>, i64)>()
             .fetch_all(&self.pool)
             .await?;
-        Ok(rows
-            .into_iter()
-            .map(|(commit_oid, last_id)| SnapshotLogHit {
-                commit_oid,
-                last_id,
+        rows.into_iter()
+            .map(|(commit_oid, last_id)| {
+                decode_commit_oid(commit_oid).map(|commit_oid| SnapshotLogHit {
+                    commit_oid,
+                    last_id,
+                })
             })
-            .collect())
+            .collect()
+    }
+}
+
+/// Decode commit OIDs read from MySQL binary-collated columns.
+fn decode_commit_oid(commit_oid: Vec<u8>) -> Result<String, SnapshotLogError> {
+    String::from_utf8(commit_oid)
+        .map_err(|_| SnapshotLogError::UnindexableRow("stored commit_oid is not utf-8".to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies MySQL binary-collated commit OID bytes decode to strings.
+    #[test]
+    fn decode_commit_oid_accepts_ascii_hex_bytes() {
+        let oid = b"0123456789abcdef0123456789abcdef01234567".to_vec();
+
+        let decoded = decode_commit_oid(oid).unwrap();
+
+        assert_eq!(decoded, "0123456789abcdef0123456789abcdef01234567");
     }
 }
