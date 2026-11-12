@@ -169,7 +169,7 @@ Python 示例使用 `SyncHTTPClient`；使用 `AsyncHTTPClient` 时添加 `await
 |----------|------|
 | `GET /api/v1/compile/config?compile_name={compile_name}` | 公开配置输入、调度与调用时间 |
 | `POST /api/v1/compile/config/update` | 按请求体 `compile_name` 替换配置 |
-| `GET /api/v1/compile/configs` | `configs` 和 `next_cursor`，按配置名称的字典序排序 |
+| `GET /api/v1/compile/configs` | `configs` 和 `next_cursor`；按配置名称的字典序划分页，每页内部按 `last_run_time` 倒序排列（null 置后） |
 | `GET /api/v1/compile/runs?compile_name={compile_name}` | `runs` 和 `next_cursor`，按 `created_at`、`task_id` 从新到旧排序 |
 | `GET /api/v1/compile/runs/{task_id}?compile_name={compile_name}` | 本次执行冻结的 run |
 | `GET /api/v1/compile/runs/{task_id}/outputs?compile_name={compile_name}` | 由本次快照推导的变更产出，包含 `outputs` 和 `next_cursor` |

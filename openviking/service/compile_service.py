@@ -1005,7 +1005,7 @@ class CompileService:
         scope: str = "user",
         compile_name: str | None = None,
     ) -> dict[str, Any]:
-        """Page readable user or ADMIN account configurations by exact name."""
+        """Page readable configs by name, then order each page by latest accepted execution."""
         if scope not in {"user", "account"}:
             raise InvalidArgumentError("scope must be user or account")
         if scope == "account" and ctx.role != Role.ADMIN:
@@ -1047,6 +1047,11 @@ class CompileService:
             next_cursor = page[-1]["compile_name"]
             if scope == "account":
                 next_cursor += ":" + page[-1]["owner_user_id"]
+        # shortcut: time ordering is page-local, use time cursors when global ordering is required.
+        page.sort(
+            key=lambda item: (item["last_run_time"] is not None, item["last_run_time"]),
+            reverse=True,
+        )
         return {
             "configs": page,
             "next_cursor": next_cursor,

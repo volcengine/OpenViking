@@ -324,6 +324,18 @@ async def test_case_distinct_names_paginate(service, app, client, monkeypatch):
     assert second["next_cursor"] is None
 
 
+async def test_configuration_list_page_order(service, app, monkeypatch):
+    ctx, _ = await prepare(service, app, monkeypatch)
+    store = service.compile.lifecycle.store
+    for name, timestamp in (("alpha", None), ("beta", 100), ("gamma", 300)):
+        record = new_record(INPUTS) | {"last_run_time": timestamp}
+        await store.create(ctx.account_id, ctx.user.user_id, record, compile_name=name)
+    first = await service.compile.list_configs(ctx, limit=2, cursor=None)
+    second = await service.compile.list_configs(ctx, limit=2, cursor=first["next_cursor"])
+    assert [config["compile_name"] for config in first["configs"]] == ["beta", "alpha"]
+    assert [config["compile_name"] for config in second["configs"]] == ["gamma"]
+
+
 @pytest.mark.parametrize("role", [Role.USER, Role.GLOBAL, Role.ROOT])
 async def test_account_configuration_listing_requires_admin(service, app, client, role):
     ctx = RequestContext(user=service.user, role=role)

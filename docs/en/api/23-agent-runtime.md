@@ -169,7 +169,7 @@ Configuration lookups and run queries use the current account and user. Updates 
 |----------|--------|
 | `GET /api/v1/compile/config?compile_name={compile_name}` | Public saved inputs, scheduling and invocation times |
 | `POST /api/v1/compile/config/update` | Replace configuration identified by body `compile_name` |
-| `GET /api/v1/compile/configs` | `configs` and `next_cursor`, ordered lexically by configuration name |
+| `GET /api/v1/compile/configs` | `configs` and `next_cursor`; page boundaries follow configuration name order, with each page ordered by `last_run_time` descending (null last) |
 | `GET /api/v1/compile/runs?compile_name={compile_name}` | `runs` and `next_cursor`, newest first by `created_at` and `task_id` |
 | `GET /api/v1/compile/runs/{task_id}?compile_name={compile_name}` | One frozen run |
 | `GET /api/v1/compile/runs/{task_id}/outputs?compile_name={compile_name}` | Changed output files derived from run snapshots; `outputs` and `next_cursor` |
