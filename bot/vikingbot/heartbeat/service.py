@@ -48,7 +48,7 @@ def _read_heartbeat_file(workspace: Path) -> str | None:
     heartbeat_file = workspace / "HEARTBEAT.md"
     if heartbeat_file.exists():
         try:
-            return heartbeat_file.read_text()
+            return heartbeat_file.read_text(encoding="utf-8")
         except Exception:
             return None
     return None
