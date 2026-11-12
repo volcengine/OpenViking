@@ -503,6 +503,13 @@ async fn terminate_connection_task(
     task: ConnectHandle,
     timeout_duration: Duration,
 ) -> CacheResult<()> {
+    // Disabling ordinary command timeouts must not make connection shutdown
+    // wait forever for an unresponsive peer before aborting the connection task.
+    let timeout_duration = if timeout_duration.is_zero() {
+        Duration::from_secs(5)
+    } else {
+        timeout_duration
+    };
     let quit_result = run_with_command_timeout("QUIT", timeout_duration, async {
         client
             .quit()

@@ -318,6 +318,37 @@ class AGFSPathLockConfig(BaseModel):
         return self
 
 
+class AGFSCoordinationConfig(BaseModel):
+    """Native coordination backend for leadership and revisions."""
+
+    provider: Literal["memory", "sqlite", "cache"] = Field(
+        default="memory",
+        description="memory: process-wide; sqlite: local cross-process; cache: distributed.",
+    )
+    sqlite_path: Optional[str] = Field(
+        default=None,
+        description="Absolute local SQLite file shared by participating processes. Required "
+        "for sqlite; independent of storage.workspace so it can stay off EFS/NFS.",
+    )
+    operation_timeout_ms: Optional[int] = Field(
+        default=None,
+        gt=0,
+        description="Deadline for one cache coordination operation in milliseconds. Defaults "
+        "to 5000 in Rust; independent of cache command timeouts and cannot be disabled.",
+    )
+
+    @model_validator(mode="after")
+    def validate_config(self):
+        if self.provider == "sqlite":
+            if not self.sqlite_path or not os.path.isabs(self.sqlite_path):
+                raise ValueError("coordination.sqlite_path must be an absolute local file path")
+        elif self.sqlite_path is not None:
+            raise ValueError("coordination.sqlite_path requires provider='sqlite'")
+        if self.provider != "cache" and self.operation_timeout_ms is not None:
+            raise ValueError("coordination.operation_timeout_ms requires provider='cache'")
+        return self
+
+
 class AGFSConfig(BaseModel):
     """Configuration for RAGFS (Rust-based AGFS)."""
 
@@ -387,6 +418,11 @@ class AGFSConfig(BaseModel):
     pathlock: AGFSPathLockConfig = Field(
         default_factory=AGFSPathLockConfig,
         description="Native RAGFS path lock configuration.",
+    )
+
+    coordination: AGFSCoordinationConfig = Field(
+        default_factory=AGFSCoordinationConfig,
+        description="Native coordination for leader leases and revisions; defaults to memory.",
     )
 
     retry_times: Any = Field(

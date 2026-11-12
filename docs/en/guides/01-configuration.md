@@ -54,9 +54,9 @@ Create `~/.openviking/ov.conf` in your home configuration directory:
 
 For `provider: "openai-codex"`, `vlm.api_key` is optional when Codex OAuth is already available.
 
-Top-level `service_name` defaults to `"openviking-server"`. Cache-backed modules use
-it as their Redis namespace. OTel `service_name` fields keep their own value
-when set and inherit this value when omitted.
+Top-level `service_name` defaults to `"openviking-server"`. It isolates coordination
+state and provides Redis namespaces for cache-backed modules. OTel `service_name`
+fields keep their own value when set and inherit this value when omitted.
 
 ### Ordered credentials in ov.conf
 
@@ -1508,10 +1508,8 @@ ALTER TABLE ov_watch_tasks
 ```
 
 Every node serves the Watch API. Nodes with `enable_watch_scheduler=true` may
-run the background Watch scheduler. `watch_leader_provider` selects leader
-mode: `auto` keeps the storage-derived default, `local` keeps leadership inside
-one process, and `cache` uses AGFS CacheRuntime for a shared leader lease. The
-leader polls due Watches every 15 seconds and settles finished runs. File and
+run the background Watch scheduler, elected through [AGFS coordination](#coordination-configuration).
+The leader polls due Watches every 15 seconds and settles finished runs. File and
 MySQL use the same Runtime polling and bounded dispatch flow. Background
 dispatch tracks unfinished Watch runs and pending submissions in leader memory
 toward its concurrency limit (default 4). Taking leadership restores occupancy
@@ -1543,6 +1541,7 @@ wait up to 10 seconds and then fail with a retryable busy error.
 | `backend` | str | `"local"`, `"s3"`, or `"memory"` | `"local"` |
 | `timeout` | float | Request timeout in seconds | `10.0` |
 | `backups` | object | Multi-write storage configuration. When set, the top-level `backend` acts as the primary backend and `backups.items[]` defines backup backends | `null` |
+| `coordination` | object | Watch leadership and semantic task revisions | `{"provider":"memory"}` |
 | `queuefs` | object | QueueFS configuration. Controls the namespace mode, backend, and runtime options for `/queue` | `{ "mode": "shared", "backend": "sqlite", "recover_stale_sec": 0, "busy_timeout_ms": 5000 }` |
 | `queue_db_path` | str (optional) | Legacy compatibility field for QueueFS sqlite DB path. Superseded by `storage.agfs.queuefs.db_path`. Defaults to `{storage.workspace}/_system/queue/queue.db` when not set. Useful when the workspace volume does not support sqlite (e.g. some network filesystems) | `null` |
 | `s3` | object | S3 backend configuration (when backend is 's3') | - |
@@ -1553,6 +1552,22 @@ RAGFS uses Rust binding mode by default, directly accessing the file system thro
 
 > [!WARNING]
 > `storage.agfs` no longer supports the AGFS HTTP client mode, and the old HTTP client entry should not be configured anymore. AGFS / RAGFS filesystem access now happens only through the in-process Rust binding (`RAGFSBindingClient`). This does not affect the OpenViking server HTTP API, the `ov` CLI, or `AsyncHTTPClient` / `SyncHTTPClient` when they connect to an OpenViking server.
+
+##### Coordination Configuration
+
+`storage.agfs.coordination` coordinates Watch leadership and revisions used to skip
+superseded semantic work. Participating nodes must share the backend and top-level `service_name`.
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `provider` | str | `memory`: one process; `sqlite`: one host; `cache`: shared top-level CacheRuntime | `"memory"` |
+| `sqlite_path` | str / null | Required for `sqlite`: absolute path to a shared database on local disk, outside EFS/NFS | `null` |
+| `operation_timeout_ms` | int | Deadline per cache coordination operation in milliseconds; cache only, must be positive | `5000` |
+
+`watch_leader_provider` is deprecated and will be removed in the next version.
+Without an explicit coordination provider, `auto` (default) selects `memory` for File
+WatchStore and `cache` for MySQL; `local` maps to `memory`, and `cache` maps to `cache`.
+Migrate by setting `storage.agfs.coordination.provider` and removing the legacy field.
 
 ##### Multi-Write Storage Configuration
 
@@ -1604,7 +1619,7 @@ See the [Multi-Write Storage Guide](./13-multi-write-storage.md) for more exampl
 ##### Global Cache Provider, CacheFS, and PathLock Configuration
 
 Top-level `service_name` names the OpenViking deployment. CacheFS, QueueFS with
-`backend=cache`, cache-backed PathLock, and cache-backed multi-write metadata
+`backend=cache`, cache-backed PathLock, coordination, and multi-write metadata
 derive their Redis namespaces from it.
 
 The top-level `cache` section is a sibling of `storage`. Its public shape is Provider-neutral:
@@ -1637,8 +1652,8 @@ own container-local database. A workspace on EFS also puts the default
 
 For multiple containers or hosts sharing EFS, use shared Redis PathLock as in
 the example below. All replicas must use the same Redis deployment, top-level
-`service_name`, and lock expiry setting. The example also uses Redis QueueFS
-so its default SQLite database is not placed on EFS.
+`service_name`, and lock expiry setting. The example uses Redis for QueueFS and
+coordination, keeping SQLite state off EFS.
 
 ```json
 {
@@ -1665,6 +1680,9 @@ so its default SQLite database is not placed on EFS.
       "queuefs": {
         "backend": "cache"
       },
+      "coordination": {
+        "provider": "cache"
+      },
       "pathlock": {
         "provider": "cache",
         "lock_expire_secs": 30.0
@@ -1674,7 +1692,7 @@ so its default SQLite database is not placed on EFS.
 }
 ```
 
-The canonical configuration has no global `cache.enabled` and no per-module Redis namespace field. CacheRuntime is initialized when CacheFS or QueueFS selects `backend=cache`, PathLock selects `provider=cache`, or multi-write selects `backups.provider=cache`. Cache-backed PathLock currently requires `cache.provider=redis`; DynamicProvider is not supported for PathLock. When all modules use local providers, `cache.params` is not parsed and no Provider connection is opened.
+The canonical configuration has no global `cache.enabled` and no per-module Redis namespace field. CacheRuntime is initialized when CacheFS or QueueFS selects `backend=cache`, PathLock or coordination selects `provider=cache`, or multi-write selects `backups.provider=cache`. Cache-backed PathLock currently requires `cache.provider=redis`; DynamicProvider is not supported for PathLock. When all modules use local providers, `cache.params` is not parsed and no Provider connection is opened.
 
 Move Provider settings to top-level `cache.provider/cache.params`, set top-level `service_name` for shared Redis names, select `cachefs.backend="cache"`, `queuefs.backend="cache"`, or `backups.provider="cache"`, use Redis `mode="standalone"` instead of `singleton`, and use `rediss://` instead of `tls_enabled`.
 
