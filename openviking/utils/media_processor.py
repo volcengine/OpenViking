@@ -485,15 +485,9 @@ class UnifiedResourceProcessor:
                 parser = DirectoryParser()
                 parse_kwargs["_feishu_import_plan"] = local_resource.feishu_plan
 
-                result = await run_stage(
+                return await run_stage(
                     "parse_artifact", parser.parse(str(local_resource.path), **parse_kwargs)
                 )
-                # Preserve temporary directory for TreeBuilder
-                if local_resource.is_temporary and not result.temp_dir_path:
-                    result.temp_dir_path = str(local_resource.path)
-                    # Mark as non-temporary so context manager doesn't clean it up
-                    local_resource.is_temporary = False
-                return result
 
             # For files, use ParserRouter to decide which parser to use
             parser_router = self._get_parser_router()
