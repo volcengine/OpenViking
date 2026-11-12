@@ -18,6 +18,7 @@ from openviking.core.namespace import (
     is_session_uri,
     user_space_fragment,
 )
+from openviking.privacy.global_policy import ensure_global_policy_file
 from openviking.server.identity import RequestContext
 from openviking.session.memory.agent_file import ensure_agent_file
 from openviking.storage.abstract_overview import AbstractOverviewFormatError, body_for_preview
@@ -237,6 +238,9 @@ class DirectoryInitializer:
         await ensure_agent_file(
             self._get_viking_fs(), replace(ctx, actor_peer_id=None), lease_ref=lease_ref
         )
+        await ensure_global_policy_file(
+            self._get_viking_fs(), replace(ctx, actor_peer_id=None), lease_ref=lease_ref
+        )
         user_count = sum(target.scope == "user" for target in created)
         return len(created) - user_count, user_count
 
@@ -268,6 +272,9 @@ class DirectoryInitializer:
             (user_root,), user_children, lease_ref=lease_ref
         )
         await ensure_agent_file(
+            self._get_viking_fs(), replace(ctx, actor_peer_id=None), lease_ref=lease_ref
+        )
+        await ensure_global_policy_file(
             self._get_viking_fs(), replace(ctx, actor_peer_id=None), lease_ref=lease_ref
         )
         return len(created)

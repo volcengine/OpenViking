@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, call
 import pytest
 
 from openviking.core.directories import PRESET_DIRECTORIES, DirectoryInitializer
+from openviking.core.global_policy import parse_global_policy
 from openviking.core.namespace import (
     canonical_user_root,
     is_session_uri,
@@ -40,6 +41,7 @@ class _FakeVikingFS:
         self.files = {}
         self._async_agfs = SimpleNamespace(
             pathlock_acquire_tree=AsyncMock(return_value={"lease_ref": "agent-init"}),
+            pathlock_acquire_exact=AsyncMock(return_value={"lease_ref": "policy-init"}),
             pathlock_release=AsyncMock(),
         )
 
@@ -85,8 +87,19 @@ async def test_initialize_account_workspace_batches_preset_directories(monkeypat
     viking_fs.files.update(legacy_files)
 
     account_count, user_count = await initializer.initialize_account_workspace(ctx)
-    assert viking_fs.files == legacy_files
+    policy_uri = f"{canonical_user_root(ctx)}/GLOBAL_POLICY.md"
+    default_policy = (SYSTEM_ASSETS_DIR / "user" / "GLOBAL_POLICY.md").read_text(encoding="utf-8")
+    assert viking_fs.files == {**legacy_files, policy_uri: default_policy}
     viking_fs.files[f"{memory_root}/soul.md"] = "Custom agent instructions"
+    custom_policy = """---
+type: global-access-policy
+schema_version: 1
+default: deny
+rules: []
+---
+Only my own agent may read my memories.
+"""
+    viking_fs.files[policy_uri] = custom_policy
 
     user_root = canonical_user_root(ctx)
     expected_user_uris = {
@@ -134,6 +147,7 @@ async def test_initialize_account_workspace_batches_preset_directories(monkeypat
     assert viking_fs.files == {
         **legacy_files,
         f"{memory_root}/soul.md": "Custom agent instructions",
+        policy_uri: custom_policy,
     }
     assert viking_fs.contexts["viking://resources"]["abstract"] == malformed_abstract
     assert set(viking_fs.contexts) == expected_uris
@@ -179,18 +193,28 @@ async def test_initialize_user_directories_ignores_actor_peer_view_for_preset_st
         *(f"{user_root}/{child.path}" for child in PRESET_DIRECTORIES["user"].children),
     }
     assert count == len(expected_uris)
-    assert deletion_guard.await_count == len(expected_uris) + 1
-    assert prepare_parent.await_count == len(expected_uris) + 1
+    assert deletion_guard.await_count == len(expected_uris) + 2
+    assert prepare_parent.await_count == len(expected_uris) + 2
     root_path = agfs._resolve(viking_fs._uri_to_path(user_root, ctx=ctx))
     assert {str(path.relative_to(root_path)) for path in root_path.rglob("*.md")} == {
         f"{uri.removeprefix(user_root + '/')}/{filename}" if uri != user_root else filename
         for uri in expected_uris
         for filename in (".abstract.md", ".overview.md")
-    } | {"memories/soul.md"}
+    } | {"memories/soul.md", "GLOBAL_POLICY.md"}
     assert (root_path / "memories/soul.md").read_text() == (
         SYSTEM_ASSETS_DIR / "memory" / "soul.md"
     ).read_text()
     assert "Sanitized scope." in (root_path / ".abstract.md").read_text()
+    policy_text = (root_path / "GLOBAL_POLICY.md").read_text(encoding="utf-8")
+    assert policy_text == (SYSTEM_ASSETS_DIR / "user" / "GLOBAL_POLICY.md").read_text(
+        encoding="utf-8"
+    )
+    policy = parse_global_policy(policy_text)
+    assert policy.allows_path("memories/experiences/lesson.md")
+    assert policy.allows_path("peers/customer-a/memories/preferences/style.md")
+    assert not policy.allows_path("memories/preferences/style.md")
+    assert not policy.allows_path("privacy/secret.md")
+    assert not policy.allows_path("sessions/history.md")
 
     with pytest.raises(PermissionDeniedError):
         await viking_fs.write_context(user_root, abstract="blocked", ctx=ctx)
@@ -209,6 +233,7 @@ async def test_system_assets_sync_only_for_account_initialization(monkeypatch):
     lease = {"lease_ref": "account-init"}
     agfs = SimpleNamespace(
         pathlock_acquire_tree=AsyncMock(return_value=lease),
+        pathlock_acquire_exact=AsyncMock(return_value=lease),
         pathlock_release=AsyncMock(),
     )
     viking_fs._async_agfs = agfs
