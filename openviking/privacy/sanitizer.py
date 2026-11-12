@@ -5,9 +5,10 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 from openviking.privacy.reference import build_privacy_field_reference
 from openviking.pyagfs import get_privacy_matcher_class
@@ -42,6 +43,31 @@ class PrivacySanitizationResult:
     def changed(self) -> bool:
         return bool(self.replacements)
 
+
+_TOKEN_CHAR = re.compile(r"[\w-]", re.UNICODE)
+
+
+def _token_bounded(content: str, start: int, end: int) -> bool:
+    """True when the span [start, end) is not embedded in a larger token."""
+
+    before = content[start - 1] if start > 0 else ""
+    after = content[end] if end < len(content) else ""
+    return not (_TOKEN_CHAR.match(before) or _TOKEN_CHAR.match(after))
+
+
+def _apply_replacements(content: str, replacements: Sequence[tuple[int, int, str]]) -> str:
+    """Rebuild ``content`` applying only the given (start, end, reference) spans."""
+
+    out: list[str] = []
+    cursor = 0
+    for start, end, reference in sorted(replacements):
+        if start < cursor:
+            continue
+        out.append(content[cursor:start])
+        out.append(reference)
+        cursor = end
+    out.append(content[cursor:])
+    return "".join(out)
 
 class PrivacySanitizer:
     """Sanitize text with the active sensitive values owned by the current user."""
@@ -108,7 +134,12 @@ class PrivacySanitizer:
                 raise ResourceExhaustedError(
                     "Content exceeds the Privacy sanitizer replacement limit"
                 )
-            return [PrivacyReplacement(*item) for item in replacements]
+            bounded = [
+                item
+                for item in replacements
+                if _token_bounded(content, item[0], item[1])
+            ]
+            return [PrivacyReplacement(*item) for item in bounded]
 
         return find
 
@@ -146,6 +177,15 @@ class PrivacySanitizer:
             raw_ambiguous,
             match_limit_exceeded,
         ) = matcher.sanitize_limited(content, effective_max_replacements)
+        # A registered value that is itself a common word must not scrub the
+        # longer words containing it: replace only token-bounded occurrences.
+        kept = tuple(
+            item
+            for item in raw_replacements
+            if _token_bounded(content, item[0], item[1])
+        )
+        if len(kept) != len(raw_replacements):
+            rewritten = _apply_replacements(content, kept)
         if match_limit_exceeded and fail_on_match_limit:
             raise ResourceExhaustedError(
                 "Content exceeds the Privacy sanitizer replacement limit",
@@ -156,7 +196,7 @@ class PrivacySanitizer:
             )
         replacements = tuple(
             PrivacyReplacement(start=start, end=end, reference=reference)
-            for start, end, reference in raw_replacements
+            for start, end, reference in kept
         )
         return PrivacySanitizationResult(
             content=rewritten,
