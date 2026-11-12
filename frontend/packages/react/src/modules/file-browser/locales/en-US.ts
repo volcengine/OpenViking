@@ -1,12 +1,14 @@
 import type { ShellLabels } from '../file-browser-labels.js';
 
+export const stackedEmpty = 'Select a file above to preview it';
+
 const messages = {
   formatCharacterCount: (count) =>
     `${count.toLocaleString('en-US')} ${count === 1 ? 'character' : 'characters'}`,
   accessDenied: 'You do not have permission to view this node.',
   traverseOnly:
     'This directory can only be expanded to reach accessible children.',
-  systemDirectory: 'Select a file in this directory to preview its content.',
+  systemDirectory: 'No content',
   empty: 'Select a file on the left to preview it',
   error: 'Failed to load the directory',
   retry: 'Retry',
@@ -14,11 +16,16 @@ const messages = {
   searchPlaceholder: 'Search files ⌘+K...',
   searchTitle: 'Search files',
   searchAction: 'Search',
-  searchHint: 'Enter a query to search.',
+  searchHint: 'Type to search for files.',
   searchEmpty: 'No matching resources',
   searchFailed: 'Failed to run the search',
   loading: 'Loading…',
   searchLoading: 'Searching…',
+  formatSearchResults: (limit) => `Top ${limit} matches`,
+  searchDismiss: 'Esc to close',
+  searchPreview: 'Search result preview',
+  searchPreviewEmpty: 'No content to preview',
+  searchPreviewFailed: 'Could not load the preview',
   previewMode: 'Preview',
   sourceMode: 'Source',
   copyPath: 'Copy path',

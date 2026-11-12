@@ -15,6 +15,7 @@ import {
 } from './fs-model.js';
 import { isSystemUri } from './preview-policy.js';
 import { readDirectory } from './fs-read-directory.js';
+import { toSystemDirectoryTab } from './fs-system-directory-tab.js';
 import { createPreviewImageResolver } from './fs-preview-images.js';
 import { readFile } from './fs-read-file.js';
 import { abortError, resolveIsDirectory } from './fs-stat.js';
@@ -124,7 +125,6 @@ export function useFsPreview({
     // the whole preview area disappear and reappear, flashing on every switch.
     setTabs([loadingTab(uri, resourceType !== 'file')]);
     setActiveKey(uri);
-    setActiveKey(null);
     setError(null);
     setCharacterCount(undefined);
     const options = { ...requestOptions, signal: controller.signal };
@@ -145,18 +145,16 @@ export function useFsPreview({
           ? await resolveIsDirectory(client, uri, options)
           : resourceType === 'directory';
       if (controller.signal.aborted) throw abortError();
-      return isDir
-        ? {
-            summary: isSystemUri(uri)
-              ? { abstract: '', overview: '' }
-              : await readDirectory(client, uri, options),
-          }
-        : {
-            tab: await readFile(client, uri, options, openParent, () => {
-              if (!controller.signal.aborted)
-                setSaveGeneration((value) => value + 1);
-            }),
-          };
+      if (isDir)
+        return isSystemUri(uri)
+          ? { tab: toSystemDirectoryTab(uri, openParent) }
+          : { summary: await readDirectory(client, uri, options) };
+      return {
+        tab: await readFile(client, uri, options, openParent, () => {
+          if (!controller.signal.aborted)
+            setSaveGeneration((value) => value + 1);
+        }),
+      };
     })();
 
     // 成功也要复查是否已被取消：目录的两级摘要里，一级先回来、另一级还在路上
@@ -191,7 +189,7 @@ export function useFsPreview({
         setTabs([tab]);
         setActiveKey(tab.key);
         // 设计稿底部显示字符数；接口不返回行数与更新时间，先给字符数。
-        const body = tab.source.content;
+        const body = tab.kind === 'file' ? tab.source.content : undefined;
         setCharacterCount(typeof body === 'string' ? body.length : undefined);
       },
       (cause: unknown) => {
@@ -243,6 +241,11 @@ export function useFsPreview({
  * makes the component render its loading state rather than "empty file".
  */
 function loadingTab(uri: string, isDirectory: boolean): FilePreviewTab {
+  if (isDirectory && isSystemUri(uri))
+    return {
+      ...toSystemDirectoryTab(uri),
+      loading: true,
+    };
   if (isDirectory) {
     return {
       kind: 'directory',

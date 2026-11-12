@@ -1,4 +1,5 @@
-import { useState, type RefObject } from 'react';
+import { useId, useRef, useState, type RefObject } from 'react';
+import SearchIcon from '../../../../icons/svg/scope-switcher/search.svg?react';
 import { useOvClient } from '../../client/provider.js';
 import type { OvRequestOptions } from '../../client/types.js';
 import { Button } from '../../shared/components/button/button.js';
@@ -6,7 +7,11 @@ import { Input } from '../../shared/components/input/input.js';
 import { Modal } from '../../shared/components/modal/modal.js';
 import type { Locale } from '../../shared/locale.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
-import { useFsSearch } from './use-fs-search.js';
+import { FileBrowserSearchPreview } from './file-browser-search-preview.js';
+import { FileBrowserSearchResults } from './file-browser-search-results.js';
+import type { FsEntry } from './fs-model.js';
+import { FILE_SEARCH_LIMIT, useFsSearch } from './use-fs-search.js';
+import type { FileBrowserHandle } from './types.js';
 
 interface FileBrowserSearchProps {
   open: boolean;
@@ -16,13 +21,9 @@ interface FileBrowserSearchProps {
   text: ResolvedLabels;
   requestOptions?: OvRequestOptions;
   onClose: () => void;
+  onOpenResource: FileBrowserHandle['openResource'];
 }
 
-/**
- * TODO: 占位搜索弹窗，目前只提交关键词并展示原生接口结果。
- * 后续补齐筛选、分页、结果定位和快捷键；此视图仅供 FileBrowser 内部使用。
- * Placeholder: query submission and results only; richer search interactions follow.
- */
 export function FileBrowserSearch({
   open,
   rootUri,
@@ -31,22 +32,43 @@ export function FileBrowserSearch({
   text,
   requestOptions,
   onClose,
+  onOpenResource,
 }: FileBrowserSearchProps) {
   const client = useOvClient();
+  const listId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState('');
-  const [request, setRequest] = useState({ query: '', generation: 0 });
-  const search = useFsSearch({
+  const [composing, setComposing] = useState(false);
+  const [generation, setGeneration] = useState(0);
+  const [highlight, setHighlight] = useState<{
+    results: FsEntry[];
+    index: number;
+  }>();
+  const query = open && !composing ? draft.trim() : '';
+  const { results, loading, error } = useFsSearch({
     client,
-    query: open ? request.query : '',
+    query,
     targetUri: rootUri,
-    generation: request.generation,
+    generation,
     requestOptions,
   });
+  const activeIndex = results === highlight?.results ? highlight.index : 0;
+  const active = results?.[activeIndex];
   const close = () => {
     setDraft('');
-    setRequest({ query: '', generation: 0 });
+    setComposing(false);
+    setHighlight(undefined);
     onClose();
   };
+  const openResult = (uri: string) => {
+    close();
+    void onOpenResource(uri).catch(() => {});
+  };
+  const retry = () => {
+    inputRef.current?.focus();
+    setGeneration((value) => value + 1);
+  };
+
   return (
     <Modal
       open={open}
@@ -56,69 +78,114 @@ export function FileBrowserSearch({
       className="ov-file-browser-search"
       onClose={close}
     >
-      <h2 className="ov-file-browser-search__title">{text.searchTitle}</h2>
-      <search>
-        <form
-          className="ov-file-browser-search__form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            const query = draft.trim();
-            if (!query || !client || search.loading) return;
-            setRequest((current) => ({
-              query,
-              generation: current.generation + 1,
-            }));
-          }}
-        >
-          <Input
-            data-autofocus
-            required
-            type="search"
-            name="query"
-            aria-label={text.searchTitle}
-            placeholder={text.searchPlaceholder}
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-          />
-          <Button
-            type="primary"
-            htmlType="submit"
-            loading={search.loading}
-            disabled={!client}
+      <div className="ov-file-browser-search__layout">
+        <section className="ov-file-browser-search__panel">
+          <form
+            role="search"
+            aria-label={text.searchAction}
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (active) openResult(active.uri);
+              else if (error) retry();
+            }}
           >
-            {text.searchAction}
-          </Button>
-        </form>
-      </search>
-      <div
-        className="ov-file-browser-search__results"
-        aria-busy={search.loading}
-      >
-        {search.loading ? (
-          <p role="status">{text.searchLoading}</p>
-        ) : search.error ? (
-          <div role="alert" className="ov-file-browser-search__error">
-            <p>{text.searchFailed}</p>
-            <p>{search.error.message}</p>
+            <Input
+              ref={inputRef}
+              className="ov-file-browser-search__input"
+              data-autofocus
+              type="search"
+              role="combobox"
+              name="query"
+              aria-label={text.searchTitle}
+              aria-autocomplete="list"
+              aria-expanded={!!active}
+              aria-controls={active ? listId : undefined}
+              aria-activedescendant={
+                active ? `${listId}-${activeIndex}` : undefined
+              }
+              placeholder={text.searchTitle}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onCompositionStart={() => setComposing(true)}
+              onCompositionEnd={(event) => {
+                setDraft(event.currentTarget.value);
+                setComposing(false);
+              }}
+              prefix={<SearchIcon width={16} height={16} />}
+              suffix={
+                <button
+                  className="ov-file-browser-search__dismiss"
+                  type="button"
+                  aria-label={text.searchDismiss}
+                  onClick={close}
+                >
+                  <kbd>{text.searchDismiss}</kbd>
+                </button>
+              }
+              onKeyDown={(event) => {
+                if (composing || event.nativeEvent.isComposing) {
+                  if (event.key === 'Escape') event.stopPropagation();
+                  return;
+                }
+                if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp')
+                  return;
+                if (!results?.length) return;
+                event.preventDefault();
+                const step = event.key === 'ArrowDown' ? 1 : -1;
+                const index =
+                  (activeIndex + step + results.length) % results.length;
+                setHighlight({ results, index });
+                inputRef.current?.ownerDocument
+                  .getElementById(`${listId}-${index}`)
+                  ?.scrollIntoView?.({ block: 'nearest' });
+              }}
+            />
+          </form>
+          <div className="ov-file-browser-search__results" aria-busy={loading}>
+            {loading ? (
+              <p className="ov-file-browser-search__status" role="status">
+                {text.searchLoading}
+              </p>
+            ) : error ? (
+              <div className="ov-file-browser-search__status">
+                <div className="ov-file-browser-search__error" role="alert">
+                  <p>{text.searchFailed}</p>
+                  <p>{error.message}</p>
+                </div>
+                <Button size="small" onClick={retry}>
+                  {text.retry}
+                </Button>
+              </div>
+            ) : results?.length ? (
+              <>
+                <p className="ov-file-browser-search__count" role="status">
+                  {text.formatSearchResults(FILE_SEARCH_LIMIT)}
+                </p>
+                <FileBrowserSearchResults
+                  id={listId}
+                  label={text.searchTitle}
+                  entries={results}
+                  query={query}
+                  activeIndex={activeIndex}
+                  onHighlight={(index) => setHighlight({ results, index })}
+                  onOpen={openResult}
+                />
+              </>
+            ) : (
+              <p className="ov-file-browser-search__status" role="status">
+                {results ? text.searchEmpty : text.searchHint}
+              </p>
+            )}
           </div>
-        ) : search.results === null ? (
-          <p role="status">{text.searchHint}</p>
-        ) : search.results.length === 0 ? (
-          <p role="status">{text.searchEmpty}</p>
-        ) : (
-          <ul className="ov-file-browser-search__list">
-            {search.results.map((entry) => (
-              <li className="ov-file-browser-search__result" key={entry.uri}>
-                <span className="ov-file-browser-search__uri">{entry.uri}</span>
-                {entry.abstract ? (
-                  <p className="ov-file-browser-search__summary">
-                    {entry.abstract}
-                  </p>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        )}
+        </section>
+        {active ? (
+          <FileBrowserSearchPreview
+            client={client}
+            entry={active}
+            requestOptions={requestOptions}
+            text={text}
+          />
+        ) : null}
       </div>
     </Modal>
   );

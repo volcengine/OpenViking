@@ -1,4 +1,6 @@
 import { Button } from '../../shared/components/button/button.js';
+import type { Ref } from 'react';
+import type { FileTreeHandle } from '../../components/file-tree/index.js';
 import type { Locale } from '../../shared/locale.js';
 import { dashboardLabels as resolveDashboardLabels } from './dashboard-labels.js';
 
@@ -28,6 +30,7 @@ import type { FileBrowserApi, FileBrowserDashboardLabels } from './types.js';
  * truncating names into ellipses.
  */
 export interface FileBrowserTreePaneProps {
+  treeRef?: Ref<FileTreeHandle>;
   entries: Pick<
     FileBrowserEntriesProps,
     'agentConnect' | 'onImportResources' | 'renderImportResources' | 'labels'
@@ -45,6 +48,7 @@ export interface FileBrowserTreePaneProps {
 }
 
 export function FileBrowserTreePane({
+  treeRef,
   entries,
   locale,
   dashboardLabels,
@@ -93,6 +97,7 @@ export function FileBrowserTreePane({
           </div>
         ) : null}
         <FileTree
+          ref={treeRef}
           search={false}
           refresh={false}
           locale={locale}

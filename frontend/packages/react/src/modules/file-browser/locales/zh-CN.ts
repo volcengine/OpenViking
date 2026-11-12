@@ -1,10 +1,12 @@
 import type { ShellLabels } from '../file-browser-labels.js';
 
+export const stackedEmpty = '从上方选中一个文件预览';
+
 const messages = {
   formatCharacterCount: (count) => `${count.toLocaleString('zh-CN')} 个字符`,
   accessDenied: '无权查看此节点。',
   traverseOnly: '此目录仅可展开以访问有权限的子节点。',
-  systemDirectory: '选择此目录中的文件以预览内容。',
+  systemDirectory: '暂无内容',
   empty: '从左侧选中一个文件预览',
   error: '目录加载失败',
   retry: '重试',
@@ -12,11 +14,16 @@ const messages = {
   searchPlaceholder: '搜索文件 ⌘+K...',
   searchTitle: '搜索文件',
   searchAction: '搜索',
-  searchHint: '输入关键词后搜索。',
+  searchHint: '输入关键词搜索文件。',
   searchEmpty: '没有匹配的资源',
   searchFailed: '搜索失败',
   loading: '加载中…',
   searchLoading: '搜索中…',
+  formatSearchResults: (limit) => `TOP ${limit} 相似度的结果`,
+  searchDismiss: 'Esc 退出',
+  searchPreview: '搜索结果预览',
+  searchPreviewEmpty: '暂无可预览内容',
+  searchPreviewFailed: '预览加载失败',
   previewMode: '预览',
   sourceMode: '源码',
   copyPath: '复制路径',

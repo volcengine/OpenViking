@@ -154,6 +154,23 @@
   line-height: 24px;
 }
 
+/* Keep the preview visible when the tree and detail cannot fit side by side. */
+.ov-file-browser--stacked {
+  flex-direction: column;
+}
+
+.ov-file-browser--stacked > .ov-file-browser__tree {
+  flex: 0 1 40%;
+  width: 100%;
+  border-block-end: 1px solid
+    var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+}
+
+.ov-file-browser--stacked .ov-file-browser__empty {
+  gap: 12px;
+  padding: 12px;
+}
+
 .ov-file-browser__hint {
   display: flex;
   flex: 1;

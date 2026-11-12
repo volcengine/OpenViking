@@ -1,21 +1,28 @@
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
-import { useCallback, useMemo, useState } from 'react';
+import { forwardRef, useCallback, useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 
 import { ResizableHandle } from '../../shared/components/resizable/index.js';
 import { FileBrowserPreviewPane } from './file-browser-preview-pane.js';
 import {
+  SIDE_BY_SIDE_MIN_WIDTH,
   TREE_DEFAULT_WIDTH,
   TREE_MIN_WIDTH,
   resolveTreeMaxWidth,
 } from './file-browser-layout.js';
 import { FileBrowserTreePane } from './file-browser-tree-pane.js';
 import { FileBrowserSearch } from './file-browser-search.js';
+import { useFileBrowserSearchShortcut } from './use-file-browser-search-shortcut.js';
 import { resolveLabels, resolvePreviewLabels } from './file-browser-labels.js';
 import { useContainerWidth } from './use-container-width.js';
 import { useFileBrowser } from './use-file-browser.js';
 import { useFileBrowserAcl } from './use-file-browser-acl.js';
-import type { FileBrowserProps } from './types.js';
+import { useFileBrowserHandle } from './use-file-browser-handle.js';
+import type {
+  FileBrowserComponent,
+  FileBrowserHandle,
+  FileBrowserProps,
+} from './types.js';
 
 export type {
   FileBrowserActions,
@@ -36,28 +43,34 @@ export type {
  * tree; loading and coordination live in {@link useFileBrowser}, and this only
  * assembles the view.
  */
-export function FileBrowser({
-  uri,
-  defaultUri,
-  rootUri = 'viking://',
-  defaultExpandedUri,
-  locale: localeProp,
-  agentConnect,
-  dashboardKinds,
-  renderDashboard,
-  acl,
-  readOnly,
-  previewActions,
-  onUriChange,
-  onImportResources,
-  renderImportResources,
-  previewSlots,
-  labels,
-  requestOptions,
-  className,
-  style,
-  ...rest
-}: FileBrowserProps) {
+export const FileBrowser: FileBrowserComponent = forwardRef<
+  FileBrowserHandle,
+  FileBrowserProps
+>(function FileBrowser(
+  {
+    uri,
+    defaultUri,
+    rootUri = 'viking://',
+    defaultExpandedUri,
+    locale: localeProp,
+    agentConnect,
+    dashboardKinds,
+    renderDashboard,
+    acl,
+    readOnly,
+    previewActions,
+    onUriChange,
+    onImportResources,
+    renderImportResources,
+    previewSlots,
+    labels,
+    requestOptions,
+    className,
+    style,
+    ...rest
+  }: FileBrowserProps,
+  ref,
+) {
   const locale = useLocale(localeProp);
   const [searchOpen, setSearchOpen] = useState(false);
   const [internalUri, setInternalUri] = useState<string | null>(
@@ -75,9 +88,11 @@ export function FileBrowser({
   // and there is no "deselect" interaction — so no separate `null` branch is needed.
   const isControlled = uri !== undefined;
   const currentUri = isControlled ? uri : internalUri;
-  const text = resolveLabels(labels, locale);
   const { ref: layoutRef, width: layoutWidth } =
     useContainerWidth<HTMLDivElement>();
+  const stacked = layoutWidth > 0 && layoutWidth < SIDE_BY_SIDE_MIN_WIDTH;
+  const text = resolveLabels(labels, locale, stacked);
+  useFileBrowserSearchShortcut(layoutRef, searchOpen, setSearchOpen);
 
   // 上限随容器变化：宿主把整个模块塞进窄栏时，树不能继续按 520px 抢地方。当前
   // 宽度再夹一次而不是丢掉，容器重新变宽时树会回到拖动过的位置。
@@ -147,13 +162,20 @@ export function FileBrowser({
     requestOptions,
     refresh: browser.actions.refresh,
   });
+  const navigation = useFileBrowserHandle(browser, ref);
 
   return (
     <LocaleProvider locale={locale}>
       <div
         {...rest}
         ref={layoutRef}
-        className={['ov-file-browser', className].filter(Boolean).join(' ')}
+        className={[
+          'ov-file-browser',
+          stacked && 'ov-file-browser--stacked',
+          className,
+        ]
+          .filter(Boolean)
+          .join(' ')}
         style={
           {
             ...style,
@@ -166,6 +188,7 @@ export function FileBrowser({
       >
         <div className="ov-file-browser__tree">
           <FileBrowserTreePane
+            treeRef={navigation.treeRef}
             rootUri={rootUri}
             entries={{
               agentConnect,
@@ -184,14 +207,16 @@ export function FileBrowser({
           />
         </div>
 
-        <ResizableHandle
-          label={text.resizeTree}
-          min={TREE_MIN_WIDTH}
-          max={treeMaxWidth}
-          value={treeWidth}
-          onResize={setPreferredTreeWidth}
-          className="ov-file-browser__resizer"
-        />
+        {!stacked ? (
+          <ResizableHandle
+            label={text.resizeTree}
+            min={TREE_MIN_WIDTH}
+            max={treeMaxWidth}
+            value={treeWidth}
+            onResize={setPreferredTreeWidth}
+            className="ov-file-browser__resizer"
+          />
+        ) : null}
 
         <FileBrowserPreviewPane
           browser={browser}
@@ -215,7 +240,8 @@ export function FileBrowser({
         text={text}
         requestOptions={requestOptions}
         onClose={() => setSearchOpen(false)}
+        onOpenResource={navigation.openResource}
       />
     </LocaleProvider>
   );
-}
+});

@@ -1,36 +1,43 @@
 import type { FsEntry } from './fs-model.js';
 
-/** 语义搜索返回的分组结果。Grouped results of a semantic search. */
-export interface FindResult {
-  memories?: Array<{ uri?: string; abstract?: string }>;
-  resources?: Array<{ uri?: string; abstract?: string }>;
-  skills?: Array<{ uri?: string; abstract?: string }>;
+interface FindMatch {
+  uri?: string;
+  abstract?: string;
+  score?: number;
 }
 
-/**
- * 把分组结果合并成一个按 URI 去重的列表。搜索视图只需要「跳到哪个资源」，类别
- * 分组对使用者没有意义。
- *
- * Merges the grouped result into one list deduplicated by URI: the search view
- * only needs "which resource to jump to", so the category split adds nothing.
- */
+/** Grouped matches from the semantic search endpoint. */
+export interface FindResult {
+  memories?: FindMatch[];
+  resources?: FindMatch[];
+  skills?: FindMatch[];
+}
+
+/** Rank across groups before deduplicating, preserving order for scoreless adapters. */
 export function mergeFindResult(
   result: FindResult | null | undefined,
 ): FsEntry[] {
+  const score = (match: FindMatch) =>
+    typeof match.score === 'number' && Number.isFinite(match.score)
+      ? match.score
+      : -Infinity;
+  const matches = [result?.memories, result?.resources, result?.skills]
+    .flatMap((group) => group ?? [])
+    .sort((left, right) => {
+      const a = score(left),
+        b = score(right);
+      return a === b ? 0 : b > a ? 1 : -1;
+    });
   const seen = new Set<string>();
   const entries: FsEntry[] = [];
-
-  for (const group of [result?.memories, result?.resources, result?.skills]) {
-    for (const item of group ?? []) {
-      const uri = item?.uri;
-      if (!uri || seen.has(uri)) continue;
-      seen.add(uri);
-      entries.push({
-        uri,
-        isDir: false,
-        abstract: item.abstract?.trim() || undefined,
-      });
-    }
+  for (const match of matches) {
+    if (!match.uri || seen.has(match.uri)) continue;
+    seen.add(match.uri);
+    entries.push({
+      uri: match.uri,
+      isDir: false,
+      abstract: match.abstract?.trim() || undefined,
+    });
   }
   return entries;
 }

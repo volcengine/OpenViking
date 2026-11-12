@@ -320,12 +320,14 @@ html.dark .ov-textarea {
   --ov-ui-connect-notice-default: var(--ov-ui-text-2-default);
 }
 
-.ov-file-preview {
+.ov-file-preview,
+.ov-file-browser-search {
   --ov-ui-preview-backdrop-default: #f8f8f8;
   --ov-ui-preview-dot-default: rgb(0 0 0 / 8%);
 }
 
-html.dark .ov-file-preview {
+html.dark .ov-file-preview,
+html.dark .ov-file-browser-search {
   --ov-ui-preview-backdrop-default: var(--ov-ui-bg-4-default);
   --ov-ui-preview-dot-default: rgb(255 255 255 / 12%);
 }

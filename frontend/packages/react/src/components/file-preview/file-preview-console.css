@@ -279,6 +279,10 @@
   background: var(--ov-ui-color-bg-4, var(--ov-ui-bg-4-default));
 }
 
+.ov-file-preview__viewer--source .ark-agentic-file-viewer-code {
+  --code-bg: var(--ov-ui-color-bg-4, var(--ov-ui-bg-4-default));
+}
+
 .ov-file-preview__toolbar-button.ov-button {
   border-radius: 6px;
 }

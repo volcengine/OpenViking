@@ -14,11 +14,26 @@ let config = {
   auto_update: false,
   update_schedule: null,
 };
+const SYSTEM = 'viking://system';
+const COMPILE = `${SYSTEM}/compile`;
+const EXAMPLE_SKILLS = `${COMPILE}/example-skills`;
+const systemDirectories = new Map([
+  [SYSTEM, [COMPILE]],
+  [COMPILE, [EXAMPLE_SKILLS]],
+  [EXAMPLE_SKILLS, []],
+]);
+
 /** Fictional native API responses; package bytes are demo text, not an actual backup. */
 export function nativePreviewDemoResponse(
   url: URL,
   init?: RequestInit,
 ): Response | undefined {
+  const uri = url.searchParams.get('uri') ?? '';
+  const children = systemDirectories.get(uri);
+  if (children && url.pathname === '/api/v1/fs/ls')
+    return ok(children.map((child) => ({ uri: child, isDir: true })));
+  if (children && url.pathname === '/api/v1/fs/stat')
+    return ok({ uri, isDir: true });
   const body = typeof init?.body === 'string' ? init.body : '{}';
   switch (url.pathname) {
     case '/api/v1/content/download':
