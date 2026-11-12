@@ -151,3 +151,20 @@ test('the owner is asked only for user scopes the app has, unless it has none of
   assert.deepEqual(grantedUserScopes(scopes, granted([])), scopes.user);
   assert.deepEqual(grantedUserScopes(scopes, null), scopes.user, 'unread, every scope is asked for');
 });
+
+test('an update with what the app lacks asks only for that', async () => {
+  const seen = [];
+  const register = async (options) => { seen.push(options); return { client_id: 'cli_old', client_secret: 's' }; };
+  const lacking = { scopes: { tenant: ['im:message.group_msg'], user: [] }, events: ['im.message.receive_v1'], callbacks: [] };
+  await scanApp({ mode: 'update', appId: 'cli_old', scopes: SCOPES, missing: lacking, onQRCode() {}, register });
+  assert.deepEqual(seen[0].addons, {
+    scopes: { tenant: ['im:message.group_msg'], user: [] }, events: { items: { tenant: ['im.message.receive_v1'] } },
+  });
+  // Events the online version could not be read for are all asked.
+  await scanApp({ mode: 'update', appId: 'cli_old', scopes: SCOPES, onQRCode() {}, register,
+    missing: { scopes: { tenant: [], user: [] }, events: null, callbacks: ['card.action.trigger'] } });
+  assert.deepEqual(seen[1].addons, { events: { items: { tenant: EVENTS } }, callbacks: { items: CALLBACKS } });
+  // Only an update narrows: a create still asks for everything.
+  await scanApp({ mode: 'create', scopes: SCOPES, missing: lacking, onQRCode() {}, register });
+  assert.deepEqual(seen[2].addons, { scopes: SCOPES, events: { items: { tenant: EVENTS } }, callbacks: { items: CALLBACKS } });
+});

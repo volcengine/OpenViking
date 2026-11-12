@@ -846,7 +846,8 @@ const scanTitles = {
 // While a create or select waits, m switches to typing the App ID and Secret;
 // while an update waits, s skips it and resolves with null.
 export async function registerApp({
-  plan, prompter, scopes, debug, register = null, canGoBack = false, mode = 'create', appId = null, fetchImpl = globalThis.fetch,
+  plan, prompter, scopes, debug, register = null, canGoBack = false, mode = 'create', appId = null, missing = null,
+  fetchImpl = globalThis.fetch,
 }) {
   const controller = new AbortController();
   let scan = null;
@@ -860,6 +861,7 @@ export async function registerApp({
     name: plan.displayName,
     description: t('OpenViking SuperAgent：把本机的 coding agent 接进飞书', 'OpenViking SuperAgent: the coding agent on your computer, in Feishu/Lark'),
     scopes,
+    missing,
     signal: controller.signal,
     ...(register ? { register } : {}),
     onQRCode: ({ url, expiresIn }) => {
@@ -1085,7 +1087,8 @@ export async function completeLarkApp({ agent, prompter, larkCli, scopes = larkS
     }
   };
   const inspected = await read();
-  if (!inspected || !lacksAny(reportApp(prompter, scopes, inspected))) return { inspected, updated: false };
+  const missing = inspected ? reportApp(prompter, scopes, inspected) : null;
+  if (!missing || !lacksAny(missing)) return { inspected, updated: false };
   // The confirm page withdraws a version under review before publishing its
   // own, and the approval starts over: not by default.
   if (inspected.pendingReview) {
@@ -1098,7 +1101,7 @@ export async function completeLarkApp({ agent, prompter, larkCli, scopes = larkS
   }
   let updated;
   try {
-    updated = await registerApp({ plan: agent, prompter, scopes, mode: 'update', appId: inspected.appId, ...(register ? { register } : {}) });
+    updated = await registerApp({ plan: agent, prompter, scopes, mode: 'update', appId: inspected.appId, missing, ...(register ? { register } : {}) });
   } catch (error) {
     if (!(error instanceof LarkRegistrationError)) throw error;
     prompter.warn(t(`应用没有更新（${error.code}）：${error.message}`, `The app was not updated (${error.code}): ${error.message}`));
