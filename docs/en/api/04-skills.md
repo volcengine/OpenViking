@@ -708,9 +708,9 @@ Missing names/descriptions and invalid YAML produce errors. Directory/name misma
 | `timeout` | `null` | Deprecated: accepted and ignored |
 | `telemetry` | `false` | Telemetry configuration |
 
-Supply new content/an upload, or set `from_source=true`. The new name must match `skill_name` in the URL; update is neither rename nor a partial patch. The server parses and checks the new package before backing up and replacing the old one, and attempts restoration on synchronous failure. Include all auxiliary files that should remain in the replacement package.
+Supply new content/an upload, or set `from_source=true`. The new name must match `skill_name` in the URL; update is neither rename nor a partial patch. The server parses and checks the new package before directly replacing the old one, without creating a package backup. Clearing old assets and index records keeps `SKILL.md` and `.source.json` until they are overwritten in place, allowing failed updates to be retried. Include all auxiliary files that should remain in the replacement package.
 
-Background processing starts after the update's files, privacy configuration, and task setup are ready. When an update fails or is cancelled while waiting, it cancels that update's summary and indexing work, waits for started writes to exit, and restores the original files, index, and privacy configuration. Restoration failures are reported. Background failures after a successful `wait=false` response do not trigger restoration.
+Background processing starts after the update's files, privacy configuration, and task setup are ready. When an update fails or is cancelled while waiting, it cancels that update's summary and indexing work, waits for started writes to exit, and returns the error. Files, index records, and privacy configuration keep their state at failure; the old version is not restored. Background failures after a successful `wait=false` response likewise do not roll back the update.
 
 **Python SDK**
 
