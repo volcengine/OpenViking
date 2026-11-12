@@ -12,9 +12,20 @@ globalThis.MutationObserver = window.MutationObserver;
 
 test('a portalled tour inherits Provider changes without restarting its target lookup', async () => {
   let calls = 0;
+  const anchor = document.createElement('div');
+  document.body.append(anchor);
+  anchor.scrollIntoView = () => {};
+  anchor.getBoundingClientRect = () => ({
+    left: 10,
+    top: 10,
+    right: 110,
+    bottom: 42,
+    width: 100,
+    height: 32,
+  });
   const locateTarget = async () => {
     calls++;
-    return null;
+    return anchor;
   };
   const steps = [
     {
@@ -50,6 +61,7 @@ test('a portalled tour inherits Provider changes without restarting its target l
     assert.equal(calls, 1);
   } finally {
     await view.unmount();
+    anchor.remove();
   }
 });
 

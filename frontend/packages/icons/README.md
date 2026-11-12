@@ -2,6 +2,10 @@
 
 React imports these SVG files directly during its build.
 
+- `svg/tui/cli-title.svg` — the first-party OpenViking CLI title artwork used by
+  the Volcengine console. The 245 × 40 viewBox, paths and cursor are unchanged;
+  fills use `currentColor` for the host theme. Tui bundles it inline.
+
 - `svg/tui/copy.svg` — an original 16 × 16 outlined copy glyph drawn for this
   workspace. It inherits `currentColor`, follows the repository license and is
   bundled inline by Tui. The success state reuses `svg/scope-switcher/check.svg`.
@@ -79,3 +83,9 @@ React imports these SVG files directly during its build.
   [OpenViking Console team experience introduction](https://www.figma.com/design/ecpd1ZGHKRYibm1ODKEpM6/OpenViking-Console?node-id=10168-334211).
   The documentation demo uses `DirectoryTourFolderIcon` and `ArrowUpRightIcon`
   from `@openviking/react/icons`; the design's paths and colors are unchanged. They follow this repository's license.
+
+- `svg/file-preview/` — toolbar, menu and warning artwork from the user-provided
+  [personal workbench and open-source design](https://www.figma.com/design/ecpd1ZGHKRYibm1ODKEpM6/OpenViking-Console?node-id=10295-379152),
+  menu `10438:19513` and deletion dialog `10295:380365`. Paths and viewBoxes are
+  retained; paints use `currentColor` for host theming. They follow the repository
+  license and are bundled inline without a private icon runtime.

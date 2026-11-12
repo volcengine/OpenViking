@@ -37,9 +37,10 @@ const mainstream = [
   { id: 'kimi-code', Icon: KimiCodeIcon },
 ] as const;
 
+const defaultOverseasAgents = new Set(['codex', 'claude-code']);
+
 const overseasAgents = new Set([
-  'codex',
-  'claude-code',
+  ...defaultOverseasAgents,
   'cursor',
   'openclaw',
   'hermes',
@@ -56,10 +57,16 @@ const custom = [
 
 export function getAgentConnectDesign(
   locale: AgentConnectLocale,
-  showOverseasTag = false,
+  showOverseasTag?: boolean,
 ) {
   const content = getAgentConnectContent(locale);
   const labels = resolveAgentConnectLabels(locale);
+  const taggedAgents =
+    showOverseasTag === undefined
+      ? defaultOverseasAgents
+      : showOverseasTag
+        ? overseasAgents
+        : undefined;
   return {
     tabs: [
       { id: 'mainstream', label: labels.mainstream },
@@ -70,9 +77,7 @@ export function getAgentConnectDesign(
       ...content[item.id],
       tags: [
         ...content[item.id].tags,
-        ...(showOverseasTag && overseasAgents.has(item.id)
-          ? [labels.overseas]
-          : []),
+        ...(taggedAgents?.has(item.id) ? [labels.overseas] : []),
       ],
     })),
     custom: custom.map((item) => ({ ...item, ...content[item.id] })),

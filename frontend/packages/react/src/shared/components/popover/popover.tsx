@@ -5,6 +5,7 @@ import {
   useId,
   useRef,
   useState,
+  version,
 } from 'react';
 import { createPortal } from 'react-dom';
 
@@ -66,6 +67,7 @@ export function Popover({
   children,
   content,
   placement = 'right',
+  alignment = 'center',
   anchorRef,
   trigger = 'hover',
   delay = 300,
@@ -89,6 +91,7 @@ export function Popover({
     anchorRef ?? triggerRef,
     surfaceNode,
     placement,
+    alignment,
   );
 
   const change = useCallback(
@@ -167,7 +170,11 @@ export function Popover({
 
   const child = children as React.ReactElement<Record<string, unknown>>;
   const childProps = child.props;
-  const childRef = (child as unknown as { ref?: React.Ref<HTMLElement> }).ref;
+  const childRef = (
+    Number.parseInt(version, 10) >= 19
+      ? childProps.ref
+      : (child as unknown as { ref?: React.Ref<HTMLElement> }).ref
+  ) as React.Ref<HTMLElement> | undefined;
   const mergedRef = useMergedRef(childRef, triggerRef);
 
   // 触发元素声明过 `aria-expanded` 就一律不动它：文件树的行用它表达「目录展开

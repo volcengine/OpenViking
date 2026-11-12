@@ -44,16 +44,24 @@
   padding: 8px 8px 12px;
 }
 
-/*
- * 分隔条紧贴左栏，把原来那根 0.5px 描边换成可拖动的命中区：描边留着会与分隔条
- * 自己的竖线重叠成两根。左右各留 4px 内缩，让命中区不压住树里的行尾内容。
- *
- * The divider hugs the left column and replaces the 0.5px border that used to sit
- * there — keeping both would show two vertical lines. A 4px inset on each side
- * keeps the hit area off the row-end content inside the tree.
- */
+/* Only the line participates in layout; the hit area overlaps each pane's inset. */
 .ov-file-browser__resizer {
-  margin: 0 4px;
+  position: relative;
+  z-index: 1;
+  width: var(--ov-ui-resizable-handle-line);
+}
+
+.ov-file-browser__resizer .ov-resizable-handle__line {
+  flex: none;
+}
+
+.ov-file-browser__resizer::before {
+  position: absolute;
+  inset-block: 0;
+  inset-inline: calc(
+    (var(--ov-ui-resizable-handle-line) - var(--ov-ui-resizable-handle-hit)) / 2
+  );
+  content: '';
 }
 
 /* 搜索行：搜索框形态的入口 + 内嵌高级筛选 + 独立刷新，对齐设计稿的三段式。 */
@@ -205,6 +213,7 @@
 
 /* ── 右栏：详情 ─────────────────────────────────────────────────── */
 
+.ov-file-browser__preview-pane,
 .ov-file-browser__detail {
   display: flex;
   flex: 1;
@@ -214,17 +223,20 @@
 }
 
 /* 空状态：插画在上、提示在下，整体居中。 */
-/* The empty state: artwork above, hint below, centred as a whole. */
+/* The design places the artwork and hint 8px left and 17px above centre. */
 .ov-file-browser__empty {
   display: flex;
   flex: 1;
   min-height: 0;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 16px;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #787c91));
+  justify-content: safe center;
+  gap: 24px;
+  box-sizing: border-box;
+  padding: 16px 32px 50px 16px;
+  overflow: auto;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  color: var(--ov-ui-color-text-3, var(--ov-ui-empty-description-default));
   font: inherit;
   text-align: center;
 }
@@ -240,7 +252,8 @@
  */
 .ov-file-browser__empty-art {
   display: block;
-  width: 258px;
+  flex: none;
+  width: 290px;
   max-width: 100%;
   height: auto;
 }
@@ -253,9 +266,8 @@
 
 .ov-file-browser__empty-label {
   margin: 0;
-  font-size: 13px;
-  line-height: 22px;
-  letter-spacing: 0.039px;
+  font-size: 16px;
+  line-height: 24px;
 }
 
 .ov-file-browser__hint {
@@ -442,4 +454,8 @@
 .ov-file-browser__dashboard:focus-visible {
   outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
   outline-offset: 1px;
+}
+
+.ov-file-browser__preview-action--danger {
+  color: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
 }

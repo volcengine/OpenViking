@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { DirectoryTourProps, DirectoryTourStep } from './types.js';
 import { useTourAnchor } from './use-tour-anchor.js';
@@ -19,20 +19,35 @@ export function DirectoryTour(props: DirectoryTourProps) {
 }
 
 function TourSession(props: DirectoryTourProps) {
+  const { steps, currentStep, onComplete, onStepChange } = props;
   const [index, setIndex] = useState(props.defaultStep ?? 0);
+  const [completed, setCompleted] = useState(false);
   const skipped = useRef(new Set<string>());
-  const current = props.currentStep ?? index;
-  const step = props.steps[current];
-  if (!step) return null;
-  const advance = (skip: boolean) => {
-    if (skip) skipped.current.add(step.id);
-    if (current === props.steps.length - 1) {
-      props.onComplete?.({ skippedStepIds: [...skipped.current] });
-    } else {
-      if (props.currentStep === undefined) setIndex(current + 1);
-      props.onStepChange?.(current + 1);
-    }
-  };
+  const current = currentStep ?? index;
+  const step = steps[current];
+  const advance = useCallback(
+    (skip: boolean) => {
+      if (!step || completed) return;
+      if (skip) skipped.current.add(step.id);
+      if (current === steps.length - 1) {
+        setCompleted(true);
+        onComplete?.({ skippedStepIds: [...skipped.current] });
+      } else {
+        if (currentStep === undefined) setIndex(current + 1);
+        onStepChange?.(current + 1);
+      }
+    },
+    [
+      step,
+      completed,
+      current,
+      steps.length,
+      currentStep,
+      onComplete,
+      onStepChange,
+    ],
+  );
+  if (!step || completed) return null;
   return (
     <TourStep
       key={step.id}
@@ -64,13 +79,12 @@ function TourStep({
   advance: (skip: boolean) => void;
 }) {
   const locale = useLocale(localeProp);
-  const [attempt, retry] = useState(0);
+  const advanced = useRef(false);
   const [surface, setSurface] = useState<HTMLDivElement | null>(null);
   const { anchor, elements, failed } = useTourAnchor(
     step.target,
     locateTarget,
     locateTimeout,
-    attempt,
   );
   const position = useTourPosition(anchor, surface, placement, elements);
   useTourTheme(anchor, surface);
@@ -97,13 +111,21 @@ function TourStep({
       if (previous?.isConnected) previous.focus?.({ preventScroll: true });
     };
   }, []);
-  const visible = position?.visible;
+  const unavailable = failed || Boolean(position?.missing);
+  const visible = Boolean(anchor && !unavailable && position?.visible);
+  // DOM lookup/removal observers report external anchor availability after commit.
+  // Notify the host once per keyed step; unmount discards this guard.
+  useEffect(() => {
+    if (unavailable && !advanced.current) {
+      advanced.current = true;
+      advance(true);
+    }
+  }, [unavailable, advance]);
   // Focus the non-modal dialog once the native top-layer surface has committed;
   // the browser owns focus, and no timers or subscriptions remain to clean up.
   useEffect(() => {
     if (surface && visible) surface.focus({ preventScroll: true });
   }, [surface, visible]);
-  const unavailable = failed || position?.missing;
   const locating = !anchor && !failed;
   return createPortal(
     <div
@@ -118,7 +140,7 @@ function TourStep({
             : undefined,
           top: position?.top ?? 0,
           left: position?.left ?? 0,
-          visibility: position?.visible ? 'visible' : 'hidden',
+          visibility: visible ? 'visible' : 'hidden',
         } as CSSProperties
       }
     >
@@ -160,12 +182,9 @@ function TourStep({
           labels={labels}
           titleId={titleId}
           bodyId={bodyId}
-          locating={locating}
-          unavailable={Boolean(unavailable)}
           onClose={onClose}
-          retry={() => retry((value) => value + 1)}
-          advance={advance}
-          renderContent={renderContent}
+          advance={() => advance(false)}
+          renderContent={anchor && !unavailable ? renderContent : undefined}
         />
       </div>
     </div>,

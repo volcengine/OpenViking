@@ -50,7 +50,7 @@ Refresh shows a hint on hover or keyboard focus. Top-level `loading`, `refresh.l
 
 ## How rows work
 
-The tree never inspects parent/child relationships. The host flattens its own state into an ordered list:
+The host flattens its own state into an ordered list:
 
 - `entry` — a directory or file.
 - `loading` — a children area that is still loading.
@@ -59,6 +59,8 @@ The tree never inspects parent/child relationships. The host flattens its own st
 - `empty` — an expanded directory with no children.
 
 Emit only the ones your data source needs. A host that returns all children at once never emits `load-more`.
+
+Rows keep their input order by default. For a context root, use `rootOrder="context"` to order root directories by URI namespace: `user → session → agent → resources`, including singular and plural aliases. Other directories keep their relative order after those groups. An expanded branch moves with its root; child order and the position of root-level state rows, such as pagination, are preserved.
 
 Rows size to their content rather than being squeezed into the container width: names render in full and the container scrolls sideways. Deep indentation gets its space the same way, so deep nodes never squeeze each other. The description is capped at 200px and truncates as needed — it is supplementary, and one long description would drag a row hundreds of pixels wide, making horizontal scrolling harder rather than easier.
 
@@ -144,6 +146,7 @@ treeRef.current?.scrollToRow('resources', { block: 'center' });
 | ------------------------- | ------------------------------------------------------ | ----------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `locale`                  | `'zh-CN' \| 'en-US'`                                   | Inherited / en-US | Built-in Chinese and English copy.                                                                               |
 | `rows`                    | `readonly FileTreeRow[]`                               | Required          | Visible rows in render order.                                                                                    |
+| `rootOrder`               | `'input' \| 'context'`                                 | `'input'`         | Root directory order; `context` uses the console's context order.                                                |
 | `operations`              | `FileTreeOperations`                                   | —                 | Asynchronous operation capabilities; missing methods disable their operations.                                   |
 | `selectedId`              | `string \| null`                                       | —                 | Selected row id, owned by the host.                                                                              |
 | `isReady`                 | `boolean`                                              | `true`            | Whether the first load finished.                                                                                 |

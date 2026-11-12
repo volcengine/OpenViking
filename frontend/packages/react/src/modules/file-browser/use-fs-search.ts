@@ -19,7 +19,7 @@ import {
 /** 模式到接口路径。`find`/`search` 语义检索，`grep`/`glob` 模式匹配。 */
 const SEARCH_PATHS: Record<SearchMode, string> = {
   find: OV_PATHS.searchFind,
-  search: OV_PATHS.searchSearch,
+  search: OV_PATHS.searchQuery,
   grep: OV_PATHS.searchGrep,
   glob: OV_PATHS.searchGlob,
 };

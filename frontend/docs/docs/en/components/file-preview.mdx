@@ -4,7 +4,9 @@ Optional `locale: 'zh-CN' | 'en-US'` overrides the nearest module or Provider; w
 
 A tabbed file preview. The host supplies the content and file name; the component handles format detection, the tab row, the content header and the body.
 
-Bodies use lazily loaded FileViewerCore adapters for Markdown, images, code, tables, PDF, Office and media, inside the console-style tab, breadcrumb and footer shell.
+Images and videos render independently through native image/video elements; they do not initialize FileViewer. Other supported formats use lazily loaded FileViewerCore adapters inside the console-style tab, breadcrumb and footer shell. Image and video previews have no source view or built-in text editing.
+
+Leading YAML front matter appears as a code block in Markdown preview. Source, editing, saving and copying still use the original text. Save and Cancel appear beside the view switch in the header during editing.
 
 ## Basic usage
 
@@ -16,6 +18,8 @@ Demo actions use internal documentation controls; use your host application’s 
 
 ```
 
+Native image/video previews return `null` from `getViewerHandle()`; playback and image enlargement use their own controls.
+
 ## Content levels and images
 
 ```tsx file="../../_demos/file-preview-console.tsx" preview
@@ -26,11 +30,11 @@ A file tab may supply `levels`, each with `key`, `label`, `source` and optional 
 
 The host loads each level: directories can expose L0 abstract and L1 overview, and files can add L2 content. The component does not request summaries. The required tab `source` remains the fallback when no level is available.
 
-Supply original images through `source.url` or `source.file`, rather than binary data decoded into `source.content`. Images fit proportionally in a plain panel, show their original pixel dimensions at the bottom right and open a larger preview on click.
+Supply original images through `source.url` or `source.file`, rather than binary data decoded into `source.content`. Images fit proportionally in a plain panel, show their original pixel dimensions at the bottom right and open a larger native dialog on click. Videos use native playback controls without autoplay. Blob URLs created by the component are released on source replacement or unmount; caller-provided URLs remain caller-owned.
 
 For Markdown images, `resources` matches the original image target. For dynamic authenticated images, supply `resolveImage(src, source): Promise<string>`. The host resolves relative paths or Viking URIs using the active level's `source.path`, returning an accessible URL. The host owns requests, cancellation and blob URL cleanup. Each level can override `resources`; omission inherits the file tab's resources. The component does not translate Viking URIs into HTTP endpoints.
 
-Use `slots.footer` for modification time and parsing attribution in a two-sided footer, `slots.titleExtra` for permission badges and `slots.actions` for the host's menu.
+Use `slots.footer` for modification time and parsing attribution in a two-sided footer, `slots.titleExtra` for permission badges and `tab.actions` to inject commands, or `slots.actions` to replace the action area.
 
 ## Two tab kinds
 
@@ -39,9 +43,63 @@ Use `slots.footer` for modification time and parsing attribution in a two-sided 
 | `kind: 'file'`    | The component   | A file, its source, a document |
 | `kind: 'content'` | The host, as-is | Dashboards, graphs, summaries  |
 
-Both share the shell — tab row, path breadcrumb, copy path and the header action area. They differ in how the body arrives, and in that the preview/source switch is a file-tab capability: a content tab renders whatever views it needs inside `content`.
+Both share the shell — tab row, path breadcrumb and the header action area. They differ in how the body arrives, and in that the preview/source switch is a file-tab capability: a content tab renders whatever views it needs inside `content`.
 
-The default toolbar follows the active content: copy text, switch between preview and source for supported formats, and edit when the active file or level supplies `editing`. Editing provides Save and Cancel. Images have no source or text-copy controls. Set `slots.actions` to replace the toolbar (or `null` to hide it), or use `slots.extraActions` to append host actions. Copy path remains next to the breadcrumb.
+The component provides path copying beside the path, plus preview/source switching and editing in the toolbar, including Save and Cancel. Hide each with `tab.toolbar.copyPath / viewSwitch / edit`. Hosts supply content copying, download, delete, history and other commands through `tab.actions`. The component does not execute business APIs. Use `slots.titleExtra` for buttons beside the path. `slots.actions` replaces the whole toolbar (`null` hides it); `slots.extraActions` appends custom nodes.
+
+Set `toolbar={{ copyPath: true, viewSwitch: true, edit: true }}` on `FilePreview` to control visibility across all file/directory tabs. All three flags default to `true`. A top-level `false` always hides the control, even when a tab supplies the capability or sets its flag to `true`. Per-tab `toolbar` flags can further hide controls, but cannot re-enable a control hidden by the host.
+
+Capability checks still apply: view switching requires a renderer offering both preview and source, while editing requires the active file/level to provide `editing`, independently of the file extension. The following demo supplies simulated saving and checkboxes for all three controls.
+
+## Injected actions
+
+```tsx file="../../_demos/file-preview-actions.tsx" preview
+
+```
+
+```tsx
+import type {
+  FilePreviewAction,
+  FilePreviewActionItems,
+} from '@openviking/react/components/file-preview';
+
+const copy: FilePreviewAction = {
+  key: 'copy',
+  icon: <CopyIcon />,
+  label: 'Copy content',
+  onClick: () => navigator.clipboard.writeText(content),
+};
+const actions: FilePreviewActionItems = [
+  copy,
+  {
+    key: 'history',
+    icon: <HistoryIcon />,
+    label: 'View history',
+    onClick: openHistory,
+  },
+  [
+    {
+      key: 'remove',
+      icon: <DeleteIcon />,
+      label: 'Delete document',
+      className: 'host-remove',
+      onClick: deleteFile,
+    },
+  ],
+];
+// tabs={[{ kind: 'file', key: 'file', source, actions }]}
+```
+
+The host supplies icons, style classes and workflows. `key / icon / label / onClick` are required; `disabled / className` are optional. There is no `group` or `danger`. `className` applies to both inline buttons and menu items. Use the `slots.actions` renderer for more custom rendering.
+
+- No commands: no extra entry.
+- One command: an icon-only button with a label Tooltip on hover or focus.
+- Multiple commands: an ellipsis button opens a menu on hover, click or keyboard input.
+- Consecutive individual commands form a group. Each nonempty nested array is a separate group. Empty arrays are ignored without splitting adjacent commands. Separators appear only between nonempty groups, preserving input order.
+
+An action factory `(context: FilePreviewActions) => FilePreviewActionItems` receives `context.source / context.path` for the active file or summary level, alongside view/edit state and controls. Content tabs do not consume this field.
+
+`onClick: () => unknown` accepts synchronous values and promises. The component awaits completion and ignores the returned value; only throws and rejections report failure. Injected commands for the same resource stay locked while pending, including across tab/level switches and temporary `slots.actions` overrides. Different resources and component instances remain independent. Resource identity uses the original tab source path, or the tab key and file name when no path is supplied. Failures appear only on their resource, controls unlock, and the user can retry. Override built-in copy with `labels.moreActions / actionFailed`.
 
 Control the active tab with `activeKey` / `onActiveKeyChange`, set its initial value with `defaultActiveKey`, or use the ref handle:
 
@@ -72,13 +130,24 @@ The host supplies asynchronous `editing.save` and optional `editing.loadContent`
 
 Execution capabilities and notifications are separate. Operation resolution triggers the corresponding `on…` callback; rejection does not. Missing methods hide or disable their controls, and notifications do not perform the operations. URI handling will be wired into the future FileViewer body.
 
+## State slots and download fallback
+
+Native images and videos also honor `loadingFallback` and `errorFallback`; a missing source uses `unsupportedFallback`. An unsupported format with a source retains FileViewer's default download fallback. Customize it with `downloadFallback`, which receives the base's `onDownload`, optional `onRetry` and file information independently of toolbar `actions`.
+
+This example deliberately uses invalid media to show the error state. Choose the unsupported format to download the original example bytes.
+
+```tsx file="../../_demos/file-preview-fallbacks.tsx" preview
+
+```
+
 ## Props
 
-| Property    | Type                                             | Default  | Description                                                    |
-| ----------- | ------------------------------------------------ | -------- | -------------------------------------------------------------- |
-| `tabs`      | `readonly [FilePreviewTab, ...FilePreviewTab[]]` | Required | At least one tab; the first is shown initially.                |
-| `labels`    | `FilePreviewLabels`                              | locale   | Default copy for every tab; a tab can override field by field. |
-| Other props | `HTMLAttributes<HTMLDivElement>`                 | —        | Standard div attributes.                                       |
+| Property    | Type                                                           | Default                                            | Description                                                             |
+| ----------- | -------------------------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------- |
+| `tabs`      | `readonly [FilePreviewTab, ...FilePreviewTab[]]`               | Required                                           | At least one tab; the first is shown initially.                         |
+| `toolbar`   | `{ copyPath?: boolean; viewSwitch?: boolean; edit?: boolean }` | `{ copyPath: true, viewSwitch: true, edit: true }` | Host visibility switches; tabs cannot re-enable controls disabled here. |
+| `labels`    | `FilePreviewLabels`                                            | locale                                             | Default copy for every tab; a tab can override field by field.          |
+| Other props | `HTMLAttributes<HTMLDivElement>`                               | —                                                  | Standard div attributes.                                                |
 
 ### Per-tab fields
 
@@ -107,20 +176,20 @@ Shared by both kinds:
 
 File tabs add:
 
-| Property         | Type                               | Default             | Description                                                                                                        |
-| ---------------- | ---------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `source`         | `FilePreviewSource`                | Required            | The content and file name.                                                                                         |
-| `operations`     | `FilePreviewOperations`            | —                   | Async `openParent(path)` and `download()` capabilities, each returning `Promise<void>`.                            |
-| `resources`      | `readonly FileViewerResource[]`    | —                   | Companion resources, e.g. textures.                                                                                |
-| `levels`         | `readonly FilePreviewLevel[]`      | —                   | Content levels with individual sources and optional resources/editing.                                             |
-| `activeLevelKey` | `string`                           | First enabled level | Controlled content level.                                                                                          |
-| `onLevelChange`  | `(key: string) => void`            | —                   | Selection intent; the host updates activeLevelKey when controlled.                                                 |
-| `resolveImage`   | `(src, source) => Promise<string>` | —                   | Host resolution of Markdown images to accessible URLs.                                                             |
-| `editing`        | `FilePreviewEditing`               | —                   | Editing capability; omit for read-only.                                                                            |
-| `slots`          | `FilePreviewFileTabSlots`          | —                   | `actions` (node or renderer), `titleExtra`, `footer`, plus fallbacks for loading, failure and unsupported formats. |
-| `onCopyContent`  | `(text: string) => void`           | —                   | Called after content copying succeeds.                                                                             |
-| `onDownload`     | `() => void`                       | —                   | Called after the download operation succeeds; not called on failure.                                               |
-| `onOpenUri`      | `(uri: string) => void`            | —                   | Called after a content resource opens successfully; not called on failure.                                         |
+| Property         | Type                               | Default                | Description                                                                                                                        |
+| ---------------- | ---------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `source`         | `FilePreviewSource`                | Required               | The content and file name.                                                                                                         |
+| `operations`     | `FilePreviewOperations`            | —                      | Async `openParent(uri)` and `openUri(uri)` capabilities, each returning `Promise<void>`.                                           |
+| `resources`      | `readonly FileViewerResource[]`    | —                      | Companion resources, e.g. textures.                                                                                                |
+| `levels`         | `readonly FilePreviewLevel[]`      | —                      | Content levels with individual sources and optional resources/editing.                                                             |
+| `activeLevelKey` | `string`                           | First enabled level    | Controlled content level.                                                                                                          |
+| `onLevelChange`  | `(key: string) => void`            | —                      | Selection intent; the host updates activeLevelKey when controlled.                                                                 |
+| `resolveImage`   | `(src, source) => Promise<string>` | —                      | Host resolution of Markdown images to accessible URLs.                                                                             |
+| `editing`        | `FilePreviewEditing`               | —                      | Editing capability; omit for read-only.                                                                                            |
+| `actions`        | `FilePreviewActionSource`          | —                      | Injected file/directory commands, as an array or context factory.                                                                  |
+| `toolbar`        | `FilePreviewToolbarOptions`        | Available capabilities | Show/hide the built-in view switch and editing; ignored by content tabs.                                                           |
+| `slots`          | `FilePreviewFileTabSlots`          | —                      | `actions` (node or renderer), `extraActions`, `titleExtra`, `footer`, plus fallbacks for loading, failure and unsupported formats. |
+| `onOpenUri`      | `(uri: string) => void`            | —                      | Called after a content resource opens successfully; not called on failure.                                                         |
 
 Content tabs add:
 
@@ -135,7 +204,7 @@ import { FilePreview } from '@openviking/react/components/file-preview';
 import '@openviking/react/components/file-preview/style.css';
 ```
 
-Copying is handled by the component: the host renders the button and calls `actions.copyContent()` or `actions.copyPath()`, both resolving to whether it succeeded. `onCopyContent` / `onCopyPath` fire after a successful copy with the value already copied, and never on failure.
+Path copying is independent of `actions` and `slots.actions`: it appears whenever the active file or directory has a path, unless `toolbar.copyPath` is false. `actions.copyPath()` resolves to success; `onCopyPath` only reports successful copies. Hosts execute content copying and downloading through ordinary actions.
 
 ## Accessibility
 
@@ -203,6 +272,6 @@ Colours come from the design system the OpenViking console uses — the values o
 
 ## Implementation scope
 
-The component renders the shell and reports successful operations. Reading, saving, downloading and navigation are supplied as execution capabilities by the host; success notifications do not execute them.
+The component renders the shell and reports successful operations. Reading, saving and navigation are supplied as execution capabilities by the host; success notifications do not execute them.
 
 `labels.showHiddenPath` overrides the collapsed-path menu button’s accessible name: “Show hidden path levels” in English and “显示隐藏的路径层级” in Chinese.

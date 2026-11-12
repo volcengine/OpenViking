@@ -230,6 +230,7 @@ export function useFileBrowser({
           setRefreshing(false);
         }
       },
+      openUri: openResource,
       openDashboard: openDashboard,
       openResource,
       setPreviewKey: (key: string) => {
@@ -281,6 +282,7 @@ export function useFileBrowser({
     treeError: tree.error,
     previewError,
     dashboards: boards.dashboards,
+    previewDashboard: boards.current,
     dashboardError: boards.error,
     previewTabs: mergeDashboardTab(preview.tabs, boards.tab, Boolean(blocked)),
     previewKey:

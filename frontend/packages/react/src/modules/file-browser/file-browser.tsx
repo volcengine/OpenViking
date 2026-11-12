@@ -3,7 +3,7 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 
 import { ResizableHandle } from '../../shared/components/resizable/index.js';
-import { FileBrowserMainPane } from './file-browser-main-pane.js';
+import { FileBrowserPreviewPane } from './file-browser-preview-pane.js';
 import {
   TREE_DEFAULT_WIDTH,
   TREE_MIN_WIDTH,
@@ -48,9 +48,11 @@ export function FileBrowser({
   renderDashboard,
   acl,
   readOnly,
+  previewActions,
   onUriChange,
   onImportResources,
   renderImportResources,
+  previewSlots,
   labels,
   requestOptions,
   className,
@@ -191,6 +193,7 @@ export function FileBrowser({
       >
         <div className="ov-file-browser__tree">
           <FileBrowserTreePane
+            rootUri={rootUri}
             entries={{
               agentConnect,
               onImportResources,
@@ -223,16 +226,17 @@ export function FileBrowser({
           className="ov-file-browser__resizer"
         />
 
-        <FileBrowserMainPane
+        <FileBrowserPreviewPane
           browser={browser}
+          permissions={permissions}
+          rootUri={rootUri}
           locale={locale}
-          labels={previewLabels}
-          emptyLabel={text.empty}
-          errorLabel={text.error}
-          retryLabel={text.retry}
-          titleExtra={permissions.titleExtra}
-          extraActions={permissions.actions}
-          readOnly={readOnly || !permissions.canEdit}
+          text={text}
+          previewLabels={previewLabels}
+          readOnly={readOnly}
+          previewActions={previewActions}
+          previewSlots={previewSlots}
+          requestOptions={requestOptions}
         />
       </div>
       {permissions.drawer}

@@ -94,18 +94,34 @@ def test_discard_invalid_search_tags_logs_one_warning_for_batch(caplog):
     assert "also-bad" in warnings[0].message
 
 
-def test_merge_search_tags_discards_invalid_existing_tags(caplog):
+def test_merge_search_tags_applies_ordered_patches_and_discards_invalid_tags(caplog):
     tags_module.logger.addHandler(caplog.handler)
     try:
         with caplog.at_level(logging.WARNING, logger="openviking.utils.tags"):
-            result = merge_search_tags(["bad-existing", "team=old"], ["owner=alice"])
+            result = merge_search_tags(
+                ["bad-existing", "team=old", "score=0.1"],
+                [
+                    "score+=0.2",
+                    "score+=0.2",
+                    "score-=1",
+                    "count+=2",
+                    "count=0",
+                    "count+=1",
+                    "owner=alice",
+                ],
+            )
     finally:
         tags_module.logger.removeHandler(caplog.handler)
 
-    assert result == ["team=old", "owner=alice"]
+    assert result == ["team=old", "score=-0.5", "count=1", "owner=alice"]
     warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
     assert len(warnings) == 1
     assert warnings[0].invalid_tags == ["bad-existing"]
+
+    with pytest.raises(InvalidArgumentError):
+        merge_search_tags(result, ["owner+=1"])
+    with pytest.raises(InvalidArgumentError):
+        merge_search_tags(result, ["count+=NaN"])
 
 
 def test_find_tags_filter_requires_all_tags():

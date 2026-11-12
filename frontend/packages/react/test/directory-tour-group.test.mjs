@@ -42,7 +42,7 @@ test('custom single-step content highlights all rows, keeps selection and comple
     width: 133,
   });
   rows[1].setAttribute('aria-selected', 'true');
-  let completed = 0;
+  const completions = [];
   let located = 0;
   let edited = 0;
   const locateTarget = async () => {
@@ -63,11 +63,11 @@ test('custom single-step content highlights all rows, keeps selection and comple
     steps: [step],
     locateTarget,
     renderContent,
-    onComplete: () => completed++,
+    onComplete: (result) => completions.push(result),
   };
   const view = await mount(h(StrictMode, null, h(DirectoryTour, props)));
   try {
-    assert.equal(completed, 0);
+    assert.equal(completions.length, 0);
     const dialog = document.querySelector('[role="dialog"]');
     assert.equal(dialog.style.width, '320px');
     const highlight = dialog.querySelector('.ov-directory-tour__highlight');
@@ -90,11 +90,11 @@ test('custom single-step content highlights all rows, keeps selection and comple
       dialog.querySelector('.ov-directory-tour__features button').click(),
     );
     assert.equal(edited, 1);
-    assert.equal(completed, 0, 'edit is independent of acknowledgement');
-    await act(async () =>
-      dialog.querySelector('.ov-directory-tour__primary').click(),
+    assert.equal(
+      completions.length,
+      0,
+      'edit is independent of acknowledgement',
     );
-    assert.equal(completed, 1);
     await act(async () => {
       rows.forEach((row, index) => {
         row.getBoundingClientRect = () => box(-40 + index * 32, 32);
@@ -121,19 +121,28 @@ test('custom single-step content highlights all rows, keeps selection and comple
       '96px',
       'removed children shrink the group highlight',
     );
-    rows[0].remove();
+    await act(async () =>
+      dialog.querySelector('.ov-directory-tour__primary').click(),
+    );
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.deepEqual(completions, [{ skippedStepIds: [] }]);
+
+    await view.render(h(DirectoryTour, { ...props, open: false }));
+    await view.render(h(DirectoryTour, props));
+    await act(async () => rows[0].remove());
     await settle();
-    assert.match(dialog.textContent, /此目录暂不可用/);
-    assert.equal(dialog.querySelector('.ov-directory-tour__intro'), null);
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.deepEqual(completions[1], { skippedStepIds: [step.id] });
   } finally {
     await view.unmount();
     rows.forEach((row) => row.remove());
   }
 });
 
-test('custom content never bypasses failed-anchor recovery and stale resolutions are ignored', async () => {
+test('custom content does not mount for timed-out anchors or late resolutions', async () => {
   let resolve;
   let rendered = 0;
+  const completions = [];
   const rows = anchors();
   const view = await mount(
     h(DirectoryTour, {
@@ -145,6 +154,7 @@ test('custom content never bypasses failed-anchor recovery and stale resolutions
         new Promise((done) => {
           resolve = done;
         }),
+      onComplete: (result) => completions.push(result),
       renderContent: () => {
         rendered++;
         return 'Ready';
@@ -153,10 +163,8 @@ test('custom content never bypasses failed-anchor recovery and stale resolutions
   );
   try {
     await act(async () => new Promise((done) => setTimeout(done, 20)));
-    assert.match(
-      document.querySelector('[role="dialog"]').textContent,
-      /unavailable/,
-    );
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.deepEqual(completions, [{ skippedStepIds: [step.id] }]);
     await act(async () => resolve(rows));
     assert.equal(rendered, 0);
   } finally {

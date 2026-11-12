@@ -14,6 +14,7 @@ export interface DirectoryTourStep {
   target: string;
   title: ReactNode;
   description: ReactNode;
+  /** Standard semantic targets include Figma artwork. Pass null to omit it. */
   illustration?: ReactNode;
   /** Card width in CSS pixels; defaults to 270 and is viewport-constrained. */
   cardWidth?: number;
@@ -65,6 +66,7 @@ export interface DirectoryTourProps {
   currentStep?: number;
   defaultStep?: number;
   placement?: 'right' | 'left';
+  /** Deadline before automatically skipping an unresolved target. Default 10000. */
   locateTimeout?: number;
   className?: string;
   style?: CSSProperties;
@@ -77,7 +79,7 @@ export interface DirectoryTourProps {
   onStepChange?: (index: number) => void;
   onClose?: () => void;
   onComplete?: (result: DirectoryTourResult) => void;
-  /** Replaces ready-state card contents; loading and recovery stay built in. */
+  /** Replaces card contents once the target resolves. */
   renderContent?: (context: DirectoryTourContentContext) => ReactNode;
   labels?: DirectoryTourLabels;
 }
