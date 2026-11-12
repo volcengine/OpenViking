@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any
 
 from .async_client import ensure_same_encryption_account
-from .copy_progress import record_copy_success
 from .protocols import AGFSByteStream, AGFSSyncClientProtocol
 
 
@@ -200,7 +199,6 @@ def _copy_file(
     if allow_same_mount_fast_path and _try_copy_within_mount_fast_path(
         client, src, dst, fs_ctx=fs_ctx
     ):
-        record_copy_success(dst)
         return
 
     if stream:
@@ -227,7 +225,6 @@ def _copy_file(
         # Read entire file and write
         data = _call_with_optional_ctx(client.cat, src, ctx=fs_ctx)
         _call_with_optional_ctx(client.write, dst, data, ctx=fs_ctx)
-    record_copy_success(dst)
 
 
 def _copy_directory(
@@ -246,8 +243,6 @@ def _copy_directory(
     except Exception:
         # Directory might already exist, continue
         pass
-    else:
-        record_copy_success(dst)
 
     # List source directory contents
     items = _call_with_optional_ctx(client.ls, src, ctx=fs_ctx)

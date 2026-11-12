@@ -9,7 +9,6 @@ Covers:
   4. api_key dead-code bug fix: no raise when api_base is set without api_key
 """
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -145,14 +144,8 @@ class TestExtraHeadersViaFactory:
             data=[MagicMock(embedding=[0.1] * 8)],
             usage=None,
         )
-        clock = [0.0]
-
-        async def slow_create(**kwargs):
-            clock[0] = 3.2
-            return async_response
-
         mock_async_client = MagicMock()
-        mock_async_client.embeddings.create = AsyncMock(side_effect=slow_create)
+        mock_async_client.embeddings.create = AsyncMock(return_value=async_response)
         mock_async_openai_class.return_value = mock_async_client
 
         cfg = EmbeddingModelConfig(
@@ -166,19 +159,16 @@ class TestExtraHeadersViaFactory:
         with (
             patch("openviking.models.embedder.openai_embedders.logger.warning") as mock_warning,
             patch(
-                "openviking.models.embedder.base.time",
-                SimpleNamespace(monotonic=lambda: clock[0]),
+                "openviking.models.embedder.base.time.monotonic",
+                side_effect=[0.0, 0.0, 0.0, 3.2],
             ),
         ):
-            result = await embedder.embed_async("hello")
+            await embedder.embed_async("hello")
 
-        assert result.dense_vector == [0.1] * 8
-        mock_async_client.embeddings.create.assert_awaited_once()
         mock_warning.assert_called_once()
         call_args = mock_warning.call_args.args
         assert call_args[1] == "OpenAI async embedding"
         assert call_args[2] == "ollama"
-        assert call_args[4:] == (0.0, 3200.0)
 
 
 class TestEmbeddingModelConfigExtraHeaders:

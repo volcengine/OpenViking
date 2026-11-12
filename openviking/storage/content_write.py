@@ -361,12 +361,9 @@ class ContentWriteCoordinator:
                         task.task_id if task is not None else task_id, exc, ctx=ctx
                     )
                 raise
-            finally:
-                # These facts describe successful storage writes, even if
-                # Task creation or subsequent root dispatch failed.
-                pending_file_changes.publish(task)
             if task is None:
                 raise RuntimeError("Content write completed without creating a root Task")
+            pending_file_changes.publish(task)
         return await self._return_or_wait_for_content_write_task(
             task.task_id,
             result,

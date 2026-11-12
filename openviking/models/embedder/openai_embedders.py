@@ -231,7 +231,6 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
     def _update_telemetry_token_usage(self, response) -> None:
         usage = getattr(response, "usage", None)
         if not usage:
-            self.record_call_without_usage()
             return
 
         def _usage_value(key: str, default: int = 0) -> int:
@@ -253,7 +252,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         # Update token tracker
         self.update_token_usage(
             model_name=self.model_name,
-            provider=self.provider,
+            provider=self._provider,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )

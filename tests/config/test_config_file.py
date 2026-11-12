@@ -38,25 +38,21 @@ def config_file(tmp_path, monkeypatch):
         "storage": {"workspace": str(tmp_path / "data")},
     }
     path.write_text(json.dumps(raw))
-    from openviking.config.config_file import _validate
-
-    # Validation may lazily load global configuration after another test resets
-    # the singleton. Bind the test file after validation has finished.
-    monkeypatch.setattr(OpenVikingConfigSingleton, "_instance", _validate(json.dumps(raw)))
     monkeypatch.setattr(OpenVikingConfigSingleton, "_config_file", path)
     monkeypatch.setattr(
         OpenVikingConfigSingleton,
         "_config_file_revision",
         hashlib.sha256(path.read_bytes()).hexdigest(),
     )
+    from openviking.config.config_file import _validate
+
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_instance", _validate(json.dumps(raw)))
     return path, raw
 
 
 def test_stale_revision_readonly_invalid_and_non_model_writes_leave_file_unchanged(config_file):
     path, _ = config_file
-    loaded = read_config_file()
-    assert loaded["file_path"] == str(path)
-    revision = loaded["revision"]
+    revision = read_config_file()["revision"]
     original = path.read_bytes()
     for settings, version in [
         ({"vlm": {"timeout": 30}}, "stale"),

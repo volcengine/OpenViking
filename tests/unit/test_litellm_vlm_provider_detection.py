@@ -38,7 +38,7 @@ class TestLiteLLMVLMProviderDetection:
         assert detect_provider_by_model(model) == "nvidia_nim"
         assert _vlm(model)._resolve_model(model) == model
 
-    def test_nvidia_nim_detection_keeps_credentials_request_scoped(self, monkeypatch):
+    def test_nvidia_nim_setup_env_uses_nvidia_key(self, monkeypatch):
         monkeypatch.delenv("NVIDIA_NIM_API_KEY", raising=False)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
@@ -48,8 +48,7 @@ class TestLiteLLMVLMProviderDetection:
 
         assert vlm._detected_provider == "nvidia_nim"
         assert "OPENAI_API_KEY" not in os.environ
-        assert "NVIDIA_NIM_API_KEY" not in os.environ
-        assert vlm._build_text_kwargs(prompt="test")["api_key"] == "fake"
+        assert os.environ["NVIDIA_NIM_API_KEY"] == "fake"
 
     def test_openai_prefixed_nemotron_model_is_left_alone(self):
         model = f"openai/{NEMOTRON_MODEL}"
@@ -116,7 +115,4 @@ def test_explicit_local_routes_reach_completion_unchanged(
         assert kwargs.get("api_key") == api_key
         assert kwargs.get("api_base") == api_base
         if model.startswith(("ollama/", "ollama_chat/")):
-            assert kwargs["num_ctx"] == extra_body.get("num_ctx", 16384)
-            assert kwargs["extra_body"] == {"think": False} | {
-                key: value for key, value in extra_body.items() if key != "num_ctx"
-            }
+            assert kwargs["extra_body"] == {"num_ctx": 16384, "think": False} | extra_body

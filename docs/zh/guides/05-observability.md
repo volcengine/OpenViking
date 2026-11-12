@@ -566,11 +566,10 @@ OpenViking 仓库里已经提供了可直接导入的 dashboard JSON：
 
 ## 可选 Kafka 事件上报
 
-安装 `openviking[reporting]` 并启用 `server.observability.reporting.enabled` 后，
-事件上报直接读取 `ov.conf` 中 `server.observability.reporting.kafka` 和
-`server.observability.reporting.telemetry`；其中 `telemetry.enabled` 也需要开启。
-KBS 从 KMS 读取这些字段，随每个实例的 `ov.conf` 下发，内核不再连接 Nacos。
-Kafka 的地址、认证和 topic 放在配置中，不能写入业务代码。
+安装 `openviking[reporting]`，并在 `ov.conf` 中开启 `server.observability.reporting.enabled`
+和 `server.observability.reporting.telemetry.enabled`。
+上报器从 `reporting.kafka` 读取 Kafka 的地址、认证和 topic，
+从 `reporting.telemetry` 读取队列和部署标识。
 该功能默认关闭，业务调用不会因上报失败而中断。
 
 上报器使用内存队列；`telemetry.queue_capacity` 必须为正整数，默认 `1024`。
@@ -578,8 +577,8 @@ Kafka 的地址、认证和 topic 放在配置中，不能写入业务代码。
 日志只包含数量。此上报器适用于允许少量丢失的分析统计，不提供持久化审计或计费账本
 保证。停止服务时应预留优雅退出时间，等待队列发送完成。
 
-KBS 在 `reporting.telemetry.deployment` 中写入实例的 `account_id`、`resource_id`、
-`region`，绑定外层云账号与实例，
+部署可在 `reporting.telemetry.deployment` 中设置 `account_id`、`resource_id` 和 `region`。
+`OV_METRICS_ACCOUNT_ID`、`OV_RESOURCE_ID` 和 `OV_REGION` 仍可用作后备值。
 原始数据空间和成员保留为 `ov_account_id`、`ov_user_id`。仅当部署能够确定模型凭据
 归属时，设置 `OV_MODEL_COST_BEARER=customer` 或 `ov`；未设置时保持 `unknown`。
 混用不同归属的凭据时，可信部署配置应在每个 VLM／Embedding 凭据上分别设置
@@ -599,37 +598,23 @@ KBS 在 `reporting.telemetry.deployment` 中写入实例的 `account_id`、`reso
 并传递到实际 VLM／Embedding 客户端。模型配置章节仍只允许 ROOT 修改，空间管理员
 和普通成员不能通过配置接口指定费用归属。
 
-上报配置示例（位于 `ov.conf` 中；认证信息由 KBS 从 KMS 下发）：
+以下是 `ov.conf` 中 `server.observability.reporting` 的示例值。
 
 ```json
 {
-  "server": {
-    "observability": {
-      "reporting": {
-        "enabled": true,
-        "kafka": {
-          "bootstrap_servers": "broker.example:9092",
-          "topic": "metric-log",
-          "security_protocol": "PLAINTEXT"
-        },
-        "telemetry": {
-          "enabled": true,
-          "queue_capacity": 1024,
-          "deployment": {
-            "account_id": "cloud-account",
-            "resource_id": "library",
-            "region": "cn-beijing"
-          }
-        }
-      }
-    }
+  "enabled": true,
+  "kafka": {
+    "bootstrap_servers": "broker.example:9092",
+    "topic": "metric-log"
+  },
+  "telemetry": {
+    "enabled": true
   }
 }
 ```
 
-上报模块不再读取 `NACOS_*`、外部上报 JSON 或环境变量占位符。
-KMS 修改后先重启 KBS，再通过配置更新/版本升级重新生成存量实例的 `ov.conf`
-并重启内核，才能使用新值。Writer 与 Reader 均从各自的 `ov.conf` 读取。
+迁移时，将 Nacos 或外部 JSON 中的 `kafka` 和 `telemetry` 移到上述位置，再重启内核。
+`reporting` 中的字符串按字面值读取，Kafka 凭据应填入实际值。
 
 ## 相关文档
 

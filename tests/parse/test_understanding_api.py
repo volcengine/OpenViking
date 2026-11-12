@@ -343,56 +343,6 @@ def _api_with_transport(monkeypatch, handler):
 
 
 @pytest.mark.asyncio
-async def test_understanding_counts_submissions_but_not_uploads_or_polling(monkeypatch):
-    from openviking.observability.events import (
-        register_event_subscriber,
-        unregister_event_subscriber,
-    )
-
-    events = []
-    register_event_subscriber("understanding_count_test", events.append)
-
-    def handler(request):
-        if request.method == "POST":
-            return httpx.Response(200, json={"id": "response_one"})
-        return httpx.Response(200, json={"status": "completed"})
-
-    api = _api_with_transport(monkeypatch, handler)
-    try:
-        await api._create_response_for_file(file_id="private_file_id")
-        await api._poll_response(response_id="response_one")
-        await api._create_response_for_url(url="https://private.example/document", doc_type="pdf")
-        calls = [event for event in events if event.event_name == "understanding_call"]
-        assert len(calls) == 2
-        assert all(event.payload["status"] == "ok" for event in calls)
-        assert all("prompt_tokens" not in event.payload for event in calls)
-        assert all("private" not in json.dumps(event.payload) for event in calls)
-    finally:
-        unregister_event_subscriber("understanding_count_test")
-
-
-@pytest.mark.asyncio
-async def test_understanding_failed_submission_is_still_one_call(monkeypatch):
-    from openviking.observability.events import (
-        register_event_subscriber,
-        unregister_event_subscriber,
-    )
-
-    events = []
-    register_event_subscriber("understanding_failure_test", events.append)
-    api = _api_with_transport(
-        monkeypatch, lambda request: httpx.Response(503, json={"error": {"message": "unavailable"}})
-    )
-    try:
-        with pytest.raises(httpx.HTTPStatusError):
-            await api._create_response_for_file(file_id="file_one")
-        calls = [event for event in events if event.event_name == "understanding_call"]
-        assert len(calls) == 1 and calls[0].payload["status"] == "error"
-    finally:
-        unregister_event_subscriber("understanding_failure_test")
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("failure_stage", ["create_response", "poll_response"])
 async def test_prepared_file_failure_preserves_reason_and_remote_ids(
     monkeypatch, tmp_path, failure_stage

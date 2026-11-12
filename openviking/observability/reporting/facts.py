@@ -30,19 +30,17 @@ class DeferredFileChanges:
     events: list = field(default_factory=list)
     active: bool = True
 
-    def publish(self, task: Any = None) -> None:
+    def publish(self, task):
         self.active = False
         for event in self.events:
             try:
-                if task is not None:
-                    payload = dict(
-                        event.payload,
-                        task_id=task.task_id,
-                        task_type=task.task_type,
-                        mode=(getattr(task, "meta", None) or {}).get("mode"),
-                    )
-                    event = replace(event, payload=payload)
-                get_event_bus().publish(event)
+                payload = dict(
+                    event.payload,
+                    task_id=task.task_id,
+                    task_type=task.task_type,
+                    mode=(getattr(task, "meta", None) or {}).get("mode"),
+                )
+                get_event_bus().publish(replace(event, payload=payload))
             except Exception:
                 # Reporting must not change an already committed write.
                 continue
@@ -202,12 +200,6 @@ def event_context(name):
     return fields
 
 
-def model_account_id(name, owner=None):
-    """Prefer actual model ownership and batch/Task identity over an inherited root."""
-    root = get_observability_context().root
-    return owner or event_context(name).get("account_id") or getattr(root, "account_id", None)
-
-
 def remember_request_task(task):
     from .runtime import is_reporting_enabled
 
@@ -260,44 +252,6 @@ async def file_exists_before(fs, path):
         return True
     except Exception as error:
         return False if is_not_found_error(error) else None
-
-
-async def file_copy_targets(
-    fs: Any,
-    source_uri: str,
-    target_uri: str,
-    ctx: Any = None,
-    lease_ref: dict[str, Any] | None = None,
-) -> list[tuple[str, bool, bool | None]]:
-    """Snapshot target pre-states before a raw copy, under the caller's existing lease."""
-    from .runtime import is_reporting_enabled
-
-    if not is_reporting_enabled():
-        return []
-    targets: list[tuple[str, bool, bool | None]] = []
-    try:
-        fs_ctx = fs._pathlock_fs_ctx(ctx, lease_ref)
-
-        async def visit(source: str, target: str, is_dir: bool) -> None:
-            path = fs._uri_to_path(target, ctx=ctx)
-            targets.append((target, is_dir, await file_exists_before(fs, path)))
-            if is_dir:
-                source_path = fs._uri_to_path(source, ctx=ctx)
-                for entry in await fs._async_agfs.ls(source_path, fs_ctx=fs_ctx):
-                    name = entry.get("name", "")
-                    if name and name not in {".", ".."}:
-                        await visit(
-                            f"{source.rstrip('/')}/{name}",
-                            f"{target.rstrip('/')}/{name}",
-                            bool(entry.get("isDir", False)),
-                        )
-
-        stat = await fs._async_agfs.stat(fs._uri_to_path(source_uri, ctx=ctx))
-        await visit(source_uri, target_uri, bool(stat.get("isDir", False)))
-    except Exception:
-        # Optional reporting reads must not prevent the actual storage copy.
-        return []
-    return targets
 
 
 def file_metadata(uri, ctx=None, *, is_dir=False):

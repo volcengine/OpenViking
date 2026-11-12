@@ -80,8 +80,8 @@ class VLMCollector(EventMetricCollector):
             provider=str(payload["provider"]),
             model_name=str(payload["model_name"]),
             duration_seconds=float(payload["duration_seconds"]),
-            prompt_tokens=payload.get("prompt_tokens"),
-            completion_tokens=payload.get("completion_tokens"),
+            prompt_tokens=int(payload["prompt_tokens"]),
+            completion_tokens=int(payload["completion_tokens"]),
             error_code=str(payload.get("error_code") or "OK"),
             account_id=(
                 None if payload.get("account_id") is None else str(payload.get("account_id"))
@@ -96,8 +96,8 @@ class VLMCollector(EventMetricCollector):
         provider: str,
         model_name: str,
         duration_seconds: float,
-        prompt_tokens: int | None,
-        completion_tokens: int | None,
+        prompt_tokens: int,
+        completion_tokens: int,
         error_code: str = "OK",
         account_id: str | None = None,
         source_type: str | None = None,
@@ -128,11 +128,7 @@ class VLMCollector(EventMetricCollector):
         )
         # A failed attempt has no reliable usage payload. Keep token families
         # success-only and avoid multiplying their cardinality by ``result``.
-        if (
-            labels["error_code"] != "OK"
-            or prompt_tokens is None
-            or completion_tokens is None
-        ):
+        if labels["error_code"] != "OK":
             return
         token_labels = {"provider": str(provider), "model_name": str(model_name)}
         registry.inc_counter(

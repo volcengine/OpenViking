@@ -170,7 +170,8 @@ class LiteLLMVLMProvider(VLMBase):
         self._forward_api_key = config.get("forward_api_key")
         self._detected_provider: str | None = None
 
-        self._detect_provider(self.model)
+        if self.api_key:
+            self._setup_env(self.api_key, self.model)
 
         litellm.suppress_debug_info = True
         litellm.drop_params = True
@@ -191,8 +192,8 @@ class LiteLLMVLMProvider(VLMBase):
                     pass
         return None
 
-    def _detect_provider(self, model: str | None) -> None:
-        """Resolve routing without modifying process-global credentials."""
+    def _setup_env(self, api_key: str, model: str | None) -> None:
+        """Set environment variables based on detected provider."""
         provider = self._provider_name
         if (not provider or provider == "litellm") and model:
             detected = detect_provider_by_model(model)
@@ -202,11 +203,11 @@ class LiteLLMVLMProvider(VLMBase):
                 return
 
         if provider and provider in PROVIDER_CONFIGS:
+            env_key = PROVIDER_CONFIGS[provider]["env_key"]
+            os.environ[env_key] = api_key
             self._detected_provider = provider
-
-    def _metrics_cost_bearer(self):
-        model = self._resolve_model(self.model or "gpt-4o-mini")
-        return self.cost_bearer if self._should_forward_api_key(model) else "unknown"
+        else:
+            os.environ["OPENAI_API_KEY"] = api_key
 
     def _resolve_model(self, model: str) -> str:
         """Resolve model name by applying provider prefixes."""
@@ -521,7 +522,7 @@ class LiteLLMVLMProvider(VLMBase):
 
         def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
-            response = self._call_provider(lambda: completion(**kwargs))
+            response = completion(**kwargs)
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
             tracer.info(f"response={response}")
@@ -563,7 +564,7 @@ class LiteLLMVLMProvider(VLMBase):
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
-            response = await self._call_provider_async(lambda: acompletion(**kwargs))
+            response = await acompletion(**kwargs)
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
             tracer.info(f"response={response}")
@@ -591,7 +592,7 @@ class LiteLLMVLMProvider(VLMBase):
 
         def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
-            response = self._call_provider(lambda: completion(**kwargs))
+            response = completion(**kwargs)
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
             if tools is not None:
@@ -618,7 +619,7 @@ class LiteLLMVLMProvider(VLMBase):
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
-            response = await self._call_provider_async(lambda: acompletion(**kwargs))
+            response = await acompletion(**kwargs)
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
             if tools is not None:
@@ -650,5 +651,3 @@ class LiteLLMVLMProvider(VLMBase):
                 prompt_cached_tokens=getattr(prompt_details, "cached_tokens", 0) or 0,
                 completion_reasoning_tokens=getattr(completion_details, "reasoning_tokens", 0) or 0,
             )
-        else:
-            self.record_call_without_usage(duration_seconds=duration_seconds)

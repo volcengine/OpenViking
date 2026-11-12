@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from openviking.utils.media_limits import MAX_MEDIA_FILE_BYTES
-from openviking.utils.model_retry import extract_metric_error_code, retry_async
+from openviking.utils.model_retry import retry_async
 
 if TYPE_CHECKING:
     from .volcengine_vlm import VolcEngineVLM
@@ -299,16 +299,13 @@ async def _attempt(
             request["extra_body"] = dict(vlm.extra_request_body)
 
         started = time.monotonic()
-        response = await vlm._call_provider_async(lambda: client.responses.create(**request))
-        response_error = None
+        response = await client.responses.create(**request)
         if getattr(response, "status", None) != "completed":
-            response_error = RuntimeError("Ark media response did not complete")
-        _record_usage(vlm, response, time.monotonic() - started, error=response_error)
-        if response_error is not None:
-            raise response_error
+            raise RuntimeError("Ark media response did not complete")
         text = _extract_response_text(response)
         if not text:
             raise RuntimeError("Ark media response contained no output text")
+        _record_usage(vlm, response, time.monotonic() - started)
         return text
     finally:
         if file_id:
@@ -363,14 +360,9 @@ def _record_usage(
     vlm: VolcEngineVLM,
     response: Any,
     duration_seconds: float,
-    *,
-    error: Exception | None = None,
 ) -> None:
     try:
         usage = getattr(response, "usage", None)
-        if usage is None:
-            vlm.record_call_without_usage(duration_seconds=duration_seconds, error=error)
-            return
         input_details = getattr(usage, "input_tokens_details", None)
         output_details = getattr(usage, "output_tokens_details", None)
         vlm.update_token_usage(
@@ -381,7 +373,6 @@ def _record_usage(
             duration_seconds=duration_seconds,
             prompt_cached_tokens=int(getattr(input_details, "cached_tokens", 0) or 0),
             completion_reasoning_tokens=int(getattr(output_details, "reasoning_tokens", 0) or 0),
-            error_code=extract_metric_error_code(error) if error is not None else "OK",
         )
     except Exception as error:
         _log_sanitized_exception("usage", error, logging.DEBUG)

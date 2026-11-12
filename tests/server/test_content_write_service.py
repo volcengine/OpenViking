@@ -3,15 +3,11 @@
 
 """Service-level tests for content write coordination."""
 
-from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
 
-from openviking.observability.events import get_event_bus
-from openviking.observability.reporting import runtime
 from openviking.server.identity import RequestContext, Role
-from openviking.service.task_tracker import get_task_tracker
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils import MemoryFileUtils
 from openviking.session.memory.utils.content_visibility import visible_content
@@ -24,133 +20,6 @@ from openviking_cli.exceptions import (
     PermissionDeniedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
-
-
-@pytest.mark.parametrize("namespace", ["resource", "memory", "file_only"])
-@pytest.mark.parametrize("preexisting", [False, True])
-@pytest.mark.parametrize("failure", [None, "write", "task_create", "dispatch"])
-@pytest.mark.asyncio
-async def test_committed_write_fact_survives_post_write_failure(
-    service, monkeypatch, namespace, preexisting, failure
-):
-    ctx = RequestContext(user=service.user, role=Role.USER)
-    user_root = f"viking://user/{ctx.user.user_space_name()}"
-    uri = {
-        "resource": "viking://resources/reporting-write.md",
-        "memory": f"{user_root}/memories/experiences/reporting-write.md",
-        "file_only": f"{user_root}/reporting-write.md",
-    }[namespace]
-    if preexisting:
-        await service.viking_fs.write_file(uri, "Original content", ctx=ctx)
-    monkeypatch.setattr(runtime, "is_reporting_enabled", lambda: True)
-    task_created_at = None
-    task = None
-    tracker = get_task_tracker()
-    original_create = tracker.create
-
-    async def create_task(task_type, **kwargs):
-        nonlocal task, task_created_at
-        if task_type == "content_write":
-            task_created_at = datetime.now(timezone.utc)
-            if failure == "task_create":
-                raise OSError("task creation failed")
-            task = await original_create(task_type, **kwargs)
-            return task
-        return await original_create(task_type, **kwargs)
-
-    monkeypatch.setattr(tracker, "create", create_task)
-    if failure == "dispatch":
-
-        async def dispatch_failure(*args, **kwargs):
-            raise OSError("dispatch failed")
-
-        monkeypatch.setattr(
-            ContentWriteCoordinator, "_enqueue_content_write_root", dispatch_failure
-        )
-    if failure == "write":
-        backend = service.viking_fs._async_agfs
-        original_write = backend.write
-        target_path = service.viking_fs._uri_to_path(uri, ctx=ctx)
-
-        async def write_failure(path, *args, **kwargs):
-            if path == target_path:
-                raise OSError("storage write failed")
-            return await original_write(path, *args, **kwargs)
-
-        monkeypatch.setattr(backend, "write", write_failure)
-    events = []
-    bus = get_event_bus()
-    bus.register("committed_write_failure_facts", events.append)
-    try:
-        if failure is not None:
-            with pytest.raises(OSError, match="failed"):
-                await service.fs.write(uri, "Updated content", ctx=ctx, wait=False)
-        else:
-            result = await service.fs.write(uri, "Updated content", ctx=ctx, wait=False)
-            assert result["task_id"] == task.task_id
-        facts = [
-            event
-            for event in events
-            if event.event_name == "file_mutation" and event.payload.get("uri") == uri
-        ]
-        if failure == "write":
-            assert facts == []
-            assert await service.viking_fs.exists(uri, ctx=ctx) is preexisting
-            if preexisting:
-                stored = await service.viking_fs.read_file(uri, ctx=ctx)
-                assert visible_content(stored, uri=uri) == "Original content"
-            return
-        stored = await service.viking_fs.read_file(uri, ctx=ctx)
-        assert visible_content(stored, uri=uri) == "Updated content"
-        assert len(facts) == 1
-        fact = facts[0]
-        assert fact.payload["change_type"] == ("modified" if preexisting else "added")
-        assert fact.payload["account_id"] == ctx.account_id
-        assert fact.payload["user_id"] == ctx.user.user_id
-        # Delayed publication must retain the physical write's timestamp.
-        assert fact.timestamp <= task_created_at
-        if failure == "task_create":
-            assert fact.payload.get("task_id") is None
-        else:
-            assert fact.payload["task_id"] == task.task_id
-            assert fact.payload["task_type"] == "content_write"
-            assert fact.payload["mode"] == "replace"
-            if failure == "dispatch":
-                failed_task = await tracker.get(
-                    task.task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
-                )
-                assert failed_task.status.value == "failed"
-    finally:
-        bus.unregister("committed_write_failure_facts")
-
-
-@pytest.mark.asyncio
-async def test_memory_write_fact_reuses_created_root_task(service, monkeypatch):
-    from openviking.observability.events import get_event_bus
-    from openviking.observability.reporting import runtime
-
-    ctx = RequestContext(user=service.user, role=Role.USER)
-    uri = f"viking://user/{ctx.user.user_space_name()}/memories/experiences/edit.md"
-    await service.viking_fs.write_file(uri, "Original experience", ctx=ctx)
-    monkeypatch.setattr(runtime, "is_reporting_enabled", lambda: True)
-    events = []
-    bus = get_event_bus()
-    bus.register("content_write_root_fact_test", events.append)
-    try:
-        result = await service.fs.write(uri, "Updated experience", ctx=ctx, wait=False)
-    finally:
-        bus.unregister("content_write_root_fact_test")
-
-    facts = [
-        event
-        for event in events
-        if event.event_name == "file_mutation" and event.payload.get("uri") == uri
-    ]
-    assert len(facts) == 1
-    assert facts[0].payload["task_id"] == result["task_id"]
-    assert facts[0].payload["task_type"] == "content_write"
-    assert facts[0].payload["memory_type"] == "experiences"
-    assert facts[0].payload["change_type"] == "modified"
 
 
 @pytest.mark.asyncio
@@ -183,15 +52,7 @@ async def test_write_updates_memory_file_and_parent_overview(service, monkeypatc
         e for e in events if e.event_name == "file_mutation" and e.payload["uri"] == memory_uri
     ]
     assert len(writes) == 1
-    # Synchronous writes return terminal content results without a Task ID,
-    # while the committed file fact retains its originating Task.
-    assert "task_id" not in result
-    task = await get_task_tracker().get(
-        writes[0].payload["task_id"], account_id=ctx.account_id, user_id=ctx.user.user_id
-    )
-    assert task is not None and task.task_type == "content_write"
-    assert task.status.value == "completed"
-    assert task.resource_id == memory_uri
+    assert writes[0].payload["task_id"] == result["task_id"]
     assert writes[0].payload["memory_type"] == "preferences"
     assert writes[0].payload["change_type"] == "modified"
 

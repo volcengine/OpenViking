@@ -92,8 +92,8 @@ class EmbeddingCollector(EventMetricCollector):
                 provider=str(payload["provider"]),
                 model_name=str(payload["model_name"]),
                 duration_seconds=float(payload["duration_seconds"]),
-                prompt_tokens=payload.get("prompt_tokens"),
-                completion_tokens=payload.get("completion_tokens"),
+                prompt_tokens=int(payload["prompt_tokens"]),
+                completion_tokens=int(payload["completion_tokens"]),
                 error_code=str(payload.get("error_code") or "OK"),
                 account_id=(
                     None if payload.get("account_id") is None else str(payload.get("account_id"))
@@ -126,8 +126,8 @@ class EmbeddingCollector(EventMetricCollector):
         provider: str,
         model_name: str,
         duration_seconds: float,
-        prompt_tokens: int | None,
-        completion_tokens: int | None,
+        prompt_tokens: int,
+        completion_tokens: int,
         error_code: str = "OK",
         account_id: str | None = None,
         source_type: str | None = None,
@@ -151,12 +151,6 @@ class EmbeddingCollector(EventMetricCollector):
             label_names=("provider", "model_name", "error_code"),
             account_id=account_id,
         )
-        if (
-            labels["error_code"] != "OK"
-            or prompt_tokens is None
-            or completion_tokens is None
-        ):
-            return
         token_labels = {"provider": str(provider), "model_name": str(model_name)}
         if labels["error_code"] == "OK" and int(prompt_tokens) > 0:
             registry.inc_counter(

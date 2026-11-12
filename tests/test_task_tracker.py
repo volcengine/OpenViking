@@ -8,7 +8,6 @@ import json
 import threading
 import time
 from copy import deepcopy
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, create_autospec
 
 import pytest
@@ -1506,89 +1505,6 @@ async def test_terminal_event_waits_for_owned_work(tracker, outcome, monkeypatch
     last = snapshot.execution_events["items"][-1]
     assert last["kind"] == "status_changed"
     assert last["status"] == ("completed" if outcome == "complete" else "failed")
-
-
-async def test_reporting_does_not_load_work_intervals_for_nonterminal_tasks(tracker, monkeypatch):
-    from openviking.observability.events import (
-        register_event_subscriber,
-        unregister_event_subscriber,
-    )
-    from openviking.observability.reporting import runtime
-
-    monkeypatch.setattr(runtime, "_reporter", object())
-    events = []
-    register_event_subscriber("terminal_read_cost", events.append)
-    owner = _owner_kwargs()
-    task = await tracker.create("add_resource", **owner)
-    await tracker.start(task.task_id, **owner)
-    # Keep the overall task open while sequential child Work completes.
-    await tracker.register_work(task.task_id, "root-hold", "Inline", **owner)
-    get_task = AsyncMock(wraps=tracker.get)
-    monkeypatch.setattr(tracker, "get", get_task)
-    try:
-        for index in range(20):
-            work_id = f"work-{index}"
-            await tracker.register_work(task.task_id, work_id, "Semantic", **owner)
-            await tracker.start_work(task.task_id, work_id, **owner)
-            await tracker.mark_work_done(task.task_id, work_id, **owner)
-        # The root outcome is still pending. Completing Work must not load
-        # get_task's growing processing-time interval list just for reporting.
-        get_task.assert_not_awaited()
-        assert not events
-        await tracker.complete(task.task_id, {"done": True}, **owner)
-        get_task.assert_not_awaited()
-        await tracker.mark_work_done(task.task_id, "root-hold", **owner)
-        get_task.assert_awaited_once()
-        assert [(event.event_name, event.payload["status"]) for event in events] == [
-            ("task_terminal", "completed")
-        ]
-    finally:
-        unregister_event_subscriber("terminal_read_cost")
-
-
-@pytest.mark.parametrize(
-    "transition", ["cancel_pending", "cancel_requeue", "discard_after_outcome"]
-)
-async def test_metric_terminal_event_covers_queue_cancellation_and_discard(
-    tracker, monkeypatch, transition
-):
-    from openviking.observability.events import (
-        register_event_subscriber,
-        unregister_event_subscriber,
-    )
-    from openviking.observability.reporting import runtime
-
-    emitted = []
-    monkeypatch.setattr(runtime, "_reporter", object())
-    register_event_subscriber(
-        "metric_lifecycle_test",
-        runtime.make_subscriber(SimpleNamespace(report=emitted.append), {}),
-    )
-    owner = _owner_kwargs()
-    try:
-        task = await tracker.create("add_resource", **owner)
-        await tracker.register_work(task.task_id, "child-work", "Semantic", **owner)
-        if transition == "cancel_pending":
-            await tracker.cancel(task.task_id, **owner)
-        elif transition == "cancel_requeue":
-            await tracker.start_work(task.task_id, "child-work", **owner)
-            await tracker.cancel(task.task_id, **owner)
-            assert not emitted
-            await tracker.mark_work_requeued(task.task_id, "child-work", **owner)
-        else:
-            await tracker.complete(task.task_id, {"done": True}, **owner)
-            assert not emitted
-            await tracker.discard_work(task.task_id, "child-work", **owner)
-        terminal = await tracker.get(task.task_id, **owner)
-        expected = "completed" if transition == "discard_after_outcome" else "cancelled"
-        assert terminal.status.value == expected
-        assert [(event["event_name"], event["task_id"], event["status"]) for event in emitted] == [
-            ("task_terminal", task.task_id, expected)
-        ]
-        assert emitted[0]["ov_account_id"] == owner["account_id"]
-        assert emitted[0]["ov_user_id"] == owner["user_id"]
-    finally:
-        unregister_event_subscriber("metric_lifecycle_test")
 
 
 async def test_legacy_tasks_do_not_get_invented_history():

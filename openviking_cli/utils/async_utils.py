@@ -6,7 +6,6 @@ Async helper utilities for running coroutines from sync code.
 
 import asyncio
 import atexit
-import contextvars
 import threading
 from typing import Coroutine, TypeVar
 
@@ -87,8 +86,7 @@ def run_async(coro: Coroutine[None, None, T]) -> T:
             finally:
                 tmp_loop.close()
 
-        context = contextvars.copy_context()
-        t = threading.Thread(target=context.run, args=(_run_in_thread,), daemon=True)
+        t = threading.Thread(target=_run_in_thread, daemon=True)
         t.start()
         t.join()
         if error_box:

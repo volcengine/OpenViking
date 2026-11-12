@@ -240,8 +240,6 @@ class OpenAIVLM(VLMBase):
                 prompt_cached_tokens=prompt_cached_tokens,
                 completion_reasoning_tokens=completion_reasoning_tokens,
             )
-        else:
-            self.record_call_without_usage(duration_seconds=duration_seconds)
         return
 
     def _parse_tool_calls(self, message) -> List[ToolCall]:
@@ -374,7 +372,7 @@ class OpenAIVLM(VLMBase):
 
         def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
-            response = self._call_provider(lambda: client.chat.completions.create(**kwargs))
+            response = client.chat.completions.create(**kwargs)
             elapsed = time.perf_counter() - t0
             if tools is not None:
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)
@@ -409,9 +407,7 @@ class OpenAIVLM(VLMBase):
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
-            response = await self._call_provider_async(
-                lambda: client.chat.completions.create(**kwargs)
-            )
+            response = await client.chat.completions.create(**kwargs)
             elapsed = time.perf_counter() - t0
             if tools is not None:
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)
@@ -499,7 +495,7 @@ class OpenAIVLM(VLMBase):
 
         def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
-            response = self._call_provider(lambda: client.chat.completions.create(**kwargs))
+            response = client.chat.completions.create(**kwargs)
             elapsed = time.perf_counter() - t0
             if tools is not None:
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)
@@ -527,9 +523,7 @@ class OpenAIVLM(VLMBase):
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
-            response = await self._call_provider_async(
-                lambda: client.chat.completions.create(**kwargs)
-            )
+            response = await client.chat.completions.create(**kwargs)
             elapsed = time.perf_counter() - t0
             if tools is not None:
                 self._update_token_usage_from_response(response, duration_seconds=elapsed)

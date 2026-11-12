@@ -141,7 +141,6 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
         """Update telemetry and token usage from response."""
         usage = getattr(response, "usage", None)
         if not usage:
-            self.record_call_without_usage()
             return
 
         def _usage_value(key: str, default: int = 0) -> int:
