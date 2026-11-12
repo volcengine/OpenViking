@@ -1,4 +1,4 @@
-import { Checkbox } from '../../shared/components/checkbox/checkbox.js';
+import { Checkbox } from '../../shared/primitives/checkbox/checkbox.js';
 import type { ScopeOption, SearchFilters, SearchMode } from './search-types.js';
 import { EMPTY_FILTERS } from './search-types.js';
 import { FILTER_AVAILABILITY } from './search-model.js';

@@ -1,4 +1,4 @@
-import { Button } from '../../shared/components/button/button.js';
+import { Button } from '../../shared/primitives/button/button.js';
 import { resolveScopeCascadeLabels } from './labels.js';
 import { useState } from 'react';
 import { useLocale } from '../../shared/locale-context.js';

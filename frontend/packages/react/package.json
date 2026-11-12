@@ -37,16 +37,16 @@
       "import": "./dist/components/file-preview.js"
     },
     "./components/file-preview/style.css": "./dist/components/file-preview/style.css",
-    "./components/file-browser-entries": {
-      "types": "./dist/components/file-browser-entries/index.d.ts",
-      "import": "./dist/components/file-browser-entries.js"
+    "./components/file-browser-action-bar": {
+      "types": "./dist/components/file-browser-action-bar/index.d.ts",
+      "import": "./dist/components/file-browser-action-bar.js"
     },
-    "./components/file-browser-entries/style.css": "./dist/components/file-browser-entries/style.css",
-    "./components/tui": {
-      "types": "./dist/components/tui/index.d.ts",
-      "import": "./dist/components/tui.js"
+    "./components/file-browser-action-bar/style.css": "./dist/components/file-browser-action-bar/style.css",
+    "./components/command-console": {
+      "types": "./dist/components/command-console/index.d.ts",
+      "import": "./dist/components/command-console.js"
     },
-    "./components/tui/style.css": "./dist/components/tui/style.css",
+    "./components/command-console/style.css": "./dist/components/command-console/style.css",
     "./components/scope-switcher": {
       "types": "./dist/components/scope-switcher/index.d.ts",
       "import": "./dist/components/scope-switcher.js"
@@ -108,36 +108,36 @@
       "import": "./dist/components/experience-dashboard.js"
     },
     "./components/experience-dashboard/style.css": "./dist/components/experience-dashboard/style.css",
-    "./components/email-login-form": {
-      "types": "./dist/components/email-login-form/index.d.ts",
-      "import": "./dist/components/email-login-form.js"
+    "./components/auth/email-login-form": {
+      "types": "./dist/components/auth/email-login-form/index.d.ts",
+      "import": "./dist/components/auth/email-login-form.js"
     },
-    "./components/email-login-form/style.css": "./dist/components/email-login-form/style.css",
-    "./components/api-key-login-form": {
-      "types": "./dist/components/api-key-login-form/index.d.ts",
-      "import": "./dist/components/api-key-login-form.js"
+    "./components/auth/email-login-form/style.css": "./dist/components/auth/email-login-form/style.css",
+    "./components/auth/api-key-login-form": {
+      "types": "./dist/components/auth/api-key-login-form/index.d.ts",
+      "import": "./dist/components/auth/api-key-login-form.js"
     },
-    "./components/api-key-login-form/style.css": "./dist/components/api-key-login-form/style.css",
-    "./components/password-reset-request-form": {
-      "types": "./dist/components/password-reset-request-form/index.d.ts",
-      "import": "./dist/components/password-reset-request-form.js"
+    "./components/auth/api-key-login-form/style.css": "./dist/components/auth/api-key-login-form/style.css",
+    "./components/auth/password-reset-request-form": {
+      "types": "./dist/components/auth/password-reset-request-form/index.d.ts",
+      "import": "./dist/components/auth/password-reset-request-form.js"
     },
-    "./components/password-reset-request-form/style.css": "./dist/components/password-reset-request-form/style.css",
-    "./components/password-setup-form": {
-      "types": "./dist/components/password-setup-form/index.d.ts",
-      "import": "./dist/components/password-setup-form.js"
+    "./components/auth/password-reset-request-form/style.css": "./dist/components/auth/password-reset-request-form/style.css",
+    "./components/auth/password-setup-form": {
+      "types": "./dist/components/auth/password-setup-form/index.d.ts",
+      "import": "./dist/components/auth/password-setup-form.js"
     },
-    "./components/password-setup-form/style.css": "./dist/components/password-setup-form/style.css",
-    "./components/login-method-selector": {
-      "types": "./dist/components/login-method-selector/index.d.ts",
-      "import": "./dist/components/login-method-selector.js"
+    "./components/auth/password-setup-form/style.css": "./dist/components/auth/password-setup-form/style.css",
+    "./components/auth/login-method-selector": {
+      "types": "./dist/components/auth/login-method-selector/index.d.ts",
+      "import": "./dist/components/auth/login-method-selector.js"
     },
-    "./components/login-method-selector/style.css": "./dist/components/login-method-selector/style.css",
-    "./components/invitation-confirmation": {
-      "types": "./dist/components/invitation-confirmation/index.d.ts",
-      "import": "./dist/components/invitation-confirmation.js"
+    "./components/auth/login-method-selector/style.css": "./dist/components/auth/login-method-selector/style.css",
+    "./components/auth/invitation-confirmation": {
+      "types": "./dist/components/auth/invitation-confirmation/index.d.ts",
+      "import": "./dist/components/auth/invitation-confirmation.js"
     },
-    "./components/invitation-confirmation/style.css": "./dist/components/invitation-confirmation/style.css"
+    "./components/auth/invitation-confirmation/style.css": "./dist/components/auth/invitation-confirmation/style.css"
   },
   "scripts": {
     "dev": "rslib build --watch",

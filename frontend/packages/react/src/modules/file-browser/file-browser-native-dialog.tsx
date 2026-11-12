@@ -1,5 +1,5 @@
 import type { RefObject } from 'react';
-import { Modal } from '../../shared/components/modal/modal.js';
+import { Modal } from '../../shared/primitives/modal/modal.js';
 import { PreviewHistory } from './preview-history.js';
 import { PreviewCompileConfig } from './preview-compile-config.js';
 import { PreviewPackImport } from './preview-pack-import.js';

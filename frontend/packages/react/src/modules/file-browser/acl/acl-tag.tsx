@@ -1,4 +1,4 @@
-import { Button } from '../../../shared/components/button/button.js';
+import { Button } from '../../../shared/primitives/button/button.js';
 import { useId, useState, type RefObject } from 'react';
 import type { FileBrowserAclLevel } from '../acl-types.js';
 import { levelLabel, type AclText } from './acl-labels.js';

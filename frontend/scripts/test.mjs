@@ -20,11 +20,11 @@ try {
           dts: false,
           source: {
             entry: {
-              button: './src/shared/components/button/button.tsx',
-              input: './src/shared/components/input/input.tsx',
-              modal: './src/shared/components/modal/modal.tsx',
+              button: './src/shared/primitives/button/button.tsx',
+              input: './src/shared/primitives/input/input.tsx',
+              modal: './src/shared/primitives/modal/modal.tsx',
               'browser-entries':
-                './src/components/file-browser-entries/index.ts',
+                './src/components/file-browser-action-bar/index.ts',
               'file-browser': './src/modules/file-browser/use-file-browser.ts',
               console: './src/modules/console/use-console.ts',
               provider: './src/client/provider.tsx',

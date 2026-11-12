@@ -29,4 +29,4 @@ export const TextArea = input.TextArea;
 const modal = await import(pathToFileURL(join(output, 'modal.js')));
 export const Modal = modal.Modal;
 const entries = await import(pathToFileURL(join(output, 'browser-entries.js')));
-export const FileBrowserEntries = entries.FileBrowserEntries;
+export const FileBrowserActionBar = entries.FileBrowserActionBar;

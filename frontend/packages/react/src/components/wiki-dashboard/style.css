@@ -1,7 +1,7 @@
-@import '../../shared/components/button/button.css';
+@import '../../shared/primitives/button/button.css';
 @import '../../theme.css';
 @import '../../shared/dashboard/dashboard.css';
-@import '../../shared/components/popover/popover.css';
-@import '../../shared/components/tooltip/tooltip.css';
+@import '../../shared/primitives/popover/popover.css';
+@import '../../shared/primitives/tooltip/tooltip.css';
 @import './wiki-dashboard.css';
 @import './wiki-severity-filter.css';

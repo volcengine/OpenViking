@@ -3,14 +3,14 @@ import test from 'node:test';
 
 import dayjs from 'dayjs';
 
-import { toApiDate } from '../src/shared/components/date-picker/api-date.ts';
+import { toApiDate } from '../src/shared/primitives/date-picker/api-date.ts';
 import {
   buildCalendar,
   monthTitle,
   parseDate,
   shiftMonth,
   weekdayNames,
-} from '../src/shared/components/date-picker/calendar.ts';
+} from '../src/shared/primitives/date-picker/calendar.ts';
 
 test('a valid YYYY-MM-DD parses to local midnight', () => {
   const date = parseDate('2026-11-12');

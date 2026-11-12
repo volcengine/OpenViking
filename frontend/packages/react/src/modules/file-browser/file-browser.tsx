@@ -2,7 +2,7 @@ import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 
-import { ResizableHandle } from '../../shared/components/resizable/index.js';
+import { ResizableHandle } from '../../shared/primitives/resizable/index.js';
 import { FileBrowserPreviewPane } from './file-browser-preview-pane.js';
 import {
   TREE_DEFAULT_WIDTH,
@@ -26,13 +26,13 @@ export type {
 } from './types.js';
 
 /**
- * 文件浏览模块的组合视图，对齐控制台设计稿：左侧目录树（入口条、搜索行、树），
+ * 文件浏览模块的组合视图：左侧目录树（操作栏、搜索行、树），
  * 右侧详情区（面包屑、标题行、正文、底部元信息）。两栏之间有一条可拖拽的
  * 分隔条，拖动改树宽；取数与联动都在 {@link useFileBrowser} 里，这里只组装
  * 视图。
  *
- * The file browser module's composite view, matching the console design: the tree
- * on the left (entry row, search row, tree) and the detail pane on the right
+ * The file browser module's composite view: the tree
+ * on the left (action bar, search row, tree) and the detail pane on the right
  * (breadcrumb, header, body, footer). A draggable divider between them resizes the
  * tree; loading and coordination live in {@link useFileBrowser}, and this only
  * assembles the view.
@@ -198,7 +198,7 @@ export function FileBrowser({
               agentConnect,
               onImportResources,
               renderImportResources,
-              labels: labels?.entries,
+              labels: labels?.actionBar,
             }}
             onSearch={() => setSearchOpen(true)}
             onAdvancedSearch={() => {

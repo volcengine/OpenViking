@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import dayjs from 'dayjs';
 
-import { toApiDate } from '../src/shared/components/date-picker/api-date.ts';
+import { toApiDate } from '../src/shared/primitives/date-picker/api-date.ts';
 
 test('the local zone reads the day on the local calendar', () => {
   // 2026-11-12T00:30+08:00 在东八区是 12 日零点；UTC 那边还是 11 日。

@@ -3,7 +3,7 @@ import { useOvClient, useOvSignal } from '../../client/provider.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { OV_PATHS } from '../../client/paths.js';
 import { useDashboardQuery } from './use-dashboard-query.js';
-import { toApiDate } from '../../shared/components/date-picker/api-date.js';
+import { toApiDate } from '../../shared/primitives/date-picker/api-date.js';
 import { experienceDateBounds } from './experience-date-range.js';
 import {
   isExperienceDirectory,

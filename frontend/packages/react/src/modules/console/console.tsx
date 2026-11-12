@@ -1,6 +1,6 @@
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
 import { useId, useRef } from 'react';
-import { Tui } from '../../components/tui/index.js';
+import { CommandConsole } from '../../components/command-console/index.js';
 import {
   VikingBot,
   VikingBotSessionActions,
@@ -114,7 +114,7 @@ export function Console({
           hidden={state.mode !== 'command'}
         >
           {slots?.commandHelp}
-          <Tui
+          <CommandConsole
             records={state.records}
             value={state.command}
             commands={state.commands}
@@ -125,7 +125,7 @@ export function Console({
             onValueChange={state.setCommand}
             onSubmit={(command) => void state.execute(command)}
             onOpenUri={onOpenUri}
-            labels={labels.tui}
+            labels={labels.commandConsole}
           />
         </div>
       </div>

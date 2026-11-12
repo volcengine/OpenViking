@@ -14,7 +14,7 @@ import type { FileBrowserLabels } from './types.js';
 /** 模块外壳自己渲染的文案，其余透传给树与预览。 */
 export type ShellLabels = Omit<
   FileBrowserLabels,
-  'tree' | 'preview' | 'entries' | 'dashboard' | 'acl' | 'workflows'
+  'tree' | 'preview' | 'actionBar' | 'dashboard' | 'acl' | 'workflows'
 >;
 
 /**

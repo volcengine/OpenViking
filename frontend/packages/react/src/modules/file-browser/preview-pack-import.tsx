@@ -1,5 +1,5 @@
 import { useId, useState } from 'react';
-import { Button } from '../../shared/components/button/button.js';
+import { Button } from '../../shared/primitives/button/button.js';
 import { importPreviewPack } from './preview-native.js';
 import { PreviewMutationError } from './preview-query-state.js';
 import type { PreviewWorkflowProps } from './preview-workflow-types.js';

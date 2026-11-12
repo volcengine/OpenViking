@@ -1,8 +1,8 @@
 import { useId } from 'react';
 
-import { Checkbox } from '../../shared/components/checkbox/checkbox.js';
-import { DatePicker } from '../../shared/components/date-picker/date-picker.js';
-import { Radio } from '../../shared/components/radio/radio.js';
+import { Checkbox } from '../../shared/primitives/checkbox/checkbox.js';
+import { DatePicker } from '../../shared/primitives/date-picker/date-picker.js';
+import { Radio } from '../../shared/primitives/radio/radio.js';
 import type { SearchFilters } from './search-types.js';
 import type { FilterAvailability } from './search-types.js';
 import type { Locale } from '../../shared/locale.js';

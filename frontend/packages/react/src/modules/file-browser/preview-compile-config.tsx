@@ -1,7 +1,7 @@
 import { useCallback, useId, useState } from 'react';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { OV_PATHS } from '../../client/paths.js';
-import { Button } from '../../shared/components/button/button.js';
+import { Button } from '../../shared/primitives/button/button.js';
 import { readCompileConfig } from './preview-native.js';
 import { useDashboardQuery } from './use-dashboard-query.js';
 import { usePreviewMutation } from './use-preview-mutation.js';

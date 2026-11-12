@@ -1,5 +1,5 @@
-import { Button } from '../../shared/components/button/button.js';
-import { Tooltip } from '../../shared/components/tooltip/tooltip.js';
+import { Button } from '../../shared/primitives/button/button.js';
+import { Tooltip } from '../../shared/primitives/tooltip/tooltip.js';
 import { FilePreviewMenu } from './file-preview-menu.js';
 import { normalizeFilePreviewActions } from './normalize-file-preview-actions.js';
 import type {

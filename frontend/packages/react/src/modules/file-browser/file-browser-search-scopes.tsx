@@ -1,7 +1,7 @@
 import { useId } from 'react';
 
-import { Checkbox } from '../../shared/components/checkbox/checkbox.js';
-import { Radio } from '../../shared/components/radio/radio.js';
+import { Checkbox } from '../../shared/primitives/checkbox/checkbox.js';
+import { Radio } from '../../shared/primitives/radio/radio.js';
 import type { ScopeOption, SearchFilters } from './search-types.js';
 import type { FilterAvailability } from './search-types.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
