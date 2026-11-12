@@ -346,6 +346,44 @@ async def test_non_recursive_memory_samples_files_and_child_abstracts_together(m
 
 
 @pytest.mark.asyncio
+async def test_memory_reindex_rolls_up_only_ready_child_abstracts(monkeypatch):
+    root_uri = "viking://user/alice/memories/events"
+    ready_uri = f"{root_uri}/ready"
+    pending_uri = f"{root_uri}/pending"
+    ready_abstract = "# Ready\n\nEvent summaries are available."
+    fake_fs = _FakeVikingFS(
+        {root_uri: [{"name": name, "isDir": True} for name in ("ready", "pending")]},
+        abstracts={
+            ready_uri: ready_abstract,
+            pending_uri: f"# {pending_uri} [Directory abstract is not ready]",
+        },
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
+    )
+    _patch_semantic_config(monkeypatch)
+    processor = _FakeProcessor()
+    executor = SemanticTreeExecutor(
+        processor=processor,
+        context_type="memory",
+        max_concurrent_llm=2,
+        ctx=RequestContext(user=UserIdentifier("acc1", "alice"), role=Role.USER),
+        recursive=False,
+        generation_trigger="reindex",
+    )
+
+    await executor.run(root_uri)
+
+    assert processor.overview_inputs[-1][:3] == (
+        root_uri,
+        [],
+        [{"name": "ready", "abstract": ready_abstract}],
+    )
+    assert processor.overview_inputs[-1][3]["total_children"] == 2
+    assert processor.vectorized_dirs == [root_uri]
+
+
+@pytest.mark.asyncio
 async def test_busy_parent_snapshot_preserves_changed_file_work(monkeypatch):
     root_uri = "viking://resources/wide"
     changed = f"{root_uri}/file-020.txt"

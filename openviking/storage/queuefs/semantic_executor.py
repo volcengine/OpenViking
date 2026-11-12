@@ -21,11 +21,13 @@ from openviking.service.task_work_index import (
     get_task_context,
 )
 from openviking.storage.abstract_overview import (
+    ABSTRACT_NOT_READY_SUFFIX,
     AbstractOverviewFormatError,
     AbstractOverviewWriteResult,
     body_for_preview,
     deterministic_sample,
     freshness_metadata,
+    is_directory_summary_placeholder,
     read_abstract_overview_pending_snapshot,
     write_abstract_overview,
 )
@@ -1482,6 +1484,7 @@ class SemanticTreeExecutor:
 
     async def _finalize_children_abstracts(self, node: DirNode) -> List[Dict[str, str]]:
         results: List[Dict[str, str]] = []
+        memory_reindex = self._context_type == "memory" and self._generation_trigger == "reindex"
         for idx, child_uri in enumerate(node.children_dirs):
             if (
                 node.sampled_children_dirs is not None
@@ -1494,9 +1497,12 @@ class SemanticTreeExecutor:
                     abstract = await self._viking_fs.abstract(child_uri, ctx=self._ctx)
                 except Exception:
                     abstract = ""
-                results.append({"name": child_uri.split("/")[-1], "abstract": abstract})
-            else:
-                results.append(item)
+                item = {"name": child_uri.split("/")[-1], "abstract": abstract}
+            if memory_reindex and is_directory_summary_placeholder(
+                item["abstract"], ABSTRACT_NOT_READY_SUFFIX
+            ):
+                continue
+            results.append(item)
         return results
 
     async def _is_stale(self) -> bool:

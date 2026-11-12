@@ -37,6 +37,8 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 ABSTRACT_OVERVIEW_FILENAMES = frozenset({".abstract.md", ".overview.md"})
+ABSTRACT_NOT_READY_SUFFIX = "[Directory abstract is not ready]"
+OVERVIEW_NOT_READY_SUFFIX = "[Directory overview is not ready]"
 EMBEDDING_METADATA_FIELDS = ("directory",)
 _METADATA_ORDER = ("directory", "source", "generated_by", "freshness")
 _MARKDOWN_URI_SAFE_ASCII = frozenset(
@@ -82,6 +84,17 @@ def is_abstract_overview_uri(uri: str) -> bool:
     """Return whether uri names one of the two generated sidecars."""
 
     return uri.rstrip("/").rsplit("/", 1)[-1] in ABSTRACT_OVERVIEW_FILENAMES
+
+
+def is_directory_summary_placeholder(text: str, suffix: str) -> bool:
+    """Identify VikingFS's heading-only marker without dropping authored content."""
+    if not text:
+        return False
+    heading = text.rstrip()
+    if not heading.endswith(suffix):
+        return False
+    heading = heading[: -len(suffix)].strip()
+    return heading.startswith("#") and "\n" not in heading
 
 
 def _normalize_directory_uri(dir_uri: str) -> str:
