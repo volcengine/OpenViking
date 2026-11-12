@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import os
 import shutil
 import zipfile
 from types import SimpleNamespace
@@ -66,8 +67,9 @@ description: PDF helper
 @pytest.mark.asyncio
 async def test_write_auxiliary_files_normalizes_windows_separators(tmp_path):
     base_path = tmp_path / "pdf"
-    base_path.mkdir()
-    aux_file = base_path / "scripts\\check_bounding_boxes.py"
+    scripts_dir = base_path / "scripts"
+    scripts_dir.mkdir(parents=True)
+    aux_file = scripts_dir / "check_bounding_boxes.py"
     aux_file.write_text("print('ok')", encoding="utf-8")
 
     viking_fs = SimpleNamespace(
@@ -86,6 +88,44 @@ async def test_write_auxiliary_files_normalizes_windows_separators(tmp_path):
 
     viking_fs.write_file.assert_awaited_once_with(
         "viking://user/default/skills/pdf/scripts/check_bounding_boxes.py",
+        "print('ok')",
+        ctx=None,
+        lease_ref=None,
+    )
+    viking_fs.write_file_bytes.assert_not_awaited()
+
+
+@pytest.mark.skipif(
+    os.name == "nt", reason="Windows cannot create file names containing a backslash"
+)
+@pytest.mark.asyncio
+async def test_write_auxiliary_files_normalizes_literal_backslash_on_posix(tmp_path):
+    # On POSIX a backslash is a legal filename character: a zip entry named
+    # "scripts\check.py" extracted on Linux produces ONE file whose name
+    # contains a literal backslash. The stored URI must still normalize it to
+    # a forward slash instead of storing the raw name.
+    base_path = tmp_path / "pdf"
+    scripts_dir = base_path / "scripts"
+    scripts_dir.mkdir(parents=True)
+    aux_file = scripts_dir / ("inner" + chr(92) + "check_bounding_boxes.py")
+    aux_file.write_text("print('ok')", encoding="utf-8")
+
+    viking_fs = SimpleNamespace(
+        write_file=AsyncMock(),
+        write_file_bytes=AsyncMock(),
+    )
+    processor = SkillProcessor(vikingdb=None)
+
+    await processor._write_auxiliary_files(
+        viking_fs,
+        [aux_file],
+        base_path,
+        "viking://user/default/skills/pdf",
+        ctx=None,
+    )
+
+    viking_fs.write_file.assert_awaited_once_with(
+        "viking://user/default/skills/pdf/scripts/inner/check_bounding_boxes.py",
         "print('ok')",
         ctx=None,
         lease_ref=None,
