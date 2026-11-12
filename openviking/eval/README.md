@@ -120,9 +120,10 @@ python -m openviking.eval.ragas.rag_eval \
     --output ./results.json
 
 # 直接评估，不加载文档库
-# 启用 RAGAS 指标
+# 端到端生成真实回答，再启用 RAGAS 指标
 python -m openviking.eval.ragas.rag_eval \
     --question_file ./questions.jsonl \
+    --mode end-to-end \
     --ragas \
     --output ./results.json
 
@@ -133,6 +134,24 @@ python -m openviking.eval.ragas.rag_eval \
     --recorder \
     --output ./results.json
 ```
+
+默认 `--mode retrieval-only` 只检索，不调用回答模型；`--ragas` 必须同时指定
+`--mode end-to-end`，使用 `--config` 中的 VLM 生成真实回答。
+题集的 `answer`（或 `ground_truth`）仅作为评分参考，不进入生成提示词。
+
+文本 L2 命中优先使用内联 `content`，否则通过 SDK `read` 读取正文；L0/L1
+使用对应摘要，并在 `content_source` 中标记。当前文本流水线不将图片、PDF
+等原文件视为文本正文，也不在正文读取失败时静默回退到摘要。
+不支持的媒体及读取错误保留在每题 `errors` 中；这不等于知识库没有资料。
+
+端到端模式沿用最多三段证据的生成预算。`contexts` 保存生成实际使用的有序
+证据，Ragas 使用完全相同的内容；`retrieved_contexts` 和 `retrieved_uris`
+保留全部候选正文及命中 URI（包括无法读取的命中）。检索模式的 `contexts`
+包含全部成功读取的证据。生成失败或空回答保存为 `answer: null` 和错误记录，
+不会作为回答文本评分。若存在无有效回答的题目，保存报告后阻止评分并提示
+对应行号，不静默删除失败题。报告另存 `retrieval_time` 和 `generation_time`。
+
+图片引用正文的定位和原图视觉核验尚不包含在该文本流水线中。
 
 ### 示例 3：基于本仓库的评估
 
@@ -309,7 +328,7 @@ export RAGAS_BATCH_SIZE=5
 export RAGAS_TIMEOUT=120
 export RAGAS_MAX_RETRIES=2
 
-python -m openviking.eval.ragas.rag_eval --docs_dir ./docs --question_file ./questions.jsonl --ragas
+python -m openviking.eval.ragas.rag_eval --docs_dir ./docs --question_file ./questions.jsonl --mode end-to-end --ragas
 ```
 
 ## 相关文件

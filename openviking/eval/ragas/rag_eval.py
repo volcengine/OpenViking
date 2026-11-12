@@ -5,8 +5,8 @@
 RAG Evaluation CLI Tool for OpenViking.
 
 Usage:
-    python -m openviking.eval.rag_eval --docs_dir ./docs --question_file ./questions.jsonl
-    python -m openviking.eval.rag_eval --docs_dir ./docs --code_dir ./code --question_file ./questions.jsonl
+    python -m openviking.eval.ragas.rag_eval --question_file ./questions.jsonl
+    python -m openviking.eval.ragas.rag_eval --question_file ./questions.jsonl --mode end-to-end --ragas
 """
 
 import argparse
@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
+
+from .pipeline import RAGQueryPipeline
 
 logging.basicConfig(
     level=logging.INFO,
@@ -80,8 +82,9 @@ class RAGEvaluator:
         self.code_dirs = code_dirs
         self.config_path = config_path
         self.server_url = server_url
-        self._client = None
+        self._client: Any = None
         self._initialized = False
+        self._pipeline = RAGQueryPipeline(config_path=config_path, server_url=server_url)
 
     def _get_client(self):
         """Get or create OpenViking client."""
@@ -144,55 +147,42 @@ class RAGEvaluator:
 
         self._initialized = True
 
-    async def retrieve(self, query: str, top_k: int = 5) -> Dict[str, Any]:
+    async def retrieve(
+        self, query: str, top_k: int = 5, generate_answer: bool = False
+    ) -> Dict[str, Any]:
         """
         Retrieve relevant contexts for a query.
 
         Args:
             query: The query string
             top_k: Number of results to retrieve
+            generate_answer: Generate a response using the materialized evidence
 
         Returns:
             Dict with contexts and timing info
         """
-        client = self._get_client()
-        start_time = time.time()
+        start_time = time.perf_counter()
 
         try:
-            result = client.search(query, limit=top_k)
-            contexts = []
-
-            if result:
-                items = (
-                    result.get("memories", [])
-                    + result.get("resources", [])
-                    + result.get("skills", [])
-                )
-                for ctx in items:
-                    contexts.append(
-                        {
-                            "uri": ctx.get("uri", ""),
-                            "content": ctx.get("abstract", "") or ctx.get("overview", ""),
-                            "score": ctx.get("score", 0.0),
-                        }
-                    )
-
-            retrieval_time = time.time() - start_time
-            return {
-                "contexts": contexts,
-                "retrieval_time": retrieval_time,
-            }
+            self._pipeline._client = self._get_client()
+            result = self._pipeline.query(query, top_k=top_k, generate_answer=generate_answer)
+            # The pipeline selects evidence once, before both generation and scoring.
+            result["contexts"] = result["retrieved_contexts"][: len(result["contexts"])]
+            return result
         except Exception as e:
             logger.error(f"Failed to retrieve for query '{query}': {e}")
             return {
                 "contexts": [],
-                "retrieval_time": time.time() - start_time,
+                "retrieval_time": time.perf_counter() - start_time,
+                "answer": None,
+                "errors": [{"stage": "retrieval", "message": str(e)}],
             }
 
     async def evaluate(
         self,
         questions: List[Dict[str, Any]],
         top_k: int = 5,
+        mode: str = "retrieval-only",
     ) -> Dict[str, Any]:
         """
         Evaluate RAG performance on a set of questions.
@@ -200,10 +190,13 @@ class RAGEvaluator:
         Args:
             questions: List of question dictionaries
             top_k: Number of contexts to retrieve per query
+            mode: Retrieval-only, or end-to-end with answer generation
 
         Returns:
             Evaluation results dictionary
         """
+        if mode not in ("retrieval-only", "end-to-end"):
+            raise ValueError(f"Unknown evaluation mode: {mode}")
         await self.initialize()
 
         results = []
@@ -214,22 +207,26 @@ class RAGEvaluator:
             question = q_item["question"]
             logger.info(f"Processing question {i}/{total_questions}: {question[:50]}...")
 
-            retrieve_result = await self.retrieve(question, top_k=top_k)
+            retrieve_result = await self.retrieve(
+                question, top_k=top_k, generate_answer=mode == "end-to-end"
+            )
             contexts = retrieve_result["contexts"]
             retrieval_time = retrieve_result["retrieval_time"]
             total_retrieval_time += retrieval_time
 
             result = {
+                **retrieve_result,
                 "question": question,
                 "contexts": contexts,
                 "context_count": len(contexts),
-                "ground_truth": q_item.get("answer", ""),
+                "ground_truth": q_item.get("answer", q_item.get("ground_truth", "")),
                 "files": q_item.get("files", []),
                 "retrieval_time": retrieval_time,
             }
             results.append(result)
 
         return {
+            "mode": mode,
             "total_questions": total_questions,
             "results": results,
             "metrics": self._calculate_metrics(results, total_retrieval_time),
@@ -298,7 +295,19 @@ def save_report(eval_results: Dict[str, Any], output_path: str):
 
 
 async def run_ragas_evaluation(eval_results: Dict[str, Any]):
-    """Run RAGAS evaluation if available."""
+    """Score end-to-end results without fabricating responses or dropping failures."""
+    if eval_results.get("mode") != "end-to-end":
+        raise ValueError("RAGAS answer metrics require --mode end-to-end")
+    invalid = [
+        i
+        for i, result in enumerate(eval_results["results"], 1)
+        if not isinstance(result.get("answer"), str) or not result["answer"].strip()
+    ]
+    if invalid:
+        raise ValueError(
+            f"Cannot score missing/failed answers at rows {invalid}; "
+            "inspect the saved report and rerun failures before scoring"
+        )
     try:
         from openviking.eval.ragas.types import EvalDataset, EvalSample
 
@@ -312,8 +321,9 @@ async def run_ragas_evaluation(eval_results: Dict[str, Any]):
             sample = EvalSample(
                 query=result["question"],
                 context=[c["content"] for c in result["contexts"]],
-                response="",
+                response=result["answer"],
                 ground_truth=result.get("ground_truth", ""),
+                meta={"errors": result.get("errors", [])},
             )
             samples.append(sample)
 
@@ -334,6 +344,8 @@ async def run_ragas_evaluation(eval_results: Dict[str, Any]):
 
 async def main_async(args):
     """Main async function."""
+    if args.ragas and args.mode != "end-to-end":
+        raise ValueError("--ragas requires --mode end-to-end to generate real answers")
     # if not args.docs_dir and not args.code_dir:
     #     logger.error("At least one --docs_dir or --code_dir must be specified")
     #     sys.exit(1)
@@ -362,6 +374,7 @@ async def main_async(args):
     eval_results = await evaluator.evaluate(
         questions=questions,
         top_k=args.top_k,
+        mode=args.mode,
     )
 
     print_report(eval_results)
@@ -381,13 +394,13 @@ def main():
         epilog="""
 Examples:
   # Evaluate with documents
-  python -m openviking.eval.rag_eval --docs_dir ./docs --question_file ./questions.jsonl
+  python -m openviking.eval.ragas.rag_eval --docs_dir ./docs --question_file ./questions.jsonl
 
   # Evaluate with multiple document directories and code
-  python -m openviking.eval.rag_eval --docs_dir ./docs1 --docs_dir ./docs2 --code_dir ./code --question_file ./questions.jsonl
+  python -m openviking.eval.ragas.rag_eval --docs_dir ./docs1 --docs_dir ./docs2 --code_dir ./code --question_file ./questions.jsonl
 
   # With RAGAS metrics
-  python -m openviking.eval.rag_eval --docs_dir ./docs --question_file ./questions.jsonl --ragas
+  python -m openviking.eval.ragas.rag_eval --question_file ./questions.jsonl --mode end-to-end --ragas
         """,
     )
 
@@ -433,6 +446,13 @@ Examples:
     parser.add_argument(
         "--output",
         help="Path to save evaluation results (JSON format)",
+    )
+
+    parser.add_argument(
+        "--mode",
+        choices=("retrieval-only", "end-to-end"),
+        default="retrieval-only",
+        help="Retrieval-only (default), or generate answers with the configured VLM",
     )
 
     parser.add_argument(
