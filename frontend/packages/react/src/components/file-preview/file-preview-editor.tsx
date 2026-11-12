@@ -31,6 +31,11 @@ export function FilePreviewEditor({
     useState<ComponentType<FilePreviewCodeEditorProps>>();
   const [editorFailed, setEditorFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  // Text inputs match :focus-visible even on pointer focus; track only this editor.
+  const [pointerFocus, setPointerFocus] = useState(false);
+  // useEffect 必要性：正文可编辑后，按读取状态和重试次数加载浏览器编辑器模块；
+  // 异步 import 必须在客户端提交后执行，React 渲染无法直接取得模块结果。
+  // 依赖变化或卸载时使旧结果失效，避免旧加载任务安装控件或更新错误状态。
   useEffect(() => {
     if (loading || failed) return;
     let active = true;
@@ -78,7 +83,18 @@ export function FilePreviewEditor({
   }
 
   return (
-    <div className="ov-file-preview__editor">
+    <div
+      className="ov-file-preview__editor"
+      data-pointer-focus={pointerFocus || undefined}
+      onPointerDownCapture={() => setPointerFocus(true)}
+      onKeyDownCapture={(event) => {
+        if (event.key === 'Tab') setPointerFocus(false);
+      }}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget))
+          setPointerFocus(false);
+      }}
+    >
       {Editor ? (
         <Editor
           draft={draft}

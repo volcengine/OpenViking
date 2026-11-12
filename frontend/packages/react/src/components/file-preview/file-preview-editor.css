@@ -15,6 +15,12 @@
   outline: none;
 }
 
+.ov-file-preview__editor:not([data-pointer-focus])
+  .cm-editor:has(.cm-content:focus-visible) {
+  outline: 2px solid var(--ov-ui-file-preview-focus-ring);
+  outline-offset: -2px;
+}
+
 .ov-file-preview__code-editor .cm-scroller {
   overflow: auto;
   font-family: var(--ov-ui-font-mono, ui-monospace, monospace);
