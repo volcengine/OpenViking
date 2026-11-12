@@ -93,6 +93,9 @@ export interface ExperienceDashboardLabels {
   retry: string;
   previous: string;
   next: string;
+  page: string;
+  jumpPrevious: string;
+  jumpNext: string;
   updated: string;
   success: string;
   partial: string;

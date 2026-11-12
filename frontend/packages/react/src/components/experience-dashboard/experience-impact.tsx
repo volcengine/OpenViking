@@ -62,7 +62,7 @@ export function ExperienceImpact({
   outcomesState: DashboardStatus;
   trajectoriesState: DashboardStatus;
   hasMore: boolean;
-  onLoadMore: () => void;
+  onLoadMore?: () => void;
   onOpenUri?: (uri: string) => void;
 }) {
   const total = data.outcomes?.reduce((sum, item) => sum + item.count, 0) ?? 0;

@@ -212,7 +212,12 @@
   max-width: none;
   padding: 8px;
   border-radius: 12px;
-  box-shadow: 0 8px 24px rgb(0 0 0 / 10%);
+  /* 投影取自主题基线，宿主可通过 --ov-ui-color-overlay-shadow 统一覆盖。 */
+  /* The shadow comes from the theme baseline, overridable through the public token. */
+  box-shadow: var(
+    --ov-ui-color-overlay-shadow,
+    var(--ov-ui-overlay-shadow-default)
+  );
 }
 
 .ov-experience-dashboard__range-menu {

@@ -160,7 +160,9 @@ function ExperienceDashboardContent({
                 outcomesState={states.outcomes ?? {}}
                 trajectoriesState={states.trajectories ?? {}}
                 hasMore={hasMore}
-                onLoadMore={() => onPageChange?.(page + 1)}
+                onLoadMore={
+                  onPageChange ? () => onPageChange(page + 1) : undefined
+                }
                 onOpenUri={onOpenUri}
               />
             ) : tab === 'source' ? (

@@ -42,7 +42,13 @@ export function ExperiencePagination({
         current={page + 1}
         pageCount={count}
         disabled={loading || !onPageChange}
-        labels={{ previous: t.previous, next: t.next }}
+        labels={{
+          previous: t.previous,
+          next: t.next,
+          page: t.page,
+          jumpPrevious: t.jumpPrevious,
+          jumpNext: t.jumpNext,
+        }}
         onChange={(next) => onPageChange?.(next - 1)}
       />
     </div>

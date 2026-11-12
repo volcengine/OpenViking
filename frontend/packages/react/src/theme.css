@@ -64,6 +64,9 @@
   --ov-ui-tour-shadow-default:
     0 15px 35px rgb(0 0 0 / 5%), 0 5px 15px rgb(0 0 0 / 5%);
   --ov-ui-tour-highlight-default: rgb(82 82 255 / 8%);
+  /* 紧凑浮层（下拉菜单、时间范围选择）的投影：比卡片浮层更收，托起一块小面板。 */
+  /* The shadow of a compact surface such as a dropdown or range picker. */
+  --ov-ui-overlay-shadow-default: 0 8px 24px rgb(0 0 0 / 10%);
 
   --ov-ui-auth-on-primary-default: #ffffff;
   --ov-ui-auth-backdrop-default: rgb(0 0 0 / 40%);
