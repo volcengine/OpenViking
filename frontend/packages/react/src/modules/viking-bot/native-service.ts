@@ -5,6 +5,7 @@ import type {
   OvRequestSpec,
 } from '../../client/types.js';
 import type { VikingBotSession } from '../../components/viking-bot/capabilities.js';
+import { isOvClientError } from '../../client/errors.js';
 import { nativeChatEvents } from './native-events.js';
 import { readNativeMessages, writeNativeParts } from './native-messages.js';
 import { nativeChatInput } from './native-input.js';
@@ -62,13 +63,37 @@ export function createNativeBotService(
     },
     async loadMessages(id, signal) {
       const path = OV_PATH_BUILDERS.session(id);
-      const [context, meta] = await Promise.all([
-        request<{ messages: Parameters<typeof readNativeMessages>[0] }>(
-          { method: 'GET', path: OV_PATH_BUILDERS.sessionContext(id) },
+      const meta = await request<{ commit_count: number; uri: string }>(
+        { method: 'GET', path },
+        signal,
+      );
+      const readMessages = async (uri: string) => {
+        const content = await request<string>(
+          {
+            method: 'GET',
+            path: OV_PATHS.contentRead,
+            query: { uri, offset: 0, limit: -1, raw: true },
+          },
           signal,
-        ),
-        request<{ commit_count: number }>({ method: 'GET', path }, signal),
-      ]);
+        );
+        return content
+          .split('\n')
+          .filter((line) => line.trim())
+          .map(
+            (line) =>
+              JSON.parse(line) as Parameters<
+                typeof readNativeMessages
+              >[0][number],
+          );
+      };
+      const uri = meta.uri.replace(/\/+$/, '');
+      const messages = await readMessages(`${uri}/messages.jsonl`).catch(
+        (error) => {
+          // Empty sessions may not have created their live JSONL yet.
+          if (isOvClientError(error) && error.statusCode === 404) return [];
+          throw error;
+        },
+      );
       const archives: Parameters<typeof readNativeMessages>[0][] = [];
       // Four concurrent archive reads per instance; preserve chronological order.
       for (let offset = 0; offset < meta.commit_count; offset += 4) {
@@ -77,16 +102,7 @@ export function createNativeBotService(
             { length: Math.min(4, meta.commit_count - offset) },
             async (_, index) => {
               const archive = `archive_${String(offset + index + 1).padStart(3, '0')}`;
-              const result = await request<{
-                messages: Parameters<typeof readNativeMessages>[0];
-              }>(
-                {
-                  method: 'GET',
-                  path: OV_PATH_BUILDERS.sessionArchive(id, archive),
-                },
-                signal,
-              );
-              return result.messages;
+              return readMessages(`${uri}/history/${archive}/messages.jsonl`);
             },
           ),
         );
@@ -94,7 +110,7 @@ export function createNativeBotService(
       }
       const seen = new Set<string>();
       return readNativeMessages(
-        [...archives.flat(), ...context.messages].filter((message) => {
+        [...archives.flat(), ...messages].filter((message) => {
           if (seen.has(message.id)) return false;
           seen.add(message.id);
           return true;

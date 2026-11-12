@@ -72,10 +72,14 @@ export function createChatTimeline(
       accumulator.apply(event);
       publish();
     },
-    finish: async () => {
+    finish: async (persistPartial = true) => {
       await decisions;
+      const completed = [...messages, ...pending];
       commit();
-      return { messages: [...messages], added: messages.slice(base.length) };
+      return {
+        messages: [...messages],
+        added: (persistPartial ? messages : completed).slice(base.length),
+      };
     },
   };
 }

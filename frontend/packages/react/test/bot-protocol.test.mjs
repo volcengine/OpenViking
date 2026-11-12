@@ -28,7 +28,10 @@ test('native reasoning snapshot does not duplicate deltas; whitespace and tool o
           ['reasoning', 'check '],
           ['tool_call', 'read({"uri":"demo"})'],
           ['tool_call', 'read({"uri":"demo"})'],
+          ['tool_call', 'read({"uri":"other"})'],
           ['tool_result', 'found'],
+          ['tool_result', 'same again'],
+          ['tool_result', 'other result'],
           ['iteration', '2'],
           ['reasoning_delta', 'done'],
           ['content_delta', 'ans'],
@@ -43,13 +46,18 @@ test('native reasoning snapshot does not duplicate deltas; whitespace and tool o
   const parts = accumulator.finish();
   assert.deepEqual(
     parts.map((part) => part.type),
-    ['reasoning', 'tool', 'reasoning', 'text'],
+    ['reasoning', 'tool', 'tool', 'tool', 'reasoning', 'text'],
   );
   assert.equal(parts[0].text, 'check ');
   assert.equal(parts[1].output, 'found');
   assert.equal(parts[1].status, 'completed');
-  assert.equal(parts[2].groupId, parts[0].groupId);
-  assert.equal(parts[3].text, 'answer');
+  assert.deepEqual(
+    parts.slice(1, 4).map((p) => p.output),
+    ['found', 'same again', 'other result'],
+  );
+  assert.equal(new Set(parts.slice(1, 4).map((p) => p.id)).size, 3);
+  assert.equal(parts[4].groupId, parts[0].groupId);
+  assert.equal(parts[5].text, 'answer');
 });
 
 test('commercial adapters can replace reasoning by stable event ID and update paired tools', () => {

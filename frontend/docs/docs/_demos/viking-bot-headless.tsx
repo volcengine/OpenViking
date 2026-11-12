@@ -33,7 +33,9 @@ export default function VikingBotHeadless() {
         isSubmitting={chat.isSubmitting}
         onSend={(input) => {
           const token = ++submission.current;
-          setDraft((current) => (current === input.text ? '' : current));
+          setDraft((current) =>
+            current.trim() === input.text.trim() ? '' : current,
+          );
           void chat.send(input).then((success) => {
             if (success) void sessions.refresh();
             else if (token === submission.current)

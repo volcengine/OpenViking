@@ -102,7 +102,7 @@ export const OV_PATH_BUILDERS = {
   sessionContext: (sessionId: string) =>
     `${OV_PATH_BUILDERS.session(sessionId)}/context`,
   sessionArchive: (sessionId: string, archiveId: string) =>
-    `${OV_PATH_BUILDERS.session(sessionId)}/archive/${encodeURIComponent(archiveId)}`,
+    `${OV_PATH_BUILDERS.session(sessionId)}/archives/${encodeURIComponent(archiveId)}`,
   botInterrupt: (sessionId: string) =>
     `/bot/v1/sessions/${encodeURIComponent(sessionId)}/interrupt`,
   botSteer: (sessionId: string) =>

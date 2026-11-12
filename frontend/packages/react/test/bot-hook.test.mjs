@@ -16,17 +16,19 @@ test('public hook survives StrictMode, uses Provider native auth and restores co
         'data: {"event":"reasoning_delta","data":"thought"}\n\ndata: {"event":"response","data":"answer"}\n\n',
         { headers: { 'Content-Type': 'text/event-stream' } },
       );
-    const result = url.endsWith('/context')
-      ? {
-          messages: [
-            {
-              id: 'past',
-              role: 'user',
-              parts: [{ type: 'text', text: 'original' }],
-            },
-          ],
-        }
-      : { session_id: 's1', commit_count: 0 };
+    const result = new URL(url, 'https://demo.invalid').pathname.endsWith(
+      '/content/read',
+    )
+      ? JSON.stringify({
+          id: 'past',
+          role: 'user',
+          parts: [{ type: 'text', text: 'original' }],
+        })
+      : {
+          session_id: 's1',
+          commit_count: 0,
+          uri: 'viking://user/alice/sessions/past-session',
+        };
     return Response.json({ status: 'ok', result });
   };
   function Host() {
@@ -62,7 +64,13 @@ test('public hook survives StrictMode, uses Provider native auth and restores co
     assert.equal(calls[0].init.headers['x-openviking-user'], 'alice');
     await act(() => chat.selectSession('past-session'));
     assert.equal(chat.messages[0].parts[0].text, 'original');
-    assert.ok(calls.some(({ url }) => url.endsWith('/past-session/context')));
+    assert.ok(
+      calls.some(({ url }) =>
+        new URL(url, 'https://demo.invalid').searchParams
+          .get('uri')
+          ?.endsWith('/past-session/messages.jsonl'),
+      ),
+    );
     assert.ok(
       !calls.some(
         ({ url, init }) => url.endsWith('/messages') && init.method === 'GET',

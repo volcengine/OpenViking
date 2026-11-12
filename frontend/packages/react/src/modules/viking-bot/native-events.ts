@@ -17,12 +17,7 @@ const textOf = (data: unknown): string => {
 export async function* nativeChatEvents(
   source: AsyncIterable<OvStreamEvent>,
 ): AsyncGenerator<VikingBotChatEvent> {
-  const pending: {
-    id: string;
-    name: string;
-    input: string;
-    iteration: number;
-  }[] = [];
+  const pending: { id: string }[] = [];
   let sequence = 0;
   let iteration = 0;
   let reasoningHadDelta = false;
@@ -70,15 +65,6 @@ export async function* nativeChatEvents(
       const opening = text.indexOf('(');
       const name = opening > 0 ? text.slice(0, opening) : text;
       const raw = opening > 0 ? text.slice(opening + 1, -1) : '';
-      if (
-        pending.some(
-          (item) =>
-            item.name === name &&
-            item.input === raw &&
-            item.iteration === iteration,
-        )
-      )
-        continue;
       const id = `native-tool-${sequence++}`;
       let input: Record<string, unknown> | undefined;
       try {
@@ -86,7 +72,7 @@ export async function* nativeChatEvents(
       } catch {
         input = { raw };
       }
-      pending.push({ id, name, input: raw, iteration });
+      pending.push({ id });
       yield {
         type: 'tool',
         part: { type: 'tool', id, name, input, status: 'running' },

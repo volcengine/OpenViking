@@ -76,7 +76,7 @@ export async function runChat({
     return !interrupted;
   } catch (error) {
     if (!current()) return false;
-    const finished = await timeline.finish();
+    const finished = await timeline.finish(signal.aborted);
     if (!current()) return false;
     update({
       messages: finished.messages,
@@ -87,7 +87,8 @@ export async function runChat({
         ? { error: error instanceof Error ? error : new Error(String(error)) }
         : {}),
     });
-    if (signal.aborted && sessionId) save(sessionId, finished.added);
+    // Preserve completed segments, accepted inputs without presenting an unfinished reply as complete history.
+    if (sessionId) save(sessionId, finished.added);
     return false;
   }
 }

@@ -1,5 +1,5 @@
 import type { SetStateAction } from 'react';
-import { useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useVikingBotChat, useVikingBotSessions } from '../viking-bot/index.js';
 import type { VikingBotProps } from '../../components/viking-bot/types.js';
 import type { ConsoleProps } from './types.js';
@@ -21,6 +21,14 @@ export function useConversation(
   const chat = useVikingBotChat(options);
   const sessions = useVikingBotSessions(options);
   const submission = useRef(0);
+  const owner = useMemo(() => ({ send: chat.send, active: true }), [chat.send]);
+  // Draft callbacks belong to the same controller as the request, including unmount.
+  useEffect(() => {
+    owner.active = true;
+    return () => {
+      owner.active = false;
+    };
+  }, [owner]);
   if (!enabled) return conversation ?? {};
   const error = chat.error ?? chat.persistenceError;
   return {
@@ -36,15 +44,20 @@ export function useConversation(
       const token = ++submission.current;
       const followingUp = chat.status === 'streaming';
       if (chat.canSteer)
-        setDraft((current) => (current === draft.text ? '' : current));
-      void chat.send(draft).then((success) => {
+        setDraft((current) =>
+          current.trim() === draft.text.trim() ? '' : current,
+        );
+      void owner.send(draft).then((success) => {
+        if (!owner.active) return;
         if (!success) {
           if (chat.canSteer && token === submission.current)
             setDraft((current) => (current === '' ? draft.text : current));
           return;
         }
         if (!chat.canSteer)
-          setDraft((current) => (current === draft.text ? '' : current));
+          setDraft((current) =>
+            current.trim() === draft.text.trim() ? '' : current,
+          );
         if (!followingUp) void sessions.refresh();
       });
     },

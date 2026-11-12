@@ -49,3 +49,122 @@ import {
 ## 组合使用
 
 [Console](./console) 已内置消费此模块。独立宿主使用 [VikingBot](../components/viking-bot) 时单独引入该组件的样式；本模块不包含 UI、CSS 或浏览器全局依赖，不从包根或 Console 入口转导出 Hook。
+
+## Adapter API
+
+所有方法均接收本次操作的 `AbortSignal`，适配器必须响应取消；失败时 reject/throw，保留后端错误。原生历史通过 session 元信息中的 URI 读取完整 `messages.jsonl`（`limit: -1`），不使用有预算的 `/context`。普通断流保存已完成段落和已接受输入，未完成回复仅保留当前界面，不作为完整助手消息写入历史；发送仍返回 `false`，状态保持错误，不把未完成回复视为成功。
+
+### VikingBotChatInput
+
+| 参数        | 说明             | 类型                             | 默认值 |
+| ----------- | ---------------- | -------------------------------- | ------ |
+| sessionId   | 会话标识         | `string`                         | 必填   |
+| text        | 提交的正文       | `string`                         | 必填   |
+| attachments | 宿主已上传的附件 | `readonly VikingBotAttachment[]` | 必填   |
+| references  | 资源引用         | `readonly VikingBotReference[]`  | -      |
+
+### VikingBotChatService
+
+| 参数          | 说明                                                  | 类型                                                                                    | 默认值 |
+| ------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------- | ------ |
+| stream        | 流式请求；必须发出 complete 或 interrupted 终止事件   | `(input: VikingBotChatInput, signal: AbortSignal) => AsyncIterable<VikingBotChatEvent>` | 必填   |
+| createSession | 新建会话                                              | `(signal: AbortSignal) => Promise<VikingBotSession>`                                    | 必填   |
+| loadMessages  | 读取完整会话历史                                      | `(id: string, signal: AbortSignal) => Promise<readonly VikingBotMessage[]>`             | 必填   |
+| saveMessage   | 逐条保存；后端自动持久化时省略，避免重复              | `(id: string, message: VikingBotMessage, signal: AbortSignal) => Promise<void>`         | 可选   |
+| interrupt     | 实际中断后端生成；与本地断开连接不同                  | `(id: string, signal: AbortSignal) => Promise<{ interrupted: boolean }>`                | 可选   |
+| steer         | 向当前流追加输入；accepted 仅表示接受，不表示回复完成 | `(input: VikingBotChatInput, signal: AbortSignal) => Promise<{ accepted: boolean }>`    | 可选   |
+
+### VikingBotSessionService
+
+| 参数          | 说明         | 类型                                                            | 默认值 |
+| ------------- | ------------ | --------------------------------------------------------------- | ------ |
+| listSessions  | 读取会话列表 | `(signal: AbortSignal) => Promise<readonly VikingBotSession[]>` | 必填   |
+| createSession | 新建会话     | `(signal: AbortSignal) => Promise<VikingBotSession>`            | 必填   |
+| removeSession | 删除会话     | `(id: string, signal: AbortSignal) => Promise<void>`            | 必填   |
+
+### VikingBotChatEvent
+
+| 参数        | 说明                                                         | 类型                                                                     | 默认值 |
+| ----------- | ------------------------------------------------------------ | ------------------------------------------------------------------------ | ------ |
+| reasoning   | delta=true 追加；false 替换；id 可选，稳定 ID 更新同一推理项 | `{ type: 'reasoning'; text: string; delta: boolean; id?: string }`       | -      |
+| text        | delta=true 追加正文；false 替换当前正文片段                  | `{ type: 'text'; text: string; delta: boolean }`                         | -      |
+| iteration   | 下一次模型迭代边界；将已接受追问归入新的交流段               | `{ type: 'iteration'; iteration: number }`                               | -      |
+| tool        | 每次实际调用唯一 ID；相同参数也不得合并                      | `{ type: 'tool'; part: VikingBotToolPart }`                              | -      |
+| tool-result | 通过 id 对应调用；原生无 ID 协议按 FIFO 配对                 | `{ type: 'tool-result'; id: string; output: string; isError?: boolean }` | -      |
+| complete    | 正常结束；可选 text 是最终正文快照                           | `{ type: 'complete'; text?: string }`                                    | -      |
+| interrupted | 中断终止；保留已有内容，send 返回 false                      | `{ type: 'interrupted' }`                                                | -      |
+
+`canInterrupt` / `canSteer` 由对应方法是否存在决定。`steer` 返回 `accepted: false` 表示未接受输入；不要发出虚假的用户消息。事件流没有终止事件就结束会报 `BOT_STREAM_TRUNCATED`。
+
+### VikingBotHookOptions
+
+| 参数           | 说明               | 类型                 | 默认值    |
+| -------------- | ------------------ | -------------------- | --------- |
+| locale         | 文案语言           | `'zh-CN' \| 'en-US'` | Inherited |
+| enabled        | 自动请求与操作开关 | `boolean`            | true      |
+| scopeKey       | 动态身份隔离标识   | `string`             | -         |
+| requestOptions | 请求覆盖           | `OvRequestOptions`   | Inherited |
+
+### UseVikingBotChatOptions
+
+继承 `VikingBotHookOptions`.
+
+| 参数            | 说明                   | 类型                          | 默认值 |
+| --------------- | ---------------------- | ----------------------------- | ------ |
+| sessionId       | 当前会话               | `string`                      | -      |
+| initialMessages | 初始消息，引用须稳定   | `readonly VikingBotMessage[]` | []     |
+| persist         | 是否保存消息           | `boolean`                     | true   |
+| service         | 后端适配器，引用须稳定 | `VikingBotChatService`        | Native |
+
+### UseVikingBotSessionsOptions
+
+继承 `VikingBotHookOptions`.
+
+| 参数    | 说明                   | 类型                      | 默认值 |
+| ------- | ---------------------- | ------------------------- | ------ |
+| service | 后端适配器，引用须稳定 | `VikingBotSessionService` | Native |
+
+### VikingBotChatState
+
+| 参数             | 说明                           | 类型                                            | 默认值 |
+| ---------------- | ------------------------------ | ----------------------------------------------- | ------ |
+| sessionId        | 当前会话                       | `string`                                        | -      |
+| messages         | 当前消息                       | `readonly VikingBotMessage[]`                   | []     |
+| streaming        | 尚未并入 messages 的流片段     | `VikingBotStreamingState`                       | -      |
+| status           | 请求状态                       | `'idle' \| 'loading' \| 'streaming' \| 'error'` | idle   |
+| isSubmitting     | 等待追问确认                   | `boolean`                                       | false  |
+| error            | 请求错误                       | `Error`                                         | -      |
+| persistenceError | 独立的保存错误，不改判发送成功 | `Error`                                         | -      |
+
+### VikingBotChatResult
+
+继承 `VikingBotChatState`.
+
+| 参数          | 说明                                                       | 类型                                                    | 默认值             |
+| ------------- | ---------------------------------------------------------- | ------------------------------------------------------- | ------------------ |
+| canInterrupt  | 是否提供 interrupt                                         | `boolean`                                               | Service capability |
+| canSteer      | 是否提供 steer                                             | `boolean`                                               | Service capability |
+| send          | 空闲时等待流结束；生成中等待追加接受；失败或中断返回 false | `(input: string \| VikingBotDraft) => Promise<boolean>` | -                  |
+| abort         | 清理本地请求；有 interrupt 时同时请求后端中断              | `() => Promise<void>`                                   | -                  |
+| reset         | 开始空白会话，首次发送时创建                               | `() => void`                                            | -                  |
+| selectSession | 取消旧流并加载选定会话                                     | `(id: string) => void`                                  | -                  |
+| reload        | 重读历史，等待本实例保存完成                               | `() => Promise<void>`                                   | -                  |
+| setMessages   | 仅空闲时替换本地消息                                       | `(messages: readonly VikingBotMessage[]) => void`       | -                  |
+
+### VikingBotSessionsState
+
+| 参数      | 说明         | 类型                          | 默认值 |
+| --------- | ------------ | ----------------------------- | ------ |
+| sessions  | 会话列表     | `readonly VikingBotSession[]` | []     |
+| isLoading | 列表加载状态 | `boolean`                     | false  |
+| error     | 请求错误     | `Error`                       | -      |
+
+### VikingBotSessionsResult
+
+继承 `VikingBotSessionsState`.
+
+| 参数    | 说明                               | 类型                                           | 默认值 |
+| ------- | ---------------------------------- | ---------------------------------------------- | ------ |
+| refresh | 刷新列表；失败记录在 error，可重试 | `() => Promise<void>`                          | -      |
+| create  | 新建，失败返回 undefined           | `() => Promise<VikingBotSession \| undefined>` | -      |
+| remove  | 删除，失败返回 false               | `(id: string) => Promise<boolean>`             | -      |

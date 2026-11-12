@@ -31,6 +31,7 @@ try {
               'bot-sessions': './src/modules/viking-bot/sessions-controller.ts',
               'bot-aggregate': './src/modules/viking-bot/aggregate.ts',
               'bot-events': './src/modules/viking-bot/native-events.ts',
+              'bot-client': './src/client/client.ts',
               'bot-service': './src/modules/viking-bot/native-service.ts',
               'bot-submit': './src/components/viking-bot/composer-controls.tsx',
               'bot-composer-events':

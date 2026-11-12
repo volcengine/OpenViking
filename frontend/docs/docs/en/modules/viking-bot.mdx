@@ -49,3 +49,122 @@ Both accept `requestOptions`, `scopeKey` and stable `service` objects. Chat also
 ## Composition
 
 [Console](./console) consumes this module internally. Standalone hosts using [VikingBot](../components/viking-bot) import its component styles separately. This module has no UI, CSS or browser-global dependency; hooks are not re-exported from the package root or Console.
+
+## Adapter API
+
+Every method receives the operation AbortSignal and must honor cancellation. Reject/throw on failure, preserving backend errors. Native history reads complete `messages.jsonl` via the session metadata URI with `limit: -1`, rather than budgeted `/context`. Stream failures persist completed segments and accepted inputs. The unfinished reply remains visible locally and is not persisted as a complete assistant message; send still returns `false` and status remains error, so partial output does not imply success.
+
+### VikingBotChatInput
+
+| Property    | Description               | Type                             | Default  |
+| ----------- | ------------------------- | -------------------------------- | -------- |
+| sessionId   | Session ID                | `string`                         | Required |
+| text        | Submitted text            | `string`                         | Required |
+| attachments | Host-uploaded attachments | `readonly VikingBotAttachment[]` | Required |
+| references  | Resource references       | `readonly VikingBotReference[]`  | -        |
+
+### VikingBotChatService
+
+| Property      | Description                                                           | Type                                                                                    | Default  |
+| ------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | -------- |
+| stream        | Streaming request; must emit a complete or interrupted terminal event | `(input: VikingBotChatInput, signal: AbortSignal) => AsyncIterable<VikingBotChatEvent>` | Required |
+| createSession | Create a session                                                      | `(signal: AbortSignal) => Promise<VikingBotSession>`                                    | Required |
+| loadMessages  | Read complete session history                                         | `(id: string, signal: AbortSignal) => Promise<readonly VikingBotMessage[]>`             | Required |
+| saveMessage   | Save a message; omit when the backend persists automatically          | `(id: string, message: VikingBotMessage, signal: AbortSignal) => Promise<void>`         | Optional |
+| interrupt     | Interrupt backend generation; distinct from local connection cleanup  | `(id: string, signal: AbortSignal) => Promise<{ interrupted: boolean }>`                | Optional |
+| steer         | Append input to the active stream; acceptance is not completion       | `(input: VikingBotChatInput, signal: AbortSignal) => Promise<{ accepted: boolean }>`    | Optional |
+
+### VikingBotSessionService
+
+| Property      | Description      | Type                                                            | Default  |
+| ------------- | ---------------- | --------------------------------------------------------------- | -------- |
+| listSessions  | List sessions    | `(signal: AbortSignal) => Promise<readonly VikingBotSession[]>` | Required |
+| createSession | Create a session | `(signal: AbortSignal) => Promise<VikingBotSession>`            | Required |
+| removeSession | Delete a session | `(id: string, signal: AbortSignal) => Promise<void>`            | Required |
+
+### VikingBotChatEvent
+
+| Property    | Description                                                                            | Type                                                                     | Default |
+| ----------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ | ------- |
+| reasoning   | delta=true appends, false replaces; optional stable id updates the same reasoning item | `{ type: 'reasoning'; text: string; delta: boolean; id?: string }`       | -       |
+| text        | Append text for delta=true; otherwise replace the current text segment                 | `{ type: 'text'; text: string; delta: boolean }`                         | -       |
+| iteration   | Next model iteration boundary; accepted follow-ups start a new segment                 | `{ type: 'iteration'; iteration: number }`                               | -       |
+| tool        | Unique ID for every actual call, including identical arguments                         | `{ type: 'tool'; part: VikingBotToolPart }`                              | -       |
+| tool-result | Match calls by id; native ID-less events pair in FIFO order                            | `{ type: 'tool-result'; id: string; output: string; isError?: boolean }` | -       |
+| complete    | Normal terminal event; optional text is the final text snapshot                        | `{ type: 'complete'; text?: string }`                                    | -       |
+| interrupted | Interrupted terminal event; retains content and send returns false                     | `{ type: 'interrupted' }`                                                | -       |
+
+`canInterrupt` / `canSteer` derive from method presence. `accepted: false` rejects follow-up input without adding a user message. Ending a stream without a terminal event produces `BOT_STREAM_TRUNCATED`.
+
+### VikingBotHookOptions
+
+| Property       | Description                    | Type                 | Default   |
+| -------------- | ------------------------------ | -------------------- | --------- |
+| locale         | Display locale                 | `'zh-CN' \| 'en-US'` | Inherited |
+| enabled        | Enable requests and operations | `boolean`            | true      |
+| scopeKey       | Dynamic identity scope         | `string`             | -         |
+| requestOptions | Request overrides              | `OvRequestOptions`   | Inherited |
+
+### UseVikingBotChatOptions
+
+Extends `VikingBotHookOptions`.
+
+| Property        | Description                             | Type                          | Default |
+| --------------- | --------------------------------------- | ----------------------------- | ------- |
+| sessionId       | Current session                         | `string`                      | -       |
+| initialMessages | Initial messages; keep reference stable | `readonly VikingBotMessage[]` | []      |
+| persist         | Persist messages                        | `boolean`                     | true    |
+| service         | Backend adapter; keep reference stable  | `VikingBotChatService`        | Native  |
+
+### UseVikingBotSessionsOptions
+
+Extends `VikingBotHookOptions`.
+
+| Property | Description                            | Type                      | Default |
+| -------- | -------------------------------------- | ------------------------- | ------- |
+| service  | Backend adapter; keep reference stable | `VikingBotSessionService` | Native  |
+
+### VikingBotChatState
+
+| Property         | Description                                          | Type                                            | Default |
+| ---------------- | ---------------------------------------------------- | ----------------------------------------------- | ------- |
+| sessionId        | Current session                                      | `string`                                        | -       |
+| messages         | Current messages                                     | `readonly VikingBotMessage[]`                   | []      |
+| streaming        | Live segment not yet in messages                     | `VikingBotStreamingState`                       | -       |
+| status           | Request status                                       | `'idle' \| 'loading' \| 'streaming' \| 'error'` | idle    |
+| isSubmitting     | Awaiting follow-up acceptance                        | `boolean`                                       | false   |
+| error            | Request error                                        | `Error`                                         | -       |
+| persistenceError | Separate save failure; does not reverse send success | `Error`                                         | -       |
+
+### VikingBotChatResult
+
+Extends `VikingBotChatState`.
+
+| Property      | Description                                                                                          | Type                                                    | Default            |
+| ------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------- | ------------------ |
+| canInterrupt  | Whether interrupt is implemented                                                                     | `boolean`                                               | Service capability |
+| canSteer      | Whether steer is implemented                                                                         | `boolean`                                               | Service capability |
+| send          | Wait for terminal completion when idle or acceptance while generating; false on failure/interruption | `(input: string \| VikingBotDraft) => Promise<boolean>` | -                  |
+| abort         | Clean up local request and request backend interruption when supported                               | `() => Promise<void>`                                   | -                  |
+| reset         | Start blank; create on first send                                                                    | `() => void`                                            | -                  |
+| selectSession | Cancel old stream and load selected history                                                          | `(id: string) => void`                                  | -                  |
+| reload        | Reload history after this instance finishes pending saves                                            | `() => Promise<void>`                                   | -                  |
+| setMessages   | Replace local messages only while idle                                                               | `(messages: readonly VikingBotMessage[]) => void`       | -                  |
+
+### VikingBotSessionsState
+
+| Property  | Description        | Type                          | Default |
+| --------- | ------------------ | ----------------------------- | ------- |
+| sessions  | Session list       | `readonly VikingBotSession[]` | []      |
+| isLoading | List loading state | `boolean`                     | false   |
+| error     | Request error      | `Error`                       | -       |
+
+### VikingBotSessionsResult
+
+Extends `VikingBotSessionsState`.
+
+| Property | Description                                             | Type                                           | Default |
+| -------- | ------------------------------------------------------- | ---------------------------------------------- | ------- |
+| refresh  | Refresh list; failures appear in error and permit retry | `() => Promise<void>`                          | -       |
+| create   | Create; returns undefined on failure                    | `() => Promise<VikingBotSession \| undefined>` | -       |
+| remove   | Delete; returns false on failure                        | `(id: string) => Promise<boolean>`             | -       |
