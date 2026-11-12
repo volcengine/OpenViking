@@ -7,6 +7,7 @@ from typing import Optional
 _LINE_NUMBER_PREFIX_RE = re.compile(r"^(\d+)\t")
 _LINE_NUMBER_PREFIX_WITH_LEADING_SPACE_RE = re.compile(r"^\s*(\d+)\t")
 _LINE_SPLIT_RE = re.compile(r"\r?\n")
+_LINE_WITH_ENDING_RE = re.compile(r"[^\n]*\n|[^\n]+")
 
 
 def split_content_lines(content: str) -> list[str]:
@@ -29,6 +30,20 @@ def slice_content_lines(content: str, offset: int = 0, limit: int = -1) -> str:
         return ""
     end = None if limit < 0 else offset + limit
     return "\n".join(lines[offset:end])
+
+
+def slice_lines_keepends(content: str, offset: int = 0, limit: int = -1) -> str:
+    """Return ``limit`` lines starting at ``offset``, each with its line ending.
+
+    Only "\\n" ends a line, as in split_content_lines() and grep line numbers.
+    str.splitlines() would also break at "\\r", "\\f", "\\v", "\\x1c"-"\\x1e",
+    "\\x85", U+2028 and U+2029, shifting every later offset.
+    """
+    if offset == 0 and limit == -1:
+        return content
+    lines = _LINE_WITH_ENDING_RE.findall(content)
+    sliced = lines[offset:] if limit == -1 else lines[offset : offset + limit]
+    return "".join(sliced)
 
 
 def line_count(content: str) -> int:
