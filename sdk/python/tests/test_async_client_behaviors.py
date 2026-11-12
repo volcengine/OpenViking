@@ -4,12 +4,15 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 import pytest
 from openviking_sdk import (
+    AsyncContextArranger,
     AsyncHTTPClient,
+    ContextArranger,
     ContextPart,
     ImagePart,
     SyncHTTPClient,
@@ -18,6 +21,85 @@ from openviking_sdk import (
 )
 from openviking_sdk.client import Session, SyncSession
 from openviking_sdk.errors import NotFoundError
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_type", [AsyncHTTPClient, SyncHTTPClient])
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"title": "Manual title"},
+        {"description": "Manual description"},
+        {"description": None},
+        {"timeout_seconds": 5},
+        {"arguments": {"location": "elsewhere"}},
+        {"created_at": "later"},
+        {},
+    ],
+)
+async def test_context_arranger_restores_mount_drift(client_type, change):
+    """Public plan/apply converges after a manual remount without changing ownership tags."""
+    mount: dict[str, Any] = {}
+    batches = []
+
+    def handle(request):
+        path = request.url.path
+        result: Any
+        if path == "/api/v1/fs/ls":
+            result = [{"uri": mount["node_uri"], "tags": mount["tags"]}] if mount else []
+        elif path == "/api/v1/fs/stat":
+            return httpx.Response(
+                404, json={"status": "error", "error": {"code": "NOT_FOUND", "message": "absent"}}
+            )
+        elif path == "/api/v1/mcps/mounts":
+            result = {"mounts": [mount] if mount else []}
+        elif path == "/api/v1/mcps/batch-mount":
+            batches.append(json.loads(request.content)["mounts"])
+            mount.update(batches[-1][0])
+            result = {"succeeded": [mount["node_uri"]], "failed": [], "not_attempted": []}
+        else:
+            assert path == "/api/v1/mcps/mount"
+            mount.update(json.loads(request.content))
+            result = mount
+        return httpx.Response(200, json={"status": "ok", "result": result})
+
+    client = client_type(url="http://fixture")
+    backend = client if client_type is AsyncHTTPClient else client._async_client
+    backend._http = httpx.AsyncClient(
+        base_url="http://fixture", transport=httpx.MockTransport(handle)
+    )
+
+    async def call(method, *args, **kwargs):
+        result = method(*args, **kwargs)
+        return await result if client_type is AsyncHTTPClient else result
+
+    try:
+        arranger_type = AsyncContextArranger if client_type is AsyncHTTPClient else ContextArranger
+        arranger = arranger_type(client, "weather")
+        arranger.live_context(
+            "weather.md",
+            "viking://agent/tools/weather/current.json",
+            "Weather",
+            description="Declared description",
+            timeout_seconds=60,
+            arguments={"location": "home"},
+        )
+        await call(arranger.apply)
+        declared = dict(mount)
+        manual = {**declared, **change}
+        manual.pop("created_at", None)
+        await call(client.mount_mcp_tool, **manual)
+        mount.update({key: value for key, value in change.items() if key == "created_at"})
+        changed = bool(change) and "created_at" not in change
+        plan = await call(arranger.plan)
+        assert plan.changes[0].action.value == ("update" if changed else "unchanged")
+        await call(arranger.apply)
+        assert len(batches) == (2 if changed else 1)
+        for key in ("title", "description", "timeout_seconds", "arguments", "tags"):
+            assert mount[key] == declared[key]
+        assert not (await call(arranger.plan)).has_changes
+    finally:
+        await backend.close()
 
 
 @pytest.mark.asyncio
