@@ -34,10 +34,13 @@ export interface FileBrowserTreePaneProps {
   >;
   locale: Locale;
   dashboardLabels?: FileBrowserDashboardLabels;
-  onSearch?: () => void;
+  onSearch: () => void;
+  onAdvancedSearch: () => void;
+  advancedOpen: boolean;
   browser: FileBrowserApi;
   treeLabels: FileTreeLabels | undefined;
   searchPlaceholder: string;
+  advancedLabel: string;
   refreshLabel: string;
   /** 失败态里的重试按钮。Retry button of the failure state. */
   retryLabel: string;
@@ -48,9 +51,12 @@ export function FileBrowserTreePane({
   locale,
   dashboardLabels,
   onSearch,
+  onAdvancedSearch,
+  advancedOpen,
   browser,
   treeLabels,
   searchPlaceholder,
+  advancedLabel,
   refreshLabel,
   retryLabel,
 }: FileBrowserTreePaneProps) {
@@ -64,9 +70,12 @@ export function FileBrowserTreePane({
 
       <FileBrowserToolbar
         onSearch={onSearch}
+        onAdvanced={onAdvancedSearch}
+        advancedOpen={advancedOpen}
         refreshing={browser.refreshing}
         canRefresh={browser.isReady}
         placeholder={searchPlaceholder}
+        advancedLabel={advancedLabel}
         refreshLabel={refreshLabel}
         onRefresh={() => void browser.actions.refresh()}
       />

@@ -1,5 +1,8 @@
 @import '../../shared/components/input/input.css';
 @import '../../shared/components/button/button.css';
+@import '../../shared/components/checkbox/checkbox.css';
+@import '../../shared/components/radio/radio.css';
+@import '../../shared/components/date-picker/date-picker.css';
 @import '../../theme.css';
 @import '../../shared/components/popover/popover.css';
 @import '../../shared/components/tooltip/tooltip.css';

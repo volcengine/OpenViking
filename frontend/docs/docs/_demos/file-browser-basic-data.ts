@@ -4,6 +4,12 @@ import {
   DEMO_WIKI,
   DEMO_WIKI_FILE,
 } from '#dashboard-demo-data';
+import {
+  globFiles,
+  grepFiles,
+  searchFailure,
+  semanticSearch,
+} from '#file-browser-search-data';
 
 /**
  * 离线运行的文件浏览示例。数据由本文件里的 `offlineFetch` 按原生接口的形状返回，
@@ -115,22 +121,6 @@ const SUMMARIES: Record<string, { l0: string; l1: string }> = {
   },
 };
 
-/** 按查询词在全部条目里做子串匹配，模拟语义检索的返回形状。 */
-/** Substring matching over every entry, in the shape of the semantic search. */
-function search(query: string) {
-  const needle = query.trim().toLowerCase();
-  if (!needle) return {};
-  const hits = Object.values(DIRS)
-    .flat()
-    .filter((entry) => entry.uri.toLowerCase().includes(needle));
-  return {
-    memories: hits.filter((entry) => entry.uri.startsWith(USER)),
-    resources: hits.filter((entry) =>
-      entry.uri.startsWith('viking://resources'),
-    ),
-  };
-}
-
 const ok = (result: unknown) =>
   new Response(JSON.stringify({ status: 'ok', result }), {
     status: 200,
@@ -197,22 +187,26 @@ export function offlineFetch(
       return Promise.resolve(ok(SUMMARIES[uri]?.l0 ?? ''));
     case '/api/v1/content/overview':
       return Promise.resolve(ok(SUMMARIES[uri]?.l1 ?? ''));
-    case '/api/v1/search/find': {
+    case '/api/v1/search/find':
+    case '/api/v1/search/search': {
       const { query } = JSON.parse(body || '{}') as { query?: string };
       if (query?.trim().toLowerCase() === 'error')
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              status: 'error',
-              error: {
-                code: 'DEMO_SEARCH_FAILED',
-                message: 'Demo search unavailable',
-              },
-            }),
-            { status: 503, headers: { 'content-type': 'application/json' } },
-          ),
-        );
-      return Promise.resolve(ok(search(query ?? '')));
+        return Promise.resolve(searchFailure());
+      return Promise.resolve(
+        ok(semanticSearch(query ?? '', Object.values(DIRS).flat(), USER)),
+      );
+    }
+    case '/api/v1/search/grep': {
+      const { pattern } = JSON.parse(body || '{}') as { pattern?: string };
+      if (pattern?.trim().toLowerCase() === 'error')
+        return Promise.resolve(searchFailure());
+      return Promise.resolve(ok({ matches: grepFiles(pattern ?? '', FILES) }));
+    }
+    case '/api/v1/search/glob': {
+      const { pattern } = JSON.parse(body || '{}') as { pattern?: string };
+      if (pattern?.trim().toLowerCase() === 'error')
+        return Promise.resolve(searchFailure());
+      return Promise.resolve(ok({ matches: globFiles(pattern ?? '', FILES) }));
     }
     default:
       return Promise.resolve(

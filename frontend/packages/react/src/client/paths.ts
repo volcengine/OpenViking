@@ -46,6 +46,8 @@ export const OV_PATHS = {
   searchGlob: '/api/v1/search/glob',
   /** 语义检索。Semantic search. */
   searchFind: '/api/v1/search/find',
+  /** 携带上下文的语义检索。Semantic search with session context. */
+  searchSearch: '/api/v1/search/search',
   /** 按正则检索正文。Search content by regular expression. */
   searchGrep: '/api/v1/search/grep',
   /** 会话列表与新建。Session list and creation. */
