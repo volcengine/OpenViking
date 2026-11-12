@@ -25,6 +25,23 @@
   border-radius: 16px;
 }
 .fileBrowser
+  :global(.ov-file-preview__toolbar):has(> .previewEditAction)
+  > :global(.ov-file-preview__switch) {
+  order: -2;
+}
+.fileBrowser .previewEditAction {
+  order: -1;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
+  border-radius: 6px;
+  background: var(--ov-ui-file-preview-row-hover);
+  color: var(--ov-ui-file-preview-text);
+}
+.fileBrowser .previewEditAction:hover {
+  border-color: var(--ov-ui-file-preview-text-muted);
+}
+.fileBrowser
   :global(
     .ark-agentic-file-viewer-markdown__content
       > .ark-agentic-markdown__heading:first-child

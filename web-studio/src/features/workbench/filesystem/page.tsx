@@ -467,7 +467,7 @@ function FilesystemWorkbench() {
   }, [])
 
   const resourceActions: FilePreviewAction[] = []
-  if (specialDirectory || specialExperience || structuredFile || canEditFile) {
+  if (specialDirectory || specialExperience || (structuredFile && !canEditFile)) {
     resourceActions.push({
       key: 'studio-resource-detail',
       icon: <PencilIcon size={16} />,
@@ -580,6 +580,19 @@ function FilesystemWorkbench() {
             exportPack: false,
           }}
           previewSlots={{
+            extraActions: canEditFile ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className={styles.previewEditAction}
+                aria-label={t('resources:filePreview.edit')}
+                title={t('resources:filePreview.edit')}
+                onClick={() => setResourceDialogOpen(true)}
+              >
+                <PencilIcon className="size-3.5" />
+              </Button>
+            ) : undefined,
             actionItems: ({ defaultActions }) => [
               ...defaultActions,
               ...(selectedFile ? [resourceActions, transferActions] : []),

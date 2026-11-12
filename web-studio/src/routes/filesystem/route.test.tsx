@@ -115,6 +115,7 @@ vi.mock(
                 kind: 'file',
                 key: props.uri ?? 'empty',
                 source: { path: props.uri, fileName: 'preview.md', content: '' },
+                slots: { extraActions: props.previewSlots?.extraActions },
                 actions: (context) => {
                   const actionItems = props.previewSlots?.actionItems
                   return typeof actionItems === 'function'
@@ -288,6 +289,9 @@ describe('filesystem workbench', () => {
 
     const props: FileBrowserProps = mocks.preview.mock.lastCall![0]
     expect(props.uri).toBe(uri)
+    expect(
+      screen.queryByRole('button', { name: 'resources:filePreview.edit' }),
+    ).toBeNull()
     expect(screen.queryByText('ide.experienceDetails')).toBeNull()
   })
 
@@ -296,9 +300,8 @@ describe('filesystem workbench', () => {
     try {
       mocks.fetchFsStat.mockResolvedValue({ isDir: false, name: 'other.md' })
       renderFilesystem()
-      await openPreviewActions()
       await userEvent.click(
-        screen.getByRole('menuitem', { name: 'resources:filePreview.edit' }),
+        screen.getByRole('button', { name: 'resources:filePreview.edit' }),
       )
 
       await act(async () => {
@@ -319,6 +322,9 @@ describe('filesystem workbench', () => {
     renderFilesystem()
     await openPreviewActions()
     expect(screen.getByRole('menuitem', { name: 'Download' })).toBeTruthy()
+    expect(
+      screen.queryByRole('menuitem', { name: 'resources:filePreview.edit' }),
+    ).toBeNull()
     await userEvent.click(
       screen.getByRole('menuitem', { name: 'dataManagement:deleteDocument' }),
     )
