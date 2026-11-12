@@ -232,6 +232,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
       {editing.noteOpen && fileTab ? (
         <FilePreviewVersionNote
           locale={locale}
+          text={tabText}
           triggerRef={rootRef}
           saving={editing.saving}
           error={editing.saveFailed ? tabText.saveFailed : undefined}

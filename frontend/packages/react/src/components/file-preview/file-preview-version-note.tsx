@@ -3,10 +3,11 @@ import type { RefObject } from 'react';
 import { Button } from '../../shared/primitives/button/button.js';
 import { Modal } from '../../shared/primitives/modal/modal.js';
 import type { Locale } from '../../shared/locale.js';
-import { resolveFilePreviewLabels } from './file-preview-labels.js';
+import type { FilePreviewLabels } from './types.js';
 
 export function FilePreviewVersionNote({
   locale,
+  text,
   triggerRef,
   saving,
   error,
@@ -14,6 +15,7 @@ export function FilePreviewVersionNote({
   onConfirm,
 }: {
   locale: Locale;
+  text: Required<FilePreviewLabels>;
   triggerRef: RefObject<HTMLElement | null>;
   saving: boolean;
   error?: string;
@@ -22,7 +24,6 @@ export function FilePreviewVersionNote({
 }) {
   const id = useId();
   const [note, setNote] = useState('');
-  const text = resolveFilePreviewLabels(locale);
   return (
     <Modal
       open

@@ -8,6 +8,7 @@ import type {
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { useTreeMetadata } from './fs-directories.js';
 import { useRequestScope } from './use-request-scope.js';
+import { useResourceUriIdentity } from './use-resource-uri-identity.js';
 import { useFsTreeReveal } from './use-fs-tree-reveal.js';
 import { useFsTreePage } from './use-fs-tree-page.js';
 import { expandChain } from './fs-path.js';
@@ -21,23 +22,10 @@ import {
   type DirState,
 } from './fs-model.js';
 
-export interface FsTreeState {
+export interface FsTreeState extends ReturnType<typeof useTreeMetadata> {
   rows: readonly FileTreeRow[];
-  metadataRows: readonly FileTreeRow[];
   isReady: boolean;
   error: Error | null;
-  /**
-   * 树已知的目录 URI 集合，与当前是否可见无关。
-   * Directory URIs the tree knows about, whether or not they are visible.
-   */
-  directoryUris: ReadonlySet<string>;
-  /**
-   * 该 URI 是否是树里见过的文件。与 {@link directoryUris} 都不命中即为类型未知。
-   * Whether the URI is a file the tree has seen. Missing from both this and
-   * {@link directoryUris} means the type is unknown.
-   */
-  isKnownFile: (uri: string) => boolean;
-  accessOf: (uri: string | null) => 'denied' | 'container' | undefined;
   toggleExpand: (row: FileTreeEntryRow) => Promise<void>;
   open: (uri: string) => Promise<void>;
   openPath: (uri: string) => Promise<void>;
@@ -193,6 +181,7 @@ export function useFsTree({
   // 展开与分页的请求属于某个有效作用域，细节见 `useRequestScope`。
   // Expansion and paging belong to one request scope; see `useRequestScope`.
   const scope = useRequestScope(client, requestOptions, rootUri);
+  const identity = useResourceUriIdentity(client, requestOptions, rootUri);
 
   // 展开与分页操作的引用必须稳定：预览的取数 effect 依赖 `open`，如果它每轮
   // 都变，effect 就会反复重跑并取消上一次请求，预览永远加载不出来。
@@ -284,6 +273,7 @@ export function useFsTree({
     initialLoad,
     fetchPage,
     setExpanded,
+    resolveHome: identity.resolveHome,
   });
   const rows = useMemo(
     () => flattenTree(rootUri, 0, dirs, expanded),
@@ -292,7 +282,7 @@ export function useFsTree({
 
   return {
     rows,
-    ...useTreeMetadata(rootUri, dirs),
+    ...useTreeMetadata(rootUri, dirs, identity.identifyUri),
     isReady,
     error,
     ...state,

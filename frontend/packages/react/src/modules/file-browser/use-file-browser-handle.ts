@@ -8,7 +8,6 @@ import {
 import type { ForwardedRef } from 'react';
 import type { FileTreeHandle } from '../../components/file-tree/index.js';
 import type { FileBrowserApi, FileBrowserHandle } from './types.js';
-import { normalizeResourceUri } from './fs-uri.js';
 import { toError } from './fs-model.js';
 
 interface ScrollRequest {
@@ -24,11 +23,12 @@ export function useFileBrowserHandle(
   const active = useRef<ScrollRequest | null>(null);
   const [scroll, setScroll] = useState<ScrollRequest | null>(null);
   const open = browser.actions.openResource;
+  const { rows, currentUri, selectedId, identifyUri } = browser;
   const openResource = useCallback<FileBrowserHandle['openResource']>(
     (uri, options) => {
       active.current?.resolve(false);
       return new Promise<boolean>((resolve, reject) => {
-        const request = { uri: normalizeResourceUri(uri), resolve };
+        const request = { uri, resolve };
         active.current = request;
         void open(uri, options).then(
           (found) => {
@@ -55,22 +55,20 @@ export function useFileBrowserHandle(
   // Requests are consumed once, so ordinary URI changes never scroll the tree.
   useEffect(() => {
     if (!scroll || active.current !== scroll) return;
-    const row = browser.rows.find(
+    const target = identifyUri(scroll.uri);
+    const row = rows.find(
       (candidate) =>
-        candidate.kind === 'entry' &&
-        normalizeResourceUri(candidate.uri) === scroll.uri,
+        candidate.kind === 'entry' && identifyUri(candidate.uri) === target,
     );
-    const selected = browser.currentUri
-      ? normalizeResourceUri(browser.currentUri)
-      : null;
+    const selected = currentUri ? identifyUri(currentUri) : null;
     active.current = null;
     scroll.resolve(
-      selected === scroll.uri &&
-        row?.id === browser.selectedId &&
+      selected === target &&
+        row?.id === selectedId &&
         !!row &&
         !!treeRef.current?.scrollToRow(row.id),
     );
-  }, [scroll, browser.rows, browser.currentUri, browser.selectedId]);
+  }, [scroll, rows, currentUri, selectedId, identifyUri]);
   // The public command is tied to a mounted network scope. On scope change or
   // unmount, settle its pending result; the tree loader aborts network requests.
   useEffect(

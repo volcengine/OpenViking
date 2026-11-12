@@ -321,6 +321,7 @@ export interface FileBrowserProps extends Omit<
  * own view from these without the composite one.
  */
 export interface FileBrowserApi {
+  identifyUri: (uri: string) => string;
   dashboards: ReadonlyMap<string, FileBrowserDashboard>;
   previewDashboard?: FileBrowserDashboard;
   dashboardError: Error | null;
