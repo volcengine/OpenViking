@@ -1663,8 +1663,9 @@ The top-level `cache` section is a sibling of `storage`. Its public shape is Pro
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `provider` | str | `filesystem`, `memory`, `sqlite`, or `cache`; `cache` uses the shared Redis CacheRuntime | `filesystem` |
+| `provider` | str | `filesystem`, `memory`, `sqlite`, `postgres`, or `cache`; `postgres` connects directly to PostgreSQL, `cache` uses the shared Redis CacheRuntime | `filesystem` |
 | `sqlite_path` | str / null | Optional absolute local shared lock database path. See [local SQLite setup](../configuration/01-server.md#storage) | `{storage.workspace}/_system/pathlock/pathlock.db` for `sqlite` |
+| `postgres_dsn_env` | str / null | Required for `postgres`; environment variable name containing the PostgreSQL DSN. See [PostgreSQL setup](25-postgresql-pathlock.md) | `null` |
 | `lock_expire_secs` | float | Seconds before an unrefreshed lock becomes stale; must be at least `1.0` | `30.0` |
 | `lock_timeout_secs` | float | Deprecated and ignored; runtime wait timeout remains `0.0` | `0.0` |
 
@@ -1673,7 +1674,37 @@ same machine's local disk. Do not put it on EFS/NFS/SMB or give each replica its
 own container-local database. A workspace on EFS also puts the default
 `sqlite_path` on EFS. See [SQLite deployment limits](../configuration/01-server.md#storage).
 
-For multiple containers or hosts sharing EFS, use shared Redis PathLock as in
+For multi-process or multi-host PathLock coordination without Redis, merge this
+fragment into `ov.conf` and set the named environment variable in each server and
+worker before startup:
+
+```json
+{
+  "service_name": "production",
+  "storage": {
+    "agfs": {
+      "pathlock": {
+        "provider": "postgres",
+        "postgres_dsn_env": "OV_POSTGRES_DSN",
+        "lock_expire_secs": 30.0
+      }
+    }
+  }
+}
+```
+
+```sh
+export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=openviking password=YOUR_PASSWORD sslmode=require'
+```
+
+All participants must use the same writable PostgreSQL primary, top-level
+`service_name`, and expiry duration. PostgreSQL PathLock is independent of
+`cache.provider/cache.params`; it does not enable CacheFS or change QueueFS,
+business file storage, or the vector backend's concurrency limits. In particular,
+the default SQLite queue is not suitable for cross-host sharing on EFS.
+See [PostgreSQL PathLock](25-postgresql-pathlock.md) for setup and verification.
+
+For multiple containers or hosts sharing EFS, shared Redis PathLock is another option, as in
 the example below. All replicas must use the same Redis deployment, top-level
 `service_name`, and lock expiry setting. The example uses Redis for QueueFS and
 coordination, keeping SQLite state off EFS.
@@ -1715,7 +1746,7 @@ coordination, keeping SQLite state off EFS.
 }
 ```
 
-The canonical configuration has no global `cache.enabled` and no per-module Redis namespace field. CacheRuntime is initialized when CacheFS or QueueFS selects `backend=cache`, PathLock or coordination selects `provider=cache`, or multi-write selects `backups.provider=cache`. Cache-backed PathLock currently requires `cache.provider=redis`; DynamicProvider is not supported for PathLock. When all modules use local providers, `cache.params` is not parsed and no Provider connection is opened.
+The canonical configuration has no global `cache.enabled` and no per-module Redis namespace field. CacheRuntime is initialized when CacheFS or QueueFS selects `backend=cache`, PathLock or coordination selects `provider=cache`, or multi-write selects `backups.provider=cache`. Cache-backed PathLock currently requires `cache.provider=redis`; DynamicProvider is not supported for PathLock. When none of these modules selects a cache provider, `cache.params` is not parsed and no CacheRuntime connection is opened, including when PathLock uses PostgreSQL.
 
 Move Provider settings to top-level `cache.provider/cache.params`, set top-level `service_name` for shared Redis names, select `cachefs.backend="cache"`, `queuefs.backend="cache"`, or `backups.provider="cache"`, use Redis `mode="standalone"` instead of `singleton`, and use `rediss://` instead of `tls_enabled`.
 

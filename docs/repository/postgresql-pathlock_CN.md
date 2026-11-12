@@ -1,5 +1,7 @@
 # PostgreSQL 路径锁：改动与使用说明
 
+公开文档站的配置入口见 [PostgreSQL PathLock 指南](../zh/guides/25-postgresql-pathlock.md)。
+
 本次为 OpenViking 新增 `postgres` PathLock Provider，让连接同一个 PostgreSQL
 主库的 OpenViking 进程共享路径锁。实现参考现有 SQLite 锁，复用已有的 holder
 冲突检查与变更逻辑，并接入现有 PathLockManager、Rust 构建器和 Python 配置链路。

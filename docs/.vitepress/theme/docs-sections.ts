@@ -246,6 +246,7 @@ export const sections: DocSection[] = [
       g('Storage and performance', '存储与性能', [
         p('guides/13-multi-write-storage'),
         p('guides/14-ragfs-cache'),
+        p('guides/25-postgresql-pathlock'),
         p('guides/16-cuvs')
       ])
     ]

@@ -1645,8 +1645,9 @@ Redis 命名空间。
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `provider` | str | `filesystem`、`memory`、`sqlite` 或 `cache`；`cache` 复用 Redis CacheRuntime | `filesystem` |
+| `provider` | str | `filesystem`、`memory`、`sqlite`、`postgres` 或 `cache`；`postgres` 直连 PostgreSQL，`cache` 复用 Redis CacheRuntime | `filesystem` |
 | `sqlite_path` | str / null | 可显式覆盖本地共享锁数据库的绝对路径。见 [SQLite 配置](../configuration/01-server.md#storage) | 使用 `sqlite` 时为 `{storage.workspace}/_system/pathlock/pathlock.db` |
+| `postgres_dsn_env` | str / null | `postgres` 必填；保存 PostgreSQL DSN 的环境变量名。见 [PostgreSQL 配置](25-postgresql-pathlock.md) | `null` |
 | `lock_expire_secs` | float | 未刷新的锁进入 stale 状态前的秒数；不得小于 `1.0` | `30.0` |
 | `lock_timeout_secs` | float | 已废弃且忽略；运行时等待超时固定为 `0.0` | `0.0` |
 
@@ -1655,7 +1656,35 @@ SQLite PathLock 仅适用于同一主机上的进程共享同一个本地磁盘�
 workspace 位于 EFS 时，默认 `sqlite_path` 也会落在 EFS。
 详见 [SQLite 部署限制](../configuration/01-server.md#storage)。
 
-多个容器或主机共享 EFS 时，使用下面的共享 Redis PathLock 配置。
+不使用 Redis 的多进程或多主机 PathLock 协调，可将下面片段合入 `ov.conf`，
+并在每个服务和 worker 启动前设置对应环境变量：
+
+```json
+{
+  "service_name": "production",
+  "storage": {
+    "agfs": {
+      "pathlock": {
+        "provider": "postgres",
+        "postgres_dsn_env": "OV_POSTGRES_DSN",
+        "lock_expire_secs": 30.0
+      }
+    }
+  }
+}
+```
+
+```sh
+export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=openviking password=YOUR_PASSWORD sslmode=require'
+```
+
+所有参与者必须连接同一可写 PostgreSQL 主库，使用相同的顶层 `service_name`
+和过期时长。PostgreSQL PathLock 独立于 `cache.provider/cache.params`，
+不会启用 CacheFS，也不会改变 QueueFS、业务文件存储或向量后端的并发限制。
+特别是默认 SQLite 队列不适合在 EFS 上跨主机共享。
+配置和验证步骤见 [PostgreSQL PathLock](25-postgresql-pathlock.md)。
+
+多个容器或主机共享 EFS 时，也可使用下面的共享 Redis PathLock 配置。
 所有副本必须连接同一个 Redis 部署，并使用相同的顶层 `service_name` 和锁过期配置。
 示例同时使用 Redis QueueFS 和 coordination，避免 SQLite 状态落在 EFS。
 
@@ -1696,7 +1725,7 @@ workspace 位于 EFS 时，默认 `sqlite_path` 也会落在 EFS。
 }
 ```
 
-标准配置没有全局 `cache.enabled`，也没有各模块自己的 Redis namespace 字段。当 CacheFS 或 QueueFS 选择 `backend=cache`、PathLock 或 coordination 选择 `provider=cache`，或多写选择 `backups.provider=cache` 时初始化 CacheRuntime。Cache PathLock 当前只支持 `cache.provider=redis`，不支持 DynamicProvider。全部模块使用本地 Provider 时不解析 `cache.params`，也不连接 Provider。
+标准配置没有全局 `cache.enabled`，也没有各模块自己的 Redis namespace 字段。当 CacheFS 或 QueueFS 选择 `backend=cache`、PathLock 或 coordination 选择 `provider=cache`，或多写选择 `backups.provider=cache` 时初始化 CacheRuntime。Cache PathLock 当前只支持 `cache.provider=redis`，不支持 DynamicProvider。只要这些模块都没有选择 cache Provider，就不解析 `cache.params`，也不连接 CacheRuntime；PathLock 使用 PostgreSQL 时同样如此。
 
 请把 Provider 参数迁移到顶层 `cache.provider/cache.params`，用顶层 `service_name` 生成共享 Redis 名称，业务模块改为 `cachefs.backend="cache"`、`queuefs.backend="cache"` 或 `backups.provider="cache"`；Redis 的 `singleton` 改为 `standalone`，`tls_enabled` 改为使用 `rediss://` endpoint。
 

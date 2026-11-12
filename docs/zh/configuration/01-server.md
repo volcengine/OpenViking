@@ -295,8 +295,9 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 |---|---|---|---|
 | `workspace` | path | `"./data"` | OpenViking 工作目录 |
 | `agfs.backend` | `local`、`memory`、`s3` | `local` | 文件与元数据存储后端 |
-| `agfs.pathlock.provider` | `filesystem`、`memory`、`sqlite`、`cache` | `filesystem` | 路径锁存储 |
+| `agfs.pathlock.provider` | `filesystem`、`memory`、`sqlite`、`postgres`、`cache` | `filesystem` | 路径锁存储；`postgres` 直连 PostgreSQL，`cache` 使用 Redis |
 | `agfs.pathlock.sqlite_path` | 本地文件绝对路径 | 使用 `sqlite` 时为 `{workspace}/_system/pathlock/pathlock.db` | SQLite 共享锁数据库，可显式覆盖 |
+| `agfs.pathlock.postgres_dsn_env` | 环境变量名 / `null` | `null` | `postgres` 必填；指定服务进程中保存 PostgreSQL DSN 的环境变量名 |
 | `vectordb.backend` | `local`、`cuvs`、`http`、`volcengine`、`vikingdb` | `local` | 向量数据库后端 |
 | `vectordb.dimension` | integer | 跟随 Embedding | 向量集合维度 |
 | `parse_output.mode` | `agfs`、`local` | `agfs` | parser 中间产物的存储后端 |
@@ -322,7 +323,7 @@ SQLite 每次尝试对瞬时数据库写竞争最多等待 100 毫秒，即使�
 WAL 使用 `synchronous=FULL` 保证崩溃后已提交锁记录的持久性，
 代价是比 `NORMAL` 更多的同步 I/O。
 租约心跳在一次 SQLite 事务中批量刷新所属路径，大租约按有限大小分批执行。
-`stale_locks_removed` 包含 SQLite/Redis 原子加锁事务实际回收的锁数量，
+`stale_locks_removed` 包含 SQLite/PostgreSQL/Redis 原子加锁事务实际回收的锁数量，
 失败并回滚的事务不会增加计数。
 
 SQLite 加锁会完整删除其他 owner 持有、已过期且与本次请求冲突的记录：
@@ -335,15 +336,46 @@ SQLite 加锁会完整删除其他 owner 持有、已过期且与本次请求冲
 频繁更新锁记录还会增加同步 I/O。如果 `storage.workspace` 位于 EFS，默认数据库路径也会落在 EFS。
 将数据库改到各容器本地磁盘会形成独立的锁状态，无法协调多个副本。
 
-多个容器或主机共享 EFS 时，使用共享 Redis PathLock：
+多个容器或主机共享 EFS 时，可使用 PostgreSQL PathLock 或共享 Redis PathLock。
+PostgreSQL 直接协调参与进程的路径锁，无需 Redis 或顶层 `cache` 配置。
+将下面的最小配置片段合入服务端 `ov.conf`：
+
+```json
+{
+  "service_name": "production",
+  "storage": {
+    "agfs": {
+      "pathlock": {
+        "provider": "postgres",
+        "postgres_dsn_env": "OV_POSTGRES_DSN",
+        "lock_expire_secs": 30.0
+      }
+    }
+  }
+}
+```
+
+启动前在每个服务和 worker 的环境中设置 DSN：
+
+```sh
+export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=openviking password=YOUR_PASSWORD sslmode=require'
+```
+
+使用 PostgreSQL 13+、UTF8 服务端编码，所有参与者连接同一可写主库，
+使用相同的顶层 `service_name` 和过期时长。字段填写环境变量名，不直接填写 DSN。
+凭据在初始化时读取，修改后需重启进程。数据库权限、TLS 和部署限制见
+[PostgreSQL PathLock 配置指南](../guides/25-postgresql-pathlock.md)。
+
+使用 Redis 协调时，
 设置 `storage.agfs.pathlock.provider="cache"` 和顶层 `cache.provider="redis"`。
 所有副本必须连接同一个 Redis 部署，并使用相同的顶层 `service_name` 和锁过期配置。
 参见[共享 Redis 配置示例](../guides/01-configuration.md)。
-共享 QueueFS 也需选择适合该部署的后端，例如 `storage.agfs.queuefs.backend="cache"`；
+无论选择哪种 PathLock，共享 QueueFS 都需选择适合该部署的后端，例如 `storage.agfs.queuefs.backend="cache"`；
 仅修改 PathLock 不会改变默认的 SQLite 队列后端。
 
 切换 provider 前需停止全部参与进程，
-SQLite 与 filesystem 锁文件不共享协议。进程运行期间不能删除数据库及其 WAL/SHM 文件。
+filesystem、SQLite、PostgreSQL 和 Redis 各自维护独立的锁状态；
+写入同一批文件的进程不能混用 Provider。进程运行期间不能删除 SQLite 数据库及其 WAL/SHM 文件。
 崩溃进程的锁在 `lock_expire_secs`（默认 30 秒）后可被接管。
 此配置不会改变 workspace 进程锁或其他后端的并发限制。
 

@@ -30,13 +30,19 @@ A partial commit starts from the branch's previous snapshot and preserves its ve
 
 For non-ROOT explicit-path commits, locks are selected from current target state before scope authorization and snapshot creation:
 
-| Target state | Filesystem PathLock | Cache (Redis) PathLock |
-| --- | --- | --- |
-| Existing file | Exact | Exact |
-| Existing directory | Tree | Tree |
-| Missing path | Skip locking this target | Tree |
+| Target state | Filesystem PathLock | Cache (Redis) / SQLite PathLock | PostgreSQL PathLock |
+| --- | --- | --- | --- |
+| Existing file | Exact | Exact | Exact |
+| Existing directory | Tree | Tree | Tree |
+| Missing path | Skip locking this target | Tree | Skip locking this target |
 
 Filesystem skips missing targets to avoid creating a target directory or a missing parent chain just to store a lock token. The target still participates in snapshot deletion processing. A concurrent recreation may be missed or read before its write finishes; a later commit records the final state. ROOT bypasses this explicit-path locking flow.
+
+PostgreSQL supports logical locks on missing paths, but the current snapshot
+selection code only requests Tree locks for missing targets with `cache` or
+`sqlite`. A PostgreSQL missing target therefore has the same concurrent-recreation
+limitation described above. See [PostgreSQL PathLock](25-postgresql-pathlock.md)
+for provider setup; this table describes snapshot behavior, not the provider's capabilities.
 
 Snapshots are not a globally atomic view of arbitrary concurrent I/O. For a deterministic checkpoint, finish writes in the intended scope before committing. Locks coordinate only operations participating in the [PathLock protocol](../concepts/09-transaction.md).
 

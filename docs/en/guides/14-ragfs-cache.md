@@ -9,8 +9,9 @@ CachedFileSystem assumptions:
 - The backend is not modified externally by bypassing RAGFS.
 - After a cache Provider successfully writes or deletes one key, later reads of that key do not return the old value.
 
-These assumptions apply to the read-cache layer. QueueFS and PathLock also use
-CacheRuntime, but define their own consistency rules.
+These assumptions apply to the read-cache layer. QueueFS and PathLock use
+CacheRuntime when their cache backend is selected, with their own consistency rules.
+PostgreSQL PathLock uses a separate database connection.
 
 ## Quick Start
 
@@ -89,6 +90,12 @@ Use distinct service names for independent deployments. Distributed path
 locking does not remove the single-writer requirement of CachedFileSystem.
 Cache-backed PathLock only supports the built-in Redis Provider.
 
+Distributed PathLock can also use `provider="postgres"` to coordinate through a
+shared PostgreSQL primary without Redis or CacheRuntime. It is configured separately
+from `cache.provider` and does not enable CacheFS or change QueueFS. See
+[PostgreSQL PathLock setup](25-postgresql-pathlock.md). CachedFileSystem retains
+its single-writer requirement with either PathLock backend.
+
 Redis HASH keys are partitioned by logical path scope:
 
 ```text
@@ -163,7 +170,8 @@ The top-level `cache` section is a sibling of `storage`:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `provider` | str | `"filesystem"` | `filesystem`, `memory`, `sqlite`, or `cache`; see [SQLite setup](../configuration/01-server.md#storage) |
+| `provider` | str | `"filesystem"` | `filesystem`, `memory`, `sqlite`, `postgres`, or `cache`; see [SQLite setup](../configuration/01-server.md#storage) and [PostgreSQL setup](25-postgresql-pathlock.md) |
+| `postgres_dsn_env` | str / null | `null` | Required for `postgres`; name of the server environment variable containing its DSN |
 | `lock_expire_secs` | float | `30.0` | Lock stale timeout; must be at least `1.0` |
 
 Redis configuration:

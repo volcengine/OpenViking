@@ -27,7 +27,7 @@ OpenViking is a context database where FS is the source of truth and VectorDB is
 Rust RAGFS `PathLockManager` and its Provider own runtime locks. Python services acquire, reuse, hand off, and release leases through the binding. The later `LockContext` examples illustrate the lifecycle; they are not current Python SDK or runtime class interfaces.
 
 - **Scope**: EXACT protects one path; TREE protects a path and its subtree.
-- **Provider**: The default filesystem provider stores lock files; cache uses Redis for atomic token checks and writes; memory coordinates only within one process.
+- **Provider**: The default filesystem provider stores lock files; SQLite coordinates processes sharing a local database; PostgreSQL provides shared database coordination; cache uses Redis for atomic token checks and writes; memory coordinates only within one process.
 - **Lease**: Records the owner, covered paths, token locations, and refresh state. Background tasks can receive an explicit lease handoff.
 - **Failure handling**: Release validates ownership, and later acquisitions detect stale tokens. Releasing a lock does not undo persisted changes.
 
@@ -227,7 +227,7 @@ Exact and Tree describe an operation's scope; file, directory, and missing descr
 Lock paths must be absolute. The Manager rejects empty or relative paths, repeated
 `/`, `.` or `..` components, and NUL with `InvalidRequest` before acquiring locks
 or checking lease coverage. A single trailing `/` is stripped, except at `/`.
-Redis and SQLite token operations require this normalized form; Redis Lua batch
+Redis, SQLite, and PostgreSQL token operations require this normalized form; Redis Lua batch
 acquisition also validates every request before mutating tokens. Use
 `/local/account-a/file`, rather than aliases such as `/local/account-a/./file`
 or `/local/account-a//file`.
@@ -306,6 +306,19 @@ scope HASH with `HGETALL`. Tree locks at `/` and `/local` are rejected with
 Use `/local/<account>` or `/local/_system` (or a descendant) as the Tree root.
 Exact locks at `/` and `/local` remain supported and protect only those paths.
 Cross-scope batches are rejected.
+
+### PostgreSQL Provider Lock Protocol
+
+The `postgres` provider stores authoritative holder tokens in PostgreSQL and
+checks Exact/Tree conflicts, acquires batches, and renews or releases holders
+within transactions protected by a namespace advisory lock. All participants
+use the same writable primary, top-level `service_name`, and expiry duration.
+Lock timestamps and expiry checks use the primary's clock.
+
+PostgreSQL is a shared coordination backend separate from Redis/CacheRuntime.
+It does not require Redis, enable the read cache, or move business files or
+QueueFS into PostgreSQL. See [PostgreSQL PathLock setup](../guides/25-postgresql-pathlock.md)
+for configuration, permissions, and deployment limits.
 
 ### Filesystem Lock Acquisition (EXACT mode)
 
@@ -414,7 +427,10 @@ Path locks are enabled by default with the `filesystem` provider. Use
 `storage.agfs.pathlock.provider=cache` for Redis-backed coordination between
 processes. Cache-backed PathLock requires a top-level Redis Cache Provider and
 uses top-level `service_name` as the Redis namespace. The runtime wait timeout
-is fixed at `0.0` seconds. `storage.transaction` remains only as a legacy compatibility layer:
+is fixed at `0.0` seconds. Alternatively, use `provider=postgres` for shared
+coordination across processes or hosts without Redis; it uses its own DSN and
+the top-level `service_name`, independently of cache settings.
+`storage.transaction` remains only as a legacy compatibility layer:
 `lock_timeout` is deprecated and ignored, `lock_expire` is automatically
 mapped when the new field is unset, and `redo_recovery_enabled` is deprecated
 and ignored.
@@ -457,14 +473,38 @@ Redis-backed configuration:
 }
 ```
 
+PostgreSQL configuration fragment for `ov.conf`:
+
+```json
+{
+  "service_name": "production",
+  "storage": {
+    "agfs": {
+      "pathlock": {
+        "provider": "postgres",
+        "postgres_dsn_env": "OV_POSTGRES_DSN",
+        "lock_expire_secs": 30.0
+      }
+    }
+  }
+}
+```
+
+```sh
+export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=openviking password=YOUR_PASSWORD sslmode=require'
+```
+
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `provider` | str | `filesystem`, `memory`, `sqlite`, or `cache` | `filesystem` |
+| `provider` | str | `filesystem`, `memory`, `sqlite`, `postgres`, or `cache` | `filesystem` |
 | `sqlite_path` | str / null | Optional absolute local database path for `sqlite`; see [SQLite setup](../configuration/01-server.md#storage) | `{storage.workspace}/_system/pathlock/pathlock.db` for `sqlite` |
+| `postgres_dsn_env` | str / null | Required for `postgres`; name of the environment variable containing its DSN | `null` |
 | `lock_expire_secs` | float | Seconds before an unrefreshed lock becomes stale | `30.0` |
 
-For replicas sharing EFS across containers or hosts, use `provider="cache"` with
-shared Redis. SQLite is limited to one shared database file on the same machine's
+For replicas sharing EFS across containers or hosts, use `provider="postgres"`
+with a shared PostgreSQL primary, or `provider="cache"` with shared Redis.
+Neither choice changes QueueFS or other storage concurrency requirements.
+SQLite is limited to one shared database file on the same machine's
 local disk; EFS/NFS/SMB and independent container-local databases are unsupported.
 See [deployment limits and provider selection](../configuration/01-server.md#storage).
 
@@ -488,6 +528,15 @@ Legacy compatibility form:
 ### QueueFS Persistence
 
 Restart recovery requires persisted queue data. QueueFS uses SQLite by default. With the cache backend, durability depends on the configured Provider; the memory backend loses queued work when the process exits.
+
+### Switching to PostgreSQL {#switching-to-postgresql}
+
+For filesystem → PostgreSQL, use the same stop-and-restart procedure below,
+setting `provider="postgres"` and `postgres_dsn_env` in step 3 and verifying fresh
+PostgreSQL locks in step 4. PostgreSQL, Redis, SQLite, and filesystem locks are
+independent coordination domains: a new provider never checks the old provider's
+tokens. Stop every writer before any provider switch, including Redis ↔ PostgreSQL.
+See [PostgreSQL setup](../guides/25-postgresql-pathlock.md) for the destination configuration.
 
 ### Single-instance path lock provider switch: filesystem → Redis
 

@@ -21,3 +21,6 @@
 先从[观测与排障入口](05-observability.md)选择工具。单次请求看[操作遥测](07-operation-telemetry.md)，时间趋势看 [Prometheus / Grafana](11-grafana-prometheus.md)，指标含义查[指标口径](../concepts/12-metrics.md)。常见问题见[FAQ](../faq/faq.md)。
 
 有存储或性能需求时，再选择[主备存储](13-multi-write-storage.md)、[RAGFS 缓存](14-ragfs-cache.md)或 [cuVS](16-cuvs.md)。这些是按需配置项，不是首次部署的必经步骤。
+
+需要在不使用 Redis 的情况下跨进程或主机共享路径锁时，参见
+[PostgreSQL PathLock](25-postgresql-pathlock.md)。

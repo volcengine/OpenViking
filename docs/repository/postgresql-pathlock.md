@@ -2,6 +2,8 @@
 
 [中文使用说明与文件改动清单](postgresql-pathlock_CN.md)
 
+The public documentation site includes the [PostgreSQL PathLock setup guide](../en/guides/25-postgresql-pathlock.md).
+
 PostgreSQL provides shared path locks for cooperating OpenViking processes.
 The provider reuses SQLite's holder protocol: Exact/Tree conflicts, reentrancy,
 holder-level renewal/release, upgrades, and handoff validation. No Redis server

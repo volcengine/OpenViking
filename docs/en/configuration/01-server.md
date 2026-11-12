@@ -303,8 +303,9 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
 |---|---|---|---|
 | `workspace` | path | `"./data"` | OpenViking workspace |
 | `agfs.backend` | `local`, `memory`, `s3` | `local` | File and metadata backend |
-| `agfs.pathlock.provider` | `filesystem`, `memory`, `sqlite`, `cache` | `filesystem` | Path lock storage |
+| `agfs.pathlock.provider` | `filesystem`, `memory`, `sqlite`, `postgres`, `cache` | `filesystem` | Path lock storage; `postgres` uses PostgreSQL directly, `cache` uses Redis |
 | `agfs.pathlock.sqlite_path` | absolute local file path | `{workspace}/_system/pathlock/pathlock.db` for `sqlite` | Shared SQLite lock database; optional override |
+| `agfs.pathlock.postgres_dsn_env` | environment variable name / `null` | `null` | Required for `postgres`; names the server environment variable containing the PostgreSQL DSN |
 | `vectordb.backend` | `local`, `cuvs`, `http`, `volcengine`, `vikingdb` | `local` | Vector database backend |
 | `vectordb.dimension` | integer | follows Embedding | Vector collection dimension |
 | `parse_output.mode` | `agfs`, `local` | `agfs` | Backend for intermediate parser artifacts |
@@ -333,7 +334,7 @@ retries still report Busy to the manager; logical lock Conflict is not retried. 
 additional synchronization I/O compared with `NORMAL`.
 Lease heartbeats refresh owned paths in one SQLite transaction (bounded batches
 for large leases). `stale_locks_removed` includes tokens recovered by committed
-atomic SQLite/Redis acquisitions; failed transactions do not increment the count.
+atomic SQLite/PostgreSQL/Redis acquisitions; failed transactions do not increment the count.
 
 SQLite acquisitions completely delete expired tokens belonging to other owners
 that conflict with the request: the target path, ancestor Tree locks, and all
@@ -348,16 +349,48 @@ updates also add synchronization I/O. If `storage.workspace` is on EFS, the
 default database path is on EFS too. Moving it to each container's local disk
 creates independent lock authorities and cannot coordinate replicas.
 
-For multiple containers or hosts sharing EFS, use shared Redis PathLock:
+For multiple containers or hosts sharing EFS, use PostgreSQL PathLock or shared Redis PathLock.
+PostgreSQL coordinates participating processes directly without Redis or a top-level
+`cache` configuration. Merge this minimal fragment into your server's `ov.conf`:
+
+```json
+{
+  "service_name": "production",
+  "storage": {
+    "agfs": {
+      "pathlock": {
+        "provider": "postgres",
+        "postgres_dsn_env": "OV_POSTGRES_DSN",
+        "lock_expire_secs": 30.0
+      }
+    }
+  }
+}
+```
+
+Set the DSN in every server and worker environment before startup:
+
+```sh
+export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=openviking password=YOUR_PASSWORD sslmode=require'
+```
+
+Use PostgreSQL 13+ with UTF8 server encoding and the same writable primary,
+top-level `service_name`, and expiry duration for all participants. The field stores
+the environment variable's name, not the DSN itself. Credentials are read at
+initialization; restart processes after changing them. See [PostgreSQL PathLock setup](../guides/25-postgresql-pathlock.md)
+for permissions, TLS, and deployment limits.
+
+For Redis coordination,
 set `storage.agfs.pathlock.provider="cache"` and top-level `cache.provider="redis"`.
 All replicas must use the same Redis deployment, top-level `service_name`, and
 lock expiry setting. See the [shared Redis configuration example](../guides/01-configuration.md).
-Shared QueueFS must also use a backend suitable for that deployment, such as
+With either PathLock provider, shared QueueFS must also use a backend suitable for that deployment, such as
 `storage.agfs.queuefs.backend="cache"`; changing PathLock alone does not change
 the default SQLite queue backend.
 
 Stop all participating processes before switching providers:
-SQLite and filesystem lock files do not share a protocol. Do not delete the database,
+Filesystem, SQLite, PostgreSQL, and Redis maintain independent lock authorities.
+Do not mix providers for processes writing the same files. Do not delete the SQLite database,
 WAL, or SHM files while participants are running. Crashed owners' tokens become
 eligible for takeover after `lock_expire_secs` (default 30 seconds). This setting
 does not change the workspace process lock or other backend concurrency constraints.
