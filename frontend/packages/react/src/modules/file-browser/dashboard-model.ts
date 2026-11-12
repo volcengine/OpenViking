@@ -1,3 +1,4 @@
+import type { FilePreviewTab } from '../../components/file-preview/index.js';
 import type {
   FileTreeEntryRow,
   FileTreeRow,
@@ -48,4 +49,13 @@ export function resolveDashboard(
         ? owner.conflicts_num > 0
         : undefined,
   };
+}
+
+/** Keep the normal tabs when no board is open, and suppress all detail tabs for blocked resources. */
+export function mergeDashboardTab(
+  tabs: readonly FilePreviewTab[] | null,
+  dashboard: FilePreviewTab | undefined,
+  blocked: boolean,
+) {
+  return blocked ? null : dashboard ? [...(tabs ?? []), dashboard] : tabs;
 }

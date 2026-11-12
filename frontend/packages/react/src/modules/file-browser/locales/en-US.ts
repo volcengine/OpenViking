@@ -3,11 +3,17 @@ import type { ShellLabels } from '../file-browser-labels.js';
 const messages = {
   formatCharacterCount: (count) =>
     `${count.toLocaleString('en-US')} ${count === 1 ? 'character' : 'characters'}`,
-  empty: 'Select a file to preview',
+  accessDenied: 'You do not have permission to view this node.',
+  traverseOnly:
+    'This directory can only be expanded to reach accessible children.',
+  empty: 'Select a file on the left to preview it',
   error: 'Failed to load the directory',
   retry: 'Retry',
   refresh: 'Refresh',
   searchPlaceholder: 'Search files ⌘+K...',
+  searchTitle: 'Search files',
+  searchAction: 'Search',
+  searchHint: 'Enter a query to search.',
   searchEmpty: 'No matching resources',
   searchFailed: 'Failed to run the search',
   loading: 'Loading…',

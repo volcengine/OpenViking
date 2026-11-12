@@ -124,6 +124,7 @@ export function FilePreviewPanels({
         canOpenParent={Boolean(fileTab.operations?.openParent)}
         titleExtra={fileTab.slots?.titleExtra}
         slotActions={fileTab.slots?.actions}
+        extraActions={fileTab.slots?.extraActions}
         actions={actionContext}
         text={text}
         onOpenParent={(uri) => void actions.openParent(activeTab, uri)}

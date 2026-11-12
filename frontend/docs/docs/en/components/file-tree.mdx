@@ -4,41 +4,19 @@ Optional `locale: 'zh-CN' | 'en-US'` overrides the nearest module or Provider; w
 
 A flattened file tree. The host owns the tree state and passes the visible rows in order; the component renders them and reports successful operations.
 
-The component renders the host-flattened row list and handles selection, expansion, paging and keyboard interaction. Search and refresh controls are optional; the host supplies search UI, data requests and import flows.
-
-## Console styling and optional toolbar
-
-Rows, indentation, the pale selected state, and 32px search and refresh controls match the Volcengine console. This example uses fixed public fixtures; its host simulates search and refresh.
-
-```tsx file="../../_demos/file-tree-console.tsx" preview
-
-```
-
-Enable `search` and `refresh` independently; both are hidden by default. `operations.search` opens the host search interface, and `operations.refresh` reloads data. A missing executor disables its button. While refresh is pending, the button is disabled and its icon spins. Duplicate clicks are ignored. Failure restores the button without calling `onRefresh`; the host owns error feedback.
-
-```tsx
-<FileTree
-  locale="en-US"
-  rows={rows}
-  search
-  refresh={{ loading: isRefreshing, disabled: !canRefresh }}
-  operations={{ search: openSearch, refresh: reloadTree }}
-  labels={{ search: 'Search files…', refresh: 'Refresh file tree' }}
-  onRefresh={() => notifySuccess()}
-/>
-```
-
-Use `search={{ disabled: true }}` to disable search. Search is a trigger, not a local filter: loaded rows may represent only part of the filesystem. The component registers no global shortcut. If the host supplies one, include its hint in `labels.search`. `slots.toolbar` remains available above the built-in controls for host actions such as connecting agents or importing resources.
+The component renders the host-flattened row list and handles selection, expansion, paging and keyboard interaction. Search and refresh controls are visible by default and can be hidden independently; the host supplies search UI, data requests and import flows.
 
 ## Basic usage
 
-Rows come from `rows`; expansion is controlled by the consumer. The example keeps its own expanded set, flattens the tree into `FileTreeRow[]` and renders it, showing all five row kinds and the built-in directory copy in action.
+Rows come from `rows`; expansion is controlled by the consumer. The example keeps its own expanded set, flattens the tree into `FileTreeRow[]` and renders it, showing async loading, paging, empty rows and the built-in directory copy in action.
 
 ```tsx file="../../_demos/file-tree-basic.tsx" preview
 
 ```
 
-The example demonstrates three host responsibilities:
+Search only displays the `onSearch` event and opens no dialog. Choose a refresh result and click refresh to run the success or failure case. Pending refresh shows loading; failure restores the button without firing `onRefresh`, and choosing success allows a retry. Toggle "Host-controlled loading" to try the controlled pending state. All data is simulated offline.
+
+The example also demonstrates these host responsibilities:
 
 - **Async loading**: expanding a directory shows a `Loading…` row for 400 ms before the children appear — `FileTreeLoadingRow`.
 - **Paging**: each page loads three children; while more remain, `Load more` appears and appends one page per click — `FileTreeLoadMoreRow`. `archive` holds nine files and loads in three pages.
@@ -48,9 +26,31 @@ Names like `memories`, `peers` and `privacy` are followed by their built-in desc
 
 The example mounts `<FileTree />` directly, keeping only the tree data and the expansion and paging state the host owns.
 
+## Search and refresh
+
+`search` and `refresh` both default to `true`; pass `false` to hide either. A missing `operations` method disables its control. `slots.toolbar` remains above the built-in controls.
+
+The default search text matches the console: `Search files ⌘+K...`. Override it with `labels.search`. The component invokes host operations; the host supplies search UI, keyboard shortcuts and result handling.
+
+Refresh shows a hint on hover or keyboard focus. Top-level `loading`, `refresh.loading`, and the pending refresh Promise are combined: any active state spins and disables the button and prevents repeated execution. `labels.refresh` overrides both the hint and accessible name.
+
+```tsx
+<FileTree
+  rows={rows}
+  loading={isRefreshing}
+  operations={{ search: openSearch, refresh: reloadTree }}
+  labels={{
+    search: 'Search documents...',
+    refresh: 'Refresh context directory',
+  }}
+  onSearch={() => notifySearch()}
+  onRefresh={() => notifyRefresh()}
+/>
+```
+
 ## How rows work
 
-The tree never inspects parent/child relationships. The host flattens its own state into an ordered list:
+The host flattens its own state into an ordered list:
 
 - `entry` — a directory or file.
 - `loading` — a children area that is still loading.
@@ -59,6 +59,8 @@ The tree never inspects parent/child relationships. The host flattens its own st
 - `empty` — an expanded directory with no children.
 
 Emit only the ones your data source needs. A host that returns all children at once never emits `load-more`.
+
+Rows keep their input order by default. For a context root, use `rootOrder="context"` to order root directories by URI namespace: `user → session → agent → resources`, including singular and plural aliases. Other directories keep their relative order after those groups. An expanded branch moves with its root; child order and the position of root-level state rows, such as pagination, are preserved.
 
 Rows size to their content rather than being squeezed into the container width: names render in full and the container scrolls sideways. Deep indentation gets its space the same way, so deep nodes never squeeze each other. The description is capped at 200px and truncates as needed — it is supplementary, and one long description would drag a row hundreds of pixels wide, making horizontal scrolling harder rather than easier.
 
@@ -140,32 +142,34 @@ treeRef.current?.scrollToRow('resources', { block: 'center' });
 
 ## Props
 
-| Property                  | Type                                                   | Default           | Description                                                                    |
-| ------------------------- | ------------------------------------------------------ | ----------------- | ------------------------------------------------------------------------------ |
-| `locale`                  | `'zh-CN' \| 'en-US'`                                   | Inherited / en-US | Built-in Chinese and English copy.                                             |
-| `rows`                    | `readonly FileTreeRow[]`                               | Required          | Visible rows in render order.                                                  |
-| `operations`              | `FileTreeOperations`                                   | —                 | Asynchronous operation capabilities; missing methods disable their operations. |
-| `selectedId`              | `string \| null`                                       | —                 | Selected row id, owned by the host.                                            |
-| `isReady`                 | `boolean`                                              | `true`            | Whether the first load finished.                                               |
-| `loadingFallback`         | `ReactNode`                                            | —                 | Shown instead of rows while the first load runs.                               |
-| `errorFallback`           | `ReactNode`                                            | —                 | Shown when a whole-tree error row is present.                                  |
-| `emptyFallback`           | `ReactNode`                                            | —                 | Shown when `rows` is empty.                                                    |
-| `slots`                   | `FileTreeSlots`                                        | —                 | `toolbar` and `spinner` slots.                                                 |
-| `labels`                  | `FileTreeLabels`                                       | locale            | Replaceable copy.                                                              |
-| `getRowAttributes`        | `(row) => HTMLAttributes<HTMLDivElement>`              | —                 | Extra attributes per row; `className` is merged.                               |
-| `renderDashboard`         | `(row) => ReactNode`                                   | —                 | Row-end indicator; `null` hides it.                                            |
-| `renderRowIcon`           | `(row) => ReactNode`                                   | —                 | Leading icon of a file row; the generic file icon when omitted.                |
-| `renderRowTooltip`        | `(row) => ReactNode`                                   | —                 | Hover content; `null` hides it.                                                |
-| `onSelect`                | `(row: FileTreeEntryRow) => void`                      | —                 | Called after selection succeeds; not called on failure.                        |
-| `onToggleExpand`          | `(row: FileTreeEntryRow) => void`                      | —                 | Called after expansion or collapse succeeds; not called on failure.            |
-| `onLoadMore`              | `(row: FileTreeLoadMoreRow) => void`                   | —                 | Called after loading more children succeeds; not called on failure.            |
-| `onRetry`                 | `(row: FileTreeErrorRow) => void`                      | —                 | Called after a retry succeeds; not called on failure.                          |
-| `search`                  | `boolean \| { disabled?: boolean }`                    | `false`           | Show the built-in search trigger.                                              |
-| `refresh`                 | `boolean \| { disabled?: boolean; loading?: boolean }` | `false`           | Show the built-in refresh button.                                              |
-| `onSearch`                | `() => void`                                           | —                 | Called after search opens successfully.                                        |
-| `onRefresh`               | `() => void`                                           | —                 | Called after refresh succeeds.                                                 |
-| `onOpenRetentionSettings` | `(uri: string) => void`                                | —                 | Called after retention settings open successfully; not called on failure.      |
-| Other props               | `HTMLAttributes<HTMLDivElement>`                       | —                 | Standard div attributes.                                                       |
+| Property                  | Type                                                   | Default           | Description                                                                                                      |
+| ------------------------- | ------------------------------------------------------ | ----------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `locale`                  | `'zh-CN' \| 'en-US'`                                   | Inherited / en-US | Built-in Chinese and English copy.                                                                               |
+| `rows`                    | `readonly FileTreeRow[]`                               | Required          | Visible rows in render order.                                                                                    |
+| `rootOrder`               | `'input' \| 'context'`                                 | `'input'`         | Root directory order; `context` uses the console's context order.                                                |
+| `operations`              | `FileTreeOperations`                                   | —                 | Asynchronous operation capabilities; missing methods disable their operations.                                   |
+| `selectedId`              | `string \| null`                                       | —                 | Selected row id, owned by the host.                                                                              |
+| `isReady`                 | `boolean`                                              | `true`            | Whether the first load finished.                                                                                 |
+| `loadingFallback`         | `ReactNode`                                            | —                 | Shown instead of rows while the first load runs.                                                                 |
+| `errorFallback`           | `ReactNode`                                            | —                 | Shown when a whole-tree error row is present.                                                                    |
+| `emptyFallback`           | `ReactNode`                                            | —                 | Shown when `rows` is empty.                                                                                      |
+| `slots`                   | `FileTreeSlots`                                        | —                 | `toolbar` and `spinner` slots.                                                                                   |
+| `labels`                  | `FileTreeLabels`                                       | locale            | Replaceable copy.                                                                                                |
+| `getRowAttributes`        | `(row) => HTMLAttributes<HTMLDivElement>`              | —                 | Extra attributes per row; `className` is merged.                                                                 |
+| `renderDashboard`         | `(row) => ReactNode`                                   | —                 | Row-end indicator; `null` hides it.                                                                              |
+| `renderRowIcon`           | `(row) => ReactNode`                                   | —                 | Leading icon of a file row; the generic file icon when omitted.                                                  |
+| `renderRowTooltip`        | `(row) => ReactNode`                                   | —                 | Hover content; `null` hides it.                                                                                  |
+| `onSelect`                | `(row: FileTreeEntryRow) => void`                      | —                 | Called after selection succeeds; not called on failure.                                                          |
+| `onToggleExpand`          | `(row: FileTreeEntryRow) => void`                      | —                 | Called after expansion or collapse succeeds; not called on failure.                                              |
+| `onLoadMore`              | `(row: FileTreeLoadMoreRow) => void`                   | —                 | Called after loading more children succeeds; not called on failure.                                              |
+| `onRetry`                 | `(row: FileTreeErrorRow) => void`                      | —                 | Called after a retry succeeds; not called on failure.                                                            |
+| `search`                  | `boolean \| { disabled?: boolean }`                    | `true`            | Show the built-in search trigger.                                                                                |
+| `refresh`                 | `boolean \| { disabled?: boolean; loading?: boolean }` | `true`            | Show the built-in refresh button.                                                                                |
+| `loading`                 | `boolean`                                              | `false`           | Host-controlled refresh pending state, combined with the Promise and `refresh.loading`; preserves existing rows. |
+| `onSearch`                | `() => void`                                           | —                 | Called after the search operation succeeds.                                                                      |
+| `onRefresh`               | `() => void`                                           | —                 | Called after refresh succeeds.                                                                                   |
+| `onOpenRetentionSettings` | `(uri: string) => void`                                | —                 | Called after retention settings open successfully; not called on failure.                                        |
+| Other props               | `HTMLAttributes<HTMLDivElement>`                       | —                 | Standard div attributes.                                                                                         |
 
 ```tsx
 import { FileTree } from '@openviking/react/components/file-tree';
@@ -201,3 +205,15 @@ import '@openviking/react/components/file-tree/style.css';
 ## Implementation scope
 
 The host supplies asynchronous execution capabilities through `operations`; the component calls the matching success notification only after the operation resolves. Rejection does not trigger a success notification. Omitting a method disables that operation; omitting a notification does not prevent execution. Directory loading, pagination, search, permissions and navigation remain host-owned.
+
+## Row permission status
+
+The view renders host-provided state and makes no authorization requests. `FileBrowser` maps native listing results to these row properties:
+
+| `FileTreeEntryRow` property | Default | Behavior                                                                                    |
+| --------------------------- | ------- | ------------------------------------------------------------------------------------------- |
+| `disabled`                  | `false` | Prevent selection and expansion                                                             |
+| `selectable`                | `true`  | `false` prevents pointer and keyboard selection while allowing directory expansion          |
+| `access`                    | —       | Display a `read-only`, `denied` or `container` badge; the properties above control behavior |
+
+Override badge strings with `labels.readOnly`, `labels.noAccess` and `labels.traverseOnly`; defaults follow the locale.

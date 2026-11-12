@@ -1,3 +1,4 @@
+import { Button } from '../../shared/components/button/button.js';
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
 import type { Locale } from '../../shared/locale.js';
 import type { ReactNode } from 'react';
@@ -6,17 +7,22 @@ import { Tooltip } from '../../shared/components/tooltip/index.js';
 import { resolveVikingBotLabels } from './labels.js';
 import type { VikingBotLabels } from './model.js';
 import type { VikingBotSessions } from './capabilities.js';
+import { SessionMeta } from './session-meta.js';
 import { BotPopover } from './bot-popover.js';
 
 /** Session controls can be used alone by a host's shared header. */
 export function VikingBotSessionActions({
   sessions,
   extra,
+  onOpenUri,
+  onCopy,
   labels: overrides,
   locale: localeProp,
 }: {
   sessions?: VikingBotSessions;
   extra?: ReactNode;
+  onOpenUri?: (uri: string) => void;
+  onCopy?: (text: string) => void;
   labels?: VikingBotLabels;
   locale?: Locale;
 }) {
@@ -25,6 +31,15 @@ export function VikingBotSessionActions({
   return (
     <LocaleProvider locale={locale}>
       <div className="ov-viking-bot__session-actions">
+        {sessions?.currentId ? (
+          <SessionMeta
+            id={sessions.currentId}
+            uri={sessions.currentUri}
+            labels={labels}
+            onOpenUri={onOpenUri}
+            onCopy={onCopy}
+          />
+        ) : null}
         {extra}
         {sessions ? (
           <>
@@ -36,14 +51,17 @@ export function VikingBotSessionActions({
                   content={labels.sessionHistory}
                   disabled={props['aria-expanded'] === true}
                 >
-                  <button
+                  <Button
                     {...props}
-                    type="button"
+                    size="mini"
+                    type="text"
+                    iconOnly
+                    htmlType="button"
                     className="ov-viking-bot__header-action"
                     aria-label={labels.sessionHistory}
                   >
                     <VikingBotIcon name="history" />
-                  </button>
+                  </Button>
                 </Tooltip>
               )}
             >
@@ -94,26 +112,31 @@ export function VikingBotSessionActions({
                     })}
                   </ul>
                   {sessions.hasMore && sessions.onLoadMore ? (
-                    <button
-                      type="button"
+                    <Button
+                      size="small"
+                      type="default"
+                      htmlType="button"
                       disabled={sessions.isLoading}
                       onClick={sessions.onLoadMore}
                     >
                       {labels.loadMore}
-                    </button>
+                    </Button>
                   ) : null}
                 </div>
               )}
             </BotPopover>
             <Tooltip content={labels.newSession}>
-              <button
-                type="button"
+              <Button
+                size="mini"
+                type="text"
+                iconOnly
+                htmlType="button"
                 className="ov-viking-bot__header-action"
                 aria-label={labels.newSession}
                 onClick={sessions.onNew}
               >
                 <VikingBotIcon name="newSession" />
-              </button>
+              </Button>
             </Tooltip>
           </>
         ) : null}

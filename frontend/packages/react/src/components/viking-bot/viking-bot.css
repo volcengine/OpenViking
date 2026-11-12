@@ -287,11 +287,18 @@
   border-radius: var(--ov-viking-bot-radius);
   background: none;
   padding: 2px 8px;
-  color: var(--ov-viking-bot-accent);
   font: inherit;
   font-size: 12px;
   overflow-wrap: anywhere;
   cursor: pointer;
+}
+
+.ov-viking-bot__context {
+  color: var(--ov-viking-bot-accent);
+}
+
+.ov-viking-bot__attachment {
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
 }
 
 .ov-viking-bot__context:hover,
@@ -332,36 +339,6 @@
 .ov-viking-bot__copy,
 .ov-viking-bot__message-action {
   align-self: flex-start;
-  border: none;
-  background: none;
-  padding: 0;
-  color: var(--ov-viking-bot-text-muted);
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.ov-viking-bot__copy:hover,
-.ov-viking-bot__message-action:hover:not(:disabled) {
-  color: var(--ov-viking-bot-text);
-}
-
-.ov-viking-bot__copy:focus-visible,
-.ov-viking-bot__message-action:focus-visible {
-  outline: 2px solid var(--ov-viking-bot-focus);
-  outline-offset: 2px;
-}
-
-.ov-viking-bot__message-action {
-  border: 1px solid var(--ov-viking-bot-border);
-  border-radius: 999px;
-  padding: 2px 10px;
-  color: var(--ov-viking-bot-accent);
-}
-
-.ov-viking-bot__message-action:disabled {
-  color: var(--ov-viking-bot-text-muted);
-  cursor: default;
 }
 
 .ov-viking-bot__thinking {

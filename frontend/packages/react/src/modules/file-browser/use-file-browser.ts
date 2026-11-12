@@ -1,17 +1,14 @@
 import { useLocale } from '../../shared/locale-context.js';
 import { resolveLabels, resolveSummaryLabels } from './file-browser-labels.js';
 import { useMemo, useRef, useState } from 'react';
-import { selectedRowId } from './fs-selection.js';
 
 import type {
   FileTreeEntryRow,
   FileTreeRow,
 } from '../../components/file-tree/index.js';
 import { useOvClient } from '../../client/provider.js';
-import { toEntryRow } from './fs-model.js';
 import { useFsPreview } from './use-fs-preview.js';
-import { useFsSearch } from './use-fs-search.js';
-import { dashboardKey } from './dashboard-model.js';
+import { dashboardKey, mergeDashboardTab } from './dashboard-model.js';
 import { useBrowserDashboards } from './use-browser-dashboards.js';
 import { useFsTree } from './use-fs-tree.js';
 import type {
@@ -21,13 +18,11 @@ import type {
 } from './types.js';
 
 /**
- * 文件浏览模块的取数与联动：把目录树、搜索与预览组合成一份视图数据。三者各自
- * 取数，这里只负责把它们接起来——目录行展开树，文件行与搜索结果打开预览。
+ * 文件浏览模块的目录与预览联动：目录行展开树，文件行打开预览。
+ * 占位搜索弹窗独立管理查询，不改变目录树。
  *
- * Data loading and coordination of the file browser module: the tree, the search
- * and the preview each load their own data, and this only wires them together —
- * a directory row expands the tree, while a file row or a search result opens
- * the preview.
+ * Coordinates directory loading and preview selection. The placeholder search
+ * dialog owns its query separately and leaves the tree unchanged.
  */
 export function useFileBrowser({
   rootUri,
@@ -37,6 +32,7 @@ export function useFileBrowser({
   dashboardLabels,
   controlled = false,
   summaryLabels,
+  accessLabels,
   formatCharacterCount,
   defaultExpandedUri,
   currentUri,
@@ -44,28 +40,17 @@ export function useFileBrowser({
   onUriChange,
 }: UseFileBrowserOptions): FileBrowserApi {
   const locale = useLocale(localeProp);
+  const text = resolveLabels(accessLabels, locale);
   const client = useOvClient();
-  const [query, setQuery] = useState('');
   const [pendingUri, setPendingUri] = useState<string | null>(currentUri);
   const [refreshing, setRefreshing] = useState(false);
-  // 刷新代次：外部改动后目录、搜索与预览都要重新取数，但它们的依赖（URI、查询
-  // 词、客户端）都没有变化，因此需要一个显式信号让三者一起重跑。
-  //
-  // Refresh generation: after an external change the tree, the search and the
-  // preview all need to reload, but none of their dependencies (URI, query, client)
-  // changed, so an explicit signal makes all three re-run.
+  // External edits must refresh the directory and preview even if URI and client
+  // are unchanged; the shared generation invalidates both requests.
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const tree = useFsTree({
     client,
     rootUri,
     defaultExpandedUri,
-    requestOptions,
-  });
-  const search = useFsSearch({
-    client,
-    query,
-    targetUri: rootUri,
-    generation: refreshGeneration,
     requestOptions,
   });
   // 当前资源是目录还是文件，决定预览读摘要还是正文。
@@ -100,6 +85,7 @@ export function useFileBrowser({
   // preview stuck on the initial resource. `pendingUri` is seeded from `currentUri`
   // anyway, so using it alone is correct.
   const activeUri = controlled ? currentUri : pendingUri;
+  const blocked = tree.accessOf(activeUri);
   // 三态而不是布尔：不在已知目录集合里既可能是文件，也可能是还没加载过的目录，
   // 两者要走的接口不同，不能合并成「不是目录」。
   //
@@ -153,29 +139,16 @@ export function useFileBrowser({
     // Under the uncontrolled mode `currentUri` is null and `pendingUri` holds the
     // real selection, so the preview follows that instead — otherwise a selection
     // the module owns would never load anything.
-    uri: activeUri,
+    uri: blocked ? null : activeUri,
     resourceType,
     labels: summaryLabels ?? resolveSummaryLabels(locale),
-    formatCharacterCount:
-      formatCharacterCount ??
-      resolveLabels(undefined, locale).formatCharacterCount,
+    formatCharacterCount: formatCharacterCount ?? text.formatCharacterCount,
     openParent,
     generation: refreshGeneration,
     requestOptions,
   });
 
-  // 搜索结果的行 id 带序号（同一 URI 可能出现在两个类别里），因此选中项也要按
-  // 同样的规则换算，否则选中态在结果列表里对不上任何一行。
-  //
-  // Search rows carry an index in their id because one URI can appear in two
-  // categories, so the selection is converted the same way — otherwise no row in
-  // the result list matches it.
-  const rows = useMemo<readonly FileTreeRow[]>(() => {
-    if (search.results === null) return tree.rows;
-    return search.results.map((entry, index) =>
-      toEntryRow(entry, 0, false, index),
-    );
-  }, [search.results, tree.rows]);
+  const rows = tree.rows;
 
   const openPath = tree.openPath;
   const openResource = useMemo(
@@ -193,7 +166,7 @@ export function useFileBrowser({
   const boards = useBrowserDashboards({
     rows,
     metadataRows: tree.metadataRows,
-    uri: activeUri,
+    uri: blocked ? null : activeUri,
     rootUri,
     generation: refreshGeneration,
     locale,
@@ -204,7 +177,7 @@ export function useFileBrowser({
     dashboardLabels,
   });
 
-  const selectedId = selectedRowId(activeUri, search.results);
+  const selectedId = activeUri;
 
   // 解构出具体操作，`select` 里因此不再碰整个 `tree` 对象。
   // Destructure the operations so `select` never touches the whole `tree` object.
@@ -230,6 +203,7 @@ export function useFileBrowser({
       // resource the user picked in the meantime. The selection belongs to the moment
       // of the click, not to a listing that arrives afterwards.
       select: async (row: FileTreeEntryRow) => {
+        if (row.disabled || row.selectable === false) return;
         closeDashboard();
         setPendingUri(row.uri);
         notifyUriChange.current(row.uri);
@@ -244,15 +218,7 @@ export function useFileBrowser({
         const parentId = 'parentId' in row ? row.parentId : undefined;
         if (parentId) await retry(parentId);
       },
-      // 刷新覆盖三个数据源：目录列表、当前预览与进行中的搜索。只刷树会让右侧
-      // 继续显示旧正文、搜索结果继续指向旧路径——外部改动（例如别的会话写了同
-      // 一个文件）之后，那是最容易误导人的状态。
-      //
-      // Refresh covers all three sources: the listings, the current preview and an
-      // active search. Reloading only the tree would leave the detail pane showing
-      // old content and the search results pointing at stale paths — the most
-      // misleading state after an external change such as another session writing
-      // the same file.
+      // Refresh the directory and preview together after external changes.
       refresh: async () => {
         setRefreshing(true);
         try {
@@ -271,7 +237,6 @@ export function useFileBrowser({
           setActiveKey(key);
         }
       },
-      setQuery,
     }),
     // 依赖收窄到具体的操作函数，不依赖整个 `tree`：后者每次展开都换新引用，
     // 会让 `actions` 跟着变，进而把 `FileTree` 的 `operations` 也换掉。
@@ -292,6 +257,9 @@ export function useFileBrowser({
     ],
   );
 
+  const previewError = blocked
+    ? new Error(text[blocked === 'denied' ? 'accessDenied' : 'traverseOnly'])
+    : preview.error;
   return {
     rows,
     selectedId,
@@ -305,21 +273,15 @@ export function useFileBrowser({
     // different resource than the preview shows.
     currentUri: activeUri,
     isReady: tree.isReady,
-    error: tree.error ?? search.error ?? preview.error,
+    error: tree.error ?? previewError,
     treeError: tree.error,
-    previewError: preview.error,
-    searchError: search.error,
+    previewError,
     dashboards: boards.dashboards,
     dashboardError: boards.error,
-    previewTabs: boards.tab
-      ? [...(preview.tabs ?? []), boards.tab]
-      : preview.tabs,
+    previewTabs: mergeDashboardTab(preview.tabs, boards.tab, Boolean(blocked)),
     previewKey:
       boards.isOpen && activeUri ? dashboardKey(activeUri) : preview.activeKey,
     previewFooter: preview.footer,
-    query,
-    searching: search.results !== null,
-    searchLoading: search.loading,
     refreshing,
     actions,
   };

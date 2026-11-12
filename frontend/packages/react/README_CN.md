@@ -6,7 +6,7 @@
 
 OpenViking AI 应用界面的 React 基础：构建工具、文档、分层目录与局部化样式。FileTree、Tui 与 FilePreview 已提供可用视图，另附五种文件类型图标。Console 提供原生命令面板与受控对话视图，ScopeCascade 提供三级级联选择器，FileBrowser 提供目录、预览与看板联动。
 
-本包沿用仓库的 AGPL-3.0-only 许可证。当 `react@<version>` 标签与本包 manifest 中的版本一致时，发布工作流会将其发布到 npm。
+本包沿用仓库的 AGPL-3.0-only 许可证。合入 Changesets 版本 PR 后，发布工作流会自动将新版本发布到 npm。也可以推送与本包版本一致的 `react@<version>` 标签触发发布。
 
 ## 模块目录
 
@@ -95,3 +95,5 @@ React 与 ReactDOM 为 peer dependencies（`^18.2.0 || ^19.0.0`），由 Rslib �
 动态文案使用类型化格式化函数，日期与数字使用 `Intl`。`npm test` 自动检查中英文 key、字符串占位符和格式化函数参数数量，类型检查约束参数类型。已有 `labels` 的未定义项继承当前语言，空字符串作为显式覆盖保留。
 
 在 `OpenVikingProvider` 上配置子树语言。模块与组件的可选 `locale` Props 覆盖最近的语言作用域，最终默认 `en-US`。内部 `src/shared/locale-context.tsx` 由各公开入口共享，与请求 Client 配置分离，切换语言保留请求和状态。
+
+内部 Input、Button、Modal 与 Drawer 参考 Arco Design 的交互逻辑（MIT），声明随包保留在 `LICENSE.arco-design`。Input、Button 的视觉规则裁剪自火山控制台使用的 `@arco-design/theme-ve-o-aml-design@0.0.36`（MIT），不使用 Arco 默认皮肤，也不提供公开组件入口。

@@ -251,6 +251,8 @@ export interface VikingBotLabels {
   toolOutput?: string;
   similarity?: string;
   sessionHistory?: string;
+  session?: string;
+  locateSession?: string;
   emptySessions?: string;
   loading?: string;
   loadMore?: string;
@@ -258,6 +260,7 @@ export interface VikingBotLabels {
   searchReferences?: string;
   emptyReferences?: string;
   removeReference?: string;
+  openReference?: string;
   expandReference?: string;
   collapseReference?: string;
   /** 欢迎标题。Welcome heading. */

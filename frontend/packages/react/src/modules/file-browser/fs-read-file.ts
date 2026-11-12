@@ -5,6 +5,8 @@ import { isBinaryFile, mimeTypeOf, toBinaryTab } from './fs-file-kind.js';
 import { fileTypeIcon } from './fs-icon.js';
 import { joinLines, splitLines } from './fs-lines.js';
 import { isMemoryUri, stripMemoryFieldsTrailer } from './fs-memory-fields.js';
+import { createPreviewImageResolver } from './fs-preview-images.js';
+import { createFileEditing } from './fs-file-editing.js';
 import { nameFromUri, toFileTab } from './fs-model.js';
 
 /** 读取正文的行数上限；读满即按截断处理。The line cap; a full read counts as truncated. */
@@ -24,6 +26,7 @@ export async function readFile(
   uri: string,
   options: OvRequestOptions,
   openParent?: (uri: string) => Promise<void>,
+  onSave?: () => void,
 ): Promise<FilePreviewFileTab> {
   const name = nameFromUri(uri);
   const icon = fileTypeIcon(name);
@@ -54,8 +57,10 @@ export async function readFile(
       .then((value) => (typeof value === 'string' ? value : ''));
 
   const first = await read(MAX_LINES);
+  const resolveImage = createPreviewImageResolver(client, uri, false, options);
+  const editing = createFileEditing(client, uri, name, options, onSave);
   if (!isMemoryUri(uri)) {
-    return toFileTab(
+    const tab = toFileTab(
       { uri },
       first,
       MAX_LINES,
@@ -63,6 +68,11 @@ export async function readFile(
       openParent,
       splitLines(first).length >= MAX_LINES,
     );
+    return {
+      ...tab,
+      resolveImage,
+      editing,
+    };
   }
 
   // 记忆文件末尾的元数据尾注不属于正文：默认读取已由服务端剥掉，宿主把请求变成
@@ -96,5 +106,9 @@ export async function readFile(
   const lines = splitLines(stripMemoryFieldsTrailer(full));
   const truncated = lines.length > MAX_LINES;
   const visible = joinLines(truncated ? lines.slice(0, MAX_LINES) : lines);
-  return toFileTab({ uri }, visible, MAX_LINES, icon, openParent, truncated);
+  return {
+    ...toFileTab({ uri }, visible, MAX_LINES, icon, openParent, truncated),
+    resolveImage,
+    editing,
+  };
 }

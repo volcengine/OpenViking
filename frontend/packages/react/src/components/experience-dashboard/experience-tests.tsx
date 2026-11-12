@@ -1,3 +1,4 @@
+import { Button } from '../../shared/components/button/button.js';
 import { useState } from 'react';
 import type {
   ExperienceDashboardData,
@@ -26,8 +27,10 @@ function CopyButton({
     }
   };
   return (
-    <button
-      type="button"
+    <Button
+      size="small"
+      type="default"
+      htmlType="button"
       disabled={!value || state === 'pending'}
       aria-live="polite"
       onClick={() => void copy()}
@@ -37,7 +40,7 @@ function CopyButton({
         : state === 'failed'
           ? t.copyFailed
           : t.copy}
-    </button>
+    </Button>
   );
 }
 
@@ -63,13 +66,15 @@ export function ExperienceTests({
                 {item.uri ? (
                   <>
                     <CopyButton value={item.uri} labels={t} />
-                    <button
-                      type="button"
+                    <Button
+                      size="small"
+                      type="default"
+                      htmlType="button"
                       disabled={!onOpenUri}
                       onClick={() => item.uri && onOpenUri?.(item.uri)}
                     >
                       {t.open}
-                    </button>
+                    </Button>
                   </>
                 ) : null}
               </div>

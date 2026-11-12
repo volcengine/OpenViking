@@ -6,9 +6,13 @@ A tabbed file preview. The host supplies the content and file name; the componen
 
 Bodies use lazily loaded FileViewerCore adapters for Markdown, images, code, tables, PDF, Office and media, inside the console-style tab, breadcrumb and footer shell.
 
+Leading YAML front matter appears as a code block in Markdown preview. Source, editing, saving and copying still use the original text. Save and Cancel appear beside the view switch in the header during editing.
+
 ## Basic usage
 
 Pass at least one tab. A file tab carries `source`; a content tab carries a node the host renders itself.
+
+Demo actions use internal documentation controls; use your host application’s buttons when integrating.
 
 ```tsx file="../../_demos/file-preview-basic.tsx" preview
 
@@ -39,7 +43,7 @@ Use `slots.footer` for modification time and parsing attribution in a two-sided 
 
 Both share the shell — tab row, path breadcrumb, copy path and the header action area. They differ in how the body arrives, and in that the preview/source switch is a file-tab capability: a content tab renders whatever views it needs inside `content`.
 
-**The component ships no action buttons of its own.** Copy body, copy path, download, the preview/source switch and editing all carry host product semantics and copy; built in they could be neither trimmed nor restyled. Copy path is the exception — any file with a `source.path` needs it under every host, so it stays in the shell at the end of the breadcrumb. Everything else is rendered by the host in `slots.actions`, which receives a `FilePreviewActions` context: the current view mode, editing state, which capabilities are available, and the methods that change them. The state stays with the component.
+The default toolbar follows the active content: copy text, switch between preview and source for supported formats, and edit when the active file or level supplies `editing`. Editing provides Save and Cancel. Images have no source or text-copy controls. Set `slots.actions` to replace the toolbar (or `null` to hide it), or use `slots.extraActions` to append host actions. Copy path remains next to the breadcrumb.
 
 Control the active tab with `activeKey` / `onActiveKeyChange`, set its initial value with `defaultActiveKey`, or use the ref handle:
 

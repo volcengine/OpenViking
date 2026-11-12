@@ -8,10 +8,9 @@ import type {
 } from 'react';
 
 /**
- * 所有行的公共字段。行是按宿主展平后的顺序渲染的，因此 `id` 与 `depth` 每行都要有。
+ * 所有行的公共字段。宿主负责展平行，因此每行都需要 `id` 与 `depth`。
  *
- * Fields shared by every row. Rows render in the host-flattened order, so each
- * one carries its own `id` and `depth`.
+ * Fields shared by every host-flattened row. Each row carries its own `id` and `depth`.
  */
 export interface FileTreeRowBase {
   /**
@@ -42,11 +41,10 @@ export interface FileTreeChildRow extends FileTreeRowBase {
 
 /**
  * 树中一条可见的行。宿主把自己的树状态展开成有序行列表后传入，
- * 因此展开、分页、加载、错误行都由调用方决定，组件不感知树结构。
+ * 展开、分页、加载、错误行都由调用方决定。
  *
  * One visible row of the tree. The host flattens its own tree state into this
- * ordered list, so expansion, pagination, loading and error rows all come from
- * the caller and the component never inspects the tree structure.
+ * ordered list and supplies expansion, pagination, loading and error rows.
  */
 export type FileTreeRow =
   | FileTreeEntryRow
@@ -111,6 +109,10 @@ export interface FileTreeEntryRow extends FileTreeRowBase {
    * without detail permission.
    */
   disabled?: boolean;
+  /** 允许展开但不选中，例如仅能遍历的目录。Allows expansion without selection. */
+  selectable?: boolean;
+  /** 权限状态的纯展示标签，不执行鉴权。Display-only permission status. */
+  access?: 'read-only' | 'denied' | 'container';
   /**
    * 名称下方的次要说明，例如摘要或行内描述。
    * Secondary line under the name, for example an abstract or inline
@@ -407,6 +409,9 @@ export interface FileTreeInfoLabels {
  * Replaceable copy with built-in Chinese and English defaults.
  */
 export interface FileTreeLabels {
+  readOnly?: string;
+  noAccess?: string;
+  traverseOnly?: string;
   /** 搜索入口文案。Search trigger label. */
   search?: string;
   /** 刷新按钮的无障碍名称。Accessible refresh button label. */
@@ -540,6 +545,11 @@ export interface FileTreeProps extends Omit<
    * Visible rows in render order.
    */
   rows: readonly FileTreeRow[];
+  /**
+   * 默认按传入顺序渲染。设为 `context` 时，只按 Viking URI 首段调整根目录及其子树。
+   * Defaults to input order. `context` reorders root directory branches by Viking URI namespace.
+   */
+  rootOrder?: 'input' | 'context';
   /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
   locale?: Locale;
   /**
@@ -553,15 +563,17 @@ export interface FileTreeProps extends Omit<
    */
   selectedId?: string | null;
   /**
-   * 显示内置搜索入口；默认隐藏，未提供 operations.search 时禁用。
-   * Shows the built-in search trigger. Hidden by default; disabled without operations.search.
+   * 显示内置搜索入口；默认显示，未提供 operations.search 时禁用。
+   * Shows the built-in search trigger. Visible by default; disabled without operations.search.
    */
   search?: boolean | { disabled?: boolean };
   /**
-   * 显示内置刷新按钮；默认隐藏。loading 可表达宿主额外的刷新状态。
-   * Shows the refresh button. Hidden by default; loading adds a host-controlled pending state.
+   * 显示内置刷新按钮；默认显示。loading 可表达宿主额外的刷新状态。
+   * Shows the refresh button. Visible by default; loading adds a host-controlled pending state.
    */
   refresh?: boolean | { disabled?: boolean; loading?: boolean };
+  /** 刷新按钮的受控加载态，与异步刷新、refresh.loading 合并。Host-controlled refresh pending state. */
+  loading?: boolean;
   /**
    * 首次加载是否已完成。
    * Whether the tree has finished its first load.

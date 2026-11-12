@@ -56,6 +56,7 @@ export default defineConfig({
               items: [
                 { text: '概览', link: '/components/' },
                 { text: '图标', link: '/components/icons' },
+                { text: '登录与认证表单', link: '/components/auth-forms' },
                 {
                   text: 'WikiDashboard Wiki 看板',
                   link: '/components/wiki-dashboard',
@@ -146,6 +147,7 @@ export default defineConfig({
               items: [
                 { text: 'Overview', link: '/en/components/' },
                 { text: 'Icons', link: '/en/components/icons' },
+                { text: 'Auth forms', link: '/en/components/auth-forms' },
                 {
                   text: 'WikiDashboard',
                   link: '/en/components/wiki-dashboard',

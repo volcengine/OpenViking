@@ -100,6 +100,9 @@ class CollectionAdapter(ABC):
     _DATA_BATCH_SIZE: int | None = None
 
     mode: str
+    # Remote glob can use this adapter's random-search post-processing path.
+    # Used when enable_path_glob is unspecified in VectorDB configuration.
+    enable_path_glob: bool = False
     _URI_FIELD_NAMES = {"uri", "parent_uri"}
 
     # Only derived fields may be shortened silently. An oversized abstract is

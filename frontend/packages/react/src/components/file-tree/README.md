@@ -29,7 +29,7 @@ Where `rows` come from, how pages are fetched and how permissions are decided ar
 
 The usual approach is to hand the tree a nested structure and let it recurse, keep its own expansion set and decide when to request children. Such a component then has to know the host's paging strategy, retry behavior and account-scope switching timing, and ends up knowing a little about everything while being welded to one backend.
 
-This component inverts that: **the host flattens tree state into a one-dimensional array and the component only renders it in order.**
+The host flattens tree state into a one-dimensional array. The component preserves that order by default. Set `rootOrder="context"` to move root directory branches into console order: user, session, agent, resources, then the remaining directories.
 
 ```ts
 type FileTreeRow =
@@ -85,6 +85,8 @@ Styles are scoped and never modify the application's global styles. Theme tokens
 
 ## Optional search and refresh
 
-`search` and `refresh` are hidden by default; pass `true` to enable either. `operations.search` opens host search UI, and `operations.refresh` reloads data. Missing executors disable their buttons. Pending refresh automatically disables the button and spins its icon; failure restores it without a success notification.
+`search` and `refresh` default to `true`; pass `false` to hide either. `operations.search` opens host search UI, and `operations.refresh` reloads data. Missing executors disable their buttons. Pending refresh automatically disables the button and spins its icon; failure restores it without a success notification.
 
-`search={{ disabled: true }}` controls search availability. `refresh={{ disabled, loading }}` adds host-controlled availability and pending state. Customize `labels.search` and `labels.refresh`; receive success notifications with `onSearch` and `onRefresh`. Search does not filter rows or register a global shortcut. `slots.toolbar` appears above built-in controls, and either control can be hidden independently.
+`search={{ disabled: true }}` controls search availability. Top-level `loading` controls the refresh pending state and is combined with the in-flight refresh Promise and `refresh.loading`. Refresh hints support hover, focus and Escape. `refresh={{ disabled, loading }}` adds host-controlled availability and pending state. Customize `labels.search` and `labels.refresh`; receive success notifications with `onSearch` and `onRefresh`. Search does not filter rows or register a global shortcut. `slots.toolbar` appears above built-in controls, and either control can be hidden independently.
+
+The default search placeholder is `Search files ⌘+K...`; override it with `labels.search`. The basic demo reports search events and lets you manually run refresh success/failure cases.

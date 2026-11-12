@@ -13,6 +13,10 @@ import type {
 } from '../../components/file-tree/index.js';
 import type { OvRequestOptions } from '../../client/index.js';
 import type {
+  FileBrowserAclLabels,
+  FileBrowserAclOptions,
+} from './acl-types.js';
+import type {
   ComponentPropsWithRef,
   HTMLAttributes,
   ReactElement,
@@ -37,6 +41,10 @@ export interface FileBrowserDashboardLabels {
 }
 
 export interface FileBrowserLabels {
+  accessDenied?: string;
+  traverseOnly?: string;
+  /** 权限管理文案。Permission management copy. */
+  acl?: FileBrowserAclLabels;
   /** 预览底部字符数。Character count in the preview footer. */
   formatCharacterCount?: (count: number) => string;
   /** 未选中资源时的提示。Message shown when no resource is selected. */
@@ -47,8 +55,14 @@ export interface FileBrowserLabels {
   retry?: string;
   /** 刷新按钮的无障碍名称。Accessible name of the refresh control. */
   refresh?: string;
-  /** 搜索框占位文案。Search placeholder. */
+  /** 搜索入口的占位文案。Placeholder of the search trigger. */
   searchPlaceholder?: string;
+  /** 内置搜索弹窗标题。Title of the built-in search dialog. */
+  searchTitle?: string;
+  /** 搜索提交按钮。Search submit button. */
+  searchAction?: string;
+  /** 尚未提交查询时的提示。Hint before a query is submitted. */
+  searchHint?: string;
   /** 搜索无结果提示。Message shown when a search returns nothing. */
   searchEmpty?: string;
   /** 搜索请求失败的结论，原因由服务端返回。Conclusion when the search request fails; the reason comes from the server. */
@@ -102,7 +116,7 @@ export interface FileBrowserLabels {
  *
  * 模块自己通过 Hook 取数，props 里没有数据字段：宿主给配置、受控的当前资源、
  * 接入配置、导入交互、文案与请求配置。入口条、目录、搜索、预览页签与行级
- * 状态都在模块内维护。
+ * 状态都在模块内维护，包含基础搜索弹窗与接口调用。
  *
  * 模块包含文件树、文件预览与顶部入口。命令面板属于 `console`。
  *
@@ -111,7 +125,7 @@ export interface FileBrowserLabels {
  * The module loads its own data through a Hook, so no prop carries data: the
  * host supplies configuration, the controlled current resource, import interactions,
  * copy and request configuration. The entry row, directory, search, preview tabs
- * and per-row state all live inside the module.
+ * and per-row state all live inside the module, including basic search UI and requests.
  *
  * The module includes the file tree, file preview and top entries. The command panel
  * belongs to `console`.
@@ -120,6 +134,13 @@ export interface FileBrowserProps extends Omit<
   HTMLAttributes<HTMLDivElement>,
   'onSelect' | 'children'
 > {
+  /**
+   * 共享资源 ACL；默认关闭。开启后显示有效权限并通过 Modal 管理授权。
+   * Shared-resource ACL, off by default. Shows effective permissions and manages grants in a Modal.
+   */
+  acl?: boolean | FileBrowserAclOptions;
+  /** 隐藏文件编辑入口。Disables editing in the preview. */
+  readOnly?: boolean;
   /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
   locale?: Locale;
   /**
@@ -226,12 +247,6 @@ export interface FileBrowserApi {
   selectedId: string | null;
   /** 当前资源 URI。Current resource URI. */
   currentUri: string | null;
-  /** 当前查询词。The current query. */
-  query: string;
-  /** 是否正在展示搜索结果。Whether search results are showing. */
-  searching: boolean;
-  /** 搜索是否进行中。Whether a search is running. */
-  searchLoading: boolean;
   /** 刷新是否进行中。Whether a refresh is running. */
   refreshing: boolean;
   /** 预览底部元信息，例如字符数与更新时间；没有时为 `undefined`。 */
@@ -249,15 +264,6 @@ export interface FileBrowserApi {
    * instead of showing a 403 as "no files".
    */
   treeError: Error | null;
-  /**
-   * 搜索请求本身的失败原因。与「搜索成功但没有结果」不同：前者要显示原因与重试，
-   * 后者才是空态文案。
-   *
-   * Why the search request failed. It differs from "the search succeeded but matched
-   * nothing": the former needs the reason and a retry, only the latter is the empty
-   * copy.
-   */
-  searchError: Error | null;
   /**
    * 当前资源预览的失败原因。选中了资源但读不出来时用它区分「读失败」与「什么
    * 都没选」。
@@ -289,13 +295,12 @@ export interface FileBrowserActions {
   refresh: () => Promise<void>;
   /** 切换预览页签。Switches the preview tab. */
   setPreviewKey: (key: string) => void;
-  /** 更新查询词；空串回到目录树。Updates the query; an empty string returns to the tree. */
-  setQuery: (query: string) => void;
 }
 
 /** Internal options for the composed FileBrowser loader. */
 export interface UseFileBrowserOptions {
   rootUri: string;
+  accessLabels?: Pick<FileBrowserLabels, 'accessDenied' | 'traverseOnly'>;
   /** Built-in copy; inherits the Provider locale, otherwise en-US. */
   locale?: Locale;
   dashboardLabels?: FileBrowserDashboardLabels;

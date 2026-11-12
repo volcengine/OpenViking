@@ -2,11 +2,16 @@ import type { ShellLabels } from '../file-browser-labels.js';
 
 const messages = {
   formatCharacterCount: (count) => `${count.toLocaleString('zh-CN')} 个字符`,
-  empty: '选择一个文件查看内容',
+  accessDenied: '无权查看此节点。',
+  traverseOnly: '此目录仅可展开以访问有权限的子节点。',
+  empty: '从左侧选中一个文件预览',
   error: '目录加载失败',
   retry: '重试',
   refresh: '刷新',
   searchPlaceholder: '搜索文件 ⌘+K...',
+  searchTitle: '搜索文件',
+  searchAction: '搜索',
+  searchHint: '输入关键词后搜索。',
   searchEmpty: '没有匹配的资源',
   searchFailed: '搜索失败',
   loading: '加载中…',

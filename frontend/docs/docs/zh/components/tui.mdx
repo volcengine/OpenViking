@@ -12,7 +12,7 @@
 
 ```
 
-示例自己维护记录与输入：发送后追加等待中的记录，再按命令对应的结果结构更新。所有命令均使用固定模拟数据，不会发送真实请求。可输入 `ov compile`、`ov task list`、`ov session get session_demo` 或 `ov help`，分别查看写入、表格、状态和帮助结果。
+示例自己维护记录与输入：发送后追加等待中的记录，再按命令对应的结果结构更新。所有命令均使用固定模拟数据，不会发送真实请求。可输入 `ov compile --compile-name demo-wiki`、`ov task list`、`ov session get session_demo` 或 `ov help`，分别查看写入、表格、状态和帮助结果。
 
 输入区是整宽的无边框编辑区域，带顶部分隔线，编辑区域最小高度 80px，底部快捷键引导高 40px。聚焦时分隔线保持原色。内容最多自适应增高至三行，超出后滚动；底部依次显示 `/ 全部指令`、`↑ 历史指令`、`↵ 发送`。↑/↓ 可回填当前记录中的命令，Enter 提交，Shift+Enter 换行，不单独渲染发送按钮。
 
@@ -21,6 +21,8 @@
 输入 `/`，或在 `ov ` 后按 Tab，都会展开未选中任何命令的候选列表；筛选或重新打开时也清除选中状态。斜杠发现同样支持多词名称及别名，例如 `/session g`；进入参数阶段前持续提供候选。未选择时，↓ 从第一项开始，↑ 从最后一项开始。悬停或使用方向键选择后，侧边才显示示例与参数表。没有关键字也未选择候选时，Tab 不填入命令。横向空间不足时，详情与列表上下排列。Esc 或点击区域外可关闭浮层；不支持原生 Popover 的浏览器回退为内联面板。
 
 选中命令后，编辑区按宿主提供的 `inputText` 显示灰色 CLI 前缀和正文色加重的命令名，在其后用浅色直接提示位置参数；没有位置参数时提示必填选项。开始填写参数后，占位提示收起，且不会写入 `value` 或提交文本。完整详情面板只在命令候选列表展开时展示。
+
+输入区、命令记录和结果中的 `http://`、`https://` 与 `viking://` 地址均自动识别为原生链接，颜色使用宿主主题主色；点击链接不会提交命令。
 
 输入区与命令记录统一使用灰色 CLI 前缀、正文色加重的命令名、链接色资源 URI；链接仅在 hover 时显示下划线。命令记录按同一份 `inputText` 显示，参数原样保留；时间单独位于下一行并右对齐。复制和历史回填使用相同前缀，未匹配目录的命令按原文显示。
 
@@ -32,7 +34,9 @@
 
 ```
 
-此示例从空记录开始，只传 `quickCommands` 就得到内置空态：标题、说明和快捷命令列表。调用方从传给 `commands` 的同一份目录中选择、排序 `quickCommands`，未命中的名称跳过。点击快捷命令回填并聚焦输入区，在输入区补充参数并按 Enter 才提交；首次提交后，欢迎页由模拟执行结果替换。
+此示例从空记录开始，通过 `quickCommands` 配置 `{ name, value }` 快捷入口。`name` 按序匹配 `commands`，说明复用命令的 `summary` 或 `description`；未命中的名称跳过，重复名称只保留首项。点击后原样填入 `value` 并聚焦，不添加 `ov` 前缀，也不自动提交。示例值对齐火山版：导入官方 README、添加 llm-wiki Skill、写入示例记忆和检索；URL 与示例文本跟随站点语言。`compile` 入口按火山版只填入 `ov compile `，需继续输入 `--compile-name <name>`。用户按 Enter 才执行。首次提交后，欢迎页由模拟执行结果替换。
+
+编译示例目录已采用命名配置流程：`ov compile create --compile-name <name> --from <source-uri> --to <target-uri> --skill <skill-uri>` 仅保存配置，不启动编译；随后用 `ov compile --compile-name <name>` 执行。来源和 Skill 必须是目录 URI，示例路径仅为模拟数据。该流程由示例宿主提供，Tui 本身不执行命令。
 
 悬停快捷命令时，箭头轻微后退、前进后回位，播放一次；启用系统的减少动态效果设置时保持静止。
 
@@ -66,21 +70,21 @@ import type {
 
 下表说明已实现的行为。
 
-| 属性          | 类型                            | 默认值           | 说明                                                                                          |
-| ------------- | ------------------------------- | ---------------- | --------------------------------------------------------------------------------------------- |
-| records       | readonly TuiRecord[]            | 必填             | 当前展示的执行记录，按提交顺序排列；会话与历史切换后由宿主更新。                              |
-| value         | string                          | 必填             | 受控输入值。                                                                                  |
-| disabled      | boolean                         | false            | 禁用命令输入与提交，提示文案由 `labels.unavailableMessage` 提供。                             |
-| emptyState    | ReactNode                       | —                | 无记录时的空态节点，完全替换内置空态；传 `null` 时同样不显示。                                |
-| quickCommands | readonly string[]               | `[]`             | 内置空态展示的快捷命令名称，按顺序取自 `commands`，未命中的名称跳过，重复名称只保留首次出现。 |
-| `locale`      | `'zh-CN' \| 'en-US'`            | 继承上层 / en-US | 选择内置中英文文案。                                                                          |
-| commands      | readonly TuiCommandDefinition[] | `[]`             | 宿主命令目录，用于补全、帮助及等待骨架。                                                      |
-| commandGroups | readonly TuiCommandGroup[]      | `[]`             | 宿主分组名称和顺序；未声明的组按目录顺序追加。                                                |
-| labels        | TuiLabels                       | —                | 统一的界面文案与引导提示。                                                                    |
-| onValueChange | (value: string) => void         | —                | 上报输入变化，包含接受的命令和示例；行内占位不改变输入值，也不提交。省略时输入框只读。        |
-| onSubmit      | (command: string) => void       | —                | 显式提交时上报意图，由宿主执行；省略时不能提交。                                              |
-| onOpenUri     | (uri: string) => void           | —                | 链接激活时接收原始 URI，由宿主负责打开资源。                                                  |
-| onCopy        | (text: string) => void          | —                | 复制成功后触发，参数为已复制的文本；失败时不触发。省略回调不影响复制。                        |
+| 属性          | 类型                            | 默认值           | 说明                                                                                                                                      |
+| ------------- | ------------------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| records       | readonly TuiRecord[]            | 必填             | 当前展示的执行记录，按提交顺序排列；会话与历史切换后由宿主更新。                                                                          |
+| value         | string                          | 必填             | 受控输入值。                                                                                                                              |
+| disabled      | boolean                         | false            | 禁用命令输入与提交，提示文案由 `labels.unavailableMessage` 提供。                                                                         |
+| emptyState    | ReactNode                       | —                | 无记录时的空态节点，完全替换内置空态；传 `null` 时同样不显示。                                                                            |
+| quickCommands | readonly TuiQuickCommand[]      | `[]`             | 快捷入口 `{ name, value }`；按 name 从 commands 复用说明，未知名称跳过、重复名称保留首项；点击原样填入 value 并聚焦，不添加前缀、不执行。 |
+| `locale`      | `'zh-CN' \| 'en-US'`            | 继承上层 / en-US | 选择内置中英文文案。                                                                                                                      |
+| commands      | readonly TuiCommandDefinition[] | `[]`             | 宿主命令目录，用于补全、帮助及等待骨架。                                                                                                  |
+| commandGroups | readonly TuiCommandGroup[]      | `[]`             | 宿主分组名称和顺序；未声明的组按目录顺序追加。                                                                                            |
+| labels        | TuiLabels                       | —                | 统一的界面文案与引导提示。                                                                                                                |
+| onValueChange | (value: string) => void         | —                | 上报输入变化，包含接受的命令和示例；行内占位不改变输入值，也不提交。省略时输入框只读。                                                    |
+| onSubmit      | (command: string) => void       | —                | 显式提交时上报意图，由宿主执行；省略时不能提交。                                                                                          |
+| onOpenUri     | (uri: string) => void           | —                | 链接激活时接收原始 URI，由宿主负责打开资源。                                                                                              |
+| onCopy        | (text: string) => void          | —                | 复制成功后触发，参数为已复制的文本；失败时不触发。省略回调不影响复制。                                                                    |
 
 `onSubmit` 上报提交的文本，不等待执行结果。宿主负责发送、权限和执行，并更新等待、成功或失败的记录；已有 `pending` 记录不阻止后续提交。
 

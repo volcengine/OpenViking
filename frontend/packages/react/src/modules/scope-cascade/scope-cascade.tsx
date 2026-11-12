@@ -1,3 +1,4 @@
+import { Button } from '../../shared/components/button/button.js';
 import { resolveScopeCascadeLabels } from './labels.js';
 import { useState } from 'react';
 import { useLocale } from '../../shared/locale-context.js';
@@ -103,9 +104,14 @@ function LevelView({
         errorFallback: (
           <>
             {labels?.error ?? text.error}{' '}
-            <button type="button" onClick={level.refresh}>
+            <Button
+              size="small"
+              type="default"
+              htmlType="button"
+              onClick={level.refresh}
+            >
               {retryLabel ?? text.retry}
-            </button>
+            </Button>
           </>
         ),
       }}

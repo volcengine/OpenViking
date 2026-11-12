@@ -12,18 +12,6 @@ KEY_PLACEHOLDER = "{api_key}"
 # Largest integer JSON readers, Studio included, hold exactly.
 JSON_INT_MAX = 2**53
 
-# OpenViking MCP tools that change data; new profiles offer only the read-only ones.
-WRITE_TOOLS = (
-    "remember",
-    "write",
-    "edit",
-    "add_resource",
-    "add_skill",
-    "forget",
-    "set_acl",
-    "cancel_watch",
-)
-
 
 def validation_detail(error: ValidationError) -> str:
     """Each problem with the field it concerns, without echoing submitted values."""
@@ -53,10 +41,15 @@ class Policy(BaseModel):
     score_threshold: float = Field(default=0.35, ge=0, le=1)
     recall_timeout: float = Field(default=2, gt=0, le=30)
     query_max_chars: int = Field(default=8000, ge=3, le=32000)
+    # "actor" keeps recall and OpenViking tools to the user's own and the request peer's memories.
+    recall_peer_scope: Literal["all", "actor"] = "all"
     # Start each turn's reply with a summary of what OpenViking injected; the model never sees it.
     show_recall: bool = False
     commit_tokens: int = Field(default=20000, ge=1, le=JSON_INT_MAX)
     keep_recent_messages: int = Field(default=10, ge=0, le=1000)
+    # Memory types OpenViking extracts from saved conversations: None means every enabled
+    # type, an empty list none.
+    capture_memory_types: list[str] | None = None
     idle_seconds: float = Field(default=600, ge=1)
     compaction: bool = True
     compaction_threshold: float = Field(default=0.9, ge=0.5, le=0.98)
@@ -65,7 +58,7 @@ class Policy(BaseModel):
     context_window: int | None = Field(default=None, ge=1024, le=JSON_INT_MAX)
     gateway_tools: bool = True
     # MCP tool names; tools the server adds later stay enabled.
-    disabled_tools: list[str] = Field(default_factory=lambda: list(WRITE_TOOLS))
+    disabled_tools: list[str] = Field(default_factory=list)
     # None means no limit, as in an agent harness's own tool loop.
     tool_max_rounds: int | None = Field(default=None, ge=1, le=JSON_INT_MAX)
     tool_timeout_seconds: float = Field(default=30, gt=0, le=120)

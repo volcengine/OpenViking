@@ -20,7 +20,7 @@ export function FilePreviewCopyPath({
     <Tooltip content={label}>
       <button
         type="button"
-        className="ov-file-preview__action"
+        className="ov-file-preview__action ov-file-preview__action--copy-path"
         aria-label={label}
         disabled={disabled}
         onClick={onClick}

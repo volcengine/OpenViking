@@ -5,6 +5,7 @@ import {
 } from '../../icons/index.js';
 import { DashboardState } from '../../shared/dashboard/dashboard-state.js';
 import type { DashboardStatus } from '../../shared/dashboard/dashboard-state.js';
+import type { Locale } from '../../shared/locale.js';
 import { ExperienceTrajectories } from './experience-trajectories.js';
 import type {
   ExperienceDashboardData,
@@ -21,6 +22,7 @@ const ORDER = [
 export function ExperienceImpact({
   data,
   labels: t,
+  locale,
   days,
   onDaysChange,
   outcomesState,
@@ -29,6 +31,7 @@ export function ExperienceImpact({
 }: {
   data: ExperienceDashboardData;
   labels: ExperienceDashboardLabels;
+  locale: Locale;
   days: number;
   onDaysChange: (days: number) => void;
   outcomesState: DashboardStatus;
@@ -50,7 +53,7 @@ export function ExperienceImpact({
     {
       label: t.rate,
       value: data.effect
-        ? new Intl.NumberFormat('en-US', {
+        ? new Intl.NumberFormat(locale, {
             style: 'percent',
             maximumFractionDigits: 1,
           }).format(data.effect.injectionRate)

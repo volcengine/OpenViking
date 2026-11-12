@@ -5,6 +5,7 @@ import { WikiWarningIcon } from '../../icons/index.js';
 import { DashboardState } from '../../shared/dashboard/dashboard-state.js';
 import { wikiLabels } from './labels.js';
 import { WikiConflictCard } from './wiki-conflict-card.js';
+import { WikiActionButton } from './wiki-action-button.js';
 import { WikiFileIcon } from './wiki-file-icon.js';
 import { WikiSeverityFilter } from './wiki-severity-filter.js';
 import type { WikiDashboardProps, WikiConflict } from './types.js';
@@ -13,13 +14,10 @@ export function WikiDashboard(props: WikiDashboardProps) {
   const {
     kind,
     data,
-    editDisabledReason,
-    discussDisabledReason,
     locale: localeProp,
     onOpenUri,
     onOpenDashboard,
-    onEdit,
-    onDiscuss,
+    defineActions,
     labels,
     loading,
     error,
@@ -88,35 +86,37 @@ export function WikiDashboard(props: WikiDashboardProps) {
                 conflict={conflict}
                 path={data?.path}
                 labels={t}
-                editDisabledReason={editDisabledReason}
-                discussDisabledReason={discussDisabledReason}
                 onOpenUri={onOpenUri}
-                onEdit={onEdit}
-                onDiscuss={onDiscuss}
+                actions={defineActions?.(conflict)}
               />
             ))}
           </div>
         ) : kind === 'directory' && data?.files.length ? (
           <ul className="ov-wiki-dashboard__files">
-            {data.files.map((file) => (
-              <li key={file}>
-                <WikiFileIcon name={file} />
-                <button
-                  type="button"
-                  className="ov-wiki-dashboard__link"
-                  disabled={!onOpenDashboard && !onOpenUri}
-                  onClick={() => (onOpenDashboard ?? onOpenUri)?.(file)}
-                >
-                  <span>{file.split('/').pop()}</span>
-                  <span className="ov-wiki-dashboard__file-uri">{file}</span>
-                </button>
-                {onEdit ? (
-                  <button type="button" onClick={() => onEdit(file)}>
-                    {t.edit}
+            {data.files.map((file) => {
+              const actions = defineActions?.(file) ?? [];
+              return (
+                <li key={file}>
+                  <WikiFileIcon name={file} />
+                  <button
+                    type="button"
+                    className="ov-wiki-dashboard__link"
+                    disabled={!onOpenDashboard && !onOpenUri}
+                    onClick={() => (onOpenDashboard ?? onOpenUri)?.(file)}
+                  >
+                    <span>{file.split('/').pop()}</span>
+                    <span className="ov-wiki-dashboard__file-uri">{file}</span>
                   </button>
-                ) : null}
-              </li>
-            ))}
+                  {actions.length > 0 ? (
+                    <div className="ov-wiki-dashboard__actions">
+                      {actions.map(({ key, ...action }) => (
+                        <WikiActionButton key={key} {...action} />
+                      ))}
+                    </div>
+                  ) : null}
+                </li>
+              );
+            })}
           </ul>
         ) : (
           <DashboardState

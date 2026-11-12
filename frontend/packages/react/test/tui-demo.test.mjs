@@ -68,15 +68,22 @@ test('every demo command returns its structured result instead of a generic exec
     assert.equal(result.content.variant, expected, descriptor.name);
   }
   const compile = createTuiDemoRecord(
-    'ov compile --from viking://resources/demo',
+    'ov compile --compile-name demo-wiki',
     'zh-CN',
   );
   assert.equal(compile.status, 'success');
   assert.ok(compile.content.lines.includes('Status: pending'));
   assert.match(
     compile.content.lines.find((line) => line.startsWith('Request:')),
-    /"mode":"incremental"/,
+    /"compile_name":"demo-wiki"/,
   );
+  const saved = createTuiDemoRecord(
+    'ov compile create --compile-name demo-wiki --from viking://resources/acme --to viking://resources/acme-wiki --skill viking://agent/skills/llm-wiki',
+    'zh-CN',
+  );
+  assert.ok(saved.content.lines.includes('Status: saved'));
+  assert.ok(saved.content.lines.includes('Compilation: not started'));
+  assert.equal(saved.content.lines.includes('Status: pending'), false);
 });
 
 test('demo execution recognizes documented aliases and whitespace-separated arguments', () => {

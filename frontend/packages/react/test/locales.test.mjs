@@ -50,7 +50,7 @@ const cases = [
       records: [],
       value: '',
       commands: [{ name: 'ls', description: 'List', usage: 'ov ls' }],
-      quickCommands: ['ls'],
+      quickCommands: [{ name: 'ls', value: '' }],
     },
     'CLI 直接操作上下文',
     'Work directly with your context through the CLI',
@@ -63,7 +63,12 @@ const cases = [
     '新建会话',
     'New session',
   ],
-  [FileBrowser, {}, '选择一个文件查看内容', 'Select a file to preview'],
+  [
+    FileBrowser,
+    {},
+    '从左侧选中一个文件预览',
+    'Select a file on the left to preview it',
+  ],
   [
     Console,
     { defaultMode: 'command' },

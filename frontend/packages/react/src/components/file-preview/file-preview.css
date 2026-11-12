@@ -140,9 +140,6 @@
 }
 
 .ov-file-preview__tab:focus-visible,
-.ov-file-preview__action:focus-visible,
-.ov-file-preview__button:focus-visible,
-.ov-file-preview__switch-item:focus-visible,
 .ov-file-preview__breadcrumb-link:focus-visible {
   outline: 2px solid var(--ov-ui-file-preview-focus-ring);
   outline-offset: 1px;
@@ -369,7 +366,7 @@
   list-style: none;
 }
 
-.ov-file-preview__breadcrumb-menu button {
+.ov-file-preview__breadcrumb-menu button:not(.ov-button) {
   display: block;
   box-sizing: border-box;
   max-width: 320px;
@@ -386,7 +383,7 @@
   cursor: pointer;
 }
 
-.ov-file-preview__breadcrumb-menu button:hover:not(:disabled) {
+.ov-file-preview__breadcrumb-menu button:not(.ov-button):hover:not(:disabled) {
   background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default, #f1f2f9));
 }
 
@@ -396,28 +393,42 @@
  * 按钮用 `--outlined` 变体，带描边与浅色底槽。
  */
 .ov-file-preview__action {
-  display: inline-flex;
   flex: none;
-  align-items: center;
-  justify-content: center;
   box-sizing: border-box;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: none;
-  color: var(--ov-ui-file-preview-text-path);
-  font: inherit;
-  cursor: pointer;
-  transition:
-    background-color 160ms ease,
-    border-color 160ms ease;
 }
 
-.ov-file-preview__action:hover:not(:disabled) {
-  background: var(--ov-ui-file-preview-row-hover);
+.ov-file-preview__action--copy-path {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ov-ui-file-preview-text-path);
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    background-color 160ms ease,
+    opacity 160ms ease;
+}
+
+.ov-file-preview__action--copy-path:hover:not(:disabled) {
+  background: var(--ov-ui-color-bg-4, var(--ov-ui-plain-button-hover-default));
   color: var(--ov-ui-file-preview-text);
+}
+
+.ov-file-preview__action--copy-path:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.ov-file-preview__action--copy-path:focus-visible {
+  outline: 2px solid var(--ov-ui-file-preview-focus-ring);
+  outline-offset: 2px;
 }
 
 /* 动作组里的按钮：带描边与浅色底槽，与宿主的次级按钮一致。 */
@@ -429,11 +440,6 @@
 
 .ov-file-preview__action--outlined:hover:not(:disabled) {
   border-color: var(--ov-ui-file-preview-text-muted);
-}
-
-.ov-file-preview__action:disabled {
-  cursor: not-allowed;
-  opacity: 0.4;
 }
 
 /*
@@ -454,63 +460,14 @@
 }
 
 .ov-file-preview__switch-item {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   box-sizing: border-box;
   min-width: 50px;
-  height: 24px;
   margin: 0;
-  padding: 0 12px;
-  border: 0;
-  border-radius: 6px;
-  background: none;
-  color: var(--ov-ui-file-preview-text-muted);
-  font: inherit;
-  font-size: 13px;
-  line-height: 22px;
   white-space: nowrap;
-  cursor: pointer;
-  transition:
-    background-color 160ms ease,
-    color 160ms ease;
-}
-
-.ov-file-preview__switch-item:hover:not([data-active]):not(:disabled) {
-  color: var(--ov-ui-file-preview-text);
-}
-
-.ov-file-preview__switch-item[data-active] {
-  background: var(--ov-ui-file-preview-surface);
-  box-shadow: 0 0 0 1px var(--ov-ui-file-preview-border);
-  color: var(--ov-ui-file-preview-text);
-  font-weight: 500;
 }
 
 .ov-file-preview__button {
   flex: none;
-  padding: 2px 10px;
-  border: 1px solid var(--ov-ui-file-preview-border);
-  border-radius: var(--ov-ui-radius, 6px);
-  background: none;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-
-.ov-file-preview__button:hover:not(:disabled) {
-  background: var(--ov-ui-file-preview-row-hover);
-}
-
-.ov-file-preview__button--primary {
-  border-color: var(--ov-ui-file-preview-accent);
-  background: var(--ov-ui-file-preview-accent);
-  color: #fff;
-}
-
-.ov-file-preview__button:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
 }
 
 /*
@@ -587,8 +544,8 @@
   background: none;
   color: inherit;
   font-family: var(--ov-ui-font-mono, ui-monospace, monospace);
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 14px;
+  line-height: 25px;
   resize: none;
 }
 

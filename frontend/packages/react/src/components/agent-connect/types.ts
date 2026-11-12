@@ -23,7 +23,10 @@ export interface AgentConnectProps extends Omit<
   baseUrl?: string;
   /** 宿主提供的用户协议链接；未传时不显示协议引用。Host agreement URL. */
   agreementUrl?: string;
-  /** 是否展示境外标签，默认 false。Show Overseas tags; defaults to false. */
+  /**
+   * 默认标记 Codex 和 Claude Code；true 标记全部适用条目，false 隐藏标签。
+   * Defaults to Codex and Claude Code. Use true for all applicable agents or false to hide the tag.
+   */
   showOverseasTag?: boolean;
   /** 受控页签；默认 mainstream。Controlled tab; defaults to mainstream. */
   activeTabId?: AgentConnectTabId;

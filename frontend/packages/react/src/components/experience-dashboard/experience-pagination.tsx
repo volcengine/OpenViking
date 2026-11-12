@@ -1,3 +1,4 @@
+import { Button } from '../../shared/components/button/button.js';
 import type { ExperienceDashboardLabels } from './types.js';
 export function ExperiencePagination({
   page,
@@ -15,21 +16,25 @@ export function ExperiencePagination({
   if (!page && !hasMore) return null;
   return (
     <div className="ov-experience-dashboard__pagination">
-      <button
-        type="button"
+      <Button
+        size="small"
+        type="default"
+        htmlType="button"
         disabled={!page || loading || !onPageChange}
         onClick={() => onPageChange?.(page - 1)}
       >
         {t.previous}
-      </button>
+      </Button>
       <span>{page + 1}</span>
-      <button
-        type="button"
+      <Button
+        size="small"
+        type="default"
+        htmlType="button"
         disabled={!hasMore || loading || !onPageChange}
         onClick={() => onPageChange?.(page + 1)}
       >
         {t.next}
-      </button>
+      </Button>
     </div>
   );
 }

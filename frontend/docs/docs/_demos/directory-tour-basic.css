@@ -10,30 +10,6 @@
   padding-bottom: 16px;
   border-bottom: 1px solid var(--rp-c-divider);
 }
-.ov-directory-tour-demo__controls button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 32px;
-  border: 1px solid var(--rp-c-divider);
-  border-radius: 6px;
-  background: var(--rp-c-bg);
-  color: var(--rp-c-text-1);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 20px;
-  cursor: pointer;
-  padding: 5px 12px;
-}
-.ov-directory-tour-demo__controls button:hover {
-  border-color: var(--rp-c-brand);
-  color: var(--rp-c-brand);
-}
-.ov-directory-tour-demo__controls button:focus-visible {
-  outline: 2px solid var(--rp-c-brand);
-  outline-offset: 3px;
-}
 .ov-directory-tour-demo__controls label {
   display: inline-flex;
   align-items: center;
@@ -78,4 +54,10 @@
   .ov-directory-tour-demo__layout {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+.ov-directory-tour-sizing__custom {
+  width: 400px;
+  max-width: 190px;
+  max-height: 110px;
 }

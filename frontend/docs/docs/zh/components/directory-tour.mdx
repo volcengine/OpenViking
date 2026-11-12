@@ -10,7 +10,7 @@
 
 组件不请求后端、不管理账号、不保存完成状态。宿主通过 `locateTarget(target, signal)` 加载目录、展开父级、等待目标行渲染，再返回对应的 `HTMLElement`。可直接使用 FileTree 的 `getRowElement(id)`。组件随后滚动、高亮并跟随该元素定位；原生 Popover API 将卡片放入浏览器顶层，不创建全屏遮罩或 SVG。
 
-账号或空间切换时，宿主关闭组件或更换 `key`。没有命中节点、定位异常或超时会显示重试与跳过，不会静默标记完成。最终回调携带 `skippedStepIds`，宿主决定是否算完成。关闭和完成回调均由宿主将 `open` 设为 `false`。
+账号或空间切换时，宿主关闭组件或更换 `key`。定位期间隐藏卡片；没有命中节点、定位异常、超时或目标被移除时自动跳过，全部缺失时结束指引。最终回调携带 `skippedStepIds`，宿主决定是否算完成。关闭和完成回调均由宿主将 `open` 设为 `false`。
 
 ## 导入
 
@@ -33,15 +33,39 @@ import '@openviking/react/components/directory-tour/style.css';
 | `locateTarget(target, signal)` | 可取消的宿主定位函数，返回已渲染的元素或 null。建议用 useCallback 保持稳定；取消后不得继续展开旧作用域。 |
 | `currentStep` / `onStepChange` | 可选受控下标与变化事件，从 0 开始。                                                                      |
 | `defaultStep`                  | 非受控模式的起始下标，默认 0；关闭后重新开始。                                                           |
-| `placement`                    | 优先 right 或 left，默认 right；空间不足自动翻转并限制在视口内。                                         |
+| `placement`                    | 优先 right 或 left，默认 right；优先放在目录行侧面，两侧都放不下时改为上方或下方。                       |
 | `locateTimeout`                | 定位超时毫秒数，默认 10000。                                                                             |
 | `onClose`                      | 关闭按钮或 Escape；宿主负责关闭。                                                                        |
-| `onComplete(result)`           | 最后一步继续或跳过，返回跳过的步骤 ID。宿主负责关闭与持久化。                                            |
-| `labels`                       | 下一步、知道了、重试、跳过、加载和错误文案，以及进度格式函数。                                           |
+| `onComplete(result)`           | 最后一步继续或自动跳过后触发，返回跳过的步骤 ID；本次指引停止渲染，宿主负责关闭与持久化。                |
+| `labels`                       | 下一步、知道了、关闭及进度格式函数；保留旧加载、错误、重试和跳过字段供类型兼容，不再显示。               |
 | `className` / `style`          | 浮层根节点样式，可继承或覆盖 `--ov-ui-color-*` 主题变量。                                                |
 
-每步包含 `id`、语义 `target`、`title`、`description`，可选 `illustration` 和 `nextLabel`。默认六步配置是英文，语义 target 区分用户私有 resources 与根级公共 resources；不内置某个账号的路径。插画通过 ReactNode 插槽传入，组件没有内部 CDN 依赖。
+每步包含 `id`、语义 `target`、`title`、`description`，可选 `illustration` 和 `nextLabel`。默认六步配置是英文，语义 target 区分用户私有 resources 与根级公共 resources；不内置某个账号的路径。六个标准 target 内置设计稿插画，随 JS 打包，无需宿主托管资源。`illustration` 可传 ReactNode 替换或 `null` 隐藏。
 
 ## 可访问性与异常处理
 
-讲解卡片使用非模态 dialog，打开后可键盘操作，支持 Escape 退出，关闭时恢复仍存在的原焦点。定位中不能前进；重试、切步和卸载会取消旧定位。滚动、窗口变化及目标尺寸变化会重新计算位置，目标滚出可见区域时隐藏讲解卡片。支持服务端渲染，服务端不创建浮层。
+讲解卡片使用非模态 dialog，打开后可键盘操作，支持 Escape 退出，关闭时恢复仍存在的原焦点。定位中隐藏卡片；切步和卸载会取消旧定位。自动跳过保留原步骤编号（例如从 1/6 跳到 3/6），并通过 `onStepChange` 通知受控宿主更新下标。滚动、窗口变化及目标尺寸变化会重新计算位置，目标滚出可见区域时隐藏讲解卡片。支持服务端渲染，服务端不创建浮层。
+
+引导随锚点移动、滚动和尺寸变化更新位置，并按缩放或软键盘影响后的可视视口限制卡片大小与位置。宿主控件通过 `preventDefault()` 处理 Escape 后，引导不会同时关闭；未提供 `onClose` 时不消费该事件。锚点主题作为继承值，卡片的 class 和内联主题覆盖优先。初始打开时，在 hydration 完成后才创建 portal。
+
+## 团队经验首次出现（单步示例）
+
+```tsx file="../../_demos/directory-tour-team.tsx" preview
+
+```
+
+单步仍使用 `DirectoryTour`，不会显示步骤计数。`renderContent(context)` 替换就绪状态的卡片内容，`context.complete()` 触发完成回调，`context.close()` 仅关闭；找到目录后才渲染自定义内容，找不到则自动跳过。`DirectoryTourIntro` 提供媒体、标题、说明、要点列表与确认按钮，不负责视频播放或编辑跳转。
+
+`locateTarget` 可返回单个 HTMLElement，也可返回一组连续目录行：第一行决定浮层定位，所有仍连接的行组成高亮范围。宿主先展开目录并等待 DOM 提交，再返回当前可见行。折叠后移除的子行会退出高亮；新加载的行需由宿主重新定位（更新 resolver 或重新打开引导）。不依赖 FileTree 的内部 DOM 结构。
+
+`step.cardWidth` 可指定每步宽度（默认 270px，限制在视口内）；内容仍需支持窄屏换行。示例封面来自 Figma `10168:334213`，视频与编辑仅演示宿主回调。首次出现、已读状态及按用户/空间持久化由宿主决定，示例只在内存中记录。
+
+主题继承会响应祖先的 `class`、`style`、`data-theme` 以及视口变化带来的媒体查询更新；支持 `--ov-ui-directory-tour-*` 专用变量，显式浮层 class/内联覆盖优先。`style.maxWidth` 和 `style.maxHeight` 的长度/百分比限制会与可视视口上限取较小值，不覆盖宿主更严格的限制。
+
+### 尺寸覆盖与长内容
+
+内联样式与 `className` 的尺寸约束保留 CSS 原有语义，卡片始终限制在可视视口内。百分比高度相对于布局视口计算；长内容在卡片内滚动。
+
+```tsx file="../../_demos/directory-tour-sizing.tsx" preview
+
+```
