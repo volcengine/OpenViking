@@ -3,6 +3,7 @@
 """Adapter parsing tests against synthetic per-harness fixtures."""
 
 import json
+import os
 import sqlite3
 
 from openviking.ingest.sources.claude_code import ClaudeCodeSource
@@ -70,6 +71,48 @@ def test_claude_code(tmp_path):
     assert [(m.role, m.text) for m in msgs] == [("user", "hello there"), ("assistant", "hi!")]
     assert msgs[1].peer_id == "claude_code__claude-opus-4-8"
     assert msgs[0].peer_id == "tester"  # no git repo -> configured fallback
+
+
+def test_claude_code_duplicate_session_files_select_newest(tmp_path):
+    root = tmp_path / "projects"
+    session_id = "11111111-2222-3333-4444-555555555555"
+    stale = root / "symlink-path-slug" / f"{session_id}.jsonl"
+    current = root / "real-path-slug" / f"{session_id}.jsonl"
+    _write_jsonl(
+        stale,
+        [
+            {
+                "type": "user",
+                "cwd": str(tmp_path),
+                "timestamp": "2026-09-20T23:54:49Z",
+                "message": {"role": "user", "content": "stale turn"},
+            }
+        ],
+    )
+    _write_jsonl(
+        current,
+        [
+            {
+                "type": "user",
+                "cwd": str(tmp_path),
+                "timestamp": "2026-10-20T17:06:51Z",
+                "message": {"role": "user", "content": "current turn"},
+            }
+        ],
+    )
+    os.utime(stale, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(current, ns=(2_000_000_000, 2_000_000_000))
+
+    src = ClaudeCodeSource(_cfg(root), fallback_user="tester")
+    refs = list(src.discover_sessions())
+
+    assert len(refs) == 1
+    assert refs[0].native_session_id == session_id
+    assert refs[0].locator == str(current)
+
+    messages, cursor = src.read_messages(refs[0], None)
+    assert [message.text for message in messages] == ["current turn"]
+    assert src.read_messages(refs[0], cursor)[0] == []
 
 
 def test_codex(tmp_path):

@@ -18,7 +18,7 @@ The feature is doubly disabled and must be turned on explicitly:
 
 | harness | Status | Default log path | Notes |
 |---|---|---|---|
-| `claude_code` | Supported | `~/.claude/projects/*/*.jsonl` | append-only JSONL, byte-offset cursor |
+| `claude_code` | Supported | `~/.claude/projects/*/*.jsonl` | append-only JSONL, byte-offset cursor; when symlinked project paths leave two files with one session UUID, the newest transcript is used |
 | `codex` | Supported | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | append-only JSONL |
 | `workbuddy` | Supported | `~/.workbuddy/projects/*/*.jsonl` | append-only JSONL; injects system reminders into user turns — the adapter strips them and keeps only `<user_query>` |
 | `hermes` | Supported | `~/.hermes/sessions/*.jsonl` | group-chat agent; user peer = original username |
