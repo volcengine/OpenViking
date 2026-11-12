@@ -31,6 +31,7 @@ try {
               'reference-tags':
                 './src/components/viking-bot/composer-reference-tags.tsx',
               'wiki-pane': './src/modules/file-browser/wiki-dashboard-pane.tsx',
+              'wiki-conflicts': './src/modules/file-browser/wiki-conflicts.ts',
               'experience-pane':
                 './src/modules/file-browser/experience-dashboard-pane.tsx',
             },

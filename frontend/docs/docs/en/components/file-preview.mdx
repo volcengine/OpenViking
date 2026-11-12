@@ -334,6 +334,7 @@ Obtained through `ref`, to switch tabs and reach FileViewer imperatively.
 - Image display: images are centered and scaled to fit, show their original pixel size at the bottom right and open enlarged in a dialog on click; video uses the native controls and does not autoplay.
 - URL lifetime: the component revokes the Blob URLs it creates from the `content` or `file` of an image or video when the source changes or the component unmounts; URLs you pass in `url` or return from `resolveImage` stay yours to manage.
 - Markdown front matter: leading YAML metadata appears as a code block in the preview, while the source view, editing, saving and copying keep the original text.
+- Dotted backdrop: Markdown bodies and the area around PDF, Word and PowerPoint pages show a dotted backdrop that follows the host theme; its colors are in Theme variables below.
 - Markdown images: `resources` are matched first, then `resolveImage` is called, and a rejected `resolveImage` falls back to the image's original target; the component never turns `viking://` into an HTTP address.
 - Markdown links: only Markdown bodies trigger `operations.openUri`, and the component passes the target as written, without resolving relative paths.
 - JSON logs: `.json` and `.jsonl` render as a JSON tree; render structured files that need their own view, such as session logs, in a content tab.
@@ -373,15 +374,17 @@ Obtained through `ref`, to switch tabs and reach FileViewer imperatively.
 
 The shell takes its colors from `--ov-ui-color-*`: set them on your app root or any ancestor to re-skin, and the defaults below apply when they are unset; see [Getting started](../guide/getting-started). Dark mode reads the `.dark` class on `<html>` and ignores `prefers-color-scheme`.
 
-| Variable                      | Light     | Dark      | Purpose                |
-| ----------------------------- | --------- | --------- | ---------------------- |
-| `--ov-ui-color-primary`       | `#5252ff` | `#5f5fff` | Primary, focus ring    |
-| `--ov-ui-color-primary-hover` | `#7075ff` | `#7075ff` | Primary on hover       |
-| `--ov-ui-color-text-1`        | `#0b0b0f` | `#c7ccd6` | Body text              |
-| `--ov-ui-color-text-3`        | `#6e718c` | `#737a87` | Secondary text         |
-| `--ov-ui-color-border-2`      | `#e1e4f2` | `#2e3138` | Separators and borders |
-| `--ov-ui-color-bg-1`          | `#ffffff` | `#131416` | Panel surface          |
-| `--ov-ui-color-bg-5`          | `#f1f2f9` | `#23252a` | Hover background       |
+| Variable                         | Light             | Dark                     | Purpose                                  |
+| -------------------------------- | ----------------- | ------------------------ | ---------------------------------------- |
+| `--ov-ui-color-primary`          | `#5252ff`         | `#5f5fff`                | Primary, focus ring                      |
+| `--ov-ui-color-primary-hover`    | `#7075ff`         | `#7075ff`                | Primary on hover                         |
+| `--ov-ui-color-text-1`           | `#0b0b0f`         | `#c7ccd6`                | Body text                                |
+| `--ov-ui-color-text-3`           | `#6e718c`         | `#737a87`                | Secondary text                           |
+| `--ov-ui-color-border-2`         | `#e1e4f2`         | `#2e3138`                | Separators and borders                   |
+| `--ov-ui-color-bg-1`             | `#ffffff`         | `#131416`                | Panel surface                            |
+| `--ov-ui-color-bg-5`             | `#f1f2f9`         | `#23252a`                | Hover background                         |
+| `--ov-ui-color-preview-backdrop` | `#f8f8f8`         | `#202227`                | Dotted backdrop color around the preview |
+| `--ov-ui-color-preview-dot`      | `rgb(0 0 0 / 8%)` | `rgb(255 255 255 / 12%)` | Dot color of the backdrop                |
 
 To adjust only this component, override `--ov-ui-file-preview-*` on its root:
 

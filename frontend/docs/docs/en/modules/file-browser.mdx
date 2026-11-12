@@ -359,7 +359,13 @@ All fields are optional, and omitted fields follow `locale`.
 - Text files are read up to 2000 lines, and the preview says when the content is truncated.
 - Images, video, audio, PDF, Office documents and archives are read through the content download endpoint, chosen by file extension.
 - Editable formats are `.md`, `.json`, `.jsonl`, `.txt`, `.yaml` and `.yml`: editing reloads the full content, saving calls `POST /api/v1/content/write`, and the preview reloads afterwards.
-- The `MEMORY_FIELDS` comment at the end of a file under a user's `memories/` directory is internal metadata written by the server. It is hidden in both preview and editing.
+- File body reads explicitly request `raw=false`, with a fallback in the block's shared read layer. Preview, source and editing drafts receive the same body.
+- Trailing `MEMORY_FIELDS` comments are internal metadata written by the server. They are removed only in memory namespaces, so preview and editing never show them; same-shaped body comments, and examples in resources and skills, survive.
+- YAML scalar ranges preserve same-shaped value content, while separately appended trailers are still removed; the body is never reserialized.
+- Line boundaries, whitespace and word characters follow the server's Python semantics. A page that fills the preview cap triggers a full read before filtering and truncation, so a page end cannot be mistaken for a file end or expose partial metadata.
+- Wiki ownership follows compile targets and resource tags, independently of dashboard visibility. Trailing `CONFLICTS_CONTENT` comments are separated from the body and still supplied to the conflict dashboard parser. Invalid JSON stays out of the body while the dashboard retains its error and retry behavior.
+- Wiki saves use the native `resolve_conflicts: true` contract so the server preserves and updates conflict history; other text saves omit this flag.
+- All YAML frontmatter, ordinary HTML comments and fenced Markdown examples survive. In a Markdown file with confirmed scope, an unclosed reserved trailer starting on its own line is hidden through the end of the file; markers quoted in YAML frontmatter, code fences or inline examples survive.
 - The refresh button reloads the expanded directories and the current preview.
 
 ### Search
@@ -407,7 +413,7 @@ All fields are optional, and omitted fields follow `locale`.
 - The experience dashboard shows for a user's `memories/experiences` directory and its direct `.md` files, including those under `peers/<peer>/`.
 - The Wiki dashboard shows for directories with the `compile_target=true` tag or listed in the compile configuration, and the files and subdirectories below them get their own Wiki dashboards.
 - The tag takes precedence over the compile configuration: a dashboard still shows when the configuration lacks the target.
-- The compile configuration (`GET /api/v1/compile/configs`) is read only when a Wiki dashboard opens, not during ordinary browsing.
+- The compile configuration (`GET /api/v1/compile/configs`) is read on demand: when a Wiki dashboard opens, or when a reserved Wiki trailer in the body needs an ownership check; ordinary browsing does not request it.
 - When `dashboardKinds` omits `'wiki'`, Wiki is no longer detected and the compile configuration is not read, so Wiki resources lose their version history and compile configuration actions.
 - Rows that have a dashboard show a dashboard icon in the tree; click it to open the dashboard. The icon differs when a Wiki has pending conflicts.
 - The tabs in the preview switch between the content and the dashboard.

@@ -334,6 +334,7 @@ import '@openviking/react/components/file-preview/style.css';
 - 图片显示：按比例居中，右下角显示原始像素尺寸，点击在弹窗里放大；视频使用原生播放控件，不自动播放。
 - 地址生命周期：组件为图片和视频的 `content`、`file` 创建的 Blob URL，在来源替换或卸载时回收；`url` 和 `resolveImage` 返回的地址由宿主管理。
 - Markdown 元数据：开头的 YAML 元数据在预览里显示为代码块，源码、编辑、保存和复制仍使用原文。
+- 点阵背景：Markdown 正文及 PDF、Word、PPT 的页面外围显示点阵背景，随宿主主题切换，底色和点色见下方「主题变量」。
 - Markdown 图片：先匹配 `resources`，未命中再调用 `resolveImage`，`resolveImage` 拒绝时使用图片的原始地址；组件不会把 `viking://` 转成 HTTP 地址。
 - Markdown 链接：只有 Markdown 触发 `operations.openUri`，组件传出 Markdown 里写的原始地址，不补全相对路径。
 - JSON 日志：`.json` 和 `.jsonl` 渲染为 JSON 树，会话日志等需要自己呈现的结构化文件，用内容页签渲染。
@@ -373,15 +374,17 @@ import '@openviking/react/components/file-preview/style.css';
 
 外壳的颜色取自 `--ov-ui-color-*`：在应用根节点或任意祖先上设置它们即可换肤，未设置时使用下表的默认值，规则见[快速开始](../guide/getting-started)。暗色读取 `<html>` 上的 `.dark` 类，不读取 `prefers-color-scheme`。
 
-| 变量                          | 亮色      | 暗色      | 用途         |
-| ----------------------------- | --------- | --------- | ------------ |
-| `--ov-ui-color-primary`       | `#5252ff` | `#5f5fff` | 主色，焦点环 |
-| `--ov-ui-color-primary-hover` | `#7075ff` | `#7075ff` | 主色悬停     |
-| `--ov-ui-color-text-1`        | `#0b0b0f` | `#c7ccd6` | 正文         |
-| `--ov-ui-color-text-3`        | `#6e718c` | `#737a87` | 次要文字     |
-| `--ov-ui-color-border-2`      | `#e1e4f2` | `#2e3138` | 分隔线与边框 |
-| `--ov-ui-color-bg-1`          | `#ffffff` | `#131416` | 面板底色     |
-| `--ov-ui-color-bg-5`          | `#f1f2f9` | `#23252a` | 悬停背景     |
+| 变量                             | 亮色              | 暗色                     | 用途               |
+| -------------------------------- | ----------------- | ------------------------ | ------------------ |
+| `--ov-ui-color-primary`          | `#5252ff`         | `#5f5fff`                | 主色，焦点环       |
+| `--ov-ui-color-primary-hover`    | `#7075ff`         | `#7075ff`                | 主色悬停           |
+| `--ov-ui-color-text-1`           | `#0b0b0f`         | `#c7ccd6`                | 正文               |
+| `--ov-ui-color-text-3`           | `#6e718c`         | `#737a87`                | 次要文字           |
+| `--ov-ui-color-border-2`         | `#e1e4f2`         | `#2e3138`                | 分隔线与边框       |
+| `--ov-ui-color-bg-1`             | `#ffffff`         | `#131416`                | 面板底色           |
+| `--ov-ui-color-bg-5`             | `#f1f2f9`         | `#23252a`                | 悬停背景           |
+| `--ov-ui-color-preview-backdrop` | `#f8f8f8`         | `#202227`                | 预览外围的点阵底色 |
+| `--ov-ui-color-preview-dot`      | `rgb(0 0 0 / 8%)` | `rgb(255 255 255 / 12%)` | 点阵的点色         |
 
 只调整本组件时，在组件根节点上覆盖 `--ov-ui-file-preview-*`：
 

@@ -24,6 +24,7 @@ from openviking.message import Message
 from openviking.message.part import TextPart
 from openviking.pyagfs.exceptions import AGFSConnectionError, AGFSIoError, AGFSTimeoutError
 from openviking.server.identity import RequestContext
+from openviking.session.memory.agent_file import is_static_agent_memory
 from openviking.session.memory.dataclass import (
     MemoryFile,
     MemoryOperationSkipCode,
@@ -141,6 +142,8 @@ async def write_stored_links(
 
     updated_uris: List[str] = []
     for uri, link_groups in file_links.items():
+        if is_static_agent_memory(uri):
+            continue
         try:
             mf = (read_file_contents or {}).get(uri)
             if mf is None:
@@ -1022,6 +1025,15 @@ class MemoryUpdater:
             for source_uri, error in migration_errors:
                 result.add_error(source_uri, error)
             return result
+        # Also guard resolved/replayed operations that bypass the extraction parser.
+        mutation_uris = {uri for op in operations.upsert_operations for uri in op.uris}
+        mutation_uris.update(file.uri for file in operations.delete_file_contents if file.uri)
+        mutation_uris.update(operations.delete_replacements.values())
+        for uri in sorted(mutation_uris):
+            if is_static_agent_memory(uri):
+                result.add_error(uri, ValueError(f"Automatic updates cannot modify {uri}"))
+        if result.errors:
+            return result
         migration_errors = await self._validate_uri_migrations(operations, ctx)
         if migration_errors:
             for source_uri, error in migration_errors:
@@ -1321,7 +1333,9 @@ class MemoryUpdater:
                     uri: memory_file
                     for uri, memory_file in link_file_contents.items()
                     if uri not in result.edited_uris
-                } if self._transaction_handle is not None else None,
+                }
+                if self._transaction_handle is not None
+                else None,
             )
 
         # Referential-integrity guard (issue #5904): after apply, no in-batch
@@ -1992,7 +2006,11 @@ class MemoryUpdater:
             and operation.old_memory_file_content.uri
         }
         for uri, link_groups in inherited_by_uri.items():
-            if uri in stale_uris or context_type_for_uri(uri) != "memory":
+            if (
+                uri in stale_uris
+                or context_type_for_uri(uri) != "memory"
+                or is_static_agent_memory(uri)
+            ):
                 continue
             # Implicit renames already copied and remapped the source's links
             # while writing the new file; drop that source's contribution to

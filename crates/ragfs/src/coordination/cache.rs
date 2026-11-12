@@ -1,10 +1,12 @@
-//! CacheRuntime-backed leader leases.
+//! Coordination primitives over the shared CacheRuntime.
 
+use super::REVISION_TTL;
 use crate::cache_runtime::{
     CacheError, CacheOperation, CacheResult, CacheRuntime, Expiration, ScriptDefinition,
     ScriptRequest, ScriptValue, SetCondition, SetOptions, SetResult,
 };
 use bytes::Bytes;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
@@ -39,29 +41,90 @@ const SCRIPT_DEFINITIONS: &[ScriptDefinition] = &[
 
 /// One leader lease. Its ownership token stays inside AGFS.
 #[derive(Clone)]
-pub struct LeaderLease {
+pub(super) struct LeaderLease {
     redis_key: String,
     token: String,
 }
 
 /// Atomic leader election over the shared CacheRuntime.
-pub struct LeaderManager {
+pub(super) struct CacheBackend {
     runtime: Arc<CacheRuntime>,
     service_name: String,
+    operation_timeout: Duration,
 }
 
-impl LeaderManager {
+impl CacheBackend {
     /// Bind leader election to one service namespace.
-    pub fn new(runtime: Arc<CacheRuntime>, service_name: &str) -> CacheResult<Self> {
+    pub fn new(
+        runtime: Arc<CacheRuntime>,
+        service_name: &str,
+        operation_timeout: Duration,
+    ) -> CacheResult<Self> {
         validate_component("service_name", service_name)?;
         runtime.require_operations(&[CacheOperation::Set, CacheOperation::ExecuteScript])?;
         for definition in SCRIPT_DEFINITIONS {
             runtime.register_script(*definition)?;
         }
+        for definition in REVISION_SCRIPTS {
+            runtime.register_script(*definition)?;
+        }
         Ok(Self {
             runtime,
             service_name: service_name.to_string(),
+            operation_timeout,
         })
+    }
+
+    async fn run<T>(
+        &self,
+        operation: &str,
+        future: impl Future<Output = CacheResult<T>>,
+    ) -> CacheResult<T> {
+        // The deadline belongs inside the native task. Cancelling only the
+        // Python await would leave that task holding the close barrier forever.
+        tokio::time::timeout(self.operation_timeout, future)
+            .await
+            .map_err(|_| {
+                CacheError::Timeout(format!(
+                    "coordination {operation} exceeded {} ms",
+                    self.operation_timeout.as_millis()
+                ))
+            })?
+    }
+
+    pub async fn revision(&self, key: &str, operation: &str, value: i64) -> CacheResult<i64> {
+        let counter = format!("{{{}}}:ov:revision:counter", self.service_name);
+        let latest = format!("{{{}}}:ov:revision:latest:{key}", self.service_name);
+        let keys = match operation {
+            ALLOCATE => vec![counter],
+            PUBLISH => vec![counter, latest],
+            LATEST => vec![latest],
+            _ => unreachable!(),
+        };
+        let result = self
+            .run(
+                operation,
+                self.runtime.execute_script(ScriptRequest {
+                    script_id: operation.to_string(),
+                    keys,
+                    args: vec![
+                        Bytes::from(value.to_string()),
+                        Bytes::from(REVISION_TTL.as_millis().to_string()),
+                    ],
+                }),
+            )
+            .await?
+            .decode()?;
+        // Decimal strings avoid Lua's loss of integer precision above 2^53.
+        match result {
+            ScriptValue::Bytes(value) => std::str::from_utf8(&value)
+                .ok()
+                .and_then(|value| value.parse::<i64>().ok())
+                .ok_or_else(|| CacheError::InvalidData("invalid revision".into())),
+            other => Err(CacheError::InvalidData(format!(
+                "invalid revision result: {other:?}"
+            ))),
+        }
     }
 
     /// Attempt to acquire one logical leadership key.
@@ -77,15 +140,17 @@ impl LeaderManager {
         let token = Uuid::new_v4().to_string();
         let redis_key = format!("{{{}}}:ov:leader:{key}", self.service_name);
         let result = self
-            .runtime
-            .set(
-                &redis_key,
-                Bytes::copy_from_slice(token.as_bytes()),
-                SetOptions {
-                    expiration: Some(Expiration::After(ttl)),
-                    condition: SetCondition::Nx,
-                    keep_ttl: false,
-                },
+            .run(
+                "leader.acquire",
+                self.runtime.set(
+                    &redis_key,
+                    Bytes::copy_from_slice(token.as_bytes()),
+                    SetOptions {
+                        expiration: Some(Expiration::After(ttl)),
+                        condition: SetCondition::Nx,
+                        keep_ttl: false,
+                    },
+                ),
             )
             .await?;
         match result {
@@ -121,12 +186,14 @@ impl LeaderManager {
         args.push(Bytes::copy_from_slice(lease.token.as_bytes()));
         args.extend(trailing_args);
         let result = self
-            .runtime
-            .execute_script(ScriptRequest {
-                script_id: script_id.to_string(),
-                keys: vec![lease.redis_key.clone()],
-                args,
-            })
+            .run(
+                script_id,
+                self.runtime.execute_script(ScriptRequest {
+                    script_id: script_id.to_string(),
+                    keys: vec![lease.redis_key.clone()],
+                    args,
+                }),
+            )
             .await?
             .decode()?;
         match result {
@@ -138,7 +205,7 @@ impl LeaderManager {
     }
 }
 
-fn validate_component(name: &str, value: &str) -> CacheResult<()> {
+pub(super) fn validate_component(name: &str, value: &str) -> CacheResult<()> {
     if value.is_empty()
         || !value
             .bytes()
@@ -151,7 +218,7 @@ fn validate_component(name: &str, value: &str) -> CacheResult<()> {
     Ok(())
 }
 
-fn ttl_millis(ttl: Duration) -> CacheResult<u128> {
+pub(super) fn ttl_millis(ttl: Duration) -> CacheResult<u128> {
     let ttl_ms = ttl.as_millis();
     if ttl_ms == 0 || ttl_ms > i64::MAX as u128 {
         return Err(CacheError::InvalidArgument(
@@ -174,44 +241,53 @@ mod tests {
         CacheRuntime::memory_with_provider(provider)
     }
 
-    #[tokio::test]
-    async fn only_one_candidate_acquires_a_live_key() {
-        let manager = LeaderManager::new(runtime_with_script_result(1), "service-a").unwrap();
-        let first = manager
-            .try_acquire("watch", "node-a", Duration::from_secs(1))
-            .await
-            .unwrap()
-            .unwrap();
-
-        assert!(manager
-            .try_acquire("watch", "node-b", Duration::from_secs(1))
-            .await
-            .unwrap()
-            .is_none());
-        assert!(manager.renew(&first, Duration::from_secs(1)).await.unwrap());
-        assert!(manager.release(&first).await.unwrap());
-    }
-
-    #[tokio::test]
-    async fn compare_failure_reports_lost_ownership() {
-        let manager = LeaderManager::new(runtime_with_script_result(0), "service-a").unwrap();
-        let lease = manager
-            .try_acquire("watch", "node-a", Duration::from_secs(1))
-            .await
-            .unwrap()
-            .unwrap();
-
-        assert!(!manager.renew(&lease, Duration::from_secs(1)).await.unwrap());
-        assert!(!manager.release(&lease).await.unwrap());
-    }
-
     #[test]
     fn rejects_sub_millisecond_ttl_and_unsafe_keys() {
         assert!(ttl_millis(Duration::from_nanos(1)).is_err());
-        let manager = LeaderManager::new(runtime_with_script_result(1), "service-a").unwrap();
+        let manager = CacheBackend::new(
+            runtime_with_script_result(1),
+            "service-a",
+            Duration::from_secs(5),
+        )
+        .unwrap();
         let result = tokio::runtime::Runtime::new()
             .unwrap()
             .block_on(manager.try_acquire("bad key", "node-a", Duration::from_secs(1)));
         assert!(matches!(result, Err(CacheError::InvalidArgument(_))));
     }
 }
+
+pub(super) const ALLOCATE: &str = "ragfs.revision.allocate.v1";
+pub(super) const PUBLISH: &str = "ragfs.revision.publish.v1";
+pub(super) const LATEST: &str = "ragfs.revision.latest.v1";
+const REVISION_SCRIPTS: &[ScriptDefinition] = &[
+    ScriptDefinition {
+        id: ALLOCATE,
+        redis_lua: r#"
+redis.call("INCR", KEYS[1])
+return redis.call("GET", KEYS[1])
+"#,
+    },
+    ScriptDefinition {
+        id: PUBLISH,
+        redis_lua: r#"
+local function less(a, b)
+    return #a < #b or (#a == #b and a < b)
+end
+local allocated = redis.call("GET", KEYS[1]) or "0"
+if less(allocated, ARGV[1]) then
+    return redis.error_reply("revision was not allocated")
+end
+local latest = redis.call("GET", KEYS[2]) or "0"
+if less(latest, ARGV[1]) then
+    latest = ARGV[1]
+end
+redis.call("SET", KEYS[2], latest, "PX", ARGV[2])
+return latest
+"#,
+    },
+    ScriptDefinition {
+        id: LATEST,
+        redis_lua: r#"return redis.call("GET", KEYS[1]) or "0""#,
+    },
+];

@@ -182,6 +182,10 @@ export function useBrowserDashboards({
         }
       : undefined;
   return {
+    isWiki: resolved?.kind === 'wiki',
+    contentPending: Boolean(
+      uri && /\.md$/i.test(uri) && !resolved && hint.loading,
+    ),
     dashboards,
     current,
     tab,

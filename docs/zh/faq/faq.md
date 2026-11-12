@@ -261,7 +261,7 @@ session.commit()
 
 ### OpenViking 支持哪些记忆类型？
 
-OpenViking 内置 `profile`、`preferences`、`entities`、`events`、`identity`、`soul`、`cases`、`trajectories`、`experiences` 等记忆类型。提交会话后，系统会按当前记忆策略提取适用内容；也可以根据业务需要扩展或调整记忆类型。
+OpenViking 内置 `profile`、`preferences`、`entities`、`events`、`cases`、`trajectories`、`experiences` 等记忆类型。提交会话后，系统会按当前记忆策略提取适用内容；也可以根据业务需要扩展或调整记忆类型。
 
 记忆存储在当前用户或 Peer 命名空间，不存在当前可写的 `viking://agent/memories` 目录。完整类型与路径见 [上下文类型](../concepts/02-context-types.md)。
 
