@@ -38,7 +38,7 @@ import '@openviking/react/modules/console/style.css';
 
 ### 内置对话
 
-省略 `conversation.messages`、`conversation.onSend` 和 `conversation.composer` 时，Console 内部管理请求、消息和输入框。宿主仍可提供文案、插槽与 `conversation.sessions`：其 `items`、加载及错误信息用于展示，`currentId` 可同步路由；内部新建或切换会话通过 `onSelect` / `onNew` 通知宿主。宿主将新建 ID 写回 `currentId` 不会重启正在进行的回复。
+省略 `conversation.messages`、`conversation.onSend` 和 `conversation.composer` 时，Console 内部管理请求、消息和输入框。宿主仍可提供文案、插槽与 `conversation.sessions`：其 `items`、加载及错误信息用于展示，`currentId` 可同步路由；每次主动选择历史会话（包括重新选择当前会话）都通过 `onSelect` 通知一次，异步创建的会话 ID 也通过 `onSelect` 同步。每次主动新建通过 `onNew` 通知，即使远端会话尚未创建。宿主将新建 ID 写回 `currentId` 不会重启正在进行的回复。切换会话会清空旧草稿，已取消的请求不会将其恢复到新会话。
 
 默认使用 `modules/viking-bot` 的两个 Hook；可通过 `chatOptions.service` 适配其他后端，服务同时实现对话与会话契约。模块切换保留当前对话；新建或切换会话会取消旧连接。历史保存失败单独提示，不改变已成功的回答。
 

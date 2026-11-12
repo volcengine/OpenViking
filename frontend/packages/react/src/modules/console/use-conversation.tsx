@@ -51,12 +51,12 @@ export function useConversation(
     selection.prop = selectedId;
     selection.pending = sessionId !== selectedId;
     if (!selection.pending) return;
+    submission.current++;
     if (selectedId) selection.select(selectedId);
     else reset();
     setDraft('');
   }, [enabled, selection, selectedId, sessionId, reset, setDraft]);
   const onSelect = conversation?.sessions?.onSelect;
-  const onNew = conversation?.sessions?.onNew;
   // Report asynchronously created remote IDs to the host router while streaming,
   // before send() settles. No event handler receives that intermediate ID.
   // This starts no resources; notified suppresses duplicate router callbacks.
@@ -65,10 +65,8 @@ export function useConversation(
     selection.pending = false;
     if (selection.notified === sessionId) return;
     selection.notified = sessionId;
-    if (sessionId === selectedId) return;
-    if (sessionId) onSelect?.(sessionId);
-    else onNew?.();
-  }, [enabled, selection, selectedId, sessionId, onSelect, onNew]);
+    if (sessionId && sessionId !== selectedId) onSelect?.(sessionId);
+  }, [enabled, selection, selectedId, sessionId, onSelect]);
   if (!enabled) return conversation ?? {};
   const error = chat.error ?? chat.persistenceError;
   return {
@@ -119,13 +117,16 @@ export function useConversation(
       },
       onSelect: (id) => {
         submission.current++;
+        selection.notified = id;
         chat.selectSession(id);
         setDraft('');
+        onSelect?.(id);
       },
       onNew: () => {
         submission.current++;
         chat.reset();
         setDraft('');
+        conversation?.sessions?.onNew?.();
       },
     },
     footer:
