@@ -3,15 +3,23 @@
 """WatchManager contracts over the file Watch store and real PathLocks."""
 
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
 import pytest
 
 from openviking.resource.watch_manager import WatchManager
 from openviking.resource.watch_store_file import FileWatchStore
-from openviking.resource.watch_types import WatchAuthority, WatchRunResult
+from openviking.resource.watch_types import (
+    STORAGE_TIMESTAMPS_TZ_KEY,
+    STORAGE_TIMESTAMPS_TZ_UTC,
+    WATCH_TIMESTAMP_FIELDS,
+    WatchAuthority,
+    WatchRunResult,
+    WatchTask,
+)
 from openviking.storage.errors import ResourceBusyError
+from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import ConflictError, FailedPreconditionError
 
 TEST_ACCOUNT_ID = "default"
@@ -322,3 +330,131 @@ class TestSharedConnectorTargets:
         )
 
         assert (await watch_manager.get_task(moving.task_id)).to_uri == "viking://resources/target"
+
+
+class TestWatchTaskTimestamps:
+    """Watch timestamps are aware UTC, and storage stays downgrade-compatible.
+
+    A naive timestamp compared against an aware "now" raises ``TypeError:
+    can't compare offset-naive and offset-aware datetimes`` and stops the
+    watch loop (issue #3268).
+    """
+
+    def test_from_dict_normalizes_timestamps_to_utc(self):
+        """Persisted aware and legacy naive timestamps both load as aware UTC."""
+        aware = datetime(2026, 7, 9, 4, 14, 37, tzinfo=timezone(timedelta(hours=8)))
+        legacy_naive = datetime(2026, 7, 9, 4, 14, 37)
+
+        from_aware = WatchTask.from_dict(
+            {
+                "path": "/test/path",
+                "created_at": aware.isoformat(),
+                "last_execution_time": aware.isoformat(),
+                "next_execution_time": aware.isoformat(),
+            }
+        )
+        from_naive = WatchTask.from_dict(
+            {
+                "path": "/test/path",
+                "created_at": legacy_naive.isoformat(),
+                "last_execution_time": legacy_naive.isoformat(),
+                "next_execution_time": legacy_naive.isoformat(),
+            }
+        )
+
+        assert from_aware.created_at == aware
+        assert from_aware.next_execution_time == aware
+        # A naive value is host-local wall time: converting keeps the same instant.
+        assert from_naive.created_at == legacy_naive.astimezone(timezone.utc)
+        assert from_naive.created_at.utcoffset() == timedelta(0)
+        assert from_naive.next_execution_time.tzinfo is not None
+
+    def test_assigned_timestamps_are_normalized_to_utc(self):
+        """Due-time comparisons never mix naive and aware values (issue #3268)."""
+        task = WatchTask(path="/test/path")
+        task.next_execution_time = datetime.now() - timedelta(minutes=1)
+
+        assert task.next_execution_time.tzinfo is not None
+        assert task.next_execution_time <= datetime.now(timezone.utc)
+
+    def test_storage_dict_persists_naive_utc_with_marker(self):
+        """Storage stays parseable by pre-upgrade builds: naive UTC + marker."""
+        aware = datetime(2026, 7, 9, 4, 14, 37, tzinfo=timezone(timedelta(hours=8)))
+        task = WatchTask(
+            path="/test/path",
+            created_at=aware,
+            last_execution_time=aware,
+            next_execution_time=aware,
+        )
+
+        data = task.to_storage_dict()
+
+        assert data[STORAGE_TIMESTAMPS_TZ_KEY] == STORAGE_TIMESTAMPS_TZ_UTC
+        for key in WATCH_TIMESTAMP_FIELDS:
+            # Naive string: exactly the shape old builds parse and compare.
+            stored = datetime.fromisoformat(data[key])
+            assert stored.tzinfo is None
+            assert stored == aware.astimezone(timezone.utc).replace(tzinfo=None)
+
+    def test_from_dict_marker_storage_recovers_utc_instant(self):
+        """Marker-carrying storage round-trips the exact instant as aware UTC."""
+        aware = datetime(2026, 7, 9, 4, 14, 37, tzinfo=timezone(timedelta(hours=8)))
+        stored = WatchTask(
+            path="/test/path",
+            created_at=aware,
+            last_execution_time=aware,
+            next_execution_time=aware,
+        ).to_storage_dict()
+
+        loaded = WatchTask.from_dict(stored)
+
+        assert loaded.created_at == aware
+        assert loaded.last_execution_time == aware
+        assert loaded.next_execution_time == aware
+        assert loaded.created_at.utcoffset() == timedelta(0)
+
+    def test_marker_storage_is_readable_by_legacy_builds(self):
+        """A pre-upgrade build parsing marker storage cannot crash on tz mix."""
+        aware = datetime(2026, 7, 9, 4, 14, 37, tzinfo=timezone.utc)
+        stored = WatchTask(path="/test/path", created_at=aware).to_storage_dict()
+
+        # Old builds: fromisoformat + naive comparison, no marker awareness.
+        legacy_created_at = datetime.fromisoformat(stored["created_at"])
+        legacy_next = (
+            parse_iso_datetime(stored["next_execution_time"])
+            if stored.get("next_execution_time")
+            else None
+        )
+
+        assert legacy_created_at.tzinfo is None
+        assert legacy_next is None or legacy_next.tzinfo is None
+        # The naive-vs-naive comparison old builds perform must not raise.
+        assert legacy_created_at <= datetime.now()
+
+    def test_legacy_storage_without_marker_keeps_host_local_reading(self):
+        """No marker means legacy semantics: naive values are host-local."""
+        legacy_naive = datetime(2026, 7, 9, 4, 14, 37)
+
+        loaded = WatchTask.from_dict(
+            {
+                "path": "/test/path",
+                "created_at": legacy_naive.isoformat(),
+            }
+        )
+
+        assert loaded.created_at == legacy_naive.astimezone(timezone.utc)
+
+    def test_storage_roundtrip_preserves_instant_after_mutation(self):
+        """Loaded, rescheduled, and re-saved tasks keep their exact instants."""
+        created = datetime(2026, 7, 9, 4, 14, 37, tzinfo=timezone.utc)
+        task = WatchTask.from_dict(
+            WatchTask(path="/test/path", created_at=created).to_storage_dict()
+        )
+        task.last_execution_time = datetime.now(timezone.utc)
+        task.next_execution_time = task.calculate_next_execution_time()
+
+        reloaded = WatchTask.from_dict(task.to_storage_dict())
+
+        assert reloaded.created_at == created
+        assert reloaded.last_execution_time == task.last_execution_time
+        assert reloaded.next_execution_time == task.next_execution_time
