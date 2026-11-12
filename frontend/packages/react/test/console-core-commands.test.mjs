@@ -115,6 +115,7 @@ test('Console passes live availability and session controls to the VikingBot vie
   const id = 'session_2026111100000_6c4ebf';
   const uri = 'viking://session/' + id;
   const conversation = {
+    messages: [],
     // Use the host slot so this Node test does not render Ark's browser composer.
     composer: false,
     onCopy: (text) => copied.push(text),

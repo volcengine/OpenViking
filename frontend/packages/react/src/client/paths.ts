@@ -99,6 +99,14 @@ export const OV_PATH_BUILDERS = {
     `${OV_PATH_BUILDERS.session(sessionId)}/messages`,
   sessionCommit: (sessionId: string) =>
     `${OV_PATH_BUILDERS.session(sessionId)}/commit`,
+  sessionContext: (sessionId: string) =>
+    `${OV_PATH_BUILDERS.session(sessionId)}/context`,
+  sessionArchive: (sessionId: string, archiveId: string) =>
+    `${OV_PATH_BUILDERS.session(sessionId)}/archive/${encodeURIComponent(archiveId)}`,
+  botInterrupt: (sessionId: string) =>
+    `/bot/v1/sessions/${encodeURIComponent(sessionId)}/interrupt`,
+  botSteer: (sessionId: string) =>
+    `/bot/v1/sessions/${encodeURIComponent(sessionId)}/steer`,
   task: (taskId: string) => `${OV_PATHS.tasks}/${encodeURIComponent(taskId)}`,
   taskCancel: (taskId: string) => `${OV_PATH_BUILDERS.task(taskId)}/cancel`,
 } as const;

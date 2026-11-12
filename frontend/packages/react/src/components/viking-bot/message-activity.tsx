@@ -3,9 +3,11 @@ import { ActivityTimeline } from '@ark-design/ui/activity-timeline';
 import type {
   ActivityItemRenderContext,
   McpToolCallActivityItem,
+  ReasoningActivityItem,
 } from '@ark-design/ui/activity-timeline';
 import { groupActivityParts } from './ark-adapter.js';
 import { ToolActivity } from './tool-activity.js';
+import { ReasoningActivity } from './reasoning-activity.js';
 import type {
   VikingBotLabels,
   VikingBotMessagePart,
@@ -46,6 +48,8 @@ export function MessageActivity({
     (item) => item.status === 'running' || item.status === 'queued',
   );
   const [now, setNow] = useState(() => Date.now());
+  // Effect necessity: the wall clock advances while a streamed activity is
+  // running, without user events; unsubscribe when complete or unmounted.
   useEffect(() => {
     if (!running) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -67,6 +71,12 @@ export function MessageActivity({
       : items.reduce((total, item) => total + (item.durationMs ?? 0), 0);
   const renderers = useMemo(
     () => ({
+      reasoning: (context: ActivityItemRenderContext) => (
+        <ReasoningActivity
+          context={context as ActivityItemRenderContext<ReasoningActivityItem>}
+          labels={labels}
+        />
+      ),
       mcpToolCall: (context: ActivityItemRenderContext) => (
         <ToolActivity
           context={
