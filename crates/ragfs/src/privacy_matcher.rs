@@ -10,7 +10,7 @@ use aho_corasick::{
 };
 use regex::Regex;
 use std::collections::HashSet;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 static PRIVACY_REFERENCE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\{\{[ \t]*ov_privacy:[^{}\r\n]+\}\}").expect("fixed reference regex")
@@ -61,6 +61,7 @@ pub struct PrivacyMatcher {
     contained_values: Vec<bool>,
     targets: Vec<PatternTarget>,
     ambiguous_placeholder: String,
+    preferred: Option<Arc<PrivacyMatcher>>,
 }
 
 impl PrivacyMatcher {
@@ -180,7 +181,14 @@ impl PrivacyMatcher {
             contained_values: contained,
             targets,
             ambiguous_placeholder: ambiguous_placeholder.into(),
+            preferred: None,
         })
+    }
+
+    /// Share another matcher, preferring its reference for an identical span.
+    pub fn with_preferred(mut self, preferred: Arc<Self>) -> Self {
+        self.preferred = Some(preferred);
+        self
     }
 
     /// Rewrite all non-overlapping leftmost-longest matches.
@@ -242,7 +250,7 @@ impl PrivacyMatcher {
         let mut result = PrivacyMatchResult::default();
         let mut source_byte_cursor = 0;
         let mut source_char_cursor = 0;
-        let completed = self.visit_valid_matches(content, |matched| {
+        let completed = self.visit_valid_matches(content, |owner, matched| {
             if result.replacements.len() >= max_replacements {
                 return false;
             }
@@ -252,11 +260,11 @@ impl PrivacyMatcher {
             let char_start = source_char_cursor;
             source_char_cursor += content[start..end].chars().count();
             let char_end = source_char_cursor;
-            let reference = match &self.targets[matched.pattern().as_usize()] {
+            let reference = match &owner.targets[matched.pattern().as_usize()] {
                 PatternTarget::Reference(reference) => reference.clone(),
                 PatternTarget::Ambiguous(candidates) => {
                     result.ambiguous_references.push(candidates.clone());
-                    self.ambiguous_placeholder.clone()
+                    owner.ambiguous_placeholder.clone()
                 }
             };
             on_match(start, end, &reference);
@@ -275,94 +283,159 @@ impl PrivacyMatcher {
         }
     }
 
-    fn visit_valid_matches(&self, content: &str, mut on_match: impl FnMut(Match) -> bool) -> bool {
-        let Some(matcher) = &self.matcher else {
-            return true;
-        };
-        let mut segment_start = 0;
-        let mut consumed = 0;
-        let width = matcher.max_pattern_len();
-        let mut candidates = Vec::new();
+    fn visit_valid_matches<'a>(
+        &'a self,
+        content: &str,
+        mut on_match: impl FnMut(&'a Self, Match) -> bool,
+    ) -> bool {
+        let mut start = 0;
         for reference in PRIVACY_REFERENCE
             .find_iter(content)
             .map(|r| r.range())
             .chain(std::iter::once(content.len()..content.len()))
         {
-            let segment_end = reference.start;
-            let mut at = segment_start;
-            segment_start = reference.end;
-            loop {
-                let mut advanced = false;
-                for first in
-                    matcher.find_overlapping_iter(Input::new(content).span(at..segment_end))
+            if !self.visit_segment_matches(content, start, reference.start, &mut on_match) {
+                return false;
+            }
+            start = reference.end;
+        }
+        true
+    }
+
+    fn visit_segment_matches<'a>(
+        &'a self,
+        content: &str,
+        start: usize,
+        end: usize,
+        mut on_match: impl FnMut(&'a Self, Match) -> bool,
+    ) -> bool {
+        let Some(preferred) = &self.preferred else {
+            return self.visit_own_matches(content, start, end, |matched| on_match(self, matched));
+        };
+        let next_own = |start| {
+            let mut found = None;
+            self.visit_own_matches(content, start, end, |matched| {
+                found = Some(matched);
+                false
+            });
+            found
+        };
+        let mut own = next_own(start);
+        let mut shared = preferred.next_match(content, start, end);
+        loop {
+            let (owner, matched) = match (own, shared) {
+                (None, None) => return true,
+                (Some(matched), None) => (self, matched),
+                (None, Some(shared)) => shared,
+                (Some(own), Some(shared))
+                    if shared.1.start() < own.start()
+                        || (shared.1.start() == own.start() && shared.1.end() >= own.end()) =>
                 {
-                    // A value absent from every other value cannot be hidden by a longer match.
-                    if !self.contained_values[first.pattern().as_usize()] {
-                        if !is_match_boundary(content, first.start())
-                            || !is_match_boundary(content, first.end())
-                        {
-                            continue;
-                        }
-                        if !on_match(first) {
-                            return false;
-                        }
-                        consumed = first.end();
-                        at = consumed;
-                        advanced = true;
-                        break;
+                    shared
+                }
+                (Some(own), _) => (self, own),
+            };
+            if !on_match(owner, matched) {
+                return false;
+            }
+            if own.is_some_and(|item| item.start() < matched.end()) {
+                own = next_own(matched.end());
+            }
+            if shared.is_some_and(|(_, item)| item.start() < matched.end()) {
+                shared = preferred.next_match(content, matched.end(), end);
+            }
+        }
+    }
+
+    fn next_match(&self, content: &str, start: usize, end: usize) -> Option<(&Self, Match)> {
+        let mut found = None;
+        self.visit_segment_matches(content, start, end, |owner, matched| {
+            found = Some((owner, matched));
+            false
+        });
+        found
+    }
+
+    fn visit_own_matches(
+        &self,
+        content: &str,
+        start: usize,
+        end: usize,
+        mut on_match: impl FnMut(Match) -> bool,
+    ) -> bool {
+        let Some(matcher) = &self.matcher else {
+            return true;
+        };
+        let mut consumed = start;
+        let width = matcher.max_pattern_len();
+        let mut candidates = Vec::new();
+        let segment_end = end;
+        let mut at = start;
+        loop {
+            let mut advanced = false;
+            for first in matcher.find_overlapping_iter(Input::new(content).span(at..segment_end)) {
+                // A value absent from every other value cannot be hidden by a longer match.
+                if !self.contained_values[first.pattern().as_usize()] {
+                    if !is_match_boundary(content, first.start())
+                        || !is_match_boundary(content, first.end())
+                    {
+                        continue;
                     }
-                    // Resolve starts in one pattern-length window with enough right lookahead.
-                    let window_start = at.max(first.end().saturating_sub(width));
-                    let safe_end = segment_end.min(window_start.saturating_add(width));
-                    let scan_end = segment_end.min(safe_end.saturating_add(width - 1));
-                    let reverse_matcher = self
-                        .reverse_matcher
-                        .as_ref()
-                        .expect("contained values require reverse matching");
-                    let mut sid = reverse_matcher
-                        .start_state(Anchored::No)
-                        .expect("reverse NFA supports unanchored searches");
-                    candidates.clear();
-                    for start in (window_start..scan_end).rev() {
-                        sid = reverse_matcher.next_state(
-                            Anchored::No,
-                            sid,
-                            content.as_bytes()[start],
-                        );
-                        if start >= safe_end
-                            || !reverse_matcher.is_match(sid)
-                            || !is_match_boundary(content, start)
-                        {
-                            continue;
-                        }
-                        // Reverse matching yields the longest value at this original start.
-                        let mut pid = reverse_matcher.match_pattern(sid, 0);
-                        let mut end = start + reverse_matcher.pattern_len(pid);
-                        if !is_match_boundary(content, end) {
-                            let Some(prefix) = self.shorter_prefixes[pid.as_usize()] else {
-                                continue;
-                            };
-                            pid = prefix;
-                            end = start + reverse_matcher.pattern_len(pid);
-                        }
-                        candidates.push(Match::new(pid, start..end));
+                    if !on_match(first) {
+                        return false;
                     }
-                    for &matched in candidates.iter().rev() {
-                        if matched.start() < consumed {
-                            continue;
-                        }
-                        if !on_match(matched) {
-                            return false;
-                        }
-                        consumed = matched.end();
-                    }
-                    at = safe_end.max(consumed);
+                    consumed = first.end();
+                    at = consumed;
                     advanced = true;
                     break;
                 }
-                if !advanced {
-                    break;
+                // Resolve starts in one pattern-length window with enough right lookahead.
+                let window_start = at.max(first.end().saturating_sub(width));
+                let safe_end = segment_end.min(window_start.saturating_add(width));
+                let scan_end = segment_end.min(safe_end.saturating_add(width - 1));
+                let reverse_matcher = self
+                    .reverse_matcher
+                    .as_ref()
+                    .expect("contained values require reverse matching");
+                let mut sid = reverse_matcher
+                    .start_state(Anchored::No)
+                    .expect("reverse NFA supports unanchored searches");
+                candidates.clear();
+                for start in (window_start..scan_end).rev() {
+                    sid = reverse_matcher.next_state(Anchored::No, sid, content.as_bytes()[start]);
+                    if start >= safe_end
+                        || !reverse_matcher.is_match(sid)
+                        || !is_match_boundary(content, start)
+                    {
+                        continue;
+                    }
+                    // Reverse matching yields the longest value at this original start.
+                    let mut pid = reverse_matcher.match_pattern(sid, 0);
+                    let mut end = start + reverse_matcher.pattern_len(pid);
+                    if !is_match_boundary(content, end) {
+                        let Some(prefix) = self.shorter_prefixes[pid.as_usize()] else {
+                            continue;
+                        };
+                        pid = prefix;
+                        end = start + reverse_matcher.pattern_len(pid);
+                    }
+                    candidates.push(Match::new(pid, start..end));
                 }
+                for &matched in candidates.iter().rev() {
+                    if matched.start() < consumed {
+                        continue;
+                    }
+                    if !on_match(matched) {
+                        return false;
+                    }
+                    consumed = matched.end();
+                }
+                at = safe_end.max(consumed);
+                advanced = true;
+                break;
+            }
+            if !advanced {
+                break;
             }
         }
         true
@@ -499,5 +572,41 @@ mod tests {
         assert!(exceeded);
         assert_eq!(rewritten.content, text);
         assert!(rewritten.replacements.is_empty());
+    }
+
+    #[test]
+    fn shared_matchers_preserve_flat_selection_and_budgets() {
+        let shared = Arc::new(matcher(vec![
+            ("b-c", vec!["middle"]),
+            ("c-d", vec!["tail"]),
+            ("same", vec!["shared"]),
+            ("pass123", vec!["short"]),
+        ]));
+        let combined = matcher(vec![
+            ("a-b", vec!["local"]),
+            ("same", vec!["local-same"]),
+            ("pass123-v2", vec!["long"]),
+        ])
+        .with_preferred(shared);
+        let flat = matcher(vec![
+            ("b-c", vec!["middle"]),
+            ("c-d", vec!["tail"]),
+            ("same", vec!["shared"]),
+            ("pass123", vec!["short"]),
+            ("a-b", vec!["local"]),
+            ("pass123-v2", vec!["long"]),
+        ]);
+        for input in [
+            "a-b-c-d same pass123-v2 pass123-v2x",
+            "🙂same a-b-c-d {{ov_privacy:same}} same",
+            "中same same_ xsame same pass123-v2²",
+        ] {
+            for limit in 0..8 {
+                let (actual, exceeded) = combined.sanitize_limited(input, limit);
+                let (expected, expected_exceeded) = flat.sanitize_limited(input, limit);
+                assert!(actual == expected);
+                assert_eq!(exceeded, expected_exceeded);
+            }
+        }
     }
 }

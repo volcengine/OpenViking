@@ -224,6 +224,45 @@ async def test_sanitizer_cache_refreshes_after_credential_changes():
     ).content == build_privacy_field_reference("alice", "credential", "service", "key")
 
 
+async def test_empty_scopes_share_credential_matching_without_sharing_user_references():
+    catalog = _PrivacyCatalog({"credential": {"service": {"key": "managed-secret"}}})
+    sanitizer = PrivacySanitizer(catalog)
+    for target in ("first", "second"):
+        await sanitizer.prepare_matcher(_ctx(), scope=("session", target))
+    assert catalog.build_reads == 1
+    assert len(sanitizer._cache) == 1
+    bob = await sanitizer.prepare_matcher(_ctx("bob"), scope=("session", "first"))
+    assert bob("managed-secret")[0].reference == build_privacy_field_reference(
+        "bob", "credential", "service", "key"
+    )
+
+
+async def test_local_matchers_reuse_credentials_and_expire_with_shared_snapshot():
+    first = "ghp_aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
+    second = "ghp_cD4fG6hJ8kM0nP2qR5sU7vW9xY1zA3bE"
+    catalog = _PrivacyCatalog(
+        {
+            "credential": {"service": {"key": "managed-secret"}},
+            "session": {"first": {"field001": first}, "second": {"field002": second}},
+        }
+    )
+    now = [0.0]
+    sanitizer = PrivacySanitizer(catalog, monotonic_clock=lambda: now[0])
+    await sanitizer.prepare_matcher(_ctx(), scope=("session", "first"))
+    now[0] = 3599
+    query = await sanitizer.prepare_matcher(_ctx(), scope=("session", "second"))
+    assert [item.reference for item in query(first + " " + second)] == [
+        build_privacy_field_reference("alice", "session", "second", "field002"),
+    ]
+    assert catalog.build_reads == 1
+    # A different worker rotates the Credential without advancing our local revision.
+    catalog.configs["credential"]["service"]["key"] = "rotated-secret"
+    now[0] = 3600
+    query = await sanitizer.prepare_matcher(_ctx(), scope=("session", "second"))
+    assert query("managed-secret") == []
+    assert len(query("rotated-secret " + second)) == 2
+
+
 async def test_waiting_matcher_reuses_the_latest_catalog_revision():
     catalog = _PrivacyCatalog({"credential": {"service": {"key": "first1"}}})
     sanitizer = PrivacySanitizer(catalog)

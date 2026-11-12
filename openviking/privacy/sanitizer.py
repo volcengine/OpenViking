@@ -9,8 +9,8 @@ import hashlib
 import json
 import os
 import time
-from collections import Counter
-from collections.abc import Iterator
+from collections import ChainMap, Counter
+from collections.abc import Iterator, Mapping
 from dataclasses import asdict, dataclass
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Callable, Literal
@@ -86,7 +86,7 @@ class PrivacySanitizationResult:
 @dataclass(frozen=True)
 class _PreparedMatcher:
     native: Any
-    ambiguous: dict[str, tuple[str, ...]]
+    ambiguous: Mapping[str, tuple[str, ...]]
     has_values: bool
 
 
@@ -332,9 +332,18 @@ class PrivacySanitizer:
             cached = self._cache.get(cache_key)
             if cached is not None and now - cached[0] < self._cache_ttl_seconds:
                 return cached[1]
-            matcher = await self._build_matcher(
-                ctx, scope=scope, current=current, settings=settings
-            )
+            shared_key = (*cache_key[:4], None, 0, "")
+            shared = self._cache.get(shared_key)
+            if shared is None or now - shared[0] >= self._cache_ttl_seconds:
+                shared = (
+                    now,
+                    await self._build_matcher(ctx, scope=None, current=None, settings=settings),
+                )
+            matcher = shared[1]
+            if cache_key[4] is not None:
+                matcher = await self._build_matcher(
+                    ctx, scope=scope, current=current, settings=settings, preferred=matcher
+                )
             owner_key = cache_key[:2]
             self._cache = {
                 key: item
@@ -342,7 +351,9 @@ class PrivacySanitizer:
                 if now - item[0] < self._cache_ttl_seconds
                 and (key[:2] != owner_key or (key[2:4] == cache_key[2:4] and key[4] != scope))
             }
-            self._cache[cache_key] = (now, matcher)
+            self._cache[shared_key] = shared
+            if matcher is not shared[1]:
+                self._cache[cache_key] = (shared[0], matcher)
             return matcher
 
     async def _matcher_state(
@@ -358,6 +369,8 @@ class PrivacySanitizer:
         current = snapshot
         if current is None and scope:
             current = await self._privacy.get_current(ctx, *scope)
+        if scope is None or current is None or not current.values:
+            scope, current = None, None
         return (
             (
                 ctx.account_id,
@@ -378,18 +391,21 @@ class PrivacySanitizer:
         scope: tuple[str, str] | None,
         current: UserPrivacyConfigVersion | None,
         settings: ResolvedPrivacyConfig,
+        preferred: _PreparedMatcher | None = None,
     ) -> _PreparedMatcher:
         from openviking.privacy.rules import prepare_privacy_extractor
 
         discover = prepare_privacy_extractor(settings=settings)
         never_mask = set(settings.never_mask)
         references: dict[str, list[PrivacyFieldReference]] = {}
-        configs = [
-            ("credential", target, await self._privacy.get_current(ctx, "credential", target))
-            for target in await self._privacy.list_targets(ctx, "credential")
-        ]
-        if scope and current is not None:
-            configs.append((*scope, current))
+        configs = (
+            [(*scope, current)]
+            if scope
+            else [
+                ("credential", target, await self._privacy.get_current(ctx, "credential", target))
+                for target in await self._privacy.list_targets(ctx, "credential")
+            ]
+        )
         for category, target_key, config in configs:
             if config is None:
                 continue
@@ -414,15 +430,21 @@ class PrivacySanitizer:
         targets: dict[str, list[str]] = {}
         ambiguous = {}
         for secret, candidates in references.items():
-            credentials = [item for item in candidates if item.category == "credential"]
             ordered = sorted(
-                set(credentials or candidates),
+                set(candidates),
                 key=lambda item: (item.category, item.target_key, item.field),
             )
             selected = tuple(item.render() for item in ordered)
             targets[secret] = [selected[0]]
             if len(selected) > 1:
                 ambiguous[selected[0]] = selected
+        if preferred is not None and not targets:
+            return preferred
+        if preferred is not None and preferred.has_values:
+            native = self._matcher_class(
+                targets, _AMBIGUOUS_PLACEHOLDER, preferred=preferred.native
+            )
+            return _PreparedMatcher(native, ChainMap(ambiguous, preferred.ambiguous), True)
         return _PreparedMatcher(
             self._matcher_class(targets, _AMBIGUOUS_PLACEHOLDER), ambiguous, bool(targets)
         )

@@ -17,16 +17,23 @@ pub(crate) struct PyPrivacyMatcher {
 impl PyPrivacyMatcher {
     /// Build one immutable matcher from `value -> candidate references`.
     #[new]
-    #[pyo3(signature = (references_by_value, ambiguous_placeholder="{{ov_privacy:ambiguous}}"))]
+    #[pyo3(signature = (references_by_value, ambiguous_placeholder="{{ov_privacy:ambiguous}}", *, preferred=None))]
     fn new(
         py: Python<'_>,
         references_by_value: HashMap<String, Vec<String>>,
         ambiguous_placeholder: &str,
+        preferred: Option<PyRef<'_, PyPrivacyMatcher>>,
     ) -> PyResult<Self> {
         let entries = references_by_value.into_iter().collect();
         let ambiguous_placeholder = ambiguous_placeholder.to_string();
+        let preferred = preferred.map(|matcher| matcher.inner.clone());
         let matcher = py
-            .detach(move || PrivacyMatcher::new(entries, ambiguous_placeholder))
+            .detach(move || {
+                PrivacyMatcher::new(entries, ambiguous_placeholder).map(|matcher| match preferred {
+                    Some(shared) => matcher.with_preferred(shared),
+                    None => matcher,
+                })
+            })
             .map_err(PyValueError::new_err)?;
         Ok(Self {
             inner: Arc::new(matcher),
