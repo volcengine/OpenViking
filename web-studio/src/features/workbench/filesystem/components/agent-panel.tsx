@@ -1,189 +1,74 @@
-import { useDefaultConversationTitles } from '#/features/workbench/sessions/lib/use-default-conversation-titles'
-import type { VikingBotProps } from '@openviking/react/components/viking-bot'
-import { CircleAlertIcon, Loader2Icon, Trash2Icon } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-
+import type { VikingBotProps } from '@openviking/react/components/viking-bot'
+import { Loader2Icon, CircleAlertIcon, Trash2Icon } from 'lucide-react'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
-import { Composer } from '#/features/workbench/sessions/components/composer'
 import { DeleteConversation } from '#/features/workbench/sessions/components/delete-conversation'
-import {
-  sharedMessages,
-  sharedPart,
-} from '#/features/workbench/sessions/lib/shared-messages'
-import { useChat } from '#/features/workbench/sessions/lib/use-chat'
+import { useDefaultConversationTitles } from '#/features/workbench/sessions/lib/use-default-conversation-titles'
 import { useSessionTitles } from '#/features/workbench/sessions/lib/use-session-titles'
 import {
   useBotHealth,
-  useCreateSession,
   useSessionListByRecency,
-  useSessionMessages,
 } from '#/features/workbench/sessions/lib/use-sessions'
-import {
-  createVikingBotWebSessionId,
-  isVikingBotWebSession,
-} from '#/features/workbench/sessions/lib/vikingbot-sessions'
-import { Button } from '#/shared/ui/button'
+import { isVikingBotWebSession } from '#/features/workbench/sessions/lib/vikingbot-sessions'
 import { copyTextToClipboard } from '#/shared/lib/clipboard'
-
+import { Button } from '#/shared/ui/button'
 import {
   getErrorMessage,
   readFilesystemAgentSessionIds,
   registerFilesystemAgentSessionId,
-} from '#/features/workbench/filesystem/lib/utils'
+} from '../lib/utils'
 
+// Only host metadata and navigation live here. Console owns chat and its editor.
 export function AgentPanel({
   initialSessionId,
   onSessionChange,
   children,
 }: {
   initialSessionId?: string
-  onSessionChange: (sessionId: string) => void
+  onSessionChange: (id: string) => void
   children: (conversation: Partial<VikingBotProps>) => ReactNode
 }) {
   const { t } = useTranslation(['filesystem', 'sessions'])
   const { identityScopeKey } = useAppConnection()
-  const [deleteSessionId, setDeleteSessionId] = useState<string | null>(null)
-  const [sessionId, setSessionId] = useState(
-    initialSessionId ?? createVikingBotWebSessionId(),
+  const [sessionId, setSessionId] = useState(initialSessionId)
+  const [deleteSessionId, setDeleteSessionId] = useState<string>()
+  const [filesystemSessionIds, setFilesystemSessionIds] = useState(() =>
+    readFilesystemAgentSessionIds(identityScopeKey),
   )
-  const [sessionError, setSessionError] = useState<string | null>(null)
-  const [isCreatingSession, setIsCreatingSession] = useState(false)
-  const [historySessionId, setHistorySessionId] = useState(initialSessionId)
-  const [persistedSessionId, setPersistedSessionId] = useState(initialSessionId)
-  const creationStartedRef = useRef(false)
-  const creationGenerationRef = useRef(0)
-  useEffect(
-    () => () => {
-      creationGenerationRef.current += 1
-    },
-    [],
-  )
-  const botHealth = useBotHealth()
-  const createSession = useCreateSession()
-  const { data: sessions, isLoading: isLoadingSessions } =
-    useSessionListByRecency()
+  const health = useBotHealth()
+  const sessions = useSessionListByRecency()
   const { getTitle, removeTitle } = useSessionTitles(identityScopeKey)
-  const [filesystemSessionIds, setFilesystemSessionIds] = useState<string[]>(
-    () => readFilesystemAgentSessionIds(identityScopeKey),
+  useEffect(() => {
+    setSessionId(initialSessionId)
+  }, [initialSessionId])
+  const history = sessions.data.filter((item) =>
+    isVikingBotWebSession(item, filesystemSessionIds),
   )
   useDefaultConversationTitles(
     identityScopeKey,
-    sessions
-      .filter((session) => isVikingBotWebSession(session, filesystemSessionIds))
-      .map((session) => session.session_id),
+    history.map((item) => item.session_id),
   )
-  const { data: historyMessages } = useSessionMessages(historySessionId)
-  const chat = useChat({
-    identityScopeKey,
-    initialMessages: historyMessages,
-    persistMessages: true,
-    sessionId,
-  })
-
-  const handleNewSession = useCallback(() => {
-    if (isCreatingSession) return
-    creationGenerationRef.current += 1
-    chat.abort({ closeLocalStream: true, discardPartial: true })
-    chat.setMessages([])
-    creationStartedRef.current = false
-    setSessionError(null)
-    setHistorySessionId(undefined)
-    setPersistedSessionId(undefined)
-    setSessionId(createVikingBotWebSessionId())
+  const select = useCallback(
+    (id: string) => {
+      setSessionId(id)
+      setFilesystemSessionIds(
+        registerFilesystemAgentSessionId(id, identityScopeKey),
+      )
+      onSessionChange(id)
+    },
+    [identityScopeKey, onSessionChange],
+  )
+  const reset = useCallback(() => {
+    setSessionId(undefined)
     onSessionChange('')
-  }, [chat, isCreatingSession, onSessionChange])
-
-  const handleSwitchSession = useCallback(
-    (nextSessionId: string) => {
-      creationGenerationRef.current += 1
-      chat.abort({ closeLocalStream: true, discardPartial: true })
-      creationStartedRef.current = false
-      setSessionError(null)
-      setIsCreatingSession(false)
-      setFilesystemSessionIds(
-        registerFilesystemAgentSessionId(nextSessionId, identityScopeKey),
-      )
-      setHistorySessionId(nextSessionId)
-      setPersistedSessionId(nextSessionId)
-      setSessionId(nextSessionId)
-      onSessionChange(nextSessionId)
-    },
-    [chat, identityScopeKey, onSessionChange],
-  )
-
-  // Only publish IDs that exist on the server; drafts must not survive in the URL.
-  useEffect(() => {
-    if (persistedSessionId) {
-      setFilesystemSessionIds(
-        registerFilesystemAgentSessionId(persistedSessionId, identityScopeKey),
-      )
-    }
-  }, [identityScopeKey, persistedSessionId])
-
-  const send = useCallback(
-    async (message: string) => {
-      if (creationStartedRef.current) return false
-      if (!persistedSessionId) {
-        const generation = ++creationGenerationRef.current
-        creationStartedRef.current = true
-        setIsCreatingSession(true)
-        setSessionError(null)
-        try {
-          const result = await createSession.mutateAsync(sessionId)
-          if (generation !== creationGenerationRef.current) return false
-          setPersistedSessionId(result.session_id)
-          onSessionChange(result.session_id)
-        } catch (error) {
-          if (generation === creationGenerationRef.current) {
-            setSessionError(getErrorMessage(error))
-          }
-          return false
-        } finally {
-          if (generation === creationGenerationRef.current) {
-            creationStartedRef.current = false
-            setIsCreatingSession(false)
-          }
-        }
-      }
-      const sending = chat.send(message)
-      if (chat.status === 'streaming') {
-        await sending
-      }
-      return true
-    },
-    [chat, createSession, onSessionChange, persistedSessionId, sessionId],
-  )
-
-  const isStreaming = chat.status === 'streaming'
-  const botModeError = botHealth.isError ? getErrorMessage(botHealth.error) : ''
-  const history = sessions.filter((session) =>
-    isVikingBotWebSession(session, filesystemSessionIds),
-  )
+  }, [onSessionChange])
+  const error = health.isError ? getErrorMessage(health.error) : ''
   const prompts = t('agent.empty.prompts', { returnObjects: true })
-  const insertIndex = Math.max(
-    0,
-    Math.min(
-      chat.streamingInsertIndex ?? chat.messages.length,
-      chat.messages.length,
-    ),
-  )
-  const before = sharedMessages(chat.messages.slice(0, insertIndex))
-  const after = sharedMessages(chat.messages.slice(insertIndex))
   const conversation: Partial<VikingBotProps> = {
-    messages: [...before, ...after],
-    streaming: isStreaming
-      ? {
-          iteration: chat.iteration,
-          parts: chat.streamingParts.map(sharedPart),
-          insertIndex: before.length,
-        }
-      : undefined,
-    listKey: sessionId,
-    isSending: isStreaming,
-    isAvailable: !botModeError,
-    unavailableMessage: botModeError ? t('agent.botDisabledFooter') : undefined,
+    isAvailable: !error && !health.isLoading,
+    unavailableMessage: error ? t('agent.botDisabledFooter') : undefined,
     labels: {
       welcomeTitle: t('agent.empty.heading'),
       welcomeDescription: t('agent.empty.body'),
@@ -195,66 +80,36 @@ export function AgentPanel({
     },
     quickInputs: Array.isArray(prompts)
       ? prompts
-          .filter((prompt): prompt is string => typeof prompt === 'string')
+          .filter((item): item is string => typeof item === 'string')
           .map((prompt) => ({ id: prompt, label: prompt, prompt }))
       : [],
-    onQuickInputSelect: (input) => void send(input.prompt),
     onCopy: (text) => void copyTextToClipboard(text),
     sessions: {
-      items: history.map((session) => ({
-        id: session.session_id,
-        title: getTitle(session.session_id),
+      items: history.map((item) => ({
+        id: item.session_id,
+        title: getTitle(item.session_id),
       })),
-      currentId: persistedSessionId,
-      isLoading: isLoadingSessions,
-      onSelect: handleSwitchSession,
-      onNew: handleNewSession,
+      currentId: sessionId,
+      isLoading: sessions.isLoading,
+      onSelect: select,
+      onNew: reset,
     },
-    headerActions: persistedSessionId ? (
+    headerActions: sessionId ? (
       <SessionDeleteAction
-        title={getTitle(persistedSessionId)}
-        onClick={() => setDeleteSessionId(persistedSessionId)}
+        title={getTitle(sessionId)}
+        onClick={() => setDeleteSessionId(sessionId)}
       />
     ) : undefined,
-    messageList: botHealth.isLoading ? (
+    messageList: health.isLoading ? (
       <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
         <Loader2Icon className="size-4 animate-spin" />
         {t('agent.detectingBot')}
       </div>
-    ) : botModeError ? (
-      <BotModePrompt
-        detail={botModeError}
-        onRetry={() => void botHealth.refetch()}
-      />
+    ) : error ? (
+      <BotModePrompt detail={error} onRetry={() => void health.refetch()} />
     ) : undefined,
-    footer: sessionError ? (
-      <div
-        role="alert"
-        className="flex items-center justify-between gap-2 px-4 py-2 text-sm text-destructive"
-      >
-        {t('agent.createFailed', { error: sessionError })}
-        <Button size="sm" variant="outline" onClick={handleNewSession}>
-          {t('agent.retry')}
-        </Button>
-      </div>
-    ) : chat.error && !botModeError ? (
-      <div role="alert" className="px-4 py-2 text-sm text-destructive">
-        {t('sessions:chat.sendFailed', { error: chat.error })}
-      </div>
-    ) : undefined,
-    composer: botModeError ? (
-      false
-    ) : (
-      <Composer
-        key={sessionId}
-        variant="compact"
-        isStreaming={isStreaming}
-        onCancel={chat.abort}
-        onSend={send}
-      />
-    ),
+    composer: error ? false : undefined,
   }
-
   return (
     <>
       {children(conversation)}
@@ -262,32 +117,18 @@ export function AgentPanel({
         <DeleteConversation
           defaultOpen
           hideTrigger
-          onOpenChange={(open) => {
-            if (!open) setDeleteSessionId(null)
-          }}
           id={deleteSessionId}
           title={getTitle(deleteSessionId)}
+          onOpenChange={(open) => {
+            if (!open) setDeleteSessionId(undefined)
+          }}
           onDeleted={() => {
-            setDeleteSessionId(null)
+            setDeleteSessionId(undefined)
             removeTitle(deleteSessionId)
             setFilesystemSessionIds((ids) =>
               ids.filter((id) => id !== deleteSessionId),
             )
-            if (deleteSessionId === sessionId) {
-              creationGenerationRef.current += 1
-              chat.abort({
-                closeLocalStream: true,
-                discardPartial: true,
-              })
-              chat.setMessages([])
-              creationStartedRef.current = false
-              setIsCreatingSession(false)
-              setSessionError(null)
-              setHistorySessionId(undefined)
-              setPersistedSessionId(undefined)
-              setSessionId(createVikingBotWebSessionId())
-              onSessionChange('')
-            }
+            if (deleteSessionId === sessionId) reset()
           }}
         />
       ) : null}

@@ -2,12 +2,14 @@
 import { Thread } from '#/features/workbench/sessions/components/thread'
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { useState } from 'react'
+import type { ReactNode } from 'react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 const m = vi.hoisted(() => ({
   provider: 'opensource',
   create: vi.fn(),
   history: vi.fn(),
+  chat: vi.fn(),
   send: vi.fn(),
   onSend: undefined as undefined | ((text: string) => Promise<boolean>),
 }))
@@ -21,29 +23,56 @@ vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({ identityScopeKey: 'test' }),
 }))
 vi.mock('#/features/workbench/sessions/lib/use-session-titles', () => ({
-  useSessionTitles: () => ({ getTitle: (id: string) => id }),
+  useSessionTitles: () => ({ getTitle: (id: string) => id, setTitle: vi.fn() }),
 }))
 vi.mock('#/features/workbench/sessions/lib/use-sessions', () => ({
   useCreateSession: () => ({ mutateAsync: m.create }),
   useSession: () => ({}),
   useSessionMessages: m.history,
 }))
-vi.mock('#/features/workbench/sessions/lib/use-chat', () => ({
-  useChat: () => ({
-    messages: [],
-    status: 'idle',
-    streamingParts: [],
-    streamingInsertIndex: undefined,
-    send: m.send,
-  }),
+vi.mock('@openviking/react/modules/viking-bot', () => ({
+  useVikingBotChat: (options: unknown) => {
+    m.chat(options)
+    return {
+      messages: [],
+      status: 'idle',
+      canSteer: true,
+      send: m.send,
+      abort: vi.fn(),
+    }
+  },
 }))
 vi.mock('#/features/workbench/sessions/components/memory-impact', () => ({
   MemoryImpact: () => null,
 }))
-vi.mock('#/features/workbench/sessions/components/composer', () => ({
-  Composer: ({ onSend }: { onSend: typeof m.onSend }) => {
-    m.onSend = onSend
-    return null
+vi.mock('@openviking/react/components/viking-bot', () => ({
+  VikingBot: ({
+    onSend,
+    emptyState,
+    header,
+    footer,
+    draft,
+    composer,
+  }: {
+    onSend: (draft: { text: string; attachments: [] }) => Promise<boolean>
+    draft?: string
+    emptyState: ReactNode
+    header: ReactNode
+    footer: ReactNode
+    composer?: ReactNode
+  }) => {
+    m.onSend =
+      draft === undefined
+        ? undefined
+        : (text) => onSend({ text, attachments: [] })
+    return (
+      <>
+        {header}
+        {emptyState}
+        {footer}
+        {composer !== false && <div data-testid="bot-composer" />}
+      </>
+    )
   },
 }))
 
@@ -51,6 +80,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   m.provider = 'opensource'
   m.onSend = undefined
+  m.send.mockReset().mockResolvedValue(true)
   m.history.mockReturnValue({ isPending: true })
   Element.prototype.scrollIntoView = vi.fn()
 })
@@ -104,9 +134,16 @@ it('does not send after leaving a draft during creation', async () => {
 
 it('loads the correct history when switching existing sessions', () => {
   const view = render(<Thread sessionId="first" />)
-  expect(m.history).toHaveBeenLastCalledWith('first')
+  expect(m.chat).toHaveBeenLastCalledWith(
+    expect.objectContaining({ sessionId: 'first', initialMessages: undefined }),
+  )
   view.rerender(<Thread sessionId="second" />)
-  expect(m.history).toHaveBeenLastCalledWith('second')
+  expect(m.chat).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      sessionId: 'second',
+      initialMessages: undefined,
+    }),
+  )
   expect(m.create).not.toHaveBeenCalled()
 })
 
@@ -133,7 +170,9 @@ it('loads persisted history and continues after switching tabs', async () => {
   })
   act(() => showThread(false))
   act(() => showThread(true))
-  expect(m.history).toHaveBeenLastCalledWith('draft')
+  expect(m.chat).toHaveBeenLastCalledWith(
+    expect.objectContaining({ sessionId: 'draft', initialMessages: undefined }),
+  )
   await act(async () => {
     expect(await m.onSend!('second')).toBe(true)
   })
@@ -141,11 +180,10 @@ it('loads persisted history and continues after switching tabs', async () => {
   expect(m.send).toHaveBeenLastCalledWith('second')
 })
 
-it('releases the composer after starting an existing session stream', async () => {
-  m.send.mockReturnValue(new Promise<void>(() => {}))
+it('reports the module completion result so failed sends preserve the draft', async () => {
+  m.send.mockResolvedValue(false)
   render(<Thread sessionId="existing" />)
-
-  await expect(m.onSend!('first')).resolves.toBe(true)
+  await expect(m.onSend!('first')).resolves.toBe(false)
   expect(m.send).toHaveBeenCalledWith('first')
 })
 
@@ -155,6 +193,7 @@ it('preserves hosted session history without exposing a Bot composer or draft se
   render(<Thread sessionId="hosted-session" />)
   expect(m.history).toHaveBeenLastCalledWith('hosted-session')
   expect(m.onSend).toBeUndefined()
+  expect(screen.queryByTestId('bot-composer')).toBeNull()
   expect(m.send).not.toHaveBeenCalled()
   expect(m.create).not.toHaveBeenCalled()
   expect(screen.getByText('chat.emptyReadDescription')).toBeTruthy()

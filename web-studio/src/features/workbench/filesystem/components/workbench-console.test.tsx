@@ -16,6 +16,10 @@ const mocks = vi.hoisted(() => ({
   invalidateAll: vi.fn(),
 }))
 
+vi.mock('@tanstack/react-query', () => ({
+  useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+}))
+
 vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({ identityScopeKey: 'test-identity' }),
 }))

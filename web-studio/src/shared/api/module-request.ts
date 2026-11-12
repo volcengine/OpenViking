@@ -8,21 +8,32 @@ const textPaths = new Set<string>([
   OV_PATHS.contentOverview,
 ])
 
-export const requestWorkbenchModule: typeof fetch = async (input, init) => {
+export const requestStudioModule: typeof fetch = async (input, init) => {
   // Use the same scoped Axios client as the rest of Studio, including its
   // credential, gateway and request logging behavior.
   const url = new URL(String(input), window.location.origin)
   const binary = url.pathname === OV_PATHS.contentDownload
+  const streaming = new Headers(init?.headers)
+    .get('accept')
+    ?.includes('text/event-stream')
   try {
-    const { status, data } = await getOvClient().instance.request({
+    const { status, data, headers } = await getOvClient().instance.request({
       url: url.pathname + url.search,
       method: init?.method ?? 'GET',
       data: init?.body,
       headers: Object.fromEntries(new Headers(init?.headers)),
       signal: init?.signal ?? undefined,
-      responseType: binary ? 'blob' : undefined,
+      responseType: binary ? 'blob' : streaming ? 'stream' : undefined,
+      // XHR buffers SSE until completion. Axios' fetch adapter preserves both
+      // the readable body and Studio's existing request interceptors.
+      ...(streaming ? { adapter: 'fetch' } : {}),
     })
     if (status === 204 || status === 205) return new Response(null, { status })
+    if (streaming)
+      return new Response(data as ReadableStream, {
+        status,
+        headers: { 'content-type': String(headers['content-type'] ?? '') },
+      })
     if (binary) return new Response(data as Blob, { status })
     const body =
       textPaths.has(url.pathname) &&

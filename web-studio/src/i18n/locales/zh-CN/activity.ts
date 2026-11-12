@@ -29,6 +29,7 @@ const activity = {
       emptyReadDescription: '当前会话暂无消息。',
       historyLoadFailed: '会话记录加载失败：{{error}}',
       sendFailed: '消息发送失败：{{error}}',
+      persistFailed: '会话记录保存失败：{{error}}',
       copy: '复制',
       emptyDescription: '探索你的知识库，开始一段对话。',
       placeholder: '输入消息...',
