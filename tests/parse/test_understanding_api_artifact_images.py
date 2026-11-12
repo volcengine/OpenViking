@@ -63,6 +63,19 @@ def test_build_artifact_image_mappings_uses_existing_sibling_images(tmp_path: Pa
     }
 
 
+@pytest.mark.parametrize("suffix", [".MD", ".Md", ".mD"])
+def test_build_artifact_image_mappings_accepts_mixed_case_markdown(
+    tmp_path: Path,
+    suffix: str,
+):
+    image_path = tmp_path / "report.png"
+    image_path.write_bytes(b"png")
+    markdown_name = f"report{suffix}"
+    (tmp_path / markdown_name).write_text("![image](report.png)\n", encoding="utf-8")
+
+    assert build_artifact_image_mappings(tmp_path) == {markdown_name: {"report.png": "report.png"}}
+
+
 @pytest.mark.asyncio
 async def test_unpack_artifact_writes_image_mapping_sidecar(tmp_path: Path):
     zip_path = tmp_path / "artifact.zip"
