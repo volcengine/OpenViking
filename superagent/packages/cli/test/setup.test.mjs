@@ -1765,6 +1765,7 @@ test('what an instance lacks: the app\'s scopes, events and callback, and scopes
       if (pathname.includes('/app_versions/')) {
         return { code: 0, data: { app_version: { event_infos: [
           { event_type: 'im.message.receive_v1' }, { event_type: 'drive.notice.comment_add_v1' },
+          { event_type: 'im.message.recalled_v1' }, { event_type: 'im.message.reaction.created_v1' }, { event_type: 'im.message.reaction.deleted_v1' },
         ] } } };
       }
       return { code: 0, data: { activate_status: 2 } };

@@ -23,6 +23,9 @@ import {
 export const SUBSCRIBED_EVENT_TYPES = Object.freeze([
   'im.message.receive_v1',
   'card.action.trigger',
+  'im.message.recalled_v1',
+  'im.message.reaction.created_v1',
+  'im.message.reaction.deleted_v1',
   DOC_COMMENT_EVENT,
   ...MEETING_EVENT_TYPES,
 ]);
