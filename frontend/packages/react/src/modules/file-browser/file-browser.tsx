@@ -1,5 +1,5 @@
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 
 import { ResizableHandle } from '../../shared/primitives/resizable/index.js';
@@ -13,6 +13,7 @@ import { FileBrowserTreePane } from './file-browser-tree-pane.js';
 import { FileBrowserSearch } from './file-browser-search.js';
 import { resolveLabels, resolvePreviewLabels } from './file-browser-labels.js';
 import { useContainerWidth } from './use-container-width.js';
+import { useSearchShortcut } from './use-search-shortcut.js';
 import { useFileBrowser } from './use-file-browser.js';
 import { useFileBrowserAcl } from './use-file-browser-acl.js';
 import type { FileBrowserProps } from './types.js';
@@ -60,6 +61,13 @@ export function FileBrowser({
 }: FileBrowserProps) {
   const locale = useLocale(localeProp);
   const [searchOpen, setSearchOpen] = useState(false);
+  // 高级面板开着的时候，左栏的漏斗也直接打开弹窗并落在展开态，与弹窗内的开关
+  // 共用同一个意图。关闭弹窗时一并收起。
+  //
+  // While the advanced panel is open, the left column's funnel also opens the dialog
+  // straight into the expanded state: both switches express the same intent. Closing
+  // the dialog collapses it too.
+  const [searchAdvanced, setSearchAdvanced] = useState(false);
   const [internalUri, setInternalUri] = useState<string | null>(
     () => defaultUri ?? null,
   );
@@ -148,12 +156,31 @@ export function FileBrowser({
     refresh: browser.actions.refresh,
   });
 
+  // 同一个页面可能挂多个实例，只有最近交互过的那个响应 ⌘K——否则一次按键会让
+  // 所有实例同时弹出搜索框。归属规则与交互记录都在 `useSearchShortcut` 里。
+  //
+  // Several instances can share one page, so only the one interacted with last answers
+  // ⌘K — otherwise one press opens every instance's dialog at once. The ownership rule
+  // and the interaction tracking live in `useSearchShortcut`.
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const shortcut = useSearchShortcut(containerRef, () =>
+    setSearchOpen((open) => {
+      if (open) setSearchAdvanced(false);
+      return !open;
+    }),
+  );
+
   return (
     <LocaleProvider locale={locale}>
       <div
         {...rest}
-        ref={layoutRef}
+        ref={(node) => {
+          layoutRef.current = node;
+          containerRef.current = node;
+        }}
         className={['ov-file-browser', className].filter(Boolean).join(' ')}
+        onPointerDownCapture={shortcut.onPointerDownCapture}
+        onFocusCapture={shortcut.onFocusCapture}
         style={
           {
             ...style,
@@ -174,11 +201,17 @@ export function FileBrowser({
               labels: labels?.actionBar,
             }}
             onSearch={() => setSearchOpen(true)}
+            onAdvancedSearch={() => {
+              setSearchAdvanced(true);
+              setSearchOpen(true);
+            }}
+            advancedOpen={searchAdvanced && searchOpen}
             browser={browser}
             treeLabels={text.tree}
             locale={locale}
             dashboardLabels={labels?.dashboard}
             searchPlaceholder={text.searchPlaceholder}
+            advancedLabel={text.searchAdvancedLabel}
             refreshLabel={text.refresh}
             retryLabel={text.retry}
           />
@@ -214,7 +247,13 @@ export function FileBrowser({
         triggerRef={layoutRef}
         text={text}
         requestOptions={requestOptions}
-        onClose={() => setSearchOpen(false)}
+        advancedOpen={searchAdvanced}
+        onToggleAdvanced={setSearchAdvanced}
+        onOpenResource={(next) => void browser.actions.openResource(next)}
+        onClose={() => {
+          setSearchOpen(false);
+          setSearchAdvanced(false);
+        }}
       />
     </LocaleProvider>
   );

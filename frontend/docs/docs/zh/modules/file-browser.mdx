@@ -204,50 +204,70 @@ import '@openviking/react/modules/file-browser/style.css';
 
 所有项都可省略，省略的项跟随 `locale`。
 
-| 参数                 | 说明                                                                                          | 类型                                 | 默认值                                   |
-| -------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------ | ---------------------------------------- |
-| empty                | 没有选中资源时的提示                                                                          | `string`                             | `'从左侧选中一个文件预览'`               |
-| error                | 预览读取失败的结论，原因显示服务端返回的消息                                                  | `string`                             | `'目录加载失败'`                         |
-| retry                | 失败状态和看板加载失败提示里的重试按钮                                                        | `string`                             | `'重试'`                                 |
-| refresh              | 刷新按钮的无障碍名称                                                                          | `string`                             | `'刷新'`                                 |
-| loading              | 预览读取内容时的提示                                                                          | `string`                             | `'加载中…'`                              |
-| resizeTree           | 树与预览之间分隔条的无障碍名称                                                                | `string`                             | `'调整目录树宽度'`                       |
-| systemDirectory      | 选中 `viking://system` 下的目录时，预览区的提示                                               | `string`                             | `'选择此目录中的文件以预览内容。'`       |
-| accessDenied         | 当前资源是无权查看的节点（`access: 'denied'`）时，预览区显示的原因                            | `string`                             | `'无权查看此节点。'`                     |
-| traverseOnly         | 当前资源是只能展开的节点（`access: 'container'`）时，预览区显示的原因                         | `string`                             | `'此目录仅可展开以访问有权限的子节点。'` |
-| searchPlaceholder    | 搜索框和搜索弹窗输入框的占位文案                                                              | `string`                             | `'搜索文件 ⌘+K...'`                      |
-| searchTitle          | 搜索弹窗的标题，也是输入框的无障碍名称                                                        | `string`                             | `'搜索文件'`                             |
-| searchAction         | 搜索提交按钮                                                                                  | `string`                             | `'搜索'`                                 |
-| searchHint           | 提交关键词前的提示                                                                            | `string`                             | `'输入关键词后搜索。'`                   |
-| searchLoading        | 搜索进行中的提示                                                                              | `string`                             | `'搜索中…'`                              |
-| searchEmpty          | 搜索没有结果时的提示                                                                          | `string`                             | `'没有匹配的资源'`                       |
-| searchFailed         | 搜索失败的结论，原因显示服务端返回的消息                                                      | `string`                             | `'搜索失败'`                             |
-| previewMode          | 「预览 / 源码」切换里的「预览」                                                               | `string`                             | `'预览'`                                 |
-| sourceMode           | 「预览 / 源码」切换里的「源码」                                                               | `string`                             | `'源码'`                                 |
-| viewSwitch           | 视图切换分组的无障碍名称                                                                      | `string`                             | `'切换视图'`                             |
-| copyPath             | 「复制路径」按钮的文案                                                                        | `string`                             | `'复制路径'`                             |
-| copyContent          | 「复制内容」操作的文案                                                                        | `string`                             | `'复制内容'`                             |
-| download             | 「下载」操作的文案                                                                            | `string`                             | `'下载'`                                 |
-| history              | 「历史版本」操作的文案，也是弹窗的标题                                                        | `string`                             | `'查看历史版本'`                         |
-| importPack           | 「导入 .ovpack」操作的文案，也是弹窗的标题                                                    | `string`                             | `'导入 .ovpack'`                         |
-| exportPack           | 「导出 .ovpack」操作的文案                                                                    | `string`                             | `'导出 .ovpack'`                         |
-| deleteFile           | 「删除文档」操作的文案                                                                        | `string`                             | `'删除文档'`                             |
-| deleteTitle          | 删除确认框的标题                                                                              | `string`                             | `'删除文档？'`                           |
-| deleteMessage        | 删除确认框的说明，参数是文件名                                                                | `(name: string) => string`           | 内置说明                                 |
-| deleteFailed         | 删除失败的提示                                                                                | `string`                             | `'删除文档失败'`                         |
-| deleteCancel         | 删除确认框的取消按钮                                                                          | `string`                             | `'取消'`                                 |
-| deleteConfirm        | 删除确认框的确认按钮                                                                          | `string`                             | `'删除'`                                 |
-| l0Summary            | 目录预览里 L0 摘要的页签名                                                                    | `string`                             | `'L0 摘要'`                              |
-| l1Overview           | 目录预览里 L1 总览的页签名                                                                    | `string`                             | `'L1 总览'`                              |
-| summaryEmpty         | 目录某一级摘要尚未生成时的提示；预览目前不显示它，覆盖不会生效                                | `string`                             | `'暂无生成内容'`                         |
-| summaryFailed        | 某一级摘要读取失败且服务端没有返回消息时的提示                                                | `string`                             | `'摘要加载失败。'`                       |
-| formatCharacterCount | 预览底部字符数的文案                                                                          | `(count: number) => string`          | 按 `locale` 格式化，如 `'1,234 个字符'`  |
-| actionBar            | 传给 [FileBrowserActionBar](../components/file-browser-action-bar) 操作栏的文案，包括接入抽屉 | `FileBrowserActionBarLabels`         | -                                        |
-| tree                 | 传给 [FileTree](../components/file-tree) 文件树的文案                                         | `FileTreeLabels`                     | -                                        |
-| preview              | 传给 [FilePreview](../components/file-preview) 文件预览的文案，优先于上面同名的项             | `FilePreviewLabels`                  | -                                        |
-| dashboard            | 看板页签标题、看板图标名称和看板加载失败的文案                                                | `FileBrowserDashboardLabels`         | -                                        |
-| acl                  | 权限标签和授权弹窗的文案                                                                      | `FileBrowserAclLabels`               | -                                        |
-| workflows            | 编译配置、历史版本和导入 .ovpack 弹窗的文案                                                   | `Partial<FileBrowserWorkflowLabels>` | -                                        |
+| 参数                    | 说明                                                                                          | 类型                                 | 默认值                                   |
+| ----------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------ | ---------------------------------------- |
+| empty                   | 没有选中资源时的提示                                                                          | `string`                             | `'从左侧选中一个文件预览'`               |
+| error                   | 预览读取失败的结论，原因显示服务端返回的消息                                                  | `string`                             | `'目录加载失败'`                         |
+| retry                   | 失败状态和看板加载失败提示里的重试按钮                                                        | `string`                             | `'重试'`                                 |
+| refresh                 | 刷新按钮的无障碍名称                                                                          | `string`                             | `'刷新'`                                 |
+| loading                 | 预览读取内容时的提示                                                                          | `string`                             | `'加载中…'`                              |
+| resizeTree              | 树与预览之间分隔条的无障碍名称                                                                | `string`                             | `'调整目录树宽度'`                       |
+| systemDirectory         | 选中 `viking://system` 下的目录时，预览区的提示                                               | `string`                             | `'选择此目录中的文件以预览内容。'`       |
+| accessDenied            | 当前资源是无权查看的节点（`access: 'denied'`）时，预览区显示的原因                            | `string`                             | `'无权查看此节点。'`                     |
+| traverseOnly            | 当前资源是只能展开的节点（`access: 'container'`）时，预览区显示的原因                         | `string`                             | `'此目录仅可展开以访问有权限的子节点。'` |
+| searchPlaceholder       | 搜索入口按钮的文案                                                                            | `string`                             | `'搜索文件和内容'`                       |
+| searchTitle             | 搜索弹窗的无障碍标题                                                                          | `string`                             | `'搜索文件和内容'`                       |
+| searchEmptyTitle        | 尚未输入查询时的标题                                                                          | `string`                             | `'开始搜索'`                             |
+| searchHint              | 尚未输入查询时的说明                                                                          | `string`                             | `'输入关键词后即可搜索上下文文件或目录'` |
+| searchLoading           | 搜索进行中的提示                                                                              | `string`                             | `'搜索中…'`                              |
+| searchEmpty             | 搜索没有结果时的提示                                                                          | `string`                             | `'没有匹配的资源'`                       |
+| searchFailed            | 搜索失败的结论，原因显示服务端返回的消息                                                      | `string`                             | `'搜索失败'`                             |
+| searchModePlaceholders  | 各检索方式的输入提示，按 `find` / `search` / `grep` / `glob` 逐项覆盖                         | `Record<SearchMode, string>`         | 见内置文案                               |
+| searchModeHints         | 各检索方式下拉里的说明                                                                        | `Record<SearchMode, string>`         | 见内置文案                               |
+| searchAdvanced          | 高级筛选面板的标题                                                                            | `string`                             | `'高级选项'`                             |
+| searchClear             | 清空筛选                                                                                      | `string`                             | `'清空'`                                 |
+| searchScopes            | 目录筛选的标题                                                                                | `string`                             | `'目录'`                                 |
+| searchPickScope         | 选择目录的入口                                                                                | `string`                             | `'选择目录'`                             |
+| searchScopesUnsupported | 当前根不支持按目录筛选时的说明                                                                | `string`                             | `'当前范围不支持按目录筛选'`             |
+| searchLevels            | 内容层级筛选的标题                                                                            | `string`                             | `'内容'`                                 |
+| searchLevelLabels       | 三级内容的名称                                                                                | `[string, string, string]`           | `['L0 摘要', 'L1 总览', 'L2 全文']`      |
+| searchTime              | 时间筛选的标题                                                                                | `string`                             | `'时间'`                                 |
+| searchCreatedAt         | 按创建时间                                                                                    | `string`                             | `'按创建时间'`                           |
+| searchUpdatedAt         | 按更新时间                                                                                    | `string`                             | `'按更新时间'`                           |
+| searchSince             | 起始时间                                                                                      | `string`                             | `'起始时间'`                             |
+| searchUntil             | 结束时间                                                                                      | `string`                             | `'结束时间'`                             |
+| searchIgnoreCase        | 忽略大小写                                                                                    | `string`                             | `'忽略大小写'`                           |
+| searchFilterUnsupported | 某个筛选在当前检索方式下不可用的原因                                                          | `string`                             | `'当前检索方式不支持此筛选'`             |
+| searchResultCount       | 检索结果数量，参数为条数                                                                      | `(count: number) => string`          | `'检索到 N 条结果'`                      |
+| searchVia               | 结果数量与模式之间的分隔说明                                                                  | `string`                             | `'向量检索方式'`                         |
+| searchSwitchMode        | 切换检索方式的入口                                                                            | `string`                             | `'切换'`                                 |
+| searchAdvancedLabel     | 高级筛选按钮的无障碍名称                                                                      | `string`                             | `'高级筛选'`                             |
+| previewMode             | 「预览 / 源码」切换里的「预览」                                                               | `string`                             | `'预览'`                                 |
+| sourceMode              | 「预览 / 源码」切换里的「源码」                                                               | `string`                             | `'源码'`                                 |
+| viewSwitch              | 视图切换分组的无障碍名称                                                                      | `string`                             | `'切换视图'`                             |
+| copyPath                | 「复制路径」按钮的文案                                                                        | `string`                             | `'复制路径'`                             |
+| copyContent             | 「复制内容」操作的文案                                                                        | `string`                             | `'复制内容'`                             |
+| download                | 「下载」操作的文案                                                                            | `string`                             | `'下载'`                                 |
+| history                 | 「历史版本」操作的文案，也是弹窗的标题                                                        | `string`                             | `'查看历史版本'`                         |
+| importPack              | 「导入 .ovpack」操作的文案，也是弹窗的标题                                                    | `string`                             | `'导入 .ovpack'`                         |
+| exportPack              | 「导出 .ovpack」操作的文案                                                                    | `string`                             | `'导出 .ovpack'`                         |
+| deleteFile              | 「删除文档」操作的文案                                                                        | `string`                             | `'删除文档'`                             |
+| deleteTitle             | 删除确认框的标题                                                                              | `string`                             | `'删除文档？'`                           |
+| deleteMessage           | 删除确认框的说明，参数是文件名                                                                | `(name: string) => string`           | 内置说明                                 |
+| deleteFailed            | 删除失败的提示                                                                                | `string`                             | `'删除文档失败'`                         |
+| deleteCancel            | 删除确认框的取消按钮                                                                          | `string`                             | `'取消'`                                 |
+| deleteConfirm           | 删除确认框的确认按钮                                                                          | `string`                             | `'删除'`                                 |
+| l0Summary               | 目录预览里 L0 摘要的页签名                                                                    | `string`                             | `'L0 摘要'`                              |
+| l1Overview              | 目录预览里 L1 总览的页签名                                                                    | `string`                             | `'L1 总览'`                              |
+| summaryEmpty            | 目录某一级摘要尚未生成时的提示；预览目前不显示它，覆盖不会生效                                | `string`                             | `'暂无生成内容'`                         |
+| summaryFailed           | 某一级摘要读取失败且服务端没有返回消息时的提示                                                | `string`                             | `'摘要加载失败。'`                       |
+| formatCharacterCount    | 预览底部字符数的文案                                                                          | `(count: number) => string`          | 按 `locale` 格式化，如 `'1,234 个字符'`  |
+| actionBar               | 传给 [FileBrowserActionBar](../components/file-browser-action-bar) 操作栏的文案，包括接入抽屉 | `FileBrowserActionBarLabels`         | -                                        |
+| tree                    | 传给 [FileTree](../components/file-tree) 文件树的文案                                         | `FileTreeLabels`                     | -                                        |
+| preview                 | 传给 [FilePreview](../components/file-preview) 文件预览的文案，优先于上面同名的项             | `FilePreviewLabels`                  | -                                        |
+| dashboard               | 看板页签标题、看板图标名称和看板加载失败的文案                                                | `FileBrowserDashboardLabels`         | -                                        |
+| acl                     | 权限标签和授权弹窗的文案                                                                      | `FileBrowserAclLabels`               | -                                        |
+| workflows               | 编译配置、历史版本和导入 .ovpack 弹窗的文案                                                   | `Partial<FileBrowserWorkflowLabels>` | -                                        |
 
 ### FileBrowserDashboardLabels
 
@@ -370,10 +390,21 @@ import '@openviking/react/modules/file-browser/style.css';
 
 ### 搜索
 
-- 点击文件树顶部的搜索框打开搜索弹窗，提交关键词后请求 `POST /api/v1/search/find`，范围是 `rootUri`。
-- 结果合并记忆、资源和技能，按 URI 去重，每类最多 20 条，列出 URI 和摘要。
-- 弹窗不支持筛选、分页、点击结果定位和快捷键，默认占位文案里的「⌘+K」只是提示文字。
-- 关闭弹窗会取消请求并清空输入。
+- 左栏顶部的搜索框打开模块内置的搜索弹窗；`⌘K` 是真实快捷键，同一页面挂多个实例时只有最近交互过的那个响应。
+- 输入停顿 400ms 后自动请求，没有提交按钮。关闭弹窗会取消在途请求并清空输入与筛选。
+- 四种检索方式共用一套输入与结果列表，可在结果区顶部的「切换」里改：
+
+| 方式     | 接口                    | 输入解释   | 可用筛选                     |
+| -------- | ----------------------- | ---------- | ---------------------------- |
+| `find`   | `/api/v1/search/find`   | 自然语言   | 目录（多选）、内容层级、时间 |
+| `search` | `/api/v1/search/search` | 自然语言   | 同上                         |
+| `grep`   | `/api/v1/search/grep`   | 正则表达式 | 目录（单选）、忽略大小写     |
+| `glob`   | `/api/v1/search/glob`   | 文件模式   | 目录（单选）                 |
+
+- 结果按 URI 去重；`grep` 例外——同一文件的多行命中是不同结果，各带自己的行号。
+- `glob` 的模式不含 `/` 时自动补 `**/` 前缀；目录命中去掉尾斜杠后再参与导航，目录这一事实记在 `isDir` 上。
+- 高级面板的筛选项按当前方式启用或禁用，禁用的分区保留可见并置灰，标题旁说明原因。目录候选从 `rootUri` 派生，用户根用 `~` 别名；切换根时失效的已选目录会被丢弃。
+- 点击结果关闭弹窗、在树中定位该资源并打开预览。
 
 ### 预览操作区
 
