@@ -6,6 +6,7 @@ import { buildPluginConfig } from "./shared/plugin-config.mjs";
 export const EXTENSION_VERSION = readManifestVersion(new URL("./package.json", import.meta.url));
 
 export interface OVConfig {
+  connectionScope?: string;
   enabled: boolean;
   endpoint: string;
   apiKey: string;

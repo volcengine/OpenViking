@@ -21,7 +21,6 @@ if (!isPluginEnabled()) {
 }
 
 const { log, logError } = createLogger("pre-compact");
-const fetchJSON = makeFetchJSON(loadConfig());
 
 function approve() {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -35,7 +34,8 @@ runHookStage({
   gates: { enabled: (cfg) => cfg.autoCapture },
   envelope: approve,
   onSkip: (reason) => log("skip", { reason }),
-}, async ({ sessionId }) => {
+}, async ({ cfg, sessionId }) => {
+  const fetchJSON = makeFetchJSON(cfg);
   if (!sessionId) {
     log("skip", { reason: "no session_id" });
     return;

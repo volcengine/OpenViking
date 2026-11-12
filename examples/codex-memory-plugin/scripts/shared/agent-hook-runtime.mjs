@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { createLogger } from "./debug-log.mjs";
 import { sendSessionMessages } from "./batch-send.mjs";
 import { createOvHttp } from "./ov-http.mjs";
-import { enqueue, replayPending } from "./pending-queue.mjs";
+import { enqueue, replayPending, withPendingScope } from "./pending-queue.mjs";
 import { buildProfileBlock } from "./profile-inject.mjs";
 import { buildRecallBlock, isRecallEnabled } from "./recall-core.mjs";
 import { buildPluginConfig } from "./plugin-config.mjs";
@@ -40,14 +40,15 @@ export function stableHash(...values) {
  *
  * `cwd` selects the workspace layer. It defaults to this process's directory,
  * which is all a hook knows before the payload on stdin names the session's
- * own — the caller re-resolves once it has it. That is safe because a workspace
- * file may not carry connection or credential keys, so the base URL and API key
- * cannot move under a logger or fetch helper already built from the first load.
+ * own — the caller re-resolves with the session id once it has it, then builds
+ * its HTTP client. Directory-scoped credentials come only from ovcli.conf;
+ * workspace files cannot supply connection or credential keys.
  */
-export function loadAgentHookConfig(clientId, cwd = process.cwd(), { env = process.env } = {}) {
+export function loadAgentHookConfig(clientId, cwd = process.cwd(), { env = process.env, sessionId = "" } = {}) {
   return {
     ...buildPluginConfig(clientId, {
       cwd,
+      sessionId,
       env,
       version: env.OPENVIKING_INTEGRATION_VERSION,
       logFile: `${clientId}-hooks.log`,
@@ -317,7 +318,7 @@ export function shouldBypassAgent(cfg, input = {}) {
  */
 export async function runHookStage({
   clientId,
-  loadConfig = (cwd) => loadAgentHookConfig(clientId, cwd),
+  loadConfig = (cwd, options) => loadAgentHookConfig(clientId, cwd, options),
   input: { read = readRawHookInput, tolerant = false } = {},
   sessionId: resolveSessionId = (payload) => payload.session_id ?? payload.sessionId,
   gates: { enabled = null, bypass = (cfg, stage) => stage.bypassed } = {},
@@ -343,8 +344,8 @@ export async function runHookStage({
   if (!payload || typeof payload !== "object") payload = {};
 
   const cwd = resolveAgentCwd(payload);
-  const cfg = loadConfig(cwd);
   const sessionId = resolveSessionId(payload);
+  const cfg = loadConfig(cwd, { sessionId });
   const stage = {
     cfg,
     input: payload,
@@ -371,7 +372,7 @@ export async function runHookStage({
     return undefined;
   }
 
-  const result = await run(stage);
+  const result = await withPendingScope(cfg.connectionScope, () => run(stage));
   emit(result);
   return result;
 }

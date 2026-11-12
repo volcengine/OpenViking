@@ -70,6 +70,21 @@ A session that was already imported, or that the plugin already captured, is ski
 
 Other agents (Cursor, TRAE, TRAE CN, TRAE CLI, ZCode, Kimi Code, CodeBuddy Code, OpenCode, pi, dsh, OpenClaw, Hermes) have no built-in reader. A small converter writes their sessions to a JSONL file, one session per line (`{"id", "cwd", "messages": [{"role", "text", "created_at"}], "updated_at", "subagent"}`, documented in `--help`), and `node import-history.mjs --harness opencode --input sessions.jsonl` imports it with everything above: the same filters, redaction and single commit, the ingest source name in the session id where `openviking-server ingest` has one, and the host plugin's own live session id and peer, so nothing is imported twice. A malformed line refuses the whole file, with its line number. OpenClaw and Hermes name their peers after the agent, so no peer is derived for them unless `--peer` gives one.
 
+## Directory-scoped connections
+
+Shared JavaScript plugins accept `connections[]` in the machine-local
+`ovcli.conf`. Each entry has an absolute or `~`-prefixed `path` and optional
+`url`, `api_key`, `account`, and `user` overrides. The longest matching directory
+wins, and omitted fields inherit from the top level. Repository configuration
+files cannot set connections. See [client configuration](../../docs/en/configuration/02-client.md#directory-scoped-plugin-connections)
+for the configuration example, precedence, and pending-queue migration.
+
+`buildPluginConfig(harness, { cwd, sessionId })` pins the selected entry across
+short-lived hooks without storing its API key. Build HTTP clients after the
+hook payload supplies these inputs. Long-lived runtimes bind their offline
+queue with `createPendingQueue(config.connectionScope)`; hook stages provide the
+same isolation through their async context. Proxies use their launch directory.
+
 ## Workspace Peers
 
 `lib/workspace-peer.mjs` decides which peer a workspace writes its memories under; `lib/workspace-identity.mjs` derives the values it substitutes.

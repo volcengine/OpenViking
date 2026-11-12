@@ -28,6 +28,7 @@ export function buildPluginConfig(
   harness: string,
   options?: {
     cwd?: string;
+    sessionId?: string;
     env?: Record<string, string | undefined>;
     legacy?: Record<string, any> | null;
     manifestUrl?: string | URL;

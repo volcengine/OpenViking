@@ -6,10 +6,7 @@ import { isCaptureEnabled } from "./shared/capture-utils.mjs";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { buildRecallBlock, isRecallEnabled } from "./shared/recall-core.mjs";
 import {
-  dequeue,
-  enqueue,
-  listPending,
-  replayPending,
+  createPendingQueue,
 } from "./shared/pending-queue.mjs";
 import { isRetryableFailure } from "./shared/retryable.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
@@ -25,6 +22,7 @@ export class OpenVikingRuntime {
   constructor(client, config, logger = console, resolveSessionPeer = null) {
     this.client = client;
     this.config = config;
+    this.pending = createPendingQueue(config.connectionScope);
     this.logger = logger;
     this.resolveSessionPeer = resolveSessionPeer;
     this.states = new Map();
@@ -281,7 +279,7 @@ export class OpenVikingRuntime {
   async enqueuePending(state, type, payload) {
     const createdAt = Math.max(Date.now(), state.pendingCreatedAt + 1);
     state.pendingCreatedAt = createdAt;
-    const result = await enqueue(type, state.ovSessionId, payload, { createdAt });
+    const result = await this.pending.enqueue(type, state.ovSessionId, payload, { createdAt });
     if (result.ok) {
       // Log the latch transition only: every message that follows while the
       // latch holds takes the cheap enqueue path, so this fires once per
@@ -313,20 +311,20 @@ export class OpenVikingRuntime {
   }
 
   async removePendingCommits(state) {
-    const pending = await listPending();
+    const pending = await this.pending.listPending();
     for (const item of pending) {
       if (
         item.entry?.type === "commitSession"
         && item.entry.sessionId === state.ovSessionId
       ) {
-        await dequeue(item.filename);
+        await this.pending.dequeue(item.filename);
       }
     }
   }
 
   async refreshPendingState(state) {
     const wasPending = state.hasPendingWrites;
-    const pending = (await listPending()).filter(
+    const pending = (await this.pending.listPending()).filter(
       item => item.entry?.sessionId === state.ovSessionId,
     );
     state.hasPendingWrites = pending.length > 0;
@@ -347,7 +345,7 @@ export class OpenVikingRuntime {
    * passes consumeRetries:false so transient failures stay retryable.
    */
   async replayPendingQueue(options = {}) {
-    await replayPending(
+    await this.pending.replayPending(
       (path, init) => this.client.fetchJSON(path, init),
       (stage, data) => this.log(stage, data),
       options,
@@ -366,7 +364,7 @@ export class OpenVikingRuntime {
     if (this.drainRunning) return;
     this.drainRunning = true;
     try {
-      const pending = await listPending();
+      const pending = await this.pending.listPending();
       if (pending.length > 0) {
         const health = await this.client.healthResult();
         if (!health.ok) {

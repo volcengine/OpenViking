@@ -79,7 +79,7 @@ const HOOK_STARTED_AT = Date.now();
 
 // The sweep catches up unsent turns before committing, so it needs the same
 // HTTP helper the capture hooks use.
-const { fetchJSONRes, fetchJSON } = makeFetchJSON(cfg, { getActorPeerId: () => activePeerId });
+let fetchJSONRes, fetchJSON;
 
 const COMMITTED_TTL_MS = (() => {
   const v = Number(process.env.OPENVIKING_CODEX_COMMITTED_TTL_MS);
@@ -335,6 +335,7 @@ runHookStage({
 }, async (stage) => {
   const { input, cwd, bypassed } = stage;
   cfg = stage.cfg;
+  ({ fetchJSONRes, fetchJSON } = makeFetchJSON(cfg, { getActorPeerId: () => activePeerId }));
   const source = input.source || "unknown";
   const newSessionId = input.session_id || "unknown";
   const effectivePeer = resolveEffectivePeerId({ cfg, cwd });
@@ -344,6 +345,7 @@ runHookStage({
     await saveState({
       ...state,
       workspacePeerId: effectivePeer.source === "workspace" ? effectivePeer.peerId : "",
+      ...(cfg.connectionScope ? { connectionScope: cfg.connectionScope } : {}),
     });
   }
   log("start", {
@@ -409,6 +411,7 @@ runHookStage({
   for (const s of await listStates()) {
     if (!s?.codexSessionId) continue;
     if (s.codexSessionId === newSessionId) continue;
+    if ((cfg.connectionScope || s.connectionScope) && cfg.connectionScope !== s.connectionScope) continue;
     if (typeof s.lastUpdatedAt !== "number") continue;
     const ageMs = now - s.lastUpdatedAt;
 

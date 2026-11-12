@@ -28,7 +28,6 @@ if (!isPluginEnabled()) {
 
 const baseCfg = loadConfig();
 const { log, logError } = createLogger("session-end");
-const fetchJSON = makeFetchJSON(baseCfg);
 
 function approve() {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -52,7 +51,8 @@ async function main() {
     gates: { enabled: (cfg) => cfg.autoCapture },
     envelope: approve,
     onSkip: (reason) => log("skip", { reason }),
-  }, async ({ sessionId }) => {
+  }, async ({ cfg, sessionId }) => {
+    const fetchJSON = makeFetchJSON(cfg);
     if (!sessionId) {
       log("skip", { reason: "no session_id" });
       return;

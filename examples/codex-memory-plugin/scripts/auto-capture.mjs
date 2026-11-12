@@ -43,7 +43,7 @@ const HOOK_STARTED_AT = (() => {
   return Number.isFinite(inherited) && inherited > 0 ? inherited : Date.now();
 })();
 
-const { fetchJSONRes, fetchJSON } = makeFetchJSON(cfg, { getActorPeerId: () => activePeerId });
+let fetchJSONRes, fetchJSON;
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
@@ -99,6 +99,7 @@ async function maybeCommitByThreshold(ovSessionId, added) {
 
 async function capture(sessionId, transcriptPath, cwd, heartbeat) {
   const state = await loadState(sessionId);
+  if (cfg.connectionScope) state.connectionScope = cfg.connectionScope;
   activePeerId = cfg.peerId || state.workspacePeerId || resolveEffectivePeerId({ cfg, cwd }).peerId;
   log("start", { sessionId, transcriptPath, hasPeer: Boolean(activePeerId) });
 
@@ -137,6 +138,7 @@ async function capture(sessionId, transcriptPath, cwd, heartbeat) {
 
 async function main(stage) {
   cfg = stage.cfg;
+  ({ fetchJSONRes, fetchJSON } = makeFetchJSON(cfg, { getActorPeerId: () => activePeerId }));
   const sessionId = stage.input.session_id || "unknown";
   const transcriptPath = stage.input.transcript_path || null;
 

@@ -22,6 +22,7 @@
 
 import { mkdir, readdir, readFile, rename, writeFile, unlink, stat, chmod, utimes } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { isRetryableFailure } from "./retryable.mjs";
@@ -31,6 +32,26 @@ const DEFAULT_TTL_DAYS = 7;
 const DEFAULT_REPLAY_LIMIT = 50;
 const PROCESSING_STALE_MS = 10 * 60 * 1000;
 const DEFAULT_PENDING_DIR = () => join(homedir(), ".openviking", "pending");
+const pendingScope = new AsyncLocalStorage();
+
+/** Keep each configured connection's failed writes with that connection. */
+export function withPendingScope(scope, run) {
+  return pendingScope.run(scope || "", run);
+}
+
+/** Long-lived plugins bind their queue once, without changing process.env. */
+export function createPendingQueue(scope) {
+  return {
+    run: (run) => withPendingScope(scope, run),
+    directory: () => withPendingScope(scope, getPendingDir),
+    enqueue: (...args) => withPendingScope(scope, () => enqueue(...args)),
+    replayPending: (...args) => withPendingScope(scope, () => replayPending(...args)),
+    listPending: (...args) => withPendingScope(scope, () => listPending(...args)),
+    dequeue: (...args) => withPendingScope(scope, () => dequeue(...args)),
+    claimForReplay: (...args) => withPendingScope(scope, () => claimForReplay(...args)),
+    incrementRetry: (...args) => withPendingScope(scope, () => incrementRetry(...args)),
+  };
+}
 
 // Pending queue files may contain raw memory payload / transcript content.
 // Use restrictive permissions explicitly so we don't depend on umask.
@@ -54,7 +75,9 @@ async function ensurePendingDir(dir) {
 }
 
 function getPendingDir() {
-  return process.env.OPENVIKING_PENDING_DIR || DEFAULT_PENDING_DIR();
+  const root = process.env.OPENVIKING_PENDING_DIR || DEFAULT_PENDING_DIR();
+  const scope = pendingScope.getStore();
+  return scope ? join(root, "connections", scope) : root;
 }
 
 function getMaxRetries() {

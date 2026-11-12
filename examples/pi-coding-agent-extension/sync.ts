@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createLogger } from "./shared/debug-log.mjs";
 import type { OVConfig } from "./config.js";
 import { deriveHarnessSessionId } from "./shared/session-model.mjs";
-import { claimForReplay, dequeue, enqueue, incrementRetry, listPending, replayPending } from "./shared/pending-queue.mjs";
+import { createPendingQueue } from "./shared/pending-queue.mjs";
 import { BATCH_LIMIT, sendSessionMessages } from "./shared/batch-send.mjs";
 import { extractBranchCapturePayloads } from "./lib/capture-adapter.mjs";
 import { countUndeliveredForSession, estimatePayloadTokens } from "./lib/takeover-core.mjs";
@@ -28,6 +28,7 @@ export interface SyncBranchResult {
 export class SyncManager {
   private client: OVClient;
   private config: OVConfig;
+  private pending: ReturnType<typeof createPendingQueue>;
   private logger: ReturnType<typeof createLogger>;
   private ovSessionId: string | null = null;
   private syncedEntryCount = 0;
@@ -47,6 +48,7 @@ export class SyncManager {
   constructor(client: OVClient, config: OVConfig) {
     this.client = client;
     this.config = config;
+    this.pending = createPendingQueue(config.connectionScope);
     this.logger = createLogger("pi", {
       debug: Boolean(config.debugLogPath),
       debugLogPath: config.debugLogPath,
@@ -96,10 +98,10 @@ export class SyncManager {
       // once none of this session's entries are left for it to drop untracked;
       // otherwise it waits for a later start.
       const sid = this.ovSessionId;
-      if (sid && countUndeliveredForSession(await listPending(), sid) > 0) return;
-      if (sid && await hasProcessingMessage(sid)) return;
+      if (sid && countUndeliveredForSession(await this.pending.listPending(), sid) > 0) return;
+      if (sid && await hasProcessingMessage(sid, this.pending.directory())) return;
     }
-    await replayPending(
+    await this.pending.replayPending(
       (path: string, init?: any) => this.client.fetchJSON(path, init),
       (stage: string, data: unknown) => this.logger.log(stage, data),
     );
@@ -112,13 +114,13 @@ export class SyncManager {
     // still claimed as `.processing` — keep the barrier closed until a later
     // turn finishes draining them.
     if (this.client.connected) await this.drainSessionBacklog(budgetMs);
-    const pending = await listPending();
+    const pending = await this.pending.listPending();
     if (countUndeliveredForSession(pending, this.ovSessionId) !== 0) return false;
     // listPending intentionally exposes only `.json` entries. A fresh
     // `.processing` file may be owned by another pi process, so absence from
     // that list is not proof of delivery. Conservatively wait until it is
     // dequeued or recovered on a later attempt.
-    return !(await hasProcessingMessage(this.ovSessionId));
+    return !(await hasProcessingMessage(this.ovSessionId, this.pending.directory()));
   }
 
   /**
@@ -147,7 +149,7 @@ export class SyncManager {
     const started = Date.now();
     let batches = 0;
 
-    const backlog = (await listPending()).filter(
+    const backlog = (await this.pending.listPending()).filter(
       ({ entry }) => entry?.type === "addMessage" && entry.sessionId === sid,
     );
     for (let start = 0; start < backlog.length; start += BATCH_LIMIT) {
@@ -164,7 +166,7 @@ export class SyncManager {
 
       const claimed: Array<{ filename: string; entry: any }> = [];
       for (const { filename, entry } of backlog.slice(start, start + BATCH_LIMIT)) {
-        const name = await claimForReplay(filename);
+        const name = await this.pending.claimForReplay(filename);
         if (name) claimed.push({ filename: name, entry });
       }
       if (claimed.length === 0) continue;
@@ -177,7 +179,7 @@ export class SyncManager {
         claimed.map(({ entry }) => entry.payload),
         {
           onSent: async (count: number) => {
-            for (let i = 0; i < count; i++) await dequeue(claimed[delivered++].filename);
+            for (let i = 0; i < count; i++) await this.pending.dequeue(claimed[delivered++].filename);
           },
         },
       );
@@ -188,9 +190,9 @@ export class SyncManager {
       // retry exhaustion or a queue write failure. Both are permanent gaps.
       for (const { filename, entry } of claimed.slice(delivered)) {
         if (!result.retryable) {
-          await dequeue(filename);
+          await this.pending.dequeue(filename);
           this.droppedForever += 1;
-        } else if ((await incrementRetry(filename, entry)) === false) {
+        } else if ((await this.pending.incrementRetry(filename, entry)) === false) {
           this.droppedForever += 1;
         }
       }
@@ -262,9 +264,9 @@ export class SyncManager {
     if (!this.ovSessionId || payloads.length === 0) {
       return { accepted: 0, delivered: 0, queued: 0, permanentFailures: 0 };
     }
-    const res = await sendSessionMessages(this.fetchJSON, this.ovSessionId, payloads, {
+    const res = await this.pending.run(() => sendSessionMessages(this.fetchJSON, this.ovSessionId!, payloads, {
       enqueueOnRetryable: true,
-    });
+    }));
     if (res.failed > 0 || res.enqueueFailed > 0) {
       this.logger.log("send", {
         session: this.ovSessionId,
@@ -323,7 +325,7 @@ export class SyncManager {
         error: response.error?.message || response.error?.code || "unknown",
       });
       if (opts.queueOnFailure !== false) {
-        await enqueue("commitSession", this.ovSessionId, {
+        await this.pending.enqueue("commitSession", this.ovSessionId, {
           keep_recent_count: opts.keepRecentCount ?? 0,
         });
       }
@@ -351,8 +353,7 @@ export function describeCommitError(status: number | undefined, error: any): str
   return code > 0 ? `HTTP ${code}: ${message}` : `no response: ${message}`;
 }
 
-async function hasProcessingMessage(sessionId: string): Promise<boolean> {
-  const dir = process.env.OPENVIKING_PENDING_DIR || join(homedir(), ".openviking", "pending");
+async function hasProcessingMessage(sessionId: string, dir = process.env.OPENVIKING_PENDING_DIR || join(homedir(), ".openviking", "pending")): Promise<boolean> {
   let names: string[];
   try {
     names = await readdir(dir);

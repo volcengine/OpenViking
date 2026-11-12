@@ -87,6 +87,50 @@ This example uses API key mode. Omit fields you do not need; a local server in `
 
 `server.root_api_key` in `ov.conf` is accepted by the server. When the CLI manages that server, `root_api_key` in `ovcli.conf` must match it.
 
+### Directory-scoped plugin connections
+
+Agent plugins using the shared JavaScript configuration loader can select a
+connection by their working directory. Keep these overrides in the machine-local
+`ovcli.conf`, alongside the default connection:
+
+```json
+{
+  "url": "https://openviking.example.com",
+  "api_key": "<personal-key>",
+  "account": "personal",
+  "user": "me",
+  "connections": [
+    {
+      "path": "~/work",
+      "api_key": "<work-key>",
+      "account": "work"
+    }
+  ]
+}
+```
+
+Each entry requires a unique absolute or `~`-prefixed directory. The longest
+matching directory wins; `~/work` matches its children, but not `~/work-other`.
+Windows matching ignores case. Entries can override `url`, `api_key`, `account`,
+and `user`. Omitted fields inherit the top-level values, rather than another
+matching entry. Host-provided values, environment overrides, and explicit
+`OPENVIKING_CREDENTIAL_SOURCE` choices retain their existing precedence.
+
+Hooks select from the session's reported directory and remember the selected
+entry for that session. Changing directories does not change its connection.
+Credentials are read from `ovcli.conf` on each invocation, so rotating a key does
+not copy it into session state. Removing the selected entry or changing its
+server/account/user requires a new session. A stdio MCP proxy selects from its
+launch directory; launch it in the intended workspace. Workspace configuration
+files cannot supply these connection entries. This setting applies to the shared
+plugin loader; it does not change the standalone `ov` CLI's connection selection.
+
+When `connections` is enabled, pending uploads are stored separately for each
+resolved connection, including its credentials, to prevent cross-tenant replay.
+Drain existing pending uploads with the original configuration before enabling
+it or rotating credentials. Existing unscoped queue files remain on disk and are
+not automatically assigned to a directory-scoped connection.
+
 ## Command Behavior
 
 ```json
