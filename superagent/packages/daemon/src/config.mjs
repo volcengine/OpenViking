@@ -325,6 +325,7 @@ export function getConfig() {
     // Opt-in per instance (agents[].stagedReplies): a longer task may get an
     // OnIt and interim findings before its final delivery.
     stagedReplies: boolEnv('OV_SUPERAGENT_STAGED_REPLIES', false),
+    ovCommitOnly: boolEnv('EXPERIMENTAL_OV_COMMIT_ONLY', false),
     // agents[].larkMessageAccess: `bot` keeps every Lark read (history and
     // search) inside the chats the bot has joined, read as the bot.
     larkMessageAccess: enumEnv('OV_SUPERAGENT_LARK_MESSAGE_ACCESS', 'owner', ['owner', 'bot']),
