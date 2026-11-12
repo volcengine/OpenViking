@@ -260,6 +260,14 @@ curl -fsS "$OV_OAUTH_ORIGIN/mcp" \
 
 ---
 
+## 多实例部署
+
+如果多个副本通过网络文件系统共享 `storage.workspace`，则不支持内置 OAuth 服务器。动态客户端注册、授权码、访问令牌和刷新令牌都存储在使用 SQLite WAL 的 `{storage.workspace}/{oauth.db_filename}` 中，应用锁也只在当前进程内生效，因此不要让多个主机共享此数据库。
+
+为每个副本配置独立的 OAuth 数据库也不适用于负载均衡部署，因为一个副本创建的客户端、授权码或令牌对其他副本不可见。在多主机部署中，请只用一个 OpenViking 实例提供内置 OAuth。目前没有可用的分布式 OAuth 存储。
+
+---
+
 ## Token 模型
 
 | Token | 形态 | 前缀 | TTL | 存储 |

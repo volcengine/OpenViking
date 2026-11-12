@@ -345,6 +345,7 @@ docker compose up -d
 - 把 `server.temp_upload.default_mode` 设为 `"shared"`，这样临时上传文件可以被其他副本消费。
 - 共享存储应使用远程向量后端。保留的 `storage.skip_process_lock` 开关只关闭本地后端的启动保护，不会使本地向量存储支持多进程共享。
 - 对 QueueFS，建议通过 `storage.agfs.queuefs.db_path` 显式指定实例本地的 SQLite 路径。如果启用了 usage audit，建议通过 `server.observability.usage_audit.sqlite_path` 显式指定实例本地的 SQLite 路径，不要默认和共享 workspace 卷混用。
+- 如果多个副本通过网络文件系统共享 `storage.workspace`，请勿启用内置 OAuth 服务器。它把客户端、授权码和令牌存储在同一个 SQLite WAL 数据库中，且没有分布式存储后端。详情参见 [OAuth 部署边界](11-oauth.md#多实例部署)。
 
 示例：
 
