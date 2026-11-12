@@ -1,0 +1,71 @@
+/* Visual rules adapted from theme-ve-o-aml-design@0.0.36 (MIT), not Arco's default skin. */
+.ov-pagination {
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+}
+
+.ov-pagination__list {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ov-pagination__item {
+  display: inline-flex;
+  min-width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition:
+    color 200ms cubic-bezier(0, 0, 1, 1),
+    background-color 200ms cubic-bezier(0, 0, 1, 1);
+}
+
+.ov-pagination__item:not(:disabled):hover {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default, #f1f2f9));
+}
+
+.ov-pagination__item[aria-current='page'] {
+  background: var(
+    --ov-ui-color-primary-light,
+    var(--ov-ui-primary-light-default, #f5f7ff)
+  );
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+}
+
+.ov-pagination__item:disabled {
+  color: var(
+    --ov-ui-color-text-disabled,
+    var(--ov-ui-text-disabled-default, #a5a7bb)
+  );
+  cursor: not-allowed;
+}
+
+.ov-pagination__item--jump span {
+  letter-spacing: 1px;
+  line-height: 1;
+}
+
+.ov-pagination__item:focus-visible {
+  outline: 2px solid
+    var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ov-pagination__item {
+    transition: none;
+  }
+}

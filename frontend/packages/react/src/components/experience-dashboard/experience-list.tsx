@@ -1,13 +1,32 @@
-/* eslint-disable jsx-a11y/no-noninteractive-tabindex -- Labelled overflow region must support keyboard scrolling. */
+import type { CSSProperties } from 'react';
+
+import {
+  getFileTypeColor,
+  getFileTypeIcon,
+  resolveFileTypeIconKey,
+} from '../../icons/index.js';
 import type { ExperienceDashboardLabels, ExperienceItem } from './types.js';
 
+/**
+ * 更新时间的展示：不足 3 天显示相对时间，更早显示日期与时刻，与火山版一致。
+ *
+ * How the update time reads: a relative phrase within three days, otherwise the date
+ * and time, matching the console.
+ */
 function updatedAt(value: string, locale: 'en-US' | 'zh-CN') {
   const time = Date.parse(value);
   if (!Number.isFinite(time)) return value;
   const seconds = (time - Date.now()) / 1000;
   const absolute = Math.abs(seconds);
-  if (absolute >= 7 * 86400)
-    return new Intl.DateTimeFormat(locale).format(time);
+  if (absolute >= 3 * 86400)
+    return new Intl.DateTimeFormat(locale, {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(time);
   const [unit, size] =
     absolute < 3600
       ? (['minute', 60] as const)
@@ -20,71 +39,119 @@ function updatedAt(value: string, locale: 'en-US' | 'zh-CN') {
   );
 }
 
+/**
+ * 目录视图的经验列表：表格化的行，列依次是序号、经验文件、注入次数、召回次数。
+ *
+ * 表头右侧两列带虚线下划线——它们在火山版里是可聚焦的说明触发器，这里保留同样
+ * 的视觉与 `title` 提示，说明文案来自文案包。
+ *
+ * The experience list of the directory view: table-like rows with the index, the
+ * experience file and the two counters.
+ *
+ * The last two headers carry a dotted underline — in the console they open an
+ * explanatory popover; here the same look and a `title` hint remain, with the copy
+ * from the label pack.
+ */
 export function ExperienceList({
   items,
-  total,
   startIndex = 0,
   locale = 'en-US',
   labels: t,
   onOpenUri,
 }: {
   items: readonly ExperienceItem[];
-  total?: number;
   startIndex?: number;
   locale?: 'en-US' | 'zh-CN';
   labels: ExperienceDashboardLabels;
   onOpenUri?: (uri: string) => void;
 }) {
   return (
-    <>
-      <h2 className="ov-experience-dashboard__list-title">
-        {t.allExperiences}
-        {total === undefined ? '' : ` · ${total}`}
-      </h2>
-      <div
-        className="ov-experience-dashboard__table-scroll"
-        tabIndex={0}
-        role="region"
-        aria-label={t.title}
-      >
-        <table className="ov-experience-dashboard__table">
-          <caption>{t.title}</caption>
-          <thead>
-            <tr>
-              <th scope="col">{t.index}</th>
-              <th scope="col">{t.name}</th>
-              <th scope="col">{t.injection}</th>
-              <th scope="col">{t.listRecall}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((item, index) => (
-              <tr key={item.uri}>
-                <td># {startIndex + index + 1}</td>
-                <th scope="row">
+    <div className="ov-experience-dashboard__table-scroll">
+      <div className="ov-experience-dashboard__table" role="table">
+        <div className="ov-experience-dashboard__table-head" role="row">
+          <span role="columnheader" aria-label={t.index} />
+          <span role="columnheader">{t.name}</span>
+          <span role="columnheader" title={t.injectionHint}>
+            <span className="ov-experience-dashboard__hint-label">
+              {t.injection}
+            </span>
+          </span>
+          <span role="columnheader" title={t.recallHint}>
+            <span className="ov-experience-dashboard__hint-label">
+              {t.listRecall}
+            </span>
+          </span>
+        </div>
+        {items.map((item, index) => {
+          const Icon = getFileTypeIcon(item.name);
+          const colorKey = resolveFileTypeIconKey(item.name);
+          return (
+            <div
+              key={item.uri}
+              className="ov-experience-dashboard__table-row"
+              role="row"
+            >
+              <span
+                className="ov-experience-dashboard__table-index"
+                role="cell"
+              >
+                #{startIndex + index + 1}
+              </span>
+              <div className="ov-experience-dashboard__table-file" role="cell">
+                <div className="ov-experience-dashboard__table-file-title">
+                  <Icon
+                    aria-hidden="true"
+                    className="ov-experience-dashboard__file-icon"
+                    style={
+                      {
+                        '--ov-ui-experience-icon-light': getFileTypeColor(
+                          colorKey,
+                          'light',
+                        ),
+                        '--ov-ui-experience-icon-dark': getFileTypeColor(
+                          colorKey,
+                          'dark',
+                        ),
+                      } as CSSProperties
+                    }
+                  />
                   <button
                     type="button"
+                    className="ov-experience-dashboard__table-file-name"
                     disabled={!onOpenUri}
                     onClick={() => onOpenUri?.(item.uri)}
                   >
                     {item.name}
                   </button>
-                  <span>
-                    <code title={item.uri}>{item.uri}</code>
-                    {item.modTime ? (
-                      <time dateTime={item.modTime} title={item.modTime}>
-                        · {t.updated} {updatedAt(item.modTime, locale)}
-                      </time>
-                    ) : null}
-                  </span>
-                </th>
-                <td>{item.injectionCount ?? '—'}</td>
-                <td>{item.recallCount ?? '—'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                </div>
+                <div className="ov-experience-dashboard__table-file-meta">
+                  <span title={item.uri}>{item.uri}</span>
+                  {item.modTime ? (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span>
+                        {t.updated} {updatedAt(item.modTime, locale)}
+                      </span>
+                    </>
+                  ) : null}
+                </div>
+              </div>
+              <span
+                className="ov-experience-dashboard__table-metric"
+                role="cell"
+              >
+                {item.injectionCount ?? '—'}
+              </span>
+              <span
+                className="ov-experience-dashboard__table-metric"
+                role="cell"
+              >
+                {item.recallCount ?? '—'}
+              </span>
+            </div>
+          );
+        })}
       </div>
-    </>
+    </div>
   );
 }

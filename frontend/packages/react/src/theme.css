@@ -64,6 +64,9 @@
   --ov-ui-tour-shadow-default:
     0 15px 35px rgb(0 0 0 / 5%), 0 5px 15px rgb(0 0 0 / 5%);
   --ov-ui-tour-highlight-default: rgb(82 82 255 / 8%);
+  /* 紧凑浮层（下拉菜单、时间范围选择）的投影：比卡片浮层更收，托起一块小面板。 */
+  /* The shadow of a compact surface such as a dropdown or range picker. */
+  --ov-ui-overlay-shadow-default: 0 8px 24px rgb(0 0 0 / 10%);
 
   --ov-ui-auth-on-primary-default: #ffffff;
   --ov-ui-auth-backdrop-default: rgb(0 0 0 / 40%);
@@ -356,6 +359,8 @@ html.dark .ov-file-browser-search {
   --ov-ui-dashboard-danger-default: #d92d54;
   --ov-ui-dashboard-danger-light-default: #ffecee;
   --ov-ui-dashboard-success-default: #4f9c70;
+  /* 看板点阵底的点色，取自控制台同款纹理的 12% 灰。 The dot colour of the board grid. */
+  --ov-ui-dashboard-dot-default: rgb(120 124 145 / 12%);
 }
 html.dark .ov-wiki-dashboard,
 html.dark .ov-experience-dashboard,
@@ -369,6 +374,7 @@ html.dark .ov-file-browser {
   --ov-ui-dashboard-danger-default: var(--ov-ui-status-error-default);
   --ov-ui-dashboard-danger-light-default: var(--ov-ui-bg-5-default);
   --ov-ui-dashboard-success-default: var(--ov-ui-status-success-default);
+  --ov-ui-dashboard-dot-default: rgb(255 255 255 / 12%);
 }
 
 /* Directory guidance: six popover illustrations and floating surface. */

@@ -1,13 +1,19 @@
+import { useState } from 'react';
+
 import { DashboardState } from '../../shared/dashboard/dashboard-state.js';
 import { useLocale } from '../../shared/locale-context.js';
+import {
+  TabImpactIcon,
+  TabSourceIcon,
+  TabTestIcon,
+} from '../../icons/index.js';
 import { DashboardTabs } from './dashboard-tabs.js';
 import { experienceLabels } from './labels.js';
-import { ExperienceList } from './experience-list.js';
 import { ExperienceImpact } from './experience-impact.js';
-import { ExperienceTests } from './experience-tests.js';
-import { ExperienceTrajectories } from './experience-trajectories.js';
-import { useState } from 'react';
+import { ExperienceList } from './experience-list.js';
 import { ExperiencePagination } from './experience-pagination.js';
+import { ExperienceSources } from './experience-sources.js';
+import { ExperienceTests } from './experience-tests.js';
 import type {
   ExperienceDashboardTab,
   ExperienceDashboardProps,
@@ -24,12 +30,15 @@ function ExperienceDashboardContent({
   tab: controlledTab,
   days: controlledDays,
   page = 0,
+  pageSize = 20,
   hasMore = false,
+  loadingMore = false,
   startIndex = 0,
   states = {},
   onTabChange,
   onDaysChange,
   onPageChange,
+  onLoadMore,
   locale: localeProp,
   onOpenUri,
   labels,
@@ -55,28 +64,39 @@ function ExperienceDashboardContent({
   };
   const t = experienceLabels(locale, labels);
   const directory = kind === 'directory';
-  const result = data;
   const tabs = [
-    { key: 'impact' as const, title: t.impact },
-    { key: 'source' as const, title: t.source },
-    ...(result.testMaterials === undefined
+    { key: 'impact' as const, title: t.impact, icon: <TabImpactIcon /> },
+    { key: 'source' as const, title: t.source, icon: <TabSourceIcon /> },
+    ...(missingTest
       ? []
-      : [{ key: 'test' as const, title: t.test }]),
+      : [{ key: 'test' as const, title: t.test, icon: <TabTestIcon /> }]),
   ];
   const activeState = directory
     ? states.list
     : tab === 'source'
       ? states.sources
-      : states.trajectories;
-  const pagination = (
+      : tab === 'test'
+        ? states.tests
+        : states.trajectories;
+  // 只有目录视图与「测试」页签用页码器；「应用效果」的轨迹按游标翻页，用滚动
+  // 加载更多，与火山版一致。
+  //
+  // Only the directory view and the Test tab page by number; Impact's trajectories
+  // page by cursor and use load-more, matching the console.
+  const paged = directory || tab === 'test';
+  const pageCount =
+    data.total === undefined ? page + (hasMore ? 2 : 1) : undefined;
+  const pagination = paged ? (
     <ExperiencePagination
       page={page}
-      hasMore={hasMore}
+      pageCount={pageCount}
+      total={data.total}
+      pageSize={pageSize}
       loading={activeState?.loading}
       labels={t}
       onPageChange={onPageChange}
     />
-  );
+  ) : null;
   return (
     <div
       {...rest}
@@ -87,10 +107,13 @@ function ExperienceDashboardContent({
     >
       {directory ? (
         <div className="ov-experience-dashboard__body">
-          {result.experiences?.length ? (
+          <h2 className="ov-experience-dashboard__list-title">
+            {t.allExperiences}
+            {data.total === undefined ? '' : ` · ${data.total}`}
+          </h2>
+          {data.experiences?.length ? (
             <ExperienceList
-              items={result.experiences}
-              total={result.total}
+              items={data.experiences}
               locale={locale}
               startIndex={startIndex}
               labels={t}
@@ -116,37 +139,32 @@ function ExperienceDashboardContent({
         >
           <div className="ov-experience-dashboard__body">
             {tab === 'impact' ? (
-              <>
-                <ExperienceImpact
-                  data={result}
+              <ExperienceImpact
+                data={data}
+                labels={t}
+                locale={locale}
+                days={days}
+                onDaysChange={setDays}
+                outcomesState={states.outcomes ?? {}}
+                trajectoriesState={states.trajectories ?? {}}
+                hasMore={hasMore}
+                loadingMore={loadingMore}
+                // 显式回调优先；只有旧回调的宿主仍按文档约定翻页。
+                // An explicit callback wins; an older-only host still pages as documented.
+                onLoadMore={
+                  onLoadMore ??
+                  (onPageChange ? () => onPageChange(page + 1) : undefined)
+                }
+                onOpenUri={onOpenUri}
+              />
+            ) : tab === 'source' ? (
+              data.sources?.length ? (
+                <ExperienceSources
+                  items={data.sources}
                   labels={t}
                   locale={locale}
-                  days={days}
-                  onDaysChange={setDays}
-                  outcomesState={states.outcomes ?? {}}
-                  trajectoriesState={states.trajectories ?? {}}
                   onOpenUri={onOpenUri}
                 />
-                {pagination}
-              </>
-            ) : tab === 'source' ? (
-              result.sources?.length ? (
-                <details open className="ov-experience-dashboard__source-group">
-                  <summary>
-                    <strong>{t.latest}</strong>
-                    <span>
-                      {t.sourceCount.replace(
-                        '{count}',
-                        String(result.sources.length),
-                      )}
-                    </span>
-                  </summary>
-                  <ExperienceTrajectories
-                    items={result.sources}
-                    source
-                    onOpenUri={onOpenUri}
-                  />
-                </details>
               ) : (
                 <DashboardState
                   state={states.sources}
@@ -156,12 +174,16 @@ function ExperienceDashboardContent({
                   retry={t.retry}
                 />
               )
-            ) : result.testMaterials?.length ? (
-              <ExperienceTests
-                items={result.testMaterials}
-                labels={t}
-                onOpenUri={onOpenUri}
-              />
+            ) : data.testMaterials?.length ? (
+              <>
+                <ExperienceTests
+                  items={data.testMaterials}
+                  startIndex={startIndex}
+                  labels={t}
+                  onOpenUri={onOpenUri}
+                />
+                {pagination}
+              </>
             ) : (
               <DashboardState
                 state={states.tests}
