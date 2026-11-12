@@ -1178,7 +1178,7 @@ class LocalIndex(IIndex):
             logger.debug(f"aggregate extra_json: {extra_json}")
         except Exception as e:
             logger.error(f"Aggregation operation failed: {e}")
-            return {}
+            raise
 
         # Parse extra_json to get aggregation results
         agg_data = {}
@@ -1188,10 +1188,15 @@ class LocalIndex(IIndex):
                 logger.debug(f"aggregate parsed agg_data: {agg_data}")
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse aggregation results: {e}")
-                return {}
+                raise
         else:
-            logger.warning("Aggregation results not available: extra_json is empty")
-            return {}
+            # The engine served the request but produced no aggregation
+            # payload. Surface the failure instead of an empty result, which
+            # callers cannot tell apart from a legitimate zero count.
+            raise RuntimeError(
+                "Aggregation results not available: engine returned no "
+                "aggregation payload (extra_json is empty)"
+            )
 
         return agg_data
 
