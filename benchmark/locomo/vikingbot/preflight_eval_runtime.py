@@ -479,30 +479,30 @@ def _resolve_ready_user_identity(
         try:
             probe = _request_health(openviking_url, api_key)
         except UserKeyValidationError as exc:
-            _error(str(exc))
-            raise SystemExit(1) from exc
-
-        auth_mode = _health_auth_mode(probe)
-        if auth_mode == "trusted":
-            _log(f"使用 {key_source} 校验 OpenViking trusted key")
-            try:
-                account, user_id = _ensure_trusted_server_ready(
-                    openviking_url, selected_account, selected_user, api_key
-                )
-            except UserKeyValidationError as exc:
-                _error(str(exc))
-                raise SystemExit(1) from exc
-            return account, user_id, api_key, "trusted"
-
-        _log(f"使用 {key_source} 校验 OpenViking User key")
-        try:
-            account, user_id = _ensure_server_and_user_key_ready(
-                openviking_url, selected_account, api_key
-            )
-            return account, user_id, api_key, "api_key"
-        except UserKeyValidationError as exc:
-            _error(str(exc))
+            _warn(str(exc))
             prompt = "当前 User key 不可用，是否使用 Root key 自动生成 default User API key"
+        else:
+            auth_mode = _health_auth_mode(probe)
+            if auth_mode == "trusted":
+                _log(f"使用 {key_source} 校验 OpenViking trusted key")
+                try:
+                    account, user_id = _ensure_trusted_server_ready(
+                        openviking_url, selected_account, selected_user, api_key
+                    )
+                except UserKeyValidationError as exc:
+                    _error(str(exc))
+                    raise SystemExit(1) from exc
+                return account, user_id, api_key, "trusted"
+
+            _log(f"使用 {key_source} 校验 OpenViking User key")
+            try:
+                account, user_id = _ensure_server_and_user_key_ready(
+                    openviking_url, selected_account, api_key
+                )
+                return account, user_id, api_key, "api_key"
+            except UserKeyValidationError as exc:
+                _warn(str(exc))
+                prompt = "当前 User key 不可用，是否使用 Root key 自动生成 default User API key"
     else:
         _error("未配置 OpenViking API key。")
         prompt = "是否使用 Root key 自动生成 default User API key"

@@ -16,6 +16,7 @@ from openviking.server.config import (
     ServerConfig,
     get_server_url_from_server_data,
 )
+from openviking_cli.utils.config.memory_config import TopicContinuityConfig
 from vikingbot.config.schema import Config
 
 CONFIG_PATH = None
@@ -187,6 +188,10 @@ def load_config() -> Config:
             bot_data["ov_server"] = bot_server_data
 
             config = Config.model_validate(bot_data)
+            topic_data = (full_data.get("memory") or {}).get("topic_continuity") or {}
+            config._topic_continuity_enabled = TopicContinuityConfig.model_validate(
+                topic_data
+            ).enabled
             config.ov_server.set_effective_auth_mode(effective_auth_mode)
             config.ov_server.set_config_source(ov_server_source)
             config.ov_server.set_api_key_source(api_key_source)

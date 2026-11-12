@@ -15,7 +15,9 @@ from openviking.session.extraction_batch import (
     resolve_extraction_batch_limits,
 )
 from openviking.session.session import Session
+from openviking.session.topic_continuity import turn_text
 from openviking.utils.token_estimation import estimate_text_tokens
+from openviking_cli.utils.config.memory_config import MemoryConfig, TopicContinuityConfig
 
 
 def _message(message_id: str, role: str = "user", text: str = "content") -> Message:
@@ -372,6 +374,26 @@ async def test_fallback_rejects_input_larger_than_model_window():
     completion.assert_not_awaited()
 
 
+def _conversation(*turns: tuple[str, str]) -> list[Message]:
+    messages: list[Message] = []
+    for index, (user_text, assistant_text) in enumerate(turns, start=1):
+        messages.append(_message(f"u{index}", text=user_text))
+        messages.append(_message(f"a{index}", role="assistant", text=assistant_text))
+    return messages
+
+
+def _topic_enabled(**overrides) -> TopicContinuityConfig:
+    values = {
+        "enabled": True,
+        "max_turns": 10,
+        "overlap_turns": 1,
+        "min_turns_to_split": 2,
+        "skip_max_user_chars": 0,
+    }
+    values.update(overrides)
+    return TopicContinuityConfig(**values)
+
+
 def test_auto_commit_policy_resolves_phase2_batch_limits():
     limits = resolve_extraction_batch_limits(
         {
@@ -662,3 +684,250 @@ async def test_long_term_memory_batches_follow_the_planned_limit():
         ["u3"],
     ]
     assert all(step == "long_term" for _, step, _ in recorded_batches)
+
+
+@pytest.mark.asyncio
+async def test_long_term_batching_flag_off_is_one_extract_call():
+    session = Session(viking_fs=None)
+    messages = _conversation(("q1", "a1"), ("q2", "a2"))
+    recorded_batches = []
+
+    async def extract(batch):
+        return [message.id for message in batch]
+
+    async def record(operation_name, step, batch, fn):
+        result = await fn()
+        recorded_batches.append([message.id for message in batch])
+        return result
+
+    await session._extract_long_term_memories_with_batching(
+        messages=messages,
+        limits=ExtractionBatchLimits(),
+        archive_uri="viking://user/default/sessions/s1/history/archive_001",
+        extract_batch=extract,
+        record_batch=record,
+    )
+    assert recorded_batches == [["u1", "a1", "u2", "a2"]]
+
+
+@pytest.mark.asyncio
+async def test_long_term_batching_flag_on_calls_once_per_topic_group():
+    session = Session(viking_fs=None)
+    messages = _conversation(("login", "ok"), ("dinner", "noodles"))
+    recorded = []
+    extract_ids = []
+
+    async def extract_and_store(batch):
+        extract_ids.append([message.id for message in batch])
+        return [message.id for message in batch]
+
+    async def record(operation_name, step, batch, fn):
+        result = await fn()
+        recorded.append(
+            {
+                "owned": [message.id for message in batch],
+                "operation": operation_name,
+                "result": result,
+            }
+        )
+        return result
+
+    await session._extract_long_term_memories_with_batching(
+        messages=messages,
+        limits=ExtractionBatchLimits(),
+        archive_uri="viking://user/default/sessions/s1/history/archive_001",
+        extract_batch=extract_and_store,
+        record_batch=record,
+        topic=_topic_enabled(overlap_turns=1),
+        continuity_check=lambda _previous, current: "dinner" not in turn_text(current),
+    )
+    assert extract_ids == [["u1", "a1"], ["u2", "a2"]]
+    assert [item["owned"] for item in recorded] == [["u1", "a1"], ["u2", "a2"]]
+    assert all(
+        item["operation"].startswith("long_term_memory_extraction_batch_") for item in recorded
+    )
+
+
+@pytest.mark.asyncio
+async def test_long_term_batching_records_owned_ids_only_with_overlap():
+    session = Session(viking_fs=None)
+    messages = _conversation(("t1", "a1"), ("t2", "a2"), ("t3", "a3"))
+    owned_ids = []
+    extract_ids = []
+
+    async def extract(batch):
+        extract_ids.append([message.id for message in batch])
+        return []
+
+    async def record(operation_name, step, batch, fn):
+        owned_ids.append([message.id for message in batch])
+        return await fn()
+
+    await session._extract_long_term_memories_with_batching(
+        messages=messages,
+        limits=ExtractionBatchLimits(),
+        archive_uri="viking://user/default/sessions/s1/history/archive_001",
+        extract_batch=extract,
+        record_batch=record,
+        topic=_topic_enabled(max_turns=2, overlap_turns=1),
+        continuity_check=lambda _previous, _current: True,
+    )
+    assert extract_ids == [["u1", "a1", "u2", "a2"], ["u2", "a2", "u3", "a3"]]
+    assert owned_ids == [["u1", "a1", "u2", "a2"], ["u3", "a3"]]
+
+
+@pytest.mark.asyncio
+async def test_long_term_batching_with_policy_limits_after_topic_groups():
+    session = Session(viking_fs=None)
+    messages = _conversation(("same", "one"), ("same", "two"))
+    extract_ids = []
+
+    async def extract(batch):
+        extract_ids.append([message.id for message in batch])
+        return []
+
+    async def record(operation_name, step, batch, fn):
+        return await fn()
+
+    await session._extract_long_term_memories_with_batching(
+        messages=messages,
+        limits=ExtractionBatchLimits(max_messages=2),
+        archive_uri="viking://user/default/sessions/s1/history/archive_001",
+        extract_batch=extract,
+        record_batch=record,
+        topic=_topic_enabled(),
+        continuity_check=lambda _previous, _current: True,
+    )
+    assert extract_ids == [["u1", "a1"], ["u2", "a2"]]
+
+
+class _RecordingCompressor:
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    async def extract_long_term_memories(self, *, messages, **_kwargs):
+        self.calls.append([message.id for message in messages])
+        return []
+
+
+class _TaskTracker:
+    async def build_queue_status(self, *_args, **_kwargs):
+        return {}
+
+    async def update_stage(self, *_args, **_kwargs):
+        return None
+
+    async def wait_for_task_work(self, *_args, **_kwargs):
+        return None
+
+    async def start(self, *_args, **_kwargs) -> None:
+        return None
+
+    async def complete(self, *_args, **_kwargs) -> None:
+        return None
+
+    async def fail(self, *_args, **_kwargs) -> None:
+        return None
+
+
+async def _run_phase2(
+    monkeypatch,
+    messages: list[Message],
+    *,
+    topic: TopicContinuityConfig | None = None,
+) -> tuple[_RecordingCompressor, list[dict]]:
+    compressor = _RecordingCompressor()
+    session = Session(viking_fs=None, session_compressor=compressor)
+    meta_updates: list[dict] = []
+    memory = MemoryConfig()
+    if topic is not None:
+        memory.topic_continuity = topic
+    config = SimpleNamespace(memory=memory)
+    monkeypatch.setattr(
+        "openviking.session.session.get_openviking_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.open_viking_config.get_openviking_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "openviking.service.task_tracker.get_task_tracker",
+        lambda: _TaskTracker(),
+    )
+
+    async def _capture_meta(_archive_uri, updates, lease_ref=None):
+        meta_updates.append(dict(updates))
+
+    session._merge_archive_meta = _capture_meta
+    session._merge_and_save_commit_meta = AsyncMock()
+    session._stage_midterm_memories = AsyncMock(return_value=1)
+    session._publish_midterm_memories_for_recall = AsyncMock(return_value=1)
+    session._reconcile_midterm_long_term_conversion = AsyncMock(return_value=(1, 1))
+    await session._run_memory_extraction(
+        task_id="task-topic",
+        archive_uri="viking://user/default/sessions/s1/history/archive_001",
+        messages=messages,
+        first_message_id=messages[0].id,
+        last_message_id=messages[-1].id,
+        memory_policy={"working_memory": {"enabled": False}},
+        auto_commit_policy=None,
+    )
+    if memory.topic_continuity.enabled:
+        session._stage_midterm_memories.assert_awaited_once()
+        session._publish_midterm_memories_for_recall.assert_awaited_once()
+        session._reconcile_midterm_long_term_conversion.assert_awaited_once()
+    else:
+        session._stage_midterm_memories.assert_not_awaited()
+        session._publish_midterm_memories_for_recall.assert_not_awaited()
+        session._reconcile_midterm_long_term_conversion.assert_not_awaited()
+    return compressor, meta_updates
+
+
+def _completed_long_term_ids(meta_updates: list[dict]) -> list[set[str]]:
+    completed = []
+    for update in meta_updates:
+        steps = update.get("completed_memory_steps") or {}
+        if "long_term" in steps:
+            completed.append(set(steps["long_term"]))
+    return completed
+
+
+@pytest.mark.asyncio
+async def test_commit_path_flag_off_extracts_once_without_policy(monkeypatch):
+    messages = _conversation(("q1", "a1"), ("q2", "a2"))
+    compressor, meta_updates = await _run_phase2(monkeypatch, messages)
+    assert compressor.calls == [["u1", "a1", "u2", "a2"]]
+    assert _completed_long_term_ids(meta_updates) == [{"u1", "a1", "u2", "a2"}]
+
+
+@pytest.mark.asyncio
+async def test_commit_path_flag_on_stays_one_batch_when_continuous(monkeypatch):
+    messages = _conversation(("login", "ok"), ("still login", "fixed"))
+    compressor, _meta_updates = await _run_phase2(
+        monkeypatch,
+        messages,
+        topic=TopicContinuityConfig(enabled=True),
+    )
+    assert compressor.calls == [["u1", "a1", "u2", "a2"]]
+
+
+@pytest.mark.asyncio
+async def test_commit_path_flag_on_splits_on_max_turns_and_records_owned_ids(monkeypatch):
+    messages = _conversation(("t1", "a1"), ("t2", "a2"), ("t3", "a3"))
+    compressor, meta_updates = await _run_phase2(
+        monkeypatch,
+        messages,
+        topic=TopicContinuityConfig(enabled=True, max_turns=2, overlap_turns=1),
+    )
+    assert compressor.calls == [
+        ["u1", "a1", "u2", "a2"],
+        ["u2", "a2", "u3", "a3"],
+    ]
+    completed = _completed_long_term_ids(meta_updates)
+    assert completed[0] == {"u1", "a1", "u2", "a2"}
+    assert completed[1] - completed[0] == {"u3", "a3"}

@@ -529,7 +529,10 @@ See [Encryption](../guides/08-encryption.md) for provider and key-management set
     "prefetch_search_topn": 5,
     "extraction_enabled": true,
     "session_skill_extraction_enabled": false,
-    "link_enabled": false
+    "link_enabled": false,
+    "topic_continuity": {
+      "enabled": false
+    }
   }
 }
 ```
@@ -545,8 +548,28 @@ See [Encryption](../guides/08-encryption.md) for provider and key-management set
 | `extraction_enabled` | boolean | `true` | Extract long-term memories on session commit |
 | `session_skill_extraction_enabled` | boolean | `false` | Also extract reusable skills |
 | `link_enabled` | boolean | `false` | Generate and resolve memory links |
+| `topic_continuity` | object | see below | Group adjacent Turns by topic continuity before long-term extraction; off by default |
 
 Automatic commits require a separate policy; enabling memory extraction does not make sessions commit automatically. See `memory.session_auto_commit` in [Configuration](../guides/01-configuration.md) and the [Sessions API](../api/05-sessions.md). For template loading order and when changes take effect, see the [Prompt Guide](../guides/10-prompt-guide.md).
+
+`topic_continuity` fields (all optional; off by default):
+
+| Field | Type | Default | Purpose |
+|---|---|---|---|
+| `enabled` | boolean | `false` | Enable topic grouping, midterm staging, vector indexing, cleanup, and VikingBot midterm recall together |
+| `max_turns` | integer, `>= 1` | `10` | Maximum complete Turns in one topic group |
+| `overlap_turns` | integer, `>= 0` | `1` | On `max_turns` cuts only, prefix the next group with the last N Turns |
+| `min_turns_to_split` | integer, `>= 1` | `2` | Skip grouping when the archive has fewer Turns |
+| `time_gap_seconds` | integer, `>= 0` | `0` | Adjacent Turn anchors farther apart than this are not continuous; `0` ignores time |
+| `skip_max_user_chars` | integer, `>= 0` | `0` | Skip a group when owned user-query text is at most this many characters; `0` never skips |
+
+When a dedicated `query_planner` is configured, it decides whether neighboring Turns stay one topic. A timeout, error, or unclear reply stays continuous. Without that planner, the extraction model is not called; with `time_gap_seconds=0`, the flag then splits only on `max_turns`. The split stays inside one commit.
+
+`memory.topic_continuity.enabled` is the single switch for topic grouping, midterm dialogue staging, vector indexing, conversion cleanup, and VikingBot midterm recall. It defaults to `false`; set it to `true` to enable the whole feature. The previous `memory.midterm_memory` and `bot.ov_server.memory_recall_midterm_enabled` switches are no longer used. VikingBot inherits the switch from the root `memory` section of its loaded `ov.conf`; use the same setting for the server and bot when they run separately.
+
+Converted staging records and their vector-recall copies are deleted; unconverted and failed records remain available. Long-term extraction continues to consume original archive messages. Recall limits and topic-group sizes remain tuning parameters.
+
+`defer_long_term_extraction` remains an explicit per-commit evaluation barrier, rather than an enable switch. Normal commits automatically proceed through midterm and long-term extraction. Evaluation clients can request the barrier and release it through `/tasks/{task_id}/release-long-term`; this requires the feature switch to be enabled.
 
 ## Parser Settings
 

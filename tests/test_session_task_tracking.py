@@ -11,11 +11,14 @@ import pytest_asyncio
 
 from openviking.core.namespace import canonical_session_uri
 from openviking.server.app import create_app
+from openviking.server.auth import get_request_context
 from openviking.server.auth.plugins import DevAuthPlugin
 from openviking.server.config import ServerConfig
 from openviking.server.dependencies import set_service
+from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
+from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest_asyncio.fixture
@@ -243,6 +246,45 @@ async def test_get_nonexistent_task_returns_404(api_client):
     client, _ = api_client
     resp = await client.get("/api/v1/tasks/nonexistent-id")
     assert resp.status_code == 404
+
+
+async def test_release_deferred_long_term_task(api_client):
+    client, _ = api_client
+    app = client._transport.app
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier.the_default_user(),
+        role=Role.USER,
+    )
+    tracker = get_task_tracker()
+    task = await tracker.create(
+        "session_commit",
+        account_id="default",
+        user_id="default",
+    )
+    await tracker.start(
+        task.task_id,
+        account_id="default",
+        user_id="default",
+    )
+    await tracker.update_stage(
+        task.task_id,
+        "midterm_ready",
+        account_id="default",
+        user_id="default",
+        meta={"midterm_memory_ready": {"ready": True}},
+    )
+
+    try:
+        response = await client.post(
+            f"/api/v1/tasks/{task.task_id}/release-long-term"
+        )
+    finally:
+        app.dependency_overrides.pop(get_request_context, None)
+
+    assert response.status_code == 200
+    released = response.json()["result"]
+    assert released["stage"] == "long_term_released"
+    assert released["meta"]["long_term_release_requested"] is True
 
 
 # ── GET /tasks list ──

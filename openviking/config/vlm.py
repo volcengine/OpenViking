@@ -409,6 +409,14 @@ class AccountVLMProvider:
         planner = view.cluster.query_planner
         return planner is not None and planner._has_any_config()
 
+    async def has_separate_query_planner(self, account_id: str) -> bool:
+        """True only when a query planner is configured apart from the extraction VLM."""
+        view = await self._view(account_id)
+        if view.account.query_planner is not None:
+            return True
+        planner = view.cluster.query_planner
+        return planner is not None and planner._has_any_config()
+
 
 class ClusterVLMResolver:
     """Resolve static Cluster model handles for offline and standalone flows."""
@@ -437,3 +445,6 @@ class ClusterVLMResolver:
         del account_id
         planner = self._config_provider().query_planner
         return planner is not None and planner._has_any_config()
+
+    async def has_separate_query_planner(self, account_id: str) -> bool:
+        return await self.has_dedicated_query_planner(account_id)

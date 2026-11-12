@@ -416,6 +416,29 @@ async def test_patch_task_updates_fields_and_dispatch_marker_atomically(tracker:
     assert stored.stage is None
 
 
+async def test_release_deferred_long_term_extraction_is_persisted_and_idempotent(
+    tracker: TaskTracker,
+):
+    owner = _owner_kwargs()
+    task = await tracker.create("session_commit", **owner)
+    await tracker.start(task.task_id)
+    await tracker.update_stage(
+        task.task_id,
+        "midterm_ready",
+        meta={"midterm_memory_ready": {"ready": True, "indexed_records": 2}},
+        **owner,
+    )
+
+    released = await tracker.release_long_term_extraction(task.task_id, **owner)
+    assert released is not None
+    assert released.stage == "long_term_released"
+    assert released.meta["long_term_release_requested"] is True
+
+    released_again = await tracker.release_long_term_extraction(task.task_id, **owner)
+    assert released_again is not None
+    assert released_again.meta["long_term_release_requested"] is True
+
+
 async def test_complete_task(tracker: TaskTracker):
     task = await tracker.create("session_commit", resource_id="s1", **_owner_kwargs())
     await tracker.start(task.task_id)

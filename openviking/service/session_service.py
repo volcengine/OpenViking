@@ -454,6 +454,7 @@ class SessionService:
         reasoning_effort: Optional[str] = None,
         event_tags: Optional[List[str]] = None,
         reset_context: bool = False,
+        defer_long_term_extraction: bool = False,
     ) -> Dict[str, Any]:
         """Commit a session (archive messages and extract memories).
 
@@ -481,6 +482,7 @@ class SessionService:
             reasoning_effort=reasoning_effort,
             event_tags=event_tags,
             reset_context=reset_context,
+            defer_long_term_extraction=defer_long_term_extraction,
         )
 
     async def commit_async(
@@ -500,6 +502,7 @@ class SessionService:
         reasoning_effort: Optional[str] = None,
         event_tags: Optional[List[str]] = None,
         reset_context: bool = False,
+        defer_long_term_extraction: bool = False,
     ) -> Dict[str, Any]:
         """Async commit a session.
 
@@ -536,6 +539,8 @@ class SessionService:
             commit_kwargs["event_tags"] = event_tags
         if reset_context:
             commit_kwargs["reset_context"] = True
+        if defer_long_term_extraction:
+            commit_kwargs["defer_long_term_extraction"] = True
         result = await session.commit_async(**commit_kwargs)
         self._record_lifecycle_metric("commit", "ok" if result.get("status") else "error")
         self._record_archive_metric("ok" if result.get("archived") else "skip")

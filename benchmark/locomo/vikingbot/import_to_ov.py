@@ -370,6 +370,9 @@ def write_success_record(
         "llm_output_tokens",
         "total_tokens",
         "duration_seconds",
+        "task_id",
+        "wait_state",
+        "background_processing",
     ]
 
     with open(csv_path, "a", encoding="utf-8", newline="") as f:
@@ -392,6 +395,9 @@ def write_success_record(
                 "llm_output_tokens": record["token_usage"].get("llm_output", 0),
                 "total_tokens": record["token_usage"].get("total", 0),
                 "duration_seconds": record.get("duration_seconds", 0),
+                "task_id": record.get("task_id", ""),
+                "wait_state": record.get("wait_state", "complete"),
+                "background_processing": record.get("background_processing", False),
             }
         )
 
@@ -528,6 +534,15 @@ def _parse_token_usage(commit_result: Dict[str, Any]) -> Dict[str, int]:
     }
 
 
+def _task_midterm_ready(task: Dict[str, Any] | None) -> bool:
+    """Return whether vector-searchable mid-term memories were published."""
+
+    if not isinstance(task, dict):
+        return False
+    readiness = (task.get("meta") or {}).get("midterm_memory_ready")
+    return isinstance(readiness, dict) and readiness.get("ready") is True
+
+
 async def viking_ingest(
     messages: List[Dict[str, Any]],
     openviking_url: str,
@@ -536,7 +551,9 @@ async def viking_ingest(
     account: str = "default",
     api_key: Optional[str] = None,
     group_chat: bool = False,
-) -> Dict[str, int]:
+    wait_until: str = "complete",
+    defer_long_term_extraction: bool = False,
+) -> Dict[str, Any]:
     """Save messages to OpenViking via OpenViking SDK client.
     Returns token usage dict with embedding and vlm token counts.
 
@@ -548,6 +565,12 @@ async def viking_ingest(
         account: OpenViking account identifier
         api_key: Optional API key for OpenViking client authentication
         group_chat: Whether to enable peer-memory extraction for group-chat sessions
+        wait_until: ``complete`` waits for all long-term extraction.  ``midterm-ready``
+            returns once vector-searchable mid-term memories are available, leaving
+            long-term extraction running in the server's background queue.  Tasks
+            without enabled mid-term indexing still wait until completion.
+        defer_long_term_extraction: Pause each commit at ``midterm_ready`` until
+            the importer releases every collected task after the global barrier.
     """
     # 解析 session_time - 为每条消息计算递增的时间戳
     base_datetime = None
@@ -594,6 +617,7 @@ async def viking_ingest(
                     for key, value in {
                         "created_at": msg_created_at,
                         "peer_id": msg.get("peer_id"),
+                        "speaker": msg.get("speaker"),
                     }.items()
                     if value is not None
                 }
@@ -609,10 +633,13 @@ async def viking_ingest(
         # Commit. If the response read fails after the server accepted the
         # commit, recover by checking session commit_count and commit tasks
         # before retrying the POST. This avoids a blind duplicate commit.
+        commit_options: Dict[str, Any] = {"telemetry": True}
+        if defer_long_term_extraction:
+            commit_options["defer_long_term_extraction"] = True
         try:
             result = await _retry_transient_http(
                 f"commit_session session={session_id}",
-                lambda: client.commit_session(session_id, telemetry=True),
+                lambda: client.commit_session(session_id, **commit_options),
                 attempts=2,
             )
         except _TRANSIENT_HTTP_ERRORS as exc:
@@ -632,6 +659,8 @@ async def viking_ingest(
         # 等待 task 完成以获取准确 token 消耗
         task_id = result.get("task_id")
         trace_id = result.get("trace_id", "")
+        wait_state = "complete"
+        background_processing = False
         if task_id:
             # 轮询任务状态直到完成
             max_attempts = 2400  # 最多等待40分钟
@@ -646,6 +675,22 @@ async def viking_ingest(
                     break
                 elif status in ("failed", "cancelled", "unknown"):
                     raise RuntimeError(f"Task {task_id} {status}, trace_id={trace_id}: {task}")
+                elif wait_until == "midterm-ready" and _task_midterm_ready(task):
+                    # Token usage is finalized only when the background task
+                    # completes.  Keep zeros here instead of reporting a partial
+                    # value as the final import cost.
+                    token_usage = {
+                        "embedding": 0,
+                        "vlm": 0,
+                        "llm_input": 0,
+                        "llm_output": 0,
+                        "cache": 0,
+                        "reasoning": 0,
+                        "total": 0,
+                    }
+                    wait_state = "midterm_ready"
+                    background_processing = True
+                    break
                 await asyncio.sleep(2)
             else:
                 raise RuntimeError(
@@ -654,7 +699,13 @@ async def viking_ingest(
         else:
             token_usage = {"embedding": 0, "vlm": 0, "total": 0}
 
-        return {"token_usage": token_usage, "task_id": task_id, "trace_id": trace_id}
+        return {
+            "token_usage": token_usage,
+            "task_id": task_id,
+            "trace_id": trace_id,
+            "wait_state": wait_state,
+            "background_processing": background_processing,
+        }
 
     finally:
         await client.close()
@@ -703,19 +754,26 @@ async def process_single_session(
             account=account,
             api_key=args.api_key,
             group_chat=args.group_chat,
+            wait_until=getattr(args, "wait_until", "complete"),
+            defer_long_term_extraction=getattr(
+                args, "defer_long_term_until_all_midterm_ready", False
+            ),
         )
         duration_seconds = round(time.perf_counter() - started_at, 3)
         token_usage = result["token_usage"]
         task_id = result.get("task_id")
         trace_id = result.get("trace_id", "")
+        wait_state = result.get("wait_state", "complete")
+        background_processing = bool(result.get("background_processing", False))
         embedding_tokens = token_usage.get("embedding", 0)
         vlm_tokens = token_usage.get("llm_input", 0)
         cache_tokens = token_usage.get("cache", 0)
         reasoning_tokens = token_usage.get("reasoning", 0)
         llm_output_tokens = token_usage.get("llm_output", 0)
         if not getattr(args, "_show_progress", False):
+            state_label = "MIDTERM_READY" if background_processing else "COMPLETED"
             print(
-                f"    -> [COMPLETED] [{csv_id}/{session_key}] duration={duration_seconds}s, embed={embedding_tokens}, vlm={vlm_tokens}, cache={cache_tokens}, reasoning={reasoning_tokens}, completion={llm_output_tokens}, task_id={task_id}, trace_id={trace_id}",
+                f"    -> [{state_label}] [{csv_id}/{session_key}] duration={duration_seconds}s, embed={embedding_tokens}, vlm={vlm_tokens}, cache={cache_tokens}, reasoning={reasoning_tokens}, completion={llm_output_tokens}, task_id={task_id}, trace_id={trace_id}",
                 file=sys.stderr,
             )
 
@@ -736,6 +794,8 @@ async def process_single_session(
             "llm_output_tokens": llm_output_tokens,
             "task_id": task_id,
             "trace_id": trace_id,
+            "wait_state": wait_state,
+            "background_processing": background_processing,
         }
 
         # 写入成功CSV
@@ -890,11 +950,21 @@ async def run_import(args: argparse.Namespace) -> None:
     total_llm_output_tokens = 0
     failed_sessions: list[dict[str, str]] = []
     success_trace_ids: list[str] = []
+    deferred_task_ids: list[str] = []
     tasks = []
     progress_tracker: AsyncProgressTracker | None = None
     progress = None
     show_progress = should_show_progress(args.no_progress)
     args._show_progress = show_progress
+
+    def record_deferred_task(result: Dict[str, Any]) -> None:
+        if not getattr(args, "defer_long_term_until_all_midterm_ready", False):
+            return
+        if not result.get("background_processing"):
+            return
+        task_id = result.get("task_id")
+        if task_id and task_id not in deferred_task_ids:
+            deferred_task_ids.append(task_id)
     session_semaphore = (
         asyncio.Semaphore(args.parallel_sessions) if args.parallel_sessions else None
     )
@@ -1069,6 +1139,7 @@ async def run_import(args: argparse.Namespace) -> None:
                     total_cache_tokens += result.get("cache_tokens", 0)
                     total_reasoning_tokens += result.get("reasoning_tokens", 0)
                     total_llm_output_tokens += result.get("llm_output_tokens", 0)
+                    record_deferred_task(result)
                 elif result.get("status") == "error":
                     error_count += 1
                     record_failed_session(result, failed_sessions)
@@ -1168,6 +1239,7 @@ async def run_import(args: argparse.Namespace) -> None:
                         total_cache_tokens += res.get("cache_tokens", 0)
                         total_reasoning_tokens += res.get("reasoning_tokens", 0)
                         total_llm_output_tokens += res.get("llm_output_tokens", 0)
+                        record_deferred_task(res)
                     elif res.get("status") == "error":
                         error_count += 1
                         record_failed_session(res, failed_sessions)
@@ -1277,9 +1349,52 @@ async def run_import(args: argparse.Namespace) -> None:
                     total_embedding_tokens += r.get("embedding_tokens", 0)
                     total_vlm_tokens += r.get("vlm_tokens", 0)
                     total_llm_output_tokens += r.get("llm_output_tokens", 0)
+                    record_deferred_task(r)
                 elif r.get("status") == "error":
                     error_count += 1
                     record_failed_session(r, failed_sessions)
+
+    if getattr(args, "defer_long_term_until_all_midterm_ready", False):
+        if deferred_task_ids:
+            print(
+                f"\n[INFO] All {len(deferred_task_ids)} Session tasks reached "
+                "midterm_ready; releasing long-term extraction",
+                file=sys.stderr,
+            )
+            release_client = ov.AsyncHTTPClient(
+                url=args.openviking_url,
+                user="" if args.auth_mode == "api_key" else (args.user or ""),
+                account="" if args.auth_mode == "api_key" else (args.account or ""),
+                api_key=args.api_key,
+                timeout=600,
+            )
+            await release_client.initialize()
+            try:
+                release_results = await asyncio.gather(
+                    *(
+                        release_client.release_long_term_extraction(task_id)
+                        for task_id in deferred_task_ids
+                    ),
+                    return_exceptions=True,
+                )
+            finally:
+                await release_client.close()
+            release_errors = [
+                result for result in release_results if isinstance(result, BaseException)
+            ]
+            if release_errors:
+                raise RuntimeError(
+                    f"Failed to release {len(release_errors)} deferred long-term tasks: "
+                    f"{release_errors[0]}"
+                )
+            print(
+                "[INFO] Long-term extraction released; evaluation may start immediately",
+                file=sys.stderr,
+            )
+        if error_count:
+            raise RuntimeError(
+                "Released successful deferred tasks, but one or more Session imports failed"
+            )
 
     # Final summary
     total_processed = success_count + error_count + skipped_count
@@ -1311,6 +1426,12 @@ async def run_import(args: argparse.Namespace) -> None:
     print(f"Total Cache tokens: {total_cache_tokens}", file=sys.stderr)
     print(f"Total Reasoning tokens: {total_reasoning_tokens}", file=sys.stderr)
     print(f"Total Completion tokens: {total_llm_output_tokens}", file=sys.stderr)
+    if args.wait_until == "midterm-ready":
+        print(
+            "Note: tasks released at midterm_ready continue in the background; "
+            "their final long-term extraction tokens are not included above.",
+            file=sys.stderr,
+        )
     if success_count > 0:
         print(
             f"Average Embedding per session: {total_embedding_tokens / success_count:.1f}",
@@ -1451,7 +1572,33 @@ def main():
         action="store_true",
         help="Disable the live progress bar (fall back to line-by-line logs). Auto-disabled when stderr is not a TTY.",
     )
+    parser.add_argument(
+        "--wait-until",
+        choices=["complete", "midterm-ready"],
+        default="complete",
+        help=(
+            "Import readiness boundary. 'complete' waits for long-term extraction; "
+            "'midterm-ready' returns after vector-searchable mid-term memories are "
+            "published while long-term extraction continues in the background."
+        ),
+    )
+    parser.add_argument(
+        "--defer-long-term-until-all-midterm-ready",
+        action="store_true",
+        help=(
+            "Pause each Session after searchable mid-term indexing, then release "
+            "all long-term extraction tasks together after the import barrier."
+        ),
+    )
     args = parser.parse_args()
+    if (
+        args.defer_long_term_until_all_midterm_ready
+        and args.wait_until != "midterm-ready"
+    ):
+        parser.error(
+            "--defer-long-term-until-all-midterm-ready requires "
+            "--wait-until midterm-ready"
+        )
 
     # 确保输出目录存在
     Path(args.success_csv).parent.mkdir(parents=True, exist_ok=True)

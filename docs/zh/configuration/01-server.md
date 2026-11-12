@@ -510,7 +510,10 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
     "prefetch_search_topn": 5,
     "extraction_enabled": true,
     "session_skill_extraction_enabled": false,
-    "link_enabled": false
+    "link_enabled": false,
+    "topic_continuity": {
+      "enabled": false
+    }
   }
 }
 ```
@@ -526,8 +529,28 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
 | `extraction_enabled` | boolean | `true` | session commit 时是否抽取长期记忆 |
 | `session_skill_extraction_enabled` | boolean | `false` | 是否同时抽取可复用 Skill |
 | `link_enabled` | boolean | `false` | 是否生成和解析记忆链接 |
+| `topic_continuity` | object | 见下表 | 长期记忆提取前是否按相邻 Turn 话题连续性分组，默认关闭 |
 
 自动提交还需要单独设置策略：记忆抽取开关不会让会话自动提交。详见[配置指南](../guides/01-configuration.md)的 `memory.session_auto_commit` 和[会话 API](../api/05-sessions.md)。模板目录的加载顺序和生效方式见 [Prompt 指南](../guides/10-prompt-guide.md)。
+
+`topic_continuity` 字段（均可选；默认关闭）：
+
+| 字段 | 类型 | 默认值 | 作用 |
+|---|---|---|---|
+| `enabled` | boolean | `false` | 是否按相邻 Turn 话题连续性分组后再提取 |
+| `max_turns` | integer，`>= 1` | `10` | 同一话题组最多包含的完整 Turn 数 |
+| `overlap_turns` | integer，`>= 0` | `1` | 仅 `max_turns` 切开时，把上一组末尾若干 Turn 作为下一组上下文前缀 |
+| `min_turns_to_split` | integer，`>= 1` | `2` | Turn 数少于此值时不分组 |
+| `time_gap_seconds` | integer，`>= 0` | `0` | 相邻 Turn 锚点间隔超过该值视为不连续；`0` 忽略时间 |
+| `skip_max_user_chars` | integer，`>= 0` | `0` | 用户提问总字符不超过该值则跳过该组；`0` 不跳过 |
+
+配置了独立 `query_planner` 时，由它判断相邻 Turn 是否仍是同一话题。超时、异常或无法解析的回复都保持连续。没有独立 planner 时不会调用提取用的 VLM；此时若 `time_gap_seconds=0`，开启后只按 `max_turns` 切组。切开发生在同一次 commit 内部。
+
+`memory.topic_continuity.enabled` 是唯一功能开关，默认 `false`。设为 `true` 后，同时开启话题分组、中期对话暂存、向量索引、转化清理和 VikingBot 中期召回。原 `memory.midterm_memory` 和 `bot.ov_server.memory_recall_midterm_enabled` 开关不再使用。VikingBot 从其加载的 `ov.conf` 根级 `memory` 配置继承开关；服务端和 Bot 分开运行时应使用相同设置。
+
+已转化的暂存记录及其向量召回副本会被清理；未转化或失败的记录继续保留。长期提取仍使用原始 archive 消息。召回限额和话题组大小仍可调节。
+
+`defer_long_term_extraction` 保留为逐次 commit 的显式评测屏障，不是功能开关。普通 commit 自动执行中期和长期提取。评测客户端可请求暂停，并通过 `/tasks/{task_id}/release-long-term` 释放；此操作要求唯一功能开关已开启。
 
 ## 解析器配置
 

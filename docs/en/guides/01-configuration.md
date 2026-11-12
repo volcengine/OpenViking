@@ -2034,6 +2034,7 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 | `session_skill_extraction_enabled` | Whether session commit also extracts reusable skills into the current user's skill directory. | `false` |
 | `link_enabled` | Whether memory extraction writes and resolves memory links. | `false` |
 | `session_auto_commit` | Server-wide automatic session commit controls. This belongs under `memory`, not under `server`; see [Session Auto Commit Configuration](#session-auto-commit-configuration). | See section below |
+| `topic_continuity` | Whether long-term extraction groups adjacent Turns by topic continuity. Off by default; see [Topic Continuity Configuration](#topic-continuity-configuration). | See section below |
 
 #### Memory links (`memory.link_enabled`)
 
@@ -2124,6 +2125,36 @@ When a session carries an `auto_commit_policy`, any field you omit falls back to
 | `min_commit_interval_seconds` | int | 0 | 0 | 604800 | Minimum seconds between two automatic commits (throttle). |
 
 Code entry: `openviking/session/auto_commit_policy.py:AutoCommitPolicy`.
+
+#### Topic Continuity Configuration
+
+`memory.topic_continuity.enabled` is the single switch for topic grouping, midterm staging, vector indexing, cleanup, and VikingBot midterm recall. It defaults to `false`; set it to `true` to enable all feature stages. Normal commits continue automatically; the explicit evaluation pause/release request remains separate.
+
+```json
+{
+  "memory": {
+    "topic_continuity": {
+      "enabled": false,
+      "max_turns": 10,
+      "overlap_turns": 1,
+      "min_turns_to_split": 2,
+      "time_gap_seconds": 0,
+      "skip_max_user_chars": 0
+    }
+  }
+}
+```
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `enabled` | bool | Enable topic grouping, midterm staging/indexing/cleanup, and VikingBot midterm recall together. Disabled by default | `false` |
+| `max_turns` | int | Maximum complete Turns in one topic group before a cut | `10` |
+| `overlap_turns` | int | On `max_turns` cuts only, copy the last N Turns of the previous group as context prefix. Topic-change cuts have no overlap | `1` |
+| `min_turns_to_split` | int | Skip grouping when the archive has fewer Turns than this | `2` |
+| `time_gap_seconds` | int | Adjacent Turn anchors farther apart than this are not continuous. `0` ignores time | `0` |
+| `skip_max_user_chars` | int | Skip extraction when owned user-query text in a group is at most this many characters. `0` never skips | `0` |
+
+When a dedicated `query_planner` is configured, it decides whether neighboring Turns stay one topic. A timeout, error, or unclear reply stays continuous. Without that planner, the extraction model is not called; with `time_gap_seconds=0`, the flag then splits only on `max_turns`. The split stays inside one commit.
 
 ### ovcli.conf
 

@@ -2094,6 +2094,13 @@ class AsyncHTTPClient:
         response = await self._request("POST", f"/api/v1/tasks/{task_id}/cancel")
         return self._handle_response(response)
 
+    async def release_long_term_extraction(self, task_id: str) -> Dict[str, Any]:
+        task_path = self._path_segment(task_id)
+        response = await self._request(
+            "POST", f"/api/v1/tasks/{task_path}/release-long-term"
+        )
+        return self._handle_response(response)
+
     async def list_tasks(
         self,
         task_type: Optional[str] = None,
@@ -3554,6 +3561,9 @@ class SyncHTTPClient:
 
     def cancel_task(self, task_id: str) -> Dict[str, Any]:
         return run_async(self._async_client.cancel_task(task_id))
+
+    def release_long_term_extraction(self, task_id: str) -> Dict[str, Any]:
+        return run_async(self._async_client.release_long_term_extraction(task_id))
 
     def list_tasks(
         self,

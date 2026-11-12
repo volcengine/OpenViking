@@ -143,6 +143,7 @@ class AddMessageRequest(BaseModel):
 
     role: str
     peer_id: Optional[str] = None
+    speaker: Optional[str] = None
     content: Optional[str] = None
     parts: Optional[List[Dict[str, Any]]] = None
     created_at: Optional[str] = None
@@ -662,6 +663,14 @@ class CommitRequest(BaseModel):
         ),
     )
     telemetry: TelemetryRequest = False
+    defer_long_term_extraction: bool = Field(
+        default=False,
+        strict=True,
+        description=(
+            "Pause after searchable mid-term memories are published until the "
+            "commit task is explicitly released."
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_turn_retention_opt_in(self) -> "CommitRequest":
@@ -754,6 +763,8 @@ async def commit_session(
     )
     if body.reset_context:
         commit_kwargs["reset_context"] = True
+    if body.defer_long_term_extraction:
+        commit_kwargs["defer_long_term_extraction"] = True
     event_tags = _commit_event_tags(body.extraction_metadata)
     if event_tags is not None:
         commit_kwargs["event_tags"] = event_tags
@@ -805,6 +816,7 @@ async def add_message(
                 "role": request.role,
                 "parts": parts,
                 "peer_id": request.peer_id,
+                "speaker": request.speaker,
                 "created_at": request.created_at,
                 "turn_id": request.turn_id,
                 "message_kind": request.message_kind,
@@ -861,6 +873,7 @@ async def batch_add_messages(
                     "role": msg_request.role,
                     "parts": parts,
                     "peer_id": msg_request.peer_id,
+                    "speaker": msg_request.speaker,
                     "created_at": msg_request.created_at,
                     "turn_id": msg_request.turn_id,
                     "message_kind": msg_request.message_kind,

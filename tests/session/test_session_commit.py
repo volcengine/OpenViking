@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -25,6 +26,7 @@ from openviking.session.memory.memory_updater import (
     MemoryUpdateResult,
 )
 from openviking.utils.time_utils import parse_iso_datetime
+from openviking_cli.utils.config.memory_config import MemoryConfig
 
 
 async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:
@@ -97,6 +99,191 @@ class TestCommit:
             for part in message["parts"]
             if part["type"] == "text"
         }
+
+    async def test_midterm_is_indexed_while_long_term_uses_raw_messages(
+        self, wm_session_with_messages: Session, monkeypatch
+    ):
+        config = SimpleNamespace(memory=MemoryConfig(topic_continuity={"enabled": True}))
+        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+        refresh_file_embedding = AsyncMock(return_value=True)
+        monkeypatch.setattr(
+            "openviking.session.memory.memory_updater.MemoryUpdater.refresh_file_embedding",
+            refresh_file_embedding,
+        )
+
+        async def extract_from_raw_archive(*, messages, archive_uri, **_kwargs):
+            assert messages
+            assert all(not message.id.startswith("midterm_") for message in messages)
+            assert all(not message.source_message_ids for message in messages)
+            root_uri = f"{archive_uri}/midterm_memory"
+            assert await wm_session_with_messages._viking_fs.exists(
+                f"{root_uri}/manifest.json", ctx=wm_session_with_messages.ctx
+            )
+            return [SimpleNamespace(category="events")]
+
+        wm_session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            side_effect=extract_from_raw_archive
+        )
+
+        commit = await wm_session_with_messages.commit_async()
+        task = await _wait_for_task(commit["task_id"])
+
+        assert task["status"] == "completed"
+        assert task["result"]["midterm_memory"] == {
+            "enabled": True,
+            "staged_records": 2,
+            "indexed_records": 2,
+            "converted_records": 2,
+            "deleted_records": 2,
+            "deleted": True,
+        }
+        assert refresh_file_embedding.await_count == 2
+        for call in refresh_file_embedding.await_args_list:
+            assert "/memories/midterm_qa/" in call.kwargs["uri"]
+            assert call.kwargs["uri"].endswith(".md")
+            assert call.kwargs["memory_type"] == "midterm_qa"
+            assert call.kwargs["strict"] is True
+        assert not await wm_session_with_messages._viking_fs.exists(
+            f"{commit['archive_uri']}/midterm_memory",
+            ctx=wm_session_with_messages.ctx,
+        )
+        archive_meta = await wm_session_with_messages._archives.read_meta(commit["archive_uri"])
+        conversion = archive_meta["midterm_memory_conversion"]
+        assert len(conversion["converted_source_message_ids"]) == 4
+        assert conversion["pending_source_message_ids"] == []
+
+    async def test_midterm_ready_is_published_while_long_term_runs_in_background(
+        self, wm_session_with_messages: Session, monkeypatch
+    ):
+        config = SimpleNamespace(memory=MemoryConfig(topic_continuity={"enabled": True}))
+        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+        monkeypatch.setattr(
+            "openviking.session.memory.memory_updater.MemoryUpdater.refresh_file_embedding",
+            AsyncMock(return_value=True),
+        )
+        extraction_started = threading.Event()
+        allow_extraction_to_finish = threading.Event()
+
+        async def blocked_long_term_extraction(**_kwargs):
+            extraction_started.set()
+            await asyncio.to_thread(allow_extraction_to_finish.wait)
+            return [SimpleNamespace(category="events")]
+
+        wm_session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            side_effect=blocked_long_term_extraction
+        )
+
+        commit = await wm_session_with_messages.commit_async()
+        tracker = get_task_tracker()
+        ready_task = None
+        for _ in range(300):
+            task = await tracker.get(commit["task_id"])
+            readiness = task.meta.get("midterm_memory_ready") if task else None
+            if isinstance(readiness, dict) and readiness.get("ready") is True:
+                ready_task = task
+                break
+            await asyncio.sleep(0.1)
+
+        try:
+            assert ready_task is not None
+            assert ready_task.status.value == "running"
+            assert ready_task.stage == "midterm_ready"
+            assert ready_task.meta["midterm_memory_ready"]["indexed_records"] == 2
+            for _ in range(100):
+                if extraction_started.is_set():
+                    break
+                await asyncio.sleep(0.05)
+            assert extraction_started.is_set()
+            for call in wm_session_with_messages._session_compressor.extract_long_term_memories.await_args_list:
+                assert call.kwargs["messages"]
+        finally:
+            allow_extraction_to_finish.set()
+
+        completed = await _wait_for_task(commit["task_id"])
+        assert completed["status"] == "completed"
+
+    async def test_deferred_long_term_waits_for_explicit_release(
+        self, wm_session_with_messages: Session, monkeypatch
+    ):
+        config = SimpleNamespace(memory=MemoryConfig(topic_continuity={"enabled": True}))
+        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+        monkeypatch.setattr(
+            "openviking.session.memory.memory_updater.MemoryUpdater.refresh_file_embedding",
+            AsyncMock(return_value=True),
+        )
+        extract_long_term = AsyncMock(return_value=[SimpleNamespace(category="events")])
+        wm_session_with_messages._session_compressor.extract_long_term_memories = extract_long_term
+
+        commit = await wm_session_with_messages.commit_async(defer_long_term_extraction=True)
+        tracker = get_task_tracker()
+        ready_task = None
+        for _ in range(300):
+            task = await tracker.get(commit["task_id"])
+            readiness = task.meta.get("midterm_memory_ready") if task else None
+            if isinstance(readiness, dict) and readiness.get("ready") is True:
+                ready_task = task
+                break
+            await asyncio.sleep(0.1)
+
+        assert ready_task is not None
+        assert ready_task.stage == "midterm_ready"
+        await asyncio.sleep(0.2)
+        extract_long_term.assert_not_awaited()
+
+        released = await tracker.release_long_term_extraction(
+            commit["task_id"],
+            account_id=wm_session_with_messages.ctx.account_id,
+            user_id=wm_session_with_messages.ctx.user.user_id,
+        )
+        assert released is not None
+        assert released.stage == "long_term_released"
+        assert released.meta["long_term_release_requested"] is True
+
+        completed = await _wait_for_task(commit["task_id"])
+        assert completed["status"] == "completed"
+        extract_long_term.assert_awaited_once()
+
+    async def test_midterm_is_retained_when_long_term_produces_no_memory(
+        self, wm_session_with_messages: Session, monkeypatch
+    ):
+        config = SimpleNamespace(memory=MemoryConfig(topic_continuity={"enabled": True}))
+        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+        wm_session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            return_value=[]
+        )
+
+        commit = await wm_session_with_messages.commit_async()
+        task = await _wait_for_task(commit["task_id"])
+
+        assert task["status"] == "completed"
+        assert task["result"]["midterm_memory"]["converted_records"] == 0
+        assert task["result"]["midterm_memory"]["deleted_records"] == 0
+        manifest = json.loads(
+            await wm_session_with_messages._viking_fs.read_file(
+                f"{commit['archive_uri']}/midterm_memory/manifest.json",
+                ctx=wm_session_with_messages.ctx,
+            )
+        )
+        assert manifest["records"]
+        assert all(record["converted_to_long_term"] is False for record in manifest["records"])
+
+    async def test_midterm_staging_is_retained_when_long_term_extraction_fails(
+        self, wm_session_with_messages: Session, monkeypatch
+    ):
+        config = SimpleNamespace(memory=MemoryConfig(topic_continuity={"enabled": True}))
+        monkeypatch.setattr("openviking.session.session.get_openviking_config", lambda: config)
+        wm_session_with_messages._session_compressor.extract_long_term_memories = AsyncMock(
+            side_effect=ValueError("long-term extraction failed")
+        )
+
+        commit = await wm_session_with_messages.commit_async()
+        task = await _wait_for_task(commit["task_id"])
+
+        assert task["status"] == "failed"
+        assert await wm_session_with_messages._viking_fs.exists(
+            f"{commit['archive_uri']}/midterm_memory/manifest.json",
+            ctx=wm_session_with_messages.ctx,
+        )
 
     async def test_idle_callback_commits_current_backlog_without_activity_recheck(
         self,

@@ -31,6 +31,10 @@ class SessionCommitMsg:
     session_window_context: int = 128_000
     summary_token_ratio: float = 0.25
     reasoning_effort: str | None = None
+    # Pause Phase 2 after all mid-term vectors are searchable.  A caller can
+    # then establish a dataset-wide barrier and explicitly release long-term
+    # extraction through the task API.
+    defer_long_term_extraction: bool = False
     # Version 1 snapshots explicitly encode WM. Version 0 (before default-off)
     # omitted true; only queued work, never saved user intent, inherits that value.
     memory_policy_version: int = 1
