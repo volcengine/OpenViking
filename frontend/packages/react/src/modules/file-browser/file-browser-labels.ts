@@ -2,10 +2,11 @@ import workflowEn from './locales/preview-workflow.en-US.js';
 import workflowZh from './locales/preview-workflow.zh-CN.js';
 import type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
 import { resolveLocale, type Locale } from '../../shared/locale.js';
-import enUS from './locales/en-US.js';
-import zhCN from './locales/zh-CN.js';
+import enUS, { stackedEmpty as stackedEmptyEn } from './locales/en-US.js';
+import zhCN, { stackedEmpty as stackedEmptyZh } from './locales/zh-CN.js';
 
 const LOCALES = { 'en-US': enUS, 'zh-CN': zhCN };
+const STACKED_EMPTY = { 'en-US': stackedEmptyEn, 'zh-CN': stackedEmptyZh };
 
 import type { FilePreviewLabels } from '../../components/file-preview/index.js';
 import type { FileTreeLabels } from '../../components/file-tree/index.js';
@@ -34,9 +35,12 @@ export interface ResolvedLabels extends Required<ShellLabels> {
 export function resolveLabels(
   labels: FileBrowserLabels | undefined,
   locale: Locale,
+  stacked = false,
 ): ResolvedLabels {
+  const text = resolveLocale(LOCALES, locale, labels);
   return {
-    ...resolveLocale(LOCALES, locale, labels),
+    ...text,
+    empty: stacked ? (labels?.empty ?? STACKED_EMPTY[locale]) : text.empty,
     workflow: resolveLocale(
       { 'en-US': workflowEn, 'zh-CN': workflowZh },
       locale,

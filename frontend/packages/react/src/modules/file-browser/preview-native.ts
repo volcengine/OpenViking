@@ -1,5 +1,7 @@
 import { OV_PATHS } from '../../client/paths.js';
+import { isOvClientError } from '../../client/errors.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
+import { splitWikiMetadata } from './wiki-metadata.js';
 import type {
   CompileConfig,
   PreviewHistoryEntry,
@@ -12,49 +14,64 @@ export async function readPreviewHistory(
   options: OvRequestOptions,
 ): Promise<PreviewHistoryEntry[]> {
   if (versioned) {
-    const result = await client.request<{
-      versions: {
-        version_id: string;
-        version_number: number;
-        snapshot_id: string;
-        snapshot_path: string;
-        created_at: number;
-      }[];
-    }>({
+    try {
+      const result = await client.request<{
+        versions: {
+          version_id: string;
+          version_number: number;
+          snapshot_id: string;
+          snapshot_path: string;
+          created_at: number;
+          message?: string;
+        }[];
+      }>({
+        method: 'GET',
+        path: OV_PATHS.snapshotVersions,
+        query: { uri, limit: 100 },
+        options,
+      });
+      return result.versions.map((entry) => ({
+        id: entry.version_id,
+        snapshot: entry.snapshot_id,
+        path: entry.snapshot_path,
+        title: String(entry.version_number),
+        numbered: true,
+        note: entry.message,
+        timestamp: entry.created_at,
+      }));
+    } catch (error) {
+      // Some hosted data planes expose snapshot log but omit Compile's version index.
+      if (!isOvClientError(error) || error.statusCode !== 404) throw error;
+    }
+  }
+  try {
+    const result = await client.request<
+      { oid: string; message: string; author: { time_seconds: number } }[]
+    >({
       method: 'GET',
-      path: OV_PATHS.snapshotVersions,
-      query: { uri, limit: 100 },
+      path: OV_PATHS.snapshotLog,
+      query: { paths: [uri], limit: 500 },
       options,
     });
-    return result.versions.map((entry) => ({
-      id: entry.version_id,
-      snapshot: entry.snapshot_id,
-      path: entry.snapshot_path,
-      title: String(entry.version_number),
-      timestamp: entry.created_at,
+    return result.map((entry) => ({
+      id: entry.oid,
+      snapshot: entry.oid,
+      path: uri,
+      title: entry.message,
+      note: entry.message,
+      timestamp: entry.author.time_seconds,
     }));
+  } catch (error) {
+    if (isOvClientError(error) && error.statusCode === 404) return [];
+    throw error;
   }
-  const result = await client.request<
-    { oid: string; message: string; author: { time_seconds: number } }[]
-  >({
-    method: 'GET',
-    path: OV_PATHS.snapshotLog,
-    query: { paths: [uri], limit: 500 },
-    options,
-  });
-  return result.map((entry) => ({
-    id: entry.oid,
-    snapshot: entry.oid,
-    path: uri,
-    title: entry.message,
-    timestamp: entry.author.time_seconds,
-  }));
 }
 
 export async function readHistoricalText(
   client: OvClient,
   entry: PreviewHistoryEntry,
   options: OvRequestOptions,
+  wiki = false,
 ) {
   const result = await client.request<Blob>({
     method: 'GET',
@@ -63,7 +80,8 @@ export async function readHistoricalText(
     responseType: 'blob',
     options,
   });
-  return result.text();
+  const text = await result.text();
+  return wiki ? splitWikiMetadata(text).document : text;
 }
 
 export function readCompileConfig(

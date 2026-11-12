@@ -4,6 +4,14 @@ export interface FileBrowserWorkflowLabels {
   configure: string;
   historyEmpty: string;
   historyLimit: string;
+  compareChanges: string;
+  noChanges: string;
+  addedLines: string;
+  removedLines: string;
+  copyOriginal: string;
+  copied: string;
+  historyPreview: string;
+  historyMarkdown: string;
   version: string;
   importFile: string;
   importHint: string;
@@ -50,5 +58,7 @@ export interface PreviewHistoryEntry {
   snapshot: string;
   path: string;
   title: string;
+  numbered?: boolean;
+  note?: string;
   timestamp?: number;
 }

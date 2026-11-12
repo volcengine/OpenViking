@@ -3,9 +3,6 @@ import { FileBrowser } from '@openviking/react/modules/file-browser';
 import { OpenVikingProvider } from '@openviking/react/client';
 import { mount, ok, recordingFetch, settle } from './module-dom.mjs';
 export { act, h, mount, ok, recordingFetch, settle };
-for (const name of ['MutationObserver', 'HTMLIFrameElement', 'SVGElement'])
-  globalThis[name] = window[name];
-globalThis.getComputedStyle = window.getComputedStyle.bind(window);
 export const URI = 'viking://resources/handbook';
 export const initial = () => ({
   uri: URI,

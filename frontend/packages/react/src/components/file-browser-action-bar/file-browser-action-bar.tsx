@@ -31,6 +31,8 @@ export type {
 export function FileBrowserActionBar({
   locale: localeProp,
   agentConnect,
+  agentConnectOpen,
+  onAgentConnectOpenChange,
   onConnectAgent,
   onImportResources,
   renderImportResources,
@@ -41,7 +43,13 @@ export function FileBrowserActionBar({
   const locale = useLocale(localeProp);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const drawerId = useId();
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [internalDrawerOpen, setInternalDrawerOpen] = useState(false);
+  const drawerOpen = agentConnectOpen ?? internalDrawerOpen;
+  const requestDrawerOpen = (open: boolean) => {
+    if (open === drawerOpen) return;
+    if (agentConnectOpen === undefined) setInternalDrawerOpen(open);
+    onAgentConnectOpenChange?.(open);
+  };
   const text = resolveFileBrowserActionBarLabels(locale, labels);
   const showConnect = Boolean(agentConnect || onConnectAgent);
   const importButton = (
@@ -82,7 +90,7 @@ export function FileBrowserActionBar({
           aria-controls={agentConnect ? drawerId : undefined}
           aria-expanded={agentConnect ? drawerOpen : undefined}
           onClick={() => {
-            if (agentConnect) setDrawerOpen(true);
+            if (agentConnect) requestDrawerOpen(true);
             onConnectAgent?.();
           }}
         >
@@ -121,7 +129,7 @@ export function FileBrowserActionBar({
           triggerRef={triggerRef}
           className="ov-file-browser-action-bar__drawer"
           lang={agentConnect.locale ?? locale}
-          onClose={() => setDrawerOpen(false)}
+          onClose={() => requestDrawerOpen(false)}
         >
           <AgentConnect
             {...agentConnect}

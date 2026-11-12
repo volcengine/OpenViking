@@ -1,9 +1,10 @@
 import { DEMO_EXPERIENCE, DEMO_WIKI } from '#dashboard-demo-data';
 import { Button } from '#demo-controls';
 import { useLang } from '@rspress/core/runtime';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { OpenVikingProvider } from '@openviking/react/client';
 import { FileBrowser } from '@openviking/react/modules/file-browser';
+import type { FileBrowserHandle } from '@openviking/react/modules/file-browser';
 import { usePreviewControls } from '#file-browser-preview-controls';
 import {
   DEMO_WIKI_FILE,
@@ -27,22 +28,24 @@ export default function FileBrowserBasic() {
           canonical: 'Wiki: canonical URI',
           alias: 'Wiki: ~ alias',
           import: 'Host received import',
-          hint: 'Open search and submit profile to try offline search',
+          hint: 'Open search and type profile to try offline search',
         };
   const [uri, setUri] = useState<string | null>(null);
+  const browserRef = useRef<FileBrowserHandle>(null);
   const [imported, setImported] = useState(false);
   return (
     <div
       lang={componentLocale}
       style={{
-        height: 720,
+        minHeight: 720,
         display: 'grid',
-        gridTemplateRows: 'minmax(0, 1fr) auto',
+        gridTemplateRows: 'minmax(360px, 1fr) auto',
         gap: 8,
       }}
     >
       <OpenVikingProvider fetch={preview.fetch}>
         <FileBrowser
+          ref={browserRef}
           locale={componentLocale}
           uri={uri ?? ''}
           onUriChange={setUri}
@@ -57,6 +60,16 @@ export default function FileBrowserBasic() {
         />
       </OpenVikingProvider>
       <div className="ov-demo-controls">
+        <Button
+          size="small"
+          onClick={() =>
+            void browserRef.current?.openResource(DEMO_PREVIEW_FILE)
+          }
+        >
+          {componentLocale === 'zh-CN'
+            ? '打开并定位文件'
+            : 'Open and reveal file'}
+        </Button>
         {preview.controls}
         <Button
           size="small"

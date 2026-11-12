@@ -1,10 +1,11 @@
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 
 import { ResizableHandle } from '../../shared/primitives/resizable/index.js';
 import { FileBrowserPreviewPane } from './file-browser-preview-pane.js';
 import {
+  SIDE_BY_SIDE_MIN_WIDTH,
   TREE_DEFAULT_WIDTH,
   TREE_MIN_WIDTH,
   resolveTreeMaxWidth,
@@ -13,15 +14,13 @@ import { FileBrowserTreePane } from './file-browser-tree-pane.js';
 import { FileBrowserSearch } from './file-browser-search.js';
 import { resolveLabels, resolvePreviewLabels } from './file-browser-labels.js';
 import { useContainerWidth } from './use-container-width.js';
-import { useSearchShortcut } from './use-search-shortcut.js';
+import { useFileBrowserSearchDialog } from './use-file-browser-search-dialog.js';
 import { useFileBrowser } from './use-file-browser.js';
 import { useFileBrowserAcl } from './use-file-browser-acl.js';
-import type { FileBrowserProps } from './types.js';
-
-export type {
-  FileBrowserActions,
-  FileBrowserApi,
-  FileBrowserLabels,
+import { useFileBrowserHandle } from './use-file-browser-handle.js';
+import type {
+  FileBrowserComponent,
+  FileBrowserHandle,
   FileBrowserProps,
 } from './types.js';
 
@@ -37,37 +36,37 @@ export type {
  * tree; loading and coordination live in {@link useFileBrowser}, and this only
  * assembles the view.
  */
-export function FileBrowser({
-  uri,
-  defaultUri,
-  rootUri = 'viking://',
-  defaultExpandedUri,
-  locale: localeProp,
-  agentConnect,
-  dashboardKinds,
-  renderDashboard,
-  acl,
-  readOnly,
-  previewActions,
-  onUriChange,
-  onImportResources,
-  renderImportResources,
-  previewSlots,
-  labels,
-  requestOptions,
-  className,
-  style,
-  ...rest
-}: FileBrowserProps) {
+export const FileBrowser: FileBrowserComponent = forwardRef<
+  FileBrowserHandle,
+  FileBrowserProps
+>(function FileBrowser(
+  {
+    uri,
+    defaultUri,
+    rootUri = 'viking://',
+    defaultExpandedUri,
+    locale: localeProp,
+    agentConnect,
+    agentConnectOpen,
+    onAgentConnectOpenChange,
+    dashboardKinds,
+    renderDashboard,
+    acl,
+    readOnly,
+    previewActions,
+    onUriChange,
+    onImportResources,
+    renderImportResources,
+    previewSlots,
+    labels,
+    requestOptions,
+    className,
+    style,
+    ...rest
+  }: FileBrowserProps,
+  ref,
+) {
   const locale = useLocale(localeProp);
-  const [searchOpen, setSearchOpen] = useState(false);
-  // 高级面板开着的时候，左栏的漏斗也直接打开弹窗并落在展开态，与弹窗内的开关
-  // 共用同一个意图。关闭弹窗时一并收起。
-  //
-  // While the advanced panel is open, the left column's funnel also opens the dialog
-  // straight into the expanded state: both switches express the same intent. Closing
-  // the dialog collapses it too.
-  const [searchAdvanced, setSearchAdvanced] = useState(false);
   const [internalUri, setInternalUri] = useState<string | null>(
     () => defaultUri ?? null,
   );
@@ -83,9 +82,10 @@ export function FileBrowser({
   // and there is no "deselect" interaction — so no separate `null` branch is needed.
   const isControlled = uri !== undefined;
   const currentUri = isControlled ? uri : internalUri;
-  const text = resolveLabels(labels, locale);
   const { ref: layoutRef, width: layoutWidth } =
     useContainerWidth<HTMLDivElement>();
+  const stacked = layoutWidth > 0 && layoutWidth < SIDE_BY_SIDE_MIN_WIDTH;
+  const text = resolveLabels(labels, locale, stacked);
 
   // 上限随容器变化：宿主把整个模块塞进窄栏时，树不能继续按 520px 抢地方。当前
   // 宽度再夹一次而不是丢掉，容器重新变宽时树会回到拖动过的位置。
@@ -155,32 +155,20 @@ export function FileBrowser({
     requestOptions,
     refresh: browser.actions.refresh,
   });
+  const navigation = useFileBrowserHandle(browser, ref);
 
-  // 同一个页面可能挂多个实例，只有最近交互过的那个响应 ⌘K——否则一次按键会让
-  // 所有实例同时弹出搜索框。归属规则与交互记录都在 `useSearchShortcut` 里。
-  //
-  // Several instances can share one page, so only the one interacted with last answers
-  // ⌘K — otherwise one press opens every instance's dialog at once. The ownership rule
-  // and the interaction tracking live in `useSearchShortcut`.
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const shortcut = useSearchShortcut(containerRef, () =>
-    setSearchOpen((open) => {
-      if (open) setSearchAdvanced(false);
-      return !open;
-    }),
-  );
+  const search = useFileBrowserSearchDialog(layoutRef);
+  const baseClass = stacked
+    ? 'ov-file-browser ov-file-browser--stacked'
+    : 'ov-file-browser';
 
   return (
     <LocaleProvider locale={locale}>
       <div
         {...rest}
-        ref={(node) => {
-          layoutRef.current = node;
-          containerRef.current = node;
-        }}
-        className={['ov-file-browser', className].filter(Boolean).join(' ')}
-        onPointerDownCapture={shortcut.onPointerDownCapture}
-        onFocusCapture={shortcut.onFocusCapture}
+        ref={layoutRef}
+        className={className ? `${baseClass} ${className}` : baseClass}
+        {...search.shortcut}
         style={
           {
             ...style,
@@ -193,19 +181,19 @@ export function FileBrowser({
       >
         <div className="ov-file-browser__tree">
           <FileBrowserTreePane
+            treeRef={navigation.treeRef}
             rootUri={rootUri}
             entries={{
               agentConnect,
+              agentConnectOpen,
+              onAgentConnectOpenChange,
               onImportResources,
               renderImportResources,
               labels: labels?.actionBar,
             }}
-            onSearch={() => setSearchOpen(true)}
-            onAdvancedSearch={() => {
-              setSearchAdvanced(true);
-              setSearchOpen(true);
-            }}
-            advancedOpen={searchAdvanced && searchOpen}
+            onSearch={search.show}
+            onAdvancedSearch={search.showAdvanced}
+            advancedOpen={search.advanced && search.open}
             browser={browser}
             treeLabels={text.tree}
             locale={locale}
@@ -217,14 +205,16 @@ export function FileBrowser({
           />
         </div>
 
-        <ResizableHandle
-          label={text.resizeTree}
-          min={TREE_MIN_WIDTH}
-          max={treeMaxWidth}
-          value={treeWidth}
-          onResize={setPreferredTreeWidth}
-          className="ov-file-browser__resizer"
-        />
+        {!stacked ? (
+          <ResizableHandle
+            label={text.resizeTree}
+            min={TREE_MIN_WIDTH}
+            max={treeMaxWidth}
+            value={treeWidth}
+            onResize={setPreferredTreeWidth}
+            className="ov-file-browser__resizer"
+          />
+        ) : null}
 
         <FileBrowserPreviewPane
           browser={browser}
@@ -241,20 +231,18 @@ export function FileBrowser({
       </div>
       {permissions.drawer}
       <FileBrowserSearch
-        open={searchOpen}
+        key={search.session}
+        open={search.open}
         locale={locale}
         rootUri={rootUri}
         triggerRef={layoutRef}
         text={text}
         requestOptions={requestOptions}
-        advancedOpen={searchAdvanced}
-        onToggleAdvanced={setSearchAdvanced}
-        onOpenResource={(next) => void browser.actions.openResource(next)}
-        onClose={() => {
-          setSearchOpen(false);
-          setSearchAdvanced(false);
-        }}
+        advancedOpen={search.advanced}
+        onToggleAdvanced={search.setAdvanced}
+        onOpenResource={navigation.openResource}
+        onClose={search.close}
       />
     </LocaleProvider>
   );
-}
+});

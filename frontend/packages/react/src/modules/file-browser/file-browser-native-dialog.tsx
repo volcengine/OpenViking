@@ -31,10 +31,16 @@ export function FileBrowserNativeDialog({
       locale={props.locale}
       triggerRef={triggerRef}
       onClose={props.onClose}
-      className="ov-file-browser-workflow"
+      className={
+        kind === 'history'
+          ? 'ov-file-browser-workflow ov-file-history'
+          : 'ov-file-browser-workflow'
+      }
     >
       <h2>{title}</h2>
-      <p className="ov-file-browser-workflow__uri">{props.uri}</p>
+      {kind === 'history' ? null : (
+        <p className="ov-file-browser-workflow__uri">{props.uri}</p>
+      )}
       {kind === 'history' ? (
         <PreviewHistory
           {...common}
