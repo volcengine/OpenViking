@@ -20,6 +20,12 @@ func setString(m map[string]any, key, value string) {
 	}
 }
 
+func setOptional[T any](m map[string]any, key string, value *T) {
+	if value != nil {
+		m[key] = *value
+	}
+}
+
 func setAny(m map[string]any, key string, value any) {
 	if value != nil {
 		m[key] = value
