@@ -481,7 +481,10 @@ class OpenVikingService:
         return self._compile_service
 
     async def initialize(
-        self, *, before_background_start: Optional[Callable[[], Awaitable[None]]] = None
+        self,
+        *,
+        before_background_start: Optional[Callable[[], Awaitable[None]]] = None,
+        preset_global_policy: bool = False,
     ) -> None:
         """Initialize OpenViking storage and indexes."""
         if self._initialized:
@@ -573,6 +576,7 @@ class OpenVikingService:
         account_count, user_count = await directory_initializer.initialize_account_workspace(
             default_ctx,
             sync_system_assets=False,
+            preset_global_policy=preset_global_policy,
         )
         logger.info(
             "Initialized preset directories account=%d user=%d",
@@ -1104,6 +1108,7 @@ class OpenVikingService:
         self,
         ctx: RequestContext,
         *,
+        preset_global_policy: bool = False,
         lease_ref: Any = None,
     ) -> tuple[int, int]:
         """Initialize a new account's workspace under one account Tree lease."""
@@ -1112,11 +1117,11 @@ class OpenVikingService:
             return 0, 0
         if lease_ref is not None:
             return await self._directory_initializer.initialize_account_workspace(
-                ctx, lease_ref=lease_ref
+                ctx, preset_global_policy=preset_global_policy, lease_ref=lease_ref
             )
         async with self.account_workspace_lock(ctx) as lease:
             return await self._directory_initializer.initialize_account_workspace(
-                ctx, lease_ref=lease
+                ctx, preset_global_policy=preset_global_policy, lease_ref=lease
             )
 
     async def reconcile_system_assets(self, account_lister: AccountLister) -> int:
@@ -1132,7 +1137,9 @@ class OpenVikingService:
             skip_account_ids={self._user.account_id},
         ).sync_if_changed()
 
-    async def initialize_user_directories(self, ctx: RequestContext) -> int:
+    async def initialize_user_directories(
+        self, ctx: RequestContext, *, preset_global_policy: bool = False
+    ) -> int:
         """Initialize the user's preset directories under one user Tree lease."""
         self._ensure_initialized()
         if not self._directory_initializer:
@@ -1150,7 +1157,7 @@ class OpenVikingService:
                     uri=uri,
                 ) from exc
             return await self._directory_initializer.initialize_user_directories(
-                ctx, lease_ref=lease
+                ctx, preset_global_policy=preset_global_policy, lease_ref=lease
             )
         finally:
             await guard.close()

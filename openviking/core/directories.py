@@ -223,6 +223,7 @@ class DirectoryInitializer:
         ctx: RequestContext,
         *,
         sync_system_assets: bool = True,
+        preset_global_policy: bool = False,
         lease_ref: Any = None,
     ) -> tuple[int, int]:
         """Initialize account and first-user preset directories as one batch."""
@@ -238,9 +239,10 @@ class DirectoryInitializer:
         await ensure_agent_file(
             self._get_viking_fs(), replace(ctx, actor_peer_id=None), lease_ref=lease_ref
         )
-        await ensure_global_policy_file(
-            self._get_viking_fs(), replace(ctx, actor_peer_id=None), lease_ref=lease_ref
-        )
+        if preset_global_policy:
+            await ensure_global_policy_file(
+                self._get_viking_fs(), replace(ctx, actor_peer_id=None), lease_ref=lease_ref
+            )
         user_count = sum(target.scope == "user" for target in created)
         return len(created) - user_count, user_count
 
@@ -257,7 +259,11 @@ class DirectoryInitializer:
         return len(await self._initialize_directory_trees(roots, children))
 
     async def initialize_user_directories(
-        self, ctx: RequestContext, *, lease_ref: Any = None
+        self,
+        ctx: RequestContext,
+        *,
+        preset_global_policy: bool = False,
+        lease_ref: Any = None,
     ) -> int:
         """Initialize the current user's root and first-level entry directories.
 
@@ -274,9 +280,10 @@ class DirectoryInitializer:
         await ensure_agent_file(
             self._get_viking_fs(), replace(ctx, actor_peer_id=None), lease_ref=lease_ref
         )
-        await ensure_global_policy_file(
-            self._get_viking_fs(), replace(ctx, actor_peer_id=None), lease_ref=lease_ref
-        )
+        if preset_global_policy:
+            await ensure_global_policy_file(
+                self._get_viking_fs(), replace(ctx, actor_peer_id=None), lease_ref=lease_ref
+            )
         return len(created)
 
     async def _initialize_directory_trees(

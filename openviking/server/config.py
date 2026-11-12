@@ -189,6 +189,10 @@ def validate_config_input(
 class UserConfigDefaults(UserConfig):
     """Deployment defaults for users without persisted overrides."""
 
+    preset_global_policy: bool = Field(
+        default=False,
+        description="Create the packaged GLOBAL_POLICY.md during user initialization.",
+    )
     auto_commit_policy: Optional[Dict[str, Any]] = None
 
     @field_validator("auto_commit_policy", mode="before")

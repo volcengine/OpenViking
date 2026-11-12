@@ -499,7 +499,11 @@ async def create_account(
                     creating=True,
                     lease_ref=lease,
                 )
-            await service.initialize_account_workspace(account_ctx, lease_ref=lease)
+            await service.initialize_account_workspace(
+                account_ctx,
+                preset_global_policy=request.app.state.config.user_config_defaults.preset_global_policy,
+                lease_ref=lease,
+            )
             await _write_initial_user_config(
                 service,
                 account_ctx,
@@ -1029,7 +1033,10 @@ async def register_user(
         str(resolved_role),
         seed=body.seed,
     )
-    await service.initialize_user_directories(user_ctx)
+    await service.initialize_user_directories(
+        user_ctx,
+        preset_global_policy=request.app.state.config.user_config_defaults.preset_global_policy,
+    )
     await _write_initial_user_config(service, user_ctx, body.user_config)
     result = {
         "account_id": account_id,

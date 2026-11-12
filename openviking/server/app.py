@@ -214,7 +214,10 @@ async def _initialize_runtime_state(
             require_registered_identity=config.get_effective_auth_mode() == "api_key",
         )
 
-    await service.initialize(before_background_start=install_write_guards)
+    await service.initialize(
+        before_background_start=install_write_guards,
+        preset_global_policy=config.user_config_defaults.preset_global_policy,
+    )
     await service.apply_agent_evolution_config()
     manager = getattr(app.state, "api_key_manager", None)
     if manager is not None:

@@ -160,7 +160,7 @@ class _FakeService:
     async def initialize_account_directories(self, ctx):
         return None
 
-    async def initialize_user_directories(self, ctx):
+    async def initialize_user_directories(self, ctx, *, preset_global_policy=False):
         return None
 
     @asynccontextmanager
@@ -171,7 +171,9 @@ class _FakeService:
         finally:
             self.account_lock_events.append(("release", ctx.account_id))
 
-    async def initialize_account_workspace(self, ctx, *, lease_ref=None):
+    async def initialize_account_workspace(
+        self, ctx, *, preset_global_policy=False, lease_ref=None
+    ):
         self.workspace_leases.append(lease_ref)
         return None
 
@@ -2876,8 +2878,15 @@ async def test_create_duplicate_account_fails(admin_client: httpx.AsyncClient):
 # ---- User CRUD ----
 
 
-async def test_register_user(admin_client: httpx.AsyncClient):
+@pytest.mark.parametrize("preset_global_policy", [False, True])
+async def test_register_user(
+    admin_client: httpx.AsyncClient,
+    admin_app: FastAPI,
+    admin_service: OpenVikingService,
+    preset_global_policy: bool,
+):
     """ROOT can register a user in an account."""
+    admin_app.state.config.user_config_defaults.preset_global_policy = preset_global_policy
     acct = _uid()
     await admin_client.post(
         "/api/v1/admin/accounts",
@@ -2893,6 +2902,15 @@ async def test_register_user(admin_client: httpx.AsyncClient):
     body = resp.json()
     assert body["result"]["user_id"] == "bob"
     assert "user_key" in body["result"]
+
+    for user_id in ("alice", "bob"):
+        ctx = RequestContext(user=UserIdentifier(acct, user_id), role=Role.USER)
+        assert (
+            await admin_service.viking_fs.exists(
+                f"viking://user/{user_id}/GLOBAL_POLICY.md", ctx=ctx
+            )
+            is preset_global_policy
+        )
 
     # Bob's key should work
     bob_key = body["result"]["user_key"]

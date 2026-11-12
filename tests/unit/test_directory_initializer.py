@@ -87,6 +87,8 @@ async def test_initialize_account_workspace_batches_preset_directories(monkeypat
     viking_fs.files.update(legacy_files)
 
     account_count, user_count = await initializer.initialize_account_workspace(ctx)
+    assert viking_fs.files == legacy_files
+    await initializer.initialize_account_workspace(ctx, preset_global_policy=True)
     policy_uri = f"{canonical_user_root(ctx)}/GLOBAL_POLICY.md"
     default_policy = (SYSTEM_ASSETS_DIR / "user" / "GLOBAL_POLICY.md").read_text(encoding="utf-8")
     assert viking_fs.files == {**legacy_files, policy_uri: default_policy}
@@ -141,7 +143,9 @@ Only my own agent may read my memories.
     malformed_abstract = "---\ndirectory: viking://resources/\n"
     viking_fs.contexts["viking://resources"]["abstract"] = malformed_abstract
 
-    second_account_count, second_user_count = await initializer.initialize_account_workspace(ctx)
+    second_account_count, second_user_count = await initializer.initialize_account_workspace(
+        ctx, preset_global_policy=True
+    )
 
     assert (second_account_count, second_user_count) == (0, 0)
     assert viking_fs.files == {
@@ -193,18 +197,19 @@ async def test_initialize_user_directories_ignores_actor_peer_view_for_preset_st
         *(f"{user_root}/{child.path}" for child in PRESET_DIRECTORIES["user"].children),
     }
     assert count == len(expected_uris)
-    assert deletion_guard.await_count == len(expected_uris) + 2
-    assert prepare_parent.await_count == len(expected_uris) + 2
+    assert deletion_guard.await_count == len(expected_uris) + 1
+    assert prepare_parent.await_count == len(expected_uris) + 1
     root_path = agfs._resolve(viking_fs._uri_to_path(user_root, ctx=ctx))
     assert {str(path.relative_to(root_path)) for path in root_path.rglob("*.md")} == {
         f"{uri.removeprefix(user_root + '/')}/{filename}" if uri != user_root else filename
         for uri in expected_uris
         for filename in (".abstract.md", ".overview.md")
-    } | {"memories/soul.md", "GLOBAL_POLICY.md"}
+    } | {"memories/soul.md"}
     assert (root_path / "memories/soul.md").read_text() == (
         SYSTEM_ASSETS_DIR / "memory" / "soul.md"
     ).read_text()
     assert "Sanitized scope." in (root_path / ".abstract.md").read_text()
+    assert await initializer.initialize_user_directories(ctx, preset_global_policy=True) == 0
     policy_text = (root_path / "GLOBAL_POLICY.md").read_text(encoding="utf-8")
     assert policy_text == (SYSTEM_ASSETS_DIR / "user" / "GLOBAL_POLICY.md").read_text(
         encoding="utf-8"
@@ -233,7 +238,6 @@ async def test_system_assets_sync_only_for_account_initialization(monkeypatch):
     lease = {"lease_ref": "account-init"}
     agfs = SimpleNamespace(
         pathlock_acquire_tree=AsyncMock(return_value=lease),
-        pathlock_acquire_exact=AsyncMock(return_value=lease),
         pathlock_release=AsyncMock(),
     )
     viking_fs._async_agfs = agfs
