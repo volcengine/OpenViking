@@ -59,6 +59,50 @@ async def test_exec_tool_runs_in_selected_directory(tmp_path, relative_dir, allo
         assert result == "Error: Tool 'exec' not found"
 
 
+@pytest.mark.asyncio
+async def test_exec_tool_recovers_a_renamed_direct_workspace(tmp_path):
+    config = Config()
+    registry = ToolRegistry(config)
+    register_default_tools(registry, config)
+
+    workspace = tmp_path / "workspace"
+    renamed_workspace = tmp_path / "workspace-renamed"
+    alternate = tmp_path / "alternate"
+    alternate.mkdir()
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="exec-recovery")
+    sandbox = DirectBackend(config.sandbox, session_key, workspace)
+    manager = _SandboxManager(sandbox)
+    await sandbox.start()
+    try:
+        workspace.rename(renamed_workspace)
+
+        recovered = await registry.execute(
+            "exec",
+            {"command": "pwd", "working_dir": str(alternate)},
+            session_key=session_key,
+            sandbox_manager=manager,
+        )
+        repeated = await registry.execute(
+            "exec",
+            {"command": "pwd"},
+            session_key=session_key,
+            sandbox_manager=manager,
+        )
+    finally:
+        await sandbox.stop()
+
+    assert recovered.splitlines() == [
+        (
+            f"Notice: Direct workspace {workspace} was missing and was recreated before this "
+            "command. Files from the previous workspace were not restored."
+        ),
+        str(alternate),
+    ]
+    assert workspace.is_dir()
+    assert renamed_workspace.is_dir()
+    assert repeated.strip() == str(workspace)
+
+
 def test_compile_exec_requires_opt_in():
     from vikingbot.compile.service import BotCompileService
 
