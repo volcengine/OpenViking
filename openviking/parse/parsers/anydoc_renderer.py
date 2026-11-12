@@ -808,10 +808,10 @@ class _AnyDocMarkdownRenderer:
                 escape = next_char is None and trailing_active
             elif char == "|" and context == "table_cell":
                 escape = True
-            elif char in "#>" and start_of_line:
+            elif char in "#>=" and start_of_line:
                 escape = True
             elif char in "-+" and start_of_line:
-                escape = next_char is None or next_char.isspace()
+                escape = char == "-" or next_char is None or next_char.isspace()
             if escape:
                 output.append("\\")
             output.append(char)
