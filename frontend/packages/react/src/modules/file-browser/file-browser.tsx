@@ -166,6 +166,7 @@ export function FileBrowser({
       >
         <div className="ov-file-browser__tree">
           <FileBrowserTreePane
+            rootUri={rootUri}
             entries={{
               agentConnect,
               onImportResources,
@@ -223,7 +224,13 @@ export function FileBrowser({
           </div>
         ) : (
           <div className="ov-file-browser__detail">
-            <FileBrowserEmpty label={text.empty} />
+            {browser.currentUri ? (
+              <p className="ov-file-browser__hint" role="status">
+                {text.loading}
+              </p>
+            ) : (
+              <FileBrowserEmpty label={text.empty} />
+            )}
           </div>
         )}
       </div>

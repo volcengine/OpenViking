@@ -45,6 +45,42 @@ export function formatResult(
       }),
     };
   const result = object(data);
+  if (
+    [
+      'add-resource',
+      'add-skill',
+      'add-memory',
+      'compile',
+      'compile create',
+      'mkdir',
+      'cp',
+      'mv',
+      'rm',
+      'write',
+    ].includes(name)
+  ) {
+    const hidden =
+      name === 'add-resource'
+        ? new Set(['sourcepath', 'tempuri'])
+        : new Set<string>();
+    const rows = Object.entries(result).filter(
+      ([key, value]) =>
+        value !== undefined &&
+        value !== null &&
+        !hidden.has(key.replace(/_/g, '').toLowerCase()),
+    );
+    return {
+      variant: 'write-result',
+      lines: rows.length
+        ? rows.slice(0, 12).map(([key, value]) => {
+            const label = key.replaceAll('_', ' ');
+            return `${label[0]?.toUpperCase() ?? ''}${label.slice(1)}: ${text(value)}`;
+          })
+        : data === null || data === undefined
+          ? []
+          : [text(data)],
+    };
+  }
   if (['find', 'search'].includes(name)) {
     const items: TuiSearchResultItem[] = [];
     for (const key of ['memories', 'resources', 'skills']) {

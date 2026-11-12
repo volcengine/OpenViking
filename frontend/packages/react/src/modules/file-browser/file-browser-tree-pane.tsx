@@ -36,6 +36,7 @@ export interface FileBrowserTreePaneProps {
   dashboardLabels?: FileBrowserDashboardLabels;
   onSearch?: () => void;
   browser: FileBrowserApi;
+  rootUri: string;
   treeLabels: FileTreeLabels | undefined;
   searchPlaceholder: string;
   refreshLabel: string;
@@ -49,6 +50,7 @@ export function FileBrowserTreePane({
   dashboardLabels,
   onSearch,
   browser,
+  rootUri,
   treeLabels,
   searchPlaceholder,
   refreshLabel,
@@ -95,6 +97,7 @@ export function FileBrowserTreePane({
           refresh={false}
           locale={locale}
           rows={browser.rows}
+          rootOrder={rootUri === 'viking://' ? 'context' : 'input'}
           selectedId={browser.selectedId}
           isReady={browser.isReady}
           labels={treeLabels}

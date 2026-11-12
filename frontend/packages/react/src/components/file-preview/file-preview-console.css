@@ -137,7 +137,7 @@
 }
 
 .ov-file-preview__toolbar,
-.ov-file-preview__edit-toolbar {
+.ov-file-preview__edit-actions {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -187,13 +187,33 @@
   outline-offset: -2px;
 }
 
-.ov-file-preview__edit-toolbar {
+.ov-file-preview__edit-actions {
   flex: none;
-  justify-content: space-between;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--ov-ui-file-preview-border);
-  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
-  font-weight: 500;
+}
+
+.ov-file-preview__edit-action.ov-button {
+  height: 28px;
+  border-radius: 8px;
+  padding-inline: 12px;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.ov-file-preview__edit-icon {
+  display: block;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  background: currentColor;
+  mask: var(--ov-ui-file-preview-edit-icon) center no-repeat;
+}
+
+.ov-file-preview__edit-icon--cancel {
+  --ov-ui-file-preview-edit-icon: url('../../../../icons/svg/file-preview/cancel.svg');
+}
+
+.ov-file-preview__edit-icon--save {
+  --ov-ui-file-preview-edit-icon: url('../../../../icons/svg/file-preview/save.svg');
 }
 
 .ov-file-preview__sr-only {

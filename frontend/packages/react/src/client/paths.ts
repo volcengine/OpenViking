@@ -16,11 +16,17 @@
  * `verbatimModuleSyntax` cannot use.
  */
 export const OV_PATHS = {
+  /** 服务健康探针。Service health probe. */
+  health: '/health',
+  systemStatus: '/api/v1/system/status',
   /** 资源访问控制。Resource access control. */
   acl: '/api/v1/acl',
+  resources: '/api/v1/resources',
+  skills: '/api/v1/skills',
   /** 列出目录内容。List directory contents. */
   fsLs: '/api/v1/fs/ls',
   fsAttrs: '/api/v1/fs/attrs',
+  compile: '/api/v1/compile',
   compileConfigs: '/api/v1/compile/configs',
   experienceTrajectories: '/api/v1/agent-evolution/experiences/trajectories',
   experienceOutcomes: '/api/v1/agent-evolution/experiences/outcomes',
@@ -32,6 +38,8 @@ export const OV_PATHS = {
   fsMkdir: '/api/v1/fs/mkdir',
   /** 移动或重命名。Move or rename. */
   fsMv: '/api/v1/fs/mv',
+  fsCp: '/api/v1/fs/cp',
+  fsRm: '/api/v1/fs',
   /** 读取文件正文。Read file content. */
   contentRead: '/api/v1/content/read',
   /** 读取目录的 L0 摘要。Read a directory's L0 abstract. */
@@ -46,10 +54,12 @@ export const OV_PATHS = {
   searchGlob: '/api/v1/search/glob',
   /** 语义检索。Semantic search. */
   searchFind: '/api/v1/search/find',
+  searchQuery: '/api/v1/search/search',
   /** 按正则检索正文。Search content by regular expression. */
   searchGrep: '/api/v1/search/grep',
   /** 会话列表与新建。Session list and creation. */
   sessions: '/api/v1/sessions',
+  tasks: '/api/v1/tasks',
   /** 非流式对话。Non-streaming chat. */
   botChat: '/bot/v1/chat',
   /** 流式对话。Streaming chat. */
@@ -77,4 +87,8 @@ export const OV_PATH_BUILDERS = {
   /** 会话的消息。Messages of one session. */
   sessionMessages: (sessionId: string) =>
     `${OV_PATH_BUILDERS.session(sessionId)}/messages`,
+  sessionCommit: (sessionId: string) =>
+    `${OV_PATH_BUILDERS.session(sessionId)}/commit`,
+  task: (taskId: string) => `${OV_PATHS.tasks}/${encodeURIComponent(taskId)}`,
+  taskCancel: (taskId: string) => `${OV_PATH_BUILDERS.task(taskId)}/cancel`,
 } as const;

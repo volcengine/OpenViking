@@ -96,7 +96,7 @@ const FILES: Record<string, string> = {
   [`${RESOURCES}/design-system-alignment-notes.md`]:
     '# Design alignment\n\nColours come from the console theme; components never hard-code them.\n',
   [DEMO_PREVIEW_FILE]:
-    '# Rollout\n\nStage first, then production once the release ticket passes.\n\n![CLI](./cli.svg)',
+    '# Rollout\n\nStage first, then production once the release ticket passes.\n\n![CLI](./cli.svg)\n\n| Check | Result |\n| --- | --- |\n| First open | Ready |',
 };
 
 /** 目录的两级摘要。The two summary levels of a directory. */
