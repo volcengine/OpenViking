@@ -52,16 +52,48 @@ Python 原生扩展，会出现不支持 `postgres` Provider 或不认识配置�
 
 ### 第二步：准备 PostgreSQL 数据库
 
-使用可写主库，例如数据库 `openviking`、连接角色 `openviking`。
+使用 PostgreSQL 13+、服务端编码为 UTF8 的可写主库，例如数据库 `openviking`、连接角色 `openviking`。
 初始化会自动创建：
 
 - `public.ov_pathlock_tokens`：存储 namespace、逻辑路径、owner、时间戳和 holder token。
 - `public.ov_pathlock_expiry`：过期记录扫描索引。
+- `public.ov_pathlock_lookup`：namespace 和路径摘要的非唯一查找索引。
+- `public.path_prefix_2048(text)`：返回路径 UTF8 编码的前 2048 **字节**，类型为 bytea。
+- `public.ov_pathlock_subtree_prefix_2048`：`(md5(namespace), path_prefix_2048(path))` 非唯一范围索引。
+
+主键为数据库生成的 UUID；完整 namespace 和路径保留在 TEXT 字段。
+查找索引仅保存 `md5(namespace), md5(path)`，过期索引仅保存
+`md5(namespace), time_ns`，避免不可压缩长路径超过 B-tree 索引项大小限制。
+摘要只用于筛选，查询仍比较完整 namespace 和路径；摘要碰撞不会覆盖或混用锁。
+写入在 namespace 事务锁内先更新，未匹配完整路径时再插入。
+
+前缀长度按字节计算，可在多字节字符中间截断；结果始终作为 bytea 比较，不解码。
+该有界索引适用于标准 8 KiB PostgreSQL B-tree 页面，不依赖路径可压缩性。
+辅助函数在 UTF8 数据库中执行 UTF8 到 UTF8 转换，与客户端编码无关；
+初始化会拒绝非 UTF8 数据库。
+
+```sql
+CREATE FUNCTION public.path_prefix_2048(text) RETURNS bytea
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+AS 'SELECT pg_catalog.substring(pg_catalog.convert_to($1, ''UTF8''), 1, 2048)';
+CREATE INDEX ov_pathlock_subtree_prefix_2048
+ON public.ov_pathlock_tokens(md5(namespace), public.path_prefix_2048(path));
+```
+
+已有 UUID/摘要表会在初始化时补建前缀索引，租约记录保持不变。
+建索引受事务和 DDL 超时约束；大表可由迁移角色提前完成。
+
+从旧版 `PRIMARY KEY(namespace,path)` 升级时，先停止全部旧版实例。
+初始化会在一个事务内为已有记录分配 UUID、替换主键和过期索引，并保留租约 token。
+迁移角色需要拥有锁表，也可由表所有者预先完成迁移后再启动运行实例。
+旧版二进制无法写入新结构，因此不支持新旧版本滚动混用。
+迁移失败或 DDL 超时会整体回滚，保留旧表结构及记录。
 
 首次自动建表时，连接角色需要数据库 CONNECT 权限及 `public` schema 的 CREATE
 权限；运行时需要锁表的 SELECT、INSERT、UPDATE、DELETE 权限。
-也可以由迁移角色预先创建表和索引，再授予运行角色相应权限。
-Provider 初始化仍会执行 `CREATE ... IF NOT EXISTS`。
+也可以由迁移角色预先创建表、函数和索引，再授予运行角色相应权限及函数 EXECUTE 权限。
+Provider 初始化仍会执行 `CREATE ... IF NOT EXISTS`，只在辅助函数不存在时创建它。
+预建函数须使用上面的定义；运行实例不会覆盖迁移角色的函数。
 
 如果数据库和角色已经存在，首次允许自动建表的示例为：
 
@@ -172,11 +204,26 @@ let stack = build_default_stack(RagfsConfig {
 与现有 SQLite holder 协议一致，支持 Exact/Tree 锁、重入、holder 级续租和释放、
 锁升级、handoff/adopt。批量获取全成功才提交，冲突时整体回滚，包括过期记录清理。
 路径范围按目录段边界处理，`/a` 不会误匹配 `/a-backup`，支持根目录和 UTF-8 路径。
+子树查询先用 namespace 摘要与二进制前缀范围筛选，再比较完整 namespace 和路径范围。
+前缀上界使用 `<=`，完整路径上界仍用 `<`，避免深层目录上下界截断成同一前缀时漏查。
+前 2048 字节相同的路径仍需逐条复核，部署前需评估这类长公共前缀的查询耗时。
+
+本地 release 压测（PG 17.6、热缓存、串行每组 200 样本）：
+10 万活跃锁加其他 namespace 的 10 万锁时，空子树 SQL P50 从纯摘要版本的
+7.122 ms 降至 0.227 ms，Tree 加锁 P99 从 12.681 ms 降至 5.692 ms。
+但 1 万条长路径共享前 2048 字节时，深层近邻未命中仍扫描全部 1 万条候选，
+SQL P50 从 15.424 ms 增至 23.750 ms。两轮分开执行，结果不代表生产延迟保证。
+额外索引的持续写入与空间成本尚未压测。
 
 每次操作使用一个事务，并取得 namespace 级事务 advisory lock，保护不存在的路径、
 祖先和子树条件检查。事务显式使用 Read Committed，等待锁后读取最新已提交状态。
 锁记录的获取、续租、过期检查和 handoff 恢复使用主库 `clock_timestamp()`；
 客户端提供租约时长。已过期 holder 不能续租，接管后旧 owner 不能续租或释放新锁。
+
+底层 `try_create_token`、`compare_and_write_token` 和 legacy `refresh_token`
+也使用主库时钟。创建时转换所有 holder 时间；CAS 转换新增或续租 holder，
+保留同 owner 下未变化的时间，包括仅修改锁类型和 legacy 引用转换；变更 owner
+时转换所有引用。CAS 先比较原始快照，再归一化写入；后续比较必须重新读取持久化 token。
 
 每个 Provider 使用一个连接，在 Tokio blocking worker 上执行数据库操作。
 连接建立超时为 5 秒、SQL statement timeout 为 5 秒、SQL lock timeout 为 1 秒。
@@ -188,7 +235,7 @@ let stack = build_default_stack(RagfsConfig {
 
 当前有三项需要在部署时考虑的边界：
 
-1. **同一 namespace 内串行执行锁事务。** 尚未做吞吐压测，不能据此承诺高并发性能；
+1. **同一 namespace 内串行执行锁事务。** 本地压测不能据此承诺生产高并发性能；
    namespace 哈希碰撞只会增加无关 namespace 间的等待，不会混用记录。
 2. **租约丢失后的存储写入没有 fencing。** 旧 worker 在锁失效后继续写本地文件或 S3
    的问题，需由后续 SQLFS 事务或存储侧版本/fencing 校验解决。
@@ -248,6 +295,27 @@ CAS、客户端时钟偏差、过期接管、续租、handoff、断线重连、�
 以及两个完整构建的实例在不启用 cache runtime 时共享 PG 锁。
 新版 `replace_holder` 的专项测试还验证：恢复时不会覆盖已经续租的 source holder，
 不会因客户端时间偏差误删仍有效的 holder，也不会重新插入已经过期的 source。
+
+长路径专项测试覆盖 3216 字节不可压缩路径、长 namespace、批量成功和失败回滚、
+续租/释放、CAS、根目录和祖先/子树边界，以及超过全局清理上限的过期子树清理。
+建表和旧表迁移测试使用会话内临时表，验证记录保留与重复初始化：
+
+```bash
+cargo test -p ragfs --features postgres --lib \
+  schema_initialization_and_legacy_migration --locked -- --ignored
+```
+
+底层写入时钟专项覆盖客户端时间 `0`、`1`、`u128::MAX`，v1/v2 创建、legacy
+续租、CAS 快照不匹配、独立 holder 时间保留、owner 变更和 legacy 引用转换。
+过期记录通过测试专用 SQL 注入，不再依赖正常写 API 持久化旧时间。
+
+2026-11-12 长路径、前缀索引及 DB 时钟修复验证：PostgreSQL 17.6 集成文件串行运行 17 项全部通过
+（`--include-ignored --test-threads=1`，含非法过期时间校验及子进程入口）；
+既有锁回归 93 项通过、2 项忽略，迁移专项另行运行 1 项通过。
+迁移专项同时验证新表初始化、旧租约保留、重复初始化及迁移失败回滚。
+Python PG/SQLite 配置测试 10 项通过。本地 PostgreSQL 保持运行。
+前缀专项覆盖相同 2048 字节前缀、UTF8 字符中间截断、客户端编码独立性，
+以及在已有 UUID/摘要结构上补建索引。
 
 ## 6. 常见问题
 

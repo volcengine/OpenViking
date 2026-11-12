@@ -43,6 +43,63 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const SET_TIMEOUTS: &str = "SET LOCAL statement_timeout = '5s'; SET LOCAL lock_timeout = '1s';
      SET LOCAL synchronous_commit = on";
 
+// Index only bounded values. Full namespace/path equality remains authoritative,
+// and the namespace advisory lock serializes insert-or-update even on hash collisions.
+// Keep migration transactional: existing leases must survive changing the primary key.
+const INITIALIZE_SCHEMA: &str = r#"
+DO $prefix$
+BEGIN
+    -- convert_to(text, 'UTF8') is deterministic in a UTF8 database. Never
+    -- claim immutability for textsend(), which follows client_encoding.
+    IF current_setting('server_encoding') <> 'UTF8' THEN
+        RAISE EXCEPTION 'PostgreSQL PathLock requires UTF8 server encoding';
+    END IF;
+    IF to_regprocedure('public.path_prefix_2048(text)') IS NULL THEN
+        EXECUTE $function$
+            CREATE FUNCTION public.path_prefix_2048(text) RETURNS bytea
+            LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+            AS 'SELECT pg_catalog.substring(pg_catalog.convert_to($1, ''UTF8''), 1, 2048)'
+        $function$;
+    END IF;
+END $prefix$;
+CREATE TABLE IF NOT EXISTS public.ov_pathlock_tokens (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    namespace TEXT COLLATE "C" NOT NULL,
+    path TEXT COLLATE "C" NOT NULL,
+    owner TEXT NOT NULL,
+    time_ns TEXT COLLATE "C" NOT NULL CHECK(length(time_ns)=39),
+    token TEXT NOT NULL
+);
+DO $migration$
+DECLARE
+    key_name text;
+    key_columns text[];
+BEGIN
+    SELECT c.conname, array_agg(a.attname::text ORDER BY k.ordinality)
+      INTO key_name, key_columns
+      FROM pg_constraint c
+      CROSS JOIN LATERAL unnest(c.conkey) WITH ORDINALITY k(attnum, ordinality)
+      JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.attnum
+      WHERE c.conrelid='public.ov_pathlock_tokens'::regclass AND c.contype='p'
+      GROUP BY c.conname;
+    IF key_columns = ARRAY['namespace','path'] THEN
+        ALTER TABLE public.ov_pathlock_tokens
+            ADD COLUMN id UUID NOT NULL DEFAULT gen_random_uuid();
+        EXECUTE format('ALTER TABLE public.ov_pathlock_tokens DROP CONSTRAINT %I', key_name);
+        ALTER TABLE public.ov_pathlock_tokens ADD PRIMARY KEY(id);
+        DROP INDEX IF EXISTS public.ov_pathlock_expiry;
+    ELSIF key_columns IS DISTINCT FROM ARRAY['id'] THEN
+        RAISE EXCEPTION 'Unsupported PostgreSQL PathLock schema';
+    END IF;
+END $migration$;
+CREATE INDEX IF NOT EXISTS ov_pathlock_lookup
+    ON public.ov_pathlock_tokens(md5(namespace),md5(path));
+CREATE INDEX IF NOT EXISTS ov_pathlock_expiry
+    ON public.ov_pathlock_tokens(md5(namespace),time_ns);
+CREATE INDEX IF NOT EXISTS ov_pathlock_subtree_prefix_2048
+    ON public.ov_pathlock_tokens(md5(namespace),public.path_prefix_2048(path));
+"#;
+
 fn db_error(error: postgres::Error) -> PathLockError {
     // Do not expose server messages: they can contain SQL parameters or credentials.
     if error
@@ -99,6 +156,32 @@ fn clock(tx: &mut Transaction<'_>, now: u128, stale: u128) -> PathLockResult<(u1
     Ok((db_now, db_now.saturating_sub(now.saturating_sub(stale))))
 }
 
+/// Rebase new/renewed references, preserving unchanged database-clock history.
+fn normalize_token_time(value: &mut LockToken, previous: Option<&LockToken>, db_now: u128) {
+    let previous = previous.filter(|old| old.owner_id == value.owner_id);
+    if value.holders.is_empty() {
+        if !previous.is_some_and(|old| old.holders.is_empty() && old.time_ns == value.time_ns) {
+            value.time_ns = db_now;
+        }
+        return;
+    }
+    for holder in &mut value.holders {
+        let unchanged = previous.is_some_and(|old| {
+            old.holders
+                .iter()
+                .any(|h| h.id == holder.id && h.time_ns == holder.time_ns)
+                // add_holder preserves a live legacy reference during conversion.
+                || (old.holders.is_empty()
+                    && holder.id == "legacy"
+                    && holder.time_ns == old.time_ns)
+        });
+        if !unchanged {
+            holder.time_ns = db_now;
+        }
+    }
+    value.recompute();
+}
+
 struct TxStore<'a, 'b> {
     tx: &'a mut Transaction<'b>,
     namespace: &'a str,
@@ -108,7 +191,9 @@ impl TxStore<'_, '_> {
     fn delete(&mut self, path: &str) -> PathLockResult<bool> {
         self.tx
             .execute(
-                "DELETE FROM public.ov_pathlock_tokens WHERE namespace=$1 AND path=$2",
+                "DELETE FROM public.ov_pathlock_tokens
+                 WHERE md5(namespace)=md5($1) AND namespace=$1
+                 AND md5(path)=md5($2) AND path=$2",
                 &[&self.namespace, &path],
             )
             .map(|count| count == 1)
@@ -120,7 +205,9 @@ impl HolderStore for TxStore<'_, '_> {
     fn get(&mut self, path: &str) -> PathLockResult<Option<LockToken>> {
         self.tx
             .query_opt(
-                "SELECT token FROM public.ov_pathlock_tokens WHERE namespace=$1 AND path=$2",
+                "SELECT token FROM public.ov_pathlock_tokens
+                 WHERE md5(namespace)=md5($1) AND namespace=$1
+                 AND md5(path)=md5($2) AND path=$2",
                 &[&self.namespace, &path],
             )
             .map_err(db_error)?
@@ -130,12 +217,14 @@ impl HolderStore for TxStore<'_, '_> {
     }
 
     fn put(&mut self, path: &str, value: &LockToken) -> PathLockResult<()> {
-        self.tx
+        // Every caller holds the namespace gate. A non-unique hash index allows
+        // colliding paths to coexist; never use a hash as an ON CONFLICT identity.
+        let updated = self
+            .tx
             .execute(
-                "INSERT INTO public.ov_pathlock_tokens(namespace,path,owner,time_ns,token)
-             VALUES ($1,$2,$3,$4,$5)
-             ON CONFLICT(namespace,path) DO UPDATE SET
-             owner=excluded.owner,time_ns=excluded.time_ns,token=excluded.token",
+                "UPDATE public.ov_pathlock_tokens SET owner=$3,time_ns=$4,token=$5
+                 WHERE md5(namespace)=md5($1) AND namespace=$1
+                 AND md5(path)=md5($2) AND path=$2",
                 &[
                     &self.namespace,
                     &path,
@@ -145,6 +234,21 @@ impl HolderStore for TxStore<'_, '_> {
                 ],
             )
             .map_err(db_error)?;
+        if updated == 0 {
+            self.tx
+                .execute(
+                    "INSERT INTO public.ov_pathlock_tokens(namespace,path,owner,time_ns,token)
+                 VALUES ($1,$2,$3,$4,$5)",
+                    &[
+                        &self.namespace,
+                        &path,
+                        &value.owner_id,
+                        &timestamp(value.time_ns),
+                        &LockTokenCodec::encode(value),
+                    ],
+                )
+                .map_err(db_error)?;
+        }
         Ok(())
     }
 
@@ -155,11 +259,28 @@ impl HolderStore for TxStore<'_, '_> {
         owner: &str,
         stale: u128,
     ) -> PathLockResult<usize> {
+        if !subtree {
+            return self
+                .tx
+                .execute(
+                    "DELETE FROM public.ov_pathlock_tokens
+                     WHERE md5(namespace)=md5($1) AND namespace=$1
+                     AND md5(path)=md5($2) AND path=$2 AND owner<>$3 AND time_ns<$4",
+                    &[&self.namespace, &path, &owner, &timestamp(stale)],
+                )
+                .map(|count| count as usize)
+                .map_err(db_error);
+        }
         let (lower, upper) = descendant_bounds(path);
         self.tx
             .execute(
-                "DELETE FROM public.ov_pathlock_tokens WHERE namespace=$1 AND owner<>$2
-             AND time_ns<$3 AND (path=$4 OR ($5 AND path>=$6 AND path<$7 AND path<>$4))",
+                "DELETE FROM public.ov_pathlock_tokens
+             WHERE md5(namespace)=md5($1) AND namespace=$1 AND owner<>$2
+             AND time_ns<$3 AND (
+                 (md5(path)=md5($4) AND path=$4) OR
+                 ($5 AND public.path_prefix_2048(path)>=public.path_prefix_2048($6)
+                     AND public.path_prefix_2048(path)<=public.path_prefix_2048($7)
+                     AND path>=$6 AND path<$7 AND path<>$4))",
                 &[
                     &self.namespace,
                     &owner,
@@ -181,10 +302,15 @@ impl HolderStore for TxStore<'_, '_> {
         stale: u128,
     ) -> PathLockResult<Option<(String, LockToken)>> {
         let (lower, upper) = descendant_bounds(root);
+        // Prefix truncation can make both bounds equal. The coarse upper
+        // comparison must be inclusive; full C-collated paths resolve ties.
         self.tx
             .query_opt(
                 "SELECT path,token FROM public.ov_pathlock_tokens
-             WHERE namespace=$1 AND path>=$2 AND path<$3 AND path<>$4
+             WHERE md5(namespace)=md5($1) AND namespace=$1
+             AND public.path_prefix_2048(path)>=public.path_prefix_2048($2)
+             AND public.path_prefix_2048(path)<=public.path_prefix_2048($3)
+             AND path>=$2 AND path<$3 AND path<>$4
              AND owner<>$5 AND time_ns>=$6 LIMIT 1",
                 &[
                     &self.namespace,
@@ -237,19 +363,7 @@ impl PostgresPathLockProvider {
         // A separate, global initialization lock serializes concurrent CREATE TABLE.
         tx.query_one("SELECT pg_advisory_xact_lock(187003451, 0)", &[])
             .map_err(db_error)?;
-        tx.batch_execute(
-            "CREATE TABLE IF NOT EXISTS public.ov_pathlock_tokens (
-                namespace TEXT COLLATE \"C\" NOT NULL,
-                path TEXT COLLATE \"C\" NOT NULL,
-                owner TEXT NOT NULL,
-                time_ns TEXT COLLATE \"C\" NOT NULL CHECK(length(time_ns)=39),
-                token TEXT NOT NULL,
-                PRIMARY KEY(namespace,path)
-             );
-             CREATE INDEX IF NOT EXISTS ov_pathlock_expiry
-             ON public.ov_pathlock_tokens(namespace,time_ns);",
-        )
-        .map_err(db_error)?;
+        tx.batch_execute(INITIALIZE_SCHEMA).map_err(db_error)?;
         tx.commit().map_err(db_error)?;
         Ok(Self {
             connection: Arc::new(Mutex::new(Some(client))),
@@ -413,9 +527,10 @@ impl PathLockProvider for PostgresPathLockProvider {
             let cleaned = store
                 .tx
                 .execute(
-                    "DELETE FROM public.ov_pathlock_tokens WHERE (namespace,path) IN (
-                 SELECT namespace,path FROM public.ov_pathlock_tokens
-                 WHERE namespace=$1 AND time_ns<$2 AND owner<>$3 LIMIT 256)",
+                    "DELETE FROM public.ov_pathlock_tokens WHERE id IN (
+                 SELECT id FROM public.ov_pathlock_tokens
+                 WHERE md5(namespace)=md5($1) AND namespace=$1
+                 AND time_ns<$2 AND owner<>$3 LIMIT 256)",
                     &[&store.namespace, &timestamp(stale), &owner],
                 )
                 .map_err(db_error)?;
@@ -502,7 +617,7 @@ impl PathLockProvider for PostgresPathLockProvider {
     async fn try_create_token(&self, path: &str, value: &LockToken) -> PathLockResult<()> {
         validate_path(path)?;
         validate_owner(&value.owner_id)?;
-        let (path, value) = (path.to_owned(), value.clone());
+        let (path, mut value) = (path.to_owned(), value.clone());
         self.run(move |store| {
             if let Some(existing) = store.get(&path)? {
                 return Err(PathLockError::Conflict {
@@ -511,6 +626,8 @@ impl PathLockProvider for PostgresPathLockProvider {
                     kind: existing.lock_type,
                 });
             }
+            let (db_now, _) = clock(store.tx, value.time_ns, 0)?;
+            normalize_token_time(&mut value, None, db_now);
             store.put(&path, &value)
         })
         .await
@@ -524,11 +641,14 @@ impl PathLockProvider for PostgresPathLockProvider {
     ) -> PathLockResult<bool> {
         validate_path(path)?;
         validate_owner(&replacement.owner_id)?;
-        let (path, expected, replacement) =
+        let (path, expected, mut replacement) =
             (path.to_owned(), expected.clone(), replacement.clone());
         self.run(move |store| {
             let matched = store.get(&path)?.as_ref() == Some(&expected);
             if matched {
+                // Compare the caller's original snapshot before rebasing writes.
+                let (db_now, _) = clock(store.tx, replacement.time_ns, 0)?;
+                normalize_token_time(&mut replacement, Some(&expected), db_now);
                 store.put(&path, &replacement)?;
             }
             Ok(matched)
@@ -563,7 +683,8 @@ impl PathLockProvider for PostgresPathLockProvider {
             if value.owner_id != owner || !value.holders.is_empty() {
                 return Ok(false);
             }
-            value.time_ns = time;
+            let (db_now, _) = clock(store.tx, time, 0)?;
+            value.time_ns = db_now;
             store.put(&path, &value)?;
             Ok(true)
         })
@@ -591,7 +712,10 @@ impl PathLockProvider for PostgresPathLockProvider {
                 .tx
                 .query(
                     "SELECT path FROM public.ov_pathlock_tokens
-                 WHERE namespace=$1 AND path>=$2 AND path<$3 AND path<>$4",
+                 WHERE md5(namespace)=md5($1) AND namespace=$1
+                 AND public.path_prefix_2048(path)>=public.path_prefix_2048($2)
+                 AND public.path_prefix_2048(path)<=public.path_prefix_2048($3)
+                 AND path>=$2 AND path<$3 AND path<>$4",
                     &[&store.namespace, &lower, &upper, &root],
                 )
                 .map(|rows| rows.into_iter().map(|row| row.get(0)).collect())
@@ -638,5 +762,144 @@ impl PathLockProvider for PostgresPathLockProvider {
             Ok(Some(false))
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires OV_TEST_PG_DSN"]
+    fn schema_initialization_and_legacy_migration_preserve_records() {
+        let dsn = std::env::var("OV_TEST_PG_DSN").unwrap();
+        // Use session-local tables: migration tests must not replace the shared
+        // integration-test table or interfere with other running providers.
+        let sql = INITIALIZE_SCHEMA.replace("public.", "pg_temp.");
+        for schema in ["fresh", "legacy", "uuid"] {
+            let legacy = schema == "legacy";
+            let mut client = Client::connect(&dsn, postgres::NoTls).unwrap();
+            let mut tx = client.transaction().unwrap();
+            if legacy {
+                tx.batch_execute(
+                    r#"CREATE TEMP TABLE ov_pathlock_tokens (
+                        namespace TEXT COLLATE "C" NOT NULL,
+                        path TEXT COLLATE "C" NOT NULL,
+                        owner TEXT NOT NULL,
+                        time_ns TEXT COLLATE "C" NOT NULL CHECK(length(time_ns)=39),
+                        token TEXT NOT NULL,
+                        PRIMARY KEY(namespace,path)
+                    );
+                    CREATE INDEX ov_pathlock_expiry ON ov_pathlock_tokens(namespace,time_ns);
+                    INSERT INTO ov_pathlock_tokens VALUES
+                        ('old','/held','owner',repeat('0',39),'preserved');"#,
+                )
+                .unwrap();
+                tx.batch_execute("SAVEPOINT migration_failure").unwrap();
+                assert!(tx.batch_execute(&format!("{sql} SELECT 1/0;")).is_err());
+                tx.batch_execute("ROLLBACK TO SAVEPOINT migration_failure")
+                    .unwrap();
+                assert_eq!(
+                    tx.query_one(
+                        "SELECT token FROM pg_temp.ov_pathlock_tokens
+                         WHERE namespace='old' AND path='/held'",
+                        &[],
+                    )
+                    .unwrap()
+                    .get::<_, String>(0),
+                    "preserved"
+                );
+                assert_eq!(
+                    tx.query_one(
+                        "SELECT count(*) FROM pg_attribute
+                         WHERE attrelid='pg_temp.ov_pathlock_tokens'::regclass
+                         AND attname='id' AND NOT attisdropped",
+                        &[],
+                    )
+                    .unwrap()
+                    .get::<_, i64>(0),
+                    0
+                );
+                assert!(tx
+                    .query_one(
+                        "SELECT to_regprocedure('pg_temp.path_prefix_2048(text)') IS NULL",
+                        &[],
+                    )
+                    .unwrap()
+                    .get::<_, bool>(0));
+            }
+            if schema == "uuid" {
+                let old_sql = sql
+                    .split("CREATE INDEX IF NOT EXISTS ov_pathlock_subtree_prefix_2048")
+                    .next()
+                    .unwrap();
+                tx.batch_execute(old_sql).unwrap();
+                tx.batch_execute(
+                    "INSERT INTO pg_temp.ov_pathlock_tokens(namespace,path,owner,time_ns,token)
+                     VALUES ('old','/held','owner',repeat('0',39),'preserved')",
+                )
+                .unwrap();
+            }
+            tx.batch_execute(&sql).unwrap();
+            if schema != "fresh" {
+                let row = tx
+                    .query_one(
+                        "SELECT id::text,token FROM pg_temp.ov_pathlock_tokens
+                     WHERE namespace='old' AND path='/held'",
+                        &[],
+                    )
+                    .unwrap();
+                let id: String = row.get(0);
+                assert_eq!(row.get::<_, String>(1), "preserved");
+                tx.batch_execute(&sql).unwrap();
+                let row = tx
+                    .query_one(
+                        "SELECT id::text,token FROM pg_temp.ov_pathlock_tokens
+                     WHERE namespace='old' AND path='/held'",
+                        &[],
+                    )
+                    .unwrap();
+                assert_eq!(row.get::<_, String>(0), id);
+                assert_eq!(row.get::<_, String>(1), "preserved");
+            } else {
+                tx.batch_execute(&sql).unwrap();
+            }
+            let indexes = tx
+                .query(
+                    "SELECT indexdef FROM pg_indexes
+                 WHERE schemaname=(SELECT nspname FROM pg_namespace
+                     WHERE oid=pg_my_temp_schema()) AND tablename='ov_pathlock_tokens'",
+                    &[],
+                )
+                .unwrap();
+            assert_eq!(indexes.len(), 4);
+            assert!(indexes
+                .iter()
+                .any(|row| { row.get::<_, String>(0).contains("path_prefix_2048(path)") }));
+            assert!(indexes.iter().all(|row| {
+                let definition: String = row.get(0);
+                !definition.contains("USING btree (namespace,")
+                    && !definition.contains("USING btree (path)")
+            }));
+            let utf8 = format!("/{}", "😀".repeat(800));
+            let prefix: Vec<u8> = tx
+                .query_one("SELECT pg_temp.path_prefix_2048($1)", &[&utf8])
+                .unwrap()
+                .get(0);
+            assert_eq!(prefix, utf8.as_bytes()[..2048]);
+            assert!(std::str::from_utf8(&prefix).is_err());
+            tx.batch_execute("SET LOCAL client_encoding = 'LATIN1'")
+                .unwrap();
+            let alternate: Vec<u8> = tx
+                .query_one(
+                    "SELECT pg_temp.path_prefix_2048('/' || repeat(chr(128512),800))",
+                    &[],
+                )
+                .unwrap()
+                .get(0);
+            assert_eq!(alternate, prefix);
+            // Rollback removes the temporary schema objects and all test rows.
+            tx.rollback().unwrap();
+        }
     }
 }
