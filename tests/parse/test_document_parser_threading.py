@@ -5,6 +5,8 @@
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
+from xml.sax.saxutils import escape
+from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
 import pytest
 
@@ -124,3 +126,105 @@ async def test_markdown_delegate_parsers_write_local_artifacts(tmp_path: Path, p
 
     assert result.artifact_ref is not None
     assert result.artifact_ref.backend == "local"
+
+
+def _write_literal_entity_epub(path: Path, body: str) -> None:
+    chapter = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<html xmlns="http://www.w3.org/1999/xhtml">'
+        "<head><title>Literal entities</title></head><body>"
+        f"{body}</body></html>"
+    )
+    package = (
+        '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" '
+        'unique-identifier="book-id">'
+        '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+        '<dc:identifier id="book-id">entities</dc:identifier>'
+        "<dc:title>Literal entities</dc:title><dc:language>en</dc:language>"
+        '</metadata><manifest><item id="chapter" href="chapter.xhtml" '
+        'media-type="application/xhtml+xml"/></manifest>'
+        '<spine><itemref idref="chapter"/></spine></package>'
+    )
+    container = (
+        '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">'
+        '<rootfiles><rootfile full-path="OPS/content.opf" '
+        'media-type="application/oebps-package+xml"/></rootfiles></container>'
+    )
+    with ZipFile(path, "w") as archive:
+        archive.writestr("mimetype", "application/epub+zip", compress_type=ZIP_STORED)
+        for name, content in (
+            ("META-INF/container.xml", container),
+            ("OPS/content.opf", package),
+            ("OPS/chapter.xhtml", chapter),
+        ):
+            archive.writestr(name, content, compress_type=ZIP_DEFLATED)
+
+
+@pytest.mark.parametrize(
+    "wrapper",
+    [
+        "<p>{}</p>",
+        "<h2>{}</h2>",
+        "<p><strong>{}</strong></p>",
+        '<p><a href="https://example.test/">{}</a></p>',
+        "<table><tr><th>Value</th></tr><tr><td>{}</td></tr></table>",
+    ],
+    ids=["paragraph", "heading", "styled-text", "link-label", "table-cell"],
+)
+def test_anydoc_conversion_preserves_literal_character_references(tmp_path: Path, wrapper: str):
+    pytest.importorskip("anydoc")
+    references = ("&copy;", "&#169;", "&#x1F680;", "&amp;")
+    source = tmp_path / "literal-entities.epub"
+    _write_literal_entity_epub(source, wrapper.format(escape(" ".join(references))))
+
+    result = anydoc_converter.AnyDocConverter().convert(
+        source, resource_name="entities", storage=None, format_hint="epub"
+    )
+
+    for reference in references:
+        # Both CommonMark representations preserve the already-decoded native text.
+        assert "\\" + reference in result.markdown or "&amp;" + reference[1:] in result.markdown
+
+
+@pytest.mark.parametrize("prefix", ["https://example.test/", "https://example.test/(group)"])
+def test_anydoc_conversion_preserves_character_references_in_link_targets(
+    tmp_path: Path, prefix: str
+):
+    pytest.importorskip("anydoc")
+    targets = [prefix + "?q=" + value for value in ("&copy;", "&#169;", "&#x1F680;", "&amp;")]
+    source = tmp_path / "literal-links.epub"
+    _write_literal_entity_epub(
+        source, "".join(f'<p><a href="{escape(url)}">destination</a></p>' for url in targets)
+    )
+
+    result = anydoc_converter.AnyDocConverter().convert(
+        source, resource_name="entities", storage=None, format_hint="epub"
+    )
+
+    for target in targets:
+        assert (
+            target.replace("&", r"\&") in result.markdown
+            or target.replace("&", "&amp;") in result.markdown
+        )
+
+
+def test_anydoc_conversion_retains_normal_text_and_code_ampersands(tmp_path: Path):
+    pytest.importorskip("anydoc")
+    source = tmp_path / "normal-controls.epub"
+    _write_literal_entity_epub(
+        source,
+        "<p>R&amp;D</p><p>&amp;notAnEntity;</p><p>Already decoded \u00a9</p>"
+        "<p><code>&amp;copy; and &amp;#169;</code></p>",
+    )
+
+    result = anydoc_converter.AnyDocConverter().convert(
+        source, resource_name="entities", storage=None, format_hint="epub"
+    )
+
+    assert any(text in result.markdown for text in ("R&D", r"R\&D", "R&amp;D"))
+    assert any(
+        text in result.markdown
+        for text in ("&notAnEntity;", r"\&notAnEntity;", "&amp;notAnEntity;")
+    )
+    assert "Already decoded \u00a9" in result.markdown
+    assert "`&copy; and &#169;`" in result.markdown

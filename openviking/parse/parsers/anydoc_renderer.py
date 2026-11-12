@@ -736,7 +736,7 @@ class _AnyDocMarkdownRenderer:
             "%7C" if char == "|" else "%3C" if char == "<" else "%3E" if char == ">" else char
             for char in url
             if ord(char) >= 32 and ord(char) != 127
-        )
+        ).replace("&", r"\&")
         return (
             f"<{escaped}>" if any(char.isspace() or char in "()" for char in escaped) else escaped
         )
@@ -789,7 +789,7 @@ class _AnyDocMarkdownRenderer:
             next_nonspace = trailing_active if next_char is None else not next_char.isspace()
             later = characters[index + 1 :]
             escape = False
-            if char == "\\":
+            if char in "\\&":
                 escape = True
             elif char == "]" and in_label:
                 escape = True
