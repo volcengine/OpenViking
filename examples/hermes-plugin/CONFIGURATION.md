@@ -250,6 +250,22 @@ fallbacks. If an older server cannot confirm sender-scoped compression, the
 provider uses scoped list recall. Enabled resource recall includes common
 resources and, in `peer` mode, the sender's resources.
 
+To disable automatic recall on selected Hermes gateway platforms, set
+`recall_disabled_platforms` in the active profile. Platform names are
+case-insensitive. This example keeps automatic recall on other platforms but
+injects no OpenViking context on `pocket`:
+
+```yaml
+memory:
+  openviking:
+    recall_disabled_platforms:
+      - pocket
+```
+
+`OPENVIKING_RECALL_DISABLED_PLATFORMS` accepts a comma-separated list and
+overrides YAML. The setting affects only automatic pre-turn injection. Capture,
+explicit `viking_*` tools, connection settings and access rights are unchanged.
+
 These recall settings do not change data access rights. They do not hide
 shared conversation history or change explicit `viking_*` tools, native memory
 mirroring or credentials. Setting `recall_scope` alone does not change gateway
