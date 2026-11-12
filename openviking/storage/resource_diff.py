@@ -611,18 +611,6 @@ async def build_rnfv_snapshot(
         asyncio.create_task(read_artifact()),
         asyncio.create_task(read_formal()),
     ]
-    if request.vectorize and vector_inventory is None:
-        tasks.append(
-            asyncio.create_task(
-                _read_incremental_vector_inventory(
-                    vikingdb,
-                    target_uri=target_uri,
-                    ctx=ctx,
-                    projection=projection,
-                    vector_scope=vector_scope,
-                )
-            )
-        )
     try:
         results = await asyncio.gather(*tasks)
     except BaseException:
@@ -631,15 +619,33 @@ async def build_rnfv_snapshot(
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         raise
-    artifact, formal = results[:2]
+    artifact, formal = results
+    target_files, files_complete = formal
+    if not files_complete:
+        raise ValueError("cannot build RNFV snapshot from an incomplete formal tree")
+    base = target_uri.rstrip("/")
     if not request.vectorize:
         inventory: Dict[str, Dict[str, Any]] = {}
     elif vector_inventory is not None:
         inventory = dict(vector_inventory)
     else:
-        inventory = results[2]
-    target_files, files_complete = formal
-    base = target_uri.rstrip("/")
+        # Include old paths removed from the new source, so a missed record
+        # can still be recovered before the planner builds its delete actions.
+        expected_levels = {base: {2} if root_is_file else {0, 1}}
+        for entries in (target_files, artifact.entries):
+            for path, entry in entries.items():
+                if vector_scope == "self" and path:
+                    continue
+                node_uri = f"{base}/{path}" if path else base
+                expected_levels.setdefault(node_uri, set()).update({0, 1} if entry.is_dir else {2})
+        inventory = await _read_incremental_vector_inventory(
+            vikingdb,
+            target_uri=target_uri,
+            ctx=ctx,
+            projection=projection,
+            vector_scope=vector_scope,
+            expected_levels=expected_levels,
+        )
     prefix = base + "/"
     vector_records: Dict[str, VectorRecordSnapshot] = {}
     for record_id, record in inventory.items():
@@ -676,12 +682,14 @@ async def _read_incremental_vector_inventory(
     ctx: Any,
     projection: frozenset[str],
     vector_scope: Literal["subtree", "self"] = "subtree",
+    expected_levels: Mapping[str, set[int]],
 ) -> Dict[str, Dict[str, Any]]:
     """Read the lightweight V snapshot used to build RNFV."""
     return await vikingdb.get_incremental_inventory_under_uri(
         target_uri,
         ctx=ctx,
         output_fields=sorted(projection),
+        expected_levels=expected_levels,
         # The shared inventory API expresses an exact URI as a non-recursive
         # scope without direct children. Keep its richer recursive/direct-child
         # contract instead of adding a parallel depth parameter solely for the
