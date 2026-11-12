@@ -22,7 +22,11 @@ export function WorkbenchFileBrowser(props: FileBrowserProps) {
         agentConnect={
           serverMode === 'trusted'
             ? undefined
-            : { apiKey: connection.apiKey, baseUrl: connection.baseUrl }
+            : {
+                apiKey: connection.apiKey,
+                baseUrl: connection.baseUrl,
+                showOverseasTag: false,
+              }
         }
         labels={{
           entries: {

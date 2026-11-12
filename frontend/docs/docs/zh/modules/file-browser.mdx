@@ -153,8 +153,6 @@ import '@openviking/react/modules/file-browser/style.css';
 
 `labels.formatCharacterCount(count)` 可覆盖预览底部的字符数文案，默认随 `locale` 切换。
 
-宿主可通过 `onSearch` 接入自有搜索，借助 `previewActions` 追加文件工具栏操作，并用 `renderResourceTab` 在原生预览旁增加专用页签。编辑草稿打开或关闭时触发 `onEditingChange`，保存成功触发 `onSaved(uri)`。外部写入后可更新 `refreshKey` 刷新树和预览，用户主动刷新后触发 `onRefresh`。
-
 ## 内置看板
 
 用户的 `memories/experiences` 目录与直接 `.md` 文件自动提供经验看板；Wiki 根据编译配置或 `compile_target=true` 资源标记识别，后代文件与目录复用 Wiki 看板。标记优先，不因配置列表缺失而隐藏。普通资源没有 Wiki 页签；已识别的 Wiki 在零冲突时仍保留看板。

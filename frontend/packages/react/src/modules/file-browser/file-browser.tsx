@@ -1,9 +1,11 @@
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 
 import { ResizableHandle } from '../../shared/components/resizable/index.js';
 import { FileBrowserDetail } from './file-browser-detail.js';
+import { FileBrowserEmpty } from './file-browser-empty.js';
+import { FileBrowserFailure } from './file-browser-failure.js';
 import {
   TREE_DEFAULT_WIDTH,
   TREE_MIN_WIDTH,
@@ -47,13 +49,6 @@ export function FileBrowser({
   renderDashboard,
   acl,
   readOnly,
-  refreshKey,
-  onSearch,
-  onRefresh,
-  onEditingChange,
-  onSaved,
-  previewActions,
-  renderResourceTab,
   onUriChange,
   onImportResources,
   renderImportResources,
@@ -144,14 +139,6 @@ export function FileBrowser({
     requestOptions,
     onUriChange: changeUri,
   });
-  const previousRefreshKey = useRef(refreshKey);
-  const refresh = browser.actions.refresh;
-  // A host mutation can change the current resource without changing its URI.
-  useEffect(() => {
-    if (refreshKey === previousRefreshKey.current) return;
-    previousRefreshKey.current = refreshKey;
-    void refresh();
-  }, [refresh, refreshKey]);
   const permissions = useFileBrowserAcl({
     uri: browser.currentUri,
     acl,
@@ -186,8 +173,7 @@ export function FileBrowser({
               renderImportResources,
               labels: labels?.entries,
             }}
-            onRefresh={onRefresh}
-            onSearch={onSearch ?? (() => setSearchOpen(true))}
+            onSearch={() => setSearchOpen(true)}
             browser={browser}
             treeLabels={text.tree}
             locale={locale}
@@ -207,33 +193,46 @@ export function FileBrowser({
           className="ov-file-browser__resizer"
         />
 
-        <FileBrowserDetail
-          tabs={browser.previewTabs}
-          activeKey={browser.previewKey}
-          locale={locale}
-          labels={previewLabels}
-          text={text}
-          error={browser.previewError}
-          onRetry={refresh}
-          footer={browser.previewFooter}
-          titleExtra={permissions.titleExtra}
-          extraActions={
-            previewActions ? (
-              <>
-                {permissions.actions}
-                {previewActions}
-              </>
+        {browser.previewTabs && browser.previewTabs.length > 0 ? (
+          <FileBrowserDetail
+            tabs={browser.previewTabs}
+            activeKey={browser.previewKey}
+            locale={locale}
+            labels={previewLabels}
+            footer={browser.previewFooter}
+            titleExtra={permissions.titleExtra}
+            extraActions={permissions.actions}
+            readOnly={readOnly || !permissions.canEdit}
+            onActiveKeyChange={browser.actions.setPreviewKey}
+          />
+        ) : // 读失败与「没选中」是两件事：前者有选中的资源却取不到内容，必须显示
+        // 原因与重试；后者才是空态插画。把失败画成空态会让一次 403 看起来像「还
+        // 没选文件」。
+        //
+        // A read failure and "nothing selected" are two different things: the former
+        // has a selected resource it could not load and needs the reason plus a retry,
+        // while only the latter is the empty-state artwork. Painting a failure as the
+        // empty state makes a 403 look like "no file selected yet".
+        browser.currentUri && browser.previewError ? (
+          <div className="ov-file-browser__detail">
+            <FileBrowserFailure
+              message={text.error}
+              detail={browser.previewError.message}
+              retryLabel={text.retry}
+              onRetry={() => void browser.actions.refresh()}
+            />
+          </div>
+        ) : (
+          <div className="ov-file-browser__detail">
+            {browser.currentUri ? (
+              <p className="ov-file-browser__hint" role="status">
+                {text.loading}
+              </p>
             ) : (
-              permissions.actions
-            )
-          }
-          resourceUri={browser.currentUri}
-          renderResourceTab={renderResourceTab}
-          onEditingChange={onEditingChange}
-          onSaved={onSaved}
-          readOnly={readOnly || !permissions.canEdit}
-          onActiveKeyChange={browser.actions.setPreviewKey}
-        />
+              <FileBrowserEmpty label={text.empty} />
+            )}
+          </div>
+        )}
       </div>
       {permissions.drawer}
       <FileBrowserSearch

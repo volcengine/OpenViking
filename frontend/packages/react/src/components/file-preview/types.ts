@@ -640,8 +640,6 @@ export interface FilePreviewProps extends Omit<
    * Called after the active tab changes, with the new tab key.
    */
   onActiveKeyChange?: (key: string) => void;
-  /** Reports whether an editable draft is open. */
-  onEditingChange?: (editing: boolean) => void;
   /**
    * 所有页签的默认文案，跟随 locale。页签可以逐项覆盖。
    * Default copy for every tab, following locale. A tab can override it field

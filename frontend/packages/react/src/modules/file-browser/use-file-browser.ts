@@ -1,6 +1,6 @@
 import { useLocale } from '../../shared/locale-context.js';
 import { resolveLabels, resolveSummaryLabels } from './file-browser-labels.js';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 
 import type {
   FileTreeEntryRow,
@@ -151,17 +151,6 @@ export function useFileBrowser({
   const rows = tree.rows;
 
   const openPath = tree.openPath;
-  const ready = tree.isReady;
-  // Host navigation (deep links, search and terminal) should reveal ancestors
-  // without rebuilding the existing tree or overriding a manual collapse.
-  useEffect(() => {
-    if (!controlled || !activeUri || !ready || blocked || activeUri === rootUri)
-      return;
-    const separator = activeUri.lastIndexOf('/');
-    if (separator >= 'viking://'.length)
-      void openPath(activeUri.slice(0, separator));
-  }, [controlled, activeUri, ready, blocked, rootUri, openPath]);
-
   const openResource = useMemo(
     () => async (uri: string) => {
       setPendingUri(uri);

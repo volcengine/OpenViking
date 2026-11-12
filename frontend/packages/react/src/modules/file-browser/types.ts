@@ -184,10 +184,6 @@ export interface FileBrowserProps extends Omit<
    * Configuration of the built-in connection drawer; enables its entry when provided.
    */
   agentConnect?: AgentConnectProps;
-  /** Change this value after a host mutation to reload the tree and preview. */
-  refreshKey?: number;
-  /** Additional actions alongside the selected resource's native controls. */
-  previewActions?: ReactNode;
   /** Host capability filter. Omitted enables both; an empty array disables discovery. */
   dashboardKinds?: readonly FileBrowserDashboard['kind'][];
   /**
@@ -204,14 +200,6 @@ export interface FileBrowserProps extends Omit<
    * pane.
    */
   onUriChange?: (uri: string | null) => void;
-  /** Use the host search when it supplies its own search dialog. */
-  onSearch?: () => void;
-  /** Called after the user refreshes the tree. */
-  onRefresh?: () => void;
-  /** Reports whether the preview has an open editable draft. */
-  onEditingChange?: (editing: boolean) => void;
-  /** Reports the URI after a successful preview save. */
-  onSaved?: (uri: string) => void;
   /** Host gateway/view override; nullish values retain the native dashboard. */
   renderDashboard?: (dashboard: FileBrowserDashboard) => ReactNode;
   /**
@@ -230,12 +218,6 @@ export interface FileBrowserProps extends Omit<
   renderImportResources?: (
     trigger: ReactElement<ComponentPropsWithRef<'button'>>,
   ) => ReactNode;
-  /** Adds an optional tab alongside the native preview and dashboards. */
-  renderResourceTab?: (resource: {
-    uri: string;
-    isDirectory: boolean;
-    content?: string;
-  }) => { title: string; content: ReactNode } | undefined;
   /**
    * 可替换文案，未提供的项使用当前 locale 的内置文案。
    * Replaceable copy; omitted fields follow locale.

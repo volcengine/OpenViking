@@ -24,6 +24,17 @@
   border: 1px solid var(--border);
   border-radius: 16px;
 }
+/* Studio supplies its own searchable and navigable resource palette. */
+.fileBrowser :global(.ov-file-browser__toolbar) {
+  display: none;
+}
+.fileBrowser
+  :global(
+    .ark-agentic-file-viewer-markdown__content
+      > .ark-agentic-markdown__heading:first-child
+  ) {
+  margin-block-start: 0;
+}
 .fileTypeIcon {
   color: var(--studio-file-icon-light);
 }

@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   provider: 'opensource',
   uploadProvider: vi.fn(),
   preview: vi.fn(),
+  editor: vi.fn(),
   agent: vi.fn(),
   console: vi.fn(),
   fetchFsStat: vi.fn(),
@@ -28,7 +29,6 @@ const mocks = vi.hoisted(() => ({
   invalidateAll: vi.fn(),
   navigate: vi.fn(),
   dataManagement: vi.fn(),
-  refreshLabel: 'refresh',
   search: {} as { file?: string; panel?: 'agent' | 'terminal'; uri?: string },
 }))
 
@@ -96,17 +96,17 @@ vi.mock(
   () => ({
     WorkbenchFileBrowser: (props: FileBrowserProps) => {
       mocks.preview(props)
-      return (
-        <>
-          <button
-            type="button"
-            aria-label={mocks.refreshLabel}
-            onClick={props.onRefresh}
-          />
-          <div data-testid="preview">{props.uri}</div>
-          {props.previewActions}
-        </>
-      )
+      return <div data-testid="preview">{props.uri}</div>
+    },
+  }),
+)
+
+vi.mock(
+  '#/features/workbench/filesystem/components/shared-file-preview',
+  () => ({
+    SharedFilePreview: (props: { onDirtyChange: (dirty: boolean) => void }) => {
+      mocks.editor(props)
+      return null
     },
   }),
 )
@@ -201,12 +201,7 @@ describe('filesystem context tree refresh', () => {
 
     const props: FileBrowserProps = mocks.preview.mock.lastCall![0]
     expect(props.uri).toBe(uri)
-    expect(
-      props.renderResourceTab?.({ uri, isDirectory: false }),
-    ).toBeUndefined()
-    expect(
-      props.renderResourceTab?.({ uri: firstFile, isDirectory: false }),
-    ).toBeUndefined()
+    expect(screen.queryByText('ide.experienceDetails')).toBeNull()
   })
 
   it('keeps the current resource when the user declines to discard an edit', async () => {
@@ -214,10 +209,14 @@ describe('filesystem context tree refresh', () => {
     try {
       mocks.fetchFsStat.mockResolvedValue({ isDir: false, name: 'other.md' })
       renderFilesystem()
+      await userEvent.click(screen.getByLabelText('ide.more'))
+      await userEvent.click(
+        screen.getByRole('button', { name: 'resources:filePreview.edit' }),
+      )
 
       await act(async () => {
         const props: FileBrowserProps = mocks.preview.mock.lastCall![0]
-        props.onEditingChange?.(true)
+        mocks.editor.mock.lastCall![0].onDirtyChange(true)
         props.onUriChange?.(secondFile)
       })
 
@@ -335,7 +334,7 @@ describe('filesystem context tree refresh', () => {
       screen.queryByRole('button', { name: 'dataManagement:exportMenu' }),
     ).toBeNull()
     expect(screen.getByTestId('preview').textContent).toBe(firstFile)
-    expect(mocks.preview.mock.lastCall?.[0].readOnly).not.toBe(true)
+    expect(mocks.preview.mock.lastCall?.[0].readOnly).toBe(true)
     expect(mocks.uploadProvider.mock.lastCall?.[0]).toBe(false)
     expect(mocks.agent).not.toHaveBeenCalled()
     expect(mocks.console.mock.lastCall?.[0]).toMatchObject({ mode: 'command' })
@@ -348,7 +347,7 @@ describe('filesystem context tree refresh', () => {
     renderFilesystem()
 
     await userEvent.click(
-      await screen.findByRole('button', { name: mocks.refreshLabel }),
+      await screen.findByRole('button', { name: 'ide.refreshFiles' }),
     )
 
     await waitFor(() => {
@@ -376,7 +375,7 @@ describe('filesystem context tree refresh', () => {
     const { rerender } = renderFilesystem()
 
     await userEvent.click(
-      await screen.findByRole('button', { name: mocks.refreshLabel }),
+      await screen.findByRole('button', { name: 'ide.refreshFiles' }),
     )
     await waitFor(() => {
       expect(mocks.fetchFsStat).toHaveBeenCalledOnce()
