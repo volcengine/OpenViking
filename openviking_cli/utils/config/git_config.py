@@ -90,6 +90,12 @@ class GitSnapshotLogConfig(BaseModel):
     mysql: GitSnapshotLogMySqlConfig = Field(default_factory=GitSnapshotLogMySqlConfig)
 
 
+class GitSnapshotConfig(BaseModel):
+    """Snapshot feature configuration."""
+
+    log: GitSnapshotLogConfig = Field(default_factory=GitSnapshotLogConfig)
+
+
 class GitConfig(BaseModel):
     """Git multi-version management configuration."""
 
@@ -124,9 +130,9 @@ class GitConfig(BaseModel):
         default=None,
         description="Configuration for the 's3' backend. Required when backend='s3'.",
     )
-    snapshot_log: GitSnapshotLogConfig = Field(
-        default_factory=GitSnapshotLogConfig,
-        description="SnapshotLog provider configuration for path-filtered history.",
+    snapshot: GitSnapshotConfig = Field(
+        default_factory=GitSnapshotConfig,
+        description="Snapshot feature configuration.",
     )
 
     @model_validator(mode="after")
@@ -144,7 +150,7 @@ class GitConfig(BaseModel):
                 raise ValueError(
                     f"git backend 's3' requires the following fields: {', '.join(missing)}"
                 )
-        if self.enabled and self.snapshot_log.provider == "sqlite":
-            if not self.snapshot_log.sqlite.path.startswith("/"):
-                raise ValueError("git snapshot_log sqlite path must be absolute")
+        if self.enabled and self.snapshot.log.provider == "sqlite":
+            if not self.snapshot.log.sqlite.path.startswith("/"):
+                raise ValueError("git snapshot log sqlite path must be absolute")
         return self

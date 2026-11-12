@@ -93,13 +93,13 @@ pub fn build_git_service(
 fn build_snapshot_log_store(
     cfg: &GitConfig,
 ) -> PyResult<Option<Arc<dyn ragfs::git::SnapshotLogStore>>> {
-    match cfg.snapshot_log.provider.as_str() {
+    match cfg.snapshot.log.provider.as_str() {
         "none" => Ok(None),
         "sqlite" => {
             let handle = tokio::runtime::Handle::try_current().map_err(|_| {
                 PyRuntimeError::new_err("build_snapshot_log_store must run inside a tokio runtime")
             })?;
-            let path = cfg.snapshot_log.sqlite.path.clone();
+            let path = cfg.snapshot.log.sqlite.path.clone();
             let store = handle
                 .block_on(async move { ragfs::git::SqliteSnapshotLogStore::connect(&path).await })
                 .map_err(|e| PyRuntimeError::new_err(format!("SqliteSnapshotLogStore: {e}")))?;
@@ -107,13 +107,14 @@ fn build_snapshot_log_store(
         }
         "mysql" => {
             let mysql = cfg
-                .snapshot_log
+                .snapshot
+                .log
                 .mysql
                 .as_ref()
-                .ok_or_else(|| PyValueError::new_err("[git.snapshot_log.mysql] missing"))?;
+                .ok_or_else(|| PyValueError::new_err("[git.snapshot.log.mysql] missing"))?;
             let dsn = std::env::var(&mysql.dsn_env).map_err(|_| {
                 PyValueError::new_err(format!(
-                    "environment variable {} is required for snapshot_log mysql provider",
+                    "environment variable {} is required for snapshot log mysql provider",
                     mysql.dsn_env
                 ))
             })?;
@@ -135,7 +136,7 @@ fn build_snapshot_log_store(
             Ok(Some(Arc::new(store) as Arc<dyn ragfs::git::SnapshotLogStore>))
         }
         other => Err(PyValueError::new_err(format!(
-            "unsupported snapshot_log provider: {}",
+            "unsupported snapshot log provider: {}",
             other
         ))),
     }
@@ -720,9 +721,11 @@ mod tests {
             }),
             s3: None,
             tuning: Default::default(),
-            snapshot_log: ragfs::git::GitSnapshotLogConfig {
-                provider: "none".into(),
-                ..Default::default()
+            snapshot: ragfs::git::GitSnapshotConfig {
+                log: ragfs::git::GitSnapshotLogConfig {
+                    provider: "none".into(),
+                    ..Default::default()
+                },
             },
         }
     }

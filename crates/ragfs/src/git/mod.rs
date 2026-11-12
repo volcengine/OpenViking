@@ -42,8 +42,8 @@ pub mod types;
 pub mod util;
 
 pub use config::{
-    GitConfig, GitLocalConfig, GitS3ConfigPy, GitSnapshotLogConfig, GitSnapshotLogMySqlConfig,
-    GitSnapshotLogSqliteConfig, GitTuningConfig,
+    GitConfig, GitLocalConfig, GitS3ConfigPy, GitSnapshotConfig, GitSnapshotLogConfig,
+    GitSnapshotLogMySqlConfig, GitSnapshotLogSqliteConfig, GitTuningConfig,
 };
 pub use error::{GitError, ObjectStoreError, RefStoreError};
 pub use ignore::{should_track_path, IgnoreMatcher, OVGITIGNORE_MAX_BYTES, OVGITIGNORE_PATH};

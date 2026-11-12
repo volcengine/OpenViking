@@ -22,8 +22,9 @@ pub struct GitConfig {
 
     #[serde(default)]
     pub tuning: GitTuningConfig,
+    /// Snapshot feature configuration.
     #[serde(default)]
-    pub snapshot_log: GitSnapshotLogConfig,
+    pub snapshot: GitSnapshotConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -65,6 +66,14 @@ pub struct GitTuningConfig {
     /// only affects backend call counts, never commit results.
     #[serde(default = "default_true")]
     pub blob_exists_precheck_enabled: bool,
+}
+
+/// Snapshot feature configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitSnapshotConfig {
+    /// Path-filtered log acceleration settings.
+    #[serde(default)]
+    pub log: GitSnapshotLogConfig,
 }
 
 /// Snapshot path history index configuration.
@@ -117,6 +126,15 @@ impl Default for GitSnapshotLogConfig {
             provider: default_snapshot_log_provider(),
             sqlite: GitSnapshotLogSqliteConfig::default(),
             mysql: None,
+        }
+    }
+}
+
+impl Default for GitSnapshotConfig {
+    /// Return the default snapshot feature configuration.
+    fn default() -> Self {
+        Self {
+            log: GitSnapshotLogConfig::default(),
         }
     }
 }
@@ -186,8 +204,8 @@ mod tests {
         assert!(cfg.s3.is_none());
         assert!(cfg.tuning.commit_index_enabled);
         assert!(cfg.tuning.blob_exists_precheck_enabled);
-        assert_eq!(cfg.snapshot_log.provider, "sqlite");
-        assert_eq!(cfg.snapshot_log.sqlite.path, "/tmp/snapshot_log.db");
+        assert_eq!(cfg.snapshot.log.provider, "sqlite");
+        assert_eq!(cfg.snapshot.log.sqlite.path, "/tmp/snapshot_log.db");
     }
 
     #[test]
@@ -223,23 +241,23 @@ mod tests {
         let cfg: GitConfig = toml::from_str("").unwrap();
         assert!(!cfg.enabled);
         assert_eq!(cfg.backend, "local");
-        assert_eq!(cfg.snapshot_log.provider, "sqlite");
+        assert_eq!(cfg.snapshot.log.provider, "sqlite");
     }
 
     #[test]
     fn parses_snapshot_log_overrides() {
         let toml_src = r#"
-            [snapshot_log]
+            [snapshot.log]
             provider = "mysql"
 
-            [snapshot_log.mysql]
+            [snapshot.log.mysql]
             dsn_env = "SNAPSHOT_DSN"
             max_connections = 4
             connect_timeout_ms = 1000
         "#;
         let cfg: GitConfig = toml::from_str(toml_src).unwrap();
-        assert_eq!(cfg.snapshot_log.provider, "mysql");
-        let mysql = cfg.snapshot_log.mysql.unwrap();
+        assert_eq!(cfg.snapshot.log.provider, "mysql");
+        let mysql = cfg.snapshot.log.mysql.unwrap();
         assert_eq!(mysql.dsn_env, "SNAPSHOT_DSN");
         assert_eq!(mysql.max_connections, 4);
         assert_eq!(mysql.connect_timeout_ms, 1000);
