@@ -75,13 +75,29 @@ export function useExperienceTrajectories({
   //
   // A request counter so a late response cannot write after the identity changed.
   const requestId = useRef(0);
+  // 当前在途请求的控制器；身份变化、禁用与卸载都要 abort 它。用 ref 是因为
+  // 它不属于渲染输出——放 state 会让每次请求都触发一次重渲染，也会让下面的
+  // effect 因依赖变化反复重启。
+  //
+  // The controller of the request in flight; identity changes, disabling and unmount
+  // abort it. A ref, because it is not render output: state would re-render on every
+  // request and restart the effect below on each dependency change.
+  const inFlight = useRef<AbortController | null>(null);
   const current = state.owner === owner;
 
   const load = useCallback(
     async (page: number, mode: 'first' | 'more') => {
+      // 同一时刻只保留一个在途请求：新的一次先把上一个真正中止，而不只是让序号
+      // 失效——否则旧连接会一直挂着，直到服务端返回。
+      //
+      // Only one request is in flight at a time: a new one aborts the previous for
+      // real instead of merely invalidating its ticket, or the old connection would
+      // hang until the server answers.
+      inFlight.current?.abort();
       const ticket = ++requestId.current;
       setState((previous) => beginTrajectoryPage(previous, owner, mode));
       const controller = new AbortController();
+      inFlight.current = controller;
       const signals = [controller.signal, signal, inheritedSignal].filter(
         (value): value is AbortSignal => Boolean(value),
       );
@@ -132,15 +148,27 @@ export function useExperienceTrajectories({
   // server, which neither a click nor render can do; identity changes, unmount and
   // refreshes invalidate the request in flight so `requestId` never writes back.
   useEffect(() => {
-    if (!enabled || !client) return;
-    // 清理交给 `load` 自己的 abort 信号与序号：身份一变，旧请求的 signal 就被中止，
-    // 序号也不再匹配，迟到响应不会写回。这里不需要额外的清理动作。
+    if (!enabled || !client) return undefined;
+    // 本次 effect 期间在途的请求；清理时中止它，迟到响应不再传输也不再写回。
+    // 序号失效由 `load` 在下次开始时递增完成，这里只负责中止网络请求。
     //
-    // Cleanup is handled by `load`'s own abort signal and ticket: a new identity
-    // aborts the old request and its ticket no longer matches, so a late response
-    // never writes back. Nothing extra is needed here.
+    // The request in flight during this effect; the cleanup aborts it so a late
+    // response neither streams nor writes back. Ticket invalidation happens when the
+    // next `load` starts; this only stops the network request.
     void load(0, 'first');
-    return undefined;
+    return () => {
+      // 清理时读取 ref 的最新值：这里要中止的是「此刻在途的那个请求」，而不是
+      // effect 建立时那一个——加载更多会替换它，而加载更多同样属于本次挂载。
+      // exhaustive-deps 针对的是把 ref 当渲染值用的场景，此处不是。
+      //
+      // Read the ref's latest value on cleanup: what must be aborted is the request
+      // in flight right now, not the one present when the effect was set up —
+      // load-more replaces it and belongs to the same mount. The lint rule targets
+      // refs used as render values, which this is not.
+      //
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      inFlight.current?.abort();
+    };
   }, [client, enabled, load, owner]);
 
   const loadMore = useCallback(() => {

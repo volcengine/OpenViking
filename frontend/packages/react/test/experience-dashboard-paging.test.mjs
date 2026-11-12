@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createElement as h } from 'react';
+import { act, createElement as h } from 'react';
 import { ExperienceDashboard } from '@openviking/react/components/experience-dashboard';
 import { mount } from './helpers/module-dom.mjs';
 
@@ -71,6 +71,62 @@ test('pagination names follow the interface language', async () => {
     assert.ok(
       !labels.some((label) => /Page|Jump/.test(label)),
       labels.join(' | '),
+    );
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('a host that only passes onPageChange still gets a working load-more', async () => {
+  const pages = [];
+  const view = await mount(
+    h(ExperienceDashboard, {
+      uri: 'legacy',
+      kind: 'file',
+      data: {
+        trajectories: [
+          { uri: 'viking://user/a/memories/trajectories/t1.md', name: 'T1' },
+        ],
+        trajectoryTotal: 2,
+      },
+      hasMore: true,
+      onPageChange: (page) => pages.push(page),
+    }),
+  );
+  try {
+    // 只有旧回调时按钮仍可用，并按文档以 page + 1 调用。
+    //
+    // With only the older callback the button stays enabled and calls page + 1.
+    const button = view.container.querySelector(
+      '.ov-experience-dashboard__load-more-action',
+    );
+    assert.equal(button.disabled, false);
+    await act(async () => button.click());
+    assert.deepEqual(pages, [1]);
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('both callbacks omitted keeps load-more disabled', async () => {
+  const view = await mount(
+    h(ExperienceDashboard, {
+      uri: 'none',
+      kind: 'file',
+      data: {
+        trajectories: [
+          { uri: 'viking://user/a/memories/trajectories/t1.md', name: 'T1' },
+        ],
+        trajectoryTotal: 2,
+      },
+      hasMore: true,
+    }),
+  );
+  try {
+    assert.equal(
+      view.container.querySelector('.ov-experience-dashboard__load-more-action')
+        .disabled,
+      true,
     );
   } finally {
     await view.unmount();

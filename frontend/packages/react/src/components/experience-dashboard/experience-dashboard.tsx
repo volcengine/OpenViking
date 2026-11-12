@@ -149,7 +149,12 @@ function ExperienceDashboardContent({
                 trajectoriesState={states.trajectories ?? {}}
                 hasMore={hasMore}
                 loadingMore={loadingMore}
-                onLoadMore={onLoadMore}
+                // 显式回调优先；只有旧回调的宿主仍按文档约定翻页。
+                // An explicit callback wins; an older-only host still pages as documented.
+                onLoadMore={
+                  onLoadMore ??
+                  (onPageChange ? () => onPageChange(page + 1) : undefined)
+                }
                 onOpenUri={onOpenUri}
               />
             ) : tab === 'source' ? (
