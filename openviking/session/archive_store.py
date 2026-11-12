@@ -201,8 +201,10 @@ class ArchiveStore:
     async def file_exists(self, archive_uri: str, file_name: str) -> bool:
         try:
             return await self._viking_fs.exists(f"{archive_uri}/{file_name}", ctx=self._ctx)
-        except Exception:
-            return False
+        except Exception as exc:
+            if is_storage_not_found(exc):
+                return False
+            raise
 
     async def terminal_state(self, archive_uri: str) -> str:
         """Return ``completed``, ``failed``, or ``pending`` for one archive."""
@@ -458,10 +460,21 @@ class ArchiveStore:
     async def read_meta(self, archive_uri: str) -> Dict[str, Any]:
         try:
             content = await self._viking_fs.read_file(f"{archive_uri}/.meta.json", ctx=self._ctx)
+        except Exception as exc:
+            # A missing meta file means "no metadata" (e.g. archives from
+            # older versions); a transient read failure must not be read as
+            # one, or Phase 1 crash recovery is silently skipped.
+            if is_storage_not_found(exc):
+                return {}
+            raise
+        # Keep the pre-existing tolerance for an unparseable body (e.g. a
+        # meta file left empty by an interrupted write): only the storage
+        # error classification changes here.
+        try:
             parsed = json.loads(content)
-            return parsed if isinstance(parsed, dict) else {}
-        except Exception:
+        except json.JSONDecodeError:
             return {}
+        return parsed if isinstance(parsed, dict) else {}
 
     # ------------------------------------------------------------------
     # Derived summaries
