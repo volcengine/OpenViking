@@ -12,6 +12,7 @@ import threading
 import time
 from collections import defaultdict
 from collections.abc import AsyncIterator, Callable, Collection
+from contextlib import AbstractContextManager
 from copy import deepcopy
 from dataclasses import dataclass, field, fields
 from enum import Enum
@@ -42,6 +43,7 @@ from openviking.service.task_domain import (
 from openviking.service.task_events import append_task_event
 from openviking.service.task_tracker_concurrency import (
     KeyedAsyncLockPool,
+    TaskChangeNotifier,
     run_to_completion,
 )
 
@@ -158,6 +160,12 @@ class TaskWorkStore(Protocol):
 
     @property
     def work_recovery_mode(self) -> WorkRecoveryMode: ...
+
+    def _subscribe_task(
+        self, task_id: str, account_id: Optional[str], user_id: Optional[str]
+    ) -> AbstractContextManager[asyncio.Future[None]]:
+        """Register before querying; hints never replace authoritative reads."""
+        ...
 
     async def create(
         self, task: TaskRecord, *, reject_if_active: bool = False
@@ -417,6 +425,7 @@ class PersistentTaskStore(TaskWorkStore):
 
     def __init__(self, agfs: Any) -> None:
         self._agfs = agfs if isinstance(agfs, AsyncAGFSClient) else AsyncAGFSClient(agfs)
+        self._task_changes = TaskChangeNotifier()
         self._ensured_task_dirs: set[tuple[str, str]] = set()
         self._lock = threading.Lock()
         self._task_cache: Dict[tuple[str, str, str], TaskRecord] = {}
@@ -429,6 +438,11 @@ class PersistentTaskStore(TaskWorkStore):
     @property
     def work_recovery_mode(self) -> WorkRecoveryMode:
         return WorkRecoveryMode.QUEUE_SNAPSHOT
+
+    def _subscribe_task(
+        self, task_id: str, account_id: Optional[str], user_id: Optional[str]
+    ) -> AbstractContextManager[asyncio.Future[None]]:
+        return self._task_changes.subscribe(task_id, account_id, user_id)
 
     async def create(
         self, task: TaskRecord, *, reject_if_active: bool = False
@@ -455,10 +469,7 @@ class PersistentTaskStore(TaskWorkStore):
                     )
                 stored = deepcopy(task)
                 append_task_events(stored, None)
-                await self._write_task(stored)
-                with self._lock:
-                    self._task_cache[owner] = stored
-                    self._work_sets[owner] = _WorkSet({})
+                await self._write_task_and_publish(stored, owner, stored, _WorkSet({}))
                 return TaskCreationResult(deepcopy(stored), created=True)
 
     async def withdraw_unaccepted(
@@ -1289,16 +1300,21 @@ class PersistentTaskStore(TaskWorkStore):
         owner: tuple[str, str, str],
         task_exists: bool,
     ) -> bool:
-        account_id, user_id, task_id = owner
-        try:
-            await self._rm(self._task_path(account_id, user_id, task_id))
-        except (AGFSNotFoundError, FileNotFoundError):
-            if not task_exists:
-                return False
-        with self._lock:
-            self._task_cache.pop(owner, None)
-            self._work_sets.pop(owner, None)
-        return task_exists
+        async def remove_and_publish() -> bool:
+            account_id, user_id, task_id = owner
+            try:
+                await self._rm(self._task_path(account_id, user_id, task_id))
+            except (AGFSNotFoundError, FileNotFoundError):
+                if not task_exists:
+                    return False
+            with self._lock:
+                self._task_cache.pop(owner, None)
+                self._work_sets.pop(owner, None)
+            if task_exists:
+                self._task_changes.notify(*owner)
+            return task_exists
+
+        return await run_to_completion(remove_and_publish)
 
     async def delete_expired(
         self, policy: TaskRetentionPolicy, *, now: float, limit: int
@@ -1410,7 +1426,10 @@ class PersistentTaskStore(TaskWorkStore):
                 candidate.updated_at = TaskRecord.next_updated_at(candidate.updated_at)
                 append_task_events(candidate, previous)
                 snapshot = deepcopy(candidate)
-            await self._write_task_and_publish(snapshot, owner, candidate, work_set)
+                work_changed = work_set != self._work_sets.get(owner, _WorkSet({}))
+            await self._write_task_and_publish(
+                snapshot, owner, candidate, work_set, work_changed=work_changed
+            )
             return mutation
 
     async def _mutate_work(
@@ -1487,10 +1506,15 @@ class PersistentTaskStore(TaskWorkStore):
                         else:
                             work_set.works[work_id] = mutation.work
                         work_set.open_count = open_count
-                    return mutation.result
+            if not finalized and not task_changed:
+                if mutation.changed:
+                    self._task_changes.notify(*owner)
+                return mutation.result
             assert candidate_task is not None
             assert candidate_work_set is not None
-            await self._write_task_and_publish(snapshot, owner, candidate_task, candidate_work_set)
+            await self._write_task_and_publish(
+                snapshot, owner, candidate_task, candidate_work_set, work_changed=mutation.changed
+            )
             return StoreOperationResult.applied()
 
     async def _write_task_and_publish(
@@ -1499,6 +1523,8 @@ class PersistentTaskStore(TaskWorkStore):
         owner: tuple[str, str, str],
         candidate_task: TaskRecord,
         candidate_work_set: Optional[_WorkSet] = None,
+        *,
+        work_changed: bool = False,
     ) -> None:
         write_task = asyncio.create_task(self._write_task(snapshot))
         cancellation: asyncio.CancelledError | None = None
@@ -1512,9 +1538,13 @@ class PersistentTaskStore(TaskWorkStore):
                     cancellation = exc
             write_task.result()
             with self._lock:
+                previous = self._task_cache.get(owner)
+                status_changed = previous is None or previous.status != candidate_task.status
                 self._task_cache[owner] = candidate_task
                 if candidate_work_set is not None:
                     self._work_sets[owner] = candidate_work_set
+            if status_changed or work_changed:
+                self._task_changes.notify(*owner)
             if cancellation is not None:
                 raise cancellation
         finally:

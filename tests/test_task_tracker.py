@@ -214,18 +214,29 @@ async def test_identity_cleanup_task_creation_allows_deleting_owner(tracker: Tas
         await tracker.create("add_resource", account_id="acc", user_id="alice")
 
 
-async def test_wait_uses_short_initial_poll(monkeypatch, tracker: TaskTracker):
+async def test_wait_reconciles_when_notification_is_lost(monkeypatch, tracker: TaskTracker):
+    from openviking.service import task_tracker
+
+    store = tracker._store
+    assert isinstance(store, PersistentTaskStore)
+    monkeypatch.setattr(task_tracker, "_WAIT_INITIAL_POLL_INTERVAL", 0.01)
+    monkeypatch.setattr(task_tracker, "_WAIT_MAX_POLL_INTERVAL", 0.02)
     task = await tracker.create("add_resource", task_id="task", **_owner_kwargs())
-    delays = []
+    queried = asyncio.Event()
+    read = tracker.get_task_status
 
-    async def sleep(delay):
-        delays.append(delay)
-        await tracker.complete(task.task_id, {}, **_owner_kwargs())
+    async def read_status(*args, **kwargs):
+        status = await read(*args, **kwargs)
+        queried.set()
+        return status
 
-    monkeypatch.setattr(asyncio, "sleep", sleep)
-
-    assert (await tracker.wait(task.task_id, **_owner_kwargs())).status is TaskStatus.COMPLETED
-    assert delays == [0.05]
+    monkeypatch.setattr(tracker, "get_task_status", read_status)
+    monkeypatch.setattr(store._task_changes, "notify", lambda *args: None)
+    waiter = asyncio.create_task(tracker.wait(task.task_id, **_owner_kwargs()))
+    await asyncio.wait_for(queried.wait(), 1)
+    await tracker.complete(task.task_id, {}, **_owner_kwargs())
+    assert (await asyncio.wait_for(waiter, 1)).status is TaskStatus.COMPLETED
+    assert store._task_changes.waiter_count == 0
 
 
 async def test_wait_for_task_work_uses_short_initial_poll(monkeypatch, tracker: TaskTracker):
@@ -234,14 +245,240 @@ async def test_wait_for_task_work_uses_short_initial_poll(monkeypatch, tracker: 
     await tracker.register_work(task.task_id, "work", "Semantic", **_owner_kwargs())
     delays = []
 
-    async def sleep(delay):
-        delays.append(delay)
-        await tracker.mark_work_done(task.task_id, "work", **_owner_kwargs())
+    wait = asyncio.wait
 
-    monkeypatch.setattr(asyncio, "sleep", sleep)
+    async def wait_once(*args, timeout):
+        delays.append(timeout)
+        await tracker.mark_work_done(task.task_id, "work", **_owner_kwargs())
+        return await wait(*args, timeout=timeout)
+
+    monkeypatch.setattr(asyncio, "wait", wait_once)
 
     await tracker.wait_for_task_work(task.task_id, **_owner_kwargs())
-    assert delays == [0.05]
+    assert len(delays) == 1
+    assert 0 < delays[0] <= 0.05 + 1e-9
+
+
+@pytest.mark.parametrize("entry", ["wait_for_work", "wait_for_task_work"])
+@pytest.mark.parametrize("state", ["empty", "missing", "open", "done", "failed", "cancelled"])
+async def test_work_wait_zero_timeout_preserves_query_and_completion_priority(
+    tracker, entry, state
+):
+    owner = _owner_kwargs()
+    await tracker.create("compile", task_id="task", **owner)
+    if state not in ("empty", "missing"):
+        await tracker.register_work("task", "work", "Embedding", **owner)
+        if state == "done":
+            await tracker.mark_work_done("task", "work", **owner)
+        elif state == "failed":
+            await tracker.mark_work_failed("task", "work", "failed", **owner)
+        elif state == "cancelled":
+            await tracker.cancel("task", **owner)
+    args = [[] if state == "empty" else ["work"]] if entry == "wait_for_work" else []
+    kwargs = {"stop_waiting": lambda: True} if entry == "wait_for_work" else {}
+    if state == "missing" and entry == "wait_for_work":
+        with pytest.raises(KeyError, match="Work not found"):
+            await getattr(tracker, entry)("missing", *args, timeout=0, **owner, **kwargs)
+    elif state == "open":
+        expected = asyncio.CancelledError if entry == "wait_for_work" else TimeoutError
+        with pytest.raises(expected):
+            await getattr(tracker, entry)("task", *args, timeout=0, **owner, **kwargs)
+    else:
+        task_id = "missing" if state in ("empty", "missing") else "task"
+        assert await getattr(tracker, entry)(task_id, *args, timeout=0, **owner, **kwargs) is None
+    assert tracker._store._task_changes.waiter_count == 0
+
+
+@pytest.mark.parametrize("entry", ["wait_for_work", "wait_for_task_work"])
+async def test_work_wait_query_errors_release_subscription(tracker, monkeypatch, entry):
+    read = "get_works" if entry == "wait_for_work" else "has_open_work"
+    monkeypatch.setattr(
+        tracker._store, read, AsyncMock(side_effect=ConnectionError("query failed"))
+    )
+    args = [["work"]] if entry == "wait_for_work" else []
+    with pytest.raises(ConnectionError, match="query failed"):
+        await getattr(tracker, entry)("task", *args, **_owner_kwargs())
+    assert tracker._store._task_changes.waiter_count == 0
+
+
+@pytest.mark.parametrize("entry", ["wait_for_work", "wait_for_task_work"])
+async def test_work_notifications_preserve_shared_budget(tracker, entry):
+    from openviking.service.task_tracker import _wait_budget, _WaitBudget
+
+    owner = _owner_kwargs()
+    await tracker.create("compile", task_id="task", **owner)
+    await tracker.register_work("task", "work", "Embedding", **owner)
+    token = _wait_budget.set(_WaitBudget("task", 0.04))
+    args = [["work"]] if entry == "wait_for_work" else []
+
+    async def noisy():
+        while True:
+            tracker._store._task_changes.notify("acme", "alice", "task")
+            await asyncio.sleep(0.001)
+
+    noise = asyncio.create_task(noisy())
+    try:
+        for _ in range(2):
+            with pytest.raises(TimeoutError, match="Timed out waiting for Work in Task task"):
+                await asyncio.wait_for(
+                    getattr(tracker, entry)("task", *args, timeout=60, **owner), 1
+                )
+        await tracker.mark_work_done("task", "work", **owner)
+        await getattr(tracker, entry)("task", *args, **owner)
+    finally:
+        _wait_budget.reset(token)
+        noise.cancel()
+        await asyncio.gather(noise, return_exceptions=True)
+    assert tracker._store._task_changes.waiter_count == 0
+
+
+async def test_work_stop_is_rechecked_without_notification(tracker, monkeypatch):
+    from openviking.service import task_tracker
+
+    monkeypatch.setattr(task_tracker, "_WAIT_INITIAL_POLL_INTERVAL", 0.01)
+    monkeypatch.setattr(task_tracker, "_WAIT_MAX_POLL_INTERVAL", 0.02)
+    owner = _owner_kwargs()
+    await tracker.create("compile", task_id="task", **owner)
+    await tracker.register_work("task", "work", "Embedding", **owner)
+    stopped = asyncio.Event()
+    queried = asyncio.Event()
+
+    def stop():
+        queried.set()
+        return stopped.is_set()
+
+    waiter = asyncio.create_task(
+        tracker.wait_for_work("task", ["work"], stop_waiting=stop, **owner)
+    )
+    try:
+        await asyncio.wait_for(queried.wait(), 1)
+        stopped.set()
+        with pytest.raises(asyncio.CancelledError, match="Worker stopped"):
+            await asyncio.wait_for(waiter, 0.2)
+        assert tracker._store._task_changes.waiter_count == 0
+    finally:
+        waiter.cancel()
+        await asyncio.gather(waiter, return_exceptions=True)
+
+
+async def test_work_stop_callback_error_releases_subscription(tracker):
+    owner = _owner_kwargs()
+    await tracker.create("compile", task_id="task", **owner)
+    await tracker.register_work("task", "work", "Embedding", **owner)
+
+    def stop():
+        raise RuntimeError("stop check failed")
+
+    with pytest.raises(RuntimeError, match="stop check failed"):
+        await tracker.wait_for_work("task", ["work"], stop_waiting=stop, **owner)
+    assert tracker._store._task_changes.waiter_count == 0
+
+
+@pytest.mark.parametrize("outcome", ["complete", "fail", "mark_cancelled"])
+@pytest.mark.parametrize("scope", ["owner", "unscoped", "account", "user"])
+async def test_wait_terminal_result_precedes_zero_timeout(tracker, outcome, scope):
+    task = await tracker.create("add_resource", **_owner_kwargs())
+    argument = {"complete": {"ok": True}, "fail": "failure", "mark_cancelled": None}[outcome]
+    if argument is None:
+        await tracker.mark_cancelled(task.task_id, **_owner_kwargs())
+    else:
+        await getattr(tracker, outcome)(task.task_id, argument, **_owner_kwargs())
+    owner = _owner_kwargs()
+    kwargs = {
+        "owner": owner,
+        "unscoped": {},
+        "account": {"account_id": owner["account_id"]},
+        "user": {"user_id": owner["user_id"]},
+    }[scope]
+    result = await tracker.wait(task.task_id, timeout=0, **kwargs)
+    assert result == await tracker.get(task.task_id, **kwargs)
+    assert tracker._store._task_changes.waiter_count == 0
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["missing", "wrong-owner", "status-error", "record-error", "deleted-after-status", "timeout"],
+)
+async def test_wait_releases_registration_on_errors(tracker, monkeypatch, failure):
+    task = await tracker.create("add_resource", **_owner_kwargs())
+    kwargs = _owner_kwargs()
+    expected: type[Exception] = KeyError
+    if failure == "missing":
+        task.task_id = "missing"
+    elif failure == "wrong-owner":
+        kwargs["user_id"] = "bob"
+    elif failure == "timeout":
+        expected = TimeoutError
+    else:
+        error = ConnectionError("query failed")
+        if failure == "status-error":
+            monkeypatch.setattr(tracker, "get_task_status", AsyncMock(side_effect=error))
+        else:
+            await tracker.complete(task.task_id, {}, **_owner_kwargs())
+            monkeypatch.setattr(
+                tracker,
+                "get",
+                AsyncMock(return_value=None)
+                if failure == "deleted-after-status"
+                else AsyncMock(side_effect=error),
+            )
+        if failure != "deleted-after-status":
+            expected = ConnectionError
+    with pytest.raises(expected):
+        await tracker.wait(task.task_id, timeout=0, **kwargs)
+    assert tracker._store._task_changes.waiter_count == 0
+
+
+async def test_waiter_cancellation_is_independent(tracker, monkeypatch):
+    task = await tracker.create("add_resource", **_owner_kwargs())
+    reads = 0
+    ready = asyncio.Event()
+    read = tracker.get_task_status
+
+    async def read_status(*args, **kwargs):
+        nonlocal reads
+        result = await read(*args, **kwargs)
+        reads += 1
+        if reads == 3:
+            ready.set()
+        return result
+
+    monkeypatch.setattr(tracker, "get_task_status", read_status)
+    waiters = [asyncio.create_task(tracker.wait(task.task_id, **_owner_kwargs())) for _ in range(3)]
+    await asyncio.wait_for(ready.wait(), 1)
+    waiters[0].cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiters[0]
+    await tracker.complete(task.task_id, {"ok": True}, **_owner_kwargs())
+    results = await asyncio.wait_for(asyncio.gather(*waiters[1:]), 1)
+    assert all(task.result == {"ok": True} for task in results)
+    assert tracker._store._task_changes.waiter_count == 0
+
+
+async def test_wait_notifications_preserve_shared_budget(tracker):
+    from openviking.service.task_tracker import _wait_budget, _WaitBudget
+
+    task = await tracker.create("add_resource", **_owner_kwargs())
+    token = _wait_budget.set(_WaitBudget(task.task_id, 0.05))
+
+    async def noisy():
+        while True:
+            tracker._store._task_changes.notify("acme", "alice", task.task_id)
+            await asyncio.sleep(0.001)
+
+    noise = asyncio.create_task(noisy())
+    try:
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(tracker.wait(task.task_id, timeout=60, **_owner_kwargs()), 1)
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(tracker.wait(task.task_id, timeout=60, **_owner_kwargs()), 0.1)
+        await tracker.complete(task.task_id, {}, **_owner_kwargs())
+        assert (await tracker.wait(task.task_id, **_owner_kwargs())).status is TaskStatus.COMPLETED
+    finally:
+        noise.cancel()
+        await asyncio.gather(noise, return_exceptions=True)
+        _wait_budget.reset(token)
+    assert tracker._store._task_changes.waiter_count == 0
 
 
 @pytest.mark.parametrize("failure", ["deletion", "identity-query", "watch-admission"])
@@ -574,6 +811,7 @@ async def test_list_limit(tracker: TaskTracker):
     for i in range(10):
         await tracker.create(
             "session_commit",
+            task_id=f"task-{i}",
             resource_id=f"s{i}",
             meta={"nested": {"values": [i]}},
             **_owner_kwargs(),

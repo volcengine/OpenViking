@@ -236,6 +236,7 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
 ):
     from openviking.pyagfs import AGFSSyncClientProtocol
     from openviking.server.identity import RequestContext, Role
+    from openviking.service import task_tracker
     from openviking.service.task_queue_middleware import TaskWorkQueueMiddleware
     from openviking.service.task_store import PersistentTaskStore
     from openviking.service.task_tracker import TaskStatus, TaskTracker
@@ -278,16 +279,21 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
     for module in ("semantic_processor", "semantic_executor", "semantic_lock"):
         monkeypatch.setattr(f"openviking.storage.queuefs.{module}.get_viking_fs", lambda: fs)
     agfs = _FakeAgfs()
-    tracker = TaskTracker(PersistentTaskStore(agfs))
+    store = PersistentTaskStore(agfs)
+    tracker = TaskTracker(store)
+    # A local completion must release the message lock without the next poll.
+    monkeypatch.setattr(task_tracker, "_WAIT_INITIAL_POLL_INTERVAL", 60)
+    monkeypatch.setattr(task_tracker, "_WAIT_MAX_POLL_INTERVAL", 60)
     monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
     entered_embedding_drain = asyncio.Event()
-    original_wait_for_work = tracker.wait_for_work
+    read_works = store.get_works
 
-    async def wait_for_work(*args, **kwargs):
+    async def get_works(*args, **kwargs):
+        result = await read_works(*args, **kwargs)
         entered_embedding_drain.set()
-        await original_wait_for_work(*args, **kwargs)
+        return result
 
-    monkeypatch.setattr(tracker, "wait_for_work", wait_for_work)
+    monkeypatch.setattr(store, "get_works", get_works)
     owner = _owner_kwargs("acc", "alice")
     source = await tracker.create("content_write", **owner)
     queue = NamedQueue(
@@ -357,6 +363,7 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
         await asyncio.wait_for(enqueued.wait(), 1)
         await asyncio.wait_for(entered_embedding_drain.wait(), 1)
         assert not worker.done()
+        assert store._task_changes.waiter_count == 1
         assert released == []
         assert "/queue/Semantic/enqueue" not in agfs.files
         payload = json.loads(agfs.files["/queue/Embedding/enqueue"])
@@ -365,6 +372,11 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
         assert metadata.task_id != source.task_id
         if task:
             assert metadata.task_id == task.task_id
+        entered_embedding_drain.clear()
+        store._task_changes.notify(metadata.account_id, metadata.user_id, metadata.task_id)
+        await asyncio.wait_for(entered_embedding_drain.wait(), 1)
+        assert not worker.done()
+        assert released == []
         await tracker.mark_work_done(
             metadata.task_id,
             metadata.work_id,
@@ -376,6 +388,7 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
             ProcessOutcome.FAILED if fail_generation else ProcessOutcome.SUCCESS
         )
         assert released == ["message-lock"]
+        assert store._task_changes.waiter_count == 0
         if context_type == "resource":
             directory = json.loads(agfs.files["/queue/Semantic/enqueue"])
             assert directory["uri"] == root

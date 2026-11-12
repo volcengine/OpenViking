@@ -116,6 +116,45 @@ _admission: ContextVar[Optional[tuple[str, Callable[[], Awaitable[bool]]]]] = Co
 )
 
 
+class _TaskWaitController:
+    def __init__(self, store: TaskWorkStore) -> None:
+        self._store = store
+
+    async def wait(
+        self,
+        task_id: str,
+        account_id: Optional[str],
+        user_id: Optional[str],
+        timeout: Optional[float],
+        read_terminal: Callable[[], Awaitable[Optional[_OperationResult]]],
+        *,
+        timeout_message: Optional[str] = None,
+    ) -> _OperationResult:
+        deadline = None if timeout is None else time.monotonic() + timeout
+        interval = _WAIT_INITIAL_POLL_INTERVAL
+        recheck_at = time.monotonic() + interval
+        while True:
+            with self._store._subscribe_task(task_id, account_id, user_id) as changed:
+                terminal = await read_terminal()
+                if terminal is not None:
+                    return terminal
+                now = time.monotonic()
+                remaining = None if deadline is None else deadline - now
+                if remaining is not None and remaining <= 0:
+                    raise TimeoutError(timeout_message or f"Timed out waiting for Task {task_id}")
+                # Hints do not postpone the periodic reconciliation clock.
+                if now >= recheck_at:
+                    interval = min(_WAIT_MAX_POLL_INTERVAL, interval * 2)
+                    recheck_at = now + interval
+                delay = recheck_at - now
+                done, _ = await asyncio.wait(
+                    (changed,), timeout=delay if remaining is None else min(delay, remaining)
+                )
+                if not done:
+                    interval = min(_WAIT_MAX_POLL_INTERVAL, interval * 2)
+                    recheck_at = time.monotonic() + interval
+
+
 @contextmanager
 def task_admission(
     task_id: str, admitted: Callable[[], Awaitable[bool]]
@@ -324,6 +363,7 @@ class TaskTracker:
 
     def __init__(self, store: TaskWorkStore) -> None:
         self._store = store
+        self._task_waiter = _TaskWaitController(store)
         self._cleanup_task: Optional[asyncio.Task[Any]] = None
         # Bound after Compile storage initialization; shares the cleanup clock and batch size.
         self.compile_history_cleanup: Optional[Callable[..., Awaitable[int]]] = None
@@ -892,40 +932,24 @@ class TaskTracker:
         user_id: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> TaskRecord:
+        async def read_terminal() -> Optional[TaskRecord]:
+            if account_id is not None and user_id is not None:
+                status = await self.get_task_status(task_id, account_id=account_id, user_id=user_id)
+                if status is None:
+                    raise KeyError(f"Task not found: {task_id}")
+                if status not in TERMINAL_TASK_STATUSES:
+                    return None
+            task = await self.get(task_id, account_id=account_id, user_id=user_id)
+            if task is None:
+                raise KeyError(f"Task not found: {task_id}")
+            if account_id is not None and user_id is not None:
+                return task
+            return task if task.status in TERMINAL_TASK_STATUSES else None
+
         with _consume_wait_budget(task_id, timeout) as remaining:
-            deadline = None if remaining is None else time.monotonic() + remaining
-            next_poll_interval = _WAIT_INITIAL_POLL_INTERVAL
-            while True:
-                if account_id is not None and user_id is not None:
-                    status = await self.get_task_status(
-                        task_id,
-                        account_id=account_id,
-                        user_id=user_id,
-                    )
-                    if status is None:
-                        raise KeyError(f"Task not found: {task_id}")
-                    if status in TERMINAL_TASK_STATUSES:
-                        task = await self.get(
-                            task_id,
-                            account_id=account_id,
-                            user_id=user_id,
-                        )
-                        if task is None:
-                            raise KeyError(f"Task not found: {task_id}")
-                        return task
-                else:
-                    task = await self.get(task_id, account_id=account_id, user_id=user_id)
-                    if task is None:
-                        raise KeyError(f"Task not found: {task_id}")
-                    if task.status in TERMINAL_TASK_STATUSES:
-                        return task
-                remaining = None if deadline is None else deadline - time.monotonic()
-                if remaining is not None and remaining <= 0:
-                    raise TimeoutError(f"Timed out waiting for Task {task_id}")
-                await asyncio.sleep(
-                    next_poll_interval if remaining is None else min(next_poll_interval, remaining)
-                )
-                next_poll_interval = min(_WAIT_MAX_POLL_INTERVAL, next_poll_interval * 2)
+            return await self._task_waiter.wait(
+                task_id, account_id, user_id, remaining, read_terminal
+            )
 
     async def list_tasks(
         self,
@@ -1273,30 +1297,29 @@ class TaskTracker:
         wanted = set(work_ids)
         if not wanted:
             return
+
+        async def read_terminal() -> Optional[bool]:
+            works = await self._store.get_works(
+                task_id, wanted, account_id=account_id, user_id=user_id
+            )
+            missing = wanted.difference(works)
+            if missing:
+                raise KeyError(f"Work not found for Task {task_id}: {sorted(missing)}")
+            if all(work.state in TERMINAL_WORK_STATES for work in works.values()):
+                return True
+            if stop_waiting is not None and stop_waiting():
+                raise asyncio.CancelledError("Worker stopped with queued Work")
+            return None
+
         with _consume_wait_budget(task_id, timeout) as remaining:
-            deadline = None if remaining is None else time.monotonic() + remaining
-            next_poll_interval = _WAIT_INITIAL_POLL_INTERVAL
-            while True:
-                works = await self._store.get_works(
-                    task_id,
-                    wanted,
-                    account_id=account_id,
-                    user_id=user_id,
-                )
-                missing = wanted.difference(works)
-                if missing:
-                    raise KeyError(f"Work not found for Task {task_id}: {sorted(missing)}")
-                if all(work.state in TERMINAL_WORK_STATES for work in works.values()):
-                    return
-                if stop_waiting is not None and stop_waiting():
-                    raise asyncio.CancelledError("Worker stopped with queued Work")
-                remaining = None if deadline is None else deadline - time.monotonic()
-                if remaining is not None and remaining <= 0:
-                    raise TimeoutError(f"Timed out waiting for Work in Task {task_id}")
-                await asyncio.sleep(
-                    next_poll_interval if remaining is None else min(next_poll_interval, remaining)
-                )
-                next_poll_interval = min(_WAIT_MAX_POLL_INTERVAL, next_poll_interval * 2)
+            await self._task_waiter.wait(
+                task_id,
+                account_id,
+                user_id,
+                remaining,
+                read_terminal,
+                timeout_message=f"Timed out waiting for Work in Task {task_id}",
+            )
 
     async def wait_for_task_work(
         self,
@@ -1307,22 +1330,25 @@ class TaskTracker:
         user_id: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> None:
-        with _consume_wait_budget(task_id, timeout) as remaining:
-            deadline = None if remaining is None else time.monotonic() + remaining
-            next_poll_interval = _WAIT_INITIAL_POLL_INTERVAL
-            while await self._store.has_open_work(
+        async def read_terminal() -> Optional[bool]:
+            if await self._store.has_open_work(
                 task_id,
                 exclude_work_id=exclude_work_id,
                 account_id=account_id,
                 user_id=user_id,
             ):
-                remaining = None if deadline is None else deadline - time.monotonic()
-                if remaining is not None and remaining <= 0:
-                    raise TimeoutError(f"Timed out waiting for Work in Task {task_id}")
-                await asyncio.sleep(
-                    next_poll_interval if remaining is None else min(next_poll_interval, remaining)
-                )
-                next_poll_interval = min(_WAIT_MAX_POLL_INTERVAL, next_poll_interval * 2)
+                return None
+            return True
+
+        with _consume_wait_budget(task_id, timeout) as remaining:
+            await self._task_waiter.wait(
+                task_id,
+                account_id,
+                user_id,
+                remaining,
+                read_terminal,
+                timeout_message=f"Timed out waiting for Work in Task {task_id}",
+            )
 
     async def is_enqueue_complete(
         self,

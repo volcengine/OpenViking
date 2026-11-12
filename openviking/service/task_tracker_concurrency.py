@@ -7,14 +7,66 @@ import asyncio
 import threading
 from concurrent.futures import Future as ConcurrentFuture
 from concurrent.futures import InvalidStateError
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Awaitable, Callable, Coroutine, Generic, TypeVar
+from typing import Any, AsyncIterator, Awaitable, Callable, Coroutine, Generic, Iterator, TypeVar
 
 from openviking.concurrency import AsyncSemaphore
 
 _KeyT = TypeVar("_KeyT")
 _ResultT = TypeVar("_ResultT")
+
+
+class TaskChangeNotifier:
+    """One-shot local hints; each subscriber owns a Future on its own loop."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._waiters: dict[tuple[str | None, str | None, str], set[asyncio.Future[None]]] = {}
+
+    @property
+    def waiter_count(self) -> int:
+        with self._lock:
+            return sum(map(len, self._waiters.values()))
+
+    @contextmanager
+    def subscribe(
+        self, task_id: str, account_id: str | None, user_id: str | None
+    ) -> Iterator[asyncio.Future[None]]:
+        future = asyncio.get_running_loop().create_future()
+        key = (account_id, user_id, task_id)
+        with self._lock:
+            self._waiters.setdefault(key, set()).add(future)
+        try:
+            yield future
+        finally:
+            with self._lock:
+                waiters = self._waiters.get(key)
+                if waiters is not None:
+                    waiters.discard(future)
+                    if not waiters:
+                        del self._waiters[key]
+            future.cancel()
+
+    def notify(self, account_id: str, user_id: str, task_id: str) -> None:
+        with self._lock:
+            waiters = [
+                future
+                for account in (account_id, None)
+                for user in (user_id, None)
+                for future in self._waiters.pop((account, user, task_id), ())
+            ]
+        for future in waiters:
+            try:
+                future.get_loop().call_soon_threadsafe(self._deliver, future)
+            except RuntimeError:
+                # A closed subscriber loop cannot change the committed writer's result.
+                continue
+
+    @staticmethod
+    def _deliver(future: asyncio.Future[None]) -> None:
+        if not future.done():
+            future.set_result(None)
 
 
 async def run_to_completion(
