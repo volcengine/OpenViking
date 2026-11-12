@@ -145,8 +145,6 @@ class RequestIntent:
 class NewArtifactSnapshot:
     entries: Mapping[str, Any]
     complete: bool = True
-    # A partial source inventory permits upserts, never inferred removals.
-    allow_partial: bool = False
 
 
 @dataclass(frozen=True)

@@ -133,7 +133,8 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "enforce_public_remote_targets",
         "resource_lock",
         "stage_callback",
-        "source_binding_reader",
+        "import_history_reader",
+        "target_was_reserved",
         "args",
         "strict",
         "source_name",
@@ -274,39 +275,36 @@ class ResourceService:
     def _get_watch_manager(self) -> Optional["WatchManager"]:
         return self._watch_manager
 
-    async def _read_watch_source_binding(self, root_uri: str, ctx: RequestContext) -> Optional[str]:
-        """Read persisted target/source identity, never the current request's path."""
-        from openviking.service.task_domain import TaskStatus
+    async def _has_resource_import_history(self, root_uri: str, ctx: RequestContext) -> bool:
+        """A new reservation is not an initial import when durable history exists."""
+        from openviking.service.task_tracker import get_task_tracker
 
         manager = self._get_watch_manager()
-        if manager is None:
-            return None
-        task = await manager.get_task_by_uri(
-            to_uri=root_uri,
-            account_id=ctx.account_id,
-            user_id=ctx.user.user_id,
-            role=str(ctx.role),
+        if manager is not None:
+            task = await manager.get_task_by_uri(
+                to_uri=root_uri,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
+                role=str(ctx.role),
+            )
+            if task is not None and (
+                task.last_task_id
+                or task.last_execution_time
+                or task.last_status
+                or task.source_checkpoint
+            ):
+                return True
+        tracker = manager.tracker if manager is not None else get_task_tracker()
+        return bool(
+            await tracker.list_tasks(
+                task_type="add_resource",
+                status="completed",
+                resource_id=root_uri,
+                account_id=ctx.account_id,
+                user_id=None,
+                limit=1,
+            )
         )
-        if (
-            task is None
-            or task.last_status not in {"completed", "partial"}
-            or not task.last_task_id
-        ):
-            return None
-        record = await manager.tracker.get(
-            task.last_task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
-        )
-        # A newly registered/rebound Watch is not proof that its source was
-        # imported into this target. Require the completed ingestion record.
-        if (
-            record is None
-            or record.status != TaskStatus.COMPLETED
-            or not isinstance(record.result, dict)
-            or record.result.get("root_uri") != root_uri
-            or record.meta.get("source_path") != task.path
-        ):
-            return None
-        return task.path
 
     async def _ensure_resource_target_available(
         self, uri: str, ctx: RequestContext, *, is_parent: bool = False
@@ -375,6 +373,8 @@ class ResourceService:
                 "temp_file_id",
                 "git_head_sha_hint",
                 "resource_lock",
+                "target_was_reserved",
+                "import_history_reader",
             }:
                 continue
             try:
@@ -750,6 +750,7 @@ class ResourceService:
             await self._viking_fs.rm(
                 root_uri,
                 recursive=True,
+                no_vector=True,
                 ctx=ctx,
                 lease_ref=resource_lock,
             )
@@ -974,6 +975,9 @@ class ResourceService:
                         viking_fs=self._viking_fs,
                         ctx=ctx,
                     )
+            internal_kwargs["target_was_reserved"] = (
+                msg.cleanup_empty_target_on_failure and not msg.defer_target_resolution
+            )
             if msg.defer_target_resolution:
                 from openviking_cli.utils.uri import VikingURI
 
@@ -2225,31 +2229,15 @@ class ResourceService:
             )
             source_plan = None
             if not resolve_watch_target_now:
-                try:
-                    source_plan = await self._prepare_standard_source_plan(
-                        path=path,
-                        ctx=ctx,
-                        mode=mode,
-                        allow_local_path_resolution=allow_local_path_resolution,
-                        processor_kwargs=kwargs,
-                        watch_auth_state=normalized_args.watch_auth_state,
-                        shared_source=shared_source,
-                    )
-                except OpenVikingError as exc:
-                    evidence = [{"error_code": exc.code, "error_details": exc.details}]
-                    if (
-                        not kwargs.get("strict", False)
-                        and to
-                        and ResourceProcessor._has_source_revocation_evidence(path, evidence)
-                    ):
-                        await self._resource_processor._quarantine_revoked_snapshot(
-                            to,
-                            ctx,
-                            source_uri=path,
-                            evidence=evidence,
-                            source_binding_reader=self._read_watch_source_binding,
-                        )
-                    raise
+                source_plan = await self._prepare_standard_source_plan(
+                    path=path,
+                    ctx=ctx,
+                    mode=mode,
+                    allow_local_path_resolution=allow_local_path_resolution,
+                    processor_kwargs=kwargs,
+                    watch_auth_state=normalized_args.watch_auth_state,
+                    shared_source=shared_source,
+                )
         if source_plan is not None:
             result = await self._enqueue_source_plan(
                 source_plan,
@@ -2424,7 +2412,7 @@ class ResourceService:
                 allow_local_path_resolution=allow_local_path_resolution,
                 prepared_resource=prepared_resource,
                 target_validator=self._ensure_resource_target_available,
-                source_binding_reader=self._read_watch_source_binding,
+                import_history_reader=self._has_resource_import_history,
                 defer_post_processing=True,
                 tags=tags,
                 tag_mode=tag_mode,

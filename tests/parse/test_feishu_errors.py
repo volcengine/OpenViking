@@ -48,7 +48,6 @@ def test_maps_feishu_forbidden_to_permission_denied_and_keeps_details(feishu_cod
     assert exc.details["feishu_msg"] == "forBidden"
     assert exc.details["http_status"] == 400
     assert exc.details["resource"] == "doc_token"
-    assert exc.details["error_source"] == "upstream_feishu"
 
 
 def test_maps_missing_bitable_scope_without_parsing_message():
@@ -74,7 +73,7 @@ def test_maps_missing_bitable_scope_without_parsing_message():
         (404, "NOT_FOUND"),
         (429, "RESOURCE_EXHAUSTED"),
         (500, "UNAVAILABLE"),
-        (403, "PERMISSION_DENIED"),
+        (400, "INVALID_ARGUMENT"),
     ],
 )
 def test_maps_http_status_to_openviking_error(http_status, error_code):
@@ -85,4 +84,3 @@ def test_maps_http_status_to_openviking_error(http_status, error_code):
     assert exc.code == error_code
     assert exc.details["feishu_code"] == 123
     assert exc.details["http_status"] == http_status
-    assert "error_source" not in exc.details

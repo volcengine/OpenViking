@@ -1,77 +1,65 @@
-# 非严格目录导入修正
+# 首次非严格导入的部分成功
 
 ## 目标与契约
 
-修正既有 `strict=false`：选定范围内部分文档读取或解析失败时，继续处理并安全提交
-成功部分；`strict=true` 保持严格扫描/解析，并拒绝残缺提交。不增加导入参数、
-CLI 选项、SDK options 或队列消息字段。
+仅对新目标的首次原生导入，`strict=false`（默认）允许提交成功解析的文档，明确报告
+失败项。`strict=true` 拒绝残缺导入。已有资源更新不因本次改动放宽：无论 strict
+为何值，只要选定范围存在实际读取/解析失败，就不提交本轮成功部分。
 
-旧提交层忽略 `strict`，只要目录包含实际失败项就整批拒绝，与解析层的容错行为
-及既有非严格导入说明不一致。本次修正会改变这类调用的实际结果：
-默认及显式 `strict=false` 由整体失败变为可能部分成功。
-要求完整结果的调用方须显式设置 `strict=true`；不承诺旧整批拒绝行为保持不变。
+不新增 import_policy、CLI 选项、SDK options 或队列消息字段，不强制将更新的
+扫描参数改为 strict=true；既有过滤和不支持格式行为不变。正常完整导入及完整更新
+沿用既有路径，认证失败、根节点不可访问、零成功文档仍整体失败。
 
-过滤规则和不支持格式继续由既有扫描逻辑控制。正常完整导入、根节点失败、
-整体认证失败和零成功文档的行为不放宽。
+## 首次判定
 
-## 实现入口
+判定针对 TreeBuilder 解析后的最终目标 URI，在目标锁内执行，不以源 URL、请求次数
+或目录是否为空作为依据：
 
-- `utils/resource_processor.py` 按既有 `strict` 决定目录失败项是否阻断提交。
-  部分完成状态传入持久化后处理结果，供 Task 返回。
-- `parse/accessors/feishu_accessor.py` 和 `parse/parsers/directory.py`
-  保留有证据的源错误码，无错误码时目录失败返回不增加空字段。
-- `storage/resource_rnfv.py` 标记本轮源快照是否完整；内部 `allow_partial`
-  仅用于计划校验，不是公开配置，正式目录与向量清单仍须完整。
-- `storage/resource_diff.py` 对未观察到的旧内容保持不变；
-  `storage/context_update_plan.py` 保留对应索引及未知子树，不按残缺源修复或删除它们。
-- `resource/watch_manager.py` 与 `storage/queuefs/add_resource_processor.py`
-  不推进部分导入的源 checkpoint；MCP 展示部分结果，不冒充完整成功。
-  REST、SDK 和 CLI 继续使用既有 strict 契约，不新增参数透传。
+1. 目标由当前任务从不存在状态预约；队列已有 cleanup_empty_target_on_failure
+   表示当前任务拥有新空目标，转换为服务内部标志。自动后缀目标同样按实际最终 URI
+   检查。旧空目录不能冒充本次预约。
+2. 目标不存在或仅含存储层内部锁元数据；业务文件、子目录、旧摘要等均拒绝。
+3. 严格读取当前账户/目标完整索引范围，无历史记录（包含孤立向量及 ACL 记录）。
+   即使 build_index=false 也检查；索引不可用时失败，不假定不存在。
+4. 持久 Watch 没有既往执行记录，Task 中没有该账户/目标的已完成导入记录。
+   当前尚未完成的 Task 和首次新注册 Watch 不算旧导入；上次部分成功后的补齐算更新。
 
-## 正确性边界
+复用已验证为空的向量清单编译首次计划，不增加不完整源规划机制。服务内部判定标志
+不允许从 parser args 指定，也不持久化到 Watch 参数。只清理当前任务拥有的空预约目录，
+cleanup 使用 no_vector=true，不删除遗留索引或 ACL。
 
-结果包含 `status="partial"`、`import_complete=false`、`failed_files`。
-Task 为 completed 仍可能携带部分导入结果；异步受理不等于导入完成。
-Watch 将部分完成记录为 partial，保留原 strict，后续刷新可补齐。
+## 更新保护与 ACL
 
-部分刷新只 upsert 本轮确认的内容，不能根据缺项推断源删除。
-目录摘要复用保留的兄弟摘要，必要摘要不可用时在内容写入前失败。
-可能抹除未观察子项的目录/文件类型替换同样拒绝。完整刷新恢复既有删除推断。
+部分更新在内容提交计划执行前拒绝，清理仅限本轮 parser 临时产物、释放锁；旧正文、
+目录/子项 ACL、祖先摘要及权限、标签和索引不变，不进入本轮后处理或推进 checkpoint。
+显式传入新的 acl 也不能让不完整更新修改旧权限。
 
-非严格模式不绕过认证或目标权限。源明确报告 PERMISSION_DENIED 时，标题及
-拆分变化使源到产物的对应关系不稳定：保守隔离整个旧目标快照到用户临时空间，
-移除其搜索记录并失效祖先摘要，再导入可读取内容。祖先目录及摘要文件使用
-批量精确锁，隔离前确保用户临时父目录存在；权限、存储和锁失败向上传播。
-隔离不是跨存储原子事务，不保证失败回滚。
+本 PR 不再自动隔离旧目录、删除旧目标/祖先索引或重建目录；不包含源撤权清理、来源绑定
+推断和部分更新规划。这样避免删除作为 ACL 权威存储的索引后，重建资源继承上级共享权限。
+源权限变化后的历史内容是否应清理，需要另行设计并验证，不能把“更新失败保留旧数据”
+宣称为撤权隔离。本次仅保持既有更新语义，不承诺跨存储事务原子性或失败回滚。
 
-撤权证据必须来自上游明确的权限错误：当前仅 Feishu 已知权限错误码标记为
-`upstream_feishu`，并由服务端 accessor 绑定本轮源 URI。通用 PERMISSION_DENIED、
-HTTP 403 文案、本地网络安全策略及目标权限拒绝均不作为撤权证据。
-隔离前持有目标树锁，核对旧摘要受保护的 source 元数据；摘要缺失时，仅可复用
-拥有已完成同目标导入记录的持久 Watch 绑定，新注册 Watch 不能证明旧目标来源。
-绑定缺失、冲突或与失败源不匹配时失败返回，不移动旧内容或失效祖先摘要。
+## 结果与 Watch
 
-索引清理独立于文件树枚举，按当前账户和精确目标 URI 子树调用向量后端删除，
-覆盖文件已缺失的孤立记录；整个目标树缺失但同源绑定可核实时也执行清理。
-不扩展到同名前缀兄弟或其他账户，清理失败传播；存在文件时先核对移动涉及的
-子项权限。`vectors_only` 可跳过摘要补读，但本轮观察并更新的记录仍须补读旧
-标量字段，未显式传入的 search_tags 等字段保留；未知子项不参与补读或修复。
+首次部分成功返回 status=partial、import_complete=false、failed_files；Task completed
+仍可能包含部分结果，调用方须读 Task。Watch 首轮记为 partial，不推进源 checkpoint。
+后续 Watch 刷新属于更新，存在实际失败项时失败，不把新旧快照混合写入。
 
-临时读取/解析失败不触发隔离；没有明确撤权证据的隐藏条目按未知内容保留。
-strict=true 拒绝该轮残缺结果，不新增撤权隔离行为。
-委托 Connector 仍由外部引擎处理，本次只修正原生导入。
+## 实现入口与验证
 
-## 验证
+- utils/resource_processor.py：strict 门禁、最终目标锁内首次判定、临时产物清理。
+- service/resource_service.py：已有预约所有权标志、Watch/Task 历史读取、无向量预约清理。
+- resource/watch_manager.py、storage/queuefs/add_resource_processor.py：部分结果和 checkpoint。
+- REST/SDK/CLI 继续用既有 strict；MCP 保留默认非严格首次导入及部分结果展示。
 
 ```bash
 python -m pytest -q \
   tests/misc/test_resource_processor_mv.py \
-  tests/parse/test_add_directory.py \
-  tests/storage/test_resource_diff_snapshot.py \
-  tests/resource/test_watch_manager.py \
-  tests/service/test_resource_failure_details.py
+  tests/service/test_resource_service_reserved_target_cleanup.py \
+  tests/utils/test_local_artifact_persist.py \
+  tests/utils/test_resource_processor_processing_mode.py
 ```
 
-覆盖 strict 省略/false/true、部分/零成功、认证和撤权、真实 RAGFS 锁及隔离、
-不完整源删除保护、摘要依赖与类型替换、Task/Watch 状态和 checkpoint。
-扩大回归须在同依赖环境对照未修改基线，不通过删除测试掩盖失败。
+覆盖首次/预约/旧空目录/旧摘要/孤立索引/历史 Task、build_index 开关、临时失败与无权限、
+完整更新及失败清理。真实 RAGFS 与生产 ACL 管理器验证旧数据未变及普通用户仍无读取权限。
+扩大回归用同依赖环境对照未修改基线，不通过删除测试掩盖失败。

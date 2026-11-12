@@ -256,8 +256,6 @@ def _raise_from_lark_response(
             public_code = error_code_from_http_status(http_status)
         message = f"Feishu {operation} failed: code={code}, msg={msg}"
 
-    if public_code == "PERMISSION_DENIED" and code in _FEISHU_PERMISSION_DENIED_CODES:
-        details["error_source"] = "upstream_feishu"
     raise OpenVikingError(message, code=public_code, details=details)
 
 
@@ -487,12 +485,7 @@ class FeishuAccessor(DataAccessor):
         )
         from openviking.connector.auth import check_feishu_auth
 
-        try:
-            return check_feishu_auth(await worker._access(source, **kwargs))
-        except OpenVikingError as exc:
-            if exc.details.get("error_source") == "upstream_feishu":
-                exc.details["source_uri"] = str(source)
-            raise
+        return check_feishu_auth(await worker._access(source, **kwargs))
 
     async def _access(self, source: Union[str, Path], **kwargs) -> LocalResource:
         """
@@ -719,17 +712,12 @@ class FeishuAccessor(DataAccessor):
             source_str,
             config=feishu_config,
         )
-        try:
-            return await asyncio.to_thread(
-                worker._preflight_source_sync,
-                source_str,
-                feishu_access_token,
-                feishu_recursive,
-            )
-        except OpenVikingError as exc:
-            if exc.details.get("error_source") == "upstream_feishu":
-                exc.details["source_uri"] = source_str
-            raise
+        return await asyncio.to_thread(
+            worker._preflight_source_sync,
+            source_str,
+            feishu_access_token,
+            feishu_recursive,
+        )
 
     def _preflight_source_sync(
         self,
@@ -1074,7 +1062,6 @@ class FeishuAccessor(DataAccessor):
                         name=name,
                         target_dir=target_dir,
                         error=exc,
-                        source_uri=self._source_url,
                     )
                     if strict:
                         raise
@@ -1222,7 +1209,6 @@ class FeishuAccessor(DataAccessor):
                     node=node,
                     target_dir=target_dir,
                     error=exc,
-                    source_uri=self._source_url,
                 )
                 if strict or depth == 0:
                     raise
@@ -1259,7 +1245,6 @@ class FeishuAccessor(DataAccessor):
                     node=node,
                     target_dir=content_dir,
                     error=exc,
-                    source_uri=self._source_url,
                 )
                 if strict:
                     raise
@@ -1313,7 +1298,6 @@ class FeishuAccessor(DataAccessor):
         node: _FeishuWikiTreeNode,
         target_dir: Path,
         error: Exception,
-        source_uri: str = "",
     ) -> None:
         message = str(error).replace("\n", " ")
         logger.warning(
@@ -1334,7 +1318,6 @@ class FeishuAccessor(DataAccessor):
                 "wiki_node_token": node.wiki_node_token,
                 "reason": message,
                 "error_code": str(getattr(error, "code", "")),
-                **FeishuAccessor._source_error_evidence(error, source_uri),
             }
         )
 
@@ -1361,7 +1344,6 @@ class FeishuAccessor(DataAccessor):
         name: str,
         target_dir: Path,
         error: Exception,
-        source_uri: str = "",
     ) -> None:
         message = str(error).replace("\n", " ")
         logger.warning(
@@ -1381,25 +1363,8 @@ class FeishuAccessor(DataAccessor):
                 "token": token,
                 "reason": message,
                 "error_code": str(getattr(error, "code", "")),
-                **FeishuAccessor._source_error_evidence(error, source_uri),
             }
         )
-
-    @staticmethod
-    def _source_error_evidence(error: Exception, source_uri: str) -> dict[str, Any]:
-        details = getattr(error, "details", {})
-        if (
-            isinstance(details, dict)
-            and details.get("error_source") == "upstream_feishu"
-            and source_uri
-        ):
-            return {
-                "error_details": {
-                    "error_source": "upstream_feishu",
-                    "source_uri": source_uri,
-                }
-            }
-        return {}
 
     def _fetch_drive_folder_children_page(
         self,

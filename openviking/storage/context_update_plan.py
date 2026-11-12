@@ -733,13 +733,12 @@ async def hydrate_context_plan_records(
     ctx: Any,
     request: RequestIntent | None = None,
     repair_indexes: bool = True,
-    input_only_paths: frozenset[str] = frozenset(),
 ) -> tuple[Mapping[str, VectorRecordSnapshot], tuple[set[str], set[str], set[str]]]:
     request = request or RequestIntent("", "semantic_and_vectors")
     if not request.vectorize:
         inventory = {}
     active, membership_changed, retained = _semantic_closure(
-        diff, new_kinds, repair_indexes=repair_indexes, input_only_paths=input_only_paths
+        diff, new_kinds, repair_indexes=repair_indexes
     )
     result = dict(inventory)
     summary_hydrated_ids: set[str] = set()
@@ -776,7 +775,7 @@ async def hydrate_context_plan_records(
                 {**current.fields, **fields},
             )
 
-    while request.processing_mode != "vectors_only":
+    while True:
         required = required_summary_ids()
         hydrated = (
             await vikingdb.hydrate_incremental_records(
@@ -802,8 +801,6 @@ async def hydrate_context_plan_records(
                 or not str(record.fields.get("abstract") or "").strip()
             )
         }
-        if promoted & input_only_paths:
-            raise ValueError("partial import lacks reusable abstracts for retained source content")
         if not promoted:
             break
         active.update(promoted)
@@ -814,8 +811,6 @@ async def hydrate_context_plan_records(
     if request.vectorize:
         required_scalars: dict[str, Mapping[str, Any]] = {}
         for record_id, record in result.items():
-            if record.relative_path in input_only_paths:
-                continue
             kind = new_kinds.get(record.relative_path)
             if record.relative_path not in active:
                 continue
@@ -1260,9 +1255,7 @@ def _with_directory_root(snapshot: RNFVSnapshot, *, root_preexisting: bool) -> R
     )
     return RNFVSnapshot(
         request=snapshot.request,
-        new=NewArtifactSnapshot(
-            new_entries, complete=snapshot.new.complete, allow_partial=snapshot.new.allow_partial
-        ),
+        new=NewArtifactSnapshot(new_entries, complete=snapshot.new.complete),
         formal=FormalTreeSnapshot(formal_entries, complete=snapshot.formal.complete),
         vectors=snapshot.vectors,
     )
@@ -1302,25 +1295,6 @@ async def build_context_update_plan_from_snapshot(
         path: "directory" if entry.is_dir else "file"
         for path, entry in snapshot.new.entries.items()
     }
-    input_only_paths = frozenset()
-    if not snapshot.new.complete:
-        input_only_paths = frozenset(
-            (
-                set(snapshot.formal.entries)
-                | {record.relative_path for record in snapshot.vectors.records_by_id.values()}
-            )
-            - set(snapshot.new.entries)
-        )
-        for path, entry in snapshot.formal.entries.items():
-            if path in input_only_paths:
-                new_kinds[path] = "directory" if entry.is_dir else "file"
-        # Replacing a directory can erase unobserved children even without a
-        # DELETE action. Refuse that ambiguous topology change before writes.
-        for path, entry in diff.entries.items():
-            if ContentState(entry.content_state) is ContentState.REPLACE_KIND and any(
-                retained.startswith(path + "/") for retained in input_only_paths
-            ):
-                raise ValueError("partial import cannot replace a directory with retained children")
     records, closure = await hydrate_context_plan_records(
         diff=diff,
         new_kinds=new_kinds,
@@ -1331,7 +1305,6 @@ async def build_context_update_plan_from_snapshot(
         repair_indexes=(
             snapshot.request.vectorize and snapshot.request.processing_mode != "vectors_only"
         ),
-        input_only_paths=input_only_paths,
     )
     plan = build_context_update_plan(
         root_uri=snapshot.request.target_uri,
@@ -1346,7 +1319,6 @@ async def build_context_update_plan_from_snapshot(
         ingest_options=ingest_options,
         source_metadata=source_metadata,
         closure=closure,
-        input_only_paths=input_only_paths,
     )
     if not root_is_file:
         return diff, plan

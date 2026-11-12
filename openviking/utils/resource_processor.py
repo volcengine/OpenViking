@@ -36,7 +36,7 @@ from openviking.storage.internal_names import is_storage_internal_name
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.resource_rnfv import RequestIntent
-from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
+from openviking.storage.viking_fs import get_viking_fs
 from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.telemetry import bind_ingestion_source_type, get_current_telemetry
 from openviking.utils import is_github_url
@@ -428,6 +428,8 @@ class ResourceProcessor:
         ingest_options: IngestOptions,
         source_metadata: Optional[Dict[str, str]],
         source_complete: bool = True,
+        target_was_reserved: bool = False,
+        import_history_reader: Optional[Callable[[str, RequestContext], Awaitable[bool]]] = None,
     ) -> Any:
         """Resolve and commit one artifact through the canonical update plan."""
         from openviking.metrics.datasources.resource import ResourceIngestionEventDataSource
@@ -449,6 +451,51 @@ class ResourceProcessor:
             lease_ref=lease_ref,
         )
         telemetry = get_current_telemetry()
+        initial_vector_inventory = None
+        if not source_complete:
+            from openviking_cli.exceptions import FailedPreconditionError
+
+            if lease_ref is None or not target_was_reserved:
+                raise FailedPreconditionError(
+                    "Incomplete updates are refused; only first imports may commit partially"
+                )
+            fs = get_viking_fs()
+            await fs._ensure_access(root_uri, ctx, action=AclAction.WRITE)
+            if await fs.exists(root_uri, ctx=ctx):
+                stat = await fs.stat(root_uri, ctx=ctx, skip_count=True)
+                if not stat.get("isDir"):
+                    raise FailedPreconditionError(
+                        "Incomplete update target already contains a file"
+                    )
+                # Do not use a user-visible ls projection: hidden/denied child
+                # entries still mean this is not an empty new target.
+                entries = await fs._async_agfs.ls(fs._uri_to_path(root_uri, ctx=ctx))
+                if any(
+                    str(entry.get("name") or "") not in {"", ".", ".."}
+                    and not is_storage_internal_name(str(entry["name"]))
+                    for entry in entries
+                ):
+                    raise FailedPreconditionError(
+                        "Incomplete update target contains existing data or metadata"
+                    )
+            # This strict read is required even with build_index=false: orphan
+            # records also own ACLs, and missing files do not imply a new import.
+            existing_vectors = await self.vikingdb.get_incremental_inventory_under_uri(
+                root_uri,
+                ctx=ctx,
+                output_fields=["id", "uri", "level"],
+                recursive=True,
+                include_direct_children=False,
+            )
+            if existing_vectors:
+                raise FailedPreconditionError(
+                    "Incomplete update target has historical index or ACL records"
+                )
+            if import_history_reader is not None and await import_history_reader(root_uri, ctx):
+                raise FailedPreconditionError(
+                    "Incomplete update target has previous import history"
+                )
+            initial_vector_inventory = existing_vectors
         await self._sanitize_parse_artifact(
             store=output_store,
             artifact_ref=artifact_ref,
@@ -493,9 +540,12 @@ class ResourceProcessor:
                     target_preexisting=target_preexisting,
                     artifact_inventory=artifact_inventory,
                     root_is_file=root_is_file,
+                    **(
+                        {"vector_inventory": initial_vector_inventory}
+                        if initial_vector_inventory is not None
+                        else {}
+                    ),
                 )
-                if not source_complete:
-                    rnfv = replace(rnfv, new=replace(rnfv.new, complete=False, allow_partial=True))
             from collections import Counter
 
             n_files, n_dirs, _ = count_tree_entry_kinds(rnfv.new.entries)
@@ -818,9 +868,8 @@ class ResourceProcessor:
         tag_mode: str = "replace",
         acl: AclSpec | Dict[str, Any] | None = None,
         target_validator: Optional[Callable[[str, RequestContext], Awaitable[None]]] = None,
-        source_binding_reader: Optional[
-            Callable[[str, RequestContext], Awaitable[Optional[str]]]
-        ] = None,
+        target_was_reserved: bool = False,
+        import_history_reader: Optional[Callable[[str, RequestContext], Awaitable[bool]]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -837,9 +886,6 @@ class ResourceProcessor:
         source commit; its errors propagate after temporary artifact cleanup.
         """
         strict = bool(kwargs.get("strict", False))
-        import_source = (
-            str(prepared_resource.original_source) if prepared_resource is not None else path
-        )
         parse_failures = []
         result = {
             "status": "success",
@@ -916,19 +962,6 @@ class ResourceProcessor:
                 )
                 parse_failures = self._directory_parse_failures(parse_meta)
                 if is_directory_aggregate and parse_meta.get("file_count") == 0:
-                    if (
-                        not strict
-                        and to
-                        and self._has_source_revocation_evidence(import_source, parse_failures)
-                    ):
-                        await self._quarantine_revoked_snapshot(
-                            to,
-                            ctx,
-                            preacquired_lock,
-                            source_uri=import_source,
-                            evidence=parse_failures,
-                            source_binding_reader=source_binding_reader,
-                        )
                     result["status"] = "error"
                     result["errors"].append(self._empty_directory_error(parse_meta))
                     try:
@@ -959,19 +992,6 @@ class ResourceProcessor:
                     return result
 
                 if is_directory_aggregate and parse_failures:
-                    if any(
-                        item.get("error_code") == "PERMISSION_DENIED"
-                        and not self._has_source_revocation_evidence(import_source, [item])
-                        for item in parse_failures
-                    ):
-                        await self._cleanup_parse_result_artifact(
-                            parse_result, output_store=output_store, viking_fs=viking_fs, ctx=ctx
-                        )
-                        result["status"] = "error"
-                        result["errors"].append(
-                            "Permission failure lacks verified source evidence; partial commit refused"
-                        )
-                        return result
                     result["status"] = "partial"
                     result["import_complete"] = False
                     result["failed_files"] = parse_failures
@@ -991,22 +1011,7 @@ class ResourceProcessor:
                 if parse_result.warnings and kwargs.get("strict", False):
                     result.setdefault("warnings", []).extend(parse_result.warnings)
 
-            except OpenVikingError as exc:
-                if (
-                    not strict
-                    and to
-                    and self._has_source_revocation_evidence(
-                        import_source, [{"error_code": exc.code, "error_details": exc.details}]
-                    )
-                ):
-                    await self._quarantine_revoked_snapshot(
-                        to,
-                        ctx,
-                        preacquired_lock,
-                        source_uri=import_source,
-                        evidence=[{"error_code": exc.code, "error_details": exc.details}],
-                        source_binding_reader=source_binding_reader,
-                    )
+            except OpenVikingError:
                 raise
             except Exception as e:
                 result["status"] = "error"
@@ -1107,6 +1112,7 @@ class ResourceProcessor:
             candidate_uri = getattr(context_tree, "_candidate_uri", None) if context_tree else None
             resource_lock: Optional[Dict[str, Any]] = preacquired_lock
             target_preexisting = False
+            newly_reserved = target_was_reserved
             source_committed = False
             local_artifact_doc_rel = ""
             incremental_noop = False
@@ -1127,6 +1133,7 @@ class ResourceProcessor:
                                 root_is_file=root_is_file,
                                 target_validator=target_validator,
                             )
+                            newly_reserved = True
                             result["root_uri"] = root_uri
                             if root_uri != candidate_uri:
                                 result.setdefault("warnings", []).append(
@@ -1137,27 +1144,8 @@ class ResourceProcessor:
                         if target_validator is not None:
                             await target_validator(root_uri, ctx)
                         target_preexisting = await viking_fs.exists(root_uri, ctx=ctx)
-                        if target_preexisting:
-                            try:
-                                stat = await viking_fs.stat(root_uri, ctx=ctx, skip_count=True)
-                                if isinstance(stat, dict) and stat.get("isDir"):
-                                    entries = await viking_fs.ls(
-                                        root_uri,
-                                        show_all_hidden=True,
-                                        node_limit=LS_ALL_NODES,
-                                        ctx=ctx,
-                                    )
-                                    names: list[str] = []
-                                    for entry in entries:
-                                        name = entry.get("name", "")
-                                        if not name or name in {".", ".."}:
-                                            continue
-                                        names.append(str(name))
-                                    if all(is_storage_internal_name(name) for name in names):
-                                        target_preexisting = False
-                            except Exception:
-                                pass
                         if resource_lock is None:
+                            newly_reserved = not target_preexisting
                             dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
                             resource_lock = await self.acquire_resource_lock(
                                 dst_path,
@@ -1169,24 +1157,6 @@ class ResourceProcessor:
                             ingest_options,
                             acl_update=await viking_fs.prepare_acl_update(root_uri, acl, ctx),
                         )
-                    if (
-                        not strict
-                        and self._has_source_revocation_evidence(import_source, parse_failures)
-                        and await self._quarantine_revoked_snapshot(
-                            root_uri,
-                            ctx,
-                            resource_lock,
-                            source_uri=import_source,
-                            evidence=parse_failures,
-                            source_binding_reader=source_binding_reader,
-                        )
-                    ):
-                        # Parsed filenames can change with titles and split modes.
-                        # Without a stable source->output mapping, isolate the entire
-                        # old snapshot rather than risk exposing a revoked document
-                        # through an old child, ancestor summary, or vector record.
-                        result["quarantined_previous_snapshot"] = True
-                        target_preexisting = False
                     artifact_ref = self._ensure_parse_artifact_ref(parse_result)
                     artifact_store = self._store_for_parse_artifact(
                         artifact_ref, output_store=output_store, viking_fs=viking_fs, ctx=ctx
@@ -1212,6 +1182,8 @@ class ResourceProcessor:
                             source_format=parse_result.source_format,
                         ),
                         source_complete=not bool(parse_failures),
+                        target_was_reserved=newly_reserved,
+                        import_history_reader=import_history_reader,
                     )
                     incremental_noop = target_preexisting and context_update_plan.is_noop()
                     temp_uri = root_uri
@@ -1302,138 +1274,6 @@ class ResourceProcessor:
                 result["temp_uri"] = original_temp_uri
 
             return result
-
-    @staticmethod
-    def _has_source_revocation_evidence(source_uri: str, evidence: List[Dict[str, Any]]) -> bool:
-        return bool(source_uri) and any(
-            item.get("error_code") == "PERMISSION_DENIED"
-            and isinstance(item.get("error_details"), dict)
-            and item["error_details"].get("error_source") == "upstream_feishu"
-            and item["error_details"].get("source_uri") == source_uri
-            for item in evidence
-        )
-
-    async def _quarantine_revoked_snapshot(
-        self,
-        root_uri: str,
-        ctx: RequestContext,
-        lease_ref: Optional[Dict[str, Any]] = None,
-        *,
-        source_uri: str,
-        evidence: List[Dict[str, Any]],
-        source_binding_reader: Optional[
-            Callable[[str, RequestContext], Awaitable[Optional[str]]]
-        ] = None,
-    ) -> bool:
-        """Isolate revoked source content and remove its derived search records.
-
-        The old tree stays in user-scoped temporary storage, outside resources,
-        without semantic sidecars or indexed vectors. Failure is propagated.
-        Source paths are not reliable output identities across split/title changes,
-        so quarantine the entire previous snapshot, never guess a leaf mapping.
-        """
-        if not self._has_source_revocation_evidence(source_uri, evidence):
-            return False
-        from openviking.storage.abstract_overview import parse_abstract_overview
-        from openviking.utils.path_safety import normalize_storage_target_uri
-
-        fs = get_viking_fs()
-        root_uri = normalize_storage_target_uri(root_uri).rstrip("/")
-        await fs._ensure_access(root_uri, ctx, action=AclAction.WRITE)
-        owned = lease_ref is None
-        if owned:
-            lease_ref = await self.acquire_resource_lock(
-                fs._uri_to_path(root_uri, ctx=ctx),
-                uri=root_uri,
-            )
-        else:
-            # A flattened-file caller may hold only an exact lock. Extend it
-            # to the target tree before deleting orphan descendant records.
-            lease_ref = await fs._async_agfs.pathlock_acquire_tree(
-                fs._uri_to_path(root_uri, ctx=ctx), owner_lease_ref=lease_ref
-            )
-        try:
-            bindings = set()
-            for name in (".abstract.md", ".overview.md"):
-                uri = root_uri + "/" + name
-                if await fs.exists(uri, ctx=ctx):
-                    source = parse_abstract_overview(await fs.read_file(uri, ctx=ctx)).metadata.get(
-                        "source", {}
-                    )
-                    if source.get("uri"):
-                        bindings.add(source["uri"])
-            if not bindings and source_binding_reader is not None:
-                binding = await source_binding_reader(root_uri, ctx)
-                if binding:
-                    bindings.add(binding)
-            # A local deny or a request for a different source must not take
-            # existing data offline. Missing or conflicting bindings fail closed.
-            if bindings != {source_uri}:
-                from openviking_cli.exceptions import FailedPreconditionError
-
-                raise FailedPreconditionError(
-                    "Source permission denied, but the previous target source binding "
-                    "is missing or does not match; automatic quarantine refused"
-                )
-            await fs._ensure_access(root_uri, ctx, action=AclAction.MANAGE)
-            vector_store = fs._get_vector_store()
-            if vector_store is None:
-                raise RuntimeError("Revocation cleanup requires the account vector store")
-            target_exists = await fs.exists(root_uri, ctx=ctx)
-            quarantine_uri = fs.create_temp_uri(ctx=ctx)
-            # Root failures can precede any parse-temp allocation. mv requires
-            # the user-scoped destination parent to exist; prepare it before
-            # invalidating any old derived views.
-            if target_exists:
-                await fs.mkdir(quarantine_uri.rsplit("/", 1)[0], exist_ok=True, ctx=ctx)
-                stat = await fs.stat(root_uri, ctx=ctx, skip_count=True)
-                # Retain mv's descendant permission checks before the broader
-                # vector deletion, not after old search records are removed.
-                await fs._prepare_transfer_entries(
-                    root_uri,
-                    quarantine_uri,
-                    is_dir=bool(stat.get("isDir")),
-                    move=True,
-                    ctx=ctx,
-                )
-            # Ancestor summaries may quote the revoked subtree even though
-            # their source bytes are outside this import's exact target.
-            # Remove those derived views before moving the old snapshot.
-            parent_uri = root_uri.rstrip("/").rsplit("/", 1)[0]
-            while parent_uri.startswith("viking://") and "/resources" in parent_uri:
-                await fs._ensure_access(parent_uri, ctx, action=AclAction.WRITE)
-                sidecars = [parent_uri + "/" + name for name in (".abstract.md", ".overview.md")]
-                # An exact directory lock protects its index metadata, not
-                # child files. Lock sidecars explicitly without taking a tree
-                # lock that would conflict with the held target-subtree lease.
-                parent_lease = await fs._async_agfs.pathlock_acquire_exact_batch(
-                    [fs._uri_to_path(uri, ctx=ctx) for uri in [parent_uri, *sidecars]],
-                    owner_lease_ref=lease_ref,
-                )
-                try:
-                    await fs._delete_from_vector_store([parent_uri], ctx=ctx)
-                    for sidecar in sidecars:
-                        if await fs.exists(sidecar, ctx=ctx):
-                            await fs.remove_files(sidecar, ctx=ctx, lease_ref=parent_lease)
-                finally:
-                    await fs._async_agfs.pathlock_release(parent_lease)
-                parent_uri = parent_uri.rsplit("/", 1)[0]
-            # Match the entire account/URI scope, including orphan records
-            # absent from the filesystem. Backend deletion failures propagate.
-            await vector_store.delete_uris(ctx, [root_uri], recursive=True)
-            if target_exists:
-                await fs.mv(
-                    root_uri,
-                    quarantine_uri,
-                    ctx=ctx,
-                    lease_ref=lease_ref,
-                    vector_mode="none",
-                    copy_semantic_sidecars=False,
-                )
-            return True
-        finally:
-            if lease_ref is not None:
-                await fs._async_agfs.pathlock_release(lease_ref)
 
     async def finish_prepared_resource(
         self,

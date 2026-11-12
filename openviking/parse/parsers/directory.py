@@ -425,7 +425,6 @@ class DirectoryParser(BaseParser):
                             "meta": error_meta if isinstance(error_meta, dict) else {},
                             "error": str(error),
                             "error_code": str(getattr(error, "code", "")),
-                            "error_details": getattr(error, "details", {}),
                         }
                     else:
                         try:
@@ -453,7 +452,6 @@ class DirectoryParser(BaseParser):
                                 "meta": getattr(sub_result, "meta", {}) or {},
                                 "error": str(exc),
                                 "error_code": str(getattr(exc, "code", "")),
-                                "error_details": getattr(exc, "details", {}),
                             }
                 elif job["native_parser_unavailable"]:
                     error = (
@@ -710,12 +708,6 @@ class DirectoryParser(BaseParser):
             }
             if item.get("error_code"):
                 entry["error_code"] = str(item["error_code"])
-            if isinstance(item.get("error_details"), dict):
-                entry["error_details"] = {
-                    key: item["error_details"][key]
-                    for key in ("error_source", "source_uri")
-                    if key in item["error_details"]
-                }
             normalized.append(entry)
         return normalized
 
@@ -770,14 +762,6 @@ class DirectoryParser(BaseParser):
             entry["error"] = str(detail["error"])
             if detail.get("error_code"):
                 entry["error_code"] = detail["error_code"]
-            if isinstance(detail.get("error_details"), dict):
-                evidence = {
-                    key: detail["error_details"][key]
-                    for key in ("error_source", "source_uri")
-                    if key in detail["error_details"]
-                }
-                if evidence:
-                    entry["error_details"] = evidence
         return entry
 
     @staticmethod
@@ -1039,7 +1023,6 @@ class DirectoryParser(BaseParser):
                     "meta": meta if isinstance(meta, dict) else {},
                     "error": str(exc),
                     "error_code": str(getattr(exc, "code", "")),
-                    "error_details": getattr(exc, "details", {}),
                 }
         else:
             try:

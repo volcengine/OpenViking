@@ -188,7 +188,7 @@ Connector 要求精确的 `to` 目标，不支持 `wait=true`。`tos://` 来源�
 | instruction | string | 否 | "" | 语义提取的处理指令（实验特性） |
 | wait | bool | 否 | False | 是否等待语义处理和向量化完成才返回 |
 | timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
-| strict | bool | 否 | False | true 严格扫描/解析并要求完整目录提交；false 允许原生导入安全提交成功部分 |
+| strict | bool | 否 | False | 严格扫描/解析；false 仅首次原生导入可部分成功，更新不完整始终失败 |
 | ignore_dirs | string | 否 | None | 要忽略的目录名（逗号分隔） |
 | include | string | 否 | None | 包含的文件模式（glob） |
 | exclude | string | 否 | None | 排除的文件模式（glob） |
@@ -239,7 +239,7 @@ Connector 要求精确的 `to` 目标，不支持 `wait=true`。`tos://` 来源�
 - 请求未传应用凭证时，用户 token watch 回退使用 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`，或 `ov.conf` 中的 `feishu.app_id` 和 `feishu.app_secret`。飞书 refresh token 绑定签发它的应用，因此实际使用的应用凭证必须与传入的用户 token 匹配。
 - Watch task 的 token 状态和请求传入的应用凭证保存在内部控制文件 `viking://resources/.watch_tasks.json` 中，不会出现在 watch API/MCP/CLI 返回里。若启用了 VikingFS 文件加密，该控制文件会静态加密；否则服务端控制文件中会包含这些明文私有状态。
 - 本地目录输入会遵循 `.gitignore`（根目录和子目录，标准 Git 语义）；`ignore_dirs`、`include`、`exclude` 会在此基础上进一步过滤。
-- 目录导入仅在至少一个入选文件成功时采用 best-effort：失败文件写入 `meta.failed_files`，成功文件正常提交。嵌套 ZIP 的叶子失败使用 `bundle.zip/path/to/file` 形式的归档限定路径，并保留远端任务 ID。如果没有任何文件成功，或筛选后没有可处理文件，任务会失败且不会保留空资源目录。
+- 首次非严格原生目录导入仅在至少一个入选文件成功时允许部分成功：失败文件写入 `meta.failed_files`，成功文件正常提交。嵌套 ZIP 的叶子失败使用 `bundle.zip/path/to/file` 形式的归档限定路径，并保留远端任务 ID。如果没有任何文件成功，或筛选后没有可处理文件，任务会失败且不会保留空资源目录。
 - `args.parse_mode=no_split` 仍调用正常的格式 Parser。PDF、Word、PowerPoint、HTML 等受支持文档会转换为 Markdown，但跳过按标题、段落和长度拆分。目录导入会对每个受支持文档分别应用该规则，并继续遵循 `.gitignore`、筛选参数和 `preserve_structure`。该模式下，配置为走 Understanding 的目录文件会回退到对应的原生 Parser；没有原生解析能力的文件会写入 `meta.failed_files`，但不会阻止其他入选文件成功导入。
 - 对单文件输入使用 `no_split` 时，如果解析结果恰好只有一个可见文件且未指定 `to`，该文件会直接放到解析出的父目录下（例如 `guide.md` 写入 `viking://resources/guide.md`），不会创建同名上层目录，也不会生成目录级 `.abstract.md` / `.overview.md`。如果解析结果还包含图片等其他可见文件，则保留上层目录。显式指定的 `to` 始终作为最终 URI 原样保留。
 - `no_split` 只改变 Markdown 正文的存储布局，不改变语义处理、文件向量化和内部 embedding 分块。Markdown 相对链接会按同一个 no-split 输出布局解析，不会再指向仅拆分模式存在的路径。该模式下不会为目录文件调用 Understanding。
@@ -247,48 +247,35 @@ Connector 要求精确的 `to` 目标，不支持 `wait=true`。`tos://` 来源�
 
 #### 3. 使用示例
 
-##### 非严格目录导入
+##### 非严格首次导入
 
-`strict=false`（默认）在部分选中文档读取或解析失败时继续处理其他文档，并允许安全提交
-成功部分。`strict=true` 保留严格扫描/解析检查，拒绝残缺目录提交。不新增导入策略参数。
-主动过滤和不支持格式沿用原有扫描语义。
+仅对新目标的首次原生导入，`strict=false`（默认）允许部分文档失败时提交成功部分，
+返回 `status="partial"`、`import_complete=false`、`failed_files`。
+`strict=true` 拒绝残缺首次导入；主动过滤和不支持格式沿用既有扫描语义，不新增策略参数。
 
-部分结果返回 `status="partial"`、`import_complete=false` 和 `failed_files`。
-异步受理不等于导入完成，需要查询 Task 结果。Watch 将本轮记录为 `partial`，
-不推进本轮源 checkpoint，后续刷新可继续补齐。
+**已有资源更新保持原规则：**存在实际读取/解析失败项时，即使 strict=false 也不提交
+本轮成功部分，不删除、隔离或重建旧目录及索引；旧正文、标签、目标/子项 ACL 和祖先
+摘要保持不变。完整更新走原流程。本次不提供源撤权后的自动旧数据清理。
 
-不完整快照不能证明缺项已在源端删除：未观察到的旧内容、未知子树及其索引保留。
-目录摘要复用保留的兄弟节点；缺少必要的可复用摘要时在内容写入前失败，避免生成
-误导性的残缺摘要。会清除未知子项的文件/目录类型替换也会被拒绝。
-后续完整刷新恢复正常源删除推断。
+首次判定针对最终目标 URI，在目标锁内核对：本次任务拥有新预约、目标无业务/摘要内容、
+当前账户目标范围无历史索引/ACL，也无已完成导入或 Watch 既往执行记录。
+旧空目录、文件已删但索引还在、上次部分成功后的补齐都属于更新；索引查询失败不放行，
+build_index=false 同样检查。
 
-非严格模式不是认证绕过：根节点不可访问、认证失败或没有成功文档仍整体失败。
-源明确返回 `PERMISSION_DENIED` 时，由于标题及拆分可能改变产物路径，先保守隔离
-整个旧目标快照到用户临时空间，移除其搜索记录并失效祖先派生摘要，再导入可读取内容。
-隔离仍校验权限并传播存储失败，不承诺跨存储原子事务或回滚。临时读取/解析失败不触发
-隔离；源列表静默隐藏的条目，没有明确证据时不能认定为撤权。
-委托 Connector 沿用原外部处理行为，本次修复针对原生导入链路。
-
-隔离要求服务端分类的上游权限拒绝证据，并核对旧快照来源绑定（摘要受保护的
-source 元数据，或具备该精确目标已完成导入记录的 Watch）。本地网络/目标权限
-错误不触发隔离；绑定缺失或不匹配时失败返回，不改动旧内容。索引按当前账户及
-目标 URI 子树独立清理，覆盖文件树中不存在的孤立记录。部分 `vectors_only`
-更新仍补读已观察文件的旧标量字段，不因省略 tags 清空原标签。
-
-这是对旧提交层行为的修正：旧实现即使 `strict=false` 也拒绝含失败项的目录。
-需要完整导入的调用方须显式使用 `strict=true`。
+认证失败、根节点不可访问、零成功文档仍失败。异步受理不等于导入完成，需要读取 Task。
+Watch 首次部分成功不推进源 checkpoint；后续刷新属于更新，不完整就失败。
+不承诺跨存储原子事务或回滚；委托 Connector 继续沿用既有外部处理行为。
 
 ```python
 await client.add_resource(
     "https://example.feishu.cn/wiki/your_node",
-    to="viking://resources/docs",
+    to="viking://resources/new-docs",
     options={"strict": False, "args": {"feishu_recursive": True},
              "watch_interval": 60},
 )
 ```
 
-CLI 默认非严格，`--strict` 要求完整导入；REST 使用既有顶层 `strict` 字段。
-MCP 原生导入使用既有非严格默认行为。
+CLI 默认非严格首次导入，--strict 要求完整；REST 用既有 strict 字段，MCP 默认非严格。
 
 以下示例使用默认异步模式，不设置等待参数。提交后保存 `task_id`，通过 [任务 API](17-tasks.md) 查询状态；只有任务为 `completed` 时，才读取摘要或检索本次导入的内容。
 

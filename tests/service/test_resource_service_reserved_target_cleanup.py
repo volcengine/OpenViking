@@ -29,6 +29,37 @@ def _service(viking_fs, resource_processor=None) -> ResourceService:
 
 
 @pytest.mark.asyncio
+async def test_initial_import_history_excludes_current_unfinished_task(watch_tracker):
+    ctx = RequestContext(user=UserIdentifier("default", "alice"), role=Role.USER)
+    root = "viking://resources/docs"
+    service = _service(SimpleNamespace())
+    await watch_tracker.create(
+        "add_resource",
+        task_id="current",
+        resource_id=root,
+        account_id=ctx.account_id,
+        user_id=ctx.user.user_id,
+    )
+    assert not await service._has_resource_import_history(root, ctx)
+    # Another user's completed import is still history for this account/target.
+    await watch_tracker.create(
+        "add_resource",
+        task_id="previous",
+        resource_id=root,
+        account_id=ctx.account_id,
+        user_id="other",
+    )
+    await watch_tracker.complete(
+        "previous",
+        {"status": "partial", "root_uri": root},
+        resource_id=root,
+        account_id=ctx.account_id,
+        user_id="other",
+    )
+    assert await service._has_resource_import_history(root, ctx)
+
+
+@pytest.mark.asyncio
 async def test_cleanup_reserved_target_removes_only_empty_directory():
     lock = {"lease_ref": "lock-1"}
     ctx = _ctx()
@@ -51,6 +82,7 @@ async def test_cleanup_reserved_target_removes_only_empty_directory():
     viking_fs.rm.assert_awaited_once_with(
         "viking://resources/empty",
         recursive=True,
+        no_vector=True,
         ctx=cleanup_ctx,
         lease_ref=lock,
     )
@@ -318,6 +350,7 @@ async def test_prepared_file_failure_preserves_cleanup_policy(cleanup_on_failure
     assert kwargs["understanding_file_id"] == "file-1"
     assert kwargs["parser_backend"] == "understanding"
     assert kwargs["internal_task"] is True
+    assert kwargs["target_was_reserved"] is cleanup_on_failure
     if cleanup_on_failure:
         service._cleanup_reserved_target_if_empty.assert_awaited_once_with(
             root_uri=msg.root_uri,
