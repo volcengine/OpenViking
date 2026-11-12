@@ -138,7 +138,7 @@ def preserve_memory_type_tag(
     existing: Iterable[str] | None,
     incoming: Iterable[str] | None,
 ) -> list[str]:
-    """Preserve the extracted memory type while updating ordinary search tags."""
+    """Preserve the extracted memory type on already resolved search tags."""
     existing_memory_type = next(
         (
             tag
@@ -154,7 +154,4 @@ def preserve_memory_type_tag(
         for tag in normalize_search_tags(incoming, discard_invalid=True)
         if not tag.startswith("memory_type=")
     ]
-    return merge_search_tags(
-        [existing_memory_type] if existing_memory_type is not None else [],
-        user_tags,
-    )
+    return [existing_memory_type, *user_tags] if existing_memory_type is not None else user_tags

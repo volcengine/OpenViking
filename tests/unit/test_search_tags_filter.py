@@ -12,6 +12,7 @@ from openviking.utils.tags import (
     merge_search_tags,
     normalize_search_tag,
     normalize_search_tags,
+    preserve_memory_type_tag,
 )
 from openviking_cli.exceptions import InvalidArgumentError
 
@@ -122,6 +123,13 @@ def test_merge_search_tags_applies_ordered_patches_and_discards_invalid_tags(cap
         merge_search_tags(result, ["owner+=1"])
     with pytest.raises(InvalidArgumentError):
         merge_search_tags(result, ["count+=NaN"])
+
+
+def test_preserve_memory_type_tag_does_not_reapply_tag_operations():
+    assert preserve_memory_type_tag(
+        ["memory_type=profile", "c++=cpp", "used_count=3"],
+        ["memory_type=other", "c++=cpp", "used_count=4"],
+    ) == ["memory_type=profile", "c++=cpp", "used_count=4"]
 
 
 def test_find_tags_filter_requires_all_tags():
