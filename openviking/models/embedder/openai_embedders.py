@@ -19,6 +19,7 @@ from openviking.models.network import (
     create_optional_async_httpx_client,
     create_optional_sync_httpx_client,
 )
+from openviking.models.openrouter import with_openrouter_attribution
 from openviking.models.vlm.registry import DEFAULT_AZURE_API_VERSION
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
@@ -146,6 +147,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         self.extra_body = extra_body
         self._provider = provider.lower()
         self.provider = (configured_provider or provider).lower()
+        extra_headers = with_openrouter_attribution(extra_headers, api_base, model_name)
         self._client_kwargs: Dict[str, Any] = {
             "api_key": self.api_key or "no-key",
             "max_retries": 0,

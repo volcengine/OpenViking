@@ -13,6 +13,7 @@ import litellm
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.models.model_error import model_error_boundary
+from openviking.models.openrouter import with_openrouter_attribution
 from openviking.telemetry import get_current_telemetry
 from openviking_cli.utils import get_logger
 
@@ -78,7 +79,7 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
         self.dimension = dimension
         self.query_param = query_param
         self.document_param = document_param
-        self.extra_headers = extra_headers
+        self.extra_headers = with_openrouter_attribution(extra_headers, api_base, model_name)
 
         if dimension is None:
             raise ValueError(
