@@ -38,9 +38,10 @@ void init_logging(const std::string& log_level, const std::string& log_output,
     } else if (log_output == "stderr") {
       sink = std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
     } else {
-      // File sink
+      // File sink. Append: the Python logger writes the same file (log.output),
+      // so truncating here wiped the server log on every start.
       sink =
-          std::make_shared<spdlog::sinks::basic_file_sink_mt>(log_output, true);
+          std::make_shared<spdlog::sinks::basic_file_sink_mt>(log_output, false);
     }
 
     auto logger = std::make_shared<spdlog::logger>("vikingdb", sink);
