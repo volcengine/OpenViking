@@ -52,13 +52,13 @@ Configure `root_api_key` in `~/.openviking/ovcli.conf`:
 
 - `ov --sudo admin` - Account and user management
 - `ov --sudo system` - System utility commands
-- `ov --sudo reindex` - Rebuild indexes
 - `ov --sudo task status/list` - Query root/system background tasks, such as account deletion tasks
 
 ### Usage Limitations
 
-- `--sudo` only works with the commands above - using it with regular data commands will error
-- Must have `root_api_key` configured to use `--sudo`
+- Configure `root_api_key` to use `--sudo`.
+- In `api_key` mode, use a tenant admin key in `api_key` to [reindex shared resources](12-content.md#reindex), and run `ov reindex` without `--sudo`.
+- In `trusted` mode, `ov --sudo reindex` uses the configured root key to authenticate. Specify the account and user in the CLI configuration or with `--account` and `--user`. The server authorizes reindexing based on that tenant identity and role.
 
 ## Groups
 

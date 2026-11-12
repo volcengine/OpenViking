@@ -102,7 +102,7 @@ pub(crate) struct Cli {
     #[arg(long = "actor-peer-id", global = true, hide = true)]
     pub(crate) actor_peer_id: Option<String>,
 
-    /// Use root API key for admin, system, reindex, and task status/list commands
+    /// Use root API key for admin, system, task status/list, and reindex (trusted mode only)
     #[arg(long, global = true, hide = true)]
     pub(crate) sudo: bool,
 
