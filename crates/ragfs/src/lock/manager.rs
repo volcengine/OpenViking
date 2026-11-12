@@ -32,12 +32,14 @@ use super::types::{
 /// Configuration for the PathLockManager.
 #[derive(Debug, Clone)]
 pub struct PathLockConfig {
-    /// Built-in provider name: `filesystem`, `memory`, `sqlite`, or `cache`.
+    /// Built-in provider name: `filesystem`, `memory`, `sqlite`, `postgres`, or `cache`.
     pub provider: String,
-    /// OpenViking instance name used by the SQLite/cache-backed provider.
+    /// OpenViking instance name used by SQLite, PostgreSQL, and cache providers.
     pub service_name: Option<String>,
     /// Absolute local database file shared by SQLite lock participants.
     pub sqlite_path: Option<String>,
+    /// Environment variable containing a PostgreSQL connection string.
+    pub postgres_dsn_env: Option<String>,
     /// Default wait timeout for auto-acquired locks.
     pub lock_timeout_secs: f64,
     /// Seconds after which a lock token is considered stale.
@@ -50,6 +52,7 @@ impl Default for PathLockConfig {
             provider: "filesystem".to_string(),
             service_name: None,
             sqlite_path: None,
+            postgres_dsn_env: None,
             lock_timeout_secs: 0.0,
             lock_expire_secs: 30.0,
         }
