@@ -8,7 +8,11 @@ import { FileBrowserSearchAdvanced } from './file-browser-search-advanced.js';
 import { FileBrowserSearchHeader } from './file-browser-search-header.js';
 import { FileBrowserSearchResults } from './file-browser-search-results.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
-import { buildScopeOptions, flattenResult } from './search-model.js';
+import {
+  buildScopeOptions,
+  flattenResult,
+  normalizeFilters,
+} from './search-model.js';
 import type { SearchFilters, SearchMode } from './search-types.js';
 import { DEFAULT_SEARCH_MODE, EMPTY_FILTERS } from './search-types.js';
 import { useFsSearch } from './use-fs-search.js';
@@ -150,6 +154,10 @@ export function FileBrowserSearch({
             onCloseMenu={() => setMenuOpen(false)}
             onSelectMode={(next) => {
               setMode(next);
+              // 切模式时把筛选收敛到新模式真正会用的形态，显示与请求才不会脱节。
+              // Collapse the filters to what the new mode actually uses, so the display
+              // and the request cannot drift apart.
+              setFilters((current) => normalizeFilters(current, next));
               setMenuOpen(false);
             }}
             onOpen={openResult}

@@ -11,10 +11,15 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
+import { useLocale } from '../../locale-context.js';
+import { resolveLocale } from '../../locale.js';
+import type { Locale } from '../../locale.js';
 import dayjs from 'dayjs';
 
 import { toApiDate } from './api-date.js';
 import { parseDate, shiftMonth } from './calendar.js';
+import enUS from './locales/en-US.js';
+import zhCN from './locales/zh-CN.js';
 import { DatePickerPopup } from './date-picker-popup.js';
 
 export interface DatePickerProps {
@@ -29,13 +34,15 @@ export interface DatePickerProps {
   /** 禁用。Disables the control. */
   disabled?: boolean;
   /**
-   * 月份与周标题的语言，BCP 47 标签，默认 `zh-CN`。交给 `Intl` 解析，因此传任何
-   * 受支持的语言都成立。
+   * 界面语言，同时决定月份/周标题与无障碍文案。月份与周名交给 `Intl`，任何受支持
+   * 的 BCP 47 标签都成立；内置的无障碍文案只有中英两套，其他标签回落到 `en-US`。
    *
-   * Language of the month and weekday headings as a BCP 47 tag, `zh-CN` by default.
-   * It goes through `Intl`, so any supported locale works.
+   * UI language for both the month/weekday headings and the accessible copy. The
+   * headings go through `Intl` and accept any supported BCP 47 tag; the built-in
+   * accessible copy exists in Chinese and English only, with other tags falling back to
+   * `en-US`.
    */
-  locale?: string;
+  locale?: Locale;
   /** 上一月、下一月的无障碍名称。Accessible names for the month navigation. */
   prevLabel?: string;
   nextLabel?: string;
@@ -69,13 +76,20 @@ export function DatePicker({
   onChange,
   placeholder,
   disabled,
-  locale = 'zh-CN',
-  prevLabel = 'Previous month',
-  nextLabel = 'Next month',
-  clearLabel = 'Clear',
-  calendarLabel = 'Open calendar',
+  locale: localeProp,
+  prevLabel,
+  nextLabel,
+  clearLabel,
+  calendarLabel,
   'aria-label': ariaLabel,
 }: DatePickerProps) {
+  // 无障碍文案按 locale 取默认值，显式传入的 label 优先——与 Modal 的做法一致，
+  // 否则中文界面里的日期操作会被屏幕阅读器读成英文。
+  //
+  // Accessible copy defaults from the locale, with explicit labels winning — the same
+  // rule Modal follows, so a Chinese dialog's date controls are not read out in English.
+  const locale = useLocale(localeProp);
+  const text = resolveLocale({ 'en-US': enUS, 'zh-CN': zhCN }, locale);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(value);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -167,7 +181,7 @@ export function DatePicker({
           <button
             type="button"
             className="ov-date-picker__clear"
-            aria-label={clearLabel}
+            aria-label={clearLabel ?? text.clearLabel}
             disabled={disabled}
             onClick={() => commit('')}
           >
@@ -190,7 +204,7 @@ export function DatePicker({
         <button
           type="button"
           className="ov-date-picker__calendar"
-          aria-label={calendarLabel}
+          aria-label={calendarLabel ?? text.calendarLabel}
           aria-expanded={open}
           disabled={disabled}
           onClick={() => setOpen((current) => !current)}
@@ -240,8 +254,8 @@ export function DatePicker({
             month={view.month}
             selected={parsed}
             locale={locale}
-            prevLabel={prevLabel}
-            nextLabel={nextLabel}
+            prevLabel={prevLabel ?? text.prevLabel}
+            nextLabel={nextLabel ?? text.nextLabel}
             onShiftMonth={(delta) =>
               setView((current) =>
                 shiftMonth(current.year, current.month, delta),

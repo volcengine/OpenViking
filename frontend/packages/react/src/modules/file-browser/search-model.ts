@@ -1,11 +1,12 @@
 /**
- * 搜索的纯逻辑：请求体构造、结果归一、筛选可用性、目录候选项。不碰 React，
- * 也不碰请求，便于单独测试。
+ * 搜索的纯逻辑：请求体、结果归一、筛选可用性与目录候选。不碰 React、不碰请求，
+ * 也**不能有任何运行时导入**——测试直接加载本文件，`.js` 后缀在那里解析不了。
  *
- * Pure logic of the search view: request bodies, result normalisation, filter
- * availability and scope options. It touches neither React nor the network, so it
- * can be tested on its own.
+ * Pure logic of the search view: bodies, result normalisation, filter availability and
+ * scope options. It touches neither React nor the network, and takes **no runtime
+ * imports**: tests load this file directly, where a `.js` suffix does not resolve.
  */
+
 import type {
   FilterAvailability,
   ScopeOption,
@@ -15,11 +16,12 @@ import type {
   SearchResult,
 } from './search-types.js';
 
-/** 每类结果最多返回多少条。Cap per result category. */
-const LIMIT = 20;
-
 /** 语义检索的两种模式。The two semantic modes. */
 const SEMANTIC: readonly SearchMode[] = ['find', 'search'];
+
+/** 某个模式是否为语义检索。Whether the mode is a semantic one. */
+export const isSemantic = (mode: SearchMode): boolean =>
+  SEMANTIC.includes(mode);
 
 /**
  * 各模式能用的筛选。目录在三态里区分多选与单选：语义检索接受 URI 数组，
@@ -35,9 +37,42 @@ export const FILTER_AVAILABILITY: Record<SearchMode, FilterAvailability> = {
   glob: { scope: 'single', levels: false, time: false, caseInsensitive: false },
 };
 
-/** 某个模式是否为语义检索。Whether the mode is a semantic one. */
-export const isSemantic = (mode: SearchMode): boolean =>
-  SEMANTIC.includes(mode);
+/**
+ * 把筛选归一到目标模式实际会用的形态。
+ *
+ * 单选模式只认一个起始 URI，多选模式认数组。切换模式时若不收敛，`scopes` 会留下
+ * 两项，而单选控件只能勾中其中一个、请求也只取第一个——界面显示与真正发出的范围
+ * 不一致。归一化放在切换处，显示与请求就消费同一个值。
+ *
+ * Normalises the filters to what the target mode actually uses.
+ *
+ * Single-select modes take one start URI, multi-select modes take an array. Without
+ * collapsing on a mode switch, `scopes` keeps two entries while the single-select control
+ * can show only one and the request takes the first — the display and the range actually
+ * sent disagree. Normalising at the switch makes both consume the same value.
+ */
+export function normalizeFilters(
+  filters: SearchFilters,
+  mode: SearchMode,
+): SearchFilters {
+  const a = FILTER_AVAILABILITY[mode];
+  // 层级与时间在 grep/glob 下不生效，一并清掉，避免切回来时出现用户没再选过的
+  // 旧条件。
+  //
+  // Levels and time do not apply to grep/glob, so they clear too — otherwise a switch
+  // back would restore conditions the user has not re-chosen.
+  return {
+    ...filters,
+    scopes: a.scope === 'single' ? filters.scopes.slice(0, 1) : filters.scopes,
+    levels: a.levels ? filters.levels : [],
+    since: a.time ? filters.since : '',
+    until: a.time ? filters.until : '',
+    caseInsensitive: a.caseInsensitive ? filters.caseInsensitive : false,
+  };
+}
+
+/** 每类结果最多返回多少条。Cap per result category. */
+const LIMIT = 20;
 
 /**
  * 用户根用 `~` 别名，不写死具体用户名：服务端在请求边界按认证身份展开，
@@ -64,19 +99,30 @@ const covers = (root: string, uri: string): boolean =>
 /**
  * 按当前根算出可勾选的目录。
  *
- * `rootUri` 是 `viking://` 时给出全部四项；更窄的根只保留能覆盖它的那几项——
- * 列出用户根本搜不到的范围只会让人点出零结果。宿主给了一个不属于任何可检索根
- * 的路径时返回空数组，面板据此显示「当前范围不支持按目录筛选」。
+ * `rootUri` 是 `viking://` 时给出全部四项。
+ *
+ * 更窄的根给出**它自己**，而不是覆盖它的祖先：宿主把浏览范围收敛到
+ * `viking://resources/project-a` 时，候选若是祖先 `viking://resources`，勾选后
+ * `target_uri` 就从项目根换成了整个资源库，检索范围被悄悄放大，返回的兄弟目录
+ * 资源树里也定位不到。只有根本身不是可检索根（例如它落在 `viking://agent` 下
+ * 却不在 `skills` 里）时，才退回到覆盖它的那一项。
  *
  * Resolves the selectable scopes for the current root.
  *
- * A `viking://` root yields all four; a narrower root keeps only those that cover it,
- * because listing scopes the user cannot reach only produces empty results. A root
- * that no retrievable scope covers yields an empty array, and the panel says the
- * current scope cannot be filtered by directory.
+ * A `viking://` root yields all four.
+ *
+ * A narrower root yields **itself** rather than the scope that covers it: when a host
+ * narrows browsing to `viking://resources/project-a`, offering the ancestor
+ * `viking://resources` would swap `target_uri` from the project root to the whole
+ * library on selection — silently widening the search, and returning sibling resources
+ * the tree cannot locate. Only a root that is not itself retrievable (it sits under
+ * `viking://agent` but outside `skills`) falls back to the scope covering it.
  */
 export function buildScopeOptions(rootUri: string): ScopeOption[] {
   if (!rootUri || rootUri === 'viking://') return [...ALL_SCOPES];
+  if (ALL_SCOPES.some((option) => covers(option.uri, rootUri))) {
+    return [{ uri: rootUri }];
+  }
   const kept = ALL_SCOPES.filter((option) => covers(option.uri, rootUri));
   return kept.length > 0 ? kept : [];
 }

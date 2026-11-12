@@ -64,7 +64,18 @@ export function buildCalendar(
   month: number,
   today: Dayjs = dayjs(),
 ): CalendarCell[] {
-  const first = dayjs().year(year).month(month).date(1);
+  // 每一格都从当天零点构造，且必须从**同一个**基准日出发。以 `dayjs()` 为基准
+  // 会把当前时分秒带进每一格，而选中值经 `startOf('day')` 归零，两边永远差几小时
+  // ——已选日期重新打开时一格都不高亮。`startOf('day')` 只保留日期部分，也让基准
+  // 日与「今天」的比较不受时刻影响。
+  //
+  // Every cell is built at midnight from one and the same base day. Starting from
+  // `dayjs()` would carry the current time into each cell while the selected value is
+  // zeroed by `startOf('day')`, so the two never match and a reopened picker highlights
+  // nothing. `startOf('day')` keeps only the date part and also keeps the base day's
+  // comparison with "today" free of the clock.
+  const base = today.startOf('day');
+  const first = base.year(year).month(month).date(1);
   const offset = (first.day() - WEEK_START + 7) % 7;
   const start = first.subtract(offset, 'day');
   const cells: CalendarCell[] = [];
@@ -73,7 +84,7 @@ export function buildCalendar(
     cells.push({
       date,
       inMonth: date.month() === month,
-      today: date.isSame(today, 'day'),
+      today: date.isSame(base, 'day'),
     });
   }
   return cells;

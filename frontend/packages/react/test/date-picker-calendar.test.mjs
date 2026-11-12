@@ -94,3 +94,17 @@ test('shifting the month crosses year boundaries in both directions', () => {
   assert.deepEqual(shiftMonth(2026, 11, 1), { year: 2027, month: 0 });
   assert.deepEqual(shiftMonth(2026, 5, 0), { year: 2026, month: 5 });
 });
+
+test('a selected day matches exactly one cell regardless of the current time', () => {
+  // 格子与选中值都必须归零到当天零点；否则已选日期重新打开时一格都不高亮。
+  //
+  // Cells and the selected value must both sit at midnight; otherwise a reopened picker
+  // highlights nothing.
+  const cells = buildCalendar(2026, 10, dayjs());
+  const selected = dayjs('2026-11-12').startOf('day');
+  const matches = cells.filter(
+    (cell) => cell.date.valueOf() === selected.valueOf(),
+  );
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].date.hour(), 0);
+});
