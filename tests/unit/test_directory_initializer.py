@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, call
 import pytest
 
 from openviking.core.directories import PRESET_DIRECTORIES, DirectoryInitializer
-from openviking.core.global_policy import parse_global_policy
 from openviking.core.namespace import (
     canonical_user_root,
     is_session_uri,
@@ -41,7 +40,6 @@ class _FakeVikingFS:
         self.files = {}
         self._async_agfs = SimpleNamespace(
             pathlock_acquire_tree=AsyncMock(return_value={"lease_ref": "agent-init"}),
-            pathlock_acquire_exact=AsyncMock(return_value={"lease_ref": "policy-init"}),
             pathlock_release=AsyncMock(),
         )
 
@@ -88,20 +86,7 @@ async def test_initialize_account_workspace_batches_preset_directories(monkeypat
 
     account_count, user_count = await initializer.initialize_account_workspace(ctx)
     assert viking_fs.files == legacy_files
-    await initializer.initialize_account_workspace(ctx, preset_global_policy=True)
-    policy_uri = f"{canonical_user_root(ctx)}/GLOBAL_POLICY.md"
-    default_policy = (SYSTEM_ASSETS_DIR / "user" / "GLOBAL_POLICY.md").read_text(encoding="utf-8")
-    assert viking_fs.files == {**legacy_files, policy_uri: default_policy}
     viking_fs.files[f"{memory_root}/soul.md"] = "Custom agent instructions"
-    custom_policy = """---
-type: global-access-policy
-schema_version: 1
-default: deny
-rules: []
----
-Only my own agent may read my memories.
-"""
-    viking_fs.files[policy_uri] = custom_policy
 
     user_root = canonical_user_root(ctx)
     expected_user_uris = {
@@ -143,15 +128,12 @@ Only my own agent may read my memories.
     malformed_abstract = "---\ndirectory: viking://resources/\n"
     viking_fs.contexts["viking://resources"]["abstract"] = malformed_abstract
 
-    second_account_count, second_user_count = await initializer.initialize_account_workspace(
-        ctx, preset_global_policy=True
-    )
+    second_account_count, second_user_count = await initializer.initialize_account_workspace(ctx)
 
     assert (second_account_count, second_user_count) == (0, 0)
     assert viking_fs.files == {
         **legacy_files,
         f"{memory_root}/soul.md": "Custom agent instructions",
-        policy_uri: custom_policy,
     }
     assert viking_fs.contexts["viking://resources"]["abstract"] == malformed_abstract
     assert set(viking_fs.contexts) == expected_uris
@@ -209,17 +191,6 @@ async def test_initialize_user_directories_ignores_actor_peer_view_for_preset_st
         SYSTEM_ASSETS_DIR / "memory" / "soul.md"
     ).read_text()
     assert "Sanitized scope." in (root_path / ".abstract.md").read_text()
-    assert await initializer.initialize_user_directories(ctx, preset_global_policy=True) == 0
-    policy_text = (root_path / "GLOBAL_POLICY.md").read_text(encoding="utf-8")
-    assert policy_text == (SYSTEM_ASSETS_DIR / "user" / "GLOBAL_POLICY.md").read_text(
-        encoding="utf-8"
-    )
-    policy = parse_global_policy(policy_text)
-    assert policy.allows_path("memories/experiences/lesson.md")
-    assert policy.allows_path("peers/customer-a/memories/preferences/style.md")
-    assert not policy.allows_path("memories/preferences/style.md")
-    assert not policy.allows_path("privacy/secret.md")
-    assert not policy.allows_path("sessions/history.md")
 
     with pytest.raises(PermissionDeniedError):
         await viking_fs.write_context(user_root, abstract="blocked", ctx=ctx)

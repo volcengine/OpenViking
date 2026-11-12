@@ -18,6 +18,7 @@ from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.resource.watch_manager import WatchManager
 from openviking.resource.watch_runtime import WatchRuntime
+from openviking.server.config import UserConfigDefaults
 from openviking.server.identity import RequestContext, Role
 from openviking.service.agent_evolution_service import AgentEvolutionService
 from openviking.service.compile_scheduler import CompileScheduler, build_credential_encryptor
@@ -116,6 +117,7 @@ class OpenVikingService:
         self._skill_processor: Optional[SkillProcessor] = None
         self._session_compressor: Optional["SessionCompressorV3"] = None
         self._directory_initializer: Optional[DirectoryInitializer] = None
+        self._user_config_defaults = UserConfigDefaults()
         self._system_asset_synchronizer: Optional[SystemAssetSynchronizer] = None
         self._watch_manager: Optional[WatchManager] = None
         self._watch_runtime: Optional[WatchRuntime] = None
@@ -283,6 +285,18 @@ class OpenVikingService:
         """Set the legacy server value used as the cluster startup baseline."""
         self._agent_evolution_base_config = config.model_copy(deep=True)
         self._session_service.set_agent_evolution_config(config)
+
+    @property
+    def user_config_defaults(self) -> UserConfigDefaults:
+        """Deployment defaults shared with user workspace initialization."""
+        return self._user_config_defaults
+
+    @user_config_defaults.setter
+    def user_config_defaults(self, config: UserConfigDefaults) -> None:
+        self._user_config_defaults = config
+        # create_app also accepts a service whose storage is already initialized.
+        if self._directory_initializer is not None:
+            self._directory_initializer.user_config_defaults = config
 
     async def apply_agent_evolution_config(self) -> None:
         """Apply the legacy server value to an already initialized manager."""
@@ -481,10 +495,7 @@ class OpenVikingService:
         return self._compile_service
 
     async def initialize(
-        self,
-        *,
-        before_background_start: Optional[Callable[[], Awaitable[None]]] = None,
-        preset_global_policy: bool = False,
+        self, *, before_background_start: Optional[Callable[[], Awaitable[None]]] = None
     ) -> None:
         """Initialize OpenViking storage and indexes."""
         if self._initialized:
@@ -570,13 +581,13 @@ class OpenVikingService:
             vikingdb=self._vikingdb_manager,
             viking_fs=self._viking_fs,
             system_asset_synchronizer=system_asset_synchronizer,
+            user_config_defaults=self.user_config_defaults,
         )
         self._directory_initializer = directory_initializer
         default_ctx = RequestContext(user=self._user, role=Role.ROOT)
         account_count, user_count = await directory_initializer.initialize_account_workspace(
             default_ctx,
             sync_system_assets=False,
-            preset_global_policy=preset_global_policy,
         )
         logger.info(
             "Initialized preset directories account=%d user=%d",
@@ -1108,7 +1119,6 @@ class OpenVikingService:
         self,
         ctx: RequestContext,
         *,
-        preset_global_policy: bool = False,
         lease_ref: Any = None,
     ) -> tuple[int, int]:
         """Initialize a new account's workspace under one account Tree lease."""
@@ -1117,11 +1127,11 @@ class OpenVikingService:
             return 0, 0
         if lease_ref is not None:
             return await self._directory_initializer.initialize_account_workspace(
-                ctx, preset_global_policy=preset_global_policy, lease_ref=lease_ref
+                ctx, lease_ref=lease_ref
             )
         async with self.account_workspace_lock(ctx) as lease:
             return await self._directory_initializer.initialize_account_workspace(
-                ctx, preset_global_policy=preset_global_policy, lease_ref=lease
+                ctx, lease_ref=lease
             )
 
     async def reconcile_system_assets(self, account_lister: AccountLister) -> int:
@@ -1137,9 +1147,7 @@ class OpenVikingService:
             skip_account_ids={self._user.account_id},
         ).sync_if_changed()
 
-    async def initialize_user_directories(
-        self, ctx: RequestContext, *, preset_global_policy: bool = False
-    ) -> int:
+    async def initialize_user_directories(self, ctx: RequestContext) -> int:
         """Initialize the user's preset directories under one user Tree lease."""
         self._ensure_initialized()
         if not self._directory_initializer:
@@ -1157,7 +1165,7 @@ class OpenVikingService:
                     uri=uri,
                 ) from exc
             return await self._directory_initializer.initialize_user_directories(
-                ctx, preset_global_policy=preset_global_policy, lease_ref=lease
+                ctx, lease_ref=lease
             )
         finally:
             await guard.close()

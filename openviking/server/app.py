@@ -214,10 +214,7 @@ async def _initialize_runtime_state(
             require_registered_identity=config.get_effective_auth_mode() == "api_key",
         )
 
-    await service.initialize(
-        before_background_start=install_write_guards,
-        preset_global_policy=config.user_config_defaults.preset_global_policy,
-    )
+    await service.initialize(before_background_start=install_write_guards)
     await service.apply_agent_evolution_config()
     manager = getattr(app.state, "api_key_manager", None)
     if manager is not None:
@@ -344,7 +341,8 @@ def create_app(
             usage_reporter = build_usage_reporter(config.usage_reporter)
         return usage_reporter
 
-    def _configure_session_runtime(service_obj) -> None:  # noqa: ANN001
+    def _configure_service_runtime(service_obj) -> None:  # noqa: ANN001
+        service_obj.user_config_defaults = config.user_config_defaults
         sessions = getattr(service_obj, "sessions", None)
         tool_output_setter = getattr(sessions, "set_tool_output_externalization_config", None)
         if callable(tool_output_setter):
@@ -373,7 +371,7 @@ def create_app(
             auto_commit_setter(config.user_config_defaults.auto_commit_policy)
 
     if service is not None:
-        _configure_session_runtime(service)
+        _configure_service_runtime(service)
 
     bot_gateway_token = load_bot_gateway_token() if config.with_bot else ""
 
@@ -393,7 +391,7 @@ def create_app(
         assert service is not None
         if config.with_bot:
             service.compile.configure_local_backend(config.bot_api_url, bot_gateway_token)
-        _configure_session_runtime(service)
+        _configure_service_runtime(service)
         set_service(service)
 
         from openviking.metrics.global_api import (

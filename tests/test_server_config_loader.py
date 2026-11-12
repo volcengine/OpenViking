@@ -62,7 +62,6 @@ def test_load_server_config_preserves_supported_fields(tmp_path):
                     "auth_mode": "trusted",
                     "with_bot": True,
                     "bot_api_url": "http://localhost:19999",
-                    "user_config_defaults": {"preset_global_policy": True},
                     "observability": {"metrics": {"exporters": {"prometheus": {"enabled": True}}}},
                 },
                 "storage": {"agfs": {"queuefs": {"mode": "worker"}}},
@@ -81,7 +80,6 @@ def test_load_server_config_preserves_supported_fields(tmp_path):
     assert config.auth_mode == "trusted"
     assert config.with_bot is True
     assert config.bot_api_url == "http://localhost:19999"
-    assert config.user_config_defaults.preset_global_policy is True
     assert config.observability.metrics.exporters.prometheus.enabled is True
     assert config.encryption_enabled is True
 
@@ -94,7 +92,6 @@ def test_load_server_config_defaults_timeout_keep_alive(tmp_path):
 
     assert config.timeout_keep_alive == 5
     assert config.executor_threads == 0
-    assert config.user_config_defaults.preset_global_policy is False
 
 
 def test_load_server_config_rejects_negative_default_executor_size(tmp_path):
