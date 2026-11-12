@@ -8,6 +8,7 @@ import time
 import async_timeout
 import orjson
 
+from .blocks import token_estimate
 from .capture import CapturePipeline
 from .compaction import cut_messages
 from .notices import tool_tail
@@ -199,7 +200,10 @@ class HiddenToolLoop:
             for event in self.stream(events):
                 yield event
         if window:
-            self.reset(*window)
+            anchor, value = window
+            # The window copies the opening block, which may predate a registered value.
+            text = self.seal(value["text"])
+            self.reset(anchor, {**value, "text": text, "tokens": token_estimate(text)})
         else:
             results = self.seal(self.adapter.results(results))
             self.transcript.extend(results)

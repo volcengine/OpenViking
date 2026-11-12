@@ -7,12 +7,16 @@ import json
 import orjson
 import pytest
 from aiohttp import web
-from conftest import MCP_TOOLS, TEXT, mcp_tool
+from conftest import MCP_TOOLS, TEXT, mcp_tool, replay_records
 from test_app import enable_tools
-from test_compaction import INSTRUCTION_START, summary_response
+from test_compaction import INSTRUCTION_START, Summarizer, answered, prepare, summary_response
 from test_native_tools import native_response, request_body, visible_response
 from test_recall_notice import FIELD, PATHS, reply
+from test_windows import NOTES, client_body, model_reply, stored
 
+from openviking_gateway import windows
+from openviking_gateway.blocks import block, token_estimate
+from openviking_gateway.capture import CapturePipeline
 from openviking_gateway.client import VikingError
 from openviking_gateway.models import Policy
 from openviking_gateway.protocols import SSEDecoder, text_content
@@ -112,7 +116,13 @@ def test_signed_and_binary_content_is_left_alone_but_tools_never_are():
         },
         {"type": "function_call", "call_id": "c", "arguments": json.dumps({"key": TOKEN})},
         {"type": "function_call_output", "call_id": "c", "output": f"data: {TOKEN}"},
+        {"type": "custom_tool_call", "call_id": "c", "name": "x", "input": uri},
         {"type": "custom_tool_call_output", "call_id": "c", "output": uri},
+        {"type": "function_call", "call_id": "c", "arguments": uri},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "c", "type": "custom", "custom": {"name": "x", "input": uri}}],
+        },
         {"role": "tool", "tool_call_id": "c", "content": f"data:{TOKEN}", "signature": TOKEN},
     ]
     for value in sealed:
@@ -298,7 +308,7 @@ class Privacy:
         return {"meta": {}, "current": {"version": version, "values": values}}
 
 
-async def test_catalog_refreshes_changed_targets_and_survives_short_outages(caplog):
+async def test_catalog_refreshes_every_target_and_survives_short_outages(caplog):
     privacy = Privacy(CREDENTIALS)
     secrets = Secrets(privacy)
     first = await asyncio.gather(*(secrets.catalog("user-key") for _ in range(5)))
@@ -308,19 +318,24 @@ async def test_catalog_refreshes_changed_targets_and_survives_short_outages(capl
         "/api/v1/privacy-configs/credential/github",
         "/api/v1/privacy-configs/tree?category=credential",
     ]
-    # Within the refresh interval nothing is read; after it, only the tree, then changed targets.
+    # Within the refresh interval nothing is read; after it, the tree and every target.
     privacy.paths.clear()
     assert await secrets.catalog("user-key") is first[0] and not privacy.paths
-    secrets.fresh.clear()
-    assert await secrets.catalog("user-key") is first[0] and len(privacy.paths) == 1
     privacy.credentials["db"] = (2, {"password": "rotated-password"})
     secrets.fresh.clear()
     rotated = await secrets.catalog("user-key")
-    assert privacy.paths[1:] == [
-        "/api/v1/privacy-configs/tree?category=credential",
+    assert sorted(privacy.paths) == [
         "/api/v1/privacy-configs/credential/db",
+        "/api/v1/privacy-configs/credential/github",
+        "/api/v1/privacy-configs/tree?category=credential",
     ]
     assert rotated.seal("rotated-password")[1] == 1 and rotated.seal(PASSWORD)[1] == 0
+    # Deleted and created again, a target restarts at version 1 with another value.
+    privacy.credentials["db"] = (1, {"password": "recreated-password"})
+    secrets.fresh.clear()
+    rotated = await secrets.catalog("user-key")
+    assert rotated.seal("recreated-password")[1] == 1 and rotated.seal("rotated-password")[1] == 0
+    assert rotated.values[PASSWORD_REF] == "recreated-password"
     # A failed refresh keeps the last catalog for a while, then fails closed.
     privacy.failure = VikingError("openviking_unavailable")
     secrets.fresh.clear()
@@ -587,6 +602,63 @@ async def test_recall_and_gateway_tool_results_are_sealed_before_they_are_kept_o
     # Each value the gateway added counts once: the recall and two tool results.
     logs = (await client.get("/admin/logs", headers=admin)).json()
     assert logs[0]["secrets_sealed_egress"] == 3 and logs[0]["hidden_rounds"] == 2
+
+
+async def test_compaction_seals_an_opening_block_recorded_before_sealing(
+    setup_kernel, credential, policy
+):
+    kernel, store, viking, _ = setup_kernel
+    viking.profile = f"My token is {TOKEN}."
+    policy.update(context_window=1024)
+    messages = [{"role": "user", "content": "How do I deploy?"}]
+    # The opening block is recorded before sealing is turned on.
+    first = await prepare(kernel, "chat", messages, credential, policy)
+    message = {"role": "assistant", "content": "Use the blue cluster."}
+    await answered(kernel, first, credential, message)
+    messages += [message, {"role": "user", "content": "What next?"}]
+    guard = catalog()
+    second = await prepare(
+        kernel,
+        "chat",
+        messages,
+        credential,
+        policy,
+        summarize=Summarizer("chat"),
+        seal=lambda text: guard.seal(text)[0],
+    )
+    [record] = (await replay_records(store, second, "replacement")).values()
+    assert record["source"] == "compaction" and TOKEN_REF in record["text"]
+    assert not leaked(record) and record["tokens"] == token_estimate(record["text"])
+
+
+async def test_a_new_window_is_sealed_before_it_is_kept(running_gateway, monkeypatch):
+    app, client, admin, key, _, _ = running_gateway
+    await enable_tools(client, admin, agent_windows=True, seal_secrets=True)
+
+    async def confirm_cut(self, request, anchor):
+        pass
+
+    monkeypatch.setattr(CapturePipeline, "confirm_cut", confirm_cut)
+    # An opening block recorded before sealing was turned on.
+    monkeypatch.setattr(
+        windows,
+        "opening_block",
+        lambda records, chain: block("gateway-session-start", f"My token is {TOKEN}."),
+    )
+    requests = []
+
+    def respond(number):
+        return model_reply("chat", number, [(windows.NEW_CONTEXT, NOTES)] if number == 1 else ())
+
+    serve(app, upstream("chat", False, requests, respond))
+    response = await client.post(
+        PATHS["chat"], headers=headers(key), json=client_body("chat", False)
+    )
+    assert response.status_code == 200, response.text
+    [record] = (await stored(app, "replacement")).values()
+    assert record["source"] == "window" and TOKEN_REF in record["text"]
+    assert not leaked(record) and record["tokens"] == token_estimate(record["text"])
+    assert len(requests) == 2 and not any(leaked(raw) for raw in requests)
 
 
 @pytest.mark.parametrize("protocol", ["chat", "anthropic", "responses"])

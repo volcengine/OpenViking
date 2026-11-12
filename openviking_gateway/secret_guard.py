@@ -37,7 +37,16 @@ SIGNED = {"signature", "encrypted_content"}
 DATA_URI = re.compile(r"data:[^\s,]*;base64,[A-Za-z0-9+/=]*")
 BASE64 = re.compile(r"[A-Za-z0-9+/=_-]{256,}")
 # What a tool read or wrote is never exempt, whatever it looks like.
-TOOL_IO = {"tool_use", "tool_result", "function_call_output", "custom_tool_call_output"}
+TOOL_IO = {
+    "tool_use",
+    "tool_result",
+    "function",
+    "function_call",
+    "function_call_output",
+    "custom",
+    "custom_tool_call",
+    "custom_tool_call_output",
+}
 # Where a client tool call, or one of its events, holds the arguments, and whether they
 # are JSON text, which takes escaped values.
 ARGUMENTS = {
@@ -285,7 +294,7 @@ class Secrets:
         async def load():
             read_at, previous = self.last.get(name, (0, None))
             try:
-                catalog = await self.read(key, previous)
+                catalog = await self.read(key)
             except Exception as error:
                 # Names the cause, never a value: an outage, a rejected key, or a server
                 # older than OpenViking 0.5.2, which has no credential tree.
@@ -301,32 +310,31 @@ class Secrets:
 
         return await self.fresh.get(name, load)
 
-    async def read(self, key, previous):
-        """Read the credential tree, then the values of targets whose version changed."""
+    async def read(self, key):
+        """Read the credential tree, then the current values of every target.
+
+        Versions cannot tell which targets are unchanged: a target deleted and created
+        again restarts at version 1.
+        """
         tree = await self.viking.request(
             "GET", "/api/v1/privacy-configs/tree?category=credential", key, timeout=5
         )
         owner = tree["owner_user_id"]
-        versions = {
-            target["target_key"]: target["version"]
+        names = [
+            target["target_key"]
             for category in tree["categories"]
             if category["category"] == "credential"
             for target in category["targets"]
-        }
-        same = previous is not None and previous.owner == owner
-        kept = previous.targets if same else {}
-        changed = [t for t, version in versions.items() if t not in kept or kept[t][0] != version]
-        if same and not changed and len(kept) == len(versions):
-            return previous
+        ]
         results = await asyncio.gather(
             *(
                 self.viking.request(
                     "GET", "/api/v1/privacy-configs/credential/" + quote(t, safe=""), key, timeout=5
                 )
-                for t in changed
+                for t in names
             )
         )
-        targets = {t: kept[t] for t in versions if t not in changed}
-        for target, result in zip(changed, results, strict=True):
-            targets[target] = versions[target], result["current"]["values"]
-        return Catalog(owner, targets)
+        current = (result["current"] for result in results)
+        return Catalog(
+            owner, {t: (c["version"], c["values"]) for t, c in zip(names, current, strict=True)}
+        )

@@ -192,7 +192,7 @@ class MemoryKernel:
     ):
         """Build the upstream body; ``summarize(prepared, body)`` sends a summary request.
 
-        ``seal(text)`` replaces registered credentials in what recall injects and records.
+        ``seal(text)`` replaces registered credentials in what recall and compaction record.
         """
         adapter = tool_protocol(protocol)
         sent = adapter.messages(body)
@@ -306,7 +306,7 @@ class MemoryKernel:
                 and not disabled
                 and prepared.context_tokens >= policy.compaction_threshold * prepared.context_window
             ):
-                await self.compact(prepared, credential, policy, summarize)
+                await self.compact(prepared, credential, policy, summarize, seal)
         # Recall and window signals come after any new cut, so they describe the
         # context the model actually gets.
         if not disabled:
@@ -816,7 +816,7 @@ class MemoryKernel:
             return tokens + await asyncio.to_thread(estimate, request.messages[index + 1 :])
         return await asyncio.to_thread(estimate, self.assembled(request))
 
-    async def compact(self, request, credential, policy, summarize):
+    async def compact(self, request, credential, policy, summarize, seal=None):
         """Replace the history before a new cut with a model-written summary.
 
         The summary covers only what the cut replaces, so every branch continuing these
@@ -867,6 +867,9 @@ class MemoryKernel:
         hint = cut_hint(request, credential["user_id"], policy)
         opening = opening_block(request.records, request.chain)
         text = replacement_text(summary, hint, opening, in_progress)
+        if seal:
+            # The opening block recorded before a value was registered still holds it.
+            text = seal(text)
         # A concurrent request may have written this cut first; its text wins.
         record = await self.store.replay.put(
             request.scope,

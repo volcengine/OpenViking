@@ -219,7 +219,7 @@ Gateway 是模型请求到厂商的唯一通道，所以它能严格执行 I1。
 
 出站终扫的命中数单独记进请求日志（`secrets_sealed_egress`）。它不为零，说明 OpenViking 自己注入的内容里带了明文，这是 §2 第 4 条路径的直接观测信号。
 
-**本地存储的范围。** 入站封存保证客户端带来的明文不会落进 Gateway 的本地存储。Gateway 自己产生的内容（召回文本、网关工具的结果）在写入本地记录之前也先封存一遍，所以新写入的记录同样是引用形态。出站终扫因此是第二道：它兜住开关打开之前留下的记录，也兜住将来任何一条忘了先封存的路径。
+**本地存储的范围。** 入站封存保证客户端带来的明文不会落进 Gateway 的本地存储。Gateway 自己产生的内容（召回文本、网关工具的结果、压缩和新窗口的替换文本）在写入本地记录之前也先封存一遍，所以新写入的记录同样是引用形态。出站终扫因此是第二道：它兜住开关打开之前留下的记录，也兜住将来任何一条忘了先封存的路径。
 
 ### 6.4 封存的匹配规则
 
@@ -277,8 +277,8 @@ token is ghp_Ab12Xy9                   token is {{…github#pat}}
 
 Gateway 不存密钥。它用**调用者自己的 OpenViking Key** 读现有的 Privacy API：
 
-1. 每 30 秒至多一次 `GET /api/v1/privacy-configs/tree?category=credential`，拿到每个 target 的版本号。
-2. 只对版本变了的 target 调 `GET /api/v1/privacy-configs/credential/{target}` 取值。
+1. 每 30 秒至多一次 `GET /api/v1/privacy-configs/tree?category=credential`，拿到所有 target。
+2. 对每个 target 调 `GET /api/v1/privacy-configs/credential/{target}` 取当前值。不按版本号跳过：target 删除后重建，版本号会从 1 重新算。
 
 | 情况 | 行为 |
 |---|---|
