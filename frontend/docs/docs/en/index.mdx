@@ -2,20 +2,20 @@
 pageType: home
 hero:
   name: OpenViking UI
-  text: Make agent context visible.
-  tagline: Build tools, documentation, and UI conventions for AI applications built on OpenViking, the context database for AI agents.
+  text: React components for OpenViking
+  tagline: A file tree, file preview, command console, conversation, login forms and dashboards for building the interface of an OpenViking app.
   actions:
     - theme: brand
       text: Get started
       link: /en/guide/getting-started
     - theme: alt
-      text: Browse components
+      text: Browse business components
       link: /en/components/
 features:
-  - title: Context people can work with
-    details: Build interfaces for the knowledge, memories, and skills OpenViking organizes as files.
-  - title: Start with the foundations
-    details: Rslib builds, bilingual documentation, layered directories, and scoped styles. Build your application’s business UI on these foundations.
-  - title: Fit your application
-    details: Use FileTree, FilePreview, and file-type icons as needed. Your application owns data, authentication, and workflows.
+  - title: Business components
+    details: Plain views such as FileTree, FilePreview, CommandConsole, VikingBot, auth forms and dashboards. You pass in the data and they send no requests.
+  - title: Blocks that load data
+    details: FileBrowser and Console read the OpenViking native API inside OpenVikingProvider, so you get a file browser and a command panel out of the box.
+  - title: Import what you need
+    details: Run npm install @openviking/react, then import the components and styles you use. Every business component and block has its own subpath, and React 18.2 and 19 are supported.
 ---

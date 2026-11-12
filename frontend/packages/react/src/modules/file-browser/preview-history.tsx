@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { Button } from '../../shared/components/button/button.js';
+import { Button } from '../../shared/primitives/button/button.js';
 import { readHistoricalText, readPreviewHistory } from './preview-native.js';
 import { useDashboardQuery } from './use-dashboard-query.js';
 import { PreviewQueryState } from './preview-query-state.js';

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { act, type, key, click } from './helpers/tui-dom.mjs';
+import { act, type, key, click } from './helpers/command-console-dom.mjs';
 import { mount, ok } from './helpers/console-dom.mjs';
 
 test('new session remains available when empty and cancels pending work without restoring late records', async () => {
@@ -50,7 +50,7 @@ test('scope, identity and new-session resets cannot restore a prior keyboard dra
       await reset();
       assert.equal(host.input.value, '');
       const status = [
-        ...host.container.querySelectorAll('.ov-tui__empty-action'),
+        ...host.container.querySelectorAll('.ov-command-console__empty-action'),
       ].find((button) => button.textContent.includes('status'));
       await click(status);
       assert.equal(host.input.value, 'ov status ');

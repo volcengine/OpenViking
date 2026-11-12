@@ -1,10 +1,10 @@
-@import '../../shared/components/input/input.css';
-@import '../../shared/components/button/button.css';
+@import '../../shared/primitives/input/input.css';
+@import '../../shared/primitives/button/button.css';
 @import '../../theme.css';
-@import '../../shared/components/popover/popover.css';
-@import '../../shared/components/tooltip/tooltip.css';
-@import '../../shared/components/resizable/resizable-handle.css';
-@import '../../components/file-browser-entries/style.css';
+@import '../../shared/primitives/popover/popover.css';
+@import '../../shared/primitives/tooltip/tooltip.css';
+@import '../../shared/primitives/resizable/resizable-handle.css';
+@import '../../components/file-browser-action-bar/style.css';
 @import '../../components/file-tree/style.css';
 @import '../../components/file-preview/style.css';
 @import './file-browser.css';
@@ -13,7 +13,7 @@
 @import '../../components/wiki-dashboard/style.css';
 @import '../../components/experience-dashboard/style.css';
 @import './acl/acl.css';
-@import '../../shared/components/modal/modal.css';
+@import '../../shared/primitives/modal/modal.css';
 
 @import './file-browser-delete-dialog.css';
 @import './preview-workflow.css';

@@ -1,4 +1,4 @@
-import { Button } from '../../shared/components/button/button.js';
+import { Button } from '../../shared/primitives/button/button.js';
 import { useId } from 'react';
 import CopyIcon from '../../../../icons/svg/agent-connect/copy.svg?react';
 import EyeIcon from '../../../../icons/svg/agent-connect/eye.svg?react';

@@ -4,7 +4,7 @@ import { createElement, StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { VikingBotSessionActions } from '@openviking/react/components/viking-bot';
 import { Console } from '@openviking/react/modules/console';
-import { act, click } from './helpers/tui-dom.mjs';
+import { act, click } from './helpers/command-console-dom.mjs';
 import './helpers/console-dom.mjs';
 
 const token = '--ov-ui-color-bg-1';

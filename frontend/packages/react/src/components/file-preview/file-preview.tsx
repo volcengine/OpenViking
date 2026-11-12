@@ -26,8 +26,6 @@ import type {
   FilePreviewTab,
 } from './types.js';
 
-export { LoadingState } from './file-preview-state.js';
-
 function isFileTab(tab: FilePreviewTab): tab is FilePreviewFileTab {
   return tab.kind === 'file';
 }

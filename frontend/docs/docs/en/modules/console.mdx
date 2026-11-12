@@ -1,80 +1,131 @@
 # Console
 
-Optional `locale: 'zh-CN' | 'en-US'` overrides the nearest module or Provider; without either, copy defaults to `en-US`. Existing `labels` override individual fields. Hosts provide business content.
+A panel with two modes: conversation mode shows VikingBot, with the conversation service connected by your app, and command mode sends `ov` commands to the OpenViking native API and shows the results.
 
-`Console` combines `Tui` and `VikingBot`, managing native API commands, execution records and separate drafts. Switching modes preserves records and drafts.
+## When to use
 
-Commands use native APIs. Conversation mode follows Volcengine release/openviking/2026-11-12 with session controls, the updated welcome state, quick inputs, attachments and reference selection. Supply VikingBot data and callbacks through `conversation`; the host integrates real chat, streaming, uploads and session persistence.
+- You want one panel where users can chat with VikingBot or run `ov` commands to browse, search and write to the knowledge base.
+- You want to run OpenViking native API commands in the browser and keep the command records and input drafts when users switch modes.
+- You only need the conversation view or the command input: use [VikingBot](../components/viking-bot) or [CommandConsole](../components/command-console). Use CommandConsole as well when you want to provide your own command list, because Console's commands are built in.
 
-The panel follows the Volcengine layout with a pill mode switch, icon toolbar and terminal quick start. Quick actions fill and focus the input without executing. Command history contains only this panel's local records; selecting a record fills the input. Both toolbar actions show hints on hover and keyboard focus. New session is always available: it cancels the current request and clears local records, errors and the command draft without deleting server data. Customize its label through `labels.clear`, and other copy through `labels`.
+## Import
 
-History dates use the client timestamp captured when submitting a command, displayed in the local timezone as `YYYY-MM-DD HH:mm`.
+```tsx
+import { OpenVikingProvider } from '@openviking/react/client';
+import { Console } from '@openviking/react/modules/console';
+import '@openviking/react/modules/console/style.css';
 
-`Console` fills the host width and height without imposing a panel width. Give the host an explicit height or a flexible layout. The example's 720px height is for demonstration only.
+<OpenVikingProvider baseURL={endpoint} apiKey={apiKey}>
+  <Console />
+</OpenVikingProvider>;
+```
 
-## Basic usage
+The stylesheet includes the CommandConsole and VikingBot styles. For the Provider and request configuration, see the [blocks overview](./).
 
-VikingBot (`conversation`) is selected by default. Set `defaultMode="command"` to start in Terminal, or use `mode` with `onModeChange` for controlled switching.
+Conversation mode uses [VikingBot](../components/viking-bot), which depends on the optional peer dependency `@ark-design/ui`. It is not installed with `@openviking/react`; see the Import section of that page for how to install it.
 
-The demo uses a fixed simulated service. Try `ov ls viking://resources/demo` or `ov read viking://resources/demo/notes.md` for structured results and resource links. It does not access a real service.
+## Examples
 
-Conversation sessions, prompts and resource candidates use fixed demo data. The `+` action selects local files without uploading; sending is unconnected. The host supplies real conversations, streaming and persistence through `conversation`.
+### Basic usage
+
+The panel opens in conversation mode. Switch to Terminal, run `ov ls viking://resources/demo` or `ov read viking://resources/demo/notes.md`, and click a resource link to see the URI that `onOpenUri` receives below the panel.
 
 ```tsx file="../../_demos/console-basic.tsx" preview
 
 ```
 
-For a real service, configure `baseURL`, credentials and identity through the host's `OpenVikingProvider`; no per-module adapter is required. Exclude `/api/v1` from `baseURL`; omission targets the same origin. Mounting does not fetch data. Requests start only when a command is explicitly submitted.
+The example uses a simulated service and fixed conversation data, so it sends no real request. Its `+` button only selects local files in the browser, and the composer cannot send because the example sets no `onSend`.
 
-The default quick commands are `add-resource`, `add-skill`, `add-memory`, `find`, and `compile`. Hover for a description. Selecting an item fills an example or prefix; users submit explicitly. Imports and installs accept remote addresses. Adding memory appends a user message and commits its session. Compile takes a source and a target URI and defaults to the built-in llm-wiki Skill.
+## API
 
-Type `/` or run `ov help` to see Core workflow, Filesystem, Search & context, and Config & status. Both Core workflow and Search & context include `find` and `read`. Use `compile create` to save a compile configuration without starting a task.
+### Console
 
-A host can query Bot availability for the active identity and set `conversation.isAvailable` and `conversation.unavailableMessage` to control the composer.
+| Property         | Description                                                                                                                                                                                                                           | Type                                    | Default                                                                     |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | --------------------------------------------------------------------------- |
+| mode             | Current mode, controlled by your app when set; `'conversation'` shows the conversation and `'command'` shows the commands                                                                                                             | `ConsoleMode`                           | -                                                                           |
+| defaultMode      | Initial mode; ignored once `mode` is set                                                                                                                                                                                              | `ConsoleMode`                           | `'conversation'`                                                            |
+| onModeChange     | Called when the user switches modes, with the new mode; update `mode` here when you control it                                                                                                                                        | `(mode: ConsoleMode) => void`           | -                                                                           |
+| conversation     | Data and callbacks for conversation mode. `sessions` and `headerActions` appear in the panel toolbar, the other props go to [VikingBot](../components/viking-bot), and Console keeps the draft when you omit `draft`                  | `Partial<VikingBotProps>`               | -                                                                           |
+| quickCommands    | Shortcuts `{ name, value }` in the command-mode empty state; clicking one fills `value` into the input without running it, and an empty array hides the empty state. See [CommandConsole](../components/command-console) for the type | `readonly CommandConsoleQuickCommand[]` | Five defaults: `add-resource`, `add-skill`, `add-memory`, `find`, `compile` |
+| scopeKey         | Isolation key for identities resolved by functions; when it changes, the records and drafts are cleared and in-flight requests are aborted                                                                                            | `string`                                | -                                                                           |
+| onOpenUri        | Called when a resource link is clicked, with its URI; in conversation mode `conversation.onOpenUri` takes precedence when set                                                                                                         | `(uri: string) => void`                 | -                                                                           |
+| slots            | Inserts your own content into the panel, see `ConsoleSlots` below                                                                                                                                                                     | `ConsoleSlots`                          | -                                                                           |
+| labels           | Overrides interface text, see `ConsoleLabels` below                                                                                                                                                                                   | `ConsoleLabels`                         | -                                                                           |
+| locale           | Interface language, see [Internationalization](../guide/i18n)                                                                                                                                                                         | `'zh-CN' \| 'en-US'`                    | Inherited, otherwise `'en-US'`                                              |
+| requestOptions   | Overrides the request configuration, see the [blocks overview](./)                                                                                                                                                                    | `OvRequestOptions`                      | -                                                                           |
+| className, style | Appearance and layout; other HTML attributes are passed to the root element                                                                                                                                                           | HTML attributes                         | -                                                                           |
 
-## Execution behavior
+### ConsoleSlots
 
-One command runs per instance; input is disabled while a request is pending. Failures appear in the corresponding command result; submit the command again to retry. Check the server before resubmitting a write that may already have been accepted. New session aborts the HTTP request and ignores late results; it does not guarantee rollback of accepted server operations. Clearing records removes local history and errors without deleting server resources.
+| Property            | Description                                                                                  | Type        | Default |
+| ------------------- | -------------------------------------------------------------------------------------------- | ----------- | ------- |
+| toolbar             | Content between the mode switch and the action buttons in the toolbar, shown in both modes   | `ReactNode` | -       |
+| conversationContext | Content above the composer in conversation mode; takes precedence over `conversation.footer` | `ReactNode` | -       |
+| commandHelp         | Content above the command console in command mode                                            | `ReactNode` | -       |
 
-Records and drafts stay in memory. Service/identity configuration or `scopeKey` changes clear local state and abort old requests; unmount also aborts. When stable functions supply changing identity values, update `scopeKey` or key the component by identity.
+### ConsoleLabels
 
-## Command scope
+| Property           | Description                                                                                          | Type                   | Default                    |
+| ------------------ | ---------------------------------------------------------------------------------------------------- | ---------------------- | -------------------------- |
+| conversation       | Label of the conversation mode button                                                                | `string`               | `'VikingBot'`              |
+| command            | Label of the command mode button                                                                     | `string`               | `'Terminal'`               |
+| mode               | Accessible name of the mode switch                                                                   | `string`               | `'Panel mode'`             |
+| description        | Description in the conversation welcome area; also the default of `vikingBot.welcomeDescription`     | `string`               | Built-in description       |
+| clear              | Label of the New session button in command mode                                                      | `string`               | `'New session'`            |
+| history            | Label of the Command history button in command mode                                                  | `string`               | `'Command history'`        |
+| emptyHistory       | Text shown when the command history is empty                                                         | `string`               | `'No command history yet'` |
+| commandTitle       | Heading of the command-mode empty state, same as `commandConsole.emptyTitle`                         | `string`               | CommandConsole default     |
+| commandDescription | Description of the command-mode empty state, same as `commandConsole.emptyDescription`               | `string`               | CommandConsole default     |
+| quickStart         | Label above the quick commands, same as `commandConsole.quickStart`                                  | `string`               | CommandConsole default     |
+| commandConsole     | Text for CommandConsole; takes precedence over `commandTitle`, `commandDescription` and `quickStart` | `CommandConsoleLabels` | -                          |
+| vikingBot          | Text for VikingBot; takes precedence over `description` and is overridden by `conversation.labels`   | `VikingBotLabels`      | -                          |
 
-Use `ov name`, `/name`, or a bare command name. Quote arguments containing spaces with single or double quotes; backslash escapes are supported. Quote option-looking data, such as `ov write viking://resources/a.md "--heading"`, or use `--` to end options: `ov write viking://resources/a.md -- --heading`. String option values may also be quoted, for example `--description "--example"`. Arguments are parsed as data without executing a shell. Unknown or duplicate options, missing arguments and invalid URIs produce error records.
+## Commands
 
-| Capability | Commands                                                                                               |
-| ---------- | ------------------------------------------------------------------------------------------------------ |
-| Local      | `help`, `clear`                                                                                        |
-| Service    | `health`, `status`                                                                                     |
-| Browse     | `ls [uri]`, `tree [uri]`, `stat <uri>`                                                                 |
-| Content    | `read <uri>`, `abstract <uri>`, `overview <uri>`                                                       |
-| Search     | `find <query>`, `search <query>`, `grep <pattern>`, `glob <pattern>`                                   |
-| Write      | `mkdir <uri>`, `write <uri> <content>`, `cp <from_uri> <to_uri>`, `mv <from_uri> <to_uri>`, `rm <uri>` |
-| Tasks      | `task list`, `task status <id>`, `task cancel <id>`                                                    |
+Command mode runs only the built-in native API commands. Type `/` or run `ov help` to see the commands and their options, grouped as Core workflow, Filesystem, Search & context and Config & status.
 
-See runtime `ov help` and parameter hints for all options. Option names follow native fields, such as `--target_uri` and `--case_insensitive`. `ls` / `tree` return at most 100 entries by default; page with `--limit` and `--offset`. `tree` also accepts `--level_limit`. `write` replaces content by default; use `--mode create` to create or `--mode append` to append. `task cancel` requests server-side cooperative cancellation; new session only aborts the browser's HTTP request.
+### Syntax
 
-This is a browser-compatible native command subset. Local CLI configuration, login, local file uploads/downloads and standalone session management are outside this phase. A successful HTTP request means the endpoint returned; inspect asynchronous operations with task commands for their final result.
+- Write a command as `ov find`, `/find` or just `find`.
+- Wrap arguments that contain spaces in single or double quotes; a backslash also escapes a character.
+- Quote values that start with `--`, for example `ov write viking://resources/a.md "--heading"`, or end option parsing with `--`, for example `ov write viking://resources/a.md -- --heading`. Option values work the same way, for example `--description "--example"`.
+- Arguments are parsed as data and no shell runs. Unquoted `| ; & < > $` and backticks are rejected, so quote URLs that contain `&`.
+- Unknown or duplicate options, missing arguments, URIs that do not start with `viking://` and unclosed quotes produce a failed record without sending a request.
 
-## Props
+### Supported commands
 
-The root exports only `Console` and `ConsoleProps`. Import the mode, copy and slot types from `@openviking/react/modules/console`. Data and state Hooks remain internal. JavaScript does not load CSS; the composite view uses `@openviking/react/modules/console/style.css`, including Tui and VikingBot styles.
+| Capability      | Commands                                                                                                                                                                 |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Add and compile | `add-resource <path>`, `add-skill <path>`, `add-memory <content> --session-id <session-id>`, `compile --from <from> --to <to>`, `compile create --from <from> --to <to>` |
+| Local           | `help`, `clear`                                                                                                                                                          |
+| Service         | `health`, `status`                                                                                                                                                       |
+| Browse          | `ls [uri]`, `tree [uri]`, `stat <uri>`                                                                                                                                   |
+| Content         | `read <uri>`, `abstract <uri>`, `overview <uri>`                                                                                                                         |
+| Search          | `find <query>`, `search <query>`, `grep <pattern>`, `glob <pattern>`                                                                                                     |
+| Write           | `mkdir <uri>`, `write <uri> <content>`, `cp <from_uri> <to_uri>`, `mv <from_uri> <to_uri>`, `rm <uri>`                                                                   |
+| Tasks           | `task list`, `task status <id>`, `task cancel <id>`                                                                                                                      |
 
-| Prop                 | Type                          | Default           | Behavior                                                                                                                                                                                                                                                                                                      |
-| -------------------- | ----------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mode`               | `ConsoleMode`                 | —                 | Controlled mode; switching reports intent                                                                                                                                                                                                                                                                     |
-| `defaultMode`        | `ConsoleMode`                 | `conversation`    | Initial uncontrolled mode                                                                                                                                                                                                                                                                                     |
-| `locale`             | `'zh-CN' \| 'en-US'`          | Inherited / en-US | Built-in Chinese and English copy.                                                                                                                                                                                                                                                                            |
-| `quickCommands`      | `readonly TuiQuickCommand[]`  | Five defaults     | `{ name, value }` shortcuts resolve copy by name from the command catalogue. Selection fills value verbatim and focuses without submitting. Unknown names are skipped and repeats keep their first entry. Default shortcuts fill examples or a command prefix; an empty array hides the built-in empty state. |
-| `scopeKey`           | `string`                      | —                 | Explicit isolation key for dynamic identity                                                                                                                                                                                                                                                                   |
-| `onModeChange`       | `(mode: ConsoleMode) => void` | —                 | Reports a request for a different mode; the host updates a controlled value                                                                                                                                                                                                                                   |
-| `onOpenUri`          | `(uri: string) => void`       | —                 | Reports resource-link activation; the host performs navigation                                                                                                                                                                                                                                                |
-| `conversation`       | `Partial<VikingBotProps>`     | —                 | Conversation data, session controls, quick inputs, references and file callbacks; omitted draft props use Console local state.                                                                                                                                                                                |
-| `slots`              | `ConsoleSlots`                | —                 | `toolbar`, `conversationContext`, `commandHelp`                                                                                                                                                                                                                                                               |
-| `labels`             | `ConsoleLabels`               | —                 | Panel copy, plus `tui` and `vikingBot` view copy                                                                                                                                                                                                                                                              |
-| `requestOptions`     | `OvRequestOptions`            | —                 | Field-by-field address, identity and signal overrides over the nearest Provider                                                                                                                                                                                                                               |
-| `className`, `style` | Standard HTML props           | —                 | Root styling; other HTML attributes are forwarded too                                                                                                                                                                                                                                                         |
+- `ls` and `tree` start from `viking://` by default and return at most 100 entries; page with `--limit` and `--offset`, and `tree` also accepts `--level_limit`.
+- `write` replaces existing content by default; `--mode create` creates a file and `--mode append` appends.
+- `add-resource` and `add-skill` accept remote addresses, not local file paths.
+- `add-memory` appends the content to the session given by `--session-id` as a user message, then commits that session.
+- `compile` uses the built-in llm-wiki Skill by default, and `--skill` selects another one; `compile create` only saves the compile configuration without starting a compile.
+- `task cancel` asks the server for cooperative cancellation, so a task may not stop immediately.
+- Option spelling differs by command: `add-skill` uses `--target-uri` while `find` uses `--target_uri`. Check `ov help` for the exact names.
+- A command shows what the API returned; check the final state of asynchronous operations such as imports and compiles with `task status <id>`.
+- The command set covers only native APIs that a browser can call; local configuration, login, local file upload or download and session management commands are not included.
 
-Hosts own authentication, permissions, account switching, page layout and resource navigation across modules.
+## Notes
 
-Console inherits the nearest language scope, with `en-US` as the fallback. Changing language updates existing command help, argument errors and cancellation notices while preserving requests, record IDs and drafts. Server content and original error messages keep their original text.
+- Your app connects the conversation service: Console sends no conversation requests. Pass `messages`, `streaming` and `sessions` through `conversation`, call your own conversation service in `onSend`, and upload files in `onFilesAdded`; without `onSend` the composer cannot send.
+- Set `conversation.isAvailable` and `conversation.unavailableMessage` from the Bot status your app queries; when the Bot is unavailable, the composer is disabled and shows the message.
+- Commands send requests only when the user submits them, never on mount. An instance runs one command at a time and disables the input while it runs.
+- A failed command shows its error in its own record; fix the command and submit it again. A failed write may already have been accepted by the server, so check the result before you resubmit.
+- The New session button in command mode aborts the in-flight request, ignores a late response, and clears the command records, error and input; operations the server already accepted are not undone, and no server data is deleted. The `clear` command only clears the local records.
+- The command history lists the records of this panel, newest first, with the local time of submission (`YYYY-MM-DD HH:mm`); clicking one fills the command back into the input without running it.
+- Command records and drafts live in memory only. When `scopeKey`, `requestOptions` or the Provider configuration changes, Console clears the records and drafts and aborts in-flight requests; unmounting aborts them too.
+- When an identity field is a function, keep the function reference stable and update `scopeKey` when the identity changes, or key the component by identity.
+- Console fills the width and height of its parent, so give the parent an explicit height or a flex layout that can stretch it.
+- Changing `locale` updates the command help, argument errors and cancellation notices already in the records, and keeps the records and drafts; content returned by the server stays as is.
+- Your app handles authentication, account switching and page layout. `onOpenUri` only reports the intent to open a resource link, and your app does the navigation.
+- Types are exported from `@openviking/react/modules/console`; the package root exports only `Console` and `ConsoleProps`.
