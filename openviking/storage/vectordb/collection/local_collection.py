@@ -301,7 +301,10 @@ class LocalCollection(ICollection):
                 }
             if not self._catalog_enabled and request["op"] == "query_items":
                 return {"data": [], "revision": "0"}
-            if not self._catalog_enabled and request["op"] == "delete_subtree":
+            if not self._catalog_enabled and request["op"] in (
+                "delete_subtree",
+                "move_subtree",
+            ):
                 return {}
             if self._catalog is None:
                 # Reads on an ordinary collection must not enable Catalog or
@@ -757,17 +760,59 @@ class LocalCollection(ICollection):
             self._open_catalog()
         candidate_limit = min(1000, max(100, max_groups * 20))
         if filter_only:
-            dense_vector = [0.0] * self.meta.vector_dim
+            index = self.indexes.get(index_name)
+            if not index:
+                return {
+                    "group_field": "item_uuid",
+                    "aggregation": aggregation,
+                    "group_count": 0,
+                    "groups_truncated": False,
+                    "groups": [],
+                }
 
         for attempt in range(3):
-            recalled = self.search_by_vector(
-                index_name=index_name,
-                dense_vector=dense_vector,
-                sparse_vector=sparse_vector,
-                limit=candidate_limit,
-                filters=filters,
-                output_fields=["uri"],
-            )
+            if filter_only:
+                # A zero-vector ANN query has no meaningful ordering and can
+                # drop matching Items beyond an arbitrary recall window. Count
+                # the fully compiled filter first, then ask the scalar sorter
+                # for every matching record. Do not use get_data_count(): the
+                # persisted index state can lag in-process writes and report 0.
+                # Holding the Catalog lock keeps the compiled path scopes and
+                # the revision attached to the recall in the same snapshot.
+                with self._catalog_lock:
+                    compiled = self._open_catalog().execute(
+                        {
+                            "op": "compile_filter",
+                            "scope": scope,
+                            "filter": filters or {},
+                        }
+                    )
+                    count_data = index.aggregate(
+                        {
+                            "sorter": {"op": "count"},
+                            "filter": compiled["filter"],
+                        }
+                    )
+                    matched_count = count_data.get(AggregateKeys.TOTAL_COUNT_INTERNAL.value)
+                    if not isinstance(matched_count, int) or matched_count < 0:
+                        raise RuntimeError("Failed to count Item filter candidates")
+                    recalled = self.search_by_scalar(
+                        index_name=index_name,
+                        field="updated_at",
+                        order="asc",
+                        limit=max(1, matched_count),
+                        filters=compiled["filter"],
+                        output_fields=["uri"],
+                    )
+            else:
+                recalled = self.search_by_vector(
+                    index_name=index_name,
+                    dense_vector=dense_vector,
+                    sparse_vector=sparse_vector,
+                    limit=candidate_limit,
+                    filters=filters,
+                    output_fields=["uri"],
+                )
             candidates = [
                 {
                     "label": str(item.id),

@@ -113,10 +113,21 @@ def test_item_attrs_filter_uses_each_item_roots_own_values():
         filter={"op": "must", "field": "item_attrs", "conds": ["asset_id=V1"]},
     )["filter"]
     assert compiled == {
-        "op": "must",
-        "field": "uri",
-        "conds": ["/resources/A", "/resources/A/frame"],
-        "para": "-d=0",
+        "op": "and",
+        "conds": [
+            {
+                "op": "must",
+                "field": "uri",
+                "conds": ["/resources/A"],
+                "para": "-d=-1",
+            },
+            {
+                "op": "must_not",
+                "field": "uri",
+                "conds": ["/resources/A/shot"],
+                "para": "-d=-1",
+            },
+        ],
     }
     missing = call(
         engine,
@@ -183,6 +194,112 @@ def test_persistence_delete_and_account_scoped_revisions(tmp_path):
     assert call(engine, "query_items", item_uuids=["uuid-a"])["data"][0]["uri"] == ("/resources/A")
     call(engine, "delete_subtree", uri="/resources/A")
     assert call(engine, "query_items", item_uuids=["uuid-a"])["data"] == []
+
+
+def test_move_subtree_preserves_item_identity_attrs_and_nested_items():
+    engine = CatalogEngine()
+    nodes(
+        engine,
+        "/resources/A",
+        "/resources/A/frame",
+        "/resources/A/shot",
+        "/resources/A/shot/frame",
+    )
+    declare(engine, "/resources/A", "uuid-a", ["asset_id=V1"])
+    declare(engine, "/resources/A/shot", "uuid-shot", ["kind=shot"])
+
+    moved = call(
+        engine,
+        "move_subtree",
+        from_uri="/resources/A",
+        to_uri="/resources/B",
+    )
+    assert moved["moved_nodes"] == 4
+    assert call(
+        engine,
+        "resolve",
+        uris=["/resources/A/frame", "/resources/B/frame", "/resources/B/shot/frame"],
+    )["data"] == [
+        {"uri": "/resources/A/frame"},
+        {
+            "uri": "/resources/B/frame",
+            "item_uuid": "uuid-a",
+            "item_root_uri": "/resources/B",
+        },
+        {
+            "uri": "/resources/B/shot/frame",
+            "item_uuid": "uuid-shot",
+            "item_root_uri": "/resources/B/shot",
+        },
+    ]
+    assert call(engine, "query_items", item_uuids=["uuid-a", "uuid-shot"])["data"] == [
+        {
+            "item_uuid": "uuid-a",
+            "uri": "/resources/B",
+            "item_attrs": ["asset_id=V1"],
+        },
+        {
+            "item_uuid": "uuid-shot",
+            "uri": "/resources/B/shot",
+            "item_attrs": ["kind=shot"],
+        },
+    ]
+
+
+def test_move_subtree_merges_and_undo_restores_both_trees():
+    engine = CatalogEngine()
+    nodes(engine, "/resources/source", "/resources/source/a")
+    nodes(engine, "/resources/target", "/resources/target/kept")
+    declare(engine, "/resources/source", "uuid-source", ["asset_id=source"])
+    declare(engine, "/resources/target", "uuid-target", ["asset_id=target"])
+
+    moved = call(
+        engine,
+        "move_subtree",
+        from_uri="/resources/source",
+        to_uri="/resources/target",
+    )
+    assert moved["moved_nodes"] == 2
+    assert call(
+        engine,
+        "resolve",
+        uris=["/resources/source/a", "/resources/target/a", "/resources/target/kept"],
+    )["data"] == [
+        {"uri": "/resources/source/a"},
+        {
+            "uri": "/resources/target/a",
+            "item_uuid": "uuid-source",
+            "item_root_uri": "/resources/target",
+        },
+        {
+            "uri": "/resources/target/kept",
+            "item_uuid": "uuid-source",
+            "item_root_uri": "/resources/target",
+        },
+    ]
+
+    call(engine, "restore_move", undo=moved["undo"])
+    assert call(
+        engine,
+        "resolve",
+        uris=["/resources/source/a", "/resources/target/a", "/resources/target/kept"],
+    )["data"] == [
+        {
+            "uri": "/resources/source/a",
+            "item_uuid": "uuid-source",
+            "item_root_uri": "/resources/source",
+        },
+        {
+            "uri": "/resources/target/a",
+            "item_uuid": "uuid-target",
+            "item_root_uri": "/resources/target",
+        },
+        {
+            "uri": "/resources/target/kept",
+            "item_uuid": "uuid-target",
+            "item_root_uri": "/resources/target",
+        },
+    ]
 
 
 @pytest.mark.parametrize(
@@ -273,6 +390,30 @@ def test_local_adapter_filters_then_groups_candidates(adapter):
     assert result["groups"][0]["candidate_members_uri"] == [f"{root}/B/frame1"]
 
 
+def test_item_attrs_filter_includes_members_indexed_before_declaration(adapter):
+    root = "viking://resources/items/A"
+    adapter.upsert(
+        [
+            {
+                "id": "before-declaration",
+                "account_id": "a",
+                "uri": f"{root}/frame",
+                "vector": [1, 0, 0, 0],
+                "level": 2,
+            }
+        ]
+    )
+    declare_adapter_item(adapter, root, "uuid-a", ["asset_id=V1"])
+
+    result = adapter.search_item_groups(
+        query_vector=[1, 0, 0, 0],
+        filter=And([Eq("account_id", "a"), Eq("item_attrs", "asset_id=V1")]),
+        max_groups=10,
+        aggregation="max",
+    )
+    assert result["groups"][0]["candidate_members_uri"] == [f"{root}/frame"]
+
+
 def test_filter_only_item_groups_have_zero_scores(adapter):
     root = "viking://resources/items/A"
     declare_adapter_item(adapter, root, "uuid-a", ["asset_id=V1"])
@@ -294,3 +435,40 @@ def test_filter_only_item_groups_have_zero_scores(adapter):
         filter_only=True,
     )
     assert result["groups"][0]["entity_score"] == 0.0
+
+
+def test_filter_only_item_groups_are_not_capped_by_ann_recall_window(adapter):
+    root = "viking://resources/items"
+    declare_adapter_item(adapter, f"{root}/A", "uuid-a", ["kind=asset"])
+    declare_adapter_item(adapter, f"{root}/B", "uuid-b", ["kind=asset"])
+    records = [
+        {
+            "id": f"a-{index:04d}",
+            "account_id": "a",
+            "uri": f"{root}/A/frame-{index:04d}",
+            "vector": [1, 0, 0, 0],
+            "level": 2,
+        }
+        for index in range(1001)
+    ]
+    records.append(
+        {
+            "id": "z-last-item",
+            "account_id": "a",
+            "uri": f"{root}/B/frame",
+            "vector": [1, 0, 0, 0],
+            "level": 2,
+        }
+    )
+    adapter.upsert(records)
+
+    result = adapter.search_item_groups(
+        filter=And([Eq("account_id", "a"), Eq("item_attrs", "kind=asset")]),
+        max_groups=2,
+        aggregation="max",
+        filter_only=True,
+    )
+    assert [(group["entity_id"], group["entity_score"]) for group in result["groups"]] == [
+        ("uuid-a", 0.0),
+        ("uuid-b", 0.0),
+    ]

@@ -44,7 +44,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from openviking.core.item_search import ItemSearchResult, SearchAsItemOptions
+from openviking.core.item_search import (
+    ItemSearchResult,
+    SearchAsItemOptions,
+    validate_item_search_request,
+)
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.retrieval_targets import default_target_directories
 from openviking.core.retrieval_types import SearchType
@@ -686,13 +690,23 @@ def _strict_tag_filter(tags: Optional[List[str]]) -> Optional[List[str]]:
     return normalize_search_tags(tags) or None
 
 
+def _resolve_context_type_filter(
+    filter: Optional[Dict[str, Any]],
+    context_type: Optional[SearchContextTypeInput],
+) -> Optional[Dict[str, Any]]:
+    try:
+        return merge_search_filter(filter, context_type=context_type)
+    except ValueError as exc:
+        raise InvalidArgumentError(str(exc)) from exc
+
+
 @_mcp_error_results()
 @mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def find(
     query: str,
     target_uri: str = "",
     limit: int = 10,
-    min_score: float = 0.35,
+    min_score: Optional[float] = None,
     level: Annotated[
         Optional[List[int]],
         Field(description=_FIND_LEVEL_DESCRIPTION),
@@ -705,21 +719,28 @@ async def find(
         Optional[List[str]],
         Field(description=_TAG_FILTER_DESCRIPTION),
     ] = None,
+    filter: Optional[Dict[str, Any]] = None,
     read_content: bool = False,
     events_time_decay_protection: Annotated[
         Optional[str],
         Field(description=_EVENTS_TIME_DECAY_DESCRIPTION),
     ] = None,
+    search_as_item: Optional[SearchAsItemOptions] = None,
 ) -> str:
-    """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, tags, and score. context_type="skill" returns one hit per skill package, pointing at its SKILL.md, and without target_uri searches both the user's own and the account-shared skills. read_content only expands stored content; use read explicitly to execute a Live Context node."""
+    """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, tags, and score. Pass search_as_item={} to return declared Item roots instead of chunks; aggregation supports max and sum. context_type="skill" returns one hit per skill package, pointing at its SKILL.md, and without target_uri searches both the user's own and the account-shared skills. read_content only expands stored content; use read explicitly to execute a Live Context node."""
     try:
         validate_event_time_decay_request(events_time_decay_protection)
+        search_as_item = validate_item_search_request(
+            search_as_item,
+            read_content=read_content,
+            events_time_decay_protection=events_time_decay_protection,
+        )
     except ValueError as exc:
         raise InvalidArgumentError(str(exc)) from exc
     service = get_service()
     ctx = _get_ctx()
     context_filter = resolve_search_filter(
-        request_filter=None,
+        request_filter=filter,
         context_type=context_type,
         since=None,
         until=None,
@@ -733,7 +754,7 @@ async def find(
         # The generic default targets stop at the user root and miss viking://agent/skills.
         target_uri = default_target_directories(ctx, context_type=ContextType.SKILL)
     # A query-less call is a filter-only listing, which package retrieval does not serve.
-    if skill_only and query.strip():
+    if skill_only and query.strip() and search_as_item is None:
         # A skill is indexed as a whole package, so an item-level find returns one hit per
         # file. find_skills collapses those to the best hit per package.
         options = {
@@ -741,10 +762,10 @@ async def find(
             "ctx": ctx,
             "target_uri": target_uri,
             "limit": limit,
-            "score_threshold": min_score,
+            "score_threshold": 0.35 if min_score is None else min_score,
             "level": level,
         }
-        if tags:
+        if tags or filter is not None:
             options["filter"] = context_filter
         result = await service.search.find_skills(**options)
     else:
@@ -753,10 +774,13 @@ async def find(
             ctx=ctx,
             target_uri=target_uri,
             limit=limit,
-            score_threshold=min_score,
+            score_threshold=min_score
+            if search_as_item is not None
+            else (0.35 if min_score is None else min_score),
             filter=context_filter,
             level=level,
             events_time_decay_protection=events_time_decay_protection,
+            **({"search_as_item": search_as_item} if search_as_item is not None else {}),
         )
     return await _format_search_result(result, service=service, ctx=ctx, read_content=read_content)
 
@@ -790,6 +814,7 @@ async def search(
         Optional[List[str]],
         Field(description=_TAG_FILTER_DESCRIPTION),
     ] = None,
+    filter: Optional[Dict[str, Any]] = None,
     mode: Literal["list", "context"] = "list",
     query_expansion: Annotated[
         Literal["off", "auto"],
@@ -862,21 +887,25 @@ async def search(
     context does not expose tag metadata.
     ``target_uri`` is only supported in list mode. ``read_content`` only expands
     stored content; use ``read`` explicitly to execute a Live Context node.
+    Pass ``search_as_item={}`` in list mode to return declared Item roots;
+    ``{"aggregation": "sum"}`` selects sum instead of the default max.
     """
     try:
         validate_event_time_decay_request(events_time_decay_protection)
+        search_as_item = validate_item_search_request(
+            search_as_item,
+            mode=mode,
+            read_content=read_content,
+            events_time_decay_protection=events_time_decay_protection,
+        )
     except ValueError as exc:
         raise InvalidArgumentError(str(exc)) from exc
-    if search_as_item is not None and (mode != "list" or read_content):
-        raise InvalidArgumentError(
-            "search_as_item requires mode='list' and does not support read_content"
-        )
     service = get_service()
     ctx = _get_ctx()
     if search_type == "keywords" and not query.strip():
         raise InvalidArgumentError("query must not be empty when search_type='keywords'")
     context_filter = resolve_search_filter(
-        request_filter=None,
+        request_filter=filter,
         context_type=context_type,
         since=None,
         until=None,
@@ -2074,6 +2103,9 @@ async def add_resource(
             and entries with principal (user:<id>, group:<id>, user:*) and level
             (read/write/manage). Requires manage on the existing target or parent
             for a new target. Omit to preserve existing ACL or inherit on creation.
+        as_item: Declare the resolved import root as an Item. Omitted means false.
+        item_attrs: Optional flat string map stored on the Item root. Requires
+            ``as_item=true``; attributes are not inherited.
         args: Parser-specific options, e.g. {"auth_config": {"token": "..."}}
             for native HTTPS Git imports and watches, {"feishu_access_token": "..."}
             for Feishu imports, {"site": true} for whole-site ingestion, or

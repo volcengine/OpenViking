@@ -5,7 +5,7 @@
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, Query
-from pydantic import BaseModel, StrictBool
+from pydantic import BaseModel, ConfigDict, StrictBool
 
 from openviking.core.namespace import canonical_user_root
 from openviking.core.path_variables import resolve_path_variables
@@ -233,6 +233,8 @@ async def attrs_set_tags(
 
 class MkdirRequest(BaseModel):
     """Request model for mkdir."""
+
+    model_config = ConfigDict(extra="forbid")
 
     uri: str
     description: Optional[str] = None

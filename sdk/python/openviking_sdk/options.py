@@ -17,6 +17,8 @@ class _ExtraOptions(TypedDict, total=False):
 
 
 class SearchAsItemOptions(TypedDict, total=False):
+    """Enable Item-root results and select max (default) or sum aggregation."""
+
     aggregation: Literal["max", "sum"]
 
 

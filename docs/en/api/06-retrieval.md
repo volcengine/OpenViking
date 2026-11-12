@@ -21,6 +21,97 @@ Reranking applies per path:
 
 Score thresholds follow one rule: a request `score_threshold` overrides everything and filters whatever scores the path produces. Without it, `rerank.threshold` (default `0.1`) filters only scores the reranker produced; vector-only paths, including `find()` and a failed rerank fallback, default to `0`.
 
+## Item Search (preview)
+
+Item Search returns declared Item roots instead of individual matching chunks. An Item must first be declared through `mkdir` or `add_resource`; `write` and `batch_write` do not accept Item declaration fields.
+
+Declare an Item with `as_item=true` and optional flat string metadata:
+
+```bash
+# CLI
+ov mkdir viking://resources/videos/V1 \
+  --as-item --item-attrs '{"asset_id":"V1","kind":"video"}'
+ov add-resource ./video.mp4 --parent viking://resources/videos \
+  --as-item --item-attrs '{"asset_id":"V2"}'
+```
+
+```bash
+# HTTP
+curl -X POST http://localhost:1933/api/v1/fs/mkdir \
+  -H 'Content-Type: application/json' \
+  -d '{"uri":"viking://resources/videos/V1","as_item":true,"item_attrs":{"asset_id":"V1"}}'
+```
+
+```python
+# Python SDK
+client.mkdir(
+    "viking://resources/videos/V1",
+    as_item=True,
+    item_attrs={"asset_id": "V1"},
+)
+client.add_resource(
+    "./video.mp4",
+    parent="viking://resources/videos",
+    options={"as_item": True, "item_attrs": {"asset_id": "V2"}},
+)
+```
+
+The MCP `add_resource` tool exposes the same `as_item` and `item_attrs` arguments. Omitting `as_item` is equivalent to `false`; when it is false, `item_attrs` must also be omitted (even an empty object is rejected). `item_uuid` is generated and maintained by OpenViking and cannot be supplied by callers. Attributes belong only to the declared root and are not inherited or merged. Moving an Item preserves its UUID and attributes, copying it does not copy the declaration, and removing it deletes the declaration.
+
+Enable Item Search by passing an empty `search_as_item` object. Set `aggregation` to `sum` only when needed; the default is `max`:
+
+```bash
+# CLI: find and search both support Item mode
+ov find "boy on the beach" --uri viking://resources/videos --search-as-item
+ov search "boy on the beach" --uri viking://resources/videos \
+  --search-as-item --aggregation sum
+
+# Filter-only Item lookup (item_score is 0.0)
+ov find --search-as-item \
+  --filter '{"op":"must","field":"item_attrs","conds":["asset_id=V1"]}'
+```
+
+```json
+// POST /api/v1/search/find or /api/v1/search/search
+{
+  "query": "boy on the beach",
+  "target_uri": "viking://resources/videos",
+  "search_as_item": {"aggregation": "max"},
+  "filter": {
+    "op": "must",
+    "field": "item_attrs",
+    "conds": ["asset_id=V1"]
+  }
+}
+```
+
+```python
+# Python SDK
+items = client.find(
+    "boy on the beach",
+    target_uri="viking://resources/videos",
+    options={"search_as_item": {}},
+)
+```
+
+For MCP, pass `search_as_item: {}` to either the `find` or `search` tool; the optional object accepts `{"aggregation":"sum"}`. The MCP result is the same Item result object serialized as JSON.
+
+One `must` node follows the existing list-string filter semantics: multiple values in its `conds` array are alternatives. To require multiple attributes, combine single-value predicates with `and`:
+
+```json
+{
+  "op": "and",
+  "conds": [
+    {"op": "must", "field": "item_attrs", "conds": ["asset_id=V1"]},
+    {"op": "must", "field": "item_attrs", "conds": ["kind=video"]}
+  ]
+}
+```
+
+The response has `items` and `total`. Each Item contains `item_uuid`, root `uri`, `item_score`, `item_attrs`, and `item_extra_info` with only this request's `candidate_members_count` and `candidate_members_uri`.
+
+Item mode supports list results only. It rejects `read_content`, `include_provenance`, event-time decay, and `mode="context"`; it supports only `max` and `sum` aggregation and does not run custom/JEV reranking. A configured storage backend without Catalog and Item grouping support returns `501 UNIMPLEMENTED` rather than emulating grouping in OpenViking.
+
 ## Retrieval Pipeline
 
 The core retrieval pipeline is as follows:

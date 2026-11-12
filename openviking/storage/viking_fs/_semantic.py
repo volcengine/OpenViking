@@ -7,7 +7,11 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from openviking.core.context import ContextLevel
-from openviking.core.item_search import ItemSearchResult, SearchAsItemOptions
+from openviking.core.item_search import (
+    ItemSearchResult,
+    SearchAsItemOptions,
+    validate_item_search_request,
+)
 from openviking.core.retrieval_targets import resolve_retrieval_targets
 from openviking.core.retrieval_types import SearchType
 from openviking.observability.log_safety import safe_log_fields, safe_uri_for_log
@@ -314,8 +318,14 @@ class _SemanticMixin:
             )
 
         if search_as_item is not None:
-            if events_time_decay_protection is not None:
-                raise InvalidArgumentError("Item Search does not support event time decay")
+            try:
+                item_options = validate_item_search_request(
+                    search_as_item,
+                    events_time_decay_protection=events_time_decay_protection,
+                )
+            except ValueError as exc:
+                raise InvalidArgumentError(str(exc)) from exc
+            assert item_options is not None
             return await self._retrieve_items(
                 query=query,
                 image_url=image_url,
@@ -326,7 +336,7 @@ class _SemanticMixin:
                 filter=filter,
                 level=level,
                 search_type=search_type,
-                options=SearchAsItemOptions.model_validate(search_as_item),
+                options=item_options,
                 filter_only=filter_only,
             )
 
@@ -641,8 +651,14 @@ class _SemanticMixin:
         storage = self._get_vector_store()
         embedder = self._get_embedder(real_ctx)
         if search_as_item is not None:
-            if events_time_decay_protection is not None:
-                raise InvalidArgumentError("Item Search does not support event time decay")
+            try:
+                item_options = validate_item_search_request(
+                    search_as_item,
+                    events_time_decay_protection=events_time_decay_protection,
+                )
+            except ValueError as exc:
+                raise InvalidArgumentError(str(exc)) from exc
+            assert item_options is not None
             return await self._retrieve_items(
                 query=query,
                 ctx=real_ctx,
@@ -653,7 +669,7 @@ class _SemanticMixin:
                 filter=filter,
                 level=level,
                 search_type=search_type,
-                options=SearchAsItemOptions.model_validate(search_as_item),
+                options=item_options,
                 filter_only=filter_only,
             )
         retriever = HierarchicalRetriever(

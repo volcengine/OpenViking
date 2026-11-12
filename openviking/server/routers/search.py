@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi import Response as FastAPIResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from openviking.core.item_search import SearchAsItemOptions
+from openviking.core.item_search import SearchAsItemOptions, validate_item_search_request
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.retrieval_types import SearchType
 from openviking.core.search_args import validate_search_args
@@ -157,11 +157,12 @@ class FindRequest(BaseModel):
         if self.events_time_decay_protection is not None:
             if not self.query.strip() and not self.image_url:
                 raise ValueError("events_time_decay_protection requires a semantic query or image")
-        if self.search_as_item is not None:
-            if self.read_content:
-                raise ValueError("read_content is not supported with search_as_item")
-            if self.events_time_decay_protection is not None:
-                raise ValueError("Item Search does not support event time decay")
+        validate_item_search_request(
+            self.search_as_item,
+            read_content=self.read_content,
+            include_provenance=self.include_provenance,
+            events_time_decay_protection=self.events_time_decay_protection,
+        )
         return self
 
 
@@ -270,13 +271,13 @@ class SearchRequest(BaseModel):
     @model_validator(mode="after")
     def _validate_mode(self) -> "SearchRequest":
         validate_event_time_decay_request(self.events_time_decay_protection)
-        if self.search_as_item is not None:
-            if self.mode != "list" or self.read_content:
-                raise ValueError(
-                    "search_as_item requires mode='list' and does not support read_content"
-                )
-            if self.events_time_decay_protection is not None:
-                raise ValueError("Item Search does not support event time decay")
+        validate_item_search_request(
+            self.search_as_item,
+            mode=self.mode,
+            read_content=self.read_content,
+            include_provenance=self.include_provenance,
+            events_time_decay_protection=self.events_time_decay_protection,
+        )
         if self.search_type == "keywords":
             if not self.query.strip():
                 raise ValueError("query must not be empty when search_type='keywords'")
