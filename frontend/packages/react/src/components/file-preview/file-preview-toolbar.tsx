@@ -13,8 +13,8 @@ export function FilePreviewToolbar({
   extraActions?: ReactNode;
 }) {
   const [copyResult, setCopyResult] = useState<boolean>();
-  if (actions.editing) return null;
   const hasActions =
+    actions.editing ||
     actions.canCopyContent ||
     actions.canEdit ||
     actions.canDownload ||
@@ -28,6 +28,40 @@ export function FilePreviewToolbar({
         : text.copyFailed;
   return (
     <div className="ov-file-preview__toolbar">
+      {actions.editing ? (
+        <div className="ov-file-preview__edit-actions">
+          <Button
+            size="small"
+            type="default"
+            className="ov-file-preview__edit-action"
+            icon={
+              <span
+                aria-hidden="true"
+                className="ov-file-preview__edit-icon ov-file-preview__edit-icon--cancel"
+              />
+            }
+            disabled={actions.busy}
+            onClick={actions.cancelEditing}
+          >
+            {text.leaveEditing}
+          </Button>
+          <Button
+            size="small"
+            type="primary"
+            className="ov-file-preview__edit-action"
+            icon={
+              <span
+                aria-hidden="true"
+                className="ov-file-preview__edit-icon ov-file-preview__edit-icon--save"
+              />
+            }
+            loading={actions.busy}
+            onClick={() => void actions.saveEditing()}
+          >
+            {text.save}
+          </Button>
+        </div>
+      ) : null}
       {actions.canSwitchView ? (
         <div
           className="ov-file-preview__switch"
@@ -40,7 +74,7 @@ export function FilePreviewToolbar({
               type="button"
               className="ov-file-preview__switch-item"
               aria-pressed={actions.viewMode === mode}
-              disabled={actions.busy}
+              disabled={actions.busy || actions.editing}
               onClick={() => actions.setViewMode(mode)}
             >
               {mode === 'preview' ? text.previewMode : text.sourceMode}

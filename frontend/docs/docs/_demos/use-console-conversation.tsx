@@ -16,7 +16,7 @@ export function useConsoleConversation(zh: boolean): Partial<VikingBotProps> {
   >([]);
   const [sessions, setSessions] = useState<readonly VikingBotSession[]>([
     {
-      id: 'docs-wiki',
+      id: 'session_20261109030400_6c4ebf',
       title: zh ? '整理项目资料' : 'Organize project resources',
       updatedAt: '2026-11-09T03:04:00Z',
     },
@@ -44,7 +44,48 @@ export function useConsoleConversation(zh: boolean): Partial<VikingBotProps> {
         'Create a daily report from the selected directory and schedule updates.',
       ];
   return {
-    messages: [],
+    messages:
+      currentId === 'session_20261109030400_6c4ebf'
+        ? [
+            {
+              id: 'demo-user',
+              role: 'user',
+              parts: [{ type: 'text', text: prompts[0] }],
+            },
+            {
+              id: 'demo-assistant',
+              role: 'assistant',
+              parts: [
+                {
+                  type: 'tool',
+                  id: 'list',
+                  name: 'List files',
+                  status: 'completed',
+                  durationMs: 5000,
+                },
+                {
+                  type: 'text',
+                  text: zh
+                    ? '我已查看目录中的资料。接下来会创建 Wiki 索引，保留来源和文档关联。'
+                    : 'I checked the directory. Next I will create a Wiki index and preserve the source links.',
+                },
+                {
+                  type: 'tool',
+                  id: 'index',
+                  name: 'Write Wiki index',
+                  status: 'completed',
+                  durationMs: 9000,
+                },
+                {
+                  type: 'text',
+                  text: zh
+                    ? 'Wiki 索引已生成，可以从目录查看。'
+                    : 'The Wiki index is ready to view in the directory.',
+                },
+              ],
+            },
+          ]
+        : [],
     draft,
     onDraftChange: setDraft,
     attachments,
@@ -80,6 +121,7 @@ export function useConsoleConversation(zh: boolean): Partial<VikingBotProps> {
     sessions: {
       items: sessions,
       currentId,
+      currentUri: currentId ? `viking://session/${currentId}` : undefined,
       onNew: () => {
         const id = `docs-${Date.now()}`;
         setSessions((items) => [

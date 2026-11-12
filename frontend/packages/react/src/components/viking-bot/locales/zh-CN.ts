@@ -6,6 +6,8 @@ const messages = {
   toolInput: '输入',
   toolOutput: '输出',
   similarity: '相似度',
+  session: '会话',
+  locateSession: '在文件目录定位会话',
   sessionHistory: '历史会话',
   newSession: '新建会话',
   emptySessions: '暂无历史会话',

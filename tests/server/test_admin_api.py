@@ -2698,7 +2698,8 @@ async def test_delete_account(
         for record_id in ids:
             rows.pop(record_id, None)
 
-    adapter._collection = SimpleNamespace(delete_data=delete_data)
+    close_collection = Mock()
+    adapter._collection = SimpleNamespace(delete_data=delete_data, close=close_collection)
     scan_rows = rows if index_updates_immediately else indexed_rows
     adapter.query = lambda *, filter, limit, offset=0, **kwargs: list(
         islice(
@@ -2770,6 +2771,7 @@ async def test_delete_account(
     completed = await _wait_for_task(admin_client, retry["task_id"])
     assert completed["status"] == "completed", completed
     assert completed["result"] == {"deleted": True}
+    close_collection.assert_called_once()
     assert set(rows) == {"keep"}
     assert len(deleted_ids) == len(set(deleted_ids)) == 100_001
     assert adapter.count(Eq("account_id", acct)) == 100_001

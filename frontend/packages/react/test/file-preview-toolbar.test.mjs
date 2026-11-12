@@ -56,6 +56,8 @@ test('standalone preview offers editing only on the active editable level', asyn
     await click(view, 'Body');
     await click(view, 'Edit');
     assert.equal(view.container.querySelector('textarea')?.value, 'full text');
+    assert.ok(button(view, 'Cancel')?.closest('.ov-file-preview__header'));
+    assert.ok(button(view, 'Save')?.closest('.ov-file-preview__header'));
     await click(view, 'Cancel');
     assert.deepEqual(saved, []);
     await click(view, 'Edit');
