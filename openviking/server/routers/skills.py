@@ -40,6 +40,7 @@ from openviking.utils.skill_processor import validate_skill_name
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
+    PermissionDeniedError,
     ResourceExhaustedError,
 )
 from openviking_cli.utils import get_logger
@@ -276,30 +277,24 @@ async def _require_skill(
             stat = await service.fs.stat(root_uri, ctx=ctx, skip_count=True)
             if stat and stat.get("isDir", False):
                 return root_uri
-        except NotFoundError:
+        except (NotFoundError, PermissionDeniedError):
             pass
-        except Exception as exc:
-            raise NotFoundError(root_uri, "skill") from exc
 
     user_root_uri = _skill_root_uri(ctx, skill_name)
     try:
         stat = await service.fs.stat(user_root_uri, ctx=ctx, skip_count=True)
         if stat and stat.get("isDir", False):
             return user_root_uri
-    except NotFoundError:
+    except (NotFoundError, PermissionDeniedError):
         pass
-    except Exception as exc:
-        raise NotFoundError(user_root_uri, "skill") from exc
 
     agent_root_uri = _skill_root_uri(ctx, skill_name, "viking://agent/skills")
     try:
         stat = await service.fs.stat(agent_root_uri, ctx=ctx, skip_count=True)
         if stat and stat.get("isDir", False):
             return agent_root_uri
-    except NotFoundError:
+    except (NotFoundError, PermissionDeniedError):
         pass
-    except Exception as exc:
-        raise NotFoundError(agent_root_uri, "skill") from exc
 
     raise NotFoundError(_skill_root_uri(ctx, skill_name), "skill")
 

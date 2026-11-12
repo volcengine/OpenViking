@@ -821,3 +821,26 @@ async def test_mcp_skill_import_and_vector_rebuild_preserve_l1_frontmatter(clien
     assert rebuilt.json()["result"]["failed_records"] == 0
     assert rebuilt.json()["result"]["rebuilt_records"] == 3
     await assert_indexed_body()
+
+
+@pytest.mark.asyncio
+async def test_require_skill_propagates_storage_failures():
+    """A transient storage failure must not be reported as a missing skill.
+
+    ``_require_skill`` used to convert any exception from ``fs.stat`` into
+    ``NotFoundError``, so a backend outage made GET/PUT/DELETE answer 404.
+    """
+    from openviking.server.identity import RequestContext, Role
+    from openviking.server.routers.skills import _require_skill
+    from openviking_cli.session.user_id import UserIdentifier
+
+    class _FailingFS:
+        async def stat(self, uri, **kwargs):
+            raise TimeoutError(f"storage backend unavailable: {uri}")
+
+    class _Service:
+        fs = _FailingFS()
+
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    with pytest.raises(TimeoutError):
+        await _require_skill(_Service(), ctx, "demo-skill")
