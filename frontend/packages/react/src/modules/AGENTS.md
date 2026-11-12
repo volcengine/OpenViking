@@ -19,3 +19,5 @@
 - 提供 `modules/<区块>` JS 与 `modules/<区块>/style.css` 样式入口，并纳入 `modules/style.css`、整包 `style.css`；区块样式包含当前视图及依赖组件样式。不提供 `modules` 聚合 JS 入口。同步维护公开接口、可运行示例及中英文文档。
 - 示例使用固定公开数据或独立模拟服务，覆盖加载、失败、重试和作用域切换，并展示组件接入方式。
 - 验证与交付遵循 Frontend Agent Guide；本目录的 `AGENTS.md` 和 `README.md` 须由 Git 跟踪。
+
+VikingBot 对话是公开无头模块的明确例外：`modules/viking-bot` 导出 `useVikingBotChat`、`useVikingBotSessions` 及必要契约，供 Console 与独立 VikingBot 宿主共同使用；不导出组合组件，不提供 CSS 入口，不从根入口或 Console 入口转导出 Hook。其他模块 Hook 仍按上述内部边界执行。

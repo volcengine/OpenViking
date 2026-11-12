@@ -23,6 +23,10 @@
   ],
   "types": "./dist/index.d.ts",
   "exports": {
+    "./modules/viking-bot": {
+      "types": "./dist/modules/viking-bot/index.d.ts",
+      "import": "./dist/modules/viking-bot.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"

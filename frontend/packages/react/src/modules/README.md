@@ -3,6 +3,7 @@
 English / [中文](README_CN.md)
 
 `modules/` holds the blocks. Each one pairs internal Hooks, which load data, adapt it and hold state, with a composite component that wires the Hooks into views from `components/`. Host apps use the composite component and assemble full pages themselves.
+VikingBot is a headless module: import `useVikingBotChat`, `useVikingBotSessions` and their contracts from `@openviking/react/modules/viking-bot`. Console consumes it by default; standalone VikingBot hosts can use it directly. It has no composed view or CSS entry, and hooks are not re-exported by the package root or Console.
 
 ## Blocks
 
@@ -11,14 +12,15 @@ English / [中文](README_CN.md)
 | `file-browser`  | `FileBrowser`  | `@openviking/react/modules/file-browser`  | Directory tree, search and file preview around one current resource          |
 | `console`       | `Console`      | `@openviking/react/modules/console`       | Conversation (`VikingBot`) and command (`CommandConsole`) modes in one panel |
 | `scope-cascade` | `ScopeCascade` | `@openviking/react/modules/scope-cascade` | Library, space and user selectors that cascade                               |
+| `viking-bot`    | Headless hooks | `@openviking/react/modules/viking-bot`    | Chat requests, streaming state and sessions, without a composed view or CSS  |
 
 Each block also has a stylesheet entry, `@openviking/react/modules/<block>/style.css`, which includes the styles of the components it composes. Usage, props and examples are in the [block docs](../../../../docs/docs/en/modules/index.mdx).
 
 ## Responsibilities
 
-- `useFileBrowser` and `useConsole` are internal. They call the native OpenViking API through the shared Client, inherit the Provider's request configuration, and manage loading, empty and error states, paging, refresh, retry and the cleanup of requests still in flight. `ScopeCascade` sends no request itself: its three loader functions come from the host. `Console` sends only command requests; its conversation view takes data and callbacks from the host through the `conversation` prop.
+- `useFileBrowser` and `useConsole` are internal. They call the native OpenViking API through the shared Client, inherit the Provider's request configuration, and manage loading, empty and error states, paging, refresh, retry and the cleanup of requests still in flight. `ScopeCascade` sends no request itself: its three loader functions come from the host. `Console` consumes the VikingBot module for native chat; hosts can take control through `conversation`.
 - A composite component hands the Hook's data and operations to `components/` views and coordinates the interactions inside the block.
-- Hosts use the composite component directly. No headless Hook or controller is exported.
+- Outside the VikingBot headless module, hosts use composite components; internal hooks and controllers are not exported.
 - Standard integration needs only a service address and credentials, with no per-block data adapter. A host adapts a nonstandard gateway once, at its request boundary. Sign-in, account scope, routing, permission enforcement, page layout and product-specific flows stay with the host.
 - Block granularity follows interactions that are completed together: directory, search and preview make up `file-browser`; conversation and commands make up `console`. A host composes blocks, not their internal views.
 
