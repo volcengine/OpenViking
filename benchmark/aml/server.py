@@ -11,6 +11,7 @@ import hmac
 import math
 import os
 import time
+import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -18,9 +19,17 @@ from typing import Annotated, Any, AsyncIterator, Awaitable, Callable, Literal, 
 
 import httpx
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.responses import JSONResponse, Response
 from openviking_sdk import AsyncHTTPClient, OpenVikingError
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from benchmark.aml.audit import (
+    audit_event,
+    audit_fields,
+    configure_audit_logging,
+    request_audit,
+)
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8088
@@ -280,6 +289,14 @@ class OpenVikingBackend:
                 retryable = isinstance(exc, httpx.RequestError) or (
                     exc.code in RETRYABLE_OPENVIKING_CODES
                 )
+                audit_event(
+                    "backend_attempt_failed",
+                    operation=operation,
+                    attempt=attempt + 1,
+                    error_type=type(exc).__name__,
+                    error_code=getattr(exc, "code", None),
+                    will_retry=retryable and attempt + 1 < self.settings.retry_attempts,
+                )
                 if not retryable or attempt + 1 == self.settings.retry_attempts:
                     raise OpenVikingBackendError(f"OpenViking {operation} failed: {exc}") from exc
                 await asyncio.sleep(self.settings.retry_delay_seconds * (2**attempt))
@@ -302,6 +319,7 @@ class OpenVikingBackend:
             )
             if not isinstance(result, dict) or result.get("added") != len(messages):
                 raise OpenVikingBackendError("OpenViking did not add every message")
+            audit_event("messages_added", added_count=len(messages))
 
             commit = await self._retry(
                 "commit",
@@ -312,14 +330,23 @@ class OpenVikingBackend:
             task_id = commit.get("task_id")
             if commit.get("status") != "accepted" or not isinstance(task_id, str) or not task_id:
                 raise OpenVikingBackendError("OpenViking did not accept the commit")
+            audit_fields(native_task_id=task_id)
+            audit_event("commit_accepted")
 
             deadline = time.monotonic() + self.settings.extraction_timeout_seconds
+            previous_status = None
             while True:
                 task = await self._retry("task poll", lambda: client.get_task(task_id))
                 if not isinstance(task, dict):
                     raise OpenVikingBackendError("OpenViking returned an invalid commit task")
                 task_status = task.get("status")
+                if task_status != previous_status:
+                    audit_event("commit_progress", task_status=task_status)
+                    previous_status = task_status
                 if task_status == "completed":
+                    task_result = task.get("result") or {}
+                    if isinstance(task_result, dict):
+                        audit_event("commit_completed", archive_uri=task_result.get("archive_uri"))
                     return
                 if task_status in {"failed", "cancelled"}:
                     raise OpenVikingBackendError(
@@ -402,6 +429,7 @@ class AMLAdapter:
                 messages=messages,
             )
         except OpenVikingBackendError as exc:
+            audit_event("add_failed", error_type=type(exc).__name__)
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
             ) from exc
@@ -431,6 +459,7 @@ class AMLAdapter:
                 **({"image": images[0] if len(images) == 1 else images} if images else {}),
             )
         except OpenVikingBackendError as exc:
+            audit_event("search_failed", error_type=type(exc).__name__)
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
             ) from exc
@@ -457,8 +486,58 @@ def create_app(
     adapter = AMLAdapter(resolved_settings, resolved_backend)
     application = FastAPI(title="OpenViking AML Adapter", version="0.1.0")
 
-    async def require_key(request: Request) -> None:
-        adapter.authorize(request)
+    @application.middleware("http")
+    async def require_key(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        # Authenticate before routing, including docs, health, redirects and 404s.
+        trace_id = uuid.uuid4().hex
+        started = time.monotonic()
+        known_paths = {
+            "/",
+            "/health",
+            "/add",
+            "/search",
+            "/docs",
+            "/redoc",
+            "/openapi.json",
+            "/docs/oauth2-redirect",
+        }
+        # Never log query strings or arbitrary URL paths, which may contain secrets.
+        path = request.url.path.rstrip("/") or "/"
+        with request_audit(
+            secrets=(resolved_settings.aml_api_key, resolved_settings.openviking_api_key),
+            trace_id=trace_id,
+            method=request.method,
+            path=path if path in known_paths else "<unmatched>",
+            client_ip=request.client.host if request.client else None,
+        ):
+            audit_event("request_received")
+            response = None
+            error_type = None
+            try:
+                try:
+                    adapter.authorize(request)
+                except HTTPException as exc:
+                    response = JSONResponse(
+                        status_code=exc.status_code,
+                        content={"detail": exc.detail},
+                        headers=exc.headers,
+                    )
+                else:
+                    response = await call_next(request)
+                response.headers["X-AML-Trace-Id"] = trace_id
+                return response
+            except BaseException as exc:
+                error_type = type(exc).__name__
+                raise
+            finally:
+                audit_event(
+                    "request_handled",
+                    http_status=response.status_code if response is not None else None,
+                    elapsed_ms=round((time.monotonic() - started) * 1000, 3),
+                    error_type=error_type,
+                )
 
     @application.get("/health")
     async def health() -> dict[str, str]:
@@ -469,13 +548,25 @@ def create_app(
             )
         return {"status": "ok"}
 
-    @application.post("/add", dependencies=[Depends(require_key)])
+    @application.post("/add")
     async def add(request: AMLAddRequest) -> dict[str, Any]:
+        audit_fields(
+            request_id=request.request_id,
+            user_id=request.user_id,
+            session_id=request.session_id,
+            message_count=len(request.messages),
+            message_chars=sum(len(message.content) for message in request.messages),
+        )
+        audit_event("add_started")
         return await adapter.add(request)
 
-    @application.post("/search", dependencies=[Depends(require_key)])
+    @application.post("/search")
     async def search(request: AMLSearchRequest) -> dict[str, list[dict[str, Any]]]:
-        return await adapter.search(request)
+        audit_fields(user_id=request.user_id, top_k=request.top_k, query_chars=len(request.query))
+        audit_event("search_started")
+        result = await adapter.search(request)
+        audit_event("search_completed", result_count=len(result["data"]))
+        return result
 
     application.state.aml_adapter = adapter
     return application
@@ -494,6 +585,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    configure_audit_logging()
     uvicorn.run(
         create_app(),
         host=args.host,
