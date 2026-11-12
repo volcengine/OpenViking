@@ -323,3 +323,51 @@ def test_memory_type_registry_does_not_load_experimental_templates_when_switch_d
 
     entities = registry.get("entities")
     assert entities is not None
+
+
+def test_prompt_manager_render_does_not_mutate_caller_variables(tmp_path):
+    """Defaults and max_length must apply to a per-render shallow copy (#6659)."""
+    templates_dir = tmp_path / "prompts"
+    (templates_dir / "semantic").mkdir(parents=True)
+
+    for name, limit in [("short", 4), ("full", None)]:
+        text_variable = {
+            "name": "text",
+            "type": "string",
+            "description": "Input text",
+            "required": True,
+        }
+        if limit is not None:
+            text_variable["max_length"] = limit
+        template = {
+            "metadata": {
+                "id": f"semantic.{name}",
+                "name": name,
+                "description": "Local rendering example",
+                "version": "1.0.0",
+                "language": "en",
+                "category": "semantic",
+            },
+            "variables": [
+                text_variable,
+                {
+                    "name": "tone",
+                    "type": "string",
+                    "description": "Style",
+                    "default": "concise",
+                    "required": False,
+                },
+            ],
+            "template": "{{ tone }}: {{ text }}",
+        }
+        (templates_dir / "semantic" / f"{name}.yaml").write_text(
+            json.dumps(template), encoding="utf-8"
+        )
+
+    manager = PromptManager(templates_dir=templates_dir, enable_caching=False)
+    values = {"text": "Hello world"}
+
+    assert manager.render("semantic.short", values) == "concise: Hell"
+    assert values == {"text": "Hello world"}
+    assert manager.render("semantic.full", values) == "concise: Hello world"
+    assert values == {"text": "Hello world"}

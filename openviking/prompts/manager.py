@@ -180,7 +180,8 @@ class PromptManager:
             ValueError: If required variables are missing or invalid
         """
         template = self.load_template(prompt_id)
-        variables = variables or {}
+        # Shallow-copy so defaults / max_length truncation do not mutate the caller dict.
+        variables = dict(variables or {})
 
         # Apply defaults
         for var_def in template.variables:
