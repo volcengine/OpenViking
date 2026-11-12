@@ -88,3 +88,13 @@ it('places a reaction on the bot\'s own message and drops the recall of one', (t
   assert.equal(deterministicFilter(resolve({ header: { event_id: 'evt-recall-mine', event_type: 'im.message.recalled_v1' },
     event: { message_id: 'om_mine1234567890', chat_id: chatId, recall_type: 'message_owner' } }), config), 'unsupported_message_type');
 });
+
+it('a reaction never makes a reply stale; a recall does', (t) => {
+  const { store, resolve } = fixture(t);
+  const target = store.db.prepare("SELECT seq, scope_key FROM connector_events WHERE event_id = 'evt-target'").get();
+  store.ingest(resolve(reaction()));
+  assert.equal(store.newerAcceptedSeq(target.scope_key, target.seq), null);
+  store.ingest(resolve({ header: { event_id: 'evt-recall-2', event_type: 'im.message.recalled_v1' },
+    event: { message_id: 'om_target12345678', chat_id: 'oc_reacttest123456', recall_time: String(Date.now()), recall_type: 'message_owner' } }));
+  assert.notEqual(store.newerAcceptedSeq(target.scope_key, target.seq), null);
+});

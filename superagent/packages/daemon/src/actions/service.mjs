@@ -122,6 +122,9 @@ function morePages(data) {
     : '\nMore results exist; narrow the query or raise limit.';
 }
 
+// How long a message Lark already holds may still be on its way to the daemon.
+const SERVER_FENCE_WINDOW_MS = 30_000;
+
 // The single outbound path. Agent tool calls (through the MCP adapter and the
 // local socket) and daemon notices all end in deliver(): reserve in the
 // outbox, invoke the Connector, settle. Authority, freshness, routing and
@@ -488,8 +491,13 @@ export class ActionService {
       this.logger.warn('server_fence_failed', { error: safeError(error) });
       return;
     }
+    // Only what is still on its way counts: not a system notice (no event ever
+    // brings it), not a message the daemon already holds (the local fence has
+    // judged it), not one so old it is never coming, and not the bot's own.
+    const now = Date.now();
     const newer = (data?.messages ?? []).filter((message) => message.message_id !== fence.message_id
-      && this.store.resolveMessageAuthor(message.message_id, fence.connector_instance)?.kind !== 'me');
+      && message.type !== 'system' && now - message.create_time_ms < SERVER_FENCE_WINDOW_MS
+      && !this.store.knowsMessage(message.message_id, fence.connector_instance));
     if (!newer.length) return;
     caller.trace.serverNewer = newer.length;
     throw blocked('stale_decision', 'Delivery blocked: Lark already holds a newer message in this chat/thread that has not reached you yet. It arrives as a new input within seconds; decide on that one instead.');

@@ -507,20 +507,29 @@ describe('agent tools', () => {
       }
       return { message_id: 'om_delivered123456' };
     } });
-    store.ingest(chatEvent({ chatType: 'group', messageId: 'om_decision123456', chatId: 'oc_chat12345678', createTimeMs: 1_000 }));
+    const base = Date.now() - 60_000;
+    const recent = Date.now() - 1_000;
+    store.ingest(chatEvent({ chatType: 'group', messageId: 'om_decision123456', chatId: 'oc_chat12345678', createTimeMs: base }));
     const send = () => call('send_message', { chat_id: 'oc_chat12345678', markdown: '2', decision_id: 'message:om_decision123456' });
 
     // Someone answered 1 s ago; the push has not reached the daemon yet.
-    onServer = [{ message_id: 'om_otherbot123456', create_time_ms: 2_000 }];
+    onServer = [{ message_id: 'om_otherbot123456', create_time_ms: recent, type: 'text' }];
     await assert.rejects(send(), (error) => error.code === 'stale_decision' && /not reached you yet/.test(error.message));
     assert.deepEqual(connectors.calls.map((entry) => entry.action), ['chat.messages.newer']);
-    assert.deepEqual(connectors.calls[0].input, { chat_id: 'oc_chat12345678', thread_id: null, after_ms: 1_000 });
+    assert.deepEqual(connectors.calls[0].input, { chat_id: 'oc_chat12345678', thread_id: null, after_ms: base });
     assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM outbox').get().n, 0);
 
     // The bot's own earlier message is not someone else's newer one.
     store.db.prepare(`INSERT INTO cognition_journal (epoch, kind, at_ms, chat_id, message_id, actor, text, detail_json)
       VALUES (0, 'outbound', 0, 'oc_chat12345678', 'om_mine1234567890', 'me', '1', '{"connectorInstance":"lark"}')`).run();
-    onServer = [{ message_id: 'om_mine1234567890', create_time_ms: 2_000 }];
+    // Nor is a system notice (no event ever brings it), a message the daemon
+    // already holds, or one too old to still be on its way.
+    store.ingest(chatEvent({ chatType: 'group', messageId: 'om_filtered123456', chatId: 'oc_chat12345678',
+      createTimeMs: recent }), 'ignored_sender');
+    onServer = [{ message_id: 'om_mine1234567890', create_time_ms: recent, type: 'text' },
+      { message_id: 'om_system12345678', create_time_ms: recent, type: 'system' },
+      { message_id: 'om_filtered123456', create_time_ms: recent, type: 'text' },
+      { message_id: 'om_ancient12345678', create_time_ms: base + 1_000, type: 'text' }];
     await send();
     assert.equal(connectors.calls.at(-1).action, 'message.send');
 
@@ -976,7 +985,7 @@ it('finds decisions, reply targets, newer inputs and orphaned conversations thro
   assert.match(plans[1], /USING INDEX connector_events_message \(connector_instance=\? AND message_id=\?\)/);
   assert.match(plans[2], /USING INDEX connector_events_message \(connector_instance=\? AND message_id=\?\)/);
   assert.match(plans[3], /USING INDEX connector_events_message_seq/);
-  assert.match(plans[4], /USING COVERING INDEX connector_events_scope_status_seq/);
+  assert.match(plans[4], /USING (COVERING )?INDEX connector_events_scope_status_seq/);
   assert.match(plans[5], /SEARCH connector_events USING COVERING INDEX connector_events_conv_status_seq \(conv_key=\?\)/);
   assert.doesNotMatch(plans.join(' '), /SCAN connector_events/);
 });

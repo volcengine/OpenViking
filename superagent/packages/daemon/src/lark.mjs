@@ -519,7 +519,7 @@ export class LarkClient {
     return { messages: (Array.isArray(data?.items) ? data.items : [])
       .filter((item) => Number(item.create_time) > afterMs && !item.deleted && (threadId || !item.thread_id))
       .map((item) => ({ message_id: item.message_id, create_time_ms: Number(item.create_time),
-        sender_type: item.sender?.sender_type ?? null })) };
+        sender_type: item.sender?.sender_type ?? null, type: item.msg_type ?? null })) };
   }
 
   // As the owner by default; as the bot, the search covers only the chats it

@@ -1470,6 +1470,12 @@ export class Store {
   // Who authored a message id this daemon has seen: an inbound sender, or the
   // bot itself (journaled deliveries record actor 'me'). Null when unseen —
   // e.g. quoted messages older than local history.
+  // Whether the daemon has this message: an inbound of any status, or one of
+  // its own deliveries.
+  knowsMessage(messageId, instance = 'lark') {
+    return Boolean(this.getInboundByMessage.get(instance, messageId) || this.getJournalActorByMessage.get(instance, messageId));
+  }
+
   resolveMessageAuthor(messageId, instance = 'lark') {
     if (!messageId) return null;
     const inbound = this.getInboundByMessage.get(instance, messageId);
@@ -1606,9 +1612,12 @@ export class Store {
 
   // The newest accepted inbound received after seq in that scope, if any. Core
   // receive order, never provider timestamps.
+  // A reaction is no newer word in the conversation: it never makes a reply
+  // stale.
   newerAcceptedSeq(scopeKey, seq) {
     const newer = this.db.prepare(`
       SELECT MAX(seq) AS seq FROM connector_events WHERE scope_key = ? AND status = 'DONE' AND seq > ?
+        AND kind NOT LIKE 'message.reaction.%'
     `).get(scopeKey, seq);
     return newer?.seq == null ? null : number(newer.seq);
   }
