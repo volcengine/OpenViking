@@ -51,6 +51,25 @@ class StoreManager:
         """
         self.storage = storage_engine
 
+    @staticmethod
+    def _ttl_key(expire_ns_ts: int, label: int) -> str:
+        """Keep expiration ordering while making every TTL row unique."""
+        return f"{expire_ns_ts}:{label}"
+
+    @staticmethod
+    def _ttl_expire_ns(key: str) -> int:
+        """Read both legacy ``<expiry>`` keys and ``<expiry>:<label>`` keys."""
+        return int(key.partition(":")[0])
+
+    def next_expiration_ns(self) -> Optional[int]:
+        """Return the earliest recorded expiration without loading candidate rows."""
+        for key, _ in self.storage.iter_all(StoreManager.TTLTable):
+            try:
+                return self._ttl_expire_ns(key)
+            except ValueError:
+                continue
+        return None
+
     def add_cands_data(
         self, cands_list: List[CandidateData], ttl: int = 0, need_delta: bool = True
     ) -> List[DeltaRecord]:
@@ -118,7 +137,7 @@ class StoreManager:
                 BatchOp(
                     StoreManager.TTLTable,
                     [OpType.PUT] * len(cands_list),
-                    [str(data.expire_ns_ts) for data in cands_list],
+                    [self._ttl_key(data.expire_ns_ts, data.label) for data in cands_list],
                     [str(data.label).encode("utf-8") for data in cands_list],
                 )
             )
@@ -252,9 +271,7 @@ class StoreManager:
     def get_delta_data_after_ts(self, ns_ts: int) -> Iterator[DeltaRecord]:
         """Lazily deserialize delta records so a large delta table can be replayed on
         memory-constrained hosts without materializing the whole list."""
-        for _, bytes_data in self.storage.iter_seek_to_end(
-            str(ns_ts), StoreManager.DeltaTable
-        ):
+        for _, bytes_data in self.storage.iter_seek_to_end(str(ns_ts), StoreManager.DeltaTable):
             yield DeltaRecord.from_bytes(data=bytes_data)
 
     def delete_delta_data_before_ts(self, ns_ts: int) -> int:
@@ -286,7 +303,7 @@ class StoreManager:
         """
         now_time = time.time_ns()
         ttl_kv_list = self.storage.begin_to_seek(
-            str(now_time),
+            str(now_time + 1),
             StoreManager.TTLTable,
         )
 
@@ -301,19 +318,25 @@ class StoreManager:
         # But we need label and fields later for DeltaRecord.
         # Let's filter first by expire_ns_ts which is in CandidateData.
 
-        expired_cands_data: List[Tuple[int, str]] = []
+        expired_cands_by_label: dict[int, str] = {}
 
-        for byte_data in cands_bytes_list:
+        for ttl_entry, byte_data in zip(ttl_kv_list, cands_bytes_list, strict=True):
             if not byte_data:
                 continue
 
             # Efficiently check expiration without full object creation if possible
             # But CandidateData takes bytes_data in init, so we might as well use helper
             expire_ts = CandidateData.bytes_row.deserialize_field(byte_data, "expire_ns_ts")
-            if expire_ts <= now_time:
+            try:
+                recorded_expire_ts = self._ttl_expire_ns(ttl_entry[0])
+            except ValueError:
+                continue
+            if expire_ts == recorded_expire_ts and expire_ts <= now_time:
                 label = CandidateData.bytes_row.deserialize_field(byte_data, "label")
                 fields = CandidateData.bytes_row.deserialize_field(byte_data, "fields")
-                expired_cands_data.append((label, fields))
+                expired_cands_by_label[label] = fields
+
+        expired_cands_data: List[Tuple[int, str]] = list(expired_cands_by_label.items())
 
         batch_op_list = []
         delta_list = [
