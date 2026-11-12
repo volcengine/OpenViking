@@ -847,7 +847,12 @@ async def merge_memory_operations(
                 registry=registry,
                 ctx=ctx,
             )
-            _inherit_source_metadata_to_merged_operations(ops_list, merged.upsert_operations)
+            aliases = await _match_retargeted_adds(
+                ops_list, merged.upsert_operations, registry.get(memory_type), messages
+            )
+            _inherit_source_metadata_to_merged_operations(
+                ops_list, merged.upsert_operations, aliases
+            )
             merged_upserts.extend(merged.upsert_operations)
             merged_deletes.extend(merged.delete_file_contents)
             merged_delete_replacements.update(
@@ -1329,9 +1334,58 @@ async def classify_memory_merge_mode(
     return False, "single_existing_content_changed"
 
 
+async def _match_retargeted_adds(
+    inputs: list[ResolvedOperation],
+    outputs: list[ResolvedOperation],
+    schema: MemoryTypeSchema | None,
+    messages: list[Message],
+) -> dict[int, list[ResolvedOperation]]:
+    """Attribute a vanished add only when its literal body has one new destination."""
+    if len(outputs) < 2 or schema is None:
+        return {}
+    output_uris = set(_unique_operation_uris(outputs))
+    retargeted = [
+        index
+        for index, op in enumerate(inputs)
+        if not op.is_edit() and output_uris.isdisjoint(op.uris)
+    ]
+    if not retargeted:
+        return {}
+
+    extract_context = ExtractContext(messages)
+    input_bodies = [
+        (await render_operation_after_file(op, schema=schema, extract_context=extract_context))
+        .plain_content()
+        .strip()
+        for op in inputs
+    ]
+    previous_bodies = [
+        op.old_memory_file_content.plain_content()
+        for op in [*inputs, *outputs]
+        if op.old_memory_file_content is not None
+    ]
+    output_bodies = [
+        (await render_operation_after_file(op, schema=schema, extract_context=extract_context))
+        .plain_content()
+        for op in outputs
+    ]
+    matches: dict[int, list[ResolvedOperation]] = {}
+    for index in retargeted:
+        body = input_bodies[index]
+        if not body or any(body in previous for previous in previous_bodies):
+            continue
+        if sum(body in proposal for proposal in input_bodies) != 1:
+            continue
+        destinations = [i for i, result in enumerate(output_bodies) if body in result]
+        if len(destinations) == 1:
+            matches.setdefault(destinations[0], []).append(inputs[index])
+    return matches
+
+
 def _inherit_source_metadata_to_merged_operations(
     input_operations: list[ResolvedOperation],
     merged_operations: list[ResolvedOperation],
+    retargeted_adds: dict[int, list[ResolvedOperation]],
 ) -> None:
     """Best-effort provenance restore after patch-merge LLM output.
 
@@ -1352,7 +1406,7 @@ def _inherit_source_metadata_to_merged_operations(
     if not all_source_ids and not any(op.source is not None for op in input_operations):
         return
 
-    for merged_op in merged_operations or []:
+    for index, merged_op in enumerate(merged_operations):
         existing_ids = _operation_source_extraction_ids(merged_op)
         matched_inputs: list[ResolvedOperation] = []
         if existing_ids:
@@ -1362,6 +1416,7 @@ def _inherit_source_metadata_to_merged_operations(
         else:
             for uri in list(getattr(merged_op, "uris", []) or []):
                 matched_inputs.extend(input_by_uri.get(uri, []))
+        matched_inputs.extend(retargeted_adds.get(index, []))
         # A single survivor can incorporate alias proposals whose input URI never
         # appears in the output. Preserve their trusted submitters as shared sources.
         candidates = (
