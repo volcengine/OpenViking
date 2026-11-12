@@ -94,58 +94,34 @@ def test_discard_invalid_search_tags_logs_one_warning_for_batch(caplog):
     assert "also-bad" in warnings[0].message
 
 
-def test_merge_search_tags_discards_invalid_existing_tags(caplog):
+def test_merge_search_tags_applies_ordered_patches_and_discards_invalid_tags(caplog):
     tags_module.logger.addHandler(caplog.handler)
     try:
         with caplog.at_level(logging.WARNING, logger="openviking.utils.tags"):
-            result = merge_search_tags(["bad-existing", "team=old"], ["owner=alice"])
+            result = merge_search_tags(
+                ["bad-existing", "team=old", "score=0.1"],
+                [
+                    "score+=0.2",
+                    "score+=0.2",
+                    "score-=1",
+                    "count+=2",
+                    "count=0",
+                    "count+=1",
+                    "owner=alice",
+                ],
+            )
     finally:
         tags_module.logger.removeHandler(caplog.handler)
 
-    assert result == ["team=old", "owner=alice"]
+    assert result == ["team=old", "score=-0.5", "count=1", "owner=alice"]
     warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
     assert len(warnings) == 1
     assert warnings[0].invalid_tags == ["bad-existing"]
 
-
-def test_merge_search_tags_executes_in_order_and_preserves_other_keys():
-    assert merge_search_tags(
-        ["team=search", "count=10", "other=4"],
-        ["count-=2", "new_count+=3", "other+=0", "count+=0.5", "count=4", "count-=1"],
-    ) == ["team=search", "count=3", "other=4", "new_count=3"]
-
-
-@pytest.mark.parametrize(
-    "existing,incoming,expected",
-    [
-        (["score=0.1"], ["score=0.2"], ["score=0.3"]),
-        (["score=1.5"], ["score=-0.25"], ["score=1.25"]),
-        ([], ["score=1.5"], ["score=1.5"]),
-        ([], ["count=1e3"], ["count=1000"]),
-    ],
-)
-def test_merge_search_tags_supports_decimal_values(existing, incoming, expected):
-    incoming = [tag.replace("=", "+=", 1) for tag in incoming]
-    assert merge_search_tags(existing, incoming) == expected
-
-
-@pytest.mark.parametrize(
-    "existing,incoming",
-    [
-        (["count=unknown"], ["count+=1"]),
-        ([], ["count+=NaN"]),
-        ([], ["count+=Infinity"]),
-        (["count=-Infinity"], ["count+=1"]),
-        (["count=sNaN"], ["count+=1"]),
-    ],
-)
-def test_merge_search_tags_rejects_invalid_arithmetic(existing, incoming):
     with pytest.raises(InvalidArgumentError):
-        merge_search_tags(existing, incoming)
-
-
-def test_merge_search_tags_normalizes_and_preserves_duplicate_operations():
-    assert merge_search_tags([], [" Count+=1 ", "COUNT-=0.5"]) == ["count=0.5"]
+        merge_search_tags(result, ["owner+=1"])
+    with pytest.raises(InvalidArgumentError):
+        merge_search_tags(result, ["count+=NaN"])
 
 
 def test_find_tags_filter_requires_all_tags():

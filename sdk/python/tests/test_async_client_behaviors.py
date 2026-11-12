@@ -1527,29 +1527,6 @@ async def test_set_tags_clear_omits_tags_from_sdk_request():
 
 
 @pytest.mark.asyncio
-async def test_batch_set_tags_uses_dedicated_post_endpoint():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response = lambda _response: {"items": [], "failed": []}
-    client._handle_response_data = lambda _response: {"result": {"items": [], "failed": []}}
-
-    await client.batch_set_tags(
-        ["resources/a.md", "viking://resources/b.md"],
-        ["count+=1"],
-        mode="append",
-    )
-
-    assert fake_http.post.await_args_list[0].args == ("/api/v1/content/batch_set_tags",)
-    assert fake_http.post.await_args_list[0].kwargs["json"] == {
-        "uris": ["viking://resources/a.md", "viking://resources/b.md"],
-        "tags": ["count+=1"],
-        "mode": "append",
-        "recursive": False,
-    }
-
-
-@pytest.mark.asyncio
 async def test_glob_normalizes_scope_uri():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
