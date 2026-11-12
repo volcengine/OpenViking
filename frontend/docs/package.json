@@ -35,6 +35,10 @@
     "#file-tree-basic-data": "./docs/_demos/file-tree-basic-data.ts",
     "#file-tree-basic-icons": "./docs/_demos/file-tree-basic-icons.tsx",
     "#demo-controls": "./internal-controls.ts",
-    "#file-browser-basic-data": "./docs/_demos/file-browser-basic-data.ts"
+    "#file-browser-preview-controls": "./docs/_demos/file-browser-preview-controls.tsx",
+    "#file-browser-basic-data": "./docs/_demos/file-browser-basic-data.ts",
+    "#file-preview-actions-data": "./docs/_demos/file-preview-actions-data.tsx",
+    "#file-preview-actions.css": "./docs/_demos/file-preview-actions.css",
+    "#file-browser-native-demo": "./docs/_demos/file-browser-native-demo.ts"
   }
 }

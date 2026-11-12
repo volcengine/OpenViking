@@ -1,3 +1,4 @@
+import { nativePreviewDemoResponse } from '#file-browser-native-demo';
 import { image } from '#file-preview-console-data';
 import {
   dashboardDemoResponse,
@@ -76,7 +77,11 @@ const DIRS: Record<string, Entry[]> = {
     { uri: `${RESOURCES}/2026-Q4-context-management-retrospective.md` },
     { uri: `${RESOURCES}/design-system-alignment-notes.md` },
   ],
-  [NOTES]: [{ uri: DEMO_PREVIEW_FILE }, { uri: DEMO_PREVIEW_IMAGE }],
+  [NOTES]: [
+    { uri: DEMO_PREVIEW_FILE },
+    { uri: DEMO_PREVIEW_IMAGE },
+    { uri: `${NOTES}/demo.webm` },
+  ],
 };
 
 /** 文件正文。Body copy of each file. */
@@ -164,10 +169,20 @@ export function offlineFetch(
   if (url.searchParams.has('uri')) url.searchParams.set('uri', uri);
   const body = typeof init?.body === 'string' ? init.body : '';
 
+  const native = nativePreviewDemoResponse(url, init);
+  if (native) return Promise.resolve(native);
   const board = dashboardDemoResponse(url);
   if (board) return Promise.resolve(board);
 
   switch (url.pathname) {
+    case '/api/v1/fs': {
+      if (init?.method !== 'DELETE')
+        return Promise.resolve(new Response(null, { status: 405 }));
+      delete FILES[uri];
+      for (const [directory, entries] of Object.entries(DIRS))
+        DIRS[directory] = entries.filter((entry) => entry.uri !== uri);
+      return Promise.resolve(ok({ uri }));
+    }
     case '/api/v1/fs/ls':
       return Promise.resolve(ok(DIRS[uri] ?? []));
     case '/api/v1/fs/stat':
@@ -181,7 +196,7 @@ export function offlineFetch(
                 headers: { 'content-type': 'image/svg+xml' },
               },
             )
-          : new Response(null, { status: 404 }),
+          : new Response(FILES[uri] ?? '# Offline demo'),
       );
     case '/api/v1/content/read':
       return Promise.resolve(ok(FILES[uri] ?? ''));

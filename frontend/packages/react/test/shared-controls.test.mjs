@@ -17,7 +17,11 @@ test('Button forwards its native ref and submits only with an explicit htmlType'
           submits++;
         },
       },
-      h(Button, { ref, onClick: () => clicks++, ...props }, 'Save'),
+      h(
+        Button,
+        { ref, icon: h('svg'), onClick: () => clicks++, ...props },
+        'Save',
+      ),
     );
   const view = await mount(host({}));
   try {
@@ -31,6 +35,8 @@ test('Button forwards its native ref and submits only with an explicit htmlType'
     await view.render(host({ htmlType: 'submit', loading: true }));
     assert.equal(ref.current.getAttribute('aria-busy'), 'true');
     assert.equal(ref.current.disabled, true);
+    assert.equal(ref.current.querySelectorAll('svg').length, 0);
+    assert.equal(ref.current.textContent, 'Save');
     await act(() => ref.current.click());
     assert.equal(clicks, 2);
     assert.equal(submits, 1);
@@ -39,6 +45,7 @@ test('Button forwards its native ref and submits only with an explicit htmlType'
     assert.equal(clicks, 2);
     await view.render(host({ htmlType: 'submit' }));
     await act(() => ref.current.click());
+    assert.ok(ref.current.querySelector('svg'));
     assert.equal(
       submits,
       2,

@@ -13,6 +13,7 @@ import {
   toDirectoryTab,
   type DirectorySummary,
 } from './fs-model.js';
+import { isSystemUri } from './preview-policy.js';
 import { readDirectory } from './fs-read-directory.js';
 import { createPreviewImageResolver } from './fs-preview-images.js';
 import { readFile } from './fs-read-file.js';
@@ -145,7 +146,11 @@ export function useFsPreview({
           : resourceType === 'directory';
       if (controller.signal.aborted) throw abortError();
       return isDir
-        ? { summary: await readDirectory(client, uri, options) }
+        ? {
+            summary: isSystemUri(uri)
+              ? { abstract: '', overview: '' }
+              : await readDirectory(client, uri, options),
+          }
         : {
             tab: await readFile(client, uri, options, openParent, () => {
               if (!controller.signal.aborted)
@@ -186,8 +191,8 @@ export function useFsPreview({
         setTabs([tab]);
         setActiveKey(tab.key);
         // 设计稿底部显示字符数；接口不返回行数与更新时间，先给字符数。
-        const body = tab.source.content ?? '';
-        setCharacterCount(body.length);
+        const body = tab.source.content;
+        setCharacterCount(typeof body === 'string' ? body.length : undefined);
       },
       (cause: unknown) => {
         if (isAbort(cause) || controller.signal.aborted) return;

@@ -83,3 +83,9 @@ React imports these SVG files directly during its build.
   [OpenViking Console team experience introduction](https://www.figma.com/design/ecpd1ZGHKRYibm1ODKEpM6/OpenViking-Console?node-id=10168-334211).
   The documentation demo uses `DirectoryTourFolderIcon` and `ArrowUpRightIcon`
   from `@openviking/react/icons`; the design's paths and colors are unchanged. They follow this repository's license.
+
+- `svg/file-preview/` — toolbar, menu and warning artwork from the user-provided
+  [personal workbench and open-source design](https://www.figma.com/design/ecpd1ZGHKRYibm1ODKEpM6/OpenViking-Console?node-id=10295-379152),
+  menu `10438:19513` and deletion dialog `10295:380365`. Paths and viewBoxes are
+  retained; paints use `currentColor` for host theming. They follow the repository
+  license and are bundled inline without a private icon runtime.

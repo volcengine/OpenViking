@@ -97,6 +97,7 @@ export const button = (text, root = document) =>
     (node) => node.textContent.trim() === text,
   );
 export async function open() {
+  await click(document.querySelector('.ov-file-browser-acl__tag'));
   await click(document.querySelector('.ov-file-browser-acl__manage'));
   return document.querySelector('.ov-file-browser-acl [role="dialog"]');
 }

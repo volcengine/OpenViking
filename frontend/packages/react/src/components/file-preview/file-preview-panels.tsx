@@ -11,7 +11,7 @@ import { FilePreviewDirectoryBody } from './file-preview-directory.js';
 import { FilePreviewHeader } from './file-preview-header.js';
 import { TruncatedNotice } from './file-preview-state.js';
 import type { useFilePreviewActions } from './use-file-preview-actions.js';
-import type { FilePreviewActions } from './types.js';
+import type { FilePreviewActions, FilePreviewProps } from './types.js';
 import type { useFilePreviewEditing } from './use-file-preview-editing.js';
 import type {
   FilePreviewContentTab,
@@ -38,6 +38,7 @@ import type {
  * introduces no state of its own.
  */
 export interface FilePreviewPanelsProps {
+  toolbar?: FilePreviewProps['toolbar'];
   contentTab?: FilePreviewContentTab;
   directoryTab?: FilePreviewDirectoryTab;
   fileTab?: FilePreviewFileTab;
@@ -59,6 +60,7 @@ export interface FilePreviewPanelsProps {
 }
 
 export function FilePreviewPanels({
+  toolbar,
   levelKey,
   onLevelChange,
   contentTab,
@@ -91,10 +93,18 @@ export function FilePreviewPanels({
     );
   }
 
+  const toolbarOptions = {
+    viewSwitch:
+      toolbar?.viewSwitch !== false && activeTab.toolbar?.viewSwitch !== false,
+    edit: toolbar?.edit !== false && activeTab.toolbar?.edit !== false,
+    copyPath:
+      toolbar?.copyPath !== false && activeTab.toolbar?.copyPath !== false,
+  };
   if (directoryTab) {
     return (
       <div {...panelProps} className={panelClass}>
         <FilePreviewDirectoryBody
+          toolbar={toolbarOptions}
           tab={directoryTab}
           text={text}
           locale={locale}
@@ -104,7 +114,6 @@ export function FilePreviewPanels({
           onViewModeChange={setViewMode}
           onHandleChange={onHandleChange}
           onViewModesChange={onViewModesChange}
-          onDownload={() => {}}
           onCancelEditing={actionContext.cancelEditing}
         />
       </div>
@@ -125,6 +134,8 @@ export function FilePreviewPanels({
         titleExtra={fileTab.slots?.titleExtra}
         slotActions={fileTab.slots?.actions}
         extraActions={fileTab.slots?.extraActions}
+        toolbar={toolbarOptions}
+        actionItems={fileTab.actions}
         actions={actionContext}
         text={text}
         onOpenParent={(uri) => void actions.openParent(activeTab, uri)}
@@ -140,7 +151,6 @@ export function FilePreviewPanels({
           onViewModeChange={setViewMode}
           onHandleChange={onHandleChange}
           onViewModesChange={onViewModesChange}
-          onDownload={() => void actions.download(fileTab)}
           onLinkClick={linkClickHandler}
           onCancelEditing={actionContext.cancelEditing}
         />
