@@ -30,6 +30,8 @@ class CompileLimits(BaseModel):
     # Soft request budget for prompt, input JSON, emit schema and estimated output space.
     # Larger indivisible records may exceed it; this is not the model's token limit.
     merge_input_chars: int = Field(default=60_000, ge=1)
+    # None preserves automatic evidence preloading; 0 leaves reads on demand.
+    reduce_evidence_chars: int | None = Field(default=None, ge=0, strict=True)
     # Source text plus repeated context per range/read batch, independent of request packing.
     source_batch_chars: int = Field(default=40_000, ge=1)
     agent_iterations: int = 120
