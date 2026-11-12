@@ -137,7 +137,7 @@ export default function FileTreeBasic() {
             },
           }}
           renderRowIcon={(row) => <FileTypeIcon name={row.name} />}
-          renderDashboard={(row) => {
+          renderRowTrailing={(row) => {
             const indicator = INDICATORS[row.uri];
             return indicator ? (
               <Indicator indicator={indicator} text={t} />

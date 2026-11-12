@@ -25,7 +25,7 @@ import '@openviking/react/components/file-tree/style.css';
 
 ```
 
-示例使用离线模拟数据：行尾的看板图标由 `renderDashboard` 提供，文件类型图标由 `renderRowIcon` 提供，搜索只显示 `onSearch` 事件，不打开搜索界面。勾选「宿主控制 loading」可单独查看受控的刷新加载态。
+示例使用离线模拟数据：行尾的看板图标由 `renderRowTrailing` 提供，文件类型图标由 `renderRowIcon` 提供，搜索只显示 `onSearch` 事件，不打开搜索界面。勾选「宿主控制 loading」可单独查看受控的刷新加载态。
 
 ## API
 
@@ -45,7 +45,7 @@ import '@openviking/react/components/file-tree/style.css';
 | refresh                 | 显示内置刷新按钮，`false` 隐藏，`disabled` 禁用，`loading` 由宿主控制加载态               | `boolean \| { disabled?: boolean; loading?: boolean }` | `true`                      |
 | loading                 | 刷新按钮的受控加载态，与刷新 Promise、`refresh.loading` 合并，不影响已有行                | `boolean`                                              | `false`                     |
 | getRowAttributes        | 为每一行（包括加载、分页等状态行）追加 HTML 属性，`className` 和 `style` 与组件自身的合并 | `(row: FileTreeRow) => HTMLAttributes<HTMLDivElement>` | -                           |
-| renderDashboard         | 渲染行尾指示器，例如看板入口，返回 `null` 时不显示，内容和点击行为由宿主决定              | `(row: FileTreeEntryRow) => ReactNode`                 | -                           |
+| renderRowTrailing       | 渲染行尾标记，例如看板入口或状态角标，返回 `null` 时不显示，内容和点击行为由宿主决定      | `(row: FileTreeEntryRow) => ReactNode`                 | -                           |
 | renderRowIcon           | 渲染文件行的行首图标，目录行始终使用内置文件夹图标，返回 `null` 时使用内置文件图标        | `(row: FileTreeEntryRow) => ReactNode`                 | 内置文件图标                |
 | renderRowTooltip        | 渲染行的悬停浮层，提供后不再显示内置的目录说明，返回 `null` 时该行不显示浮层              | `(row: FileTreeEntryRow) => ReactNode`                 | 按 `uri` 生成的内置目录说明 |
 | onSelect                | 条目选中成功后触发                                                                        | `(row: FileTreeEntryRow) => void`                      | -                           |
@@ -271,7 +271,7 @@ import '@openviking/react/components/file-tree/style.css';
 ### 选中、键盘与权限
 
 - 点击目录和点击文件都调用 `operations.select`，宿主按 `row.type` 区分。点击展开箭头只调用 `operations.toggleExpand`，不会选中。
-- `renderDashboard` 返回的内容在行内，点击会冒泡到行并触发选中。需要独立的点击行为时调用 `event.stopPropagation()`，示例中的看板图标就是这样处理的。
+- `renderRowTrailing` 返回的内容在行内，点击会冒泡到行并触发选中。需要独立的点击行为时调用 `event.stopPropagation()`，示例中的看板图标就是这样处理的。
 - 键盘：上下方向键移动焦点，右键展开目录，左键折叠目录，Enter 和空格选中。
 - 树使用 `role="tree"`，行使用 `role="treeitem"` 并输出 `aria-level`（`depth` 加 1）、`aria-selected`、`aria-expanded` 和 `aria-disabled`，用 `aria-label` 给树命名。
 - 权限状态由宿主提供，组件不发鉴权请求：`disabled` 的行不能选中和展开，`selectable: false` 的行不能选中但可以展开，`access` 只在行尾显示文字标记，不改变行为。
@@ -323,7 +323,7 @@ treeRef.current?.scrollToRow('resources', { block: 'center' });
 - 树的根元素高度为 `100%`，内容在树内部滚动，需要给外层容器设置高度。
 - 行宽按内容撑开，名称完整显示，容器横向滚动。层级很深时缩进同样靠横向滚动获得空间。
 - 说明文字最宽 200px，超出省略，避免长说明撑宽整行。
-- `renderDashboard` 返回的内容紧跟在名称和其他标记之后，要靠右对齐时给它设置 `margin-left: auto`，示例就是这样做的。
+- `renderRowTrailing` 返回的内容显示在行右端；行内还有层级、权限等行尾标记时，它紧跟在这些标记之后。
 
 ## 主题变量
 
