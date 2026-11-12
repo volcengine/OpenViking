@@ -32,7 +32,7 @@ class FakeNativeLeader:
         self.renew_results = deque(renew_results)
         self.released: list[str] = []
 
-    def leader_validate(self):
+    async def leader_validate_async(self):
         return None
 
     async def leader_try_acquire_async(self, key, holder_id, ttl_secs):
@@ -232,7 +232,7 @@ async def test_candidate_cancellation_does_not_wait_for_unfinished_acquire():
 
 
 def test_distributed_candidate_fails_fast_without_native_capability():
-    with pytest.raises(RuntimeError, match="missing leader_validate"):
+    with pytest.raises(RuntimeError, match="missing leader_validate_async"):
         AsyncAGFSClient(object()).leader_candidate(
             "watch",
             "node-a",
@@ -240,6 +240,50 @@ def test_distributed_candidate_fails_fast_without_native_capability():
             renew_interval_secs=0.2,
             retry_interval_secs=0.1,
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interruption", ["error", "cancel", "close"])
+async def test_candidate_initializes_on_enter_and_recovers_after_interruption(interruption):
+    class GatedValidation(FakeNativeLeader):
+        def __init__(self):
+            super().__init__()
+            self.started = asyncio.Event()
+            self.finish = asyncio.Event()
+            self.fail = interruption == "error"
+
+        async def leader_validate_async(self):
+            self.started.set()
+            await self.finish.wait()
+            if self.fail:
+                raise RuntimeError("initialization failed")
+
+    native = GatedValidation()
+    candidate = AsyncAGFSClient(native).leader_candidate(
+        "watch", "node-a", ttl_secs=1, renew_interval_secs=0.2, retry_interval_secs=0.01
+    )
+    assert not native.started.is_set()
+    entering = asyncio.create_task(candidate.__aenter__())
+    await asyncio.wait_for(native.started.wait(), 1)
+    assert not entering.done()
+    assert native.acquire_calls == 0
+    with pytest.raises(RuntimeError, match="already active"):
+        await candidate.__aenter__()
+    if interruption == "cancel":
+        entering.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await entering
+    else:
+        if interruption == "close":
+            await candidate.aclose()
+        native.finish.set()
+        with pytest.raises(RuntimeError, match="initialization failed|closed during validation"):
+            await entering
+    native.fail = False
+    native.finish.set()
+    async with candidate:
+        assert (await anext(candidate)).holder_id == "node-a"
+    assert native.released == ["lease-1"]
 
 
 @pytest.mark.asyncio

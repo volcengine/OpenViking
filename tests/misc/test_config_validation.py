@@ -1320,11 +1320,12 @@ def test_watch_store_defaults_to_file_and_rejects_unknown_providers():
 
 
 def test_mysql_watch_store_requires_credential_encryption_key():
+    data = _mysql_watch_store_config({})
+    data["storage"]["agfs"] = {"coordination": {"provider": "memory"}}
     with pytest.raises(ValueError, match="credential_encryption_key"):
-        OpenVikingConfig.from_dict(_mysql_watch_store_config({}))
-    config = OpenVikingConfig.from_dict(
-        _mysql_watch_store_config({"credential_encryption_key": "a" * 43 + "="})
-    )
+        OpenVikingConfig.from_dict(data)
+    data["storage"]["watch_store"]["params"]["credential_encryption_key"] = "a" * 43 + "="
+    config = OpenVikingConfig.from_dict(data)
     assert config.storage.watch_store.provider == "mysql"
     assert config.storage.task_store.provider == "file"
     assert config.storage.agfs.pathlock.provider == "filesystem"
@@ -1354,6 +1355,56 @@ def test_coordination_cache_activates_shared_runtime_without_cachefs():
     ).to_binding_dict()
     assert binding["cache"]["runtime_enabled"]
     assert not binding["cache"]["enabled"]
+
+
+@pytest.mark.parametrize("leader_provider", ["cache", "auto", None])
+def test_legacy_watch_cache_selects_coordination_and_activates_shared_runtime(leader_provider):
+    data = (
+        _mysql_watch_store_config({"credential_encryption_key": "a" * 43 + "="})
+        if leader_provider != "cache"
+        else {}
+    )
+    if leader_provider is not None:
+        data["watch_leader_provider"] = leader_provider
+    with pytest.raises(ValueError, match="top-level cache"):
+        OpenVikingConfig.from_dict(data)
+    data["cache"] = {"provider": "redis", "params": {}}
+    config = OpenVikingConfig.from_dict(data)
+    assert config.storage.agfs.coordination.provider == "cache"
+    assert OpenVikingConfig.model_json_schema()["properties"]["watch_leader_provider"]["deprecated"]
+    binding = RagfsBindingConfig(agfs=config.storage.agfs, cache=config.cache).to_binding_dict()
+    assert binding["coordination"]["provider"] == "cache"
+    assert binding["cache"]["runtime_enabled"]
+    assert not binding["cache"]["enabled"]
+
+
+@pytest.mark.parametrize("provider", ["memory", "sqlite", "cache"])
+@pytest.mark.parametrize("leader_provider", ["cache", "auto"])
+def test_explicit_coordination_provider_overrides_legacy_watch_cache(
+    provider, leader_provider, tmp_path
+):
+    coordination = {"provider": provider}
+    if provider == "sqlite":
+        coordination["sqlite_path"] = str(tmp_path / "coordination.db")
+    data = _mysql_watch_store_config({"credential_encryption_key": "a" * 43 + "="})
+    data["watch_leader_provider"] = leader_provider
+    data["storage"]["agfs"] = {"coordination": coordination}
+    if provider == "cache":
+        data["cache"] = {"provider": "redis", "params": {}}
+    config = OpenVikingConfig.from_dict(data)
+    assert config.storage.agfs.coordination.provider == provider
+
+
+@pytest.mark.parametrize("provider,store", [("auto", "file"), ("local", "file"), ("local", "mysql")])
+def test_legacy_watch_local_selection_keeps_default_coordination(provider, store):
+    data = (
+        _mysql_watch_store_config({"credential_encryption_key": "a" * 43 + "="})
+        if store == "mysql"
+        else {}
+    )
+    data["watch_leader_provider"] = provider
+    config = OpenVikingConfig.from_dict(data)
+    assert config.storage.agfs.coordination.provider == "memory"
 
 
 @pytest.mark.parametrize(

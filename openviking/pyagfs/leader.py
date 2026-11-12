@@ -39,6 +39,8 @@ def _validate_timing(name: str, value: float) -> None:
 
 
 class _LeaderBackend(Protocol):
+    async def validate(self) -> None: ...
+
     async def acquire(self, key: str, holder_id: str, ttl_secs: float) -> Optional[str]: ...
 
     async def renew(self, lease_ref: str, ttl_secs: float) -> bool: ...
@@ -47,7 +49,7 @@ class _LeaderBackend(Protocol):
 
 
 class _NativeLeaderClient(Protocol):
-    def leader_validate(self) -> None: ...
+    def leader_validate_async(self) -> Awaitable[None]: ...
 
     def leader_try_acquire_async(
         self, key: str, holder_id: str, ttl_secs: float
@@ -61,7 +63,7 @@ class _NativeLeaderClient(Protocol):
 class _NativeLeaderBackend:
     def __init__(self, client: _NativeLeaderClient) -> None:
         for method_name in (
-            "leader_validate",
+            "leader_validate_async",
             "leader_try_acquire_async",
             "leader_renew_async",
             "leader_release_async",
@@ -71,8 +73,10 @@ class _NativeLeaderBackend:
                     f"AGFS native binding does not support coordination leadership: "
                     f"missing {method_name}"
                 )
-        client.leader_validate()
         self._client = client
+
+    async def validate(self) -> None:
+        await self._client.leader_validate_async()
 
     async def acquire(self, key: str, holder_id: str, ttl_secs: float) -> Optional[str]:
         future = asyncio.ensure_future(
@@ -154,6 +158,15 @@ class LeaderCandidate(AsyncIterator[Leadership]):
             raise RuntimeError("leader candidate is already active")
         self._generation += 1
         self._active = True
+        generation = self._generation
+        try:
+            await self._backend.validate()
+        except BaseException:
+            if self._generation == generation:
+                self._active = False
+            raise
+        if not self._active or self._generation != generation:
+            raise RuntimeError("leader candidate was closed during validation")
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:

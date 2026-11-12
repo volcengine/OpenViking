@@ -384,6 +384,14 @@ class OpenVikingConfig(BaseModel):
             "disable on nodes that should never run the background watch/refresh loop."
         ),
     )
+    watch_leader_provider: Literal["auto", "local", "cache"] = Field(
+        default="auto",
+        description=(
+            "Deprecated; will be removed in the next version. Use "
+            "storage.agfs.coordination.provider instead; explicit coordination takes precedence."
+        ),
+        json_schema_extra={"deprecated": True},
+    )
     reconcile_system_assets_on_startup: bool = Field(
         default=True,
         description=(
@@ -439,6 +447,21 @@ class OpenVikingConfig(BaseModel):
     def _validate_service_name(self) -> "OpenVikingConfig":
         """Validate and normalize the top-level service name."""
         self.service_name = normalize_service_name(self.service_name)
+        return self
+
+    @model_validator(mode="after")
+    def _normalize_watch_leader_provider(self) -> "OpenVikingConfig":
+        if "watch_leader_provider" in self.model_fields_set:
+            _get_config_logger().warning(
+                "Config field 'watch_leader_provider' is deprecated and will be removed "
+                "in the next version; use 'storage.agfs.coordination.provider' instead."
+            )
+        coordination = self.storage.agfs.coordination
+        uses_cache = self.watch_leader_provider == "cache" or (
+            self.watch_leader_provider == "auto" and self.storage.watch_store.provider != "file"
+        )
+        if uses_cache and "provider" not in coordination.model_fields_set:
+            self.storage.agfs.coordination = coordination.model_copy(update={"provider": "cache"})
         return self
 
     @model_validator(mode="after")

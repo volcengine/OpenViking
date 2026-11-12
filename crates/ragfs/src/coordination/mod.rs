@@ -15,9 +15,9 @@ use memory::MemoryBackend;
 use sqlite::SqliteBackend;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex as InitMutex, OnceLock};
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, OnceCell, RwLock};
 use uuid::Uuid;
 
 /// Retain the latest persisted work per key, without resetting the service counter.
@@ -72,8 +72,7 @@ pub struct CoordinationRuntime {
     cache: Option<Arc<CacheRuntime>>,
     config: CoordinationConfig,
     service_name: String,
-    backend: OnceLock<Backend>,
-    backend_init: InitMutex<()>,
+    backend: OnceCell<Backend>,
     leases: Mutex<HashMap<String, Lease>>,
     closing: RwLock<bool>,
 }
@@ -111,46 +110,51 @@ impl CoordinationRuntime {
             cache,
             config,
             service_name,
-            backend: OnceLock::new(),
-            backend_init: InitMutex::new(()),
+            backend: OnceCell::new(),
             leases: Mutex::new(HashMap::new()),
             closing: RwLock::new(false),
         })
     }
 
-    fn backend(&self) -> CacheResult<&Backend> {
-        if let Some(backend) = self.backend.get() {
-            return Ok(backend);
-        }
-        let _initializing = self.backend_init.lock().map_err(|_| {
-            CacheError::Internal("coordination initialization lock poisoned".into())
-        })?;
-        if let Some(backend) = self.backend.get() {
-            return Ok(backend);
-        }
-        let backend = match &self.config {
-            CoordinationConfig::Memory {} => {
-                Backend::Memory(MemoryBackend::new(&self.service_name))
-            }
-            CoordinationConfig::Cache {
-                operation_timeout_ms,
-            } => Backend::Cache(CacheBackend::new(
-                self.cache.as_ref().unwrap().clone(),
-                &self.service_name,
-                Duration::from_millis(*operation_timeout_ms),
-            )?),
-            CoordinationConfig::Sqlite { sqlite_path } => {
-                Backend::Sqlite(SqliteBackend::new(sqlite_path, &self.service_name)?)
-            }
-        };
-        // An initialization error leaves the cell empty so the same client can
-        // recover after a transient SQLite lock or filesystem failure.
-        Ok(self.backend.get_or_init(|| backend))
+    async fn backend(&self) -> CacheResult<&Backend> {
+        // Initialization errors leave the cell empty so the same client can retry.
+        self.backend
+            .get_or_try_init(|| async {
+                let config = self.config.clone();
+                let cache = self.cache.clone();
+                let service_name = self.service_name.clone();
+                // Opening SQLite, creating its schema and cleaning expired rows
+                // may block. Keep all backend initialization off the executor.
+                tokio::task::spawn_blocking(move || {
+                    Ok(match config {
+                        CoordinationConfig::Memory {} => {
+                            Backend::Memory(MemoryBackend::new(&service_name))
+                        }
+                        CoordinationConfig::Cache {
+                            operation_timeout_ms,
+                        } => Backend::Cache(CacheBackend::new(
+                            cache.unwrap(),
+                            &service_name,
+                            Duration::from_millis(operation_timeout_ms),
+                        )?),
+                        CoordinationConfig::Sqlite { sqlite_path } => {
+                            Backend::Sqlite(SqliteBackend::new(&sqlite_path, &service_name)?)
+                        }
+                    })
+                })
+                .await
+                .map_err(|error| CacheError::Internal(error.to_string()))?
+            })
+            .await
     }
 
     /// Fail early if the configured backend cannot provide coordination.
-    pub fn validate(&self) -> CacheResult<()> {
-        self.backend().map(|_| ())
+    pub async fn validate_async(&self) -> CacheResult<()> {
+        let closing = self.closing.read().await;
+        if *closing {
+            return Err(CacheError::Closed);
+        }
+        self.backend().await.map(|_| ())
     }
 
     /// Acquire one term and retain its ownership token behind an opaque reference.
@@ -167,7 +171,7 @@ impl CoordinationRuntime {
         validate_component("leader key", key)?;
         validate_component("holder_id", holder)?;
         ttl_millis(ttl)?;
-        let lease = match self.backend()? {
+        let lease = match self.backend().await? {
             Backend::Memory(backend) => {
                 let token = Uuid::new_v4().to_string();
                 backend.acquire(key, &token, ttl)?.then(|| Lease::Memory {
@@ -209,7 +213,7 @@ impl CoordinationRuntime {
         let Some(lease) = lease else {
             return Ok(false);
         };
-        let renewed = match (self.backend()?, &lease) {
+        let renewed = match (self.backend().await?, &lease) {
             (Backend::Memory(backend), Lease::Memory { key, token }) => {
                 backend.renew(key, token, ttl)?
             }
@@ -226,7 +230,7 @@ impl CoordinationRuntime {
     }
 
     async fn release_lease(&self, lease: &Lease) -> CacheResult<()> {
-        match (self.backend()?, lease) {
+        match (self.backend().await?, lease) {
             (Backend::Memory(backend), Lease::Memory { key, token }) => {
                 backend.release(key, token)?;
             }
@@ -263,7 +267,7 @@ impl CoordinationRuntime {
         if key.is_empty() {
             return Err(CacheError::InvalidArgument("revision key is empty".into()));
         }
-        match self.backend()? {
+        match self.backend().await? {
             Backend::Memory(backend) => backend.revision(key, operation, value),
             Backend::Cache(backend) => backend.revision(key, operation, value).await,
             Backend::Sqlite(backend) => backend.revision(key, operation, value).await,

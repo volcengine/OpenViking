@@ -95,8 +95,8 @@ def clients():
     client_class, _ = get_binding_client()
     opened = []
 
-    def create(config):
-        client = client_class(config=config)
+    def create(config, *, config_path=None):
+        client = client_class(config=config, config_path=config_path)
         opened.append(client)
         return client
 
@@ -373,7 +373,10 @@ def test_invalid_native_coordination_config_fails_at_construction(coordination):
 
 
 @pytest.mark.asyncio
-async def test_sqlite_initialization_recovers_on_same_client_after_lock_release(tmp_path, clients):
+@pytest.mark.parametrize("entry", ["candidate", "revision"])
+async def test_sqlite_initialization_recovers_on_same_client_after_lock_release(
+    tmp_path, clients, entry
+):
     database = str(tmp_path / "coordination.db")
     blocker = await asyncio.create_subprocess_exec(
         sys.executable,
@@ -393,23 +396,50 @@ connection.close()
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
     )
+    loop = asyncio.get_running_loop()
+    ticks = []
+
+    async def heartbeat():
+        while True:
+            ticks.append(loop.time())
+            await asyncio.sleep(0.02)
+
+    pulse = asyncio.create_task(heartbeat())
+    candidate = None
     try:
         assert await asyncio.wait_for(blocker.stdout.readline(), 5) == b"locked\n"
+        started = loop.time()
         client = clients(
             {
                 "service_name": uuid4().hex,
                 "coordination": {"provider": "sqlite", "sqlite_path": database},
             }
         )
+        candidate = AsyncAGFSClient(client).leader_candidate(
+            "watch", "node", ttl_secs=1, renew_interval_secs=0.2, retry_interval_secs=0.01
+        )
+        assert loop.time() - started < 0.5
         with pytest.raises(RuntimeError, match="database is locked"):
-            await asyncio.wait_for(client.revision_allocate_async("work"), 10)
+            operation = (
+                candidate.__aenter__()
+                if entry == "candidate"
+                else client.revision_allocate_async("work")
+            )
+            await asyncio.wait_for(operation, 10)
+        ticks.append(loop.time())
+        assert len(ticks) > 20
+        assert max(after - before for before, after in zip(ticks, ticks[1:], strict=False)) < 0.5
         blocker.stdin.write(b"release\n")
         await blocker.stdin.drain()
         assert await asyncio.wait_for(blocker.wait(), 5) == 0
     finally:
+        pulse.cancel()
+        await asyncio.gather(pulse, return_exceptions=True)
         if blocker.returncode is None:
             blocker.kill()
         await blocker.wait()
+    async with candidate:
+        assert (await anext(candidate)).holder_id == "node"
     assert await client.revision_allocate_async("work") == 1
     assert await client.revision_publish_async("work", 1) == 1
     assert await client.revision_latest_async("work") == 1
@@ -526,3 +556,46 @@ async def test_canonical_config_loads_explicit_sqlite_path(tmp_path):
     finally:
         first.close()
         second.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", [None, "memory", "sqlite"])
+@pytest.mark.parametrize("leader_provider", ["cache", "auto", None])
+async def test_canonical_legacy_watch_cache_and_explicit_provider_priority(
+    tmp_path, redis_url, clients, provider, leader_provider
+):
+    namespace = uuid4().hex
+    coordination = {}
+    if provider is not None:
+        coordination["provider"] = provider
+    if provider == "sqlite":
+        coordination["sqlite_path"] = str(tmp_path / "coordination.db")
+    config_path = tmp_path / "ov.conf"
+    data = {
+        "cache": {"provider": "redis", "params": {"endpoints": [redis_url]}},
+        "storage": {"agfs": {"coordination": coordination}},
+    }
+    if leader_provider is not None:
+        data["watch_leader_provider"] = leader_provider
+    if leader_provider != "cache":
+        data["storage"]["watch_store"] = {"provider": "mysql"}
+    config_path.write_text(json.dumps(data))
+    first = clients({"service_name": namespace}, config_path=str(config_path))
+    expected = {**coordination, "provider": provider or "cache"}
+    second = clients(
+        {
+            "service_name": namespace,
+            "coordination": expected,
+            "cache": {
+                "provider": "redis",
+                "redis": {"endpoints": [redis_url]},
+            },
+        }
+    )
+    async with AsyncAGFSClient(first).leader_candidate(
+        "watch", "first", ttl_secs=1, renew_interval_secs=0.2, retry_interval_secs=0.01
+    ) as candidate:
+        assert (await anext(candidate)).holder_id == "first"
+        assert await second.leader_try_acquire_async("watch", "second", 1) is None
+        assert await first.revision_allocate_async("work") == 1
+        assert await second.revision_allocate_async("work") == 2

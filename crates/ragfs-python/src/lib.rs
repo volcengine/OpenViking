@@ -1620,7 +1620,31 @@ impl RAGFSBindingClient {
                             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
                         let value: serde_json::Value = serde_json::from_str(&contents)
                             .map_err(|e| PyValueError::new_err(e.to_string()))?;
-                        Ok(value.pointer("/storage/agfs/coordination").cloned())
+                        let mut coordination = value
+                            .pointer("/storage/agfs/coordination")
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!({}));
+                        if let Some(config) = coordination.as_object_mut() {
+                            let legacy_provider = value
+                                .get("watch_leader_provider")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("auto");
+                            let watch_store = value
+                                .pointer("/storage/watch_store/provider")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("file");
+                            let provider = if legacy_provider == "cache"
+                                || (legacy_provider == "auto" && watch_store != "file")
+                            {
+                                "cache"
+                            } else {
+                                "memory"
+                            };
+                            config
+                                .entry("provider")
+                                .or_insert_with(|| serde_json::json!(provider));
+                        }
+                        Ok(Some(coordination))
                     })
                     .transpose()?
                     .flatten();
@@ -2639,10 +2663,16 @@ impl RAGFSBindingClient {
     // ── Coordination API ──
 
     /// Validate that the configured coordination service is available.
-    fn leader_validate(&self) -> PyResult<()> {
-        self.coordination
-            .validate()
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    fn leader_validate_async<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let coordination = self.coordination.clone();
+        let task = self
+            .rt
+            .spawn(async move { coordination.validate_async().await });
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            task.await
+                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?
+                .map_err(|error| PyRuntimeError::new_err(error.to_string()))
+        })
     }
 
     /// Try to acquire a leader term and return an opaque reference.
