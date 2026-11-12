@@ -101,6 +101,7 @@ test("the scanner follows escapes, comments, nesting and here-document variants"
     // A comment hides what it holds, and an apostrophe in it opens nothing.
     [`true # it's ${REF}\necho ${REF}`, `true # it's ${REF}\necho "\${OV_SECRET_0}"`],
     [`echo a#${REF}`, 'echo a#"${OV_SECRET_0}"'],
+    [`echo a\\;#x; echo ${REF}`, 'echo a\\;#x; echo "${OV_SECRET_0}"'],
     // A here-string is a word, not a here-document.
     [`cat <<< ${REF}`, 'cat <<< "${OV_SECRET_0}"'],
     [`cat <<-EOF\n\t${REF}\n\tEOF\necho ${REF}`, 'cat <<-EOF\n\t${OV_SECRET_0}\n\tEOF\necho "${OV_SECRET_0}"'],
@@ -191,6 +192,10 @@ test("a command splits into its pipelines at every top-level separator", () => {
     [`echo "it's" '"' ${REF}; echo 'a\nb'`, [`echo "it's" '"' ${REF}`, "echo 'a\nb'"]],
     [`echo \\\n ${REF}\n\n;`, [`echo \\\n ${REF}`]],
     ["echo ${HOME} ${X:-y} a#b # tail; rm x", ["echo ${HOME} ${X:-y} a#b"]],
+    // After an escaped separator a `#` is part of a word, and an escaped `|` continues nothing.
+    [`echo ${REF} a\\;#x; rm target`, [`echo ${REF} a\\;#x`, "rm target"]],
+    ["echo a \\|\necho b", ["echo a \\|", "echo b"]],
+    ["a | # note\n b", ["a | \n b"]],
     [`cat <<<${REF}`, [`cat <<<${REF}`]],
     [`TOKEN=${REF} ./deploy.sh`, [`TOKEN=${REF} ./deploy.sh`]],
     ["# only a comment", []],
@@ -246,6 +251,7 @@ test("guard lines carry the command to a permission check and never run any of i
     "true || touch a; false || touch b; true && touch c",
     "touch a;touch b&&touch c||touch d&touch e|cat",
     `touch "a\nb" 'c;d' e\\ f; cat <<<x > g`,
+    "echo RAN \\|\ntouch a; echo x\\;#y; touch b",
   ];
   for (const command of commands) {
     const guard = guardCommand(command, { node: "printf", runner: "REACHED" });

@@ -20,6 +20,7 @@ const SESSION_START = script("session-start.mjs");
 const REF = "{{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}";
 const UNKNOWN = "{{ov_privacy:alice:viking://~/privacy/credential/gitlab#/values/pat}}";
 const VALUE = "ghp_s3cr3t \"$(echo PWNED)\" 'x' `id`";
+const ARCHIVE = Array.from({ length: 400 }, (_, n) => `archive line ${n}`).join("\n");
 
 /** A mock OpenViking that knows one credential, and the env that points the plugin at it. */
 async function withServer(fn, { url } = {}) {
@@ -37,6 +38,7 @@ async function withServer(fn, { url } = {}) {
       }
       if (path.endsWith("/status")) return writeJson(res, { status: "ok", result: { user: "alice", user_id: "alice" } });
       if (path.endsWith("/read")) return writeJson(res, { status: "ok", result: "Keep the user profile available." });
+      if (path.endsWith("/context")) return writeJson(res, { status: "ok", result: { latest_archive_overview: ARCHIVE } });
       return writeJson(res, { status: "ok", result: [] });
     }, async (baseUrl, requests) => {
       files = await writeCredentialFiles("ov-secret-exec-", { ovcli: { url: url ?? baseUrl, api_key: "sk-test" } });
@@ -254,6 +256,25 @@ test("session start carries the usage note only while secret exec is on", async 
       assert.equal(context.includes(SECRET_EXEC_USAGE), on);
     });
   }
+});
+
+test("a usage note larger than the byte cap leaves the archive truncated, not uncapped", async () => {
+  await withServer(async ({ env, cwd }) => {
+    const result = await runHookScript(SESSION_START, {
+      input: { session_id: "11111111-2222-3333-4444-555555555555", source: "resume", cwd },
+      env: {
+        ...env, ...ON,
+        OPENVIKING_RESUME_ARCHIVE_INJECT: "1",
+        OPENVIKING_NO_AUTO_INJECT: "1",
+        OPENVIKING_SESSION_START_MAX_BYTES: "512",
+      },
+      cwd,
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const context = JSON.parse(result.stdout).hookSpecificOutput?.additionalContext ?? "";
+    assert.match(context, /<session-archive>[\s\S]*\[truncated\]/);
+    assert.doesNotMatch(context, /archive line 399/);
+  });
 });
 
 test("session start carries the usage note when the connection comes from the environment alone", async () => {

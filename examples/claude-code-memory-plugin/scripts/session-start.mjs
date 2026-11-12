@@ -151,7 +151,12 @@ runHookStage({
   if (willInjectArchive) {
     ovSessionId = deriveOvSessionId(sessionId);
     const sessionCtx = await getSessionContext(fetchJSON, ovSessionId, cfg.resumeContextBudget);
-    archiveSection = formatArchiveSection(sessionCtx, ovSessionId, Math.floor(maxBytes / 2));
+    archiveSection = formatArchiveSection(
+      sessionCtx,
+      ovSessionId,
+      // 0 means no cap, so a spent budget still passes 1.
+      maxBytes ? Math.max(1, Math.floor(maxBytes / 2)) : 0,
+    );
   }
 
   // 2. Profile injection — every source unless explicitly disabled. A resumed

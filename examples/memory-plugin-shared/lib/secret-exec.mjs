@@ -101,6 +101,8 @@ export function rewriteCommand(command) {
   const heredocs = [];
   let script = "";
   let i = 0;
+  // Where the last backslash escape ended: a `#` there is part of a word.
+  let escaped = -1;
   const take = (n) => {
     script += command.slice(i, i + n);
     i += n;
@@ -137,6 +139,7 @@ export function rewriteCommand(command) {
       take(1);
     } else if (c === "\\") {
       take(2);
+      escaped = i;
     } else if (frame.kind === "ansi") {
       if (c === "'") stack.pop();
       take(1);
@@ -167,7 +170,7 @@ export function rewriteCommand(command) {
       else if (frame.depth) frame.depth -= 1;
       else stack.pop();
       take(1);
-    } else if (c === "#" && (i === 0 || /[\s;&|()<>`]/.test(command[i - 1]))) {
+    } else if (c === "#" && (i === 0 || (i !== escaped && /[\s;&|()<>`]/.test(command[i - 1])))) {
       const eol = command.indexOf("\n", i);
       take((eol < 0 ? command.length : eol) - i);
     } else if (command.startsWith("<<<", i)) {
@@ -228,6 +231,9 @@ export function splitCommands(command) {
   // Whether the next word is a command name: at the start, and after each `|`.
   let head = true;
   let i = 0;
+  let escaped = -1;
+  // The length of `part` just after its last pipe operator.
+  let piped = -1;
   const take = (n) => {
     part += command.slice(i, i + n);
     i += n;
@@ -236,6 +242,7 @@ export function splitCommands(command) {
     if (part.trim()) parts.push(part.trim());
     part = "";
     head = true;
+    piped = -1;
     i += n;
   };
 
@@ -254,6 +261,7 @@ export function splitCommands(command) {
       take(whole.length);
     } else if (c === "\\") {
       take(2);
+      escaped = i;
     } else if (c === "`" || (c === "$" && "({['".includes(next ?? " "))) {
       return null;
     } else if (quote) {
@@ -267,14 +275,14 @@ export function splitCommands(command) {
     } else if (c === "<" && next === "<") {
       if (command[i + 2] !== "<") return null;
       take(3);
-    } else if (c === "#" && (i === 0 || /[\s;&|]/.test(command[i - 1]))) {
+    } else if (c === "#" && (i === 0 || (i !== escaped && /[\s;&|]/.test(command[i - 1])))) {
       const eol = command.indexOf("\n", i);
       i = eol < 0 ? command.length : eol;
     } else if (c === ";") {
       cut(1);
     } else if (c === "\n") {
       // A pipeline goes on past a line that ends in its `|`.
-      if (/\|&?$/.test(part.trimEnd())) take(1);
+      if (piped === part.trimEnd().length) take(1);
       else cut(1);
     } else if (c === "&") {
       if (next === "&") cut(2);
@@ -286,6 +294,7 @@ export function splitCommands(command) {
         cut(2);
       } else {
         take(next === "&" ? 2 : 1);
+        piped = part.length;
         head = true;
       }
     } else {
