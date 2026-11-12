@@ -37,6 +37,63 @@ async def test_mcp_search_keeps_empty_item_options_and_no_default_threshold(
     assert search.await_args.kwargs["score_threshold"] is None
 
 
+async def test_mcp_find_forwards_item_filter_without_legacy_threshold(request_context, monkeypatch):
+    item = {
+        "item_uuid": "uuid-a",
+        "uri": "viking://resources/A",
+        "item_score": 0.0,
+        "item_attrs": {"asset_id": "V1"},
+        "item_extra_info": {
+            "candidate_members_count": 1,
+            "candidate_members_uri": ["viking://resources/A/a.md"],
+        },
+    }
+    find = AsyncMock(return_value=ItemSearchResult([item]))
+    service = SimpleNamespace(search=SimpleNamespace(find=find))
+    monkeypatch.setattr(endpoint, "get_service", lambda: service)
+    token = endpoint._mcp_ctx.set(request_context)
+    try:
+        result = await endpoint.find(
+            query="",
+            filter={"op": "must", "field": "item_attrs", "conds": ["asset_id=V1"]},
+            search_as_item=SearchAsItemOptions(aggregation="sum"),
+        )
+    finally:
+        endpoint._mcp_ctx.reset(token)
+    assert json.loads(result) == {"items": [item], "total": 1}
+    assert find.await_args.kwargs["filter"] == {
+        "op": "must",
+        "field": "item_attrs",
+        "conds": ["asset_id=V1"],
+    }
+    assert find.await_args.kwargs["score_threshold"] is None
+    assert find.await_args.kwargs["search_as_item"].aggregation == "sum"
+
+
+async def test_mcp_item_search_rejects_time_decay(request_context, monkeypatch):
+    search = AsyncMock()
+    service = SimpleNamespace(
+        search=SimpleNamespace(search=search, is_intent_enabled=lambda: False)
+    )
+    monkeypatch.setattr(endpoint, "get_service", lambda: service)
+    token = endpoint._mcp_ctx.set(request_context)
+    try:
+        result = await endpoint.mcp.call_tool(
+            "search",
+            {
+                "query": "beach",
+                "search_as_item": {},
+                "events_time_decay_protection": "1d",
+            },
+        )
+    finally:
+        endpoint._mcp_ctx.reset(token)
+    assert result.isError is True
+    assert result.structuredContent["error"]["code"] == "INVALID_ARGUMENT"
+    assert "time decay" in result.structuredContent["error"]["message"]
+    search.assert_not_awaited()
+
+
 async def test_mcp_add_resource_forwards_item_declaration(request_context, monkeypatch):
     add_resource = AsyncMock(return_value={"status": "accepted", "task_id": "task-1"})
     service = SimpleNamespace(resources=SimpleNamespace(add_resource=add_resource))

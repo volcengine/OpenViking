@@ -874,6 +874,8 @@ impl Submitter for HttpSubmitter {
                 args,
                 Vec::new(),
                 "replace".to_string(),
+                false,
+                None,
                 None,
                 false,
                 false,

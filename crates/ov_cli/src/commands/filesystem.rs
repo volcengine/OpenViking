@@ -34,19 +34,71 @@ struct FieldDef {
 }
 
 static ALL_FIELDS: &[FieldDef] = &[
-    FieldDef { name: "name", header: "NAME", alignment: FieldAlignment::Left },
-    FieldDef { name: "uri", header: "URI", alignment: FieldAlignment::Left },
-    FieldDef { name: "path", header: "PATH", alignment: FieldAlignment::Left },
-    FieldDef { name: "type", header: "TYPE", alignment: FieldAlignment::Left },
-    FieldDef { name: "size", header: "SIZE", alignment: FieldAlignment::Right },
-    FieldDef { name: "mode", header: "MODE", alignment: FieldAlignment::Left },
-    FieldDef { name: "mtime", header: "MTIME", alignment: FieldAlignment::Left },
-    FieldDef { name: "locked", header: "LOCKED", alignment: FieldAlignment::Left },
-    FieldDef { name: "id", header: "ID", alignment: FieldAlignment::Left },
-    FieldDef { name: "count", header: "COUNT", alignment: FieldAlignment::Right },
-    FieldDef { name: "tags", header: "TAGS", alignment: FieldAlignment::Left },
-    FieldDef { name: "abstract", header: "ABSTRACT", alignment: FieldAlignment::Left },
-    FieldDef { name: "overview", header: "OVERVIEW", alignment: FieldAlignment::Left },
+    FieldDef {
+        name: "name",
+        header: "NAME",
+        alignment: FieldAlignment::Left,
+    },
+    FieldDef {
+        name: "uri",
+        header: "URI",
+        alignment: FieldAlignment::Left,
+    },
+    FieldDef {
+        name: "path",
+        header: "PATH",
+        alignment: FieldAlignment::Left,
+    },
+    FieldDef {
+        name: "type",
+        header: "TYPE",
+        alignment: FieldAlignment::Left,
+    },
+    FieldDef {
+        name: "size",
+        header: "SIZE",
+        alignment: FieldAlignment::Right,
+    },
+    FieldDef {
+        name: "mode",
+        header: "MODE",
+        alignment: FieldAlignment::Left,
+    },
+    FieldDef {
+        name: "mtime",
+        header: "MTIME",
+        alignment: FieldAlignment::Left,
+    },
+    FieldDef {
+        name: "locked",
+        header: "LOCKED",
+        alignment: FieldAlignment::Left,
+    },
+    FieldDef {
+        name: "id",
+        header: "ID",
+        alignment: FieldAlignment::Left,
+    },
+    FieldDef {
+        name: "count",
+        header: "COUNT",
+        alignment: FieldAlignment::Right,
+    },
+    FieldDef {
+        name: "tags",
+        header: "TAGS",
+        alignment: FieldAlignment::Left,
+    },
+    FieldDef {
+        name: "abstract",
+        header: "ABSTRACT",
+        alignment: FieldAlignment::Left,
+    },
+    FieldDef {
+        name: "overview",
+        header: "OVERVIEW",
+        alignment: FieldAlignment::Left,
+    },
 ];
 
 fn resolve_fields(fields: &[String], is_tree: bool) -> Vec<&'static FieldDef> {
@@ -126,7 +178,13 @@ fn field_value(entry: &Value, field: &FieldDef) -> String {
         "locked" => obj
             .and_then(|o| o.get("isLocked"))
             .and_then(Value::as_bool)
-            .map(|v| if v { "yes".to_string() } else { "no".to_string() })
+            .map(|v| {
+                if v {
+                    "yes".to_string()
+                } else {
+                    "no".to_string()
+                }
+            })
             .unwrap_or_else(|| "-".to_string()),
         "id" => entry_string(obj, "id")
             .map(str::to_string)
@@ -139,7 +197,12 @@ fn field_value(entry: &Value, field: &FieldDef) -> String {
         "tags" => obj
             .and_then(|o| o.get("tags"))
             .and_then(Value::as_array)
-            .map(|tags| tags.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(","))
+            .map(|tags| {
+                tags.iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
             .filter(|tags| !tags.is_empty())
             .unwrap_or_else(|| "-".to_string()),
         "abstract" => entry_string(obj, "abstract")
@@ -215,10 +278,20 @@ pub async fn ls(
             sort_order,
             &extra,
             tags,
-            fields.as_ref().is_some_and(|items| items.iter().any(|item| item == "tags")) || !tags.is_empty(),
+            fields
+                .as_ref()
+                .is_some_and(|items| items.iter().any(|item| item == "tags"))
+                || !tags.is_empty(),
         )
         .await?;
-    output_filesystem_entries(&result, output_format, compact, false, simple, fields.as_deref());
+    output_filesystem_entries(
+        &result,
+        output_format,
+        compact,
+        false,
+        simple,
+        fields.as_deref(),
+    );
     Ok(())
 }
 
@@ -259,10 +332,20 @@ pub async fn tree(
             limit,
             &extra,
             tags,
-            fields.as_ref().is_some_and(|items| items.iter().any(|item| item == "tags")) || !tags.is_empty(),
+            fields
+                .as_ref()
+                .is_some_and(|items| items.iter().any(|item| item == "tags"))
+                || !tags.is_empty(),
         )
         .await?;
-    output_filesystem_entries(&result, output_format, compact, true, simple, fields.as_deref());
+    output_filesystem_entries(
+        &result,
+        output_format,
+        compact,
+        true,
+        simple,
+        fields.as_deref(),
+    );
     Ok(())
 }
 
@@ -328,10 +411,16 @@ fn output_filesystem_entries(
 
 /// Print one URI per line from a glob-style `{matches:[...],count:N}` result (URI strings).
 pub fn print_uri_blob_per_line(result: &Value) {
-    let Some(matches) = result.get("result").and_then(|v| v.get("matches")).or_else(|| result.get("matches")) else {
+    let Some(matches) = result
+        .get("result")
+        .and_then(|v| v.get("matches"))
+        .or_else(|| result.get("matches"))
+    else {
         return;
     };
-    let Some(arr) = matches.as_array() else { return };
+    let Some(arr) = matches.as_array() else {
+        return;
+    };
     for item in arr {
         if let Some(s) = item.as_str() {
             println!("{s}");
@@ -349,11 +438,7 @@ pub fn output_entry_list(
     output_filesystem_entries(result, output_format, compact, false, simple, fields);
 }
 
-fn render_simple_fields(
-    result: &Value,
-    fields: &[&FieldDef],
-    is_tree: bool,
-) -> Option<String> {
+fn render_simple_fields(result: &Value, fields: &[&FieldDef], is_tree: bool) -> Option<String> {
     let entries = extract_entries(result)?;
     let mut lines = Vec::with_capacity(entries.len());
     for entry in entries {
@@ -452,7 +537,13 @@ fn render_fields_table(result: &Value, fields: &[&FieldDef], is_tree: bool) {
     let header_line = headers
         .iter()
         .enumerate()
-        .map(|(i, h)| pad_cell(h, col_widths[i], fields[i].alignment == FieldAlignment::Right))
+        .map(|(i, h)| {
+            pad_cell(
+                h,
+                col_widths[i],
+                fields[i].alignment == FieldAlignment::Right,
+            )
+        })
         .collect::<Vec<_>>()
         .join("  ");
     lines.push(theme::heading(header_line).bold().to_string());
@@ -913,11 +1004,15 @@ pub async fn mkdir(
     client: &HttpClient,
     uri: &str,
     description: Option<&str>,
+    as_item: bool,
+    item_attrs: Option<Value>,
     acl: Option<Value>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.mkdir(uri, description, acl).await?;
+    let result = client
+        .mkdir(uri, description, as_item, item_attrs, acl)
+        .await?;
     output_message_result(
         result,
         format!("Directory created: {}", uri),
@@ -1230,8 +1325,13 @@ mod tests {
         ]);
 
         assert!(
-            render_filesystem_entries_for_table(&result, crate::output::OutputFormat::Json, false, false)
-                .is_none()
+            render_filesystem_entries_for_table(
+                &result,
+                crate::output::OutputFormat::Json,
+                false,
+                false
+            )
+            .is_none()
         );
     }
 

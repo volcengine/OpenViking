@@ -8,7 +8,7 @@ Provides search operations: search, find.
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from openviking.core.item_search import SearchAsItemOptions
+from openviking.core.item_search import SearchAsItemOptions, validate_item_search_request
 from openviking.core.namespace_policy import is_system_uri
 from openviking.core.retrieval_types import SearchType
 from openviking.models.rerank import RerankClient
@@ -177,10 +177,13 @@ class SearchService:
         Returns:
             FindResult
         """
-        if search_as_item is not None:
-            search_as_item = SearchAsItemOptions.model_validate(search_as_item)
-            if events_time_decay_protection is not None:
-                raise InvalidArgumentError("Item Search does not support event time decay")
+        try:
+            search_as_item = validate_item_search_request(
+                search_as_item,
+                events_time_decay_protection=events_time_decay_protection,
+            )
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
         if search_type == "keywords" and image_url:
             raise InvalidArgumentError("image_url is not supported when search_type='keywords'")
         resolved_image_url = await self._resolve_image_url(image_url, ctx)
@@ -242,10 +245,13 @@ class SearchService:
         """
         if search_type == "keywords" and image_url:
             raise InvalidArgumentError("image_url is not supported when search_type='keywords'")
-        if search_as_item is not None:
-            search_as_item = SearchAsItemOptions.model_validate(search_as_item)
-            if events_time_decay_protection is not None:
-                raise InvalidArgumentError("Item Search does not support event time decay")
+        try:
+            search_as_item = validate_item_search_request(
+                search_as_item,
+                events_time_decay_protection=events_time_decay_protection,
+            )
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
         resolved_image_url = await self._resolve_image_url(image_url, ctx)
         _validate_query(query, resolved_image_url, filter)
         _reject_system_targets(target_uri)

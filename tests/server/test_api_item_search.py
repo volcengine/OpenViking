@@ -63,6 +63,7 @@ async def test_mkdir_and_search_as_item_end_to_end(client, service, monkeypatch)
     result = response.json()["result"]
     assert result["total"] == 2
     assert {item["uri"] for item in result["items"]} == {f"{root}/A", f"{root}/B"}
+    item_uuid_by_uri = {item["uri"]: item["item_uuid"] for item in result["items"]}
     for item in result["items"]:
         UUID(item["item_uuid"])
         assert item["item_attrs"] == declarations[item["uri"].rsplit("/", 1)[-1]]
@@ -113,6 +114,60 @@ async def test_mkdir_and_search_as_item_end_to_end(client, service, monkeypatch)
     assert response.status_code == 200, response.text
     assert "resources" in response.json()["result"]
     assert "items" not in response.json()["result"]
+
+    moved_uri = f"{root}/A-moved"
+    response = await client.post(
+        "/api/v1/fs/mv",
+        json={"from_uri": f"{root}/A", "to_uri": moved_uri},
+    )
+    assert response.status_code == 200, response.text
+    response = await client.post(
+        "/api/v1/search/find",
+        json={
+            "query": "",
+            "target_uri": root,
+            "search_as_item": {},
+            "filter": {
+                "op": "must",
+                "field": "item_attrs",
+                "conds": ["asset_id=V1"],
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    moved = response.json()["result"]["items"]
+    assert [(item["uri"], item["item_uuid"]) for item in moved] == [
+        (moved_uri, item_uuid_by_uri[f"{root}/A"])
+    ]
+    assert moved[0]["item_attrs"] == declarations["A"]
+
+    response = await client.post(
+        "/api/v1/fs/cp",
+        json={
+            "from_uri": f"{root}/B",
+            "to_uri": f"{root}/B-copy",
+            "recursive": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+    response = await client.post(
+        "/api/v1/search/find",
+        json={
+            "query": "",
+            "target_uri": root,
+            "search_as_item": {},
+            "filter": {
+                "op": "must",
+                "field": "item_attrs",
+                "conds": ["asset_id=V2"],
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    copied = response.json()["result"]["items"]
+    assert [(item["uri"], item["item_uuid"]) for item in copied] == [
+        (f"{root}/B", item_uuid_by_uri[f"{root}/B"])
+    ]
 
 
 @pytest.mark.parametrize(
@@ -165,12 +220,14 @@ async def test_mkdir_item_retry_rules(client):
     [
         {"search_as_item": {"aggregation": "avg"}},
         {"search_as_item": {}, "read_content": True},
+        {"search_as_item": {}, "include_provenance": True},
         {"search_as_item": {}, "events_time_decay_protection": "2026-01-01"},
     ],
 )
-async def test_item_search_request_validation(client, payload):
+@pytest.mark.parametrize("endpoint", ["find", "search"])
+async def test_item_search_request_validation(client, payload, endpoint):
     response = await client.post(
-        "/api/v1/search/search",
+        f"/api/v1/search/{endpoint}",
         json={"query": "beach", **payload},
     )
     assert response.status_code == 400, response.text
@@ -187,6 +244,19 @@ async def test_write_does_not_accept_item_declaration_fields(client):
             },
         )
         assert response.status_code == 400, response.text
+
+
+async def test_mkdir_rejects_external_item_uuid(client):
+    response = await client.post(
+        "/api/v1/fs/mkdir",
+        json={
+            "uri": "viking://resources/items/external-uuid",
+            "as_item": True,
+            "item_uuid": "caller-controlled",
+        },
+    )
+    assert response.status_code == 400, response.text
+    assert "item_uuid" in response.text
 
 
 async def test_add_resource_declares_the_actual_resolved_root(service, sample_markdown_file):

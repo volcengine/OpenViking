@@ -21,6 +21,97 @@ OpenViking 提供多种检索方法，包括简单的向量相似度搜索、关
 
 分数阈值遵循同一规则：请求中的 `score_threshold` 优先，过滤该路径产出的任何分数；未指定时，`rerank.threshold`（默认 `0.1`）只过滤 Reranker 产出的分数，仅用向量分数的路径（包括 `find()` 和 Rerank 失败后的回退）默认阈值为 `0`。
 
+## Item Search（预览）
+
+Item Search 返回声明过的 Item 根，而不是单个命中分片。Item 只能在 `mkdir` 或 `add_resource` 时声明；`write` 和 `batch_write` 不接受 Item 声明字段。
+
+通过 `as_item=true` 和可选的扁平字符串属性声明 Item：
+
+```bash
+# CLI
+ov mkdir viking://resources/videos/V1 \
+  --as-item --item-attrs '{"asset_id":"V1","kind":"video"}'
+ov add-resource ./video.mp4 --parent viking://resources/videos \
+  --as-item --item-attrs '{"asset_id":"V2"}'
+```
+
+```bash
+# HTTP
+curl -X POST http://localhost:1933/api/v1/fs/mkdir \
+  -H 'Content-Type: application/json' \
+  -d '{"uri":"viking://resources/videos/V1","as_item":true,"item_attrs":{"asset_id":"V1"}}'
+```
+
+```python
+# Python SDK
+client.mkdir(
+    "viking://resources/videos/V1",
+    as_item=True,
+    item_attrs={"asset_id": "V1"},
+)
+client.add_resource(
+    "./video.mp4",
+    parent="viking://resources/videos",
+    options={"as_item": True, "item_attrs": {"asset_id": "V2"}},
+)
+```
+
+MCP 的 `add_resource` 工具暴露相同的 `as_item` 和 `item_attrs` 参数。省略 `as_item` 等价于 `false`；为 false 时必须同时省略 `item_attrs`（空对象也会被拒绝）。`item_uuid` 由 OpenViking 生成和维护，调用方不能指定。属性只属于声明根，不继承、不合并。移动 Item 会保留 UUID 和属性，复制不会复制 Item 声明，删除会移除声明。
+
+传入空的 `search_as_item` 对象即可开启 Item Search。只有需要求和时才设置 `aggregation=sum`；默认聚合为 `max`：
+
+```bash
+# CLI：find 和 search 都支持 Item 模式
+ov find "海滩上的男孩" --uri viking://resources/videos --search-as-item
+ov search "海滩上的男孩" --uri viking://resources/videos \
+  --search-as-item --aggregation sum
+
+# 仅过滤 Item（item_score 固定为 0.0）
+ov find --search-as-item \
+  --filter '{"op":"must","field":"item_attrs","conds":["asset_id=V1"]}'
+```
+
+```json
+// POST /api/v1/search/find 或 /api/v1/search/search
+{
+  "query": "海滩上的男孩",
+  "target_uri": "viking://resources/videos",
+  "search_as_item": {"aggregation": "max"},
+  "filter": {
+    "op": "must",
+    "field": "item_attrs",
+    "conds": ["asset_id=V1"]
+  }
+}
+```
+
+```python
+# Python SDK
+items = client.find(
+    "海滩上的男孩",
+    target_uri="viking://resources/videos",
+    options={"search_as_item": {}},
+)
+```
+
+MCP 的 `find` 和 `search` 工具都通过 `search_as_item: {}` 开启；可选对象支持 `{"aggregation":"sum"}`。MCP 会把同一个 Item 结果对象序列化成 JSON 返回。
+
+单个 `must` 节点沿用现有 `list<string>` 过滤语义：`conds` 中的多个值是“任选其一”。如果需要同时满足多个属性，应使用 `and` 组合多个单值条件：
+
+```json
+{
+  "op": "and",
+  "conds": [
+    {"op": "must", "field": "item_attrs", "conds": ["asset_id=V1"]},
+    {"op": "must", "field": "item_attrs", "conds": ["kind=video"]}
+  ]
+}
+```
+
+响应包含 `items` 和 `total`。每个 Item 包含 `item_uuid`、根 `uri`、`item_score`、`item_attrs`，以及只描述本次候选的 `item_extra_info.candidate_members_count` 和 `item_extra_info.candidate_members_uri`。
+
+Item 模式只支持 list 结果，不支持 `read_content`、`include_provenance`、事件时间衰减和 `mode="context"`；聚合只支持 `max`、`sum`，也不执行 custom/JEV rerank。配置的存储后端如果尚未支持 Catalog 和 Item 分组，会返回 `501 UNIMPLEMENTED`，OpenViking 不会在服务层模拟聚合结果。
+
 ## 检索流程
 
 检索的核心流程如下：

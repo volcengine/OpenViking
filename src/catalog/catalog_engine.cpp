@@ -43,6 +43,8 @@ class CatalogEngine::Impl {
   JsonValue compile_filter(const std::string& scope, const JsonValue& filter,
                            JsonAllocator& allocator) const;
   void commit(const std::map<std::string, std::string>& updates);
+  void commit_changes(const std::map<std::string, std::string>& updates,
+                      const std::vector<std::string>& deletes);
 };
 
 CatalogEngine::CatalogEngine(const std::string& path)
@@ -176,6 +178,21 @@ JsonValue impossible_filter(JsonAllocator& allocator) {
   return JsonValue(empty, allocator);
 }
 
+JsonValue path_filter(const char* op, const std::string& uri,
+                      JsonAllocator& allocator) {
+  JsonValue filter(rapidjson::kObjectType);
+  filter.AddMember("op", JsonValue(op, allocator), allocator);
+  filter.AddMember("field", "uri", allocator);
+  JsonValue conds(rapidjson::kArrayType);
+  conds.PushBack(JsonValue(uri.c_str(),
+                           static_cast<rapidjson::SizeType>(uri.size()),
+                           allocator),
+                 allocator);
+  filter.AddMember("conds", conds, allocator);
+  filter.AddMember("para", "-d=-1", allocator);
+  return filter;
+}
+
 }  // namespace
 
 CatalogEngine::Impl::Impl(const std::string& path) {
@@ -199,6 +216,26 @@ void CatalogEngine::Impl::commit(
   if (store_->put_data(keys, values) != 0) {
     throw std::runtime_error("Catalog persistence failed");
   }
+  for (const auto& entry : updates) nodes_[entry.first] = entry.second;
+}
+
+void CatalogEngine::Impl::commit_changes(
+    const std::map<std::string, std::string>& updates,
+    const std::vector<std::string>& deletes) {
+  std::vector<StorageOp> operations;
+  operations.reserve(updates.size() + deletes.size());
+  for (const auto& entry : updates) {
+    operations.push_back({StorageOp::PUT_OP, entry.first, entry.second});
+  }
+  for (const auto& node_key : deletes) {
+    if (updates.count(node_key) == 0) {
+      operations.push_back({StorageOp::DELETE_OP, node_key, ""});
+    }
+  }
+  if (store_->exec_op(operations) != 0) {
+    throw std::runtime_error("Catalog transaction failed");
+  }
+  for (const auto& node_key : deletes) nodes_.erase(node_key);
   for (const auto& entry : updates) nodes_[entry.first] = entry.second;
 }
 
@@ -258,26 +295,64 @@ JsonValue CatalogEngine::Impl::compile_filter(const std::string& scope,
     return out;
   }
 
-  JsonValue paths(rapidjson::kArrayType);
+  struct DeclaredItem {
+    std::string uri;
+    std::vector<std::string> attrs;
+    bool matches = false;
+  };
+  std::vector<DeclaredItem> declarations;
   const std::string prefix = scope + '\0' + '/';
   for (auto it = nodes_.lower_bound(prefix);
        it != nodes_.end() && it->first.rfind(prefix, 0) == 0; ++it) {
     const auto uri = it->first.substr(scope.size() + 1);
-    const auto item = resolve_item(scope, uri);
-    if (item.found && matches_item_attrs(item.item_attrs, filter)) {
-      paths.PushBack(JsonValue(uri.c_str(),
-                               static_cast<rapidjson::SizeType>(uri.size()),
-                               allocator),
-                     allocator);
+    const auto node = parse(it->second);
+    if (!node.HasMember("item_uuid")) continue;
+    if (!node["item_uuid"].IsString() ||
+        node["item_uuid"].GetStringLength() == 0) {
+      throw std::runtime_error("Catalog contains an invalid item_uuid");
+    }
+    std::vector<std::string> attrs;
+    if (node.HasMember("item_attrs")) {
+      validate_item_attrs(node["item_attrs"]);
+      for (const auto& attr : node["item_attrs"].GetArray()) {
+        attrs.emplace_back(attr.GetString(), attr.GetStringLength());
+      }
+    }
+    declarations.push_back(
+        {uri, attrs, matches_item_attrs(attrs, filter)});
+  }
+
+  JsonValue branches(rapidjson::kArrayType);
+  for (const auto& declaration : declarations) {
+    if (!declaration.matches) continue;
+    JsonValue branch_conds(rapidjson::kArrayType);
+    branch_conds.PushBack(path_filter("must", declaration.uri, allocator),
+                          allocator);
+    // A nested declaration starts a new shadow scope. Exclude it from the
+    // parent branch regardless of whether it independently matches; matching
+    // nested Items are reintroduced through their own branch below.
+    for (const auto& nested : declarations) {
+      if (nested.uri != declaration.uri &&
+          in_tree(nested.uri, declaration.uri)) {
+        branch_conds.PushBack(path_filter("must_not", nested.uri, allocator),
+                              allocator);
+      }
+    }
+    if (branch_conds.Size() == 1) {
+      branches.PushBack(branch_conds[0], allocator);
+    } else {
+      JsonValue branch(rapidjson::kObjectType);
+      branch.AddMember("op", "and", allocator);
+      branch.AddMember("conds", branch_conds, allocator);
+      branches.PushBack(branch, allocator);
     }
   }
-  if (paths.Empty()) return impossible_filter(allocator);
+  if (branches.Empty()) return impossible_filter(allocator);
+  if (branches.Size() == 1) return JsonValue(branches[0], allocator);
 
   out.SetObject();
-  out.AddMember("op", "must", allocator);
-  out.AddMember("field", "uri", allocator);
-  out.AddMember("conds", paths, allocator);
-  out.AddMember("para", "-d=0", allocator);
+  out.AddMember("op", "or", allocator);
+  out.AddMember("conds", branches, allocator);
   return out;
 }
 
@@ -556,6 +631,124 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
     result.AddMember("groups_truncated",
                      group_count > static_cast<size_t>(max_groups), allocator);
     result.AddMember("groups", output_groups, allocator);
+  } else if (op == "move_subtree") {
+    const auto from_uri = canonical(required_string(req, "from_uri"));
+    const auto to_uri = canonical(required_string(req, "to_uri"));
+    if (from_uri == to_uri || in_tree(to_uri, from_uri) ||
+        in_tree(from_uri, to_uri)) {
+      throw std::invalid_argument(
+          "Catalog move source and target subtrees must not overlap");
+    }
+
+    const std::string prefix = scope + '\0' + '/';
+    std::vector<std::string> source_keys;
+    std::map<std::string, std::string> updates;
+    JsonValue source_nodes(rapidjson::kArrayType);
+    JsonValue target_nodes(rapidjson::kArrayType);
+    JsonValue created_target_uris(rapidjson::kArrayType);
+    for (auto it = nodes_.lower_bound(prefix);
+         it != nodes_.end() && it->first.rfind(prefix, 0) == 0; ++it) {
+      const auto uri = it->first.substr(scope.size() + 1);
+      if (!in_tree(uri, from_uri)) continue;
+      const auto suffix = uri.substr(from_uri.size());
+      const auto moved_uri = to_uri + suffix;
+      const auto moved_key = key(scope, moved_uri);
+      const auto source_node = parse(it->second);
+      source_nodes.PushBack(JsonValue(source_node, allocator), allocator);
+      const auto existing = nodes_.find(moved_key);
+      if (existing != nodes_.end()) {
+        const auto target_node = parse(existing->second);
+        target_nodes.PushBack(JsonValue(target_node, allocator), allocator);
+      } else {
+        created_target_uris.PushBack(
+            JsonValue(moved_uri.c_str(),
+                      static_cast<rapidjson::SizeType>(moved_uri.size()),
+                      allocator),
+            allocator);
+      }
+      auto node = parse(it->second);
+      put_string(node, "uri", moved_uri, node.GetAllocator());
+      source_keys.push_back(it->first);
+      updates[moved_key] = encode(node);
+    }
+    if (!source_keys.empty()) {
+      commit_changes(updates, source_keys);
+      scope_revisions_[scope] = ++revision_;
+    }
+    result.AddMember("moved_nodes", static_cast<uint64_t>(source_keys.size()), allocator);
+    if (!source_keys.empty()) {
+      JsonValue undo(rapidjson::kObjectType);
+      put_string(undo, "from_uri", from_uri, allocator);
+      put_string(undo, "to_uri", to_uri, allocator);
+      undo.AddMember("source_nodes", source_nodes, allocator);
+      undo.AddMember("target_nodes", target_nodes, allocator);
+      undo.AddMember("created_target_uris", created_target_uris, allocator);
+      result.AddMember("undo", undo, allocator);
+    }
+  } else if (op == "restore_move") {
+    if (!req.HasMember("undo") || !req["undo"].IsObject()) {
+      throw std::invalid_argument("Catalog restore_move requires undo");
+    }
+    const auto& undo = req["undo"];
+    const auto from_uri = canonical(required_string(undo, "from_uri"));
+    const auto to_uri = canonical(required_string(undo, "to_uri"));
+    if (from_uri == to_uri || in_tree(to_uri, from_uri) ||
+        in_tree(from_uri, to_uri)) {
+      throw std::invalid_argument(
+          "Catalog restore source and target subtrees must not overlap");
+    }
+    if (!undo.HasMember("source_nodes") || !undo["source_nodes"].IsArray() ||
+        !undo.HasMember("target_nodes") || !undo["target_nodes"].IsArray() ||
+        !undo.HasMember("created_target_uris") ||
+        !undo["created_target_uris"].IsArray()) {
+      throw std::invalid_argument("Catalog restore_move undo is invalid");
+    }
+
+    std::map<std::string, std::string> updates;
+    const auto restore_nodes = [&](const JsonValue& snapshots,
+                                   const std::string& root) {
+      for (const auto& snapshot : snapshots.GetArray()) {
+        const auto uri = canonical(required_string(snapshot, "uri"));
+        if (!in_tree(uri, root)) {
+          throw std::invalid_argument(
+              "Catalog restore node is outside its subtree");
+        }
+        const auto node_type = required_string(snapshot, "node_type");
+        if (node_type != "file" && node_type != "dir") {
+          throw std::invalid_argument("Invalid Catalog node_type");
+        }
+        if (snapshot.HasMember("item_uuid")) {
+          required_string(snapshot, "item_uuid");
+        }
+        if (snapshot.HasMember("item_attrs")) {
+          validate_item_attrs(snapshot["item_attrs"]);
+        }
+        updates[key(scope, uri)] = encode(snapshot);
+      }
+    };
+    restore_nodes(undo["source_nodes"], from_uri);
+    restore_nodes(undo["target_nodes"], to_uri);
+
+    std::vector<std::string> deletes;
+    for (const auto& value : undo["created_target_uris"].GetArray()) {
+      if (!value.IsString()) {
+        throw std::invalid_argument(
+            "Catalog restore target URIs must be strings");
+      }
+      const auto uri = canonical(
+          std::string(value.GetString(), value.GetStringLength()));
+      if (!in_tree(uri, to_uri)) {
+        throw std::invalid_argument(
+            "Catalog restore target is outside its subtree");
+      }
+      deletes.push_back(key(scope, uri));
+    }
+    commit_changes(updates, deletes);
+    if (!updates.empty() || !deletes.empty()) {
+      scope_revisions_[scope] = ++revision_;
+    }
+    result.AddMember("restored_nodes", static_cast<uint64_t>(updates.size()),
+                     allocator);
   } else if (op == "delete_subtree") {
     const auto uri = canonical(required_string(req, "uri"));
     const std::string prefix = scope + '\0' + '/';

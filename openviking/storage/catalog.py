@@ -131,3 +131,38 @@ async def delete_catalog_subtree(fs, uri: str, ctx) -> None:
         await execute({"op": "delete_subtree", "uri": uri}, ctx=ctx)
     except UnimplementedError:
         return
+
+
+async def move_catalog_subtree(fs, from_uri: str, to_uri: str, ctx) -> dict[str, Any] | None:
+    """Move Item declarations and return an opaque token for exact rollback."""
+    from openviking.core.namespace_policy import is_system_uri
+    from openviking_cli.exceptions import UnimplementedError
+
+    if is_system_uri(from_uri) or is_system_uri(to_uri):
+        return None
+    storage = fs._get_vector_store()
+    execute = getattr(storage, "catalog_execute", None)
+    if execute is None:
+        return None
+    try:
+        result = await execute(
+            {"op": "move_subtree", "from_uri": from_uri, "to_uri": to_uri},
+            ctx=ctx,
+        )
+        if not result.get("moved_nodes", 0):
+            return None
+        undo = result.get("undo")
+        if not isinstance(undo, dict):
+            raise RuntimeError("Catalog move did not return rollback state")
+        return undo
+    except UnimplementedError:
+        return None
+
+
+async def restore_catalog_move(fs, undo: dict[str, Any], ctx) -> None:
+    """Restore both source and pre-existing target metadata after a failed move."""
+    storage = fs._get_vector_store()
+    execute = getattr(storage, "catalog_execute", None)
+    if execute is None:
+        raise RuntimeError("Catalog rollback is unavailable")
+    await execute({"op": "restore_move", "undo": undo}, ctx=ctx)

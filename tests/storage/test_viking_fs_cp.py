@@ -232,6 +232,39 @@ def _viking_fs(monkeypatch, agfs: _CopyAGFS) -> VikingFS:
     return fs
 
 
+class _CatalogMoveBackend:
+    """Minimal Catalog lifecycle model for move-compensation ordering."""
+
+    def __init__(self):
+        self.roots = {"viking://resources/source.md"}
+
+    async def catalog_execute(self, request, *, ctx):
+        del ctx
+        operation = request["op"]
+        if operation == "move_subtree":
+            source = request["from_uri"]
+            target = request["to_uri"]
+            if target in self.roots:
+                raise ValueError("Catalog move target already exists")
+            if source not in self.roots:
+                return {"moved_nodes": 0}
+            self.roots.remove(source)
+            self.roots.add(target)
+            return {
+                "moved_nodes": 1,
+                "undo": {"source": source, "target": target},
+            }
+        if operation == "restore_move":
+            undo = request["undo"]
+            self.roots.discard(undo["target"])
+            self.roots.add(undo["source"])
+            return {"restored_nodes": 1}
+        if operation == "delete_subtree":
+            self.roots.discard(request["uri"])
+            return {}
+        raise AssertionError(operation)
+
+
 @pytest.mark.parametrize(
     "uri",
     ["viking://", "viking://user", "viking://resources", "viking://temp"],
@@ -594,6 +627,30 @@ async def test_cp_removes_target_file_when_vector_copy_fails(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_cp_keeps_preexisting_target_when_vector_copy_fails(monkeypatch):
+    agfs = _CopyAGFS(target_exists=True)
+    fs = _viking_fs(monkeypatch, agfs)
+    monkeypatch.setattr(
+        fs,
+        "_copy_vector_store_uris",
+        AsyncMock(side_effect=RuntimeError("vector copy failed")),
+        raising=False,
+    )
+
+    with pytest.raises(RuntimeError, match="vector copy failed"):
+        await fs.cp(
+            "viking://resources/source.md",
+            "viking://resources/target.md",
+            ctx=_ctx(),
+        )
+
+    assert agfs.target_exists
+    assert not any(
+        event[0:3] == ("rm", "/local/acct/resources/target.md", False) for event in agfs.events
+    )
+
+
+@pytest.mark.asyncio
 async def test_cp_keeps_partial_target_when_agfs_copy_fails(monkeypatch):
     agfs = _CopyAGFS(fail_copy=True)
     fs = _viking_fs(monkeypatch, agfs)
@@ -732,6 +789,55 @@ async def test_mv_preserves_original_error_when_vector_failure_cleanup_fails(mon
     assert not any(
         event[0:3] == ("rm", "/local/acct/resources/source.md", False) for event in agfs.events
     )
+
+
+@pytest.mark.asyncio
+async def test_mv_keeps_preexisting_target_when_vector_move_fails(monkeypatch):
+    agfs = _CopyAGFS(target_exists=True)
+    fs = _viking_fs(monkeypatch, agfs)
+    monkeypatch.setattr(
+        fs,
+        "_update_vector_store_uris",
+        AsyncMock(side_effect=RuntimeError("vector move failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="vector move failed"):
+        await fs.mv(
+            "viking://resources/source.md",
+            "viking://resources/target.md",
+            ctx=_ctx(),
+        )
+
+    assert agfs.target_exists
+    assert not any(
+        event[0:3] == ("rm", "/local/acct/resources/target.md", False) for event in agfs.events
+    )
+
+
+@pytest.mark.asyncio
+async def test_mv_restores_catalog_after_vector_compensation_recreates_source(monkeypatch):
+    agfs = _CopyAGFS()
+    fs = _viking_fs(monkeypatch, agfs)
+    catalog = _CatalogMoveBackend()
+    fs.vector_store = catalog
+
+    async def fail_after_source_compensation(*_args, **_kwargs):
+        # update_uri_mapping restores source records before it re-raises a
+        # source-deletion failure; local vector upsert recreates Catalog nodes.
+        catalog.roots.add("viking://resources/source.md")
+        raise RuntimeError("vector move failed after source compensation")
+
+    monkeypatch.setattr(fs, "_update_vector_store_uris", fail_after_source_compensation)
+
+    with pytest.raises(RuntimeError, match="vector move failed after source compensation"):
+        await fs.mv(
+            "viking://resources/source.md",
+            "viking://resources/target.md",
+            ctx=_ctx(),
+        )
+
+    assert catalog.roots == {"viking://resources/source.md"}
+    assert not agfs.target_exists
 
 
 @pytest.mark.asyncio
