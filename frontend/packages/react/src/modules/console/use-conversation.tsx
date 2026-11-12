@@ -19,20 +19,7 @@ export function useConversation(
     requestOptions: chatOptions?.requestOptions ?? requestOptions,
   };
   const chat = useVikingBotChat(options);
-  const { sessionId, reset, selectSession } = chat;
-  const selection = useMemo(
-    () => ({
-      prop: undefined as string | undefined,
-      notified: undefined as string | undefined,
-      pending: false,
-      select: selectSession,
-    }),
-    [selectSession],
-  );
-  const sessions = useVikingBotSessions({
-    ...options,
-    enabled: enabled && !conversation?.sessions,
-  });
+  const sessions = useVikingBotSessions(options);
   const submission = useRef(0);
   const owner = useMemo(() => ({ send: chat.send, active: true }), [chat.send]);
   // Draft callbacks belong to the same controller as the request, including unmount.
@@ -42,33 +29,6 @@ export function useConversation(
       owner.active = false;
     };
   }, [owner]);
-  const selectedId = conversation?.sessions?.currentId;
-  // Follow the host's URL-selected remote session, including Back/Forward.
-  // A key would also tear down the stream when the URL echoes a newly created ID.
-  // The controller cancels old requests on selection changes and unmount.
-  useEffect(() => {
-    if (!enabled || selection.prop === selectedId) return;
-    selection.prop = selectedId;
-    selection.pending = sessionId !== selectedId;
-    if (!selection.pending) return;
-    if (selectedId) selection.select(selectedId);
-    else reset();
-    setDraft('');
-  }, [enabled, selection, selectedId, sessionId, reset, setDraft]);
-  const onSelect = conversation?.sessions?.onSelect;
-  const onNew = conversation?.sessions?.onNew;
-  // Report asynchronously created remote IDs to the host router while streaming,
-  // before send() settles. No event handler receives that intermediate ID.
-  // This starts no resources; notified suppresses duplicate router callbacks.
-  useEffect(() => {
-    if (!enabled || (selection.pending && sessionId !== selection.prop)) return;
-    selection.pending = false;
-    if (selection.notified === sessionId) return;
-    selection.notified = sessionId;
-    if (sessionId === selectedId) return;
-    if (sessionId) onSelect?.(sessionId);
-    else onNew?.();
-  }, [enabled, selection, selectedId, sessionId, onSelect, onNew]);
   if (!enabled) return conversation ?? {};
   const error = chat.error ?? chat.persistenceError;
   return {
@@ -108,13 +68,11 @@ export function useConversation(
           }
         : undefined,
     sessions: {
-      ...conversation?.sessions,
-      items: conversation?.sessions?.items ?? sessions.sessions,
+      items: sessions.sessions,
       currentId: chat.sessionId,
-      isLoading: conversation?.sessions?.isLoading ?? sessions.isLoading,
-      error: conversation?.sessions?.error ?? sessions.error?.message,
+      isLoading: sessions.isLoading,
+      error: sessions.error?.message,
       onOpenHistory: () => {
-        conversation?.sessions?.onOpenHistory?.();
         void sessions.refresh();
       },
       onSelect: (id) => {
