@@ -1,6 +1,15 @@
 /* The console shell owns the border and background; the renderer fills it. */
 .ov-file-preview {
   container-type: inline-size;
+  --ov-ui-file-preview-backdrop: var(
+    --ov-ui-color-preview-backdrop,
+    var(--ov-ui-preview-backdrop-default)
+  );
+  --ov-ui-file-preview-dots: radial-gradient(
+    circle,
+    var(--ov-ui-color-preview-dot, var(--ov-ui-preview-dot-default)) 0.6px,
+    transparent 0.7px
+  );
   background: var(--ov-ui-file-preview-surface);
   color: var(--ov-ui-file-preview-text);
 }
@@ -96,8 +105,17 @@
   overflow: hidden;
 }
 .ov-file-preview .ark-agentic-file-viewer-markdown {
-  background: var(--ov-ui-file-preview-surface);
+  background: var(--ov-ui-file-preview-dots) 0 0 / 10px 10px
+    var(--ov-ui-file-preview-backdrop);
   color: inherit;
+}
+
+/* Only the document surround receives dots; the pages keep their own surface. */
+.ov-file-preview [data-document-backdrop='true'] {
+  --agentic-file-viewer-internal-document-backdrop: var(
+      --ov-ui-file-preview-dots
+    )
+    0 0 / 10px 10px var(--ov-ui-file-preview-backdrop);
 }
 .ov-file-preview .ark-agentic-file-viewer-markdown__content img {
   max-width: 100%;
