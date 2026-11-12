@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 
 import httpx
+import openviking_sdk
 import pytest
 from openviking_sdk import AsyncHTTPClient
 
@@ -149,15 +150,42 @@ def test_async_http_client_does_not_override_explicit_gateway_header(tmp_path, m
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method,args,verb,path,payload",
+    [
+        ("health", (), "GET", "/health", None),
+        ("acl_get", ("resources/demo",), "GET", "/api/v1/acl", None),
+        ("acl_set", ("resources/demo", []), "PUT", "/api/v1/acl", {"entries": []}),
+        (
+            "acl_grant",
+            ("resources/demo", "user:alice", "read"),
+            "POST",
+            "/api/v1/acl/grant",
+            {"principal": "user:alice", "level": "read"},
+        ),
+        (
+            "acl_revoke",
+            ("resources/demo", "user:alice"),
+            "POST",
+            "/api/v1/acl/revoke",
+            {"principal": "user:alice"},
+        ),
+        ("acl_delete", ("resources/demo",), "DELETE", "/api/v1/acl", None),
+    ],
+)
+@pytest.mark.parametrize(
+    "mode", ["challenge", "success", "unmarked", "no_token", "explicit", "persistent"]
+)
 async def test_async_http_client_retries_gateway_token_only_after_marked_challenge(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, method, args, verb, path, payload, mode
 ):
     config_path = tmp_path / "ovcli.conf"
     config_path.write_text(
         json.dumps(
             {
                 "url": "http://gateway.example",
-                "gateway_token": "gateway-secret",
+                "gateway_token": None if mode == "no_token" else "gateway-secret",
+                "extra_headers": {"x-gateway-token": "manual-secret"} if mode == "explicit" else {},
             }
         )
     )
@@ -166,29 +194,51 @@ async def test_async_http_client_retries_gateway_token_only_after_marked_challen
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        if len(requests) == 1:
+        if mode != "success" and (len(requests) == 1 or mode == "persistent"):
             return httpx.Response(
                 401,
-                headers={"X-VikingBot-Gateway": "true"},
+                headers={} if mode == "unmarked" else {"X-VikingBot-Gateway": "true"},
                 json={"detail": "X-Gateway-Token header required"},
             )
-        return httpx.Response(200, json={"status": "ok"})
+        return httpx.Response(200, json={"status": "ok", "result": {"ok": True}})
 
     client = AsyncHTTPClient()
     await client.initialize()
     await client._http.aclose()
     client._http = httpx.AsyncClient(
         base_url=client._url,
+        headers=client._extra_headers,
         transport=httpx.MockTransport(handler),
     )
     try:
-        assert await client.health() is True
+        if method == "health":
+            assert await client.health() is (mode in {"challenge", "success"})
+        elif mode in {"challenge", "success"}:
+            assert await getattr(client, method)(*args) == {"ok": True}
+        else:
+            with pytest.raises(
+                openviking_sdk.OpenVikingError, match="X-Gateway-Token header required"
+            ):
+                await getattr(client, method)(*args)
     finally:
         await client.close()
 
-    assert len(requests) == 2
-    assert "X-Gateway-Token" not in requests[0].headers
-    assert requests[1].headers["X-Gateway-Token"] == "gateway-secret"
+    assert len(requests) == (2 if mode in {"challenge", "persistent"} else 1)
+    assert requests[0].headers.get("X-Gateway-Token") == (
+        "manual-secret" if mode == "explicit" else None
+    )
+    if len(requests) == 2:
+        assert requests[1].headers["X-Gateway-Token"] == "gateway-secret"
+    for request in requests:
+        assert request.method == verb
+        assert request.url.path == path
+        if method == "health":
+            continue
+        if payload is None:
+            assert dict(request.url.params) == {"uri": "viking://resources/demo"}
+            assert request.content == b""
+        else:
+            assert json.loads(request.content) == {"uri": "viking://resources/demo", **payload}
 
 
 def test_async_http_client_inherits_profile_enabled_from_ovcli_config(tmp_path, monkeypatch):
