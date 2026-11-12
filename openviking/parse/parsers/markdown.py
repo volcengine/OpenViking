@@ -832,10 +832,8 @@ class MarkdownParser(BaseParser):
             if not image_refs:
                 continue
 
-            # Resolve local image paths, skipping remote URIs and duplicates
-            local_images = []
-            origin_images_links = []
-            seen_paths = set()
+            # Copy each resolved image once while retaining all reference spellings.
+            local_images: Dict[Path, List[str]] = {}
 
             for path_str in image_refs:
                 # Skip remote URIs
@@ -847,12 +845,7 @@ class MarkdownParser(BaseParser):
                     logger.warning(f"[MarkdownParser] Image file not found: {path_str}")
                     continue
 
-                # Skip duplicates within the same markdown file
-                if resolved_path in seen_paths:
-                    continue
-                seen_paths.add(resolved_path)
-                origin_images_links.append(path_str)
-                local_images.append(resolved_path)
+                local_images.setdefault(resolved_path, []).append(path_str)
 
             if not local_images:
                 continue
@@ -863,7 +856,7 @@ class MarkdownParser(BaseParser):
             # Copy each local image next to the markdown file, deduplicating names
             used_names: set[str] = set()
             file_mappings: Dict[str, str] = {}  # original_path_str -> unique_filename
-            for origin_link, resolved_path in zip(origin_images_links, local_images, strict=False):
+            for resolved_path, origin_links in local_images.items():
                 try:
                     if not await asyncio.to_thread(resolved_path.exists):
                         logger.warning(f"[MarkdownParser] Image file not found: {resolved_path}")
@@ -888,7 +881,8 @@ class MarkdownParser(BaseParser):
                     await writer.write_bytes(viking_path, image_bytes)
 
                     # Record mapping for post-commit rewrite
-                    file_mappings[origin_link] = unique_filename
+                    for origin_link in origin_links:
+                        file_mappings[origin_link] = unique_filename
 
                 except Exception as e:
                     logger.warning(f"[MarkdownParser] Failed to ingest image {resolved_path}: {e}")
