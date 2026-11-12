@@ -9,7 +9,7 @@ import hashlib
 import hmac
 import json
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError
@@ -406,6 +406,7 @@ class FileStore(AccountStore):
         admin_user_id: str,
         api_key: str | None = None,
         *,
+        description: str | None = None,
         lease_ref: object | None = None,
     ) -> None:
         """Create an account and its first admin, optionally with a credential."""
@@ -422,6 +423,8 @@ class FileStore(AccountStore):
 
         now = datetime.now(timezone.utc).isoformat()
         user_info = {"role": "admin"}
+        if description is not None:
+            user_info["description"] = description
         if api_key is not None:
             user_info["key"] = (
                 self._hash_api_key(api_key) if self._api_key_hashing_enabled else api_key
@@ -466,6 +469,7 @@ class FileStore(AccountStore):
         role: str = "user",
         *,
         api_key: str | None = None,
+        description: str | None = None,
     ) -> None:
         """Create a user, optionally including its initial API key."""
         resolved_role = validate_account_user_creation_role(role)
@@ -480,7 +484,9 @@ class FileStore(AccountStore):
         if user_id in account.users:
             raise AlreadyExistsError(user_id, "user")
 
-        user_info = {"role": resolved_role}
+        user_info: Dict[str, Any] = {"role": resolved_role}
+        if description is not None:
+            user_info["description"] = description
         if api_key is not None:
             stored_key = self._hash_api_key(api_key) if self._api_key_hashing_enabled else api_key
             user_info["key"] = stored_key
@@ -888,6 +894,26 @@ class FileStore(AccountStore):
 
         await self._save_users_json(account_id, {user_id: account.users[user_id]})
 
+    async def _set_description(
+        self, account_id: str, user_id: str, description: str | None
+    ) -> None:
+        """Set or clear a user's registry note, leaving credentials untouched."""
+        self._ensure_account_active(account_id)
+        account = self._accounts.get(account_id)
+        if account is None:
+            raise NotFoundError(account_id, "account")
+        user_info = account.users.get(user_id)
+        if user_info is None:
+            raise NotFoundError(user_id, "user")
+        if user_info.get("deletion"):
+            raise FailedPreconditionError("User deletion is in progress")
+
+        if description is None:
+            user_info.pop("description", None)
+        else:
+            user_info["description"] = description
+        await self._save_users_json(account_id, {user_id: user_info})
+
     def _get_accounts(
         self,
         name_filter: str | None = None,
@@ -991,6 +1017,8 @@ class FileStore(AccountStore):
                 continue
 
             user_data = {"user_id": user_id, "role": user_role}
+            if description := user_info.get("description"):
+                user_data["description"] = description
             if visible_key:
                 if key.startswith("$argon2"):
                     user_data["key_prefix"] = user_info["key_prefix"]
@@ -1434,7 +1462,12 @@ class FileStore(AccountStore):
         if account is None:
             return None
         user = account.users.get(user_id)
-        return UserSummary(user_id=user_id, role=user.get("role", Role.USER)) if user else None
+        if not user:
+            return None
+        summary = UserSummary(user_id=user_id, role=user.get("role", Role.USER))
+        if description := user.get("description"):
+            summary["description"] = description
+        return summary
 
     async def get_user_membership(self, account_id: str, user_id: str) -> UserSummary | None:
         """Refresh-first point read, symmetric with ``get_account``.
@@ -1464,6 +1497,7 @@ class FileStore(AccountStore):
         admin_user_id: str,
         api_key: str,
         *,
+        description: str | None = None,
         lease_ref: object | None = None,
     ) -> None:
         self._require_writable()
@@ -1473,6 +1507,7 @@ class FileStore(AccountStore):
                 account_id,
                 admin_user_id,
                 api_key,
+                description=description,
                 lease_ref=lease_ref,
             )
 
@@ -1481,17 +1516,22 @@ class FileStore(AccountStore):
         account_id: str,
         admin_user_id: str,
         *,
+        description: str | None = None,
         lease_ref: object | None = None,
     ) -> None:
         self._require_writable()
         async with self._mutation_lock:
             await self._refresh_accounts_for_management_read_unlocked()
-            await self._create_account_identity(account_id, admin_user_id, lease_ref=lease_ref)
+            await self._create_account_identity(
+                account_id, admin_user_id, description=description, lease_ref=lease_ref
+            )
 
-    async def create_user(self, account_id: str, user_id: str, role: str) -> None:
+    async def create_user(
+        self, account_id: str, user_id: str, role: str, *, description: str | None = None
+    ) -> None:
         self._require_writable()
         async with self._mutation_lock:
-            await self._create_user_identity(account_id, user_id, role)
+            await self._create_user_identity(account_id, user_id, role, description=description)
 
     async def create_user_with_api_key(
         self,
@@ -1499,6 +1539,8 @@ class FileStore(AccountStore):
         user_id: str,
         role: str,
         api_key: str,
+        *,
+        description: str | None = None,
     ) -> None:
         self._require_writable()
         async with self._mutation_lock:
@@ -1507,6 +1549,7 @@ class FileStore(AccountStore):
                 user_id,
                 role,
                 api_key=api_key,
+                description=description,
             )
 
     async def delete_account(self, account_id: str) -> None:
@@ -1562,6 +1605,13 @@ class FileStore(AccountStore):
             await self._refresh_accounts_for_management_read_unlocked()
             await self._refresh_users_for_management_read_unlocked(account_id)
             await self._set_role(account_id, user_id, role)
+
+    async def set_description(self, account_id: str, user_id: str, description: str | None) -> None:
+        self._require_writable()
+        async with self._mutation_lock:
+            await self._refresh_accounts_for_management_read_unlocked()
+            await self._refresh_users_for_management_read_unlocked(account_id)
+            await self._set_description(account_id, user_id, description)
 
     async def begin_deletion(
         self,
