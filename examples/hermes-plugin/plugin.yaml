@@ -4,4 +4,3 @@ description: "Long-term memory for Hermes with automatic capture, recall and too
 pip_dependencies:
   - httpx
 requires_env: []
-hooks: []
