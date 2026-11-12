@@ -145,8 +145,6 @@ const activity = {
       emptyDirectory: '此目录暂无文件',
       loadFailed: '无法加载目录',
       discard: '有未保存的修改，确定放弃吗？',
-      searchFiles: '搜索文件',
-      refreshFiles: '刷新文件',
       directoryContents: '目录内容',
       experienceDetails: '经验详情',
       structuredPreview: '结构化预览',

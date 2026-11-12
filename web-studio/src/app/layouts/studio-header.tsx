@@ -88,7 +88,7 @@ export function StudioHeader({
         className={`flex shrink-0 items-center gap-1.5 ${managementMode ? 'sm:gap-3' : 'sm:gap-2'}`}
       >
         {workbenchChrome ? (
-          <div className="flex size-8 shrink-0 items-center justify-center">
+          <div className="flex h-8 min-w-8 shrink-0 items-center justify-center">
             {tasksMode ? (
               <span
                 aria-current="page"
@@ -101,7 +101,11 @@ export function StudioHeader({
                 <span className="sr-only">{t('tasksPage:title')}</span>
               </span>
             ) : (
-              <div ref={actionsRef} data-slot="studio-header-actions" />
+              <div
+                ref={actionsRef}
+                data-slot="studio-header-actions"
+                className="flex h-8 items-center gap-1"
+              />
             )}
           </div>
         ) : null}

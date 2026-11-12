@@ -24,10 +24,6 @@
   border: 1px solid var(--border);
   border-radius: 16px;
 }
-/* Studio supplies its own searchable and navigable resource palette. */
-.fileBrowser :global(.ov-file-browser__toolbar) {
-  display: none;
-}
 .fileBrowser
   :global(
     .ark-agentic-file-viewer-markdown__content
@@ -168,6 +164,9 @@
   flex-direction: column;
   border-radius: 16px;
   background: var(--background);
+}
+:global(.dark) .assistant {
+  border: 1px solid var(--border);
 }
 .directory {
   height: 100%;

@@ -4,7 +4,7 @@ import type { FileBrowserProps } from '@openviking/react/modules/file-browser'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import type { ComponentType, PropsWithChildren } from 'react'
+import type { ComponentType, PropsWithChildren, ReactNode } from 'react'
 import {
   afterEach,
   beforeAll,
@@ -94,9 +94,16 @@ vi.mock('#/features/workbench/resources/hooks/use-resource-upload', () => ({
 vi.mock(
   '#/features/workbench/filesystem/components/workbench-file-browser',
   () => ({
-    WorkbenchFileBrowser: (props: FileBrowserProps) => {
+    WorkbenchFileBrowser: (
+      props: FileBrowserProps & { previewActions?: ReactNode },
+    ) => {
       mocks.preview(props)
-      return <div data-testid="preview">{props.uri}</div>
+      return (
+        <>
+          <div data-testid="preview">{props.uri}</div>
+          {props.previewActions}
+        </>
+      )
     },
   }),
 )
@@ -173,7 +180,7 @@ function renderFilesystem() {
   })
 }
 
-describe('filesystem context tree refresh', () => {
+describe('filesystem workbench', () => {
   beforeAll(async () => {
     await FilesystemRoute.preload?.()
   })
@@ -340,58 +347,5 @@ describe('filesystem context tree refresh', () => {
     expect(mocks.console.mock.lastCall?.[0]).toMatchObject({ mode: 'command' })
     expect(mocks.console.mock.lastCall?.[0].conversation).toBeUndefined()
     expect(screen.queryByText('addResource.title')).toBeNull()
-  })
-
-  it('clears a deleted selected file from the preview and URL search', async () => {
-    mocks.fetchFsStat.mockRejectedValue({ statusCode: 404 })
-    renderFilesystem()
-
-    await userEvent.click(
-      await screen.findByRole('button', { name: 'ide.refreshFiles' }),
-    )
-
-    await waitFor(() => {
-      expect(screen.getByTestId('preview').textContent).toBe(
-        parentDirectory.slice(0, -1),
-      )
-    })
-    expect(mocks.invalidateList.mock.calls[0]).toEqual([])
-    expect(mocks.fetchFsStat).toHaveBeenCalledWith(firstFile, {
-      throwOnError: true,
-    })
-    const navigation = mocks.navigate.mock.calls[0][0]
-    expect(
-      navigation.search({ file: firstFile, uri: parentDirectory }),
-    ).toEqual({ uri: parentDirectory })
-  })
-
-  it('does not clear a newer selection when the old file stat finishes late', async () => {
-    let rejectStat: (error: unknown) => void = () => undefined
-    mocks.fetchFsStat.mockReturnValue(
-      new Promise((_, reject) => {
-        rejectStat = reject
-      }),
-    )
-    const { rerender } = renderFilesystem()
-
-    await userEvent.click(
-      await screen.findByRole('button', { name: 'ide.refreshFiles' }),
-    )
-    await waitFor(() => {
-      expect(mocks.fetchFsStat).toHaveBeenCalledOnce()
-    })
-
-    mocks.search = { file: secondFile, uri: parentDirectory }
-    rerender(<FilesystemRoute />)
-    await waitFor(() => {
-      expect(screen.getByTestId('preview').textContent).toBe(secondFile)
-    })
-
-    await act(async () => {
-      rejectStat({ statusCode: 404 })
-    })
-
-    expect(screen.getByTestId('preview').textContent).toBe(secondFile)
-    expect(mocks.navigate).not.toHaveBeenCalled()
   })
 })

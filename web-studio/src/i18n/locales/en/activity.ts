@@ -152,8 +152,6 @@ const activity = {
       emptyDirectory: 'No files in this directory',
       loadFailed: 'Unable to load directory',
       discard: 'Discard unsaved changes?',
-      searchFiles: 'Search files',
-      refreshFiles: 'Refresh files',
       directoryContents: 'Directory contents',
       experienceDetails: 'Experience details',
       structuredPreview: 'Structured preview',
