@@ -3,8 +3,9 @@
 
 """MCP wire-result tests for tool execution failures."""
 
+import logging
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from mcp.types import CallToolRequest, CallToolRequestParams
@@ -54,6 +55,36 @@ async def test_whole_call_failure_sets_error_result(monkeypatch):
         "message": "write permission required",
         "details": {"resource": uri},
     }
+
+
+async def test_unexpected_failure_is_logged_and_recorded_on_trace(monkeypatch, caplog):
+    uri = "viking://resources/a.md"
+    content = "request content must not enter the log message"
+    failure = RuntimeError("storage unavailable")
+    service = SimpleNamespace(fs=SimpleNamespace(write=AsyncMock(side_effect=failure)))
+    record_trace_exception = Mock()
+    monkeypatch.setattr(mcp_endpoint, "get_service", lambda: service)
+    monkeypatch.setattr(mcp_endpoint, "record_trace_exception", record_trace_exception)
+
+    mcp_endpoint.logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.ERROR, logger=mcp_endpoint.logger.name):
+            result = await _call_tool("write", {"uri": uri, "content": content})
+    finally:
+        mcp_endpoint.logger.removeHandler(caplog.handler)
+
+    assert result["isError"] is True
+    assert result["content"] == [
+        {"type": "text", "text": "Error executing tool write: storage unavailable"}
+    ]
+    record_trace_exception.assert_called_once_with(failure)
+    failure_records = [
+        record for record in caplog.records if record.getMessage() == "Unexpected MCP tool failure"
+    ]
+    assert len(failure_records) == 1
+    assert failure_records[0].mcp_tool == "write"
+    assert failure_records[0].exc_info is not None
+    assert content not in failure_records[0].getMessage()
 
 
 async def test_remote_resource_business_failure_sets_error_result(monkeypatch):
