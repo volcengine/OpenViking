@@ -5,8 +5,12 @@ non-empty Markdown after the underlying extractor changed from
 readabilipy + markdownify to trafilatura.
 """
 
-from openviking.parse.parsers.html import HTMLParser
+import threading
+from types import SimpleNamespace
 
+import pytest
+
+from openviking.parse.parsers.html import HTMLParser
 
 WECHAT_HTML = """
 <!doctype html>
@@ -50,3 +54,36 @@ def test_html_to_markdown_returns_empty_string_on_garbage_input():
     parser = HTMLParser()
     md = parser._html_to_markdown("<html><body></body></html>")
     assert md == ""
+
+
+@pytest.mark.asyncio
+async def test_parse_content_offloads_html_conversion(monkeypatch):
+    parser = HTMLParser()
+    event_loop_thread = threading.get_ident()
+    conversion_thread = None
+
+    def convert(content, base_url=""):
+        nonlocal conversion_thread
+        conversion_thread = threading.get_ident()
+        assert content == "<html><body>content</body></html>"
+        assert base_url == "https://example.com/page"
+        return "# Converted"
+
+    class MarkdownParser:
+        async def parse_content(self, content, source_path=None, **kwargs):
+            assert content == "# Converted"
+            assert source_path == "https://example.com/page"
+            return SimpleNamespace()
+
+    monkeypatch.setattr(parser, "_html_to_markdown", convert)
+    monkeypatch.setattr(parser, "_get_markdown_parser", lambda: MarkdownParser())
+
+    result = await parser.parse_content(
+        "<html><body>content</body></html>",
+        source_path="https://example.com/page",
+    )
+
+    assert conversion_thread is not None
+    assert conversion_thread != event_loop_thread
+    assert result.source_format == "html"
+    assert result.parser_name == "HTMLParser"
