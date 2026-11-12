@@ -13,7 +13,7 @@ import shutil
 import tempfile
 import time
 import zipfile
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -574,6 +574,26 @@ class SkillProcessor:
                         fields.add(field_name)
         return fields
 
+    async def _iter_skill_privacy_versions(
+        self,
+        ctx: RequestContext,
+        skill_name: str,
+        previous_versions: Iterable[UserPrivacyConfigVersion] | None,
+    ) -> AsyncIterator[UserPrivacyConfigVersion]:
+        """Reuse snapshots or read history under the caller's config lock."""
+        if previous_versions is not None:
+            for snapshot in previous_versions:
+                yield snapshot
+        elif self._privacy_config_service is not None:
+            for number in await self._privacy_config_service.list_versions(
+                ctx, "skill", skill_name
+            ):
+                version = await self._privacy_config_service.get_version(
+                    ctx, "skill", skill_name, number
+                )
+                if version is not None:
+                    yield version
+
     async def apply_skill_privacy(
         self,
         skill_dict: Dict[str, Any],
@@ -582,7 +602,7 @@ class SkillProcessor:
         *,
         change_reason: str,
         owner_lease_ref: Optional[Dict[str, Any]] = None,
-        previous_versions: Iterable[UserPrivacyConfigVersion] = (),
+        previous_versions: Iterable[UserPrivacyConfigVersion] | None = None,
     ) -> Dict[str, Any]:
         if (
             not self._privacy_config_service
@@ -673,7 +693,9 @@ class SkillProcessor:
             if values:
                 if current is not None:
                     new_values = set(values.values())
-                    for version in previous_versions:
+                    async for version in self._iter_skill_privacy_versions(
+                        ctx, skill_dict["name"], previous_versions
+                    ):
                         for field, previous_value in version.values.items():
                             if (
                                 field in current.values

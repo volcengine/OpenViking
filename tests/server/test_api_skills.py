@@ -551,7 +551,7 @@ async def test_skills_api_update_restores_previous_privacy_after_privacy_write(
         *,
         change_reason,
         owner_lease_ref=None,
-        previous_versions=(),
+        previous_versions=None,
     ):
         result = await original_apply(
             self,
@@ -1030,7 +1030,10 @@ async def test_skill_reupload_restores_manual_fields_for_each_member(client, ser
 
 @pytest.mark.parametrize("mode", ["auto", "auto_strict"])
 @pytest.mark.parametrize("source_kind", ["original", "current", "reference"])
-async def test_shared_zip_update_rejects_rotated_plaintext(client, service, mode, source_kind):
+@pytest.mark.parametrize("method", ["PUT", "POST"])
+async def test_shared_zip_update_rejects_rotated_plaintext(
+    client, service, mode, source_kind, method
+):
     from openviking.privacy.reference import build_privacy_field_reference
     from openviking.privacy.skill_placeholder import build_placeholder
 
@@ -1099,7 +1102,7 @@ async def test_shared_zip_update_rejects_rotated_plaintext(client, service, mode
         if source_kind == "original"
         else package(rotated if source_kind == "current" else build_placeholder(name, field))
     )
-    response = await submit("PUT", content)
+    response = await submit(method, content)
     if source_kind == "original":
         assert response.status_code == 409, response.text
         assert response.json()["error"]["code"] == "CONFLICT"
