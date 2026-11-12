@@ -683,6 +683,7 @@ class WebSearchConfig(BaseModel):
 
     api_key: str = ""  # Brave Search API key
     tavily_api_key: str = ""  # Tavily Search API key
+    outcrawl_api_key: str = ""  # Outcrawl Search API key
     max_results: int = 5
 
 
