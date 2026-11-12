@@ -106,8 +106,11 @@ test('async non-void results are ignored; failures show error, unlock and allow 
   });
   const view = await mount(tree([run]));
   try {
+    assert.ok(button('Run').querySelector('[data-icon="Run"]'));
     await click(button('Run'));
     assert.equal(button('Run').disabled, true);
+    assert.equal(button('Run').getAttribute('aria-busy'), 'true');
+    assert.equal(button('Run').querySelectorAll('[data-icon="Run"]').length, 0);
     await click(button('Run'));
     assert.equal(calls, 1);
     await act(async () => reject(new Error('Try again')));
@@ -116,9 +119,11 @@ test('async non-void results are ignored; failures show error, unlock and allow 
       /Try again/,
     );
     assert.equal(button('Run').disabled, false);
+    assert.ok(button('Run').querySelector('[data-icon="Run"]'));
     await click(button('Run'));
     assert.equal(document.querySelector('[role="alert"]'), null);
     await act(async () => resolve({ ok: true }));
+    assert.ok(button('Run').querySelector('[data-icon="Run"]'));
     assert.equal(document.querySelector('[role="alert"]'), null);
     await view.render(tree([action('Sync', { onClick: () => 42 })]));
     await click(button('Sync'));
@@ -128,6 +133,7 @@ test('async non-void results are ignored; failures show error, unlock and allow 
     assert.equal(document.querySelector('[role="alert"]'), null);
     await settle();
   } finally {
+    resolve?.();
     await view.unmount();
   }
 });

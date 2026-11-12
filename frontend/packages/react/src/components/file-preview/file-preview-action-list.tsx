@@ -42,11 +42,12 @@ export function FilePreviewActionList({
             disabled={disabled || action.disabled}
             loading={pending}
             onClick={() => void execute(action)}
-          >
-            <span className="ov-file-preview__action-icon" aria-hidden="true">
-              {action.icon}
-            </span>
-          </Button>
+            icon={
+              <span className="ov-file-preview__action-icon" aria-hidden="true">
+                {action.icon}
+              </span>
+            }
+          />
         </Tooltip>
       ) : (
         <FilePreviewMenu
