@@ -252,13 +252,21 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
 
     def render_reference_rules(self, context: ExtractionOutputContext) -> str:
         if context.add_only:
-            return prompts.PYTHON_ADD_ONLY_REFERENCE_RULES
+            return "".join(
+                (prompts.EXTRACTION_REFERENCE_RULES, prompts.PYTHON_ADD_ONLY_REFERENCE_RULES)
+            )
         removal_rule = (
             prompts.PYTHON_PATCH_REMOVAL_RULE
             if context.supports_string_patch
             else prompts.PYTHON_FULL_REMOVAL_RULE
         )
-        return "".join((prompts.PYTHON_UPSERT_REFERENCE_RULES, removal_rule))
+        return "".join(
+            (
+                prompts.EXTRACTION_REFERENCE_RULES,
+                prompts.PYTHON_UPSERT_REFERENCE_RULES,
+                removal_rule,
+            )
+        )
 
     def parse(
         self, content: str, context: ExtractionOutputContext
