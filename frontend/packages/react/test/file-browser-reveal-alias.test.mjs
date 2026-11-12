@@ -18,6 +18,7 @@ for (const { rootUri, listedRoot, targetRoot, explicitUser } of [
   },
   { rootUri: canonical, listedRoot: canonical, targetRoot: alias },
   { rootUri: canonical, listedRoot: alias, targetRoot: canonical },
+  { rootUri: alias, listedRoot: canonical, targetRoot: alias },
 ]) {
   test(`reveals ${targetRoot} under ${rootUri} with rows from ${listedRoot}`, async () => {
     scrolled.length = 0;

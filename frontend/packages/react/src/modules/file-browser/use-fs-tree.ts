@@ -274,6 +274,7 @@ export function useFsTree({
     fetchPage,
     setExpanded,
     resolveHome: identity.resolveHome,
+    requestSignal: requestOptions?.signal,
   });
   const rows = useMemo(
     () => flattenTree(rootUri, 0, dirs, expanded),

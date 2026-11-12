@@ -14,7 +14,8 @@ export interface FileBrowserHandle {
   /**
    * Open a preview and optionally reveal its tree row. Returns false when the row
    * is missing, inaccessible, outside the root, or navigation was superseded.
-   * Listing failures reject. In controlled mode the host must accept onUriChange.
+   * Listing and required alias lookup failures reject. In controlled mode the
+   * host must accept onUriChange.
    */
   openResource: (
     uri: string,
