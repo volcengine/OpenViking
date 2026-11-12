@@ -5,7 +5,6 @@ import {
   parentUri,
 } from '#/shared/lib/viking-fs'
 import type { VikingFsEntry } from '#/shared/types/viking-fs'
-import type { FindResultItem, GroupedFindResult } from '#/shared/api/retrieval'
 
 import { cleanVikingUri } from '#/shared/lib/viking-uri'
 
@@ -14,7 +13,6 @@ import {
   FILESYSTEM_EXPANDED_URIS_STORAGE_KEY,
   ROOT_URI,
 } from '#/features/workbench/filesystem/lib/constants'
-import type { ResourceRef } from '#/features/workbench/filesystem/lib/types'
 
 export { cleanVikingUri }
 
@@ -88,15 +86,6 @@ export function writeStoredJson(key: string, value: unknown): void {
   if (typeof window === 'undefined') return
   try {
     window.localStorage.setItem(key, JSON.stringify(value))
-  } catch {
-    // Ignore storage failures in restricted browser contexts.
-  }
-}
-
-export function removeStoredValue(key: string): void {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.removeItem(key)
   } catch {
     // Ignore storage failures in restricted browser contexts.
   }
@@ -233,14 +222,6 @@ export function normalizeFilesystemResourceUri(uri: string): string {
   return normalized
 }
 
-export function entryToRef(entry: VikingFsEntry): ResourceRef {
-  return {
-    label: entry.name || fileNameFromUri(entry.uri),
-    meta: entry.isDir ? 'dir' : entry.size || undefined,
-    uri: entry.uri,
-  }
-}
-
 export function visibleContextEntries(
   entries: VikingFsEntry[],
 ): VikingFsEntry[] {
@@ -260,58 +241,4 @@ export function sortTreeEntries(entries: VikingFsEntry[]): VikingFsEntry[] {
     if (leftTime !== rightTime) return rightTime - leftTime
     return left.name.localeCompare(right.name)
   })
-}
-
-export function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  message: string,
-): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timeoutId = window.setTimeout(() => {
-      reject(new Error(message))
-    }, timeoutMs)
-
-    promise.then(
-      (value) => {
-        window.clearTimeout(timeoutId)
-        resolve(value)
-      },
-      (error) => {
-        window.clearTimeout(timeoutId)
-        reject(error)
-      },
-    )
-  })
-}
-
-export function formatScore(score: number): string {
-  if (!Number.isFinite(score)) return 'score -'
-  return `score ${score.toFixed(2)}`
-}
-
-type FindGroup = 'memories' | 'resources' | 'skills'
-
-/**
- * Flatten a grouped search result (resources + memories + skills) into a single
- * ordered ref list, tagging each ref with its (localized) type, level and score
- * so nothing is dropped from the terminal output.
- */
-export function searchResultToRefs(
-  result: GroupedFindResult,
-  groupLabels: Record<FindGroup, string>,
-): ResourceRef[] {
-  const groups: Array<[FindGroup, FindResultItem[]]> = [
-    ['resources', result.resources],
-    ['memories', result.memories],
-    ['skills', result.skills],
-  ]
-
-  return groups.flatMap(([group, items]) =>
-    items.map((item) => ({
-      label: fileNameFromUri(item.uri) || item.uri,
-      meta: `${groupLabels[group]} · L${item.level} · ${formatScore(item.score)}`,
-      uri: item.uri,
-    })),
-  )
 }

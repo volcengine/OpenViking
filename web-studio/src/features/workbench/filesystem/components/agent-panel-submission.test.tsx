@@ -1,9 +1,23 @@
 import type { VikingBotComposerProps } from '@openviking/react/components/viking-bot'
 // @vitest-environment jsdom
-import { AgentPanel } from '#/features/workbench/filesystem/components/agent-panel'
+import { AgentPanel as AgentConversation } from '#/features/workbench/filesystem/components/agent-panel'
 import { registerFilesystemAgentSessionId } from '#/features/workbench/filesystem/lib/utils'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { Console } from '@openviking/react/modules/console'
+import type { ComponentProps } from 'react'
+
+function AgentPanel(
+  props: Omit<ComponentProps<typeof AgentConversation>, 'children'>,
+) {
+  return (
+    <AgentConversation {...props}>
+      {(conversation) => (
+        <Console mode="conversation" conversation={conversation} />
+      )}
+    </AgentConversation>
+  )
+}
 
 const m = vi.hoisted(() => ({
   create: vi.fn(),
@@ -109,16 +123,8 @@ function setup() {
       }),
   )
   registerFilesystemAgentSessionId('B', 'test')
-  const toolbar = document.createElement('div')
-  document.body.append(toolbar)
   const url = vi.fn()
-  render(
-    <AgentPanel
-      toolbarContainer={toolbar}
-      onSessionChange={url}
-      onOpenResource={vi.fn()}
-    />,
-  )
+  render(<AgentPanel onSessionChange={url} />)
   return {
     url,
     resolve: (id: string) => resolve({ session_id: id }),
@@ -196,7 +202,6 @@ it('deletes the active history session only after confirmation and returns to a 
   const pending = setup()
   fireEvent.click(screen.getByRole('button', { name: 'agent.history' }))
   fireEvent.click(screen.getAllByText('B')[0].closest('button')!)
-  fireEvent.click(screen.getByRole('button', { name: 'agent.history' }))
   fireEvent.click(screen.getByLabelText('threadList.deleteSession'))
   expect(m.remove).not.toHaveBeenCalled()
   await act(async () => {
@@ -209,9 +214,9 @@ it('deletes the active history session only after confirmation and returns to a 
   expect(m.create).not.toHaveBeenCalled()
 })
 
-it('shows new session only for an existing conversation and opens an unpersisted draft', () => {
+it('uses the Console new-session action to open an unpersisted draft', () => {
   const pending = setup()
-  expect(screen.queryByRole('button', { name: 'agent.newSession' })).toBeNull()
+  expect(screen.getByRole('button', { name: 'agent.newSession' })).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'agent.history' }))
   fireEvent.click(screen.getAllByText('B')[0].closest('button')!)
   expect(screen.getByRole('button', { name: 'agent.newSession' })).toBeTruthy()
@@ -219,5 +224,5 @@ it('shows new session only for an existing conversation and opens an unpersisted
   expect(m.create).not.toHaveBeenCalled()
   expect(m.history).toHaveBeenLastCalledWith(undefined)
   expect(pending.url).toHaveBeenCalledWith('')
-  expect(screen.queryByRole('button', { name: 'agent.newSession' })).toBeNull()
+  expect(screen.getByRole('button', { name: 'agent.newSession' })).toBeTruthy()
 })

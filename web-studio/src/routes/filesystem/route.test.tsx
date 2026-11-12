@@ -23,7 +23,7 @@ const mocks = vi.hoisted(() => ({
   preview: vi.fn(),
   copyContent: vi.fn(async () => true),
   agent: vi.fn(),
-  terminal: vi.fn(),
+  console: vi.fn(),
   fetchFsStat: vi.fn(),
   invalidateList: vi.fn(),
   invalidateAll: vi.fn(),
@@ -142,8 +142,8 @@ vi.mock('#/features/workbench/filesystem/components/context-explorer', () => ({
 vi.mock('#/features/workbench/filesystem/components/agent-panel', () => ({
   AgentPanel: mocks.agent,
 }))
-vi.mock('#/features/workbench/filesystem/components/terminal-panel', () => ({
-  TerminalPanel: mocks.terminal,
+vi.mock('#/features/workbench/filesystem/components/workbench-console', () => ({
+  WorkbenchConsole: mocks.console,
 }))
 vi.mock(
   '#/features/workbench/filesystem/components/data-management-dialog',
@@ -207,7 +207,7 @@ describe('filesystem context tree refresh', () => {
     mocks.preview.mockClear()
     mocks.copyContent.mockClear()
     mocks.agent.mockReset().mockReturnValue(null)
-    mocks.terminal.mockReset().mockReturnValue(null)
+    mocks.console.mockReset().mockReturnValue(null)
     mocks.search = { file: firstFile, uri: parentDirectory }
     mocks.fetchFsStat.mockReset()
     mocks.invalidateList.mockReset().mockResolvedValue(undefined)
@@ -334,13 +334,8 @@ describe('filesystem context tree refresh', () => {
     expect(mocks.preview.mock.lastCall?.[0].defaultReadLimit).toBe(10000)
     expect(mocks.uploadProvider.mock.lastCall?.[0]).toBe(false)
     expect(mocks.agent).not.toHaveBeenCalled()
-    expect(mocks.terminal).toHaveBeenCalled()
-    expect(mocks.agent).not.toHaveBeenCalled()
-    expect(
-      screen.getAllByRole('button', { name: 'tabs.terminal' }),
-    ).toHaveLength(1)
-    expect(screen.getByRole('button', { name: 'tabs.terminal' })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'tabs.agent' })).toBeNull()
+    expect(mocks.console.mock.lastCall?.[0]).toMatchObject({ mode: 'command' })
+    expect(mocks.console.mock.lastCall?.[0].conversation).toBeUndefined()
     expect(screen.queryByText('addResource.title')).toBeNull()
   })
 

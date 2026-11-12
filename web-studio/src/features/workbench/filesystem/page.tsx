@@ -12,8 +12,6 @@ import { showErrorToast } from '#/shared/lib/error-toast'
 import { getRouteApi, useNavigate, useBlocker } from '@tanstack/react-router'
 import {
   GalleryVerticalEndIcon,
-  BotIcon,
-  TerminalIcon,
   MoreHorizontalIcon,
   ArrowLeftIcon,
   HistoryIcon,
@@ -25,7 +23,11 @@ import {
   UploadIcon,
   WandSparkles,
 } from 'lucide-react'
-import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
+import type {
+  CSSProperties,
+  PointerEvent as ReactPointerEvent,
+  ReactNode,
+} from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -69,7 +71,7 @@ import {
 import { DeleteDocumentDialog } from './components/delete-document-dialog'
 import { DataManagementDialog } from '#/features/workbench/filesystem/components/data-management-dialog'
 import { SnapshotComparisonDialog } from '#/features/workbench/filesystem/components/snapshot-comparison-dialog'
-import { TerminalPanel } from '#/features/workbench/filesystem/components/terminal-panel'
+import { WorkbenchConsole } from '#/features/workbench/filesystem/components/workbench-console'
 import {
   FILESYSTEM_LEFT_WIDTH,
   FILESYSTEM_LEFT_WIDTH_STORAGE_KEY,
@@ -93,7 +95,6 @@ import {
   normalizeFilesystemResourceUri,
   readFilesystemExpandedUris,
   readStoredNumber,
-  visibleContextEntries,
   writeFilesystemExpandedUris,
 } from '#/features/workbench/filesystem/lib/utils'
 
@@ -176,7 +177,6 @@ function FilesystemWorkbench() {
     dirty: boolean
   } | null>(null)
   const [transferTab, setTransferTab] = useState<'import' | 'export'>('export')
-  const [openingUri, setOpeningUri] = useState<string | null>(null)
   const layoutRef = useRef<HTMLDivElement>(null)
   const [leftWidth, setLeftWidth] = useState(() =>
     readStoredNumber(
@@ -324,7 +324,6 @@ function FilesystemWorkbench() {
       const cleaned = cleanVikingUri(rawUri)
       if (!cleaned) return
 
-      setOpeningUri(cleaned)
       const targetUri = normalizeFilesystemResourceUri(cleaned)
       try {
         const stat = await fetchFsStat(targetUri, { throwOnError: true })
@@ -353,8 +352,6 @@ function FilesystemWorkbench() {
         })
       } catch (error) {
         showErrorToast(error, t('readFailed', { uri: cleaned }))
-      } finally {
-        setOpeningUri(null)
       }
     },
     [syncSearch, t, confirmDocumentNavigation],
@@ -491,7 +488,6 @@ function FilesystemWorkbench() {
     setDataManagementMode(null)
   }, [selectedUri])
   const canTransferSelectedUri = transferUri.startsWith('viking://resources/')
-  const entries = visibleContextEntries(listQuery.data?.entries ?? [])
   const layoutStyle = useMemo(
     () =>
       ({
@@ -860,15 +856,12 @@ function FilesystemWorkbench() {
           <aside className={styles.assistant}>
             <FilesystemActionPanel
               activePanel={activePanel}
-              currentUri={currentUri}
-              entries={entries}
               onCollapse={toggleRightCollapsed}
               onOpenResource={revealResource}
               onPanelChange={handlePanelChange}
               onSessionChange={(sessionId) =>
                 syncSearch({ session: sessionId })
               }
-              openingUri={openingUri}
               sessionId={search.session}
               showAgentTab={canUseLocalTools}
             />
@@ -879,14 +872,11 @@ function FilesystemWorkbench() {
       {canUseCliPanel && isCompactLayout ? (
         <FilesystemMobileActionScreen
           activePanel={activePanel}
-          currentUri={currentUri}
-          entries={entries}
           onClose={() => setActionPanelOpen(false)}
           onOpenResource={revealResource}
           onPanelChange={handlePanelChange}
           onSessionChange={(sessionId) => syncSearch({ session: sessionId })}
           open={actionPanelOpen}
-          openingUri={openingUri}
           sessionId={search.session}
           showAgentTab={canUseLocalTools}
         />
@@ -992,227 +982,145 @@ function useIsCompactFilesystemLayout() {
 
 function FilesystemActionPanel({
   activePanel,
-  currentUri,
-  entries,
   onCollapse,
   onOpenResource,
   onPanelChange,
   onSessionChange,
-  openingUri,
   sessionId,
   showAgentTab,
 }: {
   activePanel: FilesystemPanel
-  currentUri: string
-  entries: VikingFsEntry[]
   onCollapse: () => void
   onOpenResource: ResourceOpenHandler
   onPanelChange: (panel: FilesystemPanel) => void
   onSessionChange: (sessionId: string) => void
-  openingUri: string | null
   sessionId?: string
   showAgentTab: boolean
 }) {
   const { t } = useTranslation('filesystem')
-  const [toolbarContainer, setToolbarContainer] =
-    useState<HTMLDivElement | null>(null)
-
+  const collapseButton = (
+    <Button
+      type="button"
+      size="icon-sm"
+      variant="ghost"
+      className="shrink-0"
+      title={t('actionPanel.collapse')}
+      aria-label={t('actionPanel.collapse')}
+      onClick={onCollapse}
+    >
+      <PanelRightCloseIcon className="size-4" />
+    </Button>
+  )
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-12 shrink-0 items-center gap-2 px-3">
-        <FilesystemActionTabs
-          activePanel={activePanel}
-          onPanelChange={onPanelChange}
-          showAgentTab={showAgentTab}
-        />
-        <div
-          ref={setToolbarContainer}
-          className="ml-auto flex min-w-0 items-center gap-1"
-        />
-        <Button
-          type="button"
-          size="icon-sm"
-          variant="ghost"
-          className="shrink-0"
-          title={t('actionPanel.collapse')}
-          aria-label={t('actionPanel.collapse')}
-          onClick={onCollapse}
-        >
-          <PanelRightCloseIcon className="size-4" />
-        </Button>
-      </div>
-
-      <FilesystemActionContent
-        activePanel={activePanel}
-        currentUri={currentUri}
-        entries={entries}
-        onOpenResource={onOpenResource}
-        onSessionChange={onSessionChange}
-        openingUri={openingUri}
-        sessionId={sessionId}
-        toolbarContainer={toolbarContainer}
-        showAgentTab={showAgentTab}
-      />
-    </div>
+    <FilesystemActionContent
+      activePanel={activePanel}
+      onOpenResource={onOpenResource}
+      onPanelChange={onPanelChange}
+      onSessionChange={onSessionChange}
+      sessionId={sessionId}
+      showAgentTab={showAgentTab}
+      trailingAction={collapseButton}
+    />
   )
 }
 
 function FilesystemMobileActionScreen({
   activePanel,
-  currentUri,
-  entries,
   onClose,
   onOpenResource,
   onPanelChange,
   onSessionChange,
   open,
-  openingUri,
   sessionId,
   showAgentTab,
 }: {
   activePanel: FilesystemPanel
-  currentUri: string
-  entries: VikingFsEntry[]
   onClose: () => void
   onOpenResource: ResourceOpenHandler
   onPanelChange: (panel: FilesystemPanel) => void
   onSessionChange: (sessionId: string) => void
   open: boolean
-  openingUri: string | null
   sessionId?: string
   showAgentTab: boolean
 }) {
-  const { t } = useTranslation(['filesystem', 'resources', 'tasksPage'])
-  const [toolbarContainer, setToolbarContainer] =
-    useState<HTMLDivElement | null>(null)
-
-  if (!open) {
-    return null
-  }
+  const { t } = useTranslation('resources')
+  if (!open) return null
 
   return (
     <div className="fixed inset-0 z-50 flex min-h-0 flex-col bg-background xl:hidden">
-      <div className="flex h-14 shrink-0 items-center gap-2 border-b bg-background px-3">
-        <Button
-          type="button"
-          size="icon-sm"
-          variant="ghost"
-          title={t('dirBrowser.back', { ns: 'resources' })}
-          aria-label={t('dirBrowser.back', { ns: 'resources' })}
-          onClick={onClose}
-        >
-          <ArrowLeftIcon className="size-4" />
-        </Button>
-        <FilesystemActionTabs
-          activePanel={activePanel}
-          onPanelChange={onPanelChange}
-          showAgentTab={showAgentTab}
-        />
-        <div
-          ref={setToolbarContainer}
-          className="ml-auto flex min-w-0 items-center gap-1"
-        />
-      </div>
-      <div className="min-h-0 flex-1">
-        <FilesystemActionContent
-          activePanel={activePanel}
-          currentUri={currentUri}
-          entries={entries}
-          onOpenResource={onOpenResource}
-          onSessionChange={onSessionChange}
-          openingUri={openingUri}
-          sessionId={sessionId}
-          toolbarContainer={toolbarContainer}
-          showAgentTab={showAgentTab}
-        />
-      </div>
-    </div>
-  )
-}
-
-function FilesystemActionTabs({
-  activePanel,
-  onPanelChange,
-  showAgentTab,
-}: {
-  activePanel: FilesystemPanel
-  onPanelChange: (panel: FilesystemPanel) => void
-  showAgentTab: boolean
-}) {
-  const { t } = useTranslation('filesystem')
-  const panels: FilesystemPanel[] = showAgentTab
-    ? ['agent', 'terminal']
-    : ['terminal']
-
-  return (
-    <div
-      className={styles.actionModes}
-      role="group"
-      aria-label={t('actionPanel.expand')}
-    >
-      {panels.map((panel) => {
-        const Icon = panel === 'agent' ? BotIcon : TerminalIcon
-        const label = t(`tabs.${panel}`)
-        return (
-          <button
-            key={panel}
+      <FilesystemActionContent
+        activePanel={activePanel}
+        onOpenResource={onOpenResource}
+        onPanelChange={onPanelChange}
+        onSessionChange={onSessionChange}
+        sessionId={sessionId}
+        showAgentTab={showAgentTab}
+        leadingAction={
+          <Button
             type="button"
-            className={styles.actionMode}
-            aria-label={label}
-            title={label}
-            aria-pressed={activePanel === panel}
-            onClick={() => onPanelChange(panel)}
+            size="icon-sm"
+            variant="ghost"
+            title={t('dirBrowser.back')}
+            aria-label={t('dirBrowser.back')}
+            onClick={onClose}
           >
-            <Icon size={16} />
-            {activePanel === panel ? <span>{label}</span> : null}
-          </button>
-        )
-      })}
+            <ArrowLeftIcon className="size-4" />
+          </Button>
+        }
+      />
     </div>
   )
 }
 
 function FilesystemActionContent({
   activePanel,
-  currentUri,
-  entries,
   onOpenResource,
+  onPanelChange,
   onSessionChange,
-  openingUri,
   sessionId,
-  toolbarContainer,
   showAgentTab,
+  leadingAction,
+  trailingAction,
 }: {
   activePanel: FilesystemPanel
-  currentUri: string
-  entries: VikingFsEntry[]
   onOpenResource: ResourceOpenHandler
+  onPanelChange: (panel: FilesystemPanel) => void
   onSessionChange: (sessionId: string) => void
-  openingUri: string | null
   sessionId?: string
-  toolbarContainer: HTMLDivElement | null
   showAgentTab: boolean
+  leadingAction?: ReactNode
+  trailingAction?: ReactNode
 }) {
+  const toolbar = (
+    <div className="flex min-w-0 items-center justify-end gap-2">
+      {leadingAction}
+      {trailingAction}
+    </div>
+  )
+
+  if (!showAgentTab) {
+    return (
+      <WorkbenchConsole
+        mode="command"
+        onOpenResource={onOpenResource}
+        toolbar={toolbar}
+      />
+    )
+  }
+
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      {activePanel === 'terminal' || !showAgentTab ? (
-        <TerminalPanel
-          currentUri={currentUri}
-          entries={entries}
+    <AgentPanel initialSessionId={sessionId} onSessionChange={onSessionChange}>
+      {(conversation) => (
+        <WorkbenchConsole
+          conversation={conversation}
+          mode={activePanel === 'agent' ? 'conversation' : 'command'}
+          onModeChange={(mode) =>
+            onPanelChange(mode === 'conversation' ? 'agent' : 'terminal')
+          }
           onOpenResource={onOpenResource}
-          onSessionChange={onSessionChange}
-          openingUri={openingUri}
-          sessionId={sessionId}
-          toolbarContainer={toolbarContainer}
-        />
-      ) : (
-        <AgentPanel
-          initialSessionId={sessionId}
-          onOpenResource={onOpenResource}
-          onSessionChange={onSessionChange}
-          toolbarContainer={toolbarContainer}
+          toolbar={toolbar}
         />
       )}
-    </div>
+    </AgentPanel>
   )
 }

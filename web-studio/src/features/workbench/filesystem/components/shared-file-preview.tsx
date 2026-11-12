@@ -18,6 +18,7 @@ import { isSystemUri } from '../lib/document-kind'
 import { getAncestorUris, getErrorMessage } from '../lib/utils'
 import { useCustomPreviewEditing } from '../lib/use-custom-preview-editing'
 import { CopyIcon, FileTextIcon, PencilIcon } from 'lucide-react'
+import { FileTypeIcon } from './file-type-icon'
 import { useTranslation } from 'react-i18next'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import {
@@ -319,7 +320,11 @@ export function SharedFilePreview({
   const common = {
     key: file.uri,
     title: file.name,
-    icon: <FileTextIcon className="size-3.5" />,
+    icon: file.isDir ? (
+      <FileTextIcon className="size-3.5" />
+    ) : (
+      <FileTypeIcon name={file.name} />
+    ),
   }
   const header = (actions: ReactNode) => (
     <div className="flex min-h-11 shrink-0 items-center justify-between gap-2 border-b px-2 py-1">

@@ -12,6 +12,7 @@ import { fetchFsStat } from '#/features/workbench/resources/lib/api'
 import { FileBrowserEntries } from '@openviking/react/components/file-browser-entries'
 import '@openviking/react/components/file-browser-entries/style.css'
 import styles from './context-explorer.module.css'
+import { FileTypeIcon } from './file-type-icon'
 import { useTranslation } from 'react-i18next'
 
 import type { VikingFsEntry } from '#/shared/types/viking-fs'
@@ -105,6 +106,7 @@ export function ContextTree({
       search={Boolean(onOpenSearch)}
       refresh={{ loading: isRefreshing }}
       rows={tree.rows}
+      renderRowIcon={(row) => <FileTypeIcon name={row.name} />}
       selectedId={normalizeFileUri(selectedFileUri || currentUri)}
       isReady={tree.isReady}
       aria-label={t('explorer.title')}

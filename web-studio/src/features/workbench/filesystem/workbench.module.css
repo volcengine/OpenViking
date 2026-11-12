@@ -42,51 +42,11 @@
 .document :global(.ov-file-preview__tab-row) {
   padding-block-start: 6px;
 }
-.actionModes {
-  display: inline-flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 4px;
-  padding: 4px;
-  border-radius: 20px;
-  background: #f1f2f9;
+.fileTypeIcon {
+  color: var(--studio-file-icon-light);
 }
-:global(.dark) .actionModes {
-  background: var(--muted);
-}
-.actionMode {
-  display: inline-flex;
-  height: 28px;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  padding: 0 10px;
-  border-radius: 20px;
-  color: var(--muted-foreground);
-  font-size: 12px;
-  font-weight: 500;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.actionMode[aria-pressed='false'] {
-  width: 36px;
-}
-.actionMode[aria-pressed='true'] {
-  background: var(--background);
-  color: var(--foreground);
-  box-shadow: 0 2px 6px rgb(15 23 42 / 5%);
-}
-.actionMode:hover {
-  color: var(--foreground);
-}
-.actionMode:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 2px;
-}
-.actionMode svg {
-  width: 14px;
-  height: 14px;
-  flex: none;
+:global(.dark) .fileTypeIcon {
+  color: var(--studio-file-icon-dark);
 }
 .previewActions {
   --studio-preview-control-bg: #f7f7f9;
@@ -311,13 +271,14 @@
   }
 }
 
-.assistant [data-agent-session-title] {
-  display: none;
-}
-
 .moreMenuContent .moreMenuDanger {
   color: var(--destructive);
 }
 .moreMenuContent .moreMenuDanger:hover {
   background: color-mix(in srgb, var(--destructive) 10%, transparent);
+}
+
+/* Hosted connections expose the command panel only. */
+.commandOnlyConsole :global(.ov-console__mode[aria-pressed='false']) {
+  display: none;
 }

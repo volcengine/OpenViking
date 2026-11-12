@@ -34,10 +34,6 @@ import {
 } from '#/features/workbench/compile/lib/commands'
 import { isRejectedCompileSubmission } from '#/features/workbench/compile/lib/errors'
 import {
-  clearCompileHandoff,
-  readCompileHandoff,
-} from '#/features/workbench/compile/lib/handoff'
-import {
   locationLabel,
   sourceUris,
   targetError,
@@ -99,7 +95,6 @@ export function CompileForm({
   const userResourceRoot = `viking://user/${connection.userId || 'default'}/resources/`
   const draftKey = `compile-draft:${identityScopeKey}`,
     submissionKey = `compile-submission:${identityScopeKey}`
-  const [handoff] = useState(() => readCompileHandoff(identityScopeKey))
   const queryClient = useQueryClient()
   const [autoUpdate, setAutoUpdate] = useState(false)
   const [schedule, setSchedule] = useState<UpdateSchedule>(defaultSchedule)
@@ -119,36 +114,20 @@ export function CompileForm({
   })
   const [savedDraft] = useState(() => readDraft(draftKey))
   const [draftStarted, setDraftStarted] = useState(
-    () => !!(recoverKey || handoff || fromTask || sourceUri),
+    () => !!(recoverKey || fromTask || sourceUri),
   )
-  useEffect(() => {
-    clearCompileHandoff()
-  }, [])
   const [draft, setDraft] = useState(() =>
     target
       ? { ...empty, to: target }
-      : recoverKey
+      : recoverKey || fromTask
         ? savedDraft
-        : handoff
-          ? {
-              skill: handoff.skill || '',
-              sources: handoff.from?.join('\n') || '',
-              to: handoff.to || '',
-              instruction: handoff.instruction || '',
-            }
-          : fromTask
-            ? savedDraft
-            : {
-                ...empty,
-                sources: sourceUri || userResourceRoot.replace(/\/$/, ''),
-              },
+        : {
+            ...empty,
+            sources: sourceUri || userResourceRoot.replace(/\/$/, ''),
+          },
   )
-  const [args, setArgs] = useState(
-      !target && !recoverKey && handoff?.args
-        ? JSON.stringify(handoff.args, null, 2)
-        : '',
-    ),
-    [preview, setPreview] = useState(false)
+  const [args, setArgs] = useState('')
+  const [preview, setPreview] = useState(false)
   const [locationRevision, setLocationRevision] = useState(0)
   const capability = useCompileCapability()
   const [error, setError] = useState<unknown>(null),

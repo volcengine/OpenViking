@@ -558,6 +558,7 @@ export function AddResourceForm({
         </Collapsible>
 
         <Button
+          className="text-primary-foreground!"
           onClick={handleSubmit}
           disabled={
             !canSubmit ||

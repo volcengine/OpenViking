@@ -1,7 +1,21 @@
 // @vitest-environment jsdom
-import { AgentPanel } from '#/features/workbench/filesystem/components/agent-panel'
+import { AgentPanel as AgentConversation } from '#/features/workbench/filesystem/components/agent-panel'
 import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { Console } from '@openviking/react/modules/console'
+import type { ComponentProps } from 'react'
+
+function AgentPanel(
+  props: Omit<ComponentProps<typeof AgentConversation>, 'children'>,
+) {
+  return (
+    <AgentConversation {...props}>
+      {(conversation) => (
+        <Console mode="conversation" conversation={conversation} />
+      )}
+    </AgentConversation>
+  )
+}
 
 const mocks = vi.hoisted(() => ({
   history: vi.fn(),
@@ -58,27 +72,14 @@ afterEach(cleanup)
 
 it('keeps a new draft out of history requests and the URL', () => {
   const onSessionChange = vi.fn()
-  render(
-    <AgentPanel
-      onOpenResource={vi.fn()}
-      onSessionChange={onSessionChange}
-      toolbarContainer={null}
-    />,
-  )
+  render(<AgentPanel onSessionChange={onSessionChange} />)
   expect(mocks.history).toHaveBeenCalledWith(undefined)
   expect(onSessionChange).not.toHaveBeenCalled()
   expect(mocks.create).not.toHaveBeenCalled()
 })
 
 it('loads history for an existing session', () => {
-  render(
-    <AgentPanel
-      initialSessionId="existing"
-      onOpenResource={vi.fn()}
-      onSessionChange={vi.fn()}
-      toolbarContainer={null}
-    />,
-  )
+  render(<AgentPanel initialSessionId="existing" onSessionChange={vi.fn()} />)
   expect(mocks.history).toHaveBeenCalledWith('existing')
 })
 
@@ -91,13 +92,7 @@ it('creates the draft before sending and publishes only the persisted ID', async
         resolveCreation = resolve
       }),
   )
-  render(
-    <AgentPanel
-      onOpenResource={vi.fn()}
-      onSessionChange={onSessionChange}
-      toolbarContainer={null}
-    />,
-  )
+  render(<AgentPanel onSessionChange={onSessionChange} />)
   let sending!: Promise<void>
   act(() => {
     sending = mocks.onSend!('hello')
@@ -120,13 +115,7 @@ it('creates the draft before sending and publishes only the persisted ID', async
 it('does not send or publish the draft when creation fails', async () => {
   const onSessionChange = vi.fn()
   mocks.create.mockRejectedValue(new Error('unavailable'))
-  render(
-    <AgentPanel
-      onOpenResource={vi.fn()}
-      onSessionChange={onSessionChange}
-      toolbarContainer={null}
-    />,
-  )
+  render(<AgentPanel onSessionChange={onSessionChange} />)
   await act(async () => {
     await mocks.onSend!('hello')
   })

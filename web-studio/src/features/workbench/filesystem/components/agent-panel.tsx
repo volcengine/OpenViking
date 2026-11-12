@@ -1,22 +1,17 @@
 import { useDefaultConversationTitles } from '#/features/workbench/sessions/lib/use-default-conversation-titles'
-import type { VikingBotSessions } from '@openviking/react/components/viking-bot'
-import { VikingBot } from '@openviking/react/components/viking-bot'
-import '@openviking/react/components/viking-bot/style.css'
-import {
-  CircleAlertIcon,
-  HistoryIcon,
-  Loader2Icon,
-  SquarePenIcon,
-  Trash2Icon,
-} from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import type { VikingBotProps } from '@openviking/react/components/viking-bot'
+import { CircleAlertIcon, Loader2Icon, Trash2Icon } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { Composer } from '#/features/workbench/sessions/components/composer'
 import { DeleteConversation } from '#/features/workbench/sessions/components/delete-conversation'
-import { MessageList } from '#/features/workbench/sessions/components/message-list'
+import {
+  sharedMessages,
+  sharedPart,
+} from '#/features/workbench/sessions/lib/shared-messages'
 import { useChat } from '#/features/workbench/sessions/lib/use-chat'
 import { useSessionTitles } from '#/features/workbench/sessions/lib/use-session-titles'
 import {
@@ -30,9 +25,8 @@ import {
   isVikingBotWebSession,
 } from '#/features/workbench/sessions/lib/vikingbot-sessions'
 import { Button } from '#/shared/ui/button'
-import { Popover, PopoverContent, PopoverTrigger } from '#/shared/ui/popover'
+import { copyTextToClipboard } from '#/shared/lib/clipboard'
 
-import type { ResourceOpenHandler } from '#/features/workbench/filesystem/lib/types'
 import {
   getErrorMessage,
   readFilesystemAgentSessionIds,
@@ -41,14 +35,12 @@ import {
 
 export function AgentPanel({
   initialSessionId,
-  onOpenResource,
   onSessionChange,
-  toolbarContainer,
+  children,
 }: {
   initialSessionId?: string
-  onOpenResource: ResourceOpenHandler
   onSessionChange: (sessionId: string) => void
-  toolbarContainer: HTMLDivElement | null
+  children: (conversation: Partial<VikingBotProps>) => ReactNode
 }) {
   const { t } = useTranslation(['filesystem', 'sessions'])
   const { identityScopeKey } = useAppConnection()
@@ -89,8 +81,6 @@ export function AgentPanel({
     persistMessages: true,
     sessionId,
   })
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const followOutput = useRef(true)
 
   const handleNewSession = useCallback(() => {
     if (isCreatingSession) return
@@ -132,24 +122,6 @@ export function AgentPanel({
     }
   }, [identityScopeKey, persistedSessionId])
 
-  useEffect(() => {
-    followOutput.current = true
-  }, [sessionId])
-
-  useEffect(() => {
-    const scroller = scrollRef.current
-    if (scroller && followOutput.current) {
-      scroller.scrollTop = scroller.scrollHeight
-    }
-  }, [
-    sessionId,
-    chat.messages.length,
-    chat.streamingContent,
-    chat.streamingReasoning,
-    chat.streamingToolCalls,
-    chat.streamingInsertIndex,
-  ])
-
   const send = useCallback(
     async (message: string) => {
       if (creationStartedRef.current) return false
@@ -186,43 +158,106 @@ export function AgentPanel({
 
   const isStreaming = chat.status === 'streaming'
   const botModeError = botHealth.isError ? getErrorMessage(botHealth.error) : ''
-  const sessionTitle = getTitle(sessionId)
-  const displayedSessionTitle =
-    sessionTitle === sessionId ? t('agent.newSessionTitle') : sessionTitle
-  const reversedSessions = useMemo(() => {
-    return sessions.filter((session) =>
-      isVikingBotWebSession(session, filesystemSessionIds),
-    )
-  }, [sessions, filesystemSessionIds])
+  const history = sessions.filter((session) =>
+    isVikingBotWebSession(session, filesystemSessionIds),
+  )
+  const prompts = t('agent.empty.prompts', { returnObjects: true })
+  const insertIndex = Math.max(
+    0,
+    Math.min(
+      chat.streamingInsertIndex ?? chat.messages.length,
+      chat.messages.length,
+    ),
+  )
+  const before = sharedMessages(chat.messages.slice(0, insertIndex))
+  const after = sharedMessages(chat.messages.slice(insertIndex))
+  const conversation: Partial<VikingBotProps> = {
+    messages: [...before, ...after],
+    streaming: isStreaming
+      ? {
+          iteration: chat.iteration,
+          parts: chat.streamingParts.map(sharedPart),
+          insertIndex: before.length,
+        }
+      : undefined,
+    listKey: sessionId,
+    isSending: isStreaming,
+    isAvailable: !botModeError,
+    unavailableMessage: botModeError ? t('agent.botDisabledFooter') : undefined,
+    labels: {
+      welcomeTitle: t('agent.empty.heading'),
+      welcomeDescription: t('agent.empty.body'),
+      sessionHistory: t('agent.history'),
+      newSession: t('agent.newSession'),
+      thinking: t('sessions:chat.generating'),
+      reasoning: t('sessions:chat.reasoning'),
+      copy: t('sessions:chat.copy'),
+    },
+    quickInputs: Array.isArray(prompts)
+      ? prompts
+          .filter((prompt): prompt is string => typeof prompt === 'string')
+          .map((prompt) => ({ id: prompt, label: prompt, prompt }))
+      : [],
+    onQuickInputSelect: (input) => void send(input.prompt),
+    onCopy: (text) => void copyTextToClipboard(text),
+    sessions: {
+      items: history.map((session) => ({
+        id: session.session_id,
+        title: getTitle(session.session_id),
+      })),
+      currentId: persistedSessionId,
+      isLoading: isLoadingSessions,
+      onSelect: handleSwitchSession,
+      onNew: handleNewSession,
+    },
+    headerActions: persistedSessionId ? (
+      <SessionDeleteAction
+        title={getTitle(persistedSessionId)}
+        onClick={() => setDeleteSessionId(persistedSessionId)}
+      />
+    ) : undefined,
+    messageList: botHealth.isLoading ? (
+      <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
+        <Loader2Icon className="size-4 animate-spin" />
+        {t('agent.detectingBot')}
+      </div>
+    ) : botModeError ? (
+      <BotModePrompt
+        detail={botModeError}
+        onRetry={() => void botHealth.refetch()}
+      />
+    ) : undefined,
+    footer: sessionError ? (
+      <div
+        role="alert"
+        className="flex items-center justify-between gap-2 px-4 py-2 text-sm text-destructive"
+      >
+        {t('agent.createFailed', { error: sessionError })}
+        <Button size="sm" variant="outline" onClick={handleNewSession}>
+          {t('agent.retry')}
+        </Button>
+      </div>
+    ) : chat.error && !botModeError ? (
+      <div role="alert" className="px-4 py-2 text-sm text-destructive">
+        {t('sessions:chat.sendFailed', { error: chat.error })}
+      </div>
+    ) : undefined,
+    composer: botModeError ? (
+      false
+    ) : (
+      <Composer
+        key={sessionId}
+        variant="compact"
+        isStreaming={isStreaming}
+        onCancel={chat.abort}
+        onSend={send}
+      />
+    ),
+  }
 
   return (
     <>
-      <AgentToolbar
-        container={toolbarContainer}
-        historyLabel={t('agent.history')}
-        isCreatingSession={isCreatingSession}
-        newSessionLabel={t('agent.newSession')}
-        onNewSession={() => void handleNewSession()}
-        sessions={{
-          items: reversedSessions.map((session) => ({
-            id: session.session_id,
-            title: getTitle(session.session_id),
-          })),
-          currentId: sessionId,
-          isLoading: isLoadingSessions,
-          onSelect: handleSwitchSession,
-          renderAction: (session) => (
-            <SessionDeleteAction
-              title={session.title}
-              onClick={() => setDeleteSessionId(session.id)}
-            />
-          ),
-        }}
-        sessionTitle={displayedSessionTitle}
-        showNewSession={Boolean(
-          persistedSessionId || chat.messages.length || sessionError,
-        )}
-      />
+      {children(conversation)}
       {deleteSessionId ? (
         <DeleteConversation
           defaultOpen
@@ -256,173 +291,11 @@ export function AgentPanel({
           }}
         />
       ) : null}
-      <div className="flex min-h-0 flex-1 flex-col">
-        <div
-          ref={scrollRef}
-          className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
-          onScroll={({ currentTarget }) => {
-            followOutput.current =
-              currentTarget.scrollHeight -
-                currentTarget.scrollTop -
-                currentTarget.clientHeight <
-              100
-          }}
-        >
-          {botHealth.isLoading ? (
-            <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
-              <Loader2Icon className="size-4 animate-spin" />
-              {t('agent.detectingBot')}
-            </div>
-          ) : botModeError ? (
-            <BotModePrompt
-              detail={botModeError}
-              onRetry={() => void botHealth.refetch()}
-            />
-          ) : sessionError ? (
-            <div className="grid gap-3 rounded-lg border border-destructive/25 bg-destructive/5 p-3 text-sm text-destructive">
-              <div>{t('agent.createFailed', { error: sessionError })}</div>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="w-fit"
-                onClick={() => {
-                  setSessionError(null)
-                  void handleNewSession()
-                }}
-              >
-                {t('agent.retry')}
-              </Button>
-            </div>
-          ) : chat.messages.length === 0 && !isStreaming ? (
-            <AgentEmptyState onSend={send} />
-          ) : (
-            <MessageList
-              key={sessionId}
-              messages={chat.messages}
-              onResourceClick={onOpenResource}
-              streaming={
-                isStreaming
-                  ? {
-                      iteration: chat.iteration,
-                      parts: chat.streamingParts,
-                      insertIndex: chat.streamingInsertIndex,
-                    }
-                  : undefined
-              }
-            />
-          )}
-        </div>
-
-        {chat.error && !sessionError && !botModeError ? (
-          <div role="alert" className="px-4 py-2 text-sm text-destructive">
-            {t('sessions:chat.sendFailed', { error: chat.error })}
-          </div>
-        ) : null}
-
-        {botModeError ? (
-          <div className="border-t bg-background/80 px-4 py-3 text-center text-sm text-muted-foreground">
-            {t('agent.botDisabledFooter')}
-          </div>
-        ) : (
-          <div className="border-t bg-background/80">
-            <Composer
-              key={sessionId}
-              variant="compact"
-              isStreaming={isStreaming}
-              onCancel={chat.abort}
-              onSend={send}
-            />
-          </div>
-        )}
-      </div>
     </>
   )
 }
 
-export function AgentToolbar({
-  sessions,
-  container,
-  historyLabel,
-  isCreatingSession,
-  newSessionLabel,
-  onNewSession,
-  sessionTitle,
-  showNewSession,
-}: {
-  sessions?: Omit<VikingBotSessions, 'onNew'> & {
-    renderAction?: (
-      session: VikingBotSessions['items'][number],
-    ) => React.ReactNode
-  }
-  container: HTMLDivElement | null
-  historyLabel: string
-  isCreatingSession: boolean
-  newSessionLabel: string
-  onNewSession: () => void
-  sessionTitle: string
-  showNewSession: boolean
-}) {
-  const [open, setOpen] = useState(false)
-  if (!container) return null
-
-  return createPortal(
-    <>
-      <span
-        className="min-w-0 max-w-48 truncate px-1 text-sm font-medium"
-        title={sessionTitle}
-        data-agent-session-title
-      >
-        {sessionTitle}
-      </span>
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger
-          render={<Button variant="ghost" size="icon-sm" />}
-          aria-label={historyLabel}
-          title={historyLabel}
-        >
-          <HistoryIcon className="size-3.5" />
-        </PopoverTrigger>
-        <PopoverContent align="end" className="max-h-72 w-64 overflow-auto p-1">
-          {sessions?.isLoading ? (
-            <Loader2Icon className="mx-auto size-4 animate-spin" />
-          ) : null}
-          {sessions?.items.map((session) => (
-            <div key={session.id} className="flex min-w-0 items-center gap-1">
-              <Button
-                variant="ghost"
-                className="min-w-0 flex-1 justify-start"
-                aria-current={session.id === sessions.currentId || undefined}
-                onClick={() => {
-                  sessions.onSelect(session.id)
-                  setOpen(false)
-                }}
-              >
-                <span className="truncate">{session.title}</span>
-              </Button>
-              {sessions.renderAction?.(session)}
-            </div>
-          ))}
-        </PopoverContent>
-      </Popover>
-      {showNewSession ? (
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={newSessionLabel}
-          title={newSessionLabel}
-          disabled={isCreatingSession}
-          onClick={onNewSession}
-        >
-          <SquarePenIcon className="size-3.5" />
-        </Button>
-      ) : null}
-    </>,
-    container,
-  )
-}
-
-export function BotModePrompt({
+function BotModePrompt({
   detail,
   onRetry,
 }: {
@@ -464,34 +337,6 @@ export function BotModePrompt({
         </Button>
       </div>
     </div>
-  )
-}
-
-export function AgentEmptyState({
-  onSend,
-}: {
-  onSend: (message: string) => void
-}) {
-  const { t } = useTranslation('filesystem')
-  const prompts = t('agent.empty.prompts', {
-    returnObjects: true,
-  }) as string[]
-  return (
-    <VikingBot
-      messages={[]}
-      composer={null}
-      style={{ minHeight: '100%', height: 'auto' }}
-      labels={{
-        welcomeTitle: t('agent.empty.heading'),
-        welcomeDescription: t('agent.empty.body'),
-      }}
-      quickInputs={prompts.map((prompt) => ({
-        id: prompt,
-        label: prompt,
-        prompt,
-      }))}
-      onQuickInputSelect={(input) => onSend(input.prompt)}
-    />
   )
 }
 
