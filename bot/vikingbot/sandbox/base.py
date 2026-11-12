@@ -5,6 +5,7 @@ import os
 import posixpath
 import re
 import shutil
+import stat
 from abc import ABC, abstractmethod
 from collections import deque
 from collections.abc import AsyncIterator
@@ -117,11 +118,19 @@ class SandboxBackend(ABC):
             raise ValueError("max_entries must be positive")
 
     @staticmethod
-    def _read_local_bytes(path: Path, original_path: str, max_bytes: int | None) -> bytes:
-        if not path.exists():
-            raise FileNotFoundError(f"File not found: {original_path}")
-        if not path.is_file():
+    def _require_local_file(path: Path, original_path: str) -> os.stat_result:
+        """Return regular-file metadata without hiding access errors as absence."""
+        try:
+            file_stat = path.stat()
+        except (FileNotFoundError, NotADirectoryError) as exc:
+            raise FileNotFoundError(f"File not found: {original_path}") from exc
+        if not stat.S_ISREG(file_stat.st_mode):
             raise IOError(f"Not a file: {original_path}")
+        return file_stat
+
+    @staticmethod
+    def _read_local_bytes(path: Path, original_path: str, max_bytes: int | None) -> bytes:
+        SandboxBackend._require_local_file(path, original_path)
         with path.open("rb") as stream:
             data = stream.read() if max_bytes is None else stream.read(max_bytes + 1)
         if max_bytes is not None and len(data) > max_bytes:
@@ -136,11 +145,7 @@ class SandboxBackend(ABC):
         max_bytes: int | None,
     ) -> int:
         """Copy one host file with bounded memory and remove partial output on failure."""
-        if not source.exists():
-            raise FileNotFoundError(f"File not found: {original_path}")
-        if not source.is_file():
-            raise IOError(f"Not a file: {original_path}")
-        size = source.stat().st_size
+        size = SandboxBackend._require_local_file(source, original_path).st_size
         if max_bytes is not None and size > max_bytes:
             raise ValueError(f"File exceeds the {max_bytes}-byte export limit: {original_path}")
         if source.resolve() == destination.resolve():
@@ -229,10 +234,7 @@ class SandboxBackend(ABC):
         """Return a safe host path when this sandbox workspace is host-accessible."""
         sandbox_path = self._resolve_path(path)
         self._check_path_restriction(sandbox_path)
-        if not sandbox_path.exists():
-            raise FileNotFoundError(f"File not found: {path}")
-        if not sandbox_path.is_file():
-            raise IOError(f"Not a file: {path}")
+        self._require_local_file(sandbox_path, path)
         return sandbox_path
 
     async def export_file(
