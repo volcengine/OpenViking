@@ -81,10 +81,73 @@ pub fn build_git_service(
         }
     };
 
-    Ok(Some(Arc::new(
-        GitService::with_index(vfs, object_store, ref_store, index_store)
-            .with_blob_exists_precheck(cfg.tuning.blob_exists_precheck_enabled),
-    )))
+    #[cfg(feature = "snapshot_log")]
+    let snapshot_log_store = build_snapshot_log_store(cfg)?;
+    #[cfg(not(feature = "snapshot_log"))]
+    if cfg.snapshot_log.provider != "none" {
+        return Err(PyRuntimeError::new_err(
+            "snapshot_log provider requested but ragfs-python built without `snapshot_log` feature",
+        ));
+    }
+
+    let svc = GitService::with_index(vfs, object_store, ref_store, index_store)
+        .with_blob_exists_precheck(cfg.tuning.blob_exists_precheck_enabled);
+    #[cfg(feature = "snapshot_log")]
+    let svc = svc.with_snapshot_log(snapshot_log_store);
+
+    Ok(Some(Arc::new(svc)))
+}
+
+#[cfg(feature = "snapshot_log")]
+fn build_snapshot_log_store(
+    cfg: &GitConfig,
+) -> PyResult<Option<Arc<dyn ragfs::git::SnapshotLogStore>>> {
+    match cfg.snapshot_log.provider.as_str() {
+        "none" => Ok(None),
+        "sqlite" => {
+            let handle = tokio::runtime::Handle::try_current().map_err(|_| {
+                PyRuntimeError::new_err("build_snapshot_log_store must run inside a tokio runtime")
+            })?;
+            let path = cfg.snapshot_log.sqlite.path.clone();
+            let store = handle
+                .block_on(async move { ragfs::git::SqliteSnapshotLogStore::connect(&path).await })
+                .map_err(|e| PyRuntimeError::new_err(format!("SqliteSnapshotLogStore: {e}")))?;
+            Ok(Some(Arc::new(store) as Arc<dyn ragfs::git::SnapshotLogStore>))
+        }
+        "mysql" => {
+            let mysql = cfg
+                .snapshot_log
+                .mysql
+                .as_ref()
+                .ok_or_else(|| PyValueError::new_err("[git.snapshot_log.mysql] missing"))?;
+            let dsn = std::env::var(&mysql.dsn_env).map_err(|_| {
+                PyValueError::new_err(format!(
+                    "environment variable {} is required for snapshot_log mysql provider",
+                    mysql.dsn_env
+                ))
+            })?;
+            let handle = tokio::runtime::Handle::try_current().map_err(|_| {
+                PyRuntimeError::new_err("build_snapshot_log_store must run inside a tokio runtime")
+            })?;
+            let max_connections = mysql.max_connections;
+            let connect_timeout_ms = mysql.connect_timeout_ms;
+            let store = handle
+                .block_on(async move {
+                    ragfs::git::MySqlSnapshotLogStore::connect(
+                        &dsn,
+                        max_connections,
+                        connect_timeout_ms,
+                    )
+                    .await
+                })
+                .map_err(|e| PyRuntimeError::new_err(format!("MySqlSnapshotLogStore: {e}")))?;
+            Ok(Some(Arc::new(store) as Arc<dyn ragfs::git::SnapshotLogStore>))
+        }
+        other => Err(PyValueError::new_err(format!(
+            "unsupported snapshot_log provider: {}",
+            other
+        ))),
+    }
 }
 
 #[cfg(feature = "s3")]
@@ -666,6 +729,10 @@ mod tests {
             }),
             s3: None,
             tuning: Default::default(),
+            snapshot_log: ragfs::git::GitSnapshotLogConfig {
+                provider: "none".into(),
+                ..Default::default()
+            },
         }
     }
 

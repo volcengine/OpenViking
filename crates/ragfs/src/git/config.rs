@@ -22,6 +22,8 @@ pub struct GitConfig {
 
     #[serde(default)]
     pub tuning: GitTuningConfig,
+    #[serde(default)]
+    pub snapshot_log: GitSnapshotLogConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -65,11 +67,64 @@ pub struct GitTuningConfig {
     pub blob_exists_precheck_enabled: bool,
 }
 
+/// Snapshot path history index configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitSnapshotLogConfig {
+    /// SnapshotLog provider: `none`, `sqlite`, or `mysql`.
+    #[serde(default = "default_snapshot_log_provider")]
+    pub provider: String,
+    /// SQLite provider settings.
+    #[serde(default)]
+    pub sqlite: GitSnapshotLogSqliteConfig,
+    /// MySQL provider settings.
+    #[serde(default)]
+    pub mysql: Option<GitSnapshotLogMySqlConfig>,
+}
+
+/// SQLite SnapshotLog provider configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitSnapshotLogSqliteConfig {
+    /// Absolute SQLite database path.
+    #[serde(default = "default_snapshot_log_sqlite_path")]
+    pub path: String,
+}
+
+/// MySQL SnapshotLog provider configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitSnapshotLogMySqlConfig {
+    /// Environment variable that contains the MySQL DSN.
+    pub dsn_env: String,
+    /// Maximum MySQL pool connections.
+    #[serde(default = "default_mysql_max_connections")]
+    pub max_connections: u32,
+    /// MySQL connect timeout in milliseconds.
+    #[serde(default = "default_mysql_connect_timeout_ms")]
+    pub connect_timeout_ms: u64,
+}
+
 impl Default for GitTuningConfig {
     fn default() -> Self {
         Self {
             commit_index_enabled: default_true(),
             blob_exists_precheck_enabled: default_true(),
+        }
+    }
+}
+
+impl Default for GitSnapshotLogConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_snapshot_log_provider(),
+            sqlite: GitSnapshotLogSqliteConfig::default(),
+            mysql: None,
+        }
+    }
+}
+
+impl Default for GitSnapshotLogSqliteConfig {
+    fn default() -> Self {
+        Self {
+            path: default_snapshot_log_sqlite_path(),
         }
     }
 }
@@ -95,6 +150,18 @@ fn default_cas_mode() -> String {
 fn default_true() -> bool {
     true
 }
+fn default_snapshot_log_provider() -> String {
+    "sqlite".to_string()
+}
+fn default_snapshot_log_sqlite_path() -> String {
+    "/tmp/snapshot_log.db".to_string()
+}
+fn default_mysql_max_connections() -> u32 {
+    16
+}
+fn default_mysql_connect_timeout_ms() -> u64 {
+    3_000
+}
 
 #[cfg(test)]
 mod tests {
@@ -119,6 +186,8 @@ mod tests {
         assert!(cfg.s3.is_none());
         assert!(cfg.tuning.commit_index_enabled);
         assert!(cfg.tuning.blob_exists_precheck_enabled);
+        assert_eq!(cfg.snapshot_log.provider, "sqlite");
+        assert_eq!(cfg.snapshot_log.sqlite.path, "/tmp/snapshot_log.db");
     }
 
     #[test]
@@ -154,5 +223,25 @@ mod tests {
         let cfg: GitConfig = toml::from_str("").unwrap();
         assert!(!cfg.enabled);
         assert_eq!(cfg.backend, "local");
+        assert_eq!(cfg.snapshot_log.provider, "sqlite");
+    }
+
+    #[test]
+    fn parses_snapshot_log_overrides() {
+        let toml_src = r#"
+            [snapshot_log]
+            provider = "mysql"
+
+            [snapshot_log.mysql]
+            dsn_env = "SNAPSHOT_DSN"
+            max_connections = 4
+            connect_timeout_ms = 1000
+        "#;
+        let cfg: GitConfig = toml::from_str(toml_src).unwrap();
+        assert_eq!(cfg.snapshot_log.provider, "mysql");
+        let mysql = cfg.snapshot_log.mysql.unwrap();
+        assert_eq!(mysql.dsn_env, "SNAPSHOT_DSN");
+        assert_eq!(mysql.max_connections, 4);
+        assert_eq!(mysql.connect_timeout_ms, 1000);
     }
 }

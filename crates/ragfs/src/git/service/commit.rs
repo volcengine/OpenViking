@@ -152,6 +152,8 @@ impl GitService {
 
         // Lazily flatten prev_tree once if any explicit path requires it.
         let mut prev_paths_cache: Option<Vec<(String, ObjectId)>> = None;
+        #[cfg(feature = "snapshot_log")]
+        let mut actual_changed_paths: Vec<String> = Vec::new();
 
         let candidates: Vec<String> = match &paths {
             Some(ps) => {
@@ -210,6 +212,8 @@ impl GitService {
                                             .await?;
                                         if credited_removed.insert(path.clone()) {
                                             changed += 1;
+                                            #[cfg(feature = "snapshot_log")]
+                                            actual_changed_paths.push(path.clone());
                                         }
                                     }
                                 }
@@ -255,6 +259,8 @@ impl GitService {
                                         .remove(self.object_store.as_ref(), &account, p)
                                         .await?;
                                     changed += 1;
+                                    #[cfg(feature = "snapshot_log")]
+                                    actual_changed_paths.push(p.clone());
                                 }
                             }
                         }
@@ -305,6 +311,8 @@ impl GitService {
                                         .remove(self.object_store.as_ref(), &account, p)
                                         .await?;
                                     changed += 1;
+                                    #[cfg(feature = "snapshot_log")]
+                                    actual_changed_paths.push(p.clone());
                                 }
                             }
                             if let Some(t) = prev_tree {
@@ -341,6 +349,8 @@ impl GitService {
                                             .await?;
                                         if credited_removed.insert(path.clone()) {
                                             changed += 1;
+                                            #[cfg(feature = "snapshot_log")]
+                                            actual_changed_paths.push(path.clone());
                                         }
                                     }
                                 }
@@ -390,6 +400,8 @@ impl GitService {
                                 .await?;
                             if credited_removed.insert(p.clone()) {
                                 changed += 1;
+                                #[cfg(feature = "snapshot_log")]
+                                actual_changed_paths.push(p.clone());
                             }
                         }
                     }
@@ -525,6 +537,8 @@ impl GitService {
                             .upsert(self.object_store.as_ref(), &account, &rel_path, oid)
                             .await?;
                         changed += 1;
+                        #[cfg(feature = "snapshot_log")]
+                        actual_changed_paths.push(rel_path.clone());
                     }
 
                     // Record in the new index regardless of whether the editor
@@ -569,6 +583,8 @@ impl GitService {
                             .remove(self.object_store.as_ref(), &account, &rel_path)
                             .await?;
                         changed += 1;
+                        #[cfg(feature = "snapshot_log")]
+                        actual_changed_paths.push(rel_path.clone());
                     }
                     // The file is gone (or became a directory): drop its cached blob.
                     if self.index_store.is_some() {
@@ -633,6 +649,10 @@ impl GitService {
             }
             Err(other) => return Err(other.into()),
         }
+
+        #[cfg(feature = "snapshot_log")]
+        self.try_append_snapshot_log(&account, &branch, prev_head, commit_oid, &actual_changed_paths)
+            .await;
 
         // 8. Persist the new commit index. Soft-fail: a save error logs and
         //    continues — the commit itself has already succeeded; the worst

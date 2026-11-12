@@ -62,6 +62,34 @@ class GitS3Config(BaseModel):
     )
 
 
+class GitSnapshotLogSqliteConfig(BaseModel):
+    """SQLite SnapshotLog provider config."""
+
+    path: str = Field(
+        default="/tmp/snapshot_log.db",
+        description="Absolute SQLite database path for snapshot path history.",
+    )
+
+
+class GitSnapshotLogMySqlConfig(BaseModel):
+    """MySQL SnapshotLog provider config."""
+
+    dsn_env: str = Field(
+        default="OPENVIKING_SNAPSHOT_LOG_DSN",
+        description="Environment variable name containing the MySQL DSN.",
+    )
+    max_connections: int = Field(default=16, ge=1)
+    connect_timeout_ms: int = Field(default=3000, ge=1)
+
+
+class GitSnapshotLogConfig(BaseModel):
+    """Snapshot path history index config."""
+
+    provider: Literal["none", "sqlite", "mysql"] = "sqlite"
+    sqlite: GitSnapshotLogSqliteConfig = Field(default_factory=GitSnapshotLogSqliteConfig)
+    mysql: GitSnapshotLogMySqlConfig = Field(default_factory=GitSnapshotLogMySqlConfig)
+
+
 class GitConfig(BaseModel):
     """Git multi-version management configuration."""
 
@@ -96,6 +124,10 @@ class GitConfig(BaseModel):
         default=None,
         description="Configuration for the 's3' backend. Required when backend='s3'.",
     )
+    snapshot_log: GitSnapshotLogConfig = Field(
+        default_factory=GitSnapshotLogConfig,
+        description="SnapshotLog provider configuration for path-filtered history.",
+    )
 
     @model_validator(mode="after")
     def _validate_backend(self) -> "GitConfig":
@@ -112,4 +144,7 @@ class GitConfig(BaseModel):
                 raise ValueError(
                     f"git backend 's3' requires the following fields: {', '.join(missing)}"
                 )
+        if self.enabled and self.snapshot_log.provider == "sqlite":
+            if not self.snapshot_log.sqlite.path.startswith("/"):
+                raise ValueError("git snapshot_log sqlite path must be absolute")
         return self

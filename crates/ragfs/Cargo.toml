@@ -144,6 +144,7 @@ uuid = { version = "1.0", features = ["v4"] }
 [features]
 default = []
 cache = ["dep:fred", "dep:libloading", "dep:native-tls"]
+snapshot_log = ["dep:sqlx"]
 test-utils = []
 s3 = ["aws-sdk-s3", "aws-config", "aws-types"]
-full = ["s3", "cache"]
+full = ["s3", "cache", "snapshot_log"]
