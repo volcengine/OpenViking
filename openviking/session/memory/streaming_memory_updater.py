@@ -1340,7 +1340,7 @@ async def _match_retargeted_adds(
     schema: MemoryTypeSchema | None,
     messages: list[Message],
 ) -> dict[int, list[ResolvedOperation]]:
-    """Attribute a vanished add only when its literal body has one new destination."""
+    """Attribute a vanished add only when its literal body has one whole-text match."""
     if len(outputs) < 2 or schema is None:
         return {}
     output_uris = set(_unique_operation_uris(outputs))
@@ -1376,7 +1376,9 @@ async def _match_retargeted_adds(
             continue
         if sum(body in proposal for proposal in input_bodies) != 1:
             continue
-        destinations = [i for i, result in enumerate(output_bodies) if body in result]
+        # A word fragment in another note is insufficient evidence for attribution.
+        literal = re.compile(rf"(?<!\w){re.escape(body)}(?!\w)")
+        destinations = [i for i, result in enumerate(output_bodies) if literal.search(result)]
         if len(destinations) == 1:
             matches.setdefault(destinations[0], []).append(inputs[index])
     return matches
