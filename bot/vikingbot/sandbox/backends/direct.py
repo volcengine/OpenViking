@@ -91,6 +91,90 @@ def _resolve_windows_path(target: str, base: str) -> str:
     return target if os.path.isabs(target) else os.path.join(base, target)
 
 
+_SAFE_HOST_PATHS = {
+    "/dev/null",
+    "/dev/zero",
+    "/dev/stdin",
+    "/dev/stdout",
+    "/dev/stderr",
+    "/dev/tty",
+}
+_SAFE_HOST_PREFIXES = ("/dev/fd/", "/proc/self/fd/")
+
+
+def _command_tokens(command: str) -> list[str]:
+    try:
+        lexer = shlex.shlex(command, posix=os.name != "nt", punctuation_chars=";&|<>")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        return list(lexer)
+    except ValueError:
+        return command.split()
+
+
+def _looks_like_path(value: str) -> bool:
+    if not value or value.startswith("-"):
+        return False
+    if value.startswith(("http://", "https://", "ftp://", "viking://", "send://", "data:")):
+        return False
+    if value.startswith("~") or os.path.isabs(value):
+        return True
+    if re.match(r"^[A-Za-z]:[\\/]", value):
+        return True
+    return "/" in value or "\\" in value
+
+
+def _env_assignment_value(token: str) -> str | None:
+    if "=" not in token:
+        return None
+    name, value = token.split("=", 1)
+    return value if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) else None
+
+
+def _command_path_arguments(command: str):
+    expect_executable = True
+    for raw in _command_tokens(command):
+        token = raw.strip().strip("\"'").strip()
+        if not token:
+            continue
+        if token in {"&&", "||", "|", ";"}:
+            expect_executable = True
+            continue
+        if token in {"&", ">", ">>", "<", "<<", ">&", "<&"}:
+            expect_executable = False
+            continue
+        if token[0] in "<>":
+            token = token.lstrip("<>")
+            if not token:
+                continue
+            expect_executable = False
+        else:
+            token = token.lstrip("&")
+            if not token:
+                continue
+        if token.startswith("-"):
+            if "=" not in token:
+                continue
+            token = token.split("=", 1)[1]
+        env_value = _env_assignment_value(token)
+        if env_value is not None:
+            token = env_value
+        elif expect_executable:
+            expect_executable = False
+            continue
+        if _looks_like_path(token):
+            yield token
+
+
+def _is_safe_host_path(value: str, resolved: Path) -> bool:
+    if value.upper() in {"NUL", "CON", "AUX", "PRN"}:
+        return True
+    text = resolved.as_posix()
+    if text in _SAFE_HOST_PATHS or text.startswith(_SAFE_HOST_PREFIXES):
+        return True
+    return resolved.is_file() and os.access(resolved, os.X_OK)
+
+
 async def _restrict_windows_acl(path: str, *, directory: bool) -> str | None:
     """Approximate POSIX 0700/0600 with an owner/SYSTEM/Administrators NTFS ACL.
 
@@ -209,7 +293,12 @@ class DirectBackend(SandboxBackend):
 
         logger.info("[Direct] Executing: {}", repr(command))
 
-        cwd = kwargs.get("working_dir", str(self._workspace))
+        working_dir = kwargs.get("working_dir")
+        cwd_path = Path(working_dir) if working_dir else self._workspace
+        if not cwd_path.is_absolute():
+            cwd_path = self._workspace / cwd_path
+        self._check_path_restriction(cwd_path)
+        cwd = str(cwd_path)
 
         child_env = None
         if os.name == "nt":
@@ -218,6 +307,8 @@ class DirectBackend(SandboxBackend):
             if translated is not None:
                 logger.info("[Direct] Windows POSIX command translated: {}", repr(command))
                 return translated
+
+        self._check_command_paths(command, cwd)
 
         try:
             process = await asyncio.create_subprocess_shell(
@@ -346,6 +437,29 @@ class DirectBackend(SandboxBackend):
             items.append((item.name, item.is_dir()))
         return items
 
+    def _allowed_roots(self) -> list[Path]:
+        roots = [self.workspace.resolve()]
+        if self.restrict_workspaces and self.session_key in self.restrict_workspaces:
+            roots.append(Path(self.restrict_workspaces[self.session_key]).resolve())
+        return roots
+
+    def _is_within_allowed_roots(self, resolved: Path) -> bool:
+        return any(
+            resolved == root or root in resolved.parents for root in self._allowed_roots()
+        )
+
+    def _check_command_paths(self, command: str, cwd: str) -> None:
+        for value in _command_path_arguments(command):
+            candidate = Path(os.path.expanduser(value))
+            if not candidate.is_absolute():
+                candidate = Path(cwd) / candidate
+            resolved = candidate.resolve()
+            if self._is_within_allowed_roots(resolved):
+                continue
+            if _is_safe_host_path(value, resolved):
+                continue
+            raise PermissionError(f"Path outside allowed workspaces: {value}")
+
     def _check_path_restriction(self, path: Path) -> None:
         """Check if path is within workspace (if restricted).
 
@@ -356,12 +470,6 @@ class DirectBackend(SandboxBackend):
             PermissionError: If path outside workspace and restriction is enabled
         """
 
-        workspace = self.workspace.resolve()
         resolved = path.resolve()
-
-        allowed_roots = [workspace]
-        if self.restrict_workspaces and self.session_key in self.restrict_workspaces:
-            allowed_roots.append(Path(self.restrict_workspaces[self.session_key]).resolve())
-
-        if not any(resolved == root or root in resolved.parents for root in allowed_roots):
+        if not self._is_within_allowed_roots(resolved):
             raise PermissionError(f"Path outside allowed workspaces: {path}")
