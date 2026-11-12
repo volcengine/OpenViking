@@ -18,6 +18,9 @@ export const TREE_MIN_WIDTH = 200;
 const DETAIL_MIN_WIDTH = 320;
 /** The separator occupies only its 1px line; the wider hit area overlays the panes. */
 const RESIZE_FOOTPRINT = 1;
+/** Minimum width that can fit both panes and the divider side by side. */
+export const SIDE_BY_SIDE_MIN_WIDTH =
+  TREE_MIN_WIDTH + DETAIL_MIN_WIDTH + RESIZE_FOOTPRINT;
 /** 树的绝对宽度上限。 The tree's absolute width cap. */
 const TREE_MAX_WIDTH = 520;
 

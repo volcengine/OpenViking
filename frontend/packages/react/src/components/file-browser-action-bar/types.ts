@@ -50,6 +50,14 @@ export interface FileBrowserActionBarProps extends Omit<
    * Options for the built-in AgentConnect drawer; enables the connect entry.
    */
   agentConnect?: AgentConnectProps;
+  /** 控制内置抽屉是否打开。Controls whether the built-in drawer is open. */
+  agentConnectOpen?: boolean;
+  /**
+   * 用户通过操作栏打开或关闭内置抽屉时触发；宿主改变属性时不触发。
+   * Called when the user requests to open or close the built-in drawer.
+   * Host-driven prop changes do not trigger it.
+   */
+  onAgentConnectOpenChange?: (open: boolean) => void;
   /**
    * 点击连接入口时通知；未传 agentConnect 时由宿主处理接入。
    * Click notification; the host owns connection when agentConnect is omitted.

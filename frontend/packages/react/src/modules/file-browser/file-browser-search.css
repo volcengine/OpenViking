@@ -240,6 +240,221 @@
 
 /* ── 结果行 ───────────────────────────────────────────────────────── */
 
+.ov-file-browser-search__result-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  align-items: start;
+  gap: 12px;
+}
+
+.ov-file-browser-search__name mark {
+  background: transparent;
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+}
+
+.ov-file-browser-search__preview {
+  min-width: 0;
+  border: 1px solid var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
+  border-radius: 12px;
+  background: var(--ov-ui-file-search-surface);
+  box-shadow: var(--ov-ui-file-search-shadow);
+  pointer-events: auto;
+}
+
+.ov-file-browser-search__panel {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  border: 1px solid var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
+  border-radius: 8px;
+  flex-direction: column;
+  padding: 14px;
+}
+
+.ov-file-browser-search__input {
+  min-height: 36px;
+}
+
+.ov-file-browser-search__input input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.ov-file-browser-search__dismiss {
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--ov-ui-file-search-active);
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  cursor: pointer;
+}
+
+.ov-file-browser-search__dismiss kbd {
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.ov-file-browser-search__dismiss:focus-visible {
+  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
+}
+
+.ov-file-browser-search__results {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  margin-top: 10px;
+}
+
+.ov-file-browser-search__count,
+.ov-file-browser-search__status,
+.ov-file-browser-search__preview-body > p {
+  margin: 0;
+}
+
+.ov-file-browser-search__count {
+  padding: 2px 8px 4px;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  font-size: 12px;
+}
+
+.ov-file-browser-search__status {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  padding: 8px;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  overflow-wrap: anywhere;
+}
+
+.ov-file-browser-search__error {
+  color: var(--ov-ui-color-error, var(--ov-ui-error-default));
+}
+
+.ov-file-browser-search__error p {
+  margin: 0;
+}
+
+.ov-file-browser-search__list {
+  min-height: 0;
+  max-height: min(324px, 50dvh);
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+}
+
+.ov-file-browser-search__result {
+  display: flex;
+  width: 100%;
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: start;
+}
+
+.ov-file-browser-search__result[aria-selected='true'] {
+  background: var(--ov-ui-file-search-active);
+}
+
+.ov-file-browser-search__result > svg {
+  flex: none;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+}
+
+.ov-file-browser-search__name,
+.ov-file-browser-search__path,
+.ov-file-browser-search__preview-title > * {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-file-browser-search__name {
+  flex: 0 1 auto;
+  max-width: 72%;
+}
+
+.ov-file-browser-search__name mark {
+  background: none;
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+}
+
+.ov-file-browser-search__path {
+  flex: 0 1 auto;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  font-size: 12px;
+}
+
+.ov-file-browser-search__preview {
+  display: flex;
+  min-width: 0;
+  border: 1px solid var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
+  border-radius: 8px;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.ov-file-browser-search__preview-title {
+  display: flex;
+  min-width: 0;
+  flex: none;
+  gap: 4px;
+  padding: 11px 14px;
+  border-bottom: 1px solid
+    var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
+  font-size: 12px;
+}
+
+.ov-file-browser-search__preview-title > span {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+}
+
+.ov-file-browser-search__preview-title > strong {
+  flex: 0 0 auto;
+  max-width: 60%;
+  font-weight: 600;
+}
+
+.ov-file-browser-search__preview-body {
+  min-height: 88px;
+  max-height: min(250px, 42dvh);
+  padding: 14px 18px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background:
+    radial-gradient(
+        circle,
+        var(--ov-ui-color-preview-dot, var(--ov-ui-preview-dot-default)) 0.5px,
+        transparent 0.6px
+      )
+      0 0 / 10px 10px,
+    var(--ov-ui-preview-backdrop-default);
+  overflow-wrap: anywhere;
+}
+
+.ov-file-browser-search__excerpt {
+  white-space: pre-wrap;
+}
+
+.ov-file-browser-search__preview-title > * {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-file-browser-search__preview-body > p {
+  margin: 0;
+}
 .ov-file-browser-search__list {
   display: flex;
   flex-direction: column;
@@ -270,6 +485,7 @@
   cursor: pointer;
 }
 
+.ov-file-browser-search__result[aria-selected='true'],
 .ov-file-browser-search__result:hover,
 .ov-file-browser-search__result:focus-visible {
   background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default, #f7f8fd));
@@ -571,6 +787,19 @@
 /* ── 窄屏：高级面板独占内容区 ─────────────────────────────────────── */
 
 @media (max-width: 720px) {
+  .ov-file-browser-search__result-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ov-file-browser-search__result-layout .ov-file-browser-search__list {
+    max-height: 36dvh;
+    overflow: auto;
+  }
+
+  .ov-file-browser-search__preview-body {
+    max-height: 25dvh;
+  }
+
   .ov-file-browser-search--advanced .ov-file-browser-search__results {
     display: none;
   }

@@ -1,3 +1,5 @@
+import { Button } from '../../shared/primitives/button/button.js';
+import type { ReactNode } from 'react';
 import { FileBrowserSearchRow } from './file-browser-search-row.js';
 import { FileBrowserSearchModeRow } from './file-browser-search-mode-row.js';
 import type { SearchHit, SearchMode } from './search-types.js';
@@ -17,6 +19,12 @@ import type { ResolvedLabels } from './file-browser-labels.js';
  */
 export interface FileBrowserSearchResultsProps {
   mode: SearchMode;
+  listId: string;
+  activeIndex: number;
+  query: string;
+  preview?: ReactNode;
+  onHighlight: (index: number) => void;
+  onRetry: () => void;
   hits: SearchHit[];
   loading: boolean;
   error: Error | null;
@@ -35,6 +43,12 @@ const SKELETON_WIDTHS = [368, 348, 319, 359, 335, 316, 368, 351];
 
 export function FileBrowserSearchResults({
   mode,
+  listId,
+  activeIndex,
+  query,
+  preview,
+  onHighlight,
+  onRetry,
   hits,
   loading,
   error,
@@ -97,6 +111,9 @@ export function FileBrowserSearchResults({
           <p>{text.searchFailed}</p>
           <p>{error.message}</p>
         </div>
+        <Button size="small" onClick={onRetry}>
+          {text.retry}
+        </Button>
       </>
     );
   }
@@ -131,15 +148,27 @@ export function FileBrowserSearchResults({
   return (
     <>
       {modeRow(hits.length)}
-      <ul className="ov-file-browser-search__list">
-        {hits.map((hit) => (
-          <FileBrowserSearchRow
-            key={`${hit.uri}#${hit.line ?? 0}`}
-            hit={hit}
-            onOpen={onOpen}
-          />
-        ))}
-      </ul>
+      <div className="ov-file-browser-search__result-layout">
+        <ul
+          id={listId}
+          role="listbox"
+          aria-label={text.searchTitle}
+          className="ov-file-browser-search__list"
+        >
+          {hits.map((hit, index) => (
+            <FileBrowserSearchRow
+              key={`${hit.uri}#${hit.line ?? 0}-${index}`}
+              id={`${listId}-${index}`}
+              hit={hit}
+              query={query}
+              active={index === activeIndex}
+              onHighlight={() => onHighlight(index)}
+              onOpen={onOpen}
+            />
+          ))}
+        </ul>
+        {preview}
+      </div>
     </>
   );
 }

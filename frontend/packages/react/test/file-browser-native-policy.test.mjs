@@ -27,7 +27,7 @@ const cases = [
     `${rootUri}/guide.md`,
     false,
     [],
-    ['download', 'exportPack', 'delete'],
+    ['download', 'history', 'exportPack', 'delete'],
     true,
   ],
   [`${rootUri}/folder`, true, [], ['importPack', 'exportPack'], false],
@@ -50,7 +50,7 @@ const cases = [
       `${home}/memories/experiences/nested/a.md`,
       false,
       [],
-      ['download', 'exportPack', 'delete'],
+      ['download', 'history', 'exportPack', 'delete'],
       true,
     ],
   ]),
@@ -79,7 +79,7 @@ const cases = [
     `${rootUri}/wiki-other/doc.md`,
     false,
     [{ to: target }],
-    ['download', 'exportPack', 'delete'],
+    ['download', 'history', 'exportPack', 'delete'],
     true,
   ],
   [
@@ -156,7 +156,7 @@ test('boolean visibility hides defaults without granting resources a capability 
           download: false,
           exportPack: false,
           delete: false,
-          history: true,
+          history: false,
           configure: true,
         },
       }),
@@ -172,7 +172,7 @@ test('boolean visibility hides defaults without granting resources a capability 
     await view.render(tree(fetch, uri, { ...props, readOnly: true }));
     assert.deepEqual(
       context.defaultActions.flat().map((item) => item.key),
-      ['download', 'exportPack'],
+      ['download', 'history', 'exportPack'],
     );
     assert.equal(context.canEdit, false);
   } finally {
