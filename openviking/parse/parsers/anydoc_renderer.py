@@ -421,7 +421,13 @@ class _AnyDocMarkdownRenderer:
         if width == 0:
             return ""
         rows = [row[:width] for row in rows]
-        header = [text for text, _ in rows.pop(0)] if table.header_rows >= 1 else [""] * width
+        # Markdown tables need a header row plus a separator. When anydoc reports
+        # ``header_rows == 0`` (e.g. a ``<tbody>``-wrapped or colspan/rowspan table
+        # with no ``<thead>``), the first grid row is still real data: promote it to
+        # the header instead of emitting an empty ``|  |  |`` placeholder row above
+        # it, which shifted every data row down and dropped the real first row out of
+        # the table's body.
+        header = [text for text, _ in rows.pop(0)]
         lines = [self._format_table_row(header), self._format_table_row(["---"] * width)]
         lines.extend(self._format_table_row([text for text, _ in row]) for row in rows)
         if truncated_rows:
