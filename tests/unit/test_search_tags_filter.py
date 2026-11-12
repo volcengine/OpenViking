@@ -12,6 +12,7 @@ from openviking.utils.tags import (
     merge_search_tags,
     normalize_search_tag,
     normalize_search_tags,
+    preserve_memory_type_tag,
 )
 from openviking_cli.exceptions import InvalidArgumentError
 
@@ -146,6 +147,13 @@ def test_merge_search_tags_rejects_invalid_arithmetic(existing, incoming):
 
 def test_merge_search_tags_normalizes_and_preserves_duplicate_operations():
     assert merge_search_tags([], [" Count+=1 ", "COUNT-=0.5"]) == ["count=0.5"]
+
+
+def test_preserve_memory_type_tag_does_not_reapply_tag_operations():
+    assert preserve_memory_type_tag(
+        ["memory_type=profile", "c++=cpp", "used_count=3"],
+        ["memory_type=other", "c++=cpp", "used_count=4"],
+    ) == ["memory_type=profile", "c++=cpp", "used_count=4"]
 
 
 def test_find_tags_filter_requires_all_tags():
