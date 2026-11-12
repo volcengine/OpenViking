@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for MarkdownParser relative-link rewriting on ingest."""
 
+import posixpath
 from pathlib import Path
 from unittest.mock import patch
 
@@ -34,6 +35,44 @@ async def test_parse_rewrites_rendered_links_and_preserves_examples(tmp_path):
         document.read_text(encoding="utf-8")
         == f"# Guide\n\n{code}\n\n[Open `linked.md`](../linked/)"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("split_content", [False, True])
+async def test_parse_preserves_links_to_headings_in_the_same_document(tmp_path, split_content):
+    source = tmp_path / "guide.md"
+    source.write_text(
+        "# Guide\n\n## Setup\n\n"
+        "[Details](#details) [This section](#setup) [Unknown](#unknown)\n\n"
+        "```markdown\n[example](#details)\n```\n\n"
+        + "Setup instructions for the example application.\n" * 65
+        + "\n## Details\n\n"
+        + "Detailed options and examples for the application.\n" * 65,
+        encoding="utf-8",
+    )
+    output = tmp_path / "parsed"
+
+    await MarkdownParser().parse(
+        source,
+        split_content=split_content,
+        enable_link_rewrite=True,
+        link_rewrite_root=str(tmp_path),
+        parse_output_store=LocalParseOutputStore(str(output)),
+    )
+
+    files = {path: path.read_text(encoding="utf-8") for path in output.rglob("*.md")}
+    setup_file = next(path for path, text in files.items() if "[Details](" in text)
+    details_file = next(path for path, text in files.items() if "## Details\n" in text)
+    if split_content:
+        assert setup_file != details_file
+        relative = posixpath.relpath(details_file.as_posix(), setup_file.parent.as_posix())
+        assert f"[Details]({relative}#details)" in files[setup_file]
+    else:
+        assert setup_file == details_file
+        assert "[Details](#details)" in files[setup_file]
+    assert "[This section](#setup)" in files[setup_file]
+    assert "[Unknown](#unknown)" in files[setup_file]
+    assert "[example](#details)" in files[setup_file]
 
 
 class TestRewriteRelativeLinks:

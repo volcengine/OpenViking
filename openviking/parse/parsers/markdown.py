@@ -20,6 +20,7 @@ The parser handles scenarios:
 import asyncio
 import hashlib
 import os
+import posixpath
 import re
 import time
 from dataclasses import dataclass, field
@@ -159,6 +160,7 @@ class _RewriteContext:
         default_factory=dict
     )
     image_probe_cache: Dict[str, bool] = field(default_factory=dict)
+    local_anchors: Dict[str, str] = field(default_factory=dict)
 
 
 if TYPE_CHECKING:
@@ -485,6 +487,12 @@ class MarkdownParser(BaseParser):
         write_chars = sum(len(op.content or "") for op in write_ops)
 
         rewrite_enabled = rewrite_ctx is not None
+        if (
+            rewrite_ctx is not None
+            and len(write_ops) > 1
+            and any(re.search(r"\]\(\s*#", op.content or "") for op in write_ops)
+        ):
+            rewrite_ctx.local_anchors = self._local_anchor_targets(write_ops)
 
         mkdir_started = time.perf_counter()
         mkdir_count = 0
@@ -1188,12 +1196,23 @@ class MarkdownParser(BaseParser):
             rewrite_ctx.image_probe_cache[link] = handled
         return rewrite_ctx.image_probe_cache[link]
 
+    def _local_anchor_targets(self, sections: list[_LayoutOp]) -> dict[str, str]:
+        """Find headings that can be linked to a single emitted file."""
+        locations: dict[str, str | None] = {}
+        for section in sections:
+            for _, _, title, _ in self._find_headings(section.content or ""):
+                anchor = _gh_slug(title)
+                if locations.setdefault(anchor, section.uri) != section.uri:
+                    locations[anchor] = None
+        return {anchor: uri for anchor, uri in locations.items() if anchor and uri}
+
     async def _rewrite_relative_links(
         self,
         content: str,
         *,
         section_subpath: str,
         rewrite_ctx: _RewriteContext,
+        section_uri: Optional[str] = None,
     ) -> str:
         """Rewrite relative markdown links in `content` (disk-coordinate).
 
@@ -1221,7 +1240,14 @@ class MarkdownParser(BaseParser):
             if not bang and any(start <= match.start() < end for start, end in protected):
                 continue
             out.append(content[last : match.start()])
-            if bang and await self._ingest_will_handle_image(link, rewrite_ctx):
+            fragment = link.strip()
+            if not bang and section_uri and fragment.startswith("#"):
+                target_uri = rewrite_ctx.local_anchors.get(fragment[1:])
+                new_link = link
+                if target_uri and target_uri != section_uri:
+                    relative = posixpath.relpath(target_uri, posixpath.dirname(section_uri))
+                    new_link = relative + fragment
+            elif bang and await self._ingest_will_handle_image(link, rewrite_ctx):
                 new_link = link
             else:
                 new_link = await self._rewrite_single_link(
@@ -1335,6 +1361,7 @@ class MarkdownParser(BaseParser):
                 content,
                 section_subpath=self._section_subpath(uri, rewrite_ctx.root_dir),
                 rewrite_ctx=rewrite_ctx,
+                section_uri=uri,
             )
         if writer is None:
             writer = ParseArtifactWriter(
