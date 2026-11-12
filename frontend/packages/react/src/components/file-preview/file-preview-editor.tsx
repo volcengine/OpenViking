@@ -1,8 +1,11 @@
+import { useEffect, useState, type ComponentType } from 'react';
 import { Button } from '../../shared/primitives/button/button.js';
-import type { FilePreviewLabels } from './types.js';
+import type { FilePreviewLabels, FilePreviewSource } from './types.js';
+import type { FilePreviewCodeEditorProps } from './file-preview-code-editor.js';
 
 export interface FilePreviewEditorProps {
   draft: string;
+  source: FilePreviewSource;
   text: Required<FilePreviewLabels>;
   loading: boolean;
   failed: boolean;
@@ -12,18 +15,10 @@ export interface FilePreviewEditorProps {
   onCancel: () => void;
 }
 
-/**
- * 编辑态正文：纯文本编辑区，不经过底座。
- *
- * 编辑区独立于 `FileViewerCore`，因此进入编辑不会重建渲染器，退出编辑也
- * 不会重新解析内容。
- *
- * The editing body: a plain-text area that bypasses the base component. Keeping
- * it separate means entering or leaving editing never remounts the renderer nor
- * reparses the content.
- */
+/** Load CodeMirror only when editing; retain the draft if loading fails. */
 export function FilePreviewEditor({
   draft,
+  source,
   text,
   loading,
   failed,
@@ -32,6 +27,26 @@ export function FilePreviewEditor({
   onChange,
   onCancel,
 }: FilePreviewEditorProps) {
+  const [Editor, setEditor] =
+    useState<ComponentType<FilePreviewCodeEditorProps>>();
+  const [editorFailed, setEditorFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    if (loading || failed) return;
+    let active = true;
+    setEditorFailed(false);
+    void import('./file-preview-code-editor.js')
+      .then((module) => {
+        if (active) setEditor(() => module.FilePreviewCodeEditor);
+      })
+      .catch(() => {
+        if (active) setEditorFailed(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [loading, failed, attempt]);
+
   if (loading) {
     return (
       <div className="ov-file-preview__state" role="status">
@@ -64,14 +79,37 @@ export function FilePreviewEditor({
 
   return (
     <div className="ov-file-preview__editor">
-      <textarea
-        className="ov-file-preview__textarea"
-        value={draft}
-        readOnly={saving}
-        aria-label={text.editor}
-        spellCheck={false}
-        onChange={(event) => onChange(event.target.value)}
-      />
+      {Editor ? (
+        <Editor
+          draft={draft}
+          source={source}
+          saving={saving}
+          text={text}
+          onChange={onChange}
+        />
+      ) : editorFailed ? (
+        <>
+          <textarea
+            className="ov-file-preview__textarea"
+            value={draft}
+            readOnly={saving}
+            aria-label={text.editor}
+            spellCheck={false}
+            onChange={(event) => onChange(event.target.value)}
+          />
+          <div className="ov-file-preview__notice" role="alert">
+            {text.editorLoadFailed}{' '}
+            <Button
+              size="small"
+              onClick={() => setAttempt((value) => value + 1)}
+            >
+              {text.retry}
+            </Button>
+          </div>
+        </>
+      ) : (
+        <p className="ov-file-preview__notice">{text.loading}</p>
+      )}
       {saveFailed ? (
         <p className="ov-file-preview__notice" role="alert">
           {text.saveFailed}

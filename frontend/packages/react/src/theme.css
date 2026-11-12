@@ -324,6 +324,13 @@ html.dark .ov-textarea {
   --ov-ui-connect-notice-default: var(--ov-ui-text-2-default);
 }
 
+.ov-file-preview {
+  --ov-ui-syntax-number-default: #722ed1;
+}
+html.dark .ov-file-preview {
+  --ov-ui-syntax-number-default: #b37feb;
+}
+
 .ov-file-preview,
 .ov-file-browser-search {
   --ov-ui-preview-backdrop-default: #f8f8f8;
