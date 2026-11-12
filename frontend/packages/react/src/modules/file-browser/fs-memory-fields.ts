@@ -213,8 +213,11 @@ function yamlScalarRanges(text: string): [number, number][] {
     visit(doc, (_, node) => {
       if (!isScalar(node) || !node.range) return;
       const [start, end] = node.range;
+      // A missing closing delimiter may be reported just outside the scalar range.
       const invalid = doc.errors.some(
-        ({ pos: [a, b] }) => a < end && Math.max(a + 1, b) > start,
+        ({ code, pos: [a, b] }) =>
+          (a < end || (a === end && code === 'MISSING_CHAR')) &&
+          Math.max(a + 1, b) > start,
       );
       if (!invalid) ranges.push([start, end]);
     });
