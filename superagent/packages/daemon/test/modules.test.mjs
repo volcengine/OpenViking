@@ -190,13 +190,13 @@ describe('module boundaries', () => {
     assert.match(manifest.scripts.test, /packages\/cli\/test\/\*\.test\.mjs/);
   });
 
-  it('allows exact sibling operations without permitting self or broad PM2 control', () => {
+  it('allows exact sibling operations, and self control only at the owner\'s request', () => {
     const prompt = fs.readFileSync(
       path.join(root, 'packages', 'daemon', 'agent', 'core.md'),
       'utf8',
     );
-    assert.match(prompt, /Never restart, stop, reconfigure, or redeploy the PM2 application you run in/);
-    assert.match(prompt, /The only self-update is `ov-superagent upgrade \{\{OV_SUPERAGENT_UPGRADE_TARGET\}\}`/);
+    assert.match(prompt, /ends the operation in progress, so do it only when the owner/);
+    assert.match(prompt, /The usual self-update is `ov-superagent upgrade \{\{OV_SUPERAGENT_UPGRADE_TARGET\}\}`/);
     assert.match(prompt, /installs the latest published release/);
     assert.match(prompt, /Manage another named instance only when directly asked, after verifying that it is not the one you run in/);
     assert.match(prompt, /never use broad PM2 selectors or touch unrelated applications/);
