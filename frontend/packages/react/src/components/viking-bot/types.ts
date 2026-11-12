@@ -72,6 +72,10 @@ export interface VikingBotComposerProps extends VikingBotInputFeatures {
   disabledReason?: string;
   /** 是否正在回复；回复中停止动作替代发送。Whether a reply is streaming. */
   isSending?: boolean;
+  /** Allow sending additional input during a reply only when the host supports it. */
+  canSendWhileStreaming?: boolean;
+  /** Awaiting input acceptance; disables duplicate submissions, not editing. */
+  isSubmitting?: boolean;
   /** 输入区布局形态。Layout of the input area. */
   variant?: 'default' | 'compact';
   /** 宿主接受的 MIME 类型。MIME types the host accepts. */
@@ -119,6 +123,9 @@ export interface VikingBotProps
   attachments?: readonly VikingBotAttachment[];
   /** 是否正在回复。Whether a reply is streaming. */
   isSending?: boolean;
+  /** Supplied from the service's canSteer capability. Defaults to false. */
+  canSendWhileStreaming?: boolean;
+  isSubmitting?: boolean;
   /** 是否可接受输入。Whether the bot can accept input. */
   isAvailable?: boolean;
   /** 不可用时的说明。Message shown while the bot is unavailable. */

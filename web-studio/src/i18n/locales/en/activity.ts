@@ -29,6 +29,7 @@ const activity = {
       emptyReadDescription: 'This session has no messages yet.',
       historyLoadFailed: 'Could not load conversation history: {{error}}',
       sendFailed: 'Could not send message: {{error}}',
+      persistFailed: 'Could not save conversation history: {{error}}',
       copy: 'Copy',
       emptyDescription: 'Explore your knowledge base and start a conversation.',
       placeholder: 'Type a message...',

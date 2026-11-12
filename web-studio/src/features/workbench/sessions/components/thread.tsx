@@ -1,13 +1,30 @@
 import { CompassIcon } from 'lucide-react'
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { useStudioService } from '#/features/connection/hooks/use-studio-service'
-import { Composer } from '#/features/workbench/sessions/components/composer'
 import { MemoryImpact } from '#/features/workbench/sessions/components/memory-impact'
-import { MessageList } from '#/features/workbench/sessions/components/message-list'
-import { useChat } from '#/features/workbench/sessions/lib/use-chat'
+import { useVikingBotChat } from '@openviking/react/modules/viking-bot'
+import { OpenVikingProvider } from '@openviking/react/client'
+import { VikingBot } from '@openviking/react/components/viking-bot'
+import type {
+  VikingBotMessage,
+  VikingBotDraft,
+} from '@openviking/react/components/viking-bot'
+import '@openviking/react/components/viking-bot/style.css'
+import { copyTextToClipboard } from '#/shared/lib/clipboard'
+import { sharedMessages } from '#/features/workbench/sessions/lib/shared-messages'
+import { requestStudioModule } from '#/shared/api/module-request'
+import studioI18n from '#/i18n/core'
 import { useSessionTitles } from '#/features/workbench/sessions/lib/use-session-titles'
 import {
   useCreateSession,
@@ -17,6 +34,7 @@ import {
 
 const PixelBlast = lazy(() => import('#/shared/ui/pixel-blast'))
 const PRODUCT_NAME = 'OpenViking'
+const emptyMessages: VikingBotMessage[] = []
 
 interface ThreadProps {
   sessionId: string
@@ -27,7 +45,12 @@ interface ThreadProps {
 export function Thread(props: ThreadProps) {
   const { identityScopeKey } = useAppConnection()
   return (
-    <SessionThread key={`${identityScopeKey}:${props.sessionId}`} {...props} />
+    <OpenVikingProvider baseURL="" fetch={requestStudioModule}>
+      <SessionThread
+        key={`${identityScopeKey}:${props.sessionId}`}
+        {...props}
+      />
+    </OpenVikingProvider>
   )
 }
 
@@ -36,13 +59,16 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
   const service = useStudioService()
   const canChat = service.ready && service.provider === 'opensource'
   const { identityScopeKey } = useAppConnection()
-  const { getTitle } = useSessionTitles(identityScopeKey)
+  const { getTitle, setTitle } = useSessionTitles(identityScopeKey)
   const title = getTitle(sessionId)
 
   const [historyId] = useState(draft ? undefined : sessionId)
   const persisted = useRef(!draft)
   const creating = useRef(false)
   const mounted = useRef(false)
+  const [input, setInput] = useState('')
+  const submission = useRef(0)
+  const [isCreating, setIsCreating] = useState(false)
   const [creationError, setCreationError] = useState<string>()
   const createSession = useCreateSession()
   useEffect(() => {
@@ -54,16 +80,34 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
   const { data: session } = useSession(historyId)
   const {
     data: historyMessages,
-    isPending: historyLoading,
-    error: historyError,
-  } = useSessionMessages(historyId)
+    isPending: remoteHistoryLoading,
+    error: remoteHistoryError,
+  } = useSessionMessages(
+    service.provider === 'volcengine' ? historyId : undefined,
+  )
+  const readOnlyMessages = useMemo(
+    () => sharedMessages(historyMessages ?? []),
+    [historyMessages],
+  )
 
-  const chat = useChat({
-    identityScopeKey,
+  const chat = useVikingBotChat({
+    scopeKey: identityScopeKey,
     sessionId,
-    initialMessages: historyMessages,
-    persistMessages: true,
+    enabled: canChat,
+    initialMessages:
+      service.provider === 'volcengine'
+        ? readOnlyMessages
+        : historyId
+          ? undefined
+          : emptyMessages,
+    locale: studioI18n.language.startsWith('zh') ? 'zh-CN' : 'en-US',
   })
+  const historyLoading =
+    service.provider === 'volcengine'
+      ? remoteHistoryLoading
+      : chat.status === 'loading'
+  const historyError =
+    service.provider === 'volcengine' ? remoteHistoryError : undefined
 
   const isStreaming = chat.status === 'streaming'
 
@@ -72,6 +116,7 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
       if (!canChat || !message.trim() || creating.current) return false
       if (!persisted.current) {
         creating.current = true
+        setIsCreating(true)
         setCreationError(undefined)
         try {
           await createSession.mutateAsync(sessionId)
@@ -86,37 +131,28 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
           return false
         } finally {
           creating.current = false
+          if (mounted.current) setIsCreating(false)
         }
       }
-      const sending = chat.send(message)
-      if (chat.status === 'streaming') {
-        await sending
-      }
-      return true
+      const firstExchange = !chat.messages.some((item) => item.role === 'user')
+      const accepted = await chat.send(message)
+      if (accepted && firstExchange && mounted.current)
+        setTitle(sessionId, message.slice(0, 20))
+      return accepted
     },
-    [canChat, chat, createSession, sessionId, onPersisted],
+    [canChat, chat, createSession, sessionId, onPersisted, setTitle],
   )
 
-  // ---- Auto-scroll ----
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const bottomRef = useRef<HTMLDivElement>(null)
-  const isNearBottomRef = useRef(true)
-  const scrollRafRef = useRef(0)
-
-  const handleScroll = useCallback(() => {
-    const el = scrollRef.current
-    if (!el) return
-    isNearBottomRef.current =
-      el.scrollHeight - el.scrollTop - el.clientHeight < 100
-  }, [])
-
-  useEffect(() => {
-    if (!isNearBottomRef.current) return
-    cancelAnimationFrame(scrollRafRef.current)
-    scrollRafRef.current = requestAnimationFrame(() => {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-    })
-  }, [chat.messages.length, chat.streamingParts, chat.streamingInsertIndex])
+  const submit = async (inputDraft: VikingBotDraft) => {
+    const token = ++submission.current
+    setInput((current) =>
+      current.trim() === inputDraft.text.trim() ? '' : current,
+    )
+    const accepted = await handleSend(inputDraft.text)
+    if (!accepted && mounted.current && token === submission.current)
+      setInput((current) => (current === '' ? inputDraft.text : current))
+    return accepted
+  }
 
   const [showBackground, setShowBackground] = useState(false)
 
@@ -151,66 +187,79 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
         </div>
       )}
 
-      <div className="relative z-10 flex h-12 items-center justify-between gap-4 border-b border-border/50 bg-background/95 px-6">
-        <h2 className="truncate text-sm font-medium text-foreground">
-          {draft && title === sessionId
-            ? t('threadList.newSession')
-            : title || sessionId}
-        </h2>
-        {service.provider === 'opensource' ? (
-          <MemoryImpact session={session} />
-        ) : null}
-      </div>
-
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        className="relative z-10 flex flex-1 flex-col items-center overflow-y-auto px-4 pt-6 pb-6"
-      >
-        {historyId && historyLoading ? (
-          <div role="status" className="py-6 text-sm text-muted-foreground">
-            {t('threadList.loading')}
+      <VikingBot
+        className="relative z-10"
+        locale={studioI18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'}
+        messages={chat.messages}
+        streaming={chat.streaming}
+        listKey={`${identityScopeKey}:${sessionId}`}
+        draft={canChat ? input : undefined}
+        composer={canChat ? undefined : false}
+        onDraftChange={setInput}
+        onSend={submit}
+        isSending={isStreaming}
+        canSendWhileStreaming={chat.canSteer && isStreaming}
+        isSubmitting={isCreating || chat.isSubmitting}
+        isAvailable={canChat && !historyLoading}
+        onCancel={
+          chat.canInterrupt && isStreaming ? () => void chat.abort() : undefined
+        }
+        onCopy={(text) => void copyTextToClipboard(text)}
+        labels={{
+          thinking: t('chat.generating'),
+          reasoning: t('chat.reasoning'),
+          copy: t('chat.copy'),
+          placeholder: t('chat.placeholder'),
+          send: t('chat.send'),
+          stop: t('chat.cancel'),
+        }}
+        header={
+          <div className="flex h-12 items-center justify-between gap-4 border-b border-border/50 bg-background/95 px-6">
+            <h2 className="truncate text-sm font-medium text-foreground">
+              {draft && title === sessionId
+                ? t('threadList.newSession')
+                : title || sessionId}
+            </h2>
+            {service.provider === 'opensource' ? (
+              <MemoryImpact session={session} />
+            ) : null}
           </div>
-        ) : historyError ? (
-          <div role="alert" className="py-6 text-sm text-destructive">
-            {t('chat.historyLoadFailed', { error: historyError.message })}
-          </div>
-        ) : isEmpty ? (
-          <ThreadEmpty canChat={canChat} />
-        ) : (
-          <MessageList
-            messages={chat.messages}
-            streaming={
-              isStreaming
-                ? {
-                    parts: chat.streamingParts,
-                    insertIndex: chat.streamingInsertIndex,
-                    iteration: chat.iteration,
-                  }
-                : undefined
-            }
-          />
-        )}
-        <div ref={bottomRef} />
-      </div>
-
-      {(creationError || chat.error) && (
-        <div
-          role="alert"
-          className="relative z-10 mx-auto w-full max-w-4xl px-4 py-2 text-sm text-destructive"
-        >
-          {t('chat.sendFailed', { error: creationError || chat.error })}
-        </div>
-      )}
-      {canChat ? (
-        <div className="relative z-10">
-          <Composer
-            onSend={handleSend}
-            onCancel={chat.abort}
-            isStreaming={isStreaming}
-          />
-        </div>
-      ) : null}
+        }
+        emptyState={<ThreadEmpty canChat={canChat} />}
+        messageList={
+          historyId && historyLoading ? (
+            <div
+              role="status"
+              className="py-6 text-center text-sm text-muted-foreground"
+            >
+              {t('threadList.loading')}
+            </div>
+          ) : historyError ? (
+            <div
+              role="alert"
+              className="py-6 text-center text-sm text-destructive"
+            >
+              {t('chat.historyLoadFailed', { error: historyError.message })}
+            </div>
+          ) : undefined
+        }
+        footer={
+          creationError || chat.error || chat.persistenceError ? (
+            <div role="alert" className="px-4 py-2 text-sm text-destructive">
+              {creationError || chat.error
+                ? t(
+                    historyId && !chat.messages.length && !creationError
+                      ? 'chat.historyLoadFailed'
+                      : 'chat.sendFailed',
+                    { error: creationError || chat.error },
+                  )
+                : t('chat.persistFailed', {
+                    error: chat.persistenceError?.message,
+                  })}
+            </div>
+          ) : undefined
+        }
+      />
     </div>
   )
 }

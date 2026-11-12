@@ -6,7 +6,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
-import { requestWorkbenchModule } from '../lib/module-request'
+import { requestStudioModule } from '#/shared/api/module-request'
 import styles from '../workbench.module.css'
 
 export function WorkbenchFileBrowser(props: FileBrowserProps) {
@@ -15,7 +15,7 @@ export function WorkbenchFileBrowser(props: FileBrowserProps) {
   const [initialUri] = useState(props.defaultExpandedUri)
 
   return (
-    <OpenVikingProvider baseURL="" fetch={requestWorkbenchModule}>
+    <OpenVikingProvider baseURL="" fetch={requestStudioModule}>
       <div className="flex min-h-0 min-w-0 flex-1">
         <FileBrowser
           {...props}

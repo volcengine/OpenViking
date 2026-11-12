@@ -27,6 +27,8 @@ export function VikingBot({
   draft,
   attachments,
   isSending,
+  canSendWhileStreaming,
+  isSubmitting,
   isAvailable = true,
   unavailableMessage,
   emptyState,
@@ -176,6 +178,8 @@ export function VikingBot({
                   disabled={!isAvailable}
                   disabledReason={disabledReason}
                   isSending={isSending}
+                  canSendWhileStreaming={canSendWhileStreaming}
+                  isSubmitting={isSubmitting}
                   references={references}
                   quickInputs={
                     hasMessages || streaming || emptyState !== undefined

@@ -1,6 +1,6 @@
 # Console 交互面板
 
-在一块面板里提供对话和命令两种模式：对话模式展示 VikingBot，由宿主接入对话服务；命令模式把 `ov` 命令发送到 OpenViking 原生 API 并展示结果。
+在一块面板里提供对话和命令两种模式：对话模式通过 [VikingBot 无头模块](./viking-bot) 接通原生对话；命令模式把 `ov` 命令发送到 OpenViking 原生 API 并展示结果。
 
 ## 何时使用
 
@@ -36,24 +36,37 @@ import '@openviking/react/modules/console/style.css';
 
 示例使用模拟服务和固定的对话数据，不访问真实服务。对话模式的 `+` 只在浏览器里选择附件，示例没有提供 `onSend`，输入区不能发送。
 
+### 内置对话
+
+省略 `conversation.messages`、`conversation.onSend` 和 `conversation.composer` 时，Console 内部管理请求、消息和输入框。宿主仍可提供文案、插槽与 `conversation.sessions`：其 `items`、加载及错误信息用于展示，`currentId` 可同步路由；内部新建或切换会话通过 `onSelect` / `onNew` 通知宿主。宿主将新建 ID 写回 `currentId` 不会重启正在进行的回复。
+
+默认使用 `modules/viking-bot` 的两个 Hook；可通过 `chatOptions.service` 适配其他后端，服务同时实现对话与会话契约。模块切换保留当前对话；新建或切换会话会取消旧连接。历史保存失败单独提示，不改变已成功的回答。
+
+```tsx file="../../_demos/console-chat.tsx" preview
+
+```
+
+示例使用模拟服务，可切换原生能力与火山当前契约。原生适配器提供 `interrupt` 和 `steer`，支持停止及生成中追问；火山当前适配器省略这两个方法，生成中禁用发送且不显示停止。回答后的下一轮提问两者均支持。
+
 ## API
 
 ### Console
 
-| 参数             | 说明                                                                                                                                                                | 类型                                    | 默认值                                                            |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | ----------------------------------------------------------------- |
-| mode             | 当前模式，传入后由宿主控制；`'conversation'` 为对话，`'command'` 为命令                                                                                             | `ConsoleMode`                           | -                                                                 |
-| defaultMode      | 初始模式，传入 `mode` 后不再生效                                                                                                                                    | `ConsoleMode`                           | `'conversation'`                                                  |
-| onModeChange     | 用户切换模式时触发，参数为切换后的模式；传入 `mode` 时由宿主更新它                                                                                                  | `(mode: ConsoleMode) => void`           | -                                                                 |
-| conversation     | 对话模式的数据和回调：`sessions` 与 `headerActions` 显示在面板工具栏，其余属性传给 [VikingBot](../components/viking-bot)，省略 `draft` 时由 Console 保存对话草稿    | `Partial<VikingBotProps>`               | -                                                                 |
-| quickCommands    | 命令模式空态里的快捷入口 `{ name, value }`，点击后把 `value` 填入输入框，不自动执行；传入空数组时不显示空态，类型见 [CommandConsole](../components/command-console) | `readonly CommandConsoleQuickCommand[]` | `add-resource`、`add-skill`、`add-memory`、`find`、`compile` 五条 |
-| scopeKey         | 身份由函数动态取值时的隔离标识，值变化时清空记录和草稿并中止进行中的请求                                                                                            | `string`                                | -                                                                 |
-| onOpenUri        | 点击资源链接时触发，参数为资源 URI；对话模式下，设置了 `conversation.onOpenUri` 时以它为准                                                                          | `(uri: string) => void`                 | -                                                                 |
-| slots            | 在面板中插入宿主内容，类型见下方 `ConsoleSlots`                                                                                                                     | `ConsoleSlots`                          | -                                                                 |
-| labels           | 覆盖界面文案，类型见下方 `ConsoleLabels`                                                                                                                            | `ConsoleLabels`                         | -                                                                 |
-| locale           | 界面语言，规则见[国际化](../guide/i18n)                                                                                                                             | `'zh-CN' \| 'en-US'`                    | 继承上级，默认 `'en-US'`                                          |
-| requestOptions   | 覆盖请求配置，规则见[区块概览](./)                                                                                                                                  | `OvRequestOptions`                      | -                                                                 |
-| className、style | 外观与布局，其余 HTML 属性透传到根元素                                                                                                                              | HTML 属性                               | -                                                                 |
+| 参数             | 说明                                                                                                                                                                | 类型                                      | 默认值                                                            |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------- |
+| mode             | 当前模式，传入后由宿主控制；`'conversation'` 为对话，`'command'` 为命令                                                                                             | `ConsoleMode`                             | -                                                                 |
+| defaultMode      | 初始模式，传入 `mode` 后不再生效                                                                                                                                    | `ConsoleMode`                             | `'conversation'`                                                  |
+| onModeChange     | 用户切换模式时触发，参数为切换后的模式；传入 `mode` 时由宿主更新它                                                                                                  | `(mode: ConsoleMode) => void`             | -                                                                 |
+| conversation     | 对话模式的数据和回调：`sessions` 与 `headerActions` 显示在面板工具栏，其余属性传给 [VikingBot](../components/viking-bot)，省略 `draft` 时由 Console 保存对话草稿    | `Partial<VikingBotProps>`                 | -                                                                 |
+| chatOptions      | 对话 Hook 配置；排除 `enabled`、`sessionId`、`initialMessages`，自定义 service 同时实现对话和会话契约                                                               | `UseVikingBotChatOptions`（上述字段除外） | 原生服务                                                          |
+| quickCommands    | 命令模式空态里的快捷入口 `{ name, value }`，点击后把 `value` 填入输入框，不自动执行；传入空数组时不显示空态，类型见 [CommandConsole](../components/command-console) | `readonly CommandConsoleQuickCommand[]`   | `add-resource`、`add-skill`、`add-memory`、`find`、`compile` 五条 |
+| scopeKey         | 身份由函数动态取值时的隔离标识，值变化时清空记录和草稿并中止进行中的请求                                                                                            | `string`                                  | -                                                                 |
+| onOpenUri        | 点击资源链接时触发，参数为资源 URI；对话模式下，设置了 `conversation.onOpenUri` 时以它为准                                                                          | `(uri: string) => void`                   | -                                                                 |
+| slots            | 在面板中插入宿主内容，类型见下方 `ConsoleSlots`                                                                                                                     | `ConsoleSlots`                            | -                                                                 |
+| labels           | 覆盖界面文案，类型见下方 `ConsoleLabels`                                                                                                                            | `ConsoleLabels`                           | -                                                                 |
+| locale           | 界面语言，规则见[国际化](../guide/i18n)                                                                                                                             | `'zh-CN' \| 'en-US'`                      | 继承上级，默认 `'en-US'`                                          |
+| requestOptions   | 覆盖请求配置，规则见[区块概览](./)                                                                                                                                  | `OvRequestOptions`                        | -                                                                 |
+| className、style | 外观与布局，其余 HTML 属性透传到根元素                                                                                                                              | HTML 属性                                 | -                                                                 |
 
 ### ConsoleSlots
 
@@ -117,7 +130,7 @@ import '@openviking/react/modules/console/style.css';
 
 ## 注意
 
-- 对话服务由宿主接入：Console 不发送对话请求。宿主通过 `conversation` 传入 `messages`、`streaming` 和 `sessions`，在 `onSend` 中调用自己的对话服务，在 `onFilesAdded` 中上传文件；省略 `onSend` 时输入区不能发送。
+- 默认使用 VikingBot 无头模块发送原生对话请求。传入 `conversation.messages` 或 `conversation.onSend` 时改由宿主管理对话；附件上传仍由宿主完成。
 - 宿主查询 Bot 状态后设置 `conversation.isAvailable` 和 `conversation.unavailableMessage`，不可用时输入区被禁用并显示说明。
 - 命令只在用户提交时发送请求，挂载时不请求。同一实例一次只执行一条命令，执行期间输入框被禁用。
 - 命令失败时，错误显示在对应的记录里，修正后重新提交即可；写入类命令失败时服务端可能已经接收，重新提交前先核对结果。

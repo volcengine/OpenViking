@@ -3,14 +3,17 @@ import type { VikingBotProps } from '@openviking/react/components/viking-bot'
 import { Console } from '@openviking/react/modules/console'
 import type { ConsoleMode } from '@openviking/react/modules/console'
 import '@openviking/react/modules/console/style.css'
+import { useQueryClient } from '@tanstack/react-query'
 import { useCallback } from 'react'
 import type { ReactNode } from 'react'
 
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { useInvalidateVikingFs } from '#/features/workbench/resources/hooks/viking-fm'
-import { requestWorkbenchModule } from '../lib/module-request'
+import { requestStudioModule } from '#/shared/api/module-request'
 import type { ResourceOpenHandler } from '../lib/types'
 import styles from '../workbench.module.css'
+
+const commandOnlyConversation: Partial<VikingBotProps> = { messages: [] }
 
 const filesystemWrites = new Set<string>([
   OV_PATHS.fsCp,
@@ -39,10 +42,11 @@ export function WorkbenchConsole({
   toolbar: ReactNode
 }) {
   const { identityScopeKey } = useAppConnection()
+  const queryClient = useQueryClient()
   const { invalidateAll } = useInvalidateVikingFs()
   const request = useCallback<typeof fetch>(
     async (input, init) => {
-      const response = await requestWorkbenchModule(input, init)
+      const response = await requestStudioModule(input, init)
       const url = new URL(String(input), window.location.origin)
       if (
         response.ok &&
@@ -52,9 +56,19 @@ export function WorkbenchConsole({
         void invalidateAll()
         onFilesystemWrite?.()
       }
+      if (
+        response.ok &&
+        init?.method === 'POST' &&
+        /^\/api\/v1\/sessions(?:\/[^/]+\/messages)?$/.test(url.pathname)
+      ) {
+        void queryClient.invalidateQueries({ queryKey: ['sessions'] })
+        void queryClient.invalidateQueries({
+          queryKey: ['conversation-first-message', identityScopeKey],
+        })
+      }
       return response
     },
-    [invalidateAll, onFilesystemWrite],
+    [invalidateAll, onFilesystemWrite, queryClient, identityScopeKey],
   )
 
   return (
@@ -63,7 +77,7 @@ export function WorkbenchConsole({
         className={conversation ? undefined : styles.commandOnlyConsole}
         mode={mode}
         onModeChange={onModeChange}
-        conversation={conversation}
+        conversation={conversation ?? commandOnlyConversation}
         scopeKey={identityScopeKey}
         slots={{ toolbar }}
         onOpenUri={(uri) => {
