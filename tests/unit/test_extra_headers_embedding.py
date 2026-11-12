@@ -3,16 +3,18 @@
 """Tests for extra_headers support in OpenAIDenseEmbedder and EmbeddingConfig factory.
 
 Covers:
-  1. extra_headers is passed as default_headers to openai.OpenAI client
-  2. omitting extra_headers does not inject default_headers key
-  3. factory (_create_embedder) transparently forwards extra_headers
-  4. api_key dead-code bug fix: no raise when api_base is set without api_key
+  1. OpenViking's User-Agent is present by default
+  2. extra_headers is merged into default_headers without mutating caller input
+  3. an operator User-Agent overrides the default case-insensitively
+  4. factory (_create_embedder) transparently forwards the merged headers
+  5. api_key dead-code bug fix: no raise when api_base is set without api_key
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import openviking
 from openviking.models.embedder import OpenAIDenseEmbedder
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
 
@@ -44,11 +46,15 @@ class TestExtraHeadersDirectConstruction:
 
         mock_openai_class.assert_called_once()
         call_kwargs = mock_openai_class.call_args[1]
-        assert call_kwargs.get("default_headers") == headers
+        assert call_kwargs.get("default_headers") == {
+            **headers,
+            "User-Agent": f"openviking/{openviking.__version__}",
+        }
+        assert headers == {"HTTP-Referer": "https://example.com", "X-Title": "My App"}
 
     @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
-    def test_no_extra_headers_omits_default_headers(self, mock_openai_class):
-        """When extra_headers is not provided, default_headers must NOT appear in openai.OpenAI()."""
+    def test_no_extra_headers_adds_openviking_user_agent(self, mock_openai_class):
+        """The default embedding transport must identify OpenViking."""
         mock_openai_class.return_value = _make_mock_client()
 
         OpenAIDenseEmbedder(
@@ -58,7 +64,25 @@ class TestExtraHeadersDirectConstruction:
 
         mock_openai_class.assert_called_once()
         call_kwargs = mock_openai_class.call_args[1]
-        assert "default_headers" not in call_kwargs
+        assert call_kwargs["default_headers"] == {
+            "User-Agent": f"openviking/{openviking.__version__}"
+        }
+
+    @pytest.mark.parametrize("header_name", ["User-Agent", "user-agent", "USER-AGENT"])
+    @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
+    def test_operator_user_agent_overrides_default(self, mock_openai_class, header_name):
+        """Header-name casing must not cause a second User-Agent to be added."""
+        mock_openai_class.return_value = _make_mock_client()
+
+        OpenAIDenseEmbedder(
+            model_name="text-embedding-3-small",
+            api_key="sk-test",
+            dimension=8,
+            extra_headers={header_name: "operator-agent/9"},
+        )
+
+        call_kwargs = mock_openai_class.call_args[1]
+        assert call_kwargs["default_headers"] == {header_name: "operator-agent/9"}
 
     @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
     def test_sdk_retries_disabled(self, mock_openai_class):
@@ -94,11 +118,14 @@ class TestExtraHeadersViaFactory:
 
         mock_openai_class.assert_called_once()
         call_kwargs = mock_openai_class.call_args[1]
-        assert call_kwargs.get("default_headers") == headers
+        assert call_kwargs.get("default_headers") == {
+            **headers,
+            "User-Agent": f"openviking/{openviking.__version__}",
+        }
 
     @patch("openai.OpenAI")
-    def test_factory_omits_extra_headers_when_none(self, mock_openai_class):
-        """Factory must NOT inject default_headers when extra_headers is None."""
+    def test_factory_adds_openviking_user_agent_when_headers_are_none(self, mock_openai_class):
+        """Factory construction must keep the default transport identity."""
         mock_openai_class.return_value = _make_mock_client()
 
         cfg = EmbeddingModelConfig(
@@ -110,7 +137,9 @@ class TestExtraHeadersViaFactory:
 
         mock_openai_class.assert_called_once()
         call_kwargs = mock_openai_class.call_args[1]
-        assert "default_headers" not in call_kwargs
+        assert call_kwargs["default_headers"] == {
+            "User-Agent": f"openviking/{openviking.__version__}"
+        }
 
     @patch("openai.OpenAI")
     def test_factory_injects_embedding_max_retries(self, mock_openai_class):
@@ -169,6 +198,9 @@ class TestExtraHeadersViaFactory:
         call_args = mock_warning.call_args.args
         assert call_args[1] == "OpenAI async embedding"
         assert call_args[2] == "ollama"
+        assert mock_async_openai_class.call_args.kwargs["default_headers"] == {
+            "User-Agent": f"openviking/{openviking.__version__}"
+        }
 
 
 class TestEmbeddingModelConfigExtraHeaders:
