@@ -22,6 +22,7 @@ _IDENTITY_META_FIELDS = frozenset(
         "resolved_extension",
         "resolved_name",
         "original_filename",
+        "feed_kind",
     }
 )
 

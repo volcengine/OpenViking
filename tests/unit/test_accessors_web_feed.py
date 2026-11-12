@@ -2,6 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Unit tests for WebFeedAccessor (whole-site ingestion via sitemap / RSS / Atom)."""
 
+import shutil
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import pytest
 
 from openviking.parse.accessors import (
@@ -561,3 +565,95 @@ def test_looks_like_feed_url():
     assert looks_like_feed_url("https://h/rss.xml")
     assert not looks_like_feed_url("https://h/post")
     assert not looks_like_feed_url("/tmp/sitemap.xml")
+
+
+@pytest.mark.parametrize("preparation", ["direct", "prepared", "staged"])
+@pytest.mark.parametrize(
+    "filters,expected",
+    [
+        ({"include": "*/docs/*"}, {"docs/guide.html"}),
+        ({"exclude": "*.html"}, {"docs/guide.html", "news/other.html"}),
+        ({"exclude": "*/news/*"}, {"docs/guide.html"}),
+        ({"include": "*/docs/*", "exclude": "guide.html"}, {"docs/guide.html"}),
+    ],
+)
+async def test_url_filters_survive_resource_processing(
+    patch_httpx, monkeypatch, tmp_path, preparation, filters, expected
+):
+    from openviking.parse.output import LocalParseOutputStore
+    from openviking.resource.staged_source import StagedSource, materialize_source, stage_source
+    from openviking.utils.media_processor import UnifiedResourceProcessor
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+    from openviking_cli.utils.config.parser_config import CodeConfig
+
+    monkeypatch.setattr(
+        OpenVikingConfigSingleton,
+        "_instance",
+        SimpleNamespace(parser_api=None, directory=None, code=CodeConfig()),
+    )
+    base = "https://example.com"
+    url = f"{base}/sitemap.xml"
+    urls = [f"{base}/docs/guide", f"{base}/news/other"]
+    patch_httpx(
+        {
+            url: _FakeResponse(content=_urlset([(page_url, None) for page_url in urls])),
+            **{page_url: _FakeResponse(content=_page("Guide")) for page_url in urls},
+        }
+    )
+    processor = UnifiedResourceProcessor(vlm_processor=object())
+    options = {**filters, "respect_robots": False, "politeness_delay": 0}
+    resource = None
+    if preparation != "direct":
+        resource = await processor.prepare(url, **options)
+        if preparation == "staged":
+            fs = SimpleNamespace(
+                create_temp_uri=lambda **kw: "viking://temp/feed",
+                mkdir=AsyncMock(),
+                write_file_bytes=AsyncMock(),
+            )
+            staged = await stage_source(resource, viking_fs=fs, ctx=None)
+            resource.cleanup()
+            files = {call.args[0]: call.args[1] for call in fs.write_file_bytes.call_args_list}
+            fs.tree = AsyncMock(
+                return_value=[
+                    {"uri": uri, "rel_path": uri.removeprefix("viking://temp/feed/source/")}
+                    for uri in files
+                ]
+            )
+            fs.read_file_bytes = AsyncMock(side_effect=lambda uri, **kw: files[uri])
+            resource = await materialize_source(
+                StagedSource.from_dict(staged.to_dict()), viking_fs=fs, ctx=None
+            )
+    result = await processor.process(
+        url,
+        prepared_resource=resource,
+        parse_output_store=LocalParseOutputStore(str(tmp_path / "artifacts")),
+        **options,
+    )
+    try:
+        assert result.warnings == []
+        assert {entry["path"] for entry in result.meta["processed_files"]} == expected
+    finally:
+        if result.temp_dir_path:
+            shutil.rmtree(result.temp_dir_path)
+
+
+async def test_local_directory_still_applies_file_filters(monkeypatch, tmp_path):
+    from openviking.parse.output import LocalParseOutputStore
+    from openviking.utils.media_processor import UnifiedResourceProcessor
+
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.open_viking_config.get_openviking_config",
+        lambda: SimpleNamespace(parser_api=None, directory=None),
+    )
+    source = tmp_path / "source"
+    source.mkdir()
+    for name in ("keep.py", "skip.py", "other.txt"):
+        (source / name).write_text("content", encoding="utf-8")
+    result = await UnifiedResourceProcessor(vlm_processor=object()).process(
+        str(source),
+        include="*.py",
+        exclude="skip.py",
+        parse_output_store=LocalParseOutputStore(str(tmp_path / "artifacts")),
+    )
+    assert {entry["path"] for entry in result.meta["processed_files"]} == {"keep.py"}
