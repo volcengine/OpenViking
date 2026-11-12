@@ -56,10 +56,10 @@ async def _assert_unlocked(fs, root, ctx):
 
 
 @pytest.mark.parametrize("had_privacy", [False, True])
-async def test_update_rollback_preserves_waiting_privacy_save(
+async def test_failed_update_preserves_waiting_privacy_save(
     client, service, monkeypatch, had_privacy
 ):
-    name = "privacy-update-rollback"
+    name = "privacy-update-failure"
     await _add_skill(client, name, "Original")
     endpoint = f"/api/v1/privacy-configs/skill/{name}"
     if had_privacy:
@@ -99,7 +99,7 @@ async def test_update_rollback_preserves_waiting_privacy_save(
             client.post(endpoint, json={"values": {"api_key": "concurrent-value"}})
         )
         await asyncio.wait_for(save_started.wait(), 5)
-        assert not saving.done(), "Configuration writes must wait through update and rollback"
+        assert not saving.done(), "Configuration writes must wait until the update finishes"
         resume.set()
         failed = await asyncio.wait_for(updating, 10)
         assert failed.status_code == 500, failed.text
@@ -112,7 +112,7 @@ async def test_update_rollback_preserves_waiting_privacy_save(
             assert history[version] == snapshot
         shown = await client.get(f"/api/v1/skills/{name}")
         assert shown.status_code == 200, shown.text
-        assert shown.json()["result"]["description"] == "Original"
+        assert shown.json()["result"]["description"] == "Failed replacement"
     finally:
         resume.set()
         pending = [task for task in (updating, saving) if task is not None and not task.done()]
@@ -120,7 +120,7 @@ async def test_update_rollback_preserves_waiting_privacy_save(
             await asyncio.wait_for(asyncio.gather(*pending), 10)
 
 
-async def test_update_cancellation_restores_privacy_and_releases_both_locks(
+async def test_update_cancellation_keeps_privacy_and_releases_both_locks(
     client, service, monkeypatch
 ):
     name = "privacy-update-cancellation"
@@ -170,7 +170,7 @@ async def test_update_cancellation_restores_privacy_and_releases_both_locks(
         await _assert_unlocked(fs, privacy_root, ctx)
         status, current, history = await _privacy_snapshot(client, endpoint)
         assert status == 200
-        assert current["current"]["values"] == {"api_key": "old-value"}
+        assert current["current"]["values"] == {"api_key": "replacement-value"}
         for version, snapshot in old_history.items():
             assert history[version] == snapshot
         saved = await asyncio.wait_for(
@@ -179,7 +179,7 @@ async def test_update_cancellation_restores_privacy_and_releases_both_locks(
         assert saved.status_code == 200, saved.text
         shown = await client.get(f"/api/v1/skills/{name}")
         assert shown.status_code == 200, shown.text
-        assert shown.json()["result"]["description"] == "Original"
+        assert shown.json()["result"]["description"] == "Cancelled replacement"
     finally:
         resume.set()
         await asyncio.wait_for(get_queue_manager().wait_complete(), 5)
