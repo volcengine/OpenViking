@@ -5,6 +5,7 @@ import type {
 } from '@ark-design/ui/file-viewer/core';
 import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters/markdown';
 
+import { FilePreviewMedia, mediaKind } from './file-preview-media.js';
 import { FilePreviewImageFrame } from './file-preview-image-frame.js';
 import { FilePreviewEditor } from './file-preview-editor.js';
 import { isEmptyFile } from './file-preview-source.js';
@@ -26,7 +27,6 @@ export interface FilePreviewBodyProps {
   onViewModeChange: (mode: FilePreviewViewMode) => void;
   onHandleChange: (handle: ViewerHandle | null) => void;
   onViewModesChange: (modes: readonly ViewerViewModeOption[]) => void;
-  onDownload: () => void;
   /** Markdown 正文里的链接被点击时调用。 */
   onLinkClick?: MarkdownAdapterOptions['onLinkClick'];
   /** 读取失败后退出编辑态。Leaves editing after a failed load. */
@@ -49,7 +49,6 @@ export function FilePreviewBody({
   onViewModeChange,
   onHandleChange,
   onViewModesChange,
-  onDownload,
   onLinkClick,
   onCancelEditing,
 }: FilePreviewBodyProps) {
@@ -76,9 +75,21 @@ export function FilePreviewBody({
 
   // 加载中优先于空文件：`source` 还没填上，不能当成「文件为空」。
   // Loading outranks empty: `source` is not filled in yet, which is not an empty file.
-  if (fileTab.loading) return <LoadingState text={text} />;
+  if (fileTab.loading)
+    return fileTab.slots?.loadingFallback ?? <LoadingState text={text} />;
 
   if (isEmptyFile(fileTab.source)) return <EmptyFileState text={text} />;
+
+  const media = mediaKind(fileTab.source);
+  if (media)
+    return (
+      <FilePreviewMedia
+        source={fileTab.source}
+        kind={media}
+        text={text}
+        slots={fileTab.slots}
+      />
+    );
 
   return (
     <FilePreviewImageFrame
@@ -94,7 +105,6 @@ export function FilePreviewBody({
         locale={locale}
         viewMode={viewMode}
         onViewModeChange={onViewModeChange}
-        onDownload={onDownload}
         onHandleChange={onHandleChange}
         onViewModesChange={onViewModesChange}
         onLinkClick={onLinkClick}

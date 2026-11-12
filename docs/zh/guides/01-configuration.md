@@ -55,8 +55,8 @@ openviking-server doctor
 
 如果 `provider` 是 `openai-codex`，并且 Codex OAuth 已经就绪，则 `vlm.api_key` 可以省略。
 
-顶层 `service_name` 默认是 `"openviking-server"`。使用 cache 的模块会把它作为
-Redis 命名空间。OTel 的 `service_name` 显式配置时保持原值，省略时继承该值。
+顶层 `service_name` 默认是 `"openviking-server"`，用于隔离 coordination 状态和
+使用 cache 的模块的 Redis 命名空间。OTel 的 `service_name` 显式配置时保持原值，省略时继承该值。
 
 ### ov.conf 的有序凭据数组
 
@@ -1499,8 +1499,7 @@ ALTER TABLE ov_watch_tasks
 ```
 
 所有节点都提供 Watch API。`enable_watch_scheduler=true` 的节点可以运行后台 Watch
-调度器。`watch_leader_provider` 选择 leader 模式：`auto` 保持按存储类型推导的默认值，
-`local` 将 leader 限制在本进程内，`cache` 使用 AGFS CacheRuntime 的共享 leader 租约。
+调度器，通过 [AGFS coordination](#coordination-配置) 选主。
 leader 每 15 秒拉取到期 Watch 并结算已结束的运行。File 和 MySQL 共用 Runtime
 的轮询与有限并发派发流程。后台派发在 leader 内存中维护
 未结束的 Watch 运行和提交中的协程占用（默认上限 4）。接管时通过已有运行扫描
@@ -1526,6 +1525,7 @@ Connector 导入没有本地 Work，其 Task 会成为 failed，再结算 Watch 
 | `backend` | str | `"local"`、`"s3"` 或 `"memory"` | `"local"` |
 | `timeout` | float | 请求超时时间（秒） | `10.0` |
 | `backups` | object | 多写存储配置。配置后顶层 `backend` 作为 primary，`backups.items[]` 作为 backup | `null` |
+| `coordination` | object | Watch 选主和语义任务 revision | `{"provider":"memory"}` |
 | `queuefs` | object | QueueFS 配置。控制 `/queue` 的命名空间模式、后端和运行时参数 | `{ "mode": "shared", "backend": "sqlite", "recover_stale_sec": 0, "busy_timeout_ms": 5000 }` |
 | `queue_db_path` | str（可选）| 旧版兼容字段，用于覆盖 QueueFS 的 sqlite 数据库文件路径。已被 `storage.agfs.queuefs.db_path` 取代。未设置时默认为 `{storage.workspace}/_system/queue/queue.db`。适用于 workspace 卷不支持 sqlite 的场景（例如某些网络文件系统） | `null` |
 | `s3` | object | S3 后端配置（`backend=s3` 时使用） | - |
@@ -1537,6 +1537,22 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 
 > [!WARNING]
 > `storage.agfs` 已不再支持 AGFS HTTP client 模式，也无需再配置旧的 HTTP client 入口。当前 AGFS / RAGFS 文件系统访问仅通过 Rust binding（`RAGFSBindingClient`）在进程内完成。这不影响 OpenViking server 的 HTTP API、`ov` CLI，或 `AsyncHTTPClient` / `SyncHTTPClient` 访问 OpenViking 服务端的能力。
+
+##### Coordination 配置
+
+`storage.agfs.coordination` 管理 Watch 选主及用于跳过过时语义任务的 revision。
+参与协调的节点须共享同一后端和顶层 `service_name`。
+
+| 参数 | 类型 | 说明 | 默认值 |
+|------|------|------|--------|
+| `provider` | str | `memory`：进程内；`sqlite`：同机；`cache`：复用顶层共享 CacheRuntime | `"memory"` |
+| `sqlite_path` | str / null | 使用 `sqlite` 时必填：本地磁盘上共享数据库的绝对路径，不能位于 EFS/NFS | `null` |
+| `operation_timeout_ms` | int | 单次 cache 协调操作的截止时间（毫秒），仅用于 cache，必须为正数 | `5000` |
+
+`watch_leader_provider` 已 deprecated，下个版本移除。未显式指定 coordination provider 时，
+`auto`（默认）在 File WatchStore 下选择 `memory`、MySQL 下选择 `cache`；
+`local` 映射为 `memory`，`cache` 映射为 `cache`。
+迁移时显式设置 `storage.agfs.coordination.provider`，并删除旧字段。
 
 ##### 主备存储配置
 
@@ -1586,7 +1602,7 @@ Python 配置层仍接受旧 sync、retry、operations、excludes 和 redirects
 ##### 全局 Cache Provider、CacheFS 与 PathLock 配置
 
 顶层 `service_name` 表示当前 OpenViking 部署名。CacheFS、`backend=cache`
-的 QueueFS、Cache PathLock 和 cache-backed 多写 metadata 都会从它生成
+的 QueueFS，以及使用 cache 的 PathLock、coordination 和多写 metadata 都会从它生成
 Redis 命名空间。
 
 全局 `cache` 与 `storage` 并列，标准配置只包含 Provider 名称和 Provider 自有参数：
@@ -1619,7 +1635,7 @@ workspace 位于 EFS 时，默认 `sqlite_path` 也会落在 EFS。
 
 多个容器或主机共享 EFS 时，使用下面的共享 Redis PathLock 配置。
 所有副本必须连接同一个 Redis 部署，并使用相同的顶层 `service_name` 和锁过期配置。
-示例同时使用 Redis QueueFS，避免默认的 SQLite 队列数据库落在 EFS。
+示例同时使用 Redis QueueFS 和 coordination，避免 SQLite 状态落在 EFS。
 
 ```json
 {
@@ -1646,6 +1662,9 @@ workspace 位于 EFS 时，默认 `sqlite_path` 也会落在 EFS。
       "queuefs": {
         "backend": "cache"
       },
+      "coordination": {
+        "provider": "cache"
+      },
       "pathlock": {
         "provider": "cache",
         "lock_expire_secs": 30.0
@@ -1655,7 +1674,7 @@ workspace 位于 EFS 时，默认 `sqlite_path` 也会落在 EFS。
 }
 ```
 
-标准配置没有全局 `cache.enabled`，也没有各模块自己的 Redis namespace 字段。当 CacheFS 或 QueueFS 选择 `backend=cache`、PathLock 选择 `provider=cache`，或多写选择 `backups.provider=cache` 时初始化 CacheRuntime。Cache PathLock 当前只支持 `cache.provider=redis`，不支持 DynamicProvider。全部模块使用本地 Provider 时不解析 `cache.params`，也不连接 Provider。
+标准配置没有全局 `cache.enabled`，也没有各模块自己的 Redis namespace 字段。当 CacheFS 或 QueueFS 选择 `backend=cache`、PathLock 或 coordination 选择 `provider=cache`，或多写选择 `backups.provider=cache` 时初始化 CacheRuntime。Cache PathLock 当前只支持 `cache.provider=redis`，不支持 DynamicProvider。全部模块使用本地 Provider 时不解析 `cache.params`，也不连接 Provider。
 
 请把 Provider 参数迁移到顶层 `cache.provider/cache.params`，用顶层 `service_name` 生成共享 Redis 名称，业务模块改为 `cachefs.backend="cache"`、`queuefs.backend="cache"` 或 `backups.provider="cache"`；Redis 的 `singleton` 改为 `standalone`，`tls_enabled` 改为使用 `rediss://` endpoint。
 

@@ -52,7 +52,6 @@ export interface FilePreviewViewerProps {
   locale?: Locale;
   viewMode: FilePreviewViewMode;
   onViewModeChange: (mode: FilePreviewViewMode) => void;
-  onDownload: () => void;
   onHandleChange: (handle: ViewerHandle | null) => void;
   onViewModesChange: (modes: readonly ViewerViewModeOption[]) => void;
   /** Markdown 正文里的链接被点击时调用；传入即由宿主接管导航。 */
@@ -80,7 +79,6 @@ export function FilePreviewViewer({
   locale,
   viewMode,
   onViewModeChange,
-  onDownload,
   onHandleChange,
   onViewModesChange,
   onLinkClick,
@@ -142,7 +140,7 @@ export function FilePreviewViewer({
   );
 
   // 底座把 `slots` 里的函数当依赖，换新函数会重建渲染器。而这三个来源在宿主
-  // 那边每次渲染都是新值：`tabText` 是新建对象、`onDownload` 是内联箭头函数、
+  // 那边每次渲染都是新值：`tabText` 是新建对象、
   // `tab.slots` 写在 tabs 数组里同样是字面量。若直接进依赖数组，`slots` 就每次
   // 都变，表现为点击任意按钮后整个正文「闪一下」——渲染器被卸载重建。
   //
@@ -152,7 +150,7 @@ export function FilePreviewViewer({
   //
   // The base treats the functions inside `slots` as dependencies and remounts the
   // renderer when they change. All three sources are fresh on every host render:
-  // `tabText` is a new object, `onDownload` an inline arrow, and `tab.slots` a
+  // `tabText` is a new object and `tab.slots` a
   // literal inside the tabs array. Putting them in the dependency array made
   // `slots` change on every render — which showed up as the whole body "flashing"
   // after any click, the renderer being torn down and rebuilt.
@@ -161,22 +159,12 @@ export function FilePreviewViewer({
   // built once per mount and the body stays mounted across copy, view switch and
   // friends. Switching tabs changes `key`, which remounts everything and refreshes
   // the ref, so it never reads the previous tab's values.
-  // `canDownload` 一并存进来：`UnsupportedState` 用 `onDownload` 是否存在决定
-  // 是否渲染下载按钮，而调用方总是传一个 wrapper 函数。没有真实下载能力时
-  // 必须传 `undefined`，否则按钮可点但点了什么都不发生。
-  //
-  // `canDownload` rides along: `UnsupportedState` renders the download button only
-  // when `onDownload` is present, and the caller always passes a wrapper. Without a
-  // real download capability it must pass `undefined`, or the button looks enabled
-  // and does nothing when clicked.
-  const canDownload = Boolean(tab.operations?.download);
-  const latest = useRef({ text, onDownload, tabSlots: tab.slots, canDownload });
-  latest.current = { text, onDownload, tabSlots: tab.slots, canDownload };
+  const latest = useRef({ text, tabSlots: tab.slots });
+  latest.current = { text, tabSlots: tab.slots };
 
   const slotPresence = [
     Boolean(tab.slots?.confirmFallback),
     Boolean(tab.slots?.downloadFallback),
-    Boolean(tab.slots?.unsupportedFallback),
   ].join();
   const slots = useMemo<FileViewerCoreProps['slots']>(() => {
     // 分支在调用时才决定，不在创建时决定：`slots` 只建一次（空依赖），而
@@ -201,27 +189,13 @@ export function FilePreviewViewer({
         <LoadFailedState text={latest.current.text} onRetry={retry} />
       );
     };
-    // `confirm` 与 `downloadFallback` 不能恒传一个 wrapper：底座只看这两个
-    // slot 是否存在，存在就直接渲染它，不会再看内置界面或 `unsupportedFallback`。
-    // 恒传一个返回 `null` 的 wrapper 会让大文件确认态与不支持态都变成空白。
-    //
-    // 所以按当前页签实际有没有宿主的插槽决定传不传；memo 依赖页签 key 与这两个
-    // 插槽的存在性，宿主增删插槽时重建。`unsupportedFallback` 存在时让出
-    // `downloadFallback`，底座才会走到它。
-    //
-    // `confirm` and `downloadFallback` must not be permanently wrapped: the base
-    // only checks whether the slot exists, and renders it directly when it does —
-    // it never falls through to the built-in UI or to `unsupportedFallback`. A
-    // permanent wrapper returning `null` blanks both the large-file confirmation and
-    // the unsupported state.
-    //
-    // So pass them only when the current tab actually supplies one; the memo keys on
-    // the tab key and on those slots' presence, so adding or removing a slot
-    // rebuilds it. `downloadFallback` also steps aside for `unsupportedFallback`.
+    // 只传宿主提供的插槽。省略下载插槽时保留底座的默认下载兜底；
+    // downloadFallback、unsupportedFallback、默认界面的优先级由底座决定。
+    // Only supply host slots: omission retains FileViewer's default download UI.
+    // The base owns precedence between downloadFallback, unsupportedFallback and its default.
     const own = tab.slots;
     const hasConfirm = Boolean(own?.confirmFallback);
     const hasHostDownload = Boolean(own?.downloadFallback);
-    const hasUnsupported = Boolean(own?.unsupportedFallback);
     // 传的是稳定 wrapper，内部从 `latest.current` 读当前组件并转发 props。
     // 直接把宿主组件本身传进去会把它冻在这一帧：同一个 key 下宿主换了组件
     // （新的文案或回调闭包），memo 不重建，界面仍停在旧组件上。
@@ -242,27 +216,13 @@ export function FilePreviewViewer({
       const tabSlots = latest.current.tabSlots;
       const Host = tabSlots?.downloadFallback;
       if (Host) return <Host {...props} />;
-      // 宿主没给下载插槽时用组件自己的不支持态；给了 `unsupportedFallback`
-      // 就让位（不传 `downloadFallback`，见下方）。
-      //
-      // Without a host download slot, this component's own unsupported state
-      // applies; a host `unsupportedFallback` takes over instead (see below).
-      return (
-        <UnsupportedState
-          text={latest.current.text}
-          onDownload={
-            latest.current.canDownload ? latest.current.onDownload : undefined
-          }
-        />
-      );
+      return null;
     };
     return {
       loading: loadingSlot,
       error: errorSlot,
       ...(hasConfirm ? { confirm: confirmSlot } : {}),
-      ...(hasHostDownload || !hasUnsupported
-        ? { downloadFallback: downloadSlot }
-        : {}),
+      ...(hasHostDownload ? { downloadFallback: downloadSlot } : {}),
     };
     // 依赖用「哪些插槽存在」而不是对象身份：宿主每次渲染都会重建 `slots`，
     // 用对象会让 memo 每帧重建、底座重挂渲染器（表现为点击后正文闪一下）。
@@ -275,14 +235,7 @@ export function FilePreviewViewer({
 
   if (!source) {
     // 连可预览的来源都没有，底座无从判断格式，只能由组件兜底。
-    return (
-      tab.slots?.unsupportedFallback ?? (
-        <UnsupportedState
-          text={text}
-          onDownload={canDownload ? onDownload : undefined}
-        />
-      )
-    );
+    return tab.slots?.unsupportedFallback ?? <UnsupportedState text={text} />;
   }
 
   return (
@@ -295,6 +248,7 @@ export function FilePreviewViewer({
       slots={slots}
       source={source}
       toolbar={false}
+      capabilities={{ download: false }}
       // 格式是否可预览由底座判定，宿主的兜底内容因此交给它，而不是在组件
       // 这边提前判断。底座的选择顺序是 `slots.downloadFallback` →
       // `unsupportedFallback` → 内置兜底，所以传这个 prop 前必须先收掉

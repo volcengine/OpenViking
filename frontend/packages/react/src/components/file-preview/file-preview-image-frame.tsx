@@ -11,7 +11,7 @@ export function FilePreviewImageFrame({ children }: { children: ReactNode }) {
         const image = event.target;
         if (
           image instanceof HTMLImageElement &&
-          image.closest('[data-file-viewer-image]')
+          image.closest('[data-file-viewer-image], [data-ov-preview-image]')
         ) {
           setDimensions(`${image.naturalWidth} × ${image.naturalHeight}`);
         }

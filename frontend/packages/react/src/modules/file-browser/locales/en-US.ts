@@ -6,6 +6,7 @@ const messages = {
   accessDenied: 'You do not have permission to view this node.',
   traverseOnly:
     'This directory can only be expanded to reach accessible children.',
+  systemDirectory: 'Select a file in this directory to preview its content.',
   empty: 'Select a file on the left to preview it',
   error: 'Failed to load the directory',
   retry: 'Retry',
@@ -24,6 +25,15 @@ const messages = {
   copyContent: 'Copy content',
   download: 'Download',
   history: 'Version history',
+  importPack: 'Import .ovpack',
+  exportPack: 'Export .ovpack',
+  deleteFile: 'Delete document',
+  deleteTitle: 'Delete document?',
+  deleteMessage: (name) =>
+    `You are deleting “${name}”. It will be removed from the filesystem and your connected Agent will no longer be able to read it. Delete this document?`,
+  deleteFailed: 'Failed to delete the document',
+  deleteConfirm: 'Delete',
+  deleteCancel: 'Cancel',
   viewSwitch: 'Switch view',
   resizeTree: 'Resize the directory tree',
   l0Summary: 'L0 Summary',

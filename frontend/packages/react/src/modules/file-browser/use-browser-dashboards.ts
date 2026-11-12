@@ -183,6 +183,7 @@ export function useBrowserDashboards({
       : undefined;
   return {
     dashboards,
+    current,
     tab,
     isOpen: uri !== null && opened === uri && Boolean(current),
     open,

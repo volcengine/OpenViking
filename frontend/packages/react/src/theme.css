@@ -115,6 +115,8 @@
   --ov-ui-focus-default: #5252ff;
   --ov-ui-fill-hover-default: #f1f2f9;
   --ov-ui-status-error-default: #c43838;
+  --ov-ui-danger-default: #e31b54;
+  --ov-ui-warning-solid-default: #ff952b;
   --ov-ui-warning-default: #b26a00;
   --ov-ui-warning-light-default: #fff0b3;
 
@@ -230,6 +232,7 @@ html.dark .ov-experience-dashboard,
   --ov-ui-focus-default: #5f5fff;
   --ov-ui-fill-hover-default: #23252a;
   --ov-ui-status-error-default: #ff9595;
+  --ov-ui-danger-default: #ff668a;
   --ov-ui-warning-default: #e0a04a;
   --ov-ui-warning-light-default: #3a2f14;
 
@@ -315,6 +318,16 @@ html.dark .ov-textarea {
   --ov-ui-connect-outline-default: var(--ov-ui-border-2-default);
   --ov-ui-connect-muted-default: var(--ov-ui-text-3-default);
   --ov-ui-connect-notice-default: var(--ov-ui-text-2-default);
+}
+
+.ov-file-preview {
+  --ov-ui-preview-backdrop-default: #f8f8f8;
+  --ov-ui-preview-dot-default: rgb(0 0 0 / 8%);
+}
+
+html.dark .ov-file-preview {
+  --ov-ui-preview-backdrop-default: var(--ov-ui-bg-4-default);
+  --ov-ui-preview-dot-default: rgb(255 255 255 / 12%);
 }
 
 /* Shared dashboards: mapped from the 2026-11-12 console release, with host-overridable semantics. */

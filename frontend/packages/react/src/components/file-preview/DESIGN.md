@@ -1,3 +1,5 @@
+> 当前操作契约：组件仅内置复制路径、模式切换与编辑；工具栏中的正文复制、下载及业务操作通过 `actions` 注入。底座的 `downloadFallback` 仍独立保留，用于定制无法预览时的下载兜底。下文为迁移调研记录，接口以 types.ts 与组件文档为准。
+
 # FilePreview 实现设计（工作文档）
 
 对照 `vikingdb-fe` 火山版实现与 `@ark-design/ui/file-viewer` 能力，梳理已定 API 的落地逻辑与缺口。
@@ -38,20 +40,20 @@
 
 ## 二、已定 API → FileViewer 映射
 
-| FilePreview                 | 落到 FileViewer                        | 说明                                                                                   |
-| --------------------------- | -------------------------------------- | -------------------------------------------------------------------------------------- |
-| `source.content`            | `FileSource{kind:'bytes'}`             | 用 `TextEncoder` 转 `Uint8Array`，不用 `new File()`，避免依赖 File 全局（SSR）         |
-| `source.file`               | `FileSource{kind:'file'}`              | 直接透传                                                                               |
-| `source.url`                | `FileSource{kind:'url'}`               | `mode` 用默认 `content`；大文件可让 Adapter 走 `reference`                             |
-| `source.fileName`           | `FileSource.name`                      | 格式识别与标题都靠它                                                                   |
-| `source.fileType`           | `FileSource.fileType`                  | 优先级高于扩展名                                                                       |
-| `source.path`               | 组件自用                               | 面包屑与复制路径，不进底座                                                             |
-| `resources`                 | `FileViewerCoreProps.resources`        | 类型同源                                                                               |
-| `operations.download`       | `capabilities.download` + `onDownload` | 见 4.2                                                                                 |
-| `slots.loadingFallback`     | `slots.loading`                        | 形态不同：底座是 `ComponentType<LoadingSlotProps>`，我们的是 `ReactNode`，需要包一层   |
-| `slots.errorFallback`       | `slots.error`                          | 同上                                                                                   |
-| `slots.unsupportedFallback` | `unsupportedFallback`                  | 直接是 `ReactNode`                                                                     |
-| `labels`                    | 组件外壳文案 + `locale`                | 关掉工具栏后剩余的内置文案只有状态态（加载 / 确认 / 下载兜底），随 `locale` 走，见 5.3 |
+| FilePreview                 | 落到 FileViewer                 | 说明                                                                                   |
+| --------------------------- | ------------------------------- | -------------------------------------------------------------------------------------- |
+| `source.content`            | `FileSource{kind:'bytes'}`      | 用 `TextEncoder` 转 `Uint8Array`，不用 `new File()`，避免依赖 File 全局（SSR）         |
+| `source.file`               | `FileSource{kind:'file'}`       | 直接透传                                                                               |
+| `source.url`                | `FileSource{kind:'url'}`        | `mode` 用默认 `content`；大文件可让 Adapter 走 `reference`                             |
+| `source.fileName`           | `FileSource.name`               | 格式识别与标题都靠它                                                                   |
+| `source.fileType`           | `FileSource.fileType`           | 优先级高于扩展名                                                                       |
+| `source.path`               | 组件自用                        | 面包屑与复制路径，不进底座                                                             |
+| `resources`                 | `FileViewerCoreProps.resources` | 类型同源                                                                               |
+| 调用方注入的下载 action     | FilePreview 工具栏              | 调用方通过 `onClick` 执行；底座的 `downloadFallback` 独立保留                          |
+| `slots.loadingFallback`     | `slots.loading`                 | 形态不同：底座是 `ComponentType<LoadingSlotProps>`，我们的是 `ReactNode`，需要包一层   |
+| `slots.errorFallback`       | `slots.error`                   | 同上                                                                                   |
+| `slots.unsupportedFallback` | `unsupportedFallback`           | 直接是 `ReactNode`                                                                     |
+| `labels`                    | 组件外壳文案 + `locale`         | 关掉工具栏后剩余的内置文案只有状态态（加载 / 确认 / 下载兜底），随 `locale` 走，见 5.3 |
 
 ## 三、组件内部逻辑
 
@@ -70,7 +72,7 @@ FilePreview (root, .ov-file-preview)
 
 关闭工具栏的连带影响：
 
-- `capabilities`（download / fullscreen / page / search / zoom）全部失效，下载改由 `operations.download` 触发，其余能力不提供。
+- 工具栏中的下载命令由调用方通过 `actions` 提供；`downloadFallback` 仍接收底座的下载与重试回调，供宿主定制无法预览时的兜底界面。
 - `ViewerHandle` 的 page / search / zoom 没有 UI 入口，只能通过 ref 暴露给宿主（见 5.11）。
 - `viewMode` 只剩 `getDefaultViewMode` 一个决定因素（见 5.4）。
 
@@ -387,7 +389,7 @@ noContent?: string;   // 空白内容
 
 关掉工具栏后 `fullscreen` / `page` / `search` / `zoom` 都没有 UI 入口。`download` 仍会影响 error 态里的下载按钮（`FileViewerStateContent` 的 `error` 分支），分支里给 `capabilities={{ download: file !== undefined && kind !== 'markdown' }}` 就是这个用途。
 
-建议：组件不暴露完整的 `capabilities`，只在内部按 `operations.download` 是否存在来决定 `download` 开关。
+当前实现不从 `actions` 推断底座能力，也不暴露完整的 `capabilities`。工具栏的下载命令由模块或调用方提供；`downloadFallback` 的下载与重试回调由 FileViewer 提供，两者独立。
 
 ### 5.16 Markdown 图片的正确注入方式（分支已验证）
 
