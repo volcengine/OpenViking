@@ -77,6 +77,9 @@
   box-sizing: border-box;
   list-style: none;
 }
+.ov-console .ov-console__action.ov-button:not(:disabled) {
+  color: var(--ov-ui-console-secondary);
+}
 .ov-console__action > svg {
   display: block;
   width: 12px;

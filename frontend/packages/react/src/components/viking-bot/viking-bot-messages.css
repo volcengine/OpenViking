@@ -112,6 +112,10 @@
 }
 .ov-viking-bot__activity {
   width: min(88%, 960px);
+  border-block-end: 1px solid
+    var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
+  padding-block-end: 6px;
+  margin-block: 8px;
 }
 .ov-viking-bot__tool-details {
   display: flex;

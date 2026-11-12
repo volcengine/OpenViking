@@ -41,7 +41,7 @@ Protocol adaptation stays in each host repository; the component imports no back
 
 ## Session and input extensions
 
-`sessions` supplies items, the current ID, loading/error state and callbacks for creation, selection and pagination. Dates use host-provided ISO timestamps. `headerActions` accepts optional controls such as a More menu. The component neither loads nor persists sessions. Use `VikingBotSessionActions` independently in a shared host header.
+`sessions` supplies items, the current ID, loading/error state and callbacks for creation, selection and pagination. Dates use host-provided ISO timestamps. `headerActions` accepts optional controls such as a More menu. The component neither loads nor persists sessions. Use `VikingBotSessionActions` independently in a shared host header. The header shows a copyable current session ID. Supply both `sessions.currentUri` and `onOpenUri` to enable locating it. The disabled reason appears by the composer, or in the conversation when there is no built-in composer.
 
 The host supplies `quickInputs` as `{ id, label, prompt, icon? }`; no business commands are built in. They appear at the bottom of the welcome state or above Sender when messages exist. Selecting one fills and focuses the draft without sending. Another shortcut replaces the previously inserted prompt, preserving custom text before and after it, including identical text typed separately. Editing inside the inserted prompt makes it custom text; the next shortcut appends to it. An external draft replacement that cannot be mapped unambiguously also releases ownership. Override this behavior with `onQuickInputSelect`.
 

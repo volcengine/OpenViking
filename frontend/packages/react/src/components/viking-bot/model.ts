@@ -251,6 +251,8 @@ export interface VikingBotLabels {
   toolOutput?: string;
   similarity?: string;
   sessionHistory?: string;
+  session?: string;
+  locateSession?: string;
   emptySessions?: string;
   loading?: string;
   loadMore?: string;

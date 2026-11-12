@@ -44,9 +44,9 @@ export function FilePreviewToolbar({
       setPending(false);
     }
   };
-  if (actions.editing) return null;
-  const items =
-    typeof actionItems === 'function'
+  const items = actions.editing
+    ? []
+    : typeof actionItems === 'function'
       ? actionItems(actions)
       : (actionItems ?? []);
   const switchVisible = actions.canSwitchView && options?.viewSwitch !== false;
@@ -54,9 +54,51 @@ export function FilePreviewToolbar({
   const hasItems = items.some(
     (item) => !Array.isArray(item) || item.length > 0,
   );
-  if (!switchVisible && !editVisible && !hasItems && !extraActions) return null;
+  if (
+    !actions.editing &&
+    !switchVisible &&
+    !editVisible &&
+    !hasItems &&
+    !extraActions
+  )
+    return null;
   return (
     <div className="ov-file-preview__toolbar">
+      {actions.editing ? (
+        <div className="ov-file-preview__edit-actions">
+          <Button
+            size="small"
+            type="default"
+            className="ov-file-preview__edit-action"
+            icon={
+              <span
+                aria-hidden="true"
+                className="ov-file-preview__edit-icon ov-file-preview__edit-icon--cancel"
+              />
+            }
+            disabled={actions.busy}
+            onClick={actions.cancelEditing}
+          >
+            {text.leaveEditing}
+          </Button>
+          <Button
+            size="small"
+            type="primary"
+            className="ov-file-preview__edit-action"
+            icon={
+              <span
+                aria-hidden="true"
+                className="ov-file-preview__edit-icon ov-file-preview__edit-icon--save"
+              />
+            }
+            loading={actions.busy}
+            onClick={() => void actions.saveEditing()}
+          >
+            {text.save}
+          </Button>
+        </div>
+      ) : null}
+
       {switchVisible ? (
         <div
           className="ov-file-preview__switch"
@@ -69,7 +111,7 @@ export function FilePreviewToolbar({
               type="button"
               className="ov-file-preview__switch-item"
               aria-pressed={actions.viewMode === mode}
-              disabled={actions.busy}
+              disabled={actions.busy || actions.editing}
               onClick={() => actions.setViewMode(mode)}
             >
               {mode === 'preview' ? text.previewMode : text.sourceMode}
@@ -91,15 +133,19 @@ export function FilePreviewToolbar({
           <EditIcon width={14} height={14} aria-hidden="true" />
         </Button>
       ) : null}
-      <FilePreviewActionList
-        items={items}
-        pending={pending}
-        failure={failure}
-        execute={execute}
-        disabled={actions.busy}
-        text={text}
-      />
-      {extraActions}
+      {!actions.editing ? (
+        <>
+          <FilePreviewActionList
+            items={items}
+            pending={pending}
+            failure={failure}
+            execute={execute}
+            disabled={actions.busy}
+            text={text}
+          />
+          {extraActions}
+        </>
+      ) : null}
     </div>
   );
 }

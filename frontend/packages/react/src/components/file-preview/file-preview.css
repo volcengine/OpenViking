@@ -397,6 +397,40 @@
   box-sizing: border-box;
 }
 
+.ov-file-preview__action--copy-path {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ov-ui-file-preview-text-path);
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    background-color 160ms ease,
+    opacity 160ms ease;
+}
+
+.ov-file-preview__action--copy-path:hover:not(:disabled) {
+  background: var(--ov-ui-color-bg-4, var(--ov-ui-plain-button-hover-default));
+  color: var(--ov-ui-file-preview-text);
+}
+
+.ov-file-preview__action--copy-path:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.ov-file-preview__action--copy-path:focus-visible {
+  outline: 2px solid var(--ov-ui-file-preview-focus-ring);
+  outline-offset: 2px;
+}
+
 /* 动作组里的按钮：带描边与浅色底槽，与宿主的次级按钮一致。 */
 .ov-file-preview__action--outlined {
   border-color: var(--ov-ui-file-preview-border);
@@ -510,8 +544,8 @@
   background: none;
   color: inherit;
   font-family: var(--ov-ui-font-mono, ui-monospace, monospace);
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 14px;
+  line-height: 25px;
   resize: none;
 }
 

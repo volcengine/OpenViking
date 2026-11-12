@@ -86,7 +86,7 @@ export function useFileBrowserPreviewActions({
       (api, overrides) =>
         api.request({
           method: 'DELETE',
-          path: OV_PATHS.fsRemove,
+          path: OV_PATHS.fsRm,
           query: { uri, wait: true },
           options: overrides,
         }),

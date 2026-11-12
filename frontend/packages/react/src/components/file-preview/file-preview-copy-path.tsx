@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button } from '../../shared/components/button/button.js';
 import { Tooltip } from '../../shared/components/tooltip/index.js';
 
 /**
@@ -44,12 +43,9 @@ export function FilePreviewCopyPath({
   return (
     <span className="ov-file-preview__copy-path">
       <Tooltip content={label}>
-        <Button
-          size="small"
-          type="text"
-          iconOnly
-          htmlType="button"
-          className="ov-file-preview__action"
+        <button
+          type="button"
+          className="ov-file-preview__action ov-file-preview__action--copy-path"
           aria-label={label}
           disabled={disabled}
           onClick={() => void copy()}
@@ -81,7 +77,7 @@ export function FilePreviewCopyPath({
               <path d="M4.667 4.667V3.033c0-.653 0-.98.127-1.229a1.167 1.167 0 0 1 .51-.51c.25-.127.576-.127 1.23-.127h4.433c.653 0 .98 0 1.229.127.22.112.398.29.51.51.127.25.127.576.127 1.23v4.433c0 .653 0 .98-.127 1.229a1.167 1.167 0 0 1-.51.51c-.25.127-.576.127-1.23.127H9.333M3.033 12.833h4.434c.653 0 .98 0 1.229-.127.22-.112.398-.29.51-.51.127-.25.127-.576.127-1.229V6.533c0-.653 0-.98-.127-1.229a1.167 1.167 0 0 0-.51-.51c-.25-.127-.576-.127-1.23-.127H3.034c-.653 0-.98 0-1.23.127a1.167 1.167 0 0 0-.51.51c-.126.25-.126.576-.126 1.23v4.433c0 .653 0 .98.127 1.229.112.22.29.398.51.51.25.127.576.127 1.23.127Z" />
             </svg>
           )}
-        </Button>
+        </button>
       </Tooltip>
       <span className="ov-file-preview__copy-status" role="status">
         {feedback?.message}

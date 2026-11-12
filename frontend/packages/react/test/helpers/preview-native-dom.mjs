@@ -25,7 +25,20 @@ export function fixture(uri, isDir, intercept, targets = []) {
         permission: 'manage',
       });
     if (call.path.endsWith('/fs/ls'))
-      return ok(call.uri === uri ? [] : [{ uri, isDir }]);
+      return ok(
+        call.uri === uri
+          ? []
+          : [
+              ...targets.map(({ to }) => ({
+                uri: to,
+                isDir: true,
+                tags: ['compile_target=true'],
+              })),
+              ...(!targets.some(({ to }) => to === uri)
+                ? [{ uri, isDir }]
+                : []),
+            ],
+      );
     if (/\/content\/(read|abstract|overview)$/.test(call.path)) return ok('');
     if (call.path.endsWith('/snapshot/log')) return ok([]);
     if (call.path.endsWith('/snapshot/versions')) return ok({ versions: [] });

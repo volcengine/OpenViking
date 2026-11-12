@@ -24,7 +24,7 @@ export function AgentConnect({
   locale: localeProp,
   baseUrl = DEFAULT_BASE_URL,
   agreementUrl,
-  showOverseasTag = false,
+  showOverseasTag,
   activeTabId: controlledTabId,
   selectedId: controlledSelectedId,
   onTabChange,

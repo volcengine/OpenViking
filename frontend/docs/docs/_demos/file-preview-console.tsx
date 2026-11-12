@@ -60,7 +60,7 @@ export default function FilePreviewConsole() {
               source: {
                 content:
                   draftContent ??
-                  `${zh ? '# 完整正文' : '# Full content'}\n\n![CLI](viking://resources/manual/cli.svg)\n\n${zh ? '正文中的 Viking URI 图片。' : 'A Viking URI image in the full content.'}`,
+                  `---\ntitle: Guide\nversion: 1\n---\n\n${zh ? '# 完整正文' : '# Full content'}\n\n![CLI](viking://resources/manual/cli.svg)\n\n${zh ? '正文中的 Viking URI 图片。' : 'A Viking URI image in the full content.'}\n\n| Item | Status |\n| --- | --- |\n| Table | Ready |`,
                 fileName: 'guide.md',
                 path: `${root}/guide.md`,
               },

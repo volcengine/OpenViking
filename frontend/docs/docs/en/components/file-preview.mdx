@@ -6,6 +6,8 @@ A tabbed file preview. The host supplies the content and file name; the componen
 
 Images and videos render independently through native image/video elements; they do not initialize FileViewer. Other supported formats use lazily loaded FileViewerCore adapters inside the console-style tab, breadcrumb and footer shell. Image and video previews have no source view or built-in text editing.
 
+Leading YAML front matter appears as a code block in Markdown preview. Source, editing, saving and copying still use the original text. Save and Cancel appear beside the view switch in the header during editing.
+
 ## Basic usage
 
 Pass at least one tab. A file tab carries `source`; a content tab carries a node the host renders itself.

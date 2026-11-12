@@ -158,7 +158,13 @@ export function FileBrowserPreviewPane({
         </div>
       ) : (
         <div className="ov-file-browser__detail">
-          <FileBrowserEmpty label={text.empty} />
+          {browser.currentUri ? (
+            <p className="ov-file-browser__hint" role="status">
+              {text.loading}
+            </p>
+          ) : (
+            <FileBrowserEmpty label={text.empty} />
+          )}
         </div>
       )}
       {controls.dialog}
