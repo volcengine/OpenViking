@@ -90,3 +90,47 @@ test('import uploads multipart, retains the selected File after failure and reup
     await view.unmount();
   }
 });
+
+for (const revoked of [{ readOnly: true }, { acl: true }]) {
+  test(`import rechecks current write capability: ${JSON.stringify(revoked)}`, async () => {
+    const fetch = fixture(target, true, (call) => {
+      if (call.path.endsWith('/fs/stat'))
+        return ok({ isDir: true, permission: 'read' });
+      if (call.path.endsWith('/resources/temp_upload'))
+        return ok({ temp_file_id: 'upload' });
+      if (call.path.endsWith('/pack/import')) return ok({ uri: target });
+    });
+    const view = await mount(tree(fetch, target));
+    try {
+      await openAction('Import .ovpack');
+      const file = new File(['archive'], 'demo.ovpack');
+      const input = workflow().querySelector('input[type="file"]');
+      Object.defineProperty(input, 'files', {
+        configurable: true,
+        value: [file],
+      });
+      await act(async () =>
+        input.dispatchEvent(new window.Event('change', { bubbles: true })),
+      );
+      await view.render(tree(fetch, target, revoked));
+      await submit(); // A synthetic submit also exercises the handler rather than only the disabled button.
+      assert.equal(
+        fetch.calls.filter((call) =>
+          /(?:temp_upload|pack\/import)$/.test(call.path),
+        ).length,
+        0,
+      );
+      assert.equal(button('Import', workflow()).disabled, true);
+      assert.equal(input.files[0], file);
+      await view.render(tree(fetch, target));
+      assert.equal(button('Import', workflow()).disabled, false);
+      await submit();
+      assert.equal(
+        fetch.calls.filter((call) => /pack\/import$/.test(call.path)).length,
+        1,
+      );
+    } finally {
+      await view.unmount();
+    }
+  });
+}

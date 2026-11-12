@@ -33,7 +33,8 @@ export function nativePreviewDemoResponse(
         {
           oid: 'demo-snapshot',
           message: 'Offline example revision',
-          timestamp: 1794268800,
+          author: { time_seconds: 1794268800 },
+          committer: { time_seconds: 1794268800 },
         },
       ]);
     case '/api/v1/snapshot/versions':

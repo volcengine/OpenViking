@@ -35,7 +35,7 @@ export async function readPreviewHistory(
     }));
   }
   const result = await client.request<
-    { oid: string; message: string; timestamp?: number }[]
+    { oid: string; message: string; author: { time_seconds: number } }[]
   >({
     method: 'GET',
     path: OV_PATHS.snapshotLog,
@@ -47,7 +47,7 @@ export async function readPreviewHistory(
     snapshot: entry.oid,
     path: uri,
     title: entry.message,
-    timestamp: entry.timestamp,
+    timestamp: entry.author.time_seconds,
   }));
 }
 

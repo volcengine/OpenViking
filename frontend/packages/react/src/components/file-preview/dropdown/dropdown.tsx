@@ -1,6 +1,6 @@
 import { cloneElement, Fragment, useCallback, useId, version } from 'react';
 import type { HTMLAttributes, ReactElement, Ref } from 'react';
-import { Popover } from '../popover/popover.js';
+import { Popover } from '../../../shared/components/popover/popover.js';
 import { useDropdown } from './use-dropdown.js';
 import type { DropdownProps } from './types.js';
 

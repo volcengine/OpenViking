@@ -1,16 +1,21 @@
+import { normalizeResourceUri } from './fs-uri.js';
 import type { FileBrowserDashboard } from './dashboard-model.js';
 import { isExperienceFile } from './experience-data.js';
 
 export const isSystemUri = (uri: string) =>
-  /^viking:\/\/system(?:\/|$)/i.test(uri);
+  /^viking:\/\/system(?:\/|$)/i.test(normalizeResourceUri(uri));
 export const isSummaryUri = (uri: string) =>
-  /\/(?:\.abstract|\.overview)\.md$/i.test(uri);
+  /\/(?:\.abstract|\.overview)\.md$/i.test(normalizeResourceUri(uri));
 
 /** Namespace scope mirrors ovpack/policy.py; import targets are directories. */
-export const supportsPack = (uri: string) =>
-  /^viking:\/\/(?:resources|user|~)(?:\/|$)/.test(uri) &&
-  !/\/\.relations\.json$/.test(uri) &&
-  !/^viking:\/\/resources\/\.watch_tasks\.json(?:\.bak|\.tmp)?$/.test(uri);
+export const supportsPack = (value: string) => {
+  const uri = normalizeResourceUri(value);
+  return (
+    /^viking:\/\/(?:resources|user|~)(?:\/|$)/.test(uri) &&
+    !/\/\.relations\.json$/.test(uri) &&
+    !/^viking:\/\/resources\/\.watch_tasks\.json(?:\.bak|\.tmp)?$/.test(uri)
+  );
+};
 
 export function previewPolicy({
   uri,
@@ -27,6 +32,8 @@ export function previewPolicy({
   canManage: boolean;
   dashboard?: FileBrowserDashboard;
 }) {
+  uri = normalizeResourceUri(uri);
+  rootUri = normalizeResourceUri(rootUri);
   const system = isSystemUri(uri);
   const summary = isSummaryUri(uri);
   const experience = isFile && isExperienceFile(uri);

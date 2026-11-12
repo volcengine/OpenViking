@@ -77,7 +77,14 @@ test('experience history is path-scoped, retryable and never supplies an edit ca
     if (call.path.endsWith('/snapshot/log'))
       return ++attempts === 1
         ? Promise.resolve(new Response('offline', { status: 503 }))
-        : ok([{ oid: 'snapshot', message: 'Initial experience' }]);
+        : ok([
+            {
+              oid: 'snapshot',
+              message: 'Initial experience',
+              author: { time_seconds: 1794268800 },
+              committer: { time_seconds: 1825804800 },
+            },
+          ]);
   });
   const view = await mount(tree(fetch, uri, { rootUri: 'viking://' }));
   try {
@@ -86,6 +93,11 @@ test('experience history is path-scoped, retryable and never supplies an edit ca
     assert.ok(workflow().querySelector('[role="alert"]'));
     await click(button('Retry', workflow()));
     assert.match(workflow().textContent, /Initial experience/);
+    assert.equal(
+      workflow().querySelector('time')?.dateTime,
+      new Date(1794268800000).toISOString(),
+    );
+    assert.match(workflow().querySelector('time').textContent, /2026/);
     assert.deepEqual(
       fetch.calls.find((call) => call.path.endsWith('/snapshot/log')).query,
       { paths: uri, limit: '500' },
@@ -94,6 +106,36 @@ test('experience history is path-scoped, retryable and never supplies an edit ca
     await view.render(tree(fetch, `${rootUri}/ordinary.md`));
     await settle();
     assert.equal(workflow(), null);
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('Compile directory history renders native log author dates', async () => {
+  const fetch = fixture(
+    target,
+    true,
+    (call) =>
+      call.path.endsWith('/snapshot/log')
+        ? ok([
+            {
+              oid: 'directory-snapshot',
+              message: 'Compile directory',
+              author: { time_seconds: 1794268800 },
+              committer: { time_seconds: 1825804800 },
+            },
+          ])
+        : undefined,
+    [{ to: target }],
+  );
+  const view = await mount(tree(fetch, target));
+  try {
+    await openAction('Version history');
+    assert.equal(
+      workflow().querySelector('time')?.dateTime,
+      new Date(1794268800000).toISOString(),
+    );
+    assert.match(workflow().querySelector('time').textContent, /2026/);
   } finally {
     await view.unmount();
   }

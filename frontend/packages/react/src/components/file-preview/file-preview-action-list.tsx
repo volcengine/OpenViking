@@ -1,4 +1,3 @@
-import { useRef, useState } from 'react';
 import { Button } from '../../shared/components/button/button.js';
 import { Tooltip } from '../../shared/components/tooltip/tooltip.js';
 import { FilePreviewMenu } from './file-preview-menu.js';
@@ -13,30 +12,19 @@ export function FilePreviewActionList({
   items,
   disabled,
   text,
+  pending,
+  failure,
+  execute,
 }: {
   items: FilePreviewActionItems;
   disabled: boolean;
   text: Required<FilePreviewLabels>;
+  pending: boolean;
+  failure?: { reason: unknown };
+  execute: (action: FilePreviewAction) => Promise<void>;
 }) {
-  const [pending, setPending] = useState(false);
-  const [failure, setFailure] = useState<{ reason: unknown }>();
-  const running = useRef(false);
   const groups = normalizeFilePreviewActions(items);
   const count = groups.reduce((total, group) => total + group.length, 0);
-  const execute = async (action: FilePreviewAction) => {
-    if (running.current || disabled || action.disabled) return;
-    running.current = true;
-    setPending(true);
-    setFailure(undefined);
-    try {
-      await action.onClick();
-    } catch (reason) {
-      setFailure({ reason });
-    } finally {
-      running.current = false;
-      setPending(false);
-    }
-  };
   const action = groups[0]?.[0];
   if (!action) return null;
   return (

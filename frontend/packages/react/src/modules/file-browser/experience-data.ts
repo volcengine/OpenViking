@@ -1,3 +1,4 @@
+import { normalizeResourceUri } from './fs-uri.js';
 import { OV_PATHS } from '../../client/paths.js';
 import { resolveDashboardUri } from './dashboard-resource.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
@@ -10,11 +11,11 @@ import type {
 export const EXPERIENCE_PAGE_SIZE = 20;
 export const isExperienceDirectory = (uri: string) =>
   /^viking:\/\/(?:user\/[^/]+|~)(?:\/peers\/[^/]+)?\/memories\/experiences\/?$/.test(
-    uri,
+    normalizeResourceUri(uri),
   );
 export const isExperienceFile = (uri: string) =>
   /^viking:\/\/(?:user\/[^/]+|~)(?:\/peers\/[^/]+)?\/memories\/experiences\/[^/]+\.md$/i.test(
-    uri,
+    normalizeResourceUri(uri),
   );
 
 /** Native API date bounds are UTC and inclusive. */

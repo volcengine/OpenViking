@@ -7,11 +7,12 @@ import { usePreviewMutation } from './use-preview-mutation.js';
 
 export function PreviewPackImport({
   uri,
+  canWrite,
   text,
   requestOptions,
   onUpdated,
   onClose,
-}: PreviewWorkflowProps) {
+}: PreviewWorkflowProps & { canWrite: boolean }) {
   const id = useId();
   const [file, setFile] = useState<File>();
   const mutation = usePreviewMutation(uri, requestOptions);
@@ -19,7 +20,7 @@ export function PreviewPackImport({
     <form
       onSubmit={(event) => {
         event.preventDefault();
-        if (file)
+        if (canWrite && file)
           void mutation.run(
             (client, options) => importPreviewPack(client, uri, file, options),
             onUpdated,
@@ -34,7 +35,7 @@ export function PreviewPackImport({
         accept=".ovpack"
         required
         aria-describedby={`${id}-hint`}
-        disabled={mutation.pending}
+        disabled={!canWrite || mutation.pending}
         onChange={(event) => {
           setFile(event.currentTarget.files?.[0]);
           mutation.reset();
@@ -51,7 +52,7 @@ export function PreviewPackImport({
           type="primary"
           htmlType="submit"
           loading={mutation.pending}
-          disabled={!file || mutation.succeeded}
+          disabled={!canWrite || !file || mutation.succeeded}
         >
           {text.importSubmit}
         </Button>

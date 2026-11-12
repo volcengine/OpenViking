@@ -44,7 +44,7 @@ export function FileBrowserNativeDialog({
           retryText={text.retry}
         />
       ) : kind === 'importPack' ? (
-        <PreviewPackImport {...common} />
+        <PreviewPackImport {...common} canWrite={canWrite} />
       ) : (
         <PreviewCompileConfig
           {...common}

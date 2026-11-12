@@ -1,5 +1,5 @@
 import { Button } from '../../shared/components/button/button.js';
-import { Dropdown } from '../../shared/components/dropdown/index.js';
+import { Dropdown } from './dropdown/index.js';
 import MoreIcon from '../../../../icons/svg/file-preview/more.svg?react';
 import type { FilePreviewAction } from './action-types.js';
 import type { FilePreviewLabels } from './types.js';

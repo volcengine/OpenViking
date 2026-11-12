@@ -1,8 +1,12 @@
+import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button } from '../../shared/components/button/button.js';
 import EditIcon from '../../../../icons/svg/file-preview/edit.svg?react';
 import { FilePreviewActionList } from './file-preview-action-list.js';
-import type { FilePreviewActionSource } from './action-types.js';
+import type {
+  FilePreviewAction,
+  FilePreviewActionSource,
+} from './action-types.js';
 import type {
   FilePreviewActions,
   FilePreviewLabels,
@@ -22,6 +26,24 @@ export function FilePreviewToolbar({
   actionItems?: FilePreviewActionSource;
   extraActions?: ReactNode;
 }) {
+  // The toolbar remains mounted while editing hides its command list.
+  const running = useRef(false);
+  const [pending, setPending] = useState(false);
+  const [failure, setFailure] = useState<{ reason: unknown }>();
+  const execute = async (action: FilePreviewAction) => {
+    if (running.current || actions.busy || action.disabled) return;
+    running.current = true;
+    setPending(true);
+    setFailure(undefined);
+    try {
+      await action.onClick();
+    } catch (reason) {
+      setFailure({ reason });
+    } finally {
+      running.current = false;
+      setPending(false);
+    }
+  };
   if (actions.editing) return null;
   const items =
     typeof actionItems === 'function'
@@ -71,6 +93,9 @@ export function FilePreviewToolbar({
       ) : null}
       <FilePreviewActionList
         items={items}
+        pending={pending}
+        failure={failure}
+        execute={execute}
         disabled={actions.busy}
         text={text}
       />
