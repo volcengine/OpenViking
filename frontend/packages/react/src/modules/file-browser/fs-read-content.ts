@@ -35,7 +35,12 @@ export async function readFileContent(
     !memory && markdown && splitWikiMetadata(first).payloads.length > 0;
   const full =
     reachedCap && (memory || wiki || candidate) ? await read(-1) : first;
-  const body = memory ? stripMemoryFieldsTrailer(full, markdown) : full;
+  const format = markdown
+    ? 'markdown'
+    : /\.ya?ml$/i.test(uri)
+      ? 'yaml'
+      : 'text';
+  const body = memory ? stripMemoryFieldsTrailer(full, format) : full;
   const projection = candidate || wiki ? splitWikiMetadata(body) : undefined;
   if (!wiki && projection?.payloads.length) {
     try {

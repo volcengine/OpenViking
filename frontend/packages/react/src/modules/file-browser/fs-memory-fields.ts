@@ -61,6 +61,7 @@
  * Copying JS's `\s` would miss a trailer followed by NEL, and would treat a BOM after
  * the body as separator whitespace and delete that body.
  */
+import { isScalar, parseAllDocuments, visit } from 'yaml';
 import { isQuotedComment, startsCommentLine } from './fs-comment-trailers.js';
 
 const PY_WHITESPACE_CODES = [
@@ -168,22 +169,31 @@ export function isMemoryUri(uri: string): boolean {
  */
 export function stripMemoryFieldsTrailer(
   text: string,
-  allowUnclosed = false,
+  format: 'markdown' | 'yaml' | 'text' = 'text',
 ): string {
+  let scalars: [number, number][] | undefined;
   let visible = text;
   for (;;) {
     let start = -1;
     MEMORY_FIELDS_COMMENT.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = MEMORY_FIELDS_COMMENT.exec(visible)) !== null) {
+      const offset = match.index;
       const close = visible.indexOf('-->', match.index + match[0].length);
       if (
         close < 0 &&
-        (!allowUnclosed || !startsCommentLine(visible, match.index))
+        (format !== 'markdown' || !startsCommentLine(visible, match.index))
       )
         continue;
       const after = close < 0 ? '' : visible.slice(close + 3);
-      if (isPythonBlank(after) && !isQuotedComment(visible, match.index)) {
+      if (!isPythonBlank(after)) continue;
+      const quoted =
+        format === 'yaml'
+          ? (scalars ??= yamlScalarRanges(text)).some(
+              ([start, end]) => start <= offset && close + 3 <= end,
+            )
+          : isQuotedComment(visible, match.index);
+      if (!quoted) {
         start = match.index;
         break;
       }
@@ -191,4 +201,23 @@ export function stripMemoryFieldsTrailer(
     if (start < 0) return visible;
     visible = trimPythonEnd(visible.slice(0, start));
   }
+}
+
+/** Find YAML values without reserializing; error-recovery nodes cannot protect trailers. */
+function yamlScalarRanges(text: string): [number, number][] {
+  const ranges: [number, number][] = [];
+  // Lone CR becomes LF without changing offsets into the original source.
+  for (const doc of parseAllDocuments(text.replace(/\r(?!\n)/g, '\n'), {
+    prettyErrors: false,
+  })) {
+    visit(doc, (_, node) => {
+      if (!isScalar(node) || !node.range) return;
+      const [start, end] = node.range;
+      const invalid = doc.errors.some(
+        ({ pos: [a, b] }) => a < end && Math.max(a + 1, b) > start,
+      );
+      if (!invalid) ranges.push([start, end]);
+    });
+  }
+  return ranges;
 }
