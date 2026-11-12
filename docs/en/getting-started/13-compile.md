@@ -42,6 +42,11 @@ Check every 5 seconds for up to 5 minutes initially. Read outputs after `complet
 
 After compilation, the target directory should contain an index and a project page. See the [sample Wiki page](/quickstart/wiki-output-en-v1.txt) for content organization and source citations, then follow the checks below to review your output.
 
+Resource Markdown can declare retrieval tags in its frontmatter, for example
+`tags: [topic, role=canonical, type=guide]`. Compile publishes valid explicit `k=v`
+tags with append semantics, preserving unrelated existing tags. Plain topical labels
+remain document metadata. Missing or empty declarations do not clear retrieval tags.
+
 ## Open the body page
 
 ```bash

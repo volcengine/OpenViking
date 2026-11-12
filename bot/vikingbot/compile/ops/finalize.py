@@ -9,7 +9,11 @@ from openviking.utils.path_safety import safe_join_viking_uri
 from vikingbot.compile import file_ops
 from vikingbot.compile.hashing import content_hash
 from vikingbot.compile.models import CompileFailure
-from vikingbot.compile.renderer import RenderedBundle, validate_relative_file_path
+from vikingbot.compile.renderer import (
+    RenderedBundle,
+    resource_tag_metadata,
+    validate_relative_file_path,
+)
 
 if TYPE_CHECKING:
     from vikingbot.compile.pipeline import Pipeline
@@ -80,6 +84,7 @@ async def run(runtime: Pipeline, references: list[str]) -> RenderedBundle:
             "uri": uri,
             **file_ops.encode_content(payload),
             "mode": "replace" if revision else "create",
+            **resource_tag_metadata(uri, payload),
         }
         operation.pop("content_base64" if operation["content"] is not None else "content")
         rendered.operations.append(operation)
