@@ -1,0 +1,39 @@
+metadata:
+  id: "memory.usage_feedback"
+  name: "Memory Usage Feedback"
+  description: "Judge whether each recalled memory helped, was unused, or harmed the session"
+  version: "1.0.0"
+  language: "en"
+  category: "memory"
+
+variables:
+  - name: "messages"
+    type: "string"
+    description: "Archived session trajectory"
+    required: true
+  - name: "memories"
+    type: "string"
+    description: "Recalled memory files, each with its URI and content"
+    required: true
+
+template: |
+  You are auditing how memories recalled during an agent session affected the outcome.
+  The agent saw each memory below during the session. Judge each memory by its actual
+  effect on the user's goal in this trajectory, not by how it was recalled.
+
+  Session trajectory:
+  {{ messages }}
+
+  Recalled memories:
+  {{ memories }}
+
+  Score every memory with exactly one of:
+  - 1: the agent used it and it helped reach the user's current goal.
+  - -1: the agent used it and it caused a mistake, rework, or was contradicted or rejected
+    by the user or the actual result. If it both helped and harmed, score -1 and explain both.
+  - 0: it was not used, or it was irrelevant to this session.
+
+  Base every score on evidence in the trajectory. When unsure whether it was used, score 0.
+
+  Output only a JSON array, one object per memory, with no other text:
+  [{"uri": "<memory uri>", "score": 1, "reason": "<one short sentence citing the evidence>"}]

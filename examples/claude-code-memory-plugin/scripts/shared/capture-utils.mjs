@@ -496,7 +496,7 @@ export function shapeCapturePayload(payload, role, cfg = {}, { toolNameById = {}
 export function extractCaptureTurns(rolloutEntries, cfg = {}) {
   const toolNameById = collectToolNamesByIdFromEntries(rolloutEntries);
   const turns = [];
-  for (const entry of rolloutEntries || []) {
+  for (const [entryIndex, entry] of (rolloutEntries || []).entries()) {
     if (!entry || typeof entry !== "object") continue;
     const payload = entry.payload && typeof entry.payload === "object" ? entry.payload : entry;
     const message = payload.message && typeof payload.message === "object" ? payload.message : null;
@@ -507,7 +507,11 @@ export function extractCaptureTurns(rolloutEntries, cfg = {}) {
 
     const shaped = shapeCapturePayload(payload, role, cfg, { toolNameById });
     if (shaped.dropped || (!shaped.text && shaped.parts.length === 0)) continue;
-    turns.push({ role, text: shaped.parts.length ? shaped.signalText : shaped.text, parts: shaped.parts });
+    const turn = { role, text: shaped.parts.length ? shaped.signalText : shaped.text, parts: shaped.parts };
+    // Non-enumerable: lets a host map a turn back to its rollout entry, while
+    // JSON payloads and turn comparisons never see it.
+    Object.defineProperty(turn, "entryIndex", { value: entryIndex });
+    turns.push(turn);
   }
   return turns;
 }

@@ -1,6 +1,7 @@
 import {
   extractCaptureTurns as extractSharedCaptureTurns,
 } from "./shared/capture-utils.mjs";
+import { recallInRecord, recordsWithTurn } from "./usage/transcript.mjs";
 
 // Named one by one rather than re-exported wholesale: this module has an
 // `extractCaptureTurns` of its own, and `export *` would let the shared one
@@ -437,7 +438,42 @@ export function extractCaptureTranscript(rolloutEntries, cfg = {}) {
   const normalized = normalizeCodexNativeToolEvents(deduplicated);
   const completed = normalizeCodexCompletedToolEvents(normalized);
   const { entries, excludedLegacyTurnIndices } = withoutStartupContext(completed, cfg);
-  return { turns: extractSharedCaptureTurns(entries, cfg), excludedLegacyTurnIndices };
+  const turns = extractSharedCaptureTurns(entries, cfg);
+  markUsageAnchors(turns, entries);
+  return { turns, excludedLegacyTurnIndices };
+}
+
+/**
+ * Tag the turn that reports what one Codex turn consulted: its first human
+ * prompt, else its first captured turn. `usageTurnId` keys the lookups the
+ * PostToolUse hook recorded; `usedUris` holds what auto-recall injected.
+ * Turn count and order are untouched, so the capture cursor stays valid.
+ */
+function markUsageAnchors(turns, entries) {
+  const turnIdByEntry = [];
+  const recalledByTurn = new Map();
+  for (const [index, { record, turnId }] of [...recordsWithTurn(entries)].entries()) {
+    turnIdByEntry[index] = turnId;
+    if (!turnId) continue;
+    const recalled = recallInRecord(record);
+    if (!recalled.length) continue;
+    const uris = recalledByTurn.get(turnId) ?? new Set();
+    for (const entry of recalled) uris.add(entry.uri);
+    recalledByTurn.set(turnId, uris);
+  }
+  const anchors = new Map();
+  for (const turn of turns) {
+    const turnId = turnIdByEntry[turn.entryIndex];
+    if (!turnId) continue;
+    const isPrompt = turn.role === "user" && (!turn.parts?.length || turn.parts.some((part) => part?.type === "text"));
+    const anchor = anchors.get(turnId);
+    if (!anchor || (isPrompt && !anchor.isPrompt)) anchors.set(turnId, { turn, isPrompt });
+  }
+  // Non-enumerable, like entryIndex: host-side annotations, never serialized.
+  for (const [turnId, { turn }] of anchors) {
+    Object.defineProperty(turn, "usageTurnId", { value: turnId });
+    Object.defineProperty(turn, "usedUris", { value: [...(recalledByTurn.get(turnId) ?? [])] });
+  }
 }
 
 export function extractCaptureTurns(rolloutEntries, cfg = {}) {

@@ -1,7 +1,5 @@
 #!/usr/bin/env node
 
-import { loadConfig } from "../config.mjs";
-import { usageEnabled } from "./settings.mjs";
 import { runHook } from "./hook-io.mjs";
 import {
   classifyCall,
@@ -11,8 +9,9 @@ import {
 } from "./sources.mjs";
 import { writeLookup } from "./state.mjs";
 
+// Recorded even when the usage display is off: capture reports these URIs to
+// the server so commit can score the memories the model looked up.
 await runHook(async (input) => {
-  if (!usageEnabled(loadConfig(input.cwd || undefined))) return {};
   const sessionId = input.session_id;
   const turnId = input.turn_id;
   if (!sessionId || !turnId) return {};
