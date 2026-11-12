@@ -45,18 +45,19 @@ export function experienceDateBounds(
   now = dayjs(),
 ): ExperienceDateBounds | null {
   if (days <= 0) return null;
-  // 减法必须在 UTC 上做。`subtract(..., 'day')` 走本地日历，跨夏令时切换时那
-  // 一天只有 23 或 25 小时，结果会偏到前一天的 23:30 之类，按 UTC 格式化后
+  // 减法按固定毫秒时长走，不用 `subtract(..., 'day')`：后者走本地日历，跨夏令时
+  // 切换那天只有 23 或 25 小时，结果会偏到前一天 23:30，按 UTC 格式化后
   // `start_date` 就早了一天（纽约时区跨 2026-11-01 DST 结束时实测 10-27 vs
-  // 期望 10-28）。接口的边界是 UTC，这里也按 UTC 算。
+  // 期望 10-28）。接口的边界是 UTC，固定时长与 UTC 日历一致。
   //
-  // The subtraction happens in UTC. `subtract(..., 'day')` walks the local calendar, and
-  // a DST transition day holds 23 or 25 hours, so the result can land at 23:30 the day
-  // before and format — in UTC — one day early (measured in America/New_York across the
-  // 2026-11-01 DST end: 10-27 instead of 10-28). The endpoint's bounds are UTC, so the
-  // arithmetic is too.
-  const end = now.toDate();
-  const start = new Date(end.getTime());
-  start.setUTCDate(start.getUTCDate() - (days - 1));
-  return { start: dayjs(start), end: dayjs(end) };
+  // The subtraction uses a fixed millisecond duration rather than
+  // `subtract(..., 'day')`: the latter walks the local calendar, and a DST transition day
+  // holds 23 or 25 hours, so the result lands at 23:30 the day before and formats — in
+  // UTC — one day early (measured in America/New_York across the 2026-11-01 DST end:
+  // 10-27 instead of 10-28). The endpoint's bounds are UTC, and a fixed duration matches
+  // the UTC calendar.
+  return {
+    start: now.subtract((days - 1) * 24 * 60 * 60 * 1000, 'millisecond'),
+    end: now,
+  };
 }

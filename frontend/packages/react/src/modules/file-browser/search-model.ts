@@ -300,14 +300,28 @@ export function normalizeGrepResult(matches: unknown): SearchResult {
 /**
  * 把 glob 的 `matches` 归一。返回的是 URI 字符串数组，没有摘要。
  *
+ * 目录命中带尾斜杠——`glob` 返回的是扁平字符串列表，尾斜杠是调用方区分目录与
+ * 文件的唯一标记（`_glob_match_uri` 在服务端就是这么加的）。但 `ls` 与树节点 ID
+ * 不带尾斜杠，原样保存会让「跳到哪个资源」指向一个树里不存在的 id：点击结果后
+ * 当前 URI 是 `docs/`，而已加载的 `docs` 行仍是未选中。归一化时去掉尾斜杠，目录
+ * 信息保留在 `isDir` 上，两个用途各取所需。
+ *
  * Normalises glob's `matches`. It returns bare URI strings, so there is no abstract.
+ *
+ * A directory match carries a trailing slash — the flat string list makes that the only
+ * way a caller can tell a directory from a file (the server's `_glob_match_uri` adds it).
+ * But `ls` and tree node ids carry none, so keeping it would make "which resource to jump
+ * to" point at an id the tree does not have: after a click the current URI is `docs/`
+ * while the loaded `docs` row stays unselected. Normalisation strips it and keeps the
+ * directory fact on `isDir`, so each consumer gets what it needs.
  */
 export function normalizeGlobResult(matches: unknown): SearchResult {
   const list = Array.isArray(matches) ? matches : [];
   const resources = list
     .filter((uri): uri is string => typeof uri === 'string')
     .map<SearchHit>((uri) => ({
-      uri,
+      uri: uri.replace(/\/+$/, '') || uri,
+      isDir: uri.endsWith('/'),
       contextType: 'resource',
       abstract: '',
       resultKind: 'glob',

@@ -69,11 +69,31 @@ export function FileBrowserSearch({
   const [menuOpen, setMenuOpen] = useState(false);
 
   const scopes = useMemo(() => buildScopeOptions(rootUri), [rootUri]);
+
+  // 只保留仍在当前根候选项里的 scopes。`filters.scopes` 会跨 `rootUri` 变化保留，
+  // 若根从 project-a 换成 project-b，勾选状态还指着 project-a——面板显示未勾选，
+  // 请求却仍发 `target_uri: ["viking://resources/project-a"]`，结果来自当前树之外。
+  // 渲染时算一次即可，不必另存一份 state 再同步。
+  //
+  // Keep only the scopes still offered by the current root. `filters.scopes` survives a
+  // `rootUri` change, so after switching from project-a to project-b the selection still
+  // names project-a: the panel shows nothing checked while the request still sends
+  // `target_uri: ["viking://resources/project-a"]`, returning results from outside the
+  // current tree. Computing it during render needs no mirrored state.
+  const effectiveFilters = useMemo(() => {
+    if (filters.scopes.length === 0) return filters;
+    const allowed = new Set(scopes.map((option) => option.uri));
+    const scopes_ = filters.scopes.filter((uri) => allowed.has(uri));
+    return scopes_.length === filters.scopes.length
+      ? filters
+      : { ...filters, scopes: scopes_ };
+  }, [filters, scopes]);
+
   const search = useFsSearch({
     client,
     mode,
     query: open ? query : '',
-    filters,
+    filters: effectiveFilters,
     rootUri,
     requestOptions,
   });
@@ -166,7 +186,7 @@ export function FileBrowserSearch({
         {advancedOpen ? (
           <FileBrowserSearchAdvanced
             mode={mode}
-            filters={filters}
+            filters={effectiveFilters}
             scopes={scopes}
             locale={locale}
             text={text}

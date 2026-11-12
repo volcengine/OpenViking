@@ -41,6 +41,15 @@ export interface SearchHit {
   resultKind?: 'grep' | 'glob';
   /** grep 的命中行号。grep's matched line number. */
   line?: number;
+  /**
+   * 该命中是否为目录。glob 用尾斜杠标记目录，`uri` 归一化时去掉了尾斜杠，目录
+   * 这一事实改由这里承载，免得点击时把它当成文件。
+   *
+   * Whether the hit is a directory. glob marks one with a trailing slash, which `uri`
+   * strips on normalisation; that fact lives here instead so a click does not treat it
+   * as a file.
+   */
+  isDir?: boolean;
   score: number;
   level: number;
 }
