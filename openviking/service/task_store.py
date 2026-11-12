@@ -44,6 +44,9 @@ from openviking.service.task_tracker_concurrency import (
     KeyedAsyncLockPool,
     run_to_completion,
 )
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 SYSTEM_TASK_ACCOUNT_ID = "_system"
 SYSTEM_TASK_USER_ID = "root"
@@ -1535,13 +1538,17 @@ class PersistentTaskStore(TaskWorkStore):
                 return self._task_cache[owner]
         if not account_id or not user_id:
             return None
+        path = self._task_path(account_id, user_id, task_id)
         try:
-            payload = json.loads(
-                _decode_bytes(await self._read(self._task_path(account_id, user_id, task_id)))
-            )
+            payload = json.loads(_decode_bytes(await self._read(path)))
+            task = _task_from_payload(payload, account_id=account_id, user_id=user_id)
         except (AGFSNotFoundError, FileNotFoundError):
             return None
-        task = _task_from_payload(payload, account_id=account_id, user_id=user_id)
+        except (ValueError, TypeError, KeyError) as exc:
+            # A crash mid-write can leave an empty or truncated record. Listing already
+            # skips such files; a single lookup must not take startup reconciliation down.
+            logger.warning("Ignoring unreadable task record %s: %s", path, exc)
+            return None
         self._put_if_absent(task)
         with self._lock:
             return self._task_cache.get((account_id, user_id, task_id))

@@ -1599,3 +1599,16 @@ async def test_processing_time_persists_and_restored_active_tasks_are_unknown(mo
         task.task_id, **_owner_kwargs()
     )
     assert restored.processing_seconds == 22
+
+
+@pytest.mark.parametrize("damaged", [b"", b'{"task_id": "trunc'])
+async def test_unreadable_task_record_reads_as_missing_and_does_not_break_reconcile(damaged):
+    agfs = _FakeAgfs()
+    writer = TaskTracker(store=PersistentTaskStore(agfs))
+    task = await writer.create("session_commit", **_owner_kwargs())
+    agfs.files[f"/local/acme/_system/tasks/alice/{task.task_id}.json"] = damaged
+
+    tracker = TaskTracker(store=PersistentTaskStore(agfs))
+
+    assert await tracker.get(task.task_id, **_owner_kwargs()) is None
+    await tracker.reconcile_delivery(task.task_id, "work-1", "SessionCommit", **_owner_kwargs())
