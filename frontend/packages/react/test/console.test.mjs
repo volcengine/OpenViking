@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { act, type, click } from './helpers/tui-dom.mjs';
+import { act, type, click } from './helpers/command-console-dom.mjs';
 import { ok, mount } from './helpers/console-dom.mjs';
 
 test('Console uses native requests, validates before sending and resubmits after failure', async () => {
@@ -127,7 +127,9 @@ test('Console reports controlled mode intent and supports quick actions, keyboar
     assert.deepEqual(changes, ['conversation']);
     assert.equal(host.button('Terminal').getAttribute('aria-pressed'), 'true');
     assert.equal(host.input.value, 'ov health');
-    await click(host.container.querySelector('.ov-tui__empty-action'));
+    await click(
+      host.container.querySelector('.ov-command-console__empty-action'),
+    );
     assert.match(host.input.value, /^ov add-resource https:\/\//);
     assert.equal(document.activeElement, host.input);
     await host.execute('ov health');
@@ -157,9 +159,10 @@ test('Console reports controlled mode intent and supports quick actions, keyboar
   }
 });
 
-test('Console forwards only explicit terminal copy overrides to Tui', async () => {
+test('Console forwards only explicit terminal copy overrides to CommandConsole', async () => {
   const title = () =>
-    host0.container.querySelector('.ov-tui__empty-title').textContent;
+    host0.container.querySelector('.ov-command-console__empty-title')
+      .textContent;
   const host0 = await mount(async () => ok({ state: 'ready' }));
   try {
     assert.equal(title(), 'OpenViking CLI');
@@ -168,9 +171,12 @@ test('Console forwards only explicit terminal copy overrides to Tui', async () =
     assert.equal(title(), 'Custom CLI');
 
     await host0.render({
-      labels: { commandTitle: 'Legacy', tui: { emptyTitle: 'Tui wins' } },
+      labels: {
+        commandTitle: 'Legacy',
+        commandConsole: { emptyTitle: 'CommandConsole wins' },
+      },
     });
-    assert.equal(title(), 'Tui wins');
+    assert.equal(title(), 'CommandConsole wins');
 
     await host0.render({ labels: { commandTitle: '' } });
     assert.equal(title(), '');

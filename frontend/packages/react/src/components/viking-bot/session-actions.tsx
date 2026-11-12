@@ -1,9 +1,9 @@
-import { Button } from '../../shared/components/button/button.js';
+import { Button } from '../../shared/primitives/button/button.js';
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
 import type { Locale } from '../../shared/locale.js';
 import type { ReactNode } from 'react';
 import { VikingBotIcon } from '../../icons/viking-bot-icons.js';
-import { Tooltip } from '../../shared/components/tooltip/index.js';
+import { Tooltip } from '../../shared/primitives/tooltip/index.js';
 import { resolveVikingBotLabels } from './labels.js';
 import type { VikingBotLabels } from './model.js';
 import type { VikingBotSessions } from './capabilities.js';

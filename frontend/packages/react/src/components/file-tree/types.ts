@@ -114,9 +114,9 @@ export interface FileTreeEntryRow extends FileTreeRowBase {
   /** 权限状态的纯展示标签，不执行鉴权。Display-only permission status. */
   access?: 'read-only' | 'denied' | 'container';
   /**
-   * 名称下方的次要说明，例如摘要或行内描述。
-   * Secondary line under the name, for example an abstract or inline
-   * description.
+   * 名称右侧的次要说明，例如摘要或行内描述。
+   * Secondary text beside the name on the same row, for example an abstract or
+   * inline description.
    */
   description?: string;
   /**
@@ -365,10 +365,10 @@ export type FileTreeInfoKey =
   | 'systemRoot';
 
 /**
- * 目录说明文案。未提供的键沿用内置英文；传空字符串表示该键不显示。
+ * 目录说明文案。未提供的键跟随 `locale`；传空字符串表示该键不显示。
  *
- * Directory copy. Keys left out keep the built-in English; an empty string
- * hides that key.
+ * Directory copy. Keys left out follow `locale`; an empty string hides that
+ * key.
  */
 export interface FileTreeInfoLabels {
   /**
@@ -472,10 +472,10 @@ export interface FileTreeSlots {
   toolbar?: ReactNode;
   /**
    * 替换目录加载子节点时展开箭头位置显示的转圈。省略时用内置的 CSS 圆环，
-   * 传入自己的节点可以换成图标或品牌化的加载态；节点按 12 × 12 显示。
+   * 传入自己的节点可以换成图标或品牌化的加载态；其中的 SVG 按 12 × 12 显示。
    * Replaces the spinner shown in the expand chevron slot while a directory
    * loads its children. Omitted uses the built-in CSS ring; pass a node to swap
-   * in an icon or a branded loader. The node renders at 12 × 12.
+   * in an icon or a branded loader. An SVG inside it renders at 12 × 12.
    */
   spinner?: ReactNode;
 }

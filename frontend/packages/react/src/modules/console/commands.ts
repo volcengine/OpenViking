@@ -1,10 +1,10 @@
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type {
-  TuiCommandDefinition,
-  TuiCommandGroup,
-  TuiQuickCommand,
-  TuiRecordContent,
-} from '../../components/tui/index.js';
+  CommandConsoleCommandDefinition,
+  CommandConsoleCommandGroup,
+  CommandConsoleQuickCommand,
+  CommandConsoleRecordContent,
+} from '../../components/command-console/index.js';
 import type { Locale } from '../../shared/locale.js';
 import { COMMAND_SPECS, type CommandSpec } from './command-specs.js';
 import { parseArguments, tokenize } from './command-parser.js';
@@ -13,7 +13,7 @@ import { resolveConsoleLocale } from './labels.js';
 import { formatResult } from './results.js';
 import type { ConsoleCommandGuide } from './types.js';
 
-// Volcengine's command palette order, restricted to commands this Console can execute.
+// Command palette order, restricted to the commands this Console can execute.
 const COMMAND_GROUPS = {
   core: [
     'add-resource',
@@ -40,7 +40,7 @@ const COMMAND_GROUPS = {
 
 export function consoleCommandGroups(
   locale: Locale,
-): readonly TuiCommandGroup[] {
+): readonly CommandConsoleCommandGroup[] {
   const labels = resolveConsoleLocale(locale).commandGroups;
   return (Object.keys(COMMAND_GROUPS) as (keyof typeof COMMAND_GROUPS)[]).map(
     (key) => ({ key, label: labels[key] }),
@@ -57,7 +57,7 @@ const DEFAULT_QUICK_COMMAND_NAMES = [
 
 export function consoleQuickCommands(
   locale: Locale,
-): readonly TuiQuickCommand[] {
+): readonly CommandConsoleQuickCommand[] {
   const guides = resolveConsoleLocale(locale).commandGuides;
   return DEFAULT_QUICK_COMMAND_NAMES.map((name) => ({
     name,
@@ -67,7 +67,7 @@ export function consoleQuickCommands(
 
 export function consoleCommands(
   locale: Locale,
-): readonly TuiCommandDefinition[] {
+): readonly CommandConsoleCommandDefinition[] {
   const text = resolveConsoleLocale(locale);
   const guides: Partial<Record<CommandSpec['name'], ConsoleCommandGuide>> =
     text.commandGuides;
@@ -124,7 +124,7 @@ export function consoleCommands(
   );
 }
 
-export function createCommandHelp(locale: Locale): TuiRecordContent {
+export function createCommandHelp(locale: Locale): CommandConsoleRecordContent {
   const commands = consoleCommands(locale);
   return {
     variant: 'command-help',
@@ -147,7 +147,7 @@ export async function executeCommand(
   client: OvClient,
   options: OvRequestOptions,
   locale: Locale,
-): Promise<TuiRecordContent> {
+): Promise<CommandConsoleRecordContent> {
   const tokens = tokenize(input);
   const spec = [...COMMAND_SPECS]
     .sort((a, b) => b.name.length - a.name.length)

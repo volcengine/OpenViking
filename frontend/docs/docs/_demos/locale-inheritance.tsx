@@ -26,7 +26,7 @@ export default function LocaleInheritance() {
   const zh = useLang() === 'zh';
   const id = useId();
   const [global, setGlobal] = useState<Locale>(zh ? 'zh-CN' : 'en-US');
-  const [module, setModule] = useState<Override>('inherit');
+  const [block, setBlock] = useState<Override>('inherit');
   const [component, setComponent] = useState<Override>('inherit');
   const options = (
     <>
@@ -58,14 +58,14 @@ export default function LocaleInheritance() {
               {options}
             </select>
           </label>
-          <label htmlFor={`${id}-module`} style={fieldStyle}>
-            {zh ? '模块语言 ' : 'Module language '}
+          <label htmlFor={`${id}-block`} style={fieldStyle}>
+            {zh ? '区块语言 ' : 'Block language '}
             <select
-              id={`${id}-module`}
-              name="module-locale"
+              id={`${id}-block`}
+              name="block-locale"
               style={controlStyle}
-              value={module}
-              onChange={(e) => setModule(e.target.value as Override)}
+              value={block}
+              onChange={(e) => setBlock(e.target.value as Override)}
             >
               <option value="inherit">{zh ? '继承上层' : 'Inherit'}</option>
               {options}
@@ -89,7 +89,7 @@ export default function LocaleInheritance() {
       <OpenVikingProvider locale={global} fetch={transport}>
         <div style={{ height: 460 }}>
           <Console
-            locale={module === 'inherit' ? undefined : module}
+            locale={block === 'inherit' ? undefined : block}
             defaultMode="command"
             slots={{
               commandHelp: (

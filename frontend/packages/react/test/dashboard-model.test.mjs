@@ -3,7 +3,7 @@ import test from 'node:test';
 import {
   parseWikiFileConflicts,
   locateWikiConflict,
-} from '../src/modules/file-browser/wiki-conflicts.ts';
+} from './helpers/internal-hooks.mjs';
 
 const record = {
   match_text: 'two approvals',

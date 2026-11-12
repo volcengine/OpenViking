@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Button } from '../../shared/components/button/button.js';
+import { Button } from '../../shared/primitives/button/button.js';
 import EditIcon from '../../../../icons/svg/file-preview/edit.svg?react';
 import { useFilePreviewCommands } from './file-preview-command-state.js';
 import { FilePreviewActionList } from './file-preview-action-list.js';

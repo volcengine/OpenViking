@@ -1,6 +1,6 @@
 import type { RefObject } from 'react';
-import { Button } from '../../shared/components/button/button.js';
-import { Modal } from '../../shared/components/modal/modal.js';
+import { Button } from '../../shared/primitives/button/button.js';
+import { Modal } from '../../shared/primitives/modal/modal.js';
 import WarningIcon from '../../../../icons/svg/file-preview/warning.svg?react';
 import type { Locale } from '../../shared/locale.js';
 import type { ResolvedLabels } from './file-browser-labels.js';

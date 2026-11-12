@@ -1,6 +1,7 @@
 import type { FilePreviewActions } from '../../components/file-preview/index.js';
 import { useRef } from 'react';
 import { previewActionContext } from './file-browser-preview-action-source.js';
+import { isSystemUri } from './preview-policy.js';
 import type { Locale } from '../../shared/locale.js';
 import type { OvRequestOptions } from '../../client/types.js';
 import { FileBrowserDetail } from './file-browser-detail.js';
@@ -40,9 +41,11 @@ export function FileBrowserPreviewPane({
   requestOptions?: OvRequestOptions;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const tab = browser.previewTabs?.find(
-    (candidate) => candidate.key === browser.previewKey,
-  );
+  const tab =
+    browser.previewTabs?.find(
+      (candidate) => candidate.key === browser.previewKey,
+    ) ?? browser.previewTabs?.[0];
+  const systemDirectory = tab?.kind === 'directory' && isSystemUri(tab.key);
   const controls = useFileBrowserPreviewActions({
     uri: browser.currentUri,
     rootUri,
@@ -97,43 +100,15 @@ export function FileBrowserPreviewPane({
     <div ref={ref} className="ov-file-browser__preview-pane">
       {browser.previewTabs?.length ? (
         <FileBrowserDetail
-          tabs={
-            controls.policy.system && tab?.kind === 'directory'
-              ? browser.previewTabs.map((item) =>
-                  item === tab
-                    ? {
-                        ...tab,
-                        labels: {
-                          ...tab.labels,
-                          fileEmpty: text.systemDirectory,
-                        },
-                        levels: [
-                          {
-                            ...tab.levels[0],
-                            key: 'system',
-                            label: '',
-                            source: {
-                              path: browser.currentUri ?? undefined,
-                              fileName:
-                                browser.currentUri?.split('/').pop() ||
-                                'system',
-                              content: '',
-                            },
-                          },
-                        ],
-                      }
-                    : item,
-                )
-              : browser.previewTabs
-          }
+          tabs={browser.previewTabs}
           activeKey={browser.previewKey}
           locale={locale}
-          labels={previewLabels}
-          footer={
-            controls.policy.system && tab?.kind === 'directory'
-              ? undefined
-              : browser.previewFooter
+          labels={
+            systemDirectory
+              ? { ...previewLabels, fileEmpty: text.systemDirectory }
+              : previewLabels
           }
+          footer={browser.previewFooter}
           titleExtra={permissions.titleExtra}
           readOnly={readOnly || !permissions.canEdit || !controls.policy.edit}
           toolbar={{

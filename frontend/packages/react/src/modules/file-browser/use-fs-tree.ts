@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { SetStateAction } from 'react';
 
 import type {
   FileTreeEntryRow,
@@ -7,6 +8,8 @@ import type {
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { useTreeMetadata } from './fs-directories.js';
 import { useRequestScope } from './use-request-scope.js';
+import { useFsTreeReveal } from './use-fs-tree-reveal.js';
+import { useFsTreePage } from './use-fs-tree-page.js';
 import { expandChain } from './fs-path.js';
 import { loadPage } from './fs-page.js';
 import {
@@ -38,6 +41,8 @@ export interface FsTreeState {
   toggleExpand: (row: FileTreeEntryRow) => Promise<void>;
   open: (uri: string) => Promise<void>;
   openPath: (uri: string) => Promise<void>;
+  reveal: (uri: string) => Promise<boolean>;
+  cancelReveal: () => void;
   loadMore: (parentId: string) => Promise<void>;
   retry: (parentId: string) => Promise<void>;
   refresh: () => Promise<void>;
@@ -69,7 +74,7 @@ export function useFsTree({
   defaultExpandedUri,
   requestOptions,
 }: UseFsTreeOptions): FsTreeState {
-  const [dirs, setDirs] = useState<Record<string, DirState>>({});
+  const [dirs, setRenderedDirs] = useState<Record<string, DirState>>({});
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(
     () => new Set([rootUri]),
   );
@@ -83,8 +88,19 @@ export function useFsTree({
   // loading effect depends on `open`, and a new identity would re-run it and cancel
   // the previous request. A ref carries the value; only `client` and
   // `requestOptions` remain as dependencies.
+  const initialLoad = useRef<Promise<void> | undefined>(undefined);
   const dirsRef = useRef(dirs);
-  dirsRef.current = dirs;
+  // Publish each page to the async reader before React commits the tree. A
+  // reveal can consume consecutive pages in the same React batch.
+  const setDirs = useCallback(
+    (update: SetStateAction<Record<string, DirState>>) => {
+      const next =
+        typeof update === 'function' ? update(dirsRef.current) : update;
+      dirsRef.current = next;
+      setRenderedDirs(next);
+    },
+    [],
+  );
   const expandedRef = useRef(expanded);
   expandedRef.current = expanded;
 
@@ -155,7 +171,7 @@ export function useFsTree({
       setReady(true);
     };
 
-    void run().catch((cause: unknown) => {
+    initialLoad.current = run().catch((cause: unknown) => {
       if (isAbort(cause) || controller.signal.aborted) return;
       const failure = toError(cause);
       setError(failure);
@@ -172,7 +188,7 @@ export function useFsTree({
     });
 
     return () => controller.abort();
-  }, [client, rootUri, defaultExpandedUri, requestOptions]);
+  }, [client, rootUri, defaultExpandedUri, requestOptions, setDirs]);
 
   // 展开与分页的请求属于某个有效作用域，细节见 `useRequestScope`。
   // Expansion and paging belong to one request scope; see `useRequestScope`.
@@ -184,6 +200,15 @@ export function useFsTree({
   // The expansion and paging callbacks must keep a stable identity: the preview's
   // loading effect depends on `open`, and a fresh one every render would re-run the
   // effect and cancel the previous request, leaving the preview permanently empty.
+  const fetchPage = useFsTreePage({
+    client,
+    rootUri,
+    requestOptions,
+    scope,
+    dirsRef,
+    setDirs,
+    setError,
+  });
   const state = useMemo(() => {
     // 每次请求都取**当时**的作用域，并把它带到请求结束：作用域切换后旧作用域的
     // 控制器已被中止，因此那次请求既不会写 loading 也不会写结果。refresh 这类跨
@@ -195,72 +220,6 @@ export function useFsTree({
     // writes neither the loading flag nor a result. A multi-request operation such as
     // refresh therefore cannot read the controller once — its later iterations must
     // re-read it, or they would issue new requests with the old client.
-    const fetchPage = async (uri: string, offset: number) => {
-      if (!client) return;
-      const current = scope.current();
-      const { signal } = current.controller;
-      if (signal.aborted) return;
-      // 重新加载根目录就是一次恢复尝试：整树级的错误必须跟着清掉，否则消费
-      // `treeError` 的自定义视图会一直停在失败态，即使数据已经回来了。
-      //
-      // Reloading the root is a recovery attempt, so the tree-level error is cleared
-      // with it; otherwise a custom view reading `treeError` stays in its failure state
-      // even after the data has arrived.
-      if (uri === rootUri) setError(null);
-      setDirs((prev) => ({
-        ...prev,
-        [uri]: { ...(prev[uri] ?? emptyDir()), loading: true, error: null },
-      }));
-      try {
-        const page = await loadPage(
-          client,
-          uri,
-          offset,
-          signal,
-          requestOptions,
-        );
-        // 成功也要复查：响应可能在上一次作用域里就已经在途，回来时作用域已经换
-        // 了，这批子节点不属于当前账号。
-        //
-        // Successes are re-checked too: the response may have been in flight when
-        // the scope changed, and those children belong to the previous account.
-        // 作用域可能已经换过：`signal.aborted` 覆盖不到「控制器换了但旧的那个
-        // 还没来得及中止」这一瞬，因此再比一次键。
-        //
-        // The scope may have moved on: `signal.aborted` does not cover the instant
-        // where the controller was replaced but the old one has not been aborted yet,
-        // so the key is compared as well.
-        // 过期判据只有「已提交作用域」：渲染期不发布任何身份，因此一次被放弃的
-        // 渲染不会让仍在屏幕上的那棵树的响应作废。
-        //
-        // The only staleness test is the committed scope: nothing is published during
-        // render, so an abandoned render cannot discard the response belonging to the
-        // tree still on screen.
-        if (signal.aborted || scope.current().key !== current.key) return;
-        setDirs((prev) => ({
-          ...prev,
-          [uri]: mergePage(prev[uri], page, offset),
-        }));
-      } catch (cause) {
-        if (isAbort(cause) || signal.aborted) return;
-        const failure = toError(cause);
-        // 根目录再次失败要把整树级错误写回去：加载开始时刚把它清掉，只更新 `dirs`
-        // 会让 `treeError` 停在 null，读它的自定义视图会把一次失败当成已恢复。
-        //
-        // A repeated root failure restores the tree-level error: loading cleared it a
-        // moment ago, so updating only `dirs` leaves `treeError` at null and a custom
-        // view reading it treats a failure as recovered.
-        if (uri === rootUri) setError(failure);
-        setDirs((prev) => ({
-          ...prev,
-          [uri]: {
-            ...(prev[uri] ?? emptyDir()),
-            loading: false,
-            error: failure,
-          },
-        }));
-      }
-    };
 
     return {
       /** 展开目录并按需取子节点。Opens a directory, loading children on demand. */
@@ -271,10 +230,7 @@ export function useFsTree({
       openPath: async (uri: string) => {
         const current = scope.current();
         for (const parent of expandChain(rootUri, uri)) {
-          if (
-            current.controller.signal.aborted ||
-            scope.current().key !== current.key
-          )
+          if (scope.current() !== current || current.controller.signal.aborted)
             return;
           setExpanded((prev) => new Set(prev).add(parent));
           if (!dirsRef.current[parent]) await fetchPage(parent, 0);
@@ -292,9 +248,15 @@ export function useFsTree({
         });
         if (!isOpen && !dirsRef.current[row.uri]) await fetchPage(row.uri, 0);
       },
-      loadMore: (parentId: string) =>
-        fetchPage(parentId, dirsRef.current[parentId]?.entries.length ?? 0),
-      retry: (parentId: string) => fetchPage(parentId, 0),
+      loadMore: async (parentId: string) => {
+        await fetchPage(
+          parentId,
+          dirsRef.current[parentId]?.entries.length ?? 0,
+        );
+      },
+      retry: async (parentId: string) => {
+        await fetchPage(parentId, 0);
+      },
       // 刷新是多次请求的循环，因此每一轮都要确认还在同一个作用域里：中途换了账号
       // 就该停下，而不是拿着旧客户端的循环继续往新账号的树上写。
       //
@@ -313,8 +275,16 @@ export function useFsTree({
         }
       },
     };
-  }, [client, rootUri, requestOptions, scope]);
+  }, [client, rootUri, scope, fetchPage, setDirs]);
 
+  const navigation = useFsTreeReveal({
+    rootUri,
+    scope,
+    dirs: dirsRef,
+    initialLoad,
+    fetchPage,
+    setExpanded,
+  });
   const rows = useMemo(
     () => flattenTree(rootUri, 0, dirs, expanded),
     [rootUri, dirs, expanded],
@@ -326,5 +296,6 @@ export function useFsTree({
     isReady,
     error,
     ...state,
+    ...navigation,
   };
 }

@@ -1,8 +1,8 @@
-import { Button } from '../../shared/components/button/button.js';
+import { Button } from '../../shared/primitives/button/button.js';
 import type { Locale } from '../../shared/locale.js';
 import type { RefObject } from 'react';
 import type { SenderInstance } from '@ark-design/ui/sender';
-import { Tooltip } from '../../shared/components/tooltip/index.js';
+import { Tooltip } from '../../shared/primitives/tooltip/index.js';
 import type {
   VikingBotReferences,
   VikingBotReference,
