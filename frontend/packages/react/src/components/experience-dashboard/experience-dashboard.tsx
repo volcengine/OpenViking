@@ -1,14 +1,13 @@
 import { useState } from 'react';
 
-import { DashboardState } from '../../shared/dashboard/dashboard-state.js';
 import { useLocale } from '../../shared/locale-context.js';
-import {
-  TabImpactIcon,
-  TabSourceIcon,
-  TabTestIcon,
-} from '../../icons/index.js';
+import { DashboardState } from '../../shared/dashboard/dashboard-state.js';
 import { DashboardTabs } from './dashboard-tabs.js';
 import { experienceLabels } from './labels.js';
+import {
+  ExperienceQueryState,
+  ExperienceTableSkeleton,
+} from './experience-state.js';
 import { ExperienceImpact } from './experience-impact.js';
 import { ExperienceList } from './experience-list.js';
 import { ExperiencePagination } from './experience-pagination.js';
@@ -65,11 +64,9 @@ function ExperienceDashboardContent({
   const t = experienceLabels(locale, labels);
   const directory = kind === 'directory';
   const tabs = [
-    { key: 'impact' as const, title: t.impact, icon: <TabImpactIcon /> },
-    { key: 'source' as const, title: t.source, icon: <TabSourceIcon /> },
-    ...(missingTest
-      ? []
-      : [{ key: 'test' as const, title: t.test, icon: <TabTestIcon /> }]),
+    { key: 'impact' as const, title: t.impact },
+    { key: 'source' as const, title: t.source },
+    ...(missingTest ? [] : [{ key: 'test' as const, title: t.test }]),
   ];
   const activeState = directory
     ? states.list
@@ -84,8 +81,29 @@ function ExperienceDashboardContent({
   // Only the directory view and the Test tab page by number; Impact's trajectories
   // page by cursor and use load-more, matching the console.
   const paged = directory || tab === 'test';
+  // 有总数时页数由总数换算，这里不传；没有总数时以「当前页之后还有没有下一页」
+  // 兜底。两种情况取值不同（一个是要传的数、一个是不传），不是同一种兜底，因此
+  // 保留三元而不是 `??`。
+  //
+  // With a total the page count comes from it, so nothing is passed here; without one
+  // the "there is a next page" flag bounds it. The two branches mean different things —
+  // a value versus no value — so this stays a ternary rather than `??`.
   const pageCount =
     data.total === undefined ? page + (hasMore ? 2 : 1) : undefined;
+  // 目录骨架的占位行数：知道总数时按当前页还剩多少行算，最后一页不满时骨架不会
+  // 虚报成一整页——20 行骨架换成 1 行表会把下面的内容往上拉一千多像素。总数未知
+  // 时当作本页是满的，退回每页条数；页码越界时按 0 行算。
+  //
+  // How many placeholder rows the directory skeleton draws: with a known total it is
+  // what is left on the current page, so a short final page does not pretend to be a
+  // full one — a 20-row skeleton collapsing into a 1-row table drags everything below
+  // it up by a thousand-odd pixels. An unknown total counts as a full page, falling back
+  // to the page size; a page past the end draws no rows.
+  const remainingRows = Math.max(
+    0,
+    (data.total ?? (page + 1) * pageSize) - page * pageSize,
+  );
+  const skeletonRows = Math.min(pageSize, remainingRows);
   const pagination = paged ? (
     <ExperiencePagination
       page={page}
@@ -109,6 +127,9 @@ function ExperienceDashboardContent({
         <div className="ov-experience-dashboard__body">
           <h2 className="ov-experience-dashboard__list-title">
             {t.allExperiences}
+            {/* 不写成 `data.total && …`：总数可能是 0，而 0 要显示成「· 0」。
+             *
+             * Not `data.total && …`: the total may be 0, and 0 must read as "· 0". */}
             {data.total === undefined ? '' : ` · ${data.total}`}
           </h2>
           {data.experiences?.length ? (
@@ -119,6 +140,13 @@ function ExperienceDashboardContent({
               labels={t}
               onOpenUri={onOpenUri}
             />
+          ) : states.list?.loading ? (
+            // 目录表用表格骨架占住整页高度；通用占位条只有一百多像素，数据到达时
+            // 页面会突然长高一截。
+            //
+            // The directory table holds a page's height with its own skeleton; generic
+            // bars are a hundred-odd pixels and the page jumps when data lands.
+            <ExperienceTableSkeleton rows={skeletonRows} label={t.loading} />
           ) : (
             <DashboardState
               state={states.list}
@@ -145,6 +173,7 @@ function ExperienceDashboardContent({
                 locale={locale}
                 days={days}
                 onDaysChange={setDays}
+                effectState={states.effect ?? {}}
                 outcomesState={states.outcomes ?? {}}
                 trajectoriesState={states.trajectories ?? {}}
                 hasMore={hasMore}
@@ -166,8 +195,9 @@ function ExperienceDashboardContent({
                   onOpenUri={onOpenUri}
                 />
               ) : (
-                <DashboardState
+                <ExperienceQueryState
                   state={states.sources}
+                  rows={4}
                   empty={t.emptySource}
                   loading={t.loading}
                   failed={t.failed}
@@ -185,8 +215,9 @@ function ExperienceDashboardContent({
                 {pagination}
               </>
             ) : (
-              <DashboardState
+              <ExperienceQueryState
                 state={states.tests}
+                rows={4}
                 empty={t.emptyTests}
                 loading={t.loading}
                 failed={t.failed}

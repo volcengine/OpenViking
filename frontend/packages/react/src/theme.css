@@ -371,6 +371,19 @@ html.dark .ov-file-browser-search {
   --ov-ui-dashboard-success-default: #4f9c70;
   /* 看板点阵底的点色，取自控制台同款纹理的 12% 灰。 The dot colour of the board grid. */
   --ov-ui-dashboard-dot-default: rgb(120 124 145 / 12%);
+  /* 「更新」标记的强调色：主色到紫色的渐变，描边用同色系实色。 */
+  /* The accent of the "updated" tag: a primary-to-violet gradient with a solid border. */
+  --ov-ui-dashboard-accent-border-default: #2929ff;
+  --ov-ui-dashboard-accent-fade-default: linear-gradient(
+    77deg,
+    rgb(82 82 255 / 12%) 6.56%,
+    rgb(153 133 255 / 12%) 92.78%
+  );
+  --ov-ui-dashboard-accent-text-default: linear-gradient(
+    82deg,
+    #5252ff 6.56%,
+    #9985ff 92.78%
+  );
 }
 html.dark .ov-wiki-dashboard,
 html.dark .ov-experience-dashboard,
@@ -385,6 +398,17 @@ html.dark .ov-file-browser {
   --ov-ui-dashboard-danger-light-default: var(--ov-ui-bg-5-default);
   --ov-ui-dashboard-success-default: var(--ov-ui-status-success-default);
   --ov-ui-dashboard-dot-default: rgb(255 255 255 / 12%);
+  --ov-ui-dashboard-accent-border-default: var(--ov-ui-primary-hover-default);
+  --ov-ui-dashboard-accent-fade-default: linear-gradient(
+    77deg,
+    rgb(95 95 255 / 16%) 6.56%,
+    rgb(153 133 255 / 16%) 92.78%
+  );
+  --ov-ui-dashboard-accent-text-default: linear-gradient(
+    82deg,
+    var(--ov-ui-primary-hover-default) 6.56%,
+    #b3a4ff 92.78%
+  );
 }
 
 /* Directory guidance: six popover illustrations and floating surface. */
