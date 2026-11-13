@@ -80,6 +80,56 @@ test('the directory table holds its page height with a table skeleton', async ()
   }
 });
 
+test('a short final page draws only the rows it will hold', async () => {
+  const render = (props) =>
+    h(ExperienceDashboard, {
+      uri: 'loading-last-page',
+      kind: 'directory',
+      pageSize: 20,
+      states: { list: { loading: true } },
+      ...props,
+    });
+  const rows = (view) =>
+    view.container.querySelectorAll(
+      '.ov-experience-dashboard__table-skeleton-row',
+    ).length;
+  const view = await mount(render({}));
+  try {
+    // 总数未知时退回每页条数。
+    //
+    // An unknown total falls back to the page size.
+    assert.equal(rows(view), 20);
+
+    // 第 2 页只剩 1 行：骨架画 1 行，加载完成时高度不变；画满 20 行会让下面
+    // 的内容被往上拉一千多像素。
+    //
+    // One row left on page 2: the skeleton draws one, so the height holds when the data
+    // lands; twenty would drag everything below up by a thousand-odd pixels.
+    await view.render(render({ page: 1, data: { total: 21 } }));
+    assert.equal(rows(view), 1);
+
+    // 整页不满但仍有多行时按实际剩余行数画。
+    //
+    // A partially filled page with more than one row left draws exactly those rows.
+    await view.render(render({ page: 1, data: { total: 25 } }));
+    assert.equal(rows(view), 5);
+
+    // 满页仍是每页条数。
+    //
+    // A full page still draws the page size.
+    await view.render(render({ page: 0, data: { total: 45 } }));
+    assert.equal(rows(view), 20);
+
+    // 页码越界时不会画负数行。
+    //
+    // A page past the end draws no rows rather than a negative count.
+    await view.render(render({ page: 9, data: { total: 21 } }));
+    assert.equal(rows(view), 0);
+  } finally {
+    await view.unmount();
+  }
+});
+
 test('a failed metric request keeps the distribution and timeline on screen', async () => {
   const view = await mount(
     h(ExperienceDashboard, {

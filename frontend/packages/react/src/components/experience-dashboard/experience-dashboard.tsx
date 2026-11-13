@@ -83,6 +83,18 @@ function ExperienceDashboardContent({
   const paged = directory || tab === 'test';
   const pageCount =
     data.total === undefined ? page + (hasMore ? 2 : 1) : undefined;
+  // 目录骨架的占位行数：知道总数时按当前页还剩多少行算，最后一页不满时骨架不会
+  // 虚报成一整页——20 行骨架换成 1 行表会把下面的内容往上拉一千多像素。总数未知
+  // 时退回每页条数。
+  //
+  // How many placeholder rows the directory skeleton draws: with a known total it is
+  // what is left on the current page, so a short final page does not pretend to be a
+  // full one — a 20-row skeleton collapsing into a 1-row table drags everything below
+  // it up by a thousand-odd pixels. An unknown total falls back to the page size.
+  const skeletonRows =
+    data.total === undefined
+      ? pageSize
+      : Math.min(pageSize, Math.max(0, data.total - page * pageSize));
   const pagination = paged ? (
     <ExperiencePagination
       page={page}
@@ -122,7 +134,7 @@ function ExperienceDashboardContent({
             //
             // The directory table holds a page's height with its own skeleton; generic
             // bars are a hundred-odd pixels and the page jumps when data lands.
-            <ExperienceTableSkeleton rows={pageSize} label={t.loading} />
+            <ExperienceTableSkeleton rows={skeletonRows} label={t.loading} />
           ) : (
             <DashboardState
               state={states.list}
