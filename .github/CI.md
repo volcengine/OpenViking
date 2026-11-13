@@ -11,7 +11,7 @@ PR checks, API tests and Rust CLI checks cancel older runs for the same PR.
 Release and scheduled runs are not cancelled by this policy.
 
 The API workflow produces one Ubuntu 24.04 x86 native runtime with Python 3.10.
-Its API test job (3.10) and cuVS job (3.11) reuse that same-run artifact. Both
+Its API and database test jobs (3.10) and cuVS job (3.11) reuse that same-run artifact. Both
 native extensions target `cp310-abi3`. Restore requires matching commit, OS,
 architecture, runtime libc, platform, build options and ABI, and validates every
 file checksum before writing it. Other test platforms build locally. Release
@@ -65,3 +65,50 @@ actionlint .github/workflows/pr.yml .github/workflows/api_test.yml \
 Compare wall time, runner queue time, compiler cache hits and native build counts
 on GitHub before quoting a speedup. A local workflow validation cannot measure
 runner queueing or exercise the complete multi-platform build.
+
+## Database integration tests
+
+The API workflow's `MySQL & Redis Integration Tests` job starts fresh MySQL 8.4
+and Redis 6.2 service containers on Ubuntu 24.04. It runs for PR changes selected
+by `api_changed`, including server/service/resource code, tests, dependencies and
+CI scripts. Manual, scheduled and release runs use the workflow's existing
+repository and release-tag rules. No external database or API-key secrets are
+needed.
+
+The job installs the locked `test` and `mysql` extras, checks both connections,
+and executes the account store's deployment SQL and migrations. The database
+user has privileges only on the disposable `openviking_test` database; fixtures
+need DDL privileges to create and drop isolated Task/Work and Watch tables.
+
+The executed suites cover account-store initialization and distributed
+authentication, Redis/MySQL credential snapshots and cache invalidation,
+Task/Work lifecycle and concurrency, and Watch persistence and cross-instance
+ownership. File variants of Task/Work and Watch also run for comparison.
+PostgreSQL account-store tests are not included because that backend is not yet
+on this branch's `main` baseline.
+
+`database_integration.py verify` rejects skipped/failed database cases, missing
+account contracts, and any backend suite with zero passing cases. The two
+Watch file-only skips are expected. GitHub publishes database case counts in
+the job summary and retains `database-integration-results` JUnit XML for seven
+days, including failed runs.
+
+To reproduce against **fresh, disposable** local databases, set `OV_TEST_MYSQL`
+and `OPENVIKING_WATCH_MYSQL_PARAMS` to JSON connection objects with `host`,
+`port`, `user`, `password`, and `database`, set `OV_TEST_REDIS` to a standalone
+Redis URL without a database path, and set `OPENVIKING_CONFIG_FILE` to a writable
+temporary file. After preparing the native runtime and installing the extras,
+run the same commands as the workflow:
+
+```sh
+uv run --no-sync python .github/scripts/database_integration.py prepare
+uv run --no-sync python -m pytest -q -o addopts='' \
+  tests/server/test_account_services.py::test_mysql_load_creates_default_account \
+  tests/server/test_account_services.py::test_distributed_authentication_state_is_shared_and_service_scoped \
+  tests/server/test_redis_mysql_account_store.py \
+  tests/service/test_task_work_contract.py \
+  tests/resource/test_watch_store.py \
+  --junitxml=database-integration.xml
+uv run --no-sync python .github/scripts/database_integration.py verify database-integration.xml
+python3 -m pytest --noconftest -q -o addopts='' tests/misc/test_database_integration_ci.py
+```
