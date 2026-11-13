@@ -126,9 +126,6 @@ class FileWatchStore(WatchStore):
             content = await self._fs.read_file(uri, ctx=self._ctx())
         except NotFoundError:
             return None
-        except Exception as exc:
-            logger.warning("[FileWatchStore] Failed to read %s: %s", uri, exc)
-            return None
         if not content or not content.strip():
             return None
         try:
@@ -141,8 +138,32 @@ class FileWatchStore(WatchStore):
         return data
 
     async def _load(self) -> None:
-        data = await self._read(self.STORAGE_URI)
-        recovered = data is None and (data := await self._read(self.STORAGE_BAK_URI)) is not None
+        primary_error: Optional[Exception] = None
+        try:
+            data = await self._read(self.STORAGE_URI)
+        except Exception as exc:
+            # An unreadable snapshot is not an empty one: seeding the cache with
+            # no rows makes the next commit overwrite every task that could not
+            # be read.
+            primary_error = exc
+            logger.warning("[FileWatchStore] Failed to read %s: %s", self.STORAGE_URI, exc)
+            data = None
+        recovered = False
+        if data is None:
+            try:
+                backup = await self._read(self.STORAGE_BAK_URI)
+            except Exception as exc:
+                logger.error("[FileWatchStore] Failed to read %s: %s", self.STORAGE_BAK_URI, exc)
+                raise RuntimeError(
+                    "watch task store is unreadable; refusing to initialize from an empty snapshot"
+                ) from exc
+            if backup is not None:
+                data = backup
+                recovered = True
+            elif primary_error is not None:
+                raise RuntimeError(
+                    "watch task store is unreadable; refusing to initialize from an empty snapshot"
+                ) from primary_error
         normalized = recovered
         rows: dict[str, _Row] = {}
         for item in (data or {}).get("tasks", []):
