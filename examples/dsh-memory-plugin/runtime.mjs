@@ -267,7 +267,13 @@ export class OpenVikingRuntime {
         await operation();
         state.warnedFailures.delete("write_error");
       })
-      .catch(() => this.warnOnce(state, "write_error", {}));
+      .catch(error => {
+        this.log("write_error", {
+          sessionId: state.ovSessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        this.warnOnce(state, "write_error", {});
+      });
   }
 
   reportWriteResult(state, stage, response, path) {
