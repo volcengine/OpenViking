@@ -12,7 +12,10 @@
  * refused instead is structural, and costs nobody anything:
  *
  *   - connection and credential keys are stripped, loudly. "Which server does
- *     my data go to" must stay answerable without reading a repository.
+ *     my data go to" must stay answerable without reading a repository. The
+ *     one exception is the registry layer's `connection` *pointer*, which
+ *     names a user-private connection file instead of carrying credentials —
+ *     the registry is machine-local and never committed.
  *   - `${VAR}` is never expanded here. Variable expansion is a property of the
  *     layer, not of the parser: a committed file that could expand `${HOME}`
  *     could exfiltrate the environment.
@@ -95,6 +98,44 @@ export const FORBIDDEN_KEYS = [
  * mangling it would be a bug, not a defence.
  */
 export const FREE_FORM_SECTIONS = ["labels"];
+
+/**
+ * The keys a connection pointer may carry. A pointer names a connection
+ * configuration; it never carries one. `name` selects a file from the
+ * user-private connection library, `file` points at one directly — and only
+ * the registry layer is allowed to carry either, because the registry lives
+ * under `$HOME`, is never committed, and already outranks the in-repo files.
+ * A committed file that could redirect the credential chain could exfiltrate
+ * the session's memories by pointing them at another server.
+ */
+export const CONNECTION_POINTER_KEYS = ["name", "file"];
+
+/**
+ * Validate a `connection` pointer object, keeping only the two keys a pointer
+ * may carry and only as non-empty strings. One warning per rejected key: the
+ * pointer is the machine owner's last word, so what it named wrongly should be
+ * visible rather than guessed at.
+ */
+function sanitizeConnectionPointer(value, warnings, path = "connection") {
+  if (!isPlainObject(value)) {
+    warnings.push(`ignored '${path}': a connection pointer is an object with a 'name' or a 'file' key`);
+    return null;
+  }
+  const out = {};
+  for (const [key, child] of Object.entries(value)) {
+    const here = path ? `${path}.${key}` : key;
+    if (!CONNECTION_POINTER_KEYS.includes(key)) {
+      warnings.push(`ignored '${here}': a connection pointer carries only 'name' or 'file'`);
+      continue;
+    }
+    if (typeof child !== "string" || !child.trim()) {
+      warnings.push(`ignored '${here}': a connection pointer's '${key}' is a non-empty string`);
+      continue;
+    }
+    out[key] = child.trim();
+  }
+  return Object.keys(out).length ? out : null;
+}
 
 /**
  * The workspace schema is a projection of `config-schema.mjs`: the dotted key,
@@ -183,7 +224,7 @@ function stripUnsafeOnly(value, warnings, path, depth) {
  * Read one layer file. Every failure is a warning and an empty layer — a hook
  * must not die because a config file is odd.
  */
-export function readWorkspaceFile(path, { root = "", layer = "" } = {}) {
+export function readWorkspaceFile(path, { root = "", layer = "", allowConnectionPointer = false } = {}) {
   const warnings = [];
   const empty = { path, layer, exists: false, data: null, warnings };
 
@@ -234,13 +275,24 @@ export function readWorkspaceFile(path, { root = "", layer = "" } = {}) {
     return empty;
   }
 
-  const { version, $schema, min_client_version: minClientVersion, ...rest } = parsed;
+  const { version, $schema, min_client_version: minClientVersion, connection, ...rest } = parsed;
   let data;
   try {
     data = stripForbidden(rest, FORBIDDEN_KEYS, warnings);
   } catch (err) {
     warnings.push(`${path} is nested too deeply (${err?.message || err})`);
     return empty;
+  }
+  // The pointer is carved out before the strip, because its keys are the user's
+  // own vocabulary and only the registry layer may carry it at all.
+  if (connection !== undefined) {
+    const pointer = allowConnectionPointer
+      ? sanitizeConnectionPointer(connection, warnings)
+      : null;
+    if (!allowConnectionPointer) {
+      warnings.push(`ignored 'connection': connection settings belong in ovcli.conf or the environment`);
+    }
+    if (pointer) data.connection = pointer;
   }
   if (minClientVersion) data.min_client_version = String(minClientVersion);
 

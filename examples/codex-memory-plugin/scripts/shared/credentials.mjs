@@ -3,6 +3,9 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 
+import { findWorkspaceRoot, resolveWorkspaceIdentity } from "./workspace-identity.mjs";
+import { readEntry, resolveConnectionPointer } from "./workspace-registry.mjs";
+
 const DEFAULT_OVCLI_CONF_PATH = join(homedir(), ".openviking", "ovcli.conf");
 const DEFAULT_OV_CONF_PATH = join(homedir(), ".openviking", "ov.conf");
 const DEFAULT_TIMEOUT_MS = 15000;
@@ -79,10 +82,22 @@ function hasCredentialFields(obj) {
   ].some((key) => typeof obj[key] === "string");
 }
 
-export function loadCredentialFiles(env = process.env) {
-  const cliPathCandidate = normalizePath(env.OPENVIKING_CLI_CONFIG_FILE) || DEFAULT_OVCLI_CONF_PATH;
-  const ovPathCandidate = normalizePath(env.OPENVIKING_CONFIG_FILE) || DEFAULT_OV_CONF_PATH;
+/**
+ * Read the two user-private config files the connection chain consumes.
+ *
+ * `connectionFile` is the workspace registry's connection pointer already
+ * resolved to a file path: the per-workspace equivalent of
+ * `OPENVIKING_CLI_CONFIG_FILE`. The environment keeps its precedence — an
+ * `OPENVIKING_CLI_CONFIG_FILE` in the environment wins and the pointer is
+ * ignored — so a process told which file to read by its parent stays told,
+ * and the pointer only selects which private file feeds the chain when the
+ * environment says nothing.
+ */
+export function loadCredentialFiles(env = process.env, { connectionFile = "" } = {}) {
   const cliPathEnv = Boolean(str(env.OPENVIKING_CLI_CONFIG_FILE, ""));
+  const pointerFile = cliPathEnv ? "" : normalizePath(connectionFile);
+  const cliPathCandidate = normalizePath(env.OPENVIKING_CLI_CONFIG_FILE) || pointerFile || DEFAULT_OVCLI_CONF_PATH;
+  const ovPathCandidate = normalizePath(env.OPENVIKING_CONFIG_FILE) || DEFAULT_OV_CONF_PATH;
   const ovPathEnv = Boolean(str(env.OPENVIKING_CONFIG_FILE, ""));
 
   let cliFile = tryLoadJson(cliPathCandidate);
@@ -105,6 +120,9 @@ export function loadCredentialFiles(env = process.env) {
     cliPathCandidate,
     ovFile: ovFile || {},
     ovPath,
+    // The pointer file this resolution fed into the chain, empty when the
+    // environment named a file itself or no pointer was in play.
+    connectionFile: pointerFile,
   };
 }
 
@@ -335,6 +353,27 @@ function clampTimeout(value) {
 }
 
 /**
+ * The connection file the workspace registry's pointer names for one cwd, or
+ * "" when there is no workspace, no readable entry or no usable pointer. A
+ * proxy calls this once at startup and every failure is a silent miss — a
+ * pointer that cannot be resolved means today's behavior, not a dead proxy.
+ */
+export function resolveConnectionFileForCwd(cwd, env = process.env) {
+  const dir = String(cwd || "").trim();
+  if (!dir) return "";
+  try {
+    const { root } = findWorkspaceRoot(dir, env);
+    if (!root) return "";
+    const identity = resolveWorkspaceIdentity({ cwd: dir, env });
+    const { entry } = readEntry(root, { identity, env });
+    if (!entry?.connection) return "";
+    return resolveConnectionPointer(entry.connection, { env }).path;
+  } catch {
+    return "";
+  }
+}
+
+/**
  * Everything a stdio MCP proxy needs, for a package that ships no hooks.
  *
  * `buildPluginConfig` answers the same question one layer up, but reaching it
@@ -343,13 +382,21 @@ function clampTimeout(value) {
  * This is the same connection plus what a proxy adds to it: the User-Agent,
  * the request timeout, and the debug log.
  *
+ * `cwd` is the proxy's launch directory; when a workspace above it carries a
+ * registry connection pointer, that pointer's file feeds the credential chain,
+ * so Hook and MCP within one session present the same identity. The
+ * environment keeps its precedence over the pointer, as everywhere else.
+ *
  * The api_key ends at `server.root_api_key` even when ovcli.conf pinned the
  * chain to itself. A portable package has no installer to migrate anyone, so
  * an install that names only a `url` there keeps the key it has always used.
  */
-export function buildProxyConnection(harness, { env = process.env, manifestUrl = "", version = "" } = {}) {
+export function buildProxyConnection(harness, { env = process.env, manifestUrl = "", version = "", cwd = "" } = {}) {
   const name = str(harness);
-  const connection = resolveConnection(name, { env, rootKeyFallback: true });
+  const files = loadCredentialFiles(env, {
+    connectionFile: resolveConnectionFileForCwd(cwd, env),
+  });
+  const connection = resolveConnection(name, { env, files, rootKeyFallback: true });
   return {
     harness: name,
     userAgent: buildUserAgent(name, str(version) || (manifestUrl ? readManifestVersion(manifestUrl) : "")),
@@ -367,6 +414,7 @@ export function buildProxyConnection(harness, { env = process.env, manifestUrl =
     hasApiKey: connection.hasApiKey,
     cliPath: connection.cliPath,
     ovPath: connection.ovPath,
+    connectionFile: connection.connectionFile,
     timeoutMs: clampTimeout(env.OPENVIKING_TIMEOUT_MS),
     debug: envFlag(env, "OPENVIKING_DEBUG"),
     debugLogPath: str(env.OPENVIKING_DEBUG_LOG)

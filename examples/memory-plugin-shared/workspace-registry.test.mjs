@@ -1,14 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, symlink, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
   entryPath,
   identityKey,
+  openvikingHome,
   readEntry,
   registryDir,
+  resolveConnectionPointer,
   slotName,
 } from "./lib/workspace-registry.mjs";
 
@@ -142,4 +144,83 @@ test("a free-form section in the registry keeps its own vocabulary", async () =>
   const { entry, warnings } = readEntry(root, { identity: repo, env });
   assert.deepEqual(entry.settings.labels, { user: "alice", team: "core" });
   assert.deepEqual(warnings, []);
+});
+
+// --- the registry's connection pointer --------------------------------------
+
+test("a registry entry may carry a connection pointer; a workspace file may not", async () => {
+  const env = await home();
+  const root = "/Users/x/src/api";
+  await putEntry(root, env, repo, {
+    identity: identityKey(repo),
+    connection: { name: "work-agent" },
+  });
+  const { entry, warnings } = readEntry(root, { identity: repo, env });
+  assert.deepEqual(entry.connection, { name: "work-agent" });
+  assert.deepEqual(warnings, []);
+});
+
+test("resolveConnectionPointer expands a named connection into the library", async () => {
+  const env = await home();
+  const resolved = resolveConnectionPointer({ name: "work-agent" }, { env });
+  assert.equal(resolved.path, join(openvikingHome(env), "connections", "work-agent.conf"));
+  assert.deepEqual(resolved.warnings, []);
+  // A name is a file name, not a path: no traversal out of the library.
+  const escape = resolveConnectionPointer({ name: "../ovcli.conf" }, { env });
+  assert.equal(escape.path, "");
+  assert.ok(escape.warnings.some((w) => w.includes("connection name")));
+});
+
+test("a file pointer must stay inside the user's OpenViking home", async () => {
+  const env = await home();
+  const inside = resolveConnectionPointer({ file: "connections/dsh.conf" }, { env });
+  assert.equal(inside.path, join(openvikingHome(env), "connections", "dsh.conf"));
+  assert.deepEqual(inside.warnings, [],
+    "a relative pointer resolves against the OpenViking home, not the launch directory");
+
+  // `~` expands against the OS home, which is not the OpenViking home the
+  // pointer is confined to — a home-scoped pointer spells `connections/…`.
+  const outsideHome = resolveConnectionPointer({ file: "~/connections/dsh.conf" }, { env });
+  assert.equal(outsideHome.path, "");
+  assert.ok(outsideHome.warnings.some((w) => w.includes("must stay inside")));
+
+  const outside = resolveConnectionPointer({ file: "/etc/ovcli.conf" }, { env });
+  assert.equal(outside.path, "");
+  assert.ok(outside.warnings.some((w) => w.includes("must stay inside")));
+
+  const leaves = resolveConnectionPointer({ file: "connections/../../ovcli.conf" }, { env });
+  assert.equal(leaves.path, "", "a traversal that leaves the home is refused, resolved or not");
+  assert.ok(leaves.warnings.some((w) => w.includes("must stay inside")));
+
+  const escape = resolveConnectionPointer({ file: "connections/../ovcli.conf" }, { env });
+  assert.equal(escape.path, join(openvikingHome(env), "ovcli.conf"), "a relative pointer resolves, then is confined");
+  assert.deepEqual(escape.warnings, []);
+
+  const tilde = resolveConnectionPointer({ file: "~" }, { env });
+  assert.equal(tilde.path, "", "the home directory itself is not a connection file");
+});
+
+test("a pointer's target escaping through a symlink is refused", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("creating symlinks on Windows needs an elevated shell");
+    return;
+  }
+  const env = await home();
+  const home0 = openvikingHome(env);
+  const outside = await mkdtemp(join(tmpdir(), "ov-escape-"));
+  await symlink(outside, join(home0, "link"));
+  const pointed = resolveConnectionPointer({ file: join(home0, "link", "ovcli.conf") }, { env });
+  assert.equal(pointed.path, "", "the realpath escape must be caught even though the target does not exist yet");
+  assert.ok(pointed.warnings.some((w) => w.includes("must stay inside")));
+});
+
+test("an unusable pointer warns instead of changing the chain", async () => {
+  const env = await home();
+  assert.equal(resolveConnectionPointer(null, { env }).path, "");
+  assert.equal(resolveConnectionPointer(undefined, { env }).path, "");
+  for (const connection of [{}, { other: 1 }, { name: "" }, { file: 5 }, { user: "x", api_key: "y" }]) {
+    const resolved = resolveConnectionPointer(connection, { env });
+    assert.equal(resolved.path, "");
+    assert.ok(resolved.warnings.length > 0, `expected a warning for ${JSON.stringify(connection)}`);
+  }
 });

@@ -77,17 +77,22 @@ test("git holds the copies the directory-installed plugins need, and no others",
 // carried by hosts that install it as a plain directory, so every module it
 // reaches is committed code a reviewer reads. It has no hooks and no knobs; the
 // connection half of the shared loader (`buildProxyConnection`) is what keeps
-// it at five modules instead of the whole schema-and-workspace closure.
+// the bundle small. The workspace registry layers ride along only for the
+// connection pointer they resolve (#7395) — never the knob schema's consumers.
 test("the portable agent-plugins bundle stays connection-only", async () => {
   const target = (await resolveTargets())
     .find((entry) => relative(ROOT, entry.dir) === join("agent-plugins", "servers", "shared"));
   assert.ok(target, "the agent-plugins bundle must stay a sync target");
   assert.deepEqual(target.files, [
+    "config-schema.mjs",
     "credentials.mjs",
     "debug-log.mjs",
     "mcp-proxy-config.mjs",
     "mcp-proxy-core.mjs",
     "ov-http.mjs",
+    "workspace-config.mjs",
+    "workspace-identity.mjs",
+    "workspace-registry.mjs",
   ]);
 });
 
