@@ -319,6 +319,10 @@ bypass 命中时所有 hook 直接放行，不联系 OpenViking。
 
 `recallCompress` 决定 digest 在哪里生成，默认值为 `auto`。`client` 始终通过 `claude -p` 在本地压缩（默认 Haiku + 低推理档），token 成本留在你自己的订阅额度里。`server` 让 OpenViking 生成 digest。`auto` 优先本地，探测不到可用的宿主 CLI 时回落到服务端。压缩器执行失败或输出校验失败时会退回未压缩的上下文块；任一压缩器精确返回 `NO_RELEVANT_MEMORY` 都是成功的空结果，不注入任何内容。压缩子进程运行时所有 OpenViking hook 均被禁用，不会递归。旧的环境变量 `OPENVIKING_RECALL_REWRITE` 和配置键 `recallRewrite` 仍作为低优先级兼容别名保留。
 
+当 `claude --help` 列出 `--restricted` 时，本地压缩器会使用它跳过用户、项目和本地设置，
+包括这些设置中的插件与 hook，同时保留正常登录。托管设置仍然生效。
+能力探测结果缓存七天；旧版 CLI 保持原有调用方式。
+
 ### 遗留 `claude_code` 块（在 `ov.conf` 里）
 
 早期插件版本把调优字段配在 `~/.openviking/ov.conf` 的 `claude_code` 块里。出于向后兼容，这种方式仍能用——上面每个 env var 都有对应的 camelCase 字段（`OPENVIKING_RECALL_LIMIT` → `claude_code.recallLimit`、`OPENVIKING_BYPASS_SESSION_PATTERNS` → `claude_code.bypassSessionPatterns` JSON 数组等）。env vars 优先级更高。新部署应优先使用 env vars + shell rc——服务端配置文件不应承载每开发机自己的调优偏好。
@@ -415,6 +419,7 @@ Claude's own lookups
 
 - `auto-recall` 默认输出关键阶段 + 紧凑的 `ranking_summary`
 - 仅在排查每候选打分时才把 `claude_code.logRankingDetails` 设为 `true`，否则非常啰嗦
+- `host_compressor_failed` 包含退出码、超时状态及最多 2,000 字符的 stderr。
 
 ## 故障排除
 
