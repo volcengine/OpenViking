@@ -23,6 +23,28 @@ from tests.test_task_tracker import _FakeAgfs
 OWNER: dict[str, Any] = {"account_id": "account", "user_id": "user"}
 
 
+@pytest.mark.parametrize(
+    "original, expected",
+    [
+        (Exception(1062, "unique key conflict"), True),
+        (Exception(1452, "foreign key references duplicate_records"), False),
+        (Exception(1048, "Column 'duplicate' cannot be null"), False),
+        (Exception(3819, "Check constraint 'duplicate_guard' is violated"), False),
+        (Exception("duplicate"), False),
+        (Exception(), False),
+        (None, False),
+    ],
+)
+def test_mysql_duplicate_detection_uses_driver_error_code(original, expected):
+    from sqlalchemy.exc import IntegrityError
+
+    from openviking.service.task_store_mysql import MySQLTaskWorkStore
+
+    # SQL and parameter text also appear in str(exc), independently of errno.
+    error = IntegrityError("INSERT INTO duplicate_records", {"value": "duplicate"}, original)
+    assert MySQLTaskWorkStore._is_duplicate_error(error) is expected
+
+
 def _relational_backend(provider):
     sqlalchemy = pytest.importorskip("sqlalchemy.ext.asyncio")
     if provider == "postgres":

@@ -73,4 +73,4 @@ class MySQLTaskWorkStore(SQLTaskWorkStore):
     @staticmethod
     def _is_duplicate_error(exc: IntegrityError) -> bool:
         args = getattr(getattr(exc, "orig", None), "args", ())
-        return bool(args and args[0] == 1062) or "duplicate" in str(exc).lower()
+        return bool(args and args[0] == 1062)
