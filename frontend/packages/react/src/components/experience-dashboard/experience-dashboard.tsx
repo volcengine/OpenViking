@@ -1,6 +1,5 @@
 import { useState } from 'react';
 
-import { DashboardState } from '../../shared/dashboard/dashboard-state.js';
 import { useLocale } from '../../shared/locale-context.js';
 import {
   TabImpactIcon,
@@ -9,6 +8,7 @@ import {
 } from '../../icons/index.js';
 import { DashboardTabs } from './dashboard-tabs.js';
 import { experienceLabels } from './labels.js';
+import { ExperienceQueryState } from './experience-state.js';
 import { ExperienceImpact } from './experience-impact.js';
 import { ExperienceList } from './experience-list.js';
 import { ExperiencePagination } from './experience-pagination.js';
@@ -120,8 +120,9 @@ function ExperienceDashboardContent({
               onOpenUri={onOpenUri}
             />
           ) : (
-            <DashboardState
+            <ExperienceQueryState
               state={states.list}
+              rows={4}
               empty={t.empty}
               loading={t.loading}
               failed={t.failed}
@@ -145,6 +146,7 @@ function ExperienceDashboardContent({
                 locale={locale}
                 days={days}
                 onDaysChange={setDays}
+                effectState={states.effect ?? {}}
                 outcomesState={states.outcomes ?? {}}
                 trajectoriesState={states.trajectories ?? {}}
                 hasMore={hasMore}
@@ -166,8 +168,9 @@ function ExperienceDashboardContent({
                   onOpenUri={onOpenUri}
                 />
               ) : (
-                <DashboardState
+                <ExperienceQueryState
                   state={states.sources}
+                  rows={4}
                   empty={t.emptySource}
                   loading={t.loading}
                   failed={t.failed}
@@ -185,8 +188,9 @@ function ExperienceDashboardContent({
                 {pagination}
               </>
             ) : (
-              <DashboardState
+              <ExperienceQueryState
                 state={states.tests}
+                rows={4}
                 empty={t.emptyTests}
                 loading={t.loading}
                 failed={t.failed}

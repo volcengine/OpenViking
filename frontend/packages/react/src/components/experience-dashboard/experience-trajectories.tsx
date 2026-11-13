@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import { ArrowUpRightIcon, FileLinkIcon } from '../../icons/index.js';
 import { Tooltip } from '../../shared/primitives/tooltip/tooltip.js';
 import { ExperienceCopyAction } from './experience-copy-action.js';
+import { useLoadMoreOnScroll } from './use-load-more-on-scroll.js';
 import type {
   ExperienceDashboardLabels,
   ExperienceOutcome,
@@ -94,6 +95,7 @@ export function ExperienceTrajectories({
   locale = 'en-US',
   hasMore = false,
   loadingMore = false,
+  scrollLoadMore = false,
   onLoadMore,
   onOpenUri,
 }: {
@@ -102,9 +104,21 @@ export function ExperienceTrajectories({
   locale?: 'en-US' | 'zh-CN';
   hasMore?: boolean;
   loadingMore?: boolean;
+  /**
+   * 滚到底部时自动追加，与可点击的按钮并存。来源追溯只有一页，不需要它。
+   *
+   * Appends on reaching the bottom, alongside the clickable button. The source trace
+   * holds a single page and does not need it.
+   */
+  scrollLoadMore?: boolean;
   onLoadMore?: () => void;
   onOpenUri?: (uri: string) => void;
 }) {
+  const sentinelRef = useLoadMoreOnScroll({
+    enabled: scrollLoadMore && hasMore,
+    loading: loadingMore,
+    onLoadMore,
+  });
   return (
     <>
       <ol className="ov-experience-dashboard__timeline">
@@ -173,7 +187,7 @@ export function ExperienceTrajectories({
         ))}
       </ol>
       {hasMore || loadingMore ? (
-        <div className="ov-experience-dashboard__load-more">
+        <div ref={sentinelRef} className="ov-experience-dashboard__load-more">
           {loadingMore ? (
             t.loadingMore
           ) : (

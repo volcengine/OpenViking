@@ -44,6 +44,18 @@
     --ov-ui-color-dashboard-dot,
     var(--ov-ui-dashboard-dot-default, rgb(120 124 145 / 12%))
   );
+  --ov-ui-experience-accent-border: var(
+    --ov-ui-color-dashboard-accent-border,
+    var(--ov-ui-dashboard-accent-border-default, #2929ff)
+  );
+  --ov-ui-experience-accent-fade: var(
+    --ov-ui-color-dashboard-accent-fade,
+    var(--ov-ui-dashboard-accent-fade-default)
+  );
+  --ov-ui-experience-accent-text: var(
+    --ov-ui-color-dashboard-accent-text,
+    var(--ov-ui-dashboard-accent-text-default)
+  );
 
   display: flex;
   flex-direction: column;
@@ -141,6 +153,51 @@
   font-size: 13px;
   font-weight: 500;
   line-height: 22px;
+}
+
+/* 加载骨架：16 高的占位条，1.4 秒的明暗循环；颜色由基线底色派生，跟随主题。 */
+/* The loading skeleton: 16-high bars with a 1.4-second shimmer; colours derive from
+ * the baseline surface, so it follows the theme. */
+.ov-experience-dashboard__skeleton > div {
+  display: flex;
+  padding: 24px 0;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ov-experience-dashboard__skeleton > div > span {
+  height: 16px;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    var(--ov-ui-experience-border) 25%,
+    var(--ov-ui-experience-card) 50%,
+    var(--ov-ui-experience-border) 75%
+  );
+  background-size: 200% 100%;
+  animation: ov-experience-shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes ov-experience-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+
+  to {
+    background-position: -100% 0;
+  }
+}
+
+/* 只给读屏器的文本：骨架的占位条对它隐藏，加载状态仍由这句话表达。 */
+/* Text for screen readers only: the skeleton's bars are hidden from them, and this
+ * line still states that loading is in progress. */
+.ov-experience-dashboard__sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 /* 应用效果：标题行 32 高，标题与说明间隔 12。 */
@@ -263,6 +320,24 @@
   padding: 16px;
   border: 1px solid var(--ov-ui-experience-border);
   border-radius: 12px;
+}
+
+/* 指标取数中或失败时占同一块位置，高度与正常的三项指标一致，页面不跳。 */
+/* The metrics hold their slot while loading or failed, at the same height as the three
+ * regular metrics, so the page does not jump. */
+.ov-experience-dashboard__metrics-state {
+  display: flex;
+  height: 104px;
+  margin: 0 0 12px;
+  align-items: center;
+  border: 1px solid var(--ov-ui-experience-border);
+  border-radius: 12px;
+}
+
+.ov-experience-dashboard__metrics-state .ov-experience-dashboard__skeleton,
+.ov-experience-dashboard__metrics-state .ov-dashboard-state {
+  width: 100%;
+  min-height: 0;
 }
 
 .ov-experience-dashboard__metrics > div {
@@ -852,9 +927,39 @@
 }
 
 .ov-experience-dashboard__hint-label {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
   text-decoration: underline dotted;
   text-underline-offset: 3px;
   cursor: help;
+}
+
+/* 「更新」标记：淡渐变底、实描边、渐变文字，三色都取自主题基线。 */
+/* The "updated" tag: a faded gradient fill, a solid border and gradient text, all
+ * three from the theme baseline. */
+.ov-experience-dashboard__updated-tag {
+  display: inline-flex;
+  height: 18px;
+  flex: none;
+  align-items: center;
+  padding: 0 6px;
+  border: 0.5px solid var(--ov-ui-experience-accent-border);
+  border-radius: 4px 4px 4px 0;
+  background: var(--ov-ui-experience-accent-fade);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 18px;
+  letter-spacing: 0.03px;
+  white-space: nowrap;
+}
+
+.ov-experience-dashboard__updated-tag > span {
+  color: transparent;
+  background: var(--ov-ui-experience-accent-text);
+  background-clip: text;
 }
 
 .ov-experience-dashboard__table-row {
@@ -960,5 +1065,9 @@
   .ov-experience-dashboard__outcome-track span,
   .ov-experience-dashboard__source-chevron {
     transition: none;
+  }
+
+  .ov-experience-dashboard__skeleton > div > span {
+    animation: none;
   }
 }
