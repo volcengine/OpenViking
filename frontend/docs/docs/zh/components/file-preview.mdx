@@ -73,21 +73,30 @@ import '@openviking/react/components/file-preview/style.css';
 
 示例故意使用无效的图片和视频数据触发错误态；选择「不支持的格式」可以下载示例的原始内容。
 
+### 自定义错误展示
+
+通过组件级 `slots.errorFallback` 提供宿主的内容和样式，页签级配置仍优先。示例按钮先解除模拟异常，再调用当前区域的 `reset`。
+
+```tsx file="../../_demos/file-preview-error-fallback.tsx" preview
+
+```
+
 ## API
 
 ### FilePreview
 
-| 参数              | 说明                                                                  | 类型                                             | 默认值                   |
-| ----------------- | --------------------------------------------------------------------- | ------------------------------------------------ | ------------------------ |
-| tabs              | 页签列表，至少一个，用 `kind` 区分文件、目录和内容页签                | `readonly [FilePreviewTab, ...FilePreviewTab[]]` | 必填                     |
-| activeKey         | 受控的当前页签，找不到对应页签时显示第一个                            | `string`                                         | -                        |
-| defaultActiveKey  | 非受控时的初始页签                                                    | `string`                                         | 第一个页签               |
-| toolbar           | 统一设置所有页签的内置入口，顶层设为 `false` 的入口，页签无法重新打开 | `FilePreviewToolbarOptions`                      | -                        |
-| onActiveKeyChange | 切换页签时触发，参数为新页签的 `key`，受控时由宿主更新 `activeKey`    | `(key: string) => void`                          | -                        |
-| labels            | 覆盖界面文案，页签的 `labels` 优先                                    | `FilePreviewLabels`                              | -                        |
-| locale            | 界面语言，规则见[国际化](../guide/i18n)                               | `'zh-CN' \| 'en-US'`                             | 继承上级，默认 `'en-US'` |
-| ref               | 取得命令式句柄，切换页签或访问 FileViewer                             | `Ref<FilePreviewHandle>`                         | -                        |
-| className、style  | 外观与布局，其余 HTML 属性透传到根元素                                | HTML 属性                                        | -                        |
+| 参数              | 说明                                                                              | 类型                                                                  | 默认值                   |
+| ----------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------ |
+| tabs              | 页签列表，至少一个，用 `kind` 区分文件、目录和内容页签                            | `readonly [FilePreviewTab, ...FilePreviewTab[]]`                      | 必填                     |
+| activeKey         | 受控的当前页签，找不到对应页签时显示第一个                                        | `string`                                                              | -                        |
+| defaultActiveKey  | 非受控时的初始页签                                                                | `string`                                                              | 第一个页签               |
+| toolbar           | 统一设置所有页签的内置入口，顶层设为 `false` 的入口，页签无法重新打开             | `FilePreviewToolbarOptions`                                           | -                        |
+| onActiveKeyChange | 切换页签时触发，参数为新页签的 `key`，受控时由宿主更新 `activeKey`                | `(key: string) => void`                                               | -                        |
+| slots             | 替换渲染异常的展示内容，见[错误展示插槽](../guide/getting-started#自定义错误展示) | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }` | -                        |
+| labels            | 覆盖界面文案，页签的 `labels` 优先                                                | `FilePreviewLabels`                                                   | -                        |
+| locale            | 界面语言，规则见[国际化](../guide/i18n)                                           | `'zh-CN' \| 'en-US'`                                                  | 继承上级，默认 `'en-US'` |
+| ref               | 取得命令式句柄，切换页签或访问 FileViewer                                         | `Ref<FilePreviewHandle>`                                              | -                        |
+| className、style  | 外观与布局，其余 HTML 属性透传到根元素                                            | HTML 属性                                                             | -                        |
 
 ### FilePreviewTabBase
 
@@ -242,15 +251,15 @@ import '@openviking/react/components/file-preview/style.css';
 
 ### FilePreviewFileTabSlots
 
-包含 `FilePreviewHeaderSlots` 的全部字段，另有加载、失败和格式不支持时的替代内容，不传时使用内置状态。
+包含 `FilePreviewHeaderSlots` 的全部字段，另有加载、失败和格式不支持时的替代内容，不传时使用内置状态。 函数接收当前正文的重试方法，读取失败时重试读取，渲染异常时重试渲染。
 
-| 参数                | 说明                                                                                | 类型                               | 默认值 |
-| ------------------- | ----------------------------------------------------------------------------------- | ---------------------------------- | ------ |
-| loadingFallback     | 读取中的替代内容，`loading` 为 `true` 时也使用                                      | `ReactNode`                        | -      |
-| errorFallback       | 读取失败时的替代内容，替换内置的失败提示和重试按钮                                  | `ReactNode`                        | -      |
-| unsupportedFallback | 格式无法预览时的替代内容，传入后接管整个不支持态，FileViewer 的下载入口随之不再显示 | `ReactNode`                        | -      |
-| confirmFallback     | 大文件确认态的替代组件，收到 `onConfirm`、`onCancel` 等属性                         | `ComponentType<ConfirmSlotProps>`  | -      |
-| downloadFallback    | 无法内联预览时的替代组件，收到 `onDownload`、`onRetry` 等属性                       | `ComponentType<DownloadSlotProps>` | -      |
+| 参数                | 说明                                                                                | 类型                                              | 默认值 |
+| ------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------- | ------ |
+| loadingFallback     | 读取中的替代内容，`loading` 为 `true` 时也使用                                      | `ReactNode`                                       | -      |
+| errorFallback       | 读取或渲染失败时的替代内容，覆盖组件级错误插槽                                      | `ReactNode \| ((reset: () => void) => ReactNode)` | -      |
+| unsupportedFallback | 格式无法预览时的替代内容，传入后接管整个不支持态，FileViewer 的下载入口随之不再显示 | `ReactNode`                                       | -      |
+| confirmFallback     | 大文件确认态的替代组件，收到 `onConfirm`、`onCancel` 等属性                         | `ComponentType<ConfirmSlotProps>`                 | -      |
+| downloadFallback    | 无法内联预览时的替代组件，收到 `onDownload`、`onRetry` 等属性                       | `ComponentType<DownloadSlotProps>`                | -      |
 
 ### FilePreviewActions
 

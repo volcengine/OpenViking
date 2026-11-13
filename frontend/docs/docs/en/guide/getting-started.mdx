@@ -113,6 +113,33 @@ export function Browser({ apiKey }: { apiKey: string }) {
 - Your app handles sign-in, account scope and routing.
 - For the other identity fields, `requestOptions` and the rules of each block, see [Blocks](../modules/).
 
+## Custom error display
+
+FilePreview, CommandConsole, VikingBot and its message list, composer and interaction form, both dashboards, and the FileBrowser, Console and ScopeCascade blocks support an optional `slots.errorFallback: ReactNode | ((reset: () => void) => ReactNode)`. It replaces the entire rendering-error display, so the host can supply its own `className`, `style` and interactions.
+
+```tsx
+<FileBrowser
+  slots={{
+    errorFallback: (reset) => (
+      <div className="my-error" role="alert">
+        Files are unavailable
+        <button type="button" onClick={reset}>
+          Retry display
+        </button>
+      </div>
+    ),
+  }}
+/>
+```
+
+- Omitted or `undefined`: inherits the enclosing component or block's setting; without one, the built-in regional message and “Retry display” are shown.
+- Nested regions: inherit by default; an explicit child setting takes priority. FilePreview tab `slots.errorFallback` overrides the component-level setting.
+- `null`: hides the rendering-error display. Custom content replaces the built-in message and retry button.
+
+A render function receives the failed region’s `reset` action. Calling it clears that region’s error state and renders it again, preserving state outside the boundary without explicitly reissuing business requests. If the cause persists, the fallback appears again. Inherited functions receive the reset action of the nested region that failed.
+
+Changing the slot updates failed displays without retrying or clearing state outside the boundary. The slot applies only to rendering exceptions; ordinary request failures retain each component's existing error-state options. The error boundary itself remains internal.
+
 ## Theming
 
 Components read their colors from the `--ov-ui-color-*` variables. The library does not define these variables itself: set them on your app root or any ancestor element and the components use your values; when they are unset, the components use built-in default colors.

@@ -1,3 +1,5 @@
+import { useRenderErrors } from './labels.js';
+import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 /* eslint-disable jsx-a11y/no-noninteractive-tabindex -- Labelled conflict region must support keyboard horizontal scrolling. */
 import { useState } from 'react';
 import { useLocale } from '../../shared/locale-context.js';
@@ -10,7 +12,7 @@ import { WikiFileIcon } from './wiki-file-icon.js';
 import { WikiSeverityFilter } from './wiki-severity-filter.js';
 import type { WikiDashboardProps, WikiConflict } from './types.js';
 
-export function WikiDashboard(props: WikiDashboardProps) {
+function WikiDashboardContent(props: WikiDashboardProps) {
   const {
     kind,
     data,
@@ -132,5 +134,19 @@ export function WikiDashboard(props: WikiDashboardProps) {
         ) : null}
       </div>
     </div>
+  );
+}
+
+export function WikiDashboard(props: WikiDashboardProps) {
+  const { slots, ...contentProps } = props;
+  return (
+    <ErrorBoundary
+      fallback={slots?.errorFallback}
+      message={useRenderErrors(props.locale).dashboard}
+      locale={props.locale}
+      resetKeys={[props.kind]}
+    >
+      <WikiDashboardContent {...contentProps} />
+    </ErrorBoundary>
   );
 }

@@ -1,3 +1,5 @@
+import { useRenderErrors } from './file-preview-labels.js';
+import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import type { Locale } from '../../shared/locale.js';
 import type {
   FileViewerState,
@@ -54,7 +56,7 @@ export interface FilePreviewBodyProps {
  * The body of a file tab: it short-circuits through editing, empty file and then
  * the base component. A content tab never reaches this — its body is the host's.
  */
-export function FilePreviewBody({
+function FilePreviewBodyContent({
   fileTab,
   text,
   locale,
@@ -131,5 +133,37 @@ export function FilePreviewBody({
         onLoadingChange={onLoadingChange}
       />
     </FilePreviewImageFrame>
+  );
+}
+
+export function FilePreviewBody(props: FilePreviewBodyProps) {
+  const { source } = props.fileTab;
+  return (
+    <ErrorBoundary
+      message={
+        useRenderErrors(props.locale)[
+          props.editing.editing ||
+          props.editing.loadingEdit ||
+          props.editing.editFailed
+            ? 'editor'
+            : 'preview'
+        ]
+      }
+      locale={props.locale}
+      fallback={props.fileTab.slots?.errorFallback}
+      resetKeys={[
+        props.fileTab.key,
+        props.fileTab.loading,
+        source.path,
+        source.fileName,
+        source.fileType,
+        source.content,
+        source.url,
+        source.file,
+        props.viewMode,
+      ]}
+    >
+      <FilePreviewBodyContent {...props} />
+    </ErrorBoundary>
   );
 }

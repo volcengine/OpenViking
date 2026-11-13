@@ -45,3 +45,13 @@ const messages = {
 } satisfies Required<VikingBotLabels>;
 
 export default messages;
+
+export const renderErrors = {
+  bot: 'Conversation could not be displayed.',
+  list: 'Message list could not be displayed.',
+  message: 'Message could not be displayed.',
+  composer: 'Input area could not be displayed.',
+  interaction: 'Interaction form could not be displayed.',
+  header: 'Conversation toolbar could not be displayed.',
+  footer: 'Conversation footer could not be displayed.',
+};

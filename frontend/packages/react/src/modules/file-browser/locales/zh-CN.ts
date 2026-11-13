@@ -1,3 +1,4 @@
+import type { renderErrors as EnglishRenderErrors } from './en-US.js';
 import type { ShellLabels } from '../file-browser-labels.js';
 
 const messages = {
@@ -74,3 +75,10 @@ const messages = {
 export default messages;
 
 export const stackedEmpty = '从上方选中一个文件预览';
+
+export const renderErrors = {
+  browser: '文件浏览器显示失败',
+  tree: '目录树显示失败',
+  preview: '文件预览失败',
+  search: '搜索结果显示失败',
+} satisfies Record<keyof typeof EnglishRenderErrors, string>;

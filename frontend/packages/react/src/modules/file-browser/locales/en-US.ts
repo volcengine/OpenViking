@@ -77,3 +77,10 @@ const messages = {
 export default messages;
 
 export const stackedEmpty = 'Select a file above to preview it';
+
+export const renderErrors = {
+  browser: 'File browser could not be displayed.',
+  tree: 'File tree could not be displayed.',
+  preview: 'File preview failed.',
+  search: 'Search results could not be displayed.',
+};

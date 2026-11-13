@@ -20,6 +20,17 @@ try {
           dts: false,
           source: {
             entry: {
+              'error-boundary':
+                './src/shared/error-boundary/error-boundary.tsx',
+              'lazy-content': './src/shared/lazy-content.tsx',
+              'browser-tree-pane':
+                './src/modules/file-browser/file-browser-tree-pane.tsx',
+              'browser-preview-pane':
+                './src/modules/file-browser/file-browser-preview-pane.tsx',
+              'browser-search':
+                './src/modules/file-browser/file-browser-search.tsx',
+              'browser-labels':
+                './src/modules/file-browser/file-browser-labels.ts',
               button: './src/shared/primitives/button/button.tsx',
               input: './src/shared/primitives/input/input.tsx',
               'overlay-position':

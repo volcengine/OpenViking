@@ -177,11 +177,12 @@ Console 按适配器是否提供方法决定停止与追问能力。`steer` 返�
 
 ### ConsoleSlots
 
-| 参数                | 说明                                                     | 类型        | 默认值 |
-| ------------------- | -------------------------------------------------------- | ----------- | ------ |
-| toolbar             | 工具栏里模式切换和操作按钮之间的内容，两种模式下都显示   | `ReactNode` | -      |
-| conversationContext | 对话模式下输入区上方的内容，优先于 `conversation.footer` | `ReactNode` | -      |
-| commandHelp         | 命令模式下命令控制台上方的内容                           | `ReactNode` | -      |
+| 参数                | 说明                                                     | 类型                                              | 默认值 |
+| ------------------- | -------------------------------------------------------- | ------------------------------------------------- | ------ |
+| errorFallback       | 替换区块及内部失败区域的渲染错误展示                     | `ReactNode \| ((reset: () => void) => ReactNode)` | -      |
+| toolbar             | 工具栏里模式切换和操作按钮之间的内容，两种模式下都显示   | `ReactNode`                                       | -      |
+| conversationContext | 对话模式下输入区上方的内容，优先于 `conversation.footer` | `ReactNode`                                       | -      |
+| commandHelp         | 命令模式下命令控制台上方的内容                           | `ReactNode`                                       | -      |
 
 ### ConsoleLabels
 
