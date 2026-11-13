@@ -15,6 +15,7 @@ import {
 } from '../src/dsh-runtime.mjs';
 import { DshBridgeFramer } from '../src/dsh-bridge/protocol.mjs';
 import { terminateProcessTree } from '../src/process-utils.mjs';
+import { localSocketPath } from '../src/platform/index.mjs';
 
 // Keyless protocol smoke. The endpoint accepts TCP requests but never answers,
 // so a steer is guaranteed to remain live until the bridge cancels it, and no
@@ -58,7 +59,7 @@ function finish(error = null) {
 const sockets = new Set();
 // Worker ensure reads its tool surface from Core. These two schemas prove
 // preset/session creation and per-session tool registration without a model call.
-const actionSocket = path.join(dataDir, 'actions.sock');
+const actionSocket = localSocketPath(dataDir);
 actionServer = http.createServer((request, response) => {
   response.setHeader('content-type', 'application/json');
   const tools = [

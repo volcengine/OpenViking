@@ -261,7 +261,7 @@ export function dshCommand({ bin = 'dsh', patchPath }) {
 // The worker preset is a tool/prompt surface, not a second task manager. The
 // bridge adds per-session Core tools and authority; this preset supplies the
 // ordinary coding tools without DSH's person-facing or delegation entry points.
-function workerPreset() {
+function workerPreset(platformIsWindows) {
   return {
     id: 'ov-superagent-worker-preset', name: '@deepseek-ai/dsh-agent-preset',
     config: {
@@ -272,10 +272,10 @@ function workerPreset() {
         { id: 'agent-instructions', name: '@deepseek-ai/dsh-agent-instructions', config: { maxBytes: 65536 } },
         { id: 'time-context', name: '@deepseek-ai/dsh-time-context' },
         { id: 'shell', name: 'cordis:group', group: true, isolate: { shell: true }, config: [
-          { id: 'bash-sandbox', name: '@deepseek-ai/dsh-bash-sandbox', disabled: isWindows, config: { timeoutMs: 30000, maxTimeoutMs: 30000 } },
-          { id: 'pwsh-sandbox', name: '@deepseek-ai/dsh-pwsh-sandbox', disabled: !isWindows, config: { timeoutMs: 30000, maxTimeoutMs: 30000 } },
-          { id: 'tool-bash', name: '@deepseek-ai/dsh-tool-bash', disabled: isWindows },
-          { id: 'tool-pwsh', name: '@deepseek-ai/dsh-tool-pwsh', disabled: !isWindows },
+          { id: 'bash-sandbox', name: '@deepseek-ai/dsh-bash-sandbox', disabled: platformIsWindows, config: { timeoutMs: 30000, maxTimeoutMs: 30000 } },
+          { id: 'pwsh-sandbox', name: '@deepseek-ai/dsh-pwsh-sandbox', disabled: !platformIsWindows, config: { timeoutMs: 30000, maxTimeoutMs: 30000 } },
+          { id: 'tool-bash', name: '@deepseek-ai/dsh-tool-bash', disabled: platformIsWindows },
+          { id: 'tool-pwsh', name: '@deepseek-ai/dsh-tool-pwsh', disabled: !platformIsWindows },
         ] },
         { id: 'tool-fs', name: '@deepseek-ai/dsh-tool-fs' },
         { id: 'tool-fs-search', name: '@deepseek-ai/dsh-tool-fs-search', config: { sampleOverCapGlobResults: false } },
@@ -294,7 +294,7 @@ function workerPreset() {
 
 export function buildDshPatch({
   policy = '', bridgePath = DSH_BRIDGE_PATH, mcp = null,
-  skillDirs = [], includeDefaultSkillRoots = true,
+  skillDirs = [], includeDefaultSkillRoots = true, platformIsWindows = isWindows,
 } = {}) {
   const insert = [];
   const patch = [];
@@ -317,7 +317,7 @@ export function buildDshPatch({
   });
   if (bridgePath !== null) {
     insert.push({ id: 'agent-preset-registry', name: '@deepseek-ai/dsh-agent-preset-registry', config: { default: 'standard' } });
-    insert.push(workerPreset());
+    insert.push(workerPreset(platformIsWindows));
   }
   if (insert.length > 0) patch.push({ insert });
   // Setup owns the six/four standard roots. Default discovery must be off when
