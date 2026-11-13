@@ -105,8 +105,6 @@ _PROVIDER_CODE_KINDS = {
 _TRANSIENT_SERVICE_STATUS = {409, 500, 502, 503}
 _TRANSIENT_NETWORK_STATUS = {408, 504}
 
-_METRIC_ERROR_CODE_MAX_LENGTH = 64
-
 
 def model_exception_chain(error: BaseException) -> list[BaseException]:
     """Follow the causal chain once, preferring an explicit cause over context."""
@@ -161,54 +159,6 @@ def _body(error: BaseException) -> dict[str, Any]:
     if isinstance(nested, dict):
         return {**value, **nested}
     return value
-
-
-def _normalize_metric_error_code(value: object) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, int) and 100 <= value <= 599:
-        return str(value)
-    if not isinstance(value, str):
-        return None
-    code = value.strip()
-    if not code or len(code) > _METRIC_ERROR_CODE_MAX_LENGTH:
-        return None
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+", code):
-        return None
-    return code
-
-
-def extract_model_error_code(error: BaseException) -> str:
-    """Extract a bounded structured code without parsing free-form messages."""
-    error_chain = model_exception_chain(error)
-    for item in error_chain:
-        for attr in ("status_code", "error_code", "code"):
-            normalized = _normalize_metric_error_code(getattr(item, attr, None))
-            if normalized is not None:
-                return normalized
-
-        response = getattr(item, "response", None)
-        normalized = _normalize_metric_error_code(getattr(response, "status_code", None))
-        if normalized is not None:
-            return normalized
-
-        body = _response_body(item)
-        candidates = [body.get("status_code"), body.get("error_code"), body.get("code")]
-        nested = body.get("error")
-        if isinstance(nested, dict):
-            candidates.extend(
-                [nested.get("status_code"), nested.get("error_code"), nested.get("code")]
-            )
-        for value in candidates:
-            normalized = _normalize_metric_error_code(value)
-            if normalized is not None:
-                return normalized
-
-    if any(isinstance(item, TimeoutError) for item in error_chain):
-        return "timeout"
-    if any(isinstance(item, ConnectionError) for item in error_chain):
-        return "connection_error"
-    return "unknown"
 
 
 def _error_code(error: BaseException) -> str | None:

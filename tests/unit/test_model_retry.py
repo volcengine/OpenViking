@@ -99,6 +99,28 @@ def test_classify_api_error_treats_bare_timeout_as_transient(error_type, wrapped
     assert classify_api_error(error) == ERROR_CLASS_TRANSIENT
 
 
+@pytest.mark.parametrize("explicit_cause,expected_calls", [(False, 1), (True, 3)])
+def test_legacy_retry_does_not_scan_implicit_context(explicit_cause, expected_calls):
+    calls = 0
+
+    def operation():
+        nonlocal calls
+        calls += 1
+        try:
+            raise RuntimeError("upstream service unavailable, HTTP 503")
+        except RuntimeError as error:
+            if explicit_cause:
+                raise RuntimeError("local operation failed") from error
+            raise RuntimeError("local operation failed")
+
+    with pytest.raises(RuntimeError) as raised:
+        retry_sync(operation, max_retries=2, base_delay=0, max_delay=0, jitter=False)
+
+    assert calls == expected_calls
+    expected_class = ERROR_CLASS_TRANSIENT if explicit_cause else ERROR_CLASS_UNKNOWN
+    assert classify_api_error(raised.value) == expected_class
+
+
 class _ProviderError(RuntimeError):
     def __init__(self, *, status_code=None, error_code=None, code=None, body=None):
         super().__init__("provider request failed")
