@@ -80,6 +80,47 @@ for (const controlled of [false, true]) {
   });
 }
 
+test('ordinary resources named like Object.prototype members are not summary files', async () => {
+  const { api, view } = await mountBrowser(false);
+  try {
+    for (const name of ['constructor', 'toString', '__proto__']) {
+      await open(api, `${DIR}/${name}`);
+      assert.equal(api.current.currentUri, `${DIR}/${name}`);
+    }
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('links in a preview navigate through the shared resource path', async () => {
+  const { api, view, changes } = await mountBrowser(false);
+  const opened = [];
+  const originalOpen = window.open;
+  window.open = (...args) => opened.push(args);
+  try {
+    await open(api, `${DIR}/first.png`);
+    const link = (raw) =>
+      act(async () => api.current.previewTabs[0].operations.openUri(raw));
+    // Relative summary link: resolves against the current document.
+    await link('.overview.md');
+    assert.equal(changes.at(-1), DIR);
+    assert.equal(directoryTab(api).activeLevelKey, 'l1');
+    // Absolute summary link and a plain resource link.
+    await link(`${DIR}/.abstract.md`);
+    assert.equal(directoryTab(api).activeLevelKey, 'l0');
+    await link(FILE);
+    assert.equal(api.current.currentUri, FILE);
+    // External links open in a new window; anchors are ignored.
+    await link('https://example.com/a');
+    await link('#section');
+    assert.equal(opened.length, 1);
+    assert.equal(opened[0][0], 'https://example.com/a');
+  } finally {
+    window.open = originalOpen;
+    await view.unmount();
+  }
+});
+
 test('manual level switching updates the controlled level', async () => {
   const { api, view } = await mountBrowser(false);
   try {
@@ -113,9 +154,11 @@ test('the public handle refreshes in place and keeps the selection', async () =>
     await act(async () => handle.current.refresh());
     await settle();
     assert.ok(fetch.countOf('/api/v1/fs/ls') > before);
+    // The row lives on the second page of DIR, so refresh must re-reveal it.
     assert.match(
-      view.container.querySelector('.ov-file-browser__preview-pane')
-        .textContent,
+      view.container.querySelector(
+        '[data-file-tree-row-id][aria-selected="true"]',
+      ).textContent,
       /result.png/,
     );
   } finally {

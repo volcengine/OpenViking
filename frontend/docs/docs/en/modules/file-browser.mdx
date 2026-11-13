@@ -410,7 +410,7 @@ Reveal defaults to `true`; `{ reveal: false }` only requests a preview and resol
 
 Passing a directory summary file (`.abstract.md` or `.overview.md`) locates and selects its owning directory and switches the preview to the matching level, L0 or L1; `onUriChange` reports the directory URI. Summary files are not listed in the tree, so they are never located as file rows.
 
-Call `refresh()` to reload in place after the host has changed resources: the tree and preview reload while expanded directories and the current selection are kept, so the browser need not be remounted by changing its `key`.
+Call `refresh()` to reload in place after the host has changed resources: the tree and preview reload while expanded directories are kept and the current selection is revealed again in the tree, even when it sits on a later page, so the browser need not be remounted by changing its `key`.
 
 ```tsx
 await browserRef.current?.refresh();

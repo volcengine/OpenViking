@@ -37,7 +37,9 @@ export function fixture(uri, isDir, intercept, targets = []) {
               ...(!targets.some(({ to }) => to === uri)
                 ? [{ uri, isDir }]
                 : []),
-            ],
+              // A directory never lists itself; a cyclic listing makes the tree
+              // recurse forever once that directory is expanded.
+            ].filter((entry) => entry.uri !== call.uri),
       );
     if (/\/content\/(read|abstract|overview)$/.test(call.path)) return ok('');
     if (call.path.endsWith('/snapshot/log')) return ok([]);

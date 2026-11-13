@@ -1,10 +1,15 @@
 /** 目录摘要层级：L0 是 `.abstract.md`，L1 是 `.overview.md`。 */
 export type SummaryLevel = 'l0' | 'l1';
 
-const SUMMARY_FILES: Record<string, SummaryLevel> = {
-  '.abstract.md': 'l0',
-  '.overview.md': 'l1',
-};
+// 用 Map 而不是对象字面量：对象会继承 `constructor`、`toString` 这类属性，
+// 名字恰好相同的普通资源会被误判成摘要文件。
+// A Map rather than an object literal: an object inherits properties such as
+// `constructor` and `toString`, so an ordinary resource with such a name would be
+// mistaken for a summary file.
+const SUMMARY_FILES = new Map<string, SummaryLevel>([
+  ['.abstract.md', 'l0'],
+  ['.overview.md', 'l1'],
+]);
 
 /**
  * 把指向目录摘要文件的 URI 拆成「所属目录 + 层级」。摘要文件是目录的内部产物，
@@ -18,7 +23,7 @@ const SUMMARY_FILES: Record<string, SummaryLevel> = {
  */
 export function parseSummaryUri(uri: string) {
   const index = uri.lastIndexOf('/');
-  const level = SUMMARY_FILES[uri.slice(index + 1)];
+  const level = SUMMARY_FILES.get(uri.slice(index + 1));
   const directory = uri.slice(0, index);
   if (!level || !/^[a-z][a-z0-9+.-]*:\/\/.+/i.test(directory)) return undefined;
   return { directory, level };

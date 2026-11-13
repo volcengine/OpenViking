@@ -410,7 +410,7 @@ await browserRef.current?.openResource(resultUri, { reveal: true });
 
 传入目录摘要文件（`.abstract.md` 或 `.overview.md`）时，模块定位并选中它所属的目录，预览切到对应层级（L0 或 L1），`onUriChange` 上报的是目录 URI。摘要文件不会出现在目录树里，因此不会作为文件行定位。
 
-需要在宿主改动资源后原地刷新时调用 `refresh()`：目录树与预览重新加载，已展开的目录和当前选中项保留，不需要通过改变 `key` 重新挂载。
+需要在宿主改动资源后原地刷新时调用 `refresh()`：目录树与预览重新加载，已展开的目录保留，当前选中项会重新定位到树中（即使它在后面的页上），不需要通过改变 `key` 重新挂载。
 
 ```tsx
 await browserRef.current?.refresh();

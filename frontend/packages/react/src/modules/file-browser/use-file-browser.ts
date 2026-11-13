@@ -13,6 +13,7 @@ import { useBrowserDashboards } from './use-browser-dashboards.js';
 import { useFsTree } from './use-fs-tree.js';
 import { useSummaryLevel } from './use-summary-level.js';
 import { useBrowserRefresh } from './use-browser-refresh.js';
+import { usePreviewTabs } from './use-preview-tabs.js';
 import { findSelectedRowId } from './fs-uri.js';
 import type {
   FileBrowserActions,
@@ -87,8 +88,8 @@ export function useFileBrowser({
   // forever and a selection the module reports could never take effect, leaving the
   // preview stuck on the initial resource. `pendingUri` is seeded from `currentUri`
   // anyway, so using it alone is correct.
-  const reloadTree = useBrowserRefresh(tree.refresh);
   const activeUri = controlled ? currentUri : pendingUri;
+  const reloadTree = useBrowserRefresh(tree.refresh, tree.reveal, activeUri);
   const { identifyUri } = tree;
   const blocked = tree.accessOf(activeUri);
   // 三态而不是布尔：不在已知目录集合里既可能是文件，也可能是还没加载过的目录，
@@ -276,6 +277,10 @@ export function useFileBrowser({
     ],
   );
 
+  const previewTabs = usePreviewTabs(
+    summaryLevel.decorate(preview.tabs),
+    navigateResource,
+  );
   const previewError = blocked
     ? new Error(text[blocked === 'denied' ? 'accessDenied' : 'traverseOnly'])
     : preview.error;
@@ -299,11 +304,7 @@ export function useFileBrowser({
     dashboards: boards.dashboards,
     previewDashboard: boards.current,
     dashboardError: boards.error,
-    previewTabs: mergeDashboardTab(
-      summaryLevel.decorate(preview.tabs),
-      boards.tab,
-      Boolean(blocked),
-    ),
+    previewTabs: mergeDashboardTab(previewTabs, boards.tab, Boolean(blocked)),
     previewKey:
       boards.isOpen && activeUri ? dashboardKey(activeUri) : preview.activeKey,
     previewFooter: preview.footer,
