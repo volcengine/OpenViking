@@ -293,9 +293,7 @@ class HttpCollection(ICollection):
             timeout=DEFAULT_TIMEOUT,
         )
         # logger.info(f"UpsertData response: {response.text}")
-        if response.status_code != 200:
-            return []
-        result = json.loads(response.text)
+        result = _parse_success_response(response, "upsert data")
         return result.get("data", [])
 
     def update_data(self, data_list: List[Dict[str, Any]]):
@@ -310,9 +308,7 @@ class HttpCollection(ICollection):
             },
             timeout=DEFAULT_TIMEOUT,
         )
-        if response.status_code != 200:
-            return []
-        result = json.loads(response.text)
+        result = _parse_success_response(response, "update data")
         return result.get("data", [])
 
     def fetch_data(self, primary_keys: List[Any]) -> FetchDataInCollectionResult:
