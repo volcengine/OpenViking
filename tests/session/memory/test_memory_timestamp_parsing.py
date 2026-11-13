@@ -53,7 +53,10 @@ def test_conversation_message_accepts_z_suffix_timestamps(stub_provider_config):
 
     message = provider._build_conversation_message()
 
-    assert "Session Time:** 2026-04-17 01:26 - 2026-04-17 02:31" in message["content"]
+    assert "Session Time:** 2026-04-17 01:26" in message["content"]
+    header = message["content"].split("\n")[1]
+    assert "02:31" not in header
+    assert "**Conversation ends:** 2026-04-17 02:31" in message["content"]
     assert "(Friday)" in message["content"]
 
 

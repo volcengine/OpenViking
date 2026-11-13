@@ -2,7 +2,7 @@ metadata:
   id: "compression.ov_wm_v2_update"
   name: "Working Memory v2 - Incremental Update (tool_call)"
   description: "Incrementally update an existing Working Memory by emitting per-section decisions via the `update_working_memory` tool."
-  version: "2.5.0"
+  version: "2.5.1"
   language: "en"
   category: "compression"
 
@@ -29,22 +29,26 @@ variables:
     description: "Optional instructions for checkpoint summaries produced by the same call."
     required: false
     default: ""
+
+# Keep <new_content> before <current_wm>: the transcript grows append-only
+# across commits, so placing the per-commit dynamic Working Memory ahead of it
+# would invalidate the provider prompt-cache prefix for the whole transcript.
 template: |
   You are the Working Memory maintainer for a long-running session. Produce a
-  per-section decision via the `update_working_memory` tool{% if checkpoint_instructions %}
-  and the explicitly requested checkpoint summaries in that same tool call{% endif %}.
+  per-section decision via the `update_working_memory` tool.
   The session will keep going for many more rounds, so information you drop now
   is GONE — nobody else will put it back.
-
-  <current_wm>
-  {{ latest_archive_overview }}
-  </current_wm>
 
   <new_content>
   {{ messages }}
   </new_content>
 
+  <current_wm>
+  {{ latest_archive_overview }}
+  </current_wm>
+
   {% if checkpoint_instructions %}
+  Produce the explicitly requested checkpoint summaries in that same tool call.
   {{ checkpoint_instructions }}
   {% endif %}
 
