@@ -400,6 +400,15 @@ class GitAccessor(DataAccessor):
         path_parts = [p for p in urlparse(url).path.split("/") if p]
         return len(path_parts) == 2
 
+    @staticmethod
+    def _write_source_marker(directory: Path, url: str) -> None:
+        """Replace repository-provided metadata without following links."""
+        marker = directory / ".git_source_repo"
+        marker.unlink(missing_ok=True)
+        # Exclusive creation also rejects a symlink inserted after unlink.
+        with marker.open("x", encoding="utf-8") as file:
+            file.write(url)
+
     async def _git_clone(
         self,
         url: str,
@@ -474,12 +483,7 @@ class GitAccessor(DataAccessor):
                 env=env,
             )
 
-        # Add .git_source_repo marker file with original URL (for consistency)
-        def _write_marker():
-            marker_file = Path(target_dir) / ".git_source_repo"
-            marker_file.write_text(url, encoding="utf-8")
-
-        await asyncio.to_thread(_write_marker)
+        await asyncio.to_thread(self._write_source_marker, Path(target_dir), url)
 
         return name
 
@@ -579,12 +583,7 @@ class GitAccessor(DataAccessor):
 
         content_dir = await asyncio.to_thread(_find_content_dir)
 
-        # Add .git_source_repo marker file with original URL
-        def _write_marker():
-            marker_file = content_dir / ".git_source_repo"
-            marker_file.write_text(repo_url, encoding="utf-8")
-
-        await asyncio.to_thread(_write_marker)
+        await asyncio.to_thread(self._write_source_marker, content_dir, repo_url)
 
         logger.info(f"[GitAccessor] GitHub ZIP extracted to {content_dir} ({repo_name})")
         return content_dir, repo_name
@@ -682,12 +681,7 @@ class GitAccessor(DataAccessor):
 
         content_dir = await asyncio.to_thread(_find_content_dir)
 
-        # Add .git_source_repo marker file with original URL
-        def _write_marker():
-            marker_file = content_dir / ".git_source_repo"
-            marker_file.write_text(repo_url, encoding="utf-8")
-
-        await asyncio.to_thread(_write_marker)
+        await asyncio.to_thread(self._write_source_marker, content_dir, repo_url)
 
         logger.info(f"[GitAccessor] GitLab ZIP extracted to {content_dir} ({repo_name})")
         return content_dir, repo_name
