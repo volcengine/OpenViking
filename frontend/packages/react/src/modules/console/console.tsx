@@ -24,6 +24,7 @@ function ConsoleView({
   onModeChange,
   onOpenUri,
   conversation,
+  command,
   chatOptions,
   taskService,
   slots,
@@ -134,8 +135,8 @@ function ConsoleView({
             disabled={state.isExecuting}
             quickCommands={quickCommands ?? consoleQuickCommands(locale)}
             onValueChange={state.setCommand}
-            onSubmit={(command) => void state.execute(command)}
-            onOpenUri={onOpenUri}
+            onSubmit={(next) => void state.execute(next)}
+            onOpenUri={command?.onOpenUri ?? onOpenUri}
             labels={labels.commandConsole}
           />
         </div>

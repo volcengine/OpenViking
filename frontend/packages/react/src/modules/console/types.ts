@@ -52,6 +52,16 @@ export interface ConsoleLabels {
   vikingBot?: VikingBotLabels;
 }
 
+/**
+ * 命令模式的宿主覆盖项；记录、输入、提交和命令目录由 Console 管理。
+ * Command-mode host overrides; Console owns records, input, submission and the
+ * command catalogue.
+ */
+export interface ConsoleCommandProps {
+  /** 点击资源链接时触发；省略时使用 Console 的 `onOpenUri`。 */
+  onOpenUri?: (uri: string) => void;
+}
+
 /** Options shared by Console and useConsole. */
 export interface ConsoleOptions {
   /** Task queries use native HTTP by default; hosts can adapt another backend. */
@@ -92,7 +102,9 @@ export interface ConsoleProps
   };
   /** Host-owned conversation state/capabilities. Omit draft callbacks to use Console's local draft. */
   conversation?: Partial<VikingBotProps>;
-  /** Reports navigation intent; the host opens the resource. */
+  /** 命令模式的覆盖项；省略时命令模式使用 Console 的 `onOpenUri`。 */
+  command?: ConsoleCommandProps;
+  /** 上报导航意图，由宿主打开资源；对话和命令模式各自可用 `conversation.onOpenUri`、`command.onOpenUri` 覆盖。 */
   onOpenUri?: (uri: string) => void;
   slots?: ConsoleSlots;
   labels?: ConsoleLabels;

@@ -1,5 +1,6 @@
 export * from './console.js';
 export type {
+  ConsoleCommandProps,
   ConsoleLabels,
   ConsoleMode,
   ConsoleProps,
