@@ -1606,9 +1606,12 @@ export class Store {
 
   // The newest accepted inbound received after seq in that scope, if any. Core
   // receive order, never provider timestamps.
+  // A reaction is no newer word in the conversation: it never makes a reply
+  // stale.
   newerAcceptedSeq(scopeKey, seq) {
     const newer = this.db.prepare(`
       SELECT MAX(seq) AS seq FROM connector_events WHERE scope_key = ? AND status = 'DONE' AND seq > ?
+        AND kind NOT LIKE 'message.reaction.%'
     `).get(scopeKey, seq);
     return newer?.seq == null ? null : number(newer.seq);
   }
