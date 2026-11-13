@@ -205,7 +205,7 @@ def partition_pending(
             if position is None:
                 newest_by_number[pr.number] = len(in_window)
                 in_window.append(pr)
-            elif stamp and stamp > in_window[position].updated_at:
+            elif stamp >= in_window[position].updated_at:
                 in_window[position] = pr
         else:
             deferred.append(pr)

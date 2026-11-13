@@ -1389,9 +1389,28 @@ def test_signal_store_keeps_distinct_versions_and_dedupes_reemits():
     assert merged[0].merged_at == ""
     assert merged[1].merged_at == "2026-11-01T00:45:00Z"
 
-    # Equal-timestamp re-emit (inclusive since duplicate) keeps the first one.
-    duplicate = _build_pr(_pr_row(7, "2026-11-01T00:45:00Z"))
+    # An identical snapshot re-emitted by inclusive since stays deduplicated.
+    duplicate = _build_pr(merged_row)
     assert RadarSignalStore.merge([newer_merged], [duplicate]) == [newer_merged]
+
+
+def test_same_second_queue_and_partition_choose_latest_observation():
+    from openviking.resource.github_radar.signal_store import RadarSignalStore
+
+    stamp = "2026-11-01T00:30:00Z"
+    old = _build_pr(_pr_row(7, stamp))
+    row = _pr_row(7, stamp)
+    row["state"] = "closed"
+    row["pull_request"]["merged_at"] = stamp
+    latest = _build_pr(row)
+    existing = [old]
+    assert RadarSignalStore.merge(existing, [latest]) == [latest]
+    assert existing == [old]
+    inside, deferred = partition_pending(
+        [old, latest], "2026-11-01T00:00:00Z", "2026-11-01T01:00:00Z",
+    )
+    assert inside == [latest]
+    assert deferred == []
 
 
 def test_partition_renders_one_version_per_pr_within_a_window():
@@ -1955,7 +1974,35 @@ async def test_steady_window_waits_for_full_collection_before_closing():
 
 
 @pytest.mark.asyncio
-async def test_newer_queued_snapshot_reaches_report_after_merge():
+async def test_same_second_change_between_polls_replaces_queue_and_publishes(monkeypatch):
+    stamp = "2026-11-10T00:30:00Z"
+    fs = FakeFs()
+    _seed_state(fs, "2026-11-10T00:00:00Z")
+    gh = _SinceGh([_pr_row(7, stamp)])
+    runner = PrRadarRunner(fs, gh=gh)
+    task = _fixed_task()
+    monkeypatch.setattr(runner_module, "utc_now", lambda: datetime.fromisoformat(
+        "2026-11-10T00:45:00+00:00"))
+    await runner.maybe_run(task, _ctx)
+    queued = json.loads(fs.files[_signals_uri(fs)])
+    assert queued["state"] == "open"
+    row = _pr_row(7, stamp)
+    row["state"] = "closed"
+    row["pull_request"]["merged_at"] = stamp
+    gh.rows = [row]
+    monkeypatch.setattr(runner_module, "utc_now", lambda: datetime.fromisoformat(
+        "2026-11-10T01:05:00+00:00"))
+    result = await runner.maybe_run(task, _ctx)
+    assert result.status == "published"
+    assert "merged" in fs.files[f"{_RADAR_URI}/{LATEST_REPORT_NAME}"]
+    assert fs.files[_signals_uri(fs)] == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("updated_at", [
+    "2026-11-01T00:30:00Z", "2026-11-01T00:45:00Z",
+])
+async def test_newer_queued_snapshot_reaches_report_after_merge(updated_at):
     # An open snapshot is already queued; before its window closes the PR
     # merges. The newer merged snapshot must replace the stale one and be
     # published instead of being dropped by number-only dedup.
@@ -1965,7 +2012,7 @@ async def test_newer_queued_snapshot_reaches_report_after_merge():
     old = _build_pr(_pr_row(7, "2026-11-01T00:30:00Z"))
     fs.files[f"{_RADAR_URI}/{SIGNALS_FILENAME}"] = json.dumps(old.to_row())
 
-    merged_row = _pr_row(7, "2026-11-01T00:45:00Z")
+    merged_row = _pr_row(7, updated_at)
     merged_row["state"] = "closed"
     merged_row["pull_request"]["merged_at"] = merged_row["updated_at"]
     task = SimpleNamespace(
@@ -1985,7 +2032,8 @@ async def test_newer_queued_snapshot_reaches_report_after_merge():
 
     assert result.status == "published"
     latest = fs.files[next(uri for uri in fs.files if uri.endswith(LATEST_REPORT_NAME))]
-    assert "2026-11-01T00:45:00Z" in latest
+    assert updated_at in latest
+    assert "merged" in latest
     assert fs.files[_signals_uri(fs)] == ""
 
 

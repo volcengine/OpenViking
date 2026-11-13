@@ -72,8 +72,8 @@ class RadarSignalStore:
 
         Identity is the ``(number, updated_at)`` pair, not the number alone:
 
-          * an identical re-emit (inclusive ``since`` duplicate) keeps the
-            first snapshot, so a digest never lists the same row twice;
+          * same-time snapshots keep the latest observation, including
+            content changes within GitHub's second-resolution timestamp;
           * a NEWER snapshot of an already queued PR is appended as a
             distinct version. The window splitter routes each version to the
             report window containing its own ``updated_at``, so a PR can
@@ -82,11 +82,14 @@ class RadarSignalStore:
 
         Per-window duplicate handling lives in ``partition_pending``.
         """
-        identities = {(s.number, s.updated_at) for s in existing}
-        merged = list(existing)
-        for signal in new:
+        identities = {}
+        merged = []
+        for signal in [*existing, *new]:
             key = (signal.number, signal.updated_at)
-            if key not in identities:
-                identities.add(key)
+            position = identities.get(key)
+            if position is None:
+                identities[key] = len(merged)
                 merged.append(signal)
+            else:
+                merged[position] = signal
         return merged

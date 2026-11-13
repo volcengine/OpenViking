@@ -59,6 +59,91 @@ class FakeGh:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("interrupted", [False, True])
+async def test_same_second_content_change_survives_persisted_state(interrupted):
+    stamp = "2026-11-01T00:05:00Z"
+    config = RadarConfig(enabled=True, max_prs_per_run=2 if interrupted else 50)
+
+    class InterruptGh(FakeGh):
+        async def api_get_json(self, path, params=None):
+            if int(params["page"]) > 1:
+                raise GhCliError("interrupted")
+            return await super().api_get_json(path, params)
+
+    first = await collect_prs(
+        InterruptGh([[_issue_row(1, stamp), _pr_row(7, stamp)]])
+        if interrupted else FakeGh([[_pr_row(7, stamp)]]),
+        "o/r", config, RadarState(issues_since="2026-11-01T00:00:00Z"),
+    )
+    if interrupted:
+        assert first.state.issues_since == "2026-11-01T00:00:00Z"
+        assert first.caught_up is False
+    persisted = RadarState.from_dict(first.state.to_dict())
+    second = await collect_prs(
+        FakeGh([[_pr_row(7, stamp, merged=True)]]), "o/r", config, persisted,
+    )
+    assert [pr.merged_at for pr in second.prs] == [stamp]
+    third = await collect_prs(
+        FakeGh([[_pr_row(7, stamp, merged=True)]]),
+        "o/r", config, RadarState.from_dict(second.state.to_dict()),
+    )
+    assert third.prs == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("closed_window", [False, True])
+async def test_legacy_boundary_baselines_closed_windows_only(closed_window):
+    stamp = "2026-11-01T00:05:00Z"
+    state = RadarState.from_dict({
+        "issues_since": stamp, "issues_seen": ["#7"],
+        "last_digest_at": "2026-11-01T01:00:00Z" if closed_window else "",
+    })
+    first = await collect_prs(
+        FakeGh([[_pr_row(7, stamp, merged=True)]]), "o/r", RadarConfig(), state,
+    )
+    assert [pr.number for pr in first.prs] == ([] if closed_window else [7])
+    second = await collect_prs(
+        FakeGh([[_pr_row(7, stamp, merged=True)]]), "o/r", RadarConfig(),
+        RadarState.from_dict(first.state.to_dict()),
+    )
+    assert second.prs == []
+
+
+@pytest.mark.asyncio
+async def test_fingerprints_pruned_only_below_verified_floor():
+    old, new = "2026-11-01T00:05:00Z", "2026-11-01T00:06:00Z"
+    first = await collect_prs(
+        FakeGh([[_pr_row(7, old), _pr_row(8, new)]]),
+        "o/r", RadarConfig(), RadarState(issues_since="2026-11-01T00:00:00Z"),
+    )
+    assert set(first.state.pr_fingerprints) == {f"#8@{new}"}
+
+
+@pytest.mark.asyncio
+async def test_same_second_change_during_prefix_verification_holds_floor():
+    floor, stamp = "2026-11-01T00:00:00Z", "2026-11-01T00:05:00Z"
+
+    class ChangingGh(FakeGh):
+        async def api_get_json(self, path, params=None):
+            if len(self.calls) >= 2:
+                self._pages = [[_pr_row(7, stamp, merged=True)]]
+            return await super().api_get_json(path, params)
+
+    config = RadarConfig(max_prs_per_run=2)
+    first = await collect_prs(
+        ChangingGh([[_issue_row(1, floor), _pr_row(7, stamp)]]),
+        "o/r", config, RadarState(issues_since=floor),
+    )
+    assert first.state.issues_since == floor
+    assert first.caught_up is False
+    second = await collect_prs(
+        FakeGh([[_pr_row(7, stamp, merged=True)]]), "o/r", config,
+        RadarState.from_dict(first.state.to_dict()),
+    )
+    assert [pr.merged_at for pr in second.prs] == [stamp]
+
+
+@pytest.mark.asyncio
 async def test_collects_only_pull_requests_and_advances_watermark():
     pages = [
         [

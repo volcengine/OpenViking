@@ -227,13 +227,15 @@ class RadarSummarizer:
             # stage-1 triage rows entirely.
             if not isinstance(raw_sections, list):
                 return None
+            valid_sections = [
+                section for section in raw_sections
+                if isinstance(section, dict)
+                and str(section.get("topic") or "").strip().lower() in known_topics
+            ]
+            allow_combined = len(triage) <= 3 and len(valid_sections) == 1
             sections: List[TopicSection] = []
-            for raw_section in raw_sections:
-                if not isinstance(raw_section, dict):
-                    continue
+            for raw_section in valid_sections:
                 topic = str(raw_section.get("topic") or "").strip().lower()
-                if topic not in known_topics:
-                    continue
                 raw_highlights = raw_section.get("highlight_numbers")
                 if not isinstance(raw_highlights, list):
                     raw_highlights = []
@@ -241,6 +243,7 @@ class RadarSummarizer:
                     number
                     for number in raw_highlights
                     if type(number) is int and number in allowed
+                    and (allow_combined or triage[number].topic == topic)
                 ]
                 sections.append(
                     TopicSection(

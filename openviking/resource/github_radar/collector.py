@@ -99,6 +99,7 @@ async def collect_prs(
     previously_seen: Set[str] = set(state.issues_seen)
     boundary_refs: Set[str] = set()
     scanned_refs: Set[str] = set(state.scan_seen)
+    fingerprints = dict(state.pr_fingerprints)
     prefix_snapshot: List[str] = []
     collected: List[PrSignal] = []
     # Counts newly collected PRs only: issue rows advance the watermark but
@@ -124,6 +125,7 @@ async def collect_prs(
             issues_since=since,
             scan_offset=max(state.scan_offset, rows_consumed),
             scan_seen=sorted(scanned_refs),
+            pr_fingerprints=dict(fingerprints),
         )
 
     async def fetch(page_number: int) -> list:
@@ -170,25 +172,35 @@ async def collect_prs(
             ref = f"#{number}"
             row_key = f"{ref}@{stamp}"
             already_read = row_key in scanned_refs
+            signal = _build_pr(row) if "pull_request" in row else None
             if type(number) is int:
-                prefix_snapshot.append(row_key)
+                prefix_snapshot.append(
+                    f"{row_key}:{signal.fingerprint}" if signal else row_key
+                )
                 scanned_refs.add(row_key)
                 if stamp and stamp == watermark:
                     # Ordinary issues also identify the replayed tie prefix.
                     boundary_refs.add(ref)
             if "pull_request" not in row:
                 continue  # Issue, not a PR -- it still advanced the watermark above.
-            signal = _build_pr(row)
             if signal is None:
                 continue
             if stamp and stamp == watermark:
                 boundary_refs.add(signal.source_ref)
-            # The inclusive `since` only re-emits rows AT the previous boundary.
-            # A remembered number with a newer timestamp is a genuine update
-            # (e.g. open -> merged): suppress the boundary re-emit, but let
-            # newer snapshots through instead of losing the event while the
-            # watermark advances past it.
-            if already_read or (signal.source_ref in previously_seen and stamp <= since):
+            fingerprint = signal.fingerprint
+            previous_fingerprint = fingerprints.get(row_key)
+            fingerprints[row_key] = fingerprint
+            if previous_fingerprint == fingerprint:
+                continue
+            # Legacy states have only number/time identities. Re-observe their
+            # pending window once, but baseline already published older rows.
+            legacy_seen = already_read or (
+                signal.source_ref in previously_seen and stamp <= since
+            )
+            if (
+                previous_fingerprint is None and legacy_seen
+                and stamp and state.last_digest_at and stamp < state.last_digest_at
+            ):
                 continue
             collected.append(signal)
             prs_collected += 1
@@ -213,7 +225,10 @@ async def collect_prs(
                         continue
                     stamp = norm_ts(row.get("updated_at"))
                     key = f"#{row['number']}@{stamp}"
-                    replay_snapshot.append(key)
+                    snapshot = _build_pr(row) if "pull_request" in row else None
+                    replay_snapshot.append(
+                        f"{key}:{snapshot.fingerprint}" if snapshot else key
+                    )
             # Matching identities alone is insufficient: two shifting scans
             # could skip the same unread row. Require the ordered observed
             # prefix to agree, including updates of already known issues.
@@ -234,6 +249,7 @@ async def collect_prs(
         caught_up,
         scanned_refs,
         verified,
+        fingerprints,
     )
     if not caught_up:
         logger.info(
@@ -256,6 +272,7 @@ def _advance_state(
     caught_up: bool,
     scanned_refs: Set[str],
     verified: bool,
+    fingerprints: Dict[str, str],
 ) -> RadarState:
     """Build the next watermark state.
 
@@ -275,6 +292,7 @@ def _advance_state(
             issues_since=since,
             scan_offset=max(previous.scan_offset, rows_consumed),
             scan_seen=sorted(scanned_refs),
+            pr_fingerprints=dict(fingerprints),
         )
     watermark_moved = watermark > since
     if watermark_moved:
@@ -296,4 +314,8 @@ def _advance_state(
         issues_seen=next_seen,
         scan_offset=next_offset,
         scan_seen=next_scan_seen,
+        pr_fingerprints={
+            key: value for key, value in fingerprints.items()
+            if key.rsplit("@", 1)[-1] >= (watermark or since)
+        },
     )

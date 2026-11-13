@@ -81,6 +81,32 @@ def _synthesis_response():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("count,section_count,expected", [
+    (4, 2, [[1, 2], [3, 4]]),
+    (4, 1, [[1, 2]]),
+    (3, 1, [[1, 2, 3]]),
+    (3, 2, [[1, 2], [3]]),
+])
+async def test_synthesis_enforces_topic_membership_except_small_single_section(
+    count, section_count, expected,
+):
+    triage = _triage_response(range(1, count + 1))
+    for row in triage["items"]:
+        if row["number"] > 2:
+            row["topic"] = "storage"
+    sections = [
+        {"topic": topic, "overview_zh": "综述",
+         "highlight_numbers": list(range(1, count + 1))}
+        for topic in ["gateway", "storage"][:section_count]
+    ]
+    handle = FakeVLM([triage, {"editorial_note": "", "sections": sections}])
+    summary = await RadarSummarizer(FakeResolver(handle), batch_bytes=60_000).summarize(
+        REPO, [_pr(n) for n in range(1, count + 1)], "acct-1",
+    )
+    assert [section.highlight_numbers for section in summary.synthesis.sections] == expected
+
+
+@pytest.mark.asyncio
 async def test_boolean_identifiers_cannot_replace_pr_one_or_enter_highlights():
     valid = _triage_response([1])
     forged = _triage_response([True])["items"][0]

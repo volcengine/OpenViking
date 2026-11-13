@@ -11,6 +11,8 @@ the watch store schema (file and MySQL backends) untouched.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -174,8 +176,9 @@ class RadarState:
         how far the gh issues endpoint has been read. GitHub's ``since`` query
         is inclusive (``>=``), so PRs whose ``updated_at`` equals the
         watermark are returned again on the next poll; their numbers are
-        remembered in ``issues_seen`` and filtered instead of blindly bumping
-        the watermark by a second.
+        remembered in ``issues_seen``. PR content fingerprints distinguish
+        unchanged re-emits from same-second changes without bumping the
+        watermark by a second.
       * :attr:`last_digest_at` -- digest watermark, the right edge of the last
         published report window. Empty means the initial backfill window has
         not been digested yet. Subsequent windows are anchored on the watch's
@@ -184,6 +187,8 @@ class RadarState:
         only to budget replay. Live ``updated_at`` offsets are not cursors.
       * :attr:`scan_seen` -- observed row versions while a changing prefix
         prevents verified watermark advancement.
+      * :attr:`pr_fingerprints` -- last observed PR content at/above the
+        collection floor, retained across polls and interrupted scans.
       * :attr:`partial_fragments` -- safety-valve partial digests already
         published for the current boundary, so later full-window reports can
         label themselves as continuations of those fragments.
@@ -198,6 +203,8 @@ class RadarState:
     # Prepared publication is replayed before collecting again. It survives
     # report/queue/final-state failures without losing the window association.
     pending_publish: Optional[Dict[str, Any]] = None
+    # Snapshots at/above the inclusive collection floor, including held scans.
+    pr_fingerprints: Dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Any) -> "RadarState":
@@ -207,6 +214,7 @@ class RadarState:
         scan_seen = data.get("scan_seen")
         fragments = data.get("partial_fragments")
         offset = data.get("scan_offset", 0)
+        fingerprints = data.get("pr_fingerprints")
         return cls(
             issues_since=str(data.get("issues_since") or ""),
             issues_seen=[str(item) for item in seen] if isinstance(seen, list) else [],
@@ -221,6 +229,10 @@ class RadarState:
             pending_publish=dict(data["pending_publish"])
             if isinstance(data.get("pending_publish"), dict)
             else None,
+            pr_fingerprints={
+                key: value for key, value in fingerprints.items()
+                if isinstance(key, str) and isinstance(value, str)
+            } if isinstance(fingerprints, dict) else {},
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -232,6 +244,7 @@ class RadarState:
             "scan_seen": list(self.scan_seen),
             "partial_fragments": [dict(item) for item in self.partial_fragments],
             "pending_publish": self.pending_publish,
+            "pr_fingerprints": dict(self.pr_fingerprints),
         }
 
 
@@ -255,6 +268,14 @@ class PrSignal:
     @property
     def source_ref(self) -> str:
         return f"#{self.number}"
+
+    @property
+    def fingerprint(self) -> str:
+        """Identify report facts even when GitHub's second-resolution time ties."""
+        payload = json.dumps(
+            self.to_row(), ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     _ROW_FIELDS = (
         "number",
