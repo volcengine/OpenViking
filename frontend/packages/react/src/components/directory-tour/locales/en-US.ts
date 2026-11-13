@@ -5,7 +5,7 @@ const messages: Required<DirectoryTourLabels> = {
   next: 'Next',
   done: 'Got it',
   locating: 'Locating directory…',
-  unavailable: 'This directory is unavailable. Retry or skip this step.',
+  unavailable: 'This directory could not be found.',
   retry: 'Retry',
   skip: 'Skip',
   progress: (current: number, total: number) => `${current}/${total}`,

@@ -119,6 +119,13 @@
   line-height: 20px;
   overflow-wrap: anywhere;
 }
+.ov-directory-tour__unavailable {
+  margin-top: 4px;
+  color: var(
+    --ov-ui-directory-tour-muted,
+    var(--ov-ui-directory-tour-muted-fallback)
+  );
+}
 .ov-directory-tour__illustration {
   display: flex;
   align-items: center;
