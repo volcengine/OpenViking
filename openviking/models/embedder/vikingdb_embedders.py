@@ -12,11 +12,7 @@ from openviking.models.embedder.base import (
     HybridEmbedderBase,
     SparseEmbedderBase,
 )
-from openviking.models.model_error import (
-    model_error_boundary,
-    model_error_from_code,
-    model_error_from_status,
-)
+from openviking.models.model_error import model_error_boundary, model_error_from_status
 from openviking.storage.vectordb.collection.volcengine_clients import (
     DEFAULT_TIMEOUT,
     ClientForDataApi,
@@ -27,20 +23,6 @@ from openviking_cli.utils.logger import default_logger as logger
 
 class VikingDBClientMixin:
     """Mixin to handle VikingDB Client initialization and API calls."""
-
-    @staticmethod
-    def _embedding_data(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Return embedding data or raise a structured HTTP-200 business error."""
-        code = payload.get("code")
-        # The V2 endpoint returns "Success"; retain legacy zero/absent codes.
-        if code not in (None, 0, "0", "Success"):
-            code_text = str(code)
-            message = payload.get("message") or payload.get("msg") or "unknown error"
-            raise model_error_from_code(
-                code_text, f"VikingDB API error: {message}", provider="vikingdb"
-            )
-
-        return payload.get("result", {}).get("data", [])
 
     def _init_vikingdb_client(
         self,
@@ -91,7 +73,8 @@ class VikingDBClientMixin:
                     provider="vikingdb",
                 )
 
-            return self._embedding_data(response.json())
+            result = response.json()
+            return result.get("result", {}).get("data", [])
 
         except Exception as e:
             logger.error(f"Failed to get embeddings: {e}")
@@ -128,7 +111,8 @@ class VikingDBClientMixin:
                 provider="vikingdb",
             )
 
-        return self._embedding_data(response.json())
+        result = response.json()
+        return result.get("result", {}).get("data", [])
 
     def _truncate_and_normalize(
         self, embedding: List[float], dimension: Optional[int]
