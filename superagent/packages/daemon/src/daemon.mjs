@@ -27,7 +27,7 @@ import { IdleLivenessExtension } from './extensions/idle-liveness.mjs';
 import { OVSessionClient, OVSessionContext } from './ov-session-context.mjs';
 import { OVUnavailableError } from './ov-connection.mjs';
 import { OVRecall } from './ov-recall.mjs';
-import { loadSoul, seedSoulFromPreset } from './conversation-policy.mjs';
+import { loadSoul } from './conversation-policy.mjs';
 import { TimerConnector, TimerRepository } from './timers.mjs';
 import { OVTimerRepository } from './ov-timers.mjs';
 import { updateRuntimePreference } from './runtime-preference.mjs';
@@ -148,7 +148,6 @@ export class PersonalAgentDaemon {
       // The soul, before any runtime assembles its policy; an OV that is down
       // gets one try, so startup does not wait on it.
       await loadSoul(this.config, ovClient, { logger: this.logger, attempts: ovReachable ? 3 : 1 });
-      await seedSoulFromPreset(this.config, ovClient, { logger: this.logger });
       this.timers = this.config.timerStorage === 'sqlite'
         ? new TimerRepository(this.store.db)
         : new OVTimerRepository(ovClient, this.config.instanceId);

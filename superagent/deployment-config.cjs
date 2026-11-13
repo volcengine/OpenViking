@@ -104,7 +104,6 @@ const AGENT_FIELDS = Object.freeze([
   'soulUri',
   'explicitSilence',
   'stagedReplies',
-  'role',
   'naturalWriting',
   'model',
   'dshHomeMode',
@@ -114,9 +113,8 @@ const AGENT_FIELDS = Object.freeze([
   'meetingNotes',
   'emailAccounts',
 ]);
-// The roles shipped with the release (packages/daemon/agent/roles/<name>.md):
-// setup seeds one into the instance's soul in OpenViking, and agents[].role
-// records which it offered last. The soul itself lives only in OpenViking.
+// The roles shipped with the release (packages/daemon/agent/roles/<name>.md),
+// which setup can seed the instance's soul in OpenViking with.
 const ROLE_PRESETS = Object.freeze(['colleague', 'assistant', 'qa']);
 // agents[].larkMessageAccess: `owner` reads with the owner's visibility,
 // `bot` only in the chats the bot has joined.
@@ -373,7 +371,6 @@ function parseAgent(value, index, ignored) {
     // explicit false opts out.
     explicitSilence: value.explicitSilence ?? model !== 'ark',
     stagedReplies: value.stagedReplies ?? false,
-    role: manifestRole(value.role, `${label}.role`),
     naturalWriting: value.naturalWriting ?? true,
     model,
     dshHomeMode,
@@ -385,14 +382,6 @@ function parseAgent(value, index, ignored) {
   });
 }
 
-// A role file path is what releases before the soul moved to OpenViking
-// wrote; it still loads, and means no preset.
-function manifestRole(value, label) {
-  if (value === undefined || value === null) return null;
-  if (typeof value === 'string' && ROLE_PRESETS.includes(value)) return value;
-  if (typeof value === 'string' && path.isAbsolute(value.trim())) return null;
-  throw new Error(`${label} must be ${ROLE_PRESETS.join(', ')} or an absolute path`);
-}
 
 function manifestEmailAccounts(value, label, ignored) {
   if (value === undefined || value === null) return [];
@@ -610,10 +599,7 @@ function applyDeploymentAgentEnv(env, deployment, requestedId) {
   env.OV_SUPERAGENT_DSH_SKILL_ROOTS = JSON.stringify(agent.dshSkillRoots);
   if (agent.soulUri) env.OV_SUPERAGENT_SOUL_URI = agent.soulUri;
   else delete env.OV_SUPERAGENT_SOUL_URI;
-  // Only to seed a soul that does not exist yet (instances set up before the
-  // soul moved to OpenViking); the daemon never reads the preset otherwise.
-  if (agent.role) env.OV_SUPERAGENT_ROLE = agent.role;
-  else delete env.OV_SUPERAGENT_ROLE;
+  delete env.OV_SUPERAGENT_ROLE;
   env.OV_SUPERAGENT_CHANNEL = agent.channel;
   env.OV_SUPERAGENT_CONNECTORS_JSON = JSON.stringify(agent.connectors);
   if (agent.emailAccounts.length > 0) env.OV_SUPERAGENT_EMAIL_ACCOUNTS_JSON = JSON.stringify(agent.emailAccounts);

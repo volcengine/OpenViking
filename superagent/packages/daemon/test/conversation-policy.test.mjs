@@ -17,7 +17,6 @@ import {
   docCommentNotice,
   OV_SOUL_URI,
   loadSoul,
-  seedSoulFromPreset,
   rolePresetText,
   rolePrompt,
   substitutePromptPlaceholders,
@@ -320,30 +319,6 @@ describe('loading the soul', () => {
     assert.equal(config.soulText, '');
   });
 
-  it('seeds a missing soul once from the preset an older instance was set up with', async () => {
-    const writes = [];
-    const client = {
-      read: async () => { throw failure(404); },
-      request: async (route, body) => { writes.push([route, body]); return {}; },
-    };
-    const config = { connectors: ['lark'], rolePreset: 'colleague' };
-    await loadSoul(config, client);
-    assert.equal(config.soulMissing, true);
-    assert.equal(await seedSoulFromPreset(config, client), true);
-    assert.deepEqual(writes.map(([route, body]) => [route, body.uri, body.mode]), [['/content/write', OV_SOUL_URI, 'replace']]);
-    assert.equal(writes[0][1].content, role('colleague'));
-    assert.equal(config.soulText, role('colleague'));
-
-    // Never over a soul that could not be read, nor without a preset.
-    writes.length = 0;
-    const down = { connectors: ['lark'], rolePreset: 'colleague' };
-    await loadSoul(down, { read: async () => { throw failure(503); }, request: client.request }, { sleep: async () => {} });
-    assert.equal(await seedSoulFromPreset(down, client), false);
-    const none = { connectors: ['lark'] };
-    await loadSoul(none, client);
-    assert.equal(await seedSoulFromPreset(none, client), false);
-    assert.deepEqual(writes, []);
-  });
 });
 
 describe('natural writing', () => {

@@ -114,7 +114,6 @@ test('a first setup: Feishu + Weixin, Codex, OpenViking; scans run only after ev
     explicitSilence: true,
     // The first AI colleague on Feishu stores the owner's meeting notes.
     meetingNotes: true,
-    role: 'colleague',
     model: 'codex:',
   }]);
   // Under an API key the key is the instance's identity; the copy names no peer.
@@ -683,7 +682,7 @@ test('a new instance takes a shipped role by what it is for', async (t) => {
   //                   name  role:assistant  workspace  runtime IMs  confirm
   const h = harness(t, ['',  '2',            '',        '1',    '2', 'y']);
   assert.equal(await setupCommand(h.options), 0);
-  assert.equal(h.manifest().agents[0].role, 'assistant');
+  assert.equal(h.manifest().agents[0].role, undefined);
   assert.deepEqual(h.souls.map(([kind, { content }]) => [kind, content]), [['read', undefined], ['write', rolePresetText('assistant')]]);
   assert.match(h.written(), /1\) AI 同事  你的 AI 分身[^\n]*\n  2\) 个人助理  只为你工作[^\n]*\n  3\) 答疑助手  [^\n]*\n  4\) 保持现在的  不写入预设/);
   assert.match(h.written(), /角色\s+个人助理\n/);
@@ -696,7 +695,7 @@ test('a soul with text is shown and kept unless the owner replaces it; keeping t
   const kept = harness(t, ['2', '2', '3', '11', ''], { soulText });
   const before = existing(kept, { soulUri: 'viking://~/memories/asd-soul.md' });
   assert.equal(await setupCommand(kept.options), 0);
-  assert.deepEqual(kept.manifest().agents, [{ ...before, role: 'qa' }]);
+  assert.deepEqual(kept.manifest().agents, [before]);
   assert.deepEqual(kept.souls, [['read', { configPath: before.ovConfig, uri: 'viking://~/memories/asd-soul.md' }]]);
   assert.match(kept.written(), /角色：把「答疑助手」写入 OpenViking 里的 soul（已有内容时先问你）/);
   assert.match(kept.written(), /OpenViking 里的 soul（viking:\/\/~\/memories\/asd-soul\.md）已经有内容：\n    You are ASD, who keeps the garden club's notes\.\n[\s\S]*    line 10\n    …\n/);

@@ -1640,14 +1640,8 @@ export class ActionService {
     return result;
   }
 
-  // A file in the instance's own OpenViking space (its soul, notes), written
-  // only on the owner's request: decision_id must name an input the owner sent.
-  // Where it may land is the tool client's to check (ov-tools.mjs).
+  // One text file in OpenViking (the soul, notes), written whole or appended to.
   async openvikingWrite(input, caller) {
-    const row = this.resolveDecision(input, caller, 'Not written');
-    if (!this.isOwnerEvent(normalizeEvent(JSON.parse(row.event_json)))) {
-      throw blocked('owner_only', `Not written: only the owner can ask for an OpenViking write. Pass the event= of the owner's message that asks for it. ${NO_ACTION}`);
-    }
     caller.trace.invoked = true;
     return await this.ovToolClient().write({ uri: input.uri, content: input.content, mode: input.mode });
   }

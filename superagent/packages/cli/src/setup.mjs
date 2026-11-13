@@ -1886,10 +1886,8 @@ async function setupFlow({
       delete agent.dshHomeMode;
       delete agent.dshSkillRoots;
     }
-    // agents[].role: the shipped role last seeded, kept while nothing new is.
-    const role = state.role ?? current?.role;
-    if (ROLE_PRESETS.includes(role)) agent.role = role;
-    else delete agent.role;
+    // The soul lives only in OpenViking; older manifests may still carry role.
+    delete agent.role;
     if (state.connectors.includes('lark')) agent.profile = current?.profile ?? `superagent-${state.id}`;
     else delete agent.profile;
     // A new app reads as chosen for it; the app kept reads as it did.

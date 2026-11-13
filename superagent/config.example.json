@@ -50,7 +50,6 @@
       "ovAutoRecall": false,
       "explicitSilence": true,
       "stagedReplies": false,
-      "role": "assistant",
       "naturalWriting": true,
       "model": "codex"
     },
@@ -67,7 +66,6 @@
       "ovAutoRecall": false,
       "explicitSilence": true,
       "stagedReplies": false,
-      "role": "qa",
       "soulUri": "viking://~/memories/research-soul.md",
       "naturalWriting": false,
       "model": "dsh:deepseek/deepseek-chat",

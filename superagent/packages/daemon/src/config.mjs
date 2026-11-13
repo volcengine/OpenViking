@@ -206,9 +206,6 @@ export function getConfig() {
     workspace,
     promptDir,
     soulUri: soulUriEnv(),
-    // agents[].role: the preset an instance was set up with, used only to seed
-    // a missing soul (seedSoulFromPreset).
-    rolePreset: /^[a-z][a-z0-9-]{0,31}$/.test((process.env.OV_SUPERAGENT_ROLE ?? '').trim()) ? process.env.OV_SUPERAGENT_ROLE.trim() : '',
     // On by default; agents[].naturalWriting: false turns it off.
     naturalWriting: boolEnv('OV_SUPERAGENT_NATURAL_WRITING', true),
     openVikingConfigPath: (process.env.OPENVIKING_CLI_CONFIG_FILE || '').trim(),

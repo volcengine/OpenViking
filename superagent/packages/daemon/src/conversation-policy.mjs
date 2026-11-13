@@ -145,37 +145,6 @@ export async function loadSoul(config, client, {
   return text.trim() !== '';
 }
 
-// An instance set up before the soul moved to OpenViking has none there yet:
-// seed it once from the preset it was set up with, so an upgrade keeps its
-// Role. Only a soul known to be missing or empty is written, never one that
-// could not be read.
-export async function seedSoulFromPreset(config, client, { logger = null } = {}) {
-  if (!config.soulMissing || !config.rolePreset || typeof client?.request !== 'function') return false;
-  const uri = config.soulUri || OV_SOUL_URI;
-  let content;
-  try {
-    content = rolePresetText(config.rolePreset, config.promptDir || DEFAULT_PROMPT_DIR);
-  } catch {
-    return false;
-  }
-  const write = (mode) => client.request('/content/write', { uri, content, mode, wait: true });
-  try {
-    try {
-      await write('replace');
-    } catch (error) {
-      if (error?.httpStatus !== 404) throw error;
-      await write('create');
-    }
-  } catch (error) {
-    logger?.warn('ov_soul_seed_failed', { error: safeError(error) });
-    return false;
-  }
-  config.soulText = content;
-  config.soulMissing = false;
-  logger?.info?.('ov_soul_seeded', { preset: config.rolePreset });
-  return true;
-}
-
 // On unless the instance turns it off (agents[].naturalWriting).
 function naturalWritingSection(config) {
   return config.naturalWriting === false ? '' : renderPrompt(config, 'natural-writing.md');

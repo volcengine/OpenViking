@@ -603,10 +603,10 @@ test('meeting notes are opt-in for one Feishu/Lark instance at most, and always 
   });
 });
 
-test('an instance records the shipped role it was seeded with, names where its soul is kept, and keeps natural writing unless it turns it off', () => {
+test('an instance names where its soul is kept and keeps natural writing unless it turns it off; an old role is ignored', () => {
   const manifest = validManifest();
+  // role from before the soul moved to OpenViking still loads, and means nothing.
   manifest.agents[0].role = 'assistant';
-  // A role file from before the soul moved to OpenViking still loads, as no preset.
   manifest.agents[1].role = '/srv/superagent/roles/beta.md';
   manifest.agents[1].soulUri = 'viking://~/memories/beta-soul.md';
   manifest.agents[1].naturalWriting = false;
@@ -614,9 +614,9 @@ test('an instance records the shipped role it was seeded with, names where its s
     const env = { OV_SUPERAGENT_CONFIG: manifestPath, OV_SUPERAGENT_ROLE: 'qa', OV_SUPERAGENT_SOUL_URI: 'viking://~/shell.md', OV_SUPERAGENT_NATURAL_WRITING: 'false' };
     const deployment = loadDeploymentManifest(env);
     assert.equal(selectDeploymentAgent(deployment, 'alpha').naturalWriting, true);
-    assert.equal(selectDeploymentAgent(deployment, 'alpha').role, 'assistant');
-    assert.equal(selectDeploymentAgent(deployment, 'beta').role, null);
+    assert.equal(selectDeploymentAgent(deployment, 'alpha').role, undefined);
     applyDeploymentAgentEnv(env, deployment, 'alpha');
+    assert.equal(env.OV_SUPERAGENT_ROLE, undefined);
     assert.equal(env.OV_SUPERAGENT_SOUL_URI, undefined, 'the default soul; the shell\'s does not leak in');
     assert.equal(env.OV_SUPERAGENT_NATURAL_WRITING, 'true');
     applyDeploymentAgentEnv(env, deployment, 'beta');
@@ -626,8 +626,6 @@ test('an instance records the shipped role it was seeded with, names where its s
     assert.equal(env.OV_SUPERAGENT_SOUL_URI, undefined);
   });
   for (const [field, value, message] of [
-    ['role', 'pirate', /agents\[0\]\.role must be colleague, assistant, qa or an absolute path/],
-    ['role', 'roles/mine.md', /agents\[0\]\.role must be colleague, assistant, qa or an absolute path/],
     ['soulUri', '/srv/soul.md', /agents\[0\]\.soulUri must be a viking:\/\/ address/],
     ['soulUri', 'viking://~/my soul.md', /agents\[0\]\.soulUri must be a viking:\/\/ address/],
     ['naturalWriting', 'no', /agents\[0\]\.naturalWriting must be a boolean/],
