@@ -39,6 +39,8 @@ Then choose a connection:
 After setup, chat as usual. The plugin requests a commit at 20,000 pending
 tokens by default, at session end and when switching sessions. Memories become
 available after OpenViking finishes extraction. Existing server data is kept.
+For optional event-memory time-decay protection, see the
+[advanced plugin configuration](../../../examples/hermes-plugin/CONFIGURATION.md#event-memory-time-decay-protection).
 
 Quick Local keeps its server running after Hermes exits. See the
 [plugin guide](https://hermes-agent.nousresearch.com/docs/plugins/openviking)

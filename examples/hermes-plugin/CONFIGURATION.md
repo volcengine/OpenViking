@@ -257,6 +257,24 @@ sessions. Shared Agent changes those settings only after confirmation.
 Explicit tools keep the configured assistant view. Use separate OpenViking
 users and keys when participants need separate access.
 
+### Event-memory time decay protection
+
+Automatic recall can opt in to time decay for event memories while preserving
+their original score during a protection window:
+
+```yaml
+memory:
+  openviking:
+    recall_events_time_decay_protection: "7d"
+```
+
+`OPENVIKING_RECALL_EVENTS_DECAY_PROTECTION` overrides the YAML value.
+Unset keeps the existing ranking behavior. Use `"0"` for immediate decay, or
+a non-negative integer duration in minutes, hours, or days (for example `30m`,
+`12h`, or `7d`). OpenViking validates the duration. The setting is forwarded on
+automatic recall searches, including compressed recall and its search fallback.
+It does not change explicit `viking_search` tool calls.
+
 ## Memory writes and deletes
 
 `viking_remember` creates a separate `hermes-remember-<random>` OpenViking
