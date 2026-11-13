@@ -90,6 +90,15 @@ test("the schema is internally consistent", () => {
   }
 });
 
+// A workspace file is committed to the repository it configures. One that could
+// reach these would let a repository release credentials into the commands it
+// asks the agent to run.
+test("no workspace file can reach a secrets knob", () => {
+  const secrets = KNOBS.filter((knob) => knob.capability === "secrets");
+  assert.deepEqual(secrets.map((knob) => knob.name), ["secretExec", "secretExecApproval"]);
+  assert.deepEqual(secrets.filter((knob) => knob.workspace).map((knob) => knob.name), []);
+});
+
 // A file may carry both spellings — a plugin that renamed a knob leaves the old
 // one behind — and which one wins has to be the newer, not whichever the loop
 // happened to reach last.

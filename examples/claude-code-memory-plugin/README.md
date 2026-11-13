@@ -249,6 +249,15 @@ The bundled `openviking-skills` skill tells Claude what to do with the catalog: 
 | `OPENVIKING_CONFIG_FILE`               | `~/.openviking/ov.conf`           | Override `ov.conf` path                             |
 | `OPENVIKING_CLI_CONFIG_FILE`           | `~/.openviking/ovcli.conf`        | Override `ovcli.conf` path                          |
 
+#### Secret exec settings
+
+| Env Var                                | Default      | Description                                                              |
+|----------------------------------------|--------------|--------------------------------------------------------------------------|
+| `OPENVIKING_SECRET_EXEC`               | `false`      | Run Bash commands that carry a credential reference through the runner — see [Secret exec](#secret-exec) |
+| `OPENVIKING_SECRET_EXEC_APPROVAL`      | `inherit`    | `inherit` leaves the command to your own permission mode and rules, as without secret exec; `ask` asks before each command that uses a credential |
+
+In `ovcli.conf` they are `secretExec` and `secretExecApproval`, under `plugin` or `plugin.claude_code`. A workspace file cannot set either.
+
 Pure-env example (no config file required):
 
 ```bash
@@ -374,6 +383,52 @@ Keep `.gitignore` from ignoring all of `.openviking/`, or `config.json` can neve
 ### Legacy `claude_code` block in `ov.conf`
 
 Earlier plugin versions configured tuning fields under a `claude_code` block in `~/.openviking/ov.conf`. That still works for backward compatibility — every env var above has a camelCase counterpart (`OPENVIKING_RECALL_LIMIT` → `claude_code.recallLimit`, `OPENVIKING_BYPASS_SESSION_PATTERNS` → `claude_code.bypassSessionPatterns` as a JSON array, etc.). Env vars take priority. New deployments should prefer env vars and shell rc — server config files shouldn't carry per-developer-machine tuning.
+
+## Secret exec
+
+Off by default. With `OPENVIKING_SECRET_EXEC=1`, or `secretExec: true` in `ovcli.conf`, Claude can use a credential saved in OpenViking Privacy without the value entering the conversation. It writes the reference that `privacy_tree` lists straight into a Bash command, quoted however the command needs:
+
+```bash
+curl -H "Authorization: Bearer {{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}" https://api.github.com/user
+```
+
+A `PreToolUse` hook of its own, separate from the URI guard, hands such a command to the plugin's runner, `node scripts/secret-run.mjs '<the command>'`.A `PreToolUse` hook of its own, separate from the URI guard, wraps such a command as `node scripts/secret-run.mjs '<the command>'`. The hook makes no network call and never sees a value. When the command runs, the runner resolves every reference with your OpenViking key (`POST /api/v1/privacy-configs/resolve`) and hands each value to the command as an environment variable, expanded where the reference stood, so a value is never pasted into shell code. Any value the command prints on stdout or stderr comes back as its reference; there is no switch to turn that off. If any reference fails to resolve, nothing runs, and while the switch is off the runner resolves nothing at all. Stdin, the exit code and signals pass through. The same switch denies the MCP `privacy_resolve` tool, which would put the value in the conversation, and adds a short usage note at session start.
+
+By default the hook makes no permission decision: your permission mode and rules decide, as they would for the command Claude wrote. Claude Code matches rules against the rewritten command, where the original sits inside a quoted string that no rule can see. So the hook puts one line that never runs in front of the runner for each command in the original:
+
+```bash
+false && curl -H "Authorization: Bearer {{…}}" https://api.github.com/user
+/usr/bin/node /…/scripts/secret-run.mjs 'curl -H "Authorization: Bearer {{…}}" https://api.github.com/user'
+```
+
+Claude Code checks a command by its text, whether or not a part of it would run, so these guard lines are checked like the original:
+
+| Your rules | What happens |
+| --- | --- |
+| Every command in the original is allowed, and so is the runner | It runs without a prompt |
+| A deny rule matches a command in the original | Denied, in bypass mode too |
+| A command in the original, or the runner, is not allowed | The usual approval |
+
+The rewritten command needs what the original needs, plus the runner, so allowing the runner allows nothing else. Allow it once, with a rule such as `Bash(*/node */scripts/secret-run.mjs *)`, and a command you already allow keeps running without a prompt when it uses a credential.
+
+You are asked whatever your rules say in three cases:
+
+- `OPENVIKING_SECRET_EXEC_APPROVAL=ask` is set. Every command that uses a credential is confirmed, with the full command and the credentials it uses in the prompt.
+- The command is more than a list of plain commands and pipelines: it has a here-document, `$( )`, backticks, a subshell, or a compound command such as `if` or `for`. The hook does not guess where the commands in those begin and end, so it writes no guard lines and asks instead.
+- The command names the runner itself. Rules that allow the runner cannot see what it would run.
+
+This guards against mistakes, not against a model set on getting a value out: a command that hides the reference and the runner, or reads your OpenViking key and calls the server itself, is not caught. The hook never approves a command on its own. How Claude Code checks a line that does not run is observed behavior, verified on Claude Code 2.1.321, not a documented contract.
+
+What it does not cover:
+
+- It does not guarantee that secrets never reach the model. It covers commands that use a reference; a key you paste, the output of `cat .env`, or recalled content still reach the model unless an [OpenViking Gateway](../../docs/en/guides/15-gateway.md) seals them on the way upstream.
+- Masking matches each value as written and as it reads inside a JSON string. A value the command prints encoded or in part, such as the Basic header `curl -v -u user:{{…}}` shows, comes back unmasked.
+- The runner reads the command's quoting with a small scanner. Where it misreads it, a `case` pattern inside `$( )` for one, a reference can end up unquoted, and a value holding blanks is then split into a form masking does not match.
+- A wrapped command runs in its own shell: `cd` does not carry over to the next command, and aliases and functions from your shell profile are not there.
+- The runner needs network access to the OpenViking server, also from inside a sandbox.
+- The shell is the one Claude Code's Bash tool uses: `CLAUDE_CODE_SHELL` or `$SHELL` when it is bash or zsh, otherwise zsh or bash from `PATH`, and `/bin/sh` only when neither is installed. A reference in a here-document with a quoted delimiter (`<<'EOF'`) is refused, since the shell would never expand it.
+- A value reaches the command as data. A command that parses its own arguments as shell code again (`eval`, `sh -c '…'`, `ssh host '…'`) parses the value too.
+- No workspace file can turn it on, but Claude Code's project settings (`.claude/settings.json`) can set `OPENVIKING_SECRET_EXEC` in their `env` block, just as they can add hooks of their own.
 
 ## Hook timeouts
 
@@ -545,6 +600,7 @@ A persistent OpenViking session is created on first contact and reused for the e
 | `SubagentStop`        | Subagent finishes                        | Read subagent transcript → push to an isolated session with subagent peer identity → commit       |
 | `PreToolUse`          | Native `Read` / `Glob` / `Grep` / `Edit` / `Write` whose path is a `viking://` URI | Deny the call and point Claude to the equivalent OpenViking MCP tool; a `Write` / `Edit` on a skill URI (`viking://~/skills/...`, `viking://user/<id>/skills/...`, `viking://agent/skills/...`) is pointed to `add_skill` |
 | `PreToolUse`          | `Bash` command that contains a `viking://` URI | Let the command run and attach a notice pointing Claude to the OpenViking MCP tools in case it meant OpenViking content |
+| `PreToolUse`          | `Bash` command that contains a credential reference, or `privacy_resolve` | Opt-in [secret exec](#secret-exec): wrap the command in the runner; deny `privacy_resolve` |
 | `PostToolUse`         | `Read` of a `SKILL.md` file              | Optional (default off): inject an experience block when OV has relevant skill-experience memories |
 
 ### Async write path
@@ -590,6 +646,8 @@ claude-code-memory-plugin/
 │   ├── pre-compact.mjs      # PreCompact
 │   ├── subagent-start.mjs   # SubagentStart
 │   ├── subagent-stop.mjs    # SubagentStop
+│   ├── secret-exec.mjs      # PreToolUse: wrap commands that use a credential reference
+│   ├── secret-run.mjs       # the runner those commands go through
 │   ├── ov-status.mjs        # /ov status report
 │   ├── ov-memory-doctor.mjs # diagnostics script (ov-memory-doctor skill)
 │   └── lib/

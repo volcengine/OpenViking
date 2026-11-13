@@ -102,6 +102,24 @@ test("Claude hooks include PreToolUse URI guard for file and shell tools", () =>
   execFileSync("node", ["--check", join(pluginDir, "scripts", "uri-guard.mjs")], { stdio: "pipe" });
 });
 
+test("Claude hooks register secret exec as its own PreToolUse entry", () => {
+  const hooks = readJson(join(pluginDir, "hooks", "hooks.json"));
+  const entry = hooks.hooks?.PreToolUse?.find((e) => e?.matcher === "Bash|mcp__.*__privacy_resolve");
+  assert.ok(entry, "PreToolUse must route Bash and privacy_resolve to secret exec");
+  assert.deepEqual(entry.hooks, [{
+    type: "command",
+    command: "node ${CLAUDE_PLUGIN_ROOT}/scripts/secret-exec.mjs",
+    timeout: 5,
+  }]);
+  const matcher = new RegExp(`^(?:${entry.matcher})$`);
+  assert.ok(matcher.test("Bash"));
+  assert.ok(matcher.test("mcp__plugin_openviking-memory_openviking__privacy_resolve"));
+  assert.ok(!matcher.test("mcp__plugin_openviking-memory_openviking__privacy_tree"));
+  for (const script of ["secret-exec.mjs", "secret-run.mjs"]) {
+    execFileSync("node", ["--check", join(pluginDir, "scripts", script)], { stdio: "pipe" });
+  }
+});
+
 test("Claude plugin ships the memory doctor skill and script", () => {
   const skill = join(pluginDir, "skills", "ov-memory-doctor", "SKILL.md");
   assert.ok(existsSync(skill), "missing skills/ov-memory-doctor/SKILL.md");

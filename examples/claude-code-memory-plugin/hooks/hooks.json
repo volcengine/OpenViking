@@ -48,6 +48,16 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "Bash|mcp__.*__privacy_resolve",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/secret-exec.mjs",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "Stop": [

@@ -204,6 +204,10 @@ tree 和 resolve 标记为只读，upsert 标记为可能覆盖数据的写入�
 会将明文返回给 MCP 客户端和 Agent 上下文。保存文档和记忆时保留引用，不在聊天中复述解析后的
 密钥。tree 和 upsert 的响应不返回保存的值。
 
+Claude Code 插件开启 [secret exec](../agent-integrations/02-claude-code.md#secret-exec) 时，不要调用
+`privacy_resolve`，而是把引用原样写进需要它的 Bash 命令。插件会拒绝 `privacy_resolve`，在命令执行时
+取值，并遮罩输出中的值。遮罩只匹配值的原文和 JSON 转义形式，命令以编码或截取形式输出的值仍会出现。
+
 ### 资源权限与授权对象
 
 `list_users`、`list_groups` 对当前 account 的普通用户开放，不接受跨 account 查询参数。

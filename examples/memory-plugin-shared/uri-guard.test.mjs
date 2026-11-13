@@ -71,6 +71,15 @@ test("a shell command that carries a viking:// URI gets a notice, never a deny",
   assert.equal(evaluateUriNotice("Bash", { command: "cat /tmp/a.md" }), null)
 })
 
+test("a privacy reference is a credential name, not a viking:// path", () => {
+  const reference = "{{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}"
+  assert.equal(evaluateUriNotice("Bash", { command: `curl -H "Authorization: Bearer ${reference}" https://api.github.com` }), null)
+  assert.equal(
+    evaluateUriNotice("Bash", { command: `curl -d '${reference}'viking://resources/a.md` })?.uri,
+    "viking://resources/a.md",
+  )
+})
+
 test("PowerShell tools are shell tools for a host that maps them, and unguarded otherwise", () => {
   const input = { command: "Get-Content viking://resources/a.md" }
   // The shape dsh passes for its Windows `pwsh` tool.

@@ -382,6 +382,43 @@ test("the skill catalog is on by default and its budget clamps to the declared r
   });
 });
 
+test("secret exec is switched on from ovcli.conf or the environment, never from a workspace file", () => {
+  const attempt = {
+    version: 1,
+    secretExec: true,
+    secretExecApproval: "ask",
+    secrets: { exec: true, exec_approval: "ask" },
+    plugin: { secretExec: true },
+  };
+  withFixture({ workspace: attempt }, ({ workspaceDir }) => {
+    writeFileSync(join(workspaceDir, ".openviking", "config.local.json"), JSON.stringify(attempt));
+    const cfg = buildPluginConfig("claude-code", { cwd: workspaceDir });
+    assert.equal(cfg.secretExec, false);
+    assert.equal(cfg.secretExecApproval, "inherit");
+  });
+
+  withFixture({ cli: { ...CONNECTION, plugin: { claude_code: { secretExec: true, secretExecApproval: "ask" } } } }, ({ otherDir }) => {
+    const cfg = buildPluginConfig("claude-code", { cwd: otherDir });
+    assert.equal(cfg.secretExec, true);
+    assert.equal(cfg.secretExecApproval, "ask");
+  });
+
+  // `allow` is not a member: the hook never approves a command on its own.
+  withFixture({}, ({ otherDir }) => {
+    process.env.OPENVIKING_SECRET_EXEC = "1";
+    process.env.OPENVIKING_SECRET_EXEC_APPROVAL = "allow";
+    const cfg = buildPluginConfig("claude-code", { cwd: otherDir });
+    assert.equal(cfg.secretExec, true);
+    assert.equal(cfg.secretExecApproval, "inherit");
+  });
+
+  // Asking for confirmation in capitals must not quietly turn it off.
+  withFixture({}, ({ otherDir }) => {
+    process.env.OPENVIKING_SECRET_EXEC_APPROVAL = "ASK";
+    assert.equal(buildPluginConfig("claude-code", { cwd: otherDir }).secretExecApproval, "ask");
+  });
+});
+
 for (const [name, loader] of Object.entries(LOADERS)) {
   test(`${name} explicit cloud compression reaches the shared HTTP contract`, () => {
     withFixture({}, ({otherDir}) => {

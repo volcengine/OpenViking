@@ -592,6 +592,8 @@ Settings that apply only to some integrations:
 
 Claude Code, Cursor, TRAE, ZCode, Kimi Code, DSH, and pi also install a **URI guard**: a file tool whose path is a `viking://` URI is denied with a hint to use the OpenViking tools, and a shell command that contains one runs with a notice attached. Which tools are checked differs by host and is listed in [Notes by integration](#notes-by-integration).
 
+Claude Code also offers **secret exec**, off by default (`OPENVIKING_SECRET_EXEC`). A Bash command that writes a saved credential's <code v-pre>{{ov_privacy:...}}</code> reference runs through the plugin's runner: the value goes into the command's environment when it runs, and any value the command prints comes back as its reference. The model handles only the reference. With it on, `privacy_resolve` is denied. A workspace file cannot turn it on. It covers only commands that use a reference; pasted keys and other tool output need the [Gateway](../guides/15-gateway.md). See [Secret exec](./02-claude-code.md#secret-exec).
+
 <a id="_4-harness-profile-cards"></a>
 
 ## Notes by integration
@@ -600,9 +602,9 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 ### Claude Code
 
-[Claude Code Memory Plugin](./02-claude-code.md). A marketplace plugin with 9 hooks, an MCP proxy, a slash command, a status line, and 4 skills.
+[Claude Code Memory Plugin](./02-claude-code.md). A marketplace plugin with 10 hooks, an MCP proxy, a slash command, a status line, and 4 skills.
 
-- It registers more hooks than any other integration: `SessionStart`, `UserPromptSubmit`, `PostToolUse:Read` (the skill-experience hook, off by default), `PreToolUse` on Read, Glob, Grep, Edit, Write, and Bash (the URI guard), `Stop`, `PreCompact`, `SessionEnd`, `SubagentStart`, and `SubagentStop`.
+- It registers more hooks than any other integration: `SessionStart`, `UserPromptSubmit`, `PostToolUse:Read` (the skill-experience hook, off by default), `PreToolUse` on Read, Glob, Grep, Edit, Write, and Bash (the URI guard), a second `PreToolUse` on Bash and `privacy_resolve` (secret exec, off by default), `Stop`, `PreCompact`, `SessionEnd`, `SubagentStart`, and `SubagentStop`.
 - Recall digests are on by default through a local `claude -p`, with the server digest as the fallback.
 - Every exit except `kill -9` sends a commit.
 - The capture cursor is kept under `/tmp`. If the system clears it, the whole session is sent again.

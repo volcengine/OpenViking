@@ -46,9 +46,12 @@ export function findVikingUri(args = {}, keys = DEFAULT_URI_KEYS, contentKeys = 
   return findVikingUriInValue(args, new Set(contentKeys));
 }
 
+// The viking:// URI inside a privacy reference names a credential, not a path.
+const PRIVACY_REFERENCE = /\{\{[ \t]*ov_privacy:[^{}\r\n]+\}\}/g;
+
 export function findVikingUriInValue(value, skipKeys) {
   if (typeof value === "string") {
-    const match = value.match(/\bviking:\/\/[^\s"'`<>)]*/i);
+    const match = value.replace(PRIVACY_REFERENCE, " ").match(/\bviking:\/\/[^\s"'`<>)]*/i);
     return match?.[0] || null;
   }
   if (Array.isArray(value)) {

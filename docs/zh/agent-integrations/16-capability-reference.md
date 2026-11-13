@@ -590,6 +590,8 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 
 Claude Code、Cursor、TRAE、ZCode、Kimi Code、DSH 和 pi 还会安装 **URI guard**：文件工具的路径是 `viking://` URI 时，调用会被拒绝，并提示改用 OpenViking 工具；shell 命令中包含这种 URI 时照常执行，但附带一条提示。各宿主检查哪些工具不同，见[各集成说明](#各集成说明)。
 
+Claude Code 还提供 **secret exec**，默认关闭（`OPENVIKING_SECRET_EXEC`）。Bash 命令里写入已登记凭据的 <code v-pre>{{ov_privacy:...}}</code> 引用时，命令经插件的 runner 执行：值在命令运行时进入它的环境变量，命令输出里出现的值被换回引用，模型自始至终只接触引用。开启后 `privacy_resolve` 会被拒绝。workspace 配置文件不能开启它。它只覆盖使用引用的命令；粘贴的 key 和其他工具输出需要 [Gateway](../guides/15-gateway.md)。见 [Secret exec](./02-claude-code.md#secret-exec)。
+
 <a id="_4-harness-档案卡"></a>
 
 ## 各集成说明
@@ -598,9 +600,9 @@ Claude Code、Cursor、TRAE、ZCode、Kimi Code、DSH 和 pi 还会安装 **URI 
 
 ### Claude Code
 
-[Claude Code](./02-claude-code.md)。插件市场插件，包含 9 个 hook、一个 MCP 代理、一个斜杠命令、状态栏和 4 个 skill。
+[Claude Code](./02-claude-code.md)。插件市场插件，包含 10 个 hook、一个 MCP 代理、一个斜杠命令、状态栏和 4 个 skill。
 
-- 注册的 hook 比其他集成都多：`SessionStart`、`UserPromptSubmit`、`PostToolUse:Read`（skill 经验 hook，默认关闭）、作用于 Read、Glob、Grep、Edit、Write 和 Bash 的 `PreToolUse`（URI guard）、`Stop`、`PreCompact`、`SessionEnd`、`SubagentStart` 和 `SubagentStop`。
+- 注册的 hook 比其他集成都多：`SessionStart`、`UserPromptSubmit`、`PostToolUse:Read`（skill 经验 hook，默认关闭）、作用于 Read、Glob、Grep、Edit、Write 和 Bash 的 `PreToolUse`（URI guard）、作用于 Bash 和 `privacy_resolve` 的第二个 `PreToolUse`（secret exec，默认关闭）、`Stop`、`PreCompact`、`SessionEnd`、`SubagentStart` 和 `SubagentStop`。
 - 召回摘要默认通过本地 `claude -p` 生成，服务端摘要作为回退。
 - 除 `kill -9` 外，所有退出方式都会发出提交。
 - 捕获游标保存在 `/tmp` 下。系统清理后，整个会话会重新发送。

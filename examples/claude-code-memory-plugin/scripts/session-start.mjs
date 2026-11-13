@@ -18,6 +18,7 @@
  *      This optional injection is disabled by default.
  *
  * The composed payload is mirrored to ~/.openviking/last_inject.md for audit.
+ * While secret exec is on, its usage note follows the envelope.
  */
 
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -41,20 +42,28 @@ import {
 import { statePath, writeJsonState } from "./lib/state.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 import { runHookStage } from "./shared/agent-hook-runtime.mjs";
+import { SECRET_EXEC_USAGE } from "./shared/secret-exec.mjs";
+
+const startupConfig = loadConfig();
+// No workspace file can set secretExec, so the startup config already holds
+// this session's answer, and every exit below carries the note. Secret exec
+// has a switch of its own, so the note does not wait for memory to be on.
+const usageNote = startupConfig.secretExec ? SECRET_EXEC_USAGE : "";
 
 if (!isPluginEnabled()) {
-  process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
+  approve();
   process.exit(0);
 }
 
 const { log, logError } = createLogger("session-start");
-const fetchJSON = makeFetchJSON(loadConfig());
+const fetchJSON = makeFetchJSON(startupConfig);
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
 }
 
-function approve(additionalContext) {
+function approve(envelope) {
+  const additionalContext = [envelope, usageNote].filter(Boolean).join("\n\n");
   const out = { decision: "approve" };
   if (additionalContext) {
     out.hookSpecificOutput = {
@@ -132,14 +141,22 @@ runHookStage({
   }
 
   // 1. Archive injection — resume/compact only, requires session_id. Under a
-  // byte cap it takes up to half, and the profile gets the rest.
-  const maxBytes = cfg.sessionStartMaxBytes || 0;
+  // byte cap it takes up to half, and the profile gets the rest. The usage
+  // note shares the cap.
+  const maxBytes = cfg.sessionStartMaxBytes
+    ? Math.max(1, cfg.sessionStartMaxBytes - Buffer.byteLength(usageNote))
+    : 0;
   let archiveSection = null;
   let ovSessionId = null;
   if (willInjectArchive) {
     ovSessionId = deriveOvSessionId(sessionId);
     const sessionCtx = await getSessionContext(fetchJSON, ovSessionId, cfg.resumeContextBudget);
-    archiveSection = formatArchiveSection(sessionCtx, ovSessionId, Math.floor(maxBytes / 2));
+    archiveSection = formatArchiveSection(
+      sessionCtx,
+      ovSessionId,
+      // 0 means no cap, so a spent budget still passes 1.
+      maxBytes ? Math.max(1, Math.floor(maxBytes / 2)) : 0,
+    );
   }
 
   // 2. Profile injection — every source unless explicitly disabled. A resumed

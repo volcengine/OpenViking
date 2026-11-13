@@ -167,7 +167,7 @@ sync / install / pack 负责把这张依赖图完整交付到机器上
 
 连接和身份必须走 `credentials.mjs` 的 `resolveConnection()`，`buildPluginConfig()` 就是调用它。`OPENVIKING_CREDENTIAL_SOURCE` 的 `auto`、`cli`、`env` 控制凭据来源，不能简单套用行为配置优先级。MCP proxy 导出 `readProxyConfig(env)`，经与 hook 相同的 loader 解析，再用 `toMcpProxyConfig()` 映射，不手工挑字段，也不直接调用 `credentials.mjs`。宿主若只把白名单里的环境变量交给 MCP 进程，白名单必须覆盖 `MCP_PROXY_ENV_VARS`；宿主若给的是封闭环境，就用 `forwardConnectionEnv()` 转发解析好的连接。新 proxy 必须加入 `mcp-hook-parity.test.mjs`，缺行时该测试会失败。
 
-workspace 文件不得包含 URL、API key、用户凭据等禁止字段，也不做环境变量插值。规则由 [`workspace-config.mjs`](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/workspace-config.mjs) 执行，不在每个宿主增加自己的白名单。安装器不得把解析后的 API key 固化到 `.mcp.json`，也不得替换用户已选择的云端连接。
+workspace 文件不得包含 URL、API key、用户凭据等禁止字段，也不做环境变量插值。规则由 [`workspace-config.mjs`](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/workspace-config.mjs) 执行，不在每个宿主增加自己的白名单。会放出凭据的配置（例如 `secretExec`）声明时不带 workspace 键，workspace 文件无法开启它。安装器不得把解析后的 API key 固化到 `.mcp.json`，也不得替换用户已选择的云端连接。
 
 请求头由 `buildOvHeaders()` 构造：API key 使用 `Authorization: Bearer`，不再另发 `X-API-Key`；只有解析结果 `sendIdentityHeaders` 为真时才发送 account/user 头。保留 `User-Agent` 和错误中的 `traceId`，便于确认实际运行版本和追踪请求。不要在健康检查、状态栏或诊断探针里另写鉴权。
 
@@ -194,6 +194,7 @@ peer 解析使用共享实现。现状默认从 Git 身份推导，普通非 Git
 | 会话结束 | 完成尚未完成的写入与提交 | `SessionEnd` 提交已有消息；本入口不补采 transcript | `SessionEnd` 后台补齐并提交，保留启动补偿 |
 | 子代理 | 保留身份和父子关系，避免重复 | `SubagentStart`、`SubagentStop` | 当前 hook manifest 没有这两个事件 |
 | 本地工具检查 | 文件工具的路径是虚拟 URI 时拒绝；shell 命令带虚拟 URI 时附加提示 | `PreToolUse` URI guard，匹配 Read、Glob、Grep、Edit、Write、Bash | 不注册：Codex 会把 `PreToolUse` 的上下文作为 developer 消息插在工具调用和输出之间，部分 Responses 服务端会拒绝；文件编辑走 `apply_patch`，没有路径参数 |
+| Secret exec（可选） | 让带凭据引用的 shell 命令经 runner 执行；拒绝 `privacy_resolve` | 独立的 `PreToolUse`，匹配 Bash 和 `privacy_resolve`，未设 `secretExec` 时不生效 | 不注册 |
 
 以两份 [Claude Code hooks.json](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/hooks/hooks.json) 和 [Codex hooks.json](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/hooks/hooks.json) 为事件注册依据。相同事件名称不保证 payload 或输出格式相同。没有结束事件的宿主必须选择并说明替代提交点，例如 ZCode 在 Stop 提交；不能假装存在一个永远不会执行的 SessionEnd。
 
@@ -280,6 +281,8 @@ proxy 入口不得拥有自己的工具 schema、副本 API client、SSE parser 
 ## 7. URI guard、Skill 和诊断
 
 `viking://` 是虚拟 URI。本地文件工具的路径参数是 `viking://` URI 时必然失败，所以宿主支持工具执行前检查时，用 `evaluateUriGuard()` 拒绝这次调用。shell 命令里的 `viking://` URI 可能只是数据（`ov` 命令参数、HTTP 请求体、搜索模式），所以命令照常执行，再通过宿主的模型可见上下文通道附上 `evaluateUriNotice()` 生成的提示；`PreToolUse` 类宿主直接用 `preToolUseOutput()`，它返回拒绝或提示 envelope。适配器中只定义替代工具提示和 envelope。检查器不能扩展成一般命令拦截器；普通文件路径应保持原有行为。宿主不支持该事件时，明确限制并通过 Skill 指引模型使用 MCP，不得宣称具备等效拦截。
+
+Secret exec 是独立的可选能力，不属于检查器。它由 [`secret-exec.mjs`](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/secret-exec.mjs) 负责：`secretExecPreToolUse()` 决定 hook 的回答——把带凭据引用的 shell 命令包进 runner，前面加上守卫行让宿主的权限规则继续作用于它，并拒绝 `privacy_resolve`；把带凭据引用的 shell 命令包进 runner，拒绝 `privacy_resolve`；`runSecretExec()` 就是 runner，宿主入口用 `privacyResolver(fetchJSON)`、`spawn` 和自己的输入输出流调用它。hook 从不联网、从不接触值，也从不返回 `allow`，写不出守卫行的命令则返回 `ask`；hook 从不联网、从不接触值，也从不返回 `allow`；出任何错都不作回答，命令保留引用并失败。输出遮罩由 runner 自己完成，不交给工具后置 hook，因为多数宿主的输出改写要么 fail-open，要么不存在。宿主若不能在 shell 命令执行前改写它，就不提供 secret exec，并写明这一限制，不得改为把值拼进命令。
 
 共享 Skill 的源文件放在 [`examples/skills/`](https://github.com/volcengine/OpenViking/tree/main/examples/skills/)，通过 `SKILL_TARGETS` 交付，禁止在多个插件副本里分别修改同一段指导。Skill 只描述真实可调用工具和实际能力；自动 hook 已处理的捕获、提交不应再要求模型每轮手动重复执行。不同工具集确有不同操作语义时，可以保留独立 Skill，并说明理由。生成 Skill 时不能在 YAML frontmatter 前插入生成标记。
 
