@@ -35,6 +35,7 @@ import { toast } from 'sonner'
 
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { useStudioService } from '#/features/connection/hooks/use-studio-service'
+import { CompileForm } from '#/features/workbench/compile/components/compile-form'
 import { AddResourceForm } from '#/features/workbench/resources/components/add-resource-page'
 import { FindPalette } from '#/features/workbench/resources/components/find-palette'
 import { WorkbenchFileBrowser } from './components/workbench-file-browser'
@@ -152,6 +153,10 @@ function FilesystemWorkbench() {
   })
   const [findPaletteOpen, setFindPaletteOpen] = useState(false)
   const [resourceDialogOpen, setResourceDialogOpen] = useState(false)
+  const [compileSource, setCompileSource] = useState<{
+    scope: string
+    uri: string
+  } | null>(null)
   const [dataManagementMode, setDataManagementMode] = useState<
     'history' | 'transfer' | 'compare' | null
   >(null)
@@ -525,7 +530,7 @@ function FilesystemWorkbench() {
         icon: <WandSparkles size={16} />,
         label: t('compile:compileThisFolder'),
         onClick: () =>
-          navigate({ to: '/compile/new', search: { from: selectedUri } }),
+          setCompileSource({ scope: identityScopeKey, uri: selectedUri }),
       })
     }
   }
@@ -730,6 +735,13 @@ function FilesystemWorkbench() {
           </DialogContent>
         </Dialog>
       ) : null}
+      {compileSource?.scope === identityScopeKey && (
+        <CompileForm
+          key={`${identityScopeKey}:${compileSource.uri}`}
+          sourceUri={compileSource.uri}
+          onClose={() => setCompileSource(null)}
+        />
+      )}
       {deleteTarget ? (
         <DeleteDocumentDialog
           key={`${identityScopeKey}:${deleteTarget.uri}`}

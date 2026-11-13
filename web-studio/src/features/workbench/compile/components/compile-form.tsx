@@ -57,6 +57,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '#/shared/ui/dialog'
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '#/shared/ui/sheet'
 import { Textarea } from '#/shared/ui/textarea'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useBlocker, useNavigate } from '@tanstack/react-router'
@@ -84,17 +85,22 @@ export function CompileForm({
   fromTask,
   sourceUri,
   target,
+  onClose,
 }: {
   fromTask?: string
   sourceUri?: string
   target?: string
+  onClose?: () => void
 }) {
   const { t } = useTranslation('compile'),
     navigate = useNavigate()
   const { identityScopeKey, connection } = useAppConnection()
   const userResourceRoot = `viking://user/${connection.userId || 'default'}/resources/`
-  const draftKey = `compile-draft:${identityScopeKey}`,
-    submissionKey = `compile-submission:${identityScopeKey}`
+  const draftScope = onClose
+    ? `${identityScopeKey}:folder:${sourceUri}`
+    : identityScopeKey
+  const draftKey = `compile-draft:${draftScope}`,
+    submissionKey = `compile-submission:${draftScope}`
   const queryClient = useQueryClient()
   const [autoUpdate, setAutoUpdate] = useState(false)
   const [schedule, setSchedule] = useState<UpdateSchedule>(defaultSchedule)
@@ -114,7 +120,7 @@ export function CompileForm({
   })
   const [savedDraft] = useState(() => readDraft(draftKey))
   const [draftStarted, setDraftStarted] = useState(
-    () => !!(recoverKey || fromTask || sourceUri),
+    () => !!(recoverKey || fromTask || (sourceUri && !onClose)),
   )
   const [draft, setDraft] = useState(() =>
     target
@@ -455,8 +461,9 @@ export function CompileForm({
     ['mySkills', skills.mine],
     ['sharedSkills', skills.shared],
   ] as const
-  return (
-    <CompileShell title={t(target ? 'schedule.edit' : 'new')}>
+  const title = t(target ? 'schedule.edit' : 'new')
+  const content = (
+    <>
       {!target && <CapabilityNotice capability={capability} />}
       {target && !config.isFetchedAfterMount && !config.isError && (
         <p role="status">{t('loading')}</p>
@@ -808,6 +815,34 @@ export function CompileForm({
           </div>
         </div>
       </form>
-    </CompileShell>
+    </>
   )
+  if (onClose) {
+    return (
+      <Sheet
+        open
+        onOpenChange={(open, event) => {
+          if (open) return
+          if (
+            busy ||
+            ((args.trim() || savingError) && !window.confirm(t('leave')))
+          ) {
+            event.cancel()
+            return
+          }
+          onClose()
+        }}
+      >
+        <SheetContent className="gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-3xl">
+          <SheetHeader className="shrink-0 border-b px-6 py-5 pr-14">
+            <SheetTitle className="text-lg">{title}</SheetTitle>
+          </SheetHeader>
+          <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6">
+            {content}
+          </div>
+        </SheetContent>
+      </Sheet>
+    )
+  }
+  return <CompileShell title={title}>{content}</CompileShell>
 }
