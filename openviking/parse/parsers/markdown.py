@@ -1105,6 +1105,8 @@ class MarkdownParser(BaseParser):
             return link
 
         m = _MD_FRAGMENT_RE.match(raw)
+        if m is None:
+            return link
         path_part = m.group(1)
         suffix = m.group(2) or ""
         if not path_part:
