@@ -310,20 +310,22 @@ class WatchManager:
                 "updated_at": datetime.now().isoformat(),
             }
 
-            content = json.dumps(data, ensure_ascii=False, indent=2)
+            # Internal control state must round-trip verbatim, without content sanitization.
+            content = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
             if not content.strip():
                 raise ValueError("Refusing to write empty watch task storage")
             json.loads(content)
 
             supports_atomic = all(
-                hasattr(self._viking_fs, name) for name in ("mv", "rm", "exists", "write_file")
+                hasattr(self._viking_fs, name)
+                for name in ("mv", "rm", "exists", "write_file_bytes")
             )
             if not supports_atomic:
-                await self._viking_fs.write_file(self.STORAGE_URI, content, ctx=ctx)
+                await self._viking_fs.write_file_bytes(self.STORAGE_URI, content, ctx=ctx)
                 logger.debug(f"[WatchManager] Saved {len(self._tasks)} tasks to storage")
                 return
 
-            await self._viking_fs.write_file(self.STORAGE_TMP_URI, content, ctx=ctx)
+            await self._viking_fs.write_file_bytes(self.STORAGE_TMP_URI, content, ctx=ctx)
 
             try:
                 if await self._viking_fs.exists(self.STORAGE_BAK_URI, ctx=ctx):
