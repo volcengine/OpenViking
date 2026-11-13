@@ -61,7 +61,19 @@ For a stable release, manually run **React UI Release**, choose `latest`, and
 enter an exact stable version such as `0.1.8`. Select the branch or tag to
 release. Alternatively, push `react@<version>`; the tag must match the package
 manifest at that commit. Stable tags and manual runs are the only ways to
-publish `latest`. An already published version is skipped.
+publish `latest`. An already published npm version is skipped.
+
+Stable releases also create or update a GitHub Release at `react@<version>`,
+using that version's archived `en-US` and `zh-CN` notes from
+`packages/react/CHANGELOG.md`. Missing, empty or unpaired notes stop the workflow
+before npm publishing. The GitHub Release runs after npm succeeds; rerunning an
+already published stable version skips npm and repairs its GitHub Release.
+Manual stable releases create the tag at the selected commit if it is absent.
+React releases do not replace the repository's main-product Latest release.
+Beta runs only publish to npm.
+
+To backfill an existing stable tag, dispatch the current workflow from `main`
+with channel `latest` and the already published version.
 
 When a manual run selects a tag ref, the chosen channel and version inputs still
 control the release. Tag-to-manifest validation applies only to tag push events.
