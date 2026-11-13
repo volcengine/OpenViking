@@ -17,6 +17,8 @@
 
 Migration: the public `@openviking/react/modules/viking-bot` hook entry is removed; use Console with `modes={['conversation']}` and its conversation services. Remove imports of `TabImpactIcon`, `TabSourceIcon`, and `TabTestIcon`. Remove the obsolete `FileBrowserLabels.searchPreview`, `searchPreviewEmpty`, and `searchPreviewFailed` overrides.
 
+FileBrowser now reads effective permissions from `access` in filesystem `ls`/`stat` responses. Upgrade the backend or adapt custom gateway responses from `permission` to `access`; returning only `permission` no longer supplies the read-only indicator or effective ACL level.
+
 [Full changes](https://github.com/volcengine/OpenViking/compare/react@0.1.10...react@0.1.11)
 
 <!-- /release-note:en-US -->
@@ -33,6 +35,8 @@ Migration: the public `@openviking/react/modules/viking-bot` hook entry is remov
 - 统一 FileTree 滚动条颜色、跟随主题的表单控件和下拉选择的键盘交互。快捷命令配置摘要或描述被截断时展示完整提示。文档站新增双语发布日志。
 
 迁移说明：移除公开的 `@openviking/react/modules/viking-bot` Hook 入口，请改用 `modes={['conversation']}` 的 Console 及其对话服务。请移除 `TabImpactIcon`、`TabSourceIcon`、`TabTestIcon` 导入，以及已废弃的 `FileBrowserLabels.searchPreview`、`searchPreviewEmpty`、`searchPreviewFailed` 文案覆盖。
+
+FileBrowser 改为从文件系统 `ls`/`stat` 响应的 `access` 字段读取有效权限。请升级后端，或在自定义网关中将旧 `permission` 响应适配为 `access`；仅返回 `permission` 将无法提供只读标识或有效 ACL 级别。
 
 [完整变更](https://github.com/volcengine/OpenViking/compare/react@0.1.10...react@0.1.11)
 

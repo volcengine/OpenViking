@@ -22,6 +22,8 @@
 
 迁移说明：移除公开的 `@openviking/react/modules/viking-bot` Hook 入口，请改用 `modes={['conversation']}` 的 Console 及其对话服务。请移除 `TabImpactIcon`、`TabSourceIcon`、`TabTestIcon` 导入，以及已废弃的 `FileBrowserLabels.searchPreview`、`searchPreviewEmpty`、`searchPreviewFailed` 文案覆盖。
 
+FileBrowser 改为从文件系统 `ls`/`stat` 响应的 `access` 字段读取有效权限。请升级后端，或在自定义网关中将旧 `permission` 响应适配为 `access`；仅返回 `permission` 将无法提供只读标识或有效 ACL 级别。
+
 [完整变更](https://github.com/volcengine/OpenViking/compare/react@0.1.10...react@0.1.11)
 
 ### 0.1.10

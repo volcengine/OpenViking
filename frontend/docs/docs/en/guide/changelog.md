@@ -22,6 +22,8 @@ Changes in stable releases of `@openviking/react`.
 
 Migration: the public `@openviking/react/modules/viking-bot` hook entry is removed; use Console with `modes={['conversation']}` and its conversation services. Remove imports of `TabImpactIcon`, `TabSourceIcon`, and `TabTestIcon`. Remove the obsolete `FileBrowserLabels.searchPreview`, `searchPreviewEmpty`, and `searchPreviewFailed` overrides.
 
+FileBrowser now reads effective permissions from `access` in filesystem `ls`/`stat` responses. Upgrade the backend or adapt custom gateway responses from `permission` to `access`; returning only `permission` no longer supplies the read-only indicator or effective ACL level.
+
 [Full changes](https://github.com/volcengine/OpenViking/compare/react@0.1.10...react@0.1.11)
 
 ### 0.1.10
