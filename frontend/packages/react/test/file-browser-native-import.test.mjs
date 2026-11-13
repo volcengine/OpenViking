@@ -95,7 +95,7 @@ for (const revoked of [{ readOnly: true }, { acl: true }]) {
   test(`import rechecks current write capability: ${JSON.stringify(revoked)}`, async () => {
     const fetch = fixture(target, true, (call) => {
       if (call.path.endsWith('/fs/stat'))
-        return ok({ isDir: true, permission: 'read' });
+        return ok({ isDir: true, access: 'read' });
       if (call.path.endsWith('/resources/temp_upload'))
         return ok({ temp_file_id: 'upload' });
       if (call.path.endsWith('/pack/import')) return ok({ uri: target });
