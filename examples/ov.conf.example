@@ -113,6 +113,24 @@
             },
         },
     },
+    "git": {
+        "enabled": true,
+        "backend": "local",
+        "default_branch": "main",
+        "author_name": "viking-bot",
+        "author_email": "bot@viking.local",
+        "local": {
+            "base_dir": ""
+        },
+        "snapshot": {
+            "log": {
+                "provider": "sqlite",
+                "sqlite": {
+                    "path": "/data/openviking/_system/snapshot/log/snapshot_log.db"
+                }
+            }
+        }
+    },
     "queue_workers": {
         "external_parse": {"max_concurrent": 4},
         "add_resource": {
