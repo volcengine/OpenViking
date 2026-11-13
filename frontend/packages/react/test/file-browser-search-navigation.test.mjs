@@ -3,12 +3,12 @@ import test from 'node:test';
 import { act, createElement as h } from 'react';
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import { OpenVikingProvider } from '@openviking/react/client';
-import { mount, ok, recordingFetch, settle } from './helpers/module-dom.mjs';
+import { mount, ok, recordingFetch } from './helpers/module-dom.mjs';
 for (const name of ['HTMLIFrameElement', 'SVGElement'])
   globalThis[name] = window[name];
 globalThis.getComputedStyle = window.getComputedStyle.bind(window);
 
-test('ranked results highlight by keyboard and open the active one', async () => {
+test('ranked results highlight by keyboard and open without fetching a search preview', async () => {
   const first = 'viking://resources/one.md';
   const second = 'viking://resources/two.md';
   const opened = [];
@@ -45,37 +45,39 @@ test('ranked results highlight by keyboard and open the active one', async () =>
       field.dispatchEvent(new window.Event('input', { bubbles: true }));
     });
     await wait(450);
-    await wait(140);
+    assert.equal(modal().querySelector('aside'), null);
+    assert.equal(
+      fetch.calls.some((call) => call.path === '/api/v1/content/read'),
+      false,
+    );
     assert.equal(
       modal()
         .querySelector('[role="option"][aria-selected="true"]')
         .textContent.includes('one.md'),
       true,
     );
-    await act(async () =>
-      field.dispatchEvent(
-        new window.KeyboardEvent('keydown', {
-          bubbles: true,
-          cancelable: true,
-          key: 'ArrowDown',
-        }),
-      ),
-    );
-    assert.equal(
-      modal()
-        .querySelector('[role="option"][aria-selected="true"]')
-        .textContent.includes('two.md'),
-      true,
-    );
-    await act(async () =>
-      field.dispatchEvent(
-        new window.KeyboardEvent('keydown', {
-          bubbles: true,
-          cancelable: true,
-          key: 'Enter',
-        }),
-      ),
-    );
+    const press = (key) =>
+      act(async () =>
+        field.dispatchEvent(
+          new window.KeyboardEvent('keydown', {
+            bubbles: true,
+            cancelable: true,
+            key,
+          }),
+        ),
+      );
+    const selected = () =>
+      modal().querySelector('[role="option"][aria-selected="true"]')
+        .textContent;
+    await press('ArrowDown');
+    assert.match(selected(), /two.md/);
+    await press('ArrowUp');
+    assert.match(selected(), /one.md/);
+    await press('ArrowDown');
+    assert.match(selected(), /two.md/);
+    assert.equal(modal().querySelector('aside'), null);
+    assert.equal(fetch.countOf('/api/v1/content/read'), 0);
+    await press('Enter');
     assert.deepEqual(opened, [second]);
   } finally {
     await view.unmount();

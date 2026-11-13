@@ -158,7 +158,7 @@ export function useFileBrowser({
     dashboardLabels,
   });
 
-  const preview = useFsPreview({
+  const { setActiveKey, ...preview } = useFsPreview({
     client,
     // 非受控模式下 currentUri 是 null，真正选中的是 pendingUri；预览要跟着
     // 实际选中的资源走，否则内部维护的选中永远不会加载预览。
@@ -191,7 +191,6 @@ export function useFileBrowser({
   const { open, toggleExpand, loadMore, retry, refresh } = tree;
 
   const { open: openDashboard, close: closeDashboard } = boards;
-  const setActiveKey = preview.setActiveKey;
   const navigateResource = useMemo<FileBrowserActions['openResource']>(
     () => async (resource, options) => {
       const uri = requestUri(resource);
@@ -249,7 +248,7 @@ export function useFileBrowser({
       },
       openUri: openResource,
       openResource: navigateResource,
-      openDashboard: openDashboard,
+      openDashboard,
       setPreviewKey: (key: string) => {
         if (activeUri && key === dashboardKey(activeUri))
           openDashboard(activeUri);
@@ -308,6 +307,7 @@ export function useFileBrowser({
     previewKey:
       boards.isOpen && activeUri ? dashboardKey(activeUri) : preview.activeKey,
     previewFooter: preview.footer,
+    previewUpdatedAt: preview.updatedAt,
     refreshing,
     actions,
   };

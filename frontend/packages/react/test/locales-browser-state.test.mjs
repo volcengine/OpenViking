@@ -53,7 +53,7 @@ test('file-browser preview footer follows locale and supports a typed host forma
       }),
     );
   const view = await mount(element('zh-CN'));
-  assert.match(view.container.textContent, /0 个字符/);
+  assert.match(view.container.textContent, /0 字符数/);
   await view.render(element('en-US'));
   assert.match(view.container.textContent, /0 characters/);
   await view.render(

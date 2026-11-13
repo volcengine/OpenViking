@@ -41,6 +41,9 @@
   min-height: 0;
   padding: 0 16px;
 }
+.ov-console__panel--conversation {
+  padding: 0;
+}
 .ov-console__panel[hidden] {
   display: none;
 }

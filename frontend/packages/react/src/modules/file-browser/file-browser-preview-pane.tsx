@@ -8,6 +8,10 @@ import type { Locale } from '../../shared/locale.js';
 import type { OvRequestOptions } from '../../client/types.js';
 import { FileBrowserDetail } from './file-browser-detail.js';
 import { FileBrowserEmpty } from './file-browser-empty.js';
+import {
+  FileBrowserPreviewFooter,
+  previewModelNotice,
+} from './file-browser-preview-footer.js';
 import { FileBrowserFailure } from './file-browser-failure.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
 import type { useFileBrowserAcl } from './use-file-browser-acl.js';
@@ -48,6 +52,24 @@ function FileBrowserPreviewPaneContent({
       (candidate) => candidate.key === browser.previewKey,
     ) ?? browser.previewTabs?.[0];
   const systemDirectory = tab?.kind === 'directory' && isSystemUri(tab.key);
+  const modelNotice = previewModelNotice(
+    browser.currentUri,
+    text.previewModelNotice,
+  );
+  const previewFooter =
+    tab &&
+    tab.kind !== 'content' &&
+    !tab.loading &&
+    tab.key === browser.currentUri &&
+    (browser.previewFooter || browser.previewUpdatedAt || modelNotice) ? (
+      <FileBrowserPreviewFooter
+        count={browser.previewFooter}
+        updatedAt={browser.previewUpdatedAt}
+        modelNotice={modelNotice}
+        locale={locale}
+        text={text}
+      />
+    ) : undefined;
   const controls = useFileBrowserPreviewActions({
     uri: browser.currentUri,
     rootUri,
@@ -110,7 +132,7 @@ function FileBrowserPreviewPaneContent({
               ? { ...previewLabels, fileEmpty: text.systemDirectory }
               : previewLabels
           }
-          footer={browser.previewFooter}
+          footer={previewFooter}
           titleExtra={permissions.titleExtra}
           readOnly={readOnly || !permissions.canEdit || !controls.policy.edit}
           toolbar={{

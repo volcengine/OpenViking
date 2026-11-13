@@ -35,7 +35,8 @@ export function MessageBody({
           );
         return block.parts.map((value: VikingBotMessagePart, offset) =>
           value.type === 'text' ? (
-            value.format === 'plain' ? (
+            value.format === 'plain' ||
+            (message.role === 'user' && value.format !== 'markdown') ? (
               <div key={`${index}:${offset}`} className="ov-viking-bot__text">
                 {value.text}
               </div>

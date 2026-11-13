@@ -90,7 +90,7 @@ test('shared resolution preserves language defaults and explicit empty overrides
   const browser = groups.get(join('modules', 'file-browser', 'locales'));
   assert.equal(browser['en-US'].formatCharacterCount(1), '1 character');
   assert.equal(browser['en-US'].formatCharacterCount(1000), '1,000 characters');
-  assert.equal(browser['zh-CN'].formatCharacterCount(1000), '1,000 个字符');
+  assert.equal(browser['zh-CN'].formatCharacterCount(1000), '1,000 字符数');
 });
 
 test('regional UI locales preserve installer language flags and guide URLs', async () => {

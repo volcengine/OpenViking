@@ -69,7 +69,7 @@ export interface SearchFilters {
   /** 内容层级：0=L0、1=L1、2=L2；空数组表示不限。Content levels; empty means all. */
   levels: number[];
   /** 时间字段。Which timestamp the range applies to. */
-  timeField: 'created_at' | 'updated_at';
+  timeField: 'created_at' | 'updated_at' | '';
   /** 起始日期（YYYY-MM-DD）。Start date. */
   since: string;
   /** 结束日期（YYYY-MM-DD）。End date. */
@@ -82,7 +82,7 @@ export interface SearchFilters {
 export const EMPTY_FILTERS: SearchFilters = {
   scopes: [],
   levels: [],
-  timeField: 'updated_at',
+  timeField: '',
   since: '',
   until: '',
   caseInsensitive: false,

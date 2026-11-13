@@ -489,3 +489,16 @@ html.dark .ov-file-browser__empty-art {
 .ov-file-browser__preview-action--danger {
   color: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
 }
+.ov-file-browser__preview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  line-height: 20px;
+}
+
+.ov-file-browser__preview-model {
+  margin-inline-start: auto;
+  text-align: end;
+  line-height: 20px;
+}
