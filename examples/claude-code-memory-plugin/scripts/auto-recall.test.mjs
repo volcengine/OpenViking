@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -280,6 +280,73 @@ test("the client-ranked fallback degrades past the budget to URI hints", async (
   assert.ok(state.tokens_used <= state.tokens_budget);
   assert.equal(state.tokens_budget, 200);
 });
+
+for (const [restricted, failed] of [[true, false], [false, false], [true, true]]) {
+  test(`local compression: restricted=${restricted}, failed=${failed}`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "ov-cc-compressor-"));
+    const uri = "viking://user/default/memories/entities/plugin.md";
+    const rendered = `Original fact. source: ${uri}`;
+    const diagnostic = "model unavailable: ".repeat(300);
+    const trace = join(root, "compressor.jsonl");
+    try {
+      await writeFile(join(root, "claude"), `#!${process.execPath}
+import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(trace)}, JSON.stringify(args) + "\\n");
+if (args[0] === "--help") {
+  console.log(${JSON.stringify(restricted ? "Usage: claude\n  --restricted  Skip settings" : "Usage: claude")});
+} else if (args.includes("--restricted") && !${restricted}) {
+  process.exitCode = 2;
+} else {
+  process.stdin.resume();
+  process.stdin.on("end", () => {
+    if (${failed}) {
+      process.stderr.write(${JSON.stringify(diagnostic)});
+      process.exitCode = 1;
+    } else console.log(${JSON.stringify(`- Compressed fact. source: ${uri}`)});
+  });
+}
+`, { mode: 0o755 });
+      // A pre-upgrade availability cache must not suppress capability detection.
+      const stateDir = join(root, ".openviking", "state");
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(join(stateDir, "host-cli-probe.json"), JSON.stringify({
+        command: "claude", available: true, checkedAt: Date.now(),
+      }));
+      await withMockOpenViking((req, res) => {
+        writeJson(res, 200, {
+          status: "ok", result: { rendered, entries: [{ uri, text: "Original fact." }], stats: {} },
+        });
+      }, async (baseUrl) => {
+        const env = hookEnv(root, baseUrl, {
+          PATH: `${root}:${process.env.PATH}`,
+          OPENVIKING_RECALL_COMPRESS: "client",
+          OPENVIKING_RECALL_COMPRESS_MIN_INPUT_CHARS: "0",
+          OPENVIKING_DEBUG: "1",
+        });
+        const input = JSON.stringify({ prompt: "remember the plugin", session_id: SESSION_ID, cwd: root });
+        const { stdout } = await runAutoRecall(input, env);
+        assert.ok(injectedContext(stdout).includes(failed ? "Original fact." : "Compressed fact."));
+        assert.ok(injectedContext(stdout).includes(uri));
+        const calls = (await readFile(trace, "utf8")).trim().split("\n").map(JSON.parse);
+        assert.deepEqual(calls[0], ["--help"]);
+        assert.equal(calls[1].includes("--restricted"), restricted);
+        if (failed) {
+          const logs = (await readFile(join(root, ".openviking", "logs", "cc-hooks.log"), "utf8"))
+            .trim().split("\n").map(JSON.parse);
+          const failure = logs.find((entry) => entry.stage === "host_compressor_failed");
+          assert.equal(failure.data.code, 1);
+          assert.equal(failure.data.stderr, diagnostic.slice(0, 2000));
+        }
+        await runAutoRecall(input, env);
+        const cachedCalls = (await readFile(trace, "utf8")).trim().split("\n").map(JSON.parse);
+        assert.equal(cachedCalls.filter((args) => args[0] === "--help").length, 1);
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}
 
 // The ranking pipeline lives in the shared recall core and the transcript walk
 // in the shared capture utilities. A second copy of either here is what this

@@ -371,6 +371,11 @@ Keep `.gitignore` from ignoring all of `.openviking/`, or `config.json` can neve
 
 `recallCompress` decides where the digest is produced and defaults to `auto`. `client` always compresses locally through `claude -p` (Haiku with low effort by default), keeping the token cost on your own subscription. `server` asks OpenViking for the digest. `auto` prefers local and falls back to the server when no healthy host CLI is found. Compressor execution or output-validation failures fall back to the uncompressed context block; an exact `NO_RELEVANT_MEMORY` response from either compressor is a successful empty result and injects nothing. The compressor subprocess runs with all OpenViking hooks disabled so it cannot recurse. The former `OPENVIKING_RECALL_REWRITE` environment variable and `recallRewrite` config key remain supported as lower-priority compatibility aliases.
 
+When `claude --help` advertises `--restricted`, the local compressor uses it to
+skip user, project and local settings, including their plugins and hooks, while
+retaining normal sign-in. Managed settings still apply. This capability probe is
+cached for seven days; older CLIs keep the existing invocation.
+
 ### Legacy `claude_code` block in `ov.conf`
 
 Earlier plugin versions configured tuning fields under a `claude_code` block in `~/.openviking/ov.conf`. That still works for backward compatibility — every env var above has a camelCase counterpart (`OPENVIKING_RECALL_LIMIT` → `claude_code.recallLimit`, `OPENVIKING_BYPASS_SESSION_PATTERNS` → `claude_code.bypassSessionPatterns` as a JSON array, etc.). Env vars take priority. New deployments should prefer env vars and shell rc — server config files shouldn't carry per-developer-machine tuning.
@@ -467,6 +472,7 @@ Set `claude_code.debug: true` in `ov.conf` or `OPENVIKING_DEBUG=1` to write hook
 
 - `auto-recall` logs key stages plus a compact `ranking_summary` by default.
 - Set `claude_code.logRankingDetails: true` only when investigating per-candidate scoring; output is verbose.
+- `host_compressor_failed` includes the exit code, timeout status and up to 2,000 characters of stderr.
 
 ## Troubleshooting
 

@@ -309,7 +309,7 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 
 本地压缩器：
 
-- **Claude Code** 用 `claude --version` 检测 `claude`（结果缓存 7 天），执行 `claude -p --model sonnet --effort low --strict-mcp-config`。子进程超时默认 110 秒（`recallCompressTimeoutMs`），但 60 秒的提问 hook 可能更早结束它。少于 1,500 字符的输入不压缩。引用的 URI 按编辑距离匹配回真实的结果 URI，无法匹配的要点会被丢弃。失败时注入本地格式化的结果，或注入渲染好的块。
+- **Claude Code** 用 `claude --help` 检测 CLI（结果缓存 7 天），执行 `claude -p --model haiku --effort low --strict-mcp-config`，支持时添加 `--restricted` 以跳过用户、项目和本地设置并保留正常登录；旧版 CLI 保持原有参数。子进程超时默认 110 秒（`recallCompressTimeoutMs`），但 60 秒的提问 hook 可能更早结束它。少于 1,500 字符的输入不压缩。引用的 URI 按编辑距离匹配回真实的结果 URI，无法匹配的要点会被丢弃。失败时注入本地格式化的结果，或注入渲染好的块；调试日志包含最多 2,000 字符的 stderr。
 - **Codex** 从 `~/.codex/models_cache.json` 选择模型（优先 `gpt-5.3-codex-spark`，其次低 effort 的 `gpt-5.6-luna`；缓存 7 天），在只读的临时沙箱中执行 `codex exec`，默认超时 110 秒。运行失败一次后，本地压缩停用到下一次 `SessionStart`。输出上限 4,000 字符；失败时的回退方式与 Claude Code 相同。
 
 这些设置只作用于自动召回。模型显式调用 MCP `search` 时，使用它自己传入的参数。旧服务端的回退和宿主时间预算见[共享插件说明](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/README.md#cloud-recall-compression)和[调整召回延迟](./19-recall-tuning.md)。
