@@ -141,8 +141,9 @@ class SQLTaskWorkStore(TaskWorkStore):
             return
         await self._sql_runtime.acquire()
         self._sql_lease = True
+        engine: AsyncEngine | None = None
 
-        async def cleanup_failed_load(engine: AsyncEngine | None = None) -> None:
+        async def cleanup_failed_load(engine: AsyncEngine | None) -> None:
             if engine is not None:
                 await engine.dispose()
             if self._sql_lease:
@@ -158,12 +159,12 @@ class SQLTaskWorkStore(TaskWorkStore):
                 for model in (self._models.Task, self._models.Work, self._models.Event):
                     await session.execute(select(*model.__table__.columns).limit(1))
         except ImportError:
-            await wait_sql_cleanup(cleanup_failed_load())
+            await wait_sql_cleanup(cleanup_failed_load(engine))
             raise RuntimeError(
                 f"{self.provider_name} task storage requires openviking[{self.dependency_extra}]"
             ) from None
         except DBAPIError as exc:
-            await wait_sql_cleanup(cleanup_failed_load(engine if "engine" in locals() else None))
+            await wait_sql_cleanup(cleanup_failed_load(engine))
             message = str(exc).lower()
             if any(
                 marker in message
@@ -175,7 +176,7 @@ class SQLTaskWorkStore(TaskWorkStore):
                 ) from exc
             raise
         except BaseException:
-            await wait_sql_cleanup(cleanup_failed_load(engine if "engine" in locals() else None))
+            await wait_sql_cleanup(cleanup_failed_load(engine))
             raise
         self._engine = engine
         self._sessions = sessions
