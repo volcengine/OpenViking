@@ -1,5 +1,7 @@
-import { useId, useState, type KeyboardEvent } from 'react';
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import type { SearchHit } from './search-types.js';
+
+const HOVER_DELAY = 120;
 
 export function useSearchHighlight(
   hits: readonly SearchHit[],
@@ -14,7 +16,22 @@ export function useSearchHighlight(
   }>();
   const activeIndex = selection?.hits === hits ? selection.index : 0;
   const active = hits[activeIndex];
-  const onHighlight = (index: number) => setSelection({ hits, index });
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  // The pointer schedules a browser timer; when results change or the dialog
+  // unmounts, cancel it so a row from the previous list cannot take selection.
+  useEffect(() => () => clearTimeout(hoverTimer.current), [hits]);
+  const onLeave = () => clearTimeout(hoverTimer.current);
+  const onHover = (index: number) => {
+    onLeave();
+    if (index !== activeIndex) {
+      hoverTimer.current = setTimeout(
+        () => setSelection({ hits, index }),
+        HOVER_DELAY,
+      );
+    }
+  };
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (composing || event.nativeEvent.isComposing) {
       if (event.key === 'Escape') event.stopPropagation();
@@ -22,6 +39,7 @@ export function useSearchHighlight(
     }
     if (event.key === 'Enter' && (active || onRetry)) {
       event.preventDefault();
+      onLeave();
       if (active) onOpen(active.uri);
       else onRetry?.();
     }
@@ -29,10 +47,11 @@ export function useSearchHighlight(
     event.preventDefault();
     const step = event.key === 'ArrowDown' ? 1 : -1;
     const index = (activeIndex + step + hits.length) % hits.length;
-    onHighlight(index);
+    onLeave();
+    setSelection({ hits, index });
     event.currentTarget.ownerDocument
       .getElementById(`${listId}-${index}`)
       ?.scrollIntoView?.({ block: 'nearest' });
   };
-  return { active, activeIndex, listId, onHighlight, onKeyDown };
+  return { active, activeIndex, listId, onHover, onLeave, onKeyDown };
 }

@@ -143,7 +143,7 @@ export function FileBrowserSearch({
     inputRef.current?.focus();
     setGeneration((value) => value + 1);
   };
-  const { active, activeIndex, listId, onKeyDown, onHighlight } =
+  const { active, activeIndex, listId, onKeyDown, onHover, onLeave } =
     useSearchHighlight(
       hits,
       composing,
@@ -198,7 +198,8 @@ export function FileBrowserSearch({
             listId={listId}
             activeIndex={activeIndex}
             query={query.trim()}
-            onHighlight={onHighlight}
+            onHover={onHover}
+            onLeave={onLeave}
             onRetry={retry}
             preview={
               active ? (

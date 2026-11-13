@@ -6,7 +6,6 @@ import { nameFromUri } from './fs-model.js';
 import type { SearchHit } from './search-types.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
 
-const PREVIEW_DELAY = 120;
 const LINE_LIMIT = 20;
 const CHARACTER_LIMIT = 2400;
 
@@ -41,36 +40,29 @@ export function FileBrowserSearchPreview({
     failed?: boolean;
   }>();
 
-  // Hover and keyboard highlight drive the external content request. A short
-  // delay skips rows the pointer passes over; switching rows or closing cancels
-  // the timer and read, and stale responses cannot replace the active preview.
+  // Read the active result after hover settles or keyboard selection changes.
+  // Switching results or closing aborts the read and discards late responses.
   useEffect(() => {
     if (!request) return;
     const controller = new AbortController();
-    const timer = setTimeout(() => {
-      void readFileContent(
-        request.client,
-        request.uri,
-        { ...request.options, signal: controller.signal },
-        LINE_LIMIT,
-      ).then(
-        ({ content }) => {
-          if (controller.signal.aborted) return;
-          setResponse({
-            request,
-            content: content.slice(0, CHARACTER_LIMIT).trim(),
-          });
-        },
-        () => {
-          if (!controller.signal.aborted)
-            setResponse({ request, failed: true });
-        },
-      );
-    }, PREVIEW_DELAY);
-    return () => {
-      clearTimeout(timer);
-      controller.abort();
-    };
+    void readFileContent(
+      request.client,
+      request.uri,
+      { ...request.options, signal: controller.signal },
+      LINE_LIMIT,
+    ).then(
+      ({ content }) => {
+        if (controller.signal.aborted) return;
+        setResponse({
+          request,
+          content: content.slice(0, CHARACTER_LIMIT).trim(),
+        });
+      },
+      () => {
+        if (!controller.signal.aborted) setResponse({ request, failed: true });
+      },
+    );
+    return () => controller.abort();
   }, [request]);
 
   const current = request && response?.request === request ? response : null;
@@ -90,10 +82,10 @@ export function FileBrowserSearchPreview({
         className="ov-file-browser-search__preview-body"
         aria-busy={loading}
       >
-        {loading ? (
-          <p role="status">{text.loading}</p>
-        ) : content ? (
+        {content ? (
           <p className="ov-file-browser-search__excerpt">{content}</p>
+        ) : loading ? (
+          <p role="status">{text.loading}</p>
         ) : (
           <p>
             {current?.failed
