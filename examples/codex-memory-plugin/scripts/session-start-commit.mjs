@@ -46,6 +46,7 @@
 
 import { join } from "node:path";
 
+import { healRetiredVersions } from "./cache-heal.mjs";
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { catchUpTurns, commitOvSession, makeFetchJSON } from "./ov-session.mjs";
@@ -66,6 +67,7 @@ import { replayPending } from "./shared/pending-queue.mjs";
 import { buildProfileBlock, isRepeatInjection, truncateToBytes } from "./shared/profile-inject.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
+healRetiredVersions();
 let cfg = loadConfig();
 const { log, logError } = createLogger("session-start");
 let activePeerId = cfg.peerId || "";

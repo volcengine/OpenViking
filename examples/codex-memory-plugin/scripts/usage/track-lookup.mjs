@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { healRetiredVersions } from "../cache-heal.mjs";
 import { loadConfig } from "../config.mjs";
 import { usageEnabled } from "./settings.mjs";
 import { runHook } from "./hook-io.mjs";
@@ -11,6 +12,7 @@ import {
 } from "./sources.mjs";
 import { writeLookup } from "./state.mjs";
 
+healRetiredVersions();
 await runHook(async (input) => {
   if (!usageEnabled(loadConfig(input.cwd || undefined))) return {};
   const sessionId = input.session_id;

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { healRetiredVersions } from "../cache-heal.mjs";
 import { loadConfig } from "../config.mjs";
 import { usageEnabled, usageOutput } from "./settings.mjs";
 import { runHook } from "./hook-io.mjs";
@@ -7,6 +8,7 @@ import { formatReport } from "./display.mjs";
 import { pruneSessions, pruneTurns, readTurn, writeRecall } from "./state.mjs";
 import { readTranscriptRecall } from "./transcript.mjs";
 
+healRetiredVersions();
 await runHook(async (input) => {
   const cfg = loadConfig(input.cwd || undefined);
   if (!usageEnabled(cfg)) return {};
