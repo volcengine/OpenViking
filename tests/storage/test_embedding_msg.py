@@ -347,3 +347,59 @@ def test_legacy_update_fields_message_normalizes_to_field_patch_payload():
     assert restored.payload.field_patch.values == {"search_tags": ["scope=new"]}
     assert restored.payload.field_patch.modes == {"search_tags": "append"}
     assert restored.payload.field_patch.seed_fields == {"vector": [0.1, 0.2]}
+
+
+def test_payload_message_backfills_envelope_owner_metadata():
+    """Task envelopes carry the authoritative owner at the top level, but
+    payload.context_data may not repeat it. Parsing must backfill the
+    envelope identity instead of rejecting the message."""
+    msg = EmbeddingMsg.for_embed(
+        message="hello",
+        context_data={"uri": "viking://resources/demo", "account_id": "default"},
+    )
+    data = msg.to_dict()
+    # Simulate a queue envelope where the middleware attached the owner at
+    # the top level but the payload context lost its copy (the shape older
+    # queued messages can have after middleware rewrites).
+    data["_task_account_id"] = "tenant-a"
+    data["_task_user_id"] = "user-a"
+    data["payload"]["context_data"].pop("account_id")
+
+    restored = EmbeddingMsg.from_dict(data)
+
+    assert restored.payload.context_data["account_id"] == "tenant-a"
+    assert restored.payload.context_data["owner_user_id"] == "user-a"
+
+
+def test_payload_message_prefers_payload_context_owner_over_envelope():
+    """Existing payload context identity must win; the envelope is only a
+    fallback for messages whose payload context lost its owner fields."""
+    msg = EmbeddingMsg.for_embed(
+        message="hello",
+        context_data={
+            "uri": "viking://resources/demo",
+            "account_id": "payload-account",
+            "owner_user_id": "payload-user",
+        },
+    )
+    data = msg.to_dict()
+    data["_task_account_id"] = "envelope-account"
+    data["_task_user_id"] = "envelope-user"
+
+    restored = EmbeddingMsg.from_dict(data)
+
+    assert restored.payload.context_data["account_id"] == "payload-account"
+    assert restored.payload.context_data["owner_user_id"] == "payload-user"
+
+
+def test_payload_message_without_any_owner_is_still_rejected():
+    """No envelope owner and no payload owner must keep failing fast."""
+    msg = EmbeddingMsg.for_embed(
+        message="hello",
+        context_data={"uri": "viking://resources/demo", "account_id": "default"},
+    )
+    data = msg.to_dict()
+    data["payload"]["context_data"].pop("account_id")
+
+    with pytest.raises(ValueError, match="requires account_id"):
+        EmbeddingMsg.from_dict(data)
