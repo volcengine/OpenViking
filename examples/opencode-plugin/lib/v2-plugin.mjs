@@ -213,21 +213,12 @@ export async function prepareV2Prompt(event, {
   const text = event?.prompt?.text
   const parts = typeof text === "string" && text.trim() ? [{ type: "text", text }] : []
   const input = { sessionID, messageID, directory }
-  const blocks = []
-  try {
-    const sessionBlock = await sessionInject.buildSessionContext(input)
-    if (sessionBlock) blocks.push(sessionBlock)
-  } catch (error) {
-    logHookError("session.prompt.profile", error)
-  }
-  if (recallEnabled) {
-    try {
-      const recallBlock = await recall.buildRelevantMemories(input, parts)
-      if (recallBlock) blocks.push(recallBlock)
-    } catch (error) {
-      logHookError("session.prompt.recall", error)
-    }
-  }
+  const blocks = (await Promise.all([
+    sessionInject.buildSessionContext(input).catch((error) => logHookError("session.prompt.profile", error)),
+    recallEnabled
+      ? recall.buildRelevantMemories(input, parts).catch((error) => logHookError("session.prompt.recall", error))
+      : undefined,
+  ])).filter(Boolean)
   if (blocks.length === 0) return
 
   event.metadata = event.metadata && typeof event.metadata === "object" ? event.metadata : {}

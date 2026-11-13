@@ -164,6 +164,26 @@ test("cleanup waits for background initialization before flushing", async () => 
   assert.equal(flushed, true)
 })
 
+test("prompt starts session context and recall together and keeps block order", async () => {
+  const started = []
+  const pending = {}
+  const call = (name) => new Promise((resolve) => {
+    started.push(name)
+    pending[name] = resolve
+  })
+  const event = { sessionID: "ses_1", messageID: "msg_1", prompt: { text: "query" } }
+  const preparing = prepareV2Prompt(event, {
+    recallEnabled: true,
+    sessionInject: { buildSessionContext: () => call("profile") },
+    recall: { buildRelevantMemories: () => call("recall") },
+  })
+  assert.deepEqual(started, ["profile", "recall"])
+  pending.recall("<recall/>")
+  pending.profile("<profile/>")
+  await preparing
+  assert.deepEqual(event.metadata.openviking.context, ["<profile/>", "<recall/>"])
+})
+
 test("prompt metadata is persisted and context injection is stable across model steps", async () => {
   let recallCalls = 0
   const event = {
