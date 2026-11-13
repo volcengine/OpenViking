@@ -100,9 +100,12 @@ async def test_write_allows_existing_semantic_sidecar_but_rejects_relations(clie
     [
         ("# Original", "Resolved content.", "Resolved content."),
         ("# Original", "Resolved content.\n\nContinued.", "Resolved content.\n\nContinued."),
-        ("# Updated", "Resolved content.", "Conflicting content"),
+        ("# Updated", "Resolved content.", "Resolved content."),
+        ("# Original", "", "# Original"),
+        ("", "", None),
+        ("", " \n\t", None),
     ],
-    ids=["reliable-anchor", "multiline-anchor", "uncertain-anchor"],
+    ids=["reliable-anchor", "multiline-anchor", "approximate-anchor", "deleted", "empty", "blank"],
 )
 async def test_write_replaces_resource_and_preserves_manual_conflict_resolution(
     client_with_resource, title, replacement, expected_anchor
@@ -126,7 +129,11 @@ async def test_write_replaces_resource_and_preserves_manual_conflict_resolution(
         },
     )
     assert seeded.status_code == 200, seeded.text
-    edited = f"{title}\n\n{replacement}\n\nAdditional context.\n\n"
+    edited = (
+        replacement
+        if expected_anchor is None
+        else f"{title}\n\n{replacement}\n\nAdditional context.\n\n"
+    )
     write_resp = await client.post(
         "/api/v1/content/write",
         headers={"X-OpenViking-User": "alice"},
@@ -144,18 +151,26 @@ async def test_write_replaces_resource_and_preserves_manual_conflict_resolution(
     read_resp = await client.get("/api/v1/content/read", params={"uri": file_uri})
     stored = read_resp.json()["result"]
     assert stored.startswith(edited)
-    resolution = json.loads(stored.split("<!-- CONFLICTS_CONTENT", 1)[1].split("-->", 1)[0])
-    assert resolution["state"] == "fixed" and resolution["fix_time"] > 0
-    assert resolution["match_text"] == expected_anchor
-    assert resolution["fix_plan"] == (
-        "用户手动解决内容冲突，修正后的内容如正文所示"
-    )
-    assert resolution["resolution_basis"] == "人工修复"
-    assert resolution["resolved_by"] == "alice"
     attrs = await client.get("/api/v1/fs/attrs", params={"uri": file_uri})
     assert {"has_conflict=false", "conflict_num=0", "team=search"} <= set(
         attrs.json()["result"]["attrs"]["tags"]
     )
+    if expected_anchor is None:
+        assert stored == edited
+        return
+    resolution = json.loads(stored.split("<!-- CONFLICTS_CONTENT", 1)[1].split("-->", 1)[0])
+    assert resolution["state"] == "fixed" and resolution["fix_time"] > 0
+    assert resolution["match_text"] == expected_anchor
+    assert resolution["match_text"] in edited
+    assert resolution["fix_plan"] == ("用户手动解决内容冲突，修正后的内容如正文所示")
+    assert resolution["resolution_basis"] == "人工修复"
+    assert resolution["resolved_by"] == "alice"
+    assert set(resolution) == set(conflict) | {
+        "fix_time",
+        "fix_plan",
+        "resolution_basis",
+        "resolved_by",
+    }
 
 
 async def test_write_appends_existing_resource_file(client_with_resource):

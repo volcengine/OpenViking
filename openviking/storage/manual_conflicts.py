@@ -7,13 +7,12 @@ from __future__ import annotations
 import json
 import re
 import time
+from difflib import SequenceMatcher
 
 from openviking_cli.exceptions import InvalidArgumentError
 
 _CONFLICT_BLOCK = re.compile(r"<!--\s*CONFLICTS_CONTENT\b(.*?)-->", re.DOTALL)
-_MANUAL_RESOLUTION = (
-    "用户手动解决内容冲突，修正后的内容如正文所示"
-)
+_MANUAL_RESOLUTION = "用户手动解决内容冲突，修正后的内容如正文所示"
 # Fixed contexts prevent matching neighboring edits.
 _ANCHOR_CONTEXT_CHARS = 10
 
@@ -32,7 +31,6 @@ def _find_rewritten_anchor(
     left, right = previous[context_start:position], previous[end:context_end]
     if not left.strip() and not right.strip():
         return None
-    # shortcut: changed contexts retain anchors; broader edits require explicit spans.
     for context in (left, right):
         if context and (
             previous.find(context) != previous.rfind(context)
@@ -61,6 +59,44 @@ def _find_rewritten_anchor(
     return candidate
 
 
+def _find_approximate_anchor(
+    previous: str,
+    edited: str,
+    anchor: str,
+    changes: list[tuple[str, int, int, int, int]],
+) -> str:
+    """Return text in nonblank edited using line changes, then the nearest paragraph.
+
+    Missing old anchors use the first paragraph; matches may be ambiguous or unrelated.
+    """
+    position = previous.find(anchor) if anchor else -1
+    edited_lines = edited.split("\n")
+    mapped_start = mapped_end = 0
+    if position >= 0:
+        start_line = previous.count("\n", 0, position)
+        end_line = previous.count("\n", 0, position + len(anchor) - 1) + 1
+        spans = []
+        for operation, old_start, old_end, new_start, new_end in changes:
+            if old_start < end_line and start_line < old_end:
+                if operation == "equal":
+                    new_end = new_start + min(end_line, old_end) - old_start
+                    new_start += max(start_line, old_start) - old_start
+                spans.append((new_start, new_end))
+        if spans:
+            mapped_start, mapped_end = spans[0][0], spans[-1][1]
+            candidate = "\n".join(edited_lines[mapped_start:mapped_end]).strip()
+            if candidate:
+                return candidate
+
+    offset = sum(len(line) + 1 for line in edited_lines[:mapped_start])
+    paragraphs = list(re.finditer(r"\S.*?(?=\n\s*\n|\Z)", edited, re.DOTALL))
+    nearest = min(
+        paragraphs,
+        key=lambda paragraph: max(paragraph.start() - offset, offset - paragraph.end(), 0),
+    )
+    return nearest.group().strip()
+
+
 def _parse_conflict_records(payload: str) -> list[dict]:
     """Parse comma-separated objects (possibly empty); reject invalid records."""
     try:
@@ -81,21 +117,36 @@ def _parse_conflict_records(payload: str) -> list[dict]:
     return records
 
 
+def conflict_tags_from_content(content: str) -> list[str]:
+    """Return Markdown conflict tags (zero if absent); invalid metadata raises InvalidArgumentError."""
+    if re.search(r"<!--\s*CONFLICTS_CONTENT\b", _CONFLICT_BLOCK.sub("", content)):
+        raise InvalidArgumentError("CONFLICTS_CONTENT comment must be closed")
+    unfixed = 0
+    for match in _CONFLICT_BLOCK.finditer(content):
+        for record in _parse_conflict_records(match.group(1)):
+            if record.get("state") not in ("fixed", "unfixed"):
+                raise InvalidArgumentError("conflict state must be fixed or unfixed")
+            unfixed += record["state"] == "unfixed"
+    return [f"has_conflict={'true' if unfixed else 'false'}", f"conflict_num={unfixed}"]
+
+
 def resolve_manual_conflicts(
     previous: str, edited: str, user_id: str
 ) -> tuple[str, list[str] | None]:
-    """Return edited text with conflict history and tags; uncertain anchors stay unchanged.
+    """Return edited text and conflict tags, attributing newly fixed records to user_id.
 
-    user_id identifies the request caller recorded for newly resolved conflicts.
-    Missing comments yield tags=None; empty comments count as zero conflicts.
-    Invalid records raise InvalidArgumentError.
+    Blank bodies clear history and tags.
+    No old comments yield tags=None unless the body is blank. Invalid records raise
+    InvalidArgumentError.
     """
     matches = list(_CONFLICT_BLOCK.finditer(previous))
+    records_by_block = [_parse_conflict_records(match.group(1)) for match in matches]
+    edited_body = _CONFLICT_BLOCK.sub("", edited)
+    if not edited_body.strip():
+        return edited_body, ["has_conflict=false", "conflict_num=0"]
     if not matches:
         return edited, None
     previous_body = _CONFLICT_BLOCK.sub("", previous)
-    edited_body = _CONFLICT_BLOCK.sub("", edited)
-    records_by_block = [_parse_conflict_records(match.group(1)) for match in matches]
     old_anchors = {
         record["match_text"]
         for records in records_by_block
@@ -105,17 +156,15 @@ def resolve_manual_conflicts(
     blocks = []
     unfixed = 0
     now = int(time.time())
+    changes = None
     for match, records in zip(matches, records_by_block, strict=True):
         block = match.group(0)
         changed = False
         for record in records:
+            anchor = record.get("match_text")
             if record.get("state") == "unfixed":
-                anchor = record.get("match_text")
                 # shortcut: disappearance counts as resolution; semantic proof needs validation.
                 if anchor in previous_body and anchor not in edited_body:
-                    rewritten = _find_rewritten_anchor(
-                        previous_body, edited_body, anchor, old_anchors
-                    )
                     record.update(
                         state="fixed",
                         fix_plan=_MANUAL_RESOLUTION,
@@ -123,11 +172,31 @@ def resolve_manual_conflicts(
                         resolution_basis="人工修复",
                         resolved_by=user_id,
                     )
-                    if rewritten is not None:
-                        record["match_text"] = rewritten
                     changed = True
                 else:
                     unfixed += 1
+            if not isinstance(anchor, str) or not anchor or anchor not in edited_body:
+                rewritten = (
+                    _find_rewritten_anchor(previous_body, edited_body, anchor, old_anchors)
+                    if isinstance(anchor, str) and anchor
+                    else None
+                )
+                if rewritten is None:
+                    if changes is None:
+                        changes = SequenceMatcher(
+                            None,
+                            previous_body.split("\n"),
+                            edited_body.split("\n"),
+                            autojunk=False,
+                        ).get_opcodes()
+                    rewritten = _find_approximate_anchor(
+                        previous_body,
+                        edited_body,
+                        anchor if isinstance(anchor, str) else "",
+                        changes,
+                    )
+                record["match_text"] = rewritten
+                changed = True
         if changed:
             block = (
                 "<!-- CONFLICTS_CONTENT\n"

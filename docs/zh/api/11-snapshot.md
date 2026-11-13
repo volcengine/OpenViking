@@ -630,7 +630,7 @@ curl -X POST "http://localhost:1933/api/v1/snapshot/restore" \
 
 响应包含 `uri`、`snapshot_id` 和 `result`（`created`、`noop` 或 `dry_run`）。内容变化会生成新的 forward snapshot，并执行正常索引维护；内容相同时可返回已有快照和 `noop`。dry run 不写内容、不创建快照。省略 `current_commit_id` 时，dry run 返回的 `snapshot_id` 为 null。
 
-传入 `current_commit_id` 时，恢复前校验文件最新 commit，在内容写锁内再次校验。过期请求返回 `409`，缺失历史或路径返回 `404`。保留 ACL 和索引维护，按同一路径恢复，不自动追踪重命名。文件及目录回滚都不写 Compile state/run；目录回滚已经产生 forward commit，不额外重复提交。
+传入 `current_commit_id` 时，恢复前校验文件最新 commit，在内容写锁内再次校验。存在未提交编辑时也返回 `409`；省略 `current_commit_id` 可直接恢复。过期请求返回 `409`，缺失历史或路径返回 `404`。保留 ACL 和索引维护，按同一路径恢复，不自动追踪重命名。文件及目录回滚都不写 Compile state/run；目录回滚已经产生 forward commit，不额外重复提交。
 
 ---
 

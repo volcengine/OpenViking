@@ -630,7 +630,7 @@ curl -X POST "http://localhost:1933/api/v1/snapshot/restore" \
 
 The response contains `uri`, `snapshot_id`, and `result` (`created`, `noop`, or `dry_run`). Changed content produces a forward snapshot and normal index maintenance. Identical content may return the existing snapshot as `noop`. Dry runs do not write content or create a snapshot. The dry-run `snapshot_id` is null when `current_commit_id` is omitted.
 
-When `current_commit_id` is supplied, the last file commit is checked before reading historical content and again under the content write lock. Stale requests return `409`; missing history or paths return `404`. ACL checks and index maintenance still apply. Restore uses the same path and does not follow renames. Neither file nor directory restore writes Compile state or run history; directory restore already produces its own forward commit.
+When `current_commit_id` is supplied, the last file commit is checked before reading historical content and again under the content write lock. Uncommitted edits also return `409`; omit `current_commit_id` to restore unconditionally. Stale requests return `409`; missing history or paths return `404`. ACL checks and index maintenance still apply. Restore uses the same path and does not follow renames. Neither file nor directory restore writes Compile state or run history; directory restore already produces its own forward commit.
 
 ---
 

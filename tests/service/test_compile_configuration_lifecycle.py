@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import pytest
 
+from openviking.service.compile_service import CompileService
 from openviking.service.compile_targets import (
     CompileLifecycle,
     CompileStateStore,
@@ -16,7 +17,7 @@ from openviking.service.compile_targets import (
     new_record,
     split_control_args,
 )
-from openviking.service.external_task_service import ExternalTaskSnapshot
+from openviking.service.external_task_service import ExternalTaskError, ExternalTaskSnapshot
 from openviking.service.task_domain import TaskPatch, TaskRecord, TaskStatus
 from openviking.service.task_store import PersistentTaskStore
 from openviking.storage.errors import ResourceBusyError
@@ -132,6 +133,7 @@ class SnapshotFS:
     def __init__(self, files):
         self._async_agfs = files
         self.commits = []
+        self.restore = AsyncMock(return_value={"result": "applied", "new_commit_oid": "f" * 40})
         self.source_changes = []
         self.output_changes = []
         self._can_access_many = AsyncMock(return_value={})
@@ -484,6 +486,7 @@ async def test_changes_new_roots_and_updated_configuration_do_not_rewrite_frozen
         "source_commit": "a" * 40,
         "processed_roots": [SOURCE],
         "instruction": None,
+        "model_name": "",
         "skill_snapshot": {"uri": SKILL, "snapshot_id": None},
     }
     record["from"] = [SOURCE, "viking://resources/added"]
@@ -515,7 +518,7 @@ async def test_changes_new_roots_and_updated_configuration_do_not_rewrite_frozen
     assert (await setup.store.get("acme", "alice", compile_name))["conflict_num"] is None
 
 
-@pytest.mark.parametrize("status", ["failed", "cancelled"])
+@pytest.mark.parametrize("status", ["failed", "cancelled", "OperationConflict"])
 async def test_unsuccessful_runs_preserve_baseline_and_redact_persisted_errors(
     setup, status, compile_metric_events
 ):
@@ -524,23 +527,35 @@ async def test_unsuccessful_runs_preserve_baseline_and_redact_persisted_errors(
         "source_commit": "a" * 40,
         "processed_roots": [SOURCE],
         "instruction": None,
+        "model_name": "",
         "skill_snapshot": {"uri": SKILL, "snapshot_id": None},
     }
     compile_name = await setup.store.create("acme", "alice", record, compile_name="wiki")
     setup.fs.source_changes = [{"uri": SOURCE + "/a.md", "change_type": "modified"}]
     task = make_task(setup, compile_name=compile_name, record=record)
     assert await setup.lifecycle.on_start(task) == "proceed"
-    outcome = await setup.lifecycle.on_finish(
-        task,
-        ExternalTaskSnapshot(
-            status=status,
-            error_message="Bad request sk-secret_value Authorization: Bearer bearer-secret",
-        ),
+    snapshot = ExternalTaskSnapshot(
+        status=status,
+        error_message="Bad request sk-secret_value Authorization: Bearer bearer-secret",
     )
+    if status == "OperationConflict":
+        task.stage = "submitting"
+        rejected = await CompileService.on_cancel(
+            SimpleNamespace(),
+            task,
+            external_task_id=None,
+            payload={},
+            private_payload={},
+            connection={},
+            failure=ExternalTaskError(status, snapshot.error_message, transient=False),
+        )
+        snapshot, status = rejected.snapshot, "failed"
+    outcome = await setup.lifecycle.on_finish(task, snapshot)
     run = await setup.store.get_run("acme", "alice", compile_name, task.task_id)
     assert run["status"] == status
     assert run["meta"]["trigger"] == "initial"
     assert run["meta"]["finish_snapshot"] is not None
+    setup.fs.restore.assert_awaited_once()
     assert (await setup.store.get("acme", "alice", compile_name))["progress"] == record["progress"]
     assert "secret_value" not in run["error"] and "bearer-secret" not in run["error"]
     assert "[REDACTED]" in run["error"]
@@ -702,12 +717,12 @@ async def test_cancel_after_publication_still_restores_the_start_snapshot(
     result = await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="completed"))
     assert result.status == "cancelled"
     run = await setup.store.get_run("acme", "alice", compile_name, task.task_id)
-    assert run["meta"]["finish_snapshot"] == f"{4:040x}"
+    assert run["meta"]["finish_snapshot"] == "f" * 40
     assert run["result"] is None
     assert (await setup.store.get("acme", "alice", compile_name))["progress"] == {}
     # A replay sees a completed rollback and cannot create further commits.
     await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="cancelled"))
-    assert len(setup.fs.commits) == 4
+    assert len(setup.fs.commits) == 3
     assert compile_metric_events == []
 
 
@@ -834,12 +849,7 @@ async def test_conflict_publication_recovers_after_state_write_failure(
 async def test_rollback_conflict_count_waits_for_tracked_reindex(setup, registered, reindex_status):
     record, compile_name, task = registered
     await setup.lifecycle.on_start(task)
-    uri = TARGET + "/page.md"
-    setup.fs.output_changes = [{"uri": uri, "change_type": "modified"}]
-    setup.fs._can_access_many.return_value = {uri: True}
-    setup.fs.exists = AsyncMock(return_value=False)
-    setup.fs.show = AsyncMock(return_value=b"restored")
-    setup.fs.write_file_bytes = AsyncMock()
+    setup.fs.restore.return_value["written_paths"] = ["resources/output/page.md"]
     setup.fs._schedule_restore_reindex_for_paths.return_value = "reindex-1"
     setup.tracker.wait = AsyncMock(
         return_value=SimpleNamespace(status=reindex_status),

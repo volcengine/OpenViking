@@ -112,6 +112,8 @@ POST /api/v1/compile
 
 执行重试可使用 `Idempotency-Key`；查询和取消使用 `/api/v1/tasks/{task_id}`。手动执行使用当前调用者的权限和连接，不借用保存的调度凭据。
 
+源目录被删除或移动后，新执行在创建任务前返回 HTTP `404` / `NOT_FOUND`。错误标明缺失的 Viking URI，`details.type="compile source directory"`，并提示修改配置中的源目录后重试；权限错误保持独立。使用相同 `Idempotency-Key` 恢复已有提交时，不重新校验源目录。
+
 ### CLI 与 SDK
 
 ```bash
@@ -167,14 +169,14 @@ Python 示例使用 `SyncHTTPClient`；使用 `AsyncHTTPClient` 时添加 `await
 |----------|------|
 | `GET /api/v1/compile/config?compile_name={compile_name}` | 公开配置输入、调度与调用时间 |
 | `POST /api/v1/compile/config/update` | 按请求体 `compile_name` 替换配置 |
-| `GET /api/v1/compile/configs` | `configs` 和 `next_cursor`，按配置名称的字典序排序 |
+| `GET /api/v1/compile/configs` | `configs` 和 `next_cursor`；按配置名称的字典序划分页，每页内部按 `last_run_time` 倒序排列（null 置后） |
 | `GET /api/v1/compile/runs?compile_name={compile_name}` | `runs` 和 `next_cursor`，按 `created_at`、`task_id` 从新到旧排序 |
 | `GET /api/v1/compile/runs/{task_id}?compile_name={compile_name}` | 本次执行冻结的 run |
 | `GET /api/v1/compile/runs/{task_id}/outputs?compile_name={compile_name}` | 由本次快照推导的变更产出，包含 `outputs` 和 `next_cursor` |
 
 列表接受 `limit`（1–100，默认 20）及可选 `cursor`。原样传递 `next_cursor`；null 表示结束。产出项包含 `uri`、`snapshot_id`、`latest_snapshot_id`、`change_type`。`snapshot_id` 固定为本次 run 的产出快照；`latest_snapshot_id` 为查询时该文件最近变更的 commit，无历史时为 null。最近变更可能是后续删除，此时读取该版本正文返回 404。仅查询本页产出的文件历史，查询失败直接报错。
 
-配置更新必填 `compile_name`、`from`、`skill` 和顶层 `auto_update`，可选 `instruction`、`args` 替换已保存值。`to` 可选，省略或为 null 时沿用该配置已保存的目标目录；显式传入的 `to` 规范化后必须与已保存的目标目录一致，修改目标目录返回 `400 INVALID_ARGUMENT`，配置保持不变；`from`、`skill` 等其他参数仍可修改。顶层 `update_schedule` 省略或为 null 时保留已保存的计划。启用自动更新需要本次提供或已保存的计划；关闭时保留计划，清除执行凭据和下次触发时间，并取消调度注册，是否启用计划由 `auto_update` 决定。更新请求的 `args` 不接受调度控制。执行输入变化使成功基线失效；仅修改调度保持基线。更新同样校验目录约束并持久入队独立补标任务，不等待 tag 就绪。配置更新不执行编译、不重置调用时间。
+配置更新必填 `compile_name`、`from`、`skill` 和顶层 `auto_update`，可选 `instruction`、`args` 替换已保存值。`to` 可选，省略或为 null 时沿用该配置已保存的目标目录；显式传入的 `to` 规范化后必须与已保存的目标目录一致，修改目标目录返回 `400 INVALID_ARGUMENT`，配置保持不变；`from`、`skill` 等其他参数仍可修改。顶层 `update_schedule` 省略或为 null 时保留已保存的计划。启用自动更新需要本次提供或已保存的计划；关闭时保留计划，清除执行凭据和下次触发时间，并取消调度注册，是否启用计划由 `auto_update` 决定。更新请求的 `args` 不接受调度控制。更新配置保留上次成功执行的 `progress`。执行时比较指令、Skill 及其快照、`model_name`，不一致时全量编译；已有源目录计算增量，新增源目录完整处理。更新同样校验目录约束并持久入队独立补标任务，不等待 tag 就绪。配置更新不执行编译、不重置调用时间。
 
 创建配置时，`state.json` 的顶层字段 `updated_by` 记录配置归属用户的 ID。更新时可在请求体顶层传入字符串 `updated_by` 指定记录的值，省略时记录当前认证用户的 ID。
 
@@ -211,11 +213,9 @@ Compile 业务文件仅有：
 
 配置按账号和用户分目录存储，公开 API 使用原始 `compile_name` 定位配置。
 
-state 的精确字段为 `from`、`to`、`skill`、`instruction`、`args`、`auto_update`、`update_schedule`、`task_first_create_time`、`last_run_time`、`last_triggered_slot`、`next_triggered_slot`、`conflict_num`、`progress`、`updated_by`、`execution_context`。`progress` 保存成功增量基线；`execution_context` 保存内部执行上下文和加密参数。
+state 的精确字段为 `from`、`to`、`skill`、`instruction`、`args`、`auto_update`、`update_schedule`、`task_first_create_time`、`last_run_time`、`last_triggered_slot`、`next_triggered_slot`、`conflict_num`、`progress`、`updated_by`、`execution_context`。`progress` 保存成功增量基线，其中 `model_name` 记录成功执行请求的模型名，未指定时为空字符串；`execution_context` 保存内部执行上下文和加密参数。
 
 `conflict_num` 是收尾时 `to` 及其后代中，执行身份可检索的 `has_conflict=true` 文件数量，不是文件内部的冲突条数。统计使用空 query、标签过滤和 `level=2`，单次调用 `find`，固定 `limit=100`，不分页；计数达到或超过 100 时统一保存为 100，可能仍有更多冲突文件。正常完成在产物快照收尾后统计，不等待目标补标；失败或取消在回滚完成后统计。字段初始为 null；尚未取得起始快照的执行不检索并保存 null，避免读取其他任务正在修改的目标。回滚索引最多等待 30 秒；索引未就绪或检索失败时记录 warning 并保存 null，不因此回滚已成功生成的产物。修改配置时，`to` 不变保留已有计数，改变 `to` 则重置为 null。
-
-普通 `rm`、`mv`、`cp`、`mkdir`、写入、Skill 导入和回滚不修改上述文件，不在移动后自动修改配置路径。普通写入依据索引中最近带 `compile_target=true` 的祖先目录，在内容锁内拍快照；批量写合并提交。后台 tag 尚不可查询时，这种自动快照也存在空窗，不能保证每次普通写入都有该机制触发的版本；Compile 自身显式的开始/结束快照及产物版本仍然保留。文件版本查询使用原生快照历史，与持久配置无关；目录回滚复用已有的 forward commit。
 
 ### 检查 Compile 可用性
 

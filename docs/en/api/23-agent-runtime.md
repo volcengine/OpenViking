@@ -112,6 +112,8 @@ Every accepted execution returns `202 Accepted` with the ordinary TaskRecord:
 
 Use `Idempotency-Key` for execution retries and `/api/v1/tasks/{task_id}` for status or cancellation. Manual execution uses the current caller's identity and connection; it does not borrow the schedule's credentials.
 
+If a source directory has been deleted or moved, a new execution returns HTTP `404` / `NOT_FOUND` before creating a task. The error identifies the missing Viking URI with `details.type="compile source directory"` and asks the caller to update the configuration's source directories before retrying. Permission errors remain separate. Recovering an existing submission with the same `Idempotency-Key` does not revalidate its source directories.
+
 ### CLI and SDKs
 
 ```bash
@@ -167,14 +169,14 @@ Configuration lookups and run queries use the current account and user. Updates 
 |----------|--------|
 | `GET /api/v1/compile/config?compile_name={compile_name}` | Public saved inputs, scheduling and invocation times |
 | `POST /api/v1/compile/config/update` | Replace configuration identified by body `compile_name` |
-| `GET /api/v1/compile/configs` | `configs` and `next_cursor`, ordered lexically by configuration name |
+| `GET /api/v1/compile/configs` | `configs` and `next_cursor`; page boundaries follow configuration name order, with each page ordered by `last_run_time` descending (null last) |
 | `GET /api/v1/compile/runs?compile_name={compile_name}` | `runs` and `next_cursor`, newest first by `created_at` and `task_id` |
 | `GET /api/v1/compile/runs/{task_id}?compile_name={compile_name}` | One frozen run |
 | `GET /api/v1/compile/runs/{task_id}/outputs?compile_name={compile_name}` | Changed output files derived from run snapshots; `outputs` and `next_cursor` |
 
 List endpoints accept `limit` (1–100, default 20) and an optional `cursor`. Pass `next_cursor` unchanged; null ends pagination. Output items contain `uri`, `snapshot_id`, `latest_snapshot_id` and `change_type`. `snapshot_id` is the frozen run snapshot; `latest_snapshot_id` is the file’s latest change commit at query time (null if no history). It may identify a later deletion, in which case reading that version returns 404. History errors propagate; only returned page items require history reads.
 
-Configuration updates require `compile_name`, `from`, `skill`, and top-level `auto_update`; optional `instruction` and `args` replace the saved values. The optional `to` field preserves the saved output directory when omitted or null. When supplied, its normalized value must match the configuration's saved output directory. Changing the output directory returns `400 INVALID_ARGUMENT` and leaves the configuration unchanged; other inputs such as `from` and `skill` remain editable. Omitting or passing null for top-level `update_schedule` preserves the saved plan. Enabling updates requires a supplied or saved plan. Disabling updates preserves the plan, clears execution credentials and the next trigger time, and unregisters scheduling; `auto_update` controls whether the plan is active. Do not place schedule controls in update `args`. Changing execution inputs invalidates the successful baseline; schedule-only changes preserve it. Updates apply the same directory constraints and durably enqueue independent tagging without waiting for tags. Updating configuration does not run Compile or reset invocation times.
+Configuration updates require `compile_name`, `from`, `skill`, and top-level `auto_update`; optional `instruction` and `args` replace the saved values. The optional `to` field preserves the saved output directory when omitted or null. When supplied, its normalized value must match the configuration's saved output directory. Changing the output directory returns `400 INVALID_ARGUMENT` and leaves the configuration unchanged; other inputs such as `from` and `skill` remain editable. Omitting or passing null for top-level `update_schedule` preserves the saved plan. Enabling updates requires a supplied or saved plan. Disabling updates preserves the plan, clears execution credentials and the next trigger time, and unregisters scheduling; `auto_update` controls whether the plan is active. Do not place schedule controls in update `args`. Configuration updates preserve the last successful `progress`. Execution compares the instruction, Skill and its snapshot, and `model_name`; mismatches require a full compile. Existing source directories use incremental changes, while new source directories are processed in full. Updates apply the same directory constraints and durably enqueue independent tagging without waiting for tags. Updating configuration does not run Compile or reset invocation times.
 
 At creation, `state.json` records the configuration owner’s user ID in the top-level `updated_by` field. On update, the caller can supply a top-level `updated_by` string. If omitted, the server records the authenticated user’s ID.
 
@@ -211,11 +213,9 @@ The only Compile business files are:
 
 Configurations are stored in account and user directories. Public APIs locate configurations by their original `compile_name`.
 
-State contains exactly `from`, `to`, `skill`, `instruction`, `args`, `auto_update`, `update_schedule`, `task_first_create_time`, `last_run_time`, `last_triggered_slot`, `next_triggered_slot`, `conflict_num`, `progress`, `updated_by`, and `execution_context`. `progress` stores the successful incremental baseline; `execution_context` stores internal execution context and encrypted arguments.
+State contains exactly `from`, `to`, `skill`, `instruction`, `args`, `auto_update`, `update_schedule`, `task_first_create_time`, `last_run_time`, `last_triggered_slot`, `next_triggered_slot`, `conflict_num`, `progress`, `updated_by`, and `execution_context`. `progress` stores the successful incremental baseline, including the successful request's `model_name` (an empty string when unspecified); `execution_context` stores internal execution context and encrypted arguments.
 
 `conflict_num` counts files tagged `has_conflict=true` that the execution identity can retrieve under `to` at finalization, including descendants. It does not count individual conflicts inside those files. One `find` call uses an empty query, the tag filter, `level=2`, and `limit=100`, without pagination. Counts at or above 100 are stored as 100; more conflicting files may exist. Successful runs count after output snapshot finalization without waiting for target tagging; failed or cancelled runs count after rollback completes. The field starts as null. Runs without a start snapshot skip retrieval and record null because another task may be modifying the target. Rollback index rebuilding is awaited for at most 30 seconds. Unavailable indexes or retrieval failures log a warning and record null without rolling back successfully generated output. Configuration updates preserve the count when `to` is unchanged and reset it to null when `to` changes.
-
-Ordinary `rm`, `mv`, `cp`, `mkdir`, writes, skill imports and restores do not update these files or follow configuration paths after a move. Ordinary writes use the nearest ancestor whose `compile_target=true` tag is visible in the index to take a snapshot under the content lock; batched writes share a snapshot. This automatic snapshot mechanism also has a gap before tags become searchable, so it does not guarantee a version for each ordinary write during that interval. Compile's explicit start/finish snapshots and output versions remain in place. File history uses native snapshots independently of saved configuration. Directory restore uses its existing forward commit.
 
 ### Check Compile availability
 

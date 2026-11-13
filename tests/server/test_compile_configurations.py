@@ -27,6 +27,7 @@ from openviking.storage.queuefs.compile_target_tag_processor import CompileTarge
 from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking_cli.exceptions import (
     InvalidArgumentError,
+    NotFoundError,
     PermissionDeniedError,
     UnavailableError,
 )
@@ -323,6 +324,18 @@ async def test_case_distinct_names_paginate(service, app, client, monkeypatch):
     assert second["next_cursor"] is None
 
 
+async def test_configuration_list_page_order(service, app, monkeypatch):
+    ctx, _ = await prepare(service, app, monkeypatch)
+    store = service.compile.lifecycle.store
+    for name, timestamp in (("alpha", None), ("beta", 100), ("gamma", 300)):
+        record = new_record(INPUTS) | {"last_run_time": timestamp}
+        await store.create(ctx.account_id, ctx.user.user_id, record, compile_name=name)
+    first = await service.compile.list_configs(ctx, limit=2, cursor=None)
+    second = await service.compile.list_configs(ctx, limit=2, cursor=first["next_cursor"])
+    assert [config["compile_name"] for config in first["configs"]] == ["beta", "alpha"]
+    assert [config["compile_name"] for config in second["configs"]] == ["gamma"]
+
+
 @pytest.mark.parametrize("role", [Role.USER, Role.GLOBAL, Role.ROOT])
 async def test_account_configuration_listing_requires_admin(service, app, client, role):
     ctx = RequestContext(user=service.user, role=role)
@@ -376,7 +389,7 @@ async def test_configuration_list_metadata_and_cross_user_paging(
 
 
 @pytest.mark.parametrize("endpoint", ["/api/v1/compile/create", "/api/v1/compile"])
-async def test_compile_admission_rejects_invalid_targets_before_publication(
+async def test_compile_admission_rejects_invalid_inputs_before_publication(
     service, app, client, monkeypatch, endpoint
 ):
     ctx, runtime = await prepare(service, app, monkeypatch)
@@ -388,6 +401,11 @@ async def test_compile_admission_rejects_invalid_targets_before_publication(
     service.fs.ensure_compile_target.side_effect = UnavailableError("tags", "unavailable")
     response = await client.post(endpoint, json=inputs)
     assert response.status_code == 503, response.text
+    monkeypatch.setattr(service.fs, "stat", AsyncMock(side_effect=NotFoundError(SOURCE, "file")))
+    response = await client.post(endpoint, json=inputs)
+    assert response.status_code == 404, response.text
+    assert "The source directory is not found." in response.json()["error"]["message"]
+    assert response.json()["error"]["details"]["resource"] == SOURCE
     assert not runtime.calls
     assert not [r async for r in service.compile.lifecycle.store.iter_records(ctx.account_id)]
     assert not await get_task_tracker().list_tasks(
@@ -452,6 +470,7 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
     assert state["execution_context"]["owner_user_id"] == ctx.user.user_id
     assert state["conflict_num"] == 0
     assert state["progress"]["source_commit"] == run["meta"]["start_snapshot"]
+    assert state["progress"]["model_name"] == ""
     assert runtime.calls[-1]["args"]["changes"]["execution"]["mode"] == "full"
     assert "compile" not in runtime.calls[-1]
     assert "compile_name" not in runtime.calls[-1]
@@ -462,6 +481,13 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
         "last_run_time"
     ] == first.created_at
     assert len(runtime.calls) == 1
+
+    added_source = SOURCE + "-added"
+    await service.viking_fs.write_file(f"{added_source}/source.md", "source", ctx=ctx)
+    update = CompileConfigUpdate(**SAVED_INPUTS, auto_update=False)
+    for sources in ([SOURCE, added_source], [SOURCE]):
+        update.from_ = sources
+        await service.compile.update_config(update, ctx)
 
     noop = await execute({"compile_name": compile_name}, "compile-noop-execution")
     assert noop.status == "completed", noop.error
@@ -476,7 +502,14 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
     incremental = await execute({"compile_name": compile_name}, "compile-updated-source")
     assert incremental.status == "completed", incremental.error
     assert runtime.calls[-1]["args"]["changes"]["execution"]["mode"] == "incremental"
+    update.args = {"model_name": "model-a"}
+    await service.compile.update_config(update, ctx)
+    modeled = await execute({"compile_name": compile_name}, "compile-model-change")
+    assert modeled.status == "completed", modeled.error
+    assert runtime.calls[-1]["args"]["changes"]["execution"]["mode"] == "full"
+
     state_before_full = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
+    assert state_before_full["progress"]["model_name"] == "model-a"
     runs_before_full = await store.list_runs(ctx.account_id, ctx.user.user_id, compile_name)
     full = await execute(INPUTS, "compile-full-execution")
     assert full.status == "completed", full.error
@@ -650,7 +683,7 @@ async def test_configuration_update_preserves_times_and_retry_payload(service, a
     assert updated["updated_by"] == "bob"
     assert updated["execution_context"]["executor"]["user_id"] == editor.user.user_id
     assert updated["task_first_create_time"] == updated["last_run_time"] == task.created_at
-    assert updated["progress"] == {}
+    assert updated["progress"] == {"source_commit": "old-success"}
     assert updated["conflict_num"] == 7
     assert updated["to"] == TARGET
     assert updated["from"] == [source]

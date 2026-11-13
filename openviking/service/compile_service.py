@@ -830,7 +830,13 @@ class CompileService:
             and not isinstance(failure, ExternalTaskRetryExhaustedError)
             and not failure.transient
             and failure.code
-            in {"INVALID_ARGUMENT", "NOT_FOUND", "PERMISSION_DENIED", "UNAUTHENTICATED"}
+            in {
+                "INVALID_ARGUMENT",
+                "NOT_FOUND",
+                "PERMISSION_DENIED",
+                "UNAUTHENTICATED",
+                "OperationConflict",
+            }
         )
         if external_task_id is None and (task.stage in {None, "queued"} or rejected):
             return ExternalTaskCancellation(None, outcome)
@@ -941,7 +947,6 @@ class CompileService:
         lifecycle = self._require_lifecycle()
         async with lifecycle.store.edit(ctx.account_id, owner_user_id, body.compile_name) as record:
             await lifecycle._fs._ensure_access(record["to"], ctx, action=AclAction.WRITE)
-            previous_signature = execution_signature(record)
             replacement = deepcopy(replacement)
             replacement["updated_by"] = (
                 ctx.user.user_id if body.updated_by is None else body.updated_by
@@ -984,8 +989,7 @@ class CompileService:
             ):
                 for field in ("last_triggered_slot", "next_triggered_slot"):
                     replacement[field] = record[field]
-            if previous_signature == execution_signature(replacement):
-                replacement["progress"] = record["progress"]
+            replacement["progress"] = record["progress"]
             if self._scheduler is not None:
                 await self._scheduler.reschedule(
                     ctx.account_id,
@@ -1007,7 +1011,7 @@ class CompileService:
         scope: str = "user",
         compile_name: str | None = None,
     ) -> dict[str, Any]:
-        """Page readable user or ADMIN account configurations by exact name."""
+        """Page readable configs by name, then order each page by latest accepted execution."""
         if scope not in {"user", "account"}:
             raise InvalidArgumentError("scope must be user or account")
         if scope == "account" and ctx.role != Role.ADMIN:
@@ -1049,6 +1053,11 @@ class CompileService:
             next_cursor = page[-1]["compile_name"]
             if scope == "account":
                 next_cursor += ":" + page[-1]["owner_user_id"]
+        # shortcut: time ordering is page-local, use time cursors when global ordering is required.
+        page.sort(
+            key=lambda item: (item["last_run_time"] is not None, item["last_run_time"]),
+            reverse=True,
+        )
         return {
             "configs": page,
             "next_cursor": next_cursor,
@@ -1161,7 +1170,11 @@ class CompileService:
             resolve_path_variables(skill), ctx, field_name="skill"
         ).rstrip("/")
         if not classify_uri(skill).is_skill_root:
-            raise InvalidArgumentError("skill must resolve to a Skill directory or SKILL.md")
+            raise InvalidArgumentError(
+                "The input skill is not in a supported location. "
+                "Select a Skill directory or its SKILL.md, "
+                "e.g. viking://user/<user_id>/skills/<skill_name>."
+            )
         target = validate_request_viking_uri(
             resolve_path_variables(request.to), ctx, field_name="to"
         ).rstrip("/")
@@ -1180,7 +1193,17 @@ class CompileService:
                 "Compile target must not be inside the user memories/experiences subtree"
             )
         for uri in request.from_:
-            stat = await self._fs.stat(uri, ctx, skip_count=True)
+            try:
+                stat = await self._fs.stat(uri, ctx, skip_count=True)
+            except NotFoundError as exc:
+                raise NotFoundError(
+                    uri,
+                    "compile source directory",
+                    reason=(
+                        "The source directory is not found. "
+                        "Update the Compile configuration's source directories before retrying."
+                    ),
+                ) from exc
             if not stat.get("isDir"):
                 raise InvalidArgumentError(f"Compile source must be a directory: {uri}")
         skill_stat = await self._fs.stat(request.skill, ctx, skip_count=True)

@@ -23,6 +23,7 @@ from openviking.server.config import ServerConfig
 from openviking.server.identity import AuthMode, RequestContext, Role
 from openviking.service.compile_service import CompileService
 from openviking.service.external_task_service import ExternalTaskService
+from openviking.service.task_domain import TaskPatch
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskRecord, TaskStatus, TaskTracker
 from openviking.storage.queuefs import QueueManager
@@ -386,6 +387,8 @@ _COMPILE_RUNTIME_ARGS = {
             "poll_failure",
             "restart",
             "restart_cancel",
+            "conflict",
+            "recovered_conflict",
         ]
     ],
 )
@@ -485,7 +488,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     assert "active-user-key" not in json.dumps(stored_auth)
     auth = await tasks._task_auth(task.task_id, **owner)
     assert auth["external_request_private"] == private_payload
-    assert auth["openviking_connection"] == connection
+    assert auth["openviking_connection"] == {**connection, "role": "user", "group_ids": []}
     external_task_id = await service.submit(
         task.task_id,
         restored.meta["request"],
@@ -607,6 +610,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     polls = 0
     rejected_id = None
     rejected_submissions = []
+    rejection_code = "OperationConflict" if "conflict" in finish else "INVALID_ARGUMENT"
 
     async def runtime_request(_client, method, url, headers, json):
         nonlocal polls
@@ -617,8 +621,8 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
             if task_id == rejected_id:
                 rejected_submissions.append(task_id)
                 return FakeResponse(
-                    {"detail": {"code": "INVALID_ARGUMENT", "message": "invalid request"}},
-                    status_code=422,
+                    {"error": {"code": rejection_code, "message": "submission rejected"}},
+                    status_code=409 if "conflict" in finish else 422,
                 )
             submitted.append(task_id)
             return FakeResponse({"session_id": task_id})
@@ -751,12 +755,23 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     # Submission failure also releases the target for the next task.
     rejected = await create()
     rejected_id = rejected.task_id
+    if finish == "recovered_conflict":
+        await tracker.start(rejected_id, stage="submitting", **owner)
+        await tracker.patch_task(
+            rejected_id,
+            TaskPatch(
+                auth={"external_cleanup_failure": {"code": rejection_code, "message": "conflict"}}
+            ),
+            **owner,
+        )
+        tracker = TaskTracker(store)
     await queue.dequeue()
     failed = await state(rejected)
     assert failed.status == TaskStatus.FAILED
-    assert failed.error.startswith("INVALID_ARGUMENT:")
+    assert failed.error.startswith(rejection_code + ":")
     assert "cleanup_error" not in failed.meta
-    assert rejected_submissions.count(rejected_id) == 1
+    assert rejected_submissions.count(rejected_id) == (0 if finish == "recovered_conflict" else 1)
+    assert not backend.pending and not backend.processing
     after_rejection = await create()
     await queue.dequeue()
     assert (await state(after_rejection)).status == TaskStatus.COMPLETED

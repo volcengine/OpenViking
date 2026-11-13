@@ -66,6 +66,7 @@ from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.expr import And, Eq, In, Or, PathScope, RawDSL
 from openviking.storage.index_action import FieldPatch
 from openviking.storage.internal_names import is_storage_internal_name
+from openviking.storage.manual_conflicts import conflict_tags_from_content
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.content_write_msg import ContentWriteMsg
@@ -1746,14 +1747,11 @@ class FSService:
         acl: AclSpec | Dict[str, Any] | None = None,
         commit_content: Optional[Callable[..., Awaitable[Any]]] = None,
         resolve_conflicts: bool = False,
+        use_snapshot: bool = False,
     ) -> Dict[str, Any]:
-        """Write and refresh content, snapshotting files below tagged directories under the lease.
-
-        Internal restores supply ``commit_content`` to check and commit their own snapshot.
-        resolve_conflicts enables manual conflict resolution.
-        """
+        """Write content with optional snapshots; restores supply their own commit callback."""
         viking_fs = self._ensure_initialized()
-        if commit_content is None:
+        if commit_content is None and use_snapshot:
             commit_content = partial(self._snapshot_write, ctx=ctx)
         coordinator = ContentWriteCoordinator(
             viking_fs=viking_fs,
@@ -1786,20 +1784,20 @@ class FSService:
         skip_conflicts: bool = False,
         defer_processing: bool = False,
         processing_mode: str = "semantic_and_vectors",
+        use_snapshot: bool = False,
     ) -> Dict[str, Any]:
-        """Apply multiple file writes and aggregate downstream refresh."""
+        """Write files, refresh indexes, and optionally snapshot successful writes once."""
         viking_fs = self._ensure_initialized()
         snapshot_paths: set[str] = set()
 
         async def collect_snapshot(uris, *, lease_ref, write):
-            """Collect only successfully written tagged paths while the batch owns its lease."""
-            targets = await self._tagged_snapshot_paths(uris, ctx)
+            """Collect successful paths under the content lease."""
             result = await write()
-            snapshot_paths.update(targets)
+            snapshot_paths.update(uris)
             return result
 
         async def commit_snapshot(*, lease_ref):
-            """Commit the batch's tagged paths once before releasing its content lease."""
+            """Commit collected paths before releasing the lease."""
             if snapshot_paths:
                 await viking_fs.commit(
                     message="content batch write",
@@ -1812,8 +1810,8 @@ class FSService:
             viking_fs=viking_fs,
             vikingdb=self._vikingdb,
             privacy_sanitizer=self._privacy_sanitizer,
-            commit_batch=commit_snapshot,
-            commit_content=collect_snapshot,
+            commit_batch=commit_snapshot if use_snapshot else None,
+            commit_content=collect_snapshot if use_snapshot else None,
         )
         write = partial(
             coordinator.batch_write,
@@ -1826,26 +1824,6 @@ class FSService:
             processing_mode=processing_mode,
         )
         return await write()
-
-    async def _tagged_snapshot_paths(self, uris: List[str], ctx: RequestContext) -> List[str]:
-        """Select files with a tagged ancestor inside their content namespace; storage errors propagate."""
-        selected = []
-        tagged: Dict[str, bool] = {}
-        for uri in uris:
-            if not namespace_policy_for_uri(uri).supports_tags:
-                continue
-            namespace = classify_uri(uri)
-            boundary = (namespace.content_index or 0) + 1
-            parts = list(namespace.parts[:-1])
-            while len(parts) >= boundary:
-                parent = "viking://" + "/".join(parts)
-                if parent not in tagged:
-                    tagged[parent] = await self._directory_has_compile_tag(parent, ctx)
-                if tagged[parent]:
-                    selected.append(uri)
-                    break
-                parts.pop()
-        return selected
 
     async def _directory_has_compile_tag(self, uri: str, ctx: RequestContext) -> bool:
         """Test visible directory nodes for the output tag without requiring a unique index record."""
@@ -1870,16 +1848,11 @@ class FSService:
         lease_ref: Any,
         write: Callable[[], Awaitable[Any]],
     ) -> Any:
-        """Return the write callback's result after snapshotting tagged URIs under its lease.
-
-        Snapshot failures propagate even when the bytes have already been written.
-        """
-        paths = await self._tagged_snapshot_paths(uris, ctx)
+        """Write and snapshot under the lease; commit errors propagate after writing."""
         result = await write()
-        if paths:
-            await self._ensure_initialized().commit(
-                message="content write", paths=paths, ctx=ctx, lease_ref=lease_ref
-            )
+        await self._ensure_initialized().commit(
+            message="content write", paths=uris, ctx=ctx, lease_ref=lease_ref
+        )
         return result
 
     async def set_tags(
@@ -2588,7 +2561,7 @@ class FSService:
         *,
         dry_run: bool = False,
     ) -> Dict[str, Any]:
-        """Restore historical file content, checking the last file commit only when supplied."""
+        """Restore and snapshot content; a supplied commit also rejects uncommitted edits."""
         viking_fs = self._ensure_initialized()
         await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
 
@@ -2602,6 +2575,10 @@ class FSService:
                     f"Current file commit is {current}, not {current_commit_id}",
                     resource="VERSION_CONFLICT",
                 )
+            if await viking_fs.read_file_bytes(uri, ctx=ctx) != await viking_fs.show(
+                current_commit_id, path=uri, ctx=ctx
+            ):
+                raise ConflictError("File has uncommitted changes", resource="VERSION_CONFLICT")
 
         await check_current_commit()
         try:
@@ -2610,6 +2587,18 @@ class FSService:
             if is_not_found_error(exc):
                 raise NotFoundError(f"{restore_commit_id}:{uri}", "snapshot file") from exc
             raise
+        try:
+            content = content.decode("utf-8")
+        except UnicodeDecodeError:
+            pass
+        conflict_tags = None
+        if (
+            isinstance(content, str)
+            and namespace_policy_for_uri(uri).supports_tags
+            and uri.lower().endswith(".md")
+            and not is_abstract_overview_uri(uri)
+        ):
+            conflict_tags = conflict_tags_from_content(content)
         if dry_run:
             return {"uri": uri, "snapshot_id": current_commit_id, "result": "dry_run"}
         result = {}
@@ -2626,15 +2615,20 @@ class FSService:
             result.update(uri=uri, snapshot_id=snapshot["commit_oid"], result=snapshot["result"])
             return written
 
-        try:
-            content = content.decode("utf-8")
-        except UnicodeDecodeError:
-            pass
         if isinstance(content, str) and classify_uri(uri).is_memory:
             from openviking.session.memory.utils.memory_fields import strip_memory_fields_trailer
 
             content = strip_memory_fields_trailer(content)
-        await self.write(uri, content, ctx, mode="replace", commit_content=commit_restore)
+        await self.write(
+            uri,
+            content,
+            ctx,
+            mode="replace",
+            commit_content=commit_restore,
+            use_snapshot=True,
+            tags=conflict_tags,
+            tag_mode="append",
+        )
         return result
 
     async def show(

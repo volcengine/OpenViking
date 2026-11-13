@@ -1529,6 +1529,7 @@ async def write(
     ] = None,
     acl: Optional[AclSpec] = None,
     resolve_conflicts: bool = False,
+    use_snapshot: bool = False,
 ) -> str:
     """Write text to a viking:// file. Use this for files you author yourself (notes, profiles, state), the same way you would use a working directory. To change part of an existing file, prefer the edit tool over a full rewrite. To store a file, document, URL, or repo the user gives you, use add_resource; for a skill, use add_skill. Do not copy its text into a file here instead.
 
@@ -1557,6 +1558,7 @@ async def write(
         wait=wait,
         acl=acl,
         resolve_conflicts=resolve_conflicts,
+        use_snapshot=use_snapshot,
     )
     written = result.get("written_bytes", 0)
     message = (
