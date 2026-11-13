@@ -72,12 +72,26 @@ export function useVikingBotChat(
     () => projectBotTasks(state.messages, state.streaming, tasks, source.key),
     [state.messages, state.streaming, tasks, source],
   );
+  const error = localizeBotError(state.error, locale);
+  const messages = projected.messages.map((message) => {
+    if (!message.clientError) return message;
+    const clientError =
+      message.clientError === state.error
+        ? error!
+        : localizeBotError(message.clientError, locale)!;
+    return {
+      ...message,
+      clientError,
+      parts: [{ type: 'text' as const, text: clientError.message }],
+    };
+  });
   return {
     ...state,
     ...projected,
+    messages,
     canInterrupt: Boolean(service.interrupt),
     canSteer: Boolean(service.steer),
-    error: localizeBotError(state.error, locale),
+    error,
     send: controller.send,
     abort: controller.abort,
     reset: controller.reset,
