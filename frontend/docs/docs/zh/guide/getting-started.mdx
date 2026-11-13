@@ -1,0 +1,150 @@
+# 快速开始
+
+`@openviking/react` 是 OpenViking 的 React 组件库，提供文件树、文件预览、命令控制台、对话、登录表单和看板等[业务组件](../components/)，以及自带数据加载的[区块](../modules/)。文档里的「宿主」指嵌入这些组件的你的应用。
+
+## 安装
+
+```bash
+npm install @openviking/react
+```
+
+`react` 和 `react-dom` 是 peer 依赖，版本范围是 `^18.2.0 || ^19.0.0`。包只提供 ESM 入口。
+
+FilePreview 和 VikingBot 用可选 peer 依赖 `@ark-design/ui` 渲染，内置它们的 FileBrowser 和 Console 同样需要。版本和配套包见 [FilePreview](../components/file-preview) 与 [VikingBot](../components/viking-bot) 页面的「引入」。
+
+## 引入样式
+
+JavaScript 导入不会自动加载 CSS，按需选择一个样式入口：
+
+```ts
+// 整个组件库：全部业务组件、区块和主题
+import '@openviking/react/style.css';
+
+// 全部业务组件，或全部区块
+import '@openviking/react/components/style.css';
+import '@openviking/react/modules/style.css';
+
+// 单个业务组件或区块
+import '@openviking/react/components/file-tree/style.css';
+import '@openviking/react/modules/file-browser/style.css';
+```
+
+每个入口都可以单独使用，并已包含所用组件的样式。图标（`@openviking/react/icons`）不需要样式表。
+
+## 使用一个业务组件
+
+业务组件是纯视图：数据由你传入，用户的操作通过回调交给宿主，组件不发起请求。下面的 FileTree 把你提供的行渲染成文件树：
+
+```tsx
+import { useState } from 'react';
+import {
+  FileTree,
+  type FileTreeRow,
+} from '@openviking/react/components/file-tree';
+import '@openviking/react/components/file-tree/style.css';
+
+const rows: FileTreeRow[] = [
+  {
+    kind: 'entry',
+    id: 'viking://resources',
+    uri: 'viking://resources',
+    name: 'resources',
+    type: 'directory',
+    depth: 0,
+    expanded: true,
+  },
+  {
+    kind: 'entry',
+    id: 'viking://resources/intro.md',
+    uri: 'viking://resources/intro.md',
+    name: 'intro.md',
+    type: 'file',
+    depth: 1,
+  },
+];
+
+export function Tree() {
+  const [selectedId, setSelectedId] = useState<string>();
+  return (
+    <div style={{ height: 320 }}>
+      <FileTree
+        rows={rows}
+        selectedId={selectedId}
+        search={false}
+        refresh={false}
+        operations={{ select: async (row) => setSelectedId(row.id) }}
+      />
+    </div>
+  );
+}
+```
+
+FileTree 的高度是父容器的 100%，所以外层要设置高度。示例没有提供搜索和刷新的实现，用 `search={false}` 和 `refresh={false}` 隐藏了这两个入口。
+
+导入规则：
+
+- 组件和它的类型从 `@openviking/react/components/<名称>` 导入，例如 `file-tree`，每个组件的确切路径见它页面的「引入」。
+- 根入口 `@openviking/react` 也导出组件本体和主 Props 类型，例如 `FileTree` 和 `FileTreeProps`；其余类型只从子路径导入。
+- FilePreview 是例外：它依赖可选 peer `@ark-design/ui`，只从 `@openviking/react/components/file-preview` 子路径导出，不在根入口里。
+
+## 使用一个区块
+
+FileBrowser 和 Console 自己读取 OpenViking 原生 API，需要放在 `OpenVikingProvider` 内，由 Provider 提供服务地址和凭证。下面以 FileBrowser 为例：
+
+```tsx
+import { OpenVikingProvider } from '@openviking/react/client';
+import { FileBrowser } from '@openviking/react/modules/file-browser';
+import '@openviking/react/modules/file-browser/style.css';
+
+export function Browser({ apiKey }: { apiKey: string }) {
+  return (
+    <OpenVikingProvider baseURL="https://ov.example.com" apiKey={apiKey}>
+      <div style={{ height: 600 }}>
+        <FileBrowser />
+      </div>
+    </OpenVikingProvider>
+  );
+}
+```
+
+- `baseURL` 是服务地址，不含 `/api/v1`。
+- FileBrowser 的高度是父容器的 100%，外层要设置高度。
+- FileBrowser 预览文件内容需要先安装可选 peer 依赖 `@ark-design/ui`，见上文「安装」。
+- 登录、账号作用域和路由由宿主负责。
+- 其余身份字段、`requestOptions` 和各区块的规则见[区块](../modules/)。
+
+## 主题
+
+组件的颜色读取 `--ov-ui-color-*` 变量。库本身不定义这些变量：在应用根节点或任意祖先元素上设置它们，组件就使用你的值；没有设置时，组件使用内置的默认色。
+
+```css
+.my-workbench {
+  --ov-ui-color-primary: #0f766e;
+  --ov-ui-color-bg-5: #eef5f4;
+  --ov-ui-color-border-2: #d4e4e1;
+}
+```
+
+写在 `:root` 上则对整个应用生效。带有「主题变量」一节的组件页会列出该组件读取的变量。
+
+暗色只认 `<html>` 上的 `.dark` 类，不读 `prefers-color-scheme`，因为系统偏好可能与你的应用实际呈现的主题不一致。出现 `.dark` 后，组件自动切换到内置的暗色默认值。你设置的变量在亮色和暗色下都生效，需要暗色专用的值时，在 `.dark` 下再声明一次：
+
+```css
+.dark .my-workbench {
+  --ov-ui-color-primary: #5eead4;
+}
+```
+
+只想调整单个组件时，覆盖它的 `--ov-ui-<组件>-*` 变量。这些变量声明在组件的根元素上，设置在祖先元素上不会生效，要写在组件自己的选择器上：
+
+```css
+.my-workbench .ov-file-tree {
+  --ov-ui-file-tree-row-height: 28px;
+}
+```
+
+## 下一步
+
+- [业务组件总览](../components/)：全部业务组件的简介和用法。
+- [区块](../modules/)：`OpenVikingProvider`、`requestOptions` 和各区块。
+- [国际化](./i18n)：用 `locale` 切换语言，用 `labels` 覆盖文案。

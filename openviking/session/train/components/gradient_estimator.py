@@ -224,6 +224,7 @@ def _operations_to_gradients(
                     "rubric_passed": analysis.evaluation.passed,
                     "supersedes": fields.get("supersedes"),
                     "training_category": _trajectory_training_category(trajectory, analysis),
+                    "case_uris": list(trajectory.metadata.get("case_uris", [])),
                 },
             )
         )

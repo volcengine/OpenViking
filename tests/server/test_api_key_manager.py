@@ -185,23 +185,36 @@ async def test_management_writer_preserves_a_trusted_identity_from_another_insta
 ):
     """A stale manager write must merge, rather than replace, a trusted registry update."""
     acct = _uid()
-    await manager.create_account(acct, "admin")
+    original_key = await manager.create_account(acct, "admin")
+    other_account = f"{acct}_other"
+    other_key = await manager.create_account(other_account, "admin")
+    assert original_key[:8] == other_key[:8]
 
     replica = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
     await replica.load()
 
     await manager.ensure_trusted_identities({acct: {"trusted-user"}})
+    rotated_key = await manager.regenerate_key(acct, "admin")
+    remote_key = await manager.register_user(acct, "remote-user")
     assert await replica.has_user(acct, "trusted-user") is False
 
     await replica.register_user(acct, "managed-user")
+    assert (await replica.resolve_identity(rotated_key)).user_id == "admin"
+    assert (await replica.resolve_identity(remote_key)).user_id == "remote-user"
+    with pytest.raises(UnauthenticatedError):
+        await replica.resolve_identity(original_key)
+    assert (await replica.resolve_identity(other_key)).account_id == other_account
 
     verifier = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
     await verifier.load()
     assert {item["user_id"] for item in await _list_users(verifier, acct)} == {
         "admin",
         "trusted-user",
+        "remote-user",
         "managed-user",
     }
+    await replica.delete_account(acct)
+    assert (await replica.resolve_identity(other_key)).account_id == other_account
 
 
 async def test_concurrent_management_registration_of_same_user_rejects_second_writer(
@@ -771,7 +784,8 @@ async def test_user_and_group_persistence_across_reload(manager_service):
         owner_account_id=acct,
         owner_user_id="alice",
     )
-    assert await mgr2.remove_group_member(acct, group_id, "alice") is True
+    assert await mgr2.remove_group_members(acct, group_id, ["alice", "missing", "alice"]) is True
+    assert await mgr2.remove_group_members(acct, group_id, ["alice", "missing"]) is False
     with pytest.raises(FailedPreconditionError):
         await mgr2.add_group_members(acct, group_id, ["alice", "bob"])
     assert await mgr2.get_group_members(acct, group_id) == ["bob"]

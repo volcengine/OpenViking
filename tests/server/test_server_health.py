@@ -213,7 +213,7 @@ async def test_lifespan_shutdown_ignores_cancelled_service_close(monkeypatch):
             self.viking_fs = object()
             self._queue_manager = None
 
-        async def initialize(self):
+        async def initialize(self, **kwargs):
             pass
 
         async def apply_agent_evolution_config(self):
@@ -382,8 +382,8 @@ async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
     )
     await _initialize_runtime_state(app, service, config)
 
-    startup = ["auth", "ttl", "workers", "service", "agent-evolution"]
-    assert events == startup + ["system-assets", "deletion"]
+    startup = ["auth", "ttl", "deletion", "workers", "service", "agent-evolution"]
+    assert events == startup + ["system-assets"]
     assert service._initialized is True
     assert app.state.api_key_manager is manager
     assert service.compile.lifecycle.resolve_groups is manager.get_user_group_ids
@@ -399,7 +399,7 @@ async def test_initialize_runtime_state_loads_api_key_manager(monkeypatch):
 
     assert service._initialized is True
     assert app.state.api_key_manager is manager
-    assert events == startup + ["deletion"]
+    assert events == startup
 
 
 async def test_initialize_runtime_state_skips_reconcile_without_account_manager(monkeypatch):
@@ -415,6 +415,11 @@ async def test_initialize_runtime_state_skips_reconcile_without_account_manager(
         app.state.api_key_manager = None
 
     monkeypatch.setattr("openviking.server.app._initialize_auth_plugin", initialize_plugin)
+
+    async def initialize(**kwargs):
+        await kwargs["before_background_start"]()
+
+    service.initialize.side_effect = initialize
 
     app = SimpleNamespace(state=SimpleNamespace(api_key_manager=None))
     await _initialize_runtime_state(app, service, ServerConfig())

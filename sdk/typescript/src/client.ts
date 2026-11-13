@@ -33,7 +33,12 @@ import type {
   GrepOptions,
   GlobOptions,
   ImportPackOptions,
+  MCPBatchMountResult,
+  MCPBatchUnmountResult,
+  MCPSyncResult,
+  MCPToolMount,
   Message,
+  MountMCPToolOptions,
   ObserverFormat,
   PreflightAssetOptions,
   ReindexOptions,
@@ -296,6 +301,164 @@ export class OpenVikingClient {
   deleteSkill(name: string, targetUri?: string): Promise<JsonObject> {
     return this.request("DELETE", `/api/v1/skills/${pathPart(name)}`, {
       query: { target_uri: targetUri },
+    });
+  }
+  /** Register a Streamable HTTP MCP server and discover its tools. */
+  addMCP(
+    name: string,
+    url: string,
+    headers: Record<string, string> = {},
+    options: Pick<WaitOptions, "wait"> & { targetUri?: string } = {},
+  ): Promise<JsonObject> {
+    return this.request("POST", "/api/v1/mcps", {
+      body: compact({
+        name,
+        url,
+        headers,
+        target_uri: options.targetUri,
+        wait: options.wait ?? false,
+      }),
+    });
+  }
+  /** Remove an MCP server and its tool catalog. */
+  removeMCP(name: string, targetUri?: string): Promise<JsonObject> {
+    return this.request("DELETE", `/api/v1/mcps/${pathPart(name)}`, {
+      query: { target_uri: targetUri },
+    });
+  }
+  /** List registered MCP servers. */
+  listMCPs(targetUri?: string): Promise<JsonObject> {
+    return this.request("GET", "/api/v1/mcps", {
+      query: { target_uri: targetUri },
+    });
+  }
+  /** Search the MCP tool catalog semantically. */
+  findMCPTools(
+    query: string,
+    limit = 10,
+    targetUri?: string,
+  ): Promise<JsonObject> {
+    return this.request("POST", "/api/v1/mcps/find", {
+      body: compact({ query, limit, target_uri: targetUri }),
+    });
+  }
+  /** Validate and discover an MCP server without registering it. */
+  validateMCP(
+    name: string,
+    url: string,
+    headers: Record<string, string> = {},
+  ): Promise<JsonObject> {
+    return this.request("POST", "/api/v1/mcps/validate", {
+      body: { name, url, headers },
+    });
+  }
+  /** Get a registered MCP server and its current tool catalog. */
+  getMCP(name: string, targetUri?: string): Promise<JsonObject> {
+    return this.request("GET", `/api/v1/mcps/${pathPart(name)}`, {
+      query: { target_uri: targetUri },
+    });
+  }
+  /** Refresh an MCP tool catalog and report affected live context mounts. */
+  syncMCP(
+    name: string,
+    options: Pick<WaitOptions, "wait"> & { targetUri?: string } = {},
+  ): Promise<MCPSyncResult> {
+    return this.request("POST", `/api/v1/mcps/${pathPart(name)}/sync`, {
+      body: compact({
+        wait: options.wait ?? false,
+        target_uri: options.targetUri,
+      }),
+    });
+  }
+  /** Check whether an MCP server is reachable. */
+  getMCPStatus(name: string, targetUri?: string): Promise<JsonObject> {
+    return this.request("GET", "/api/v1/mcps/status", {
+      query: { name, target_uri: targetUri },
+    });
+  }
+  /** Invoke a registered MCP tool through OpenViking. */
+  invokeMCPTool(
+    toolUri: string,
+    toolArguments: JsonObject = {},
+  ): Promise<JsonObject> {
+    return this.request("POST", "/api/v1/mcps/invoke", {
+      body: { uri: normalizeURI(toolUri), arguments: toolArguments },
+    });
+  }
+  /** Create or replace a live context node backed by an MCP tool. */
+  mountMCPTool(
+    toolUri: string,
+    nodeUri: string,
+    title: string,
+    options: MountMCPToolOptions = {},
+  ): Promise<JsonObject> {
+    return this.request("POST", "/api/v1/mcps/mount", {
+      body: compact({
+        tool_uri: normalizeURI(toolUri),
+        node_uri: normalizeURI(nodeUri),
+        title,
+        description: options.description,
+        timeout_seconds: options.timeoutSeconds ?? 60,
+        arguments: options.arguments ?? {},
+        tags: options.tags,
+        wait: options.wait ?? false,
+      }),
+    });
+  }
+  /** Create or replace multiple MCP-backed live context nodes. */
+  batchMountMCPTools(
+    mounts: MCPToolMount[],
+    options: Pick<WaitOptions, "wait"> = {},
+  ): Promise<MCPBatchMountResult> {
+    return this.request("POST", "/api/v1/mcps/batch-mount", {
+      body: {
+        mounts: mounts.map((mount) =>
+          compact({
+            tool_uri: normalizeURI(mount.toolUri),
+            node_uri: normalizeURI(mount.nodeUri),
+            title: mount.title,
+            description: mount.description,
+            timeout_seconds: mount.timeoutSeconds ?? 60,
+            arguments: mount.arguments ?? {},
+            tags: mount.tags,
+          }),
+        ),
+        wait: options.wait ?? false,
+      },
+    });
+  }
+  /** Remove a live context mount and its node. */
+  unmountMCPTool(
+    nodeUri: string,
+    options: Pick<WaitOptions, "wait"> = {},
+  ): Promise<JsonObject> {
+    return this.request("DELETE", "/api/v1/mcps/mount", {
+      query: {
+        node_uri: normalizeURI(nodeUri),
+        wait: options.wait ?? false,
+      },
+    });
+  }
+  /** Remove multiple live context mounts and their nodes. */
+  batchUnmountMCPTools(
+    nodeUris: string[],
+    options: Pick<WaitOptions, "wait"> = {},
+  ): Promise<MCPBatchUnmountResult> {
+    return this.request("POST", "/api/v1/mcps/batch-unmount", {
+      body: {
+        node_uris: nodeUris.map(normalizeURI),
+        wait: options.wait ?? false,
+      },
+    });
+  }
+  /** List live context mounts for one MCP server and optional tool. */
+  listMCPMounts(
+    mcp: string,
+    tool?: string,
+    targetUri?: string,
+  ): Promise<JsonObject> {
+    return this.request("GET", "/api/v1/mcps/mounts", {
+      query: { mcp, tool, target_uri: targetUri },
     });
   }
   /** List resource watches. */
@@ -750,6 +913,29 @@ export class OpenVikingClient {
     return this.request("POST", "/api/v1/fs/attrs/set_tags", {
       body: mergeExtra(body, options.extra, [
         "uri",
+        "tags",
+        "mode",
+        "recursive",
+        "telemetry",
+      ]),
+    });
+  }
+  /** Set retrieval tags for multiple URIs. */
+  batchSetTags(
+    uris: string[],
+    tags?: string[],
+    options: SetTagsOptions = {},
+  ): Promise<JsonObject> {
+    const body = compact({
+      uris: uris.map(normalizeURI),
+      tags,
+      mode: options.mode ?? "replace",
+      recursive: options.recursive ?? false,
+      telemetry: options.telemetry,
+    });
+    return this.request("POST", "/api/v1/content/batch_set_tags", {
+      body: mergeExtra(body, options.extra, [
+        "uris",
         "tags",
         "mode",
         "recursive",
@@ -1356,34 +1542,6 @@ export class OpenVikingClient {
       "POST",
       `/api/v1/admin/accounts/${pathPart(accountId)}/users/${pathPart(userId)}/key`,
       { body: seed === undefined ? undefined : { seed } },
-    );
-  }
-  /** Return the effective Agent Evolution switch for the caller's account. */
-  adminGetAgentEvolution(): Promise<JsonObject> {
-    return this.request("GET", "/api/v1/admin/agent-evolution");
-  }
-  /** Persist and hot-reload Agent Evolution for the caller's account. */
-  adminSetAgentEvolution(enabled: boolean): Promise<JsonObject> {
-    return this.request("PUT", "/api/v1/admin/agent-evolution", {
-      body: { enabled },
-    });
-  }
-  /** Return effective and explicitly overridden settings for one account. */
-  adminGetAccountSettings(accountId: string): Promise<JsonObject> {
-    return this.request(
-      "GET",
-      `/api/v1/admin/accounts/${pathPart(accountId)}/settings`,
-    );
-  }
-  /** Update the allowlisted Agent Evolution setting for one account. */
-  adminSetAccountAgentEvolution(
-    accountId: string,
-    enabled: boolean,
-  ): Promise<JsonObject> {
-    return this.request(
-      "PATCH",
-      `/api/v1/admin/accounts/${pathPart(accountId)}/settings`,
-      { body: { agent_evolution: { enabled } } },
     );
   }
   /** List trajectories that consumed an Experience. */

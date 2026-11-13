@@ -4,6 +4,7 @@
 import json
 
 import httpx
+import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.retrieve import ContextType, MatchedContext
@@ -487,12 +488,14 @@ async def test_context_mode_session_materialization_failure_stays_stateless(
     assert not await service.viking_fs.exists(f"{session_uri}/.recall_log.json", ctx=ctx)
 
 
-async def test_context_mode_does_not_materialize_session_when_session_features_are_off(
+@pytest.mark.parametrize("query_expansion", ["off", "auto"])
+async def test_context_mode_without_dedup_does_not_materialize_a_missing_session(
     client: httpx.AsyncClient,
     service,
     monkeypatch,
+    query_expansion,
 ):
-    session_id = "context-with-session-features-off"
+    session_id = "context-without-dedup"
     ctx = RequestContext(user=UserIdentifier.the_default_user("default"), role=Role.ROOT)
 
     async def fake_find(**kwargs):
@@ -507,7 +510,7 @@ async def test_context_mode_does_not_materialize_session_when_session_features_a
             "mode": "context",
             "session_id": session_id,
             "dedup_turns": 0,
-            "query_expansion": "off",
+            "query_expansion": query_expansion,
         },
     )
 

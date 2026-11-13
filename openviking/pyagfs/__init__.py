@@ -169,6 +169,21 @@ def get_privacy_extractor_class():
         ) from exc
 
 
+def get_user_global_policy_types():
+    """Return the native UserGlobalPolicy class and its exception types."""
+    try:
+        module = _load_rust_module()
+        return (
+            module.UserGlobalPolicy,
+            module.GlobalPolicyError,
+            module.UnsupportedGlobalPolicySchemaError,
+        )
+    except (ImportError, AttributeError) as exc:
+        raise ImportError(
+            "ragfs_python UserGlobalPolicy is not available; rebuild the native extension"
+        ) from exc
+
+
 def reopen_rust_tracing_file() -> None:
     """Reopen the Rust tracing log file after Python rotates the active file."""
     try:

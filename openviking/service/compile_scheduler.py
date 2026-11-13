@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
 
+from openviking.crypto.encryptor import build_credential_encryptor as build_credential_encryptor
 from openviking.server.identity import RequestContext, Role
 from openviking.service.compile_targets import CompileStore, task_ctx
 from openviking_cli.exceptions import (
@@ -97,15 +98,6 @@ async def encrypt_credential(encryptor: Any, ctx: RequestContext) -> Dict[str, s
             details={"reason": "COMPILE_CREDENTIAL_KEY_UNAVAILABLE"},
         ) from exc
     return {"provider": CREDENTIAL_PROVIDER, "ciphertext": base64.b64encode(ciphertext).decode()}
-
-
-def build_credential_encryptor(encryption_config: Any) -> Any:
-    """Encryptor for saved API keys; unlike AGFS encryption, ignores ``encryption.enabled``."""
-    from openviking.crypto.encryptor import FileEncryptor
-    from openviking.crypto.providers import create_root_key_provider
-
-    config = encryption_config.model_dump()
-    return FileEncryptor(create_root_key_provider(config.get("provider", "local"), config))
 
 
 class CompileScheduler:

@@ -6,6 +6,7 @@ import hashlib
 import inspect
 import re
 from contextlib import contextmanager
+from dataclasses import replace
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Union
 
 from openviking.core.context import ContextLevel
@@ -16,10 +17,14 @@ from openviking.core.namespace import (
     is_hidden_by_actor_peer_view,
     may_include_hidden_actor_peers,
 )
-from openviking.core.namespace_policy import is_system_custom_asset_uri, is_system_uri
+from openviking.core.namespace_policy import (
+    is_system_compile_global_uri,
+    is_system_custom_asset_uri,
+    is_system_uri,
+)
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error
-from openviking.server.identity import RequestContext, Role
+from openviking.server.identity import AccessDecision, DataAccessScope, RequestContext, Role
 from openviking.storage.acl import (
     AclAction,
     AclEntry,
@@ -30,6 +35,7 @@ from openviking.storage.acl import (
     EffectiveAcl,
     acl_allows,
     acl_ancestors,
+    acl_permission,
     has_implicit_manage,
     is_acl_uri,
     normalize_acl_level,
@@ -104,9 +110,7 @@ class _AccessMixin:
     def _require_request_context(self, ctx: Optional[RequestContext]) -> RequestContext:
         """Resolve an account context without inventing the default account."""
         if ctx is None and self._bound_ctx.get() is None:
-            raise RuntimeError(
-                "Account request context is required for account-scoped operations"
-            )
+            raise RuntimeError("Account request context is required for account-scoped operations")
         return self._ctx_or_default(ctx)
 
     @contextmanager
@@ -168,6 +172,107 @@ class _AccessMixin:
         digest = hashlib.sha256(relative_path.encode("utf-8")).hexdigest()
         return f"{mount_prefix}{temp_root}/{digest}.encrypt"
 
+    def authorize_read(
+        self, ctx: RequestContext, targets: Sequence[str], *, recursive: bool = True
+    ) -> RequestContext:
+        """Derive one owner scope, preserving actor identity and public ACLs."""
+        if ctx.role != Role.GLOBAL:
+            return ctx
+        canonical = tuple(
+            dict.fromkeys((t if t == "viking://" else t.rstrip("/")) for t in targets)
+        )
+        owners = set()
+        for target in canonical:
+            parts = self._safe_uri_parts(target)
+            if parts[:1] == ["user"] and len(parts) >= 2:
+                owners.add(parts[1])
+            elif parts == ["user"]:
+                raise PermissionDeniedError("GLOBAL_ACCESS_DENIED: explicit owner required")
+        if ctx.bypass_acl or len(owners) > 1:
+            raise PermissionDeniedError(
+                "GLOBAL_ACCESS_DENIED: one owner and no ACL bypass required"
+            )
+        if ctx.data_access is not None:
+            if owners - {ctx.data_access.owner_user_id}:
+                raise PermissionDeniedError("GLOBAL_ACCESS_DENIED: owner scope cannot change")
+            return ctx
+        if not owners or owners == {ctx.user.user_id}:
+            return ctx
+        owner = next(iter(owners))
+        service = getattr(self, "_global_policy_service", None)
+        policy = service.for_owner(ctx, owner) if service is not None else None
+        from openviking.core.global_policy import (
+            GlobalPolicyError,
+            PolicyScopePlan,
+        )
+
+        root = f"viking://user/{owner}"
+        plan = DataAccessScope.read_plan(policy)
+        effective = []
+        scoped_includes = []
+        for target in canonical:
+            if target != root and not target.startswith(root + "/"):
+                effective.append(target)
+                continue
+            sub_path = target[len(root) + 1 :] or None
+            try:
+                restricted = plan.restrict_scope(sub_path, recursive=recursive)
+            except GlobalPolicyError:
+                if sub_path is None:
+                    raise
+                # The policy grammar cannot represent this path, so deny it.
+                continue
+            if restricted.status != "allowed":
+                continue
+            if sub_path == ".overview.md" or (
+                sub_path is not None and sub_path.endswith("/.overview.md")
+            ):
+                # Keep the source directory scope for the overview check; the
+                # requested and effective targets still name only the sidecar.
+                parent_path = sub_path.rsplit("/", 1)[0] if "/" in sub_path else None
+                scoped_includes.extend(plan.restrict_scope(parent_path).includes)
+            else:
+                scoped_includes.extend(restricted.includes)
+            effective.extend(
+                root + ("/" + item.path if item.path else "") for item in restricted.includes
+            )
+        if not effective:
+            raise PermissionDeniedError("GLOBAL_ACCESS_DENIED: targets have no allowed content")
+        plan = PolicyScopePlan("allowed", tuple(dict.fromkeys(scoped_includes)), plan.excludes)
+        return replace(
+            ctx,
+            data_access=DataAccessScope(
+                owner,
+                AclAction.READ,
+                plan,
+                policy.policy_hash if policy is not None else None,
+                root,
+                canonical,
+                tuple(dict.fromkeys(effective)),
+            ),
+        )
+
+    def _access_decision(self, uri: str, ctx: RequestContext) -> AccessDecision:
+        parts = self._safe_uri_parts(uri)
+        if ctx.data_access is not None and parts[:1] == ["user"]:
+            return ctx.data_access.decide(uri)
+        return AccessDecision.ALLOWED if self._is_accessible(uri, ctx) else AccessDecision.DENIED
+
+    def _is_traversable(self, uri: str, ctx: RequestContext) -> bool:
+        return self._access_decision(uri, ctx) is not AccessDecision.DENIED
+
+    async def _ensure_traversable(self, uri: str, ctx: RequestContext) -> AclLevel | None:
+        ctx = self.authorize_read(ctx, [uri])
+        permission = (await self._permissions_many([uri], ctx))[uri]
+        if permission is None and self._access_decision(uri, ctx) is not AccessDecision.CONTAINER:
+            raise PermissionDeniedError(
+                "GLOBAL_ACCESS_DENIED"
+                if ctx.data_access is not None and self._safe_uri_parts(uri)[:1] == ["user"]
+                else f"Access denied for {uri}: read permission required",
+                resource=uri,
+            )
+        return permission
+
     @staticmethod
     def _system_permission_allows(
         uri: str,
@@ -175,10 +280,16 @@ class _AccessMixin:
         action: AclAction,
     ) -> bool:
         """Apply the fixed role and path policy for the account system namespace."""
+        if ctx.role == Role.ROOT:
+            return True
+        if is_system_compile_global_uri(uri):
+            return ctx.role == Role.ADMIN or (
+                ctx.role in {Role.USER, Role.GLOBAL} and action is AclAction.READ
+            )
         if action is AclAction.READ:
             return True
         return (
-            ctx.role in {Role.ADMIN, Role.ROOT}
+            ctx.role == Role.ADMIN
             and action in {AclAction.WRITE, AclAction.MANAGE}
             and is_system_custom_asset_uri(uri)
         )
@@ -192,47 +303,63 @@ class _AccessMixin:
     ) -> Dict[str, bool]:
         if not isinstance(action, AclAction):
             raise TypeError(f"action must be AclAction, got {type(action).__name__}")
+        permissions = await self._permissions_many(uris, ctx)
+        return {
+            uri: permission is not None and permission.allows(action)
+            for uri, permission in permissions.items()
+        }
+
+    async def _permissions_many(
+        self, uris: Sequence[str], ctx: Optional[RequestContext]
+    ) -> Dict[str, AclLevel | None]:
+        """Resolve caller permissions once for both authorization and file metadata."""
         real_ctx = self._ctx_or_default(ctx)
-        result: Dict[str, bool] = {}
+        result: Dict[str, AclLevel | None] = {}
         valid: List[str] = []
         for uri in dict.fromkeys(uris):
             try:
                 self._safe_uri_parts(uri)
             except ValueError:
-                result[uri] = False
+                result[uri] = None
             else:
                 valid.append(uri)
 
         remaining: List[str] = []
         for uri in valid:
             if is_system_uri(uri):
-                result[uri] = self._system_permission_allows(uri, real_ctx, action)
+                result[uri] = next(
+                    (
+                        level
+                        for level in reversed(AclLevel)
+                        if self._system_permission_allows(uri, real_ctx, AclAction(level.value))
+                    ),
+                    None,
+                )
             else:
                 remaining.append(uri)
-        if not remaining:
-            return result
-
         acl_manager = self.acl_manager
-        if acl_manager is None or not await acl_manager.is_enabled(real_ctx.account_id):
-            result.update({uri: self._is_accessible(uri, real_ctx) for uri in remaining})
-            return result
-
         pending: List[str] = []
+        acl_enabled = (
+            bool(remaining)
+            and acl_manager is not None
+            and await acl_manager.is_enabled(real_ctx.account_id)
+        )
         for uri in remaining:
-            if is_watch_task_control_uri(uri):
-                result[uri] = self._is_accessible(uri, real_ctx)
-                continue
-            if not is_acl_uri(uri):
-                result[uri] = self._is_accessible(uri, real_ctx)
-                continue
-            if real_ctx.bypass_acl or has_implicit_manage(real_ctx, uri):
-                result[uri] = True
+            if not acl_enabled or not is_acl_uri(uri) or is_watch_task_control_uri(uri):
+                result[uri] = AclLevel.MANAGE if self._is_accessible(uri, real_ctx) else None
+            elif real_ctx.bypass_acl or has_implicit_manage(real_ctx, uri):
+                result[uri] = AclLevel.MANAGE
             else:
                 pending.append(uri)
 
         effective = await acl_manager.resolve_many(pending, real_ctx) if pending else {}
         for uri in pending:
-            result[uri] = acl_allows(effective[uri], real_ctx, action)
+            result[uri] = acl_permission(effective[uri], real_ctx)
+        if real_ctx.data_access is not None:
+            return {
+                uri: AclLevel.READ if permission is not None else None
+                for uri, permission in result.items()
+            }
         return result
 
     async def _ensure_access(
@@ -242,6 +369,8 @@ class _AccessMixin:
         *,
         action: AclAction = AclAction.READ,
     ) -> None:
+        if action is AclAction.READ:
+            ctx = self.authorize_read(self._ctx_or_default(ctx), [uri])
         await self._ensure_access_many([uri], ctx, action=action)
 
     async def _ensure_destination_access(self, uri: str, ctx: Optional[RequestContext]) -> bool:
@@ -280,6 +409,8 @@ class _AccessMixin:
         action: AclAction,
     ) -> None:
         real_ctx = self._ctx_or_default(ctx)
+        if real_ctx.data_access is not None and action is not AclAction.READ:
+            raise PermissionDeniedError("Delegated GLOBAL access is read-only")
         access = await self._can_access_many(uris, real_ctx, action=action)
         denied = next((uri for uri in uris if not access.get(uri, False)), None)
         if denied is not None:
@@ -344,6 +475,10 @@ class _AccessMixin:
 
     async def _ensure_retrieval_scope(self, uri: str, ctx: Optional[RequestContext]) -> None:
         self._safe_uri_parts(uri)
+        real_ctx = self._ctx_or_default(ctx)
+        if real_ctx.data_access is not None:
+            await self._ensure_traversable(uri, real_ctx)
+            return
         if await self._acl_enabled(ctx) and is_acl_uri(uri):
             return
         await self._ensure_access(uri, ctx)
@@ -609,6 +744,10 @@ class _AccessMixin:
         entry_path = entry["path"]
         entry_info = entry.get("info", {})
         name = entry_info.get("name") or entry_path.rstrip("/").rsplit("/", 1)[-1]
+        if ctx.data_access is not None and entry_info.get("isDir"):
+            uri = self._path_to_uri(entry_path, ctx=ctx)
+            if self._access_decision(uri, ctx) is AccessDecision.CONTAINER:
+                return not self._ancestor_is_filtered(entry_path, base_path)
         return self._is_path_entry_visible(
             entry_path,
             name,
@@ -689,19 +828,27 @@ class _AccessMixin:
                 ):
                     break
 
-            if not acl_enabled:
+            permissions = await self._permissions_many([u for _, u in candidates], real_ctx)
+            if real_ctx.data_access is not None:
+                visible = []
+                for entry, entry_uri in candidates:
+                    if permissions[entry_uri] is not None:
+                        visible.append((entry, entry_uri))
+                    elif (
+                        entry.get("info", {}).get("isDir")
+                        and self._access_decision(entry_uri, real_ctx) is AccessDecision.CONTAINER
+                    ):
+                        visible.append((dict(entry, access="container", extra={}), entry_uri))
+            elif not acl_enabled:
                 visible = candidates
             else:
-                access = await self._can_access_many(
-                    [entry_uri for _, entry_uri in candidates], real_ctx
-                )
                 if expose_resource_names:
                     denied_directories.update(
                         {
                             entry["path"].rstrip("/")
                             for entry, entry_uri in candidates
                             if entry.get("info", {}).get("isDir", False)
-                            and not access.get(entry_uri, False)
+                            and permissions[entry_uri] is None
                         }
                     )
                     visible = []
@@ -716,20 +863,24 @@ class _AccessMixin:
                             parent = parent.rsplit("/", 1)[0]
                         if blocked:
                             continue
-                        if access.get(entry_uri, False):
+                        if permissions[entry_uri] is not None:
                             visible.append((entry, entry_uri))
                         else:
                             denied_entry = dict(entry)
                             denied_entry["access"] = "denied"
                             visible.append((denied_entry, entry_uri))
                 else:
-                    visible = [item for item in candidates if access.get(item[1], False)]
+                    visible = [item for item in candidates if permissions[item[1]] is not None]
 
-            for item in visible:
+            for entry, entry_uri in visible:
                 if remaining_offset:
                     remaining_offset -= 1
                     continue
-                yield item
+                permission = permissions[entry_uri]
+                yield (
+                    dict(entry, access=permission.value) if permission is not None else entry,
+                    entry_uri,
+                )
                 yielded += 1
                 if node_limit is not None and yielded >= node_limit:
                     return
@@ -877,6 +1028,10 @@ class _AccessMixin:
     def _is_accessible(self, uri: str, ctx: RequestContext) -> bool:
         """Check whether a URI is visible/accessible under current request context."""
         parts = self._safe_uri_parts(uri)
+        if is_system_uri(uri):
+            return self._system_permission_allows(uri, ctx, AclAction.READ)
+        if ctx.data_access is not None and parts[:1] == ["user"]:
+            return ctx.data_access.decide(uri) is AccessDecision.ALLOWED
         if ctx.role == Role.ROOT:
             return True
         if is_hidden_by_actor_peer_view(uri, ctx):

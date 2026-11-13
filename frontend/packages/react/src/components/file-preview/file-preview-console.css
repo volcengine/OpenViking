@@ -1,0 +1,317 @@
+/* The console shell owns the border and background; the renderer fills it. */
+.ov-file-preview {
+  container-type: inline-size;
+  --ov-ui-file-preview-backdrop: var(
+    --ov-ui-color-preview-backdrop,
+    var(--ov-ui-preview-backdrop-default)
+  );
+  --ov-ui-file-preview-dots: radial-gradient(
+    circle,
+    var(--ov-ui-color-preview-dot, var(--ov-ui-preview-dot-default)) 0.6px,
+    transparent 0.7px
+  );
+  background: var(--ov-ui-file-preview-surface);
+  color: var(--ov-ui-file-preview-text);
+}
+.ov-file-preview__header {
+  padding: 8px;
+  border-bottom: 0;
+}
+.ov-file-preview__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 0;
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+}
+.ov-file-preview__levels--file {
+  display: flex;
+  flex: none;
+  gap: 24px;
+  min-width: 0;
+  padding: 0 16px;
+  overflow-x: auto;
+  border-bottom: 1px solid
+    var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
+}
+.ov-file-preview__levels--file .ov-file-preview__level {
+  position: relative;
+  flex: none;
+  padding: 8px 0;
+  border: 0;
+  background: transparent;
+  color: var(--ov-ui-file-preview-text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+.ov-file-preview__levels--file .ov-file-preview__level[aria-pressed='true'] {
+  color: var(--ov-ui-file-preview-accent);
+  font-weight: 500;
+}
+.ov-file-preview__levels--file
+  .ov-file-preview__level[aria-pressed='true']::after {
+  position: absolute;
+  bottom: 0;
+  left: calc(50% - 7px);
+  width: 14px;
+  height: 2px;
+  background: currentColor;
+  content: '';
+}
+.ov-file-preview__levels--file .ov-file-preview__level:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.ov-file-preview__levels--file .ov-file-preview__level:focus-visible {
+  outline: 2px solid var(--ov-ui-file-preview-focus-ring);
+  outline-offset: -2px;
+}
+.ov-file-preview .ov-file-preview__viewer {
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--ov-ui-file-preview-surface);
+  color: inherit;
+}
+/* FileViewer's fallback uses Arco buttons; keep their styling local to the viewer. */
+.ov-file-preview__viewer .ark-agentic-file-viewer__fallback > .arco-btn {
+  min-block-size: 28px;
+  padding: 4px 12px;
+  border: 1px solid var(--ov-ui-file-preview-border);
+  border-radius: 6px;
+  background: var(--ov-ui-file-preview-surface);
+  color: var(--ov-ui-file-preview-text);
+  font: inherit;
+  cursor: pointer;
+}
+.ov-file-preview__viewer .ark-agentic-file-viewer__fallback > .arco-btn:hover {
+  background: var(--ov-ui-file-preview-row-hover);
+}
+.ov-file-preview__viewer
+  .ark-agentic-file-viewer__fallback
+  > .arco-btn:focus-visible {
+  outline: 2px solid var(--ov-ui-file-preview-focus-ring);
+  outline-offset: 2px;
+}
+.ov-file-preview .ark-agentic-file-viewer-image {
+  min-height: 0;
+  overflow: hidden;
+  background: var(--ov-ui-file-preview-surface);
+}
+.ov-file-preview .ark-agentic-file-viewer-image__stage {
+  padding: 24px;
+  overflow: hidden;
+}
+.ov-file-preview .ark-agentic-file-viewer-markdown {
+  background: var(--ov-ui-file-preview-dots) 0 0 / 10px 10px
+    var(--ov-ui-file-preview-backdrop);
+  color: inherit;
+}
+
+/* Only the document surround receives dots; the pages keep their own surface. */
+.ov-file-preview [data-document-backdrop='true'] {
+  --agentic-file-viewer-internal-document-backdrop: var(
+      --ov-ui-file-preview-dots
+    )
+    0 0 / 10px 10px var(--ov-ui-file-preview-backdrop);
+}
+.ov-file-preview .ark-agentic-file-viewer-markdown__content img {
+  max-width: 100%;
+  height: auto;
+  object-fit: contain;
+}
+@media (max-width: 480px) {
+  .ov-file-preview__header {
+    flex-wrap: wrap;
+  }
+  .ov-file-preview__path-row {
+    flex-basis: 100%;
+  }
+  .ov-file-preview__header-actions {
+    margin-left: auto;
+    max-width: 100%;
+    flex-wrap: wrap;
+  }
+  .ov-file-preview .ark-agentic-file-viewer-image__stage {
+    padding: 12px;
+  }
+  .ov-file-preview .ark-agentic-file-viewer-markdown {
+    padding: 16px;
+  }
+  .ov-file-preview__footer {
+    flex-wrap: wrap;
+  }
+}
+
+.ov-file-preview__image-frame {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.ov-file-preview__image-size {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 0 2px;
+  background: var(--ov-ui-file-preview-surface);
+  color: var(--ov-ui-file-preview-text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.ov-file-preview__tab-row {
+  padding-block-start: 8px;
+}
+
+.ov-file-preview__header {
+  box-sizing: border-box;
+  min-height: 44px;
+}
+
+.ov-file-preview__toolbar,
+.ov-file-preview__edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ov-file-preview__toolbar {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.ov-file-preview__toolbar-divider {
+  width: 1px;
+  height: 10px;
+  margin-inline: 8px;
+  background: var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
+}
+
+.ov-file-preview__toolbar-button.ov-button {
+  height: 28px;
+  gap: 6px;
+  border-color: var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
+  background: var(--ov-ui-file-preview-row-hover);
+  color: var(--ov-ui-file-preview-text);
+}
+
+.ov-file-preview__switch-item {
+  height: 24px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ov-ui-file-preview-text-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.ov-file-preview__switch-item[aria-pressed='true'] {
+  background: var(--ov-ui-file-preview-surface);
+  color: var(--ov-ui-file-preview-text);
+  box-shadow: 0 0 0 1px var(--ov-ui-file-preview-border);
+  font-weight: 500;
+}
+
+.ov-file-preview__switch-item:focus-visible {
+  outline: 2px solid var(--ov-ui-file-preview-focus-ring);
+  outline-offset: -2px;
+}
+
+.ov-file-preview__edit-actions {
+  flex: none;
+}
+
+.ov-file-preview__edit-action.ov-button {
+  height: 28px;
+  border-radius: 8px;
+  padding-inline: 12px;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.ov-file-preview__edit-icon {
+  display: block;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  background: currentColor;
+  mask: var(--ov-ui-file-preview-edit-icon) center no-repeat;
+}
+
+.ov-file-preview__edit-icon--cancel {
+  --ov-ui-file-preview-edit-icon: url('../../../../icons/svg/file-preview/cancel.svg');
+}
+
+.ov-file-preview__edit-icon--save {
+  --ov-ui-file-preview-edit-icon: url('../../../../icons/svg/file-preview/save.svg');
+}
+
+.ov-file-preview__sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@container (max-width: 480px) {
+  .ov-file-preview__header {
+    flex-wrap: wrap;
+  }
+
+  .ov-file-preview__header-actions {
+    margin-inline-start: auto;
+    max-width: 100%;
+  }
+}
+
+.ov-file-preview .ark-agentic-file-viewer-code,
+.ov-file-preview__editor {
+  background: var(--ov-ui-color-bg-4, var(--ov-ui-bg-4-default));
+}
+
+.ov-file-preview__viewer--source .ark-agentic-file-viewer-code {
+  --code-bg: var(--ov-ui-color-bg-4, var(--ov-ui-bg-4-default));
+}
+
+.ov-file-preview__toolbar-button.ov-button {
+  border-radius: 6px;
+}
+
+.ov-file-preview__toolbar-button.ov-button:hover:not(:disabled) {
+  border-color: var(--ov-ui-file-preview-text-muted);
+}
+
+.ov-file-preview .ark-agentic-file-viewer-code__lines {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.ov-file-preview .ark-agentic-file-viewer-code__content {
+  flex: 1 1 auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ov-file-preview__copy-path {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.ov-file-preview__copy-path .ov-button {
+  min-inline-size: 24px;
+  min-block-size: 24px;
+}
+.ov-file-preview__copy-status {
+  font-size: 12px;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+}

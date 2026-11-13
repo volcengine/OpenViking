@@ -424,6 +424,14 @@ def test_plugin_detection_distinguishes_gateway_sources(source, plugin):
     )
 
 
+def test_plugin_detection_finds_hook_context_mid_line():
+    text = (
+        "<system-reminder>\nUserPromptSubmit hook additional context: <openviking-context>\n"
+        "Use `ov find`:\n```sh\nov find deploy\n```\n</openviking-context>\n</system-reminder>"
+    )
+    assert plugin_present({"messages": [{"role": "user", "content": text}]}, {})
+
+
 async def test_scope_fork_and_policy_snapshot(setup_kernel, credential, policy):
     kernel, _, viking, _ = setup_kernel
     body = {"messages": [{"role": "user", "content": "How do I deploy?"}]}

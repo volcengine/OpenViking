@@ -1,0 +1,353 @@
+.ov-file-browser-acl {
+  --ov-ui-modal-width: 520px;
+}
+.ov-file-browser-acl .ov-modal__body {
+  box-sizing: border-box;
+  padding: 24px;
+}
+.ov-file-browser-acl__title {
+  margin: 0 32px 8px 0;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 28px;
+}
+.ov-file-browser-acl__uri {
+  margin: 0 0 16px;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 20px;
+}
+.ov-file-browser-acl__status {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  font-size: 12px;
+  line-height: 20px;
+}
+.ov-file-browser-acl__status:empty {
+  display: none;
+}
+.ov-file-browser-acl__restricted {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+  padding: 12px;
+  border-radius: 6px;
+  background: var(
+    --ov-ui-color-warning-light,
+    var(--ov-ui-warning-light-default)
+  );
+  font-size: 13px;
+  line-height: 20px;
+}
+.ov-file-browser-acl__restricted p {
+  flex: 1;
+  margin: 0;
+}
+.ov-file-browser-acl .ov-modal__body button:not(.ov-button),
+.ov-file-browser-acl__tag-anchor button:not(.ov-button) {
+  min-height: 28px;
+  border: 1px solid var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+  border-radius: 6px;
+  padding: 3px 10px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  cursor: pointer;
+}
+.ov-file-browser-acl .ov-modal__body button:not(.ov-button):disabled {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  cursor: not-allowed;
+}
+.ov-file-browser-acl
+  .ov-modal__body
+  button:not(.ov-button):not(:disabled):hover,
+.ov-file-browser-acl__tag-anchor button:not(.ov-button):hover {
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+}
+.ov-file-browser-acl
+  .ov-modal__body
+  :is(button:not(.ov-button), input:not(.ov-input__element), h2):focus-visible,
+.ov-file-browser-acl__manage:focus-visible,
+.ov-file-browser-acl__tag-anchor button:not(.ov-button):focus-visible {
+  outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  outline-offset: 2px;
+}
+.ov-file-browser-acl__add {
+  margin-top: 20px;
+}
+.ov-file-browser-acl__add > label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+}
+.ov-file-browser-acl__picker {
+  border: 1px solid var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 8px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+}
+.ov-file-browser-acl__types {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.ov-file-browser-acl__types button:not(.ov-button)[aria-pressed='true'] {
+  border-color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  background: var(
+    --ov-ui-color-primary-light,
+    var(--ov-ui-primary-light-default)
+  );
+}
+.ov-file-browser-acl__candidates {
+  padding: 4px;
+}
+.ov-file-browser-acl__candidate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+}
+.ov-file-browser-acl__candidate > label {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  font-size: 13px;
+  cursor: pointer;
+}
+.ov-file-browser-acl__candidate > label > span:last-child {
+  overflow-wrap: anywhere;
+}
+.ov-file-browser-acl__candidate .ov-checkbox__text {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ov-file-browser-acl__buttons {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.ov-file-browser-acl__entries {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 20px 0 0;
+  padding: 0 0 120px;
+  list-style: none;
+}
+.ov-file-browser-acl__entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 40px;
+}
+.ov-file-browser-acl__avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(
+    --ov-ui-color-primary-light,
+    var(--ov-ui-primary-light-default)
+  );
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  font-size: 12px;
+}
+.ov-file-browser-acl__avatar[data-group] {
+  border-radius: 6px;
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+}
+.ov-file-browser-acl__identity {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+.ov-file-browser-acl__name {
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  font-size: 13px;
+  line-height: 22px;
+  overflow-wrap: anywhere;
+}
+.ov-file-browser-acl__source {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+.ov-file-browser-acl__fixed {
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+  padding: 0 10px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.ov-file-browser-acl__menu-anchor {
+  position: relative;
+  flex: 0 0 auto;
+}
+.ov-file-browser-acl
+  .ov-modal__body
+  button:not(.ov-button).ov-file-browser-acl__level {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-color: transparent;
+  white-space: nowrap;
+}
+.ov-file-browser-acl__menu {
+  position: absolute;
+  z-index: 2;
+  top: 100%;
+  right: 0;
+  min-width: 136px;
+  border: 1px solid var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+  border-radius: 8px;
+  padding: 4px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  box-shadow: 0 4px 16px
+    color-mix(
+      in srgb,
+      var(--ov-ui-color-shadow, var(--ov-ui-shadow-default)) 12%,
+      transparent
+    );
+}
+.ov-file-browser-acl__menu button:not(.ov-button) {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 8px;
+  border: 0;
+  border-radius: 4px;
+  text-align: left;
+  min-height: 32px;
+}
+.ov-file-browser-acl__check {
+  display: flex;
+  width: 12px;
+}
+.ov-file-browser-acl__menu button:not(.ov-button).ov-file-browser-acl__remove {
+  margin-top: 4px;
+  border-top: 1px solid
+    var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+  border-radius: 0;
+  color: var(--ov-ui-color-status-error, var(--ov-ui-status-error-default));
+}
+.ov-file-browser-acl__more {
+  margin-top: 8px;
+}
+.ov-file-browser-acl__hint {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  font-size: 13px;
+  line-height: 20px;
+}
+.ov-file-browser-acl__failure {
+  color: var(--ov-ui-color-status-error, var(--ov-ui-status-error-default));
+  font-size: 13px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+.ov-file-browser-acl__failure p {
+  margin: 8px 0;
+}
+.ov-file-browser-acl__confirmation {
+  margin-top: 24px;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  font-size: 13px;
+  line-height: 22px;
+}
+.ov-file-browser-acl__confirmation h3 {
+  font-size: 16px;
+  font-weight: 500;
+}
+.ov-file-browser-acl__confirmation li {
+  overflow-wrap: anywhere;
+}
+.ov-file-browser-acl__tag-anchor {
+  position: relative;
+  font-weight: 400;
+}
+.ov-file-browser-acl__tag-anchor .ov-file-browser-acl__tag {
+  min-height: 24px;
+  padding: 1px 6px;
+  border-color: transparent;
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+  font-size: 12px;
+  white-space: nowrap;
+}
+.ov-file-browser-acl__tag-detail {
+  position: absolute;
+  z-index: 3;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(244px, calc(100vw - 48px));
+  box-sizing: border-box;
+  padding: 12px 16px;
+  border: 1px solid var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+  border-radius: 8px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  box-shadow: 0 4px 16px
+    color-mix(
+      in srgb,
+      var(--ov-ui-color-shadow, var(--ov-ui-shadow-default)) 12%,
+      transparent
+    );
+  font-size: 13px;
+  line-height: 20px;
+}
+.ov-file-browser-acl__tag-detail p {
+  margin: 0 0 8px;
+}
+@media (max-width: 480px) {
+  .ov-file-browser-acl .ov-modal__body {
+    padding: 20px 16px;
+  }
+}
+@media (pointer: coarse) {
+  .ov-file-browser-acl .ov-modal__body button:not(.ov-button),
+  .ov-file-browser-acl__tag-anchor button:not(.ov-button) {
+    min-height: 44px;
+  }
+}
+
+.ov-file-browser-acl__lookup-error {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ov-ui-color-status-error, var(--ov-ui-status-error-default));
+  font-size: 12px;
+  font-weight: 400;
+}
+.ov-file-browser-acl__lookup-error button:not(.ov-button) {
+  border: 0;
+  padding: 2px 4px;
+  min-height: 24px;
+  background: transparent;
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  font: inherit;
+  cursor: pointer;
+}
+.ov-file-browser-acl__lookup-error button:not(.ov-button):focus-visible {
+  outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  outline-offset: 2px;
+}

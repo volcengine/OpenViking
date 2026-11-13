@@ -1,12 +1,10 @@
+import studioI18n from '#/i18n/core'
 // @vitest-environment jsdom
 
-import { createInstance } from 'i18next'
-import { I18nextProvider } from 'react-i18next'
-import type { ComponentType } from 'react'
-import type * as TanStackRouter from '@tanstack/react-router'
 import en from '#/i18n/locales/en/workspace'
 import zh from '#/i18n/locales/zh-CN/workspace'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type * as TanStackRouter from '@tanstack/react-router'
 import {
   cleanup,
   render,
@@ -15,6 +13,9 @@ import {
   within,
 } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { createInstance } from 'i18next'
+import type { ComponentType } from 'react'
+import { I18nextProvider } from 'react-i18next'
 import {
   afterEach,
   beforeAll,
@@ -25,11 +26,11 @@ import {
   vi,
 } from 'vitest'
 
-import { toast } from 'sonner'
+import { commitSession } from '#/features/workbench/sessions/lib/api'
+import type { TaskRecord } from '#/features/workbench/tasks/lib/task-record'
 import { postResources } from '#/gen/ov-client'
-import { commitSession } from '#/lib/sessions/api'
-import { Route } from './route'
-import type { TaskRecord } from './-lib/task-record'
+import { Route } from '#/routes/tasks/route'
+import { toast } from 'sonner'
 
 const clientMocks = vi.hoisted(() => ({ getTasks: vi.fn() }))
 
@@ -39,24 +40,26 @@ vi.mock('@tanstack/react-router', async (importOriginal) => ({
   useNavigate: () => navigationMocks.navigate,
 }))
 
-vi.mock('#/lib/ov-client', () => ({
+vi.mock('#/shared/api/ov-client/index', () => ({
   getOvResult: async (value: unknown) => value,
   getTasks: clientMocks.getTasks,
   ovClient: { instance: { post: vi.fn() } },
 }))
 
 vi.mock('#/gen/ov-client', () => ({ postResources: vi.fn() }))
-vi.mock('#/lib/sessions/api', () => ({ commitSession: vi.fn() }))
+vi.mock('#/features/workbench/sessions/lib/api', () => ({
+  commitSession: vi.fn(),
+}))
 vi.mock('sonner', () => ({
   toast: { info: vi.fn(), success: vi.fn(), error: vi.fn() },
 }))
-vi.mock('#/hooks/use-app-connection', () => ({
+vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({ identityScopeKey: 'test/test' }),
 }))
-vi.mock('#/routes/monitoring/-components/queue-status-card', () => ({
+vi.mock('#/features/workbench/monitoring/components/queue-status-card', () => ({
   QueueStatusCard: () => null,
 }))
-vi.mock('#/routes/tasks/-components/task-detail-sheet', () => ({
+vi.mock('#/features/workbench/tasks/components/task-detail-sheet', () => ({
   TaskDetailSheet: () => null,
 }))
 
@@ -300,7 +303,10 @@ describe('session commit re-trigger feedback', () => {
     const user = await renderPage()
     await user.click(await screen.findByTitle('Re-trigger Task'))
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith('Commit failed'),
+      expect(toast.error).toHaveBeenCalledWith(
+        studioI18n.t('studio:errors.requestFailed'),
+        { description: 'Commit failed' },
+      ),
     )
     expect(toast.info).not.toHaveBeenCalled()
     expect(toast.success).not.toHaveBeenCalled()

@@ -119,14 +119,18 @@ async def restore_feishu_request(
 def validate_oauth_ref(
     value: Any, ov_user_id: str, *, platform: str = "feishu_doc"
 ) -> Dict[str, str]:
-    keys = {"account_id", "user_id", "ov_user_id", "platform", "type"}
-    if (
-        not isinstance(value, dict)
-        or set(value) != keys
-        or any(not isinstance(value[key], str) or not value[key].strip() for key in keys)
-    ):
+    legacy_keys = {"account_id", "user_id", "ov_user_id", "platform", "type"}
+    scoped_keys = legacy_keys | {"resource_id", "openviking_account_id"}
+    if not isinstance(value, dict) or set(value) not in (legacy_keys, scoped_keys):
         raise InvalidArgumentError("args.openviking_oauth_ref contains an invalid OAuth reference.")
-    ref = {key: value[key].strip() for key in keys}
+    ref: Dict[str, str] = {}
+    for key in value:
+        field = value[key]
+        if not isinstance(field, str) or not field.strip():
+            raise InvalidArgumentError(
+                "args.openviking_oauth_ref contains an invalid OAuth reference."
+            )
+        ref[key] = field.strip()
     if ref["type"] != "oauth" or ref["platform"] != platform:
         raise InvalidArgumentError(f"This import requires a {platform} OAuth reference.")
     if ref["ov_user_id"] != ov_user_id:
@@ -162,16 +166,26 @@ def extract_credential_reference(
 def validate_credential_reference(value: Any) -> Dict[str, Any]:
     """Validate the OpenViking-managed credential reference shape.
 
-    ``binding_version`` is optional (DingTalk sends a positive integer; Feishu
-    omits it). All other fields are non-empty strings and ``type`` is ``oauth``.
-    The reference is forwarded verbatim to the unified resolver, so the kernel
-    never inspects platform-specific credential fields here.
+    DingTalk references include ``ov_account_id`` and a positive
+    ``binding_version``. Historical DingTalk references use the default data
+    space. Feishu references may omit both fields.
     """
     if not isinstance(value, dict):
-        raise InvalidArgumentError("connector_auth_config contains an invalid credential reference.")
-    extra = set(value) - set(_CREDENTIAL_REF_REQUIRED_KEYS) - {"binding_version"}
+        raise InvalidArgumentError(
+            "connector_auth_config contains an invalid credential reference."
+        )
+    extra = (
+        set(value)
+        - set(_CREDENTIAL_REF_REQUIRED_KEYS)
+        - {
+            "binding_version",
+            "ov_account_id",
+        }
+    )
     if extra or any(key not in value for key in _CREDENTIAL_REF_REQUIRED_KEYS):
-        raise InvalidArgumentError("connector_auth_config contains an invalid credential reference.")
+        raise InvalidArgumentError(
+            "connector_auth_config contains an invalid credential reference."
+        )
     reference: Dict[str, Any] = {}
     for key in _CREDENTIAL_REF_REQUIRED_KEYS:
         field = value[key]
@@ -181,12 +195,27 @@ def validate_credential_reference(value: Any) -> Dict[str, Any]:
             )
         reference[key] = field.strip()
     if reference["type"] != "oauth":
-        raise InvalidArgumentError("connector_auth_config credential reference must be an OAuth type.")
+        raise InvalidArgumentError(
+            "connector_auth_config credential reference must be an OAuth type."
+        )
+    if "ov_account_id" in value:
+        ov_account_id = value["ov_account_id"]
+        if not isinstance(ov_account_id, str) or not ov_account_id.strip():
+            raise InvalidArgumentError(
+                "connector_auth_config ov_account_id must be a non-empty string."
+            )
+        reference["ov_account_id"] = ov_account_id.strip()
+    elif reference["platform"] == "dingtalk":
+        reference["ov_account_id"] = "default"
     if "binding_version" in value:
         binding_version = value["binding_version"]
         if isinstance(binding_version, bool) or not isinstance(binding_version, int):
             raise InvalidArgumentError("connector_auth_config binding_version must be an integer.")
         reference["binding_version"] = binding_version
+    if reference["platform"] == "dingtalk" and reference.get("binding_version", 0) <= 0:
+        raise InvalidArgumentError(
+            "DingTalk credential reference requires a positive binding_version."
+        )
     return reference
 
 
@@ -200,6 +229,16 @@ async def resolve_connector_auth_config(
     ``auth_config`` for the target Connector, and the kernel forwards it
     verbatim without persisting any token or application secret.
     """
+    reference = validate_credential_reference(reference)
+    if reference["platform"] == "dingtalk":
+        if reference["ov_account_id"] != ctx.account_id:
+            raise InvalidArgumentError(
+                "Credential reference does not belong to the current OpenViking data space."
+            )
+        if reference["ov_user_id"] != ctx.user.user_id:
+            raise InvalidArgumentError(
+                "Credential reference does not belong to the current OpenViking user."
+            )
     resolve_url = credential_resolve_url()
     if not resolve_url:
         raise InvalidArgumentError(
@@ -278,7 +317,7 @@ class ExternalFeishuToken:
             raise InvalidArgumentError("External OAuth authorization requires an API key.")
         self._reference = reference
         self._api_key = api_key
-        self._client = ConnectorClient("", "", account_id=reference["account_id"])
+        self._client = ConnectorClient("", "", account_id=reference.get("account_id", ""))
         self._lock = Lock()
         self._credentials: Dict[str, Any] = {}
         self._valid_until = 0.0

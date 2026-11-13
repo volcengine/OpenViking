@@ -18,7 +18,10 @@ from openviking.core.namespace import (
     is_session_uri,
     user_space_fragment,
 )
+from openviking.privacy.global_policy import ensure_global_policy_file
+from openviking.server.config import UserConfigDefaults
 from openviking.server.identity import RequestContext
+from openviking.session.memory.agent_file import ensure_agent_file
 from openviking.storage.abstract_overview import AbstractOverviewFormatError, body_for_preview
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.vector_ids import vector_record_id
@@ -141,6 +144,13 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
                 "should retrieve relevant skills before executing tasks, select most appropriate skill to execute.",
             ),
             DirectoryDefinition(
+                path="tools",
+                abstract="User-private tool configuration for agent capabilities.",
+                overview="Stores tool integration definitions owned by the current User, "
+                "such as MCP server tool catalogs. Shared tools remain under "
+                "viking://agent/tools.",
+            ),
+            DirectoryDefinition(
                 path="sessions",
                 abstract="User session registry. Stores conversation state, live messages, tool outputs, and session history owned by the current User.",
                 overview="Use this directory to inspect or migrate user-owned session records. Session entries are created lazily when sessions are started.",
@@ -197,10 +207,14 @@ class DirectoryInitializer:
         vikingdb: "VikingDBManager",
         viking_fs: Optional["VikingFS"] = None,
         system_asset_synchronizer: Optional["SystemAssetSynchronizer"] = None,
+        user_config_defaults: Optional[UserConfigDefaults] = None,
     ):
         self.vikingdb = vikingdb
         self._viking_fs = viking_fs
         self._system_asset_synchronizer = system_asset_synchronizer
+        self.user_config_defaults = (
+            user_config_defaults if user_config_defaults is not None else UserConfigDefaults()
+        )
 
     def _get_viking_fs(self) -> "VikingFS":
         if self._viking_fs is not None:
@@ -226,6 +240,13 @@ class DirectoryInitializer:
             (*account_children, *user_children),
             lease_ref=lease_ref,
         )
+        await ensure_agent_file(
+            self._get_viking_fs(), replace(ctx, actor_peer_id=None), lease_ref=lease_ref
+        )
+        if self.user_config_defaults.preset_global_policy:
+            await ensure_global_policy_file(
+                self._get_viking_fs(), replace(ctx, actor_peer_id=None), lease_ref=lease_ref
+            )
         user_count = sum(target.scope == "user" for target in created)
         return len(created) - user_count, user_count
 
@@ -241,7 +262,9 @@ class DirectoryInitializer:
         roots, children = self._account_directory_targets(ctx)
         return len(await self._initialize_directory_trees(roots, children))
 
-    async def initialize_user_directories(self, ctx: RequestContext) -> int:
+    async def initialize_user_directories(
+        self, ctx: RequestContext, *, lease_ref: Any = None
+    ) -> int:
         """Initialize the current user's root and first-level entry directories.
 
         Concrete leaf namespaces under entries such as ``memories`` or ``sessions``
@@ -251,7 +274,17 @@ class DirectoryInitializer:
         if "user" not in PRESET_DIRECTORIES:
             return 0
         user_root, user_children = self._user_directory_targets(ctx)
-        return len(await self._initialize_directory_trees((user_root,), user_children))
+        created = await self._initialize_directory_trees(
+            (user_root,), user_children, lease_ref=lease_ref
+        )
+        await ensure_agent_file(
+            self._get_viking_fs(), replace(ctx, actor_peer_id=None), lease_ref=lease_ref
+        )
+        if self.user_config_defaults.preset_global_policy:
+            await ensure_global_policy_file(
+                self._get_viking_fs(), replace(ctx, actor_peer_id=None), lease_ref=lease_ref
+            )
+        return len(created)
 
     async def _initialize_directory_trees(
         self,
@@ -366,16 +399,24 @@ class DirectoryInitializer:
         viking_fs = self._get_viking_fs()
         contents = {}
         missing = {}
+        defaults = (
+            ("abstract", target.definition.abstract),
+            ("overview", target.definition.overview),
+        )
+        results = await asyncio.gather(
+            *(
+                viking_fs.read_file(f"{target.uri}/.{name}.md", ctx=target.ctx)
+                for name, _ in defaults
+            ),
+            return_exceptions=True,
+        )
         try:
-            for name, default in (
-                ("abstract", target.definition.abstract),
-                ("overview", target.definition.overview),
-            ):
-                try:
-                    raw = await viking_fs.read_file(f"{target.uri}/.{name}.md", ctx=target.ctx)
-                except (FileNotFoundError, NotFoundError):
+            for (name, default), raw in zip(defaults, results, strict=True):
+                if isinstance(raw, (FileNotFoundError, NotFoundError)):
                     contents[name] = default
                     missing[name] = contents[name]
+                elif isinstance(raw, BaseException):
+                    raise raw
                 else:
                     contents[name] = body_for_preview(raw)
         except AbstractOverviewFormatError as exc:

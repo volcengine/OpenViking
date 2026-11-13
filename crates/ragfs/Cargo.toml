@@ -45,6 +45,7 @@ async-trait = "0.1"
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_yaml = "0.9"
 
 # Logging
 tracing = "0.1"
@@ -88,10 +89,12 @@ bytes = "1.5"
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
-fred = { version = "10.1.0", default-features = false, features = ["i-keys", "i-lists", "i-scripts", "i-server", "i-sets", "sentinel-auth", "sha-1", "vendored-openssl"], optional = true }
+postgres = { version = "0.19", optional = true }
+postgres-native-tls = { version = "0.5", optional = true }
+fred = { version = "10.1.0", default-features = false, features = ["i-hashes", "i-keys", "i-lists", "i-scripts", "i-server", "i-sets", "i-sorted-sets", "sentinel-auth", "sha-1", "vendored-openssl"], optional = true }
 libloading = { version = "0.8", optional = true }
 native-tls = { version = "0.2", optional = true }
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "mysql"], optional = true }
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "mysql"] }
 
 # AWS S3
 aws-config = { version = "1", features = ["behavior-version-latest"], optional = true }
@@ -145,4 +148,5 @@ default = []
 cache = ["dep:fred", "dep:libloading", "dep:native-tls"]
 test-utils = []
 s3 = ["aws-sdk-s3", "aws-config", "aws-types"]
-full = ["s3", "cache"]
+postgres = ["dep:postgres", "dep:postgres-native-tls", "dep:native-tls"]
+full = ["s3", "cache", "postgres"]

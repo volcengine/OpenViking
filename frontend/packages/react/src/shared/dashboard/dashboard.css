@@ -1,0 +1,32 @@
+.ov-dashboard-state {
+  display: flex;
+  min-height: 120px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  padding: 16px;
+  text-align: center;
+  color: var(
+    --ov-ui-color-dashboard-muted,
+    var(--ov-ui-dashboard-muted-default)
+  );
+  font-size: 13px;
+}
+.ov-dashboard-state p {
+  margin: 4px 0;
+  overflow-wrap: anywhere;
+}
+.ov-wiki-dashboard__body {
+  position: relative;
+  isolation: isolate;
+}
+.ov-wiki-dashboard__body::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  opacity: 0.08;
+  background-image: url('../../../../icons/dashboard-background.png');
+  background-size: 20px 20px;
+  pointer-events: none;
+  z-index: -1;
+}

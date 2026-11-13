@@ -40,7 +40,7 @@ it does not guarantee complete grouping of every matching record or transitive l
 ## Revision Boundaries
 
 Start from input_handle with input_type. Completed stages and their outputs remain
-fixed. Do not refer to consumed datasets or reuse completed_names.
+fixed. Do not refer to consumed datasets, reuse completed_names or repeat completed_ops.
 Changing instructions does not restore missing information or regroup existing groups.
 Keep output_format and distinguish meanings unchanged. Do not weaken task requirements
 or erase execution failures. When revisions_left is zero, return continue.
@@ -178,8 +178,22 @@ class StageOutputReader(Tool):
         )
 
 
-async def run(runtime, node, outputs, remaining_plan, completed_names, revisions, prompt, context):
-    """Return a validated revision or None; cancellation propagates."""
+async def run(
+    runtime,
+    node,
+    outputs,
+    remaining_plan,
+    completed_names,
+    revisions,
+    prompt,
+    context,
+    *,
+    completed_ops,
+):
+    """Validate revisions against completed names/operators; return None on rejection or continuation.
+
+    Completed outputs stay fixed and cancellation propagates.
+    """
     record = {}
     accepted = None
     try:
@@ -198,6 +212,7 @@ async def run(runtime, node, outputs, remaining_plan, completed_names, revisions
             "input_handle": node.name,
             "input_type": output_type,
             "completed_names": sorted(completed_names),
+            "completed_ops": sorted(completed_ops),
             "current": {
                 "handle": node.name,
                 "type": output_type,
@@ -235,7 +250,7 @@ async def run(runtime, node, outputs, remaining_plan, completed_names, revisions
                     input_handle=node.name,
                     input_type=output_type,
                     completed_names=completed_names,
-                    input_against_target=node.against_target,
+                    completed_ops=completed_ops,
                 )
                 accepted = (decision, nodes)
 

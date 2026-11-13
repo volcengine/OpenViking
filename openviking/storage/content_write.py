@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import os
 import sys
 from collections import defaultdict
@@ -35,6 +36,7 @@ from openviking.resource.processing_mode import (
 )
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext, Role
+from openviking.service.task_domain import collect_queue_work_errors
 from openviking.service.task_tracker import (
     TaskStatus,
     get_task_tracker,
@@ -101,7 +103,11 @@ from openviking.utils.embedding_utils import vectorize_directory_meta
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.path_safety import normalize_storage_target_uri, validate_safe_viking_uri_path
 from openviking.utils.summarizer import FileRefreshRequest, Summarizer
-from openviking.utils.tags import merge_search_tags, normalize_search_tags
+from openviking.utils.tags import (
+    merge_search_tags,
+    normalize_search_tag,
+    normalize_search_tags,
+)
 from openviking_cli.exceptions import (
     ConflictError,
     DeadlineExceededError,
@@ -329,34 +335,39 @@ class ContentWriteCoordinator:
                     user_id=ctx.user.user_id,
                     resource_id=uri,
                     task_id=task_id,
+                    meta={"mode": mode},
                 )
             if task is None:
                 raise RuntimeError("Content write Task was not created")
             return task
 
-        try:
-            result = await self._write(
-                uri=uri,
-                content=content,
-                ctx=ctx,
-                mode=mode,
-                wait=wait,
-                processing_mode=processing_mode,
-                tags=tags,
-                tag_mode=tag_mode,
-                acl=acl,
-                resolve_conflicts=resolve_conflicts,
-                root_operation="content_write",
-                root_task_factory=create_root_task,
-            )
-        except BaseException as exc:
-            if task_id is not None and not _root_owns_failure(exc):
-                await self._fail_content_write_task(
-                    task.task_id if task is not None else task_id, exc, ctx=ctx
+        from openviking.observability.reporting.facts import defer_file_changes
+
+        with defer_file_changes() as pending_file_changes:
+            try:
+                result = await self._write(
+                    uri=uri,
+                    content=content,
+                    ctx=ctx,
+                    mode=mode,
+                    wait=wait,
+                    processing_mode=processing_mode,
+                    tags=tags,
+                    tag_mode=tag_mode,
+                    acl=acl,
+                    resolve_conflicts=resolve_conflicts,
+                    root_operation="content_write",
+                    root_task_factory=create_root_task,
                 )
-            raise
-        if task is None:
-            raise RuntimeError("Content write completed without creating a root Task")
+            except BaseException as exc:
+                if task_id is not None and not _root_owns_failure(exc):
+                    await self._fail_content_write_task(
+                        task.task_id if task is not None else task_id, exc, ctx=ctx
+                    )
+                raise
+            if task is None:
+                raise RuntimeError("Content write completed without creating a root Task")
+            pending_file_changes.publish(task)
         return await self._return_or_wait_for_content_write_task(
             task.task_id,
             result,
@@ -401,10 +412,14 @@ class ContentWriteCoordinator:
         if terminal.status == TaskStatus.FAILED and not (
             accept_failed_result is not None and accept_failed_result(terminal_result)
         ):
+            work_errors = collect_queue_work_errors(terminal_result)
+            details: Dict[str, Any] = {"task_id": task_id}
+            if work_errors:
+                details["errors"] = work_errors
             raise OpenVikingError(
                 terminal.error or "Task processing failed",
                 code="PROCESSING_ERROR",
-                details={"task_id": task_id},
+                details=details,
             )
         if terminal.status == TaskStatus.CANCELLED:
             raise OpenVikingError(
@@ -454,6 +469,8 @@ class ContentWriteCoordinator:
                 ctx.account_id,
                 ctx.user.user_id,
                 enqueued_work=[],
+                task_type=task.task_type,
+                mode=task.meta.get("mode"),
             ):
                 return await self._enqueue_content_write_root(
                     operation=operation,
@@ -731,6 +748,7 @@ class ContentWriteCoordinator:
 
         created: list[str] = []
         updated: list[str] = []
+        unchanged: list[str] = []
         refresh_kinds: dict[str, str] = {}
         file_md5s: dict[str, str] = {}
         file_abstracts: dict[str, str] = {}
@@ -764,6 +782,26 @@ class ContentWriteCoordinator:
                 try:
                     if exists and stat.get("isDir"):
                         raise ConflictError(f"Target is a directory: {uri}")
+                    if operation["if_absent"] and exists:
+                        raise ConflictError(f"Target already exists: {uri}")
+                    expected = operation.get("expected_sha256")
+                    if expected is not None:
+                        if not exists:
+                            raise ConflictError(f"Expected content no longer exists: {uri}")
+                        current = await self._viking_fs.read_file_bytes(uri, ctx=ctx)
+                        if hashlib.sha256(current).hexdigest() != expected:
+                            raise ConflictError(f"Content revision changed: {uri}")
+                        desired = operation["content"]
+                        if isinstance(desired, str):
+                            desired = desired.encode("utf-8")
+                        if (
+                            skip_conflicts
+                            and write_mode == "replace"
+                            and current == desired
+                            and operation["ingest_options"] == IngestOptions()
+                        ):
+                            unchanged.append(uri)
+                            continue
                 except ConflictError as exc:
                     if not skip_conflicts:
                         raise
@@ -870,7 +908,7 @@ class ContentWriteCoordinator:
                     "root_uri": normalized_root,
                     "created": created,
                     "updated": updated,
-                    "unchanged": [],
+                    "unchanged": unchanged,
                     "queue_status": None,
                 }
                 if skip_conflicts:
@@ -1078,7 +1116,25 @@ class ContentWriteCoordinator:
                     ) from exc
 
             mode = raw.get("mode", "replace")
+            expected = raw.get("expected_sha256")
+            if expected is not None and (
+                not isinstance(expected, str)
+                or len(expected) != 64
+                or any(c not in "0123456789abcdef" for c in expected)
+            ):
+                raise InvalidArgumentError("expected_sha256 must be a lowercase SHA-256 digest")
             self._validate_batch_mode(mode)
+            if_absent = raw.get("if_absent", False)
+            if not isinstance(if_absent, bool):
+                raise InvalidArgumentError(f"batch-write if_absent must be a boolean: {uri}")
+            if if_absent and expected is not None:
+                raise InvalidArgumentError(
+                    f"batch-write if_absent cannot be combined with expected_sha256: {uri}"
+                )
+            if if_absent and mode == "append":
+                raise InvalidArgumentError(
+                    f"batch-write if_absent cannot be combined with append mode: {uri}"
+                )
             if has_content_base64 and mode == "append":
                 raise InvalidArgumentError(
                     f"batch-write append does not support binary content: {uri}"
@@ -1109,6 +1165,8 @@ class ContentWriteCoordinator:
                     "uri": uri,
                     "content": content,
                     "mode": mode,
+                    "expected_sha256": raw.get("expected_sha256"),
+                    "if_absent": if_absent,
                     "ingest_options": ingest_options,
                 }
             )
@@ -1398,9 +1456,12 @@ class ContentWriteCoordinator:
         self._validate_tag_mode(mode)
         normalized_uri = self._validate_uri_path(uri, field_name="uri")
         requested_mode = mode
-        normalized_tags = (
-            [] if requested_mode == "clear" else normalize_search_tags(tags, discard_invalid=True)
-        )
+        if requested_mode == "clear":
+            normalized_tags = []
+        elif requested_mode == "append":
+            normalized_tags = [normalize_search_tag(tag) for tag in tags]
+        else:
+            normalized_tags = normalize_search_tags(tags, discard_invalid=True)
         if not namespace_policy_for_uri(normalized_uri).supports_tags:
             raise InvalidArgumentError(f"tags are not supported for namespace: {normalized_uri}")
         await self._viking_fs._ensure_access(normalized_uri, ctx, action=AclAction.WRITE)

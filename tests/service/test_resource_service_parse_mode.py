@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from openviking.resource.watch_manager import WatchManager, WatchTask
-from openviking.resource.watch_scheduler import WatchScheduler
+from openviking.resource.watch_manager import WatchManager
+from openviking.resource.watch_types import WatchRunResult
 from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
@@ -41,11 +41,6 @@ class _ResourceProcessor:
         return {"status": "success"}
 
 
-class _DiscardedBackgroundTask:
-    def add_done_callback(self, callback):
-        callback(self)
-
-
 @pytest.fixture
 def ctx() -> RequestContext:
     return RequestContext(
@@ -55,22 +50,8 @@ def ctx() -> RequestContext:
 
 
 @pytest.fixture
-def service(monkeypatch: pytest.MonkeyPatch) -> ResourceService:
-    tracker = SimpleNamespace(
-        create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
-        fail=AsyncMock(),
-    )
-    monkeypatch.setattr(
-        "openviking.service.task_tracker.get_task_tracker",
-        lambda: tracker,
-    )
+def service(monkeypatch: pytest.MonkeyPatch, watch_tracker) -> ResourceService:
     monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: False)
-
-    def discard_background(coro):
-        coro.close()
-        return _DiscardedBackgroundTask()
-
-    monkeypatch.setattr(resource_service_module.asyncio, "create_task", discard_background)
 
     instance = ResourceService(
         vikingdb=object(),
@@ -79,11 +60,19 @@ def service(monkeypatch: pytest.MonkeyPatch) -> ResourceService:
         skill_processor=object(),
     )
     monkeypatch.setattr(instance._connector, "should_delegate", lambda *_args, **_kwargs: False)
-    monkeypatch.setattr(
-        instance,
-        "_enqueue_add_resource_job",
-        AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
-    )
+
+    async def enqueue(msg, **kwargs):
+        task = await watch_tracker.create(
+            "add_resource",
+            task_id=msg.task_id,
+            resource_id=msg.root_uri,
+            account_id=msg.account_id,
+            user_id=msg.user_id,
+        )
+        await kwargs["on_task_created"](task)
+        return task
+
+    monkeypatch.setattr(instance, "_enqueue_add_resource_job", AsyncMock(side_effect=enqueue))
     monkeypatch.setattr(
         instance,
         "_plan_source_job_target",
@@ -93,41 +82,14 @@ def service(monkeypatch: pytest.MonkeyPatch) -> ResourceService:
 
 
 @pytest.mark.asyncio
-async def test_no_split_is_forwarded_and_persisted_for_watch_replay(
-    service: ResourceService,
-    ctx: RequestContext,
-):
-    watch_manager = SimpleNamespace(
-        create_task=AsyncMock(return_value=SimpleNamespace(task_id="watch-1")),
-    )
-    scheduler = SimpleNamespace(watch_manager=watch_manager)
-    service._watch_scheduler = scheduler
-
-    await service.add_resource(
-        path="/test/path",
-        ctx=ctx,
-        to="viking://resources/no_split_watch",
-        watch_interval=30.0,
-        args={"parse_mode": "no_split"},
-    )
-
-    processor = service._resource_processor
-    assert processor.calls[-1]["parse_mode"] == "no_split"
-    assert watch_manager.create_task.await_args.kwargs["processor_kwargs"]["parse_mode"] == (
-        "no_split"
-    )
-
-
-@pytest.mark.asyncio
 async def test_no_split_watch_replay_preserves_auto_bound_file_target(
+    watch_store,
+    watch_vfs,
     service: ResourceService,
     ctx: RequestContext,
 ):
-    watch_manager = WatchManager(viking_fs=None)
-    await watch_manager.initialize()
-    scheduler = WatchScheduler(resource_service=service, check_interval=1)
-    scheduler._watch_manager = watch_manager
-    service._watch_scheduler = scheduler
+    watch_manager = WatchManager(watch_store, viking_fs=watch_vfs, resource_service=service)
+    service._watch_manager = watch_manager
     service._plan_source_job_target = AsyncMock(
         side_effect=lambda **kwargs: (
             "viking://resources/test",
@@ -143,16 +105,10 @@ async def test_no_split_watch_replay_preserves_auto_bound_file_target(
         watch_interval=30.0,
         args={"parse_mode": "no_split"},
     )
-    assert "root_uri" not in result
+    assert result["root_uri"] == "viking://resources/test"
     message = service._enqueue_add_resource_job.await_args.args[0]
-    assert message.defer_target_resolution is True
-    await service.execute_add_resource_job(
-        message,
-        ctx=ctx,
-        resource_lock=None,
-        stage_callback=AsyncMock(),
-        task_auth={},
-    )
+    assert message.defer_target_resolution is False
+    assert message.skip_watch_management and message.watch_task_id
 
     tasks = await watch_manager.get_all_tasks(
         account_id=ctx.account_id,
@@ -163,9 +119,15 @@ async def test_no_split_watch_replay_preserves_auto_bound_file_target(
     task = tasks[0]
     assert task.to_uri == "viking://resources/test"
     assert task.to_is_directory is False
-    task = WatchTask.from_dict(task.to_storage_dict())
+    assert task.processor_kwargs["parse_mode"] == "no_split"
+    assert service._resource_processor.calls[-1]["parse_mode"] == "no_split"
 
-    await scheduler._execute_task(task)
+    first_run = await watch_store.get_state(task.task_id)
+    await watch_manager.finish_run(
+        task.task_id, first_run.current_run_id, WatchRunResult(status="completed")
+    )
+    await watch_vfs.write_file(task.to_uri, "content", ctx=ctx)
+    assert await watch_manager.trigger(task.task_id)
 
     replay_message = service._enqueue_add_resource_job.await_args.args[0]
     assert replay_message.root_uri == "viking://resources/test"
@@ -201,13 +163,12 @@ async def test_no_split_defers_initial_root_when_parent_targeted(
 
 @pytest.mark.asyncio
 async def test_no_split_watch_persists_auto_bound_multi_artifact_directory(
+    watch_manager,
     service: ResourceService,
     ctx: RequestContext,
 ):
     service._resource_processor.root_is_file = False
-    watch_manager = WatchManager(viking_fs=None)
-    await watch_manager.initialize()
-    service._watch_scheduler = SimpleNamespace(watch_manager=watch_manager)
+    service._watch_manager = watch_manager
 
     await service.add_resource(
         path="https://example.com/guide.md",

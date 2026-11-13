@@ -372,7 +372,11 @@ class AddResourceProcessor(DequeueHandlerBase):
                     reason=msg.reason,
                     source_name=msg.source_name,
                 )
-                await self._record_watch_execution(msg, "completed", result=result)
+                checkpoint = self._resource_service._initial_source_checkpoint(
+                    result.get("meta"), instruction=msg.instruction
+                )
+                if checkpoint is not None and result.get("import_complete") is not False:
+                    result["source_checkpoint"] = checkpoint
                 await tracker.complete(
                     msg.task_id,
                     result,
@@ -380,6 +384,7 @@ class AddResourceProcessor(DequeueHandlerBase):
                     user_id=ctx.user.user_id,
                     resource_id=result.get("root_uri"),
                 )
+                await self._record_watch_execution(msg, "completed")
                 terminal = True
                 return ProcessResult.success()
             except asyncio.CancelledError:
@@ -418,11 +423,6 @@ class AddResourceProcessor(DequeueHandlerBase):
                     current_stage,
                     exc,
                 )
-                await self._record_watch_execution(
-                    msg,
-                    "failed",
-                    str(exc) or type(exc).__name__,
-                )
                 failure_result = (
                     {"code": exc.code} if isinstance(exc, OpenVikingError) and exc.code else {}
                 )
@@ -434,6 +434,11 @@ class AddResourceProcessor(DequeueHandlerBase):
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
                     result=failure_result or None,
+                )
+                await self._record_watch_execution(
+                    msg,
+                    "failed",
+                    str(exc) or type(exc).__name__,
                 )
                 terminal = True
                 return ProcessResult.failed(str(exc))

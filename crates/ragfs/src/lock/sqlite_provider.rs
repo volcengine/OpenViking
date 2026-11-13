@@ -7,6 +7,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
+use super::codec::LockTokenCodec;
 use super::path::validate_normalized_logical_path as validate_path;
 use super::provider::{
     AcquisitionChange, AtomicAcquisition, AtomicAcquisitionResult, PathLockHandleMode,
@@ -81,44 +82,57 @@ fn descendant_bounds(path: &str) -> (String, String) {
 }
 
 fn decode_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LockToken> {
-    let time: String = row.get(1)?;
-    let kind: String = row.get(2)?;
+    decode_columns(row, 0)
+}
+
+/// Decode `owner, time_ns, kind, holders` starting at column `at`.
+fn decode_columns(row: &rusqlite::Row<'_>, at: usize) -> rusqlite::Result<LockToken> {
+    if let Ok(raw) = row.get::<_, String>(at + 3) {
+        if !raw.is_empty() {
+            return LockTokenCodec::decode(&raw).map_err(|_| rusqlite::Error::InvalidQuery);
+        }
+    }
+    let time: String = row.get(at + 1)?;
+    let kind: String = row.get(at + 2)?;
     let invalid = || rusqlite::Error::InvalidQuery;
     Ok(LockToken {
-        owner_id: row.get(0)?,
+        owner_id: row.get(at)?,
         time_ns: time.parse().map_err(|_| invalid())?,
         lock_type: match kind.as_str() {
             "E" => PathLockKind::Exact,
             "T" => PathLockKind::Tree,
             _ => return Err(invalid()),
         },
+        holders: Vec::new(),
     })
 }
 
 fn read(conn: &Connection, namespace: &str, path: &str) -> PathLockResult<Option<LockToken>> {
-    conn.query_row(
-        "SELECT owner, time_ns, kind FROM pathlock_tokens WHERE namespace=?1 AND path=?2",
-        params![namespace, path],
-        decode_row,
+    conn.prepare_cached(
+        "SELECT owner, time_ns, kind, holders FROM pathlock_tokens WHERE namespace=?1 AND path=?2",
     )
-    .optional()
+    .and_then(|mut stmt| {
+        stmt.query_row(params![namespace, path], decode_row)
+            .optional()
+    })
     .map_err(db_error)
 }
 
 fn write(conn: &Connection, namespace: &str, path: &str, token: &LockToken) -> PathLockResult<()> {
-    conn.execute(
-        "INSERT INTO pathlock_tokens(namespace, path, owner, time_ns, kind)
-         VALUES (?1,?2,?3,?4,?5)
+    conn.prepare_cached(
+        "INSERT INTO pathlock_tokens(namespace, path, owner, time_ns, kind, holders)
+         VALUES (?1,?2,?3,?4,?5,?6)
          ON CONFLICT(namespace,path) DO UPDATE SET
-         owner=excluded.owner, time_ns=excluded.time_ns, kind=excluded.kind",
-        params![
+         owner=excluded.owner, time_ns=excluded.time_ns, kind=excluded.kind, holders=excluded.holders",
+    )
+    .and_then(|mut stmt| stmt.execute(params![
             namespace,
             path,
             token.owner_id,
             timestamp(token.time_ns),
-            token.lock_type.to_code().to_string()
-        ],
-    )
+            token.lock_type.to_code().to_string(),
+            if token.holders.is_empty() { String::new() } else { LockTokenCodec::encode(token) }
+        ]))
     .map_err(db_error)?;
     Ok(())
 }
@@ -146,7 +160,7 @@ impl SQLitePathLockProvider {
                     .to_string(),
             ));
         }
-        let conn = Connection::open(db_path).map_err(db_error)?;
+        let mut conn = Connection::open(db_path).map_err(db_error)?;
         // Allow concurrent process initialization.
         conn.busy_timeout(Duration::from_secs(5))
             .map_err(db_error)?;
@@ -166,6 +180,27 @@ impl SQLitePathLockProvider {
              CREATE INDEX IF NOT EXISTS pathlock_expiry ON pathlock_tokens(namespace,time_ns);",
         )
         .map_err(db_error)?;
+        let migration = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error)?;
+        let has_holders = migration
+            .prepare("PRAGMA table_info(pathlock_tokens)")
+            .map_err(db_error)?
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?
+            .iter()
+            .any(|name| name == "holders");
+        if !has_holders {
+            migration
+                .execute(
+                    "ALTER TABLE pathlock_tokens ADD COLUMN holders TEXT NOT NULL DEFAULT ''",
+                    [],
+                )
+                .map_err(db_error)?;
+        }
+        migration.commit().map_err(db_error)?;
         conn.busy_timeout(SQLITE_BUSY_TIMEOUT).map_err(db_error)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -204,8 +239,275 @@ impl SQLitePathLockProvider {
     }
 }
 
+/// Refresh or release one holder at every path in a single write transaction.
+#[allow(clippy::too_many_arguments)]
+fn mutate_holders(
+    conn: &mut Connection,
+    namespace: &str,
+    paths: &[String],
+    owner: &str,
+    holder: &str,
+    now: u128,
+    stale_before: u128,
+    release: bool,
+) -> PathLockResult<Vec<bool>> {
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(db_error)?;
+    let mut changed = Vec::with_capacity(paths.len());
+    for path in paths {
+        let next = read(&tx, namespace, path)?.and_then(|current| {
+            super::provider::mutate_holder_record(
+                &current,
+                owner,
+                holder,
+                now,
+                stale_before,
+                release,
+            )
+        });
+        match &next {
+            Some(token) if token.holders.is_empty() => {
+                tx.prepare_cached("DELETE FROM pathlock_tokens WHERE namespace=?1 AND path=?2")
+                    .and_then(|mut stmt| stmt.execute(params![namespace, path]))
+                    .map_err(db_error)?;
+            }
+            Some(token) => write(&tx, namespace, path, token)?,
+            None => {}
+        }
+        changed.push(next.is_some());
+    }
+    tx.commit().map_err(db_error)?;
+    Ok(changed)
+}
+
+struct TxStore<'a> {
+    tx: &'a rusqlite::Transaction<'a>,
+    namespace: &'a str,
+}
+
+impl super::provider::HolderStore for TxStore<'_> {
+    fn get(&mut self, path: &str) -> PathLockResult<Option<LockToken>> {
+        read(self.tx, self.namespace, path)
+    }
+
+    fn remove_stale(
+        &mut self,
+        path: &str,
+        subtree: bool,
+        owner: &str,
+        stale_before: u128,
+    ) -> PathLockResult<usize> {
+        let stale_before = timestamp(stale_before);
+        let mut removed = self
+            .tx
+            .prepare_cached(
+                "DELETE FROM pathlock_tokens
+                 WHERE namespace=?1 AND path=?2 AND owner<>?3 AND time_ns<?4",
+            )
+            .and_then(|mut stmt| stmt.execute(params![self.namespace, path, owner, stale_before]))
+            .map_err(db_error)?;
+        if subtree {
+            let (lower, upper) = descendant_bounds(path);
+            removed += self
+                .tx
+                .prepare_cached(
+                    "DELETE FROM pathlock_tokens
+                     WHERE namespace=?1 AND path>=?2 AND path<?3 AND path<>?4
+                     AND owner<>?5 AND time_ns<?6",
+                )
+                .and_then(|mut stmt| {
+                    stmt.execute(params![
+                        self.namespace,
+                        lower,
+                        upper,
+                        path,
+                        owner,
+                        stale_before
+                    ])
+                })
+                .map_err(db_error)?;
+        }
+        Ok(removed)
+    }
+
+    fn live_descendant(
+        &mut self,
+        root: &str,
+        owner: &str,
+        stale_before: u128,
+    ) -> PathLockResult<Option<(String, LockToken)>> {
+        let (lower, upper) = descendant_bounds(root);
+        self.tx
+            .prepare_cached(
+                "SELECT path, owner, time_ns, kind, holders FROM pathlock_tokens
+                 WHERE namespace=?1 AND path>=?2 AND path<?3 AND path<>?4
+                 AND owner<>?5 AND time_ns>=?6 LIMIT 1",
+            )
+            .and_then(|mut stmt| {
+                stmt.query_row(
+                    params![
+                        self.namespace,
+                        lower,
+                        upper,
+                        root,
+                        owner,
+                        timestamp(stale_before)
+                    ],
+                    |row| Ok((row.get::<_, String>(0)?, decode_columns(row, 1)?)),
+                )
+                .optional()
+            })
+            .map_err(db_error)
+    }
+
+    fn put(&mut self, path: &str, token: &LockToken) -> PathLockResult<()> {
+        write(self.tx, self.namespace, path, token)
+    }
+}
+
 #[async_trait]
 impl PathLockProvider for SQLitePathLockProvider {
+    async fn try_acquire_holders_atomic(
+        &self,
+        requests: &[PathLockRequest],
+        owner: &str,
+        holder: &str,
+        now: u128,
+        stale_before: u128,
+        source: Option<&str>,
+    ) -> PathLockResult<Option<AtomicAcquisitionResult>> {
+        let requests = requests.to_vec();
+        let (owner, holder, source) = (
+            owner.to_owned(),
+            holder.to_owned(),
+            source.map(str::to_owned),
+        );
+        self.run(move |conn, namespace| {
+            let tx = conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(db_error)?;
+            // Opportunistic global cleanup is bounded; conflicting stale records
+            // are removed completely by the holder acquisition itself.
+            let cleaned = tx
+                .prepare_cached(
+                    "DELETE FROM pathlock_tokens WHERE (namespace,path) IN (
+                 SELECT namespace,path FROM pathlock_tokens
+                 WHERE namespace=?1 AND time_ns<?2 AND owner<>?3 LIMIT 256)",
+                )
+                .and_then(|mut stmt| {
+                    stmt.execute(params![namespace, timestamp(stale_before), owner])
+                })
+                .map_err(db_error)?;
+            let mut result = super::provider::acquire_holder_records(
+                &mut TxStore { tx: &tx, namespace },
+                &requests,
+                &owner,
+                &holder,
+                now,
+                stale_before,
+                source.as_deref(),
+            )?;
+            tx.commit().map_err(db_error)?;
+            result.stale_tokens_removed += cleaned;
+            Ok(Some(result))
+        })
+        .await
+    }
+
+    async fn mutate_holder(
+        &self,
+        path: &str,
+        owner: &str,
+        holder: &str,
+        now: u128,
+        stale_before: u128,
+        release: bool,
+    ) -> PathLockResult<bool> {
+        let paths = vec![path.to_owned()];
+        let (owner, holder) = (owner.to_owned(), holder.to_owned());
+        self.run(move |conn, namespace| {
+            mutate_holders(
+                conn,
+                namespace,
+                &paths,
+                &owner,
+                &holder,
+                now,
+                stale_before,
+                release,
+            )
+        })
+        .await
+        .map(|changed| changed[0])
+    }
+
+    async fn refresh_holders(
+        &self,
+        paths: &[String],
+        owner: &str,
+        holder: &str,
+        now: u128,
+        stale_before: u128,
+    ) -> Vec<PathLockResult<bool>> {
+        let (all, owner, holder) = (paths.to_vec(), owner.to_owned(), holder.to_owned());
+        let result = self
+            .run(move |conn, namespace| {
+                mutate_holders(
+                    conn,
+                    namespace,
+                    &all,
+                    &owner,
+                    &holder,
+                    now,
+                    stale_before,
+                    false,
+                )
+            })
+            .await;
+        match result {
+            Ok(changed) => changed.into_iter().map(Ok).collect(),
+            Err(error) => paths
+                .iter()
+                .map(|_| {
+                    Err(match &error {
+                        PathLockError::Busy {
+                            lock_path,
+                            operation,
+                        } => PathLockError::Busy {
+                            lock_path: lock_path.clone(),
+                            operation: operation.clone(),
+                        },
+                        error => PathLockError::Io(error.to_string()),
+                    })
+                })
+                .collect(),
+        }
+    }
+
+    async fn compare_and_remove_token(
+        &self,
+        path: &str,
+        expected: &LockToken,
+    ) -> PathLockResult<bool> {
+        let (path, expected) = (path.to_owned(), expected.clone());
+        self.run(move |conn, namespace| {
+            let tx = conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(db_error)?;
+            let matches = read(&tx, namespace, &path)?.as_ref() == Some(&expected);
+            if matches {
+                tx.execute(
+                    "DELETE FROM pathlock_tokens WHERE namespace=?1 AND path=?2",
+                    params![namespace, path],
+                )
+                .map_err(db_error)?;
+            }
+            tx.commit().map_err(db_error)?;
+            Ok(matches)
+        })
+        .await
+    }
     fn name(&self) -> &'static str {
         "sqlite"
     }
@@ -270,7 +572,12 @@ impl PathLockProvider for SQLitePathLockProvider {
                     .map_err(db_error)?;
                 let existing = read(&tx, namespace, &request.path)?;
                 if let Some(token) = &existing {
-                    if token.owner_id != owner && token.time_ns >= stale_before_ns {
+                    if token.owner_id == owner && !token.holders.is_empty() {
+                        return Err(PathLockError::InvalidRequest(
+                            "holder token requires holder acquisition".into(),
+                        ));
+                    }
+                    if token.owner_id != owner && token.live_kind(stale_before_ns).is_some() {
                         return Err(conflict(&request.path, token));
                     }
                 }
@@ -284,9 +591,8 @@ impl PathLockProvider for SQLitePathLockProvider {
                         )
                         .map_err(db_error)?;
                     if let Some(token) = read(&tx, namespace, ancestor)? {
-                        if token.lock_type == PathLockKind::Tree
+                        if token.live_kind(stale_before_ns) == Some(PathLockKind::Tree)
                             && token.owner_id != owner
-                            && token.time_ns >= stale_before_ns
                         {
                             return Err(conflict(ancestor, &token));
                         }
@@ -304,27 +610,13 @@ impl PathLockProvider for SQLitePathLockProvider {
                         .map_err(db_error)?;
                     let found = tx
                         .query_row(
-                            "SELECT path, owner, time_ns, kind FROM pathlock_tokens
+                            "SELECT path, owner, time_ns, kind, holders FROM pathlock_tokens
                              WHERE namespace=?1 AND path>=?2 AND path<?3 AND path<>?4
                              AND owner<>?5 AND time_ns>=?6 LIMIT 1",
                             params![namespace, lower, upper, request.path, owner, stale_before],
                             |row| {
                                 let path: String = row.get(0)?;
-                                Ok((
-                                    path,
-                                    LockToken {
-                                        owner_id: row.get(1)?,
-                                        time_ns: row
-                                            .get::<_, String>(2)?
-                                            .parse()
-                                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
-                                        lock_type: match row.get::<_, String>(3)?.as_str() {
-                                            "E" => PathLockKind::Exact,
-                                            "T" => PathLockKind::Tree,
-                                            _ => return Err(rusqlite::Error::InvalidQuery),
-                                        },
-                                    },
-                                ))
+                                Ok((path, decode_columns(row, 1)?))
                             },
                         )
                         .optional()
@@ -334,6 +626,7 @@ impl PathLockProvider for SQLitePathLockProvider {
                     }
                 }
                 let replacement = LockToken {
+                    holders: Vec::new(),
                     owner_id: owner.clone(),
                     time_ns: now_ns,
                     lock_type: request.kind,
@@ -440,14 +733,17 @@ impl PathLockProvider for SQLitePathLockProvider {
         self.run(move |conn, namespace| {
             let tx = conn.transaction().map_err(db_error)?;
             if read(&tx, namespace, &path)?
-                .is_some_and(|token| !ignore_stale || token.time_ns >= stale_before_ns)
+                .is_some_and(|token| !ignore_stale || token.live_kind(stale_before_ns).is_some())
             {
                 return Ok(Some(true));
             }
             for ancestor in ancestors(&path) {
                 if read(&tx, namespace, ancestor)?.is_some_and(|token| {
-                    token.lock_type == PathLockKind::Tree
-                        && (!ignore_stale || token.time_ns >= stale_before_ns)
+                    if ignore_stale {
+                        token.live_kind(stale_before_ns) == Some(PathLockKind::Tree)
+                    } else {
+                        token.lock_type == PathLockKind::Tree
+                    }
                 }) {
                     return Ok(Some(true));
                 }
@@ -511,7 +807,7 @@ impl PathLockProvider for SQLitePathLockProvider {
         let owner = owner.to_string();
         self.run(move |conn, namespace| {
             conn.execute(
-                "UPDATE pathlock_tokens SET time_ns=?1 WHERE namespace=?2 AND path=?3 AND owner=?4",
+                "UPDATE pathlock_tokens SET time_ns=?1 WHERE namespace=?2 AND path=?3 AND owner=?4 AND holders=''",
                 params![timestamp(time_ns), namespace, path, owner],
             )
             .map(|count| count == 1)
@@ -525,7 +821,7 @@ impl PathLockProvider for SQLitePathLockProvider {
         let owner = owner.to_string();
         self.run(move |conn, namespace| {
             conn.execute(
-                "DELETE FROM pathlock_tokens WHERE namespace=?1 AND path=?2 AND owner=?3",
+                "DELETE FROM pathlock_tokens WHERE namespace=?1 AND path=?2 AND owner=?3 AND holders=''",
                 params![namespace, path, owner],
             )
             .map(|count| count == 1)
@@ -565,7 +861,7 @@ impl PathLockProvider for SQLitePathLockProvider {
                 for batch in valid_paths.chunks(256) {
                     let placeholders = vec!["?"; batch.len()].join(",");
                     let sql = format!(
-                        "UPDATE pathlock_tokens SET time_ns=? WHERE namespace=? AND owner=?
+                        "UPDATE pathlock_tokens SET time_ns=? WHERE namespace=? AND owner=? AND holders=''
                      AND path IN ({placeholders}) RETURNING path"
                     );
                     let mut args = vec![timestamp(time_ns), namespace.to_string(), owner.clone()];

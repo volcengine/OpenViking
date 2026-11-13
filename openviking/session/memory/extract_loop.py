@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.models.vlm.base import ToolCall, VLMBase
 from openviking.server.identity import RequestContext
+from openviking.session.memory.agent_file import is_static_agent_memory
 from openviking.session.memory.dataclass import (
     DeleteId,
     MemoryFile,
@@ -144,7 +145,7 @@ class ExtractLoop:
             vlm: VLM instance (from openviking.models.vlm.base)
             viking_fs: VikingFS instance for storage operations
             model: Model name to use
-            max_iterations: Maximum number of ReAct iterations (default: 5)
+            max_iterations: Maximum number of ReAct iterations (default: 3)
             ctx: Request context
             context_provider: ExtractContextProvider - 必须提供（由 provider 加载 schema）
             thinking: Per-call thinking override for this extraction loop. True/False
@@ -211,6 +212,7 @@ class ExtractLoop:
         patch_repair_count = 0
         resolution_repair_count = 0
         pending_resolution_repair: Optional[Tuple[ResolvedOperations, List]] = None
+        resolution_repair_ranges_only = True
 
         # 从 provider 获取 schemas（内部自动加载 registry）
         schemas = self.context_provider.get_memory_schemas(self.ctx)
@@ -336,6 +338,7 @@ class ExtractLoop:
                     operations = self._event_resolution_repair_subset(
                         operations,
                         pending_resolution_repair[0],
+                        ranges_only=resolution_repair_ranges_only,
                     )
                 candidate_operations, candidate_links = await self.resolve_operations(operations)
                 if pending_resolution_repair is not None:
@@ -345,31 +348,15 @@ class ExtractLoop:
                         candidate_operations,
                     )
                     raw_links = base_links
-                    pending_resolution_repair = None
+                    # Refetch and patch retries must keep using the validated base.
                 else:
                     final_operations = candidate_operations
                     raw_links = candidate_links
-                resolution_issues = self._retryable_resolution_issues(final_operations)
-                if resolution_issues and resolution_repair_count == 0:
-                    resolution_repair_count += 1
-                    pending_resolution_repair = (final_operations, raw_links)
-                    max_iterations += 1
-                    self._disable_tools_for_iteration = True
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": self._build_resolution_repair_instruction(resolution_issues),
-                        }
-                    )
-                    tracer.info(
-                        "Extended max_iterations to "
-                        f"{max_iterations} for retry memory target resolution",
-                        console=True,
-                    )
-                    continue
                 # Check if any write_uris target existing files that weren't read
                 refetch_uris = await self._check_unread_existing_files(final_operations)
                 if refetch_uris:
+                    # New file context may require changes beyond the Event's ranges.
+                    resolution_repair_ranges_only = False
                     tracer.info(f"Found unread existing files: {refetch_uris}, refetching...")
                     # Add refetch results to messages and continue loop
                     await self._add_refetch_results_to_messages(messages, refetch_uris)
@@ -384,6 +371,7 @@ class ExtractLoop:
                     continue
                 patch_errors = await self._validate_patch_operations(final_operations)
                 if patch_errors and patch_repair_count == 0:
+                    resolution_repair_ranges_only = False
                     patch_repair_count += 1
                     max_iterations += 1
                     self._disable_tools_for_iteration = True
@@ -397,6 +385,26 @@ class ExtractLoop:
                         f"Extended max_iterations to {max_iterations} for retry patch repair"
                     )
                     continue
+                # Only cache a fallback after reads and patch validation have completed.
+                resolution_issues = self._retryable_resolution_issues(final_operations)
+                if not patch_errors and resolution_issues and resolution_repair_count == 0:
+                    resolution_repair_count += 1
+                    pending_resolution_repair = (final_operations, raw_links)
+                    resolution_repair_ranges_only = True
+                    max_iterations += 1
+                    self._disable_tools_for_iteration = True
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": self._build_resolution_repair_instruction(resolution_issues),
+                        }
+                    )
+                    tracer.info(
+                        "Extended max_iterations to "
+                        f"{max_iterations} for retry memory target resolution",
+                        console=True,
+                    )
+                    continue
                 break
             # If no tool calls either, continue to next iteration (don't break!)
             failure_kind = self._last_llm_failure_kind or "unknown"
@@ -405,6 +413,15 @@ class ExtractLoop:
             # Add format error message if parse failed (max 1 retry). This may raise
             # max_iterations, granting one more attempt after this failure.
             if failure_kind == "budget_exhausted":
+                if pending_resolution_repair is not None:
+                    final_operations, raw_links = pending_resolution_repair
+                    pending_resolution_repair = None
+                    tracer.info(
+                        "Event resolution repair response was cut off by the output budget; "
+                        "keeping the validated first-pass operations",
+                        console=True,
+                    )
+                    break
                 # Truncation is not an ordinary format mistake: a same-cap format
                 # retry would only hit the budget again, and replaying the
                 # truncated output just grows the prompt. Fail fast with the
@@ -595,8 +612,10 @@ class ExtractLoop:
         cls,
         operations: Any,
         original: ResolvedOperations,
+        *,
+        ranges_only: bool = True,
     ) -> _EventRepairOperations:
-        """Keep only one range repair for each failed Event and preserve its original fields."""
+        """Keep one response per failed Event; limit the initial repair to ranges."""
         failed_events = {
             operation.page_id: operation
             for operation in original.upsert_operations
@@ -630,10 +649,9 @@ class ExtractLoop:
                 )
                 continue
 
+            fields = failed_operation.memory_fields if ranges_only else candidate
             repaired_item = {
-                key: value
-                for key, value in failed_operation.memory_fields.items()
-                if key not in {"memory_type", "user_id"}
+                key: value for key, value in fields.items() if key not in {"memory_type", "user_id"}
             }
             repaired_item["ranges"] = candidate["ranges"]
             repaired_item["page_id"] = page_id
@@ -946,6 +964,9 @@ class ExtractLoop:
             delete_uri = page_id_map.resolve(delete_id.delete_page_id)
             if not delete_uri:
                 continue
+            if is_static_agent_memory(delete_uri):
+                logger.warning("Skipping automatic deletion of static agent memory %s", delete_uri)
+                continue
             old_content = self.context_provider.read_file_contents.get(delete_uri)
             if not old_content:
                 continue
@@ -983,6 +1004,23 @@ class ExtractLoop:
                 )
                 if not replacement_uri:
                     replacement_uri = page_id_map.resolve(replacement_page_id)
+                if not replacement_uri:
+                    errors.append(
+                        f"Unresolved replacement page_id {replacement_page_id} for {delete_uri}"
+                    )
+                    continue
+                if replacement_uri == delete_uri:
+                    # Distinct proposed pages can resolve to the same existing file.
+                    if replacement_page_id == delete_id.delete_page_id or not any(
+                        op.page_id == replacement_page_id
+                        and op.uris == [delete_uri]
+                        and not op.resolution_skip
+                        for op in upsert_operations
+                    ):
+                        errors.append(
+                            f"Delete references its own URI without a surviving update: {delete_uri}"
+                        )
+                    continue
 
             if all(file.uri != old_content.uri for file in delete_file_contents):
                 delete_file_contents.append(old_content)

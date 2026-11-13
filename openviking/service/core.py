@@ -9,21 +9,25 @@ Main service class that composes all sub-services and manages infrastructure lif
 import asyncio
 import inspect
 import os
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 
 from openviking.core.directories import DirectoryInitializer
+from openviking.core.namespace import canonical_user_root
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
-from openviking.resource.uri_mutation_coordinator import UriMutationCoordinator
-from openviking.resource.watch_scheduler import WatchScheduler
+from openviking.resource.watch_manager import WatchManager
+from openviking.resource.watch_runtime import WatchRuntime
+from openviking.server.config import UserConfigDefaults
 from openviking.server.identity import RequestContext, Role
 from openviking.service.agent_evolution_service import AgentEvolutionService
 from openviking.service.compile_scheduler import CompileScheduler, build_credential_encryptor
 from openviking.service.compile_service import CompileService
 from openviking.service.compile_targets import CompileLifecycle, CompileStateStore
 from openviking.service.debug_service import DebugService
-from openviking.service.external_task_service import ExternalTaskService
+from openviking.service.external_task_service import ExternalTaskService, set_external_task_service
 from openviking.service.fs_service import FSService
+from openviking.service.mcp_service import MCPService
 from openviking.service.mineru_preflight import wait_for_mineru_ready
 from openviking.service.pack_service import PackService
 from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
@@ -113,9 +117,10 @@ class OpenVikingService:
         self._skill_processor: Optional[SkillProcessor] = None
         self._session_compressor: Optional["SessionCompressorV3"] = None
         self._directory_initializer: Optional[DirectoryInitializer] = None
+        self._user_config_defaults = UserConfigDefaults()
         self._system_asset_synchronizer: Optional[SystemAssetSynchronizer] = None
-        self._uri_mutation_coordinator = UriMutationCoordinator()
-        self._watch_scheduler: Optional[WatchScheduler] = None
+        self._watch_manager: Optional[WatchManager] = None
+        self._watch_runtime: Optional[WatchRuntime] = None
         self._session_auto_commit_scheduler: Optional[SessionAutoCommitScheduler] = None
         self._rule_cleanup_scheduler: Optional[RuleCleanupScheduler] = None
         self._expiry_runtime: Optional["ExpiryRuntime"] = None
@@ -132,9 +137,7 @@ class OpenVikingService:
         self._data_dir_lock_path: Optional[str] = None
 
         # Sub-services
-        self._fs_service = FSService(
-            uri_mutation_coordinator=self._uri_mutation_coordinator,
-        )
+        self._fs_service = FSService()
         self._pack_service = PackService()
         self._search_service = SearchService()
         self._resource_memory_link_service = ResourceMemoryLinkService()
@@ -143,7 +146,10 @@ class OpenVikingService:
         self._session_service = SessionService()
         self._debug_service = DebugService()
         self._agent_evolution_service = AgentEvolutionService()
-        self._external_task_service = ExternalTaskService()
+        self._external_task_service = ExternalTaskService(
+            credential_encryptor=build_credential_encryptor(config.encryption)
+        )
+        self._mcp_service = MCPService(self)
         self._compile_service = CompileService(
             config.compile_api,
             self._external_task_service,
@@ -228,6 +234,7 @@ class OpenVikingService:
 
         # PathLock has been moved to Rust ragfs; Python-layer LockManager is no longer needed.
         set_task_tracker(config.build_task_tracker(self._agfs_client, service_name=service_name))
+        set_external_task_service(self._external_task_service)
 
     def _build_ragfs_binding_config(self) -> Any:
         """Build the single runtime binding config from OpenViking storage + encryption settings."""
@@ -278,6 +285,18 @@ class OpenVikingService:
         """Set the legacy server value used as the cluster startup baseline."""
         self._agent_evolution_base_config = config.model_copy(deep=True)
         self._session_service.set_agent_evolution_config(config)
+
+    @property
+    def user_config_defaults(self) -> UserConfigDefaults:
+        """Deployment defaults shared with user workspace initialization."""
+        return self._user_config_defaults
+
+    @user_config_defaults.setter
+    def user_config_defaults(self, config: UserConfigDefaults) -> None:
+        self._user_config_defaults = config
+        # create_app also accepts a service whose storage is already initialized.
+        if self._directory_initializer is not None:
+            self._directory_initializer.user_config_defaults = config
 
     async def apply_agent_evolution_config(self) -> None:
         """Apply the legacy server value to an already initialized manager."""
@@ -337,6 +356,7 @@ class OpenVikingService:
         self._session_service.set_runtime_config_manager(manager)
         self._vlm_resolver = AccountVLMProvider(manager)
         if self._queue_manager is not None:
+            self._queue_manager.set_runtime_config_manager(manager)
             self._queue_manager.set_vlm_resolver(self._vlm_resolver)
             self._queue_manager.setup_standard_queues(
                 self._vikingdb_manager,
@@ -401,14 +421,23 @@ class OpenVikingService:
         return self._compile_scheduler
 
     @property
-    def watch_scheduler(self) -> Optional[WatchScheduler]:
-        """Get WatchScheduler instance."""
-        return self._watch_scheduler
+    def watch_manager(self) -> Optional[WatchManager]:
+        """Watch management and resource submission, available without Runtime."""
+        return self._watch_manager
+
+    @property
+    def watch_runtime(self) -> Optional[WatchRuntime]:
+        return self._watch_runtime
 
     @property
     def fs(self) -> FSService:
         """Get FSService instance."""
         return self._fs_service
+
+    @property
+    def mcps(self) -> MCPService:
+        """Get MCP server registry service."""
+        return self._mcp_service
 
     @property
     def pack(self) -> PackService:
@@ -470,6 +499,8 @@ class OpenVikingService:
     ) -> None:
         """Initialize OpenViking storage and indexes."""
         if self._initialized:
+            if before_background_start is not None:
+                await before_background_start()
             logger.debug("Already initialized")
             return
 
@@ -550,6 +581,7 @@ class OpenVikingService:
             vikingdb=self._vikingdb_manager,
             viking_fs=self._viking_fs,
             system_asset_synchronizer=system_asset_synchronizer,
+            user_config_defaults=self.user_config_defaults,
         )
         self._directory_initializer = directory_initializer
         default_ctx = RequestContext(user=self._user, role=Role.ROOT)
@@ -563,6 +595,7 @@ class OpenVikingService:
             user_count,
         )
         self._privacy_config_service = UserPrivacyConfigService(self._viking_fs)
+        self._viking_fs.set_global_policy_service(self._privacy_config_service.global_policies)
         self._privacy_sanitizer = PrivacySanitizer(self._privacy_config_service)
         self._viking_fs.set_privacy_sanitizer(self._privacy_sanitizer)
         self._resource_processor.set_privacy_sanitizer(self._privacy_sanitizer)
@@ -578,13 +611,21 @@ class OpenVikingService:
             vikingdb=self._vikingdb_manager,
             skill_processor=self._skill_processor,
             vlm_resolver=self._vlm_resolver,
+            runtime_config_manager=self._runtime_config_manager,
         )
 
-        self._watch_scheduler = WatchScheduler(
-            resource_service=self._resource_service,
+        self._watch_manager = WatchManager(
+            self._config.storage.build_watch_store(
+                service_name=self._config.service_name, viking_fs=self._viking_fs
+            ),
             viking_fs=self._viking_fs,
-            uri_mutation_coordinator=self._uri_mutation_coordinator,
+            resource_service=self._resource_service,
             runtime_config_manager=self._runtime_config_manager,
+        )
+        await self._watch_manager.initialize()
+        self._watch_runtime = WatchRuntime(
+            self._watch_manager,
+            leader_enabled=self._config.enable_watch_scheduler,
         )
 
         # Wire up sub-services
@@ -594,8 +635,7 @@ class OpenVikingService:
             privacy_config_service=self._privacy_config_service,
             privacy_sanitizer=self._privacy_sanitizer,
             resource_memory_link_service=self._resource_memory_link_service,
-            watch_scheduler=self._watch_scheduler,
-            uri_mutation_coordinator=self._uri_mutation_coordinator,
+            watch_manager=self._watch_manager,
         )
         self._pack_service.set_dependencies(
             viking_fs=self._viking_fs,
@@ -608,10 +648,11 @@ class OpenVikingService:
             viking_fs=self._viking_fs,
             resource_processor=self._resource_processor,
             skill_processor=self._skill_processor,
-            watch_scheduler=self._watch_scheduler,
+            watch_manager=self._watch_manager,
             resource_memory_link_service=self._resource_memory_link_service,
             runtime_config_manager=self._runtime_config_manager,
         )
+        self._external_task_service.register(self._resource_service._connector)
         self._session_service.set_dependencies(
             vikingdb=self._vikingdb_manager,
             viking_fs=self._viking_fs,
@@ -625,9 +666,6 @@ class OpenVikingService:
             viking_fs=self._viking_fs,
             session_service=self._session_service,
         )
-        # Install optional server write hooks before any producer or consumer starts.
-        if before_background_start is not None:
-            await before_background_start()
         try:
             session_auto_commit_config = get_openviking_config().memory.session_auto_commit
         except Exception:
@@ -647,7 +685,6 @@ class OpenVikingService:
                 session_auto_commit_config,
                 check_interval=session_auto_commit_config.check_interval_seconds,
             )
-            await self._session_auto_commit_scheduler.start()
         else:
             self._session_auto_commit_scheduler = None
         self._debug_service.set_dependencies(
@@ -661,7 +698,11 @@ class OpenVikingService:
             vikingdb=self._vikingdb_manager,
             viking_fs=self._viking_fs,
         )
-        self._compile_service.configure_memory_runner(vikingdb=self._vikingdb_manager)
+        self._compile_service.configure_memory_runner(
+            vikingdb=self._vikingdb_manager,
+            runtime_config_manager=self._runtime_config_manager,
+            vlm_resolver=self._vlm_resolver,
+        )
         self._rule_service.set_dependencies(
             fs=self._fs_service,
             resources=self._resource_service,
@@ -676,7 +717,6 @@ class OpenVikingService:
                 self._viking_fs,
                 config.rules,
             )
-            await self._rule_cleanup_scheduler.start()
         else:
             self._rule_cleanup_scheduler = None
         compile_config = self._config.compile_api
@@ -689,8 +729,8 @@ class OpenVikingService:
                 compile_store,
                 self._viking_fs,
             )
-            self._compile_scheduler.credential_encryptor = build_credential_encryptor(
-                self._config.encryption
+            self._compile_scheduler.credential_encryptor = (
+                self._external_task_service.credential_encryptor
             )
             self._compile_service.lifecycle.reschedule = self._compile_scheduler.reschedule
             self._compile_service.lifecycle.versions.reschedule = self._compile_scheduler.reschedule
@@ -700,6 +740,11 @@ class OpenVikingService:
         self._fs_service.compile_versions = self._compile_service.lifecycle.versions
         self._fs_service.compile_lifecycle = self._compile_service.lifecycle
         self._resource_service.compile_versions = self._compile_service.lifecycle.versions
+
+        if self._queue_manager:
+            self._queue_manager.get_queue(self._queue_manager.DATA_CLEANUP, allow_create=True)
+        if before_background_start is not None:
+            await before_background_start()
 
         if self._queue_manager:
             for queue_name in (
@@ -739,10 +784,6 @@ class OpenVikingService:
                 ),
                 allow_create=True,
             )
-            # Auth state is initialized by the HTTP server after the core service.
-            # Register durable cleanup work before restoring tracked tasks;
-            # the deletion service binds consumers once auth is ready.
-            self._queue_manager.get_queue(self._queue_manager.DATA_CLEANUP, allow_create=True)
             tracker = get_task_tracker()
             await self._queue_manager.prepare_task_tracking(tracker)
             # Target reservations need recovery even when Work is already durable.
@@ -751,11 +792,11 @@ class OpenVikingService:
             )
             await self._external_task_service.restore_tasks(restored_tasks)
 
-        if self._config.enable_watch_scheduler:
-            await self._watch_scheduler.start()
-            logger.info("WatchScheduler started")
-        else:
-            logger.info("WatchScheduler disabled by config (enable_watch_scheduler=false)")
+        if self._session_auto_commit_scheduler is not None:
+            await self._session_auto_commit_scheduler.start()
+        if self._rule_cleanup_scheduler is not None:
+            await self._rule_cleanup_scheduler.start()
+        await self._watch_runtime.start()
 
         if self._queue_manager:
             self._queue_manager.start()
@@ -855,7 +896,9 @@ class OpenVikingService:
 
     async def close(self) -> None:
         """Close OpenViking and release resources."""
-        await self._resource_service.close_background_tasks()
+        if self._watch_runtime is not None:
+            await self._watch_runtime.stop()
+            self._watch_runtime = None
         vlm_resolver = getattr(self, "_vlm_resolver", None)
 
         if self._compile_scheduler is not None:
@@ -874,11 +917,6 @@ class OpenVikingService:
             self._runtime_config_manager = None
             logger.info("Runtime config manager stopped")
 
-        if self._watch_scheduler:
-            await self._watch_scheduler.stop()
-            self._watch_scheduler = None
-            logger.info("WatchScheduler stopped")
-
         if self._session_auto_commit_scheduler:
             await self._session_auto_commit_scheduler.stop()
             self._session_auto_commit_scheduler = None
@@ -890,6 +928,7 @@ class OpenVikingService:
             self._rule_cleanup_scheduler = None
             logger.info("RuleCleanupScheduler stopped")
 
+        await self._resource_service.close_background_tasks()
         if self._queue_manager:
             await asyncio.to_thread(self._queue_manager.stop)
             self._queue_manager = None
@@ -910,6 +949,9 @@ class OpenVikingService:
 
         # Queue workers and scheduled producers persist their final Task/Work
         # transitions while stopping, so keep their store open until they drain.
+        if self._watch_manager is not None:
+            await self._watch_manager.close()
+            self._watch_manager = None
         await get_task_tracker().close()
 
         close_vlm_resolver = getattr(vlm_resolver, "close", None)
@@ -1050,27 +1092,47 @@ class OpenVikingService:
             return 0
         return await self._directory_initializer.initialize_account_directories(ctx)
 
-    async def initialize_account_workspace(self, ctx: RequestContext) -> tuple[int, int]:
-        """Initialize a new account's workspace under one account Tree lease."""
+    @asynccontextmanager
+    async def account_workspace_lock(self, ctx: RequestContext):
+        """Hold one Tree lease for all account-scoped provisioning writes."""
         self._ensure_initialized()
-        if not self._directory_initializer:
-            return 0, 0
+        if not self._viking_fs:
+            raise NotInitializedError("VikingFS")
         agfs = self._viking_fs._async_agfs
         path = self._viking_fs._uri_to_path("viking://", ctx=ctx)
         guard = PathLockGuard(agfs)
         try:
             try:
-                lease = await guard.acquire(lambda: agfs.pathlock_acquire_tree(path))
+                lease = await guard.acquire(
+                    lambda: agfs.pathlock_acquire_tree(path, timeout_secs=10.0)
+                )
             except LockAcquisitionError as exc:
                 raise ResourceBusyError(
                     f"Account workspace is busy and cannot be initialized now: {ctx.account_id}",
                     uri="viking://",
                 ) from exc
+            yield lease
+        finally:
+            await guard.close()
+
+    async def initialize_account_workspace(
+        self,
+        ctx: RequestContext,
+        *,
+        lease_ref: Any = None,
+    ) -> tuple[int, int]:
+        """Initialize a new account's workspace under one account Tree lease."""
+        self._ensure_initialized()
+        if not self._directory_initializer:
+            return 0, 0
+        if lease_ref is not None:
+            return await self._directory_initializer.initialize_account_workspace(
+                ctx, lease_ref=lease_ref
+            )
+        async with self.account_workspace_lock(ctx) as lease:
             return await self._directory_initializer.initialize_account_workspace(
                 ctx, lease_ref=lease
             )
-        finally:
-            await guard.close()
 
     async def reconcile_system_assets(self, account_lister: AccountLister) -> int:
         """Synchronize packaged system assets for every active account."""
@@ -1086,8 +1148,24 @@ class OpenVikingService:
         ).sync_if_changed()
 
     async def initialize_user_directories(self, ctx: RequestContext) -> int:
-        """Initialize current user's directory tree."""
+        """Initialize the user's preset directories under one user Tree lease."""
         self._ensure_initialized()
         if not self._directory_initializer:
             return 0
-        return await self._directory_initializer.initialize_user_directories(ctx)
+        agfs = self._viking_fs._async_agfs
+        uri = canonical_user_root(ctx)
+        path = self._viking_fs._uri_to_path(uri, ctx=ctx)
+        guard = PathLockGuard(agfs)
+        try:
+            try:
+                lease = await guard.acquire(lambda: agfs.pathlock_acquire_tree(path))
+            except LockAcquisitionError as exc:
+                raise ResourceBusyError(
+                    f"User workspace is busy and cannot be initialized now: {ctx.user.user_id}",
+                    uri=uri,
+                ) from exc
+            return await self._directory_initializer.initialize_user_directories(
+                ctx, lease_ref=lease
+            )
+        finally:
+            await guard.close()

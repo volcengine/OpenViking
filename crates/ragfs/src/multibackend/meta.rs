@@ -1,8 +1,8 @@
 //! Multi-write metadata management.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde::{de::DeserializeOwned, Serialize};
 
@@ -11,12 +11,14 @@ use crate::core::errors::{Error, Result};
 use crate::core::filesystem::FileSystem;
 use crate::core::types::{FileInfo, WriteFlag};
 use crate::lock::PathLockManager;
-use crate::multibackend::constants::{MULTIWRITE_MOUNT_PREFIX, VBUCKETS};
+use crate::multibackend::constants::{MULTIWRITE_MOUNT_PREFIX, SYSTEM_DIR, VBUCKETS};
 use crate::multibackend::model::{
     BackendState, CheckpointsManifest, PartitionEntry, PartitionManifest, PartitionState,
     PartitionsManifest, ProtocolState, ProtocolStatus, ScopeKey, SegmentManifest,
 };
 use crate::multibackend::router::{build_initial_routes, MultiWritePaths};
+
+const RESET_IMPORT_MARKER_FILE: &str = ".multiwrite.reset_import";
 
 /// Trait for resolving `FsContext` from a filesystem path.
 ///
@@ -71,6 +73,111 @@ pub(crate) enum MultiWriteWorker {
     Checkpoint,
     CatchUp,
     Gc,
+}
+
+/// In-memory multi-write metrics snapshot used by scrape paths.
+#[derive(Default)]
+pub(crate) struct MultiWriteMetricsSnapshot {
+    protocol_status: Mutex<Option<ProtocolStatus>>,
+    scope_lag: Mutex<HashMap<(ScopeKey, String), u64>>,
+}
+
+impl MultiWriteMetricsSnapshot {
+    /// Store the latest known protocol status for metrics collection.
+    pub(crate) fn set_protocol_status(&self, status: ProtocolStatus) {
+        *self
+            .protocol_status
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(status);
+    }
+
+    /// Return the latest known protocol status for metrics collection.
+    pub(crate) fn protocol_status(&self) -> Option<ProtocolStatus> {
+        *self
+            .protocol_status
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
+    /// Add newly appended segment events to every configured backup lag.
+    pub(crate) fn record_flush(
+        &self,
+        scope: &ScopeKey,
+        backends: &[String],
+        first: u64,
+        last: u64,
+    ) {
+        if last < first {
+            return;
+        }
+        let delta = last - first + 1;
+        let mut lag = self
+            .scope_lag
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        for backend in backends {
+            *lag.entry((scope.clone(), backend.clone())).or_default() += delta;
+        }
+    }
+
+    /// Replace one scope's lag from a freshly read segment manifest.
+    pub(crate) fn replace_scope(&self, scope: &ScopeKey, manifest: &SegmentManifest) {
+        let tail = manifest.next_seq.saturating_sub(1);
+        let mut lag = self
+            .scope_lag
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        lag.retain(|(existing, _), _| existing != scope);
+        for (backend, state) in &manifest.backend_states {
+            lag.insert(
+                (scope.clone(), backend.clone()),
+                tail.saturating_sub(state.synced_seq),
+            );
+        }
+    }
+
+    /// Decrease one backend's lag after catch-up advances durable progress.
+    pub(crate) fn record_progress(
+        &self,
+        scope: &ScopeKey,
+        backend: &str,
+        previous: u64,
+        progress: u64,
+    ) {
+        if progress <= previous {
+            return;
+        }
+        let mut lag = self
+            .scope_lag
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let value = lag.entry((scope.clone(), backend.to_string())).or_default();
+        *value = value.saturating_sub(progress - previous);
+    }
+
+    /// Remove every lag entry owned by one deleted account.
+    pub(crate) fn remove_account(&self, account_id: &str) {
+        self.scope_lag
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .retain(|(scope, _), _| scope.account_id != account_id);
+    }
+
+    /// Return lag aggregated by backend and partition labels.
+    pub(crate) fn backend_lag(&self) -> BTreeMap<(String, u32), u64> {
+        let mut aggregated = BTreeMap::new();
+        for ((scope, backend), value) in self
+            .scope_lag
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+        {
+            *aggregated
+                .entry((backend.clone(), scope.partition_id))
+                .or_default() += *value;
+        }
+        aggregated
+    }
 }
 
 /// Primary filesystem store for V2 multi-write metadata.
@@ -284,6 +391,43 @@ impl MetadataStore {
             Ok(()) | Err(Error::NotFound(_)) => Ok(()),
             Err(error) => Err(error),
         }
+    }
+
+    /// Remove V2 protocol and per-account partition metadata for full re-import.
+    pub(crate) async fn reset_multiwrite_metadata(&self) -> Result<()> {
+        self.remove_file(&self.paths.mount_protocol().0).await?;
+        for entry in self.primary.read_internal_dir("/").await? {
+            if !entry.is_dir {
+                continue;
+            }
+            self.remove_all(&self.paths.account_partitions(&entry.name)?.0)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Persist that reset-triggered imports must scan existing primary files.
+    pub(crate) async fn mark_reset_import_pending(&self) -> Result<()> {
+        self.write_immutable(&self.reset_import_marker_path(), b"1")
+            .await
+    }
+
+    /// Return whether a reset-triggered import still needs full reconciliation.
+    pub(crate) async fn reset_import_pending(&self) -> Result<bool> {
+        match self.read_bytes(&self.reset_import_marker_path()).await {
+            Ok(_) => Ok(true),
+            Err(Error::NotFound(_)) => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Clear the reset import marker after the importer reaches Stable.
+    pub(crate) async fn clear_reset_import_pending(&self) -> Result<()> {
+        self.remove_file(&self.reset_import_marker_path()).await
+    }
+
+    fn reset_import_marker_path(&self) -> String {
+        format!("{MULTIWRITE_MOUNT_PREFIX}/{SYSTEM_DIR}/{RESET_IMPORT_MARKER_FILE}")
     }
 
     /// Recheck destructive GC safety while the caller holds the account Exact lock.

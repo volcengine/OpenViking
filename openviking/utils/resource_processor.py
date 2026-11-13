@@ -36,7 +36,7 @@ from openviking.storage.internal_names import is_storage_internal_name
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.resource_rnfv import RequestIntent
-from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
+from openviking.storage.viking_fs import get_viking_fs
 from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.telemetry import bind_ingestion_source_type, get_current_telemetry
 from openviking.utils import is_github_url
@@ -318,6 +318,22 @@ class ResourceProcessor:
             storage=self.media_storage,
         )
 
+    async def _parser_api_config_kwargs(
+        self,
+        ctx: RequestContext,
+        kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Add the owning Account's parser config for one operation without persisting it."""
+        if self.runtime_config_manager is None:
+            return kwargs
+        from openviking.config.parser_api import get_effective_parser_api_config
+
+        result = dict(kwargs)
+        result["parser_api_config"] = await get_effective_parser_api_config(
+            self.runtime_config_manager, ctx.account_id
+        )
+        return result
+
     def _build_parse_output_store(self):
         """Return the configured parse output store, or None for AGFS mode.
 
@@ -411,6 +427,8 @@ class ResourceProcessor:
         is_code_repo: bool,
         ingest_options: IngestOptions,
         source_metadata: Optional[Dict[str, str]],
+        source_complete: bool = True,
+        target_was_reserved: bool = False,
     ) -> Any:
         """Resolve and commit one artifact through the canonical update plan."""
         from openviking.metrics.datasources.resource import ResourceIngestionEventDataSource
@@ -432,6 +450,47 @@ class ResourceProcessor:
             lease_ref=lease_ref,
         )
         telemetry = get_current_telemetry()
+        initial_vector_inventory = None
+        if not source_complete:
+            from openviking_cli.exceptions import FailedPreconditionError
+
+            if lease_ref is None or not target_was_reserved:
+                raise FailedPreconditionError(
+                    "Incomplete updates are refused; only first imports may commit partially"
+                )
+            fs = get_viking_fs()
+            await fs._ensure_access(root_uri, ctx, action=AclAction.WRITE)
+            if await fs.exists(root_uri, ctx=ctx):
+                stat = await fs.stat(root_uri, ctx=ctx, skip_count=True)
+                if not stat.get("isDir"):
+                    raise FailedPreconditionError(
+                        "Incomplete update target already contains a file"
+                    )
+                # Do not use a user-visible ls projection: hidden/denied child
+                # entries still mean this is not an empty new target.
+                entries = await fs._async_agfs.ls(fs._uri_to_path(root_uri, ctx=ctx))
+                if any(
+                    str(entry.get("name") or "") not in {"", ".", ".."}
+                    and not is_storage_internal_name(str(entry["name"]))
+                    for entry in entries
+                ):
+                    raise FailedPreconditionError(
+                        "Incomplete update target contains existing data or metadata"
+                    )
+            # This strict read is required even with build_index=false: orphan
+            # records also own ACLs, and missing files do not imply a new import.
+            existing_vectors = await self.vikingdb.get_incremental_inventory_under_uri(
+                root_uri,
+                ctx=ctx,
+                output_fields=["id", "uri", "level"],
+                recursive=True,
+                include_direct_children=False,
+            )
+            if existing_vectors:
+                raise FailedPreconditionError(
+                    "Incomplete update target has historical index or ACL records"
+                )
+            initial_vector_inventory = existing_vectors
         await self._sanitize_parse_artifact(
             store=output_store,
             artifact_ref=artifact_ref,
@@ -476,6 +535,11 @@ class ResourceProcessor:
                     target_preexisting=target_preexisting,
                     artifact_inventory=artifact_inventory,
                     root_is_file=root_is_file,
+                    **(
+                        {"vector_inventory": initial_vector_inventory}
+                        if initial_vector_inventory is not None
+                        else {}
+                    ),
                 )
             from collections import Counter
 
@@ -746,11 +810,17 @@ class ResourceProcessor:
     def should_use_understanding_directly(self, source: str, **kwargs) -> bool:
         return self._get_media_processor().should_use_understanding_directly(source, **kwargs)
 
-    async def submit_understanding(self, source: Union[str, "LocalResource"], **kwargs) -> str:
+    async def submit_understanding(
+        self, source: Union[str, "LocalResource"], *, ctx: RequestContext, **kwargs
+    ) -> str:
+        kwargs = await self._parser_api_config_kwargs(ctx, kwargs)
         return await self._get_media_processor().submit_understanding(source, **kwargs)
 
-    async def upload_understanding_file(self, source: Union[str, "LocalResource"]) -> str:
-        return await self._get_media_processor().upload_understanding_file(source)
+    async def upload_understanding_file(
+        self, source: Union[str, "LocalResource"], *, ctx: RequestContext
+    ) -> str:
+        kwargs = await self._parser_api_config_kwargs(ctx, {})
+        return await self._get_media_processor().upload_understanding_file(source, **kwargs)
 
     async def build_index(
         self, resource_uris: List[str], ctx: RequestContext, **kwargs
@@ -793,6 +863,7 @@ class ResourceProcessor:
         tag_mode: str = "replace",
         acl: AclSpec | Dict[str, Any] | None = None,
         target_validator: Optional[Callable[[str, RequestContext], Awaitable[None]]] = None,
+        target_was_reserved: bool = False,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -808,6 +879,8 @@ class ResourceProcessor:
         target_validator rejects the resolved destination before reservation or
         source commit; its errors propagate after temporary artifact cleanup.
         """
+        strict = bool(kwargs.get("strict", False))
+        parse_failures = []
         result = {
             "status": "success",
             "errors": [],
@@ -851,6 +924,7 @@ class ResourceProcessor:
                 else:
                     await _set_stage("parsing")
                 kwargs = await self._source_config_kwargs(path, ctx, kwargs)
+                kwargs = await self._parser_api_config_kwargs(ctx, kwargs)
                 with viking_fs.bind_request_context(ctx):
                     parse_result = await media_processor.process(
                         source=path,
@@ -862,9 +936,7 @@ class ResourceProcessor:
                 result["source_path"] = parse_result.source_path or path
                 result["meta"] = parse_result.meta
 
-                # Only abort when no temp content was produced at all.
-                # For directory imports partial success (some files failed) is
-                # normal - finalization should still proceed.
+                # Non-strict imports may commit readable content without inferring deletions.
                 if not parse_result.temp_dir_path:
                     result["status"] = "error"
                     result["errors"].extend(
@@ -882,6 +954,7 @@ class ResourceProcessor:
                         "failed_files",
                     )
                 )
+                parse_failures = self._directory_parse_failures(parse_meta)
                 if is_directory_aggregate and parse_meta.get("file_count") == 0:
                     result["status"] = "error"
                     result["errors"].append(self._empty_directory_error(parse_meta))
@@ -897,8 +970,7 @@ class ResourceProcessor:
                         )
                     return result
 
-                parse_failures = self._directory_parse_failures(parse_meta)
-                if is_directory_aggregate and parse_failures:
+                if is_directory_aggregate and parse_failures and strict:
                     result["status"] = "error"
                     result["errors"].append(self._incomplete_directory_error(parse_failures))
                     try:
@@ -912,6 +984,23 @@ class ResourceProcessor:
                             exc,
                         )
                     return result
+
+                if is_directory_aggregate and parse_failures:
+                    result["status"] = "partial"
+                    result["import_complete"] = False
+                    result["failed_files"] = parse_failures
+                    result.setdefault("warnings", []).append(
+                        self._incomplete_directory_error(parse_failures)
+                    )
+                    if any(item.get("error_code") == "UNAUTHENTICATED" for item in parse_failures):
+                        await self._cleanup_parse_result_artifact(
+                            parse_result, output_store=output_store, viking_fs=viking_fs, ctx=ctx
+                        )
+                        result["status"] = "error"
+                        result["errors"].append(
+                            "Source authentication failed; partial commit refused"
+                        )
+                        return result
 
                 if parse_result.warnings and kwargs.get("strict", False):
                     result.setdefault("warnings", []).extend(parse_result.warnings)
@@ -1017,6 +1106,7 @@ class ResourceProcessor:
             candidate_uri = getattr(context_tree, "_candidate_uri", None) if context_tree else None
             resource_lock: Optional[Dict[str, Any]] = preacquired_lock
             target_preexisting = False
+            newly_reserved = target_was_reserved
             source_committed = False
             local_artifact_doc_rel = ""
             incremental_noop = False
@@ -1037,6 +1127,7 @@ class ResourceProcessor:
                                 root_is_file=root_is_file,
                                 target_validator=target_validator,
                             )
+                            newly_reserved = True
                             result["root_uri"] = root_uri
                             if root_uri != candidate_uri:
                                 result.setdefault("warnings", []).append(
@@ -1047,27 +1138,8 @@ class ResourceProcessor:
                         if target_validator is not None:
                             await target_validator(root_uri, ctx)
                         target_preexisting = await viking_fs.exists(root_uri, ctx=ctx)
-                        if target_preexisting:
-                            try:
-                                stat = await viking_fs.stat(root_uri, ctx=ctx, skip_count=True)
-                                if isinstance(stat, dict) and stat.get("isDir"):
-                                    entries = await viking_fs.ls(
-                                        root_uri,
-                                        show_all_hidden=True,
-                                        node_limit=LS_ALL_NODES,
-                                        ctx=ctx,
-                                    )
-                                    names: list[str] = []
-                                    for entry in entries:
-                                        name = entry.get("name", "")
-                                        if not name or name in {".", ".."}:
-                                            continue
-                                        names.append(str(name))
-                                    if all(is_storage_internal_name(name) for name in names):
-                                        target_preexisting = False
-                            except Exception:
-                                pass
                         if resource_lock is None:
+                            newly_reserved = not target_preexisting
                             dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
                             resource_lock = await self.acquire_resource_lock(
                                 dst_path,
@@ -1103,6 +1175,8 @@ class ResourceProcessor:
                             prepared_resource=prepared_resource,
                             source_format=parse_result.source_format,
                         ),
+                        source_complete=not bool(parse_failures),
+                        target_was_reserved=newly_reserved,
                     )
                     incremental_noop = target_preexisting and context_update_plan.is_noop()
                     temp_uri = root_uri
@@ -1158,6 +1232,8 @@ class ResourceProcessor:
                 "is_code_repo": parse_result.source_format == "repository",
                 "root_is_file": root_is_file,
                 "incremental_noop": incremental_noop,
+                "import_complete": not bool(parse_failures),
+                "failed_files": parse_failures,
                 "acl_update": ingest_options.acl_update.model_dump(mode="json")
                 if ingest_options.acl_update
                 else None,
@@ -1268,6 +1344,12 @@ class ResourceProcessor:
             file_refresh = None
         should_refresh_file_parent = file_refresh is not None and not vectors_only
         result: Dict[str, Any] = {"status": "success", "root_uri": root_uri}
+        if prepared.get("import_complete") is False:
+            result.update(
+                status="partial",
+                import_complete=False,
+                failed_files=prepared.get("failed_files", []),
+            )
         artifact_cleaned = False
 
         async def cleanup_artifact_if_owned() -> None:

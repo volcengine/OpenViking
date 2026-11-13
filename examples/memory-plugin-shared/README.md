@@ -41,6 +41,12 @@ Run from a repository checkout, the installer uses that checkout's plugins (`--s
 
 `--uninstall --harness <list>` removes the Cursor, TRAE, TRAE CN, ZCode and Kimi Code integrations. Claude Code, Codex, OpenCode, pi and dsh are removed with their own commands, which the installer prints at the end of an install.
 
+Cursor skill upgrades and removal require a matching installer ownership record
+under `$OPENVIKING_HOME/cursor-skill-ownership` (default `~/.openviking`).
+Existing unmanaged skills, symlinks, and skills modified after installation are
+preserved with a warning. Copies installed before ownership tracking are also
+preserved; move them aside yourself if you want the installer to manage a fresh copy.
+
 The install ends with a "Not done" list, when something that was asked for did not happen (a selected harness whose CLI was not found, a server that could not be reached or rejected the key, a CLI that npm could not install), and then a line linking the agent onboarding guide, `https://docs.openviking.<host>/agents/<en|zh>/onboarding.md`, on the docs host the downloads came from and in the installer's language. Run from inside a dsh session (`DSH_SHELL=1`), the dsh plugin goes into that session's profile (`DSH_PROFILE`) unless `--dsh-profile` names another.
 
 ## Importing earlier sessions

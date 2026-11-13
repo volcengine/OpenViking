@@ -543,7 +543,12 @@ class _AnyDocMarkdownRenderer:
                     anchors.append(inline.anchor)
         for note in _items(self.document.notes):
             for inline in self._walk_inlines(note.blocks):
-                if _kind(inline) == "anchor" and inline.anchor:
+                kind = _kind(inline)
+                # A note may link to a bookmark defined in the body (issue #7177);
+                # collect those links like body links, not only note anchors.
+                if kind == "link" and inline.target and inline.target.kind == "anchor":
+                    linked.add(inline.target.value)
+                elif kind == "anchor" and inline.anchor:
                     anchors.append(inline.anchor)
 
         resolved: dict[str, _ResolvedAnchor] = {}
@@ -808,10 +813,10 @@ class _AnyDocMarkdownRenderer:
                 escape = next_char is None and trailing_active
             elif char == "|" and context == "table_cell":
                 escape = True
-            elif char in "#>" and start_of_line:
+            elif char in "#>=" and start_of_line:
                 escape = True
             elif char in "-+" and start_of_line:
-                escape = next_char is None or next_char.isspace()
+                escape = char == "-" or next_char is None or next_char.isspace()
             if escape:
                 output.append("\\")
             output.append(char)

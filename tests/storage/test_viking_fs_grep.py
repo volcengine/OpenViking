@@ -87,6 +87,36 @@ def _fulltext_meta(enabled):
     }
 
 
+def test_build_grep_scope_filter_preserves_existing_shape():
+    build_scope = getattr(grep_module, "_build_grep_scope_filter", None)
+    assert callable(build_scope)
+
+    tag_filter = {"op": "must", "field": "search_tags", "conds": ["env=prod"]}
+    assert build_scope(
+        "viking://resources",
+        3,
+        exclude_uri="viking://resources/archive",
+        tag_filter=tag_filter,
+    ) == And(
+        [
+            And(
+                [
+                    PathScope("uri", "viking://resources", depth=3),
+                    RawDSL(
+                        {
+                            "op": "must_not",
+                            "field": "uri",
+                            "conds": ["viking://resources/archive"],
+                            "para": "-d=-1",
+                        }
+                    ),
+                ]
+            ),
+            RawDSL(tag_filter),
+        ]
+    )
+
+
 @pytest.fixture
 def fs(monkeypatch):
     viking_fs = VikingFS(agfs=_DummyAgfs())
@@ -530,6 +560,8 @@ async def test_grep_vikingdb_auto_remote_limit_uses_five_times_node_limit(
     assert result == {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
     assert vector_store.calls[0]["limit"] == expected_remote_limit
     assert vector_store.calls[0]["output_fields"] == ["uri"]
+    assert vector_store.calls[0]["mode"] == "bm25"
+    assert vector_store.calls[0]["fields"] == ["content"]
 
 
 @pytest.mark.asyncio

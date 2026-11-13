@@ -8,12 +8,14 @@ from uuid import uuid4
 
 import pytest
 
+from openviking.pyagfs import get_binding_client
 from openviking.storage.abstract_overview import (
     AbstractOverviewWriteResult,
     parse_abstract_overview,
 )
 from openviking.storage.queuefs.named_queue import NamedQueue
-from openviking.storage.queuefs.semantic_msg import SemanticMsg
+from openviking.storage.queuefs.semantic_msg import SemanticMsg, build_semantic_coalesce_key
+from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.queuefs.semantic_queue import SemanticQueue, is_semantic_msg_stale
 
@@ -21,6 +23,15 @@ from openviking.storage.queuefs.semantic_queue import SemanticQueue, is_semantic
 def _processor(**kwargs):
     resolver = SimpleNamespace(get_vlm=AsyncMock(return_value=SimpleNamespace()))
     return SemanticProcessor(vlm_resolver=resolver, **kwargs)
+
+
+@pytest.fixture
+def native_queue():
+    client_class, _ = get_binding_client()
+    client = client_class(config={"service_name": f"semantic-test-{uuid4().hex}"})
+    client.mount("queuefs", "/queue", {"backend": "memory"})
+    yield SemanticQueue(client, "/queue", "semantic")
+    client.close()
 
 
 @pytest.mark.asyncio
@@ -141,30 +152,49 @@ async def test_non_memory_context_not_deduped():
 
 
 @pytest.mark.asyncio
-async def test_coalesced_semantic_messages_mark_old_version_stale():
-    mock_agfs = MagicMock()
-    with patch.object(NamedQueue, "enqueue", new_callable=AsyncMock) as named_enqueue:
-        named_enqueue.return_value = "queued-id"
-        q = SemanticQueue(mock_agfs, "/queue", "semantic")
-        coalesce_key = f"resource|acc|u|p|viking://resources/docs/{uuid4().hex}"
-        first = SemanticMsg(
-            uri="viking://resources/docs",
-            context_type="resource",
-            coalesce_key=coalesce_key,
-        )
-        second = SemanticMsg(
-            uri="viking://resources/docs",
-            context_type="resource",
-            coalesce_key=first.coalesce_key,
-        )
-
-        await q.enqueue(first)
-        await q.enqueue(second)
-
-        assert first.coalesce_version == 1
-        assert second.coalesce_version == 2
-        assert is_semantic_msg_stale(first)
-        assert not is_semantic_msg_stale(second)
+async def test_write_and_ingest_directory_refreshes_coalesce(monkeypatch, native_queue):
+    q = native_queue
+    directory_uri = f"viking://resources/docs/{uuid4().hex}"
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: SimpleNamespace(SEMANTIC="semantic", get_queue=lambda *a, **kw: q),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs", lambda: object()
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace()),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.plan_abstract_overview_refresh",
+        AsyncMock(return_value=SimpleNamespace(action=FreshnessAction.REFRESH_NOW)),
+    )
+    source = SemanticMsg(
+        uri=directory_uri, context_type="resource", generation_trigger="content_write",
+    )
+    file_work = SemanticMsg(
+        uri=directory_uri, context_type="resource",
+        coalesce_key=build_semantic_coalesce_key(context_type="resource", uri=directory_uri),
+    )
+    await q.enqueue(file_work)
+    processor = _processor()
+    await processor._enqueue_directory_refresh(
+        source, directory_uri, changes={"modified": [f"{directory_uri}/a.md"]}
+    )
+    source.generation_trigger = "resource_ingest"
+    await processor._enqueue_parent_refresh(
+        source, f"{directory_uri}/imported", l0_body_changed=True
+    )
+    await q.dequeue()  # File work has its own key.
+    first, second = await q.dequeue(), await q.dequeue()
+    assert first.coalesce_key == second.coalesce_key != ""
+    assert file_work.coalesce_version == 1
+    assert first.coalesce_version == 2
+    assert second.coalesce_version == 3
+    assert await is_semantic_msg_stale(first, agfs=q._async_agfs)
+    assert not await is_semantic_msg_stale(second, agfs=q._async_agfs)
+    assert not await is_semantic_msg_stale(file_work, agfs=q._async_agfs)
 
 
 class _FakePathLock:
@@ -213,26 +243,24 @@ def _patch_semantic_config(monkeypatch, *, overview_sample_limit=32):
 
 
 @pytest.mark.asyncio
-async def test_stale_memory_semantic_write_is_success(monkeypatch):
+async def test_stale_memory_semantic_write_is_success(monkeypatch, native_queue):
     pathlock = _FakePathLock()
     viking_fs = _FakeVikingFS(pathlock)
     processor = _processor()
     coalesce_key = f"memory|acc|u|p|viking://user/default/memories/preferences/{uuid4().hex}"
 
-    with patch.object(NamedQueue, "enqueue", new_callable=AsyncMock):
-        q = SemanticQueue(MagicMock(), "/queue", "semantic")
-        first = SemanticMsg(
-            uri="viking://user/default/memories/preferences",
-            context_type="memory",
-            coalesce_key=coalesce_key,
-        )
-        latest = SemanticMsg(
-            uri="viking://user/default/memories/preferences",
-            context_type="memory",
-            coalesce_key=coalesce_key,
-        )
-        await q.enqueue(first)
-        await q.enqueue(latest)
+    q = native_queue
+    pathlock.revision_latest = q._async_agfs.revision_latest
+    first = SemanticMsg(
+        uri="viking://user/default/memories/preferences",
+        context_type="memory", coalesce_key=coalesce_key,
+    )
+    latest = SemanticMsg(
+        uri="viking://user/default/memories/preferences",
+        context_type="memory", coalesce_key=coalesce_key,
+    )
+    await q.enqueue(first)
+    await q.enqueue(latest)
 
     wrote_first = await processor._write_memory_directory_semantics(
         msg=first,
@@ -270,13 +298,20 @@ async def test_stale_memory_semantic_write_is_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_memory_directory_summarizes_all_uncached_files(monkeypatch):
+async def test_memory_directory_summarizes_all_files_but_samples_overview(monkeypatch):
     processor = _processor(max_concurrent_llm=4)
     summaries = []
+    summarized_files = []
+    file_names = [f"file-{index:03}.md" for index in range(40)]
+    fake_fs = _FakeMemoryDirFS()
+    monkeypatch.setattr(
+        fake_fs, "ls", AsyncMock(return_value=[{"name": name} for name in file_names])
+    )
 
     async def generate_file_summary(file_path, llm_sem=None, ctx=None):
         del llm_sem, ctx
         name = file_path.rsplit("/", 1)[-1]
+        summarized_files.append(name)
         return {"name": name, "summary": f"summary:{name}"}
 
     async def generate_overview(
@@ -287,14 +322,15 @@ async def test_memory_directory_summarizes_all_uncached_files(monkeypatch):
         return "overview"
 
     async def write_semantics(**kwargs):
-        del kwargs
+        assert kwargs["total_entries"] == 40
+        assert kwargs["sampled_entries"] == 32
         return AbstractOverviewWriteResult(
             wrote=True, overview_body_changed=True, abstract_body_changed=True
         )
 
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_processor.get_viking_fs",
-        lambda: _FakeMemoryDirFS(),
+        lambda: fake_fs,
     )
     _patch_semantic_config(monkeypatch)
     monkeypatch.setattr(processor, "_generate_single_file_summary", generate_file_summary)
@@ -314,7 +350,10 @@ async def test_memory_directory_summarizes_all_uncached_files(monkeypatch):
         )
     )
 
-    assert [item["name"] for item in summaries] == ["first.md", "second.md"]
+    assert sorted(summarized_files) == file_names
+    assert len(summaries) == 32
+    assert summaries[0]["name"] == file_names[0]
+    assert summaries[-1]["name"] == file_names[-1]
 
 
 @pytest.mark.asyncio

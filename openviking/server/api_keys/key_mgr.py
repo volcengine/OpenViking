@@ -17,6 +17,7 @@ from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
+    PermissionDeniedError,
     UnauthenticatedError,
 )
 
@@ -85,6 +86,11 @@ class APIKeyManager:
         self._root_api_key = root_key
         self._issue_user_keys = issue_user_keys
 
+    def require_writable(self) -> None:
+        """Reject management writes before handlers acquire filesystem leases."""
+        if self._store.read_only:
+            raise PermissionDeniedError("Account store is read-only.")
+
     async def load(self) -> None:
         try:
             await self._store.load()
@@ -131,39 +137,51 @@ class APIKeyManager:
     async def resolve_identity(self, api_key: str) -> ResolvedIdentity:
         if self._root_api_key and hmac.compare_digest(api_key, self._root_api_key):
             return ResolvedIdentity(role=Role.ROOT)
-        account_id, user_id = await self._verify_key(api_key)
-        identity = await self._get_registered_identity(account_id, user_id)
-        deletion = await self.get_deletion(account_id, user_id) if identity is not None else None
-        if not self._is_authenticatable_identity(identity, deletion):
-            raise UnauthenticatedError("Account identity does not exist or is being deleted")
-        return identity
+        account_id, user_id = self._key_hints(api_key)
+        snapshot = await self._store.get_auth_snapshot(
+            api_key, account_id_hint=account_id, user_id_hint=user_id
+        )
+        if snapshot is None:
+            raise UnauthenticatedError("Invalid API key")
+        try:
+            registered_role = Role.parse(snapshot["role"])
+            if registered_role == Role.ROOT:
+                raise ValueError("ROOT is not an account role")
+        except (KeyError, ValueError):
+            raise UnauthenticatedError("Registered account identity has an invalid role") from None
+        return ResolvedIdentity(
+            role=registered_role,
+            account_id=snapshot["account_id"],
+            user_id=snapshot["user_id"],
+            group_ids=tuple(snapshot["group_ids"]),
+        )
 
-    async def _verify_key(self, key: str):
+    @staticmethod
+    def _key_hints(key: str) -> tuple[str, str]:
         if not is_valid_format_key(key):
             raise UnauthenticatedError("Invalid API key format")
         try:
             account_id, user_id, _ = parse_api_key(key)
         except (ValueError, UnicodeError):
             raise UnauthenticatedError("Invalid API key format") from None
-        binding = await self._store.verify_api_key(
-            key, account_id_hint=account_id, user_id_hint=user_id
-        )
-        if binding is not None:
-            return binding
-        raise UnauthenticatedError("Invalid API key")
+        return account_id, user_id
 
     async def create_account(
         self,
         account_id: str,
         admin_user_id: str,
         seed: Optional[str] = None,
+        *,
+        lease_ref: object | None = None,
     ) -> str | None:
         if not self._issue_user_keys:
-            await self._store.create_account(account_id, admin_user_id)
+            await self._store.create_account(account_id, admin_user_id, lease_ref=lease_ref)
             return None
 
         key = generate_api_key(account_id, admin_user_id, seed)
-        await self._store.create_account_with_api_key(account_id, admin_user_id, key)
+        await self._store.create_account_with_api_key(
+            account_id, admin_user_id, key, lease_ref=lease_ref
+        )
         return key
 
     async def delete_account(self, account_id: str) -> None:
@@ -306,6 +324,14 @@ class APIKeyManager:
                 user.pop("key_prefix", None)
         elif mask_keys or hide_other_keys:
             for user in page["users"]:
+                # GLOBAL identities are ROOT-only to manage. Other roles may
+                # observe that the identity exists, never its credentials.
+                if str(user.get("role")) == Role.GLOBAL:
+                    api_key = user.pop("api_key", None)
+                    user.pop("key_prefix", None)
+                    if not hide_other_keys:
+                        user["api_key_available"] = bool(api_key)
+                    continue
                 if hide_other_keys and (
                     account_id != viewer_account_id or user.get("user_id") != viewer_user_id
                 ):
@@ -367,8 +393,8 @@ class APIKeyManager:
     async def add_group_members(self, account_id, group_id, user_ids):
         return await self._store.add_group_members(account_id, group_id, user_ids)
 
-    async def remove_group_member(self, account_id, group_id, user_id):
-        return await self._store.remove_group_member(account_id, group_id, user_id)
+    async def remove_group_members(self, account_id, group_id, user_ids):
+        return await self._store.remove_group_members(account_id, group_id, user_ids)
 
     async def delete_group(self, account_id, group_id):
         await self._store.delete_group(account_id, group_id)

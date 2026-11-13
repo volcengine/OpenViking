@@ -1,0 +1,317 @@
+# CommandConsole
+
+A terminal-style view of command records and their results, with an input area that provides command suggestions and parameter help.
+
+## When to use
+
+- You want a command-line style input and result view, with your own commands and execution. The component sends no requests, does not use local storage and does not need `OpenVikingProvider`.
+- You need one view for different kinds of command output, such as text, search results, resource previews, status and write results.
+- When you use [Console](../modules/console), its command mode already includes CommandConsole, so you do not need to add it yourself.
+
+## Import
+
+```tsx
+import { CommandConsole } from '@openviking/react/components/command-console';
+import '@openviking/react/components/command-console/style.css';
+```
+
+## Examples
+
+### Basic usage
+
+Shows command records with several result types and an input area with completion. Type `/` to see suggestions, then submit `ov compile --compile-name demo-wiki`, `ov task list`, `ov session get session_demo` or `ov help` to get a write result, a table, a status card and command help.
+
+```tsx file="../../_demos/command-console-basic.tsx" preview
+
+```
+
+The example uses fixed simulated data: submitting appends a pending record that is replaced by the result a moment later, and no request is sent. Clicking a resource link only shows an alert.
+
+### Empty state and quick commands
+
+Quick commands appear while there are no records. Clicking one only fills the input; press Enter to submit, and the first submission replaces the empty state with records. Each row shows its `summary`, falling back to `description`; hovering the row shows the full `description` when a `summary` is provided or when the description is truncated by the single-line ellipsis.
+
+```tsx file="../../_demos/command-console-empty.tsx" preview
+
+```
+
+Every quick command in the example fills a complete command except `compile`, which fills only `ov compile `, so you still need to add `--compile-name <name>`.
+
+## API
+
+### CommandConsole
+
+| Property         | Description                                                                                                                                                      | Type                                         | Default                        |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ------------------------------ |
+| records          | Command records to display, in submission order                                                                                                                  | `readonly CommandConsoleRecord[]`            | Required                       |
+| value            | Text in the input area (controlled)                                                                                                                              | `string`                                     | Required                       |
+| disabled         | Disables input and submission, and shows `labels.unavailableMessage` below the input area                                                                        | `boolean`                                    | `false`                        |
+| emptyState       | Content shown when there are no records; replaces the built-in empty state, and `null` shows no empty state                                                      | `ReactNode`                                  | -                              |
+| quickCommands    | Shortcuts in the built-in empty state; the empty state shows nothing when none of them resolves to a command                                                     | `readonly CommandConsoleQuickCommand[]`      | -                              |
+| commands         | Command catalogue used for suggestions, parameter help and pending skeletons; without it you can still type and submit, but get no suggestions or parameter help | `readonly CommandConsoleCommandDefinition[]` | `[]`                           |
+| commandGroups    | Group names and order in the suggestion list; undeclared groups follow in order of appearance                                                                    | `readonly CommandConsoleCommandGroup[]`      | `[]`                           |
+| onValueChange    | Called when the input changes, including accepted suggestions and examples; the input is read-only when omitted                                                  | `(value: string) => void`                    | -                              |
+| onSubmit         | Called on Enter with the trimmed command text; submission is disabled when omitted                                                                               | `(command: string) => void`                  | -                              |
+| onOpenUri        | Called when a resource link is clicked, with the link target; links navigate natively through `href` when omitted                                                | `(uri: string) => void`                      | -                              |
+| onCopy           | Called after a successful copy, with the copied text                                                                                                             | `(text: string) => void`                     | -                              |
+| labels           | Overrides interface text, see [CommandConsoleLabels](#commandconsolelabels)                                                                                      | `CommandConsoleLabels`                       | -                              |
+| locale           | Interface language, see [Internationalization](../guide/i18n)                                                                                                    | `'zh-CN' \| 'en-US'`                         | Inherited, otherwise `'en-US'` |
+| className, style | Appearance and layout; other HTML attributes are passed to the root element                                                                                      | HTML attributes                              | -                              |
+
+### CommandConsoleRecord
+
+| Property    | Description                                                                                                                                      | Type                                               | Default  |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------- | -------- |
+| id          | Unique identifier of the record                                                                                                                  | `string`                                           | Required |
+| command     | Submitted command text, shown above the result; when it matches a command in `commands`, the command name is shown as that command's `inputText` | `string`                                           | Required |
+| status      | State of this record; pending submissions show a skeleton, while background tasks can retain their submission result                             | `'pending' \| 'success' \| 'error' \| 'cancelled'` | Required |
+| tasks       | Background task snapshots supplied by the host                                                                                                   | `readonly CommandConsoleTask[]`                    | -        |
+| content     | Execution result; records with background tasks can show it while pending, otherwise pending records show a skeleton                             | `CommandConsoleRecordContent`                      | -        |
+| createdAtMs | Submission time as a Unix timestamp in milliseconds, shown below the command                                                                     | `number`                                           | -        |
+| createdAt   | Text shown when there is no valid `createdAtMs`, also used for server rendering; it is never parsed as a date                                    | `string`                                           | -        |
+
+`CommandConsoleTask` uses the [ConsoleTaskSnapshot](../modules/console#consoletasksnapshot) fields.
+
+### CommandConsoleRecordContent
+
+The union of execution results, distinguished by `variant`.
+
+| variant              | Description                                                          | Type                                   |
+| -------------------- | -------------------------------------------------------------------- | -------------------------------------- |
+| `'text'`             | Plain text or Markdown; also used for JSON and error messages        | `CommandConsoleTextContent`            |
+| `'search-list'`      | A list of search results                                             | `CommandConsoleSearchListContent`      |
+| `'resource-preview'` | A body preview of one resource                                       | `CommandConsoleResourcePreviewContent` |
+| `'resource-tree'`    | A list of resource entries, shown as a table when they carry details | `CommandConsoleResourceTreeContent`    |
+| `'status'`           | Key/value status rows                                                | `CommandConsoleStatusContent`          |
+| `'write-result'`     | Result lines of a write command                                      | `CommandConsoleWriteResultContent`     |
+| `'command-help'`     | Available commands listed in groups                                  | `CommandConsoleCommandHelpContent`     |
+
+### CommandConsoleTextContent
+
+| Property | Description                                                                                                                                              | Type                    | Default   |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- | --------- |
+| variant  | Result type, always `'text'`                                                                                                                             | `'text'`                | Required  |
+| text     | Text content; when `format` is `'plain'` and the whole text is valid JSON, it is indented without changing its values and shown as a copyable code block | `string`                | Required  |
+| format   | Text format: `'plain'` shows the text as is, `'markdown'` renders Markdown (GFM supported)                                                               | `'plain' \| 'markdown'` | `'plain'` |
+
+### CommandConsoleSearchListContent
+
+| Property | Description                                                         | Type                                        | Default  |
+| -------- | ------------------------------------------------------------------- | ------------------------------------------- | -------- |
+| variant  | Result type, always `'search-list'`                                 | `'search-list'`                             | Required |
+| items    | Search results; `labels.noResult` is shown when empty               | `readonly CommandConsoleSearchResultItem[]` | Required |
+| summary  | Summary above the list; resource addresses in a string become links | `ReactNode`                                 | -        |
+
+### CommandConsoleSearchResultItem
+
+| Property     | Description                                                                      | Type        | Default  |
+| ------------ | -------------------------------------------------------------------------------- | ----------- | -------- |
+| id           | Unique identifier of the result                                                  | `string`    | Required |
+| title        | Result title; `uri` is shown instead when it is provided                         | `string`    | Required |
+| metaLabel    | Extra information below the excerpt, such as a path or file type                 | `string`    | -        |
+| levelLabel   | Content level label next to the title                                            | `string`    | -        |
+| typeLabel    | Result type label next to the score                                              | `string`    | -        |
+| scoreLabel   | Score text, formatted by your app                                                | `string`    | -        |
+| scoreDetails | Score details shown on hover, focus or click of the score; requires `scoreLabel` | `ReactNode` | -        |
+| preview      | Content excerpt below the title                                                  | `string`    | -        |
+| uri          | Resource URI, shown as a link that calls `onOpenUri` when clicked                | `string`    | -        |
+
+### CommandConsoleResourcePreviewContent
+
+| Property      | Description                                                                               | Type                 | Default  |
+| ------------- | ----------------------------------------------------------------------------------------- | -------------------- | -------- |
+| variant       | Result type, always `'resource-preview'`                                                  | `'resource-preview'` | Required |
+| title         | Resource title; hidden when it equals the command name                                    | `string`             | Required |
+| content       | Resource body, usually file content; shown as a copyable code block when it is valid JSON | `string`             | Required |
+| meta          | Metadata above the title, such as type and size, joined with `·`                          | `readonly string[]`  | -        |
+| description   | One-line description shown when there is no `meta`                                        | `string`             | -        |
+| uri           | The resource's own URI, shown above the body as a link                                    | `string`             | -        |
+| navigationUri | Address passed to `onOpenUri` when `uri` is clicked; defaults to `uri`                    | `string`             | -        |
+
+### CommandConsoleResourceTreeContent
+
+| Property | Description                                                                                                             | Type                                        | Default  |
+| -------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- | -------- |
+| variant  | Result type, always `'resource-tree'`                                                                                   | `'resource-tree'`                           | Required |
+| items    | Resource entries; more than 20 are paged and "Load more" shows the next page, and `labels.noResult` is shown when empty | `readonly CommandConsoleResourceTreeItem[]` | Required |
+| title    | Title; hidden when it equals the command name                                                                           | `string`                                    | -        |
+
+### CommandConsoleResourceTreeItem
+
+| Property   | Description                                                                                                                     | Type                                             | Default  |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | -------- |
+| id         | Unique identifier of the entry                                                                                                  | `string`                                         | Required |
+| title      | Entry title; shown as a link when `uri` is provided                                                                             | `string`                                         | Required |
+| metaLabel  | Extra information next to the title                                                                                             | `string`                                         | -        |
+| detailRows | Key/value details; when any entry has details, the whole result becomes a table whose columns merge the `label`s of all entries | `readonly CommandConsoleResourceTreeDetailRow[]` | -        |
+| uri        | Resource URI of the entry; clicking the title calls `onOpenUri`                                                                 | `string`                                         | -        |
+
+### CommandConsoleResourceTreeDetailRow
+
+| Property | Description                                              | Type     | Default  |
+| -------- | -------------------------------------------------------- | -------- | -------- |
+| label    | Detail name; details with the same name share one column | `string` | Required |
+| value    | Detail value; resource addresses in it become links      | `string` | Required |
+
+### CommandConsoleStatusContent
+
+| Property | Description                                   | Type                                 | Default  |
+| -------- | --------------------------------------------- | ------------------------------------ | -------- |
+| variant  | Result type, always `'status'`                | `'status'`                           | Required |
+| rows     | Key/value rows                                | `readonly CommandConsoleStatusRow[]` | Required |
+| title    | Title; hidden when it equals the command name | `string`                             | -        |
+
+### CommandConsoleStatusRow
+
+| Property | Description                                                                                                                    | Type                               | Default    |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------- | ---------- |
+| label    | Row label, unique within one result                                                                                            | `string`                           | Required   |
+| value    | Row content; resource addresses in a string become links                                                                       | `ReactNode`                        | Required   |
+| variant  | Display form: `'inline'` on one line, `'long-text'` for wrapping long text, `'pre'` for monospaced text that keeps line breaks | `'inline' \| 'long-text' \| 'pre'` | `'inline'` |
+
+### CommandConsoleWriteResultContent
+
+| Property | Description                                                                      | Type                   | Default  |
+| -------- | -------------------------------------------------------------------------------- | ---------------------- | -------- |
+| variant  | Result type, always `'write-result'`                                             | `'write-result'`       | Required |
+| lines    | Result lines, each in its own block; resource addresses in a string become links | `readonly ReactNode[]` | Required |
+| title    | Title; hidden when it equals the command name                                    | `string`               | -        |
+
+### CommandConsoleCommandHelpContent
+
+| Property | Description                                                                      | Type                                          | Default  |
+| -------- | -------------------------------------------------------------------------------- | --------------------------------------------- | -------- |
+| variant  | Result type, always `'command-help'`                                             | `'command-help'`                              | Required |
+| sections | Commands listed in groups; clicking a command fills the input without submitting | `readonly CommandConsoleCommandHelpSection[]` | Required |
+
+### CommandConsoleCommandHelpSection
+
+| Property | Description                    | Type                                       | Default  |
+| -------- | ------------------------------ | ------------------------------------------ | -------- |
+| key      | Unique identifier of the group | `string`                                   | Required |
+| label    | Group title                    | `string`                                   | Required |
+| items    | Commands in the group          | `readonly CommandConsoleCommandHelpItem[]` | Required |
+
+### CommandConsoleCommandHelpItem
+
+| Property    | Description                                          | Type     | Default  |
+| ----------- | ---------------------------------------------------- | -------- | -------- |
+| key         | Unique identifier of the command                     | `string` | Required |
+| name        | Command text to display; clicking it fills the input | `string` | Required |
+| description | Command description                                  | `string` | -        |
+
+### CommandConsoleQuickCommand
+
+| Property | Description                                                                                                                                                  | Type     | Default  |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- | -------- |
+| name     | Name of a command in `commands`, whose name and description the empty state shows; names that match no command are skipped and repeated names keep the first | `string` | Required |
+| value    | Text filled into the input as is when clicked, without a prefix and without submitting; an empty string clears the input                                     | `string` | Required |
+
+### CommandConsoleCommandDefinition
+
+| Property    | Description                                                                                                                                                  | Type                                                                   | Default               |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- | --------------------- |
+| name        | Command name, unique in the catalogue and possibly several words, such as `session get`; shown in suggestions and quick commands, and used to match commands | `string`                                                               | Required              |
+| inputText   | Command prefix filled into the input when a suggestion is accepted, also used to display records; for example `ov find` when `name` is `find`                | `string`                                                               | Same as `name`        |
+| aliases     | Aliases that work like `name` for `/` completion and command matching                                                                                        | `readonly string[]`                                                    | -                     |
+| group       | `key` of the group the command belongs to, from `commandGroups`                                                                                              | `string`                                                               | -                     |
+| description | Command description, shown at the top of the parameter help                                                                                                  | `string`                                                               | Required              |
+| usage       | Usage line, shown above the parameter table                                                                                                                  | `string`                                                               | Required              |
+| summary     | Short description that suggestions and quick commands show in preference to `description`                                                                    | `string`                                                               | Same as `description` |
+| params      | Parameter descriptions, shown in the parameter table                                                                                                         | `readonly CommandConsoleCommandParam[]`                                | -                     |
+| options     | Option descriptions, shown in the parameter table                                                                                                            | `readonly CommandConsoleCommandOption[]`                               | -                     |
+| examples    | Example commands, shown in the parameter help; clicking one fills the input without submitting                                                               | `readonly (string \| CommandConsoleCommandExample)[]`                  | -                     |
+| skeleton    | Loading skeleton shown while the command runs, matching search, resource preview, resource tree, status, write result or a generic shape                     | `'search' \| 'resource' \| 'tree' \| 'status' \| 'write' \| 'generic'` | `'generic'`           |
+
+### CommandConsoleCommandParam
+
+| Property     | Description                                                                                             | Type      | Default  |
+| ------------ | ------------------------------------------------------------------------------------------------------- | --------- | -------- |
+| label        | Parameter name shown as is; one that does not start with `-` is positional and hinted after the command | `string`  | Required |
+| description  | Parameter description                                                                                   | `string`  | Required |
+| required     | Whether it is required; shown as "Yes" or "No" in the parameter table                                   | `boolean` | `false`  |
+| defaultValue | Default value; the parameter table shows `—` when omitted                                               | `string`  | -        |
+
+### CommandConsoleCommandOption
+
+| Property     | Description                                                                                          | Type      | Default  |
+| ------------ | ---------------------------------------------------------------------------------------------------- | --------- | -------- |
+| token        | Option syntax shown as is, such as `-n, --node-limit <n>`                                            | `string`  | Required |
+| description  | Option description                                                                                   | `string`  | Required |
+| required     | Whether it is required; without positional parameters, required options are hinted after the command | `boolean` | `false`  |
+| defaultValue | Default value; the parameter table shows `—` when omitted                                            | `string`  | -        |
+
+### CommandConsoleCommandExample
+
+| Property | Description                                | Type     | Default  |
+| -------- | ------------------------------------------ | -------- | -------- |
+| value    | Command filled into the input when clicked | `string` | Required |
+| label    | Text to display; defaults to `value`       | `string` | -        |
+
+### CommandConsoleCommandGroup
+
+| Property | Description                                      | Type     | Default  |
+| -------- | ------------------------------------------------ | -------- | -------- |
+| key      | Group identifier, matched by a command's `group` | `string` | Required |
+| label    | Group title in the suggestion list               | `string` | Required |
+
+### CommandConsoleLabels
+
+Defaults are the copy used when `locale` is `'en-US'`.
+
+| Property           | Description                                                                                | Type                          | Default                                           |
+| ------------------ | ------------------------------------------------------------------------------------------ | ----------------------------- | ------------------------------------------------- |
+| placeholder        | Placeholder of the input, also its accessible name                                         | `string`                      | `>_ Enter CLI commands, e.g. ov find OpenViking`  |
+| unavailableMessage | Message shown when `disabled` is `true`; changing it does not disable the component        | `string`                      | `Commands are unavailable right now.`             |
+| send               | Label for `↵` in the shortcut hints below the input                                        | `string`                      | `Send`                                            |
+| allCommands        | Label for `/` in the shortcut hints                                                        | `string`                      | `All commands`                                    |
+| historyCommands    | Label for `↑` in the shortcut hints                                                        | `string`                      | `History`                                         |
+| suggestions        | Accessible name of the suggestion list                                                     | `string`                      | `Command suggestions`                             |
+| noSuggestions      | Message when no command matches                                                            | `string`                      | `No matching commands`                            |
+| cancelled          | Accessible name of the cancelled status icon                                               | `string`                      | `Cancelled`                                       |
+| pending            | Accessible name of the pending status icon                                                 | `string`                      | `Running`                                         |
+| success            | Accessible name of the success status icon                                                 | `string`                      | `Succeeded`                                       |
+| error              | Accessible name of the error status icon; also shown for a failed record without `content` | `string`                      | `Failed`                                          |
+| copy               | Tooltip of the copy button                                                                 | `string`                      | `Copy`                                            |
+| copied             | Tooltip after a successful copy                                                            | `string`                      | `Copied`                                          |
+| emptyTitle         | Heading of the built-in empty state                                                        | `string`                      | `OpenViking CLI`                                  |
+| emptyDescription   | Description of the built-in empty state                                                    | `string`                      | `Work directly with your context through the CLI` |
+| quickStart         | Label above the quick commands                                                             | `string`                      | `Quick start:`                                    |
+| noResult           | Message for an empty result                                                                | `string`                      | `No result returned`                              |
+| justNow            | Time text for a record submitted less than a minute ago                                    | `string`                      | `Just now`                                        |
+| availableCommands  | Heading of the command help result                                                         | `string`                      | `Available commands`                              |
+| helpHint           | Hint at the bottom of the command help result                                              | `string`                      | `Type / to open the command palette.`             |
+| parameters         | Heading of the parameter table in the parameter help                                       | `string`                      | `Parameters`                                      |
+| examples           | Heading of the example list in the parameter help                                          | `string`                      | `Examples`                                        |
+| noParameters       | Message for a command without parameters and options                                       | `string`                      | `No parameters`                                   |
+| parameter          | Header of the parameter column in the parameter table                                      | `string`                      | `Parameter`                                       |
+| required           | Header of the required column in the parameter table                                       | `string`                      | `Required`                                        |
+| description        | Header of the description column in the parameter table                                    | `string`                      | `Description`                                     |
+| defaultValue       | Header of the default value column in the parameter table                                  | `string`                      | `Default`                                         |
+| yes                | Value for required entries in the parameter table                                          | `string`                      | `Yes`                                             |
+| no                 | Value for optional entries in the parameter table                                          | `string`                      | `No`                                              |
+| loadMore           | Label of the paging button in resource tables                                              | `string`                      | `Load more`                                       |
+| resource           | Header of the name column in resource tables                                               | `string`                      | `Resource`                                        |
+| formatMinutesAgo   | Formats elapsed whole minutes                                                              | `(minutes: number) => string` | `N minute(s) ago`                                 |
+| formatHoursAgo     | Formats elapsed whole hours                                                                | `(hours: number) => string`   | `N hour(s) ago`                                   |
+
+## Notes
+
+- `onSubmit` only reports the command text and your app runs it: add a record with `status: 'pending'`, then update it to `'success'` or `'error'`. A pending record does not block further submissions; set `disabled` if you need that.
+- Report a failure with `status: 'error'` and put the message in a `text` result. The component does not parse command output, so convert the response into a `CommandConsoleRecordContent` yourself.
+- `'success'` only means the command itself succeeded; a task it started may still be running.
+- Session creation, history panels and toolbars are yours to compose around the component, which has no slots for them. After you switch sessions or history, update `records` and `value`.
+- Enter submits and Shift+Enter inserts a newline; the component has no send button.
+- ↑ and ↓ recall commands from `records`, or move through the suggestions while the list is open. Tab stays in the input, and Shift+Tab moves focus out.
+- As you type a command name, the rest is hinted in gray and Tab accepts it; the hint never enters `value` or the submitted text. Type `/`, or press Tab after the command prefix, to open the suggestion list, where ↑ and ↓ select, Tab or Enter fill in and Esc closes.
+- Hovering or selecting a suggestion shows its usage, examples and parameter table beside the list. Once you accept a command, positional parameters are hinted in light text after the command name until you start typing arguments.
+- Records follow new output only while the reader is near the bottom. Scrolling up keeps the reading position, and submitting a command resumes following.
+- The root element is `height: 100%`: the record area scrolls and the input stays at the bottom, so give the parent a definite height.
+- `viking://`, `http://` and `https://` addresses in the input, records and results become links, and clicking one never submits the command. `onOpenUri` receives the address.
+- Links in descriptive text exclude trailing sentence punctuation, while links in commands, code blocks and resource values keep punctuation that belongs to file names. Structured `uri` fields accept only the three schemes above and show anything else as plain text.
+- In Markdown text, `http(s)` links and addresses open in a new tab and do not call `onOpenUri`; `viking://` ones do.
+- JSON and Markdown code blocks have a copy button, and a successful copy calls `onCopy`. If the browser refuses the clipboard write, no success feedback is shown and `onCopy` is not called.
+- `createdAtMs` shows "Just now" under one minute, whole minutes under one hour, whole hours under 24 hours, then the local `YYYY-MM-DD HH:mm`; a future timestamp shows "Just now". Override the text with `labels.justNow`, `labels.formatMinutesAgo` and `labels.formatHoursAgo`.
+- Server rendering and the hydration pass use `createdAt` and show no time without it; the client switches to `createdAtMs` afterwards. The time is recalculated when the component renders and does not refresh on a timer.
+- Colors come from the `--ov-ui-color-*` theme variables, and dark mode follows the `.dark` class on `<html>`; see [Getting started](../guide/getting-started).
+- Types are exported from `@openviking/react/components/command-console`; the package root exports only the component and `CommandConsoleProps`.

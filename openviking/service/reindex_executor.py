@@ -9,7 +9,7 @@ import re
 import time
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Dict, Iterable, Mapping, Optional
 
 from openviking.core.context import (
     Context,
@@ -28,9 +28,10 @@ from openviking.core.namespace import (
     uri_parts,
 )
 from openviking.core.namespace_policy import namespace_policy_for_uri
+from openviking.metrics.datasources.vikingdb import VikingDBEventDataSource
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
-from openviking.service.task_domain import TaskPatch
+from openviking.service.task_domain import TaskPatch, collect_queue_work_errors
 from openviking.service.task_tracker import TaskStatus, get_task_tracker
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import bind_task_context, get_task_context
@@ -343,10 +344,17 @@ class ReindexExecutor:
             )
             result = deepcopy(terminal.result or {})
             if terminal.status == TaskStatus.FAILED and not self._accept_partial_result(result):
+                work_errors = collect_queue_work_errors(result)
+                details: Dict[str, Any] = {
+                    "task_id": task.task_id,
+                    **result.get("details", {}),
+                }
+                if work_errors:
+                    details["errors"] = work_errors
                 raise OpenVikingError(
                     terminal.error or "Task processing failed",
                     code=result.get("code") or "PROCESSING_ERROR",
-                    details={"task_id": task.task_id, **result.get("details", {})},
+                    details=details,
                 )
             if terminal.status == TaskStatus.CANCELLED:
                 raise OpenVikingError(
@@ -1975,6 +1983,12 @@ class ReindexExecutor:
                     bool(getattr(exc, "retryable", False)) or incomplete
                 ):
                     raise
+                VikingDBEventDataSource.record_retry(
+                    backend=str(getattr(vikingdb, "_backend_type", None) or "unknown"),
+                    operation="reindex_inventory",
+                    error=exc,
+                    delay_seconds=retry_delays[attempt],
+                )
                 logger.warning(
                     "Reindex vector inventory was rate limited; retrying uri=%s attempt=%d/%d "
                     "error=%s",

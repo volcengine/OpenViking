@@ -163,7 +163,7 @@ class _ScheduledExecutor:
 
 def _patch_semantic_config(monkeypatch, *, overview_sample_limit=32):
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.get_openviking_config",
+        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
         lambda: SimpleNamespace(
             semantic=SimpleNamespace(overview_sample_limit=overview_sample_limit)
         ),
@@ -235,7 +235,6 @@ async def test_semantic_executor_bounds_active_node_work(monkeypatch):
         context_type="resource",
         max_concurrent_llm=3,
         ctx=ctx,
-        skip_vectorization=True,
     )
 
     max_running = 0
@@ -252,10 +251,13 @@ async def test_semantic_executor_bounds_active_node_work(monkeypatch):
     assert stats.in_progress_nodes == 0
     assert processor.max_active_summaries <= 3
     assert max_running <= 3
+    assert len(processor.vectorized_files) == 40
+    assert len(processor.overview_inputs[-1][1]) == 32
 
 
 @pytest.mark.asyncio
-async def test_incremental_wide_directory_includes_all_summary_inputs(monkeypatch):
+@pytest.mark.parametrize("sample_limit", [4, 32])
+async def test_incremental_wide_directory_samples_summary_inputs(monkeypatch, sample_limit):
     root_uri = "viking://resources/wide"
     tree = {
         root_uri: [{"name": f"file-{idx:03}.txt", "isDir": False} for idx in range(40)],
@@ -264,7 +266,7 @@ async def test_incremental_wide_directory_includes_all_summary_inputs(monkeypatc
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    _patch_semantic_config(monkeypatch, overview_sample_limit=4)
+    _patch_semantic_config(monkeypatch, overview_sample_limit=sample_limit)
 
     processor = _FakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
@@ -276,19 +278,25 @@ async def test_incremental_wide_directory_includes_all_summary_inputs(monkeypatc
         incremental_update=True,
         target_uri=root_uri,
         recursive=False,
-        changes={"modified": [f"{root_uri}/file-020.txt"]},
-        skip_vectorization=True,
+        changes={"modified": [f"{root_uri}/file-004.txt"]},
     )
 
     await executor.run(root_uri)
 
-    assert len(processor.summarized_files) == 40
-    assert executor.get_stats().total_nodes == 41
-    assert len(processor.overview_inputs[-1][1]) == 40
+    assert len(processor.summarized_files) == sample_limit + 1
+    assert f"{root_uri}/file-004.txt" in processor.vectorized_files
+    _, summaries, _, coverage = processor.overview_inputs[-1]
+    assert len(summaries) == sample_limit
+    assert summaries[0]["name"] == "file-000.txt"
+    assert summaries[-1]["name"] == "file-039.txt"
+    assert "file-004.txt" not in {item["name"] for item in summaries}
+    assert coverage["total_files"] == 40
+    overview = parse_abstract_overview(dict(fake_fs.writes)[f"{root_uri}/.overview.md"])
+    assert overview.metadata["freshness"] == freshness_metadata(40, sample_limit)
 
 
 @pytest.mark.asyncio
-async def test_non_recursive_memory_includes_files_and_reads_child_abstracts(monkeypatch):
+async def test_non_recursive_memory_samples_files_and_child_abstracts_together(monkeypatch):
     root_uri = "viking://user/alice/memories"
     child_a = f"{root_uri}/a-child"
     child_d = f"{root_uri}/d-child"
@@ -324,15 +332,14 @@ async def test_non_recursive_memory_includes_files_and_reads_child_abstracts(mon
 
     await executor.run(root_uri)
 
-    assert processor.summarized_files == [f"{root_uri}/{name}.md" for name in ("b", "c", "e", "f")]
-    assert executor.get_stats().total_nodes == 5
+    assert processor.summarized_files == [f"{root_uri}/{name}.md" for name in ("c", "f")]
+    assert executor.get_stats().total_nodes == 3
     assert processor.vectorized_files == []
     assert processor.vectorized_dirs == []
     _, file_summaries, child_abstracts, coverage = processor.overview_inputs[-1]
-    assert [item["name"] for item in file_summaries] == ["b.md", "c.md", "e.md", "f.md"]
+    assert [item["name"] for item in file_summaries] == ["c.md", "f.md"]
     assert child_abstracts == [
         {"name": "a-child", "abstract": "child a abstract"},
-        {"name": "d-child", "abstract": ""},
     ]
     assert coverage["total_files"] == 4
     assert coverage["total_children"] == 2

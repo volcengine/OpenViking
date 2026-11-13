@@ -295,9 +295,10 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 |---|---|---|---|
 | `workspace` | path | `"./data"` | OpenViking 工作目录 |
 | `agfs.backend` | `local`、`memory`、`s3` | `local` | 文件与元数据存储后端 |
-| `agfs.pathlock.provider` | `filesystem`、`memory`、`sqlite`、`cache` | `filesystem` | 路径锁存储 |
+| `agfs.pathlock.provider` | `filesystem`、`memory`、`sqlite`、`postgres`、`cache` | `filesystem` | 路径锁存储；`postgres` 直连 PostgreSQL，`cache` 使用 Redis |
 | `agfs.pathlock.sqlite_path` | 本地文件绝对路径 | 使用 `sqlite` 时为 `{workspace}/_system/pathlock/pathlock.db` | SQLite 共享锁数据库，可显式覆盖 |
-| `vectordb.backend` | `local`、`cuvs`、`http`、`volcengine`、`vikingdb` | `local` | 向量数据库后端 |
+| `agfs.pathlock.postgres_dsn_env` | 环境变量名 / `null` | `null` | `postgres` 必填；指定服务进程中保存 PostgreSQL DSN 的环境变量名 |
+| `vectordb.backend` | `local`、`cuvs`、`http`、`volcengine`、`vikingdb`、`opengauss`、`pgvector` | `local` | 向量数据库后端；参见 [pgvector 配置](../guides/25-pgvector.md) |
 | `vectordb.dimension` | integer | 跟随 Embedding | 向量集合维度 |
 | `parse_output.mode` | `agfs`、`local` | `agfs` | parser 中间产物的存储后端 |
 | `parse_output.local_root` | 路径或 `null` | 系统临时目录 | local parser artifact 的根目录 |
@@ -322,7 +323,7 @@ SQLite 每次尝试对瞬时数据库写竞争最多等待 100 毫秒，即使�
 WAL 使用 `synchronous=FULL` 保证崩溃后已提交锁记录的持久性，
 代价是比 `NORMAL` 更多的同步 I/O。
 租约心跳在一次 SQLite 事务中批量刷新所属路径，大租约按有限大小分批执行。
-`stale_locks_removed` 包含 SQLite/Redis 原子加锁事务实际回收的锁数量，
+`stale_locks_removed` 包含 SQLite/PostgreSQL/Redis 原子加锁事务实际回收的锁数量，
 失败并回滚的事务不会增加计数。
 
 SQLite 加锁会完整删除其他 owner 持有、已过期且与本次请求冲突的记录：
@@ -335,17 +336,111 @@ SQLite 加锁会完整删除其他 owner 持有、已过期且与本次请求冲
 频繁更新锁记录还会增加同步 I/O。如果 `storage.workspace` 位于 EFS，默认数据库路径也会落在 EFS。
 将数据库改到各容器本地磁盘会形成独立的锁状态，无法协调多个副本。
 
-多个容器或主机共享 EFS 时，使用共享 Redis PathLock：
+#### PostgreSQL PathLock
+
+多个容器或主机共享 EFS 时，可使用 PostgreSQL PathLock 或共享 Redis PathLock。
+PostgreSQL 直接协调参与进程的路径锁，无需 Redis 或顶层 `cache` 配置。
+将下面的最小配置片段合入服务端 `ov.conf`：
+
+```json
+{
+  "service_name": "production",
+  "storage": {
+    "agfs": {
+      "pathlock": {
+        "provider": "postgres",
+        "postgres_dsn_env": "OV_POSTGRES_DSN",
+        "lock_expire_secs": 30.0
+      }
+    }
+  }
+}
+```
+
+启动前在每个服务和 worker 的环境中设置 DSN：
+
+```sh
+export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=openviking password=YOUR_PASSWORD sslmode=require'
+```
+
+使用 PostgreSQL 13+、UTF8 服务端编码。保护同一批文件的参与者必须连接同一可写主库
+和数据库，使用相同的顶层 `service_name`、Provider 和过期时长。
+不同 `service_name` 对应独立的锁 namespace，锁操作不能发送到只读副本。
+无需安装 PostgreSQL 扩展。`lock_expire_secs` 不得小于 `1.0` 秒，默认 `30.0`。
+
+`postgres_dsn_env` 填非空环境变量名，不直接填写 DSN。
+支持 PostgreSQL URL 和 key/value DSN。凭据在初始化时读取，
+轮换后需重启全部服务和 worker。
+远程连接使用 `sslmode=require`，native TLS connector 使用系统信任库校验证书
+和主机名；`sslmode=disable` 仅用于可丢弃的本地测试数据库。
+
+首次启动时，Provider 创建 `public.ov_pathlock_tokens`、
+`public.path_prefix_2048(text)` 辅助函数，以及查找、过期和子树索引。
+初始化角色需要数据库 CONNECT 权限及 `public` schema 的 USAGE/CREATE 权限；
+运行角色需要锁表的 SELECT、INSERT、UPDATE、DELETE 权限和辅助函数的 EXECUTE 权限。
+也可由迁移角色预建这些对象，并在启动前授予运行角色所需权限。
+预建辅助函数时使用下面的定义：
+
+```sql
+CREATE FUNCTION public.path_prefix_2048(text) RETURNS bytea
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+AS 'SELECT pg_catalog.substring(pg_catalog.convert_to($1, ''UTF8''), 1, 2048)';
+```
+
+初始化只在函数不存在时创建它，已有函数应使用上述定义。
+从早期 `(namespace,path)` 主键升级时需要表所有者权限，迁移前应停止全部旧版实例。
+建索引受事务和 DDL 超时约束，大表可提前建好索引。
+源码安装升级 PostgreSQL 支持时需重建 Python native binding；
+Rust 接入启用 `ragfs/postgres` feature。
+
+验证协调时，启动两个使用相同配置的进程：第一个持有 Tree lease，
+第二个在该根目录下申请 Exact lease，应在前者释放或达到过期接管条件前发生冲突。
+PostgreSQL 可以对不存在的逻辑路径加锁，无需创建业务目录。
+显式路径快照提交会根据运行时 Provider 的 handle mode，为 PostgreSQL 缺失目标
+申请 Tree 锁；详见[快照语义](../guides/15-snapshot.md)。
+锁时间戳和过期检查使用主库时钟，批量获取全成功才提交，否则整体回滚；
+各 holder 独立续租和释放。
+
+同一 namespace 内的操作串行执行，应按目标并发量测量加锁和续租表现。
+部署需防止 split brain，并考虑异步复制故障切换时丢失已提交锁记录的风险。
+PathLock 不提供租约失效后的存储侧 fencing，也不改变 CachedFileSystem 的单写者要求、
+本地向量存储的进程锁及其他后端的并发限制。
+
+| 现象 | 检查项 |
+| --- | --- |
+| 不识别 `postgres` Provider | 重建或升级 native binding |
+| 缺少 DSN | 在每个服务和 worker 环境中导出配置指定的变量 |
+| 初始化 schema 失败 | 检查 UTF8 编码、权限、对象所有权和迁移耗时 |
+| 参与者之间不冲突 | 核对主库、数据库、service name、Provider 和过期配置 |
+| 数据库 `Busy` | 检查数据库争用和负载，与逻辑路径冲突区分处理 |
+
+#### Redis PathLock
+
+使用 Redis 协调时，
 设置 `storage.agfs.pathlock.provider="cache"` 和顶层 `cache.provider="redis"`。
 所有副本必须连接同一个 Redis 部署，并使用相同的顶层 `service_name` 和锁过期配置。
 参见[共享 Redis 配置示例](../guides/01-configuration.md)。
-共享 QueueFS 也需选择适合该部署的后端，例如 `storage.agfs.queuefs.backend="cache"`；
+无论选择哪种 PathLock，共享 QueueFS 都需选择适合该部署的后端，例如 `storage.agfs.queuefs.backend="cache"`；
 仅修改 PathLock 不会改变默认的 SQLite 队列后端。
 
-切换 provider 前需停止全部参与进程，
-SQLite 与 filesystem 锁文件不共享协议。进程运行期间不能删除数据库及其 WAL/SHM 文件。
+#### Provider 切换与升级
+
+切换 provider 前需停止全部参与进程和续租任务，
+filesystem、SQLite、PostgreSQL 和 Redis 各自维护独立的锁状态；
+写入同一批文件的进程不能混用 Provider。进程运行期间不能删除 SQLite 数据库及其 WAL/SHM 文件。
 崩溃进程的锁在 `lock_expire_secs`（默认 30 秒）后可被接管。
 此配置不会改变 workspace 进程锁或其他后端的并发限制。
+
+升级 holder 租约协议时，同样需要先停止全部锁参与者（包括队列 worker），再部署新的
+native binding。SQLite 会自动增加 `holders` 列。新代码可以读取旧 owner token，
+但旧进程无法维护 holder 记录，因此不能在同一个数据库、filesystem 锁或 Redis
+namespace 中混跑新旧版本；保留已有持久化队列 handoff。
+每个租约独立续租和释放自己的 holder。native adopt 只接管仍有效的来源 holder。
+来源消失或过期、旧 payload 缺少 holder 或 Provider 变化时，由 `adopt_or_reacquire`
+统一校验账号和覆盖范围，完整检查冲突后在 payload 的原 owner 下申请新的 holder。
+重复投递通过恢复可能创建多个 holder，业务写入需保证幂等。
+仅有一个 holder 的 consumer 崩溃时，其他 owner 要等待配置的 TTL 到期；原 delivery
+在 holder 过期后可通过恢复 helper 继续处理。
 
 远程存储后端还需要配置 endpoint、bucket/collection、鉴权和超时等字段。完整后端示例见[配置指南](../guides/01-configuration.md#storage)。
 

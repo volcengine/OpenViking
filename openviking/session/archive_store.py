@@ -15,6 +15,7 @@ session state â€” only the filesystem handle, request context, and session URI â
 so it can be composed by ``Session`` and exercised in isolation.
 """
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -211,8 +212,10 @@ class ArchiveStore:
             try:
                 if await self._viking_fs.exists(f"{archive_uri}/{marker}", ctx=self._ctx):
                     return state
-            except Exception:
-                continue
+            except Exception as exc:
+                if is_storage_not_found(exc):
+                    continue
+                raise
         return "pending"
 
     async def list_refs(self) -> List[Dict[str, Any]]:
@@ -222,8 +225,10 @@ class ArchiveStore:
 
         try:
             history_items = await self._viking_fs.ls(f"{self._session_uri}/history", ctx=self._ctx)
-        except Exception:
-            return []
+        except Exception as exc:
+            if is_storage_not_found(exc):
+                return []
+            raise
 
         refs: List[Dict[str, Any]] = []
         for item in history_items:
@@ -436,6 +441,19 @@ class ArchiveStore:
                 raise _ArchiveMessagesCorruptError("invalid message record") from exc
 
         return messages
+
+    async def messages_sha256(self, archive_uri: str) -> str:
+        """Return the archive-time SHA-256 of ``messages.jsonl``.
+
+        Archives written before the hash was persisted fall back to hashing the
+        current bytes.
+        """
+        phase1 = (await self.read_meta(archive_uri)).get("phase1")
+        persisted = phase1.get("messages_sha256") if isinstance(phase1, dict) else None
+        if isinstance(persisted, str) and persisted:
+            return persisted
+        raw = await self._viking_fs.read_file(f"{archive_uri}/messages.jsonl", ctx=self._ctx)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     async def read_meta(self, archive_uri: str) -> Dict[str, Any]:
         try:

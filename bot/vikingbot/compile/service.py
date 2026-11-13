@@ -215,8 +215,9 @@ class _CompileProvider(LLMProvider):
                 async for event in stream:
                     yield event
 
-    def supports_tool_result_media(self, model: str | None = None) -> bool:
-        return self._provider.supports_tool_result_media(model)
+    def should_inline_tool_result_media(self, model: str | None = None) -> bool:
+        """Send original evidence; model capability is decided by the endpoint."""
+        return True
 
     def get_default_model(self) -> str:
         return self._provider.get_default_model()
@@ -1100,7 +1101,7 @@ class BotCompileService:
         pipeline.model.agent_runner = agent_runner
         pipeline.tools = {
             name: tool
-            for name in ("openviking_search", "openviking_multi_read", "openviking_diff_paths")
+            for name in ("openviking_search", "openviking_multi_read")
             if (tool := self.agent_loop.tools.get(name)) is not None
         }
         pipeline.tool_context = tool_context
@@ -1119,23 +1120,24 @@ class BotCompileService:
             }
 
         await self._set_state(task_id, status="running", stage="pipeline")
-        directory_plan = has_directory_plan(request.changes)
-        ordered = []
-        if not (directory_plan and request.changes.get("head")):
-            ordered = (
-                source_files
-                if source_files is not None
-                else await self._list_source_files(client, request.from_)
-            )
+        ordered = (
+            source_files
+            if source_files is not None
+            else await self._list_pipeline_source_files(client, request)
+        )
         if not resume:
             await pipeline.files.put("inputs", dict.fromkeys(ordered, "pending"))
+
+        source_limits = self.limits.model_copy(
+            update={"source_batch_chars": min(self.limits.source_batch_chars, 10_000)}
+        )
 
         async def source_batches():
             """Retain at most one read batch of source bodies while seeding task shards."""
             for start in range(0, len(ordered), 8):
                 uris = ordered[start : start + 8]
                 contents = await asyncio.gather(
-                    *(read_source(client, uri, pipeline.model.provider) for uri in uris),
+                    *(read_source(client, uri) for uri in uris),
                     return_exceptions=True,
                 )
                 readable = []
@@ -1144,17 +1146,12 @@ class BotCompileService:
                         manifest = await pipeline.files.get("inputs")
                         manifest[uri] = "failed"
                         await pipeline.files.put("inputs", manifest)
-                        if (
-                            isinstance(content, CompileFailure)
-                            and content.code == "UNSUPPORTED_MEDIA"
-                        ):
-                            raise content
                         pipeline.failures.append(f"Source read failed: {uri}: {str(content)[:400]}")
                     elif isinstance(content, BaseException):
                         raise content
                     else:
                         readable.append((uri, content))
-                for batch in pack_source_batches(readable, self.limits):
+                for batch in pack_source_batches(readable, source_limits):
                     yield batch
 
         try:
@@ -1502,6 +1499,37 @@ class BotCompileService:
         )
         return registry
 
+    async def _list_pipeline_source_files(
+        self, client: VikingClient, request: SanitizedCompileRequest
+    ) -> list[str]:
+        """Select unique full-scan and added/modified inputs; listing errors propagate."""
+        changes = request.changes
+        if not (has_directory_plan(changes) and changes.get("head")):
+            return await self._list_source_files(client, request.from_)
+        files = set(await self._list_source_files(client, changes["full_dirs"], allow_empty=True))
+        roots = changes["diff_dirs"]
+        if roots:
+            offset = 0
+            while True:
+                page = await client.diff_paths(
+                    roots, base=changes["base"], head=changes["head"], offset=offset
+                )
+                for change in page["changes"]:
+                    uri = str(change.get("uri") or "").rstrip("/")
+                    if not uri or not any(
+                        uri == root or relative_uri_path(root, uri) for root in roots
+                    ):
+                        raise ValueError(f"Source inventory returned an out-of-scope URI: {uri}")
+                    if change["change_type"] in {"added", "modified"}:
+                        files.add(uri)
+                if not page["has_more"]:
+                    break
+                next_offset = page["next_offset"]
+                if not isinstance(next_offset, int) or next_offset <= offset:
+                    raise ValueError("Source inventory pagination did not advance")
+                offset = next_offset
+        return sorted(files)
+
     async def _list_source_files(
         self,
         client: VikingClient,
@@ -1570,9 +1598,7 @@ class BotCompileService:
         ordered = files if files is not None else await self._list_source_files(client, roots)
         for start in range(0, len(ordered), 8):
             uris = ordered[start : start + 8]
-            contents = await asyncio.gather(
-                *(read_source(client, uri, self.agent_loop.provider) for uri in uris)
-            )
+            contents = await asyncio.gather(*(read_source(client, uri) for uri in uris))
             sources.extend(zip(uris, contents, strict=True))
         return pack_source_batches(sources, self.limits)
 

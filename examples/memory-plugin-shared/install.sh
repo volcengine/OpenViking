@@ -2655,9 +2655,18 @@ agent_remove_trae_cli_configs() { # agent_remove_trae_cli_configs <hooks> <traec
 
 uninstall_agent_integrations() {
   if contains_harness cursor; then
+    local skill ownership_lib
     agent_remove_json_configs "$HOME/.cursor/hooks.json" "$(cursor_mcp_path)"
     rm -f "$HOME/.cursor/rules/openviking-memory.mdc"
-    rm -rf "$HOME/.cursor/skills/openviking-memory" "$HOME/.cursor/skills/openviking-skills" "$HOME/.cursor/skills/ov-experience-memory"
+    ownership_lib="$(install_lib_dir)" || ownership_lib=""
+    for skill in openviking-memory openviking-skills ov-experience-memory openviking-rule-search; do
+      if [ -f "$ownership_lib/owned-skill.mjs" ]; then
+        "$NODE_BIN" "$ownership_lib/owned-skill.mjs" uninstall "" \
+          "$HOME/.cursor/skills/$skill" "$OV_HOME/cursor-skill-ownership/$skill.json"
+      else
+        warn "Preserved Cursor skill without ownership runtime: $HOME/.cursor/skills/$skill"
+      fi
+    done
     rm -rf "$OV_HOME/agent-integrations/cursor"
     info "$(t 'Removed the Cursor OpenViking integration.' '已移除 Cursor OpenViking 集成。')"
   fi
@@ -2830,7 +2839,7 @@ trae_mcp_path() { # trae_mcp_path <client-id>
 
 install_cursor() {
   step_heading "$(t 'Cursor integration' 'Cursor 集成')"
-  local root hooks_path mcp_path skill skill_tmp legacy_plugins
+  local root hooks_path mcp_path skill ownership_lib legacy_plugins
   ensure_bundle
   root="$(assemble_agent_integration cursor cursor)" || return 1
   hooks_path="$HOME/.cursor/hooks.json"
@@ -2838,12 +2847,11 @@ install_cursor() {
   agent_write_json_configs cursor "$hooks_path" "$mcp_path" "$root" cursor "$NODE_BIN"
   mkdir -p "$HOME/.cursor/rules" "$HOME/.cursor/skills"
   cp "$root/hosts/cursor/rules/openviking-memory.mdc" "$HOME/.cursor/rules/openviking-memory.mdc"
-  for skill in openviking-memory openviking-skills ov-experience-memory; do
-    skill_tmp="$HOME/.cursor/skills/$skill.tmp"
-    rm -rf "$skill_tmp"
-    cp -R "$root/hosts/cursor/skills/$skill" "$skill_tmp"
-    rm -rf "$HOME/.cursor/skills/$skill"
-    mv "$skill_tmp" "$HOME/.cursor/skills/$skill"
+  ownership_lib="$(require_install_lib_dir)" || return 1
+  for skill in openviking-memory openviking-skills ov-experience-memory openviking-rule-search; do
+    "$NODE_BIN" "$ownership_lib/owned-skill.mjs" install \
+      "$root/hosts/cursor/skills/$skill" "$HOME/.cursor/skills/$skill" \
+      "$OV_HOME/cursor-skill-ownership/$skill.json" || return 1
   done
   info "$(t 'Cursor hooks installed:' 'Cursor hooks 已安装：') $hooks_path"
   info "$(t 'Cursor MCP installed:' 'Cursor MCP 已安装：') $mcp_path"
@@ -3170,7 +3178,7 @@ validate_hook_host() { # validate_hook_host <client>
       hooks="$HOME/.cursor/hooks.json"; mcp="$(cursor_mcp_path)"; event=sessionStart
       set -- "$@" "$root/plugin.json" "$shared/uri-guard.mjs" "$HOME/.cursor/rules/openviking-memory.mdc" \
         "$HOME/.cursor/skills/openviking-memory/SKILL.md" "$HOME/.cursor/skills/openviking-skills/SKILL.md" \
-        "$HOME/.cursor/skills/ov-experience-memory/SKILL.md"
+        "$HOME/.cursor/skills/ov-experience-memory/SKILL.md" "$HOME/.cursor/skills/openviking-rule-search/SKILL.md"
       ;;
     zcode) hooks="$HOME/.zcode/cli/config.json"; mcp="$hooks"; event=session-start ;;
     *) hooks="$HOME/.$client/hooks.json"; mcp="$(trae_mcp_path "$client")"; event=session-start ;;
@@ -3581,7 +3589,7 @@ EOF
   if contains_harness cursor; then
     plan_paths Cursor "$HOME/.cursor/hooks.json" "$(cursor_mcp_path)" "$HOME/.cursor/rules/openviking-memory.mdc" \
       "$HOME/.cursor/skills/openviking-memory" "$HOME/.cursor/skills/openviking-skills" \
-      "$HOME/.cursor/skills/ov-experience-memory" "$OV_HOME/agent-integrations/cursor"
+      "$HOME/.cursor/skills/ov-experience-memory" "$HOME/.cursor/skills/openviking-rule-search" "$OV_HOME/agent-integrations/cursor"
   fi
   if contains_harness trae; then
     plan_paths TRAE "$HOME/.trae/hooks.json" "$(trae_mcp_path trae)" "$OV_HOME/agent-integrations/trae"

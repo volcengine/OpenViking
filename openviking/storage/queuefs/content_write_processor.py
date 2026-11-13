@@ -287,15 +287,12 @@ class ContentWriteProcessor(DequeueHandlerBase):
                         code="FAILED_PRECONDITION",
                     )
                 expected = set(msg.refresh["indexed_levels"])
-                records = await get_service().fs._directory_index_records(msg.resource_id, ctx)
-                indexed = {record["level"] for record in records}
-                if (queue_status.get("Embedding") or {}).get(
-                    "error_count", 0
-                ) or expected - indexed:
+                if (queue_status.get("Embedding") or {}).get("error_count", 0):
                     raise OpenVikingError(
-                        f"Directory index is not readable: {msg.resource_id}",
+                        f"Directory index processing failed: {msg.resource_id}",
                         code="PROCESSING_ERROR",
                     )
+                await get_service().fs._wait_for_directory_index(msg.resource_id, ctx, expected)
                 result["indexed_levels"] = sorted(expected)
                 result["vector_status"] = "complete"
             result["queue_status"] = queue_status

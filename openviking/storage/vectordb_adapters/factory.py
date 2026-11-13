@@ -10,6 +10,7 @@ from .base import CollectionAdapter
 from .http_adapter import HttpCollectionAdapter
 from .local_adapter import CuVSCollectionAdapter, LocalCollectionAdapter
 from .opengauss_adapter import OpenGaussCollectionAdapter
+from .pgvector_adapter import PgvectorCollectionAdapter
 from .vikingdb_private_adapter import VikingDBPrivateCollectionAdapter
 from .volcengine_adapter import VolcengineCollectionAdapter
 
@@ -20,6 +21,7 @@ _ADAPTER_REGISTRY: dict[str, type[CollectionAdapter]] = {
     "volcengine": VolcengineCollectionAdapter,
     "vikingdb": VikingDBPrivateCollectionAdapter,
     "opengauss": OpenGaussCollectionAdapter,
+    "pgvector": PgvectorCollectionAdapter,
 }
 
 

@@ -36,10 +36,10 @@ class RerankConfig(BaseModel):
     )
 
     candidates_visible: bool = Field(
-        default=True,
+        default=False,
         description=(
-            "Jev rerank candidate visibility: true shares all candidates in state; "
-            "false places each candidate in its own question (noul mode only)"
+            "Jev Noul candidate visibility: false (default) isolates each candidate "
+            "in its own question; true shares all candidates in state. Ignored by choice."
         ),
     )
 
@@ -100,8 +100,6 @@ class RerankConfig(BaseModel):
             self.mode = self.mode.strip().lower()
             if self.mode not in ("noul", "choice"):
                 raise ValueError("Jev rerank mode must be one of ['noul', 'choice']")
-            if self.mode == "choice" and not self.candidates_visible:
-                raise ValueError("Jev choice rerank requires candidates_visible=True")
 
         if provider and provider not in [
             "vikingdb",

@@ -137,6 +137,7 @@ class QueueManager:
         self._embedding_worker_stopped = threading.Event()
         self._poll_interval = 0.2
         self._vlm_resolver: Optional["VLMResolver"] = None
+        self._runtime_config_manager: Any = None
         # Import at composition time to avoid a service <-> queue package cycle.
         from openviking.service.task_queue_middleware import TaskWorkQueueMiddleware
 
@@ -251,6 +252,7 @@ class QueueManager:
             max_concurrent_llm=self._max_concurrent_semantic,
             embedding_worker_stopped=self._embedding_worker_stopped.is_set,
             vlm_resolver=self._vlm_resolver,
+            runtime_config_manager=self._runtime_config_manager,
         )
         self.get_queue(
             self.SEMANTIC,
@@ -261,6 +263,12 @@ class QueueManager:
 
         if start:
             self.start()
+
+    def set_runtime_config_manager(self, manager: Any) -> None:
+        """Bind generation configuration before installing the semantic handler."""
+        if self._started:
+            raise RuntimeError("Cannot replace configuration after queue workers start")
+        self._runtime_config_manager = manager
 
     def set_vlm_resolver(self, resolver: "VLMResolver") -> None:
         """Bind the owning service's resolver before queue workers start."""
@@ -276,6 +284,7 @@ class QueueManager:
                     max_concurrent_llm=self._max_concurrent_semantic,
                     embedding_worker_stopped=self._embedding_worker_stopped.is_set,
                     vlm_resolver=resolver,
+                    runtime_config_manager=self._runtime_config_manager,
                 )
             )
 

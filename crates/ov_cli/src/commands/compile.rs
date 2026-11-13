@@ -9,7 +9,7 @@ const MEMORY_COMPILE_SKILL: &str = "memory";
 pub async fn run(
     client: &HttpClient,
     from_uris: Vec<String>,
-    to: String,
+    to: Option<String>,
     skill: String,
     instruction: Option<String>,
     args: Option<String>,
@@ -18,6 +18,7 @@ pub async fn run(
 ) -> Result<()> {
     let skill = skill.trim().to_string();
     let memory_mode = skill == MEMORY_COMPILE_SKILL;
+    let to = normalize_target(to, memory_mode)?;
     let sources = normalize_sources(from_uris, memory_mode)?;
     let args = parse_args(args.as_deref())?;
     let instruction = instruction
@@ -35,6 +36,15 @@ pub async fn run(
         .await?;
     render_accepted(&accepted, to.trim(), output_format, compact);
     Ok(())
+}
+
+/// Return the explicit target or memory root; other skills require an explicit target.
+fn normalize_target(value: Option<String>, memory_mode: bool) -> Result<String> {
+    match value {
+        Some(value) => Ok(value),
+        None if memory_mode => Ok("viking://~/memories".to_string()),
+        None => Err(Error::Client("--to is required unless --skill memory".into())),
+    }
 }
 
 fn parse_args(value: Option<&str>) -> Result<Option<Map<String, Value>>> {
@@ -102,7 +112,15 @@ fn render_accepted(
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_sources, parse_args};
+    use super::{normalize_sources, normalize_target, parse_args};
+
+    #[test]
+    fn only_memory_mode_defaults_the_target() {
+        assert_eq!(normalize_target(None, true).unwrap(), "viking://~/memories");
+        assert!(normalize_target(None, false).is_err());
+        let target = "viking://resources/wiki";
+        assert_eq!(normalize_target(Some(target.into()), false).unwrap(), target);
+    }
 
     #[test]
     fn expands_comma_separated_and_repeated_sources_stably() {

@@ -35,8 +35,6 @@ class CompileLimits(BaseModel):
     agent_iterations: int = 120
     # Per-transform model/tool rounds, including draft checks and submission; parent budget is separate.
     subagent_iterations: int = Field(default=70, ge=1)
-    # Final delivery review has a task-wide model/tool-round budget, including submission.
-    final_review_iterations: int = Field(default=300, ge=1)
     # Per-task Map workers, also used for Resource source subagents.
     source_concurrency: int = Field(default=6, ge=1)
     # Per-task Shuffle routing workers and embedding batches.

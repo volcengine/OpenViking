@@ -1,0 +1,57 @@
+/**
+ * 弹出层的组件变量，颜色取自包级主题基线 `src/theme.css`。宿主想换肤时改基线，
+ * 只想调这一处时覆盖下面任意一条。
+ *
+ * Component variables of the popover, derived from the package-level baseline in
+ * `src/theme.css`. A host re-skins by overriding the baseline, or adjusts just
+ * this component by overriding any variable below.
+ */
+.ov-popover {
+  --ov-ui-popover-bg: var(
+    --ov-ui-color-bg-1,
+    var(--ov-ui-bg-1-default, #ffffff)
+  );
+  --ov-ui-popover-text: var(
+    --ov-ui-color-text-1,
+    var(--ov-ui-text-1-default, #0b0b0f)
+  );
+  --ov-ui-popover-border: var(
+    --ov-ui-color-border-2,
+    var(--ov-ui-border-2-default, #e1e4f2)
+  );
+
+  position: fixed;
+  z-index: 1000;
+  box-sizing: border-box;
+  max-width: 320px;
+  padding: 12px;
+  border: 1px solid var(--ov-ui-popover-border);
+  border-radius: 8px;
+  background: var(--ov-ui-popover-bg);
+  color: var(--ov-ui-popover-text);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 20px;
+  overflow-wrap: break-word;
+  /* 与卡片式菜单同一层浮起高度，但比提示更重——它承载的是要读的内容。 */
+  box-shadow:
+    0 15px 35px -2px rgb(0 0 0 / 5%),
+    0 5px 15px rgb(0 0 0 / 5%);
+  animation: ov-popover-enter 120ms ease-out;
+}
+
+@keyframes ov-popover-enter {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ov-popover {
+    animation: none;
+  }
+}
