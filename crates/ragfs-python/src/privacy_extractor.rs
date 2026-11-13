@@ -2,7 +2,7 @@
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use ragfs::privacy_extractor::PrivacyExtractor;
+use ragfs::privacy_extractor::{PrivacyExtractor, PrivacyRuleLimits};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -14,11 +14,23 @@ pub(crate) struct PyPrivacyExtractor {
 #[pymethods]
 impl PyPrivacyExtractor {
     #[new]
-    #[pyo3(signature = (custom_rules_json="[]"))]
-    fn new(custom_rules_json: &str) -> PyResult<Self> {
+    #[pyo3(signature = (custom_rules_json="[]", *, max_rules=None, max_source_bytes=None, max_compiled_bytes=None))]
+    fn new(
+        py: Python<'_>,
+        custom_rules_json: &str,
+        max_rules: Option<usize>,
+        max_source_bytes: Option<usize>,
+        max_compiled_bytes: Option<usize>,
+    ) -> PyResult<Self> {
+        let defaults = PrivacyRuleLimits::default();
+        let limits = PrivacyRuleLimits {
+            max_rules: max_rules.unwrap_or(defaults.max_rules),
+            max_source_bytes: max_source_bytes.unwrap_or(defaults.max_source_bytes),
+            max_compiled_bytes: max_compiled_bytes.unwrap_or(defaults.max_compiled_bytes),
+        };
         Ok(Self {
             inner: Arc::new(
-                PrivacyExtractor::with_custom_rules(custom_rules_json)
+                py.detach(|| PrivacyExtractor::with_limits(custom_rules_json, limits))
                     .map_err(PyValueError::new_err)?,
             ),
         })

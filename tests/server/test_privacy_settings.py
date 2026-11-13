@@ -243,6 +243,41 @@ async def test_custom_rules_inherit_replace_and_validate_before_writing(
     assert response.json()["result"]["privacy"]["never_mask"] == ["public-value"]
 
 
+async def test_rule_resource_limits_reject_settings_before_persistence(client, service, owner):
+    from openviking.privacy import rules as privacy_rules
+
+    response = await client.patch(URL, json={"privacy": {"mode": "off", "custom_rules": []}})
+    assert response.status_code == 200, response.text
+    uris = [user_config_uri(owner), user_config_backup_uri(owner)]
+    before = [await service.viking_fs.read_file(uri, ctx=owner) for uri in uris]
+    cached = dict(privacy_rules._extractor_cache)
+    rules = [{"id": f"costly{i}", "regex": "[a-z0-9]{100000}"} for i in range(20)]
+    response = await client.patch(URL, json={"privacy": {"custom_rules": rules}})
+    assert response.status_code == 400, response.text
+    assert "compiled size limit" in response.text
+    assert [await service.viking_fs.read_file(uri, ctx=owner) for uri in uris] == before
+    assert privacy_rules._extractor_cache == cached
+
+
+async def test_successful_rule_updates_only_cache_on_first_use(client, service, owner, monkeypatch):
+    from openviking.privacy import rules as privacy_rules
+
+    monkeypatch.setattr(privacy_rules, "_extractor_cache", {})
+    monkeypatch.setattr(privacy_rules, "_extractor_cache_bytes", 0)
+    custom_rules = [{"id": "route", "regex": "route_[A-Za-z0-9]{12}"}]
+    response = await client.patch(
+        URL,
+        json={"privacy": {"mode": "auto", "custom_rules": custom_rules}},
+    )
+    assert response.status_code == 200, response.text
+    assert privacy_rules._extractor_cache == {}
+
+    settings = await service.privacy_configs.get_settings(owner)
+    privacy_rules.find_privacy_matches("route_aB3dE5gH7jK9", settings=settings)
+    cache_key = json.dumps(custom_rules, sort_keys=True)
+    assert list(privacy_rules._extractor_cache) == [cache_key]
+
+
 async def test_custom_rules_and_never_mask_apply_to_skill_session_and_registered_values(
     client, app, service, owner
 ):

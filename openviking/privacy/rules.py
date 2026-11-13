@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -26,11 +28,34 @@ class PrivacyMatch:
     detector_id: str
 
 
-_extractor_cache: dict[str, tuple[float, Any]] = {}
+DEFAULT_EXTRACTOR_CACHE_MAX_BYTES = 64 * 1024 * 1024
+# Keep this aligned with PrivacyRuleLimits::default() in the native extractor.
+DEFAULT_PRIVACY_RULES_COMPILED_BYTES = 10 * 1024 * 1024
+_extractor_cache_max_bytes = int(
+    os.environ.get(
+        "OPENVIKING_PRIVACY_EXTRACTOR_CACHE_MAX_BYTES", DEFAULT_EXTRACTOR_CACHE_MAX_BYTES
+    )
+)
+_extractor_limits = {
+    name: int(os.environ[env])
+    for name, env in (
+        ("max_rules", "OPENVIKING_PRIVACY_MAX_CUSTOM_RULES"),
+        ("max_source_bytes", "OPENVIKING_PRIVACY_MAX_RULES_SOURCE_BYTES"),
+        ("max_compiled_bytes", "OPENVIKING_PRIVACY_MAX_RULES_COMPILED_BYTES"),
+    )
+    if env in os.environ
+}
+if _extractor_cache_max_bytes < 0 or any(value <= 0 for value in _extractor_limits.values()):
+    raise ValueError("Privacy rule limits must be positive; extractor cache bytes may be zero")
+
+_extractor_cache: dict[str, tuple[float, Any, int]] = {}
+_extractor_cache_bytes = 0
 _extractor_cache_lock = Lock()
 
 
-def _extractor(custom_rules_json: str = "[]"):
+def _extractor(custom_rules_json: str = "[]", *, cache: bool = True):
+    global _extractor_cache_bytes
+
     now = time.monotonic()
     cached = _extractor_cache.get(custom_rules_json)
     if cached is not None and now - cached[0] < DEFAULT_MATCHER_CACHE_TTL_SECONDS:
@@ -40,21 +65,33 @@ def _extractor(custom_rules_json: str = "[]"):
         cached = _extractor_cache.get(custom_rules_json)
         if cached is not None and now - cached[0] < DEFAULT_MATCHER_CACHE_TTL_SECONDS:
             return cached[1]
-        expired = []
-        # Creation order is also expiry order because all entries share one TTL.
-        for key, (created, _) in _extractor_cache.items():
-            if now - created < DEFAULT_MATCHER_CACHE_TTL_SECONDS:
+        extractor = get_privacy_extractor_class()(custom_rules_json, **_extractor_limits)
+        if not cache:
+            return extractor
+        size = _extractor_limits.get(
+            "max_compiled_bytes", DEFAULT_PRIVACY_RULES_COMPILED_BYTES
+        ) + sys.getsizeof(custom_rules_json)
+        if size > _extractor_cache_max_bytes:
+            return extractor
+        # Creation order is also expiry order because hits do not renew the TTL.
+        while _extractor_cache:
+            key = next(iter(_extractor_cache))
+            created, _, previous_size = _extractor_cache[key]
+            if (
+                now - created < DEFAULT_MATCHER_CACHE_TTL_SECONDS
+                and _extractor_cache_bytes + size <= _extractor_cache_max_bytes
+            ):
                 break
-            expired.append(key)
-        for key in expired:
             del _extractor_cache[key]
-        extractor = get_privacy_extractor_class()(custom_rules_json)
-        _extractor_cache[custom_rules_json] = (time.monotonic(), extractor)
+            _extractor_cache_bytes -= previous_size
+        _extractor_cache[custom_rules_json] = (time.monotonic(), extractor, size)
+        _extractor_cache_bytes += size
         return extractor
 
 
 def validate_custom_rules(rules: list[dict]) -> None:
-    _extractor(json.dumps(rules, sort_keys=True))
+    if rules:
+        _extractor(json.dumps(rules, sort_keys=True), cache=False)
 
 
 def prepare_privacy_extractor(

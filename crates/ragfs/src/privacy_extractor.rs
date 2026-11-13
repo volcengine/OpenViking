@@ -1,7 +1,7 @@
 //! Format-based discovery of credentials in text.
 //! Positions are Unicode character offsets, suitable for Python string slicing.
 
-use regex::{Captures, Regex};
+use regex::{Captures, Error as RegexError, Regex, RegexBuilder};
 use serde::Deserialize;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
@@ -9,6 +9,28 @@ use std::collections::{BinaryHeap, HashSet};
 // Keep these budgets aligned with Python's PrivacySanitizer defaults.
 const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_MATCHES: usize = 10_000;
+
+/// Resource limits for one compiled rule set, including the built-in detectors.
+pub struct PrivacyRuleLimits {
+    /// Maximum number of custom rules, excluding built-ins.
+    pub max_rules: usize,
+    /// Maximum UTF-8 bytes of custom-rule JSON.
+    pub max_source_bytes: usize,
+    /// Maximum combined compiled regex program budget.
+    pub max_compiled_bytes: usize,
+}
+
+impl Default for PrivacyRuleLimits {
+    fn default() -> Self {
+        Self {
+            // Custom rules are maintained as configuration, like Privacy fields.
+            max_rules: 128,
+            max_source_bytes: 1024 * 1024,
+            // Split regex's default 10 MiB program limit across the whole rule set.
+            max_compiled_bytes: 10 * 1024 * 1024,
+        }
+    }
+}
 
 #[derive(Deserialize)]
 struct Config {
@@ -83,21 +105,66 @@ impl PrivacyExtractor {
 
     /// Compile built-in and validated user-defined detectors together.
     pub fn with_custom_rules(custom_rules_json: &str) -> Result<Self, String> {
+        Self::with_limits(custom_rules_json, PrivacyRuleLimits::default())
+    }
+
+    /// Compile with deployment-specific resource limits.
+    pub fn with_limits(custom_rules_json: &str, limits: PrivacyRuleLimits) -> Result<Self, String> {
+        if limits.max_rules == 0 || limits.max_source_bytes == 0 || limits.max_compiled_bytes == 0 {
+            return Err("Privacy rule limits must be positive".into());
+        }
+        if custom_rules_json.len() > limits.max_source_bytes {
+            return Err(format!(
+                "Privacy rule source limit exceeded ({} bytes)",
+                limits.max_source_bytes
+            ));
+        }
+        let rules: Vec<CustomRule> =
+            serde_json::from_str(custom_rules_json).map_err(|error| error.to_string())?;
+        if rules.len() > limits.max_rules {
+            return Err(format!(
+                "Privacy rule count limit exceeded ({})",
+                limits.max_rules
+            ));
+        }
         let cfg: Config = serde_json::from_str(include_str!("privacy_extractor_rules.json"))
             .map_err(|error| error.to_string())?;
+        let pattern_count = cfg
+            .detectors
+            .len()
+            .checked_add(rules.len())
+            .and_then(|count| count.checked_add(1))
+            .ok_or_else(|| "Privacy rule count overflow".to_string())?;
+        let pattern_size_limit = limits.max_compiled_bytes / pattern_count;
+        let size_error = || {
+            format!(
+                "Privacy rule compiled size limit exceeded ({} bytes)",
+                limits.max_compiled_bytes
+            )
+        };
+        if pattern_size_limit == 0 {
+            return Err(size_error());
+        }
+        let compile = |pattern: &str, id: &str| -> Result<Regex, String> {
+            RegexBuilder::new(pattern)
+                .size_limit(pattern_size_limit)
+                .build()
+                .map_err(|error| match error {
+                    RegexError::CompiledTooBig(_) => size_error(),
+                    _ => format!("Invalid Privacy rule {id}: {error}"),
+                })
+        };
         let mut detectors = cfg
             .detectors
             .into_iter()
             .map(|detector| {
                 Ok(Detector {
-                    pattern: Regex::new(&detector.pattern).map_err(|error| error.to_string())?,
+                    pattern: compile(&detector.pattern, &detector.id)?,
                     id: detector.id,
                     reject_repeated: detector.reject_repeated,
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
-        let rules: Vec<CustomRule> =
-            serde_json::from_str(custom_rules_json).map_err(|error| error.to_string())?;
         let mut ids: HashSet<_> = detectors.iter().map(|d| d.id.clone()).collect();
         for rule in rules {
             if rule.id.is_empty()
@@ -120,11 +187,10 @@ impl PrivacyExtractor {
                 _ => {
                     return Err(
                         "Privacy rules require prefix with positive min_length, or regex".into(),
-                    )
+                    );
                 }
             };
-            let pattern = Regex::new(&pattern)
-                .map_err(|error| format!("Invalid Privacy rule {}: {error}", rule.id))?;
+            let pattern = compile(&pattern, &rule.id)?;
             if pattern.is_match("") {
                 return Err("Privacy rules must not match an empty string".into());
             }
@@ -134,9 +200,10 @@ impl PrivacyExtractor {
                 reject_repeated: true,
             });
         }
+        let reference = compile(&cfg.reference_pattern, "reference")?;
         Ok(Self {
             detectors,
-            reference: Regex::new(&cfg.reference_pattern).map_err(|error| error.to_string())?,
+            reference,
         })
     }
 
@@ -396,6 +463,40 @@ mod tests {
         }
         let oversized = serde_json::json!([{"id":"x", "regex":"[a-zA-Z0-9]{1000000000}"}]);
         assert!(PrivacyExtractor::with_custom_rules(&oversized.to_string()).is_err());
+    }
+
+    #[test]
+    fn rule_resource_budgets_are_enforced() {
+        let limits = PrivacyRuleLimits::default();
+        let rules: Vec<_> = (0..=limits.max_rules)
+            .map(|n| serde_json::json!({"id":format!("rule{n}"),"regex":"token_[a-z0-9]{12}"}))
+            .collect();
+        assert!(
+            PrivacyExtractor::with_custom_rules(&serde_json::to_string(&rules).unwrap())
+                .err()
+                .unwrap()
+                .contains("count limit")
+        );
+
+        let source = r#"[{"id":"token","regex":"token_[a-z0-9]{12}"}]"#;
+        assert!(PrivacyExtractor::with_limits(
+            source,
+            PrivacyRuleLimits {
+                max_source_bytes: source.len() - 1,
+                ..PrivacyRuleLimits::default()
+            }
+        )
+        .err()
+        .unwrap()
+        .contains("source limit"));
+
+        // Each pattern fits regex's former per-pattern limit, but the set does not.
+        let costly =
+            r#"[{"id":"one","regex":"[a-z0-9]{100000}"},{"id":"two","regex":"[a-z0-9]{100000}"}]"#;
+        assert!(PrivacyExtractor::with_custom_rules(costly)
+            .err()
+            .unwrap()
+            .contains("compiled size limit"));
     }
     #[test]
     fn custom_rules_accept_long_values_and_skip_zero_width_matches() {

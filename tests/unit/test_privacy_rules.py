@@ -3,6 +3,7 @@
 """Native credential detection preserves non-secret text and character spans."""
 
 import json
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
@@ -91,6 +92,11 @@ def test_custom_detection_and_exact_exclusion_share_the_native_pipeline():
 @pytest.fixture
 def empty_extractor_cache(monkeypatch):
     monkeypatch.setattr(rules, "_extractor_cache", {})
+    monkeypatch.setattr(rules, "_extractor_cache_bytes", 0)
+    monkeypatch.setattr(
+        rules, "_extractor_cache_max_bytes", rules.DEFAULT_EXTRACTOR_CACHE_MAX_BYTES
+    )
+    monkeypatch.setattr(rules, "_extractor_limits", {})
 
 
 @pytest.mark.usefixtures("empty_extractor_cache")
@@ -107,7 +113,7 @@ def test_extractor_cache_shares_rules_and_expires_after_ttl(monkeypatch):
     shared.extract.assert_has_calls([call("public", ["one"]), call("public", ["two"])])
     definitions = [
         json.dumps([{"id": f"rule{i}", "prefix": f"token{i}_", "min_length": 12}], sort_keys=True)
-        for i in range(64)
+        for i in range(2)
     ]
     clock[0] = 1
     engines = {key: rules._extractor(key) for key in definitions}
@@ -115,36 +121,51 @@ def test_extractor_cache_shares_rules_and_expires_after_ttl(monkeypatch):
     for key, engine in engines.items():
         assert rules._extractor(key) is engine
     assert rules._extractor() is shared
-    assert constructor.call_count == 65
+    assert constructor.call_count == 3
     clock[0] = 60
     assert rules._extractor() is not shared
     assert rules._extractor(definitions[0]) is engines[definitions[0]]
     clock[0] = 61
     assert rules._extractor(definitions[0]) is not engines[definitions[0]]
     assert len(rules._extractor_cache) == 2
-    assert constructor.call_count == 67
+    assert constructor.call_count == 5
 
 
 @pytest.mark.usefixtures("empty_extractor_cache")
-def test_extractor_cache_compiles_once_for_concurrent_requests(monkeypatch):
-    start = Barrier(8)
-    engine = object()
+def test_extractor_cache_reserves_the_full_compilation_budget(monkeypatch):
+    constructor = Mock(side_effect=lambda value: SimpleNamespace(key=value))
+    monkeypatch.setattr(rules, "get_privacy_extractor_class", lambda: constructor)
+    definitions = [f"rules-{index}" for index in range(7)]
 
-    def compile_rules(_):
+    for definition in definitions:
+        rules._extractor(definition)
+
+    assert len(rules._extractor_cache) == 6
+    assert rules._extractor_cache_bytes <= rules.DEFAULT_EXTRACTOR_CACHE_MAX_BYTES
+
+
+@pytest.mark.usefixtures("empty_extractor_cache")
+def test_extractor_cache_serializes_compilation_and_respects_budget(monkeypatch):
+    start = Barrier(8)
+    monkeypatch.setattr(rules, "_extractor_limits", {"max_compiled_bytes": 100})
+    monkeypatch.setattr(rules, "_extractor_cache_max_bytes", 4 * (100 + sys.getsizeof("a")))
+
+    def compile_rules(value, **_):
         time.sleep(0.02)
-        return engine
+        return SimpleNamespace(key=value)
 
     constructor = Mock(side_effect=compile_rules)
     monkeypatch.setattr(rules, "get_privacy_extractor_class", lambda: constructor)
 
-    def lookup(_):
+    def lookup(key):
         start.wait(timeout=5)
-        return rules._extractor()
+        return rules._extractor(key)
 
     with ThreadPoolExecutor(max_workers=8) as pool:
-        results = list(pool.map(lookup, range(8)))
-    assert all(result is engine for result in results)
-    constructor.assert_called_once_with("[]")
+        results = list(pool.map(lookup, ["a", "b", "c", "d"] * 2))
+    assert all(first is second for first, second in zip(results[:4], results[4:], strict=True))
+    assert constructor.call_count == 4
+    assert rules._extractor_cache_bytes <= rules._extractor_cache_max_bytes
 
 
 @pytest.mark.usefixtures("empty_extractor_cache")
