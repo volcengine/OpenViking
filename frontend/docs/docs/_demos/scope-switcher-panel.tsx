@@ -111,12 +111,18 @@ export default function ScopeSwitcherPanel() {
                 }
                 footer={
                   <>
-                    <button type="button" className="demo-panel__footer-item">
+                    <Button
+                      htmlType="button"
+                      className="demo-panel__footer-item"
+                    >
                       库设置
-                    </button>
-                    <button type="button" className="demo-panel__footer-item">
+                    </Button>
+                    <Button
+                      htmlType="button"
+                      className="demo-panel__footer-item"
+                    >
                       查看账单
-                    </button>
+                    </Button>
                   </>
                 }
               >
@@ -137,9 +143,9 @@ export default function ScopeSwitcherPanel() {
               <Shell
                 title="选择数据空间"
                 footer={
-                  <button type="button" className="demo-panel__footer-item">
+                  <Button htmlType="button" className="demo-panel__footer-item">
                     管理空间
-                  </button>
+                  </Button>
                 }
               >
                 {list}
@@ -158,9 +164,9 @@ export default function ScopeSwitcherPanel() {
               <Shell
                 title="选择 User"
                 footer={
-                  <button type="button" className="demo-panel__footer-item">
+                  <Button htmlType="button" className="demo-panel__footer-item">
                     管理 User
-                  </button>
+                  </Button>
                 }
               >
                 {list}

@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { Button } from '#demo-controls';
+import { Checkbox, Button } from '#demo-controls';
 import { offlineFetch } from '#file-browser-basic-data';
 import type {
   FileBrowserPreviewActions,
@@ -157,20 +157,10 @@ export function usePreviewControls(locale: 'zh-CN' | 'en-US') {
             ))}
           </select>
         </label>{' '}
-        <label>
-          <input
-            type="checkbox"
-            style={{
-              display: 'inline-block',
-              appearance: 'auto',
-              width: 16,
-              height: 16,
-            }}
-            checked={fail}
-            onChange={(event) => setFail(event.target.checked)}
-          />{' '}
+        <Checkbox checked={fail} onChange={(next) => setFail(next)}>
+          {' '}
           {text.simulate}
-        </label>
+        </Checkbox>
         <p>{text.demo}</p>
         {hint ? (
           <p role="status">

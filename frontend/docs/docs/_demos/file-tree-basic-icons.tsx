@@ -1,3 +1,4 @@
+import { Button } from '#demo-controls';
 import {
   ExperienceBoardIcon,
   WikiBoardIcon,
@@ -36,8 +37,8 @@ export function Indicator({
         ? text.conflict
         : text.wiki;
   return (
-    <button
-      type="button"
+    <Button
+      htmlType="button"
       title={label}
       aria-label={label}
       onClick={(event) => event.stopPropagation()}
@@ -50,7 +51,7 @@ export function Indicator({
       ) : (
         <WikiBoardIcon width={12} height={12} aria-hidden />
       )}
-    </button>
+    </Button>
   );
 }
 

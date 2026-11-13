@@ -1,3 +1,4 @@
+import { Button } from '#demo-controls';
 import { useCallback, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { useLang } from '@rspress/core/runtime';
@@ -38,9 +39,9 @@ export default function DirectoryTourSizing() {
           <option key={name}>{name}</option>
         ))}
       </select>
-      <button ref={anchor} type="button" onClick={() => setOpen(true)}>
+      <Button ref={anchor} htmlType="button" onClick={() => setOpen(true)}>
         {zh ? '测试尺寸约束' : 'Test sizing'}
-      </button>
+      </Button>
       <DirectoryTour
         open={open}
         locale={zh ? 'zh-CN' : 'en-US'}

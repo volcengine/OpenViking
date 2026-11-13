@@ -17,7 +17,15 @@ export interface InputProps extends Omit<
   InputHTMLAttributes<HTMLInputElement>,
   'size' | 'prefix' | 'type'
 > {
-  type?: 'text' | 'search' | 'email' | 'url' | 'tel' | 'password' | 'number';
+  type?:
+    | 'text'
+    | 'search'
+    | 'email'
+    | 'url'
+    | 'tel'
+    | 'password'
+    | 'number'
+    | 'time';
   size?: 'mini' | 'small' | 'default' | 'large';
   prefix?: ReactNode;
   suffix?: ReactNode;

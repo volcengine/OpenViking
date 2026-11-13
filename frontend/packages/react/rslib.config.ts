@@ -78,9 +78,14 @@ export default defineConfig({
             './src/shared/primitives/button/button.tsx',
           'shared/primitives/notification/index':
             './src/shared/primitives/notification/index.ts',
+          'shared/primitives/input/input':
+            './src/shared/primitives/input/input.tsx',
+          'shared/primitives/checkbox/checkbox':
+            './src/shared/primitives/checkbox/checkbox.tsx',
+          style: './src/shared/docs-controls.css',
         },
       },
-      output: { distPath: { root: './dist/docs' }, emitCss: false },
+      output: { distPath: { root: './dist/docs' }, emitCss: true },
     },
     // Build each stylesheet independently so every public CSS entry is complete.
     ...Object.entries({

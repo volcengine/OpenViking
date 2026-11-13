@@ -23,11 +23,11 @@
   padding: 0;
   border: 0;
 }
-.ov-file-browser-workflow label {
+.ov-file-browser-workflow label:not(.ov-checkbox) {
   display: block;
   margin-block-start: 12px;
 }
-.ov-file-browser-workflow :is(input:not([type='checkbox']), textarea, select) {
+.ov-file-browser-workflow select {
   box-sizing: border-box;
   min-width: 0;
   width: 100%;
@@ -42,7 +42,7 @@
   min-height: 80px;
   resize: vertical;
 }
-.ov-file-browser-workflow :is(input, textarea, select):focus-visible {
+.ov-file-browser-workflow :is(select, .ov-textarea):focus-visible {
   outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
   outline-offset: 2px;
 }
@@ -75,13 +75,4 @@
   overflow-wrap: anywhere;
   border-radius: 8px;
   background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
-}
-
-.ov-file-browser-workflow input[type='checkbox'] {
-  appearance: auto;
-  width: 16px;
-  height: 16px;
-  margin-inline-end: 8px;
-  vertical-align: middle;
-  accent-color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
 }

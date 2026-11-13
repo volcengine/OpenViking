@@ -1,3 +1,4 @@
+import { Checkbox } from '#demo-controls';
 import { useState } from 'react';
 import { useLang } from '@rspress/core/runtime';
 import { FilePreview } from '@openviking/react/components/file-preview';
@@ -49,14 +50,10 @@ export default function FilePreviewEditing() {
             ))}
           </select>
         </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={fail}
-            onChange={(event) => setFail(event.target.checked)}
-          />{' '}
+        <Checkbox checked={fail} onChange={(next) => setFail(next)}>
+          {' '}
           {text.fail}
-        </label>
+        </Checkbox>
       </div>
       <p>{text.hint}</p>
       <div style={{ height: 360 }}>

@@ -1,3 +1,4 @@
+import { Checkbox } from '#demo-controls';
 import { useState } from 'react';
 import { useLang } from '@rspress/core/runtime';
 import { FileTree } from '@openviking/react/components/file-tree';
@@ -92,15 +93,13 @@ export default function FileTreeBasic() {
             <option value="failure">{t.failureCase}</option>
           </select>
         </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={externalLoading}
-            onChange={(event) => setExternalLoading(event.target.checked)}
-            style={{ display: 'inline-block', appearance: 'auto' }}
-          />{' '}
+        <Checkbox
+          checked={externalLoading}
+          onChange={(next) => setExternalLoading(next)}
+        >
+          {' '}
           {t.externalLoading}
-        </label>
+        </Checkbox>
       </div>
       <div style={{ height: 420 }}>
         <FileTree

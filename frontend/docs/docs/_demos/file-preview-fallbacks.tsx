@@ -1,6 +1,6 @@
 import { useId, useMemo, useState } from 'react';
 import { useLang } from '@rspress/core/runtime';
-import { Button } from '#demo-controls';
+import { Checkbox, Button } from '#demo-controls';
 import { FilePreview } from '@openviking/react/components/file-preview';
 import type { FilePreviewFileTabSlots } from '@openviking/react/components/file-preview';
 import '@openviking/react/components/file-preview/style.css';
@@ -109,15 +109,14 @@ export default function FilePreviewFallbacks() {
             <option value="missing">{text.missing}</option>
           </select>
         </label>{' '}
-        <label htmlFor={`${id}-custom`}>
-          <input
-            id={`${id}-custom`}
-            type="checkbox"
-            checked={custom}
-            onChange={(event) => setCustom(event.target.checked)}
-          />{' '}
+        <Checkbox
+          id={`${id}-custom`}
+          checked={custom}
+          onChange={(next) => setCustom(next)}
+        >
+          {' '}
           {text.custom}
-        </label>
+        </Checkbox>
       </div>
       <div style={{ height: 320 }}>
         <FilePreview

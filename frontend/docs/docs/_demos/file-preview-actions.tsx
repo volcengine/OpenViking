@@ -1,3 +1,4 @@
+import { Checkbox } from '#demo-controls';
 import { useState } from 'react';
 import { useLang } from '@rspress/core/runtime';
 import {
@@ -67,30 +68,18 @@ export default function FilePreviewActionsDemo() {
   return (
     <div className="ov-demo-preview-actions">
       <div className="ov-demo-preview-actions__controls">
-        <label>
-          <input
-            type="checkbox"
-            checked={showModes}
-            onChange={(event) => setShowModes(event.target.checked)}
-          />{' '}
+        <Checkbox checked={showModes} onChange={(next) => setShowModes(next)}>
+          {' '}
           {text.showModes}
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={showEdit}
-            onChange={(event) => setShowEdit(event.target.checked)}
-          />{' '}
+        </Checkbox>
+        <Checkbox checked={showEdit} onChange={(next) => setShowEdit(next)}>
+          {' '}
           {text.showEdit}
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={showPath}
-            onChange={(event) => setShowPath(event.target.checked)}
-          />{' '}
+        </Checkbox>
+        <Checkbox checked={showPath} onChange={(next) => setShowPath(next)}>
+          {' '}
           {text.showPath}
-        </label>
+        </Checkbox>
         <label>
           {text.mode}{' '}
           <select
@@ -108,22 +97,17 @@ export default function FilePreviewActionsDemo() {
             ))}
           </select>
         </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={fail}
-            onChange={(event) => setFail(event.target.checked)}
-          />{' '}
+        <Checkbox checked={fail} onChange={(next) => setFail(next)}>
+          {' '}
           {text.fail}
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={customToolbar}
-            onChange={(event) => setCustomToolbar(event.target.checked)}
-          />{' '}
+        </Checkbox>
+        <Checkbox
+          checked={customToolbar}
+          onChange={(next) => setCustomToolbar(next)}
+        >
+          {' '}
           {text.customToolbar}
-        </label>
+        </Checkbox>
       </div>
       <div className="ov-demo-surface" style={{ height: 300 }}>
         <FilePreview
