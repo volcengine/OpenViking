@@ -126,6 +126,9 @@ test('the owner\'s policy file is kept, and without a group list the owner is to
   const f = fixture(t, [URL_, TOKEN]);
   const policy = path.join(f.dataDir, 'onebot', 'config.json');
   fs.writeFileSync(policy, '{"groups":{"123456789":"ambient"}}\n', { mode: 0o644 });
+  // The fixture may run under a restrictive umask; the behavior under test is
+  // preservation of an explicitly 0644 owner file, not the process umask.
+  fs.chmodSync(policy, 0o644);
   await connectOneBot({ ...f.options, WebSocketImpl: server(f.text, { groups: [] }).Socket });
   assert.equal(f.state.account().ownerId, OWNER);
   assert.equal(fs.readFileSync(policy, 'utf8'), '{"groups":{"123456789":"ambient"}}\n');

@@ -999,15 +999,16 @@ test('a failed backup or write leaves the document untouched', (t) => {
   const original = Buffer.from('- this: [is not, valid yaml\n');
   fs.writeFileSync(document, original);
 
-  // A read-only directory refuses the backup, so the rewrite never starts. The
-  // mode is restored before the assertions so the fixture can still clean up.
-  fs.chmodSync(directory, 0o500);
-  let result;
-  try {
-    result = run(f, ['repair'], { env: { FAKE_DSH_MODE: 'unreadable' } });
-  } finally {
-    fs.chmodSync(directory, 0o700);
-  }
+  // Inject EACCES only for backup writes. A chmod-based fixture is not a
+  // permission test when the suite runs as root (root bypasses the mode bits).
+  const denyBackup = 'import fs from "node:fs";const write=fs.writeFileSync;'
+    + 'fs.writeFileSync=(file,...args)=>{if(String(file).includes(".bak-")){'
+    + 'const error=new Error("EACCES: injected backup failure");error.code="EACCES";throw error;}'
+    + 'return write(file,...args);};';
+  const result = run(f, ['repair'], { env: {
+    FAKE_DSH_MODE: 'unreadable',
+    NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import data:text/javascript,${encodeURIComponent(denyBackup)}`,
+  } });
   assert.notEqual(result.status, 0, output(result));
   assert.match(output(result), /EACCES|EPERM|permission denied/i);
   assert.ok(fs.readFileSync(document).equals(original), 'the document is untouched');
