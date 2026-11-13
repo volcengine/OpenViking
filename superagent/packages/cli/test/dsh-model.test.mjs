@@ -437,6 +437,18 @@ test('list shows declared routes, catalogue models and credential state', (t) =>
   assert.equal(lastStart.home, path.join(f.home, 'data', 'secondary', 'dsh', 'home'));
 });
 
+test('shared mode makes the model command read the host DSH home', (t) => {
+  const f = fixture(t);
+  const manifest = JSON.parse(fs.readFileSync(f.config, 'utf8'));
+  manifest.agents[0].dshHomeMode = 'shared';
+  fs.writeFileSync(f.config, JSON.stringify(manifest));
+  const result = run(f, ['list', '--json']);
+  assert.equal(result.status, 0, output(result));
+  const lastStart = f.calls().filter(call => call.event === 'start').at(-1);
+  assert.equal(lastStart.home, path.join(f.home, '.dsh'));
+  assert.equal(fs.existsSync(path.join(f.agent().dataDir, 'dsh', 'home')), false);
+});
+
 // `ov-superagent dsh model add` no longer exists: the menu wizard is the only way to add
 // a model, and it writes through `addModelOps`. The rules that used to be
 // asserted through the flag form are asserted on that builder directly, so the

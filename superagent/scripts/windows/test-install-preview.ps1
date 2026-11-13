@@ -186,6 +186,7 @@ try {
     $launcherText = Get-Content -LiteralPath $launcher -Raw
     if ($launcherText -notmatch 'current') { throw 'the launcher does not go through current' }
     if ($launcherText -notmatch 'ov-superagent\.mjs') { throw 'the launcher does not run the CLI' }
+    if ($launcherText -notmatch '(?m)^exit /b %ERRORLEVEL%\r?$') { throw 'the launcher does not exit with the CLI status after Ctrl+C' }
     # The home may be HOME or the profile, so the launcher reads neither: it finds
     # the .ov-superagent directory it was written into.
     if ($launcherText -match 'USERPROFILE|%HOME%') { throw "the launcher guesses the home directory:`n$launcherText" }

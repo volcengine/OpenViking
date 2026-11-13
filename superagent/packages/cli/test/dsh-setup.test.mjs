@@ -68,9 +68,9 @@ test('DSH pins its binary like every other runtime and probes with the manifest 
   // DSH_BIN is a deployment fact, not a DSH setting: the chosen binary is pinned
   // into the manifest exactly like CODEX_BIN, so a restart does not depend on the
   // operator still exporting it.
-  const DSH = { id: 'dsh', label: 'DeepSeek Harness', model: 'dsh', bin: '/opt/dsh/bin/dsh', binEnv: 'DSH_BIN', installed: true, available: true, note: 'SDK bridge 兼容（0.2.2-rc.1）' };
-  //         name  role  workspace  runtime  IMs  channel reads-as-you confirm
-  const h = harness(t, ['小V', '',   '',        '1',    '1',  '',     '',          'y'], { runtimes: [DSH] });
+  const DSH = { id: 'dsh', label: 'DeepSeek Harness', model: 'dsh', bin: '/opt/dsh/bin/dsh', binEnv: 'DSH_BIN', installed: true, available: true, route: 'deepseek/deepseek-chat', note: 'SDK bridge 兼容（0.2.2-rc.1）' };
+  //         name  role  workspace  runtime  DSH mode skills IMs  channel reads-as-you confirm
+  const h = harness(t, ['小V', '',   '',        '1',    '1',      '',     '1',  '',     '',          'y'], { runtimes: [DSH] });
   let probeEnv = null;
   h.options.detect.runtimes = async ({ env }) => { probeEnv = env; return [DSH]; };
   assert.equal(await setupCommand(h.options), 0);
@@ -78,6 +78,10 @@ test('DSH pins its binary like every other runtime and probes with the manifest 
   const manifest = h.manifest();
   assert.deepEqual(manifest.env, { DSH_BIN: '/opt/dsh/bin/dsh' });
   assert.equal(manifest.agents[0].model, 'dsh');
+  assert.equal(manifest.agents[0].dshHomeMode, 'isolated');
+  assert.deepEqual(manifest.agents[0].dshSkillRoots, [
+    'workspace-dsh', 'project-agents', 'host-agents', 'host-dsh', 'data-dsh', 'data-agents',
+  ]);
   assert.equal(manifest.agents[0].displayName, '小V');
   assert.equal(probeEnv.DSH_BIN, undefined, 'nothing is pinned yet on the first run');
 });

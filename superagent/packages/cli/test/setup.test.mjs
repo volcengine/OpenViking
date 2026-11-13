@@ -767,6 +767,13 @@ test('setup stops early when no runtime can run, and reports a start failure aft
   assert.match(failing.written(), /配置已保存，但启动没有完成：\n\s+pm2 is not installed/);
 });
 
+test('an unavailable runtime stays selectable, then explains why and exits without saving', async (t) => {
+  const h = harness(t, ['小V', '', '', '2']);
+  await assert.rejects(setupCommand(h.options), /Claude Code 现在不能运行：未安装/);
+  assert.equal(fs.existsSync(path.join(h.home, '.ov-superagent', 'config.json')), false);
+  assert.deepEqual(h.calls, []);
+});
+
 test('with no runtime on a terminal, setup offers to log the built-in Pi in to a model, then carries on', async (t) => {
   const none = RUNTIMES.map((runtime) => ({ ...runtime, available: false }));
   const h = harness(t, [], { runtimes: none });
