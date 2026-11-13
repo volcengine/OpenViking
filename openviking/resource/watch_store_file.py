@@ -126,9 +126,10 @@ class FileWatchStore(WatchStore):
             content = await self._fs.read_file(uri, ctx=self._ctx())
         except NotFoundError:
             return None
-        except Exception as exc:
-            logger.warning("[FileWatchStore] Failed to read %s: %s", uri, exc)
-            return None
+        # Only a missing or malformed snapshot may fall back to the backup.
+        # A failed read means the snapshot state is unknown: treating it as
+        # empty would start the store with no tasks and let the next mutation
+        # write that empty state back, rotating the real snapshot away.
         if not content or not content.strip():
             return None
         try:
