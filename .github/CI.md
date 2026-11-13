@@ -18,25 +18,44 @@ file checksum before writing it. Other test platforms build locally. Release
 wheels build independently in Ubuntu 20.04/macOS/Windows; Ubuntu 24.04 test
 binaries and musl CLI binaries are never reused in release wheels.
 
-Only Linux x86_64 wheels use `[self-hosted, Linux, X64, ov-ci-runner]` for official repository
-PRs and branch pushes. Release/tag events, schedules, manual runs, fork PRs and
-other repositories use GitHub-hosted. Labels are selected directly in `runs-on`;
-no selector job or token is needed.
-Studio, the shared API native runtime, both musl CLI targets, tests, checks and
-source packaging use hosted runners and can run in parallel without competing
-for ov-ci-runner. Native ARM, macOS and Windows assignments are unchanged.
+With repository variable `CI_LINUX_BUILDS_ENABLED=true`, selected Linux x86_64
+builds alternate between GitHub-hosted and `[self-hosted, Linux, X64, ci-linux-builds]`.
+Only the dedicated runner `iv-yezentk8ao3z47ge5tmm` has that custom label; runner
+display names do not select machines.
+Linux wheels use the dedicated runner on even workflow run numbers; API native
+runtime preparation uses it on odd run numbers. Each workflow therefore sends
+50% of consecutive runs to each destination, and reruns keep the same destination.
+This is half of the selected build jobs over time, not half of all Linux jobs or
+an equal share of execution time. Conditional skips can change the observed share.
+The old ECS runner does not receive these build jobs.
+
+Only official repository PRs from the same repository and branch pushes are
+eligible. Release/tag events, schedules, manual builds, fork PRs and other
+repositories use GitHub-hosted. Labels are selected directly in `runs-on`;
+no selector job or token is needed. Studio, both musl CLI targets, API/database
+tests, cuVS, other tests/checks and source packaging stay hosted. Native ARM,
+macOS and Windows assignments are unchanged.
 
 Self-hosted builds require Docker access and use disposable containers with
 job-local HOME/Cargo/Rustup directories and post-job ownership cleanup.
-Wheels retain Ubuntu 20.04/glibc 2.31. The Linux wheel execution timeout is
-60 minutes. It starts when execution begins, not while queued; there is no
-automatic queue fallback.
+Wheels retain Ubuntu 20.04/glibc 2.31. API native runtime preparation uses Ubuntu
+24.04 on both destinations so its artifact remains compatible with hosted tests.
+The Linux wheel execution timeout is 60 minutes and native preparation is limited
+to 30 minutes. Timeouts start when execution begins, not while queued; there is
+no automatic queue fallback.
 
-If ov-ci-runner is offline or stuck, set repository Actions variable
+Before enabling routing, dispatch `_build.yml` on this branch with
+`check_linux_runner=true`, `build_wheels=false` and `build_sdist=false`. Its
+five-minute diagnostic checks Docker access and both container images without
+checking out repository code. Enable `CI_LINUX_BUILDS_ENABLED` only after it
+passes. The runner user must be able to access Docker without interactive sudo.
+
+If the dedicated runner is offline or stuck, set repository Actions variable
 `CI_DISABLE_SELF_HOSTED=true`, cancel affected runs and trigger new runs.
 New jobs use hosted runners; already queued jobs retain their original labels.
-After repairing/updating the runner, remove the variable to resume PR/push
-acceleration. Release builds remain hosted regardless of the variable.
+After repairing/updating the runner, remove the disable variable to resume the
+half-load routing. Removing `CI_LINUX_BUILDS_ENABLED` also leaves all builds hosted.
+Release builds remain hosted regardless of either variable.
 
 The cuVS check now lives in the API workflow so it can consume the same artifact.
 Its check name stays `cuvs-tests / Lite Test (ubuntu-24.04, 3.11)`, matching the

@@ -25,6 +25,11 @@ on:
         default: true
   workflow_dispatch:
     inputs:
+      check_linux_runner:
+        description: 'Check Docker readiness on the dedicated Linux build runner'
+        required: false
+        type: boolean
+        default: false
       build_sdist:
         description: 'Whether to build source distribution'
         required: false
@@ -45,6 +50,25 @@ on:
         default: '["3.10"]'
 
 jobs:
+  check-linux-runner:
+    name: Check dedicated Linux runner
+    if: github.event_name == 'workflow_dispatch' && inputs.check_linux_runner && github.repository == 'volcengine/OpenViking'
+    runs-on: [self-hosted, Linux, X64, ci-linux-builds]
+    permissions: {}
+    timeout-minutes: 5
+    steps:
+      - name: Verify runner and disposable build containers
+        shell: bash
+        run: |
+          set -euo pipefail
+          id
+          uname -m
+          nproc
+          df -h "$RUNNER_TEMP"
+          docker version
+          docker run --rm ubuntu:20.04 getconf GNU_LIBC_VERSION
+          docker run --rm ubuntu:24.04 getconf GNU_LIBC_VERSION
+
   build-studio:
     name: Build shared Studio bundle
     if: inputs.build_wheels
@@ -150,8 +174,12 @@ jobs:
           github.repository == 'volcengine/OpenViking' &&
           (github.event_name == 'pull_request' || github.event_name == 'push') &&
           !startsWith(github.ref, 'refs/tags/') && vars.CI_DISABLE_SELF_HOSTED != 'true' &&
+          vars.CI_LINUX_BUILDS_ENABLED == 'true' &&
           (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) &&
-          '["self-hosted","Linux","X64","ov-ci-runner"]' || '["ubuntu-24.04"]') }}
+          (endsWith(github.run_number, '0') || endsWith(github.run_number, '2') ||
+           endsWith(github.run_number, '4') || endsWith(github.run_number, '6') ||
+           endsWith(github.run_number, '8')) &&
+          '["self-hosted","Linux","X64","ci-linux-builds"]' || '["ubuntu-24.04"]') }}
     container: ubuntu:20.04
     timeout-minutes: 60
     env:
