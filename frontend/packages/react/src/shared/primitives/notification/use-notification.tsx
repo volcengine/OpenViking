@@ -28,7 +28,12 @@ export function useNotification(
   const api = useMemo<NotificationApi>(() => {
     const add = (type: NotificationType) => (config: NotificationConfig) => {
       const id = config.id ?? `${prefix}-${++sequence.current}`;
-      const next = { duration: 3000, ...config, id, type };
+      const next = {
+        ...config,
+        duration: config.duration ?? (type === 'loading' ? 0 : 3000),
+        id,
+        type,
+      };
       setNotices((items) =>
         items.some((item) => item.id === id)
           ? items.map((item) => (item.id === id ? next : item))
@@ -42,6 +47,7 @@ export function useNotification(
       warning: add('warning'),
       error: add('error'),
       normal: add('normal'),
+      loading: add('loading'),
       remove,
       clear: () => setNotices([]),
     };

@@ -97,7 +97,7 @@ Submit `ov add-resource https://example.com/demo` in Terminal, then send a chat 
 | error      | Server task error                                             | `string`                                                                           | -        |
 | queryError | Scheduler query error; the last known task state is preserved | `{ code: 'request' \| 'invalid-response'; message?: string }`                      | -        |
 
-Active tasks are queried every 3 seconds, with one query per scope and task ID and up to 4 concurrent requests. Query failures use exponential backoff capped at 30 seconds. Terminal states stop polling.
+Active tasks are queried every 3 seconds, with one query per scope and task ID and up to 4 concurrent requests. Query failures use exponential backoff capped at 30 seconds. Terminal states stop polling. Active task notifications use the built-in loading icon; terminal states replace it with their result icon. Query failures display a warning without changing the task status.
 
 Changing modes or chat sessions, clearing terminal history and dismissing notifications do not cancel backend tasks. Dismissing a notification leaves its records updating. Identity changes and Console unmount abort queries and discard stale responses. Task state and notifications are not persisted across page reloads.
 

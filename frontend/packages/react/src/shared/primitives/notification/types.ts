@@ -2,7 +2,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import type { Locale } from '../../locale.js';
 
 export type NotificationType =
-  'info' | 'success' | 'warning' | 'error' | 'normal';
+  'info' | 'success' | 'warning' | 'error' | 'normal' | 'loading';
 
 export interface NotificationConfig {
   content: ReactNode;

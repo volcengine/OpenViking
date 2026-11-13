@@ -45,8 +45,8 @@
 ### Notification
 
 - `useNotification` 返回实例隔离的操作 API 与上下文占位，占位放在调用方的语言与主题作用域内。
-- API 沿用 Arco 的 `info`、`success`、`warning`、`error`、`normal`、`remove` 和 `clear`，同一 `id` 原位更新通知，`btn` 提供操作内容。
-- 通知默认 3000 ms 后关闭，`duration: 0` 禁用自动关闭，悬停和键盘焦点暂停计时。
+- API 提供 `loading`、`info`、`success`、`warning`、`error`、`normal`、`remove` 和 `clear`，同一 `id` 原位更新通知，`btn` 提供操作内容。
+- `loading` 使用与 Button 共用的内置 `LoadingIcon`，默认持续显示；其他通知默认 3000 ms 后关闭，`duration: 0` 禁用自动关闭，悬停和键盘焦点暂停计时。
 - 关闭按钮与自动关闭计时器在开始移除前调用 `onDismiss`；移除与清空在退出动画结束后调用各通知的 `onClose`，任务轮询、取消任务和终态操作由调用方负责。
 - 仅提供右上角，不提供全局 API。
 - [内部任务演示](../../../../docs/docs/_demos/notification-tasks.tsx) 消费私有文档构建，手动模拟运行、成功和失败状态。

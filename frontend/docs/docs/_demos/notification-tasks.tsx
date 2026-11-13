@@ -32,13 +32,12 @@ export default function NotificationTasks() {
     </Button>
   );
   const running = () =>
-    notification.info({
+    notification.loading({
       id: 'compile-demo',
       title: zh ? '上下文编译执行中' : 'Compiling context',
       content,
       duration: 0,
       btn,
-      icon: <span className="ov-button__spinner" />,
     });
   const complete = () =>
     notification.success({
@@ -76,7 +75,7 @@ export default function NotificationTasks() {
         <Button onClick={fail}>{zh ? '模拟失败' : 'Simulate failure'}</Button>
         <Button
           onClick={() =>
-            notification.info({
+            notification.loading({
               title: zh ? '另一个任务' : 'Another task',
               content,
               duration: 0,

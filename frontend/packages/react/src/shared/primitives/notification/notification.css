@@ -28,7 +28,7 @@
   box-sizing: border-box;
   width: 100%;
   padding: 16px;
-  gap: 8px;
+  gap: 12px;
   border: 0.5px solid var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
   border-radius: 12px;
   background: var(
@@ -66,6 +66,12 @@
   flex: none;
   margin-top: 2px;
   color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+}
+.ov-notification__icon .ov-notification__loading-icon {
+  /* Match the SVG circle's 20/24 drawing area within the same 20px slot. */
+  width: calc(20px * 20 / 24);
+  height: calc(20px * 20 / 24);
+  margin: calc(20px * 2 / 24);
 }
 .ov-notification--success .ov-notification__icon {
   color: var(--ov-ui-color-status-success, var(--ov-ui-status-success-default));

@@ -82,6 +82,7 @@ export function Notice({
         .filter(Boolean)
         .join(' ')}
       style={style}
+      aria-busy={type === 'loading' || undefined}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onFocusCapture={() => setFocused(true)}

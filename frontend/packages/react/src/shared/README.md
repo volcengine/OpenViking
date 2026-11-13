@@ -45,8 +45,8 @@ Translations stay with their owner in `locales/en-US.ts` and `locales/zh-CN.ts`;
 ### Notification
 
 - `useNotification` returns an instance-local API and a context holder. Mount the holder inside the caller's locale and theme scope.
-- The API follows Arco's `info`, `success`, `warning`, `error`, `normal`, `remove` and `clear`; reusing an `id` updates the notice in place, and `btn` supplies actions.
-- Notices default to 3000 ms; `duration: 0` disables auto-dismiss. Hover and keyboard focus pause the timer.
+- The API provides `loading`, `info`, `success`, `warning`, `error`, `normal`, `remove` and `clear`; reusing an `id` updates the notice in place, and `btn` supplies actions.
+- `loading` uses the built-in `LoadingIcon` shared with Button and stays open by default. Other notices default to 3000 ms; `duration: 0` disables auto-dismiss. Hover and keyboard focus pause the timer.
 - The close button and auto-dismiss timer call `onDismiss` before removal begins. Removal and clearing call each notice's `onClose` after its exit animation. Task polling, cancellation and terminal-state actions belong to the caller.
 - Only the top-right position is supported, with no global API.
 - The [internal task demo](../../../../docs/docs/_demos/notification-tasks.tsx) uses the private docs build and manually simulates running, success and failure states.

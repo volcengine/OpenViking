@@ -1,0 +1,21 @@
+.ov-loading-icon {
+  display: inline-block;
+  box-sizing: border-box;
+  flex: none;
+  width: 1em;
+  height: 1em;
+  border: 1.5px solid currentColor;
+  border-inline-start-color: transparent;
+  border-radius: 50%;
+  animation: ov-loading-icon-spin 1s linear infinite;
+}
+@keyframes ov-loading-icon-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ov-loading-icon {
+    animation-duration: 6s;
+  }
+}

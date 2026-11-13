@@ -46,7 +46,7 @@ export function ConsoleTaskNotifications({ locale }: { locale: Locale }) {
               ? 'error'
               : task.status === 'cancelled' || task.queryError
                 ? 'warning'
-                : 'info';
+                : 'loading';
         api[type]({
           id: task.key,
           title: task.kind ? labels.kinds[task.kind] : labels.task,
