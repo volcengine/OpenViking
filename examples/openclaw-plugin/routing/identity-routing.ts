@@ -26,6 +26,27 @@ export function sanitizeOpenVikingPeerId(raw?: string): string | undefined {
   return normalized || undefined;
 }
 
+/**
+ * Which `peer_id` a session message carries.
+ *
+ * OpenViking only reads peer ownership from user-role messages:
+ * `memory_isolation_handler._is_peer_owner_message(msg)` is `msg.role == "user"`,
+ * so a `peer_id` on an assistant turn is stored but never becomes a write
+ * target. Tagging the assistant turn alone therefore leaves `peer_role=assistant`
+ * memories in the shared user scope and `peers/<peer_id>/memories/` never
+ * appears, which is not what the setting documents.
+ *
+ * Both roles carry the assistant peer here, matching the Codex and Claude Code
+ * plugins, which send `peer_id` on every message of the turn. `sender` stays
+ * user-only: there the peer is the human on the other side of the conversation,
+ * so tagging an assistant turn with the speaker's id would attribute the
+ * assistant's own words to that speaker.
+ *
+ * Roles outside the conversational pair stay unattributed. `memory_store` takes
+ * its `role` from a free-form tool argument, so anything else it passes through
+ * (`system`, `tool`, a caller's typo) lands on the `undefined` branch instead of
+ * carrying a peer the server does not model.
+ */
 export function resolveOpenVikingMessagePeerId(params: {
   peerRole: OpenVikingPeerRole;
   role?: string;
@@ -35,7 +56,10 @@ export function resolveOpenVikingMessagePeerId(params: {
   if (params.peerRole === "sender" && params.role === "user") {
     return params.senderPeerId;
   }
-  if (params.peerRole === "assistant" && params.role === "assistant") {
+  if (
+    params.peerRole === "assistant" &&
+    (params.role === "assistant" || params.role === "user")
+  ) {
     return params.assistantPeerId;
   }
   return undefined;
