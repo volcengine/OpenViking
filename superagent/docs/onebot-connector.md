@@ -289,7 +289,7 @@ Inbound messages are rendered as text. An @ shows the person's group card or nic
 up with `get_group_member_info`, for at most 5 people and within 2 s per line, and the rest stay QQ numbers. Lines
 are looked up side by side as they arrive, with at most 5 lookups under way at once, so lookups that go unanswered
 hold the lines after them back by 2 s, not by 2 s each. A failed lookup is not repeated for 10 minutes. At most 100 @mentions of a message reach the Core, the agent's own
-among them; the text still shows every one. A quote becomes `parent_id`, so a reply to the agent carries `reply_to=me`. Images, files, videos and forwarded chats
+among them; the text still shows every one. A quote becomes `parent_id`, so a reply to the agent carries `reply_to=me` and a reply to a message the Core has seen carries its sender and a `quote=` excerpt. A quoted message the Core has not seen (older than its history) shows only its full id, `reply_to=<message id>`. Images, files, videos and forwarded chats
 become attachment references, at most 10 per message. Stickers, faces, voice messages and share cards become short
 markers (`[sticker]`, `[face]`, `[voice message]`, `[card] <title> <link>`); a card's JSON is never shown. Text is
 cut at 16,000 characters. Media addresses carry download keys and never appear in text, logs or errors.

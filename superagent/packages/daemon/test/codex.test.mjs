@@ -159,8 +159,13 @@ describe('formatting helpers', () => {
       `${prefix} reply_to=ou_other999] who is this for?`,
     );
     assert.equal(
+      formatInboundLine(message, null, { replyTo: { kind: 'user', chatId: 'oc_chat1234abcd', senderId: 'ou_other9999zzzz', text: 'ship it friday?' } }),
+      `${prefix} reply_to=ou_other999 quote=ship_it_friday?] who is this for?`,
+    );
+    // The full id, so a history tool can find the message.
+    assert.equal(
       formatInboundLine(message, null, { replyTo: { kind: 'unknown', id: 'om_gone5678wxyz' } }),
-      `${prefix} reply_to=om_gone5678] who is this for?`,
+      `${prefix} reply_to=om_gone5678wxyz] who is this for?`,
     );
     assert.equal(formatInboundLine(message, null, {}), `${prefix}] who is this for?`);
   });

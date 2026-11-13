@@ -113,9 +113,8 @@ function fromLabel(chatId, senderId, resolveName = null, source = 'lark', sender
   return lookupMemberName(chatId, senderId) ?? sanitizeMemberName(senderName) ?? shortenId(senderId);
 }
 
-// How a quoted message of the agent's own begins, as one tag value: no
-// whitespace, brackets or `=`, so it can neither end the tag nor pass for
-// another field.
+// How a quoted message begins, as one tag value: no whitespace, brackets or
+// `=`, so it can neither end the tag nor pass for another field.
 const QUOTE_CHARS = 60;
 
 function quoteTag(text) {
@@ -152,14 +151,27 @@ export function mentionTarget(mentions, selfId) {
 
 const MENTION_TARGETS = new Set(['me', 'other', 'mixed']);
 
-function renderInboundContent(message) {
-  let content = eventContent(message);
-  for (const mention of message.mentions ?? []) {
+function withMentionNames(content, mentions) {
+  for (const mention of mentions ?? []) {
     if (typeof mention?.key !== 'string' || !mention.key) continue;
     const label = oneLine(mention.name).trim() || shortenId(mention.id);
     content = content.split(mention.key).join(`@${label}`);
   }
-  return oneLine(content);
+  return content;
+}
+
+function renderInboundContent(message) {
+  return oneLine(withMentionNames(eventContent(message), message.mentions));
+}
+
+// What a quoted inbound message says, for quote=: @names as on its own line,
+// but an attachment as just its kind ([image]), since a cut-off attachment id
+// would only crowd out the words. quoteTag flattens newlines itself.
+function quotedContent(message) {
+  const content = [message.title, message.content,
+    ...(message.attachments ?? []).map((item) => `[${item.type || 'attachment'}]`),
+  ].filter(Boolean).join('\n');
+  return withMentionNames(content, message.mentions);
 }
 
 export function formatInboundLine(message, resolveName = null, authenticated = {}) {
@@ -175,13 +187,16 @@ export function formatInboundLine(message, resolveName = null, authenticated = {
   // The sender is the owner this connector reported at check.
   const ownerTag = authenticated?.owner ? ' owner=1' : '';
   const replyTo = authenticated?.replyTo;
-  const quote = replyTo?.kind === 'me' ? quoteTag(replyTo.text) : '';
+  // A quoted message Core has stored shows how it begins, whoever wrote it. One
+  // Core never saw shows its full id, escaped like msg=, so the model can match
+  // it against msg= in history or pass it to a tool (a prefix could do neither).
+  const quote = replyTo?.kind === 'me' || replyTo?.kind === 'user' ? quoteTag(replyTo.text) : '';
   const replyTag = replyTo
     ? ` reply_to=${replyTo.kind === 'me'
-      ? `me${quote ? ` quote=${quote}` : ''}`
+      ? 'me'
       : replyTo.kind === 'user'
-        ? fromLabel(replyTo.chatId ?? message.chatId, replyTo.senderId, resolveName, message.source)
-        : shortenId(replyTo.id)}`
+        ? fromLabel(replyTo.chatId ?? message.chatId, replyTo.senderId, resolveName, message.source, replyTo.senderName)
+        : metadataTag(replyTo.id ?? 'unknown')}${quote ? ` quote=${quote}` : ''}`
     : '';
   const bots = authenticated?.botsSinceHuman;
   const botsTag = Number.isSafeInteger(bots) && bots > 0 ? ` bots_since_human=${bots}` : '';
@@ -197,13 +212,25 @@ export function formatInboundLine(message, resolveName = null, authenticated = {
 }
 
 // A quote-reply's target, resolved from local history: 'me' when the sender
-// quoted one of the bot's own messages (a strong addressing signal). Plain
+// quoted one of the bot's own messages (a strong addressing signal), 'user'
+// with that message's text when it quoted a stored inbound message. Plain
 // thread membership (parent == thread root) is not a quote and stays untagged.
+// A recall's or reaction's parent is the message acted on, not a quote: a
+// recall gets no tag (the withdrawn text must not come back as quote=), and a
+// reaction keeps whose message it was but not someone else's text. A card
+// click always answers the agent's own card.
 export function resolveReplyTarget(store, message) {
+  if (message.messageType === 'card_action') return { kind: 'me' };
+  if (message.messageType === 'recall') return null;
   const parentId = message.parentId;
   if (!parentId || parentId === message.messageId) return null;
   if (message.threadRootId && parentId === message.threadRootId) return null;
   const author = store.resolveMessageAuthor?.(parentId, message.connectorInstance ?? message.source ?? 'lark');
+  if (author?.kind === 'user') {
+    // Without the text the model could not tell which of someone's messages
+    // was quoted.
+    const { message: quoted, ...user } = author;
+    return quoted && message.messageType !== 'reaction' ? { ...user, text: quotedContent(quoted) } : user;
+  }
   return author ?? { kind: 'unknown', id: parentId };
 }
-
