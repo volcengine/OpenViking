@@ -61,7 +61,7 @@ def build_account_store(
         return account_store
 
     provider = account_store_provider.strip().lower()
-    if provider in {"mysql", "redis_mysql"} and service_name is None:
+    if provider in {"mysql", "redis_mysql", "postgres"} and service_name is None:
         raise InvalidArgumentError(
             f"service_name is required for the {provider} account store provider"
         )
@@ -74,13 +74,17 @@ def build_account_store(
             watch_enabled=account_store_watch_enabled,
             watch_interval_seconds=account_store_watch_interval_seconds,
         )
+    if provider == "postgres":
+        try:
+            from openviking.server.account_stores.postgres import PostgresAccountStore
+        except ImportError:
+            raise RuntimeError("PostgreSQL account storage requires openviking[postgres]") from None
+        return PostgresAccountStore(service_name=service_name, params=account_store_params)
     if provider == "mysql":
         try:
             from openviking.server.account_stores.mysql import MySQLAccountStore
         except ImportError:
-            raise RuntimeError(
-                "MySQL account storage requires openviking[mysql]"
-            ) from None
+            raise RuntimeError("MySQL account storage requires openviking[mysql]") from None
         return MySQLAccountStore(
             service_name=service_name,
             params=account_store_params,
@@ -100,5 +104,5 @@ def build_account_store(
         )
     raise InvalidArgumentError(
         f"Unknown account store provider '{account_store_provider}'. "
-        "Available providers: file, mysql, redis_mysql"
+        "Available providers: file, mysql, redis_mysql, postgres"
     )
