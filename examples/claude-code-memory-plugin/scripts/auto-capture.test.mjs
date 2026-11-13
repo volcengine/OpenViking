@@ -627,7 +627,7 @@ test("a subagent stopping again pushes and commits only its new turns", async ()
   }
 });
 
-async function captureFinalAnswer(root, transcriptPath, input, whileRunning = async () => {}) {
+async function captureFinalAnswer(root, transcriptPath, input) {
   const batches = [];
   await withMockOpenViking(async (req, res) => {
     const url = new URL(req.url, "http://127.0.0.1");
@@ -640,10 +640,7 @@ async function captureFinalAnswer(root, transcriptPath, input, whileRunning = as
       writeJson(res, { status: "ok", result: {} });
     }
   }, async (baseUrl) => {
-    await Promise.all([
-      runAutoCapture({ session_id: "final-answer", transcript_path: transcriptPath, cwd: root, ...input }, hookEnv(root, baseUrl)),
-      whileRunning(),
-    ]);
+    await runAutoCapture({ session_id: "final-answer", transcript_path: transcriptPath, cwd: root, ...input }, hookEnv(root, baseUrl));
   });
   return batches.flatMap((batch) => batch.messages).map((message) => [
     message.role,
@@ -671,20 +668,20 @@ test("Stop captures the final answer the transcript has not been written with ye
   }
 });
 
-test("Stop captures a final answer once when the transcript catches up", async () => {
-  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-final-late-"));
+test("Stop captures the whole final answer when only part of it is in the transcript", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-final-partial-"));
   const transcriptPath = join(root, "transcript.jsonl");
+  const full = "All checks passed.\n\nI ran the test suite. All checks passed.";
   try {
-    await writeFile(transcriptPath, question);
-    const messages = await captureFinalAnswer(root, transcriptPath, {
-      last_assistant_message: "The server listens on 1933.",
-    }, async () => {
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      await writeFile(transcriptPath, [question, answer].join("\n"));
-    });
+    await writeFile(transcriptPath, [
+      question,
+      JSON.stringify({ role: "assistant", content: [{ type: "text", text: "All checks passed." }] }),
+    ].join("\n"));
+    const messages = await captureFinalAnswer(root, transcriptPath, { last_assistant_message: full });
     assert.deepEqual(messages, [
       ["user", "remember which port the server uses"],
-      ["assistant", "The server listens on 1933."],
+      ["assistant", "All checks passed."],
+      ["assistant", full],
     ]);
 
     const state = JSON.parse(
