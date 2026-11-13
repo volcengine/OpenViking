@@ -1,4 +1,7 @@
 .ov-dropdown.ov-popover {
+  inset: auto;
+  margin: 0;
+  z-index: calc(var(--ov-ui-modal-z-index, 1001) + 1);
   width: 200px;
   max-width: calc(100vw - 16px);
   max-height: calc(100dvh - 16px);
@@ -56,15 +59,7 @@
   color: var(--ov-ui-color-text-disabled, var(--ov-ui-text-disabled-default));
   cursor: not-allowed;
 }
-.ov-dropdown__icon {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-}
-.ov-dropdown hr {
+.ov-dropdown__separator {
   width: 100%;
   margin: 0;
   border: 0;

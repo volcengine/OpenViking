@@ -45,17 +45,17 @@ test('Wiki module binds operation URIs and resets local filters when the documen
     null,
   );
   await act(async () =>
-    view.container.querySelector('[aria-haspopup="listbox"]').click(),
+    view.container.querySelector('[aria-haspopup="menu"]').click(),
   );
   await act(async () =>
-    [...document.querySelectorAll('[role="option"]')]
+    [...document.querySelectorAll('[role="menuitemradio"]')]
       .find((el) => el.textContent === 'Low')
       .click(),
   );
   assert.match(view.container.textContent, /No matching conflicts/);
   await view.render(render(next));
   assert.match(
-    view.container.querySelector('[aria-haspopup="listbox"]').textContent,
+    view.container.querySelector('[aria-haspopup="menu"]').textContent,
     /All/,
   );
   assert.match(view.container.textContent, /Approval policy differs/);

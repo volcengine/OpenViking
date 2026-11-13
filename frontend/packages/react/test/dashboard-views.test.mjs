@@ -20,7 +20,7 @@ test('dashboard views render supplied states without a Provider or requests', as
       'true',
     );
     assert.match(view.container.textContent, /Pending conflicts/);
-    assert.ok(view.container.querySelector('[aria-haspopup="listbox"]'));
+    assert.ok(view.container.querySelector('[aria-haspopup="menu"]'));
     await view.render(
       h(WikiDashboard, {
         kind: 'file',
@@ -31,10 +31,7 @@ test('dashboard views render supplied states without a Provider or requests', as
     assert.equal(view.container.querySelector('dd').textContent, '0');
     await view.render(h(WikiDashboard, { kind: 'directory', loading: true }));
     assert.match(view.container.textContent, /Conflicting files/);
-    assert.equal(
-      view.container.querySelector('[aria-haspopup="listbox"]'),
-      null,
-    );
+    assert.equal(view.container.querySelector('[aria-haspopup="menu"]'), null);
     await view.render(
       h(ExperienceDashboard, { uri: 'experience-view', kind: 'file' }),
     );
@@ -77,7 +74,7 @@ test('dashboard labels inherit undefined defaults and preserve explicit empty st
     assert.equal(view.container.querySelector('h3').textContent, '');
     assert.match(
       view.container
-        .querySelector('[aria-haspopup="listbox"]')
+        .querySelector('[aria-haspopup="menu"]')
         .getAttribute('aria-label'),
       /Severity/,
     );
@@ -119,9 +116,9 @@ test('asynchronous test materials preserve valid experience selections and date 
         .querySelector('.ov-experience-dashboard__range-trigger')
         .click(),
     );
-    const option = [...document.querySelectorAll('[role="option"]')].find(
-      (el) => el.textContent === 'Last 30 days',
-    );
+    const option = [
+      ...document.querySelectorAll('[role="menuitemradio"]'),
+    ].find((el) => el.textContent === 'Last 30 days');
     assert.ok(option, 'the range popover lists the 30-day shortcut');
     await act(async () => option.click());
     assert.equal(rangeLabel(), 'Last 30 days');

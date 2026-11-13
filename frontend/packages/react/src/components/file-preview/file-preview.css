@@ -334,21 +334,13 @@
   color: var(--ov-ui-file-preview-accent-hover);
 }
 
-/*
- * 菜单浮层：Tooltip 的点击形态默认带 `min-width: 120px`（为短提示留出宽度），
- * 这里取消掉，让菜单按内容收缩。
- *
- * The menu surface. Tooltip's click shape carries a `min-width: 120px` meant for
- * short hints; drop it here so the menu shrinks to its content.
- */
-/* 需要带上 `[role='dialog']`：Tooltip 的规则写在 `.ov-tooltip[role='dialog']`
-   上，只写类名特异性不够，会被它盖掉。 */
-.ov-tooltip.ov-file-preview__breadcrumb-menu-surface[role='dialog'] {
-  min-width: 0;
+/* Parent names determine the menu width, bounded by the viewport. */
+.ov-dropdown.ov-popover.ov-file-preview__breadcrumb-menu-surface {
+  width: max-content;
 }
 
 /*
- * 菜单本体渲染在 Tooltip 的浮层里，定位与背景由浮层负责，这里只管列表的
+ * 菜单本体渲染在 Dropdown 的浮层里，定位与背景由浮层负责，这里只管列表的
  * 排布与项样式。
  *
  * 宽度随内容自适应，不设最小宽度——只有一两级时留一大片空白反而显得空。
@@ -384,7 +376,7 @@
 }
 
 .ov-file-preview__breadcrumb-menu button:not(.ov-button):hover:not(:disabled) {
-  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default, #f1f2f9));
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
 }
 
 /*

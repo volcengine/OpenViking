@@ -26,8 +26,8 @@
 .ov-wiki-dashboard__filter-value {
   color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
 }
-.ov-wiki-dashboard__severity-popover {
-  min-width: 160px;
+.ov-dropdown.ov-popover.ov-wiki-dashboard__severity-popover {
+  width: 160px;
   padding: 4px;
 }
 .ov-wiki-dashboard__severity-menu {
@@ -48,7 +48,7 @@
   text-align: start;
   cursor: pointer;
 }
-.ov-wiki-dashboard__severity-menu button[aria-selected='true'] {
+.ov-wiki-dashboard__severity-menu button[aria-checked='true'] {
   color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
   background: var(
     --ov-ui-color-primary-light,

@@ -1,7 +1,8 @@
-import { useState } from 'react';
-
 import { ChevronRightIcon } from '../../icons/index.js';
-import { Popover } from '../../shared/primitives/popover/popover.js';
+import {
+  Dropdown,
+  DropdownItem,
+} from '../../shared/primitives/dropdown/index.js';
 import type { ExperienceDashboardLabels } from './types.js';
 
 /** 可选区间：天数（`0` 表示不限时间）与对应的文案键。 Day count and its label key. */
@@ -34,56 +35,38 @@ export function ExperienceTimeRange({
   labels: ExperienceDashboardLabels;
   onChange: (days: number) => void;
 }) {
-  const [open, setOpen] = useState(false);
   const current = OPTIONS.find((option) => option.days === days) ?? OPTIONS[3];
   return (
-    <Popover
-      trigger="click"
-      placement="bottom"
-      alignment="end"
-      open={open}
-      onOpenChange={setOpen}
-      role="presentation"
+    <Dropdown
       className="ov-experience-dashboard__range-popover"
-      content={
-        <div
-          role="listbox"
+      menuClassName="ov-experience-dashboard__range-menu"
+      trigger={
+        <button
+          type="button"
+          className="ov-experience-dashboard__range-trigger"
           aria-label={t.range}
-          className="ov-experience-dashboard__range-menu"
         >
-          {OPTIONS.map((option) => (
-            <button
-              key={option.days}
-              type="button"
-              role="option"
-              aria-selected={option === current}
-              className="ov-experience-dashboard__range-option"
-              onClick={() => {
-                setOpen(false);
-                onChange(option.days);
-              }}
-            >
-              {t[option.key]}
-            </button>
-          ))}
-        </div>
+          <span>{t[current.key]}</span>
+          <ChevronRightIcon
+            aria-hidden="true"
+            width={12}
+            height={12}
+            className="ov-experience-dashboard__range-chevron"
+          />
+        </button>
       }
     >
-      <button
-        type="button"
-        className="ov-experience-dashboard__range-trigger"
-        aria-label={t.range}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-      >
-        <span>{t[current.key]}</span>
-        <ChevronRightIcon
-          aria-hidden="true"
-          width={12}
-          height={12}
-          className="ov-experience-dashboard__range-chevron"
-        />
-      </button>
-    </Popover>
+      {OPTIONS.map((option) => (
+        <DropdownItem
+          key={option.days}
+          role="menuitemradio"
+          aria-checked={option === current}
+          className="ov-experience-dashboard__range-option"
+          onClick={() => onChange(option.days)}
+        >
+          {t[option.key]}
+        </DropdownItem>
+      ))}
+    </Dropdown>
   );
 }

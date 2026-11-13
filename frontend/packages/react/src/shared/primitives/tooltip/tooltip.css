@@ -65,6 +65,11 @@
   box-shadow: 0 6px 16px rgb(0 0 0 / 12%);
 }
 
+.ov-tooltip[popover] {
+  inset: auto;
+  margin: 0;
+}
+
 @keyframes ov-tooltip-enter {
   from {
     opacity: 0;

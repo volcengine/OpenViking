@@ -1,3 +1,5 @@
+@import '../../shared/primitives/popover/popover.css';
+@import '../../shared/primitives/dropdown/dropdown.css';
 @import '../../shared/primitives/input/input.css';
 @import '../../shared/primitives/button/button.css';
 @import '../../theme.css';
