@@ -18,19 +18,21 @@ file checksum before writing it. Other test platforms build locally. Release
 wheels build independently in Ubuntu 20.04/macOS/Windows; Ubuntu 24.04 test
 binaries and musl CLI binaries are never reused in release wheels.
 
-With repository variable `CI_LINUX_BUILDS_ENABLED=true`, selected Linux x86_64
-builds and their API test consumers alternate between GitHub-hosted and
-`[self-hosted, Linux, X64, ci-linux-builds]`.
+With repository variable `CI_LINUX_BUILDS_ENABLED=true`, trusted Linux API jobs
+use `[self-hosted, Linux, X64, ci-linux-builds]`. Linux x86_64 wheel builds
+alternate between GitHub-hosted and this dedicated pool.
 Only the dedicated runner `iv-yezentk8ao3z47ge5tmm` has that custom label; runner
 display names do not select machines.
-Linux wheels use the dedicated runner on even workflow run numbers; API native
-runtime preparation and its short change-planning job use it on odd run numbers.
+Linux wheels use the dedicated runner on even workflow run numbers.
+API native runtime preparation and its short change-planning job always use
+the dedicated runner for eligible events, regardless of workflow run number.
 The planning job runs Git/Python on the host with a five-minute execution limit.
 Linux API/CLI, MySQL/Redis and
-cuVS tests inherit their same-run native producer's destination. Each workflow therefore sends
-50% of consecutive runs to each destination, and reruns keep the same destination.
-This is half of the selected build/test jobs over time, not half of all Linux jobs or
-an equal share of execution time. Conditional skips can change the observed share.
+cuVS tests inherit their same-run native producer's destination. This keeps the
+entire trusted Linux API dependency chain off the hosted queue.
+Wheel builds send 50% of consecutive runs to each destination, and reruns keep
+the same destination. This is not half of all Linux jobs or an equal share of
+execution time. Conditional skips can change the observed share.
 The old ECS runner does not receive these jobs.
 
 Only official repository PRs from the same repository and branch pushes are
@@ -73,7 +75,7 @@ If the dedicated runner is offline or stuck, set repository Actions variable
 `CI_DISABLE_SELF_HOSTED=true`, cancel affected runs and trigger new runs.
 New jobs use hosted runners; already queued jobs retain their original labels.
 After repairing/updating the runner, remove the disable variable to resume the
-half-load routing. Removing `CI_LINUX_BUILDS_ENABLED` also leaves these builds/tests hosted.
+dedicated routing. Removing `CI_LINUX_BUILDS_ENABLED` also leaves these builds/tests hosted.
 Release builds remain hosted regardless of either variable.
 
 The cuVS check now lives in the API workflow so it can consume the same artifact.

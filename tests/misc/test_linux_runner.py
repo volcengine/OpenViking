@@ -1,4 +1,4 @@
-"""Check half-load build/test routing, fork isolation and platform compatibility."""
+"""Check dedicated API routing, half-load wheels and platform compatibility."""
 
 import json
 import re
@@ -162,8 +162,6 @@ def test_wheel_container_restores_workspace_ownership():
     "file,name,self_hosted_parity",
     [
         ("_build.yml", "build-linux", 0),
-        ("api_test.yml", "prepare", 1),
-        ("api_test.yml", "native-runtime", 1),
     ],
 )
 def test_selected_builds_alternate_half_the_runs(file, name, self_hosted_parity):
@@ -172,6 +170,21 @@ def test_selected_builds_alternate_half_the_runs(file, name, self_hosted_parity)
     assert actual.count(SELF_HOSTED) == 50
     for number, result in enumerate(actual, 1):
         assert result == (SELF_HOSTED if number % 2 == self_hosted_parity else ["ubuntu-24.04"])
+
+
+@pytest.mark.parametrize("name", ["prepare", "native-runtime"])
+def test_trusted_api_jobs_never_wait_for_hosted_based_on_run_parity(name):
+    expression = jobs("api_test.yml")[name]["runs-on"]
+    assert [
+        labels(
+            expression,
+            {},
+            source="volcengine/OpenViking",
+            event="pull_request",
+            run_number=number,
+        )
+        for number in range(1, 101)
+    ] == [SELF_HOSTED] * 100
 
 
 @pytest.mark.parametrize(
@@ -222,6 +235,7 @@ def test_api_consumers_inherit_the_trusted_native_producer_pool(number, source):
     destination = labels(
         native["runs-on"], {}, source=source, event="pull_request", run_number=number
     )
+    assert destination == (SELF_HOSTED if source == "volcengine/OpenViking" else ["ubuntu-24.04"])
     environment = "self-hosted" if destination == SELF_HOSTED else "github-hosted"
     pool = next(step for step in native["steps"] if step.get("id") == "test-pool")
     published = labels(
