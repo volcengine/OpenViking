@@ -19,27 +19,32 @@ wheels build independently in Ubuntu 20.04/macOS/Windows; Ubuntu 24.04 test
 binaries and musl CLI binaries are never reused in release wheels.
 
 With repository variable `CI_LINUX_BUILDS_ENABLED=true`, selected Linux x86_64
-builds alternate between GitHub-hosted and `[self-hosted, Linux, X64, ci-linux-builds]`.
+builds and their API test consumers alternate between GitHub-hosted and
+`[self-hosted, Linux, X64, ci-linux-builds]`.
 Only the dedicated runner `iv-yezentk8ao3z47ge5tmm` has that custom label; runner
 display names do not select machines.
 Linux wheels use the dedicated runner on even workflow run numbers; API native
-runtime preparation uses it on odd run numbers. Each workflow therefore sends
+runtime preparation uses it on odd run numbers. Linux API/CLI, MySQL/Redis and
+cuVS tests inherit their same-run native producer's destination. Each workflow therefore sends
 50% of consecutive runs to each destination, and reruns keep the same destination.
-This is half of the selected build jobs over time, not half of all Linux jobs or
+This is half of the selected build/test jobs over time, not half of all Linux jobs or
 an equal share of execution time. Conditional skips can change the observed share.
-The old ECS runner does not receive these build jobs.
+The old ECS runner does not receive these jobs.
 
 Only official repository PRs from the same repository and branch pushes are
 eligible. Release/tag events, schedules, manual builds, fork PRs and other
-repositories use GitHub-hosted. Labels are selected directly in `runs-on`;
-no selector job or token is needed. Studio, both musl CLI targets, API/database
-tests, cuVS, other tests/checks and source packaging stay hosted. Native ARM,
+repositories use GitHub-hosted. The native producer publishes its selected labels
+and container image for its consumers; no extra selector job or token is needed.
+Studio, both musl CLI targets, other tests/checks and source packaging stay hosted. Native ARM,
 macOS and Windows assignments are unchanged.
 
-Self-hosted builds require Docker access and use disposable containers with
+Self-hosted builds and tests require Docker access and use disposable containers with
 job-local HOME/Cargo/Rustup directories and post-job ownership cleanup.
 Wheels retain Ubuntu 20.04/glibc 2.31. API native runtime preparation uses Ubuntu
 24.04 on both destinations so its artifact remains compatible with hosted tests.
+Self-hosted API, database and cuVS consumers also use Ubuntu 24.04 containers;
+hosted consumers retain their existing host execution. Database consumers use
+service-container DNS inside containers and loopback on hosted runners.
 The Linux wheel execution timeout is 60 minutes and native preparation is limited
 to 30 minutes. Timeouts start when execution begins, not while queued; there is
 no automatic queue fallback.
@@ -58,7 +63,7 @@ exist. Incomplete apt index downloads fail the job instead of continuing with
 missing package metadata.
 If official Ubuntu endpoints are unreachable from the dedicated machine, set
 `CI_UBUNTU_MIRROR` to a reachable HTTPS Ubuntu mirror, including its `/ubuntu` path.
-The override applies only to self-hosted builds and the readiness diagnostic;
+The override applies only to self-hosted builds/tests and the readiness diagnostic;
 hosted builds retain the official sources. The diagnostic prints host/container
 TCP reachability to help distinguish mirror access from Docker networking issues.
 
@@ -66,7 +71,7 @@ If the dedicated runner is offline or stuck, set repository Actions variable
 `CI_DISABLE_SELF_HOSTED=true`, cancel affected runs and trigger new runs.
 New jobs use hosted runners; already queued jobs retain their original labels.
 After repairing/updating the runner, remove the disable variable to resume the
-half-load routing. Removing `CI_LINUX_BUILDS_ENABLED` also leaves all builds hosted.
+half-load routing. Removing `CI_LINUX_BUILDS_ENABLED` also leaves these builds/tests hosted.
 Release builds remain hosted regardless of either variable.
 
 The cuVS check now lives in the API workflow so it can consume the same artifact.

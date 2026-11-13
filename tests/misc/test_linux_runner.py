@@ -1,4 +1,4 @@
-"""Check half-load build routing, fork isolation and platform compatibility."""
+"""Check half-load build/test routing, fork isolation and platform compatibility."""
 
 import json
 import re
@@ -25,9 +25,12 @@ def labels(
     disabled="",
     enabled="true",
     run_number=2,
+    contexts=None,
 ):
     """Evaluate only the routing expressions in these checked-in workflows."""
     expression = expression.strip().removeprefix("${{").removesuffix("}}")
+    for key, value in (contexts or {}).items():
+        expression = expression.replace(key, repr(value))
     expression = expression.replace(
         "github.event.pull_request.head.repo.full_name", repr(source)
     ).replace("github.event.pull_request", repr(source is not None))
@@ -206,3 +209,102 @@ def test_runner_diagnostic_is_explicit_and_does_not_checkout_code():
     assert "workflow_dispatch" in diagnostic["if"]
     assert "inputs.check_linux_runner" in diagnostic["if"]
     assert all("uses" not in step for step in diagnostic["steps"])
+
+
+@pytest.mark.parametrize("number", [1, 2])
+@pytest.mark.parametrize("source", ["volcengine/OpenViking", "fork/OpenViking"])
+def test_api_consumers_inherit_the_trusted_native_producer_pool(number, source):
+    workflow = jobs("api_test.yml")
+    native = workflow["native-runtime"]
+    destination = labels(
+        native["runs-on"], {}, source=source, event="pull_request", run_number=number
+    )
+    environment = "self-hosted" if destination == SELF_HOSTED else "github-hosted"
+    pool = next(step for step in native["steps"] if step.get("id") == "test-pool")
+    published = labels(
+        pool["env"]["TEST_RUNNER"], {}, contexts={"runner.environment": environment}
+    )[0]
+    assert json.loads(published) == destination
+    assert native["outputs"] == {
+        "test_runner": "${{ steps.test-pool.outputs.runner }}",
+        "test_container": "${{ steps.test-pool.outputs.container }}",
+    }
+    container = labels(
+        pool["env"]["TEST_CONTAINER"], {}, contexts={"runner.environment": environment}
+    )[0]
+    assert container == ("ubuntu:24.04" if environment == "self-hosted" else "")
+    contexts = {
+        "needs.native-runtime.outputs.test_runner": json.dumps(destination),
+        "needs.native-runtime.outputs.test_container": container,
+    }
+    for name in ["api-tests", "database-tests"]:
+        job = workflow[name]
+        assert "native-runtime" in job["needs"]
+        assert labels(job["runs-on"], {"os": "ubuntu-24.04"}, contexts=contexts) == destination
+        assert labels(job["container"]["image"], {"os": "ubuntu-24.04"}, contexts=contexts) == [
+            container
+        ]
+    cuvs = workflow["cuvs-tests"]
+    assert cuvs["with"]["linux_runner_json"] == "${{ needs.native-runtime.outputs.test_runner }}"
+    assert cuvs["with"]["linux_container"] == "${{ needs.native-runtime.outputs.test_container }}"
+    lite = jobs("_test_lite.yml")["test-lite"]
+    lite_contexts = {
+        "inputs.linux_runner_json": json.dumps(destination),
+        "inputs.linux_container": container,
+    }
+    assert labels(lite["runs-on"], {"os": "ubuntu-24.04"}, contexts=lite_contexts) == destination
+    for os in ["macos-15", "windows-latest"]:
+        assert labels(workflow["api-tests"]["runs-on"], {"os": os}, contexts=contexts) == [os]
+        assert labels(lite["runs-on"], {"os": os}, contexts=lite_contexts) == [os]
+        assert labels(
+            workflow["api-tests"]["container"]["image"], {"os": os}, contexts=contexts
+        ) == [""]
+        assert labels(lite["container"]["image"], {"os": os}, contexts=lite_contexts) == [""]
+
+
+@pytest.mark.parametrize(
+    "file,name",
+    [
+        ("api_test.yml", "api-tests"),
+        ("api_test.yml", "database-tests"),
+        ("_test_lite.yml", "test-lite"),
+    ],
+)
+def test_self_hosted_test_containers_bootstrap_and_cleanup(file, name):
+    job = jobs(file)[name]
+    steps = job["steps"]
+    bootstrap = steps[0]
+    assert bootstrap["if"] == "runner.environment == 'self-hosted'"
+    assert "Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt" in bootstrap["run"]
+    assert "APT::Update::Error-Mode=any" in bootstrap["run"]
+    assert "git ca-certificates curl python3 cmake build-essential" in bootstrap["run"]
+    assert "ca-certificates.crt:/tmp/runner-ca-certificates.crt:ro" in job["container"]["options"]
+    cleanup = next(step for step in steps if step.get("uses") == "./.github/actions/linux-test-env")
+    assert cleanup["if"] == "runner.environment == 'self-hosted'"
+    assert steps.index(cleanup) < next(
+        index for index, step in enumerate(steps) if step.get("uses") == "actions/setup-python@v6"
+    )
+
+
+@pytest.mark.parametrize("container,host", [("", "127.0.0.1"), ("ubuntu:24.04", "mysql")])
+def test_database_services_use_container_dns_or_host_loopback(container, host):
+    job = jobs("api_test.yml")["database-tests"]
+    contexts = {"needs.native-runtime.outputs.test_container": container}
+    for variable in ["OV_TEST_MYSQL", "OPENVIKING_WATCH_MYSQL_PARAMS"]:
+        expression = job["env"][variable].strip().removeprefix("${{").removesuffix("}}")
+        # GitHub format uses escaped braces, like Python's format.
+        expression = expression.replace("format(", "gh_format(")
+        expression = expression.replace(
+            "needs.native-runtime.outputs.test_container", repr(container)
+        )
+        expression = expression.replace("&&", " and ").replace("||", " or ")
+        value = eval(
+            expression, {"__builtins__": {}, "gh_format": lambda text, value: text.format(value)}
+        )
+        assert json.loads(value)["host"] == host
+    redis = "redis://redis:6379" if container else "redis://127.0.0.1:6379"
+    assert labels(job["env"]["OV_TEST_REDIS"], {}, contexts=contexts) == [redis]
+    for service, port in [("mysql", "3306"), ("redis", "6379")]:
+        assert labels(job["services"][service]["ports"][0], {}, contexts=contexts) == [
+            port if container else f"{port}:{port}"
+        ]
