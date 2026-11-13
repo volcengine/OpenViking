@@ -18,6 +18,7 @@ from openviking.session.memory.merge_op import MergeOp
 from openviking.session.memory.merge_op.base import FieldType
 from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking.system_assets import builtin_memory_templates_dir
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -293,11 +294,13 @@ class MemoryTypeRegistry:
 
             file_uri = f"{directory}/{filename}"
 
-            # Check if file already exists
+            # Check if file already exists. Only a definite not-found may seed
+            # the template: a transient read failure must never be treated as
+            # absence and overwrite an existing memory file.
             try:
                 await viking_fs.read_file(file_uri, ctx=ctx)
                 continue
-            except Exception:
+            except (NotFoundError, FileNotFoundError):
                 pass
 
             # Add MEMORY_FIELDS comment with field metadata

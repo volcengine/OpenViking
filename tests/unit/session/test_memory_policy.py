@@ -210,6 +210,52 @@ async def test_initialize_memory_files_renders_fields_without_init_value_as_empt
     assert "- **AlsoNoInit:**" in lines
 
 
+async def test_initialize_memory_files_propagates_read_failures_without_writing(monkeypatch):
+    """A transient read failure must not be treated as a missing memory file.
+
+    Seeding the init template over an unreadable file would overwrite the
+    user's accumulated identity/profile/soul memory.
+    """
+
+    class FakeVikingFS:
+        def __init__(self):
+            self.written_uris = []
+
+        async def read_file(self, uri, ctx=None):
+            raise TimeoutError(f"storage backend timed out reading {uri}")
+
+        async def write_file(self, uri, content, ctx=None):
+            del content, ctx
+            self.written_uris.append(uri)
+
+    def schema(memory_type: str, filename: str) -> MemoryTypeSchema:
+        return MemoryTypeSchema(
+            memory_type=memory_type,
+            directory="viking://user/{{ user_space }}/memories",
+            filename_template=filename,
+            content_template="{{ content }}",
+            fields=[
+                MemoryField(
+                    name="content",
+                    field_type=FieldType.STRING,
+                    init_value=memory_type,
+                )
+            ],
+        )
+
+    fake_fs = FakeVikingFS()
+    monkeypatch.setattr("openviking.storage.viking_fs.get_viking_fs", lambda: fake_fs)
+
+    registry = MemoryTypeRegistry(load_schemas=False)
+    registry.register(schema("identity", "identity.md"))
+
+    ctx = type("Ctx", (), {"user": type("User", (), {"user_id": "carol"})()})()
+
+    with pytest.raises(TimeoutError):
+        await registry.initialize_memory_files(ctx)
+    assert fake_fs.written_uris == []
+
+
 @pytest.mark.parametrize("value", [None, {}, {"peer": {"enabled": True}}, {"working_memory": {}}])
 def test_missing_working_memory_is_disabled(value):
     assert MemoryPolicy.from_dict(value).enable_working_memory is False
