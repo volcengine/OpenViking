@@ -394,6 +394,23 @@ async def test_conditional_budget_is_atomic_across_stores(setup_kernel, credenti
                 {"role": "tool", "content": "<openviking-context>quoted</openviking-context>"}
             ]
         },
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Summary: the session began with an `<openviking-context>` block.",
+                }
+            ]
+        },
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "```\n<openviking-context>m</openviking-context>\n```",
+                }
+            ]
+        },
+        {"messages": [{"role": "user", "content": "The <openviking-context> tag holds recall."}]},
     ],
 )
 def test_unrelated_content_cannot_disable_memory(body):
