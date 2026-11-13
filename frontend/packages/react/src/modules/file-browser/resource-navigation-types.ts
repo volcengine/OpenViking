@@ -16,6 +16,7 @@ export interface FileBrowserHandle {
    * is missing, inaccessible, outside the root, or navigation was superseded.
    * Listing and required alias lookup failures reject. In controlled mode the
    * host must accept onUriChange.
+   * Links to .abstract.md or .overview.md open their parent at L0 or L1.
    */
   openResource: (
     uri: string,
