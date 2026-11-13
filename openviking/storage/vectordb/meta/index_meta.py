@@ -144,6 +144,9 @@ class IndexMeta:
 
         Returns:
             bool: True if update was successful, False if validation failed.
+
+        Raises:
+            RuntimeError: If the updated metadata cannot be persisted.
         """
         if not validation.is_valid_index_meta_data_for_update(
             additional_user_meta, self.collection_meta.fields_dict
@@ -158,8 +161,11 @@ class IndexMeta:
             user_meta["Description"] = additional_user_meta["Description"]
 
         new_inner_meta = IndexMeta._build_inner_meta(user_meta, self.collection_meta)
+        previous_inner_meta = self.inner_meta
         self.inner_meta = new_inner_meta
-        self.__idict.override(new_inner_meta)
+        if not self.__idict.override(new_inner_meta):
+            self.inner_meta = previous_inner_meta
+            raise RuntimeError("Failed to persist index metadata")
         return True
 
     def get_build_index_dict(self) -> Dict[str, Any]:
