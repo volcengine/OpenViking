@@ -84,3 +84,46 @@ test('internal chat survives StrictMode, uses Provider native auth and restores 
     await act(() => root.unmount());
   }
 });
+
+test('client failure notices follow the display locale without restarting requests and disappear on scope change', async () => {
+  let chat;
+  let creations = 0;
+  let streams = 0;
+  const service = {
+    createSession: async () => ({ id: `s${++creations}`, title: 'Session' }),
+    loadMessages: async () => [],
+    async *stream() {
+      streams++;
+      yield { type: 'text', text: 'unfinished content', delta: true };
+    },
+  };
+  function Host({ locale, scopeKey }) {
+    chat = useVikingBotChat({ service, locale, scopeKey });
+    return null;
+  }
+  const root = createRoot(document.createElement('div'));
+  const render = (locale, scopeKey = 'first') =>
+    act(() => root.render(createElement(Host, { locale, scopeKey })));
+  try {
+    await render('zh-CN');
+    await act(() => chat.send('original question'));
+    const notice = chat.messages.at(-1);
+    assert.equal(notice.role, 'system');
+    assert.equal(notice.tone, 'error');
+    assert.equal(notice.clientError.code, 'BOT_STREAM_TRUNCATED');
+    assert.match(notice.parts[0].text, /完成前断开/);
+    assert.equal(notice.clientError, chat.error);
+    await render('en-US');
+    assert.equal(chat.messages.at(-1).id, notice.id);
+    assert.match(chat.messages.at(-1).parts[0].text, /terminal event/);
+    assert.equal(chat.messages[0].parts[0].text, 'original question');
+    assert.equal(chat.messages[1].parts[0].text, 'unfinished content');
+    assert.equal(creations, 1);
+    assert.equal(streams, 1);
+    await render('en-US', 'second');
+    assert.deepEqual(chat.messages, []);
+    assert.equal(chat.error, undefined);
+  } finally {
+    await act(() => root.unmount());
+  }
+});

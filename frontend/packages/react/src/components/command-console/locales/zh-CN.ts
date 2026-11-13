@@ -1,3 +1,4 @@
+import type { renderErrors as EnglishRenderErrors } from './en-US.js';
 import type { ResolvedCommandConsoleLabels } from '../command-console-labels.js';
 
 const messages = {
@@ -8,6 +9,7 @@ const messages = {
   historyCommands: '历史指令',
   suggestions: '命令建议',
   noSuggestions: '没有匹配的命令',
+  cancelled: '已取消',
   pending: '执行中',
   success: '执行成功',
   error: '执行失败',
@@ -36,3 +38,8 @@ const messages = {
 } satisfies ResolvedCommandConsoleLabels;
 
 export default messages;
+
+export const renderErrors = {
+  console: '命令控制台显示失败',
+  result: '命令结果显示失败',
+} satisfies Record<keyof typeof EnglishRenderErrors, string>;

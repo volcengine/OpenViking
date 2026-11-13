@@ -1,3 +1,5 @@
+import { useRenderErrors } from './file-browser-labels.js';
+import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import { useOvClient } from '../../client/provider.js';
@@ -6,7 +8,6 @@ import { Modal } from '../../shared/primitives/modal/modal.js';
 import type { Locale } from '../../shared/locale.js';
 import { FileBrowserSearchAdvanced } from './file-browser-search-advanced.js';
 import { FileBrowserSearchHeader } from './file-browser-search-header.js';
-import { FileBrowserSearchPreview } from './file-browser-search-preview.js';
 import { useSearchHighlight } from './use-search-highlight.js';
 import type { FileBrowserHandle } from './types.js';
 import { FileBrowserSearchResults } from './file-browser-search-results.js';
@@ -61,6 +62,7 @@ export function FileBrowserSearch({
   onClose,
 }: FileBrowserSearchProps) {
   const client = useOvClient();
+  const renderErrors = useRenderErrors(locale);
   const inputRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState('');
   const [query, setQuery] = useState('');
@@ -192,37 +194,33 @@ export function FileBrowserSearch({
       />
       <div className="ov-file-browser-search__content">
         <div className="ov-file-browser-search__results">
-          <FileBrowserSearchResults
-            mode={mode}
-            hits={hits}
-            listId={listId}
-            activeIndex={activeIndex}
-            query={query.trim()}
-            onHighlight={onHighlight}
-            onRetry={retry}
-            preview={
-              active ? (
-                <FileBrowserSearchPreview
-                  client={client}
-                  entry={active}
-                  requestOptions={requestOptions}
-                  text={text}
-                />
-              ) : null
-            }
-            loading={search.loading || (awaitingQuery && !!draft.trim())}
-            error={search.error}
-            searched={search.result !== null}
-            text={text}
-            onSelectMode={(next) => {
-              setMode(next);
-              // 切模式时把筛选收敛到新模式真正会用的形态，显示与请求才不会脱节。
-              // Collapse the filters to what the new mode actually uses, so the display
-              // and the request cannot drift apart.
-              setFilters((current) => normalizeFilters(current, next));
-            }}
-            onOpen={openResult}
-          />
+          <ErrorBoundary
+            message={renderErrors.search}
+            resetKeys={[rootUri, query, mode]}
+          >
+            <FileBrowserSearchResults
+              mode={mode}
+              hits={hits}
+              listId={listId}
+              activeIndex={activeIndex}
+              query={query.trim()}
+              onHighlight={onHighlight}
+              onRetry={retry}
+              fallbackFocusRef={inputRef}
+              loading={search.loading || (awaitingQuery && !!draft.trim())}
+              error={search.error}
+              searched={search.result !== null}
+              text={text}
+              onSelectMode={(next) => {
+                setMode(next);
+                // 切模式时把筛选收敛到新模式真正会用的形态，显示与请求才不会脱节。
+                // Collapse the filters to what the new mode actually uses, so the display
+                // and the request cannot drift apart.
+                setFilters((current) => normalizeFilters(current, next));
+              }}
+              onOpen={openResult}
+            />
+          </ErrorBoundary>
         </div>
         {advancedOpen ? (
           <FileBrowserSearchAdvanced

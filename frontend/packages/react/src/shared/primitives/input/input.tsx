@@ -12,12 +12,21 @@ import {
   type ReactNode,
   type TextareaHTMLAttributes,
 } from 'react';
+import { InputFrame } from './input-frame.js';
 
 export interface InputProps extends Omit<
   InputHTMLAttributes<HTMLInputElement>,
   'size' | 'prefix' | 'type'
 > {
-  type?: 'text' | 'search' | 'email' | 'url' | 'tel' | 'password' | 'number';
+  type?:
+    | 'text'
+    | 'search'
+    | 'email'
+    | 'url'
+    | 'tel'
+    | 'password'
+    | 'number'
+    | 'time';
   size?: 'mini' | 'small' | 'default' | 'large';
   prefix?: ReactNode;
   suffix?: ReactNode;
@@ -28,16 +37,11 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   ref,
 ) {
   return (
-    <span
+    <InputFrame
       role="presentation"
-      className={[
-        'ov-input',
-        `ov-input--${size}`,
-        disabled && 'ov-input--disabled',
-        className,
-      ]
-        .filter(Boolean)
-        .join(' ')}
+      size={size}
+      disabled={disabled}
+      className={className}
       style={style}
       onMouseDown={(event) => {
         if (event.target !== event.currentTarget.querySelector('input'))
@@ -65,7 +69,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
           {suffix}
         </span>
       ) : null}
-    </span>
+    </InputFrame>
   );
 });
 

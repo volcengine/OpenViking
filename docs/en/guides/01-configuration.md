@@ -1363,7 +1363,7 @@ Grep engine configuration for content pattern search. These settings are server-
 | `engine` | str | Search engine mode: `"auto"` uses VikingDB BM25 recall when available and falls back to local filesystem search; `"fs"` forces local filesystem search only. | `"auto"` |
 | `switch_to_remote_threshold` | int | L2 record count threshold to switch to VikingDB BM25 recall. When the number of L2 files under the search scope reaches this threshold, VikingDB BM25 is used for phase-1 recall; otherwise local filesystem search is used. Set to `0` to always use VikingDB BM25. Must be ≥ 0. | `10000` |
 
-For VikingDB / Volcengine FullText grep, OpenViking writes a `content` text field for BM25 recall. The source context keeps the full content, while the vector-store write payload truncates this field to **1 MB** at the final adapter boundary to stay within backend payload limits. Only VikingDB-backed backends use `content`; on all other backends (`local`, `cuvs`, `http`) the field is not written.
+For VikingDB / Volcengine FullText grep, OpenViking writes a `content` text field for BM25 recall. The source context keeps the full content, while the vector-store write payload truncates this field to **1 MB** at the final adapter boundary to stay within backend payload limits. The SQL backends (`opengauss`, `pgvector`) also store `content`; pgvector grep uses the filesystem fallback. The field is not written on `local`, `cuvs` or `http`.
 
 ### glob
 
@@ -1941,7 +1941,7 @@ Vector database storage configuration
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), 'vikingdb' (private deployment), or 'cuvs' (local storage + GPU dense search) | "local" |
+| `backend` | str | VectorDB backend: `local`, `http`, `volcengine`, `vikingdb`, `cuvs`, `opengauss`, or `pgvector` (PostgreSQL) | "local" |
 | `name` | str | VectorDB collection name | "context" |
 | `url` | str | Remote service URL for 'http' type (e.g., `http://localhost:5000`) | null |
 | `project_name` | str | Project name (alias project) | "default" |
@@ -1951,6 +1951,7 @@ Vector database storage configuration
 | `volcengine` | object | 'volcengine' type VikingDB configuration | - |
 | `vikingdb` | object | 'vikingdb' type private deployment configuration | - |
 | `cuvs` | object | NVIDIA cuVS configuration for the 'cuvs' backend and the opt-in memory-aware auto mode on 'local'; see the [cuVS guide](./16-cuvs.md) | - |
+| `pgvector` | object | PostgreSQL connection pool and flat/HNSW settings; see the [pgvector guide](./25-pgvector.md) | - |
 
 Default local mode
 ```
@@ -2255,7 +2256,7 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 | `port` | int | Bind port | `1933` |
 | `auth_mode` | str / null | Built-in modes: `"dev"`, `"api_key"`, `"trusted"`, `"oidc"`, `"ldap"`. When omitted/null, infer `api_key` from a non-empty `root_api_key`; otherwise infer `dev`. | `null` |
 | `root_api_key` | str | Root API key for multi-tenant auth in `api_key` mode. In `trusted` mode it is required on every deployment, including localhost; it does not become the source of user identity | `null` |
-| `account_store.provider` | str | Complete Account store provider. Built-in values are `"file"`, `"mysql"`, and `"redis_mysql"`; it owns account, user, group, and API-key records. `"file"` preserves the existing AGFS JSON registry and owns its process-local lookup indexes. `"redis_mysql"` keeps MySQL authoritative and adds a shared Redis cache for authentication and request identity reads. | `"file"` |
+| `account_store.provider` | str | Complete Account store provider. Built-in values are `"file"`, `"mysql"`, `"postgres"`, and `"redis_mysql"`; it owns account, user, group, and API-key records. `"file"` preserves the existing AGFS JSON registry and owns its process-local lookup indexes. `"postgres"` uses PostgreSQL directly. `"redis_mysql"` keeps MySQL authoritative and adds a shared Redis cache for authentication and request identity reads. | `"file"` |
 | `account_store.params` | object | Provider-specific startup parameters. Framework-owned filesystem and File-provider API-key hashing dependencies cannot be overridden here. | `{}` |
 | `account_store.params.read_only` | bool | File provider only. Load an existing writer-created registry without locks, bootstrap, or credential migrations, and reject identity mutations. Keep the replica's data mount read-only and set `reconcile_system_assets_on_startup=false`; enable `api_key_watch_enabled` to observe writer changes. A missing registry prevents startup. | `false` |
 | `profile_enabled` | bool | Whether to allow request-scoped cProfile via `profile=1` on HTTP requests. When disabled, the server ignores that query parameter. When enabled, the CLI can display the returned `profile`, while the Python HTTP client currently triggers profiling but does not automatically attach the top-level `profile` field to most SDK return values. | `false` |
@@ -2314,6 +2315,52 @@ separate table prefixes to isolate OpenViking clusters that share a database.
   }
 }
 ```
+
+For PostgreSQL Account Store, install `pip install 'openviking[postgres]'` and
+select the `postgres` provider. It connects through psycopg 3 and SQLAlchemy;
+Redis and pgvector are not required. Provision
+`openviking/server/account_stores/sql/postgres/init.sql` with your migration role
+before startup. The runtime never creates or migrates tables. Grant the runtime
+role schema `USAGE`, `SELECT, INSERT, UPDATE, DELETE` on the five `ov_accounts*`
+tables, and `USAGE, SELECT` on their three primary-key sequences. Table ownership
+and schema `CREATE` are not required. A new deployment creates the `default`
+account on first startup.
+
+```json
+{
+  "service_name": "production",
+  "server": {
+    "account_store": {
+      "provider": "postgres",
+      "params": {
+        "host": "db.example.com",
+        "port": 5432,
+        "user": "openviking",
+        "password": "secret",
+        "database": "openviking",
+        "maxsize": 10,
+        "connect_timeout": 10,
+        "sslmode": "verify-full",
+        "sslrootcert": "/etc/ssl/certs/postgres-ca.pem",
+        "credential_storage": "hash"
+      }
+    }
+  }
+}
+```
+
+The top-level `service_name` is required and separates deployments sharing a
+database. Credentials support the same `hash` and `encrypted` modes and
+`credential_encryption_key` as MySQL; plaintext is never persisted. `maxsize`
+limits connections per Store instance (default 10); `connect_timeout` is the
+connection timeout in seconds (default 10). Omit `password` to use libpq-supported
+authentication; `host` can also be a Unix socket directory. `sslmode` defaults to
+`prefer` and accepts `disable`, `allow`, `require`, `verify-ca`, or `verify-full`.
+Use `sslcert` / `sslkey` for client certificates. Authentication reads the latest
+committed PG state across instances; user pages and their counts share one MVCC
+snapshot. Existing File/MySQL accounts are not migrated automatically. This
+setting replaces only Account Store; Task, Work, and Watch stores have independent
+configuration.
 
 `redis_mysql` requires the `redis-mysql` extra. Its `mysql` block uses the
 same parameters as the MySQL provider; its `cache` block follows the top-level
@@ -2697,7 +2744,7 @@ This illustrates the main sections, not a complete runnable configuration or JSO
       }
     },
     "vectordb": {
-      "backend": "local|cuvs|http|volcengine|vikingdb",
+      "backend": "local|cuvs|http|volcengine|vikingdb|opengauss|pgvector",
       "url": "string",
       "project": "string"
     }

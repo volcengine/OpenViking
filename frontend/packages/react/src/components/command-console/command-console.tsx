@@ -1,4 +1,6 @@
-import { useLocale } from '../../shared/locale-context.js';
+import { useRenderErrors } from './command-console-labels.js';
+import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
+import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 
 import { CommandConsoleAssist } from './command-console-assist.js';
@@ -22,7 +24,7 @@ import { findCommandConsoleCommand } from './command-definitions.js';
  * Command records, results and input. The host owns execution and sessions; the
  * component renders supplied records and reports submission intent and successful copies.
  */
-export function CommandConsole({
+function CommandConsoleContent({
   records,
   value,
   disabled = false,
@@ -108,84 +110,100 @@ export function CommandConsole({
   }, [records]);
 
   return (
-    <div
-      className={['ov-command-console', className].filter(Boolean).join(' ')}
-      {...rest}
-    >
+    <LocaleProvider locale={locale}>
       <div
-        ref={bodyRef}
-        className="ov-command-console__body"
-        onScroll={(event) => {
-          const body = event.currentTarget;
-          followOutput.current =
-            body.scrollHeight - body.scrollTop - body.clientHeight <= 24;
-        }}
+        className={['ov-command-console', className].filter(Boolean).join(' ')}
+        {...rest}
       >
-        {records.length ? (
-          records.map((record) => (
-            <CommandConsoleRecordItem
-              key={record.id}
-              record={record}
-              command={findCommandConsoleCommand(record.command, commands)}
+        <div
+          ref={bodyRef}
+          className="ov-command-console__body"
+          onScroll={(event) => {
+            const body = event.currentTarget;
+            followOutput.current =
+              body.scrollHeight - body.scrollTop - body.clientHeight <= 24;
+          }}
+        >
+          {records.length ? (
+            records.map((record) => (
+              <CommandConsoleRecordItem
+                key={record.id}
+                record={record}
+                locale={locale}
+                command={findCommandConsoleCommand(record.command, commands)}
+                labels={text}
+                onOpenUri={onOpenUri}
+                onCopy={onCopy}
+                onPickCommand={
+                  disabled || readOnly
+                    ? undefined
+                    : (command) => fillCommand(`${command} `)
+                }
+              />
+            ))
+          ) : (
+            <CommandConsoleEmptyRegion
+              emptyState={emptyState}
+              commands={pickCommandConsoleCommands(quickCommands, commands)}
               labels={text}
-              onOpenUri={onOpenUri}
-              onCopy={onCopy}
-              onPickCommand={
-                disabled || readOnly
-                  ? undefined
-                  : (command) => fillCommand(`${command} `)
-              }
+              disabled={disabled || readOnly}
+              onPick={fillInput}
             />
-          ))
-        ) : (
-          <CommandConsoleEmptyRegion
-            emptyState={emptyState}
-            commands={pickCommandConsoleCommands(quickCommands, commands)}
-            labels={text}
-            disabled={disabled || readOnly}
-            onPick={fillInput}
-          />
-        )}
+          )}
+        </div>
+        <CommandConsoleAssist
+          assistId={assistId}
+          anchorRef={composerRef}
+          onDismiss={dismissCompletion}
+          labels={text}
+          completion={completion}
+          activeIndex={activeIndex}
+          onActiveIndexChange={setActiveIndexSafely}
+          onPick={fillCommand}
+        />
+        <CommandConsoleComposer
+          onDismiss={dismissCompletion}
+          onRequestPalette={() => {
+            setDismissedValue(null);
+            setSelection({ queryKey: value, index: -1 });
+            setPaletteScope(completion.query.scope);
+          }}
+          assistId={assistId}
+          anchorRef={composerRef}
+          onFocus={() => setDismissedValue(null)}
+          value={value}
+          history={records.map((record) =>
+            formatCommandConsoleCommandInput(record.command, commands),
+          )}
+          labels={text}
+          completion={completion}
+          disabled={disabled}
+          readOnly={readOnly}
+          canSubmit={Boolean(onSubmit) && !readOnly}
+          activeIndex={activeIndex}
+          onActiveIndexChange={setActiveIndexSafely}
+          onValueChange={onValueChange ? updateValue : undefined}
+          onSubmit={(command) => {
+            if (disabled || readOnly) return;
+            followOutput.current = true;
+            onSubmit?.(command);
+          }}
+          onOpenUri={onOpenUri}
+        />
       </div>
-      <CommandConsoleAssist
-        assistId={assistId}
-        anchorRef={composerRef}
-        onDismiss={dismissCompletion}
-        labels={text}
-        completion={completion}
-        activeIndex={activeIndex}
-        onActiveIndexChange={setActiveIndexSafely}
-        onPick={fillCommand}
-      />
-      <CommandConsoleComposer
-        onDismiss={dismissCompletion}
-        onRequestPalette={() => {
-          setDismissedValue(null);
-          setSelection({ queryKey: value, index: -1 });
-          setPaletteScope(completion.query.scope);
-        }}
-        assistId={assistId}
-        anchorRef={composerRef}
-        onFocus={() => setDismissedValue(null)}
-        value={value}
-        history={records.map((record) =>
-          formatCommandConsoleCommandInput(record.command, commands),
-        )}
-        labels={text}
-        completion={completion}
-        disabled={disabled}
-        readOnly={readOnly}
-        canSubmit={Boolean(onSubmit) && !readOnly}
-        activeIndex={activeIndex}
-        onActiveIndexChange={setActiveIndexSafely}
-        onValueChange={onValueChange ? updateValue : undefined}
-        onSubmit={(command) => {
-          if (disabled || readOnly) return;
-          followOutput.current = true;
-          onSubmit?.(command);
-        }}
-        onOpenUri={onOpenUri}
-      />
-    </div>
+    </LocaleProvider>
+  );
+}
+
+export function CommandConsole(props: CommandConsoleProps) {
+  const { slots, ...contentProps } = props;
+  return (
+    <ErrorBoundary
+      fallback={slots?.errorFallback}
+      message={useRenderErrors(props.locale).console}
+      locale={props.locale}
+    >
+      <CommandConsoleContent {...contentProps} />
+    </ErrorBoundary>
   );
 }

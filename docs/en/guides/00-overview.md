@@ -20,7 +20,7 @@ Configure authentication and reverse proxies before exposing remote access. For 
 
 Choose a tool through the [observability and diagnostics guide](05-observability.md). Inspect individual requests with [operation telemetry](07-operation-telemetry.md), trends with [Prometheus / Grafana](11-grafana-prometheus.md), and metric meanings in [metric definitions](../concepts/12-metrics.md). See the [FAQ](../faq/faq.md) for common problems.
 
-Add [multi-write storage](13-multi-write-storage.md), [RAGFS caching](14-ragfs-cache.md) or [cuVS](16-cuvs.md) when needed. These are optional configurations rather than prerequisites for a first deployment.
+Add [multi-write storage](13-multi-write-storage.md), [RAGFS caching](14-ragfs-cache.md), [cuVS](16-cuvs.md) or [PostgreSQL + pgvector](25-pgvector.md) when needed. These are optional configurations rather than prerequisites for a first deployment.
 
 For shared path locks across processes or hosts without Redis, see
 [PostgreSQL PathLock configuration](../configuration/01-server.md#postgresql-pathlock).

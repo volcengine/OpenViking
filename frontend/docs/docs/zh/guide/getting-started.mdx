@@ -113,6 +113,33 @@ export function Browser({ apiKey }: { apiKey: string }) {
 - 登录、账号作用域和路由由宿主负责。
 - 其余身份字段、`requestOptions` 和各区块的规则见[区块](../modules/)。
 
+## 自定义错误展示
+
+FilePreview、CommandConsole、VikingBot 及其消息列表、输入区和交互表单、两个看板，以及 FileBrowser、Console 和 ScopeCascade 区块，均支持可选的 `slots.errorFallback: ReactNode | ((reset: () => void) => ReactNode)`。它替换渲染异常后的整个错误展示，宿主可在传入的内容上设置 `className`、`style` 和自己的交互。
+
+```tsx
+<FileBrowser
+  slots={{
+    errorFallback: (reset) => (
+      <div className="my-error" role="alert">
+        文件区域暂不可用
+        <button type="button" onClick={reset}>
+          重新显示
+        </button>
+      </div>
+    ),
+  }}
+/>
+```
+
+- 不传或传 `undefined`：继承外层组件或区块的配置；没有外层配置时使用内置的区域文案和“重试显示”。
+- 内部区域：默认继承，子组件显式设置的插槽优先；FilePreview 的页签 `slots.errorFallback` 优先于组件级配置。
+- 传 `null`：隐藏对应渲染错误展示；自定义内容会替换内置提示和重试按钮。
+
+渲染函数在失败时收到当前区域的 `reset`。调用它会清除该区域的错误状态并重新渲染，不会重置外层状态或主动重发业务请求；原因仍未消除时，会再次显示 fallback。函数继承到内部区域时，收到的是该内部区域自己的 `reset`。
+
+插槽变化只更新失败展示，不会自动重试或清空边界外的状态。它仅影响渲染异常；普通请求失败继续使用各组件原有的错误态配置。错误边界本身仍是库内实现。
+
 ## 主题
 
 组件的颜色读取 `--ov-ui-color-*` 变量。库本身不定义这些变量：在应用根节点或任意祖先元素上设置它们，组件就使用你的值；没有设置时，组件使用内置的默认色。

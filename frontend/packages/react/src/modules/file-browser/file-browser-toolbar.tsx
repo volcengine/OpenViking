@@ -1,5 +1,5 @@
 import SearchIcon from '../../../../icons/svg/scope-switcher/search.svg?react';
-import FilterIcon from '../../../../icons/svg/dashboards/severity-filter.svg?react';
+import FilterIcon from '../../../../icons/svg/file-browser/search-filter.svg?react';
 import RefreshIcon from '../../../../icons/svg/file-browser/refresh-cw-01.svg?react';
 
 /**

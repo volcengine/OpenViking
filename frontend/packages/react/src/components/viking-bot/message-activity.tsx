@@ -1,3 +1,4 @@
+import type { TaskSnapshot } from '../../shared/task-tracking/types.js';
 import { useEffect, useMemo, useState } from 'react';
 import { ActivityTimeline } from '@ark-design/ui/activity-timeline';
 import type {
@@ -43,6 +44,14 @@ export function MessageActivity({
     }
     return links;
   }, [parts]);
+  const taskSnapshots = useMemo(() => {
+    const snapshots = new Map<string, readonly TaskSnapshot[]>();
+    for (const part of parts) {
+      if ((part.type === 'tool' || part.type === 'tool_result') && part.tasks)
+        snapshots.set(part.id, part.tasks);
+    }
+    return snapshots;
+  }, [parts]);
   const items = order.flatMap((id) => groups.get(id)?.items ?? []);
   const running = items.some(
     (item) => item.status === 'running' || item.status === 'queued',
@@ -85,10 +94,11 @@ export function MessageActivity({
           labels={labels}
           onOpenUri={onOpenUri}
           results={resultLinks.get(context.item.id)}
+          tasks={taskSnapshots.get(context.item.id)}
         />
       ),
     }),
-    [labels, onOpenUri, resultLinks],
+    [labels, onOpenUri, resultLinks, taskSnapshots],
   );
   return (
     <ActivityTimeline

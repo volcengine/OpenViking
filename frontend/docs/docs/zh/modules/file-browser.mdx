@@ -94,6 +94,7 @@ import '@openviking/react/modules/file-browser/style.css';
 | previewSlots             | 追加、替换或隐藏预览操作区，看板页签不受影响，类型见下方 `FileBrowserPreviewSlots`                                 | `FileBrowserPreviewSlots`                                               | -                        |
 | dashboardKinds           | 启用的看板类型，空数组关闭看板；例如 `['experience']` 只保留经验看板，并且不再读取编译配置                         | `readonly ('wiki' \| 'experience')[]`                                   | `['wiki', 'experience']` |
 | renderDashboard          | 自定义看板页签的内容，返回 `null` 或 `undefined` 时使用内置看板，类型见下方 `FileBrowserDashboard`                 | `(dashboard: FileBrowserDashboard) => ReactNode`                        | -                        |
+| slots                    | 替换渲染异常的展示内容，见[错误展示插槽](../guide/getting-started#自定义错误展示)                                  | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }`   | -                        |
 | labels                   | 覆盖界面文案，类型见下方 `FileBrowserLabels`                                                                       | `FileBrowserLabels`                                                     | -                        |
 | locale                   | 界面语言，规则见[国际化](../guide/i18n)                                                                            | `'zh-CN' \| 'en-US'`                                                    | 继承上级，默认 `'en-US'` |
 | requestOptions           | 覆盖请求配置，规则见[区块概览](./)                                                                                 | `OvRequestOptions`                                                      | -                        |
@@ -142,12 +143,12 @@ import '@openviking/react/modules/file-browser/style.css';
 
 `acl` 传入对象时的配置，全部可选；传入 `true` 等同于不设置任何选项。
 
-| 参数              | 说明                                                                                                             | 类型                                                                                                                                          | 默认值   |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| readOnly          | 禁止修改授权，仍可查看                                                                                           | `boolean`                                                                                                                                     | `false`  |
-| resolvePermission | 返回当前用户在资源上的有效权限，未知时返回 `undefined`；省略时读取 `fs/stat` 的 `permission`，缺失时探测管理权限 | `(uri: string, context: FileBrowserAclContext) => Promise<FileBrowserAclLevel \| undefined>`                                                  | 内置实现 |
-| listPrincipals    | 返回可添加的 User 或 Group，`page` 从 1 开始；省略时调用账号的用户和用户组接口，不读取凭证                       | `(query: { type: 'user' \| 'group'; keyword: string; page: number }, context: FileBrowserAclContext) => Promise<FileBrowserAclPrincipalPage>` | 内置实现 |
-| onChange          | 授权保存成功后触发，保存失败时不触发；回调抛出的错误不影响保存结果                                               | `(report: FileBrowserAclReport) => void`                                                                                                      | -        |
+| 参数              | 说明                                                                                                         | 类型                                                                                                                                          | 默认值   |
+| ----------------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| readOnly          | 禁止修改授权，仍可查看                                                                                       | `boolean`                                                                                                                                     | `false`  |
+| resolvePermission | 返回当前用户在资源上的有效权限，未知时返回 `undefined`；省略时读取 `fs/stat` 的 `access`，缺失时探测管理权限 | `(uri: string, context: FileBrowserAclContext) => Promise<FileBrowserAclLevel \| undefined>`                                                  | 内置实现 |
+| listPrincipals    | 返回可添加的 User 或 Group，`page` 从 1 开始；省略时调用账号的用户和用户组接口，不读取凭证                   | `(query: { type: 'user' \| 'group'; keyword: string; page: number }, context: FileBrowserAclContext) => Promise<FileBrowserAclPrincipalPage>` | 内置实现 |
+| onChange          | 授权保存成功后触发，保存失败时不触发；回调抛出的错误不影响保存结果                                           | `(report: FileBrowserAclReport) => void`                                                                                                      | -        |
 
 ### FileBrowserAclContext
 
@@ -241,7 +242,7 @@ import '@openviking/react/modules/file-browser/style.css';
 | searchIgnoreCase        | 忽略大小写                                                                                    | `string`                             | `'忽略大小写'`                           |
 | searchFilterUnsupported | 某个筛选在当前检索方式下不可用的原因                                                          | `string`                             | `'当前检索方式不支持此筛选'`             |
 | searchResultCount       | 检索结果数量，参数为条数                                                                      | `(count: number) => string`          | `'检索到 N 条结果'`                      |
-| searchVia               | 结果数量与模式之间的分隔说明                                                                  | `string`                             | `'向量检索方式'`                         |
+| searchVia               | 模式 chip 之后的检索方式说明                                                                  | `string`                             | `'向量检索方式'`                         |
 | searchSwitchMode        | 切换检索方式的入口                                                                            | `string`                             | `'切换'`                                 |
 | searchAdvancedLabel     | 高级筛选按钮的无障碍名称                                                                      | `string`                             | `'高级筛选'`                             |
 | previewMode             | 「预览 / 源码」切换里的「预览」                                                               | `string`                             | `'预览'`                                 |
@@ -406,6 +407,8 @@ const browserRef = useRef<FileBrowserHandle>(null);
 await browserRef.current?.openResource(resultUri, { reveal: true });
 ```
 
+传入以 `/.abstract.md` 或 `/.overview.md` 结尾的链接时，模块打开父目录并分别切换到 L0 摘要或 L1 总览；树定位与 `onUriChange` 使用父目录 URI。同一目录内重复打开链接也会切换到指定层级，之后仍可手动切换。
+
 `reveal` 默认 `true`；传 `{ reveal: false }` 只发出打开预览的请求，发出后返回 `true`。普通 `uri` 属性变化不会展开或滚动目录树。受控模式需要宿主在 `onUriChange` 中更新 `uri` 接受打开意图。目标行选中并滚动后 Promise 返回 `true`；目标不存在、不可访问、不在 `rootUri` 下、被后续操作替代或组件卸载时返回 `false`。根目录本身没有树行，打开其预览后返回 `false`。目录列表请求或必要的当前用户别名解析失败会 reject，宿主可捕获并展示提示。服务端明确不支持别名解析时，按原 URI 写法匹配。调用方主动取消时返回 `false`。Promise 不等待预览正文加载完成。内置搜索复用同一导航入口。
 
 ### 搜索
@@ -424,7 +427,7 @@ await browserRef.current?.openResource(resultUri, { reveal: true });
 - 结果按 URI 去重；`grep` 例外——同一文件的多行命中是不同结果，各带自己的行号。
 - `glob` 的模式不含 `/` 时自动补 `**/` 前缀；目录命中去掉尾斜杠后再参与导航，目录这一事实记在 `isDir` 上。
 - 高级面板的筛选项按当前方式启用或禁用，禁用的分区保留可见并置灰，标题旁说明原因。目录候选从 `rootUri` 派生，用户根用 `~` 别名；切换根时失效的已选目录会被丢弃。
-- 悬停结果或按 **↑ / ↓** 查看预览。点击或按 **Enter** 关闭弹窗、打开资源并在树中定位。窄屏时预览移到列表下方。
+- 按 **↑ / ↓** 切换当前结果，点击或按 **Enter** 关闭弹窗、打开资源并在树中定位。
 
 ### 预览操作区
 
@@ -443,7 +446,7 @@ await browserRef.current?.openResource(resultUri, { reveal: true });
 ### 权限（ACL）
 
 - `acl` 只作用于 `viking://resources/` 下的非根节点；其他位置不显示权限标签，也不受 ACL 限制。
-- 有效权限先读 `GET /api/v1/fs/stat` 返回的 `permission`；没有该字段时调用 `GET /api/v1/acl` 探测，成功视为 `manage`，403 视为未知。
+- 有效权限先读 `GET /api/v1/fs/stat` 返回的 `access`；没有该字段时调用 `GET /api/v1/acl` 探测，成功视为 `manage`，403 视为未知。
 - 权限未知时不显示权限标签，编辑和删除不可用；权限读取失败时标题旁显示「重试」。
 - 权限标签显示有效权限，`manage` 的标签详情里有「管理权限」按钮，点击打开授权弹窗。
 - `read` 不能编辑，`write` 可以编辑和导入，`manage` 还可以删除和管理授权。
@@ -453,7 +456,7 @@ await browserRef.current?.openResource(resultUri, { reveal: true });
 - 保存期间不能重复提交或关闭弹窗；保存失败时保留上次成功的授权并显示服务端的原因。
 - 保存成功后刷新目录和预览；服务端的索引更新可能异步完成，以服务端的鉴权结果为准。
 - 目录列表（`fs/ls`）里 `access: 'denied'` 的节点不能选中或展开，`access: 'container'` 的节点只能展开以访问有权限的子节点、不能预览自身。
-- `permission: 'read'` 的节点显示只读标记。
+- `access: 'read'` 的节点显示只读标记。
 - 以上节点标记来自目录列表，不依赖 `acl`。
 - 授权调用 `GET`、`PUT`、`DELETE /api/v1/acl`；成员目录调用账号的用户和用户组接口（用户每页 20 条，`include_credentials=false`），需要在 Provider 或 `requestOptions` 里提供 `accountId`。
 - 用户组目录需要账号管理权限，资源管理者无权读取时会显示失败和重试，可以用 `acl.listPrincipals` 接入自己的目录。

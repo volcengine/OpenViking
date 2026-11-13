@@ -1,3 +1,5 @@
+import { useRenderErrors } from './file-browser-labels.js';
+import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import type { FilePreviewActions } from '../../components/file-preview/index.js';
 import { useRef } from 'react';
 import { previewActionContext } from './file-browser-preview-action-source.js';
@@ -17,7 +19,7 @@ import type {
   FileBrowserPreviewSlots,
 } from './types.js';
 
-export function FileBrowserPreviewPane({
+function FileBrowserPreviewPaneContent({
   browser,
   permissions,
   rootUri,
@@ -144,5 +146,19 @@ export function FileBrowserPreviewPane({
       )}
       {controls.dialog}
     </div>
+  );
+}
+
+export function FileBrowserPreviewPane(
+  props: Parameters<typeof FileBrowserPreviewPaneContent>[0],
+) {
+  return (
+    <ErrorBoundary
+      message={useRenderErrors(props.locale).preview}
+      locale={props.locale}
+      resetKeys={[props.browser.currentUri]}
+    >
+      <FileBrowserPreviewPaneContent {...props} />
+    </ErrorBoundary>
   );
 }

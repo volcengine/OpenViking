@@ -8,6 +8,7 @@ const messages = {
   historyCommands: 'History',
   suggestions: 'Command suggestions',
   noSuggestions: 'No matching commands',
+  cancelled: 'Cancelled',
   pending: 'Running',
   success: 'Succeeded',
   error: 'Failed',
@@ -37,3 +38,8 @@ const messages = {
 } satisfies ResolvedCommandConsoleLabels;
 
 export default messages;
+
+export const renderErrors = {
+  console: 'Command console could not be displayed.',
+  result: 'Command result could not be displayed.',
+};

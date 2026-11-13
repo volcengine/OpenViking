@@ -1,0 +1,18 @@
+.ov-task-status {
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+  font-size: 12px;
+  line-height: 1.6;
+  margin-block: 8px;
+}
+.ov-task-status__item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  overflow-wrap: anywhere;
+}
+.ov-task-status__id {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+}
+.ov-task-status__error {
+  color: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
+}

@@ -1543,3 +1543,16 @@
     animation: none;
   }
 }
+
+.ov-command-console__result-state[data-status='cancelled'] {
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  color: var(--ov-ui-command-console-muted);
+}
+.ov-command-console__result-state[data-status='cancelled']::before {
+  content: '';
+  width: 10px;
+  height: 2px;
+  background: currentColor;
+  transform: rotate(-45deg);
+}

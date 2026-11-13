@@ -1,3 +1,5 @@
+import { Button, Select, SelectOption } from '#demo-controls';
+
 import { useCallback, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { useLang } from '@rspress/core/runtime';
@@ -25,22 +27,26 @@ export default function DirectoryTourSizing() {
     : 'Long content wraps and scrolls inside the card. ';
   return (
     <div className="ov-directory-tour-sizing">
-      <select
+      <Select
         aria-label={zh ? '尺寸约束' : 'Size constraints'}
-        value={preset}
-        onChange={(event) => setPreset(event.target.value)}
+        value={[preset]}
+        onChange={([value]) => {
+          if (value !== undefined) setPreset(value);
+        }}
       >
         {[
           'percentage',
           'class',
           ...Object.keys(limits).filter((name) => name !== 'percentage'),
         ].map((name) => (
-          <option key={name}>{name}</option>
+          <SelectOption key={name} value={name}>
+            {name}
+          </SelectOption>
         ))}
-      </select>
-      <button ref={anchor} type="button" onClick={() => setOpen(true)}>
+      </Select>
+      <Button ref={anchor} htmlType="button" onClick={() => setOpen(true)}>
         {zh ? '测试尺寸约束' : 'Test sizing'}
-      </button>
+      </Button>
       <DirectoryTour
         open={open}
         locale={zh ? 'zh-CN' : 'en-US'}

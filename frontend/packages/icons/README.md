@@ -28,6 +28,13 @@ React imports these SVG files directly during its build. This file records where
   ISC; the same artwork is present in 0.0.134. The 14 × 14 viewBox, path and
   1.2-unit `currentColor` stroke are unchanged. Only the runtime wrapper is
   removed; the React package bundles the local SVG through SVGR.
+- `svg/file-browser/` — the search dialog's filter glyph, the toolbar's refresh
+  glyph and the empty search state's artwork. `search-filter.svg` and
+  `refresh-cw-01.svg` keep the design's geometry with `currentColor` paint;
+  `search-empty.svg` redraws the design's 258 × 140 dashed grid, document outline
+  and magnifier in the style of `svg/console/history-empty.svg`, with its colours
+  mapped to theme variables. See that directory's README.
+
 - `svg/scope-switcher/` — the chevron and check assets were supplied by the
   designer. Chevron is 14 × 14 and check is 16 × 16. Their paint was changed from
   the design's fixed colours to `currentColor` so a host theme can recolour them;

@@ -488,7 +488,7 @@ class CollectionAdapter(ABC):
         advance: Optional[Dict[str, Any]] = None,
     ) -> list[Dict[str, Any]]:
         decay_request = (advance or {}).get("time_decay")
-        if decay_request is not None and self.mode != "opengauss":
+        if decay_request is not None and self.mode not in {"opengauss", "pgvector"}:
             from openviking.utils.time_decay import (
                 build_time_decay_fusion_spec,
                 build_time_decay_post_process_ops,

@@ -1,3 +1,4 @@
+import type { renderErrors as EnglishRenderErrors } from './en-US.js';
 import type { FilePreviewLabels } from '../types.js';
 
 const messages = {
@@ -30,3 +31,9 @@ const messages = {
 } satisfies Required<FilePreviewLabels>;
 
 export default messages;
+
+export const renderErrors = {
+  preview: '文件预览失败',
+  content: '页签内容显示失败',
+  editor: '文件编辑器显示失败',
+} satisfies Record<keyof typeof EnglishRenderErrors, string>;

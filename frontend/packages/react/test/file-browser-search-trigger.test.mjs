@@ -93,9 +93,23 @@ test('search runs as you type, keeps the scope, and survives a locale change', a
       /profile\.md/,
     );
     await act(async () => modeSwitch().click());
+    // 菜单挂在 document.body 上，不在弹窗里：弹窗为固定头部裁掉溢出，菜单若留在
+    // 里面会被裁掉大半。
+    //
+    // The menu lives on document.body, not inside the dialog: the dialog clips its
+    // overflow so the header stays put, and a menu left inside would be cut off.
     assert.equal(
-      dialog().querySelectorAll('.ov-file-browser-search__menu-item').length,
+      document.querySelectorAll('.ov-file-browser-search__menu-item').length,
       4,
+    );
+    assert.equal(
+      dialog().querySelector('.ov-file-browser-search__menu-item'),
+      null,
+    );
+    await act(async () => modeSwitch().click());
+    assert.equal(
+      document.querySelectorAll('.ov-file-browser-search__menu-item').length,
+      0,
     );
     assert.equal(
       view.container.querySelector('.ov-file-browser__tree-scroll').textContent,

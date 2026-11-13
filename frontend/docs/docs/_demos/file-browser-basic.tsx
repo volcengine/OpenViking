@@ -101,6 +101,19 @@ export default function FileBrowserBasic() {
             ? '预览目录摘要'
             : 'Preview directory summaries'}
         </Button>{' '}
+        {(['.abstract.md', '.overview.md'] as const).map((name, index) => (
+          <Button
+            key={name}
+            size="small"
+            onClick={() =>
+              void browserRef.current?.openResource(`${MEMORIES}/${name}`)
+            }
+          >
+            {componentLocale === 'zh-CN'
+              ? `打开 L${index} 摘要链接`
+              : `Open L${index} summary link`}
+          </Button>
+        ))}
         <Button size="small" onClick={() => setUri(DEMO_EXPERIENCE)}>
           {componentLocale === 'zh-CN' ? '预览经验文件' : 'Preview experience'}
         </Button>

@@ -5,7 +5,6 @@
 
 import asyncio
 import json
-from collections import deque
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -554,53 +553,23 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     await tracker.complete(task.task_id, {"output": "wiki"}, **owner)
     assert await tracker.get_task_auth(task.task_id, **owner) == {}
 
-    # Exercise the real task store, work index, consumer, and ACK lifecycle.
-    class QueueBackend:
-        def __init__(self):
-            self.pending = deque()
-            self.processing = {}
-            self.sequence = 0
+    # Exercise the real kernel, task store, Work index and final ACK lifecycle.
+    import ragfs_python
 
-        async def mkdir(self, path):
-            pass
-
-        async def write(self, path, data):
-            if path.endswith("/enqueue"):
-                self.sequence += 1
-                message = {"id": str(self.sequence), "data": json.loads(data)}
-                self.pending.append(message)
-                return message["id"]
-            assert path.endswith("/ack")
-            del self.processing[data.decode()]
-
-        async def read(self, path):
-            if path.endswith("/messages"):
-                result = [*self.pending, *self.processing.values()]
-            elif path.endswith("/size"):
-                result = len(self.pending)
-            else:
-                assert path.endswith("/dequeue")
-                result = self.pending.popleft() if self.pending else {}
-                if result:
-                    self.processing[result["id"]] = result
-            return json.dumps(result).encode()
-
-    backend = QueueBackend()
-    manager = QueueManager(agfs=object())
+    backend = ragfs_python.RAGFSBindingClient()
+    queue_config = {"backend": "sqlite", "db_path": str(tmp_path / "queue.sqlite")}
+    backend.mount("queuefs", "/queue", queue_config)
+    manager = QueueManager(agfs=backend)
     queue = manager.get_queue(
         QueueManager.EXTERNAL_TASK,
         dequeue_handler=ExternalTaskProcessor(tasks),
         allow_create=True,
     )
-    queue._async_agfs = backend
     store = PersistentTaskStore(MockLocalAGFS(root_path=tmp_path))
     tracker = TaskTracker(store)
     monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
     monkeypatch.setattr(external_task_service_module, "get_task_tracker", lambda: tracker)
     monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: manager)
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.external_task_processor.get_queue_manager", lambda: manager
-    )
     await manager.prepare_task_tracking(tracker)
     real_sleep = asyncio.sleep
 
@@ -684,22 +653,21 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     assert queried_task == current_task
     assert queried.result["meta"]["request"].get("args", {}) == public_args
 
-    await queue.dequeue()  # Same target rotates, including across users.
+    await queue.dequeue()  # Kernel skips the blocked target and admits independent work.
     assert (await state(waiting)).status == TaskStatus.PENDING
     assert waiting.task_id not in submitted
     assert await tracker.has_work(
         waiting.task_id,
         account_id=waiting.account_id,
         user_id=waiting.user_id,
-    )  # Requeue survives ACK of the old delivery.
-    await queue.dequeue()
+    )
     assert (await state(independent)).status == TaskStatus.COMPLETED
     await tracker.cancel(cancelled.task_id, account_id="acct", user_id="alice")
     await queue.dequeue()
     assert (await state(cancelled)).status == TaskStatus.CANCELLED
     assert cancelled.task_id not in submitted
-    await queue.dequeue()
     assert (await state(other_account)).status == TaskStatus.COMPLETED
+    assert await queue.dequeue_raw() is None
 
     if finish == "cancel":
         await tracker.cancel(first.task_id, account_id="acct", user_id="alice")
@@ -714,21 +682,22 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
         tasks = ExternalTaskService()
         tasks.register(CompileService(service._config, tasks, SimpleNamespace()))
         queue.set_dequeue_handler(ExternalTaskProcessor(tasks))
-        await tasks.restore_tasks(await manager.prepare_task_tracking(tracker))
-        # Recover processing behind pending work to prove recovery reserves the target first.
-        backend.pending.extend(backend.processing.values())
-        backend.processing.clear()
+        backend.unmount("/queue")
+        backend.mount("queuefs", "/queue", queue_config)
+        await manager.prepare_task_tracking(tracker)
+        recovered = await queue.dequeue_raw()
+        assert json.loads(recovered["data"])["task_id"] == first.task_id
+        worker = asyncio.create_task(queue.process_dequeued(recovered))
 
-    await queue.dequeue()
+    assert await queue.dequeue_raw() is None
     assert waiting.task_id not in submitted
     assert (await state(waiting)).status == TaskStatus.PENDING
     if finish == "restart_cancel":
         await tracker.cancel(first.task_id, account_id="acct", user_id="alice")
     release.set()
+    await asyncio.wait_for(worker, timeout=5)
     if finish in {"restart", "restart_cancel"}:
-        await queue.dequeue()
-    else:
-        await asyncio.wait_for(worker, timeout=5)
+        await queue.ack(recovered["id"], recovered)
     expected = {
         "cancel": TaskStatus.CANCELLED,
         "restart_cancel": TaskStatus.CANCELLED,
@@ -743,8 +712,10 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
         assert cancel_entered.is_set()
     await queue.dequeue()
     assert (await state(waiting)).status == TaskStatus.COMPLETED
+    await queue.dequeue()
+    assert (await state(cancelled)).status == TaskStatus.CANCELLED
     assert submitted.count(first.task_id) == 1
-    assert not backend.pending and not backend.processing
+    assert not await queue.snapshot()
 
     # Submission failure also releases the target for the next task.
     rejected = await create()
@@ -761,6 +732,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     for secret in private_args.values():
         if secret:
             assert secret not in caplog.text
+    backend.close()
 
 
 @pytest.mark.asyncio

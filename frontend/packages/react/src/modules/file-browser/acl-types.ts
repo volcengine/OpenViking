@@ -25,8 +25,8 @@ export interface FileBrowserAclOptions {
   /** 禁止授权修改，仍可查看。Prevent mutations while retaining the grant list. */
   readOnly?: boolean;
   /**
-   * 自身有效权限；默认先读 fs/stat.permission，缺失时仅探测管理权限。
-   * Own effective level. Defaults to fs/stat.permission, then a manage-only ACL probe.
+   * 自身有效权限；默认先读 fs/stat.access，缺失时仅探测管理权限。
+   * Own effective level. Defaults to fs/stat.access, then a manage-only ACL probe.
    * No particular user ID is assumed to be an administrator.
    */
   resolvePermission?: (

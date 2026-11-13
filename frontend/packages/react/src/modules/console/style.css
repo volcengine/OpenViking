@@ -1,3 +1,4 @@
+@import '../../shared/error-boundary/error-boundary.css';
 @import '../../shared/primitives/button/button.css';
 @import '../../theme.css';
 @import '../../components/command-console/style.css';
@@ -6,3 +7,5 @@
 @import './console.css';
 @import './console-toolbar.css';
 @import './console-history.css';
+
+@import '../../shared/primitives/notification/style.css';

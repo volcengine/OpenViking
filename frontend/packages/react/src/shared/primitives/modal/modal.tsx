@@ -4,7 +4,15 @@
  * Copyright (c) 2021 Bytedance, Inc. and its affiliates.
  * License: ../../../../LICENSE.arco-design (included in the published package).
  */
-import { useEffect, useId, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import type { RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import FocusLock from 'react-focus-lock';
 import { CSSTransition } from 'react-transition-group';
@@ -13,6 +21,8 @@ import { useLocale } from '../../locale-context.js';
 import { resolveLocale } from '../../locale.js';
 import { lockBodyScroll } from '../overlay/lock-body-scroll.js';
 import { usePortalTheme } from '../tooltip/use-portal-theme.js';
+import { ModalFocusShardContext } from './focus-shards.js';
+import type { RegisterFocusShard } from './focus-shards.js';
 import type { ModalProps } from './types.js';
 import enUS from './locales/en-US.js';
 import zhCN from './locales/zh-CN.js';
@@ -45,6 +55,29 @@ export function Modal({
   const [present, setPresent] = useState(open);
   const [layer, setLayer] = useState<HTMLDivElement | null>(null);
   usePortalTheme(Boolean(layer), triggerRef, layer);
+
+  // 浮层 portal 到 body 后不在弹窗的 DOM 子树里，`FocusLock` 的 Tab 序列看不到
+  // 它。把浮层节点登记成 shard，`FocusLock` 就会把它算进自己的焦点范围，Tab 能
+  // 进去也能出来。用 state 而不是 ref：shard 列表变了要重渲染，`FocusLock` 才会
+  // 拿到新的 `shards` 属性。
+  //
+  // A portaled surface is not in the dialog's DOM subtree, so `FocusLock`'s tab
+  // sequence cannot see it. Registering the node as a shard puts it inside the lock's
+  // focus scope, so Tab enters and leaves it. State, not a ref: the lock only picks up
+  // a changed `shards` prop when it re-renders.
+  const [shards, setShards] = useState<Array<RefObject<HTMLElement | null>>>(
+    [],
+  );
+  const registerFocusShard = useCallback<RegisterFocusShard>((shard) => {
+    setShards((current: Array<RefObject<HTMLElement | null>>) =>
+      current.includes(shard) ? current : [...current, shard],
+    );
+    return () =>
+      setShards((current: Array<RefObject<HTMLElement | null>>) =>
+        current.filter((item) => item !== shard),
+      );
+  }, []);
+  const shardContext = useMemo(() => registerFocusShard, [registerFocusShard]);
 
   // useEffect 必要性：Portal 提交后才可锁定所属 document 的 body；
   // 锁属于浏览器外部资源，需一直保留到退出动画卸载 Portal，再释放本层令牌。
@@ -114,17 +147,20 @@ export function Modal({
             className="ov-modal__focus-lock"
             returnFocus={{ preventScroll: true }}
             crossFrame={false}
+            shards={shards}
           >
-            <button
-              type="button"
-              className="ov-modal__close"
-              aria-label={label}
-              disabled={!onClose}
-              onClick={onClose}
-            >
-              <CloseIcon width={16} height={16} aria-hidden="true" />
-            </button>
-            <div className="ov-modal__body">{children}</div>
+            <ModalFocusShardContext.Provider value={shardContext}>
+              <button
+                type="button"
+                className="ov-modal__close"
+                aria-label={label}
+                disabled={!onClose}
+                onClick={onClose}
+              >
+                <CloseIcon width={16} height={16} aria-hidden="true" />
+              </button>
+              <div className="ov-modal__body">{children}</div>
+            </ModalFocusShardContext.Provider>
           </FocusLock>
         </div>
       </CSSTransition>

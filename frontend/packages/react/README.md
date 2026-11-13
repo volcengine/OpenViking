@@ -107,4 +107,4 @@ Every stylesheet entry works on its own and includes the styles of the component
 
 ## License
 
-`@openviking/react` is licensed under AGPL-3.0-only, the license of the OpenViking repository ([LICENSE](../../../LICENSE)). The internal Button, Input, Modal and Drawer adapt Arco Design (MIT), whose notice ships in `LICENSE.arco-design`; the visual rules of Button and Input adapt `@arco-design/theme-ve-o-aml-design@0.0.36` (MIT). Icon sources and their licenses, including the Apache-2.0 file-type icons, are recorded in [`packages/icons`](../icons/README.md).
+`@openviking/react` is licensed under AGPL-3.0-only, the license of the OpenViking repository ([LICENSE](../../../LICENSE)). The internal Button, Input, Modal, Drawer and Notification adapt Arco Design (MIT), whose notice ships in `LICENSE.arco-design`; the visual rules of Button and Input adapt `@arco-design/theme-ve-o-aml-design@0.0.36` (MIT). Icon sources and their licenses, including the Apache-2.0 file-type icons, are recorded in [`packages/icons`](../icons/README.md).

@@ -44,6 +44,8 @@ export interface UseFsPreviewOptions {
    */
   resourceType?: 'directory' | 'file' | 'unknown';
   contentKind?: 'plain' | 'wiki' | 'pending';
+  activeLevelKey?: string;
+  onActiveLevelChange?: (key: string) => void;
   /** 目录两级摘要的标题。Titles of the two summary levels. */
   labels?: { l0: string; l1: string; failure: string };
   /** 字符数文案；独立 Hook 默认英文。Character count copy; standalone Hooks default to English. */
@@ -82,6 +84,8 @@ export function useFsPreview({
   uri,
   resourceType = 'file',
   contentKind = 'plain',
+  activeLevelKey = 'l0',
+  onActiveLevelChange,
   labels = resolveSummaryLabels('en-US'),
   formatCharacterCount = resolveLabels(undefined, 'en-US').formatCharacterCount,
   openParent,
@@ -99,12 +103,9 @@ export function useFsPreview({
   const [characterCount, setCharacterCount] = useState<number>();
   const [saveGeneration, setSaveGeneration] = useState(0);
 
-  // 当前资源决定要读什么。资源切换必须取消上一次读取，否则慢的旧响应会覆盖新
-  // 资源的页签；卸载时同样取消。
-  //
-  // The current resource decides what is read. A resource switch cancels the
-  // previous read, or a slow response would overwrite the new resource's tabs; the
-  // same happens on unmount.
+  // useEffect 必要性：按 URI、资源类型与请求配置同步远端正文和目录摘要。
+  // URI 也会由宿主属性改变，点击事件无法覆盖这些变化，渲染本身不能发请求。
+  // 依赖变化与卸载中止请求并忽略过期结果；摘要层级与文案仅影响展示。
   useEffect(() => {
     setDirectory(null);
     if (!client || !uri) {
@@ -228,10 +229,15 @@ export function useFsPreview({
             directoryIcon(),
           ),
           resolveImage: directory.resolveImage,
+          activeLevelKey,
+          onActiveLevelChange,
         }
       : undefined;
   const count = directoryTab
-    ? (directoryTab.levels[0].source.content ?? '').length
+    ? (
+        directoryTab.levels.find((level) => level.key === activeLevelKey)
+          ?.source.content ?? ''
+      ).length
     : characterCount;
   return {
     tabs: directoryTab ? [directoryTab] : tabs,

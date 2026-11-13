@@ -1,3 +1,5 @@
+import { useTaskTracking } from '../../../shared/task-tracking/context.js';
+import { projectBotTasks, submittedBotTasks } from './task-messages.js';
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import { createChatController } from './chat-controller.js';
 import { useBotService } from './use-service.js';
@@ -11,6 +13,7 @@ export function useVikingBotChat(
 ): VikingBotChatResult {
   const { service: native, signal } = useBotService(options);
   const locale = useLocale(options.locale);
+  const { track, tasks, source } = useTaskTracking(options);
   const {
     service = native,
     sessionId,
@@ -51,11 +54,44 @@ export function useVikingBotChat(
     controller.getSnapshot,
     controller.getSnapshot,
   );
+  // Effect necessity: register tasks from the external chat controller's stream
+  // and history events, which also arrive without a user submission here.
+  // Subscribe directly rather than mirror React message state; cleanup detaches
+  // the old controller, and useTaskTracking releases/aborts its query source.
+  useEffect(() => {
+    if (enabled === false) return;
+    const register = () => {
+      const current = controller.getSnapshot();
+      for (const task of submittedBotTasks(current.messages, current.streaming))
+        track(task);
+    };
+    register();
+    return controller.subscribe(register);
+  }, [controller, track, enabled]);
+  const projected = useMemo(
+    () => projectBotTasks(state.messages, state.streaming, tasks, source.key),
+    [state.messages, state.streaming, tasks, source],
+  );
+  const error = localizeBotError(state.error, locale);
+  const messages = projected.messages.map((message) => {
+    if (!message.clientError) return message;
+    const clientError =
+      message.clientError === state.error
+        ? error!
+        : localizeBotError(message.clientError, locale)!;
+    return {
+      ...message,
+      clientError,
+      parts: [{ type: 'text' as const, text: clientError.message }],
+    };
+  });
   return {
     ...state,
+    ...projected,
+    messages,
     canInterrupt: Boolean(service.interrupt),
     canSteer: Boolean(service.steer),
-    error: localizeBotError(state.error, locale),
+    error,
     send: controller.send,
     abort: controller.abort,
     reset: controller.reset,

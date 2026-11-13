@@ -138,7 +138,8 @@
 .ov-viking-bot__popover-anchor {
   display: inline-flex;
 }
-.ov-viking-bot__popover {
+.ov-viking-bot__popover,
+.ov-dropdown.ov-popover.ov-select__popover.ov-viking-bot__popover {
   position: fixed;
   z-index: 1000;
   box-sizing: border-box;
@@ -176,6 +177,7 @@
   display: flex;
   width: 100%;
   flex-direction: column;
+  align-items: stretch;
   gap: 6px;
   border: 0;
   border-radius: 8px;
@@ -200,6 +202,9 @@
 .ov-viking-bot__session-history time {
   color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
   font-variant-numeric: tabular-nums;
+}
+.ov-viking-bot__session-history .ov-select__check {
+  display: none;
 }
 .ov-viking-bot__empty-history {
   display: flex;
