@@ -27,7 +27,7 @@ curl -fsSL https://openviking.ai/install | bash
 - 以 stdio 代理形式提供的 OpenViking MCP 服务，含 `search`、`read`、`remember`、`add_skill` 等工具。
 - `openviking-memory`、`openviking-skills`、`ov-experience-memory`、`openviking-rule-search` 四个 skill，以插件名为前缀列出，例如 `openviking-memory:openviking-skills`。
 
-安装器使用 `~/.qoder`，设置了 `QODER_CONFIG_DIR` 时用它。`PATH` 中只有 `qoderclicn` 时，改用该 CLI 及 `~/.qoder-cn`（`QODERCN_CONFIG_DIR`）。
+`PATH` 中的每个 Qoder CLI 版本都会装上插件：`qodercli` 装在 `~/.qoder`（`QODER_CONFIG_DIR`），国内版 `qoderclicn` 装在 `~/.qoder-cn`（`QODERCN_CONFIG_DIR`）。卸载时两处都会移除。
 
 ## 验证
 

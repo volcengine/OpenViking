@@ -27,7 +27,7 @@ The installer assembles a self-contained plugin under `~/.openviking/agent-integ
 - The OpenViking MCP server as a stdio proxy, with tools such as `search`, `read`, `remember`, and `add_skill`.
 - The `openviking-memory`, `openviking-skills`, `ov-experience-memory`, and `openviking-rule-search` skills, listed under the plugin's name, for example `openviking-memory:openviking-skills`.
 
-The installer uses `~/.qoder`, or `QODER_CONFIG_DIR` when set. When only `qoderclicn` is on `PATH`, it uses that CLI and `~/.qoder-cn` (`QODERCN_CONFIG_DIR`) instead.
+Every Qoder CLI build on `PATH` gets the plugin: `qodercli` in `~/.qoder` (`QODER_CONFIG_DIR`), and the CN build `qoderclicn` in `~/.qoder-cn` (`QODERCN_CONFIG_DIR`). Uninstall removes it from both.
 
 ## Verify
 
