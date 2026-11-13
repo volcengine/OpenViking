@@ -109,6 +109,8 @@ export const sections: DocSection[] = [
         p('agent-integrations/04-codex'),
         p('agent-integrations/12-cursor'),
         p('agent-integrations/13-trae'),
+        p('agent-integrations/20-codebuddy'),
+        p('agent-integrations/21-qoder'),
         p('agent-integrations/10-opencode'),
         p('agent-integrations/17-dsh')
       ]),

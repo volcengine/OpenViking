@@ -887,7 +887,8 @@ test("--input: session ids, live ids and peers follow each host's plugin", async
   // Peers, against the plugin loader with each host's harness name.
   const ovcli = (body) => writeFileSync(join(root, "ovcli.conf"), JSON.stringify(body));
   const hosts = [["cursor", "cursor"], ["trae", "trae"], ["trae-cn", "trae_cn"], ["trae-cli", "trae_cli", "codex"], ["zcode", "zcode"],
-    ["kimicode", "kimicode"], ["codebuddy", "codebuddy"], ["opencode", "opencode"], ["pi", "pi"], ["dsh", "dsh"]];
+    ["kimicode", "kimicode"], ["codebuddy", "codebuddy"], ["qoder", "qoder"],
+    ["opencode", "opencode"], ["pi", "pi"], ["dsh", "dsh"]];
   for (const [name, key, pluginName = name] of hosts) {
     const scenarios = [
       { cwd: repo },

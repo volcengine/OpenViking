@@ -55,8 +55,8 @@ process.stdin.on("end", () => {
 
 # Each host-facing manifest must report the distributed agent-hook version.
 # Kimi also exposes kimi.plugin.json to the host and its marketplace, and
-# CodeBuddy resolves its installed plugin by the manifest version, so keep
-# both aligned with the integration and root manifests.
+# CodeBuddy and Qoder resolve an installed plugin by the manifest version, so
+# keep them aligned with the integration and root manifests.
 PAIRED=(
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/cursor/openviking.integration.json"
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/trae/openviking.integration.json"
@@ -64,6 +64,7 @@ PAIRED=(
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/kimicode/openviking.integration.json"
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/kimicode/kimi.plugin.json"
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/codebuddy/plugin.json"
+  "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/qoder/plugin.json"
 )
 
 failed=0
