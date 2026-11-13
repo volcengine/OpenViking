@@ -64,7 +64,7 @@ def _pr_row(number: int, updated_at: str = "2026-11-10T08:00:00Z") -> dict:
 
 
 WATCH_TO_URI = "viking://resources/volcengine/OpenViking"
-RADAR_TARGET_URI = "viking://user/acct-1/resources/radar/volcengine/OpenViking"
+RADAR_TARGET_URI = "viking://user/alice/resources/radar/volcengine/OpenViking"
 
 
 def _task(processor_kwargs: dict | None = None, path: str = GITHUB_URL):
@@ -78,10 +78,14 @@ def _task(processor_kwargs: dict | None = None, path: str = GITHUB_URL):
         # Anchor two minutes in the past so a 1-minute window is already due.
         created_at=datetime.now() - timedelta(minutes=2),
         watch_interval=1.0,
+        user_id="alice",
     )
 
 
-_ctx = SimpleNamespace(account_id="acct-1")
+# Watch runtime identity: account_id (tenant) differs from user_id (namespace owner).
+_ctx = SimpleNamespace(
+    account_id="acct-1", user=SimpleNamespace(user_id="alice")
+)
 
 
 @pytest.fixture(autouse=True)
@@ -187,8 +191,33 @@ def test_custom_target_uri_is_honored():
     config = RadarConfig.from_kwargs(
         {"pr_radar": {"enabled": True, "target_uri": "viking://user/x/resources/radar/custom"}}
     )
-    uri = PrRadarRunner._target_uri(config, "volcengine/OpenViking", "acct-1")
+    uri = PrRadarRunner._target_uri(config, "volcengine/OpenViking", "alice")
     assert uri == "viking://user/x/resources/radar/custom"
+
+
+def test_derived_target_uri_uses_user_id_not_account_id():
+    # The owner segment of viking://user/<owner>/... must be user_id, matching
+    # namespace.is_accessible; account_id would self-deny non-root identities.
+    config = RadarConfig.from_kwargs({"pr_radar": {"enabled": True}})
+    uri = PrRadarRunner._target_uri(config, "volcengine/OpenViking", "alice", WATCH_TO_URI)
+    assert uri == RADAR_TARGET_URI
+
+    from openviking.core.namespace import is_accessible
+    from openviking.server.identity import RequestContext, Role
+    from openviking_cli.session.user_id import UserIdentifier
+
+    ctx = RequestContext(
+        user=UserIdentifier("acct-1", "alice"), role=Role.USER, bypass_acl=True
+    )
+    assert is_accessible(f"{uri}/{STATE_FILENAME}", ctx) is True
+
+
+def test_owner_user_id_falls_back_to_task_then_default():
+    task = SimpleNamespace(user_id="bob")
+    ctx_with_user = SimpleNamespace(user=SimpleNamespace(user_id="alice"))
+    assert PrRadarRunner._owner_user_id(task, ctx_with_user) == "alice"
+    assert PrRadarRunner._owner_user_id(task, SimpleNamespace()) == "bob"
+    assert PrRadarRunner._owner_user_id(SimpleNamespace(), SimpleNamespace()) == "default"
 
 
 def test_validate_rejects_radar_on_non_github():
@@ -547,6 +576,41 @@ async def test_empty_due_window_advances_boundary_without_report():
     assert not any(uri.endswith(LATEST_REPORT_NAME) for uri in fs.files)
     expected_next = fmt_ts(parse_ts(last_digest_ts) + timedelta(minutes=1))
     assert _read_state(fs)["last_digest_at"] == expected_next
+
+
+@pytest.mark.asyncio
+async def test_first_run_since_matches_labeled_backfill_window():
+    from datetime import datetime, timedelta, timezone
+
+    from openviking.resource.github_radar.models import fmt_ts
+
+    class RecordingGh:
+        def __init__(self) -> None:
+            self.since_values: list[str] = []
+
+        async def api_get_json(self, path, params=None):
+            self.since_values.append(params["since"])
+            return []
+
+    fs = FakeFs()
+    gh = RecordingGh()
+    # Watch created three days ago; a delayed first trigger must not shrink
+    # the queried range relative to the labeled [anchor-backfill, anchor] window.
+    anchor = datetime.now(timezone.utc) - timedelta(days=3)
+    task = SimpleNamespace(
+        task_id="watch-1",
+        path=GITHUB_URL,
+        to_uri=WATCH_TO_URI,
+        processor_kwargs={"pr_radar": {"enabled": True, "backfill_days": 7}},
+        created_at=anchor,
+        watch_interval=1.0,
+        user_id="alice",
+    )
+
+    result = await PrRadarRunner(fs, gh=gh).maybe_run(task, _ctx)
+
+    assert result.status == "empty"
+    assert gh.since_values[0] == fmt_ts(anchor - timedelta(days=7))
 
 
 def test_plan_digest_partial_safety_valve_never_advances_boundary():

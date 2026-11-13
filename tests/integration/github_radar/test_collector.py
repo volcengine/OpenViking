@@ -207,6 +207,79 @@ async def test_constant_per_page_keeps_github_offsets_from_overlapping():
 
 
 @pytest.mark.asyncio
+async def test_first_floor_parameter_pins_since_for_empty_state():
+    captured: list[dict] = []
+
+    class RecordingGh:
+        async def api_get_json(self, path, params=None):
+            captured.append(dict(params))
+            return []
+
+    floor = "2026-10-01T00:00:00Z"
+    outcome = await collect_prs(
+        RecordingGh(),
+        "o/r",
+        RadarConfig(enabled=True, backfill_days=7),
+        RadarState(),
+        first_floor=floor,
+    )
+
+    # The labeled backfill window start reaches GitHub verbatim instead of a
+    # floor recomputed at trigger time.
+    assert captured[0]["since"] == floor
+    assert outcome.state.issues_since == floor
+
+
+@pytest.mark.asyncio
+async def test_final_watermark_ref_survives_large_scan_and_blocks_reemit():
+    # 300 unique-timestamp PRs in one pass (per_page=100, 3 pages). The old
+    # lexicographic top-200 truncation dropped the final-watermark PR #300 and
+    # the next pass re-collected it through the inclusive `since`.
+    rows = [
+        _pr_row(n, f"2026-11-01T00:{n // 60:02d}:{n % 60:02d}Z")
+        for n in range(1, 301)
+    ]
+    config = RadarConfig(enabled=True, max_prs_per_run=500)
+    outcome = await collect_prs(
+        GithubOffsetGh(rows), "o/r", config,
+        RadarState(issues_since="2026-11-01T00:00:00Z"),
+    )
+
+    assert len(outcome.prs) == 300
+    assert "#300" in outcome.state.issues_seen
+    # Only final-watermark refs are remembered, well under the safety cap.
+    assert len(outcome.state.issues_seen) <= 200
+
+    class BoundaryReemitGh:
+        async def api_get_json(self, path, params=None):
+            # GitHub re-emits the boundary row because `since` is inclusive.
+            return [rows[-1]] if int(params["page"]) == 1 else []
+
+    second = await collect_prs(BoundaryReemitGh(), "o/r", config, outcome.state)
+    assert second.prs == []
+
+
+def test_config_rejects_values_above_upper_bounds():
+    oversized = {
+        "backfill_days": 3651,
+        "max_prs_per_run": 1001,
+        "max_pending_prs": 10_001,
+        "summary_batch_bytes": 10_000_001,
+        "digest_interval_minutes": 525_601,
+    }
+    for name, value in oversized.items():
+        with pytest.raises(InvalidArgumentError):
+            RadarConfig.from_kwargs(
+                {"pr_radar": {"enabled": True, name: value}}
+            )
+    # Values exactly at the bound remain valid.
+    cfg = RadarConfig.from_kwargs(
+        {"pr_radar": {"enabled": True, "max_prs_per_run": 1000}}
+    )
+    assert cfg.max_prs_per_run == 1000
+
+
+@pytest.mark.asyncio
 async def test_transport_failure_holds_earned_prefix_without_raising():
     gh = FakeGh(
         [[_pr_row(1, "2026-11-01T00:01:00Z")]],

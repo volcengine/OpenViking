@@ -23,6 +23,14 @@ _DEFAULT_BACKFILL_DAYS = 7
 _DEFAULT_MAX_PRS_PER_RUN = 50
 _DEFAULT_MAX_PENDING_PRS = 200
 _DEFAULT_SUMMARY_BATCH_BYTES = 60_000
+# Upper bounds reject values that pass the positive-int check but overflow
+# timedelta at runtime (e.g. backfill_days=10**9 raises OverflowError on every
+# trigger and processor_kwargs cannot be patched after watch creation).
+_MAX_BACKFILL_DAYS = 3650  # ten years
+_MAX_PRS_PER_RUN = 1000  # the 10-page x 100-row page guard cannot yield more
+_MAX_PENDING_PRS = 10_000
+_MAX_SUMMARY_BATCH_BYTES = 10_000_000  # 10 MB per LLM batch
+_MAX_DIGEST_INTERVAL_MINUTES = 525_600  # one year
 # Collection runs on every watch trigger (typically hourly); the digest window
 # is independent and defaults to daily, so a large backfill catches up across
 # hourly collection passes instead of spanning multiple daily reports.
@@ -110,22 +118,36 @@ class RadarConfig:
             if not target_uri:
                 target_uri = None
 
-        def _positive_int(name: str, default: int) -> int:
+        def _positive_int(name: str, default: int, maximum: int) -> int:
             value = raw.get(name, default)
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 raise InvalidArgumentError(
                     f"{PR_RADAR_CONFIG_KEY}.{name} must be a positive integer"
                 )
+            if value > maximum:
+                raise InvalidArgumentError(
+                    f"{PR_RADAR_CONFIG_KEY}.{name} must be <= {maximum}"
+                )
             return value
 
-        backfill_days = _positive_int("backfill_days", _DEFAULT_BACKFILL_DAYS)
-        max_prs_per_run = _positive_int("max_prs_per_run", _DEFAULT_MAX_PRS_PER_RUN)
-        max_pending_prs = _positive_int("max_pending_prs", _DEFAULT_MAX_PENDING_PRS)
+        backfill_days = _positive_int(
+            "backfill_days", _DEFAULT_BACKFILL_DAYS, _MAX_BACKFILL_DAYS
+        )
+        max_prs_per_run = _positive_int(
+            "max_prs_per_run", _DEFAULT_MAX_PRS_PER_RUN, _MAX_PRS_PER_RUN
+        )
+        max_pending_prs = _positive_int(
+            "max_pending_prs", _DEFAULT_MAX_PENDING_PRS, _MAX_PENDING_PRS
+        )
         summary_batch_bytes = _positive_int(
-            "summary_batch_bytes", _DEFAULT_SUMMARY_BATCH_BYTES
+            "summary_batch_bytes",
+            _DEFAULT_SUMMARY_BATCH_BYTES,
+            _MAX_SUMMARY_BATCH_BYTES,
         )
         digest_interval_minutes = _positive_int(
-            "digest_interval_minutes", _DEFAULT_DIGEST_INTERVAL_MINUTES
+            "digest_interval_minutes",
+            _DEFAULT_DIGEST_INTERVAL_MINUTES,
+            _MAX_DIGEST_INTERVAL_MINUTES,
         )
         return cls(
             enabled=enabled,

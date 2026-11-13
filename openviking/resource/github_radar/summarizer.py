@@ -135,7 +135,13 @@ class RadarSummarizer:
                 continue
             if not isinstance(data, dict):
                 continue
-            for raw_row in data.get("items") or []:
+            raw_items = data.get("items")
+            # A scalar (LLM/json_repair artifact) is not iterable; skip the
+            # batch instead of letting TypeError escape and voiding the rows
+            # earned by earlier batches.
+            if not isinstance(raw_items, list):
+                continue
+            for raw_row in raw_items:
                 triage_row = self._parse_triage_row(raw_row, allowed)
                 if triage_row is not None:
                     rows[triage_row.number] = triage_row
@@ -209,7 +215,12 @@ class RadarSummarizer:
         if not isinstance(data, dict):
             return None
         try:
-            raw_sections = data.get("sections") or []
+            raw_sections = data.get("sections")
+            # A scalar sections value must degrade to triage-only, not raise
+            # TypeError past the ValidationError guard below and discard the
+            # stage-1 triage rows entirely.
+            if not isinstance(raw_sections, list):
+                return None
             sections: List[TopicSection] = []
             for raw_section in raw_sections:
                 if not isinstance(raw_section, dict):
@@ -217,9 +228,12 @@ class RadarSummarizer:
                 topic = str(raw_section.get("topic") or "").strip().lower()
                 if topic not in known_topics:
                     continue
+                raw_highlights = raw_section.get("highlight_numbers")
+                if not isinstance(raw_highlights, list):
+                    raw_highlights = []
                 highlights = [
                     number
-                    for number in raw_section.get("highlight_numbers") or []
+                    for number in raw_highlights
                     if isinstance(number, int) and number in allowed
                 ]
                 sections.append(

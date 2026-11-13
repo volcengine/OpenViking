@@ -214,10 +214,21 @@ class PrRadarRunner:
                 return RadarRunResult(status="skipped", reason=warning)
 
             target_uri = self._target_uri(
-                config, repo, ctx.account_id, getattr(task, "to_uri", None)
+                config,
+                repo,
+                self._owner_user_id(task, ctx),
+                getattr(task, "to_uri", None),
             )
             state = await self._load_state(target_uri, ctx)
-            outcome = await collect_prs(self._gh, repo, config, state)
+            # Anchor the first-run floor on the watch creation time so the
+            # collected range matches the labeled backfill window: a delayed
+            # first trigger (gh missing, scheduler downtime) must not shrink
+            # the queried range and silently drop the oldest window's PRs.
+            anchor = self._anchor_utc(task)
+            first_floor = fmt_ts(anchor - timedelta(days=config.backfill_days))
+            outcome = await collect_prs(
+                self._gh, repo, config, state, first_floor=first_floor
+            )
 
             # Raw-material layer: undigested PRs accumulate across capped
             # collection passes so a report always covers a complete window.
@@ -227,7 +238,6 @@ class PrRadarRunner:
             if len(merged) != len(pending):
                 await signal_store.save(merged, ctx)
 
-            anchor = self._anchor_utc(task)
             plan = plan_digest(
                 state=state,
                 config=config,
@@ -345,24 +355,40 @@ class PrRadarRunner:
         return repo if repo and "/" in repo else None
 
     @staticmethod
+    def _owner_user_id(task: Any, ctx: Any) -> str:
+        """Resolve the user-namespace owner (user_id, not account_id).
+
+        ``viking://user/<owner>/...`` is authorized against ``ctx.user.user_id``
+        in namespace.is_accessible; using the tenant account_id here makes the
+        radar directory self-deny for every non-root identity whose account_id
+        differs from user_id. Watch runtimes carry a UserIdentifier on
+        ``ctx.user``; fall back to the task field / "default" for test doubles.
+        """
+        user = getattr(ctx, "user", None)
+        user_id = getattr(user, "user_id", None)
+        if user_id:
+            return str(user_id)
+        return str(getattr(task, "user_id", None) or "default")
+
+    @staticmethod
     def _target_uri(
         config: RadarConfig,
         repo: str,
-        account_id: str,
+        owner_user_id: str,
         watch_to_uri: Optional[str] = None,
     ) -> str:
         if config.target_uri:
             return config.target_uri.rstrip("/")
-        account = account_id or "default"
+        owner = owner_user_id or "default"
         relative = PrRadarRunner._radar_relative_path(watch_to_uri)
         if relative is not None:
             # Keyed by the watch's own target URI, so two watches on the same
             # GitHub repo (different resource paths) never share radar state.
-            return f"viking://user/{account}/resources/radar/{relative}"
+            return f"viking://user/{owner}/resources/radar/{relative}"
         # Fallback for malformed/missing watch targets: repo slug stays unique
-        # per (account, repo) and preserves the pre-watch-URI behavior.
+        # per (owner, repo) and preserves the pre-watch-URI behavior.
         return (
-            f"viking://user/{account}/resources/radar/{escape_repo_slug(repo)}"
+            f"viking://user/{owner}/resources/radar/{escape_repo_slug(repo)}"
         )
 
     @staticmethod

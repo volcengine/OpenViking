@@ -222,3 +222,54 @@ async def test_synthesis_exception_keeps_triage_only_result():
     assert summary is not None
     assert 11 in summary.triage
     assert summary.synthesis is None
+
+
+@pytest.mark.asyncio
+async def test_scalar_items_skips_batch_without_typeerror():
+    handle = FakeVLM([{"items": 123}])
+    summarizer = RadarSummarizer(FakeResolver(handle), batch_bytes=60_000)
+
+    # Degrades to None (template report) instead of raising TypeError.
+    assert await summarizer.summarize(REPO, [_pr(11)], "acct-1") is None
+
+
+@pytest.mark.asyncio
+async def test_scalar_sections_keeps_triage_only_result():
+    handle = FakeVLM(
+        [
+            _triage_response([11]),
+            {"editorial_note": "n", "sections": 5},  # scalar, not a list
+        ]
+    )
+    summarizer = RadarSummarizer(FakeResolver(handle), batch_bytes=60_000)
+    summary = await summarizer.summarize(REPO, [_pr(11)], "acct-1")
+
+    # The triage-only contract survives a malformed synthesis payload.
+    assert summary is not None
+    assert 11 in summary.triage
+    assert summary.synthesis is None
+
+
+@pytest.mark.asyncio
+async def test_scalar_highlight_numbers_is_treated_as_empty():
+    handle = FakeVLM(
+        [
+            _triage_response([11]),
+            {
+                "editorial_note": "n",
+                "sections": [
+                    {
+                        "topic": "gateway",
+                        "overview_zh": "x",
+                        "highlight_numbers": 99,  # scalar, not a list
+                    }
+                ],
+            },
+        ]
+    )
+    summarizer = RadarSummarizer(FakeResolver(handle), batch_bytes=60_000)
+    summary = await summarizer.summarize(REPO, [_pr(11)], "acct-1")
+
+    assert summary is not None
+    assert summary.synthesis is not None
+    assert summary.synthesis.sections[0].highlight_numbers == []

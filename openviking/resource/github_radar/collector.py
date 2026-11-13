@@ -77,14 +77,20 @@ async def collect_prs(
     repo: str,
     config: RadarConfig,
     state: RadarState,
+    first_floor: Optional[str] = None,
 ) -> CollectOutcome:
     """Collect PRs updated after the stored watermark.
+
+    ``first_floor`` pins the first-run query floor (the backfill window start
+    derived from the watch anchor); without it the floor is computed at call
+    time, which drifts forward when early triggers are skipped and would query
+    a narrower range than the report window claims to cover.
 
     On transport failure the previous state is returned untouched so the next
     watch trigger retries the same window. On a bounded stop the watermark only
     advances over the complete ascending prefix already read.
     """
-    since = state.issues_since or config.first_run_floor()
+    since = state.issues_since or first_floor or config.first_run_floor()
     watermark = since
     previously_seen: Set[str] = set(state.issues_seen)
     boundary_refs: Set[str] = set()
@@ -129,12 +135,18 @@ async def collect_prs(
             stamp = norm_ts(row.get("updated_at"))
             if stamp > watermark:
                 watermark = stamp
+                # Keep only refs sharing the FINAL watermark: they are the
+                # rows the inclusive `since` re-emits next pass. Refs from
+                # earlier running maxima must not occupy the _SEEN_LIMIT
+                # budget, or the actual boundary refs can be truncated away
+                # and re-collected as new PRs.
+                boundary_refs.clear()
             if "pull_request" not in row:
                 continue  # Issue, not a PR -- it still advanced the watermark above.
             signal = _build_pr(row)
             if signal is None:
                 continue
-            if stamp == watermark:
+            if stamp and stamp == watermark:
                 boundary_refs.add(signal.source_ref)
             # The inclusive `since` re-emits boundary rows; dedupe by PR number.
             if signal.source_ref in previously_seen:
@@ -168,10 +180,12 @@ def _advance_state(
 ) -> RadarState:
     """Build the next watermark state.
 
-    Rows landing exactly on the watermark are remembered so the inclusive
-    ``since`` does not re-emit them next pass. When nothing landed on the final
-    watermark (usually an empty page), keep the previous memory rather than
-    clearing it and re-emitting an old boundary item.
+    ``boundary_refs`` holds only PR refs sharing the final watermark, so the
+    inclusive ``since`` does not re-emit them next pass; its size is bounded by
+    the number of PRs sharing one timestamp and the _SEEN_LIMIT cap is a pure
+    safety net. When nothing landed on the final watermark (usually an empty
+    page), keep the previous memory rather than clearing it and re-emitting an
+    old boundary item.
     """
     next_seen = sorted(boundary_refs) if boundary_refs else sorted(previously_seen)
     return RadarState(
