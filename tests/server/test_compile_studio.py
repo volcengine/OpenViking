@@ -24,6 +24,154 @@ from openviking_cli.session.user_id import UserIdentifier
 from tests.test_task_tracker import _FakeAgfs
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wait_at", ["admission", "finalization"])
+async def test_external_busy_retries_original_delivery_until_fourth_attempt(
+    monkeypatch, tmp_path, wait_at
+):
+    import ragfs_python
+
+    from openviking.service.external_task_service import ExternalTaskSnapshot
+    from openviking.storage.queuefs.external_task_processor import ExternalTaskProcessor
+    from openviking.storage.queuefs.queue_manager import QueueManager
+
+    tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
+    monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
+    transport = ragfs_python.RAGFSBindingClient()
+    transport.mount(
+        "queuefs", "/queue", {"backend": "sqlite", "db_path": str(tmp_path / "queue.sqlite")}
+    )
+    manager = QueueManager(transport)
+    service = ExternalTaskService()
+    completed = ExternalTaskSnapshot(status="completed", result={"ok": True})
+    provider = SimpleNamespace(
+        task_type="compile",
+        task_id_prefix="cmp_",
+        serialization_key=lambda payload: payload["to"],
+        poll_interval_seconds=0.001,
+        poll_max_attempts=1,
+        submit=AsyncMock(return_value="remote"),
+        get=AsyncMock(return_value=completed),
+        on_start=AsyncMock(side_effect=["busy"] * 3 + [None])
+        if wait_at == "admission"
+        else AsyncMock(return_value=None),
+        on_finish=AsyncMock(
+            side_effect=[ExternalTaskSnapshot(status="running", stage="committing")] * 3
+            + [completed]
+        )
+        if wait_at == "finalization"
+        else AsyncMock(side_effect=lambda task, snapshot: snapshot),
+        on_cancel=AsyncMock(),
+        submission_meta=lambda _: {},
+    )
+    service.register(provider)
+    queue = manager.get_queue(
+        manager.EXTERNAL_TASK, dequeue_handler=ExternalTaskProcessor(service), allow_create=True
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: manager)
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role(Role.USER))
+    owner = {"account_id": "acme", "user_id": "alice"}
+    try:
+        task = await service.create("compile", resource_id=None, payload={"to": "target"}, ctx=ctx)
+        [original] = await queue.snapshot()
+        waiting = await service.create(
+            "compile", resource_id=None, payload={"to": "target"}, ctx=ctx
+        )
+        for _ in range(3):
+            await queue.dequeue()
+            current = await tracker.get(task.task_id, **owner)
+            assert current is not None
+            assert current.status not in {TaskStatus.FAILED, TaskStatus.COMPLETED}
+            assert (await queue.get_status()).pending == 2
+            assert original in await queue.snapshot()
+            assert await tracker.has_work(task.task_id, **owner)
+        await queue.dequeue()
+        current = await tracker.get(task.task_id, **owner)
+        assert current is not None and current.status is TaskStatus.COMPLETED
+        next_message = await queue.dequeue_raw()
+        assert next_message is not None and next_message["id"] != original["id"]
+        waiting_task = await tracker.get(waiting.task_id, **owner)
+        assert waiting_task is not None and waiting_task.status is TaskStatus.PENDING
+        provider.submit.assert_awaited_once()
+        provider.get.assert_awaited_once()
+        provider.on_cancel.assert_not_awaited()
+    finally:
+        transport.close()
+
+
+@pytest.mark.asyncio
+async def test_external_interrupted_cancellation_cleanup_preserves_delivery(monkeypatch, tmp_path):
+    import ragfs_python
+
+    from openviking.service.external_task_service import (
+        ExternalTaskCancellation,
+        ExternalTaskSnapshot,
+    )
+    from openviking.storage.queuefs.external_task_processor import ExternalTaskProcessor
+    from openviking.storage.queuefs.queue_manager import QueueManager
+
+    tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
+    monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
+    transport = ragfs_python.RAGFSBindingClient()
+    transport.mount(
+        "queuefs", "/queue", {"backend": "sqlite", "db_path": str(tmp_path / "queue.sqlite")}
+    )
+    manager = QueueManager(transport)
+    service = ExternalTaskService()
+    executing = asyncio.Event()
+    cleanup_polling = asyncio.Event()
+    polls = 0
+
+    async def poll(*args, **kwargs):
+        nonlocal polls
+        polls += 1
+        (executing if polls == 1 else cleanup_polling).set()
+        await asyncio.Event().wait()
+
+    provider = SimpleNamespace(
+        task_type="compile",
+        task_id_prefix="cmp_",
+        serialization_key=lambda payload: payload["to"],
+        poll_interval_seconds=0.001,
+        poll_max_attempts=1,
+        submit=AsyncMock(),
+        get=poll,
+        on_start=AsyncMock(return_value=None),
+        on_finish=AsyncMock(side_effect=lambda task, snapshot: snapshot),
+        on_cancel=AsyncMock(
+            return_value=ExternalTaskCancellation(
+                external_task_id="remote", snapshot=ExternalTaskSnapshot(status="running")
+            )
+        ),
+        submission_meta=lambda _: {},
+    )
+    service.register(provider)
+    queue = manager.get_queue(
+        manager.EXTERNAL_TASK, dequeue_handler=ExternalTaskProcessor(service), allow_create=True
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: manager)
+    owner = {"account_id": "acme", "user_id": "alice"}
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role(Role.USER))
+    try:
+        task = await service.create("compile", resource_id=None, payload={"to": "target"}, ctx=ctx)
+        await tracker.patch_task(
+            task.task_id, TaskPatch(auth={"external_task_id": "remote"}), **owner
+        )
+        [original] = await queue.snapshot()
+        worker = asyncio.create_task(queue.dequeue())
+        await asyncio.wait_for(executing.wait(), timeout=2)
+        await tracker.cancel(task.task_id, **owner)
+        await asyncio.wait_for(cleanup_polling.wait(), timeout=2)
+        worker.cancel()
+        await asyncio.wait_for(worker, timeout=2)
+        assert await queue.snapshot() == [original]
+        assert (await queue.get_status()).in_progress == 1
+        assert await tracker.has_work(task.task_id, **owner)
+        provider.on_finish.assert_not_awaited()
+    finally:
+        transport.close()
+
+
 @pytest.mark.parametrize(
     "skill,valid",
     [
@@ -225,6 +373,7 @@ async def test_concurrent_submission_retry_and_restart(monkeypatch):
 
     import openviking.service.external_task_service as module
     from openviking.service.external_task_service import ExternalTaskSnapshot
+    from openviking.storage.queuefs.external_task_processor import ExternalTaskProcessor
     from openviking.storage.queuefs.queue_manager import QueueManager
 
     agfs = _FakeAgfs()
@@ -285,15 +434,111 @@ async def test_concurrent_submission_retry_and_restart(monkeypatch):
         await manager.prepare_task_tracking(tracker)
         recovered = await manager.get_queued_tasks(tracker, manager.EXTERNAL_TASK)
         assert {task.task_id for task in recovered} == {again.task_id, waiting.task_id}
-        await service.restore_tasks(recovered)
-
-        assert not await service.execute(waiting.task_id, other.account_id, other.user.user_id)
+        queue = manager.get_queue(manager.EXTERNAL_TASK)
+        queue.set_dequeue_handler(ExternalTaskProcessor(service))
+        message = await queue.dequeue_raw()
+        assert json.loads(message["data"])["task_id"] == again.task_id
+        # Other users cannot dequeue the same target while its original ID is unacked.
+        assert await queue.dequeue_raw() is None
         provider.submit.assert_not_awaited()
-        assert await service.execute(again.task_id, ctx.account_id, ctx.user.user_id)
-        assert await service.execute(waiting.task_id, other.account_id, other.user.user_id)
+        await queue.process_dequeued(message)
+        await queue.ack(message["id"], message)
+        for _ in range(len(await queue.snapshot())):
+            await queue.dequeue()
         assert (await tracker.get(waiting.task_id, account_id="acme", user_id="bob")).result == {
             "done": True
         }
+    finally:
+        transport.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("save_failures", [2, 3])
+async def test_external_outcome_save_does_not_repeat_provider(monkeypatch, tmp_path, save_failures):
+    import ragfs_python
+
+    from openviking.service.external_task_service import ExternalTaskSnapshot
+    from openviking.storage.queuefs.external_task_processor import ExternalTaskProcessor
+    from openviking.storage.queuefs.queue_manager import QueueManager
+
+    agfs = _FakeAgfs()
+    tracker = TaskTracker(PersistentTaskStore(agfs))
+    monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
+    transport = ragfs_python.RAGFSBindingClient()
+    queue_config = {"backend": "sqlite", "db_path": str(tmp_path / "queue.sqlite")}
+    transport.mount("queuefs", "/queue", queue_config)
+    manager = QueueManager(transport)
+    service = ExternalTaskService()
+    provider = SimpleNamespace(
+        task_type="compile",
+        task_id_prefix="cmp_",
+        serialization_key=lambda payload: payload["to"],
+        poll_interval_seconds=0.001,
+        poll_max_attempts=1,
+        submit=AsyncMock(return_value="remote"),
+        get=AsyncMock(return_value=ExternalTaskSnapshot(status="completed", result={"ok": True})),
+        on_start=AsyncMock(return_value=None),
+        on_finish=AsyncMock(side_effect=lambda task, snapshot: snapshot),
+        on_cancel=AsyncMock(),
+        submission_meta=lambda _: {},
+    )
+    service.register(provider)
+    queue = manager.get_queue(
+        manager.EXTERNAL_TASK, dequeue_handler=ExternalTaskProcessor(service), allow_create=True
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: manager)
+    complete = tracker.complete
+    saves = 0
+
+    async def save(*args, **kwargs):
+        nonlocal saves
+        saves += 1
+        if saves <= save_failures:
+            raise OSError("store unavailable")
+        return await complete(*args, **kwargs)
+
+    monkeypatch.setattr(tracker, "complete", save)
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+    try:
+        first = await service.create("compile", resource_id=None, payload={"to": "target"}, ctx=ctx)
+        [original] = await queue.snapshot()
+        await queue.dequeue()
+        provider.submit.assert_awaited_once()
+        provider.get.assert_awaited_once()
+        provider.on_finish.assert_awaited_once()
+        provider.on_cancel.assert_not_awaited()
+        if save_failures == 3:
+            assert (await queue.get_status()).in_progress == 1
+            assert await queue.snapshot() == [original]
+            assert await tracker.has_work(first.task_id, account_id="acme", user_id="alice")
+            waiting = await service.create(
+                "compile", resource_id=None, payload={"to": "target"}, ctx=ctx
+            )
+            assert await queue.dequeue_raw() is None
+
+            # Restart preserves the original delivery and retries its saved outcome.
+            tracker = TaskTracker(PersistentTaskStore(agfs))
+            monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
+            service = ExternalTaskService()
+            service.register(provider)
+            queue.set_dequeue_handler(ExternalTaskProcessor(service))
+            transport.unmount("/queue")
+            transport.mount("queuefs", "/queue", queue_config)
+            await manager.prepare_task_tracking(tracker)
+            recovered = await queue.dequeue_raw()
+            assert recovered["id"] == original["id"]
+            await queue.process_dequeued(recovered)
+            await queue.ack(recovered["id"], recovered)
+            provider.submit.assert_awaited_once()
+            provider.get.assert_awaited_once()
+            await queue.dequeue()
+            assert (
+                await tracker.get(waiting.task_id, account_id="acme", user_id="alice")
+            ).status is TaskStatus.COMPLETED
+        assert (
+            await tracker.get(first.task_id, account_id="acme", user_id="alice")
+        ).status is TaskStatus.COMPLETED
+        assert (await queue.get_status()).is_complete
     finally:
         transport.close()
 

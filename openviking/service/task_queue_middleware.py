@@ -228,7 +228,7 @@ class TaskWorkQueueMiddleware(QueueMiddleware):
                 account_id=metadata.account_id,
                 user_id=metadata.user_id,
             )
-        elif result.outcome is ProcessOutcome.REQUEUED:
+        elif result.outcome in (ProcessOutcome.REQUEUED, ProcessOutcome.RETRY):
             await self._tracker.mark_work_requeued(
                 metadata.task_id,
                 metadata.work_id,

@@ -35,7 +35,7 @@ MemoryBackend 也维护 `processing` 集合：dequeue 将消息移入该集合�
 
 | 字段 | 含义 |
 | --- | --- |
-| `pending` | 尚未 dequeue、可被 worker 获取的消息数 |
+| `pending` | 尚未 dequeue 的消息数，包含暂时因分组占用而不可投递的消息 |
 | `processing` | 已 dequeue、尚未 ACK 的消息数 |
 | `unacked` | `pending + processing` |
 
@@ -48,12 +48,12 @@ pending == 0 && processing == 0
 等价于 `unacked == 0`。
 
 当 handler 失败、ACK 失败或 worker 退出时，只要消息仍未 ACK，就不能视为完成。
-消息只能通过恢复流程重新进入 pending，或通过成功 ACK 离开队列。
+消息可通过 `/retry` 或恢复流程重新进入 pending，或通过成功 ACK 离开队列。
 
 ## 状态归属
 
 QueueFS 是队列生命周期状态的 Owner。各 backend 必须在 enqueue、dequeue、ACK、
-clear 和 recovery 操作中维护 `pending` 与 `processing`。
+retry、clear 和 recovery 操作中维护 `pending` 与 `processing`。
 
 Python 不应再组合 backend 的 `pending` 和进程内计数来判断完成。本地 worker
 计数仍可作为运行时观测指标，但它不属于队列长度，也不是完成状态的权威来源。
@@ -80,16 +80,69 @@ QueueFS `/status` 返回同一次原子读取取得的状态：
 
 `unacked` 由 `pending + processing` 派生。为保持兼容和 worker 调度语义，现有
 `/size` 可以继续表示 `pending`。
-QueueFS 控制文件名属于保留路径段，队列名不能以 `enqueue`、`dequeue`、`peek`、
-`size`、`status`、`messages`、`clear` 或 `ack` 结尾。
+QueueFS 控制文件名属于保留路径段，队列名不能以 `enqueue`、`enqueue_ext`、`dequeue`、`peek`、
+`size`、`status`、`messages`、`clear`、`ack` 或 `retry` 结尾。
 
 各后端要求：
 
 - **SQLite：** 在同一个数据库快照中读取两个计数。
-- **Cache：** 通过一个 Lua 脚本返回 `LLEN(pending)` 和
+- **Cache：** 通过一个 Lua 脚本返回 `ZCARD(pending)` 和
   `ZCARD(processing)`。
 - **Memory：** 维护 processing 集合；dequeue 将消息移入该集合，ACK 从该集合
   删除消息。
 
 `NamedQueue.get_status()` 只消费 backend 返回的状态快照。`wait_complete()` 和
 `is_all_complete()` 只使用 backend 维护的 `pending` 与 `processing` 判断完成。
+
+## 内核分组调度
+
+`/enqueue_ext` 按消息提供可选、互斥的 key，同一队列可以混用三类消息：
+
+| 消息元数据 | 同一队列内的语义 |
+| --- | --- |
+| 两个 key 都没有 | 普通消息，独立投递 |
+| `serial_key` | 同 key 同时只处理一条消息，最终 ACK 后才能投递下一条 |
+| `group_key` | 同 key 可以并发处理多条消息，但全部归属同一个消费者实例 |
+
+两个 key 的命名空间及不同队列相互独立，不承诺严格 FIFO。退出恢复保留原消息 ID；
+`serial_key` 的原消息 ACK 前，同 key 后续消息仍阻塞。`group_key` 在最后一条
+在途消息 ACK 后释放消费者归属。重复 ACK 不改变其他消息的占用。
+
+- **Redis/Cache：** 相同 `service_name` 和队列路径下支持跨 backend 实例约束，
+  消费者身份为 backend 实例，退出恢复沿用心跳机制。
+- **Memory：** 支持单 backend 实例内的两种 key，退出后丢失状态。
+- **SQLite：** 仅支持单消费者进程；`group_key` 保留元数据、按普通消息分发，
+  `serial_key` 约束进程内并发，启动时重投未 ACK 消息。
+
+SQLite 自动补齐可空 `serial_key` 列与索引，旧消息该列为 `NULL`；
+补齐 `schedule_seq` 调度序号并按原行 ID 初始化，替换原 status 索引。
+存量消息的 ID、payload 和原始顺序保持不变。
+Redis 布局与旧版不兼容：升级前须排空 service 下共享队列、统一升级生产者与消费者，
+不支持新旧版本混用或自动迁移积压。
+
+扩展入队使用 `QFSE` v1 大端帧（固定头、TLV、原始 payload），header 上限 64 KiB。
+`group_key` / `serial_key` 的 TLV type 为 `2` / `3`，flags 为 `1`，
+key 长度为 1–4096 UTF-8 bytes；拒绝互斥字段并存、重复或无效 key、未知必选字段，
+跳过未知可选字段。完整帧定义见[协议实现](../../../crates/ragfs/src/plugins/queuefs/enqueue_protocol.rs)。
+
+旧 `/enqueue` 仍接收原始 payload；dequeue、peek、messages 和 ACK 格式不变。
+无可投递消息时 `/dequeue` 返回 `{}`，即使 pending 非零。扩展 write 返回字节数，
+UUID 由调用方持有；同队列尚存 ID 重复入队返回 `AlreadyExists`，ACK 后不保留去重记录。
+`clear` 和删除队列同时清理调度状态。业务处理、合并及写回结束后才 ACK。
+
+Python `enqueue(..., serial_key=..., group_key=...)` 在注册 Work 前校验 key，
+扩展入队返回实际 UUID；无 key 时保持旧路径。ExternalTask 使用账号、任务类型和
+provider 显式返回的 key 生成 `serial_key`；返回 `None` 时不启用串行调度。
+同账号跨用户的相同 key 共享串行约束。
+admission busy 或本地 finalization 未完成时返回 `ProcessResult.retry()`；
+通用 middleware 先保存 Work 为 pending，再写 `/retry`，释放 worker 槽位。
+原消息 ID、payload、时间戳和 key 不变，无 delay 调度；
+同 serial key 的后续消息仍须等待原消息最终 ACK，其他 key 可继续投递。
+`/retry` 只移动 processing 消息，重复 retry 和 pending ACK 均为空操作。
+旧 `ProcessResult.requeued()` 仍表示 handler 已发布替代消息，原消息照常 ACK。
+External 业务结果保存最多尝试三次；向外传播的执行、清理及
+Task/Work 保存异常均不 ACK，已处理的业务失败在 Work 结算后 ACK。
+取消沿用通用 Task middleware 契约；ACK 沿用通用队列行为，写入失败记录
+warning，消息留待恢复，消费继续。本版本 ExternalTaskService 保留基线的目标
+占用和执行保护，并在 worker 启动前恢复占用，以兼容未携带 key 的旧消息；
+这些过渡保护计划在下个版本移除。

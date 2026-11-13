@@ -36,6 +36,10 @@ _PRIVATE_AUTH_FIELDS = ("openviking_connection", "external_request_private")
 _instance: ExternalTaskService | None = None
 
 
+class ExternalTaskResultSaveError(RuntimeError):
+    """Remote execution finished, but its local outcome could not be saved."""
+
+
 def set_external_task_service(service: ExternalTaskService | None) -> None:
     global _instance
     _instance = service
@@ -91,7 +95,9 @@ class ExternalTaskProvider(Protocol):
     @property
     def poll_interval_seconds(self) -> float: ...
 
-    def serialization_key(self, payload: Mapping[str, Any]) -> str | None: ...
+    def serialization_key(self, payload: Mapping[str, Any]) -> str | None:
+        """Return the provider's serial scheduling key, or None for independent deliveries."""
+        ...
 
     async def submit(
         self,
@@ -138,9 +144,8 @@ class ExternalTaskService:
     def __init__(self, *, credential_encryptor: Any = None) -> None:
         self.credential_encryptor = credential_encryptor
         self._providers: dict[str, ExternalTaskProvider] = {}
-        # Restored before workers start, then accessed only by the ExternalTask
-        # queue's loop. Restored owners may include multiple
-        # tasks submitted before target serialization was enabled.
+        # Transitional reservations for pre-key deliveries; remove next version.
+        # Restored before workers start, then accessed on the ExternalTask queue loop.
         self._owners: dict[tuple[str | None, str, str], set[str]] = {}
         self._executing: set[str] = set()
         self._submission_locks = KeyedAsyncLockPool[str]()
@@ -190,18 +195,24 @@ class ExternalTaskService:
         return provider
 
     def _serialization_key(self, task: TaskRecord) -> tuple[str | None, str, str] | None:
-        key = self._provider(task.task_type).serialization_key(task.meta["request"])
-        return (task.account_id, task.task_type, key) if key is not None else None
+        target = self._provider(task.task_type).serialization_key(task.meta["request"])
+        return (task.account_id, task.task_type, target) if target is not None else None
+
+    def queue_serial_key(self, task: TaskRecord) -> str | None:
+        """Scope an explicit provider key across users of the same account."""
+        key = self._serialization_key(task)
+        if key is None:
+            return None
+        account_id, task_type, target = key
+        scope = [account_id, task_type, "target", target]
+        return json.dumps(scope, ensure_ascii=False, separators=(",", ":"))
 
     async def restore_tasks(self, tasks: Iterable[TaskRecord]) -> None:
         """Reserve submitted work before any recovered queue delivery can run."""
         for task in tasks:
-            if (
-                task.task_type not in self._providers
-                or (
-                    task.status != TaskStatus.CANCELLED
-                    and (task.result is not None or task.error is not None)
-                )
+            if task.task_type not in self._providers or (
+                task.status != TaskStatus.CANCELLED
+                and (task.result is not None or task.error is not None)
             ):
                 continue
             if task.status not in {
@@ -340,6 +351,7 @@ class ExternalTaskService:
                         "account_id": ctx.account_id,
                         "user_id": ctx.user.user_id,
                     },
+                    serial_key=self.queue_serial_key(task),
                 )
             enqueued = True
             current = await tracker.get(
@@ -408,10 +420,11 @@ class ExternalTaskService:
                         "account_id": ctx.account_id,
                         "user_id": ctx.user.user_id,
                     },
+                    serial_key=self.queue_serial_key(task),
                 )
 
     async def execute(self, task_id: str, account_id: str, user_id: str) -> bool:
-        """Execute a delivery; return False when it needs requeueing."""
+        """Resume execution; pending admission or finalization retries the same delivery."""
         tracker = get_task_tracker()
         try:
             return await self._retry(
@@ -426,18 +439,17 @@ class ExternalTaskService:
                 task_id, account_id=account_id, user_id=user_id
             ):
                 await self.cancel_recovered(task_id, account_id, user_id)
+                return True
             raise
+        except ExternalTaskResultSaveError:
+            raise
+        except ExternalTaskRetryExhaustedError as exc:
+            auth = await self._task_auth(task_id, account_id, user_id)
+            if auth.get("external_terminal_snapshot") is not None:
+                return False
+            await self.cancel_recovered(task_id, account_id, user_id, failure=exc)
+            return True
         except Exception as exc:
-            task = await tracker.get(task_id, account_id=account_id, user_id=user_id)
-            if task is not None:
-                auth = await self._task_auth(task_id, account_id, user_id)
-                if auth.get("external_terminal_snapshot") and isinstance(
-                    exc, ExternalTaskRetryExhaustedError
-                ):
-                    # A storage outage during local finalization must not turn
-                    # a successful remote task into a failed import.
-                    await asyncio.sleep(self._provider(task.task_type).poll_interval_seconds)
-                    return False
             await self.cancel_recovered(task_id, account_id, user_id, failure=exc)
             return True
 
@@ -449,21 +461,15 @@ class ExternalTaskService:
             task = await tracker.get(task_id, account_id=account_id, user_id=user_id)
             if task is None:
                 return True
-            if task.status in {
-                TaskStatus.COMPLETED,
-                TaskStatus.FAILED,
-            }:
+            if task.status in {TaskStatus.COMPLETED, TaskStatus.FAILED}:
                 self._release(task)
                 return True
             if task.status in {TaskStatus.CANCELLING, TaskStatus.CANCELLED}:
                 raise asyncio.CancelledError()
-            # The outcome is persisted before QueueFS ACK removes the owned work.
-            # After a crash in that window, let the recovered delivery ACK without
-            # resubmitting credentials that have already been cleared.
+            # A recovered delivery can ACK an already saved outcome without resubmission.
             if task.result is not None or task.error is not None:
                 self._release(task)
                 return True
-
             provider = self._provider(task.task_type)
             payload = task.meta.get("request")
             if not isinstance(payload, dict):
@@ -478,8 +484,7 @@ class ExternalTaskService:
             owners = self._owners.get(key, set()) if key is not None else set()
             if task_id in self._executing or (owners and task_id not in owners):
                 return False
-            # No await between checking and claiming: concurrent deliveries on the
-            # queue loop cannot both acquire an unoccupied target.
+            # No await between checking and claiming on the queue loop.
             if key is not None:
                 self._owners.setdefault(key, set()).add(task_id)
             self._executing.add(task_id)
@@ -491,15 +496,13 @@ class ExternalTaskService:
                 await self.cancel_recovered(task_id, account_id, user_id)
                 return True
             if terminal is not None:
-                while not await self._apply_snapshot(
+                return await self._apply_snapshot(
                     ExternalTaskSnapshot(**terminal),
                     task_id=task_id,
                     account_id=account_id,
                     user_id=user_id,
                     auth=auth,
-                ):
-                    await asyncio.sleep(provider.poll_interval_seconds)
-                return True
+                )
             try:
                 started = await provider.on_start(task)
             except (ResourceBusyError, GitConcurrentCommitError) as exc:
@@ -510,21 +513,16 @@ class ExternalTaskService:
                 self._release(task)
                 return False
             if isinstance(started, ExternalTaskSnapshot):
-                finished = await self._apply_snapshot(
+                return await self._apply_snapshot(
                     started,
                     task_id=task_id,
                     account_id=account_id,
                     user_id=user_id,
                     auth=auth,
                 )
-                if not finished:
-                    await asyncio.sleep(provider.poll_interval_seconds)
-                return finished
-            await self._execute_task(task, provider, payload, account_id, user_id)
-            return True
+            return await self._execute_task(task, provider, payload, account_id, user_id)
         finally:
-            # An interrupted delivery keeps ownership until recovery confirms
-            # the Runtime has stopped; it must not admit another target writer.
+            # Interrupted execution retains the reservation until cleanup confirms termination.
             if claimed:
                 self._executing.remove(task_id)
 
@@ -535,7 +533,7 @@ class ExternalTaskService:
         payload: Mapping[str, Any],
         account_id: str,
         user_id: str,
-    ) -> None:
+    ) -> bool:
         tracker = get_task_tracker()
         task_id = task.task_id
         auth = await self._task_auth(task_id, account_id, user_id)
@@ -583,14 +581,15 @@ class ExternalTaskService:
                     poll_interval=provider.poll_interval_seconds,
                     max_attempts=provider.poll_max_attempts,
                 )
-            if await self._apply_snapshot(
+            finished = await self._apply_snapshot(
                 snapshot,
                 task_id=task_id,
                 account_id=account_id,
                 user_id=user_id,
                 auth=auth,
-            ):
-                return
+            )
+            if finished or snapshot.status not in _ACTIVE_STATUSES:
+                return finished
             await asyncio.sleep(provider.poll_interval_seconds)
 
     async def cancel_recovered(
@@ -639,7 +638,6 @@ class ExternalTaskService:
                     task = await tracker.get(task_id, account_id=account_id, user_id=user_id)
                     if task is None:
                         return
-                    # Keep exhausted cleanup retries on the unacknowledged Work.
                     cleanup_error = sanitize_error(str(exc))
                     if task.meta.get("cleanup_error") != cleanup_error:
                         await tracker.patch_task(
@@ -651,14 +649,13 @@ class ExternalTaskService:
                     await asyncio.sleep(
                         max(self._provider(task.task_type).poll_interval_seconds, 0.2)
                     )
-        except asyncio.CancelledError as exc:
+        except asyncio.CancelledError:
             if await tracker.is_cancellation_requested(
                 task_id, account_id=account_id, user_id=user_id
             ):
-                # Preserve delivery when shutdown interrupts cancellation cleanup.
                 raise ExternalTaskError(
-                    "CLEANUP_INTERRUPTED", "Cancellation cleanup was interrupted", transient=True
-                ) from exc
+                    "CLEANUP_INTERRUPTED", "External task cleanup was interrupted", transient=True
+                ) from None
             raise
         except Exception as exc:
             await get_task_tracker().patch_task(
@@ -677,12 +674,9 @@ class ExternalTaskService:
         task = await tracker.get(task_id, account_id=account_id, user_id=user_id)
         if task is None:
             return
-        if (
-            task.status in {TaskStatus.COMPLETED, TaskStatus.FAILED}
-            or (
-                task.status != TaskStatus.CANCELLED
-                and (task.result is not None or task.error is not None)
-            )
+        if task.status in {TaskStatus.COMPLETED, TaskStatus.FAILED} or (
+            task.status != TaskStatus.CANCELLED
+            and (task.result is not None or task.error is not None)
         ):
             self._release(task)
             return
@@ -925,10 +919,19 @@ class ExternalTaskService:
                     account_id=account_id,
                     user_id=user_id,
                 )
-            if task is not None:
-                self._release(task)
 
-        await run_to_completion(finalize)
+        for attempt in range(3):
+            try:
+                await run_to_completion(finalize)
+                break
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if attempt == 2:
+                    raise ExternalTaskResultSaveError(f"Outcome save exhausted: {exc}") from exc
+                await asyncio.sleep(0.2 * (attempt + 1))
+        if task is not None:
+            self._release(task)
         return True
 
     @staticmethod
