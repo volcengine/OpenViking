@@ -424,7 +424,7 @@ class ExternalTaskService:
                 )
 
     async def execute(self, task_id: str, account_id: str, user_id: str) -> bool:
-        """Resume execution; pending admission or finalization retries the same delivery."""
+        """Execute a delivery; return False when it needs retrying."""
         tracker = get_task_tracker()
         try:
             return await self._retry(
@@ -444,9 +444,12 @@ class ExternalTaskService:
         except ExternalTaskResultSaveError:
             raise
         except ExternalTaskRetryExhaustedError as exc:
-            auth = await self._task_auth(task_id, account_id, user_id)
-            if auth.get("external_terminal_snapshot") is not None:
-                return False
+            task = await tracker.get(task_id, account_id=account_id, user_id=user_id)
+            if task is not None:
+                auth = await self._task_auth(task_id, account_id, user_id)
+                if auth.get("external_terminal_snapshot"):
+                    await asyncio.sleep(self._provider(task.task_type).poll_interval_seconds)
+                    return False
             await self.cancel_recovered(task_id, account_id, user_id, failure=exc)
             return True
         except Exception as exc:
@@ -496,13 +499,15 @@ class ExternalTaskService:
                 await self.cancel_recovered(task_id, account_id, user_id)
                 return True
             if terminal is not None:
-                return await self._apply_snapshot(
+                while not await self._apply_snapshot(
                     ExternalTaskSnapshot(**terminal),
                     task_id=task_id,
                     account_id=account_id,
                     user_id=user_id,
                     auth=auth,
-                )
+                ):
+                    await asyncio.sleep(provider.poll_interval_seconds)
+                return True
             try:
                 started = await provider.on_start(task)
             except (ResourceBusyError, GitConcurrentCommitError) as exc:
@@ -513,14 +518,18 @@ class ExternalTaskService:
                 self._release(task)
                 return False
             if isinstance(started, ExternalTaskSnapshot):
-                return await self._apply_snapshot(
+                finished = await self._apply_snapshot(
                     started,
                     task_id=task_id,
                     account_id=account_id,
                     user_id=user_id,
                     auth=auth,
                 )
-            return await self._execute_task(task, provider, payload, account_id, user_id)
+                if not finished:
+                    await asyncio.sleep(provider.poll_interval_seconds)
+                return finished
+            await self._execute_task(task, provider, payload, account_id, user_id)
+            return True
         finally:
             # Interrupted execution retains the reservation until cleanup confirms termination.
             if claimed:
@@ -533,7 +542,7 @@ class ExternalTaskService:
         payload: Mapping[str, Any],
         account_id: str,
         user_id: str,
-    ) -> bool:
+    ) -> None:
         tracker = get_task_tracker()
         task_id = task.task_id
         auth = await self._task_auth(task_id, account_id, user_id)
@@ -581,15 +590,14 @@ class ExternalTaskService:
                     poll_interval=provider.poll_interval_seconds,
                     max_attempts=provider.poll_max_attempts,
                 )
-            finished = await self._apply_snapshot(
+            if await self._apply_snapshot(
                 snapshot,
                 task_id=task_id,
                 account_id=account_id,
                 user_id=user_id,
                 auth=auth,
-            )
-            if finished or snapshot.status not in _ACTIVE_STATUSES:
-                return finished
+            ):
+                return
             await asyncio.sleep(provider.poll_interval_seconds)
 
     async def cancel_recovered(

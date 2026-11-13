@@ -15,7 +15,7 @@ from openviking.service.compile_targets import (
     new_operation,
 )
 from openviking.service.external_task_service import ExternalTaskService
-from openviking.service.task_domain import TaskPatch
+from openviking.service.task_domain import TaskPatch, WorkState
 from openviking.service.task_pagination import decode_cursor, encode_cursor, page_scope
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskStatus, TaskTracker
@@ -25,13 +25,22 @@ from tests.test_task_tracker import _FakeAgfs
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("wait_at", ["admission", "finalization"])
-async def test_external_busy_retries_original_delivery_until_fourth_attempt(
-    monkeypatch, tmp_path, wait_at
-):
+@pytest.mark.parametrize(
+    "wait_at",
+    [
+        "admission",
+        "finalization",
+        "recovered_finalization",
+        "start_finalization",
+        "finalization_error",
+    ],
+)
+async def test_external_busy_preserves_delivery_and_provider_wait(monkeypatch, tmp_path, wait_at):
     import ragfs_python
 
+    import openviking.service.external_task_service as module
     from openviking.service.external_task_service import ExternalTaskSnapshot
+    from openviking.service.task_work_index import extract_task_metadata
     from openviking.storage.queuefs.external_task_processor import ExternalTaskProcessor
     from openviking.storage.queuefs.queue_manager import QueueManager
 
@@ -52,15 +61,20 @@ async def test_external_busy_retries_original_delivery_until_fourth_attempt(
         poll_max_attempts=1,
         submit=AsyncMock(return_value="remote"),
         get=AsyncMock(return_value=completed),
-        on_start=AsyncMock(side_effect=["busy"] * 3 + [None])
-        if wait_at == "admission"
-        else AsyncMock(return_value=None),
+        on_start=AsyncMock(
+            side_effect=["busy"] * 3 + [None] if wait_at == "admission" else None,
+            return_value=completed if wait_at == "start_finalization" else None,
+        ),
         on_finish=AsyncMock(
-            side_effect=[ExternalTaskSnapshot(status="running", stage="committing")] * 3
+            side_effect=(
+                [ConnectionError("local finalization unavailable")] * 3
+                if wait_at == "finalization_error"
+                else [ExternalTaskSnapshot(status="running", stage="committing")] * 3
+            )
             + [completed]
-        )
-        if wait_at == "finalization"
-        else AsyncMock(side_effect=lambda task, snapshot: snapshot),
+            if wait_at != "admission"
+            else lambda task, snapshot: snapshot
+        ),
         on_cancel=AsyncMock(),
         submission_meta=lambda _: {},
     )
@@ -74,10 +88,45 @@ async def test_external_busy_retries_original_delivery_until_fourth_attempt(
     try:
         task = await service.create("compile", resource_id=None, payload={"to": "target"}, ctx=ctx)
         [original] = await queue.snapshot()
+        metadata = extract_task_metadata(original)
+        assert metadata is not None
+
+        async def wait(delay):
+            assert (
+                await tracker.get_work_state(task.task_id, metadata.work_id, **owner)
+                is WorkState.RUNNING
+            )
+            assert (await queue.get_status()).in_progress == 1
+            assert original in await queue.snapshot()
+
+        sleep = AsyncMock(side_effect=wait)
+        monkeypatch.setattr(
+            module, "asyncio", SimpleNamespace(sleep=sleep, CancelledError=asyncio.CancelledError)
+        )
+        provider.poll_interval_seconds = 30.0
+        if wait_at == "recovered_finalization":
+            await tracker.start(task.task_id, **owner)
+            await tracker.patch_task(
+                task.task_id,
+                TaskPatch(
+                    auth={
+                        "external_terminal_snapshot": {
+                            "status": "completed",
+                            "result": {"ok": True},
+                        }
+                    }
+                ),
+                **owner,
+            )
         waiting = await service.create(
             "compile", resource_id=None, payload={"to": "target"}, ctx=ctx
         )
-        for _ in range(3):
+        requeues = (
+            3
+            if wait_at == "admission"
+            else int(wait_at in {"start_finalization", "finalization_error"})
+        )
+        for _ in range(requeues):
             await queue.dequeue()
             current = await tracker.get(task.task_id, **owner)
             assert current is not None
@@ -85,6 +134,10 @@ async def test_external_busy_retries_original_delivery_until_fourth_attempt(
             assert (await queue.get_status()).pending == 2
             assert original in await queue.snapshot()
             assert await tracker.has_work(task.task_id, **owner)
+            assert (
+                await tracker.get_work_state(task.task_id, metadata.work_id, **owner)
+                is WorkState.PENDING
+            )
         await queue.dequeue()
         current = await tracker.get(task.task_id, **owner)
         assert current is not None and current.status is TaskStatus.COMPLETED
@@ -92,10 +145,132 @@ async def test_external_busy_retries_original_delivery_until_fourth_attempt(
         assert next_message is not None and next_message["id"] != original["id"]
         waiting_task = await tracker.get(waiting.task_id, **owner)
         assert waiting_task is not None and waiting_task.status is TaskStatus.PENDING
-        provider.submit.assert_awaited_once()
-        provider.get.assert_awaited_once()
+        if wait_at in {"recovered_finalization", "start_finalization"}:
+            provider.submit.assert_not_awaited()
+            provider.get.assert_not_awaited()
+        else:
+            provider.submit.assert_awaited_once()
+            provider.get.assert_awaited_once()
+        expected_delays = {
+            "admission": [],
+            "finalization": [30.0] * 3,
+            "recovered_finalization": [30.0] * 3,
+            "start_finalization": [30.0] * 3,
+            "finalization_error": [0.2, 0.4, 30.0],
+        }
+        assert [call.args[0] for call in sleep.await_args_list] == expected_delays[wait_at]
         provider.on_cancel.assert_not_awaited()
     finally:
+        transport.close()
+
+
+@pytest.mark.asyncio
+async def test_external_cancel_during_finalization_keeps_work_running_until_cleanup(
+    monkeypatch, tmp_path
+):
+    import ragfs_python
+
+    import openviking.service.external_task_service as module
+    from openviking.service.external_task_service import (
+        ExternalTaskCancellation,
+        ExternalTaskSnapshot,
+    )
+    from openviking.service.task_work_index import extract_task_metadata
+    from openviking.storage.queuefs.external_task_processor import ExternalTaskProcessor
+    from openviking.storage.queuefs.queue_manager import QueueManager
+
+    tracker = TaskTracker(PersistentTaskStore(_FakeAgfs()))
+    monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
+    transport = ragfs_python.RAGFSBindingClient()
+    transport.mount(
+        "queuefs", "/queue", {"backend": "sqlite", "db_path": str(tmp_path / "queue.sqlite")}
+    )
+    manager = QueueManager(transport)
+    service = ExternalTaskService()
+    finalization_waiting = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    cleanup_allowed = asyncio.Event()
+
+    async def wait(delay):
+        assert delay == 30.0
+        finalization_waiting.set()
+        await asyncio.Event().wait()
+
+    async def finish(task, snapshot):
+        if snapshot.status == "cancelled":
+            cleanup_started.set()
+            await cleanup_allowed.wait()
+            return snapshot
+        return ExternalTaskSnapshot(status="running", stage="committing")
+
+    monkeypatch.setattr(
+        module, "asyncio", SimpleNamespace(sleep=wait, CancelledError=asyncio.CancelledError)
+    )
+    provider = SimpleNamespace(
+        task_type="compile",
+        task_id_prefix="cmp_",
+        serialization_key=lambda payload: payload["to"],
+        poll_interval_seconds=30.0,
+        poll_max_attempts=1,
+        submit=AsyncMock(return_value="remote"),
+        get=AsyncMock(return_value=ExternalTaskSnapshot(status="completed", result={"ok": True})),
+        on_start=AsyncMock(return_value=None),
+        on_finish=AsyncMock(side_effect=finish),
+        on_cancel=AsyncMock(
+            return_value=ExternalTaskCancellation(
+                external_task_id="remote", snapshot=ExternalTaskSnapshot(status="cancelled")
+            )
+        ),
+        submission_meta=lambda _: {},
+    )
+    service.register(provider)
+    queue = manager.get_queue(
+        manager.EXTERNAL_TASK, dequeue_handler=ExternalTaskProcessor(service), allow_create=True
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: manager)
+    owner = {"account_id": "acme", "user_id": "alice"}
+    ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+    worker = None
+    try:
+        task = await service.create("compile", resource_id=None, payload={"to": "target"}, ctx=ctx)
+        [original] = await queue.snapshot()
+        metadata = extract_task_metadata(original)
+        assert metadata is not None
+        waiting = await service.create(
+            "compile", resource_id=None, payload={"to": "target"}, ctx=ctx
+        )
+        worker = asyncio.create_task(queue.dequeue())
+        await asyncio.wait_for(finalization_waiting.wait(), timeout=2)
+        assert not worker.done()
+        assert (await tracker.get(task.task_id, **owner)).status is TaskStatus.RUNNING
+        await tracker.cancel(task.task_id, **owner)
+        await asyncio.wait_for(cleanup_started.wait(), timeout=2)
+        assert (await tracker.get(task.task_id, **owner)).status is TaskStatus.CANCELLING
+        assert (
+            await tracker.get_work_state(task.task_id, metadata.work_id, **owner)
+            is WorkState.RUNNING
+        )
+        assert await tracker.has_work(task.task_id, **owner)
+        assert original in await queue.snapshot()
+        assert await queue.dequeue_raw() is None
+        assert (await tracker.get(waiting.task_id, **owner)).status is TaskStatus.PENDING
+        cleanup_allowed.set()
+        await asyncio.wait_for(worker, timeout=2)
+        assert (await tracker.get(task.task_id, **owner)).status is TaskStatus.CANCELLED
+        assert (
+            await tracker.get_work_state(task.task_id, metadata.work_id, **owner)
+            is WorkState.CANCELLED
+        )
+        assert not await tracker.has_work(task.task_id, **owner)
+        successor = await queue.dequeue_raw()
+        assert successor is not None and successor["id"] != original["id"]
+        provider.submit.assert_awaited_once()
+        provider.get.assert_awaited_once()
+        provider.on_cancel.assert_awaited_once()
+    finally:
+        if worker is not None:
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
         transport.close()
 
 
