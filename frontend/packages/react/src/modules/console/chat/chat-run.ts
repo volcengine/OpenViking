@@ -45,6 +45,7 @@ export async function runChat({
     : state.messages.filter((message) => message.role === 'user');
   let complete = false;
   let interrupted = false;
+  let delivered = false;
   try {
     signal.throwIfAborted();
     if (!sessionId) {
@@ -53,14 +54,16 @@ export async function runChat({
       sessionId = session.id;
       update({ sessionId });
       save(sessionId, recovered);
-      undelivered.length = 0;
     }
     for await (const event of service.stream(
       { sessionId, ...recoveredDraft },
       signal,
     )) {
-      signal.throwIfAborted();
       if (!current()) return false;
+      // A stream event acknowledges delivery; creating a session does not.
+      delivered = true;
+      undelivered.length = 0;
+      signal.throwIfAborted();
       await timeline.apply(event);
       signal.throwIfAborted();
       if (event.type === 'complete' || event.type === 'interrupted') {
@@ -88,7 +91,7 @@ export async function runChat({
     return !interrupted;
   } catch (error) {
     if (!current()) return false;
-    if (!sessionId) undelivered.push(draft);
+    if (!delivered) undelivered.push(draft);
     const finished = await timeline.finish(signal.aborted);
     if (!current()) return false;
     const failure = error instanceof Error ? error : new Error(String(error));

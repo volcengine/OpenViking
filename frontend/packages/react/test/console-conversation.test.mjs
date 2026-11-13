@@ -83,10 +83,7 @@ for (const failure of ['session', 'stream']) {
       assert.equal(view.messages.at(-1).parts[0].text, 'answer');
       assert.equal(requests.length, failure === 'session' ? 1 : 2);
       assert.match(requests.at(-1).text, /follow-up/);
-      assert.equal(
-        requests.at(-1).text.includes('question'),
-        failure === 'session',
-      );
+      assert.equal(requests.at(-1).text.includes('question'), true);
       assert.doesNotMatch(requests.at(-1).text, /failed/);
       assert.deepEqual(
         saved.map((message) => message.role),
