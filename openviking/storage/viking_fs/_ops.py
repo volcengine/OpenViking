@@ -511,7 +511,7 @@ class _OpsMixin:
         try:
             if is_dir:
                 await self._ensure_descendant_access(old_uri, ctx, action=AclAction.READ)
-            source_uris = await self._prepare_transfer_entries(
+            source_uris, target_existed = await self._prepare_transfer_entries(
                 old_uri, new_uri, is_dir=is_dir, move=False, ctx=ctx
             )
             files_created = await self._copy_agfs_entry(
@@ -535,12 +535,17 @@ class _OpsMixin:
                         **({"source_uris": source_uris} if is_dir else {}),
                     )
                 except Exception:
-                    try:
-                        await self._cleanup_transfer_target(
-                            new_path, is_dir=is_dir, ctx=copy_ctx, lease_ref=lease
-                        )
-                    except Exception:
-                        logger.warning("Failed to clean copy target %s", new_uri, exc_info=True)
+                    # Only remove a target this operation created. cp overwrites
+                    # an existing file and merges into an existing directory, so
+                    # deleting the whole target here would destroy content the
+                    # caller had before the failed transfer.
+                    if not target_existed:
+                        try:
+                            await self._cleanup_transfer_target(
+                                new_path, is_dir=is_dir, ctx=copy_ctx, lease_ref=lease
+                            )
+                        except Exception:
+                            logger.warning("Failed to clean copy target %s", new_uri, exc_info=True)
                     raise
             result: Dict[str, Any] = {
                 "operation_id": operation_id,
@@ -570,19 +575,23 @@ class _OpsMixin:
         finally:
             await self._async_agfs.pathlock_release(lease)
 
-    async def _ensure_transfer_target_type(self, path: str, uri: str, *, is_dir: bool) -> None:
-        """Allow overwrite/merge, but never replace a file with a directory or vice versa."""
+    async def _ensure_transfer_target_type(self, path: str, uri: str, *, is_dir: bool) -> bool:
+        """Allow overwrite/merge, but never replace a file with a directory or vice versa.
+
+        Returns ``True`` when the target already exists.
+        """
         try:
             stat = await self._async_agfs.stat(path)
         except Exception as exc:
             if is_not_found_error(exc):
-                return
+                return False
             mapped = map_exception(exc, resource=uri)
             if mapped is not None:
                 raise mapped from exc
             raise
         if bool(stat.get("isDir", False)) != is_dir:
             raise InvalidArgumentError(f"transfer source and target types differ: {uri}")
+        return True
 
     async def _prepare_transfer_entries(
         self,
@@ -592,13 +601,18 @@ class _OpsMixin:
         is_dir: bool,
         move: bool,
         ctx: Optional[RequestContext],
-    ) -> List[str]:
-        """Validate all affected entries under the lease before the first content write."""
+    ) -> tuple[List[str], bool]:
+        """Validate all affected entries under the lease before the first content write.
+
+        Returns the source URIs and whether the root target already exists.
+        """
         source_uris: List[str] = []
+        root_target_existed = False
         # Copy ACLs were checked under the lease; retain per-path namespace guards.
         guard_ctx = ctx if move else replace(self._ctx_or_default(ctx), bypass_acl=True)
 
         async def visit(source: str, target: str, directory: bool) -> None:
+            nonlocal root_target_existed
             source_path = self._uri_to_path(source, ctx=ctx)
             stat = await self._async_agfs.stat(source_path)
             if bool(stat.get("isDir", False)) != directory:
@@ -609,9 +623,11 @@ class _OpsMixin:
             else:
                 await self._ensure_copy_source_access(source, recursive=directory, ctx=guard_ctx)
             await self._ensure_access(target, guard_ctx, action=AclAction.WRITE)
-            await self._ensure_transfer_target_type(
+            target_existed = await self._ensure_transfer_target_type(
                 self._uri_to_path(target, ctx=ctx), target, is_dir=directory
             )
+            if source == old_uri:
+                root_target_existed = target_existed
             source_uris.append(source)
             if directory:
                 # Match the copy traversal exactly; user content can use names
@@ -627,7 +643,7 @@ class _OpsMixin:
                     )
 
         await visit(old_uri, new_uri, is_dir)
-        return source_uris
+        return source_uris, root_target_existed
 
     async def _ensure_copy_source_access(
         self,
@@ -845,7 +861,7 @@ class _OpsMixin:
 
         operation_id = uuid.uuid4().hex
         try:
-            uris_to_move = await self._prepare_transfer_entries(
+            uris_to_move, target_existed = await self._prepare_transfer_entries(
                 old_uri, new_uri, is_dir=is_dir, move=True, ctx=ctx
             )
 
@@ -899,12 +915,16 @@ class _OpsMixin:
                 elif vector_mode != "none":
                     raise ValueError(f"unsupported move vector mode: {vector_mode}")
             except Exception:
-                try:
-                    await self._cleanup_transfer_target(
-                        new_path, is_dir=is_dir, ctx=ctx, lease_ref=lease
-                    )
-                except Exception:
-                    logger.warning("Failed to clean move target %s", new_uri, exc_info=True)
+                # mv overwrites an existing file and merges into an existing
+                # directory; only remove a target this operation created, never
+                # one that already held the caller's data.
+                if not target_existed:
+                    try:
+                        await self._cleanup_transfer_target(
+                            new_path, is_dir=is_dir, ctx=ctx, lease_ref=lease
+                        )
+                    except Exception:
+                        logger.warning("Failed to clean move target %s", new_uri, exc_info=True)
                 raise
 
             # Old mv semantics: source deletion is the last step, with no copy-back on failure.
