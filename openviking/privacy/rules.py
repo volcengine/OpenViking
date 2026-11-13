@@ -29,8 +29,6 @@ class PrivacyMatch:
 
 
 DEFAULT_EXTRACTOR_CACHE_MAX_BYTES = 64 * 1024 * 1024
-# Keep this aligned with PrivacyRuleLimits::default() in the native extractor.
-DEFAULT_PRIVACY_RULES_COMPILED_BYTES = 10 * 1024 * 1024
 _extractor_cache_max_bytes = int(
     os.environ.get(
         "OPENVIKING_PRIVACY_EXTRACTOR_CACHE_MAX_BYTES", DEFAULT_EXTRACTOR_CACHE_MAX_BYTES
@@ -68,9 +66,7 @@ def _extractor(custom_rules_json: str = "[]", *, cache: bool = True):
         extractor = get_privacy_extractor_class()(custom_rules_json, **_extractor_limits)
         if not cache:
             return extractor
-        size = _extractor_limits.get(
-            "max_compiled_bytes", DEFAULT_PRIVACY_RULES_COMPILED_BYTES
-        ) + sys.getsizeof(custom_rules_json)
+        size = extractor.reserved_bytes + sys.getsizeof(custom_rules_json)
         if size > _extractor_cache_max_bytes:
             return extractor
         # Creation order is also expiry order because hits do not renew the TTL.
@@ -104,7 +100,7 @@ def prepare_privacy_extractor(
             if settings and settings.custom_rules
             else "[]"
         )
-        extractor = _extractor(rules)
+        extractor = _extractor(rules).clone_for_search()
     except ValueError as exc:
         raise InvalidArgumentError(str(exc)) from None
     never_mask = settings.never_mask if settings else []

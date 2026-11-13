@@ -104,7 +104,13 @@ def test_extractor_cache_shares_rules_and_expires_after_ttl(monkeypatch):
     clock = [0.0]
     monkeypatch.setattr(rules, "time", SimpleNamespace(monotonic=lambda: clock[0]))
     monkeypatch.setattr(rules, "DEFAULT_MATCHER_CACHE_TTL_SECONDS", 60.0)
-    constructor = Mock(side_effect=lambda _: SimpleNamespace(extract=Mock(return_value=[])))
+
+    def compile_rules(_):
+        engine = SimpleNamespace(extract=Mock(return_value=[]), reserved_bytes=0)
+        engine.clone_for_search = lambda: engine
+        return engine
+
+    constructor = Mock(side_effect=compile_rules)
     monkeypatch.setattr(rules, "get_privacy_extractor_class", lambda: constructor)
     find_privacy_matches("public", settings=ResolvedPrivacyConfig(never_mask=["one"]))
     find_privacy_matches("public", settings=ResolvedPrivacyConfig(never_mask=["two"]))
@@ -132,8 +138,11 @@ def test_extractor_cache_shares_rules_and_expires_after_ttl(monkeypatch):
 
 
 @pytest.mark.usefixtures("empty_extractor_cache")
-def test_extractor_cache_reserves_the_full_compilation_budget(monkeypatch):
-    constructor = Mock(side_effect=lambda value: SimpleNamespace(key=value))
+def test_extractor_cache_charges_native_reservations(monkeypatch):
+    reserved = 10 * 1024 * 1024
+    constructor = Mock(
+        side_effect=lambda value: SimpleNamespace(key=value, reserved_bytes=reserved)
+    )
     monkeypatch.setattr(rules, "get_privacy_extractor_class", lambda: constructor)
     definitions = [f"rules-{index}" for index in range(7)]
 
@@ -147,12 +156,11 @@ def test_extractor_cache_reserves_the_full_compilation_budget(monkeypatch):
 @pytest.mark.usefixtures("empty_extractor_cache")
 def test_extractor_cache_serializes_compilation_and_respects_budget(monkeypatch):
     start = Barrier(8)
-    monkeypatch.setattr(rules, "_extractor_limits", {"max_compiled_bytes": 100})
     monkeypatch.setattr(rules, "_extractor_cache_max_bytes", 4 * (100 + sys.getsizeof("a")))
 
     def compile_rules(value, **_):
         time.sleep(0.02)
-        return SimpleNamespace(key=value)
+        return SimpleNamespace(key=value, reserved_bytes=100)
 
     constructor = Mock(side_effect=compile_rules)
     monkeypatch.setattr(rules, "get_privacy_extractor_class", lambda: constructor)
@@ -170,7 +178,7 @@ def test_extractor_cache_serializes_compilation_and_respects_budget(monkeypatch)
 
 @pytest.mark.usefixtures("empty_extractor_cache")
 def test_rejected_rules_do_not_poison_cached_extractors(monkeypatch):
-    engine = object()
+    engine = SimpleNamespace(reserved_bytes=0)
 
     def compile_rules(value):
         if value != "[]":

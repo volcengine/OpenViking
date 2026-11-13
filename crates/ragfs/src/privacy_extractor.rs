@@ -16,9 +16,19 @@ pub struct PrivacyRuleLimits {
     pub max_rules: usize,
     /// Maximum UTF-8 bytes of custom-rule JSON.
     pub max_source_bytes: usize,
-    /// Maximum combined compiled regex program budget.
+    /// Combined program budget, weighted by capture count to bound fallback workspaces.
+    /// Also bounds each search thread's lazy DFA caches, split across patterns.
     pub max_compiled_bytes: usize,
 }
+
+/// Smallest program budget charged to one pattern.
+const MIN_PATTERN_PROGRAM_BYTES: usize = 4 * 1024;
+/// Forward, reverse and reverse-inner lazy DFAs may each keep a cache.
+const LAZY_DFA_CACHES_PER_PATTERN: usize = 3;
+/// Conservative reservation for NFAs and auxiliary compiled structures.
+const RETAINED_BYTES_PER_PROGRAM_BYTE: usize = 5;
+/// regex-automata 0.4's default one-pass DFA limit is independent of size_limit.
+const ONEPASS_DFA_BUDGET_BYTES: usize = 1024 * 1024;
 
 impl Default for PrivacyRuleLimits {
     fn default() -> Self {
@@ -26,7 +36,7 @@ impl Default for PrivacyRuleLimits {
             // Custom rules are maintained as configuration, like Privacy fields.
             max_rules: 128,
             max_source_bytes: 1024 * 1024,
-            // Split regex's default 10 MiB program limit across the whole rule set.
+            // Regex's default program limit, shared by the whole rule set.
             max_compiled_bytes: 10 * 1024 * 1024,
         }
     }
@@ -55,6 +65,7 @@ struct CustomRule {
     regex: Option<String>,
 }
 
+#[derive(Clone)]
 struct Detector {
     id: String,
     pattern: Regex,
@@ -85,9 +96,11 @@ impl Detector {
 }
 
 /// Compiled, immutable credential format detectors.
+#[derive(Clone)]
 pub struct PrivacyExtractor {
     detectors: Vec<Detector>,
     reference: Regex,
+    reserved_bytes: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -135,24 +148,48 @@ impl PrivacyExtractor {
             .checked_add(rules.len())
             .and_then(|count| count.checked_add(1))
             .ok_or_else(|| "Privacy rule count overflow".to_string())?;
-        let pattern_size_limit = limits.max_compiled_bytes / pattern_count;
-        let size_error = || {
-            format!(
-                "Privacy rule compiled size limit exceeded ({} bytes)",
-                limits.max_compiled_bytes
-            )
-        };
-        if pattern_size_limit == 0 {
-            return Err(size_error());
-        }
-        let compile = |pattern: &str, id: &str| -> Result<Regex, String> {
-            RegexBuilder::new(pattern)
-                .size_limit(pattern_size_limit)
-                .build()
-                .map_err(|error| match error {
-                    RegexError::CompiledTooBig(_) => size_error(),
-                    _ => format!("Invalid Privacy rule {id}: {error}"),
-                })
+        // Each search thread keeps its own lazy DFA caches for every pattern.
+        let cache_limit = limits.max_compiled_bytes / pattern_count / LAZY_DFA_CACHES_PER_PATTERN;
+        let mut remaining = limits.max_compiled_bytes;
+        let mut program_bytes = 0;
+        let mut compile = |pattern: &str, id: &str| -> Result<Regex, String> {
+            // Grow the allowance geometrically instead of charging every pattern the full budget.
+            let mut budget = MIN_PATTERN_PROGRAM_BYTES.min(remaining);
+            loop {
+                match RegexBuilder::new(pattern)
+                    .size_limit(budget)
+                    .dfa_size_limit(cache_limit)
+                    .build()
+                {
+                    Ok(regex) => {
+                        // Capture tables scale as NFA states × capture slots, even for find().
+                        // Charge before any search can allocate these deferred workspaces.
+                        remaining = budget
+                            .checked_mul(regex.captures_len())
+                            .and_then(|charge| remaining.checked_sub(charge))
+                            .ok_or_else(|| {
+                                format!(
+                                    "Privacy rule {id} exceeds the capture workspace budget \
+                                 ({} weighted program bytes per rule set)",
+                                    limits.max_compiled_bytes
+                                )
+                            })?;
+                        program_bytes += budget;
+                        return Ok(regex);
+                    }
+                    Err(RegexError::CompiledTooBig(_)) if budget < remaining => {
+                        budget = budget.saturating_mul(2).min(remaining);
+                    }
+                    Err(RegexError::CompiledTooBig(_)) => {
+                        return Err(format!(
+                            "Privacy rule {id} exceeds the remaining compiled size budget \
+                             ({} bytes per rule set)",
+                            limits.max_compiled_bytes
+                        ));
+                    }
+                    Err(error) => return Err(format!("Invalid Privacy rule {id}: {error}")),
+                }
+            }
         };
         let mut detectors = cfg
             .detectors
@@ -165,6 +202,7 @@ impl PrivacyExtractor {
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
+        let reference = compile(&cfg.reference_pattern, "reference")?;
         let mut ids: HashSet<_> = detectors.iter().map(|d| d.id.clone()).collect();
         for rule in rules {
             if rule.id.is_empty()
@@ -191,7 +229,7 @@ impl PrivacyExtractor {
                 }
             };
             let pattern = compile(&pattern, &rule.id)?;
-            if pattern.is_match("") {
+            if pattern.clone().is_match("") {
                 return Err("Privacy rules must not match an empty string".into());
             }
             detectors.push(Detector {
@@ -200,11 +238,18 @@ impl PrivacyExtractor {
                 reject_repeated: true,
             });
         }
-        let reference = compile(&cfg.reference_pattern, "reference")?;
+        let reserved_bytes = program_bytes * RETAINED_BYTES_PER_PROGRAM_BYTE
+            + ONEPASS_DFA_BUDGET_BYTES * pattern_count;
         Ok(Self {
             detectors,
             reference,
+            reserved_bytes,
         })
+    }
+
+    /// Conservative compiled-program reservation, excluding temporary search caches.
+    pub fn reserved_bytes(&self) -> usize {
+        self.reserved_bytes
     }
 
     /// Return disjoint credential spans and detector IDs in character coordinates.
@@ -496,7 +541,48 @@ mod tests {
         assert!(PrivacyExtractor::with_custom_rules(costly)
             .err()
             .unwrap()
-            .contains("compiled size limit"));
+            .contains("Privacy rule two exceeds the remaining compiled size budget"));
+    }
+
+    #[test]
+    fn rule_budget_follows_actual_program_size() {
+        // Unicode classes compile to large programs; one such rule may use most of the budget.
+        let unicode = r#"[{"id":"unicode","regex":"tok_\\w{20}"}]"#;
+        let extractor = PrivacyExtractor::with_custom_rules(unicode).unwrap();
+        assert_eq!(
+            extractor.extract("tok_ABCDEFGHIJKLMNOPQRST").unwrap(),
+            vec![(0, 24, "unicode".to_string())]
+        );
+        let builtin = PrivacyExtractor::new().unwrap().reserved_bytes();
+        assert!(builtin < extractor.reserved_bytes());
+        // The same rules fit while their combined programs stay within the budget.
+        let small: Vec<_> = (0..PrivacyRuleLimits::default().max_rules)
+            .map(|n| serde_json::json!({"id":format!("rule{n}"),"regex":"tok_[a-z0-9]{12}"}))
+            .collect();
+        assert!(
+            PrivacyExtractor::with_custom_rules(&serde_json::to_string(&small).unwrap()).is_ok()
+        );
+    }
+
+    #[test]
+    fn capture_workspaces_are_bounded_before_search() {
+        let rules = serde_json::json!([{
+            "id": "captures", "regex": "([a-z0-9]{200})".repeat(100)
+        }]);
+        assert!(PrivacyExtractor::with_custom_rules(&rules.to_string())
+            .err()
+            .unwrap()
+            .contains("capture workspace budget"));
+
+        let rules = serde_json::json!([{
+            "id": "captures", "regex": "([a-z0-9]{20})".repeat(10)
+        }]);
+        let extractor = PrivacyExtractor::with_custom_rules(&rules.to_string()).unwrap();
+        let value = "a1b2c3d4".repeat(25);
+        assert_eq!(
+            extractor.extract(&value).unwrap(),
+            vec![(0, value.len(), "captures".into())]
+        );
     }
     #[test]
     fn custom_rules_accept_long_values_and_skip_zero_width_matches() {

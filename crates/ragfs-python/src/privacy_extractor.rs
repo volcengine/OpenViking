@@ -36,6 +36,19 @@ impl PyPrivacyExtractor {
         })
     }
 
+    /// Conservative reservation for the shared compiled programs.
+    #[getter]
+    fn reserved_bytes(&self) -> usize {
+        self.inner.reserved_bytes()
+    }
+
+    /// Share compiled programs while keeping this batch's search caches independent.
+    fn clone_for_search(&self) -> Self {
+        Self {
+            inner: Arc::new(self.inner.as_ref().clone()),
+        }
+    }
+
     #[pyo3(signature = (content, never_mask=None))]
     fn extract(
         &self,

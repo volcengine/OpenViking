@@ -251,11 +251,17 @@ async def test_rule_resource_limits_reject_settings_before_persistence(client, s
     uris = [user_config_uri(owner), user_config_backup_uri(owner)]
     before = [await service.viking_fs.read_file(uri, ctx=owner) for uri in uris]
     cached = dict(privacy_rules._extractor_cache)
-    rules = [{"id": f"costly{i}", "regex": "[a-z0-9]{100000}"} for i in range(20)]
-    response = await client.patch(URL, json={"privacy": {"custom_rules": rules}})
-    assert response.status_code == 400, response.text
-    assert "compiled size limit" in response.text
-    assert [await service.viking_fs.read_file(uri, ctx=owner) for uri in uris] == before
+    for rules, message in [
+        (
+            [{"id": f"costly{i}", "regex": "[a-z0-9]{100000}"} for i in range(20)],
+            "compiled size budget",
+        ),
+        ([{"id": "captures", "regex": "([a-z0-9]{200})" * 100}], "capture workspace budget"),
+    ]:
+        response = await client.patch(URL, json={"privacy": {"custom_rules": rules}})
+        assert response.status_code == 400, response.text
+        assert message in response.text
+        assert [await service.viking_fs.read_file(uri, ctx=owner) for uri in uris] == before
     assert privacy_rules._extractor_cache == cached
 
 
