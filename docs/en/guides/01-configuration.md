@@ -1309,7 +1309,9 @@ using Choice through MCP.
 
 **Supported providers:**
 - `vikingdb`: Volcengine VikingDB Rerank API (uses AK/SK)
-- `cohere`: Cohere Rerank API
+- `cohere`: Cohere Rerank API. `api_base` is the base URL (default
+  `https://api.cohere.com`), with `/v2/rerank` appended. `timeout` controls the
+  HTTP request timeout in seconds (default `30.0`).
 - `openai`: OpenAI-compatible Rerank API
 - `litellm`: LiteLLM Rerank API
 - `jev`: Jev (TypeSafe System One) structured-decision API with Choice comparison and independent Noul scoring
