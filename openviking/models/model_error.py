@@ -82,9 +82,9 @@ _CODE_KINDS = {
     "UNSUPPORTEDVALUE": ModelErrorKind.UNSUPPORTED,
 }
 
-# MiniMax returns endpoint-specific business codes in an HTTP 200 response.
+# MiniMax business codes come from base_resp.status_code.
 # Keep numeric codes provider-scoped: the same number has no portable meaning
-# across model APIs. These are the codes documented for the embedding endpoint.
+# across model APIs.
 _PROVIDER_CODE_KINDS = {
     "minimax": {
         "1000": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
