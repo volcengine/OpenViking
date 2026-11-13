@@ -338,6 +338,28 @@
   font-size: 12px;
 }
 
+.ov-viking-bot__notice.ov-viking-bot__notice--error {
+  border: 1px solid
+    color-mix(in srgb, var(--ov-viking-bot-danger) 35%, var(--ov-viking-bot-bg));
+  background: color-mix(
+    in srgb,
+    var(--ov-viking-bot-danger) 8%,
+    var(--ov-viking-bot-bg)
+  );
+  padding: 10px 12px;
+  color: var(--ov-viking-bot-danger);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.ov-viking-bot__notice--error svg [stroke] {
+  stroke: currentColor;
+}
+
+.ov-viking-bot__notice--error svg [fill]:not([fill='none']) {
+  fill: currentColor;
+}
+
 .ov-viking-bot__message--system {
   align-items: center;
 }
