@@ -3,21 +3,14 @@ import test from 'node:test';
 import { act, createElement as h } from 'react';
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import { OpenVikingProvider } from '@openviking/react/client';
-import {
-  deferred,
-  mount,
-  ok,
-  recordingFetch,
-  settle,
-} from './helpers/module-dom.mjs';
+import { mount, ok, recordingFetch, settle } from './helpers/module-dom.mjs';
 for (const name of ['HTMLIFrameElement', 'SVGElement'])
   globalThis[name] = window[name];
 globalThis.getComputedStyle = window.getComputedStyle.bind(window);
 
-test('ranked results highlight by keyboard and replace stale previews', async () => {
+test('ranked results highlight by keyboard and open the active one', async () => {
   const first = 'viking://resources/one.md';
   const second = 'viking://resources/two.md';
-  const old = deferred();
   const opened = [];
   const fetch = recordingFetch((call) => {
     if (call.path === '/api/v1/search/find')
@@ -27,8 +20,6 @@ test('ranked results highlight by keyboard and replace stale previews', async ()
           { uri: first, score: 0.9 },
         ],
       });
-    if (call.path === '/api/v1/content/read')
-      return call.uri === first ? old.promise : ok('Second file body');
     return ok([]);
   });
   const view = await mount(
@@ -55,10 +46,6 @@ test('ranked results highlight by keyboard and replace stale previews', async ()
     });
     await wait(450);
     await wait(140);
-    const previous = fetch.calls.find(
-      (call) => call.path === '/api/v1/content/read' && call.uri === first,
-    );
-    assert.equal(previous.query.limit, '20');
     assert.equal(
       modal()
         .querySelector('[role="option"][aria-selected="true"]')
@@ -74,16 +61,11 @@ test('ranked results highlight by keyboard and replace stale previews', async ()
         }),
       ),
     );
-    assert.equal(previous.init.signal.aborted, true);
-    await wait(150);
-    assert.match(
-      modal().querySelector('aside').textContent,
-      /Second file body/,
-    );
-    await act(async () => old.resolve(await ok('Stale first body')));
-    assert.doesNotMatch(
-      modal().querySelector('aside').textContent,
-      /Stale first body/,
+    assert.equal(
+      modal()
+        .querySelector('[role="option"][aria-selected="true"]')
+        .textContent.includes('two.md'),
+      true,
     );
     await act(async () =>
       field.dispatchEvent(

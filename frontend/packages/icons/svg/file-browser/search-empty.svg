@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="258" height="140" viewBox="0 0 258 140" fill="none">
+  <g
+    opacity=".36"
+    stroke="var(--ov-ui-color-border-2, var(--ov-ui-border-2-default))"
+    stroke-dasharray="2 2"
+    style="
+      mask-image: radial-gradient(
+        ellipse at center,
+        currentColor,
+        transparent 72%
+      );
+    "
+  >
+    <path d="M0 28H258M0 56H258M0 84H258M0 112H258M37 0V140M75 0V140M117 0V140M159 0V140M199 0V140M235 0V140" />
+  </g>
+  <path
+    d="M109.974 93.6485V43.9883C109.974 39.57 113.555 35.9883 117.974 35.9883H151.613C154.247 35.9883 156.712 37.2844 158.204 39.4541L165.495 50.0515C166.412 51.3855 166.904 52.9665 166.904 54.5857V93.6485C166.904 98.0667 163.322 101.648 158.904 101.648H117.974C113.555 101.648 109.974 98.0667 109.974 93.6485Z"
+    fill="var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default))"
+    stroke="var(--ov-ui-color-border-3, var(--ov-ui-border-3-default))"
+    stroke-width="1.5"
+  />
+  <path
+    d="M108.68 107.328H151.207C155.625 107.328 159.207 103.747 159.207 99.3283V60.8783C159.207 58.9881 158.537 57.1589 157.317 55.715L148.037 44.732C146.517 42.9331 144.281 41.8954 141.926 41.8954H108.68C104.262 41.8954 100.68 45.4771 100.68 49.8954V99.3283C100.68 103.747 104.262 107.328 108.68 107.328Z"
+    fill="var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default))"
+    stroke="currentColor"
+    stroke-width="1.5"
+    stroke-linecap="round"
+  />
+  <path
+    d="M144.3 41.8954V48.2817C144.3 54.3568 149.225 59.2817 155.3 59.2817H159.204"
+    stroke="currentColor"
+    stroke-width="1.5"
+  />
+  <circle
+    cx="126.114"
+    cy="73.6377"
+    r="11.0244"
+    stroke="currentColor"
+    stroke-width="1.5"
+    stroke-linecap="round"
+  />
+  <path
+    d="M135.746 79.8945L141.385 85.5332C142.195 86.3438 142.195 87.6581 141.385 88.4687C140.574 89.2794 139.26 89.2794 138.449 88.4687L132.811 82.83"
+    stroke="currentColor"
+    stroke-width="1.5"
+    stroke-linecap="round"
+  />
+  <g
+    stroke="currentColor"
+    stroke-width="1.5"
+    stroke-linecap="round"
+    opacity=".8"
+  >
+    <path d="M129.019 58.2283L129.168 53.9442" />
+    <path d="M133.498 59.8939L136.088 56.4783" />
+    <path d="M137.098 63.4613L140.95 61.5799" />
+  </g>
+</svg>

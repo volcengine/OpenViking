@@ -100,6 +100,7 @@
 
   /* 底色：面板、次级面板、选中、悬停。 */
   --ov-ui-bg-1-default: #ffffff;
+  --ov-ui-bg-2-default: #fbfbfc;
   --ov-ui-bg-3-default: #f7f8fd;
   --ov-ui-bg-4-default: #f6f7fa;
   --ov-ui-bg-5-default: #f1f2f9;
@@ -229,6 +230,7 @@ html.dark .ov-experience-dashboard,
   --ov-ui-border-3-default: #3a3d45;
 
   --ov-ui-bg-1-default: #131416;
+  --ov-ui-bg-2-default: #18191c;
   --ov-ui-bg-3-default: #1b1d21;
   --ov-ui-bg-4-default: #202227;
   --ov-ui-bg-5-default: #23252a;
