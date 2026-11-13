@@ -60,14 +60,17 @@ import '@openviking/react/components/command-console/style.css';
 
 ### CommandConsoleRecord
 
-| 参数        | 说明                                                                                                       | 类型                                | 默认值 |
-| ----------- | ---------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------ |
-| id          | 记录的唯一标识                                                                                             | `string`                            | 必填   |
-| command     | 提交的命令文本，显示在结果上方；匹配到 `commands` 中的命令时，命令名部分按它的 `inputText` 显示            | `string`                            | 必填   |
-| status      | 执行状态，只影响这一条记录；`'pending'` 时显示加载骨架，其余状态显示结果                                   | `'pending' \| 'success' \| 'error'` | 必填   |
-| content     | 执行结果；`'pending'` 的记录不显示它，成功或失败的记录省略它时，分别显示 `labels.noResult`、`labels.error` | `CommandConsoleRecordContent`       | -      |
-| createdAtMs | 提交时间，Unix 毫秒时间戳，显示在命令下方                                                                  | `number`                            | -      |
-| createdAt   | 没有有效 `createdAtMs` 时显示的文本，也用于服务端渲染；不会被解析为日期                                    | `string`                            | -      |
+| 参数        | 说明                                                                                            | 类型                                               | 默认值 |
+| ----------- | ----------------------------------------------------------------------------------------------- | -------------------------------------------------- | ------ |
+| id          | 记录的唯一标识                                                                                  | `string`                                           | 必填   |
+| command     | 提交的命令文本，显示在结果上方；匹配到 `commands` 中的命令时，命令名部分按它的 `inputText` 显示 | `string`                                           | 必填   |
+| status      | 执行状态，只影响这一条记录；`'pending'` 且尚无后台任务结果时显示加载骨架，其余状态显示结果      | `'pending' \| 'success' \| 'error' \| 'cancelled'` | 必填   |
+| tasks       | 后台任务快照，组件仅展示传入的状态                                                              | `readonly CommandConsoleTask[]`                    | -      |
+| content     | 执行结果；带后台任务的记录在运行中也显示它，省略时按状态显示骨架或空结果                        | `CommandConsoleRecordContent`                      | -      |
+| createdAtMs | 提交时间，Unix 毫秒时间戳，显示在命令下方                                                       | `number`                                           | -      |
+| createdAt   | 没有有效 `createdAtMs` 时显示的文本，也用于服务端渲染；不会被解析为日期                         | `string`                                           | -      |
+
+`CommandConsoleTask` 的字段与 [ConsoleTaskSnapshot](../modules/console#consoletasksnapshot) 一致。
 
 ### CommandConsoleRecordContent
 
@@ -265,6 +268,7 @@ import '@openviking/react/components/command-console/style.css';
 | historyCommands    | 快捷键提示里 `↑` 的说明                                         | `string`                      | `历史指令`                                |
 | suggestions        | 候选列表的无障碍名称                                            | `string`                      | `命令建议`                                |
 | noSuggestions      | 没有匹配的命令时的提示                                          | `string`                      | `没有匹配的命令`                          |
+| cancelled          | 已取消状态图标的无障碍名称                                      | `string`                      | `已取消`                                  |
 | pending            | 执行中状态图标的无障碍名称                                      | `string`                      | `执行中`                                  |
 | success            | 执行成功状态图标的无障碍名称                                    | `string`                      | `执行成功`                                |
 | error              | 执行失败状态图标的无障碍名称，失败的记录没有 `content` 时也显示 | `string`                      | `执行失败`                                |

@@ -23,10 +23,15 @@ try {
               button: './src/shared/primitives/button/button.tsx',
               input: './src/shared/primitives/input/input.tsx',
               modal: './src/shared/primitives/modal/modal.tsx',
+              notification: './src/shared/primitives/notification/index.ts',
               'browser-entries':
                 './src/components/file-browser-action-bar/index.ts',
               'file-browser': './src/modules/file-browser/use-file-browser.ts',
               console: './src/modules/console/use-console.ts',
+              'task-context': './src/shared/task-tracking/context.tsx',
+              'task-tracker': './src/shared/task-tracking/tracker.ts',
+              'task-references':
+                './src/shared/task-tracking/read-references.ts',
               'bot-chat-hook':
                 './src/modules/console/chat/use-viking-bot-chat.ts',
               'bot-chat': './src/modules/console/chat/chat-controller.ts',

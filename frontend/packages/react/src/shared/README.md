@@ -25,6 +25,7 @@ General-purpose basic pieces. The caller supplies business content and specific 
 - `divider`: a single `role="separator"` rule whose length, thickness and color the caller passes.
 - `resizable`: `ResizableHandle`, a draggable `role="separator"` that resizes a neighbouring panel with pointer drag or the arrow keys. The caller owns the width and receives each clamped value through `onResize`.
 - `overlay`: positioning and scroll helpers for floating surfaces such as `tooltip`, `popover`, `modal` and `drawer`. `useOverlayPosition` flips a surface to the opposite side when space runs out and clamps it to the viewport, `lockBodyScroll` counts its owners and restores the host's inline styles when the last one releases, and `OverlayPlacement` is the shared placement type.
+- `notification`: a top-right notification stack for task status and result feedback; see [Notification](#notification).
 
 ### `auth/`
 
@@ -40,6 +41,15 @@ What the six forms in `components/auth/` share: the `<form>` frame with title, d
 - `locale-context.tsx`: `useLocale` and `LocaleProvider`, the language scope all public entries share. It is separate from the request client's Context, so switching language keeps requests and state.
 
 Translations stay with their owner in `locales/en-US.ts` and `locales/zh-CN.ts`; `auth/` and `primitives/modal/` follow the same layout.
+
+### Notification
+
+- `useNotification` returns an instance-local API and a context holder. Mount the holder inside the caller's locale and theme scope.
+- The API provides `loading`, `info`, `success`, `warning`, `error`, `normal`, `remove` and `clear`; reusing an `id` updates the notice in place, and `btn` supplies actions.
+- `loading` uses the built-in `LoadingIcon` shared with Button and stays open by default. Other notices default to 3000 ms; `duration: 0` disables auto-dismiss. Hover and keyboard focus pause the timer.
+- The close button and auto-dismiss timer call `onDismiss` before removal begins. Removal and clearing call each notice's `onClose` after its exit animation. Task polling, cancellation and terminal-state actions belong to the caller.
+- Only the top-right position is supported, with no global API.
+- The [internal task demo](../../../../docs/docs/_demos/notification-tasks.tsx) uses the private docs build and manually simulates running, success and failure states.
 
 ## Notes
 

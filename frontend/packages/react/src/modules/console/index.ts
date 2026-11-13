@@ -6,6 +6,8 @@ export type {
   ConsoleMode,
   ConsoleProps,
   ConsoleSlots,
+  ConsoleTaskService,
+  ConsoleTaskSnapshot,
 } from './types.js';
 export type {
   VikingBotChatEvent,

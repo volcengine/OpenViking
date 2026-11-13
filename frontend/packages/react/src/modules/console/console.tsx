@@ -1,3 +1,5 @@
+import { TaskTrackingProvider } from '../../shared/task-tracking/context.js';
+import { ConsoleTaskNotifications } from './task-notifications.js';
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
 import { useId, useRef } from 'react';
 import { CommandConsole } from '../../components/command-console/index.js';
@@ -12,7 +14,7 @@ import { consoleLabels } from './labels.js';
 import { ConsoleToolbar } from './console-toolbar.js';
 import type { ConsoleProps } from './types.js';
 
-export function Console({
+function ConsoleView({
   mode,
   modes,
   defaultMode,
@@ -25,6 +27,7 @@ export function Console({
   conversation,
   command,
   chatOptions,
+  taskService,
   slots,
   labels: overrides,
   className,
@@ -38,6 +41,7 @@ export function Console({
     locale,
     scopeKey,
     requestOptions,
+    taskService,
     onModeChange,
   });
   const labels = consoleLabels(locale, overrides);
@@ -65,6 +69,7 @@ export function Console({
         {...rest}
         className={['ov-console', className].filter(Boolean).join(' ')}
       >
+        <ConsoleTaskNotifications locale={locale} />
         {state.mode ? (
           <ConsoleToolbar
             mode={state.mode}
@@ -146,5 +151,13 @@ export function Console({
         ) : null}
       </div>
     </LocaleProvider>
+  );
+}
+
+export function Console(props: ConsoleProps) {
+  return (
+    <TaskTrackingProvider service={props.taskService}>
+      <ConsoleView {...props} />
+    </TaskTrackingProvider>
   );
 }

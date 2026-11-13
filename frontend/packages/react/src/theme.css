@@ -36,6 +36,7 @@
  * `var(--ov-ui-color-primary, privateFallback)` — the host's value wins when set,
  * the fallback applies otherwise.
  */
+.ov-notification-stack,
 .ov-button,
 .ov-input,
 .ov-textarea,
@@ -178,6 +179,7 @@
   /* @generated library-swatches:end */
 }
 
+html.dark .ov-notification-stack,
 html.dark .ov-button,
 html.dark .ov-input,
 html.dark .ov-textarea,
@@ -400,4 +402,14 @@ html.dark .ov-directory-tour {
   --ov-ui-tour-surface-default: var(--ov-ui-bg-1-default);
   --ov-ui-tour-border-default: var(--ov-ui-border-3-default);
   --ov-ui-tour-muted-default: var(--ov-ui-text-3-default);
+}
+
+/* Persistent notice surface from the console Arco theme (MIT). */
+.ov-notification-stack {
+  --ov-ui-notification-bg-default: rgb(245 245 245 / 90%);
+  --ov-ui-notification-shadow-default:
+    0 15px 35px rgb(0 0 0 / 5%), 0 5px 15px rgb(0 0 0 / 5%);
+}
+html.dark .ov-notification-stack {
+  --ov-ui-notification-bg-default: var(--ov-ui-bg-3-default);
 }

@@ -25,6 +25,7 @@
 - `divider`：一条 `role="separator"` 的分隔线，长度、粗细和颜色由调用方给出。
 - `resizable`：`ResizableHandle`，可拖拽的 `role="separator"` 分隔条，用指针拖动或方向键调整相邻面板的宽度。宽度由调用方持有，每个夹取后的值通过 `onResize` 回传。
 - `overlay`：`tooltip`、`popover`、`modal`、`drawer` 这类浮层共用的定位与滚动工具。`useOverlayPosition` 在空间不足时把浮层翻到对侧并夹在视口内，`lockBodyScroll` 记录各个持有者，最后一个释放时恢复宿主的内联样式，`OverlayPlacement` 是共用的方位类型。
+- `notification`：右上角通知栈，展示任务状态与结果反馈，见 [Notification](#notification)。
 
 ### `auth/`
 
@@ -40,6 +41,15 @@
 - `locale-context.tsx`：`useLocale` 与 `LocaleProvider`，各公开入口共用的语言作用域。它与请求 Client 的 Context 分离，因此切换语言不影响请求和状态。
 
 译文放在各自所属目录的 `locales/en-US.ts` 与 `locales/zh-CN.ts`；`auth/` 和 `primitives/modal/` 采用同样的布局。
+
+### Notification
+
+- `useNotification` 返回实例隔离的操作 API 与上下文占位，占位放在调用方的语言与主题作用域内。
+- API 提供 `loading`、`info`、`success`、`warning`、`error`、`normal`、`remove` 和 `clear`，同一 `id` 原位更新通知，`btn` 提供操作内容。
+- `loading` 使用与 Button 共用的内置 `LoadingIcon`，默认持续显示；其他通知默认 3000 ms 后关闭，`duration: 0` 禁用自动关闭，悬停和键盘焦点暂停计时。
+- 关闭按钮与自动关闭计时器在开始移除前调用 `onDismiss`；移除与清空在退出动画结束后调用各通知的 `onClose`，任务轮询、取消任务和终态操作由调用方负责。
+- 仅提供右上角，不提供全局 API。
+- [内部任务演示](../../../../docs/docs/_demos/notification-tasks.tsx) 消费私有文档构建，手动模拟运行、成功和失败状态。
 
 ## 说明
 

@@ -1,3 +1,6 @@
+import type { TaskService } from '../../shared/task-tracking/types.js';
+export type ConsoleTaskService = TaskService;
+export type { TaskSnapshot as ConsoleTaskSnapshot } from '../../shared/task-tracking/types.js';
 import type { Locale } from '../../shared/locale.js';
 import type { HTMLAttributes, ReactNode, SetStateAction } from 'react';
 import type { OvRequestOptions } from '../../client/types.js';
@@ -67,6 +70,8 @@ export interface ConsoleCommandProps {
 
 /** Options shared by Console and useConsole. */
 export interface ConsoleOptions {
+  /** Task queries use native HTTP by default; hosts can adapt another backend. */
+  taskService?: ConsoleTaskService;
   locale?: Locale;
   /** Enabled modes, in toolbar order. Omitted enables both; an empty list renders no panels. */
   modes?: readonly ConsoleMode[];

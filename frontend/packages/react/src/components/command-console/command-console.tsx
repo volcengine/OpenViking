@@ -126,6 +126,7 @@ export function CommandConsole({
             <CommandConsoleRecordItem
               key={record.id}
               record={record}
+              locale={locale}
               command={findCommandConsoleCommand(record.command, commands)}
               labels={text}
               onOpenUri={onOpenUri}

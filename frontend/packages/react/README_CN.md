@@ -107,4 +107,4 @@ export function Browser({ apiKey }: { apiKey: string }) {
 
 ## 许可证
 
-`@openviking/react` 使用 AGPL-3.0-only 许可证，与 OpenViking 仓库一致（[LICENSE](../../../LICENSE)）。内部的 Button、Input、Modal 与 Drawer 改编自 Arco Design（MIT），声明随包保留在 `LICENSE.arco-design`；Button 与 Input 的视觉规则改编自 `@arco-design/theme-ve-o-aml-design@0.0.36`（MIT）。图标的来源与授权（包括 Apache-2.0 的文件类型图标）记录在 [`packages/icons`](../icons/README.md)。
+`@openviking/react` 使用 AGPL-3.0-only 许可证，与 OpenViking 仓库一致（[LICENSE](../../../LICENSE)）。内部的 Button、Input、Modal、Drawer 与 Notification 改编自 Arco Design（MIT），声明随包保留在 `LICENSE.arco-design`；Button 与 Input 的视觉规则改编自 `@arco-design/theme-ve-o-aml-design@0.0.36`（MIT）。图标的来源与授权（包括 Apache-2.0 的文件类型图标）记录在 [`packages/icons`](../icons/README.md)。

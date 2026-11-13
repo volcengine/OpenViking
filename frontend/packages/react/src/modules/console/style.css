@@ -6,3 +6,5 @@
 @import './console.css';
 @import './console-toolbar.css';
 @import './console-history.css';
+
+@import '../../shared/primitives/notification/style.css';
