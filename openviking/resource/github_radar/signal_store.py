@@ -67,23 +67,22 @@ class RadarSignalStore:
 
     @staticmethod
     def merge(existing: List[PrSignal], new: List[PrSignal]) -> List[PrSignal]:
-        """Append new signals, de-duplicated by PR number.
+        """Merge fresh signals into the pending queue, keyed by PR number.
 
-        A PR re-emitted by the inclusive ``since`` window, or updated again
-        while still pending, keeps its first collected occurrence so a digest
-        never lists the same PR twice. First-snapshot-wins is deliberate:
-        within one digest window a PR may flip state (e.g. open -> merged),
-        but overwriting the queued snapshot mid-window could make the LLM
-        triage prose disagree with the deterministic detail rows of the same
-        report. The fresh snapshot is naturally picked up in the next window
-        after the queue is cleared.
+        A PR re-emitted by the inclusive ``since`` window with the SAME
+        timestamp is a duplicate: keep the first snapshot so a digest never
+        lists the same PR twice. A snapshot with a NEWER ``updated_at``
+        (e.g. an open PR that merged while queued across a window boundary)
+        replaces the stale one; dropping it here would consume the collection
+        watermark for an update that can never reach any later report.
         """
-        seen = {signal.number for signal in existing}
+        index = {signal.number: position for position, signal in enumerate(existing)}
         merged = list(existing)
         for signal in new:
-            if signal.number in seen:
-                # Keep the first snapshot for this number; see docstring.
-                continue
-            seen.add(signal.number)
-            merged.append(signal)
+            position = index.get(signal.number)
+            if position is None:
+                index[signal.number] = len(merged)
+                merged.append(signal)
+            elif signal.updated_at > merged[position].updated_at:
+                merged[position] = signal
         return merged

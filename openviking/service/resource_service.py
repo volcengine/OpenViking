@@ -2639,9 +2639,15 @@ class ResourceService:
         if not watch_manager:
             return None
 
-        from openviking.resource.pr_radar_runner import validate_pr_radar_config
+        from openviking.resource.pr_radar_runner import (
+            authorize_pr_radar_target,
+            validate_pr_radar_config,
+        )
 
         validate_pr_radar_config(path, processor_kwargs)
+        # Authorize an explicit radar report target with the caller's own
+        # context before the watch runtime handles it under bypass_acl.
+        await authorize_pr_radar_target(self._viking_fs, processor_kwargs, ctx)
 
         task = await watch_manager.create_task(
             path=path,

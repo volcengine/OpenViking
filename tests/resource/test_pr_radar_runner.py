@@ -17,10 +17,11 @@ from openviking.resource.github_radar.models import (
 )
 from openviking.resource.pr_radar_runner import (
     PrRadarRunner,
+    authorize_pr_radar_target,
     partition_pending,
     validate_pr_radar_config,
 )
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 
 GITHUB_URL = "https://github.com/volcengine/OpenViking"
 
@@ -233,6 +234,56 @@ def test_validate_allows_disabled_radar_anywhere():
         "https://gitlab.example.com/team/repo",
         {"pr_radar": {"enabled": False}},
     )
+
+
+class _AuthProbeFs(FakeFs):
+    def __init__(self, deny: set[str] | None = None) -> None:
+        super().__init__()
+        self.access_checks: list[tuple[str, str]] = []
+        self._deny = deny or set()
+
+    async def _ensure_access(self, uri, ctx, action=None):
+        self.access_checks.append((uri, str(action)))
+        if uri in self._deny:
+            raise PermissionDeniedError(f"denied {uri}", resource=uri)
+
+
+@pytest.mark.asyncio
+async def test_explicit_radar_target_requires_caller_write_permission():
+    kwargs = {
+        "pr_radar": {
+            "enabled": True,
+            "target_uri": "viking://resources/restricted/",
+        }
+    }
+    fs = _AuthProbeFs(deny={"viking://resources/restricted"})
+
+    with pytest.raises(PermissionDeniedError):
+        await authorize_pr_radar_target(fs, kwargs, _ctx)
+    # Trailing slash is trimmed to match the runtime write path.
+    assert fs.access_checks == [
+        ("viking://resources/restricted", "AclAction.WRITE")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_authorized_explicit_radar_target_passes_and_derived_skips_check():
+    allowed_fs = _AuthProbeFs()
+    await authorize_pr_radar_target(
+        allowed_fs,
+        {"pr_radar": {"enabled": True, "target_uri": "viking://resources/ok"}},
+        _ctx,
+    )
+    assert len(allowed_fs.access_checks) == 1
+
+    # A derived target (no explicit target_uri) lives in the caller's own
+    # namespace and must not trigger an extra authorization call.
+    derived_fs = _AuthProbeFs()
+    await authorize_pr_radar_target(
+        derived_fs, {"pr_radar": {"enabled": True}}, _ctx
+    )
+    await authorize_pr_radar_target(derived_fs, None, _ctx)
+    assert derived_fs.access_checks == []
 
 
 class FakeVLM:
@@ -449,6 +500,26 @@ def test_signal_store_merge_dedupes_by_number():
     merged = RadarSignalStore.merge([signals[0]], signals)  # #11 again + #12
 
     assert [pr.number for pr in merged] == [11, 12]
+
+
+def test_signal_store_merge_replaces_stale_snapshot_with_newer_update():
+    from openviking.resource.github_radar.collector import _build_pr
+    from openviking.resource.github_radar.signal_store import RadarSignalStore
+
+    old_open = _build_pr(_pr_row(7, "2026-11-01T00:30:00Z"))
+    merged_row = _pr_row(7, "2026-11-01T00:45:00Z")
+    merged_row["state"] = "closed"
+    merged_row["pull_request"]["merged_at"] = merged_row["updated_at"]
+    newer_merged = _build_pr(merged_row)
+
+    merged = RadarSignalStore.merge([old_open], [newer_merged])
+
+    assert [pr.number for pr in merged] == [7]
+    assert merged[0].merged_at == "2026-11-01T00:45:00Z"
+
+    # Equal-timestamp re-emit (inclusive since duplicate) keeps the first one.
+    duplicate = _build_pr(_pr_row(7, "2026-11-01T00:45:00Z"))
+    assert RadarSignalStore.merge([newer_merged], [duplicate]) == [newer_merged]
 
 
 _RADAR_URI = RADAR_TARGET_URI
@@ -688,6 +759,36 @@ def test_plan_digest_uses_independent_digest_interval_not_watch_interval():
     assert due.advance_to == fmt_ts(due_now)
 
 
+def test_plan_digest_steady_boundary_waits_for_caught_up():
+    from datetime import datetime, timedelta, timezone
+
+    from openviking.resource.github_radar.models import RadarState, fmt_ts
+    from openviking.resource.pr_radar_runner import plan_digest
+
+    now = datetime.now(timezone.utc)
+    last_digest = now - timedelta(hours=2)
+    config = RadarConfig.from_kwargs(
+        {"pr_radar": {"enabled": True, "digest_interval_minutes": 60}}
+    )
+    kwargs = {
+        "state": RadarState(last_digest_at=fmt_ts(last_digest)),
+        "config": config,
+        "pending_count": 1,
+        "anchor": now,
+        "now": now,
+    }
+
+    # Boundary due but collection capped/failed mid-window: hold the boundary.
+    incomplete = plan_digest(caught_up=False, **kwargs)
+    assert incomplete.action == "accumulate"
+    assert incomplete.advance_to == ""
+
+    # Once the full window is read, the same due boundary closes normally.
+    complete = plan_digest(caught_up=True, **kwargs)
+    assert complete.action == "digest"
+    assert complete.advance_to == complete.window_end
+
+
 def test_plan_digest_rejects_non_positive_digest_interval():
     from openviking_cli.exceptions import InvalidArgumentError
 
@@ -836,3 +937,97 @@ async def test_lagged_watch_catches_up_one_window_per_digest():
     # Unique archive stamps retain both reports instead of overwriting.
     archives = [uri for uri in fs.files if "/reports/" in uri and uri.endswith(".md")]
     assert len(archives) == 2
+
+
+class _SinceGh:
+    """GitHub-like fixture: filters `since` inclusively and paginates by offset."""
+
+    def __init__(self, rows: list[dict]) -> None:
+        self.rows = rows
+
+    async def api_get_json(self, path, params=None):
+        rows = sorted(
+            (r for r in self.rows if r["updated_at"] >= params["since"]),
+            key=lambda r: r["updated_at"],
+        )
+        per_page = int(params["per_page"])
+        start = (int(params["page"]) - 1) * per_page
+        return rows[start : start + per_page]
+
+
+@pytest.mark.asyncio
+async def test_steady_window_waits_for_full_collection_before_closing():
+    # Two in-window PRs, cap=1: trigger 1 reads only #1, trigger 2 reads #2
+    # but ends on a full page (caught_up still False), trigger 3 reads the
+    # empty confirmation page and only then does one report cover both PRs.
+    fs = FakeFs()
+    base = "2026-11-01T00:00:00Z"
+    _seed_state(fs, base)
+    gh = _SinceGh(
+        [_pr_row(1, "2026-11-01T00:10:00Z"), _pr_row(2, "2026-11-01T00:20:00Z")]
+    )
+    task = SimpleNamespace(
+        task_id="watch-1",
+        path=GITHUB_URL,
+        to_uri=WATCH_TO_URI,
+        user_id="alice",
+        processor_kwargs={
+            "pr_radar": {
+                "enabled": True,
+                "target_uri": _RADAR_URI,
+                "max_prs_per_run": 1,
+                "digest_interval_minutes": 60,
+            }
+        },
+    )
+    runner = PrRadarRunner(fs, gh=gh)
+
+    first = await runner.maybe_run(task, _ctx)
+    assert first.status == "accumulating"
+    second = await runner.maybe_run(task, _ctx)
+    assert second.status == "accumulating"
+    assert not any(uri.endswith(LATEST_REPORT_NAME) for uri in fs.files)
+    # Digest boundary held while collection is incomplete.
+    assert _read_state(fs)["last_digest_at"] == base
+
+    third = await runner.maybe_run(task, _ctx)
+    assert third.status == "published"
+    latest = fs.files[next(uri for uri in fs.files if uri.endswith(LATEST_REPORT_NAME))]
+    assert "#1" in latest and "#2" in latest
+    assert fs.files[_signals_uri(fs)] == ""
+    assert _read_state(fs)["last_digest_at"] == "2026-11-01T01:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_newer_queued_snapshot_reaches_report_after_merge():
+    # An open snapshot is already queued; before its window closes the PR
+    # merges. The newer merged snapshot must replace the stale one and be
+    # published instead of being dropped by number-only dedup.
+    fs = FakeFs()
+    base = "2026-11-01T00:00:00Z"
+    _seed_state(fs, base)
+    old = _build_pr(_pr_row(7, "2026-11-01T00:30:00Z"))
+    fs.files[f"{_RADAR_URI}/{SIGNALS_FILENAME}"] = json.dumps(old.to_row())
+
+    merged_row = _pr_row(7, "2026-11-01T00:45:00Z")
+    merged_row["state"] = "closed"
+    merged_row["pull_request"]["merged_at"] = merged_row["updated_at"]
+    task = SimpleNamespace(
+        task_id="watch-1",
+        path=GITHUB_URL,
+        to_uri=WATCH_TO_URI,
+        user_id="alice",
+        processor_kwargs={
+            "pr_radar": {
+                "enabled": True,
+                "target_uri": _RADAR_URI,
+                "digest_interval_minutes": 60,
+            }
+        },
+    )
+    result = await PrRadarRunner(fs, gh=_SinceGh([merged_row])).maybe_run(task, _ctx)
+
+    assert result.status == "published"
+    latest = fs.files[next(uri for uri in fs.files if uri.endswith(LATEST_REPORT_NAME))]
+    assert "2026-11-01T00:45:00Z" in latest
+    assert fs.files[_signals_uri(fs)] == ""

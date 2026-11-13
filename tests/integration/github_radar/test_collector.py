@@ -247,8 +247,8 @@ async def test_final_watermark_ref_survives_large_scan_and_blocks_reemit():
 
     assert len(outcome.prs) == 300
     assert "#300" in outcome.state.issues_seen
-    # Only final-watermark refs are remembered, well under the safety cap.
-    assert len(outcome.state.issues_seen) <= 200
+    # Distinct timestamps: only the single final-watermark ref is remembered.
+    assert outcome.state.issues_seen == ["#300"]
 
     class BoundaryReemitGh:
         async def api_get_json(self, path, params=None):
@@ -256,6 +256,51 @@ async def test_final_watermark_ref_survives_large_scan_and_blocks_reemit():
             return [rows[-1]] if int(params["page"]) == 1 else []
 
     second = await collect_prs(BoundaryReemitGh(), "o/r", config, outcome.state)
+    assert second.prs == []
+
+
+@pytest.mark.asyncio
+async def test_newer_snapshot_of_remembered_pr_is_emitted():
+    # #7 collected at T0 and remembered on the boundary; when it merges at T1
+    # the inclusive `since` re-emits it with a newer timestamp, which must be
+    # collected as an update instead of being skipped by number-only dedup.
+    config = RadarConfig(enabled=True, max_prs_per_run=50)
+    first = await collect_prs(
+        GithubOffsetGh([_pr_row(7, "2026-11-10T01:00:00Z")]),
+        "o/r",
+        config,
+        RadarState(issues_since="2026-11-10T00:00:00Z"),
+    )
+    merged = _pr_row(7, "2026-11-10T02:00:00Z", merged=True)
+
+    second = await collect_prs(GithubOffsetGh([merged]), "o/r", config, first.state)
+
+    assert [pr.number for pr in second.prs] == [7]
+    assert second.prs[0].merged_at == "2026-11-10T02:00:00Z"
+    # The watermark advances while the update itself is not lost.
+    assert second.state.issues_since == "2026-11-10T02:00:00Z"
+
+    # A same-timestamp boundary re-emit is still suppressed.
+    third = await collect_prs(GithubOffsetGh([merged]), "o/r", config, second.state)
+    assert third.prs == []
+
+
+@pytest.mark.asyncio
+async def test_tied_boundary_refs_are_kept_losslessly_beyond_200():
+    # 300 PRs sharing ONE timestamp: all 300 boundary refs must be remembered
+    # so the inclusive `since` re-emit on the next pass collects nothing,
+    # instead of truncating to 200 and re-collecting the other 100 forever.
+    tie = "2026-11-10T00:00:00Z"
+    rows = [_pr_row(n, tie) for n in range(1, 301)]
+    config = RadarConfig(enabled=True, max_prs_per_run=500)
+
+    first = await collect_prs(
+        GithubOffsetGh(rows), "o/r", config, RadarState(issues_since=tie)
+    )
+    assert len(first.prs) == 300
+    assert len(first.state.issues_seen) == 300
+
+    second = await collect_prs(GithubOffsetGh(rows), "o/r", config, first.state)
     assert second.prs == []
 
 

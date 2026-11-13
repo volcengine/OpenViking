@@ -149,6 +149,12 @@ def plan_digest(
         )
     if now < next_digest:
         return DigestPlan(action="accumulate")
+    if not caught_up:
+        # The boundary is due but collection has not read the full window
+        # (per-run cap or a transport failure). Closing it now would strand
+        # unread in-window PRs outside every future window, so hold the
+        # boundary and retry on the next trigger, mirroring backfill gating.
+        return DigestPlan(action="accumulate")
     return DigestPlan(
         action="digest",
         window_start=state.last_digest_at,
@@ -235,7 +241,9 @@ class PrRadarRunner:
             signal_store = RadarSignalStore(self._fs, target_uri)
             pending = await signal_store.load(ctx)
             merged = signal_store.merge(pending, outcome.prs)
-            if len(merged) != len(pending):
+            # Compare content, not length: a newer snapshot may replace an
+            # equal-length pending entry and still needs to be persisted.
+            if merged != pending:
                 await signal_store.save(merged, ctx)
 
             plan = plan_digest(
@@ -501,3 +509,28 @@ def validate_pr_radar_config(path: str, processor_kwargs: Optional[dict[str, Any
         raise InvalidArgumentError(
             "pr_radar is only supported for GitHub repositories in this release"
         )
+
+
+async def authorize_pr_radar_target(
+    viking_fs: Any,
+    processor_kwargs: Optional[dict[str, Any]],
+    ctx: Any,
+) -> None:
+    """Authorize an explicit radar target with the caller's own authority.
+
+    Radar I/O runs inside the watch context, whose ``bypass_acl=True`` skips
+    namespace/ACL enforcement, so a user-supplied ``target_uri`` must be
+    WRITE-checked at watch creation with the original request context. Without
+    this, a user could redirect radar writes at ACL-protected resources they
+    cannot otherwise write. Derived targets live in the caller's own user
+    namespace (target_uri is None) and need no extra check.
+    """
+    config = radar_config_or_none(processor_kwargs)
+    if config is None or not config.enabled or not config.target_uri:
+        return
+    from openviking.storage.acl import AclAction
+
+    # rstrip mirrors _target_uri so the check covers the exact runtime path.
+    await viking_fs._ensure_access(
+        config.target_uri.rstrip("/"), ctx, action=AclAction.WRITE
+    )

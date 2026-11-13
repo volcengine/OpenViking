@@ -35,7 +35,6 @@ _PER_PAGE = 100
 # ``max_prs_per_run``; bound pages instead so an issue-heavy repository cannot
 # turn one trigger into an unbounded pagination loop.
 _MAX_PAGES_PER_RUN = 10
-_SEEN_LIMIT = 200
 
 
 @dataclass
@@ -137,9 +136,8 @@ async def collect_prs(
                 watermark = stamp
                 # Keep only refs sharing the FINAL watermark: they are the
                 # rows the inclusive `since` re-emits next pass. Refs from
-                # earlier running maxima must not occupy the _SEEN_LIMIT
-                # budget, or the actual boundary refs can be truncated away
-                # and re-collected as new PRs.
+                # earlier running maxima must not be remembered, or the
+                # boundary set would grow with every PR ever read.
                 boundary_refs.clear()
             if "pull_request" not in row:
                 continue  # Issue, not a PR -- it still advanced the watermark above.
@@ -148,8 +146,12 @@ async def collect_prs(
                 continue
             if stamp and stamp == watermark:
                 boundary_refs.add(signal.source_ref)
-            # The inclusive `since` re-emits boundary rows; dedupe by PR number.
-            if signal.source_ref in previously_seen:
+            # The inclusive `since` only re-emits rows AT the previous boundary.
+            # A remembered number with a newer timestamp is a genuine update
+            # (e.g. open -> merged): suppress the boundary re-emit, but let
+            # newer snapshots through instead of losing the event while the
+            # watermark advances past it.
+            if signal.source_ref in previously_seen and stamp <= since:
                 continue
             collected.append(signal)
             prs_collected += 1
@@ -180,15 +182,16 @@ def _advance_state(
 ) -> RadarState:
     """Build the next watermark state.
 
-    ``boundary_refs`` holds only PR refs sharing the final watermark, so the
-    inclusive ``since`` does not re-emit them next pass; its size is bounded by
-    the number of PRs sharing one timestamp and the _SEEN_LIMIT cap is a pure
-    safety net. When nothing landed on the final watermark (usually an empty
-    page), keep the previous memory rather than clearing it and re-emitting an
-    old boundary item.
+    ``boundary_refs`` holds every PR ref sharing the final watermark timestamp,
+    so the inclusive ``since`` does not re-emit them next pass. The set must be
+    stored losslessly: truncating it would let tied boundary rows survive as
+    "new" PRs forever. Its natural bound is the rows read in one pass (the
+    10-page x 100-row page guard), typically a handful for distinct timestamps.
+    When nothing landed on the final watermark (usually an empty page), keep
+    the previous memory rather than clearing it and re-emitting an old boundary.
     """
     next_seen = sorted(boundary_refs) if boundary_refs else sorted(previously_seen)
     return RadarState(
         issues_since=watermark or since or previous.issues_since,
-        issues_seen=next_seen[-_SEEN_LIMIT:],
+        issues_seen=next_seen,
     )
