@@ -50,9 +50,9 @@ export function ovAttribution(item) {
 //   calls openviking_remember (ov-person.mjs); this also keeps a later commit
 //   from extracting the same request a second time.
 // - the agent's own soul and identity: a line that talks the agent into a new
-//   name or a global rule would otherwise rewrite who it is (OpenViking SuperAgent's name and
-//   role come from its configuration, and the owner's standing rules are the
-//   owner's preferences).
+//   name or a global rule would otherwise rewrite who it is (the static soul is
+//   edited in OpenViking, with the configured role as its local fallback, and
+//   the owner's standing rules are the owner's preferences).
 // These exist in every OV release that has memory_policy, so a commit never
 // fails on an unknown type.
 export const OV_MEMORY_TYPES = Object.freeze(['profile', 'entities', 'events']);

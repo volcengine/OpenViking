@@ -27,6 +27,7 @@ import { IdleLivenessExtension } from './extensions/idle-liveness.mjs';
 import { OVSessionClient, OVSessionContext } from './ov-session-context.mjs';
 import { OVUnavailableError } from './ov-connection.mjs';
 import { OVRecall } from './ov-recall.mjs';
+import { loadOVSoul } from './conversation-policy.mjs';
 import { TimerConnector, TimerRepository } from './timers.mjs';
 import { OVTimerRepository } from './ov-timers.mjs';
 import { updateRuntimePreference } from './runtime-preference.mjs';
@@ -142,6 +143,7 @@ export class PersonalAgentDaemon {
         status: 'STARTING',
       }, 'starting');
       await this.checkOpenViking(ovClient);
+      await loadOVSoul(this.config, ovClient, this.logger);
       this.timers = this.config.timerStorage === 'sqlite'
         ? new TimerRepository(this.store.db)
         : new OVTimerRepository(ovClient, this.config.instanceId);

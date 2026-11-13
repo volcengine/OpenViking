@@ -15,6 +15,8 @@ import {
   assembleVolcConversationPolicy,
   assembleVolcSelfHostedConversationPolicy,
   docCommentNotice,
+  loadOVSoul,
+  OV_SOUL_URI,
   resolveRolePromptPath,
   rolePrompt,
   substitutePromptPlaceholders,
@@ -266,6 +268,52 @@ describe('the instance role', () => {
       assert.equal(rolePrompt({ rolePromptPath: filePath }), '');
       assert.doesNotMatch(assembleConversationPolicy({ rolePromptPath: filePath }), /## Role/);
     });
+  });
+
+  it('prefers OV soul.md for a configured role in both Core and Volc policies', async (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-soul-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const rolePromptPath = path.join(directory, 'role.md');
+    fs.writeFileSync(rolePromptPath, 'The local role fallback.');
+    const config = { rolePromptPath, agentName: 'Fern' };
+    const reads = [];
+    const loaded = await loadOVSoul(config, {
+      read: async (...args) => {
+        reads.push(args);
+        return '<!-- editor note -->\nYou are {{AGENT_NAME}}, using the OV soul.';
+      },
+    });
+    assert.equal(loaded, true);
+    assert.deepEqual(reads, [[OV_SOUL_URI, 0, -1]]);
+    assert.equal(rolePrompt(config), 'You are Fern, using the OV soul.');
+    assert.match(assembleConversationPolicy(config), /You are Fern, using the OV soul\./);
+    assert.match(assembleVolcConversationPolicy(config), /You are Fern, using the OV soul\./);
+    assert.doesNotMatch(assembleConversationPolicy(config), /local role fallback|editor note/);
+  });
+
+  it('falls back to role.md when OV soul.md is blank or unavailable', async (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-soul-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const rolePromptPath = path.join(directory, 'role.md');
+    fs.writeFileSync(rolePromptPath, 'The local {{AGENT_NAME}} role.');
+    const config = { rolePromptPath, agentName: 'Fern' };
+    assert.equal(await loadOVSoul(config, { read: async () => '  \n' }), false);
+    assert.equal(rolePrompt(config), 'The local Fern role.');
+    const warnings = [];
+    assert.equal(await loadOVSoul(config, { read: async () => { throw new Error('offline'); } }, {
+      warn: (...args) => warnings.push(args),
+    }), false);
+    assert.equal(rolePrompt(config), 'The local Fern role.');
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0][0], 'ov_soul_unavailable_using_role_file');
+  });
+
+  it('does not load an OV soul when no Role is configured', async () => {
+    let called = false;
+    const config = {};
+    assert.equal(await loadOVSoul(config, { read: async () => { called = true; return 'unexpected'; } }), false);
+    assert.equal(called, false);
+    assert.equal(rolePrompt(config), '');
   });
 
   it('runs on the Core defaults without a role', () => {

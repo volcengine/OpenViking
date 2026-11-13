@@ -5,12 +5,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { agentCliCommands, cliCommandCode } from './agent-clis.mjs';
+import { safeError } from './logger.mjs';
 
 // The conversation policy is the Core's markdown under agent/ (how inputs,
 // decisions and deliveries work, one section per connector the instance
 // uses) followed by the instance's Role: who the agent is and when it speaks.
 // A Role is one of the release's presets (agent/roles/<name>.md) or a file
-// the owner keeps; it comes after the Core, which it cannot change.
+// the owner keeps; it comes after the Core, which it cannot change. When a
+// Role is configured, OpenViking's static soul.md replaces that local file
+// whenever it can be read; the local file remains the offline fallback.
 
 export const DEFAULT_PROMPT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'agent');
 
@@ -88,8 +91,27 @@ function connectorSections(config) {
 export function rolePrompt(config = {}) {
   const filePath = config.rolePromptPath;
   if (!filePath) return '';
-  const text = fs.readFileSync(filePath, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+  const source = config.rolePromptText ?? fs.readFileSync(filePath, 'utf8');
+  const text = String(source).replace(/<!--[\s\S]*?-->/g, '');
   return substitutePromptPlaceholders(text, config).trim();
+}
+
+export const OV_SOUL_URI = 'viking://~/memories/soul.md';
+
+// Resolve the configured Role once at daemon startup, before any Router or
+// Worker runtime is constructed. A blank or unreadable soul leaves the local
+// role.md in place, matching VikingBot's OV-first bootstrap behavior.
+export async function loadOVSoul(config, ovClient, logger) {
+  if (!config.rolePromptPath || !ovClient?.read) return false;
+  try {
+    const soul = await ovClient.read(OV_SOUL_URI, 0, -1);
+    if (!String(soul ?? '').trim()) return false;
+    config.rolePromptText = String(soul);
+    return true;
+  } catch (error) {
+    logger?.warn('ov_soul_unavailable_using_role_file', { error: safeError(error) });
+    return false;
+  }
 }
 
 function roleSection(config) {
