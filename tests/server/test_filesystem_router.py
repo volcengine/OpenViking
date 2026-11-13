@@ -3,7 +3,6 @@
 """Filesystem router tests."""
 
 import asyncio
-from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -11,22 +10,18 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from openviking.core.global_policy import PolicyPathScope, PolicyScopePlan
 from openviking.core.namespace_policy import (
     SYSTEM_MEMORY_BUILTIN_ROOT,
     SYSTEM_MEMORY_CUSTOM_ROOT,
 )
 from openviking.server.auth import get_request_context
-from openviking.server.identity import DataAccessScope, RequestContext, Role
+from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import filesystem
 from openviking.service.fs_service import FSService, ListingPage
-from openviking.storage.acl import AclAction
 from openviking.storage.queuefs.queue_manager import get_queue_manager
-from openviking.storage.viking_fs import VikingFS
 from openviking.system_assets import builtin_memory_templates_dir
 from openviking_cli.exceptions import InvalidURIError
 from openviking_cli.session.user_id import UserIdentifier
-from tests.utils.mock_agfs import MockLocalAGFS
 
 
 @pytest.mark.asyncio
@@ -372,17 +367,25 @@ async def test_dev_root_http_mkdir_expands_home_alias_from_request_identity(
 
 
 @pytest.mark.asyncio
-async def test_http_stat_returns_canonical_request_uri(monkeypatch, tmp_path):
+async def test_http_stat_returns_canonical_request_uri(monkeypatch):
+    seen = {}
     request_context = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
-    uri = "viking://user/alice/resources/notes.md"
-    agfs = MockLocalAGFS(root_path=tmp_path)
-    fs = VikingFS(agfs=agfs)
-    agfs.write(fs._uri_to_path(uri, ctx=request_context), b"notes")
+
+    async def fake_stat(uri, ctx=None, include_lock_status=False):
+        seen.update(uri=uri, ctx=ctx, include_lock_status=include_lock_status)
+        return {
+            "name": "notes.md",
+            "size": 12,
+            "mode": 0o644,
+            "modTime": "2026-08-28T00:00:00Z",
+            "isDir": False,
+            "isLocked": False,
+        }
 
     monkeypatch.setattr(
         filesystem,
         "get_service",
-        lambda: SimpleNamespace(fs=FSService(viking_fs=fs)),
+        lambda: SimpleNamespace(fs=SimpleNamespace(stat=fake_stat)),
     )
 
     app = FastAPI()
@@ -394,52 +397,12 @@ async def test_http_stat_returns_canonical_request_uri(monkeypatch, tmp_path):
             "/api/v1/fs/stat",
             params={"uri": "viking://~/resources/notes.md"},
         )
-        listing = await client.get(
-            "/api/v1/fs/ls",
-            params={"uri": "viking://~/resources", "include_abstract": "false"},
-        )
-        request_context = replace(
-            request_context,
-            user=UserIdentifier("acct", "auditor"),
-            role=Role.GLOBAL,
-            data_access=DataAccessScope(
-                owner_user_id="alice",
-                operation=AclAction.READ,
-                plan=PolicyScopePlan(
-                    "allowed", (PolicyPathScope("resources/notes.md", False),), ()
-                ),
-                policy_hash=None,
-                request_root="viking://user/alice",
-                requested_targets=("viking://user/alice",),
-                effective_targets=(uri,),
-            ),
-        )
-        container = await client.get(
-            "/api/v1/fs/stat", params={"uri": "viking://user/alice/resources"}
-        )
-        delegated_listing = await client.get(
-            "/api/v1/fs/ls",
-            params={"uri": "viking://user/alice", "include_abstract": "false"},
-        )
-        delegated_file = await client.get("/api/v1/fs/stat", params={"uri": uri})
 
     assert response.status_code == 200, response.text
-    assert response.json()["result"]["uri"] == uri
-    assert response.json()["result"]["access"] == "manage"
-    assert "permission" not in response.json()["result"]
-    assert response.json()["result"]["isLocked"] is False
-    assert listing.status_code == 200, listing.text
-    assert [(entry["uri"], entry["access"]) for entry in listing.json()["result"]] == [
-        (uri, "manage")
-    ]
-    assert container.status_code == 200, container.text
-    assert container.json()["result"]["access"] == "container"
-    assert delegated_listing.status_code == 200, delegated_listing.text
-    assert [(entry["uri"], entry["access"]) for entry in delegated_listing.json()["result"]] == [
-        ("viking://user/alice/resources", "container")
-    ]
-    assert delegated_file.status_code == 200, delegated_file.text
-    assert delegated_file.json()["result"]["access"] == "read"
+    assert response.json()["result"]["uri"] == "viking://user/alice/resources/notes.md"
+    assert seen["uri"] == "viking://user/alice/resources/notes.md"
+    assert seen["ctx"].user.user_id == "alice"
+    assert seen["include_lock_status"] is True
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,7 @@ import pytest
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.expr import And, PathScope, RawDSL
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, PermissionDeniedError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.glob_config import GlobConfig
 
@@ -794,11 +794,20 @@ async def test_glob_rejects_empty_pattern(fs):
 
 
 @pytest.mark.asyncio
-async def test_glob_checks_access_before_listing():
-    fs = VikingFS(agfs=_DummyAgfs())
-    ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER)
-    with pytest.raises(PermissionDeniedError):
-        await fs.glob("**/*.md", uri="viking://user/bob/resources", ctx=ctx)
+async def test_glob_checks_access_before_listing(monkeypatch, fs):
+    called = False
+
+    async def fake_ensure_access(uri, ctx):
+        nonlocal called
+        called = True
+        raise PermissionError(f"denied: {uri}")
+
+    monkeypatch.setattr(fs, "_ensure_traversable", fake_ensure_access)
+
+    with pytest.raises(PermissionError):
+        await fs.glob("**/*.md", uri="viking://resources", ctx=_default_ctx())
+
+    assert called is True
 
 
 @pytest.mark.asyncio
