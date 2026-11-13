@@ -12,7 +12,7 @@ import { createThreadRequest } from './thread-request'
 import styles from './thread.module.css'
 import { copyTextToClipboard } from '#/shared/lib/clipboard'
 import { sharedMessages } from '../lib/shared-messages'
-import { useSessionTitles } from '../lib/use-session-titles'
+import { getSessionTitle, useSessionTitles } from '../lib/use-session-titles'
 import { useSession, useSessionMessages } from '../lib/use-sessions'
 
 const PixelBlast = lazy(() => import('#/shared/ui/pixel-blast'))
@@ -38,9 +38,6 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
   const { identityScopeKey } = useAppConnection()
   const { getTitle, setTitle } = useSessionTitles(identityScopeKey)
   const title = getTitle(sessionId)
-  const [hasTitle] = useState(
-    title !== sessionId && title !== t('threadList.newSession'),
-  )
   const [historyId] = useState(draft ? undefined : sessionId)
   const [currentId, setCurrentId] = useState(historyId)
   const queryClient = useQueryClient()
@@ -48,13 +45,20 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
     () =>
       createThreadRequest({
         sessionId,
-        hasTitle,
+        hasTitle: () => {
+          // Read at save completion; restored titles must not replace the stream owner.
+          const current = getSessionTitle(identityScopeKey, sessionId)
+          return (
+            current !== sessionId &&
+            current !== i18n.t('sessions:threadList.newSession')
+          )
+        },
         onMessageSaved: (text) => {
           if (text) setTitle(sessionId, text.slice(0, 20))
           void queryClient.invalidateQueries({ queryKey: ['sessions'] })
         },
       }),
-    [sessionId, hasTitle, setTitle, queryClient],
+    [sessionId, identityScopeKey, i18n, setTitle, queryClient],
   )
   const { data: session } = useSession(currentId)
   const {

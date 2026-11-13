@@ -4,14 +4,14 @@ import { requestStudioModule } from '#/shared/api/module-request'
 // Session ownership and product metadata stay in Studio; Console owns chat.
 export function createThreadRequest({
   sessionId,
-  hasTitle = false,
+  hasTitle,
   onMessageSaved,
 }: {
   sessionId: string
-  hasTitle?: boolean
+  hasTitle?: () => boolean
   onMessageSaved: (text?: string) => void
 }): typeof fetch {
-  let titled = hasTitle
+  let titled = false
   return async (input, init) => {
     const url = new URL(String(input), window.location.origin)
     const creating =
@@ -31,7 +31,7 @@ export function createThreadRequest({
       if (envelope.status === 'ok') {
         const message = JSON.parse(String(init.body))
         const text =
-          !titled && message.role === 'user'
+          !titled && message.role === 'user' && !hasTitle?.()
             ? message.parts?.find(
                 (part: { type: string }) => part.type === 'text',
               )?.text

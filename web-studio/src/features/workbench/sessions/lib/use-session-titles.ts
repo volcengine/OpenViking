@@ -61,6 +61,11 @@ function subscribe(storageKey: string, onStoreChange: () => void) {
   return () => window.removeEventListener('storage', handler)
 }
 
+export function getSessionTitle(identityScopeKey: string, sessionId: string) {
+  const storageKey = createSessionTitleStorageKey(identityScopeKey)
+  return getTitlesSnapshot(storageKey)[sessionId] ?? sessionId
+}
+
 export function setSessionTitle(
   identityScopeKey: string,
   sessionId: string,

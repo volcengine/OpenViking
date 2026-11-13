@@ -1,36 +1,36 @@
 // @vitest-environment jsdom
 import { Thread } from './thread'
 import { createThreadRequest } from './thread-request'
-import { cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
+import {
+  createSessionTitleStorageKey,
+  removeSessionTitle,
+  setSessionTitle,
+} from '../lib/use-session-titles'
 import type { ConsoleProps } from '@openviking/react/modules/console'
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 const m = vi.hoisted(() => ({
   provider: 'opensource',
+  i18n: { language: 'en', t: (key: string) => key.replace(/^sessions:/, '') },
   request: vi.fn(),
   history: vi.fn(),
   console: undefined as ConsoleProps | undefined,
-  invalidate: vi.fn(),
-  setTitle: vi.fn(),
+  queryClient: { invalidateQueries: vi.fn() },
+  adapter: undefined as typeof fetch | undefined,
 }))
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
+  useTranslation: () => ({ t: (key: string) => key, i18n: m.i18n }),
 }))
 vi.mock('@tanstack/react-query', () => ({
-  useQueryClient: () => ({ invalidateQueries: m.invalidate }),
+  useQueryClient: () => m.queryClient,
 }))
 vi.mock('#/features/connection/hooks/use-studio-service', () => ({
   useStudioService: () => ({ provider: m.provider, ready: true }),
 }))
 vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({ identityScopeKey: 'test' }),
-}))
-vi.mock('#/features/workbench/sessions/lib/use-session-titles', () => ({
-  useSessionTitles: () => ({
-    getTitle: (id: string) => id,
-    setTitle: m.setTitle,
-  }),
 }))
 vi.mock('#/features/workbench/sessions/lib/use-sessions', () => ({
   useSession: () => ({}),
@@ -41,7 +41,16 @@ vi.mock('#/shared/api/module-request', () => ({
 }))
 vi.mock('@openviking/react/client', async (original) => ({
   ...(await original<object>()),
-  OpenVikingProvider: ({ children }: { children: ReactNode }) => children,
+  OpenVikingProvider: ({
+    children,
+    fetch: adapter,
+  }: {
+    children: ReactNode
+    fetch: typeof fetch
+  }) => {
+    m.adapter = adapter
+    return children
+  },
 }))
 vi.mock('@openviking/react/modules/console', () => ({
   Console: (props: ConsoleProps) => {
@@ -59,6 +68,7 @@ vi.mock('./memory-impact', () => ({ MemoryImpact: () => null }))
 beforeEach(() => {
   vi.clearAllMocks()
   m.provider = 'opensource'
+  removeSessionTitle('test', 'late-title')
   m.history.mockReturnValue({ isPending: false, data: [] })
   m.request.mockResolvedValue(Response.json({ status: 'ok', result: {} }))
 })
@@ -122,7 +132,7 @@ it('does not overwrite an existing session title on follow-up', async () => {
   const saved = vi.fn()
   const request = createThreadRequest({
     sessionId: 's',
-    hasTitle: true,
+    hasTitle: () => true,
     onMessageSaved: saved,
   })
   await request('/api/v1/sessions/s/messages', {
@@ -133,4 +143,54 @@ it('does not overwrite an existing session title on follow-up', async () => {
     }),
   })
   expect(saved).toHaveBeenCalledWith(undefined)
+})
+
+it('preserves a title restored after mount without replacing the request adapter', async () => {
+  render(<Thread sessionId="late-title" />)
+  const request = m.adapter!
+  expect(screen.getByText('late-title')).toBeTruthy()
+  act(() => setSessionTitle('test', 'late-title', 'Original first message'))
+  expect(screen.getByText('Original first message')).toBeTruthy()
+  expect(m.adapter).toBe(request)
+  await act(async () => {
+    await request('/api/v1/sessions/late-title/messages', {
+      method: 'POST',
+      body: JSON.stringify({
+        role: 'user',
+        parts: [{ type: 'text', text: 'Later follow-up' }],
+      }),
+    })
+  })
+  expect(screen.getByText('Original first message')).toBeTruthy()
+  expect(
+    JSON.parse(localStorage.getItem(createSessionTitleStorageKey('test'))!)[
+      'late-title'
+    ],
+  ).toBe('Original first message')
+})
+
+it('checks the latest title when an in-flight save succeeds', async () => {
+  let complete!: (response: Response) => void
+  m.request.mockImplementationOnce(
+    () =>
+      new Promise<Response>((resolve) => {
+        complete = resolve
+      }),
+  )
+  render(<Thread sessionId="late-title" />)
+  const request = m.adapter!
+  const pending = request('/api/v1/sessions/late-title/messages', {
+    method: 'POST',
+    body: JSON.stringify({
+      role: 'user',
+      parts: [{ type: 'text', text: 'Later follow-up' }],
+    }),
+  })
+  act(() => setSessionTitle('test', 'late-title', 'Original first message'))
+  expect(m.adapter).toBe(request)
+  await act(async () => {
+    complete(Response.json({ status: 'ok', result: {} }))
+    await pending
+  })
+  expect(screen.getByText('Original first message')).toBeTruthy()
 })
