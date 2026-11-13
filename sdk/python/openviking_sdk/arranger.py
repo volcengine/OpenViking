@@ -26,7 +26,9 @@ _SPEC_TAG_KEY = "ov-cac-spec"
 _RESERVED_TAG_KEYS = frozenset({_OWNER_TAG_KEY, _KIND_TAG_KEY, _SPEC_TAG_KEY})
 _OWNER_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _USER_ID_RE = re.compile(r"^[a-zA-Z0-9_.@-]+$")
-_TOOL_URI_RE = re.compile(r"^viking://agent/tools/(?P<server>[^/]+)/(?P<tool>[^/]+)\.json$")
+_TOOL_URI_RE = re.compile(
+    r"^viking://(?:agent|user/[^/]+)/tools/(?P<server>[^/]+)/(?P<tool>[^/]+)\.json$"
+)
 
 
 class ContextResourceKind(str, Enum):
@@ -211,7 +213,10 @@ class _ContextArrangerBase:
         if not uri.endswith(".md"):
             raise ValueError("Live context path must end with .md")
         if not _TOOL_URI_RE.fullmatch(normalized_tool_uri):
-            raise ValueError("tool_uri must match viking://agent/tools/<server>/<tool>.json")
+            raise ValueError(
+                "tool_uri must match viking://agent/tools/<server>/<tool>.json "
+                "or viking://user/<user_id>/tools/<server>/<tool>.json"
+            )
         if not title.strip():
             raise ValueError("Live context title must not be empty")
         if timeout_seconds <= 0:
@@ -328,7 +333,7 @@ class _ContextArrangerBase:
                             ContextChangeAction.CONFLICT,
                             resource.kind,
                             uri,
-                            "target exists but is not managed by this project",
+                            "not managed by this project",
                         )
                     )
                 else:
@@ -337,7 +342,7 @@ class _ContextArrangerBase:
                             ContextChangeAction.CREATE,
                             resource.kind,
                             uri,
-                            "target does not exist",
+                            "not found",
                         )
                     )
                 continue
@@ -350,7 +355,7 @@ class _ContextArrangerBase:
                         ContextChangeAction.CONFLICT,
                         resource.kind,
                         uri,
-                        f"managed target kind is {current_kind}",
+                        f"type mismatch: {current_kind}",
                     )
                 )
             elif tags.get(_SPEC_TAG_KEY) == fingerprint and await self._matches_applied(
@@ -361,7 +366,7 @@ class _ContextArrangerBase:
                         ContextChangeAction.UNCHANGED,
                         resource.kind,
                         uri,
-                        "declaration matches the applied specification",
+                        "no changes",
                     )
                 )
             else:
@@ -370,7 +375,7 @@ class _ContextArrangerBase:
                         ContextChangeAction.UPDATE,
                         resource.kind,
                         uri,
-                        "actual state differs from the declaration",
+                        "changes detected",
                     )
                 )
 
@@ -385,7 +390,7 @@ class _ContextArrangerBase:
                         ContextChangeAction.CONFLICT,
                         ContextResourceKind.LIVE_CONTEXT,
                         uri,
-                        f"managed target has unsupported kind {raw_kind!r}",
+                        f"unsupported type: {raw_kind!r}",
                     )
                 )
                 continue
@@ -394,7 +399,7 @@ class _ContextArrangerBase:
                     ContextChangeAction.DELETE,
                     ContextResourceKind.LIVE_CONTEXT,
                     uri,
-                    "managed target is absent from the declaration",
+                    "removed from configuration",
                 )
             )
 
@@ -665,7 +670,7 @@ def _format_result_table(
     if not plan.total:
         lines.append("No resources declared.")
     elif not visible_changes:
-        lines.append("No changes. All nodes match the declaration.")
+        lines.append("No changes.")
     else:
         lines.extend(
             _format_change_rows(
@@ -735,15 +740,15 @@ def _applied_change_display(
     prune: bool,
 ) -> Tuple[str, str]:
     if action == ContextChangeAction.CREATE:
-        return "CREATED", "created successfully"
+        return "CREATED", "created"
     if action == ContextChangeAction.UPDATE:
-        return "UPDATED", "updated successfully"
+        return "UPDATED", "updated"
     if action == ContextChangeAction.DELETE:
         if prune:
-            return "DELETED", "deleted successfully"
+            return "DELETED", "deleted"
         return "PENDING DELETE", "run apply --prune to delete"
     if action == ContextChangeAction.UNCHANGED:
-        return "UNCHANGED", "already matches declaration"
+        return "UNCHANGED", "no changes"
     return "CONFLICT", "not applied"
 
 
