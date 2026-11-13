@@ -672,17 +672,17 @@ Claude Code、Cursor、TRAE、ZCode、Kimi Code、CodeBuddy Code、Qoder CLI、D
 
 ### CodeBuddy Code
 
-[CodeBuddy Code](./08-community-plugins.md#codebuddy-code-记忆集成)。带 6 个 hook、一个 MCP 代理和 4 个 skill 的插件，由统一安装器以本地 marketplace 的形式安装；与 ZCode、Kimi Code 一样是 `agent-hook-plugin` 的宿主适配器。
+[CodeBuddy Code](./20-codebuddy.md)。带 6 个 hook、一个 MCP 代理和 4 个 skill 的插件，由统一安装器以本地 marketplace 的形式安装；与 ZCode、Kimi Code 一样是 `agent-hook-plugin` 的宿主适配器。
 
 - `UserPromptSubmit` 与 `SessionEnd` **只在交互式 TUI 触发**。headless 运行（`-p`、`--input-format stream-json`）只在 `Stop` 捕获，永远不发收尾提交。
 - URI guard 会拒绝路径为 `viking://` URI 的文件类工具。拒绝以「工具调用失败」的形式到达模型；`allow` 携带的文字到不了模型，因此本宿主没有劝告通道。Shell 命令不做检查，`ov` 调用与字面量 `viking://` 参数照常可用。
 - `SessionStart` 不带 `cwd`，且同一会话内可能投递两次，因此该 hook 是幂等的，并以进程工作目录兜底。
 - Hook 超时被杀时不会连带杀掉它的子进程——这正是提交能在 hook 进程返回后在分离的 worker 中完成的原因。
-- v1 不支持子代理采集，与其他社区适配器一致：宿主会触发这些事件，但共享 dispatcher 目前没有子代理阶段。
+- v1 不支持子代理采集，与其他 `agent-hook-plugin` 宿主一致：宿主会触发这些事件，但共享 dispatcher 目前没有子代理阶段。
 
 ### Qoder CLI
 
-[Qoder CLI](./08-community-plugins.md#qoder-cli-记忆集成)。带 6 个 hook、一个 MCP 代理和 4 个 skill 的插件，由统一安装器以本地 marketplace 的形式安装；与 CodeBuddy Code 一样是 `agent-hook-plugin` 的宿主适配器。
+[Qoder CLI](./21-qoder.md)。带 6 个 hook、一个 MCP 代理和 4 个 skill 的插件，由统一安装器以本地 marketplace 的形式安装；与 CodeBuddy Code 一样是 `agent-hook-plugin` 的宿主适配器。
 
 - `UserPromptSubmit` 与 `SessionEnd` 在 TUI 和 headless `-p` 运行中都会触发。每次 `-p` 运行结束时还会结束一个没有 transcript 的辅助会话，它的 `SessionEnd` 会被忽略。
 - 注入的上下文会作为 attachment 记录写进 transcript。捕获只读取对话记录，召回的记忆不会被再次捕获。

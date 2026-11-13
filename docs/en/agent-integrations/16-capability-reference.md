@@ -674,17 +674,17 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 ### CodeBuddy Code
 
-[CodeBuddy Code](./08-community-plugins.md#codebuddy-code-memory-integration). A plugin with 6 hooks, an MCP proxy, and 4 skills, installed by the unified installer as a local marketplace, and an `agent-hook-plugin` host adapter like ZCode and Kimi Code.
+[CodeBuddy Code](./20-codebuddy.md). A plugin with 6 hooks, an MCP proxy, and 4 skills, installed by the unified installer as a local marketplace, and an `agent-hook-plugin` host adapter like ZCode and Kimi Code.
 
 - `UserPromptSubmit` and `SessionEnd` fire **only in the interactive TUI**. A headless run (`-p`, `--input-format stream-json`) captures on `Stop` and never sends the final commit.
 - The URI guard denies file tools whose path is a `viking://` URI. The denial reaches the model as the failed tool result; an `allow` carries no text through, so this host has no advisory channel. Shell commands are not checked, so `ov` calls and literal `viking://` arguments still work.
 - `SessionStart` carries no `cwd` and can be delivered twice in one session, so the hook is idempotent and falls back to the process working directory.
 - A hook killed at its timeout does not take its child processes with it, which is what lets a commit run in a detached worker after the hook process returns.
-- Subagent capture is not supported in v1, as on the other community adapters: the host fires the events, but the shared dispatcher has no subagent stage yet.
+- Subagent capture is not supported in v1, as on the other `agent-hook-plugin` hosts: the host fires the events, but the shared dispatcher has no subagent stage yet.
 
 ### Qoder CLI
 
-[Qoder CLI](./08-community-plugins.md#qoder-cli-memory-integration). A plugin with 6 hooks, an MCP proxy, and 4 skills, installed by the unified installer as a local marketplace, and an `agent-hook-plugin` host adapter like CodeBuddy Code.
+[Qoder CLI](./21-qoder.md). A plugin with 6 hooks, an MCP proxy, and 4 skills, installed by the unified installer as a local marketplace, and an `agent-hook-plugin` host adapter like CodeBuddy Code.
 
 - `UserPromptSubmit` and `SessionEnd` fire in the TUI and in headless `-p` runs. Every `-p` run also ends an auxiliary session that has no transcript; its `SessionEnd` is ignored.
 - Injected context is written into the transcript as attachment records. Capture reads only the conversation records, so recalled memories are not captured back.
