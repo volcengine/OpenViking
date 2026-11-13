@@ -1,9 +1,9 @@
 import type {
   VikingBotDraft,
   VikingBotMessage,
-} from '../../components/viking-bot/model.js';
+} from '../../../components/viking-bot/model.js';
 import { createChatTimeline, type AppendInput } from './chat-timeline.js';
-import { OvClientError } from '../../client/errors.js';
+import { OvClientError } from '../../../client/errors.js';
 import type { VikingBotChatService, VikingBotChatState } from './types.js';
 
 /** One request owns its accumulator and snapshot, never a global conversation. */

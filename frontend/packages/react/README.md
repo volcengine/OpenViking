@@ -3,7 +3,6 @@
 English / [中文](README_CN.md)
 
 React business components and blocks for building interfaces on OpenViking, the context database for AI agents.
-VikingBot is a headless module: import `useVikingBotChat`, `useVikingBotSessions` and their contracts from `@openviking/react/modules/viking-bot`. Console consumes it by default; standalone VikingBot hosts can use it directly. It has no composed view or CSS entry, and hooks are not re-exported by the package root or Console.
 
 ## Install
 
@@ -91,7 +90,7 @@ All JavaScript entries are ESM. There is no `@openviking/react/components` or `@
 | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `@openviking/react`                   | Business components and blocks with their main `<Name>Props` types, such as `FileTree` and `FileTreeProps`. `FilePreview` is the exception: import it from its subpath.                                                        |
 | `@openviking/react/components/<name>` | One component with its related types (rows, options, handles, labels), such as `components/file-tree`. Related components sit in a group, such as `components/auth/email-login-form`.                                          |
-| `@openviking/react/modules/<name>`    | A block (`file-browser`, `console` or `scope-cascade`) or the `viking-bot` headless module.                                                                                                                                    |
+| `@openviking/react/modules/<name>`    | A block (`file-browser`, `console` or `scope-cascade`) .                                                                                                                                                                       |
 | `@openviking/react/client`            | `OpenVikingProvider` and the request client (`createOvClient`, `OvClientError` and others).                                                                                                                                    |
 | `@openviking/react/icons`             | Icon components and the file-type icon helpers.                                                                                                                                                                                |
 | `…/style.css`                         | Stylesheets. JavaScript never imports CSS, so import what you use: `@openviking/react/style.css` for everything, `components/style.css` or `modules/style.css` for one category, or the `style.css` of one component or block. |

@@ -5,7 +5,7 @@ import type {
   UseVikingBotChatOptions,
   VikingBotChatService,
   VikingBotSessionService,
-} from '../viking-bot/index.js';
+} from './chat/types.js';
 import type {
   CommandConsoleCommandDefinition,
   CommandConsoleLabels,
@@ -49,6 +49,12 @@ export interface ConsoleLabels {
   vikingBot?: VikingBotLabels;
 }
 
+/** Request and persistence options for Console's built-in conversation. */
+export type ConsoleChatOptions = Omit<
+  UseVikingBotChatOptions,
+  'enabled' | 'sessionId' | 'initialMessages'
+> & { service?: VikingBotChatService & VikingBotSessionService };
+
 /**
  * 命令模式的宿主覆盖项；记录、输入、提交和命令目录由 Console 管理。
  * Command-mode host overrides; Console owns records, input, submission and the
@@ -62,6 +68,8 @@ export interface ConsoleCommandProps {
 /** Options shared by Console and useConsole. */
 export interface ConsoleOptions {
   locale?: Locale;
+  /** Enabled modes, in toolbar order. Omitted enables both; an empty list renders no panels. */
+  modes?: readonly ConsoleMode[];
   mode?: ConsoleMode;
   /** Initial uncontrolled mode. Defaults to VikingBot ('conversation'). */
   defaultMode?: ConsoleMode;
@@ -89,12 +97,7 @@ export interface ConsoleProps
    */
   quickCommands?: readonly CommandConsoleQuickCommand[];
   /** Native chat by default. Supply a stable service to adapt a non-native backend. */
-  chatOptions?: Omit<
-    UseVikingBotChatOptions,
-    'enabled' | 'sessionId' | 'initialMessages'
-  > & {
-    service?: VikingBotChatService & VikingBotSessionService;
-  };
+  chatOptions?: ConsoleChatOptions;
   /** Host-owned conversation state/capabilities. Omit draft callbacks to use Console's local draft. */
   conversation?: Partial<VikingBotProps>;
   /** 命令模式的覆盖项；省略时命令模式使用 Console 的 `onOpenUri`。 */
@@ -117,7 +120,7 @@ export interface ConsoleState {
 
 /** Data and operations available independently of Console's view. */
 export interface ConsoleResult extends ConsoleState {
-  mode: ConsoleMode;
+  mode: ConsoleMode | undefined;
   commands: readonly CommandConsoleCommandDefinition[];
   setMode: (mode: ConsoleMode) => void;
   setCommand: (command: string) => void;

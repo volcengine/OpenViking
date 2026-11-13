@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import { createChatController } from './chat-controller.js';
 import { useBotService } from './use-service.js';
-import { useLocale } from '../../shared/locale-context.js';
+import { useLocale } from '../../../shared/locale-context.js';
 import { localizeBotError } from './errors.js';
 import type { UseVikingBotChatOptions, VikingBotChatResult } from './types.js';
 

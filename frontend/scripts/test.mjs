@@ -27,12 +27,15 @@ try {
                 './src/components/file-browser-action-bar/index.ts',
               'file-browser': './src/modules/file-browser/use-file-browser.ts',
               console: './src/modules/console/use-console.ts',
-              'bot-chat': './src/modules/viking-bot/chat-controller.ts',
-              'bot-sessions': './src/modules/viking-bot/sessions-controller.ts',
-              'bot-aggregate': './src/modules/viking-bot/aggregate.ts',
-              'bot-events': './src/modules/viking-bot/native-events.ts',
+              'bot-chat-hook':
+                './src/modules/console/chat/use-viking-bot-chat.ts',
+              'bot-chat': './src/modules/console/chat/chat-controller.ts',
+              'bot-sessions':
+                './src/modules/console/chat/sessions-controller.ts',
+              'bot-aggregate': './src/modules/console/chat/aggregate.ts',
+              'bot-events': './src/modules/console/chat/native-events.ts',
               'bot-client': './src/client/client.ts',
-              'bot-service': './src/modules/viking-bot/native-service.ts',
+              'bot-service': './src/modules/console/chat/native-service.ts',
               'bot-submit': './src/components/viking-bot/composer-controls.tsx',
               'bot-composer-events':
                 './src/components/viking-bot/composer-events.ts',
