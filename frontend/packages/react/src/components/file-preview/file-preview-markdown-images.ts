@@ -14,12 +14,52 @@ export function originalImageTarget(url: string): string {
 }
 type Node = {
   type: string;
+  value?: string;
   url?: string;
   identifier?: string;
   alt?: string | null;
   title?: string | null;
   children?: Node[];
 };
+
+const importedImageLine =
+  /^ {0,3}!\[([^\]\\\r\n]*)\]\((viking:\/\/[^\s<>()]+)\)[ \t]*$/i;
+const importedImageBoundary = /^[ \t]*(?:<\/[a-z]+>[ \t]*)*<\/kbimage>[ \t]*$/i;
+
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+}
+
+/**
+ * Older imports put the extracted image directly after the KBImage closing
+ * tags. CommonMark consumes that line as HTML. Recover each image run in
+ * place so the HTML parser still handles surrounding markup and comments,
+ * and the resulting image still passes through the sanitizer.
+ */
+export function recoverImportedMarkdownImages(root: Node): void {
+  for (const node of root.children ?? []) {
+    if (node.type !== 'html' || !node.value) continue;
+    let afterMarker = false;
+    const lines = node.value.split(/(\r?\n)/);
+    for (let index = 0; index < lines.length; index += 2) {
+      const line = lines[index]!;
+      const image = afterMarker ? importedImageLine.exec(line) : null;
+      if (image) {
+        const [, alt, url] = image;
+        lines[index] =
+          `<img alt="${escapeHtmlAttribute(alt!)}" src="${imagePreviewTarget(url!)}">`;
+      } else {
+        afterMarker = importedImageBoundary.test(line);
+      }
+    }
+    node.value = lines.join('');
+  }
+}
+
 /** Rewrite image nodes only. Fenced code and normal links remain untouched. */
 export function preserveVikingImages(root: Node): void {
   const definitions = new Map<string, Node>();

@@ -16,7 +16,7 @@ const messages = {
   searchEmpty: '没有匹配的资源',
   searchFailed: '搜索失败',
   searchModePlaceholders: {
-    find: '输入语义检索内容',
+    find: '搜索文件或目录',
     search: '输入需要结合会话理解的问题',
     grep: '输入正则表达式或精确文本',
     glob: '输入文件模式，例如 **/*.md',

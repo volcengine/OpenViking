@@ -1,16 +1,26 @@
 import type { SetStateAction } from 'react';
 import { useEffect, useMemo, useRef } from 'react';
-import { useVikingBotChat, useVikingBotSessions } from '../viking-bot/index.js';
+import { useVikingBotChat } from './chat/use-viking-bot-chat.js';
+import { useVikingBotSessions } from './chat/use-viking-bot-sessions.js';
 import type { VikingBotProps } from '../../components/viking-bot/types.js';
 import type { ConsoleProps } from './types.js';
 
-/** Both Console and standalone hosts consume the same public headless hooks. */
+/** Console owns chat requests and sessions. */
 export function useConversation(
-  { conversation, chatOptions, scopeKey, requestOptions, locale }: ConsoleProps,
+  {
+    conversation,
+    chatOptions,
+    scopeKey,
+    requestOptions,
+    locale,
+    modes,
+  }: ConsoleProps,
   setDraft: (value: SetStateAction<string>) => void,
 ): Partial<VikingBotProps> {
   const enabled =
-    conversation?.messages === undefined && conversation?.onSend === undefined;
+    (modes === undefined || modes.includes('conversation')) &&
+    conversation?.messages === undefined &&
+    conversation?.onSend === undefined;
   const options = {
     ...chatOptions,
     locale: chatOptions?.locale ?? locale,

@@ -1,7 +1,7 @@
 import type {
   VikingBotDraft,
   VikingBotMessage,
-} from '../../components/viking-bot/model.js';
+} from '../../../components/viking-bot/model.js';
 import { steerInput } from './steer-input.js';
 import type { AppendInput } from './chat-timeline.js';
 import { runChat } from './chat-run.js';

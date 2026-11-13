@@ -79,7 +79,6 @@ function TourStep({
   advance: (skip: boolean) => void;
 }) {
   const locale = useLocale(localeProp);
-  const advanced = useRef(false);
   const [surface, setSurface] = useState<HTMLDivElement | null>(null);
   const { anchor, elements, failed } = useTourAnchor(
     step.target,
@@ -112,15 +111,9 @@ function TourStep({
     };
   }, []);
   const unavailable = failed || Boolean(position?.missing);
-  const visible = Boolean(anchor && !unavailable && position?.visible);
-  // DOM lookup/removal observers report external anchor availability after commit.
-  // Notify the host once per keyed step; unmount discards this guard.
-  useEffect(() => {
-    if (unavailable && !advanced.current) {
-      advanced.current = true;
-      advance(true);
-    }
-  }, [unavailable, advance]);
+  const visible = Boolean(
+    position && (unavailable || (anchor && position.visible)),
+  );
   // Focus the non-modal dialog once the native top-layer surface has committed;
   // the browser owns focus, and no timers or subscriptions remain to clean up.
   useEffect(() => {
@@ -183,7 +176,8 @@ function TourStep({
           titleId={titleId}
           bodyId={bodyId}
           onClose={onClose}
-          advance={() => advance(false)}
+          advance={() => advance(unavailable)}
+          unavailable={unavailable}
           renderContent={anchor && !unavailable ? renderContent : undefined}
         />
       </div>

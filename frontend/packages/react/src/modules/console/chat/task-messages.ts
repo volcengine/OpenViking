@@ -2,11 +2,11 @@ import type {
   VikingBotMessage,
   VikingBotMessagePart,
   VikingBotStreamingState,
-} from '../../components/viking-bot/model.js';
+} from '../../../components/viking-bot/model.js';
 import type {
   TaskReference,
   TrackedTask,
-} from '../../shared/task-tracking/types.js';
+} from '../../../shared/task-tracking/types.js';
 
 export function submittedBotTasks(
   messages: readonly VikingBotMessage[],

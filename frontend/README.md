@@ -46,10 +46,6 @@ npm run lint:fix -- 'docs/docs/_demos/**/*.tsx'
 
 Run commands from `frontend/` and format only the files you changed: the repository root has its own `docs/`, `README.md` and `AGENTS.md`, so a relative path from the wrong directory touches the product documentation. See [Verification and delivery](./AGENTS.md#验证与交付).
 
-## VikingBot headless module
-
-`@openviking/react/modules/viking-bot` exports `useVikingBotChat` and `useVikingBotSessions` for Console and standalone VikingBot hosts. It has no composed view or CSS entry. See the [module guide](./docs/docs/en/modules/viking-bot.mdx).
-
 ## Add a business component or block
 
 1. Create `packages/react/src/components/<name>/` for a business component, or `packages/react/src/modules/<name>/` for a block. The directory name is kebab-case and the entry file has the same name (`<name>.tsx`). `index.ts` is the only export point and `style.css` is the stylesheet entry. Keep the implementation, styles and private subcomponents beside them, and put tests in `packages/react/test/`. Three or more related components that share internal code go in a group directory such as `components/auth/`, and their names carry no group prefix: `components/auth/email-login-form` exports `EmailLoginForm`.

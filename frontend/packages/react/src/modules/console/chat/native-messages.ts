@@ -1,7 +1,7 @@
 import type {
   VikingBotMessage,
   VikingBotMessagePart,
-} from '../../components/viking-bot/model.js';
+} from '../../../components/viking-bot/model.js';
 
 type RawPart = Record<string, unknown>;
 interface RawMessage {

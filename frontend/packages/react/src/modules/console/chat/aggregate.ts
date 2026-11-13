@@ -1,4 +1,4 @@
-import type { VikingBotMessagePart } from '../../components/viking-bot/model.js';
+import type { VikingBotMessagePart } from '../../../components/viking-bot/model.js';
 import type { VikingBotChatEvent } from './types.js';
 
 /** Per-request accumulator: stable groups, ordered text, delta/snapshot semantics. */

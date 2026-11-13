@@ -1,6 +1,6 @@
 # Console
 
-A panel with two modes: conversation mode connects native chat through the [VikingBot headless module](./viking-bot), and command mode sends `ov` commands to the OpenViking native API and shows the results.
+A panel with two modes: conversation mode connects native VikingBot chat, and command mode sends `ov` commands to the OpenViking native API and shows the results.
 
 ## When to use
 
@@ -40,7 +40,7 @@ The example uses a simulated service and fixed conversation data, so it sends no
 
 Omit `conversation.messages`, `conversation.onSend`, and `conversation.composer` to let Console own requests, messages, and its editor. Hosts can still provide labels, slots, and `conversation.sessions`: its items, loading state, and errors supply presentation metadata, while `currentId` follows host navigation. Each explicit history selection notifies `onSelect` once, including reselecting the current session; asynchronously created IDs also notify `onSelect`. Each explicit New action notifies `onNew`, even before a remote session exists. Reflecting a newly created ID back into `currentId` does not restart its active response. Navigating to another session clears the old draft and prevents cancelled requests from restoring it.
 
-Console uses both hooks from `modules/viking-bot` by default. Adapt another backend with a stable `chatOptions.service` implementing both chat and session contracts. Changing panel mode preserves the conversation; selecting or starting a session cancels the old connection. Persistence errors appear separately and do not turn a successful answer into a failed send.
+Console manages requests, sessions and streaming state internally. Adapt another backend with a stable `chatOptions.service` implementing both chat and session contracts. Changing panel mode preserves the conversation; selecting or starting a session cancels the old connection. Persistence errors appear separately and do not turn a successful answer into a failed send.
 
 ```tsx file="../../_demos/console-chat.tsx" preview
 
@@ -56,27 +56,93 @@ Submit `ov add-resource https://example.com/demo` in Terminal, then send a chat 
 
 ```
 
+### Mode selection
+
+Use `modes={['command']}` for TUI only or `modes={['conversation']}` for VikingBot only. Omitting it enables both. The mode switch is hidden when only one mode is enabled. Disabled modes are not rendered and send no requests. If `mode` or `defaultMode` is unavailable, Console displays the first enabled mode without calling `onModeChange`. Switching modes preserves chat; removing conversation from `modes` aborts its connection, and re-enabling it reloads sessions.
+
+```tsx file="../../_demos/console-modes.tsx" preview
+
+```
+
 ## API
 
 ### Console
 
-| Property         | Description                                                                                                                                                                                                                           | Type                                               | Default                                                                     |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------- |
-| mode             | Current mode, controlled by your app when set; `'conversation'` shows the conversation and `'command'` shows the commands                                                                                                             | `ConsoleMode`                                      | -                                                                           |
-| defaultMode      | Initial mode; ignored once `mode` is set                                                                                                                                                                                              | `ConsoleMode`                                      | `'conversation'`                                                            |
-| onModeChange     | Called when the user switches modes, with the new mode; update `mode` here when you control it                                                                                                                                        | `(mode: ConsoleMode) => void`                      | -                                                                           |
-| conversation     | Data and callbacks for conversation mode. `sessions` and `headerActions` appear in the panel toolbar, the other props go to [VikingBot](../components/viking-bot), and Console keeps the draft when you omit `draft`                  | `Partial<VikingBotProps>`                          | -                                                                           |
-| taskService      | Task query adapter shared by both modes                                                                                                                                                                                               | `ConsoleTaskService`                               | Native task endpoint                                                        |
-| chatOptions      | Chat hook options excluding `enabled`, `sessionId` and `initialMessages`; a custom service implements both chat and session contracts                                                                                                 | `UseVikingBotChatOptions` (excluding those fields) | Native service                                                              |
-| quickCommands    | Shortcuts `{ name, value }` in the command-mode empty state; clicking one fills `value` into the input without running it, and an empty array hides the empty state. See [CommandConsole](../components/command-console) for the type | `readonly CommandConsoleQuickCommand[]`            | Five defaults: `add-resource`, `add-skill`, `add-memory`, `find`, `compile` |
-| scopeKey         | Isolation key for identities resolved by functions; when it changes, the records and drafts are cleared and in-flight requests are aborted                                                                                            | `string`                                           | -                                                                           |
-| command          | Command-mode overrides, see `ConsoleCommandProps` below                                                                                                                                                                               | `ConsoleCommandProps`                              | -                                                                           |
-| onOpenUri        | Called when a resource link is clicked, with its URI; each mode prefers its own `conversation.onOpenUri` or `command.onOpenUri`                                                                                                       | `(uri: string) => void`                            | -                                                                           |
-| slots            | Inserts your own content into the panel, see `ConsoleSlots` below                                                                                                                                                                     | `ConsoleSlots`                                     | -                                                                           |
-| labels           | Overrides interface text, see `ConsoleLabels` below                                                                                                                                                                                   | `ConsoleLabels`                                    | -                                                                           |
-| locale           | Interface language, see [Internationalization](../guide/i18n)                                                                                                                                                                         | `'zh-CN' \| 'en-US'`                               | Inherited, otherwise `'en-US'`                                              |
-| requestOptions   | Overrides the request configuration, see the [blocks overview](./)                                                                                                                                                                    | `OvRequestOptions`                                 | -                                                                           |
-| className, style | Appearance and layout; other HTML attributes are passed to the root element                                                                                                                                                           | HTML attributes                                    | -                                                                           |
+| Property         | Description                                                                                                                                                                                                                           | Type                                    | Default                                                                     |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | --------------------------------------------------------------------------- |
+| modes            | Enabled modes in toolbar order; pass one mode for conversation-only or TUI-only use, or an empty array for no panels                                                                                                                  | `readonly ConsoleMode[]`                | `['conversation', 'command']`                                               |
+| mode             | Current mode, controlled by your app when set; `'conversation'` shows the conversation and `'command'` shows the commands                                                                                                             | `ConsoleMode`                           | -                                                                           |
+| defaultMode      | Initial mode; ignored once `mode` is set                                                                                                                                                                                              | `ConsoleMode`                           | `'conversation'`                                                            |
+| onModeChange     | Called when the user switches modes, with the new mode; update `mode` here when you control it                                                                                                                                        | `(mode: ConsoleMode) => void`           | -                                                                           |
+| conversation     | Data and callbacks for conversation mode. `sessions` and `headerActions` appear in the panel toolbar, the other props go to [VikingBot](../components/viking-bot), and Console keeps the draft when you omit `draft`                  | `Partial<VikingBotProps>`               | -                                                                           |
+| taskService      | Task query adapter shared by both modes                                                                                                                                                                                               | `ConsoleTaskService`                    | Native task endpoint                                                        |
+| chatOptions      | Conversation options; a custom service implements both chat and session contracts                                                                                                                                                     | `ConsoleChatOptions`                    | Native service                                                              |
+| quickCommands    | Shortcuts `{ name, value }` in the command-mode empty state; clicking one fills `value` into the input without running it, and an empty array hides the empty state. See [CommandConsole](../components/command-console) for the type | `readonly CommandConsoleQuickCommand[]` | Five defaults: `add-resource`, `add-skill`, `add-memory`, `find`, `compile` |
+| scopeKey         | Isolation key for identities resolved by functions; when it changes, the records and drafts are cleared and in-flight requests are aborted                                                                                            | `string`                                | -                                                                           |
+| command          | Command-mode overrides, see `ConsoleCommandProps` below                                                                                                                                                                               | `ConsoleCommandProps`                   | -                                                                           |
+| onOpenUri        | Called when a resource link is clicked, with its URI; each mode prefers its own `conversation.onOpenUri` or `command.onOpenUri`                                                                                                       | `(uri: string) => void`                 | -                                                                           |
+| slots            | Inserts your own content into the panel, see `ConsoleSlots` below                                                                                                                                                                     | `ConsoleSlots`                          | -                                                                           |
+| labels           | Overrides interface text, see `ConsoleLabels` below                                                                                                                                                                                   | `ConsoleLabels`                         | -                                                                           |
+| locale           | Interface language, see [Internationalization](../guide/i18n)                                                                                                                                                                         | `'zh-CN' \| 'en-US'`                    | Inherited, otherwise `'en-US'`                                              |
+| requestOptions   | Overrides the request configuration, see the [blocks overview](./)                                                                                                                                                                    | `OvRequestOptions`                      | -                                                                           |
+| className, style | Appearance and layout; other HTML attributes are passed to the root element                                                                                                                                                           | HTML attributes                         | -                                                                           |
+
+### ConsoleChatOptions
+
+| Property       | Description                                             | Type                                             | Default                |
+| -------------- | ------------------------------------------------------- | ------------------------------------------------ | ---------------------- |
+| taskService    | Conversation task queries; inherits the Console adapter | `ConsoleTaskService`                             | Inherited from Console |
+| locale         | Conversation locale                                     | `'zh-CN' \| 'en-US'`                             | Inherited from Console |
+| persist        | Save completed messages                                 | `boolean`                                        | `true`                 |
+| scopeKey       | Isolation key for dynamic identities                    | `string`                                         | Inherited from Console |
+| service        | Chat and session adapter; keep its reference stable     | `VikingBotChatService & VikingBotSessionService` | Native service         |
+| requestOptions | Conversation request settings                           | `OvRequestOptions`                               | Inherited from Console |
+
+Every adapter method receives an `AbortSignal`, must honor cancellation, and throws on failure. Omit `saveMessage` when the backend persists messages automatically.
+
+### VikingBotChatInput
+
+| Property    | Description               | Type                             | Default  |
+| ----------- | ------------------------- | -------------------------------- | -------- |
+| sessionId   | Session ID                | `string`                         | Required |
+| text        | Submitted text            | `string`                         | Required |
+| attachments | Host-uploaded attachments | `readonly VikingBotAttachment[]` | Required |
+| references  | Resource references       | `readonly VikingBotReference[]`  | -        |
+
+### VikingBotChatService
+
+| Property      | Description                                                           | Type                                                                                    | Default  |
+| ------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | -------- |
+| stream        | Streaming request; must emit a complete or interrupted terminal event | `(input: VikingBotChatInput, signal: AbortSignal) => AsyncIterable<VikingBotChatEvent>` | Required |
+| createSession | Create a session                                                      | `(signal: AbortSignal) => Promise<VikingBotSession>`                                    | Required |
+| loadMessages  | Read complete session history                                         | `(id: string, signal: AbortSignal) => Promise<readonly VikingBotMessage[]>`             | Required |
+| saveMessage   | Save a message; omit when the backend persists automatically          | `(id: string, message: VikingBotMessage, signal: AbortSignal) => Promise<void>`         | Optional |
+| interrupt     | Interrupt backend generation; distinct from local connection cleanup  | `(id: string, signal: AbortSignal) => Promise<{ interrupted: boolean }>`                | Optional |
+| steer         | Append input to the active stream; acceptance is not completion       | `(input: VikingBotChatInput, signal: AbortSignal) => Promise<{ accepted: boolean }>`    | Optional |
+
+### VikingBotSessionService
+
+| Property      | Description      | Type                                                            | Default  |
+| ------------- | ---------------- | --------------------------------------------------------------- | -------- |
+| listSessions  | List sessions    | `(signal: AbortSignal) => Promise<readonly VikingBotSession[]>` | Required |
+| createSession | Create a session | `(signal: AbortSignal) => Promise<VikingBotSession>`            | Required |
+| removeSession | Delete a session | `(id: string, signal: AbortSignal) => Promise<void>`            | Required |
+
+### VikingBotChatEvent
+
+| Property    | Description                                                                            | Type                                                                                                             | Default |
+| ----------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ------- |
+| reasoning   | delta=true appends, false replaces; optional stable id updates the same reasoning item | `{ type: 'reasoning'; text: string; delta: boolean; id?: string }`                                               | -       |
+| text        | Append text for delta=true; otherwise replace the current text segment                 | `{ type: 'text'; text: string; delta: boolean }`                                                                 | -       |
+| iteration   | Next model iteration boundary; accepted follow-ups start a new segment                 | `{ type: 'iteration'; iteration: number }`                                                                       | -       |
+| tool        | Unique ID for every actual call, including identical arguments                         | `{ type: 'tool'; part: VikingBotToolPart }`                                                                      | -       |
+| tool-result | Match calls by id; native ID-less events pair in FIFO order                            | `{ type: 'tool-result'; id: string; output: string; isError?: boolean; tasks?: readonly ConsoleTaskSnapshot[] }` | -       |
+| complete    | Normal terminal event; optional text is the final text snapshot                        | `{ type: 'complete'; text?: string }`                                                                            | -       |
+| interrupted | Interrupted terminal event; retains content                                            | `{ type: 'interrupted' }`                                                                                        | -       |
+
+Console derives stop and follow-up capabilities from method presence. `accepted: false` rejects follow-up input without adding a user message. Ending a stream without a terminal event produces `BOT_STREAM_TRUNCATED`.
+
+Declare tasks started by a tool in `tool-result.tasks`, with a required `id` and optional `kind`, `uri` and `status`. The native adapter extracts IDs from structured results of known submission tools; other adapters supply `tasks` directly. Tool completion, chat completion and background task completion remain separate, and tool parts expose task snapshots while preserving their original output.
 
 ### ConsoleTaskService
 
@@ -171,7 +237,7 @@ Command mode runs only the built-in native API commands. Type `/` or run `ov hel
 
 ## Notes
 
-- Console uses the VikingBot headless module for native chat by default. Providing `conversation.messages` or `conversation.onSend` gives the host ownership of chat; attachment uploads remain with the host.
+- Console sends native VikingBot chat requests by default. Providing `conversation.messages` or `conversation.onSend` gives the host ownership of chat; attachment uploads remain with the host.
 - Set `conversation.isAvailable` and `conversation.unavailableMessage` from the Bot status your app queries; when the Bot is unavailable, the composer is disabled and shows the message.
 - Commands send requests only when the user submits them, never on mount. An instance runs one command at a time and disables the input while it runs.
 - A failed command shows its error in its own record; fix the command and submit it again. A failed write may already have been accepted by the server, so check the result before you resubmit.

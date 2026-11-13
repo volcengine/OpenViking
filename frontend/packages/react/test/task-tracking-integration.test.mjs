@@ -9,7 +9,7 @@ import { join } from 'node:path';
 const internal = (name) =>
   import(pathToFileURL(join(process.env.OV_UI_TEST_HOOKS, `${name}.js`)));
 const { TaskTrackingProvider } = await internal('task-context');
-const { useVikingBotChat } = await internal('bot-hook');
+const { useVikingBotChat } = await internal('bot-chat-hook');
 const tick = () => act(() => new Promise((resolve) => setTimeout(resolve, 15)));
 
 test('Console terminal and Bot flows share queries, continue after replies and retain tasks across sessions', async () => {

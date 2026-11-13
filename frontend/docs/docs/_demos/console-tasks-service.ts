@@ -1,11 +1,9 @@
 import type {
   ConsoleTaskService,
   ConsoleTaskSnapshot,
-} from '@openviking/react/modules/console';
-import type {
   VikingBotChatService,
   VikingBotSessionService,
-} from '@openviking/react/modules/viking-bot';
+} from '@openviking/react/modules/console';
 
 export function createTaskDemo() {
   let sequence = 0;
