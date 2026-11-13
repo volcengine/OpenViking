@@ -48,14 +48,14 @@ export function useFileBrowser({
   const text = resolveLabels(accessLabels, locale);
   const client = useOvClient();
   const [pendingUri, setPendingUri] = useState<string | null>(currentUri);
-  const summaryLevel = useSummaryLevel();
-  const { resolve: resolveSummary } = summaryLevel;
   const tree = useFsTree({
     client,
     rootUri,
     defaultExpandedUri,
     requestOptions,
   });
+  const summaryLevel = useSummaryLevel(tree.identifyUri);
+  const { resolve: resolveSummary } = summaryLevel;
   // 当前资源是目录还是文件，决定预览读摘要还是正文。
   //
   // 判定不能用「可见行里有没有这一行」：根目录本身从不出现在 `tree.rows` 里，

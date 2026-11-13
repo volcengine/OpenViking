@@ -4,6 +4,7 @@ import { act, createElement, createRef, useState } from 'react';
 
 import {
   OpenVikingProvider,
+  useBrowserRefresh,
   useFileBrowser,
   usePreviewTabs,
 } from './helpers/internal-hooks.mjs';
@@ -23,6 +24,8 @@ import {
   command,
 } from './helpers/file-browser-reveal.mjs';
 
+// A stable object: an inline one changes every render and restarts the tree load.
+const homeOptions = { userId: 'default' };
 const answer = (call) => {
   if (call.path === '/api/v1/content/abstract') return ok('L0 TEXT');
   if (call.path === '/api/v1/content/overview') return ok('L1 TEXT');
@@ -218,6 +221,53 @@ test('a failing directory does not stop the remaining expanded directories from 
   }
 });
 
+test('a finished refresh does not re-reveal a selection the user already left', async () => {
+  const reload = deferred();
+  const revealed = [];
+  const api = { current: undefined };
+  function Probe({ selected }) {
+    api.current = useBrowserRefresh(
+      () => reload.promise,
+      async (uri) => revealed.push(uri) > 0,
+      selected,
+    );
+    return null;
+  }
+  const view = await mount(createElement(Probe, { selected: 'A' }));
+  try {
+    let refreshing;
+    await act(async () => {
+      refreshing = api.current.refresh();
+    });
+    // The user opens B while the reload is still running.
+    await view.render(createElement(Probe, { selected: 'B' }));
+    await act(async () => reload.resolve(true));
+    await refreshing;
+    assert.deepEqual(revealed, []);
+
+    // An unchanged selection is still re-revealed.
+    const again = deferred();
+    function Same() {
+      api.current = useBrowserRefresh(
+        () => again.promise,
+        async (uri) => revealed.push(uri) > 0,
+        'B',
+      );
+      return null;
+    }
+    await view.render(createElement(Same, null));
+    let second;
+    await act(async () => {
+      second = api.current.refresh();
+    });
+    await act(async () => again.resolve(true));
+    await second;
+    assert.deepEqual(revealed, ['B']);
+  } finally {
+    await view.unmount();
+  }
+});
+
 test('a refresh interrupted by an account switch does not reveal with the old account', async () => {
   const gate = deferred();
   let gated = false;
@@ -275,6 +325,42 @@ test('a controlled host that normalises the URI still gets the summary level', a
   try {
     await open(api, `${DIR}/.overview.md`);
     assert.equal(api.current.currentUri, `${DIR}/`);
+    assert.equal(directoryTab(api).activeLevelKey, 'l1');
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('a controlled host that canonicalises a home alias still gets the summary level', async () => {
+  const home = 'viking://user/default';
+  const api = { current: undefined };
+  function Probe() {
+    const [uri, setUri] = useState(null);
+    api.current = useFileBrowser({
+      rootUri: home,
+      currentUri: uri,
+      controlled: true,
+      requestOptions: homeOptions,
+      // The host canonicalises the alias before passing it back.
+      onUriChange: (next) => setUri(next.replace('viking://~', home)),
+    });
+    return null;
+  }
+  const fetch = recordingFetch((call) => {
+    if (call.path === '/api/v1/fs/stat') return ok({ isDir: true });
+    if (call.path === '/api/v1/fs/ls') return ok([]);
+    return answer(call);
+  });
+  const view = await mount(
+    createElement(
+      OpenVikingProvider,
+      { baseURL: 'https://ov.test', fetch },
+      createElement(Probe, null),
+    ),
+  );
+  try {
+    await open(api, 'viking://~/docs/.overview.md');
+    assert.equal(api.current.currentUri, `${home}/docs`);
     assert.equal(directoryTab(api).activeLevelKey, 'l1');
   } finally {
     await view.unmount();

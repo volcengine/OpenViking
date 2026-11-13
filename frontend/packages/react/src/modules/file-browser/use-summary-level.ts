@@ -1,7 +1,6 @@
 import { useCallback, useState } from 'react';
 import type { FilePreviewTab } from '../../components/file-preview/index.js';
 import { parseSummaryUri } from './fs-summary-uri.js';
-import { normalizeResourceUri } from './fs-uri.js';
 import type { SummaryLevel } from './fs-summary-uri.js';
 
 /**
@@ -12,7 +11,7 @@ import type { SummaryLevel } from './fs-summary-uri.js';
  * directory tab through FilePreview's controlled `activeLevelKey`. Manual switches
  * afterwards update it too, so nothing depends on the DOM.
  */
-export function useSummaryLevel() {
+export function useSummaryLevel(identifyUri: (uri: string) => string) {
   const [target, setTarget] = useState<{ uri: string; key: SummaryLevel }>();
 
   /**
@@ -36,9 +35,9 @@ export function useSummaryLevel() {
       target && tabs
         ? tabs.map((tab) =>
             tab.kind === 'directory' &&
-            // 宿主可能把 URI 规范化（比如去掉末尾斜杠）后再传回来。
-            // The host may normalise the URI (e.g. drop a trailing slash) before passing it back.
-            normalizeResourceUri(tab.key) === normalizeResourceUri(target.uri)
+            // 宿主可能把 URI 规范化（末尾斜杠、主目录别名）后再传回来。
+            // The host may normalise the URI (trailing slash, home alias) before passing it back.
+            identifyUri(tab.key) === identifyUri(target.uri)
               ? {
                   ...tab,
                   activeLevelKey: target.key,
@@ -48,7 +47,7 @@ export function useSummaryLevel() {
               : tab,
           )
         : tabs,
-    [target],
+    [target, identifyUri],
   );
 
   return { resolve, decorate };

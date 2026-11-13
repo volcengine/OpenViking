@@ -10,6 +10,10 @@ const previewTabs = await import(
   pathToFileURL(join(output, 'preview-tabs.js'))
 );
 export const usePreviewTabs = previewTabs.usePreviewTabs;
+const browserRefresh = await import(
+  pathToFileURL(join(output, 'browser-refresh.js'))
+);
+export const useBrowserRefresh = browserRefresh.useBrowserRefresh;
 export const useConsole = consoleModule.useConsole;
 const provider = await import(pathToFileURL(join(output, 'provider.js')));
 export const OpenVikingProvider = provider.OpenVikingProvider;

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 
 /**
  * 外部改动后同时刷新目录与预览。URI 和客户端都没变时，请求也要重新发出，所以
@@ -22,6 +22,8 @@ export function useBrowserRefresh(
 ) {
   const [refreshing, setRefreshing] = useState(false);
   const [generation, setGeneration] = useState(0);
+  const latestUri = useRef(selectedUri);
+  latestUri.current = selectedUri;
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try {
@@ -32,7 +34,11 @@ export function useBrowserRefresh(
       // still belong to the previous account; revealing would write that account's
       // listings into the new account's tree.
       if (!(await reloadTree())) return;
-      if (selectedUri) await reveal(selectedUri);
+      // 刷新期间用户已经打开了别的资源：再定位旧的那个会取消新的导航。
+      // The user opened another resource while this ran; revealing the old one would
+      // cancel the new navigation.
+      if (selectedUri && latestUri.current === selectedUri)
+        await reveal(selectedUri);
     } finally {
       setRefreshing(false);
     }
