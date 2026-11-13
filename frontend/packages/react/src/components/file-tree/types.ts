@@ -114,9 +114,9 @@ export interface FileTreeEntryRow extends FileTreeRowBase {
   /** 权限状态的纯展示标签，不执行鉴权。Display-only permission status. */
   access?: 'read-only' | 'denied' | 'container';
   /**
-   * 名称下方的次要说明，例如摘要或行内描述。
-   * Secondary line under the name, for example an abstract or inline
-   * description.
+   * 名称右侧的次要说明，例如摘要或行内描述。
+   * Secondary text beside the name on the same row, for example an abstract or
+   * inline description.
    */
   description?: string;
   /**
@@ -365,10 +365,10 @@ export type FileTreeInfoKey =
   | 'systemRoot';
 
 /**
- * 目录说明文案。未提供的键沿用内置英文；传空字符串表示该键不显示。
+ * 目录说明文案。未提供的键跟随 `locale`；传空字符串表示该键不显示。
  *
- * Directory copy. Keys left out keep the built-in English; an empty string
- * hides that key.
+ * Directory copy. Keys left out follow `locale`; an empty string hides that
+ * key.
  */
 export interface FileTreeInfoLabels {
   /**
@@ -472,10 +472,10 @@ export interface FileTreeSlots {
   toolbar?: ReactNode;
   /**
    * 替换目录加载子节点时展开箭头位置显示的转圈。省略时用内置的 CSS 圆环，
-   * 传入自己的节点可以换成图标或品牌化的加载态；节点按 12 × 12 显示。
+   * 传入自己的节点可以换成图标或品牌化的加载态；其中的 SVG 按 12 × 12 显示。
    * Replaces the spinner shown in the expand chevron slot while a directory
    * loads its children. Omitted uses the built-in CSS ring; pass a node to swap
-   * in an icon or a branded loader. The node renders at 12 × 12.
+   * in an icon or a branded loader. An SVG inside it renders at 12 × 12.
    */
   spinner?: ReactNode;
 }
@@ -604,13 +604,17 @@ export interface FileTreeProps extends Omit<
    */
   getRowAttributes?: (row: FileTreeRow) => HTMLAttributes<HTMLDivElement>;
   /**
-   * 渲染行尾的看板指示器。返回 `null` 时该行不显示指示器。内容与交互都由
-   * 宿主决定，包括点击行为与折叠时的数量角标。
-   * Renders the dashboard indicator at the end of a row. Returning `null` shows
-   * no indicator. Both the content and its interaction belong to the host,
-   * including the click behaviour and any collapsed-count badge.
+   * 渲染行尾标记，例如看板入口、状态角标或数量。返回 `null` 时该行不显示标记。
+   * 内容与交互都由宿主决定，包括点击行为。标记显示在行右端；行内已有层级、权限
+   * 等行尾标记时，它紧跟在这些标记之后。
+   *
+   * Renders a trailing marker at the end of a row, such as a board entry, a status
+   * badge or a count. Returning `null` shows no marker. Both the content and its
+   * interaction belong to the host, including the click behaviour. The marker sits
+   * at the right edge of the row; when the row also shows trailing markers such as
+   * the level or access, it follows them directly.
    */
-  renderDashboard?: (row: FileTreeEntryRow) => ReactNode;
+  renderRowTrailing?: (row: FileTreeEntryRow) => ReactNode;
   /**
    * 渲染文件行的行首图标，例如按扩展名区分的类型图标。返回 `null` 或省略时用
    * 内置的通用文件图标；目录行始终用内置的文件夹图标。

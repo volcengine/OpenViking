@@ -8,12 +8,12 @@ import {
   LoginMethodSelector,
   InvitationConfirmation,
 } from '@openviking/react';
-import '@openviking/react/components/email-login-form/style.css';
-import '@openviking/react/components/api-key-login-form/style.css';
-import '@openviking/react/components/password-setup-form/style.css';
-import '@openviking/react/components/password-reset-request-form/style.css';
-import '@openviking/react/components/login-method-selector/style.css';
-import '@openviking/react/components/invitation-confirmation/style.css';
+import '@openviking/react/components/auth/email-login-form/style.css';
+import '@openviking/react/components/auth/api-key-login-form/style.css';
+import '@openviking/react/components/auth/password-setup-form/style.css';
+import '@openviking/react/components/auth/password-reset-request-form/style.css';
+import '@openviking/react/components/auth/login-method-selector/style.css';
+import '@openviking/react/components/auth/invitation-confirmation/style.css';
 
 const agreements = {
   items: [

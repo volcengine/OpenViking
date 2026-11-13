@@ -609,7 +609,7 @@ Content-Type: application/json
 
 ### set_tags()
 
-设置用于检索过滤的显式 `k=v` 标签。`replace` 替换已有标签，`append` 追加标签，`clear` 显式清空已有标签；对目录设置 `recursive=true` 时会更新目录下的文件。省略 `tags` 或传入空数组配合 `replace` 都是 no-op；只有 `clear` 会清空，且会忽略同时传入的标签值。
+设置用于检索过滤的显式标签。`replace` 替换已有标签，`append` 按输入顺序执行 `k=v`、`k+=number`、`k-=number`，`clear` 清空已有标签。算术操作使用有限十进制数，key 不存在时按 0 处理，结果允许为负数；该过程是读改写，不保证并发原子性。对目录设置 `recursive=true` 时会更新目录下的文件。
 
 **Python SDK**
 
@@ -620,6 +620,12 @@ result = client.set_tags(
     mode="replace",
     recursive=True,
 )
+
+batch = client.batch_set_tags(
+    ["viking://resources/project/a.md", "viking://resources/project/b.md"],
+    ["used_count+=1"],
+    mode="append",
+)
 ```
 
 **TypeScript SDK**
@@ -629,6 +635,11 @@ const result = await client.setTags(
   "viking://resources/project/",
   ["team=search", "env=prod"],
   { mode: "replace", recursive: true },
+);
+const batch = await client.batchSetTags(
+  ["viking://resources/project/a.md", "viking://resources/project/b.md"],
+  ["used_count+=1"],
+  { mode: "append" },
 );
 ```
 
@@ -641,12 +652,19 @@ result, err := client.SetTags(
     []string{"team=search", "env=prod"},
     &openviking.SetTagsOptions{Mode: "replace", Recursive: true},
 )
+batch, err := client.BatchSetTags(
+    ctx,
+    []string{"viking://resources/project/a.md", "viking://resources/project/b.md"},
+    []string{"used_count+=1"},
+    &openviking.SetTagsOptions{Mode: "append"},
+)
 ```
 
 **HTTP API**
 
 ```http
 POST /api/v1/content/set_tags
+POST /api/v1/content/batch_set_tags
 Content-Type: application/json
 ```
 
@@ -664,6 +682,8 @@ curl -X POST http://localhost:1933/api/v1/content/set_tags \
 
 `POST /api/v1/fs/attrs/set_tags` 是等价兼容路径，当前 Python、TypeScript、Go SDK 和 CLI 使用该路径。
 
+批量接口接受 1～50 个 URI，返回 `items` 和 `failed`。目标没有语义记录时仍属于成功项，`tags_updated=false`；只有真实异常进入 `failed`。
+
 **CLI**
 
 ```bash
@@ -671,6 +691,10 @@ ov set-tags viking://resources/project/ \
   --tags team=search,env=prod \
   --mode replace \
   --recursive
+
+ov attrs batch-set-tags \
+  viking://resources/project/a.md viking://resources/project/b.md \
+  --tags used_count+=1 --mode append
 ```
 
 **响应**

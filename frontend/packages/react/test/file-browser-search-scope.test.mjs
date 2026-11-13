@@ -14,7 +14,7 @@ for (const name of ['HTMLIFrameElement', 'SVGElement'])
   globalThis[name] = window[name];
 globalThis.getComputedStyle = window.getComputedStyle.bind(window);
 
-test('the built-in dialog cancels the previous account search and rejects its late result', async () => {
+test('switching accounts cancels the previous search and rejects its late result', async () => {
   const old = deferred();
   const searches = [];
   const fetch = recordingFetch((call) => {
@@ -33,29 +33,25 @@ test('the built-in dialog cancels the previous account search and rejects its la
   const view = await mount(render('A'));
   try {
     await act(async () =>
-      view.container.querySelector('.ov-file-tree__search').click(),
+      view.container.querySelector('.ov-file-browser__search-trigger').click(),
     );
     await settle();
     const modal = () => document.querySelector('.ov-file-browser-search');
     await act(async () => {
-      const input = modal().querySelector('input');
+      const input = modal().querySelector('.ov-file-browser-search__input');
       Object.getOwnPropertyDescriptor(
         window.HTMLInputElement.prototype,
         'value',
       ).set.call(input, 'secret');
       input.dispatchEvent(new window.Event('input', { bubbles: true }));
     });
-    await act(async () =>
-      modal()
-        .querySelector('form')
-        .dispatchEvent(
-          new window.Event('submit', { bubbles: true, cancelable: true }),
-        ),
-    );
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 450)));
     await settle();
+
     await view.render(render('B'));
     await settle();
     assert.equal(searches[0].init.signal.aborted, true);
+
     await act(async () =>
       old.resolve(await ok({ memories: [{ uri: 'viking://a-secret.md' }] })),
     );

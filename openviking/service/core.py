@@ -18,6 +18,7 @@ from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.resource.watch_manager import WatchManager
 from openviking.resource.watch_runtime import WatchRuntime
+from openviking.server.config import UserConfigDefaults
 from openviking.server.identity import RequestContext, Role
 from openviking.service.agent_evolution_service import AgentEvolutionService
 from openviking.service.compile_scheduler import CompileScheduler, build_credential_encryptor
@@ -117,6 +118,7 @@ class OpenVikingService:
         self._skill_processor: Optional[SkillProcessor] = None
         self._session_compressor: Optional["SessionCompressorV3"] = None
         self._directory_initializer: Optional[DirectoryInitializer] = None
+        self._user_config_defaults = UserConfigDefaults()
         self._system_asset_synchronizer: Optional[SystemAssetSynchronizer] = None
         self._watch_manager: Optional[WatchManager] = None
         self._watch_runtime: Optional[WatchRuntime] = None
@@ -284,6 +286,18 @@ class OpenVikingService:
         """Set the legacy server value used as the cluster startup baseline."""
         self._agent_evolution_base_config = config.model_copy(deep=True)
         self._session_service.set_agent_evolution_config(config)
+
+    @property
+    def user_config_defaults(self) -> UserConfigDefaults:
+        """Deployment defaults shared with user workspace initialization."""
+        return self._user_config_defaults
+
+    @user_config_defaults.setter
+    def user_config_defaults(self, config: UserConfigDefaults) -> None:
+        self._user_config_defaults = config
+        # create_app also accepts a service whose storage is already initialized.
+        if self._directory_initializer is not None:
+            self._directory_initializer.user_config_defaults = config
 
     async def apply_agent_evolution_config(self) -> None:
         """Apply the legacy server value to an already initialized manager."""
@@ -568,6 +582,7 @@ class OpenVikingService:
             vikingdb=self._vikingdb_manager,
             viking_fs=self._viking_fs,
             system_asset_synchronizer=system_asset_synchronizer,
+            user_config_defaults=self.user_config_defaults,
         )
         self._directory_initializer = directory_initializer
         default_ctx = RequestContext(user=self._user, role=Role.ROOT)
@@ -612,7 +627,6 @@ class OpenVikingService:
         self._watch_runtime = WatchRuntime(
             self._watch_manager,
             leader_enabled=self._config.enable_watch_scheduler,
-            leader_provider=self._config.watch_leader_provider,
         )
 
         # Wire up sub-services

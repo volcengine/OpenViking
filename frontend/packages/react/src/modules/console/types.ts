@@ -1,12 +1,17 @@
 import type { Locale } from '../../shared/locale.js';
-import type { HTMLAttributes, ReactNode } from 'react';
+import type { HTMLAttributes, ReactNode, SetStateAction } from 'react';
 import type { OvRequestOptions } from '../../client/types.js';
 import type {
-  TuiCommandDefinition,
-  TuiLabels,
-  TuiQuickCommand,
-  TuiRecord,
-} from '../../components/tui/index.js';
+  UseVikingBotChatOptions,
+  VikingBotChatService,
+  VikingBotSessionService,
+} from '../viking-bot/index.js';
+import type {
+  CommandConsoleCommandDefinition,
+  CommandConsoleLabels,
+  CommandConsoleQuickCommand,
+  CommandConsoleRecord,
+} from '../../components/command-console/index.js';
 import type {
   VikingBotLabels,
   VikingBotProps,
@@ -33,14 +38,14 @@ export interface ConsoleLabels {
   clear?: string;
   history?: string;
   emptyHistory?: string;
-  /** 终端空态标题，转交 Tui 的 `emptyTitle`。Terminal empty-state heading, mapped to Tui `emptyTitle`. */
+  /** 终端空态标题，转交 CommandConsole 的 `emptyTitle`。Terminal empty-state heading, mapped to CommandConsole `emptyTitle`. */
   commandTitle?: string;
-  /** 终端空态说明，转交 Tui 的 `emptyDescription`。Terminal empty-state description, mapped to Tui `emptyDescription`. */
+  /** 终端空态说明，转交 CommandConsole 的 `emptyDescription`。Terminal empty-state description, mapped to CommandConsole `emptyDescription`. */
   commandDescription?: string;
-  /** 快捷命令引导文案，转交 Tui 的 `quickStart`。Quick-command label, mapped to Tui `quickStart`. */
+  /** 快捷命令引导文案，转交 CommandConsole 的 `quickStart`。Quick-command label, mapped to CommandConsole `quickStart`. */
   quickStart?: string;
   mode?: string;
-  tui?: TuiLabels;
+  commandConsole?: CommandConsoleLabels;
   vikingBot?: VikingBotLabels;
 }
 
@@ -72,7 +77,14 @@ export interface ConsoleProps
    * names are skipped. Omitted uses the default set with ov command prefixes;
    * an empty array shows no built-in empty state.
    */
-  quickCommands?: readonly TuiQuickCommand[];
+  quickCommands?: readonly CommandConsoleQuickCommand[];
+  /** Native chat by default. Supply a stable service to adapt a non-native backend. */
+  chatOptions?: Omit<
+    UseVikingBotChatOptions,
+    'enabled' | 'sessionId' | 'initialMessages'
+  > & {
+    service?: VikingBotChatService & VikingBotSessionService;
+  };
   /** Host-owned conversation state/capabilities. Omit draft callbacks to use Console's local draft. */
   conversation?: Partial<VikingBotProps>;
   /** Reports navigation intent; the host opens the resource. */
@@ -83,7 +95,7 @@ export interface ConsoleProps
 
 /** Local state. Records and drafts are never persisted by the module. */
 export interface ConsoleState {
-  records: readonly TuiRecord[];
+  records: readonly CommandConsoleRecord[];
   command: string;
   conversationDraft: string;
   isExecuting: boolean;
@@ -94,10 +106,10 @@ export interface ConsoleState {
 /** Data and operations available independently of Console's view. */
 export interface ConsoleResult extends ConsoleState {
   mode: ConsoleMode;
-  commands: readonly TuiCommandDefinition[];
+  commands: readonly CommandConsoleCommandDefinition[];
   setMode: (mode: ConsoleMode) => void;
   setCommand: (command: string) => void;
-  setConversationDraft: (draft: string) => void;
+  setConversationDraft: (draft: SetStateAction<string>) => void;
   execute: (command?: string) => Promise<void>;
   retry: () => Promise<void>;
   cancel: () => void;

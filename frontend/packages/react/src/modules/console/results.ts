@@ -1,7 +1,7 @@
 import type {
-  TuiRecordContent,
-  TuiSearchResultItem,
-} from '../../components/tui/index.js';
+  CommandConsoleRecordContent,
+  CommandConsoleSearchResultItem,
+} from '../../components/command-console/index.js';
 
 function object(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -18,7 +18,7 @@ export function formatResult(
   name: string,
   data: unknown,
   values: Record<string, string | number | boolean>,
-): TuiRecordContent {
+): CommandConsoleRecordContent {
   if (['read', 'abstract', 'overview'].includes(name))
     return {
       variant: 'resource-preview',
@@ -82,7 +82,7 @@ export function formatResult(
     };
   }
   if (['find', 'search'].includes(name)) {
-    const items: TuiSearchResultItem[] = [];
+    const items: CommandConsoleSearchResultItem[] = [];
     for (const key of ['memories', 'resources', 'skills']) {
       const entries = result[key];
       if (!Array.isArray(entries)) continue;

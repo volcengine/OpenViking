@@ -1511,6 +1511,26 @@ pub async fn handle_set_tags(
     .await
 }
 
+pub async fn handle_batch_set_tags(
+    uris: Vec<String>,
+    tags: Vec<String>,
+    mode: String,
+    recursive: bool,
+    ctx: CliContext,
+) -> Result<()> {
+    let client = ctx.get_client();
+    commands::content::batch_set_tags(
+        &client,
+        &uris,
+        tags,
+        &mode,
+        recursive,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
 pub async fn handle_reindex(
     uri: String,
     mode: String,

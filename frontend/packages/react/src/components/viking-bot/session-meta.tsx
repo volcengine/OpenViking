@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ScanSearchIcon } from '../../icons/index.js';
-import { Button } from '../../shared/components/button/button.js';
-import { Tooltip } from '../../shared/components/tooltip/index.js';
+import { Button } from '../../shared/primitives/button/button.js';
+import { Tooltip } from '../../shared/primitives/tooltip/index.js';
 import type { VikingBotLabels } from './model.js';
 
 export function SessionMeta({

@@ -6,11 +6,12 @@
  * 这里的处理是同一规则的兜底：宿主可能通过自定义传输层或网关让请求带上
  * `raw=true`，那条路径返回的是原始字节，尾注会原样回来。
  *
- * 规则与后端保持一致，而不是「看到同形注释就删」：
+ * 以服务端尾注语义为基础，而不是「看到同形注释就删」：
  *
  * - 只认**位于文件末尾**的那一块（其后只剩空白），正文中间出现的同形注释属于
  *   内容本身，例如资源文档里举例的这段标记；
- * - 连续多块尾注一起剥掉；
+ * - 连续多块尾注一起剥掉；Markdown 正文中独占一行的未闭合尾注隐藏到文件末尾；
+ * - Markdown 代码围栏中的示例保留；
  * - 只在记忆命名空间生效，资源与技能文件不经过这一步。
  *
  * 空白与「单词字符」都按 Python 的语义判定，不沿用 JS 的 `\s` / `\b` / `trim()`：
@@ -60,6 +61,9 @@
  * Copying JS's `\s` would miss a trailer followed by NEL, and would treat a BOM after
  * the body as separator whitespace and delete that body.
  */
+import { isScalar, parseAllDocuments, visit } from 'yaml';
+import { isQuotedComment, startsCommentLine } from './fs-comment-trailers.js';
+
 const PY_WHITESPACE_CODES = [
   0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x85, 0xa0,
   0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007,
@@ -95,14 +99,14 @@ const PY_WORD = '\\p{L}\\p{N}_';
  * `MEMORY_FIELDS\b`；用前瞻表达，避免依赖 JS 的 ASCII `\b`。
  *
  * A reserved comment: `<!--`, whitespace, `MEMORY_FIELDS`, a **non-word** character,
- * any content, then `-->`.
+ * followed by its payload; the closing delimiter is located separately.
  *
  * The third group requires no word character right after `MEMORY_FIELDS`, which is what
  * `MEMORY_FIELDS\b` means in the Python pattern; a lookahead expresses it without
  * relying on JS's ASCII-only `\b`.
  */
 const MEMORY_FIELDS_COMMENT = new RegExp(
-  `<!--[${PY_WHITESPACE}]*MEMORY_FIELDS(?![${PY_WORD}])[\\s\\S]*?[${PY_WHITESPACE}]*-->`,
+  `<!--[${PY_WHITESPACE}]*MEMORY_FIELDS(?![${PY_WORD}])`,
   'gu',
 );
 
@@ -163,17 +167,60 @@ export function isMemoryUri(uri: string): boolean {
  * again, because consecutive trailing blocks need one pass each; a same-shaped comment
  * in the middle of the body is therefore never removed.
  */
-export function stripMemoryFieldsTrailer(text: string): string {
+export function stripMemoryFieldsTrailer(
+  text: string,
+  format: 'markdown' | 'yaml' | 'text' = 'text',
+): string {
+  let scalars: [number, number][] | undefined;
   let visible = text;
   for (;;) {
     let start = -1;
     MEMORY_FIELDS_COMMENT.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = MEMORY_FIELDS_COMMENT.exec(visible)) !== null) {
-      const after = visible.slice(match.index + match[0].length);
-      if (isPythonBlank(after)) start = match.index;
+      const offset = match.index;
+      const close = visible.indexOf('-->', match.index + match[0].length);
+      if (
+        close < 0 &&
+        (format !== 'markdown' || !startsCommentLine(visible, match.index))
+      )
+        continue;
+      const after = close < 0 ? '' : visible.slice(close + 3);
+      if (!isPythonBlank(after)) continue;
+      const quoted =
+        format === 'yaml'
+          ? (scalars ??= yamlScalarRanges(text)).some(
+              ([start, end]) => start <= offset && close + 3 <= end,
+            )
+          : isQuotedComment(visible, match.index);
+      if (!quoted) {
+        start = match.index;
+        break;
+      }
     }
     if (start < 0) return visible;
     visible = trimPythonEnd(visible.slice(0, start));
   }
+}
+
+/** Find YAML values without reserializing; error-recovery nodes cannot protect trailers. */
+function yamlScalarRanges(text: string): [number, number][] {
+  const ranges: [number, number][] = [];
+  // Lone CR becomes LF without changing offsets into the original source.
+  for (const doc of parseAllDocuments(text.replace(/\r(?!\n)/g, '\n'), {
+    prettyErrors: false,
+  })) {
+    visit(doc, (_, node) => {
+      if (!isScalar(node) || !node.range) return;
+      const [start, end] = node.range;
+      // A missing closing delimiter may be reported just outside the scalar range.
+      const invalid = doc.errors.some(
+        ({ code, pos: [a, b] }) =>
+          (a < end || (a === end && code === 'MISSING_CHAR')) &&
+          Math.max(a + 1, b) > start,
+      );
+      if (!invalid) ranges.push([start, end]);
+    });
+  }
+  return ranges;
 }

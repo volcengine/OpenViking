@@ -21,7 +21,8 @@ test('the five quick commands use scoped native requests and command-specific re
   try {
     await host.execute('ov add-resource https://example.com/notes.md');
     assert.match(
-      host.records.at(-1).querySelector('.ov-tui__write').textContent,
+      host.records.at(-1).querySelector('.ov-command-console__write')
+        .textContent,
       /Task id: resource-task/,
     );
     assert.equal(
@@ -34,12 +35,14 @@ test('the five quick commands use scoped native requests and command-specific re
       'ov add-skill https://example.com/wiki -p viking://agent/skills',
     );
     assert.match(
-      host.records.at(-1).querySelector('.ov-tui__write').textContent,
+      host.records.at(-1).querySelector('.ov-command-console__write')
+        .textContent,
       /Root uri: viking:\/\/agent\/skills\/wiki/,
     );
     await host.execute('ov add-memory "Prefer tables" --session-id "test/a b"');
     assert.match(
-      host.records.at(-1).querySelector('.ov-tui__write').textContent,
+      host.records.at(-1).querySelector('.ov-command-console__write')
+        .textContent,
       /memory-task/,
     );
     await host.execute('ov find "notes"');
@@ -48,18 +51,21 @@ test('the five quick commands use scoped native requests and command-specific re
       'ov compile --from viking://resources/notes --to viking://resources/wiki',
     );
     assert.match(
-      host.records.at(-1).querySelector('.ov-tui__write').textContent,
+      host.records.at(-1).querySelector('.ov-command-console__write')
+        .textContent,
       /compile-task/,
     );
     await host.execute(
       'ov compile create --from viking://resources/notes --to viking://resources/wiki',
     );
     assert.match(
-      host.records.at(-1).querySelector('.ov-tui__write').textContent,
+      host.records.at(-1).querySelector('.ov-command-console__write')
+        .textContent,
       /Auto update: false/,
     );
     assert.doesNotMatch(
-      host.records.at(-1).querySelector('.ov-tui__write').textContent,
+      host.records.at(-1).querySelector('.ov-command-console__write')
+        .textContent,
       /Task id/,
     );
     assert.deepEqual(calls, [
@@ -109,6 +115,7 @@ test('Console passes live availability and session controls to the VikingBot vie
   const id = 'session_2026111100000_6c4ebf';
   const uri = 'viking://session/' + id;
   const conversation = {
+    messages: [],
     // Use the host slot so this Node test does not render Ark's browser composer.
     composer: false,
     onCopy: (text) => copied.push(text),

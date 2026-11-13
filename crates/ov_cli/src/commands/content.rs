@@ -79,9 +79,22 @@ pub async fn set_tags(
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    // Tags are explicit k=v metadata labels; append mode replaces any existing value for the same key.
     let result = client.set_tags(uri, tags, mode, recursive).await?;
     output_set_tags_result(result, output_format, compact);
+    Ok(())
+}
+
+pub async fn batch_set_tags(
+    client: &HttpClient,
+    uris: &[String],
+    tags: Vec<String>,
+    mode: &str,
+    recursive: bool,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let result = client.batch_set_tags(uris, tags, mode, recursive).await?;
+    crate::output::output_success(result, output_format, compact);
     Ok(())
 }
 

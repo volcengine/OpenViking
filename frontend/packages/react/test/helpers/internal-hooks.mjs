@@ -11,6 +11,11 @@ const provider = await import(pathToFileURL(join(output, 'provider.js')));
 export const OpenVikingProvider = provider.OpenVikingProvider;
 const wiki = await import(pathToFileURL(join(output, 'wiki-pane.js')));
 export const WikiDashboardPane = wiki.WikiDashboardPane;
+const conflicts = await import(
+  pathToFileURL(join(output, 'wiki-conflicts.js'))
+);
+export const parseWikiFileConflicts = conflicts.parseWikiFileConflicts;
+export const locateWikiConflict = conflicts.locateWikiConflict;
 const experience = await import(
   pathToFileURL(join(output, 'experience-pane.js'))
 );
@@ -24,4 +29,4 @@ export const TextArea = input.TextArea;
 const modal = await import(pathToFileURL(join(output, 'modal.js')));
 export const Modal = modal.Modal;
 const entries = await import(pathToFileURL(join(output, 'browser-entries.js')));
-export const FileBrowserEntries = entries.FileBrowserEntries;
+export const FileBrowserActionBar = entries.FileBrowserActionBar;

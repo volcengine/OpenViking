@@ -7,7 +7,7 @@ import {
 } from 'react';
 import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { useOverlayPosition } from '../../shared/components/overlay/use-overlay-position.js';
+import { useOverlayPosition } from '../../shared/primitives/overlay/use-overlay-position.js';
 import { navigatePopoverTab } from './popover-tab-navigation.js';
 
 const subscribe = () => () => {};

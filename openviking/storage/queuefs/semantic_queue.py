@@ -6,28 +6,40 @@ import threading
 import time
 from typing import Optional
 
+from openviking.pyagfs.async_client import AsyncAGFSClient
+from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking_cli.utils.logger import get_logger
 
 from .named_queue import NamedQueue
+from .queue_middleware import EnqueueContext
 from .semantic_msg import SemanticMsg
 
 logger = get_logger(__name__)
 
 # Coalesce rapid re-enqueues for the same memory parent directory (github #769).
 _MEMORY_PARENT_SEMANTIC_DEDUPE_SEC = 45.0
-_SEMANTIC_COALESCE_LOCK = threading.Lock()
-_SEMANTIC_COALESCE_VERSION: dict[str, int] = {}
 
 
-def is_semantic_coalesce_stale(coalesce_key: str, coalesce_version: int) -> bool:
+def semantic_revision_key(coalesce_key: str) -> str:
+    return f"queue:semantic:{coalesce_key}"
+
+
+async def is_semantic_coalesce_stale(
+    coalesce_key: str, coalesce_version: int, *, agfs: AsyncAGFSClient
+) -> bool:
     if not coalesce_key or coalesce_version <= 0:
         return False
-    with _SEMANTIC_COALESCE_LOCK:
-        return coalesce_version < _SEMANTIC_COALESCE_VERSION.get(coalesce_key, 0)
+    try:
+        latest = await agfs.revision_latest(semantic_revision_key(coalesce_key))
+    except Exception:
+        # Coalescing is an optimization: uncertainty must not discard valid work.
+        logger.warning("Cannot read semantic revision; retaining work", exc_info=True)
+        return False
+    return coalesce_version < latest
 
 
-def is_semantic_msg_stale(msg: SemanticMsg) -> bool:
-    return is_semantic_coalesce_stale(msg.coalesce_key, msg.coalesce_version)
+async def is_semantic_msg_stale(msg: SemanticMsg, *, agfs: AsyncAGFSClient) -> bool:
+    return await is_semantic_coalesce_stale(msg.coalesce_key, msg.coalesce_version, agfs=agfs)
 
 
 class SemanticQueue(NamedQueue):
@@ -64,15 +76,36 @@ class SemanticQueue(NamedQueue):
                     for k in stale[:800]:
                         self._memory_parent_semantic_last.pop(k, None)
 
-        if msg.coalesce_key:
-            with _SEMANTIC_COALESCE_LOCK:
-                version = _SEMANTIC_COALESCE_VERSION.get(msg.coalesce_key, 0) + 1
-                _SEMANTIC_COALESCE_VERSION[msg.coalesce_key] = version
-                msg.coalesce_version = version
+        if msg.coalesce_key and msg.coalesce_version <= 0:
+            # Retries retain their original revision, including after restart.
+            msg.coalesce_version = await self._async_agfs.revision_allocate(
+                semantic_revision_key(msg.coalesce_key)
+            )
 
         msg.queue_enqueued_at = time.time()
 
         return await super().enqueue(msg.to_dict())
+
+    async def _enqueue(self, ctx: EnqueueContext) -> str:
+        # Settle persistence and publication together on cancellation; middleware
+        # observes the committed receipt even if its post-enqueue work fails.
+        return await run_to_completion(lambda: self._persist_and_publish(ctx))
+
+    async def _persist_and_publish(self, ctx: EnqueueContext) -> str:
+        message_id = await super()._enqueue(ctx)
+        payload = ctx.payload
+        if isinstance(payload, dict) and payload.get("coalesce_key"):
+            try:
+                await self._async_agfs.revision_publish(
+                    semantic_revision_key(payload["coalesce_key"]),
+                    payload["coalesce_version"],
+                )
+            except Exception:
+                # The message already exists. Reporting enqueue failure would
+                # trigger unnecessary duplicates; an unpublished revision only
+                # permits older work to run.
+                logger.warning("Semantic work persisted but revision publish failed", exc_info=True)
+        return message_id
 
     async def dequeue(self) -> Optional[SemanticMsg]:
         """Get message from queue and deserialize to SemanticMsg object."""

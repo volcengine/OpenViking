@@ -3,17 +3,35 @@ import { useOvClient, useOvSignal } from '../../client/provider.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { OV_PATHS } from '../../client/paths.js';
 import { useDashboardQuery } from './use-dashboard-query.js';
+import { toApiDate } from '../../shared/primitives/date-picker/api-date.js';
+import { experienceDateBounds } from './experience-date-range.js';
 import {
-  experienceDateRange,
   isExperienceDirectory,
   readExperiences,
   readExperienceSources,
-  EXPERIENCE_PAGE_SIZE,
 } from './experience-data.js';
-import type {
-  ExperienceTrajectoryPage,
-  ExperienceOutcomeResult,
-} from './experience-data.js';
+import type { ExperienceOutcomeResult } from './experience-data.js';
+
+/**
+ * 把天数换成接口的日期查询参数。
+ *
+ * 边界按 UTC 取：`agent_evolution` 的列表接口收 UTC `YYYY-MM-DD`，服务端用
+ * `timezone.utc` 拼边界，东八区的本地零点在 UTC 是前一天。
+ *
+ * Turns a day count into the endpoint's date query parameters.
+ *
+ * Boundaries are UTC: the `agent_evolution` list endpoints take UTC `YYYY-MM-DD` and the
+ * server builds its bounds with `timezone.utc`; a local midnight in UTC+8 is the previous
+ * day in UTC.
+ */
+function dateQuery(days: number) {
+  const bounds = experienceDateBounds(days);
+  if (!bounds) return {};
+  return {
+    start_date: toApiDate(bounds.start, 'utc'),
+    end_date: toApiDate(bounds.end, 'utc'),
+  };
+}
 
 export function useExperienceDashboard({
   uri,
@@ -78,39 +96,12 @@ export function useExperienceDashboard({
       readExperienceSources(client, uri, options),
     [uri],
   );
-  const loadTrajectories = useCallback(
-    async (client: OvClient, options: OvRequestOptions) => {
-      const result = await client.request<ExperienceTrajectoryPage>({
-        method: 'GET',
-        path: OV_PATHS.experienceTrajectories,
-        query: {
-          experience_uri: uri,
-          offset: page * EXPERIENCE_PAGE_SIZE,
-          limit: EXPERIENCE_PAGE_SIZE,
-          ...experienceDateRange(days),
-        },
-        options,
-      });
-      if (
-        !Array.isArray(result?.items) ||
-        !Number.isSafeInteger(result.total) ||
-        result.total < 0 ||
-        result.items.some(
-          (item) =>
-            typeof item?.uri !== 'string' || typeof item.name !== 'string',
-        )
-      )
-        throw new TypeError('Invalid Experience trajectories');
-      return result;
-    },
-    [uri, page, days],
-  );
   const loadOutcomes = useCallback(
     async (client: OvClient, options: OvRequestOptions) => {
       const result = await client.request<ExperienceOutcomeResult>({
         method: 'GET',
         path: OV_PATHS.experienceOutcomes,
-        query: { experience_uri: uri, ...experienceDateRange(days) },
+        query: { experience_uri: uri, ...dateQuery(days) },
         options,
       });
       if (
@@ -145,12 +136,6 @@ export function useExperienceDashboard({
     enabled && !directory && tab === 'source',
     refreshGeneration,
   );
-  const trajectories = useDashboardQuery(
-    loadTrajectories,
-    requestOptions,
-    enabled && !directory && tab === 'impact',
-    refreshGeneration,
-  );
   const outcomes = useDashboardQuery(
     loadOutcomes,
     requestOptions,
@@ -160,7 +145,6 @@ export function useExperienceDashboard({
   return {
     list,
     sources,
-    trajectories,
     outcomes,
     page,
     setPage,

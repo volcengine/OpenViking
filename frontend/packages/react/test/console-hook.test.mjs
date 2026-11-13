@@ -4,7 +4,7 @@ import { createElement, StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { useConsole } from './helpers/internal-hooks.mjs';
 import { OpenVikingProvider } from './helpers/internal-hooks.mjs';
-import { act } from './helpers/tui-dom.mjs';
+import { act } from './helpers/command-console-dom.mjs';
 
 test('internal Console state sends quoted and end-of-options data through the native client', async () => {
   const calls = [];

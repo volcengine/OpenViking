@@ -514,11 +514,11 @@
 
 /*
  * 编辑区在受限高度下要能收缩：`min-height: 0` 允许它被压缩，`overflow: auto`
- * 让超出的部分滚动。否则 textarea 的 240px 最小高度会撑破面板，把下方的保存
+ * 让超出的部分滚动。否则编辑器的最小高度会撑破面板，把下方的保存
  * 失败提示挤出可视区，而外层 `overflow: hidden` 又滚不到它。
  *
  * The editor has to shrink in a short panel: `min-height: 0` lets it be compressed
- * and `overflow: auto` scrolls what does not fit. Otherwise the textarea's 240px
+ * and `overflow: auto` scrolls what does not fit. Otherwise the editor's
  * minimum pushes past the panel and the save-failure notice below it lands outside
  * the visible area, where the body's `overflow: hidden` cannot reach it.
  */
@@ -539,14 +539,21 @@
   /* 240px 是舒适高度，不是硬下限：面板更矮时允许它一起收缩。 */
   min-height: 120px;
   padding: 8px;
-  border: 1px solid var(--ov-ui-file-preview-border);
-  border-radius: var(--ov-ui-radius, 6px);
+  border: 0;
+  border-radius: 0;
+  outline: none;
   background: none;
   color: inherit;
   font-family: var(--ov-ui-font-mono, ui-monospace, monospace);
   font-size: 14px;
   line-height: 25px;
   resize: none;
+}
+
+.ov-file-preview__editor:not([data-pointer-focus])
+  .ov-file-preview__textarea:focus-visible {
+  outline: 2px solid var(--ov-ui-file-preview-focus-ring);
+  outline-offset: -2px;
 }
 
 .ov-file-preview__notice {
@@ -663,4 +670,84 @@
   .ov-file-preview__spinner {
     animation-duration: 2s;
   }
+}
+
+.ov-file-preview__media {
+  position: relative;
+  display: grid;
+  place-items: center;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  padding: 24px;
+  box-sizing: border-box;
+}
+.ov-file-preview__media > .ov-file-preview__state {
+  position: absolute;
+  inset: 0;
+}
+.ov-file-preview__media img,
+.ov-file-preview__media video {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.ov-file-preview__image-button {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  max-height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+.ov-file-preview__image-button img {
+  max-height: 100%;
+}
+.ov-file-preview__image-button:focus-visible img {
+  outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  outline-offset: 2px;
+}
+.ov-file-preview__image-dialog {
+  max-width: 92vw;
+  max-height: 92vh;
+  border: 1px solid var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+  border-radius: 8px;
+  color: var(--ov-ui-file-preview-text);
+  background: var(--ov-ui-file-preview-surface);
+}
+.ov-file-preview__image-dialog:modal {
+  overscroll-behavior: contain;
+}
+.ov-file-preview__image-dialog::backdrop {
+  overflow: hidden;
+  overscroll-behavior: contain;
+  background: var(--ov-ui-color-overlay, var(--ov-ui-overlay-default));
+}
+.ov-file-preview__image-dialog[open] {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 16px;
+}
+.ov-file-preview__image-dialog img {
+  max-width: 100%;
+  max-height: 80vh;
+  object-fit: contain;
+}
+
+.ov-file-preview__media > video {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
 }

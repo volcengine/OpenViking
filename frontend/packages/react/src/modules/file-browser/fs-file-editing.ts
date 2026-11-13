@@ -1,7 +1,9 @@
 import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type { FilePreviewEditing } from '../../components/file-preview/index.js';
-import { isMemoryUri, stripMemoryFieldsTrailer } from './fs-memory-fields.js';
+import { isExperienceFile } from './experience-data.js';
+import { isSummaryUri, isSystemUri } from './preview-policy.js';
+import { readFileContent } from './fs-read-content.js';
 
 const EDITABLE_TEXT = /\.(?:md|json|jsonl|txt|yaml|yml)$/i;
 
@@ -12,32 +14,34 @@ export function createFileEditing(
   name: string,
   options: OvRequestOptions,
   onSave?: () => void,
+  isWiki = false,
 ): FilePreviewEditing | undefined {
   if (
     !EDITABLE_TEXT.test(name) ||
-    /(?:^viking:\/\/system(?:\/|$)|\/(?:experiences|\.abstract\.md|\.overview\.md)(?:\/|$))/i.test(
-      uri,
-    )
+    isSystemUri(uri) ||
+    isSummaryUri(uri) ||
+    isExperienceFile(uri)
   )
     return undefined;
+  let wiki = isWiki;
   return {
     loadContent: async () => {
-      const content = await client.request<string>({
-        method: 'GET',
-        path: OV_PATHS.contentRead,
-        query: { uri, limit: -1 },
-        options,
-      });
-      if (typeof content !== 'string')
-        throw new TypeError('Invalid file content');
-      // The server replaces only the body of memory files and preserves their metadata.
-      return isMemoryUri(uri) ? stripMemoryFieldsTrailer(content) : content;
+      const result = await readFileContent(client, uri, options, -1, wiki);
+      wiki = result.wiki;
+      return result.content;
     },
     save: async (content) => {
       await client.request({
         method: 'POST',
         path: OV_PATHS.contentWrite,
-        body: { uri, content, mode: 'replace' },
+        body: {
+          uri,
+          content,
+          mode: 'replace',
+          edit_source: 'manual',
+          // The native write contract preserves and updates Wiki conflict history.
+          ...(wiki ? { resolve_conflicts: true } : {}),
+        },
         options,
       });
     },

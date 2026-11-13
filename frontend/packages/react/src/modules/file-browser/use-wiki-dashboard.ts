@@ -3,6 +3,7 @@ import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { useDashboardQuery } from './use-dashboard-query.js';
 import { parseWikiFileConflicts } from './wiki-conflicts.js';
+import { readFileContent } from './fs-read-content.js';
 import { readDashboardStat } from './dashboard-resource.js';
 import type {
   WikiDirectoryData,
@@ -21,15 +22,8 @@ export async function readWikiDashboard(
   const stat = await readDashboardStat(client, uri, options);
   uri = stat.uri;
   if (!stat.isDir) {
-    const result = await client.request<string>({
-      method: 'GET',
-      path: OV_PATHS.contentRead,
-      query: { uri, limit: -1 },
-      options,
-    });
-    if (typeof result !== 'string')
-      throw new TypeError('Invalid Wiki content response');
-    const parsed = parseWikiFileConflicts(result);
+    const result = await readFileContent(client, uri, options, -1, true);
+    const parsed = parseWikiFileConflicts(result.wikiSource ?? result.content);
     if (parsed.status === 'invalid')
       throw new TypeError('Invalid CONFLICTS_CONTENT metadata');
     return {

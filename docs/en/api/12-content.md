@@ -609,7 +609,7 @@ Content-Type: application/json
 
 ### set_tags()
 
-Set explicit `k=v` tags used by retrieval filters. `replace` replaces existing tags, `append` adds tags, and `clear` explicitly removes existing tags. When the target is a directory, `recursive=true` applies the update to files below it. Omitting `tags`, or passing an empty list with `replace`, is a no-op; only `clear` removes tags and it ignores any supplied tag values.
+Set explicit tags used by retrieval filters. `replace` replaces existing tags, `append` applies ordered `k=v`, `k+=number`, and `k-=number` patches, and `clear` removes existing tags. Arithmetic uses finite decimal values, treats a missing key as zero, and may produce negative results. It is a read-modify-write operation, not an atomic increment. When the target is a directory, `recursive=true` applies the update to files below it.
 
 **Python SDK**
 
@@ -620,6 +620,12 @@ result = client.set_tags(
     mode="replace",
     recursive=True,
 )
+
+batch = client.batch_set_tags(
+    ["viking://resources/project/a.md", "viking://resources/project/b.md"],
+    ["used_count+=1"],
+    mode="append",
+)
 ```
 
 **TypeScript SDK**
@@ -629,6 +635,11 @@ const result = await client.setTags(
   "viking://resources/project/",
   ["team=search", "env=prod"],
   { mode: "replace", recursive: true },
+);
+const batch = await client.batchSetTags(
+  ["viking://resources/project/a.md", "viking://resources/project/b.md"],
+  ["used_count+=1"],
+  { mode: "append" },
 );
 ```
 
@@ -641,12 +652,19 @@ result, err := client.SetTags(
     []string{"team=search", "env=prod"},
     &openviking.SetTagsOptions{Mode: "replace", Recursive: true},
 )
+batch, err := client.BatchSetTags(
+    ctx,
+    []string{"viking://resources/project/a.md", "viking://resources/project/b.md"},
+    []string{"used_count+=1"},
+    &openviking.SetTagsOptions{Mode: "append"},
+)
 ```
 
 **HTTP API**
 
 ```http
 POST /api/v1/content/set_tags
+POST /api/v1/content/batch_set_tags
 Content-Type: application/json
 ```
 
@@ -664,6 +682,8 @@ curl -X POST http://localhost:1933/api/v1/content/set_tags \
 
 `POST /api/v1/fs/attrs/set_tags` is an equivalent compatibility path currently used by the Python, TypeScript, and Go SDKs and the CLI.
 
+The batch endpoint accepts 1-50 URIs and returns `items` plus `failed`. A target with no semantic record is a successful item with `tags_updated=false`; only actual errors appear in `failed`.
+
 **CLI**
 
 ```bash
@@ -671,6 +691,10 @@ ov set-tags viking://resources/project/ \
   --tags team=search,env=prod \
   --mode replace \
   --recursive
+
+ov attrs batch-set-tags \
+  viking://resources/project/a.md viking://resources/project/b.md \
+  --tags used_count+=1 --mode append
 ```
 
 **Response**

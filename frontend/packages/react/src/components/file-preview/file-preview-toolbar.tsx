@@ -1,31 +1,51 @@
-import { useState, type ReactNode } from 'react';
-import { Button } from '../../shared/components/button/button.js';
-import { WikiEditIcon } from '../../icons/index.js';
-import type { FilePreviewActions, FilePreviewLabels } from './types.js';
+import type { ReactNode } from 'react';
+import { Button } from '../../shared/primitives/button/button.js';
+import EditIcon from '../../../../icons/svg/file-preview/edit.svg?react';
+import { useFilePreviewCommands } from './file-preview-command-state.js';
+import { FilePreviewActionList } from './file-preview-action-list.js';
+import { normalizeFilePreviewActions } from './normalize-file-preview-actions.js';
+import type { FilePreviewActionSource } from './action-types.js';
+import type {
+  FilePreviewActions,
+  FilePreviewLabels,
+  FilePreviewToolbarOptions,
+} from './types.js';
 
 export function FilePreviewToolbar({
   actions,
   text,
+  options,
+  actionItems,
   extraActions,
 }: {
   actions: FilePreviewActions;
   text: Required<FilePreviewLabels>;
+  options?: FilePreviewToolbarOptions;
+  actionItems?: FilePreviewActionSource;
   extraActions?: ReactNode;
 }) {
-  const [copyResult, setCopyResult] = useState<boolean>();
-  const hasActions =
-    actions.editing ||
-    actions.canCopyContent ||
-    actions.canEdit ||
-    actions.canDownload ||
-    extraActions;
-  if (!actions.canSwitchView && !hasActions) return null;
-  const copyLabel =
-    copyResult === undefined
-      ? text.copyContent
-      : copyResult
-        ? text.copied
-        : text.copyFailed;
+  const commands = useFilePreviewCommands();
+  const groups = normalizeFilePreviewActions(
+    typeof actionItems === 'function'
+      ? actionItems(actions)
+      : (actionItems ?? []),
+  );
+  const pinned = groups.flat().filter((action) => action.pinned);
+  const items = groups.map((group) => group.filter((action) => !action.pinned));
+  const switchVisible = actions.canSwitchView && options?.viewSwitch !== false;
+  const editVisible = actions.canEdit && options?.edit !== false;
+  const hasItems = items.some(
+    (item) => !Array.isArray(item) || item.length > 0,
+  );
+  if (
+    !actions.editing &&
+    !switchVisible &&
+    !editVisible &&
+    !hasItems &&
+    !pinned.length &&
+    !extraActions
+  )
+    return null;
   return (
     <div className="ov-file-preview__toolbar">
       {actions.editing ? (
@@ -62,7 +82,8 @@ export function FilePreviewToolbar({
           </Button>
         </div>
       ) : null}
-      {actions.canSwitchView ? (
+
+      {switchVisible ? (
         <div
           className="ov-file-preview__switch"
           role="group"
@@ -82,81 +103,43 @@ export function FilePreviewToolbar({
           ))}
         </div>
       ) : null}
-      {actions.canSwitchView && hasActions ? (
-        <span className="ov-file-preview__toolbar-divider" aria-hidden="true" />
-      ) : null}
-      {actions.canCopyContent ? (
-        <>
-          <Button
-            size="small"
-            type="default"
-            iconOnly
-            className="ov-file-preview__toolbar-button"
-            aria-label={text.copyContent}
-            title={copyLabel}
-            disabled={actions.busy}
-            onBlur={() => setCopyResult(undefined)}
-            onClick={() => void actions.copyContent().then(setCopyResult)}
-          >
-            <svg
-              aria-hidden="true"
-              width="14"
-              height="14"
-              viewBox="0 0 16 16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.4"
-            >
-              <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
-              <path d="M10.5 5.5v-1a1.5 1.5 0 0 0-1.5-1.5H4a1.5 1.5 0 0 0-1.5 1.5v5A1.5 1.5 0 0 0 4 11h1" />
-            </svg>
-          </Button>
-          {copyResult !== undefined ? (
-            <span className="ov-file-preview__sr-only" role="status">
-              {copyLabel}
-            </span>
-          ) : null}
-        </>
-      ) : null}
-      {actions.canEdit ? (
-        <Button
-          size="small"
-          type="default"
-          className="ov-file-preview__toolbar-button"
-          disabled={actions.busy}
-          onClick={actions.startEditing}
-        >
-          <WikiEditIcon width={14} height={14} aria-hidden="true" />
-          {text.edit}
-        </Button>
-      ) : null}
-      {actions.canDownload ? (
+      {editVisible ? (
         <Button
           size="small"
           type="default"
           iconOnly
           className="ov-file-preview__toolbar-button"
-          aria-label={text.download}
-          title={text.download}
+          aria-label={text.edit}
+          title={text.edit}
           disabled={actions.busy}
-          onClick={actions.download}
+          onClick={actions.startEditing}
         >
-          <svg
-            aria-hidden="true"
-            width="14"
-            height="14"
-            viewBox="0 0 16 16"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.4"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M8 2.5v8m-3-3 3 3 3-3M2.5 12.5h11" />
-          </svg>
+          <EditIcon width={14} height={14} aria-hidden="true" />
         </Button>
       ) : null}
-      {extraActions}
+      {pinned.map((action) => (
+        <FilePreviewActionList
+          key={action.key}
+          items={[action]}
+          pending={commands.pending}
+          execute={(item) => commands.execute(item, actions.busy)}
+          disabled={actions.busy}
+          text={text}
+        />
+      ))}
+      {!actions.editing ? (
+        <>
+          <FilePreviewActionList
+            items={items}
+            pending={commands.pending}
+            failure={commands.failure}
+            execute={(action) => commands.execute(action, actions.busy)}
+            disabled={actions.busy}
+            text={text}
+          />
+          {extraActions}
+        </>
+      ) : null}
     </div>
   );
 }

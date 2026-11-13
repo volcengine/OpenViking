@@ -24,52 +24,11 @@
   font: inherit;
   cursor: pointer;
 }
-.ov-dashboard-tabs {
-  display: flex;
-  flex: none;
-  gap: 24px;
-  padding: 0 12px;
-  overflow: auto;
-  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
-}
-.ov-dashboard-tabs button {
-  position: relative;
-  flex: none;
-  min-height: 42px;
-  padding: 8px 0;
-  border: 0;
-  background: transparent;
-  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
-  font: inherit;
-  cursor: pointer;
-}
-.ov-dashboard-tabs button[aria-selected='true'] {
-  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
-  font-weight: 500;
-}
-.ov-dashboard-tabs button[aria-selected='true']::after {
-  position: absolute;
-  content: '';
-  inset-block-end: 2px;
-  inset-inline-start: calc(50% - 7px);
-  width: 14px;
-  height: 2px;
-  background: currentColor;
-}
-.ov-dashboard-tabpanel {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  flex-direction: column;
-}
-
-.ov-wiki-dashboard__body,
-.ov-experience-dashboard__body {
+.ov-wiki-dashboard__body {
   position: relative;
   isolation: isolate;
 }
-.ov-wiki-dashboard__body::before,
-.ov-experience-dashboard__body::before {
+.ov-wiki-dashboard__body::before {
   content: '';
   position: absolute;
   inset: 0;
