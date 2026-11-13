@@ -870,6 +870,7 @@ class FileStore(AccountStore):
                 "GLOBAL identities cannot change roles; delete and recreate instead."
             )
 
+        old_user_info = copy.deepcopy(account.users[user_id])
         account.users[user_id]["role"] = resolved_role
 
         # Update role in prefix index
@@ -886,7 +887,14 @@ class FileStore(AccountStore):
                     entry.role = resolved_role
                     break
 
-        await self._save_users_json(account_id, {user_id: account.users[user_id]})
+        try:
+            await self._save_users_json(account_id, {user_id: account.users[user_id]})
+        except Exception:
+            account.users[user_id] = old_user_info
+            self._account_key_indexes[account_id] = self._build_account_key_index(
+                account_id, account.users
+            )
+            raise
 
     def _get_accounts(
         self,
