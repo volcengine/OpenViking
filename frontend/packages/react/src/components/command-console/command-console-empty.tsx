@@ -57,9 +57,7 @@ export function CommandConsoleEmptyRegion({
   // Hook 必须在提前返回之前调用；内置空态不渲染时列表 ref 为空，测量直接跳过。
   // Hooks run before the early returns; with no built-in empty state the list ref
   // stays null and the measurement is skipped.
-  const { listRef, truncated } = useCommandConsoleQuickOverflow(
-    commands.length,
-  );
+  const { listRef, truncated } = useCommandConsoleQuickOverflow();
   if (emptyState !== undefined) {
     return emptyState === null ? null : (
       <div className="ov-command-console__empty">{emptyState}</div>
@@ -119,26 +117,32 @@ export function CommandConsoleEmptyRegion({
           // 没有 summary 但说明被单行省略截断时同样看不到全文。两种情况下 Tooltip
           // 才有行内没有的内容，其余情况弹出的会是同一句话。
           //
+          // Tooltip 始终挂载、只切 disabled，而不是按需包一层：包与不包会替换整棵
+          // 子树，说明节点随之卸载，截断测量仍盯着已脱离 DOM 的旧节点，测出的 0
+          // 宽又会把 Tooltip 关掉。保持节点身份稳定，订阅才一直有效。
+          //
           // The row shows `summary ?? description`: the full description is hidden
           // when the host supplied a `summary`, and equally when the description is
           // truncated by the single-line ellipsis. Only then does the Tooltip add
           // something the row does not already show.
-          const showTooltip =
+          //
+          // The Tooltip stays mounted and only toggles `disabled` instead of being
+          // added on demand: adding it replaces the whole subtree, so the
+          // description node unmounts while the measurement still watches the
+          // detached old node, whose zero width then switches the Tooltip back off.
+          // Keeping the node's identity stable keeps the subscription valid.
+          const hasTooltip =
             command.summary !== undefined || truncated.includes(index);
           return (
             <li key={command.name} className="ov-command-console__empty-item">
-              {showTooltip ? (
-                <Tooltip
-                  content={command.description}
-                  placement="top"
-                  disabled={disabled}
-                  className="ov-command-console__quick-tooltip"
-                >
-                  {action}
-                </Tooltip>
-              ) : (
-                action
-              )}
+              <Tooltip
+                content={command.description}
+                placement="top"
+                disabled={disabled || !hasTooltip}
+                className="ov-command-console__quick-tooltip"
+              >
+                {action}
+              </Tooltip>
             </li>
           );
         })}
