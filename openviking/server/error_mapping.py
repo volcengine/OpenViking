@@ -377,7 +377,7 @@ def _map_structured_model_error(error: ModelError, *, context: Exception) -> Ope
         details["provider_error_code"] = error.code
     return _build_upstream_error(
         code=code,
-        message="" if error.kind is ModelErrorKind.UNKNOWN else _upstream_detail_message(context),
+        message=_upstream_detail_message(context),
         status=error.status_code,
         source=error,
         vlm_context=context,
@@ -401,9 +401,8 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
                 vlm_context=exc,
             )
 
-    # Once a provider boundary has attached a ModelError, it is the fact owner.
-    # UNKNOWN may still carry an HTTP status; keep its message redacted and
-    # never fall back to message heuristics.
+    # A provider boundary owns classification. Project its kind and status
+    # without classifying the message again.
     for item in model_exception_chain(exc):
         if isinstance(item, ModelError):
             return _map_structured_model_error(item, context=exc)
