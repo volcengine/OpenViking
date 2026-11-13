@@ -5,6 +5,7 @@
 import asyncio
 import json
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from unittest.mock import Mock, create_autospec
@@ -102,6 +103,148 @@ async def test_relational_load_requires_schema_and_can_retry(provider):
         async with admin.begin() as connection:
             await connection.run_sync(store._models.Base.metadata.drop_all)
         await admin.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("release", ["finalize", "withdraw", "replace"])
+async def test_duplicate_business_key_rechecks_after_conflict(task_stores, monkeypatch, release):
+    from sqlalchemy.exc import IntegrityError
+
+    from openviking.service.task_store_sql import SQLTaskWorkStore
+
+    first, second = task_stores
+    if not isinstance(first, SQLTaskWorkStore):
+        pytest.skip("Duplicate-key recovery is a relational store contract")
+    writer, observer = TaskTracker(first), TaskTracker(second)
+    uri = "viking://resources/duplicate-key"
+    await observer.create("content_write", uri, task_id="blocker", reject_if_active=True, **OWNER)
+    original = first._transaction
+    conflicts = 0
+
+    @asynccontextmanager
+    async def release_after_rollback():
+        nonlocal conflicts
+        try:
+            async with original() as session:
+                yield session
+        except IntegrityError:
+            # Commit on the other client after the real INSERT failed and
+            # rolled back, but before create() starts duplicate recovery.
+            conflicts += 1
+            if release == "withdraw":
+                assert (await second.withdraw_unaccepted("blocker", **OWNER)).is_applied
+            else:
+                await observer.complete("blocker", {"done": True}, **OWNER)
+                if release == "replace":
+                    await observer.create(
+                        "content_write", uri, task_id="replacement", reject_if_active=True, **OWNER
+                    )
+            raise
+
+    monkeypatch.setattr(first, "_transaction", release_after_rollback)
+    created = await writer.create_if_no_running("content_write", uri, task_id="new", **OWNER)
+    assert conflicts == 1
+    if release == "replace":
+        assert created is None
+        assert await observer.get("new", **OWNER) is None
+        assert (await observer.get("replacement", **OWNER)).status is TaskStatus.PENDING
+    else:
+        assert created is not None and created.task_id == "new"
+        history = (await observer.get_with_events("new", **OWNER)).execution_events
+        assert [item["seq"] for item in history["items"]] == [1]
+        assert await observer.create_if_no_running("content_write", uri, **OWNER) is None
+
+
+@pytest.mark.asyncio
+async def test_duplicate_task_id_deleted_before_recovery_is_retried(task_stores, monkeypatch):
+    from sqlalchemy.exc import IntegrityError
+
+    from openviking.service.task_domain import TaskRecord
+    from openviking.service.task_store_sql import SQLTaskWorkStore
+
+    first, second = task_stores
+    if not isinstance(first, SQLTaskWorkStore):
+        pytest.skip("Duplicate-key recovery is a relational store contract")
+    record = TaskRecord(task_id="same-id", task_type="content_write", **OWNER)
+    load = first._load_task
+    transaction = first._transaction
+    injected = False
+    conflicts = 0
+
+    async def insert_after_missing_read(*args, **kwargs):
+        nonlocal injected
+        row = await load(*args, **kwargs)
+        if row is None and not injected:
+            injected = True
+            assert (await second.create(record)).created
+        return row
+
+    @asynccontextmanager
+    async def delete_after_rollback():
+        nonlocal conflicts
+        try:
+            async with transaction() as session:
+                yield session
+        except IntegrityError:
+            conflicts += 1
+            assert (await second.withdraw_unaccepted(record.task_id, **OWNER)).is_applied
+            raise
+
+    monkeypatch.setattr(first, "_load_task", insert_after_missing_read)
+    monkeypatch.setattr(first, "_transaction", delete_after_rollback)
+    assert (await first.create(record)).created
+    assert conflicts == 1
+    history = (await second.get_task_with_events(record.task_id, **OWNER)).execution_events
+    assert [item["seq"] for item in history["items"]] == [1]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_recovery_churn_has_bounded_retries(task_stores, monkeypatch):
+    from sqlalchemy.exc import IntegrityError
+
+    from openviking.service.task_domain import TaskRecord
+    from openviking.service.task_store_sql import SQLTaskWorkStore
+
+    first, second = task_stores
+    if not isinstance(first, SQLTaskWorkStore):
+        pytest.skip("Duplicate-key recovery is a relational store contract")
+    observer = TaskTracker(second)
+    record = TaskRecord(
+        task_id="new", task_type="content_write", resource_id="viking://resources/churn", **OWNER
+    )
+    original = first._transaction
+    transactions = 0
+    conflicts = 0
+
+    @asynccontextmanager
+    async def churn():
+        nonlocal transactions, conflicts
+        transactions += 1
+        blocker = f"blocker-{transactions}"
+        if transactions % 2:
+            await observer.create(
+                record.task_type,
+                record.resource_id,
+                task_id=blocker,
+                reject_if_active=True,
+                **OWNER,
+            )
+        try:
+            async with original() as session:
+                yield session
+        except IntegrityError:
+            conflicts += 1
+            await observer.complete(blocker, {"done": True}, **OWNER)
+            raise
+
+    monkeypatch.setattr(first, "_transaction", churn)
+    with pytest.raises(IntegrityError):
+        await first.create(record, reject_if_active=True)
+    assert conflicts == 3
+    assert transactions == 6
+    assert await second.get_task(record.task_id, **OWNER) is None
+    monkeypatch.setattr(first, "_transaction", original)
+    assert (await first.create(record, reject_if_active=True)).created
 
 
 @pytest.mark.asyncio

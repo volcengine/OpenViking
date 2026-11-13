@@ -460,80 +460,101 @@ class SQLTaskWorkStore(TaskWorkStore):
         stored.user_id = user_id
         stored._extra_fields = {}
         append_task_events(stored, None)
-        row = Task(
-            service_name=self._service_name,
-            task_id=stored.task_id,
-            task_type=stored.task_type,
-            status=stored.status.value,
-            created_at=stored.created_at,
-            updated_at=stored.updated_at,
-            resource_id=stored.resource_id,
-            resource_id_hash=_resource_id_hash(stored.resource_id),
-            account_id=account_id,
-            user_id=user_id,
-            meta=_json_copy(stored.meta),
-            stage=stored.stage,
-            result=_json_copy(stored.result),
-            error=stored.error,
-            auth=_json_copy(stored.auth),
-            processing_seconds=stored.processing_seconds,
-            reject_if_active=reject_if_active,
-            is_internal=bool(stored.meta.get("internal")),
-            active_business_key=(
+        row_values = {
+            "service_name": self._service_name,
+            "task_id": stored.task_id,
+            "task_type": stored.task_type,
+            "status": stored.status.value,
+            "created_at": stored.created_at,
+            "updated_at": stored.updated_at,
+            "resource_id": stored.resource_id,
+            "resource_id_hash": _resource_id_hash(stored.resource_id),
+            "account_id": account_id,
+            "user_id": user_id,
+            "meta": _json_copy(stored.meta),
+            "stage": stored.stage,
+            "result": _json_copy(stored.result),
+            "error": stored.error,
+            "auth": _json_copy(stored.auth),
+            "processing_seconds": stored.processing_seconds,
+            "reject_if_active": reject_if_active,
+            "is_internal": bool(stored.meta.get("internal")),
+            "active_business_key": (
                 _business_key(account_id, user_id, stored.task_type, stored.resource_id)
                 if reject_if_active and stored.status in ACTIVE_TASK_STATUSES
                 else None
             ),
-        )
-        try:
-            async with self._transaction() as session:
-                existing = await self._load_task(
-                    session,
-                    stored.task_id,
-                    account_id=None,
-                    user_id=None,
-                    lock=True,
-                )
-                if existing is not None:
-                    if existing.account_id != account_id or existing.user_id != user_id:
-                        raise ValueError(
-                            f"Task id already belongs to another owner: {stored.task_id}"
-                        )
-                    return TaskCreationResult(
-                        self._task_from_row(
-                            existing,
-                            execution_events=await self._event_history(session, stored.task_id),
-                        ),
-                        created=False,
+        }
+        retries = 0
+        while True:
+            try:
+                async with self._transaction() as session:
+                    existing = await self._load_task(
+                        session,
+                        stored.task_id,
+                        account_id=None,
+                        user_id=None,
+                        lock=True,
                     )
-                session.add(row)
-                await self._append_event_history(session, stored.task_id, stored.execution_events)
-        except IntegrityError as exc:
-            if not self._is_duplicate_error(exc):
-                raise
-            async with self._session_factory() as session:
-                existing = await self._load_task(
-                    session,
-                    stored.task_id,
-                    account_id=None,
-                    user_id=None,
-                )
-                if existing is not None:
-                    if existing.account_id != account_id or existing.user_id != user_id:
-                        raise ValueError(
-                            f"Task id already belongs to another owner: {stored.task_id}"
+                    if existing is not None:
+                        if existing.account_id != account_id or existing.user_id != user_id:
+                            raise ValueError(
+                                f"Task id already belongs to another owner: {stored.task_id}"
+                            )
+                        return TaskCreationResult(
+                            self._task_from_row(
+                                existing,
+                                execution_events=await self._event_history(session, stored.task_id),
+                            ),
+                            created=False,
                         )
-                    return TaskCreationResult(
-                        self._task_from_row(
-                            existing,
-                            execution_events=await self._event_history(session, stored.task_id),
-                        ),
-                        created=False,
+                    # Rollback expires ORM state; each retry gets a fresh row.
+                    session.add(Task(**row_values))
+                    await self._append_event_history(
+                        session, stored.task_id, stored.execution_events
                     )
-                if reject_if_active:
-                    raise TaskAlreadyActive(stored.task_type, stored.resource_id) from exc
-            raise
-        return TaskCreationResult(stored, created=True)
+                return TaskCreationResult(stored, created=True)
+            except IntegrityError as exc:
+                if not self._is_duplicate_error(exc):
+                    raise
+                # The conflicting row may have finalized or been deleted since
+                # INSERT failed. Recheck both guards in a fresh transaction.
+                async with self._transaction() as session:
+                    existing = await self._load_task(
+                        session,
+                        stored.task_id,
+                        account_id=None,
+                        user_id=None,
+                        lock=True,
+                    )
+                    if existing is not None:
+                        if existing.account_id != account_id or existing.user_id != user_id:
+                            raise ValueError(
+                                f"Task id already belongs to another owner: {stored.task_id}"
+                            )
+                        return TaskCreationResult(
+                            self._task_from_row(
+                                existing,
+                                execution_events=await self._event_history(session, stored.task_id),
+                            ),
+                            created=False,
+                        )
+                    if row_values["active_business_key"] is not None:
+                        active = await session.scalar(
+                            select(Task.task_id)
+                            .where(
+                                Task.service_name == self._service_name,
+                                Task.active_business_key == row_values["active_business_key"],
+                            )
+                            .with_for_update()
+                        )
+                        if active is not None:
+                            raise TaskAlreadyActive(stored.task_type, stored.resource_id) from exc
+                # Bound retries under sustained create/finalize churn. Preserve
+                # the database error instead of inventing an active-task conflict.
+                if retries >= 2:
+                    raise
+                retries += 1
 
     @staticmethod
     def _is_duplicate_error(exc: IntegrityError) -> bool:
