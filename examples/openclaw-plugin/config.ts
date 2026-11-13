@@ -114,6 +114,14 @@ export type MemoryOpenVikingConfig = {
   traceRecallIncludeRawUserPreview?: boolean;
   /** Auto-recall target resource types. Empty means the backward-compatible memory recall set. */
   recallTargetTypes?: Array<"resource" | "user" | "agent"> | string;
+  /**
+   * Subtree URIs the auto-recall context search must never return, forwarded
+   * to the server as `exclude_uris`. Without it, generated directory files
+   * (viking://user/<space>/skills, viking://user/<space>/resources,
+   * viking://agent/skills) match like ordinary content and consume the
+   * per-turn recall budget with boilerplate.
+   */
+  recallExcludeUris?: Array<string> | string;
   /** Agent-visible add_resource tool is disabled by default; manual /add-resource remains available. */
   enableAddResourceTool?: boolean;
   /** Agent-visible tool allowlist. Supports exact tool names or groups such as "memory" and "resource_query". */
@@ -133,7 +141,7 @@ export type MemoryOpenVikingConfig = {
 
 /** Runtime config after memoryOpenVikingConfigSchema.parse() has applied defaults. */
 export type ParsedMemoryOpenVikingConfig = Required<
-  Omit<MemoryOpenVikingConfig, "agentExperience" | "recallTargetTypes" | "apiKey" | "peer_role">
+  Omit<MemoryOpenVikingConfig, "agentExperience" | "recallTargetTypes" | "recallExcludeUris" | "apiKey" | "peer_role">
 > & {
   /** parse() resolves SecretRef values, so the runtime shape is always a plain string. */
   apiKey: string;
@@ -141,6 +149,7 @@ export type ParsedMemoryOpenVikingConfig = Required<
   peer_role: "none" | "assistant" | "sender";
   agentExperience: Required<NonNullable<MemoryOpenVikingConfig["agentExperience"]>>;
   recallTargetTypes: Array<"resource" | "user" | "agent">;
+  recallExcludeUris: string[];
 };
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:1933";
@@ -572,6 +581,7 @@ export const memoryOpenVikingConfigSchema = {
         "traceRecallIncludeContentByDefault",
         "traceRecallIncludeRawUserPreview",
         "recallTargetTypes",
+        "recallExcludeUris",
         "enableAddResourceTool",
         "enabledTools",
         "disabledTools",
@@ -649,6 +659,7 @@ export const memoryOpenVikingConfigSchema = {
       cfg.recallTargetTypes,
       !("recallTargetTypes" in cfg) && recallResources,
     );
+    const recallExcludeUris = [...new Set(toStringArray(cfg.recallExcludeUris, []))];
     const { enabledTools, disabledTools } = normalizeEnabledTools(cfg);
 
     return {
@@ -768,6 +779,7 @@ export const memoryOpenVikingConfigSchema = {
       traceRecallIncludeContentByDefault: cfg.traceRecallIncludeContentByDefault === true,
       traceRecallIncludeRawUserPreview: cfg.traceRecallIncludeRawUserPreview === true,
       recallTargetTypes,
+      recallExcludeUris,
       recallCompress,
       enableAddResourceTool: cfg.enableAddResourceTool === true,
       enabledTools,
@@ -899,6 +911,12 @@ export const memoryOpenVikingConfigSchema = {
       label: "Recall Target Types",
       placeholder: "user,agent",
       help: "Comma-separated auto-recall and default memory_recall targets: user, agent, resource. Session history is available through ov_archive_search and ov_archive_expand.",
+      advanced: true,
+    },
+    recallExcludeUris: {
+      label: "Recall Exclude URIs",
+      placeholder: "viking://user/memories/skills,viking://agent/skills",
+      help: "Comma-separated subtree URIs the auto-recall context search must never return (sent as exclude_uris). Keeps generated directory files from consuming the recall budget.",
       advanced: true,
     },
     recallLimit: {

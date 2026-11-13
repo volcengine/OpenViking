@@ -575,6 +575,36 @@ describe("OpenVikingClient canonical namespace policy", () => {
     expect(routingDebugLog).toHaveBeenCalledWith(expect.stringContaining('"query_expansion":"auto"'));
   });
 
+  it("forwards excludeUris as exclude_uris on the context search body", async () => {
+    const transport = vi.fn().mockResolvedValue(okResponse({ entries: [], rendered: "", stats: {} }));
+    const client = new OpenVikingClient(
+      "http://127.0.0.1:1933", "", "agent", 5000,
+      "", "", undefined, false, true, { transport },
+    );
+
+    await client.searchContext("deployment preferences", {
+      excludeUris: ["viking://user/memories/skills", "viking://agent/skills"],
+    });
+
+    const [, init] = transport.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      exclude_uris: ["viking://user/memories/skills", "viking://agent/skills"],
+    });
+  });
+
+  it("omits exclude_uris when no excludeUris are configured", async () => {
+    const transport = vi.fn().mockResolvedValue(okResponse({ entries: [], rendered: "", stats: {} }));
+    const client = new OpenVikingClient(
+      "http://127.0.0.1:1933", "", "agent", 5000,
+      "", "", undefined, false, true, { transport },
+    );
+
+    await client.searchContext("deployment preferences");
+
+    const [, init] = transport.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).not.toHaveProperty("exclude_uris");
+  });
+
   it("normalizes context entries through the shared response contract", async () => {
     const transport = vi.fn().mockResolvedValue(okResponse({
       entries: [{
