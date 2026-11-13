@@ -51,12 +51,15 @@ function config(port, env = {}) {
 }
 
 test("every hook.mjs event has a request budget inside the timeout its hooks.json gives it", () => {
-  for (const [client, hostDir] of [["cursor", "cursor"], ["trae", "trae"], ["trae-cn", "trae"], ["zcode", "zcode"]]) {
+  for (const [client, hostDir] of [
+    ["cursor", "cursor"], ["trae", "trae"], ["trae-cn", "trae"], ["zcode", "zcode"],
+    ["codebuddy", "codebuddy"], ["qoder", "qoder"],
+  ]) {
     const { hooks } = JSON.parse(readFileSync(join(ROOT, "hosts", hostDir, "hooks.json"), "utf8"));
     const events = [];
     for (const entry of Object.values(hooks).flat()) {
       for (const leaf of entry.hooks || [entry]) {
-        const event = /scripts\/hook\.mjs (\S+) /u.exec(leaf.command)?.[1];
+        const event = /scripts\/hook\.mjs"? (\S+) /u.exec(leaf.command)?.[1];
         if (!event) continue;
         events.push(event);
         const budget = HOSTS[client].requestBudgets?.[event];

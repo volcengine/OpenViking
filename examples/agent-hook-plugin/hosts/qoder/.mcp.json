@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "openviking": {
+      "command": "node",
+      "args": [
+        "${QODER_PLUGIN_ROOT}/agent-integrations/qoder/servers/mcp-proxy.mjs"
+      ],
+      "env": {
+        "OPENVIKING_HOOK_SOURCE": "qoder"
+      }
+    }
+  }
+}
