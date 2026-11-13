@@ -100,7 +100,7 @@ Rerank 只处理本次全局召回的候选，不会触发下一轮检索。例�
 - 使用候选索引记录的 `abstract` 字段作为 Rerank 文本。
 - 分数与排序使用 Rerank 分数，否则使用向量分数；访问频次、更新时间和父目录分数不参与加权。
 - 分数阈值在 Rerank 后应用。请求中的 `score_threshold` 过滤所有分数；未指定时，`rerank.threshold` 只过滤模型产出的 Rerank 分数，向量分数（未启用 Rerank 或 Rerank 失败时）不受其过滤。
-- Rerank 请求失败或返回无效结果时，保留已有的向量分数回退行为。
+- 配置 `rerank.fallback` 后，主 Rerank 失败或返回无效结果时会先尝试回退 Reranker，再使用向量分数。
 - 不再使用目录优先队列、父子分数传播或多轮收敛判断。
 
 支持的 provider 和配置见 [Rerank 配置](../guides/01-configuration.md#rerank)。
