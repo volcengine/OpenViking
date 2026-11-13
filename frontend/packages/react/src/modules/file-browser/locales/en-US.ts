@@ -18,7 +18,7 @@ const messages = {
   searchEmpty: 'No matching resources',
   searchFailed: 'Failed to run the search',
   searchModePlaceholders: {
-    find: 'Enter a semantic query',
+    find: 'Search files or directories',
     search: 'Enter a question that needs conversation context',
     grep: 'Enter a regular expression or exact text',
     glob: 'Enter a file pattern, e.g. **/*.md',

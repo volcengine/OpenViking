@@ -23,6 +23,7 @@ export function Console({
   onModeChange,
   onOpenUri,
   conversation,
+  command,
   chatOptions,
   slots,
   labels: overrides,
@@ -137,8 +138,8 @@ export function Console({
               disabled={state.isExecuting}
               quickCommands={quickCommands ?? consoleQuickCommands(locale)}
               onValueChange={state.setCommand}
-              onSubmit={(command) => void state.execute(command)}
-              onOpenUri={onOpenUri}
+              onSubmit={(next) => void state.execute(next)}
+              onOpenUri={command?.onOpenUri ?? onOpenUri}
               labels={labels.commandConsole}
             />
           </div>

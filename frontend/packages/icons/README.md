@@ -48,9 +48,13 @@ React imports these SVG files directly during its build. This file records where
   React fallbacks import it directly and the CSS block is generated from it by
   `npm run sync:swatches`, so the two never drift. A host can still pass its own
   icons through `icon`; the examples reuse these built-in ones.
+- `svg/file-browser/refresh-cw-01.svg` — the 14 × 14 refresh icon exported
+  from the OpenViking Console design (Figma node `10674:69790`). The module
+  uses the original artwork and applies the active theme's stroke color.
 - `svg/file-type/` — the file-type icon set vendored from `@pierre/trees`
   (Apache-2.0, see that directory's `LICENSE.md`). One SVG per icon.
-- `empty-state.png` — the empty-state illustration for the file browser
+- `file-browser-empty-figma.png` — source artwork for the file browser's light empty state
+- `empty-state.png` — transparent illustration for the file browser's dark empty state
   (258 × 140 at 2×). Supplied by the designer; the module imports it and the build
   inlines it as a data URI, so no separate asset file ships. It is a bitmap rather
   than an SVG because the original carries gradients and anti-aliased edges that a

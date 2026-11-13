@@ -70,7 +70,8 @@ import '@openviking/react/modules/console/style.css';
 | chatOptions      | 对话配置；自定义 service 同时实现对话和会话契约                                                                                                                     | `ConsoleChatOptions`                    | 原生服务                                                          |
 | quickCommands    | 命令模式空态里的快捷入口 `{ name, value }`，点击后把 `value` 填入输入框，不自动执行；传入空数组时不显示空态，类型见 [CommandConsole](../components/command-console) | `readonly CommandConsoleQuickCommand[]` | `add-resource`、`add-skill`、`add-memory`、`find`、`compile` 五条 |
 | scopeKey         | 身份由函数动态取值时的隔离标识，值变化时清空记录和草稿并中止进行中的请求                                                                                            | `string`                                | -                                                                 |
-| onOpenUri        | 点击资源链接时触发，参数为资源 URI；对话模式下，设置了 `conversation.onOpenUri` 时以它为准                                                                          | `(uri: string) => void`                 | -                                                                 |
+| command          | 命令模式的覆盖项，类型见下方 `ConsoleCommandProps`                                                                                                                  | `ConsoleCommandProps`                   | -                                                                 |
+| onOpenUri        | 点击资源链接时触发，参数为资源 URI；两种模式各自以 `conversation.onOpenUri`、`command.onOpenUri` 为准                                                               | `(uri: string) => void`                 | -                                                                 |
 | slots            | 在面板中插入宿主内容，类型见下方 `ConsoleSlots`                                                                                                                     | `ConsoleSlots`                          | -                                                                 |
 | labels           | 覆盖界面文案，类型见下方 `ConsoleLabels`                                                                                                                            | `ConsoleLabels`                         | -                                                                 |
 | locale           | 界面语言，规则见[国际化](../guide/i18n)                                                                                                                             | `'zh-CN' \| 'en-US'`                    | 继承上级，默认 `'en-US'`                                          |
@@ -130,6 +131,12 @@ import '@openviking/react/modules/console/style.css';
 | interrupted | 中断终止，保留已有内容                                       | `{ type: 'interrupted' }`                                                | -      |
 
 Console 按适配器是否提供方法决定停止与追问能力。`steer` 返回 `accepted: false` 表示未接受输入；不要发出虚假的用户消息。事件流没有终止事件就结束会报 `BOT_STREAM_TRUNCATED`。
+
+### ConsoleCommandProps
+
+| 参数      | 说明                                                         | 类型                    | 默认值 |
+| --------- | ------------------------------------------------------------ | ----------------------- | ------ |
+| onOpenUri | 命令模式下点击资源链接时触发；省略时使用 `Console.onOpenUri` | `(uri: string) => void` | -      |
 
 ### ConsoleSlots
 
