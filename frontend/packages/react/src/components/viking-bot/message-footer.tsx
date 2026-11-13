@@ -1,4 +1,6 @@
 import { Button } from '../../shared/primitives/button/button.js';
+import { Tooltip } from '../../shared/primitives/tooltip/index.js';
+import CopySvg from '../../../../icons/svg/command-console/copy.svg?react';
 import { BubbleTools } from '@ark-design/ui/bubble';
 import { messageText } from './message-groups.js';
 import type { VikingBotLabels, VikingBotMessage } from './model.js';
@@ -36,15 +38,19 @@ export function MessageFooter({
       {time ? <time dateTime={message.createdAt}>{time}</time> : null}
       {canCopy ? (
         onCopy ? (
-          <Button
-            size="mini"
-            type="text"
-            htmlType="button"
-            className="ov-viking-bot__copy"
-            onClick={() => onCopy(text)}
-          >
-            {labels.copy}
-          </Button>
+          <Tooltip content={labels.copy}>
+            <Button
+              size="mini"
+              type="text"
+              iconOnly
+              htmlType="button"
+              className="ov-viking-bot__copy"
+              aria-label={labels.copy}
+              onClick={() => onCopy(text)}
+            >
+              <CopySvg aria-hidden="true" focusable="false" />
+            </Button>
+          </Tooltip>
         ) : (
           <BubbleTools
             items={['copy']}

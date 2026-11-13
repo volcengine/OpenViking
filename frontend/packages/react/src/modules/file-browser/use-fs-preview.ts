@@ -7,14 +7,11 @@ import type {
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { directoryIcon } from './fs-icon.js';
 import { resolveLabels, resolveSummaryLabels } from './file-browser-labels.js';
-import {
-  isAbort,
-  nameFromUri,
-  toDirectoryTab,
-  type DirectorySummary,
-} from './fs-model.js';
+import { isAbort, toDirectoryTab, type DirectorySummary } from './fs-model.js';
 import { isSystemUri } from './preview-policy.js';
 import { readDirectory } from './fs-read-directory.js';
+import { loadingTab } from './fs-preview-loading-tab.js';
+import { toSystemDirectoryTab } from './fs-system-directory-tab.js';
 import { createPreviewImageResolver } from './fs-preview-images.js';
 import { readFile } from './fs-read-file.js';
 import { abortError, resolveIsDirectory } from './fs-stat.js';
@@ -125,7 +122,7 @@ export function useFsPreview({
     // stays put and only the body shows the loading state. Setting null would make
     // the whole preview area disappear and reappear, flashing on every switch.
     setTabs([loadingTab(uri, resourceType !== 'file')]);
-    setActiveKey(null);
+    setActiveKey(uri);
     setError(null);
     setCharacterCount(undefined);
     const options = { ...requestOptions, signal: controller.signal };
@@ -147,24 +144,23 @@ export function useFsPreview({
           ? await resolveIsDirectory(client, uri, options)
           : resourceType === 'directory';
       if (controller.signal.aborted) throw abortError();
-      return isDir
-        ? {
-            summary: isSystemUri(uri)
-              ? { abstract: '', overview: '' }
-              : await readDirectory(client, uri, options),
-          }
-        : {
-            tab: await readFile(
-              client,
-              uri,
-              options,
-              openParent,
-              () =>
-                !controller.signal.aborted &&
-                setSaveGeneration((value) => value + 1),
-              contentKind === 'wiki',
-            ),
-          };
+      if (isDir)
+        return isSystemUri(uri)
+          ? { tab: toSystemDirectoryTab(uri, openParent) }
+          : { summary: await readDirectory(client, uri, options) };
+      return {
+        tab: await readFile(
+          client,
+          uri,
+          options,
+          openParent,
+          () => {
+            if (!controller.signal.aborted)
+              setSaveGeneration((value) => value + 1);
+          },
+          contentKind === 'wiki',
+        ),
+      };
     })();
 
     // 成功也要复查是否已被取消：目录的两级摘要里，一级先回来、另一级还在路上
@@ -199,7 +195,7 @@ export function useFsPreview({
         setTabs([tab]);
         setActiveKey(tab.key);
         // 设计稿底部显示字符数；接口不返回行数与更新时间，先给字符数。
-        const body = tab.source.content;
+        const body = tab.kind === 'file' ? tab.source.content : undefined;
         setCharacterCount(typeof body === 'string' ? body.length : undefined);
       },
       (cause: unknown) => {
@@ -243,48 +239,5 @@ export function useFsPreview({
     error,
     footer: count === undefined ? undefined : formatCharacterCount(count),
     setActiveKey,
-  };
-}
-
-/**
- * 加载中占位页签：只带 key 与文件名，`loading` 让组件渲染加载态而不是「空文件」。
- * A placeholder tab while loading: it carries the key and file name, and `loading`
- * makes the component render its loading state rather than "empty file".
- */
-function loadingTab(uri: string, isDirectory: boolean): FilePreviewTab {
-  if (isDirectory) {
-    return {
-      kind: 'directory',
-      key: uri,
-      loading: true,
-      levels: [
-        {
-          key: 'l0',
-          label: '',
-          source: {
-            fileName: `${nameFromUri(uri)}.md`,
-            path: uri,
-            fileType: 'markdown',
-            content: '',
-          },
-        },
-        {
-          key: 'l1',
-          label: '',
-          source: {
-            fileName: `${nameFromUri(uri)}.md`,
-            path: uri,
-            fileType: 'markdown',
-            content: '',
-          },
-        },
-      ],
-    };
-  }
-  return {
-    kind: 'file',
-    key: uri,
-    loading: true,
-    source: { fileName: nameFromUri(uri), path: uri, content: '' },
   };
 }

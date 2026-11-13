@@ -284,7 +284,11 @@ class AGFSPathLockConfig(BaseModel):
 
     provider: str = Field(
         default="filesystem",
-        description="PathLock provider: 'filesystem' | 'memory' | 'sqlite' | 'cache'",
+        description="PathLock provider: 'filesystem' | 'memory' | 'sqlite' | 'postgres' | 'cache'",
+    )
+    postgres_dsn_env: Optional[str] = Field(
+        default=None,
+        description="Environment variable containing the PostgreSQL connection string.",
     )
     sqlite_path: Optional[str] = Field(
         default=None,
@@ -303,10 +307,14 @@ class AGFSPathLockConfig(BaseModel):
     @model_validator(mode="after")
     def validate_config(self):
         """Validate provider and timeout/expiry ranges."""
-        if self.provider not in {"filesystem", "memory", "sqlite", "cache"}:
+        if self.provider not in {"filesystem", "memory", "sqlite", "postgres", "cache"}:
             raise ValueError(
-                "pathlock provider must be one of: 'filesystem', 'memory', 'sqlite', 'cache'"
+                "pathlock provider must be one of: 'filesystem', 'memory', 'sqlite', 'postgres', 'cache'"
             )
+        if self.postgres_dsn_env is not None and not self.postgres_dsn_env.strip():
+            raise ValueError("pathlock postgres_dsn_env must be nonempty")
+        if self.provider == "postgres" and self.postgres_dsn_env is None:
+            raise ValueError("pathlock postgres_dsn_env is required for PostgreSQL")
         if (
             self.provider == "sqlite"
             and self.sqlite_path is not None

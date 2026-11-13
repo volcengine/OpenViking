@@ -2076,6 +2076,7 @@ return redis.call("HGET", KEYS[1], ARGV[2])
             provider: "cache".to_string(),
             service_name: Some(service_name.clone()),
             sqlite_path: None,
+            postgres_dsn_env: None,
             lock_timeout_secs: 0.0,
             lock_expire_secs: 3.0,
         };

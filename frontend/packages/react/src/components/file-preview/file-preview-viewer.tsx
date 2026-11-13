@@ -242,7 +242,11 @@ export function FilePreviewViewer({
     <FileViewerCore
       key={tab.key}
       adapters={adapters}
-      className="ov-file-preview__viewer"
+      className={
+        viewMode === 'source'
+          ? 'ov-file-preview__viewer ov-file-preview__viewer--source'
+          : 'ov-file-preview__viewer'
+      }
       locale={locale}
       resources={resources}
       slots={slots}

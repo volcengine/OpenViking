@@ -55,6 +55,7 @@ const DIRS: Record<string, Entry[]> = {
     { uri: 'viking://agent', isDir: true },
     { uri: 'viking://resources', isDir: true },
     { uri: USER, isDir: true },
+    { uri: 'viking://system', isDir: true },
   ],
   [USER]: [
     { uri: MEMORIES, isDir: true },

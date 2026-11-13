@@ -9,12 +9,8 @@ import {
   isExperienceDirectory,
   readExperiences,
   readExperienceSources,
-  EXPERIENCE_PAGE_SIZE,
 } from './experience-data.js';
-import type {
-  ExperienceTrajectoryPage,
-  ExperienceOutcomeResult,
-} from './experience-data.js';
+import type { ExperienceOutcomeResult } from './experience-data.js';
 
 /**
  * 把天数换成接口的日期查询参数。
@@ -100,33 +96,6 @@ export function useExperienceDashboard({
       readExperienceSources(client, uri, options),
     [uri],
   );
-  const loadTrajectories = useCallback(
-    async (client: OvClient, options: OvRequestOptions) => {
-      const result = await client.request<ExperienceTrajectoryPage>({
-        method: 'GET',
-        path: OV_PATHS.experienceTrajectories,
-        query: {
-          experience_uri: uri,
-          offset: page * EXPERIENCE_PAGE_SIZE,
-          limit: EXPERIENCE_PAGE_SIZE,
-          ...dateQuery(days),
-        },
-        options,
-      });
-      if (
-        !Array.isArray(result?.items) ||
-        !Number.isSafeInteger(result.total) ||
-        result.total < 0 ||
-        result.items.some(
-          (item) =>
-            typeof item?.uri !== 'string' || typeof item.name !== 'string',
-        )
-      )
-        throw new TypeError('Invalid Experience trajectories');
-      return result;
-    },
-    [uri, page, days],
-  );
   const loadOutcomes = useCallback(
     async (client: OvClient, options: OvRequestOptions) => {
       const result = await client.request<ExperienceOutcomeResult>({
@@ -167,12 +136,6 @@ export function useExperienceDashboard({
     enabled && !directory && tab === 'source',
     refreshGeneration,
   );
-  const trajectories = useDashboardQuery(
-    loadTrajectories,
-    requestOptions,
-    enabled && !directory && tab === 'impact',
-    refreshGeneration,
-  );
   const outcomes = useDashboardQuery(
     loadOutcomes,
     requestOptions,
@@ -182,7 +145,6 @@ export function useExperienceDashboard({
   return {
     list,
     sources,
-    trajectories,
     outcomes,
     page,
     setPage,
