@@ -59,6 +59,7 @@ from openviking.resource.github_radar.signal_store import RadarSignalStore
 from openviking.resource.github_radar.summarizer import RadarSummarizer
 from openviking.server.error_mapping import is_not_found_error
 from openviking.utils.code_hosting_utils import is_github_url, parse_code_hosting_url
+from openviking_cli.exceptions import ConflictError
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -221,12 +222,16 @@ class PrRadarRunner:
         vlm_resolver: Any = None,
         group_resolver: Any = None,
         context_resolver: Any = None,
+        watch_store: Any = None,
+        path_locks: Any = None,
     ) -> None:
         self._fs = viking_fs
         self._gh = gh or GhCli()
         self._vlm_resolver = vlm_resolver
         self._group_resolver = group_resolver
         self._context_resolver = context_resolver
+        self._watch_store = watch_store
+        self._path_locks = path_locks
 
     async def maybe_run(self, task: Any, ctx: Any) -> RadarRunResult:
         """Entry point for a watch trigger. Never raises."""
@@ -263,6 +268,14 @@ class PrRadarRunner:
                     ctx.account_id, self._owner_user_id(task, ctx)
                 )
                 io_ctx = replace(io_ctx, group_ids=tuple(groups))
+            from openviking.resource.github_radar.ownership import radar_directory_guard
+            from openviking.resource.watch_manager import WatchPathLocks
+
+            async with radar_directory_guard(
+                self._fs, self._path_locks or WatchPathLocks(self._fs),
+                self._watch_store, task, io_ctx, claim=have_gh(),
+            ):
+                pass
             state = await self._load_state(target_uri, io_ctx)
             if state.pending_publish is not None:
                 return await self._finish_publication(target_uri, state.pending_publish, io_ctx)
@@ -276,6 +289,10 @@ class PrRadarRunner:
             # the queried range and silently drop the oldest window's PRs.
             anchor = self._anchor_utc(task)
             first_floor = fmt_ts(anchor - timedelta(days=config.backfill_days))
+            # Only close a window that was already due before collection
+            # began. Later I/O can cross a boundary while updates in that
+            # window are still absent from the already returned endpoint.
+            now = utc_now()
             outcome = await collect_prs(
                 self._gh, repo, config, state, first_floor=first_floor
             )
@@ -290,7 +307,6 @@ class PrRadarRunner:
             if merged != pending:
                 await signal_store.save(merged, io_ctx)
 
-            now = utc_now()
             window = plan_digest(
                 state=state, config=config, pending_count=0,
                 caught_up=outcome.caught_up, anchor=anchor, now=now,
@@ -424,6 +440,9 @@ class PrRadarRunner:
                 target_uri, replace(state, pending_publish=journal), io_ctx
             )
             return await self._finish_publication(target_uri, journal, io_ctx)
+        except ConflictError as exc:
+            logger.warning("[PrRadar] directory conflict: %s", exc)
+            return RadarRunResult(status="skipped", reason=str(exc))
         except GhCliUnavailable as exc:
             logger.warning("[PrRadar] gh unavailable: %s", exc)
             return RadarRunResult(status="skipped", reason=str(exc))

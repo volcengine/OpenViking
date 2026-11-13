@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import asyncio
 import json
 from datetime import datetime
 from types import SimpleNamespace
@@ -30,6 +31,24 @@ GITHUB_URL = "https://github.com/volcengine/OpenViking"
 class FakeFs:
     def __init__(self) -> None:
         self.files: dict[str, str] = {}
+        self._test_locks = {}
+        self._async_agfs = SimpleNamespace(
+            pathlock_acquire_tree=self._acquire,
+            pathlock_release=self._release,
+        )
+
+    def _uri_to_path(self, uri, ctx=None):
+        return f"/local/{ctx.account_id}/" + "/".join(
+            part for part in uri[len("viking://"):].split("/") if part
+        )
+
+    async def _acquire(self, path, **kwargs):
+        lock = self._test_locks.setdefault(path, asyncio.Lock())
+        await lock.acquire()
+        return lock
+
+    async def _release(self, lease):
+        lease.release()
 
     async def write_file(self, uri, content, ctx=None, **kwargs):
         self.files[uri] = content
@@ -38,6 +57,11 @@ class FakeFs:
         if uri not in self.files:
             raise FileNotFoundError(uri)
         return self.files[uri]
+
+    async def stat(self, uri, ctx=None, **kwargs):
+        if uri in self.files or any(key.startswith(uri.rstrip("/") + "/") for key in self.files):
+            return {"isDir": uri not in self.files}
+        raise FileNotFoundError(uri)
 
 
 class FakeGh:
@@ -186,7 +210,7 @@ async def test_gh_failure_holds_watermark_and_writes_nothing():
     )
     # The collector holds the watermark on transport failure; nothing is published.
     assert result.status == "empty"
-    assert fs.files == {}
+    assert set(fs.files) == {f"{RADAR_TARGET_URI}/.radar-owner.json"}
 
 
 def test_custom_target_uri_is_honored():
@@ -721,7 +745,8 @@ async def test_auth_initialization_wires_group_resolver_into_watch_sidecar(monke
     captured = []
 
     class Runner:
-        def __init__(self, fs, vlm_resolver=None, group_resolver=None, context_resolver=None):
+        def __init__(self, fs, vlm_resolver=None, group_resolver=None, context_resolver=None,
+                     **kwargs):
             captured.append(context_resolver)
 
         async def maybe_run(self, task, ctx):
@@ -837,6 +862,7 @@ async def test_admin_created_radar_loses_privilege_after_demotion(monkeypatch):
         processor_kwargs={"pr_radar": {"enabled": True,
                                       "target_uri": "viking://resources/restricted/radar"}},
     )
+    manager.store.list_tasks = AsyncMock(return_value=[task])
     ctx = WatchManager.context(task)
     await manager._run_pr_radar_sidecar(task, ctx)
     assert results[0].status == "empty" and fs.files
@@ -995,8 +1021,10 @@ async def test_watch_creation_requires_background_local_grant_for_explicit_radar
         async def tree(self, *args, **kwargs):
             yield
 
-    store = SimpleNamespace(create_task=AsyncMock())
+    store = SimpleNamespace(create_task=AsyncMock(), list_tasks=AsyncMock(return_value=[]))
     manager = WatchManager(store=store, locks=Locks(), viking_fs=fs)
+    monkeypatch.setattr(fs, "read_file", AsyncMock(side_effect=FileNotFoundError))
+    monkeypatch.setattr(fs, "stat", AsyncMock(side_effect=FileNotFoundError))
     monkeypatch.setattr("openviking.server.auth.registry.get_registry", lambda: SimpleNamespace(
         get=lambda name: Plugin, register=lambda cls: None))
     await _initialize_auth_plugin(
@@ -1079,6 +1107,161 @@ async def test_peer_account_revocation_blocks_radar_and_watch_admission(account_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["remove_member", "delete_group"])
+async def test_peer_group_revocation_blocks_radar_and_watch_admission(change, monkeypatch):
+    import copy
+    from dataclasses import replace
+    from unittest.mock import AsyncMock
+
+    from openviking.resource.watch_manager import WatchManager
+    from openviking.server.account_stores.file import (
+        ACCOUNTS_PATH,
+        GROUPS_PATH_TEMPLATE,
+        USERS_PATH_TEMPLATE,
+        FileStore,
+    )
+    from openviking.server.api_keys import APIKeyManager
+    from openviking.server.app import _initialize_auth_plugin
+    from openviking.server.identity import RequestContext, Role
+    from openviking.storage.acl import (
+        AclAction,
+        AclEntry,
+        AclLevel,
+        AclMode,
+        DirectAcl,
+        EffectiveAcl,
+    )
+    from openviking.storage.viking_fs import VikingFS
+    from openviking_cli.session.user_id import UserIdentifier
+
+    groups_path = GROUPS_PATH_TEMPLATE.format(account_id="acme")
+    documents = {
+        ACCOUNTS_PATH: {"accounts": {"acme": {"created_at": "born"}}},
+        USERS_PATH_TEMPLATE.format(account_id="acme"): {"users": {"alice": {"role": Role.USER}}},
+        groups_path: {"groups": {"engineering": {"members": ["alice"]}}},
+    }
+    reads = []
+
+    async def read_json(path):
+        reads.append(path)
+        return copy.deepcopy(documents.get(path))
+
+    async def write_json(path, content, **kwargs):
+        documents[path] = copy.deepcopy(content)
+
+    account_store = FileStore(SimpleNamespace(agfs=SimpleNamespace()), watch_enabled=False)
+    peer = FileStore(SimpleNamespace(agfs=SimpleNamespace()), watch_enabled=False)
+    for instance in [account_store, peer]:
+        monkeypatch.setattr(instance, "_read_json", read_json)
+        monkeypatch.setattr(instance, "_write_json", write_json)
+    identity_manager = APIKeyManager("", account_store)
+
+    class Plugin:
+        async def initialize(self, app, service, config):
+            app.state.api_key_manager = identity_manager
+
+    acl = EffectiveAcl(
+        AclMode.RESTRICTED, DirectAcl((AclEntry("group:engineering", AclLevel.WRITE),)),
+        DirectAcl(),
+    )
+
+    async def resolve_many(uris, ctx):
+        return dict.fromkeys(uris, acl)
+
+    policy = VikingFS(
+        agfs=SimpleNamespace(),
+        acl_manager=SimpleNamespace(
+            is_enabled=AsyncMock(return_value=True), resolve_many=resolve_many,
+        ),
+    )
+    accesses = []
+
+    class PolicyFs(FakeFs):
+        async def _ensure_access(self, uri, ctx, action=AclAction.READ):
+            await policy._ensure_access(uri, ctx, action=action)
+
+        async def read_file(self, uri, ctx=None, **kwargs):
+            await self._ensure_access(uri, ctx)
+            accesses.append(uri)
+            return await super().read_file(uri, ctx, **kwargs)
+
+        async def write_file(self, uri, content, ctx=None, **kwargs):
+            await self._ensure_access(uri, ctx, AclAction.WRITE)
+            accesses.append(uri)
+            return await super().write_file(uri, content, ctx, **kwargs)
+
+    fs = PolicyFs()
+    store = SimpleNamespace(create_task=AsyncMock())
+    manager = WatchManager(store=store, viking_fs=fs)
+    monkeypatch.setattr("openviking.server.auth.registry.get_registry", lambda: SimpleNamespace(
+        get=lambda name: Plugin, register=lambda cls: None))
+    await _initialize_auth_plugin(
+        SimpleNamespace(state=SimpleNamespace()), SimpleNamespace(watch_manager=manager),
+        SimpleNamespace(get_effective_auth_mode=lambda: "api_key"),
+    )
+    resolver = manager._pr_radar_context_resolver
+    ctx = RequestContext(UserIdentifier("acme", "alice"), Role.USER, bypass_acl=True)
+    assert (await resolver(ctx)).group_ids == ("engineering",)
+    target = "viking://resources/team/radar"
+    kwargs = {"pr_radar": {"enabled": True, "target_uri": target}}
+    await authorize_pr_radar_target(policy, kwargs, replace(await resolver(ctx), bypass_acl=False))
+    await peer.get_account("acme")
+    await peer.get_user_membership("acme", "alice")
+    await peer.get_user_group_ids("acme", "alice")
+    if change == "remove_member":
+        await peer.remove_group_members("acme", "engineering", ["alice"])
+    else:
+        await peer.delete_group("acme", "engineering")
+    reads.clear()
+    assert (await resolver(ctx)).group_ids == ()
+    assert groups_path in reads
+    with pytest.raises(InvalidArgumentError, match="persistent local"):
+        await manager.create_task(
+            path=GITHUB_URL, to_uri=WATCH_TO_URI, account_id="acme", user_id="alice",
+            processor_kwargs=kwargs,
+        )
+    store.create_task.assert_not_called()
+    monkeypatch.setattr(runner_module, "utc_now", lambda: datetime.fromisoformat(
+        "2026-11-10T02:30:00+00:00"))
+    result = await PrRadarRunner(
+        fs, gh=_SinceGh([_pr_row(9, "2026-11-10T00:30:00Z")]), context_resolver=resolver,
+    ).maybe_run(_fixed_task(target_uri=target), ctx)
+    assert result.status == "failed" and result.reason == "PermissionDeniedError"
+    assert fs.files == {}
+    assert accesses == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("read_result", ["missing", "error", "watching"])
+async def test_group_authorization_refresh_handles_storage_and_watcher(read_result, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from openviking.server.account_stores.file import FileStore
+    from openviking.server.api_keys.models import AccountInfo
+    from openviking.server.identity import Role
+
+    store = FileStore(SimpleNamespace(agfs=SimpleNamespace()), watch_enabled=False)
+    store._accounts["acme"] = AccountInfo(
+        created_at="born", users={"alice": {"role": Role.USER}},
+        groups={"engineering": {"members": ["alice"]}},
+    )
+    store._rebuild_account_group_index("acme")
+    read = AsyncMock(return_value=None)
+    monkeypatch.setattr(store, "_read_json", read)
+    if read_result == "error":
+        read.side_effect = RuntimeError("storage unavailable")
+        with pytest.raises(RuntimeError, match="storage unavailable"):
+            await store.get_user_group_ids("acme", "alice")
+    elif read_result == "watching":
+        monkeypatch.setattr(store, "_watcher_running", lambda: True)
+        assert await store.get_user_group_ids("acme", "alice") == ("engineering",)
+        read.assert_not_awaited()
+    else:
+        assert await store.get_user_group_ids("acme", "alice") == ()
+        read.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_force_publish_when_pending_hits_safety_bound():
     fs = FakeFs()
     full_page = [_pr_row(n) for n in range(1, 51)]
@@ -1151,6 +1334,42 @@ def test_signal_store_merge_dedupes_by_number():
     merged = RadarSignalStore.merge([signals[0]], signals)  # #11 again + #12
 
     assert [pr.number for pr in merged] == [11, 12]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("separator", ["\u2028", "\u2029", "\u0085", "\n"])
+async def test_signal_store_roundtrip_preserves_text_separators(separator):
+    from openviking.resource.github_radar.signal_store import RadarSignalStore
+
+    fs = FakeFs()
+    store = RadarSignalStore(fs, _RADAR_URI)
+    row = _pr_row(9)
+    row["title"] = f"first{separator}second"
+    row["body"] = f"body{separator}tail"
+    signals = [_build_pr(row), _build_pr(_pr_row(10))]
+    await store.save(signals, _ctx)
+    assert await store.load(_ctx) == signals
+    uri = f"{_RADAR_URI}/{SIGNALS_FILENAME}"
+    fs.files[uri] += "\ninvalid json\n\n"
+    assert await store.load(_ctx) == signals
+
+
+@pytest.mark.asyncio
+async def test_accumulated_unicode_signal_is_published_when_window_closes(monkeypatch):
+    fs = FakeFs()
+    _seed_state(fs, "2026-11-10T00:00:00Z")
+    row = _pr_row(9, "2026-11-10T00:00:02Z")
+    row["body"] = "first\u2028second"
+    runner = PrRadarRunner(fs, gh=_SinceGh([row]))
+    monkeypatch.setattr(runner_module, "utc_now", lambda: datetime.fromisoformat(
+        "2026-11-10T00:30:00+00:00"))
+    first = await runner.maybe_run(_fixed_task(), _ctx)
+    assert first.status == "accumulating" and first.pr_count == 1
+    monkeypatch.setattr(runner_module, "utc_now", lambda: datetime.fromisoformat(
+        "2026-11-10T02:30:00+00:00"))
+    second = await runner.maybe_run(_fixed_task(), _ctx)
+    assert second.status == "published" and second.pr_count == 1
+    assert "[#9]" in fs.files[f"{_RADAR_URI}/{LATEST_REPORT_NAME}"]
 
 
 def test_signal_store_keeps_distinct_versions_and_dedupes_reemits():
@@ -1627,6 +1846,69 @@ class _SinceGh:
         per_page = int(params["per_page"])
         start = (int(params["page"]) - 1) * per_page
         return rows[start : start + per_page]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("last_stamp", ["2026-11-10T00:00:01Z", "2026-11-10T00:00:02Z"])
+async def test_bounded_recovery_archives_each_pr_version_once(monkeypatch, last_stamp):
+    base = "2026-11-10T00:00:00Z"
+    rows = [
+        {"number": 100, "updated_at": base}, {"number": 101, "updated_at": base},
+        _pr_row(7, "2026-11-10T00:00:01Z"), _pr_row(8, last_stamp),
+    ]
+
+    class ChangingGh(_SinceGh):
+        changed = False
+
+        async def api_get_json(self, path, params=None):
+            if int(params["page"]) == 3 and not self.changed:
+                rows[0]["updated_at"] = "2026-11-10T00:00:03Z"
+                self.changed = True
+            return await super().api_get_json(path, params)
+
+    fs = FakeFs()
+    _seed_state(fs, base)
+    state = _read_state(fs)
+    state["issues_since"] = base
+    fs.files[_state_uri(fs)] = json.dumps(state)
+    monkeypatch.setattr(runner_module, "utc_now", lambda: datetime.fromisoformat(
+        "2026-11-10T02:30:00+00:00"))
+    stamps = iter(["recovery-a", "recovery-b", "recovery-c"])
+    monkeypatch.setattr(runner_module, "report_stamp", lambda: next(stamps))
+    runner = PrRadarRunner(fs, gh=ChangingGh(rows))
+    task = _fixed_task(max_prs_per_run=1, max_pending_prs=1)
+    statuses = [(await runner.maybe_run(task, _ctx)).status for _ in range(3)]
+    assert statuses == ["published", "published", "empty"]
+    archives = [body for uri, body in fs.files.items() if "/reports/" in uri]
+    assert len(archives) == 2
+    assert sum("[#8]" in body for body in archives) == 1
+    assert sum("[#7]" in body for body in archives) == 1
+
+
+@pytest.mark.asyncio
+async def test_queue_write_crossing_boundary_does_not_close_unread_window(monkeypatch):
+    clock = datetime.fromisoformat("2026-11-10T00:59:55+00:00")
+    monkeypatch.setattr(runner_module, "utc_now", lambda: clock)
+    fs = FakeFs()
+    _seed_state(fs, "2026-11-10T00:00:00Z")
+    original = fs.write_file
+
+    async def save(uri, content, **kwargs):
+        nonlocal clock
+        await original(uri, content, **kwargs)
+        if uri.endswith(SIGNALS_FILENAME):
+            clock = datetime.fromisoformat("2026-11-10T01:00:15+00:00")
+
+    monkeypatch.setattr(fs, "write_file", save)
+    gh = FakeGh([_pr_row(1, "2026-11-10T00:50:00Z")])
+    runner = PrRadarRunner(fs, gh=gh)
+    task = _fixed_task()
+    assert (await runner.maybe_run(task, _ctx)).status == "accumulating"
+    assert _read_state(fs)["last_digest_at"] == "2026-11-10T00:00:00Z"
+    # This update occurred after the previous fetch, before the boundary.
+    gh._rows.append(_pr_row(2, "2026-11-10T00:59:58Z"))
+    result = await runner.maybe_run(task, _ctx)
+    assert result.status == "published" and result.pr_count == 2
 
 
 @pytest.mark.asyncio

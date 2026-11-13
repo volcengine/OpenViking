@@ -193,6 +193,41 @@ class MutableUpdatedGh(GithubOffsetGh):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("last_stamp", ["2026-11-10T00:00:01Z", "2026-11-10T00:00:02Z"])
+async def test_bounded_recovery_retains_versions_above_advanced_floor(last_stamp):
+    base = "2026-11-10T00:00:00Z"
+    rows = [_issue_row(100, base), _issue_row(101, base)]
+    rows += [_pr_row(7, "2026-11-10T00:00:01Z"), _pr_row(8, last_stamp)]
+
+    class ChangingGh(MutableUpdatedGh):
+        changed = False
+
+        async def api_get_json(self, path, params=None):
+            if int(params["page"]) == 3 and not self.changed:
+                rows[0]["updated_at"] = "2026-11-10T00:00:03Z"
+                self.changed = True
+            return await super().api_get_json(path, params)
+
+    gh = ChangingGh(rows)
+    config = RadarConfig(enabled=True, max_prs_per_run=1)
+    state = RadarState(issues_since=base)
+    emitted = []
+    for _ in range(3):
+        outcome = await collect_prs(gh, "o/r", config, state)
+        emitted.append([pr.number for pr in outcome.prs])
+        state = outcome.state
+    assert emitted == [[8], [7], []]
+    assert outcome.caught_up
+    assert state.scan_seen == []
+    # A genuine later version of the same PR must still be collected.
+    rows[-1]["updated_at"] = "2026-11-10T00:00:04Z"
+    newer = await collect_prs(gh, "o/r", config, state)
+    assert [(pr.number, pr.updated_at) for pr in newer.prs] == [
+        (8, "2026-11-10T00:00:04Z")
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("change", ["update", "delete"])
 async def test_resumption_reconciles_shifted_issue_prefix(change):
     tie = "2026-11-10T00:00:00Z"

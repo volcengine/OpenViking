@@ -283,10 +283,17 @@ def _advance_state(
     else:
         next_seen = sorted(previously_seen | boundary_refs)
         next_offset = 0 if caught_up else max(previous.scan_offset, rows_consumed)
+    # A held scan may already have emitted versions above this verified
+    # prefix. Keep them until the floor passes them or the scan catches up.
+    next_scan_seen = [] if caught_up else sorted(scanned_refs)
+    if watermark_moved and not caught_up:
+        next_scan_seen = [
+            key for key in next_scan_seen if key.rsplit("@", 1)[-1] >= watermark
+        ]
     return replace(
         previous,
         issues_since=watermark or since or previous.issues_since,
         issues_seen=next_seen,
         scan_offset=next_offset,
-        scan_seen=[] if watermark_moved or caught_up else sorted(scanned_refs),
+        scan_seen=next_scan_seen,
     )

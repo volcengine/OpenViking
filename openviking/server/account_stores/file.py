@@ -1101,14 +1101,20 @@ class FileStore(AccountStore):
             raise NotFoundError(group_id, "group")
         return group
 
-    async def _ensure_account_groups_loaded(self, account_id: str) -> None:
+    async def _ensure_account_groups_loaded(
+        self, account_id: str, *, force_refresh: bool = False
+    ) -> None:
         """Load one account's groups when its account metadata was discovered alone."""
         async with self._reload_lock:
             account = self._require_account(account_id)
-            await self._load_account_groups_if_needed(account_id, account)
+            await self._load_account_groups_if_needed(
+                account_id, account, force_refresh=force_refresh
+            )
 
-    async def _load_account_groups_if_needed(self, account_id: str, account: AccountInfo) -> None:
-        if account.groups_loaded:
+    async def _load_account_groups_if_needed(
+        self, account_id: str, account: AccountInfo, *, force_refresh: bool = False
+    ) -> None:
+        if account.groups_loaded and not force_refresh:
             return
         groups_path = GROUPS_PATH_TEMPLATE.format(account_id=account_id)
         groups_data = await self._read_json(groups_path)
@@ -1639,11 +1645,16 @@ class FileStore(AccountStore):
         return self._get_group_members(account_id, group_id)
 
     async def get_user_group_ids(self, account_id: str, user_id: str) -> tuple[str, ...]:
-        account = self._accounts.get(account_id)
-        if account is None or user_id not in account.users:
-            return ()
-        await self._ensure_account_groups_loaded(account_id)
-        return self._get_user_group_ids(account_id, user_id)
+        async with self._mutation_lock:
+            account = self._accounts.get(account_id)
+            if account is None or user_id not in account.users:
+                return ()
+            # Without a running watcher, cached groups can retain grants
+            # revoked by another process. Authorization must read the store.
+            await self._ensure_account_groups_loaded(
+                account_id, force_refresh=not self._watcher_running()
+            )
+            return self._get_user_group_ids(account_id, user_id)
 
     async def add_group_members(self, account_id: str, group_id: str, user_ids: list[str]) -> bool:
         self._require_writable()

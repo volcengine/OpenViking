@@ -45,7 +45,8 @@ class RadarSignalStore:
                 return []
             raise
         signals: List[PrSignal] = []
-        for line in (raw or "").splitlines():
+        # JSONL records use LF; Unicode line separators are valid JSON text.
+        for line in (raw or "").split("\n"):
             line = line.strip()
             if not line:
                 continue
