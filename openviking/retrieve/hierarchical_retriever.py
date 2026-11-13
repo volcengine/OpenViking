@@ -4,6 +4,7 @@
 Global vector retrieval with optional reranking of the recalled candidates.
 """
 
+import asyncio
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -17,6 +18,7 @@ from openviking.models.embedder.base import (
     embedder_supports_multimodal,
 )
 from openviking.models.rerank import RerankClient
+from openviking.models.rerank.input import RerankInput
 from openviking.retrieve.rerank_scoring import RerankScores, finite_score, rerank_scores
 from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.server.identity import RequestContext
@@ -134,7 +136,9 @@ class HierarchicalRetriever:
         if mode is None:
             mode = RetrieverMode.THINKING if self._rerank_client else RetrieverMode.QUICK
         use_rerank = (
-            mode == RetrieverMode.THINKING and self._rerank_client is not None and not image_query
+            mode == RetrieverMode.THINKING
+            and self._rerank_client is not None
+            and (not image_query or getattr(self._rerank_client, "supports_multimodal", False))
         )
         decay_kwargs = {}
         if events_time_decay_protection is not None:
@@ -245,8 +249,8 @@ class HierarchicalRetriever:
         rerank_used = use_rerank and bool(candidates)
         if rerank_used:
             rerank = await self._rerank_scores(
-                query.query,
-                [str(candidate.get("abstract", "")) for candidate in candidates],
+                query.embedding_input if image_query else query.query,
+                await self._rerank_documents(candidates, ctx),
                 scores,
             )
             scores, reranked = rerank.scores, rerank.reranked
@@ -294,10 +298,44 @@ class HierarchicalRetriever:
             return score >= threshold
         return score > threshold
 
+    async def _rerank_documents(
+        self, candidates: List[Dict[str, Any]], ctx: RequestContext
+    ) -> List[RerankInput]:
+        documents: List[RerankInput] = [str(c.get("abstract", "")) for c in candidates]
+        if not getattr(self._rerank_client, "supports_multimodal", False):
+            return documents
+
+        from openviking.core.context import ResourceContentType
+        from openviking.storage.viking_fs import get_viking_fs
+        from openviking.utils.embedding_utils import get_resource_content_type
+        from openviking.utils.image_search import image_bytes_to_model_data_uri
+
+        for index, candidate in enumerate(candidates):
+            uri = candidate["uri"]
+            if (
+                candidate.get("level", 2) != 2
+                or get_resource_content_type(uri) != ResourceContentType.IMAGE
+            ):
+                continue
+            # An unreadable image keeps its vector score, not a potentially misleading caption score.
+            documents[index] = ""
+            try:
+                content = await get_viking_fs().read_file_bytes(
+                    uri, ctx=ctx, max_bytes=20 * 1024 * 1024
+                )
+                data_uri = await asyncio.to_thread(image_bytes_to_model_data_uri, content, uri)
+                documents[index] = [{"type": "image_url", "image_url": {"url": data_uri}}]
+            except Exception as exc:
+                logger.warning(
+                    "[Rerank] Cannot prepare candidate image (%s); keeping vector score",
+                    type(exc).__name__,
+                )
+        return documents
+
     async def _rerank_scores(
         self,
-        query: str,
-        documents: List[str],
+        query: RerankInput,
+        documents: List[RerankInput],
         fallback_scores: List[float],
     ) -> RerankScores:
         """Return rerank scores or fall back to vector scores."""

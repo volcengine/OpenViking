@@ -13,6 +13,7 @@ from typing import Dict, List, Optional
 import requests
 
 from openviking.models.rerank.base import RerankBase
+from openviking.models.rerank.input import RerankInput
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -51,6 +52,7 @@ class OpenAIRerankClient(RerankBase):
         model_name: str,
         extra_headers: Optional[Dict[str, str]] = None,
         timeout: float = 30.0,
+        input_type: str = "text",
     ) -> None:
         """
         Initialize OpenAI-compatible rerank client.
@@ -71,8 +73,27 @@ class OpenAIRerankClient(RerankBase):
         self.timeout = timeout
         self.provider = "openai"
         self._uses_nested_envelope = _uses_nested_envelope(api_base)
+        self.supports_multimodal = input_type == "multimodal"
 
-    def _build_request_body(self, query: str, documents: List[str]) -> dict:
+    def _encode_input(self, content: RerankInput):
+        if isinstance(content, str):
+            return content
+        if not self.supports_multimodal:
+            raise ValueError("This reranker is configured for text input")
+        if not self._uses_nested_envelope:
+            return {"content": content}
+        # DashScope's native API documents one modality per query/document.
+        # Do not silently discard a mixed or multi-image query.
+        if len(content) != 1:
+            raise ValueError("DashScope native rerank requires one content part per input")
+        part = content[0]
+        if part["type"] == "text":
+            return {"text": part["text"]}
+        if part["type"] == "image_url":
+            return {"image": part["image_url"]["url"]}
+        raise ValueError("Unsupported rerank content part")
+
+    def _build_request_body(self, query: RerankInput, documents: List[RerankInput]) -> dict:
         """Build the request body for the rerank API.
 
         DashScope native API uses a nested envelope:
@@ -81,6 +102,8 @@ class OpenAIRerankClient(RerankBase):
         Standard OpenAI/Cohere and DashScope compatible-api use a flat body:
             {"model": ..., "query": ..., "documents": [...]}
         """
+        query = self._encode_input(query)
+        documents = [self._encode_input(document) for document in documents]
         if self._uses_nested_envelope:
             return {
                 "model": self.model_name,
@@ -115,7 +138,9 @@ class OpenAIRerankClient(RerankBase):
             return None
         return response_json.get("results")
 
-    def rerank_batch(self, query: str, documents: List[str]) -> Optional[List[float]]:
+    def rerank_batch(
+        self, query: RerankInput, documents: List[RerankInput]
+    ) -> Optional[List[float]]:
         """
         Batch rerank documents against a query.
 
@@ -130,9 +155,8 @@ class OpenAIRerankClient(RerankBase):
         if not documents:
             return []
 
-        req_body = self._build_request_body(query, documents)
-
         try:
+            req_body = self._build_request_body(query, documents)
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
@@ -204,4 +228,5 @@ class OpenAIRerankClient(RerankBase):
             model_name=config.model or "qwen3-rerank",
             extra_headers=config.extra_headers,
             timeout=config.timeout,
+            input_type=config.input,
         )

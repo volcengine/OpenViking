@@ -9,6 +9,7 @@ Provides common token usage tracking functionality.
 import logging
 from typing import Any, Dict
 
+from openviking.models.rerank.input import RerankInput, text_content
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.utils import get_logger
 
@@ -43,14 +44,16 @@ class RerankBase:
     Provides common token usage tracking functionality.
     """
 
+    supports_multimodal = False
+
     def __init__(self):
         """Initialize rerank client with token tracking"""
         # Token usage tracking
         self._token_tracker = _get_token_tracker()
 
-    def _estimate_tokens(self, text: str) -> int:
+    def _estimate_tokens(self, text: RerankInput) -> int:
         """Estimate token count with the shared mixed-language fallback."""
-        return max(1, estimate_text_tokens(text))
+        return max(1, estimate_text_tokens(text_content(text)))
 
     def update_token_usage(
         self,
@@ -122,7 +125,7 @@ class RerankBase:
     def _extract_and_update_token_usage(
         self,
         response_data: dict,
-        query: str,
+        query: RerankInput,
         documents: list,
         duration_seconds: float = 0.0,
     ) -> None:
@@ -149,7 +152,7 @@ class RerankBase:
         if prompt_tokens == 0 and completion_tokens == 0:
             prompt_tokens = self._estimate_tokens(query)
             for doc in documents:
-                prompt_tokens += self._estimate_tokens(str(doc))
+                prompt_tokens += self._estimate_tokens(doc)
             # Rerank typically doesn't generate output tokens, just scores
             completion_tokens = 0
 
