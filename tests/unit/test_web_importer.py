@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from openviking.parse.accessors.base import LocalResource
 from openviking.parse.accessors.web_importer import (
     WebImporter,
     WebImportOptions,
@@ -154,6 +155,49 @@ class TestWebImporter:
             import shutil
 
             shutil.rmtree(result.path.parent, ignore_errors=True)
+
+    async def test_import_to_directory_cleanup_removes_temp_root(self, monkeypatch):
+        class FakeCrawler:
+            def __init__(self, config):
+                self.config = config
+
+            async def crawl(self, root_url):
+                return SimpleNamespace(
+                    pages=[
+                        SimpleNamespace(
+                            url=root_url,
+                            final_url=root_url,
+                            depth=0,
+                            status="success",
+                            html="<html><body>Home</body></html>",
+                        )
+                    ],
+                    downloads=[],
+                    total_crawled=1,
+                    total_downloads=0,
+                    total_failed=0,
+                    total_skipped=0,
+                )
+
+        monkeypatch.setattr("openviking.parse.accessors.web_importer.ScrapyWebCrawler", FakeCrawler)
+
+        result = await WebImporter().import_to_directory(
+            root_url="https://example.com",
+            options=WebImportOptions(),
+        )
+        local = LocalResource(
+            path=result.path,
+            source_type="http",
+            original_source="https://example.com",
+            meta=dict(result.meta),
+        )
+
+        local.cleanup()
+
+        # The per-host directory lives inside a mkdtemp root; cleanup must not
+        # leave the empty root behind after every import.
+        assert not result.path.exists()
+        assert not result.path.parent.exists()
 
     async def test_import_to_directory_rejects_missing_entry(self, monkeypatch):
         class FakeCrawler:
