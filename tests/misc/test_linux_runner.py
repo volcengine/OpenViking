@@ -117,6 +117,7 @@ def test_only_selected_builds_and_explicit_diagnostic_reference_self_hosted():
     assert references == {
         ("_build.yml", "build-linux"),
         ("_build.yml", "check-linux-runner"),
+        ("api_test.yml", "prepare"),
         ("api_test.yml", "native-runtime"),
     }
 
@@ -161,6 +162,7 @@ def test_wheel_container_restores_workspace_ownership():
     "file,name,self_hosted_parity",
     [
         ("_build.yml", "build-linux", 0),
+        ("api_test.yml", "prepare", 1),
         ("api_test.yml", "native-runtime", 1),
     ],
 )
@@ -176,6 +178,7 @@ def test_selected_builds_alternate_half_the_runs(file, name, self_hosted_parity)
     "file,name,run_number",
     [
         ("_build.yml", "build-linux", 2),
+        ("api_test.yml", "prepare", 1),
         ("api_test.yml", "native-runtime", 1),
     ],
 )

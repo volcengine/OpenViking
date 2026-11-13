@@ -24,7 +24,9 @@ builds and their API test consumers alternate between GitHub-hosted and
 Only the dedicated runner `iv-yezentk8ao3z47ge5tmm` has that custom label; runner
 display names do not select machines.
 Linux wheels use the dedicated runner on even workflow run numbers; API native
-runtime preparation uses it on odd run numbers. Linux API/CLI, MySQL/Redis and
+runtime preparation and its short change-planning job use it on odd run numbers.
+The planning job runs Git/Python on the host with a five-minute execution limit.
+Linux API/CLI, MySQL/Redis and
 cuVS tests inherit their same-run native producer's destination. Each workflow therefore sends
 50% of consecutive runs to each destination, and reruns keep the same destination.
 This is half of the selected build/test jobs over time, not half of all Linux jobs or

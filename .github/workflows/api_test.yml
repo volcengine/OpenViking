@@ -30,7 +30,17 @@ concurrency:
 
 jobs:
   prepare:
-    runs-on: ubuntu-24.04
+    runs-on: >-
+      ${{ fromJSON(github.repository == 'volcengine/OpenViking' &&
+          (github.event_name == 'pull_request' || github.event_name == 'push') &&
+          !startsWith(github.ref, 'refs/tags/') && vars.CI_DISABLE_SELF_HOSTED != 'true' &&
+          vars.CI_LINUX_BUILDS_ENABLED == 'true' &&
+          (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) &&
+          (endsWith(github.run_number, '1') || endsWith(github.run_number, '3') ||
+           endsWith(github.run_number, '5') || endsWith(github.run_number, '7') ||
+           endsWith(github.run_number, '9')) &&
+          '["self-hosted","Linux","X64","ci-linux-builds"]' || '["ubuntu-24.04"]') }}
+    timeout-minutes: 5
     outputs:
       api_changed: ${{ steps.plan.outputs.api_changed }}
       cuvs_changed: ${{ steps.plan.outputs.cuvs_changed }}
