@@ -47,8 +47,6 @@ const studio = {
     details: '技术详情',
 
     botHealth: 'Bot 健康检查失败（{{status}}）',
-    botSteer: '追加 Bot 输入失败（{{status}}）',
-    botInterrupt: '中断 Bot 失败（{{status}}）',
     expectedEventStream: '响应格式应为 {{contentType}}',
     sseFailed: 'SSE 请求失败（{{status}}）：{{detail}}',
     imageLoadFailed: '图片加载失败',

@@ -57,7 +57,6 @@ export function DeleteAccountButton({
       const deletingSelectedAccount = connection.accountId === accountId
       if (deletingSelectedAccount) await switchManagementAccount(nextAccountId)
       queryClient.removeQueries({ queryKey: ['managed-users'] })
-      await queryClient.invalidateQueries({ queryKey: ['account-switcher'] })
       await queryClient.invalidateQueries({ queryKey: ['data-spaces'] })
       setOpen(false)
       setConfirmation('')

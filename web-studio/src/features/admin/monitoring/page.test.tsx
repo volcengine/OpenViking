@@ -3,7 +3,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { MonitoringRoute } from './page'
-import { NAV_ITEMS } from '#/app/navigation/workbench-navigation'
 import { featureForPath } from '#/shared/lib/studio-service'
 
 const api = vi.hoisted(() => ({ observer: vi.fn(), scope: 'first' }))
@@ -57,9 +56,7 @@ function mount() {
   )
 }
 it('places monitoring in management and removes the workbench destination', () => {
-  expect(NAV_ITEMS.some((item) => String(item.to) === '/monitoring')).toBe(
-    false,
-  )
+  expect(featureForPath('/monitoring')).toBeUndefined()
   expect(featureForPath('/admin/monitoring')?.domain).toBe('management')
 })
 it('shows actual component health and opens its matching detail from a card', async () => {

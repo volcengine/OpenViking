@@ -58,8 +58,6 @@ const studio = {
     details: 'Technical details',
 
     botHealth: 'Bot health check failed ({{status}})',
-    botSteer: 'Bot steer failed ({{status}})',
-    botInterrupt: 'Bot interrupt failed ({{status}})',
     expectedEventStream: 'Expected {{contentType}} response',
     sseFailed: 'SSE request failed ({{status}}): {{detail}}',
     imageLoadFailed: 'Image failed to load',

@@ -217,7 +217,6 @@ export function UserManagementPanel({
       setAddUserOpen(false)
       toast.success(t('toast.userCreated'))
       await queryClient.invalidateQueries({ queryKey: ['managed-users'] })
-      await queryClient.invalidateQueries({ queryKey: ['account-switcher'] })
     },
   })
 
@@ -273,7 +272,6 @@ export function UserManagementPanel({
       setPendingRemoveUser(null)
       toast.success(t('toast.userRemoved', { user: user.userId }))
       await queryClient.invalidateQueries({ queryKey: ['managed-users'] })
-      await queryClient.invalidateQueries({ queryKey: ['account-switcher'] })
     },
   })
 

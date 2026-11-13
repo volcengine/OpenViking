@@ -37,7 +37,3 @@ export function createRandomUuid(): RandomUuid {
 
   return createFallbackRandomUuid()
 }
-
-export function createBrowserId(prefix: string): string {
-  return `${prefix}_${createRandomUuid().replace(/-/g, '')}`
-}

@@ -64,23 +64,6 @@ export interface VikingReadResult {
   truncated: boolean
 }
 
-export interface VikingPreviewPolicy {
-  maxAutoReadBytes?: number
-  defaultReadLimit?: number
-  requireKnownSize?: boolean
-}
-
-export interface VikingPreviewResult {
-  entry: VikingFsEntry
-  fileType: VikingFileType
-  shouldAutoRead: boolean
-  reason?: 'binary' | 'too-large' | 'unknown-size'
-  content: string
-  offset: number
-  limit: number
-  truncated: boolean
-}
-
 export interface VikingApiError {
   code: string
   message: string

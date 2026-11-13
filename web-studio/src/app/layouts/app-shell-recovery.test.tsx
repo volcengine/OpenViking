@@ -32,9 +32,6 @@ vi.mock('#/features/connection/components/studio-scope-switcher', () => ({
 vi.mock('#/features/connection/components/generated-credential-dialog', () => ({
   GeneratedCredentialDialog: () => null,
 }))
-vi.mock('#/features/oauth/components/cross-device-verify-dialog', () => ({
-  CrossDeviceVerifyDialog: () => null,
-}))
 vi.mock('#/features/connection/hooks/use-studio-service', () => ({
   useStudioService: () => ({
     ready: state.mode !== 'checking',

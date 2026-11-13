@@ -119,19 +119,6 @@ vi.mock('#/features/workbench/resources/hooks/viking-fm', () => ({
     invalidatePreview: vi.fn(),
     invalidateTree: vi.fn(),
   }),
-  useVikingFilePreview: () => ({
-    canLoadContent: false,
-    isContentLoaded: true,
-    isFetching: false,
-    isLoading: false,
-    preview: {
-      content: '[Target](./target.md)',
-      fileType: 'markdown',
-      shouldAutoRead: true,
-      ...(previewState.override ?? {}),
-    },
-    refetch: vi.fn(),
-  }),
   useVikingFsStat: () => ({
     data: undefined,
     isLoading: false,

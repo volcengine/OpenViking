@@ -269,34 +269,6 @@ export function isLikelyBinary(uri: string): boolean {
   return BINARY_EXTS.includes(ext)
 }
 
-export function shouldAutoRead(
-  entry: Pick<VikingFsEntry, 'isDir' | 'uri' | 'sizeBytes'>,
-  maxAutoReadBytes = 2 * 1024 * 1024,
-  requireKnownSize = false,
-): {
-  shouldRead: boolean
-  reason?: 'binary' | 'too-large' | 'unknown-size'
-} {
-  if (entry.isDir) {
-    return { shouldRead: false }
-  }
-
-  const fileType = detectFileType(entry.uri)
-  if (fileType === 'image' || isLikelyBinary(entry.uri)) {
-    return { shouldRead: false, reason: 'binary' }
-  }
-
-  if (requireKnownSize && entry.sizeBytes === null) {
-    return { shouldRead: false, reason: 'unknown-size' }
-  }
-
-  if (entry.sizeBytes !== null && entry.sizeBytes > maxAutoReadBytes) {
-    return { shouldRead: false, reason: 'too-large' }
-  }
-
-  return { shouldRead: true }
-}
-
 export function normalizeFsEntry(
   item: unknown,
   currentUri: string,
