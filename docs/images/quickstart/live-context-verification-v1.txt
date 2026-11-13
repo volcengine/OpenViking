@@ -1,0 +1,65 @@
+Live context onboarding verification / 实时上下文入门核验
+Date: 2026-11-13
+Type: feature walkthrough / 功能体验
+Audience: users with a connected CLI and a local OpenViking server.
+Goal: register and mount a read-only MCP tool, retrieve its node, observe a source-data change, and have an Agent use the result.
+Location: getting-started/24-live-context, between Skills and Rules in both locales.
+Owner: OpenViking documentation maintainers.
+
+Test environment:
+- Local OpenViking Server 0.5.4.1, CLI 0.5.2, api_key authentication, existing default Account/User with ADMIN role.
+- The active CLI profile pointed to a hosted service whose MCP management route returned 404. Tests selected the existing localtest profile through OPENVIKING_CLI_CONFIG_FILE; the global active profile was not switched.
+- Extracted live-context-demo-v1.zip into an isolated temporary directory and ran uv run live-context-demo.py --port 18765. uv installed the declared dependencies; the sample ran on Python 3.14 with MCP 1.27.0. The harness used uv's absolute installed path because its elevated shell did not expose uv on PATH.
+- Port 8765 and the user's onboarding-live-v1 registration were already in use and were left intact.
+- Test registration: onboarding-live-test-20261113.
+- Test node: viking://resources/onboarding-live-context-test-20261113/status.md.
+- Executed the Chinese walkthrough with only registration name, directory, and documented optional port changed for isolation. Also executed the English retrieval question; translated mount titles/descriptions were checked statically rather than rerun as a separate full walkthrough.
+
+Executed checks:
+1. ov health / ov mcps list: local server and authenticated identity confirmed.
+2. uv startup: dependency installation and Streamable HTTP listener succeeded. A Pydantic forward-reference warning on Python 3.14 did not block startup or tool calls.
+3. ov mcps validate: valid=true, tool_count=1, MCP protocol 2025-11-25, sample MCP version 1.27.0.
+4. ov mcps add --wait: catalog registration and processing succeeded (about 13 seconds in this run).
+5. ov mcps show: project_status discovered with a required project string and readOnlyHint=true / destructiveHint=false.
+6. ov mcps mount --wait: created the node with project=Lighthouse (about 23 seconds in this run).
+7. ov mcps mounts: node URI, tool binding, and arguments matched.
+8. Chinese and English ov find questions both returned status.md as an L2 resource.
+9. First ov read returned {"project":"Lighthouse","pending_feedback":3}.
+10. Changed only status.json to {"pending_feedback":1}; second ov read returned {"project":"Lighthouse","pending_feedback":1}. No remount, sync, reimport, or sample restart.
+11. Paginated ov read --limit 80 returned the stored OpenViking Live Context description.
+12. Directory abstract was Chinese in the tested server configuration. This is an observation, not a fix or general guarantee for automatic language detection.
+13. Temporarily malformed the isolated status.json: ov read failed with PROCESSING_ERROR. Restored the fixture immediately.
+14. uv run --offline live-context-demo.py --port 0 rejected the invalid port before server startup.
+15. ov mcps unmount --wait succeeded; reading the removed node returned NOT_FOUND.
+16. ov mcps remove succeeded; showing the test registration returned NOT_FOUND.
+17. Removed the test-only resource directory and confirmed NOT_FOUND. Confirmed the user's original onboarding-live-v1 registration still existed.
+18. Stopped the sample on port 18765. Test chat history was retained for review.
+
+Agent validation:
+- Ran the walkthrough question in an isolated VikingBot session, adding a read-only instruction.
+- CLI chat returned 1 pending feedback item with the correct node URI.
+- A separate streaming run captured actual tool events to verify the answer rather than relying on the model's claim that it read the node.
+- Observed trace:
+  openviking_list(uri="viking://resources/onboarding-live-context-test-20261113/")
+  openviking_search(query="Lighthouse 项目待处理反馈数量", target_uri="viking://resources/onboarding-live-context-test-20261113/")
+  openviking_multi_read(uris=["viking://resources/onboarding-live-context-test-20261113/status.md"])
+- The read tool returned {"project":"Lighthouse","pending_feedback":1}.
+- The final answer stated “Lighthouse 项目当前有 1 条待处理反馈” and cited the node URI.
+- The observed trace used OpenViking tools and contained no direct project_status invocation.
+- Retrieval identifies the mounted query; the full read invokes it with preset arguments. The 3-to-1 change alone does not distinguish mounting from a direct MCP call.
+
+Documentation and packaging:
+- Added health/MCP-list checks and User/Admin-key guidance after verifying connection and authentication prerequisites in the actual environment.
+- Added optional --port support and synchronized the ZIP and both language pages so an existing sample instance does not block another run.
+- npm run check:docs passed: 148 pages per locale, 763 JSON blocks, 2937 local links.
+- npm run docs:build passed. Existing syntax-highlighting and bundle-size warnings remain.
+- Python syntax, ZIP integrity, initial status.json=3, source/ZIP equality, and built-download equality passed.
+- git diff --check passed.
+
+Evidence baseline and limits:
+- Official guide: https://docs.openviking.net/zh/guides/24-live-context-arrangement
+- Repository MCP API and CLI contracts at ba941e829; runtime results came from the installed server and CLI versions listed above.
+- Earlier upstream-only tests on Python 3.10/MCP 1.27.0 also checked an unknown project and a missing source file. This run adds the full OpenViking and Agent path.
+- No service settings, roles, credentials, or global CLI profile were changed for testing.
+- No hosted or container deployment was tested. Multi-source retrieval quality, other Agent clients, and performance/token improvements are not established by this run.
+- No documentation site was published.
