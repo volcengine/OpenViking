@@ -5,6 +5,7 @@
 import asyncio
 import json
 import os
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -373,6 +374,61 @@ async def test_outcome_conflict_retries_if_destination_guard_is_released(task_st
     assert [item["seq"] for item in task.execution_events["items"]] == [1]
     await writer.mark_work_done("source", "work", **OWNER)
     assert (await observer.get("source", **OWNER)).status is TaskStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_work_error_waits_for_task_lock_before_touching_work(task_stores, monkeypatch):
+    from openviking.service.task_store import StoreOperationCode
+    from openviking.service.task_store_sql import SQLTaskWorkStore
+
+    first, second = task_stores
+    if not isinstance(first, SQLTaskWorkStore):
+        pytest.skip("Task-before-Work row locking is a relational store contract")
+    writer = TaskTracker(first)
+    await writer.create("content_write", task_id="task", **OWNER)
+    await writer.register_work("task", "work", "Semantic", **OWNER)
+    locked, release, attempted = threading.Event(), threading.Event(), threading.Event()
+    lock_task = first._lock_task
+
+    async def observe_task_lock(*args, **kwargs):
+        attempted.set()
+        return await lock_task(*args, **kwargs)
+
+    async def hold_task():
+        async with second._transaction() as session:
+            assert await second._lock_task(session, "task", **OWNER)
+            locked.set()
+            assert await asyncio.to_thread(release.wait, 5)
+
+    monkeypatch.setattr(first, "_lock_task", observe_task_lock)
+    holder = asyncio.create_task(second._sql_runtime.run(hold_task))
+    error_writer = None
+    try:
+        assert await asyncio.to_thread(locked.wait, 5)
+        error_writer = asyncio.create_task(
+            first.record_work_error("task", "work", "first error", **OWNER)
+        )
+        assert await asyncio.to_thread(attempted.wait, 5)
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(error_writer), 0.1)
+        work = await second.get_work("task", "work", **OWNER)
+        assert work.error is None
+        release.set()
+        await asyncio.wait_for(holder, 5)
+        assert (await asyncio.wait_for(error_writer, 5)).is_applied
+        assert (await second.record_work_error("task", "work", "second error", **OWNER)).accepted
+        assert (await second.get_work("task", "work", **OWNER)).error == "first error"
+        foreign = await first.record_work_error(
+            "task", "work", "foreign error", account_id="other", user_id=OWNER["user_id"]
+        )
+        assert not foreign.is_applied and foreign.code is StoreOperationCode.WORK_NOT_OPEN
+        missing = await first.record_work_error("missing", "work", "error", **OWNER)
+        assert not missing.is_applied and missing.code is StoreOperationCode.WORK_NOT_OPEN
+    finally:
+        release.set()
+        await asyncio.gather(
+            holder, *([error_writer] if error_writer is not None else []), return_exceptions=True
+        )
 
 
 @pytest.mark.asyncio

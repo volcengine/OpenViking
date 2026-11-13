@@ -1828,6 +1828,8 @@ class SQLTaskWorkStore(TaskWorkStore):
     ) -> StoreOperationResult:
         Work = self._models.Work
         async with self._transaction() as session:
+            if not await self._lock_task(session, task_id, account_id=account_id, user_id=user_id):
+                return StoreOperationResult.noop(StoreOperationCode.WORK_NOT_OPEN)
             result = await session.execute(
                 select(Work.error)
                 .where(*self._work_query(Work, task_id, work_id, account_id, user_id))
