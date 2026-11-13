@@ -223,10 +223,10 @@ export class Harness {
 
   // Shows an accepted line again, tagged undecided=1, after a turn ended with
   // neither a delivery nor stay_silent for it. Same event= (still a valid
-  // decision_id), but no seq: it never moves the fence or counts as a new
-  // input, so it cannot start another reminder. A line a loop-stopped turn
-  // left behind comes back with its seq instead (a second stop must see it
-  // again), and with the tag only where the policy explains it.
+  // decision_id) and original seq: it never moves the fence or counts as a new
+  // input, but lets the next turn end settle it until the reminder limit. A
+  // line a loop-stopped turn left behind uses the same seq mechanics, with the
+  // tag only where the policy explains it.
   redeliverUndecided(row, { seq = null, undecided = true } = {}) {
     return this.enqueueIngress(async () => {
       await this.runtime.prepareInputContext?.();

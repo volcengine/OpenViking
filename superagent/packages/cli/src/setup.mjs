@@ -611,7 +611,7 @@ const SWITCHES = () => [
   { key: 'naturalWriting', label: t('自然写作', 'Natural writing'),
     hint: t('写得像人，去掉 AI 腔', 'writes like a person, without the AI tone') },
   { key: 'explicitSilence', label: t('显式不回复', 'Explicit silence'),
-    hint: t('每条消息都要模型表态：回复，或记下不回；漏了提醒一次', 'the model decides on every message: a reply, or a note that it stays silent; a miss gets one reminder') },
+    hint: t('每条消息都要模型表态：回复，或记下不回；漏了最多提醒三次', 'the model decides on every message: a reply, or a note that it stays silent; a miss gets up to three reminders') },
   { key: 'meetingNotes', label: t('会议纪要入库', 'Meeting notes'),
     hint: t('你参加的飞书会议，智能纪要和文字记录存进 OpenViking；一台机器上只有一个实例能开',
       'the Feishu/Lark AI notes and transcripts of your meetings go into OpenViking; one instance per machine') },

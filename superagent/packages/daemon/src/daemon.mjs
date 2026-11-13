@@ -336,15 +336,16 @@ export class PersonalAgentDaemon {
         isStopping: () => this.shuttingDown,
       });
       // Checks at each successful turn's end that every input it consumed got a
-      // decision (a delivery or stay_silent), with one reminder if not: only on
-      // an instance with explicitSilence on. Recovers what a loop-stopped turn
-      // left undecided on every instance.
+      // decision (a delivery or stay_silent), with up to three reminders by
+      // default if not: only on an instance with explicitSilence on. Recovers
+      // what a loop-stopped turn left undecided on every instance.
       this.decisionPolicy = new DecisionPolicy({
         store: this.store,
         harness: this.harness,
         logger: this.logger.child({ component: 'decisions' }),
         recordActivity: (kind, fields) => this.recordSystemActivity(kind, fields),
         explicitSilence: Boolean(this.config.explicitSilence),
+        decisionReminderLimit: this.config.decisionReminderLimit,
         notifyFailure: (info) => this.failurePolicy.notifyTurnFailure(info),
         isStopping: () => this.shuttingDown,
       });

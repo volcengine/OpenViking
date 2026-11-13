@@ -4,9 +4,9 @@
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
 import { opaqueRef, safeError } from './logger.mjs';
 
-// Seqs already nudged in this process. A restart forgets them: the ledger is
-// durable, the reminder is best effort.
-const NUDGED_LIMIT = 1_000;
+// Reminder counts by seq in this process. A restart forgets them: the ledger
+// is durable, the reminders are best effort.
+const REMINDER_HISTORY_LIMIT = 1_000;
 // The failure notice for an input a loop-stopped turn held twice.
 const LOOP_STOPPED_ERROR = '模型反复做没有效果的调用，这一轮被 daemon 中止了';
 
@@ -46,14 +46,16 @@ function expected(row) {
 // decision: a final delivery or stay_silent (the ledger in `decisions`). It
 // never judges the decision, never sends anything, and never touches the
 // inbound ledger, freshness or the outbox. An expected input with no decision
-// gets one reminder line (same event=, undecided=1, no seq); a seq is reminded
-// about at most once per process, and a later miss on it is only recorded.
+// gets up to `decisionReminderLimit` reminder lines (same event= and seq,
+// undecided=1). The seq lets each reminder turn settle again without moving
+// the freshness fence or counting as a new input. Later misses are recorded.
 export class DecisionPolicy {
   constructor({
-    store, harness, logger, recordActivity, explicitSilence = true, notifyFailure = null, isStopping = () => false,
+    store, harness, logger, recordActivity, explicitSilence = true, decisionReminderLimit = 3,
+    notifyFailure = null, isStopping = () => false,
   }) {
-    Object.assign(this, { store, harness, logger, recordActivity, explicitSilence, notifyFailure, isStopping });
-    this.nudged = new Set();
+    Object.assign(this, { store, harness, logger, recordActivity, explicitSilence, decisionReminderLimit, notifyFailure, isStopping });
+    this.nudged = new Map();
     this.recovered = new Set();
   }
 
@@ -100,11 +102,13 @@ export class DecisionPolicy {
         continue;
       }
       counts.expected_unsettled += 1;
-      if (!this.nudged.has(row.seq)) {
-        this.remember(row.seq);
-        this.harness.redeliverUndecided(row);
+      const reminders = this.nudged.get(row.seq) ?? 0;
+      if (reminders < this.decisionReminderLimit) {
+        this.nudged.set(row.seq, reminders + 1);
+        if (this.nudged.size > REMINDER_HISTORY_LIMIT) this.nudged.delete(this.nudged.keys().next().value);
+        this.harness.redeliverUndecided(row, { seq: row.seq, undecided: true });
         this.missing(row, 'NUDGED', runtime);
-        this.logger.info('decision_nudged', { seq: row.seq, conversationRef: opaqueRef(scopeKey) });
+        this.logger.info('decision_nudged', { seq: row.seq, reminder: reminders + 1, conversationRef: opaqueRef(scopeKey) });
         counts.nudged += 1;
       } else {
         this.missing(row, 'MISSING', runtime);
@@ -114,9 +118,9 @@ export class DecisionPolicy {
     return counts;
   }
 
-  remember(seq, seen = this.nudged) {
+  remember(seq, seen) {
     seen.add(seq);
-    if (seen.size > NUDGED_LIMIT) seen.delete(seen.values().next().value);
+    if (seen.size > REMINDER_HISTORY_LIMIT) seen.delete(seen.values().next().value);
   }
 
   // A turn the loop breaker stopped (AgentRuntime.breakLoop), on any instance:

@@ -124,6 +124,16 @@ describe('configuration safety', { concurrency: false }, () => {
     setEnv('OV_SUPERAGENT_EXPLICIT_SILENCE', 'true');
     assert.equal(getConfig().explicitSilence, true);
   });
+  it('offers an undecided input three times by default, with a bounded override', () => {
+    setEnv('OV_SUPERAGENT_DECISION_REMINDER_LIMIT', undefined);
+    assert.equal(getConfig().decisionReminderLimit, 3);
+    setEnv('OV_SUPERAGENT_DECISION_REMINDER_LIMIT', '5');
+    assert.equal(getConfig().decisionReminderLimit, 5);
+    setEnv('OV_SUPERAGENT_DECISION_REMINDER_LIMIT', '0');
+    assert.equal(getConfig().decisionReminderLimit, 0);
+    setEnv('OV_SUPERAGENT_DECISION_REMINDER_LIMIT', '-1');
+    assert.throws(() => getConfig(), /OV_SUPERAGENT_DECISION_REMINDER_LIMIT/);
+  });
   it('keeps staged replies off unless the instance opts in', () => {
     setEnv('OV_SUPERAGENT_STAGED_REPLIES', undefined);
     assert.equal(getConfig().stagedReplies, false);
