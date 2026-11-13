@@ -247,7 +247,12 @@ it.
 ### Workers
 
 A worker turn is one run of the router's runtime CLI in its non-interactive
-mode, resuming the task's own session (`worker-executor.mjs`):
+mode, resuming the task's own session (`worker-executor.mjs`). DSH instead
+keeps one profile process for the router and workers: each task gets a native
+session with the `ov-superagent-worker` preset, and the existing JSON-RPC bridge
+drives it. The DSH worker uses the same TaskManager contract and turn-scoped
+Core authority; cancelling one worker does not cancel the router or other
+workers.
 
 | Runtime | Turn | First turn of a task that follows one on the same runtime |
 |---|---|---|
@@ -255,6 +260,7 @@ mode, resuming the task's own session (`worker-executor.mjs`):
 | Codex | `codex exec --json ...`, then `codex exec resume <thread>` | `codex exec ... fork <its thread>` |
 | TraeX | `traex exec --json ...`, then `traex exec resume <thread>` | `traex exec ... fork <its thread>` |
 | Claude Code | `claude --print --output-format stream-json --session-id/--resume <task>` | `--resume <its session> --fork-session --session-id <task>` |
+| DSH | `worker/ensure → submit → wait` in the router's DSH profile, `worker-<task>` with the worker preset | its own new session; the brief's summary is the start |
 
 A task that follows another starts from a copy of that task's session when the
 session is still there and at most 4 MB, else from the summary in its brief.
@@ -280,10 +286,16 @@ directory, measured:
   tokens). Codex keys the prompt cache by thread (`prompt_cache_key`), which a
   fork changes, and nothing sets it. Resuming a task's own thread, as each
   later turn and round does, is 99% cached.
+- **DSH: nothing to fork.** Its sessions are not files on the daemon's side, so
+  the bridge starts the task's own session and the brief's summary is the
+  start.
 
-No process runs between turns, so an idle task holds nothing; Durable,
-OpenCode and Ark have no worker mode, and `task_create` tells the router to
-handle the request itself there. A task keeps the runtime it started on.
+No process runs between turns, so an idle CLI task holds nothing; DSH sessions
+stay in the shared profile and resume on the task's next turn or round.
+Durable, OpenCode and Ark have no worker mode, and `task_create` tells the
+router to handle the request itself there. A task keeps the runtime it started
+on.
+
 Three turns run at once, plus one slot only a follow-up to an existing task may
 take. Each task works in a directory under `<workspace>/tasks/` (see Task
 directories).

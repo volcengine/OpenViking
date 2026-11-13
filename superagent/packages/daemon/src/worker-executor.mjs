@@ -31,16 +31,14 @@ function codexTaskInputHookArgs() {
   return ['--dangerously-bypass-hook-trust',
     ...TASK_INPUT_EVENTS.flatMap((event) => ['-c', `hooks.${event}=[{hooks=[{type="command",command=${JSON.stringify(command)}}]}]`])];
 }
+import { parseDshModel } from './dsh-runtime.mjs';
 
-// One worker turn is one run of the router's own runtime CLI in its
-// non-interactive mode, resuming the task's own session: `pi --mode json -p`,
-// `codex exec --json [resume]`, `claude --print --resume`. Nothing runs
-// between turns, so an idle task holds no process, and a crash or restart
-// loses at most the turn in flight. The worker reaches the Core through the
-// same MCP adapter as the router, with an authority that allows only its task
-// tools and reads (ActionService.workerTools).
+// Pi, Codex, TraeX and Claude run one worker turn as a non-interactive CLI
+// process. DSH instead drives a task session beside the router in the existing
+// profile. Every worker reaches Core with a turn-scoped authority that allows
+// only its task tools and reads (ActionService.workerTools).
 
-export const WORKER_RUNTIMES = Object.freeze(['pi', 'codex', 'traex', 'claude']);
+export const WORKER_RUNTIMES = Object.freeze(['pi', 'codex', 'traex', 'claude', 'dsh']);
 const MAX_OUTPUT_BYTES = 20_000_000;
 const TRANSIENT = /\b(429|5\d\d)\b|rate.?limit|overloaded|ECONNRESET|ETIMEDOUT|ECONNREFUSED|socket hang up|timed? ?out|temporarily/i;
 // What Claude Code and Codex say when the session a turn resumes is gone
@@ -310,6 +308,9 @@ export class WorkerExecutor {
   // and clean them up themselves (Claude Code after 30 days by default).
   sessionState(task, { maxBytes = FORK_MAX_BYTES } = {}) {
     if (!task.native_session || !WORKER_RUNTIMES.includes(task.runtime)) return 'kept';
+    // A DSH worker session lives in the router's profile, not in a file the
+    // daemon can look at, and the bridge can always resume it.
+    if (task.runtime === 'dsh') return 'kept';
     const file = sessionFile(this.config, process.env, task.runtime, task.id, task.native_session);
     if (!file) return 'deleted';
     try { return fs.statSync(file).size > maxBytes ? 'large' : 'kept'; } catch { return 'deleted'; }
@@ -322,7 +323,55 @@ export class WorkerExecutor {
     return { model: model && model !== runtime ? model : null, effort: effort || null };
   }
 
+  // DSH workers are sessions beside the router in its existing profile, not
+  // short-lived child processes. The task/turn request id makes a retried
+  // submit idempotent inside the bridge; a profile disconnect rejects the turn
+  // through the daemon's ordinary pending-RPC path.
+  startDsh({ task, prompt, authority }) {
+    let stopped = false;
+    const request = this.settings().dshRequest;
+    if (typeof request !== 'function') {
+      return { done: Promise.resolve({ text: '', error: 'DSH worker bridge is not active', transient: false }), stop: () => {} };
+    }
+    const sessionId = task.native_session || task.session_id;
+    const selected = this.modelFor(task);
+    const parsed = parseDshModel(selected.model);
+    const done = (async () => {
+      try {
+        await request('superagent/worker/ensure', {
+          taskId: task.id, sessionId, cwd: task.workdir, authority,
+          policy: assembleWorkerPolicy(this.config), turn: task.turns,
+          provider: parsed.provider, model: parsed.model,
+          ...(selected.effort ? { effort: selected.effort } : {}),
+        }, Math.max(30_000, this.config.dshStartTimeoutMs ?? 30_000));
+        if (stopped) {
+          await request('superagent/worker/cancel', { sessionId }, 10_000).catch(() => {});
+          return { text: '', error: 'stopped', transient: false };
+        }
+        await request('superagent/worker/submit', {
+          sessionId, requestId: `${task.id}:${task.turns}`, prompt,
+        }, this.config.sendTimeoutMs);
+        const result = await request('superagent/worker/wait', { sessionId }, 0);
+        return {
+          ...result,
+          transient: !stopped && Boolean(result.error && result.error !== 'stopped' && TRANSIENT.test(result.error)),
+          ...(stopped ? { error: 'stopped', transient: false } : {}),
+        };
+      } catch (error) {
+        return { text: '', error: stopped ? 'stopped' : safeError(error), transient: !stopped && TRANSIENT.test(safeError(error)) };
+      }
+    })();
+    return {
+      done,
+      stop: () => {
+        stopped = true;
+        void request('superagent/worker/cancel', { sessionId }, 10_000).catch(() => {});
+      },
+    };
+  }
+
   start({ task, prompt, authority, fork = null }) {
+    if (task.runtime === 'dsh') return this.startDsh({ task, prompt, authority });
     const definition = RUNTIMES[task.runtime];
     if (!definition) throw new Error(`workers do not run on ${task.runtime}; they need ${WORKER_RUNTIMES.join(', ')}`);
     let child = null;
