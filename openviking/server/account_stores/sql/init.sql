@@ -22,6 +22,7 @@ CREATE TABLE `ov_accounts_users` (
     account_pk BIGINT NOT NULL,
     user_id VARCHAR(255) COLLATE utf8mb4_bin NOT NULL,
     `role` VARCHAR(16) NOT NULL,
+    `description` VARCHAR(512) COLLATE utf8mb4_bin NULL,
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     deletion_task_id VARCHAR(64) NULL,
     deletion_owner_account_id VARCHAR(255) COLLATE utf8mb4_bin NULL,

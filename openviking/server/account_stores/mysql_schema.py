@@ -134,6 +134,9 @@ class User(Base):
     account_pk: Mapped[int] = mapped_column(BigInteger)
     user_id: Mapped[str] = mapped_column(String(255, collation="utf8mb4_bin"))
     role: Mapped[str] = mapped_column(String(16))
+    description: Mapped[Optional[str]] = mapped_column(
+        String(512, collation="utf8mb4_bin"), nullable=True
+    )
     created_at: Mapped[object] = mapped_column(
         DATETIME(fsp=6), server_default=text("CURRENT_TIMESTAMP(6)")
     )

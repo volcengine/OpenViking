@@ -505,13 +505,19 @@ class MySQLAccountStore(AccountStore):
                     User.user_id == user_id,
                 )
             )
-        return UserSummary(user_id=user.user_id, role=user.role) if user else None
+        if user is None:
+            return None
+        summary = UserSummary(user_id=user.user_id, role=user.role)
+        if user.description is not None:
+            summary["description"] = user.description
+        return summary
 
     async def create_account(
         self,
         account_id: str,
         admin_user_id: str,
         *,
+        description: str | None = None,
         lease_ref: object | None = None,
     ) -> None:
         del lease_ref
@@ -528,6 +534,7 @@ class MySQLAccountStore(AccountStore):
                         account_pk=account.account_pk,
                         user_id=admin_user_id,
                         role=Role.ADMIN,
+                        description=description,
                     )
                 )
                 await session.flush()
@@ -540,6 +547,7 @@ class MySQLAccountStore(AccountStore):
         admin_user_id: str,
         api_key: str,
         *,
+        description: str | None = None,
         lease_ref: object | None = None,
     ) -> None:
         del lease_ref
@@ -555,6 +563,7 @@ class MySQLAccountStore(AccountStore):
                     account_pk=account.account_pk,
                     user_id=admin_user_id,
                     role=Role.ADMIN,
+                    description=description,
                 )
                 session.add(user)
                 await session.flush()
@@ -570,7 +579,9 @@ class MySQLAccountStore(AccountStore):
         except IntegrityError as exc:
             raise AlreadyExistsError(account_id, "account") from exc
 
-    async def create_user(self, account_id: str, user_id: str, role: str) -> None:
+    async def create_user(
+        self, account_id: str, user_id: str, role: str, *, description: str | None = None
+    ) -> None:
         _validate(user_id, validate_user_id, "user_id")
         role = _validate_creation_role(role)
         try:
@@ -583,6 +594,7 @@ class MySQLAccountStore(AccountStore):
                         account_pk=account.account_pk,
                         user_id=user_id,
                         role=role,
+                        description=description,
                     )
                 )
                 await session.flush()
@@ -595,6 +607,8 @@ class MySQLAccountStore(AccountStore):
         user_id: str,
         role: str,
         api_key: str,
+        *,
+        description: str | None = None,
     ) -> None:
         _validate(user_id, validate_user_id, "user_id")
         role = _validate_creation_role(role)
@@ -607,6 +621,7 @@ class MySQLAccountStore(AccountStore):
                     account_pk=account.account_pk,
                     user_id=user_id,
                     role=role,
+                    description=description,
                 )
                 session.add(user)
                 await session.flush()
@@ -736,6 +751,8 @@ class MySQLAccountStore(AccountStore):
         result: list[UserSummary] = []
         for user in users:
             row: UserSummary = {"user_id": user.user_id, "role": user.role}
+            if user.description is not None:
+                row["description"] = user.description
             if credential := credentials.get(user.user_pk):
                 api_key = self._decrypt_credential(account_id, user.user_id, credential.material)
                 if api_key is None:
@@ -765,6 +782,14 @@ class MySQLAccountStore(AccountStore):
             if role != Role.ADMIN:
                 await self._protect_last_admin(session, account, user)
             user.role = role
+
+    async def set_description(self, account_id: str, user_id: str, description: str | None) -> None:
+        async with self._transaction() as session:
+            account = await self._lock_account(session, account_id)
+            self._require_active(account)
+            user = await self._lock_user(session, account, user_id)
+            self._require_active(user)
+            user.description = description
 
     async def ensure_trusted_identities(self, identities: dict[str, set[str]]) -> dict[str, int]:
         for account_id, user_ids in identities.items():

@@ -774,12 +774,13 @@ class RedisMySQLAccountStore(AccountStore):
         account_id: str,
         admin_user_id: str,
         *,
+        description: str | None = None,
         lease_ref: object | None = None,
     ) -> None:
         del lease_ref
         await self._mutate_account(
             account_id,
-            lambda: self._mysql.create_account(account_id, admin_user_id),
+            lambda: self._mysql.create_account(account_id, admin_user_id, description=description),
         )
 
     async def create_account_with_api_key(
@@ -788,6 +789,7 @@ class RedisMySQLAccountStore(AccountStore):
         admin_user_id: str,
         api_key: str,
         *,
+        description: str | None = None,
         lease_ref: object | None = None,
     ) -> None:
         del lease_ref
@@ -797,6 +799,7 @@ class RedisMySQLAccountStore(AccountStore):
                 account_id,
                 admin_user_id,
                 api_key,
+                description=description,
             ),
         )
 
@@ -809,10 +812,12 @@ class RedisMySQLAccountStore(AccountStore):
     async def list_accounts(self, **kwargs) -> list[AccountSummary]:
         return await self._read_mysql(lambda: self._mysql.list_accounts(**kwargs))
 
-    async def create_user(self, account_id: str, user_id: str, role: str) -> None:
+    async def create_user(
+        self, account_id: str, user_id: str, role: str, *, description: str | None = None
+    ) -> None:
         await self._mutate_account(
             account_id,
-            lambda: self._mysql.create_user(account_id, user_id, role),
+            lambda: self._mysql.create_user(account_id, user_id, role, description=description),
             user_id=user_id,
         )
 
@@ -822,6 +827,8 @@ class RedisMySQLAccountStore(AccountStore):
         user_id: str,
         role: str,
         api_key: str,
+        *,
+        description: str | None = None,
     ) -> None:
         await self._mutate_account(
             account_id,
@@ -830,6 +837,7 @@ class RedisMySQLAccountStore(AccountStore):
                 user_id,
                 role,
                 api_key,
+                description=description,
             ),
             user_id=user_id,
         )
@@ -841,6 +849,13 @@ class RedisMySQLAccountStore(AccountStore):
         await self._mutate_account(
             account_id,
             lambda: self._mysql.set_role(account_id, user_id, role),
+            user_id=user_id,
+        )
+
+    async def set_description(self, account_id: str, user_id: str, description: str | None) -> None:
+        await self._mutate_account(
+            account_id,
+            lambda: self._mysql.set_description(account_id, user_id, description),
             user_id=user_id,
         )
 

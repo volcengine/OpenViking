@@ -172,15 +172,18 @@ class APIKeyManager:
         admin_user_id: str,
         seed: Optional[str] = None,
         *,
+        description: Optional[str] = None,
         lease_ref: object | None = None,
     ) -> str | None:
         if not self._issue_user_keys:
-            await self._store.create_account(account_id, admin_user_id, lease_ref=lease_ref)
+            await self._store.create_account(
+                account_id, admin_user_id, description=description, lease_ref=lease_ref
+            )
             return None
 
         key = generate_api_key(account_id, admin_user_id, seed)
         await self._store.create_account_with_api_key(
-            account_id, admin_user_id, key, lease_ref=lease_ref
+            account_id, admin_user_id, key, description=description, lease_ref=lease_ref
         )
         return key
 
@@ -193,13 +196,16 @@ class APIKeyManager:
         user_id: str,
         role: str = "user",
         seed: Optional[str] = None,
+        description: Optional[str] = None,
     ) -> str | None:
         if not self._issue_user_keys:
-            await self._store.create_user(account_id, user_id, role)
+            await self._store.create_user(account_id, user_id, role, description=description)
             return None
 
         key = generate_api_key(account_id, user_id, seed)
-        await self._store.create_user_with_api_key(account_id, user_id, role, key)
+        await self._store.create_user_with_api_key(
+            account_id, user_id, role, key, description=description
+        )
         return key
 
     async def regenerate_key(self, account_id, user_id, seed=None, *, expected_api_key=None):
@@ -380,6 +386,9 @@ class APIKeyManager:
 
     async def set_role(self, account_id, user_id, role):
         await self._store.set_role(account_id, user_id, role)
+
+    async def set_description(self, account_id, user_id, description):
+        await self._store.set_description(account_id, user_id, description)
 
     async def create_group(self, account_id, group_id):
         return await self._store.create_group(account_id, group_id)

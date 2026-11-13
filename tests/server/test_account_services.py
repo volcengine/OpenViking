@@ -30,6 +30,7 @@ from openviking.server.identity import Role
 from openviking.server.store_assembly import build_api_key_manager
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import (
+    FailedPreconditionError,
     InvalidArgumentError,
     NotFoundError,
     PermissionDeniedError,
@@ -639,6 +640,66 @@ async def test_file_store_keeps_global_role_immutable():
         await store.set_role("acme", "agent", "user")
     with pytest.raises(InvalidArgumentError, match="user or admin"):
         await store.set_role("acme", "alice", "global")
+
+
+async def test_file_store_persists_user_description_round_trip():
+    """Descriptions persist to users.json and reload in legacy-compatible form."""
+    agfs = InMemoryAGFS()
+    store = FileStore(SimpleNamespace(agfs=agfs))
+    await store.load()
+    await store.create_account_with_api_key("acme", "alice", "alice-key", description="human admin")
+    await store.create_user_with_api_key(
+        "acme", "backup", "user", "backup-key", description="nightly backup cronjob"
+    )
+    # A row written without a description keeps the exact pre-feature shape.
+    await store.create_user("acme", "probe", "user")
+
+    persisted = json.loads(agfs.read("/local/acme/_system/users.json"))
+    assert persisted["users"]["alice"]["description"] == "human admin"
+    assert persisted["users"]["backup"]["description"] == "nightly backup cronjob"
+    assert "description" not in persisted["users"]["probe"]
+
+    peer = FileStore(SimpleNamespace(agfs=agfs))
+    await peer.load()
+    assert (await peer.get_user("acme", "backup"))["description"] == "nightly backup cronjob"
+    assert "description" not in (await peer.get_user("acme", "probe"))
+    rows = {row["user_id"]: row for row in (await peer.list_users_page("acme"))["users"]}
+    assert rows["alice"]["description"] == "human admin"
+    assert "description" not in rows["probe"]
+
+    await peer.set_description("acme", "backup", "backup cronjob v2")
+    assert (await peer.get_user("acme", "backup"))["description"] == "backup cronjob v2"
+    # Clearing removes the key instead of persisting an explicit null.
+    await peer.set_description("acme", "backup", None)
+    assert "description" not in (await peer.get_user("acme", "backup"))
+    persisted = json.loads(agfs.read("/local/acme/_system/users.json"))
+    assert "description" not in persisted["users"]["backup"]
+
+
+async def test_file_set_description_rejects_missing_and_deleting_users():
+    store = _file_store()
+    await store.load()
+    await store.create_account_with_api_key("acme", "alice", "alice-key")
+    await store.create_user("acme", "bob", "user")
+
+    with pytest.raises(NotFoundError):
+        await store.set_description("acme", "missing", "note")
+
+    await store.begin_deletion(
+        "acme",
+        "bob",
+        task_id="delete",
+        owner_account_id="system",
+        owner_user_id="system",
+    )
+    with pytest.raises(FailedPreconditionError, match="deletion is in progress"):
+        await store.set_description("acme", "bob", "note")
+
+
+def test_mysql_user_table_description_is_nullable():
+    """Existing rows predate the column; it must stay optional in the schema."""
+    column = User.__table__.columns["description"]
+    assert column.nullable
 
 
 async def test_group_deletion_preserves_users_and_persists_membership_removal():

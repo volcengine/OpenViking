@@ -40,6 +40,7 @@ class AccountStore(ABC):
         account_id: str,
         admin_user_id: str,
         *,
+        description: str | None = None,
         lease_ref: object | None = None,
     ) -> None: ...
 
@@ -50,6 +51,7 @@ class AccountStore(ABC):
         admin_user_id: str,
         api_key: str,
         *,
+        description: str | None = None,
         lease_ref: object | None = None,
     ) -> None: ...
 
@@ -88,7 +90,9 @@ class AccountStore(ABC):
         return await self.get_user(account_id, user_id)
 
     @abstractmethod
-    async def create_user(self, account_id: str, user_id: str, role: str) -> None: ...
+    async def create_user(
+        self, account_id: str, user_id: str, role: str, *, description: str | None = None
+    ) -> None: ...
 
     @abstractmethod
     async def create_user_with_api_key(
@@ -97,6 +101,8 @@ class AccountStore(ABC):
         user_id: str,
         role: str,
         api_key: str,
+        *,
+        description: str | None = None,
     ) -> None: ...
 
     @abstractmethod
@@ -113,6 +119,11 @@ class AccountStore(ABC):
 
     @abstractmethod
     async def set_role(self, account_id: str, user_id: str, role: str) -> None: ...
+
+    @abstractmethod
+    async def set_description(self, account_id: str, user_id: str, description: str | None) -> None:
+        """Set or clear the user's registry note without touching credentials."""
+        ...
 
     # Group
     @abstractmethod

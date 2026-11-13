@@ -3820,6 +3820,168 @@ async def test_admin_can_demote_self_and_loses_role_management_access(
     assert restore_role.status_code == 403
 
 
+async def test_create_paths_accept_description(
+    lightweight_admin_client: httpx.AsyncClient,
+):
+    """Descriptions set at issuance ride the registry rows; legacy rows stay unchanged."""
+    acct = _uid()
+    create_account = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={
+            "account_id": acct,
+            "admin_user_id": "alice",
+            "description": "human admin, data-plane owner",
+        },
+        headers=root_headers(),
+    )
+    assert create_account.status_code == 200, create_account.text
+    create_user = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={
+            "user_id": "backup-job",
+            "role": "user",
+            "description": "nightly backup cronjob",
+        },
+        headers=root_headers(),
+    )
+    assert create_user.status_code == 200, create_user.text
+    # A blank description is normalized to absent, matching pre-feature rows.
+    blank = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "probe", "role": "user", "description": "   "},
+        headers=root_headers(),
+    )
+    assert blank.status_code == 200, blank.text
+
+    listed = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users", headers=root_headers()
+    )
+    rows = {row["user_id"]: row for row in listed.json()["result"]}
+    assert rows["alice"]["description"] == "human admin, data-plane owner"
+    assert rows["backup-job"]["description"] == "nightly backup cronjob"
+    assert "description" not in rows["probe"]
+
+    point = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users/backup-job", headers=root_headers()
+    )
+    assert point.json()["result"]["description"] == "nightly backup cronjob"
+
+
+@pytest.mark.parametrize("actor_role", [Role.ROOT, Role.ADMIN])
+async def test_root_or_admin_can_set_user_description(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app,
+    actor_role: str,
+):
+    """ROOT and ADMIN can annotate an existing user without rotating its key."""
+    acct = _uid()
+    create_account = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    alice_key = create_account.json()["result"]["user_key"]
+    create_user = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "kuma-probe", "role": "user"},
+        headers=root_headers(),
+    )
+    probe_key = create_user.json()["result"]["user_key"]
+
+    resp = await lightweight_admin_client.patch(
+        f"/api/v1/admin/accounts/{acct}/users/kuma-probe",
+        json={"description": "uptime monitor #39"},
+        headers=root_headers() if actor_role == Role.ROOT else {"X-API-Key": alice_key},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["result"] == {
+        "account_id": acct,
+        "user_id": "kuma-probe",
+        "description": "uptime monitor #39",
+    }
+    manager = lightweight_admin_app.state.api_key_manager
+    assert (await manager.get_user(acct, "kuma-probe"))["description"] == "uptime monitor #39"
+
+    # No-rotation weld: annotating a live consumer keeps its credential usable.
+    assert (await manager.resolve_identity(probe_key)).user_id == "kuma-probe"
+    listed = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users/kuma-probe",
+        headers={"X-API-Key": alice_key} if actor_role == Role.ADMIN else root_headers(),
+    )
+    assert listed.status_code == 200
+
+    # null clears the note; the row drops the key entirely.
+    clear = await lightweight_admin_client.patch(
+        f"/api/v1/admin/accounts/{acct}/users/kuma-probe",
+        json={"description": None},
+        headers=root_headers() if actor_role == Role.ROOT else {"X-API-Key": alice_key},
+    )
+    assert clear.status_code == 200
+    assert clear.json()["result"]["description"] is None
+    assert "description" not in (await manager.get_user(acct, "kuma-probe"))
+
+    # A blank string behaves like null.
+    blank = await lightweight_admin_client.patch(
+        f"/api/v1/admin/accounts/{acct}/users/kuma-probe",
+        json={"description": "  "},
+        headers=root_headers() if actor_role == Role.ROOT else {"X-API-Key": alice_key},
+    )
+    assert blank.status_code == 200
+    assert "description" not in (await manager.get_user(acct, "kuma-probe"))
+
+
+@pytest.mark.parametrize("actor_role", [Role.USER, Role.ADMIN])
+async def test_set_user_description_rejects_unauthorized_callers(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app,
+    actor_role: str,
+):
+    """USER cannot annotate; ADMIN cannot annotate another account's users."""
+    manager = lightweight_admin_app.state.api_key_manager
+    acct = _uid()
+    await manager.create_account(acct, "alice")
+    await manager.register_user(acct, "bob")
+    if actor_role == Role.ADMIN:
+        actor_key = await manager.create_account(_uid(), "other-admin")
+    else:
+        actor_key = await manager.register_user(acct, "charlie")
+
+    resp = await lightweight_admin_client.patch(
+        f"/api/v1/admin/accounts/{acct}/users/bob",
+        json={"description": "note"},
+        headers={"X-API-Key": actor_key},
+    )
+    assert resp.status_code == 403
+    assert "description" not in (await manager.get_user(acct, "bob"))
+
+
+async def test_set_user_description_rejects_oversized_notes(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app,
+):
+    manager = lightweight_admin_app.state.api_key_manager
+    acct = _uid()
+    await manager.create_account(acct, "alice")
+
+    resp = await lightweight_admin_client.patch(
+        f"/api/v1/admin/accounts/{acct}/users/alice",
+        json={"description": "x" * 513},
+        headers=root_headers(),
+    )
+    # The full app maps request validation to 400 INVALID_ARGUMENT; the
+    # lightweight fixture keeps FastAPI's default 422. Either way: rejected.
+    assert resp.status_code in (400, 422)
+    assert "description" not in (await manager.get_user(acct, "alice"))
+
+    accepted = await lightweight_admin_client.patch(
+        f"/api/v1/admin/accounts/{acct}/users/alice",
+        json={"description": "x" * 512},
+        headers=root_headers(),
+    )
+    assert accepted.status_code == 200
+    assert (await manager.get_user(acct, "alice"))["description"] == "x" * 512
+
+
 async def test_regenerate_key(admin_client: httpx.AsyncClient):
     """ROOT can regenerate a user's key."""
     acct = _uid()

@@ -73,6 +73,8 @@ class CreateAccountRequest(BaseModel):
     # Optional initial AccountConfig override, validated against the active
     # account-level runtime field surface before the account is created.
     settings: dict[str, Any] | None = None
+    # Optional non-credential note recording what the admin key is for.
+    description: str | None = Field(default=None, max_length=512)
 
 
 class RegisterUserRequest(BaseModel):
@@ -80,10 +82,19 @@ class RegisterUserRequest(BaseModel):
     role: str = "user"
     seed: str | None = None
     user_config: UserConfig | None = None
+    # Optional non-credential note recording what the user's key is for.
+    description: str | None = Field(default=None, max_length=512)
 
 
 class SetRoleRequest(BaseModel):
     role: str
+
+
+class SetDescriptionRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    # ``null`` or a blank string clears the note.
+    description: str | None = Field(default=None, max_length=512)
 
 
 class RegenerateKeyRequest(BaseModel):
@@ -422,6 +433,13 @@ async def _check_user_exists(request: Request, account_id: str, user_id: str, ma
         raise NotFoundError(user_id, "user")
 
 
+def _normalized_description(description: str | None) -> str | None:
+    """Treat blank descriptions as absent so stores only persist meaningful notes."""
+    if description is None:
+        return None
+    return description.strip() or None
+
+
 def _user_settings_result(
     ctx: RequestContext,
     user_config: UserConfig,
@@ -488,6 +506,7 @@ async def create_account(
                 body.account_id,
                 body.admin_user_id,
                 seed=body.seed,
+                description=_normalized_description(body.description),
                 lease_ref=lease,
             )
             account_created = True
@@ -1028,6 +1047,7 @@ async def register_user(
         body.user_id,
         str(resolved_role),
         seed=body.seed,
+        description=_normalized_description(body.description),
     )
     await service.initialize_user_directories(user_ctx)
     await _write_initial_user_config(service, user_ctx, body.user_config)
@@ -1094,6 +1114,8 @@ async def list_users(
                     if ctx.role != Role.USER or user["user_id"] == ctx.user.user_id
                     else {}
                 ),
+                # The registry note is non-credential metadata; keep it visible.
+                **({"description": user["description"]} if "description" in user else {}),
             }
             for user in users["users"]
         ]
@@ -1112,14 +1134,18 @@ async def get_user(
 ):
     """Return one user's credential-free membership info, or 404 if absent.
 
-    Deliberately returns only ``user_id`` and ``role``; it never exposes
-    ``api_key`` or ``key_prefix``.
+    Deliberately returns only ``user_id`` and ``role`` (plus the optional
+    registry ``description`` when one is set); it never exposes ``api_key``
+    or ``key_prefix``.
     """
     _check_account_access(ctx, account_id)
     user = await _get_api_key_manager(request).get_user_membership(account_id, user_id)
     if user is None:
         raise NotFoundError(user_id, "user")
-    return Response(status="ok", result={"user_id": user_id, "role": user["role"]})
+    result = {"user_id": user_id, "role": user["role"]}
+    if "description" in user:
+        result["description"] = user["description"]
+    return Response(status="ok", result=result)
 
 
 @router.get("/accounts/{account_id}/users/{user_id}/settings")
@@ -1241,6 +1267,39 @@ async def set_user_role(
             "account_id": account_id,
             "user_id": user_id,
             "role": role,
+        },
+    )
+
+
+@router.patch("/accounts/{account_id}/users/{user_id}")
+@require_auth_root_or_admin
+async def set_user_description(
+    body: SetDescriptionRequest,
+    request: Request,
+    account_id: str = Path(..., description="Account ID"),
+    user_id: str = Path(..., description="User ID"),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Set or clear a user's registry description without rotating its key.
+
+    The description is non-credential metadata recording what a key is for
+    (human operator, backup cronjob, uptime probe). Annotating a live machine
+    consumer must not invalidate the very credential it runs on, so this never
+    touches key material. ROOT may manage any account; ADMIN may manage only
+    its own account. ``null`` or a blank string clears the note.
+    """
+    _check_account_access(ctx, account_id)
+    await _reject_non_root_global_target(request, ctx, account_id, user_id)
+    description = _normalized_description(body.description)
+    await _get_api_key_manager(request, for_write=True).set_description(
+        account_id, user_id, description
+    )
+    return Response(
+        status="ok",
+        result={
+            "account_id": account_id,
+            "user_id": user_id,
+            "description": description,
         },
     )
 

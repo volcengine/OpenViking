@@ -24,6 +24,7 @@ class UserSummary(TypedDict, total=False):
     role: str
     api_key: str
     key_prefix: str
+    description: str
 
 
 class UsersPage(TypedDict):
