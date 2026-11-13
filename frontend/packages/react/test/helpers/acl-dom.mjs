@@ -53,7 +53,7 @@ export function fixture(intercept) {
     }
     if (call.path.endsWith('/fs/ls')) return ok([{ uri: URI, isDir: true }]);
     if (call.path.endsWith('/fs/stat'))
-      return ok({ isDir: true, permission: 'manage' });
+      return ok({ isDir: true, access: 'manage' });
     if (
       call.path.endsWith('/content/abstract') ||
       call.path.endsWith('/content/overview')

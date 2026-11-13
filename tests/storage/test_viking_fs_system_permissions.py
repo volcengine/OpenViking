@@ -137,6 +137,13 @@ async def test_global_subtree_parent_listings_follow_read_permissions(role, acl_
 
     entries = await fs.ls(SYSTEM_COMPILE_ROOT, ctx=_ctx(role), include_abstract=False)
     assert {entry["name"] for entry in entries} == {"global", "global-other"}
+    permissions = {entry["name"]: entry["access"] for entry in entries}
+    assert permissions == {
+        "global": "manage" if role in {Role.ADMIN, Role.ROOT} else "read",
+        "global-other": "manage" if role == Role.ROOT else "read",
+    }
+    for uri, name in ((global_file, "global"), (sibling_file, "global-other")):
+        assert (await fs.stat(uri, ctx=_ctx(role)))["access"] == permissions[name]
     parent_path = fs._uri_to_path(SYSTEM_COMPILE_ROOT, ctx=_ctx(role))
     parent = agfs._resolve(parent_path)
     fs._async_agfs.tree_directory = AsyncMock(
@@ -157,6 +164,10 @@ async def test_global_subtree_parent_listings_follow_read_permissions(role, acl_
     )
     entries = await fs.tree(SYSTEM_COMPILE_ROOT, ctx=_ctx(role), include_abstract=False)
     assert {entry["uri"] for entry in entries if not entry["isDir"]} == {global_file, sibling_file}
+    assert {entry["uri"]: entry["access"] for entry in entries if not entry["isDir"]} == {
+        global_file: permissions["global"],
+        sibling_file: permissions["global-other"],
+    }
     result = await fs.grep(SYSTEM_COMPILE_ROOT, "content", ctx=_ctx(role), force_fs=True)
     assert {match["uri"] for match in result["matches"]} == {global_file, sibling_file}
 

@@ -142,12 +142,12 @@ The context received by `previewSlots.actions` and by the function form of `prev
 
 Options when `acl` is an object. All are optional, and `true` is the same as setting none.
 
-| Property          | Description                                                                                                                                                         | Type                                                                                                                                          | Default  |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| readOnly          | Prevents changing grants while keeping them viewable                                                                                                                | `boolean`                                                                                                                                     | `false`  |
-| resolvePermission | Returns the current user's effective permission on a resource, `undefined` when unknown; by default it reads `permission` from `fs/stat`, then probes manage access | `(uri: string, context: FileBrowserAclContext) => Promise<FileBrowserAclLevel \| undefined>`                                                  | Built-in |
-| listPrincipals    | Returns the Users or Groups that can be added, with `page` starting at 1; by default it calls the account's user and group endpoints without reading credentials    | `(query: { type: 'user' \| 'group'; keyword: string; page: number }, context: FileBrowserAclContext) => Promise<FileBrowserAclPrincipalPage>` | Built-in |
-| onChange          | Called after grants are saved successfully, and not when saving fails; an error it throws does not affect the saved result                                          | `(report: FileBrowserAclReport) => void`                                                                                                      | -        |
+| Property          | Description                                                                                                                                                      | Type                                                                                                                                          | Default  |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| readOnly          | Prevents changing grants while keeping them viewable                                                                                                             | `boolean`                                                                                                                                     | `false`  |
+| resolvePermission | Returns the current user's effective permission on a resource, `undefined` when unknown; by default it reads `access` from `fs/stat`, then probes manage access  | `(uri: string, context: FileBrowserAclContext) => Promise<FileBrowserAclLevel \| undefined>`                                                  | Built-in |
+| listPrincipals    | Returns the Users or Groups that can be added, with `page` starting at 1; by default it calls the account's user and group endpoints without reading credentials | `(query: { type: 'user' \| 'group'; keyword: string; page: number }, context: FileBrowserAclContext) => Promise<FileBrowserAclPrincipalPage>` | Built-in |
+| onChange          | Called after grants are saved successfully, and not when saving fails; an error it throws does not affect the saved result                                       | `(report: FileBrowserAclReport) => void`                                                                                                      | -        |
 
 ### FileBrowserAclContext
 
@@ -443,7 +443,7 @@ Reveal defaults to `true`; `{ reveal: false }` only requests a preview and resol
 ### Permissions (ACL)
 
 - `acl` only applies to non-root nodes under `viking://resources/`; elsewhere no permission tag appears and ACL imposes no limits.
-- The effective permission is read from `permission` in `GET /api/v1/fs/stat`. If it is missing, `GET /api/v1/acl` is probed: success counts as `manage` and a 403 counts as unknown.
+- The effective permission is read from `access` in `GET /api/v1/fs/stat`. If it is missing, `GET /api/v1/acl` is probed: success counts as `manage` and a 403 counts as unknown.
 - While the permission is unknown, no permission tag shows and editing and deletion are unavailable; if reading it fails, a Retry button appears beside the title.
 - The permission tag shows the effective permission, and for `manage` its details include a Manage permissions button that opens the grants dialog.
 - `read` cannot edit, `write` can edit and import, and `manage` can also delete and manage grants.
@@ -453,7 +453,7 @@ Reveal defaults to `true`; `{ reveal: false }` only requests a preview and resol
 - While saving, the dialog cannot be submitted again or closed. If saving fails, the last saved grants stay and the server's reason is shown.
 - After a successful save the tree and preview refresh; the server's index update may finish later, and the server's authorization result is authoritative.
 - In the directory listing (`fs/ls`), nodes with `access: 'denied'` cannot be selected or expanded, and nodes with `access: 'container'` can only be expanded to reach accessible children and cannot be previewed themselves.
-- Nodes with `permission: 'read'` show a read-only marker.
+- Nodes with `access: 'read'` show a read-only marker.
 - These node markers come from the directory listing and do not depend on `acl`.
 - Grants use `GET`, `PUT` and `DELETE /api/v1/acl`. The member directory calls the account's user and group endpoints (20 users per page, `include_credentials=false`) and needs an `accountId` from the Provider or `requestOptions`.
 - The group directory needs account administration access. When a resource manager cannot read it, the dialog shows a failure with Retry; supply your own directory through `acl.listPrincipals`.

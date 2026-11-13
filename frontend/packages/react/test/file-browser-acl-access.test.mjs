@@ -51,7 +51,7 @@ test('read and write show effective levels without a management action', async (
   let permission = 'read';
   const fetch = fixture((call) =>
     call.path.endsWith('/fs/stat')
-      ? ok({ isDir: true, permission })
+      ? ok({ isDir: true, access: permission })
       : undefined,
   );
   const view = await mount(tree(fetch));
@@ -93,7 +93,9 @@ test('denied rows cannot open; container rows expand but cannot select or previe
             access: 'container',
             tags: ['compile_target=true'],
           },
-          { uri: `${URI}/readme.md`, permission: 'read' },
+          { uri: `${URI}/readme.md`, access: 'read' },
+          { uri: `${URI}/draft.md`, access: 'write' },
+          { uri: `${URI}/managed.md`, access: 'manage' },
         ])
       : undefined,
   );
@@ -109,6 +111,9 @@ test('denied rows cannot open; container rows expand but cannot select or previe
     assert.match(rows[0].textContent, /No access/);
     assert.match(rows[1].textContent, /Traverse only/);
     assert.match(rows[2].textContent, /Read-only/);
+    for (const row of rows.slice(3)) {
+      assert.doesNotMatch(row.textContent, /No access|Traverse only|Read-only/);
+    }
     assert.equal(rows[0].querySelector('.ov-file-browser__dashboard'), null);
     assert.equal(rows[1].querySelector('.ov-file-browser__dashboard'), null);
     await click(rows[0]);

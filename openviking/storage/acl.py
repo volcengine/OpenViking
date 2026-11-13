@@ -27,6 +27,10 @@ class AclLevel(str, Enum):
     WRITE = "write"
     MANAGE = "manage"
 
+    def allows(self, action: AclAction) -> bool:
+        required = _LEVEL_MASK[AclLevel(action.value)]
+        return _LEVEL_MASK[self] & required == required
+
 
 class AclAction(str, Enum):
     READ = "read"
@@ -103,12 +107,7 @@ class DirectAcl:
         return DirectAcl.from_entries((*self.entries, *other.entries))
 
     def principals_for(self, action: AclAction) -> frozenset[str]:
-        required_mask = _LEVEL_MASK[AclLevel(action.value)]
-        return frozenset(
-            entry.principal
-            for entry in self.entries
-            if _LEVEL_MASK[entry.level] & required_mask == required_mask
-        )
+        return frozenset(entry.principal for entry in self.entries if entry.level.allows(action))
 
     def context_fields(self, prefix: str) -> dict[str, Any]:
         grants = [_encode_grant(entry) for entry in self.entries]
@@ -299,9 +298,19 @@ def has_implicit_manage(ctx: RequestContext, uri: str) -> bool:
     return is_acl_uri(uri) and ctx.role == Role.ADMIN
 
 
+def acl_permission(acl: EffectiveAcl, ctx: RequestContext) -> AclLevel | None:
+    """Resolve the caller's highest grant across its user and group principals."""
+    principals = acl_principals(ctx)
+    return max(
+        (entry.level for entry in acl.permissions.entries if entry.principal in principals),
+        key=_LEVEL_MASK.__getitem__,
+        default=None,
+    )
+
+
 def acl_allows(acl: EffectiveAcl, ctx: RequestContext, action: AclAction) -> bool:
-    principals = acl.permissions.principals_for(action)
-    return not principals.isdisjoint(acl_principals(ctx))
+    permission = acl_permission(acl, ctx)
+    return permission is not None and permission.allows(action)
 
 
 class AclManager:

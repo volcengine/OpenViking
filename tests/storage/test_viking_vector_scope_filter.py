@@ -12,12 +12,15 @@ from openviking.server.identity import RequestContext, Role
 from openviking.storage.acl import AclAction, AclManager, acl_allows, acl_filter
 from openviking.storage.collection_schemas import CollectionSchemas
 from openviking.storage.expr import And, Eq, In, Or, PathScope, RawDSL
+from openviking.storage.viking_fs import VikingFS
 from openviking.storage.viking_vector_index_backend import (
     VikingVectorIndexBackend,
     _SingleAccountBackend,
 )
+from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
+from tests.utils.mock_agfs import MockLocalAGFS
 
 
 def _ctx(*, role: Role = Role.USER, actor_peer_id: str | None = None) -> RequestContext:
@@ -157,15 +160,21 @@ async def test_scroll_and_count_hide_cross_user_records(vector_backend_factory, 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("mode", "allowed"), [("restricted", False), ("inherit", True)])
+@pytest.mark.parametrize(
+    ("grant", "permission"),
+    [("1:user:reader", "read"), ("3:group:editors", "write"), ("7:user:*", "manage")],
+)
 async def test_acl_resolution_preserves_revocation_and_inheritance(
-    vector_backend_factory, tmp_path, mode, allowed
+    vector_backend_factory, tmp_path, mode, allowed, grant, permission
 ):
-    reader = RequestContext(user=UserIdentifier("acct", "reader"), role=Role.USER)
+    reader = RequestContext(
+        user=UserIdentifier("acct", "reader"), role=Role.USER, group_ids=("editors",)
+    )
     admin = RequestContext(user=UserIdentifier("acct", "admin"), role=Role.ADMIN)
     parent = "viking://resources/parent"
     target = f"{parent}/target"
     leaf = f"{target}/rules.md"
-    grants = ["1:user:reader"]
+    grants = [grant]
     backend = vector_backend_factory(
         config=VectorDBBackendConfig(
             backend="local",
@@ -183,7 +192,8 @@ async def test_acl_resolution_preserves_revocation_and_inheritance(
         assert await backend.create_collection(
             "context", CollectionSchemas.context_collection("context", 4)
         )
-        backend.acl_manager = AclManager(backend, _AclConfigReader(True))
+        acl_config = _AclConfigReader(True)
+        backend.acl_manager = AclManager(backend, acl_config)
         await backend._upsert_many_raw(
             [
                 {
@@ -208,6 +218,48 @@ async def test_acl_resolution_preserves_revocation_and_inheritance(
         )
         assert {row["id"] for row in await backend.search_in_tenant(**search)} == {"dir", "file"}
 
+        agfs = MockLocalAGFS(root_path=tmp_path / "files")
+        fs = VikingFS(agfs=agfs, acl_manager=backend.acl_manager)
+        agfs.write(fs._uri_to_path(leaf, ctx=admin), b"content")
+        assert (await fs.stat(leaf, ctx=reader))["access"] == permission
+        for output in ("original", "agent"):
+            entries = await fs.ls(target, output=output, include_abstract=False, ctx=reader)
+            assert [(entry["uri"], entry["access"]) for entry in entries] == [(leaf, permission)]
+        if permission == "read":
+            with pytest.raises(PermissionDeniedError):
+                await fs.write(leaf, "denied", ctx=reader)
+        else:
+            await fs.write(leaf, "updated", ctx=reader)
+
+        # Missing ACL fields retain namespace rules, even on indexed files.
+        public = "viking://resources/legacy.md"
+        private = "viking://user/reader/resources/legacy.md"
+        await backend._upsert_many_raw(
+            [
+                {
+                    "id": record_id,
+                    "uri": uri,
+                    "account_id": "acct",
+                    "owner_user_id": owner,
+                    "context_type": "resource",
+                    "level": 2,
+                    "vector": [1.0, 0.0, 0.0, 0.0],
+                }
+                for record_id, uri, owner in (
+                    ("public", public, ""),
+                    ("private", private, "reader"),
+                )
+            ],
+            ctx=admin,
+        )
+        for uri in (public, private):
+            agfs.write(fs._uri_to_path(uri, ctx=reader), b"legacy")
+            assert (await fs.stat(uri, ctx=reader))["access"] == "manage"
+            entries = await fs.ls(uri.rsplit("/", 1)[0], include_abstract=False, ctx=reader)
+            assert next(entry for entry in entries if entry["uri"] == uri)["access"] == "manage"
+        with pytest.raises(PermissionDeniedError):
+            await fs.stat(private, ctx=admin)
+
         await backend.acl_manager.set_acl(target, [], admin)
         saved = {row["id"]: row for row in await backend.get_strict(["dir", "file"], ctx=admin)}
         assert saved["dir"]["acl_mode"] == mode
@@ -221,12 +273,23 @@ async def test_acl_resolution_preserves_revocation_and_inheritance(
         # Resolution must still see a restricted record hidden from this caller.
         acl = await backend.acl_manager.resolve(leaf, reader)
         assert acl_allows(acl, reader, AclAction.READ) is allowed
+        entries = await fs.ls(parent, include_abstract=False, ctx=reader)
+        assert entries[0]["access"] == (permission if allowed else "denied")
+        if allowed:
+            assert (await fs.stat(leaf, ctx=reader))["access"] == permission
+        else:
+            with pytest.raises(PermissionDeniedError):
+                await fs.stat(leaf, ctx=reader)
+        assert (await fs.stat(leaf, ctx=admin))["access"] == "manage"
 
         # An ordinary update must not restore revoked access or discard inheritance.
         updated = {**saved["dir"], "abstract": "updated"}
         assert await backend.upsert(updated, ctx=admin) == "dir"
         assert (await backend.get_strict(["dir"], ctx=admin))[0] == updated
         assert {row["id"] for row in await backend.search_in_tenant(**search)} == visible
+        acl_config.enabled = False
+        assert (await fs.stat(leaf, ctx=reader))["access"] == "manage"
+        assert (await fs.ls(target, include_abstract=False, ctx=reader))[0]["access"] == "manage"
     finally:
         await backend.close()
 
