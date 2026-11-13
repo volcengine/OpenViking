@@ -355,25 +355,20 @@ _MODEL_ERROR_KIND_TO_PROTOCOL_CODE = {
 
 
 def _map_structured_model_error(error: ModelError, *, context: Exception) -> OpenVikingError:
-    code = _MODEL_ERROR_KIND_TO_PROTOCOL_CODE.get(error.kind, "INTERNAL")
-    # These kinds do not fully describe the public error. For example, SDKs
-    # group 409 conflicts and 504 timeouts with other transient failures.
-    if error.kind in {
-        ModelErrorKind.UNKNOWN,
-        ModelErrorKind.INVALID_REQUEST,
-        ModelErrorKind.TRANSIENT_SERVICE_ERROR,
-        ModelErrorKind.TRANSIENT_NETWORK_ERROR,
-    } or (error.kind is ModelErrorKind.UNSUPPORTED and error.status_code == 501):
-        code = error_code_from_http_status(error.status_code, default=code)
-    if error.kind is ModelErrorKind.TRANSIENT_NETWORK_ERROR:
-        if error.status_code in {408, 504} or (
-            error.status_code is None
-            and any(
-                isinstance(item, TimeoutError) or "timeout" in type(item).__name__.lower()
-                for item in model_exception_chain(error)
-            )
-        ):
-            code = "DEADLINE_EXCEEDED"
+    # Preserve transport status precision; kind is the fallback without a status.
+    code = error_code_from_http_status(
+        error.status_code,
+        default=_MODEL_ERROR_KIND_TO_PROTOCOL_CODE.get(error.kind, "INTERNAL"),
+    )
+    if (
+        error.kind is ModelErrorKind.TRANSIENT_NETWORK_ERROR
+        and error.status_code is None
+        and any(
+            isinstance(item, TimeoutError) or "timeout" in type(item).__name__.lower()
+            for item in model_exception_chain(error)
+        )
+    ):
+        code = "DEADLINE_EXCEEDED"
 
     details: dict[str, Any] = {"model_error_kind": error.kind.value}
     if error.provider:
