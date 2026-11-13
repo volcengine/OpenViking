@@ -87,7 +87,7 @@ try {
         '--test',
         'scripts/package.test.mjs',
         'scripts/react-release*.test.mjs',
-        'scripts/release-notes.test.mjs',
+        'scripts/release-notes*.test.mjs',
         'packages/react/test/*.test.mjs',
       ],
       {

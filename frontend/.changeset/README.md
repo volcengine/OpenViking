@@ -53,6 +53,9 @@ by `-beta.<run>.<attempt>.g<commit>`. For example, stable `0.1.7` produces
 published with npm's `beta` dist-tag. Install with
 `npm install @openviking/react@beta`. Package and lockfile changes made by the
 workflow are temporary and are not committed back.
+During beta staging, release-note checks and generation use the latest stable
+version archived in `CHANGELOG.md`, preserving the prepared stable major even
+when npm's `latest` still belongs to an older major.
 
 For a stable release, manually run **React UI Release**, choose `latest`, and
 enter an exact stable version such as `0.1.8`. Select the branch or tag to
