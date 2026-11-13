@@ -70,7 +70,11 @@ export function localizeChangelog(source, locale) {
       const blocks =
         /<!-- release-note:(en-US|zh-CN) -->\n([\s\S]*?)\n<!-- \/release-note:\1 -->/g;
       const remaining = version
-        .replace(blocks, (_match, language) => {
+        .replace(blocks, (_match, language, content) => {
+          if (!content.trim())
+            throw new Error(
+              `${version.split('\n')[0]}: ${language} release note is empty`,
+            );
           counts[language]++;
           return '';
         })

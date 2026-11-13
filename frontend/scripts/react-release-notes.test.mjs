@@ -38,6 +38,24 @@ test('GitHub notes reuse only the exact archived version in both languages', () 
     assert.throws(() => githubReleaseNotes(invalid, '0.1.11'));
 });
 
+test('each archived language block must be nonempty beside populated notes', () => {
+  for (const locale of ['en-US', 'zh-CN']) {
+    const emptyBlock = bilingualBlock({
+      'en-US': '- Second fix.',
+      'zh-CN': '- 第二项修复。',
+      [locale]: ' \n ',
+    });
+    for (const source of [
+      entry('0.1.11') + '\n' + emptyBlock,
+      `## 0.1.11\n\n${emptyBlock}\n\n${bilingualBlock({ 'en-US': '- Fixed.', 'zh-CN': '- 已修复。' })}`,
+    ])
+      assert.throws(
+        () => githubReleaseNotes(source, '0.1.11'),
+        new RegExp(`${locale} release note is empty`),
+      );
+  }
+});
+
 test('CLI preparation matches the archived bilingual notes', () => {
   const root = mkdtempSync(join(tmpdir(), 'ov-github-notes-'));
   try {
