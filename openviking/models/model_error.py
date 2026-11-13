@@ -122,20 +122,6 @@ def _normalized_code(value: object) -> str | None:
     return "".join(character for character in value.upper() if character.isalnum())
 
 
-def _kind_from_code_value(
-    value: object,
-    provider: str | None = None,
-) -> ModelErrorKind | None:
-    normalized = _normalized_code(value)
-    if normalized is None:
-        return None
-    if provider:
-        kind = _PROVIDER_CODE_KINDS.get(provider.lower(), {}).get(normalized)
-        if kind is not None:
-            return kind
-    return _CODE_KINDS.get(normalized)
-
-
 def _body(error: BaseException) -> dict[str, Any]:
     value = getattr(error, "body", None)
     if not isinstance(value, dict):
@@ -340,7 +326,8 @@ def model_error_from_status(
     code: str | None = None,
 ) -> ModelError:
     """Build a model error from a structured HTTP or provider status."""
-    kind = _kind_from_code_value(code, provider)
+    normalized = _normalized_code(code)
+    kind = _CODE_KINDS.get(normalized) if normalized else None
     return ModelError(
         kind or _kind_from_status(status_code) or ModelErrorKind.UNKNOWN,
         message,
@@ -358,8 +345,11 @@ def model_error_from_code(
 ) -> ModelError:
     """Build a model error from a provider-scoped business error code."""
     code_text = str(code) if code is not None else None
+    normalized = _normalized_code(code_text) or ""
+    provider_kinds = _PROVIDER_CODE_KINDS.get(provider.lower(), {})
+    kind = provider_kinds.get(normalized) or _CODE_KINDS.get(normalized)
     return ModelError(
-        _kind_from_code_value(code_text, provider) or ModelErrorKind.UNKNOWN,
+        kind or ModelErrorKind.UNKNOWN,
         message,
         provider=provider,
         code=code_text,

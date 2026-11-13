@@ -100,25 +100,20 @@ class CircuitBreaker:
         """Record a failed API call. May trip the breaker."""
         kind = model_error_kind(error)
         legacy_class = classify_api_error(error) if kind is None else None
-        if (
-            kind
-            in {
-                ModelErrorKind.AUTHENTICATION_ERROR,
-                ModelErrorKind.PERMISSION_DENIED,
-                ModelErrorKind.MODEL_NOT_FOUND,
-                ModelErrorKind.UNSUPPORTED,
-                ModelErrorKind.INVALID_REQUEST,
-                ModelErrorKind.INPUT_TOO_LARGE,
-                ModelErrorKind.CONTENT_SAFETY,
-            }
-            or legacy_class == ERROR_CLASS_INPUT_TOO_LARGE
-        ):
+        if kind in {
+            ModelErrorKind.AUTHENTICATION_ERROR,
+            ModelErrorKind.PERMISSION_DENIED,
+            ModelErrorKind.MODEL_NOT_FOUND,
+            ModelErrorKind.UNSUPPORTED,
+            ModelErrorKind.INVALID_REQUEST,
+            ModelErrorKind.INPUT_TOO_LARGE,
+            ModelErrorKind.CONTENT_SAFETY,
+        } or legacy_class == ERROR_CLASS_INPUT_TOO_LARGE:
             label = kind.value if kind is not None else legacy_class
             logger.info("Circuit breaker ignoring %s error: %s", label, error)
             return
 
         with self._lock:
-            previous_state = self._state
             self._failure_count += 1
             self._last_failure_time = time.monotonic()
 
@@ -147,8 +142,7 @@ class CircuitBreaker:
                     f"Circuit breaker tripped after {self._failure_count} consecutive "
                     f"failures: {error}"
                 )
-            if previous_state != _STATE_OPEN and self._state == _STATE_OPEN:
+            if self._state == _STATE_OPEN:
                 # Keep the failure available to consumers of subsequent blocked
-                # calls. Failures already in flight must not replace the reason
-                # that actually opened the breaker.
+                # calls; the breaker itself does not decide its API status.
                 self._opening_error = error
