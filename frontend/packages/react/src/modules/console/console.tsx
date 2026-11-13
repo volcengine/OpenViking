@@ -90,7 +90,7 @@ export function Console({
         </ConsoleToolbar>
         <div
           id={`${id}-conversation`}
-          className="ov-console__panel"
+          className="ov-console__panel ov-console__panel--conversation"
           hidden={state.mode !== 'conversation'}
         >
           {state.mode === 'conversation' ? (

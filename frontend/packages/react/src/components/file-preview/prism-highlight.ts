@@ -6,7 +6,7 @@ import {
   type EditorView,
   type ViewUpdate,
 } from '@codemirror/view';
-import { Prism } from './prism-language.js';
+import { Prism } from '../../shared/prism-language.js';
 
 const highlighted = StateEffect.define<DecorationSet>();
 
