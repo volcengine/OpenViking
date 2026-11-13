@@ -212,7 +212,7 @@ html.dark .ov-experience-dashboard,
 .dark .ov-date-picker__popup,
 .dark .ov-file-browser,
 .dark .ov-file-preview,
-.ov-error-boundary,
+html.dark .ov-error-boundary,
 .dark .ov-file-tree,
 .dark .ov-module-placeholder,
 .dark .ov-popover,
@@ -379,7 +379,7 @@ html.dark .ov-file-preview {
 }
 
 html.dark .ov-file-preview,
-.ov-error-boundary,
+html.dark .ov-error-boundary,
 html.dark .ov-file-browser-search {
   --ov-ui-preview-backdrop-default: var(--ov-ui-bg-4-default);
   --ov-ui-preview-dot-default: rgb(255 255 255 / 12%);

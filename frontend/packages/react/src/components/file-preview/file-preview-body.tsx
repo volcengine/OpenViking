@@ -151,6 +151,11 @@ export function FilePreviewBody(props: FilePreviewBodyProps) {
       }
       locale={props.locale}
       fallback={props.fileTab.slots?.errorFallback}
+      onError={() => {
+        // Promote failed background bodies so their fallback and retry are reachable.
+        props.onLoadingChange?.(false);
+        props.onStateChange?.('error');
+      }}
       resetKeys={[
         props.fileTab.key,
         props.fileTab.loading,
