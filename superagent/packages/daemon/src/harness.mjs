@@ -200,7 +200,7 @@ export class Harness {
         ...(idleHint ?? {}),
         owner,
         mention,
-        replyTo: event.messageType === 'card_action' ? { kind: 'me' } : event.messageType === 'recall' ? null : resolveReplyTarget(this.store, event),
+        replyTo: resolveReplyTarget(this.store, event),
         // How long only bots have been talking here: the model's cue to stop.
         ...(BOT_SENDERS.has(event.senderType)
           ? { botsSinceHuman: this.store.botsSincePerson(event.scopeKey, result.inbound.seq) } : {}),
@@ -234,7 +234,7 @@ export class Harness {
         text: formatInboundLine(row, null, {
           owner: this.isOwner(row),
           mention: this.mentionTarget(row),
-          replyTo: row.messageType === 'card_action' ? { kind: 'me' } : row.messageType === 'recall' ? null : resolveReplyTarget(this.store, row),
+          replyTo: resolveReplyTarget(this.store, row),
           undecided,
         }),
       }));
