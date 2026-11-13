@@ -6,6 +6,8 @@ These examples use the current user’s API key. In trusted mode, supply the ide
 
 Activating a version changes only the values stored in OpenViking. It does not rotate, revoke, or restore credentials at the external provider.
 
+Mutations of the same `category + target_key` for the same user require the target's write lock. If another operation holds the lock, the endpoint returns HTTP 409 (`CONFLICT`) without waiting for release or automatically retrying the mutation.
+
 ## Endpoint Summary
 
 | Method | Path | Description |
