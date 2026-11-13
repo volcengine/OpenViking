@@ -109,7 +109,7 @@ function isKnownLegacyOpenVikingServer(value) {
 }
 
 /** Render the host's hook and MCP templates into the user's own config files. */
-export function writeHostJsonConfigs({ kind, hooksPath, mcpPath, root, clientId, nodeBin, sourceMode }) {
+export function writeHostJsonConfigs({ kind, hooksPath, mcpPath, root, clientId, nodeBin, sourceMode, platform = process.platform }) {
   // One plugin serves every config-driven host; `kind` names the host directory
   // this client's configuration templates live in.
   const hostDir = path.join(root, "hosts", kind);
@@ -127,21 +127,36 @@ export function writeHostJsonConfigs({ kind, hooksPath, mcpPath, root, clientId,
     .map(([key, value]) => `${key}=${shellArg(value)}`)
     .join(" ");
 
-  function renderHookCommand(command) {
-    const match = /^node\s+"?__OPENVIKING_PLUGIN_ROOT__\/([^\s"]+)"?(\s.*)?$/u.exec(command);
-    if (!match) throw new Error(`Unsupported ${clientId} hook command template: ${command}`);
+  // ZCode command hooks run through a Windows shell that cannot execute the
+  // POSIX `VAR=value 'path' args` form rendered below, and the failure is
+  // silent: no recall, no capture, no error. ZCode's process-type hooks run an
+  // argument vector with no shell, so on Windows the zcode template's entries
+  // become process entries instead. The hook scripts take the client id from
+  // argv; the dropped env vars are telemetry the MCP server entry still carries.
+  const windowsProcessHooks = platform === "win32" && kind === "zcode";
+
+  function renderHookEntry(entry) {
+    const match = /^node\s+"?__OPENVIKING_PLUGIN_ROOT__\/([^\s"]+)"?(\s.*)?$/u.exec(entry.command);
+    if (!match) throw new Error(`Unsupported ${clientId} hook command template: ${entry.command}`);
+    const rest = (match[2] || "").trim().replaceAll("__OPENVIKING_CLIENT_ID__", clientId).split(/\s+/u);
+    if (windowsProcessHooks) {
+      return {
+        type: "process",
+        command: nodeBin,
+        args: [path.join(root, match[1]), ...rest],
+        ...(Number.isFinite(entry.timeout) ? { timeoutMs: entry.timeout * 1000 } : {}),
+      };
+    }
     const args = (match[2] || "").replaceAll("__OPENVIKING_CLIENT_ID__", clientId);
     const rendered = `${shellArg(nodeBin)} ${shellArg(path.join(root, match[1]))}${args}`;
-    return `${envPrefix} ${rendered} # openviking-memory`;
+    return { ...entry, command: `${envPrefix} ${rendered} # openviking-memory` };
   }
 
   function renderHookValue(value) {
     if (Array.isArray(value)) return value.map(renderHookValue);
+    if (value && typeof value === "object" && typeof value.command === "string") return renderHookEntry(value);
     if (!value || typeof value !== "object") return value;
-    return Object.fromEntries(Object.entries(value).map(([key, child]) => [
-      key,
-      key === "command" && typeof child === "string" ? renderHookCommand(child) : renderHookValue(child),
-    ]));
+    return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, renderHookValue(child)]));
   }
 
   const hookTemplate = readJson(path.join(hostDir, "hooks.json"));
