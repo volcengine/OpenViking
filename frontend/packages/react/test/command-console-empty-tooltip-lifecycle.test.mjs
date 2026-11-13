@@ -50,6 +50,33 @@ test('a list that appears after mount still gets observed', async () => {
   }
 });
 
+test('StrictMode keeps the list observed', async () => {
+  // StrictMode 会重放 effect 的 setup→cleanup→setup，但不重新调用 DOM callback
+  // ref。若另有 effect 在 cleanup 里断开订阅，这里就再也没人恢复它。
+  //
+  // StrictMode replays an effect's setup→cleanup→setup without re-invoking DOM
+  // callback refs, so a cleanup that disconnects the subscription leaves nothing
+  // to restore it.
+  setDescWidth(1000);
+  const view = await mount(withCommand, true, { strict: true });
+  try {
+    assert.equal(
+      observedLists(),
+      1,
+      'the list stays observed under StrictMode',
+    );
+    setDescWidth(80);
+    await resize();
+    assert.equal(
+      await hover(actions(view.container)[0]),
+      'List directory entries',
+    );
+  } finally {
+    await view.dispose();
+    setDescWidth(1000);
+  }
+});
+
 test('a list hidden and shown again is observed afresh', async () => {
   // 列表消失后旧观察器绑在已卸载的节点上；恢复时必须重新订阅当前列表，否则
   // 之后的宽度变化收不到。

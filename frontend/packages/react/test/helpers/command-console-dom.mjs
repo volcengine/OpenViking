@@ -1,6 +1,6 @@
 import { after } from 'node:test';
 import { JSDOM } from 'jsdom';
-import { act, createElement, useState } from 'react';
+import { act, createElement, StrictMode, useState } from 'react';
 import { CommandConsole } from '@openviking/react/components/command-console';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', {
@@ -46,7 +46,7 @@ export const record = (content, id = 'one') => ({
   content,
 });
 
-export async function mount(props = {}, controlled = true) {
+export async function mount(props = {}, controlled = true, options = {}) {
   const container = document.createElement('div');
   document.body.append(container);
   const root = createRoot(container);
@@ -58,9 +58,18 @@ export async function mount(props = {}, controlled = true) {
       controlled ? { ...input, value, onValueChange: setValue } : input,
     );
   }
+  // StrictMode 会重放 effect 的 setup→cleanup→setup，但不重新调用 DOM
+  // callback ref；订阅类实现必须在这个模式下同样成立。
+  //
+  // StrictMode replays an effect's setup→cleanup→setup without re-invoking DOM
+  // callback refs, so a subscription must survive that replay too.
+  const tree = (input) => {
+    const host = createElement(Host, { input });
+    return options.strict ? createElement(StrictMode, null, host) : host;
+  };
   const render = async (next = {}) => {
     current = { ...current, ...next };
-    await act(() => root.render(createElement(Host, { input: current })));
+    await act(() => root.render(tree(current)));
   };
   await render();
   return {

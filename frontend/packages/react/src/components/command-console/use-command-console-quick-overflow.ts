@@ -106,12 +106,14 @@ export function useCommandConsoleQuickOverflow() {
   // longer copy.
   useMeasureEffect(measure);
 
-  // 卸载时断开：callback ref 在卸载时会收到 null，但组件整体卸载时也要保证
-  // 观察器不再持有已销毁的节点。
+  // 订阅的建立与释放全部交给 callback ref：它在节点挂载时收到列表、卸载时收到
+  // null。不要再加一个「卸载时断开」的 effect——StrictMode 会重放 effect 的
+  // setup→cleanup→setup，却不会重新调用 DOM callback ref，cleanup 断开的订阅
+  // 便无人恢复。
   //
-  // Disconnect on unmount: the callback ref receives null on unmount too, but this
-  // keeps the observer from holding a destroyed node either way.
-  useMeasureEffect(() => () => observerRef.current?.disconnect(), []);
-
+  // The callback ref owns both ends of the subscription: it receives the list on
+  // mount and null on unmount. Do not add an "disconnect on unmount" effect —
+  // StrictMode replays an effect's setup→cleanup→setup without re-invoking DOM
+  // callback refs, so a cleanup that disconnects leaves nothing to restore it.
   return { listRef: attachList, truncated };
 }
