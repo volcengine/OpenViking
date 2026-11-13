@@ -387,8 +387,18 @@
   border-radius: 12px;
 }
 
-.ov-experience-dashboard__distribution:has(.ov-dashboard-state) {
-  min-height: 266px;
+/* 空态与加载骨架都撑到与五行结果相同的高度（16 上下内边距 + 1 边框 + 5 行 34 +
+ * 4 个 16 间隔 = 268），切换时不把下方的时间线顶来顶去。结果分布固定渲染五行，
+ * 所以这个高度是确定的。
+ *
+ * Both the empty state and the loading skeleton hold the height of the five outcome
+ * rows (16 padding top and bottom + 1 border + five 34-high rows + four 16 gaps = 268),
+ * so neither shifts the timeline below it when the data lands. The distribution always
+ * renders five rows, so the height is fixed.
+ */
+.ov-experience-dashboard__distribution:has(.ov-dashboard-state),
+.ov-experience-dashboard__distribution:has(.ov-experience-dashboard__skeleton) {
+  min-height: 268px;
   align-items: center;
   justify-content: center;
 }

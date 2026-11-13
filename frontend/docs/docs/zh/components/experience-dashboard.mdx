@@ -110,9 +110,9 @@ import '@openviking/react/components/experience-dashboard/style.css';
 
 ## 注意
 
-- `states` 的键与区域对应，且只在对应区域没有数据时显示；例外是追加轨迹页失败——已加载的记录保留，错误与重试显示在列表下方：`list` 目录视图的列表，`effect` 应用效果的三个指标，`outcomes` 任务结果分布，`trajectories` 注入轨迹，`sources` 来源追溯，`tests` 测试材料。
+- `states` 的键与区域对应，通常只在对应区域没有数据时显示：`list` 目录视图的列表，`effect` 应用效果的三个指标，`outcomes` 任务结果分布，`trajectories` 注入轨迹，`sources` 来源追溯，`tests` 测试材料。有两处例外：追加轨迹页失败时，已加载的记录保留，错误与重试显示在列表下方；`effect` 的 `loading` 或 `error` 一旦给出，即使 `data.effect` 仍有值也整块替换为骨架或错误，因为指标是独立取数的，旧值不能与刷新失败同时显示。
 - 分页在超过一页时出现：`data.total` 与 `pageSize` 决定页数，没有 `data.total` 时由 `hasMore` 界定。对应区域的 `loading` 为 `true` 时翻页按钮禁用。
-- 「应用效果」页签在 `hasMore` 为 `true` 时提供「向下滚动加载更多」：滚到距底部 240px 内自动追加，也可点击按钮；优先调用 `onLoadMore`，只提供 `onPageChange` 时以 `page + 1` 调用它。停在底部不会连续请求，失败后再滚一段即重试同一页；`loadingMore` 为 `true` 期间显示加载中。
+- 「应用效果」页签在 `hasMore` 为 `true` 时提供「向下滚动加载更多」：滚到距底部 240px 内自动追加，也可点击按钮；优先调用 `onLoadMore`，只提供 `onPageChange` 时以 `page + 1` 调用它。停在同一位置不会连续请求，往回滚或离开触发区后再次回到末尾才会再请求一次——请求失败时内容不会变高，重试同一页靠的就是这条；`loadingMore` 为 `true` 期间显示加载中。
 - 更新测试材料会保留已选页签与时间范围；`testMaterials` 变回 `undefined` 时，已选中的「测试」页签回到「应用效果」。
 - 复制使用 `navigator.clipboard.writeText`，只在 HTTPS 或 localhost 下可用；不可用或浏览器拒绝时按钮显示「复制失败」。
 - 组件高度为 `100%` 且内容区自己滚动，父元素需要给出高度。

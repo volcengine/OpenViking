@@ -57,14 +57,32 @@ test('reaching the bottom of the timeline loads the next page, the button stays'
       body.dispatchEvent(new window.Event('scroll'));
     });
     assert.deepEqual(pages, ['more']);
-    // 停在底部不重复请求；再往下滚一段才会请求下一页。
+    // 停在底部不重复请求。
     //
-    // Resting at the bottom does not ask again; scrolling further does.
+    // Resting at the bottom does not ask again.
     await act(async () => {
       body.dispatchEvent(new window.Event('scroll'));
     });
     assert.deepEqual(pages, ['more']);
-    body.scrollTop = 700;
+    // 往回滚再回到末尾（容器最大滚动位置就是 600）会再请求一次：失败时内容不会
+    // 变高，只有这样才能重试同一页。
+    //
+    // Scrolling back up and returning to the end — 600 is this container's maximum —
+    // asks again: after a failure the content does not grow, and this is what lets the
+    // same page be retried.
+    body.scrollTop = 550;
+    await act(async () => {
+      body.dispatchEvent(new window.Event('scroll'));
+    });
+    assert.deepEqual(pages, ['more'], 'scrolling up alone does not load');
+    body.scrollTop = 600;
+    await act(async () => {
+      body.dispatchEvent(new window.Event('scroll'));
+    });
+    assert.deepEqual(pages, ['more', 'more']);
+    // 再停在原地也不会继续请求。
+    //
+    // Resting there again does not keep asking.
     await act(async () => {
       body.dispatchEvent(new window.Event('scroll'));
     });

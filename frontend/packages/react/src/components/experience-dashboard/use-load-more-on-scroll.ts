@@ -2,10 +2,6 @@ import { useEffect, useRef } from 'react';
 
 /** 距底部多少像素内触发加载。 Distance from the bottom that triggers a load. */
 const THRESHOLD = 240;
-/** 两次请求之间至少再滚动的像素数，避免停在底部时连续触发。 */
-/** How far the user must scroll again between two requests, so resting at the bottom
- * does not fire repeatedly. */
-const SCROLL_DELTA = 24;
 
 /**
  * 离元素最近的可滚动祖先。看板的内容区自己滚动，轨迹列表并不直接持有滚动容器，
@@ -27,16 +23,18 @@ function getScrollParent(element: HTMLElement | null): HTMLElement | null {
 /**
  * 滚到接近底部时自动追加下一页。
  *
- * 只在用户又往下滚了一段之后才再请求一次：停在底部不会连续触发，失败后条数没有
- * 增加，再滚一次就重试同一页。调用方仍需保留可点击的「加载更多」，键盘与读屏
+ * 一次请求只由一次到达底部触发，停在那里不会连续发请求；往回滚或离开触发区就
+ * 重新武装，用户再次回到末尾时会再请求一次——失败时内容没有变高，只有这样才能
+ * 让「失败后重试同一页」成立。调用方仍需保留可点击的「加载更多」，键盘与读屏
  * 用户不靠滚动也能翻页。
  *
  * Appends the next page once the list is scrolled near its end.
  *
- * It asks again only after the user scrolls further: resting at the bottom does not fire
- * repeatedly, and after a failure — where the row count did not grow — the next scroll
- * retries the same page. The caller still keeps a clickable "load more", so keyboard and
- * screen-reader users page without scrolling.
+ * One arrival at the end triggers one request, so resting there does not fire
+ * repeatedly; scrolling back up or leaving the trigger zone re-arms it, and returning to
+ * the end asks again. After a failure the content did not grow, and this is what makes
+ * "the next scroll retries the same page" true. The caller still keeps a clickable
+ * "load more", so keyboard and screen-reader users page without scrolling.
  */
 export function useLoadMoreOnScroll({
   enabled,
@@ -48,12 +46,15 @@ export function useLoadMoreOnScroll({
   onLoadMore?: () => void;
 }) {
   const sentinelRef = useRef<HTMLDivElement | null>(null);
-  // 起始值比阈值再低一像素：列表短到不用滚动时，用户在顶部的一次滚动也算「又往下
-  // 滚了」，仍能触发加载。
+  // 上一次请求时的滚动位置；`null` 表示已重新武装、可以再请求一次。
   //
-  // The start sits one pixel below the delta so a scroll at the very top still counts as
-  // moving, which matters when the list is short enough that it never scrolls far.
-  const lastScrollTop = useRef(-SCROLL_DELTA - 1);
+  // The scroll position of the last request; `null` means it is re-armed and may ask
+  // again.
+  const requestedAt = useRef<number | null>(null);
+  // 上一次滚动事件看到的位置，用来判断这次是在往回滚。
+  //
+  // The position the previous scroll event saw, used to tell whether this one moves up.
+  const previousTop = useRef(0);
 
   // useEffect 必要性：与滚动容器这个外部系统同步——滚动事件只发生在浏览器的滚动
   // 元素上，渲染计算和点击都无法得知用户滚到了哪里。哨兵换位、加载状态或回调
@@ -70,11 +71,25 @@ export function useLoadMoreOnScroll({
     const scroller = getScrollParent(sentinel);
     if (!scroller) return undefined;
     const onScroll = () => {
-      const distance =
-        scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-      const moved = scroller.scrollTop > lastScrollTop.current + SCROLL_DELTA;
-      if (distance > THRESHOLD || !moved) return;
-      lastScrollTop.current = scroller.scrollTop;
+      const top = scroller.scrollTop;
+      const distance = scroller.scrollHeight - top - scroller.clientHeight;
+      const movingUp = top < previousTop.current;
+      previousTop.current = top;
+      // 往回滚，或者已经离开触发区，都重新武装：请求失败后内容没有变高，只有让
+      // 用户回到同一位置还能再请求一次，否则「失败后重试同一页」只是一句空话。
+      //
+      // Scrolling back up, or leaving the trigger zone, re-arms it: after a failure the
+      // content did not grow, so the only way "the next scroll retries the same page"
+      // holds is to let the same position ask again.
+      if (requestedAt.current !== null && (movingUp || distance > THRESHOLD))
+        requestedAt.current = null;
+      // 往回滚不触发：重试发生在用户回到列表末尾时，而不是往上翻的过程中。
+      //
+      // Scrolling up does not trigger: the retry happens when the user returns to the
+      // end of the list, not while paging back through it.
+      if (movingUp || distance > THRESHOLD || requestedAt.current !== null)
+        return;
+      requestedAt.current = top;
       onLoadMore();
     };
     scroller.addEventListener('scroll', onScroll, { passive: true });
