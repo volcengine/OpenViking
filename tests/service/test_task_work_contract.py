@@ -21,34 +21,54 @@ from tests.test_task_tracker import _FakeAgfs
 OWNER: dict[str, Any] = {"account_id": "account", "user_id": "user"}
 
 
-@pytest.fixture(params=["file", "mysql"])
+def _relational_backend(provider):
+    sqlalchemy = pytest.importorskip("sqlalchemy.ext.asyncio")
+    if provider == "postgres":
+        pytest.importorskip("psycopg")
+        from openviking.service.task_store_postgres import PostgresTaskWorkStore
+
+        store_class = PostgresTaskWorkStore
+        schema_names = ["task_store_postgres_init.sql"]
+    else:
+        pytest.importorskip("aiomysql")
+        from openviking.service.task_store_mysql import MySQLTaskWorkStore
+
+        store_class = MySQLTaskWorkStore
+        schema_names = ["task_store_init.sql", "changes/0001_task_store_service_name.sql"]
+    raw = os.environ.get(f"OV_TEST_{provider.upper()}")
+    if not raw:
+        pytest.skip(f"Set OV_TEST_{provider.upper()} to exercise the shared Task/Work contract")
+    params = {**json.loads(raw), "table": f"ov_contract_{uuid4().hex[:12]}"}
+    return sqlalchemy, store_class, params, schema_names
+
+
+async def _provision_task_schema(admin, params, schema_names):
+    sql_dir = Path(__file__).resolve().parents[2] / "openviking/service/sql"
+    async with admin.begin() as connection:
+        for name in schema_names:
+            sql = "\n".join(
+                line
+                for line in (sql_dir / name).read_text().splitlines()
+                if not line.lstrip().startswith("--")
+            )
+            for statement in sql.replace("ov_tasks", params["table"]).split(";"):
+                # The fixture already owns a transaction.
+                if statement.strip() and statement.strip().upper() not in {"BEGIN", "COMMIT"}:
+                    await connection.exec_driver_sql(statement)
+
+
+@pytest.fixture(params=["file", "mysql", "postgres"])
 async def task_stores(request):
     if request.param == "file":
         store = PersistentTaskStore(_FakeAgfs())
         yield store, store
         return
-    raw = os.environ.get("OV_TEST_MYSQL")
-    if not raw:
-        pytest.skip("Set OV_TEST_MYSQL to exercise the shared Task/Work contract")
-    sqlalchemy = pytest.importorskip("sqlalchemy.ext.asyncio")
-    pytest.importorskip("aiomysql")
-    from openviking.service import task_store_mysql
-
-    params = {**json.loads(raw), "table": f"ov_contract_{uuid4().hex[:12]}"}
-    first = task_store_mysql.MySQLTaskWorkStore(params=params)
-    second = task_store_mysql.MySQLTaskWorkStore(params=params)
+    sqlalchemy, store_class, params, schema_names = _relational_backend(request.param)
+    first = store_class(params=params)
+    second = store_class(params=params)
     admin = sqlalchemy.create_async_engine(first._url, **first._engine_options)
-    sql_dir = Path(task_store_mysql.__file__).parent / "sql"
-    schema_files = [
-        sql_dir / "task_store_init.sql",
-        sql_dir / "changes/0001_task_store_service_name.sql",
-    ]
     try:
-        async with admin.begin() as connection:
-            for schema in schema_files:
-                for statement in schema.read_text().replace("ov_tasks", params["table"]).split(";"):
-                    if statement.strip():
-                        await connection.exec_driver_sql(statement)
+        await _provision_task_schema(admin, params, schema_names)
         await first.load()
         await second.load()
         yield first, second
@@ -57,6 +77,30 @@ async def task_stores(request):
         await second.close()
         async with admin.begin() as connection:
             await connection.run_sync(first._models.Base.metadata.drop_all)
+        await admin.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["mysql", "postgres"])
+async def test_relational_load_requires_schema_and_can_retry(provider):
+    sqlalchemy, store_class, params, schema_names = _relational_backend(provider)
+    store = store_class(params=params)
+    admin = sqlalchemy.create_async_engine(store._url, **store._engine_options)
+    try:
+        with pytest.raises(RuntimeError, match="schema is missing or incompatible"):
+            await store.load()
+        assert store._engine is None
+        assert not store._sql_lease
+        await _provision_task_schema(admin, params, schema_names)
+        await asyncio.gather(*[store.load() for _ in range(4)])
+        assert store._sql_lease
+        await store.close()
+        await store.load()
+        assert await store.get_task("absent", **OWNER) is None
+    finally:
+        await store.close()
+        async with admin.begin() as connection:
+            await connection.run_sync(store._models.Base.metadata.drop_all)
         await admin.dispose()
 
 
@@ -450,35 +494,20 @@ def test_mysql_task_store_schema_uses_service_name_partition():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("deletion", ["manual", "expired"])
-async def test_mysql_requeue_and_concurrent_completion_are_durable(deletion):
-    raw = os.environ.get("OV_TEST_MYSQL")
-    if not raw:
-        pytest.skip("Set OV_TEST_MYSQL to exercise the shared Task/Work contract")
-    sqlalchemy = pytest.importorskip("sqlalchemy.ext.asyncio")
-    pytest.importorskip("aiomysql")
-    from openviking.service import task_store_mysql
-
-    params = {**json.loads(raw), "table": f"ov_contract_{uuid4().hex[:12]}"}
-    first = task_store_mysql.MySQLTaskWorkStore(params=params)
-    second = task_store_mysql.MySQLTaskWorkStore(params=params)
-    isolated_store = task_store_mysql.MySQLTaskWorkStore(
+@pytest.mark.parametrize("provider", ["mysql", "postgres"])
+async def test_relational_requeue_and_concurrent_completion_are_durable(deletion, provider):
+    sqlalchemy, store_class, params, schema_names = _relational_backend(provider)
+    first = store_class(params=params)
+    second = store_class(params=params)
+    isolated_store = store_class(
         params=params,
         service_name="contract-isolated",
     )
     admin = sqlalchemy.create_async_engine(first._url, **first._engine_options)
-    sql_dir = Path(task_store_mysql.__file__).parent / "sql"
-    schema_files = [
-        sql_dir / "task_store_init.sql",
-        sql_dir / "changes/0001_task_store_service_name.sql",
-    ]
     writer, observer = TaskTracker(first), TaskTracker(second)
     isolated = TaskTracker(isolated_store)
     try:
-        async with admin.begin() as connection:
-            for schema in schema_files:
-                for statement in schema.read_text().replace("ov_tasks", params["table"]).split(";"):
-                    if statement.strip():
-                        await connection.exec_driver_sql(statement)
+        await _provision_task_schema(admin, params, schema_names)
         await first.load()
         await second.load()
         await isolated_store.load()
@@ -569,10 +598,13 @@ async def test_mysql_requeue_and_concurrent_completion_are_durable(deletion):
         assert await isolated.get(task_id, **OWNER) is not None
         assert await isolated.get_work_state(task_id, "semantic", **OWNER) is WorkState.PENDING
         async with admin.connect() as connection:
-            for table in first._models.table_names:
-                remaining = await connection.exec_driver_sql(
-                    f"SELECT COUNT(*) FROM `{table}` WHERE service_name = %s AND task_id = %s",
-                    (first._service_name, task_id),
+            from sqlalchemy import func, select
+
+            for model in (first._models.Task, first._models.Work, first._models.Event):
+                remaining = await connection.execute(
+                    select(func.count())
+                    .select_from(model)
+                    .where(model.service_name == first._service_name, model.task_id == task_id)
                 )
                 assert remaining.scalar_one() == 0
     finally:
