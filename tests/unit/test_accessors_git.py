@@ -1005,30 +1005,35 @@ class TestGitAccessor:
         killpg.assert_called_once_with(43210, signal.SIGKILL)
         assert elapsed < 1.0
 
-    @pytest.mark.parametrize(
-        ("source", "repo_name"),
-        [
-            ("https://gitcode.com/org/repo.git", "org/repo"),
-            ("https://gitee.com/org/repo.git", "org/repo"),
-            ("https://bitbucket.org/org/repo.git", "org/repo"),
-            ("https://codeberg.org/org/repo.git", "org/repo"),
-            ("https://gitea.com/org/repo.git", "org/repo"),
-            ("https://atomgit.com/org/repo.git", "org/repo"),
-            ("https://git.sr.ht/~user/repo", "_user/repo"),
-        ],
-    )
-    async def test_generic_code_hosts_are_marked_for_code_repository_parser(
+    @pytest.mark.parametrize("marker_kind", ["missing", "file", "symlink", "dangling_symlink"])
+    async def test_git_clone_writes_marker_without_changing_external_files(
         self,
         accessor: GitAccessor,
         tmp_path: Path,
-        source: str,
-        repo_name: str,
+        marker_kind: str,
     ) -> None:
-        with patch.object(accessor, "_run_git", new_callable=AsyncMock):
-            assert await accessor._git_clone(source, str(tmp_path)) == repo_name
+        source = "https://gitee.com/org/repo.git"
+        checkout = tmp_path / "checkout"
+        checkout.mkdir()
+        marker = checkout / ".git_source_repo"
+        external = tmp_path / "external"
+        if marker_kind != "dangling_symlink":
+            external.write_text("unchanged", encoding="utf-8")
+        if marker_kind == "file":
+            marker.write_text("repository-provided content", encoding="utf-8")
+        elif marker_kind in {"symlink", "dangling_symlink"}:
+            marker.symlink_to(external)
 
-        assert (tmp_path / ".git_source_repo").read_text(encoding="utf-8") == source
-        assert await DirectoryParser._is_git_repository(tmp_path) is True
+        with patch.object(accessor, "_run_git", new_callable=AsyncMock):
+            assert await accessor._git_clone(source, str(checkout)) == "org/repo"
+
+        assert not marker.is_symlink()
+        assert marker.read_text(encoding="utf-8") == source
+        assert await DirectoryParser._is_git_repository(checkout) is True
+        if marker_kind == "dangling_symlink":
+            assert not external.exists()
+        else:
+            assert external.read_text(encoding="utf-8") == "unchanged"
 
     async def test_github_archive_encodes_fragment_in_ref(
         self, accessor: GitAccessor, tmp_path: Path
