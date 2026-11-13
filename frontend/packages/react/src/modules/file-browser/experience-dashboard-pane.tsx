@@ -4,6 +4,7 @@ import {
 } from '../../components/experience-dashboard/index.js';
 import type { OvRequestOptions } from '../../client/types.js';
 import { useExperienceDashboard } from './use-experience-dashboard.js';
+import { useExperienceTrajectories } from './use-experience-trajectories.js';
 import {
   EXPERIENCE_PAGE_SIZE,
   isExperienceDirectory,
@@ -26,6 +27,17 @@ export function ExperienceDashboardPane({
     refreshGeneration,
   });
   const directory = isExperienceDirectory(uri);
+  // 轨迹自己管分页：目录视图不需要它，只有文件视图的「应用效果」页签会取数。
+  //
+  // Trajectories own their paging: the directory view never needs it, and only the
+  // file view's Impact tab fetches.
+  const trajectories = useExperienceTrajectories({
+    uri,
+    days: browser.days,
+    enabled: !directory && browser.tab === 'impact',
+    requestOptions,
+    refreshGeneration,
+  });
   const status = (query: {
     loading: boolean;
     error: Error | null;
@@ -40,28 +52,33 @@ export function ExperienceDashboardPane({
       data={{
         experiences: browser.list.data?.items,
         outcomes: browser.outcomes.data,
-        trajectories: browser.trajectories.data?.items,
-        trajectoryTotal: browser.trajectories.data?.total,
+        trajectories: trajectories.data?.items,
+        trajectoryTotal: trajectories.data?.total,
         sources: browser.sources.data,
       }}
       tab={browser.tab}
       days={browser.days}
       page={browser.page}
+      pageSize={EXPERIENCE_PAGE_SIZE}
       startIndex={browser.page * EXPERIENCE_PAGE_SIZE}
       hasMore={Boolean(
-        directory
-          ? browser.list.data?.hasMore
-          : browser.tab === 'impact' && browser.trajectories.data?.has_more,
+        directory ? browser.list.data?.hasMore : trajectories.hasMore,
       )}
+      loadingMore={trajectories.loadingMore}
       states={{
         list: status(browser.list),
         sources: status(browser.sources),
         outcomes: status(browser.outcomes),
-        trajectories: status(browser.trajectories),
+        trajectories: {
+          loading: trajectories.loading,
+          error: trajectories.error,
+          onRetry: trajectories.retry,
+        },
       }}
       onTabChange={browser.setTab}
       onDaysChange={browser.setDays}
       onPageChange={browser.setPage}
+      onLoadMore={trajectories.loadMore}
     />
   );
 }

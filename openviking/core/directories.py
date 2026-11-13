@@ -18,6 +18,8 @@ from openviking.core.namespace import (
     is_session_uri,
     user_space_fragment,
 )
+from openviking.privacy.global_policy import ensure_global_policy_file
+from openviking.server.config import UserConfigDefaults
 from openviking.server.identity import RequestContext
 from openviking.session.memory.agent_file import ensure_agent_file
 from openviking.storage.abstract_overview import AbstractOverviewFormatError, body_for_preview
@@ -205,10 +207,14 @@ class DirectoryInitializer:
         vikingdb: "VikingDBManager",
         viking_fs: Optional["VikingFS"] = None,
         system_asset_synchronizer: Optional["SystemAssetSynchronizer"] = None,
+        user_config_defaults: Optional[UserConfigDefaults] = None,
     ):
         self.vikingdb = vikingdb
         self._viking_fs = viking_fs
         self._system_asset_synchronizer = system_asset_synchronizer
+        self.user_config_defaults = (
+            user_config_defaults if user_config_defaults is not None else UserConfigDefaults()
+        )
 
     def _get_viking_fs(self) -> "VikingFS":
         if self._viking_fs is not None:
@@ -237,6 +243,10 @@ class DirectoryInitializer:
         await ensure_agent_file(
             self._get_viking_fs(), replace(ctx, actor_peer_id=None), lease_ref=lease_ref
         )
+        if self.user_config_defaults.preset_global_policy:
+            await ensure_global_policy_file(
+                self._get_viking_fs(), replace(ctx, actor_peer_id=None), lease_ref=lease_ref
+            )
         user_count = sum(target.scope == "user" for target in created)
         return len(created) - user_count, user_count
 
@@ -270,6 +280,10 @@ class DirectoryInitializer:
         await ensure_agent_file(
             self._get_viking_fs(), replace(ctx, actor_peer_id=None), lease_ref=lease_ref
         )
+        if self.user_config_defaults.preset_global_policy:
+            await ensure_global_policy_file(
+                self._get_viking_fs(), replace(ctx, actor_peer_id=None), lease_ref=lease_ref
+            )
         return len(created)
 
     async def _initialize_directory_trees(

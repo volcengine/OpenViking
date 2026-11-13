@@ -3,7 +3,6 @@
 import hashlib
 import json
 import logging
-import os
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, List, Literal, Optional
@@ -15,7 +14,7 @@ from openviking_cli.session.user_id import UserIdentifier
 
 from .agent_evolution_config import AgentEvolutionConfig
 from .cache_config import CacheConfig
-from .config_loader import resolve_config_path
+from .config_loader import expand_config_environment, resolve_config_path
 from .config_utils import (
     DEFAULT_SERVICE_NAME,
     format_validation_error,
@@ -876,9 +875,7 @@ class OpenVikingConfigSingleton:
             data = config_path.read_bytes()
             raw = data.decode("utf-8-sig")
 
-            # Expand $VAR and ${VAR} inside the JSON text (useful for container deployments).
-            # Unset variables are left unchanged by expandvars().
-            raw = os.path.expandvars(raw)
+            raw = expand_config_environment(raw)
             config_data = json.loads(raw)
 
             config = OpenVikingConfig.from_dict(config_data)

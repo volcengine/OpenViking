@@ -54,7 +54,24 @@ export function useSearchShortcut(
     const id = instanceId.current;
     registerInstance(id);
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'k')
+      if (
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.repeat ||
+        event.altKey ||
+        event.shiftKey ||
+        !(event.metaKey || event.ctrlKey) ||
+        event.key.toLowerCase() !== 'k'
+      )
+        return;
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        !target.closest('.ov-file-browser-search') &&
+        target.closest(
+          'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="dialog"]',
+        )
+      )
         return;
       if (!ownsShortcut(id, containerRef.current)) return;
       event.preventDefault();

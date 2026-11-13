@@ -115,7 +115,7 @@ test('an empty input never issues a request', async () => {
   }
 });
 
-test('failed searches expose the reason and a new query retries', async () => {
+test('failed searches expose the reason and can retry the same query', async () => {
   let available = false;
   const fetch = recordingFetch((call) => {
     if (call.path !== find) return ok([]);
@@ -140,9 +140,14 @@ test('failed searches expose the reason and a new query retries', async () => {
     );
 
     available = true;
-    await type('profile2');
-    await waitForDebounce();
+    await act(async () =>
+      [...dialog().querySelectorAll('button')]
+        .find((button) => button.textContent === 'Retry')
+        .click(),
+    );
+    await settle();
     assert.equal(calls(fetch).length, 2);
+    assert.equal(calls(fetch)[1].body.query, 'profile');
     assert.match(dialog().textContent, /No matching resources/);
   } finally {
     await view.unmount();

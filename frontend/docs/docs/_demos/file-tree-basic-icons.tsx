@@ -18,7 +18,6 @@ const INDICATOR = {
   flex: 'none',
   width: 24,
   height: 24,
-  marginLeft: 'auto',
   borderRadius: 4,
 } as const;
 

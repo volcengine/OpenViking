@@ -25,7 +25,7 @@ Your app keeps the expanded set and the paging state and passes the flattened tr
 
 ```
 
-The example uses simulated offline data: the row-end board icons come from `renderDashboard`, the file-type icons from `renderRowIcon`, and search only shows the `onSearch` event without opening a search UI. Check "Host-controlled loading" to see the controlled refresh state on its own.
+The example uses simulated offline data: the row-end board icons come from `renderRowTrailing`, the file-type icons from `renderRowIcon`, and search only shows the `onSearch` event without opening a search UI. Check "Host-controlled loading" to see the controlled refresh state on its own.
 
 ## API
 
@@ -45,7 +45,7 @@ The example uses simulated offline data: the row-end board icons come from `rend
 | refresh                 | Shows the built-in refresh button; `false` hides it, `disabled` disables it and `loading` sets a host-controlled pending state              | `boolean \| { disabled?: boolean; loading?: boolean }` | `true`                                        |
 | loading                 | Host-controlled pending state of the refresh button, combined with the refresh Promise and `refresh.loading`; existing rows stay visible    | `boolean`                                              | `false`                                       |
 | getRowAttributes        | Adds HTML attributes to every row, including loading and paging rows; `className` and `style` are merged with the component's own           | `(row: FileTreeRow) => HTMLAttributes<HTMLDivElement>` | -                                             |
-| renderDashboard         | Renders the row-end indicator, such as a dashboard entry; `null` hides it, and the content and click behavior are yours                     | `(row: FileTreeEntryRow) => ReactNode`                 | -                                             |
+| renderRowTrailing       | Renders a trailing marker such as a board entry or a status badge; `null` hides it, and the content and click behavior are yours            | `(row: FileTreeEntryRow) => ReactNode`                 | -                                             |
 | renderRowIcon           | Renders the leading icon of a file row; directory rows always use the built-in folder icon, and `null` falls back to the built-in file icon | `(row: FileTreeEntryRow) => ReactNode`                 | Built-in file icon                            |
 | renderRowTooltip        | Renders the hover tooltip of a row; when provided it replaces the built-in directory description, and `null` hides the tooltip for that row | `(row: FileTreeEntryRow) => ReactNode`                 | Built-in directory description based on `uri` |
 | onSelect                | Called after an entry is selected                                                                                                           | `(row: FileTreeEntryRow) => void`                      | -                                             |
@@ -271,7 +271,7 @@ Semantic key of a directory. The component matches it from the structure of a ro
 ### Selection, keyboard and permissions
 
 - Clicking a directory and clicking a file both call `operations.select`, so branch on `row.type`. Clicking the expand arrow only calls `operations.toggleExpand` and does not select.
-- Content returned by `renderDashboard` sits inside the row, so a click on it bubbles up and selects the row. Call `event.stopPropagation()` when it needs its own click behavior, as the board icons in the example do.
+- Content returned by `renderRowTrailing` sits inside the row, so a click on it bubbles up and selects the row. Call `event.stopPropagation()` when it needs its own click behavior, as the board icons in the example do.
 - Keyboard: Up and Down move focus, Right expands a directory, Left collapses it, and Enter and Space select.
 - The tree uses `role="tree"` and rows use `role="treeitem"` with `aria-level` (`depth` plus 1), `aria-selected`, `aria-expanded` and `aria-disabled`. Name the tree with `aria-label`.
 - Permission state comes from your app and the component sends no authorization requests: a `disabled` row can be neither selected nor expanded, a row with `selectable: false` cannot be selected but can be expanded, and `access` only shows a text badge at the row end without changing behavior.
@@ -329,7 +329,7 @@ treeRef.current?.scrollToRow('resources', { block: 'center' });
 - The root element is `100%` tall and scrolls its content internally, so give its container a height.
 - Rows size to their content: names render in full, the container scrolls sideways, and deep indentation gets its space the same way.
 - Descriptions are at most 200px wide and truncate beyond that, so a long description does not stretch the row.
-- Content returned by `renderDashboard` follows the name and the other badges directly. Give it `margin-left: auto` to align it to the right edge, as the example does.
+- Content returned by `renderRowTrailing` sits at the right edge of the row; when the row also shows trailing markers such as the level or access, it follows them directly.
 
 ## Theme variables
 

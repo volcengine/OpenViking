@@ -1,0 +1,250 @@
+.ov-file-history {
+  --ov-ui-modal-width: min(1160px, 100%);
+  --ov-ui-history-border: var(
+    --ov-ui-color-border-1,
+    var(--ov-ui-border-1-default)
+  );
+  --ov-ui-history-muted: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  --ov-ui-history-surface: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  --ov-ui-history-added: var(
+    --ov-ui-color-status-success,
+    var(--ov-ui-status-success-default)
+  );
+  --ov-ui-history-removed: var(
+    --ov-ui-color-danger,
+    var(--ov-ui-danger-default)
+  );
+}
+.ov-file-browser-workflow.ov-file-history .ov-modal__body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+.ov-file-history h2 {
+  flex: none;
+  margin: 0;
+  padding: 18px 56px 16px 24px;
+  border-bottom: 1px solid var(--ov-ui-history-border);
+}
+.ov-file-history__layout {
+  display: grid;
+  grid-template-columns: minmax(168px, 19.5%) minmax(0, 1fr);
+  min-height: 0;
+  height: min(76dvh, 790px);
+  font-size: 13px;
+}
+.ov-file-history__sidebar {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  flex-direction: column;
+  border-inline-end: 1px solid var(--ov-ui-history-border);
+}
+.ov-file-history__compare {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 48px;
+  padding: 0 18px;
+}
+.ov-file-history__compare button {
+  position: relative;
+  flex: 0 0 28px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 16px;
+  background: var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
+  cursor: pointer;
+}
+.ov-file-history__compare button::after {
+  position: absolute;
+  inset-block-start: 3px;
+  inset-inline-start: 3px;
+  width: 10px;
+  height: 10px;
+  border-radius: 100%;
+  background: var(--ov-ui-history-surface);
+  content: '';
+}
+.ov-file-history__compare button[aria-checked='true'] {
+  background: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+}
+.ov-file-history__compare button[aria-checked='true']::after {
+  inset-inline-start: 15px;
+}
+.ov-file-history__compare button:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+.ov-file-history__entries {
+  min-height: 0;
+  overflow: auto;
+}
+.ov-file-history__entries ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ov-file-history__entries p {
+  margin: 12px 18px;
+}
+.ov-file-history__entries li > :is(button, div) {
+  display: grid;
+  gap: 4px;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 12px 18px;
+  border: 0;
+  text-align: start;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  overflow-wrap: anywhere;
+}
+.ov-file-history__entries button {
+  cursor: pointer;
+}
+.ov-file-history__entries button[aria-pressed='true'],
+.ov-file-history__entries button:hover:not(:disabled) {
+  background: var(--ov-ui-color-bg-4, var(--ov-ui-bg-4-default));
+}
+.ov-file-history__entries button[aria-pressed='true'] time {
+  font-weight: 600;
+}
+.ov-file-history__entries button span {
+  color: var(--ov-ui-history-muted);
+  white-space: pre-wrap;
+}
+.ov-file-history__entries button:focus-visible,
+.ov-file-history__compare button:focus-visible {
+  outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  outline-offset: -2px;
+}
+.ov-file-history__main {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  padding: 16px;
+}
+.ov-file-history__revision {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  border: 1px solid var(--ov-ui-history-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.ov-file-history__toolbar,
+.ov-file-history__commands {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ov-file-history__toolbar {
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--ov-ui-history-border);
+}
+.ov-file-history__content {
+  position: relative;
+  isolation: isolate;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+  background: var(--ov-ui-color-bg-2, var(--ov-ui-bg-2-default));
+}
+.ov-file-history__content::before {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background: url('./history-grid.png') 0 0 / 20px 20px repeat;
+  opacity: 0.08;
+  content: '';
+  pointer-events: none;
+}
+.ov-file-history__content pre,
+.ov-file-history__diff {
+  margin: 0;
+  padding: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ov-file-history__markdown {
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.ov-file-history__markdown > :first-child {
+  margin-block-start: 0;
+}
+.ov-file-history__markdown :is(img, pre) {
+  max-width: 100%;
+}
+.ov-file-history__diff {
+  list-style: none;
+}
+.ov-file-history__diff li {
+  display: grid;
+  grid-template-columns: minmax(32px, auto) minmax(0, 1fr);
+  gap: 8px;
+  padding: 2px 8px;
+  line-height: 20px;
+}
+.ov-file-history__diff li > span {
+  color: var(--ov-ui-history-muted);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+.ov-file-history__diff li[data-change='added'],
+.ov-file-history__diff li[data-change='removed'] {
+  background: color-mix(in srgb, currentColor 7%, transparent);
+}
+.ov-file-history [data-change='added'] {
+  color: var(--ov-ui-history-added);
+}
+.ov-file-history [data-change='removed'] {
+  color: var(--ov-ui-history-removed);
+}
+.ov-file-history__diff li[data-change='removed'] code {
+  text-decoration: line-through;
+}
+.ov-file-history__legend {
+  display: flex;
+  gap: 16px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--ov-ui-history-border);
+}
+.ov-file-history__legend span::before {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-inline-end: 6px;
+  border-radius: 2px;
+  background: currentColor;
+  content: '';
+}
+.ov-file-history__layout:not(:has(.ov-file-history__main)) {
+  display: block;
+  height: auto;
+  overflow: auto;
+}
+@media (max-width: 640px) {
+  .ov-file-history__layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(96px, auto) minmax(0, 1fr);
+  }
+  .ov-file-history__sidebar {
+    max-height: min(23dvh, 170px);
+    border-inline-end: 0;
+    border-bottom: 1px solid var(--ov-ui-history-border);
+  }
+  .ov-file-history__main {
+    padding: 8px;
+  }
+}
