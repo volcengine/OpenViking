@@ -34,7 +34,8 @@
 
 ## 代码写法
 
-- 优先使用较新的语言特性，用声明式写法代替手写分支：可选值兜底用 `??`（`data.total ?? pageSize`），可选链用 `?.`（`item?.name`），不用 `x === undefined ? a : b` 或 `x || fallback` 表达同一件事。
+- 优先用语法糖代替手写分支，同一件事写得越短越好：判空兜底用 `??`（`data.total ?? pageSize`），可选链用 `?.`（`item?.name`），条件赋值用 `??=`、`||=`（`options.locale ??= 'en-US'`），不用 `x === undefined ? a : b` 这类等价展开。
+- `??` 与 `||` 不是一回事，按语义选：`??` 只在 `null`、`undefined` 时兜底；`||` 对 `0`、`''`、`false` 也兜底，用于「假值就该换默认值」的场景（`label || fallbackLabel`）。需要保留 `0` 或空串时用 `??`。
 
 ## 样式与交互
 
