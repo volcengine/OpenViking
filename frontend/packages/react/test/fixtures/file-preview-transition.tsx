@@ -73,9 +73,42 @@ function LateCase() {
   );
 }
 
+function SnapshotCase() {
+  // B 先以 loading 占位进入，随后同一 identity 补上正文；等它显示出来后再切到
+  // 异步的 C。此时 B 退居后台，屏幕上应仍是 B 的**正文**，而不是最初的占位。
+  //
+  // B arrives as a loading placeholder, then gets its body under the same identity.
+  // Once shown, switching to an async C makes B step aside — and the screen must still
+  // show B's body, not its original placeholder.
+  const [active, setActive] = useState('L0');
+  const [ready, setReady] = useState(false);
+  (window as unknown as { __setSnapshotReady: () => void }).__setSnapshotReady =
+    () => setReady(true);
+  return (
+    <FilePreview
+      tabs={[
+        {
+          kind: 'file',
+          key: 'guide',
+          source: { content: '# A', fileName: 'a.md' },
+          activeLevelKey: active,
+          onLevelChange: setActive,
+          loading: active === 'L1' && !ready,
+          levels: [
+            level('L0', '# A'),
+            level('L1', ready ? '# B body' : '# B placeholder'),
+            level('L2', '# C body'),
+          ],
+        },
+      ]}
+    />
+  );
+}
+
 const cases: Record<string, () => ReactElement> = {
   cancel: CancelCase,
   late: LateCase,
+  snapshot: SnapshotCase,
 };
 
 const Case = cases[new URLSearchParams(location.search).get('case') ?? ''];

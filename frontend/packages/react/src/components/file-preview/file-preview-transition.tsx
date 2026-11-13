@@ -193,18 +193,46 @@ export function FilePreviewTransition<T>({
   // 停在加载分支，既不挂载渲染器也不上报就绪，遮罩就再也撤不掉。只有身份已经
   // 落后的那一层（屏幕上正在被替换的旧内容）保持原样。
   //
-  // A slot whose identity matches the current target follows the latest tab object:
-  // the host rebuilds it every render, and freezing the old one would keep a saved
-  // body or a new resource list from reaching the screen. The background slot follows
-  // too — a host often supplies a `loading: true` placeholder first and the body under
-  // the same key afterwards; frozen, it would stay on the loading branch forever,
-  // never mounting the renderer or reporting ready, and the overlay could never go
-  // away. Only a layer whose identity has fallen behind — the old content being
-  // replaced — keeps its own object.
+  // 跟随时要把最新的对象写回槽位：下一轮切换里这一层会变成「旧内容」，那时读的
+  // 就是槽位里的快照。只在这里返回最新对象而不落库，等它退居后台后会退回创建时
+  // 的占位（例如最初的 loading 空壳），「旧内容留在屏幕上」就失效了。
+  //
+  // A slot whose identity matches the current target follows the latest tab object: the
+  // host rebuilds it every render, and freezing the old one would keep a saved body or a
+  // new resource list from reaching the screen. The background slot follows too — a host
+  // often supplies a `loading: true` placeholder first and the body under the same key
+  // afterwards; frozen, it would stay on the loading branch forever, never mounting the
+  // renderer or reporting ready, and the overlay could never go away. Only a layer whose
+  // identity has fallen behind — the old content being replaced — keeps its own object.
+  //
+  // Following also has to write the latest object back into the slot: in the next switch
+  // this layer becomes the old content, and what it renders then is the snapshot stored
+  // here. Returning the latest object without storing it would send it back to its
+  // creation-time placeholder (the original empty loading shell) once it steps aside,
+  // defeating "the previous content stays on screen".
+  // 每层最后实际渲染的 tab。槽位退居后台后就读它，因此必须同步更新：渲染期间
+  // 写入，晚一帧写入会让切换正好落在写入之前，读到旧值。
+  //
+  // The tab each layer last actually rendered. A slot reads it once it steps aside, so
+  // it is written during render — deferred by a frame, a switch landing in between
+  // would read a stale value.
+  const shownTabs = useRef<
+    Record<SlotName, { identity: string; tab: T } | null>
+  >({
+    a: { identity, tab },
+    b: null,
+  });
   const layerTab = (name: SlotName) => {
     const slot = slots[name];
-    if (!slot) return null;
-    return slot.identity === identity ? tab : slot.tab;
+    if (!slot) {
+      shownTabs.current[name] = null;
+      return null;
+    }
+    if (slot.identity === identity) {
+      shownTabs.current[name] = { identity, tab };
+      return tab;
+    }
+    return shownTabs.current[name]?.tab ?? slot.tab;
   };
 
   return (
