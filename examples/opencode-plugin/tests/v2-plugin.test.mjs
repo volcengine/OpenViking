@@ -99,6 +99,24 @@ for (const disabled of [false, true]) {
   })
 }
 
+test("existing skills override bundled skills by ID or name", async () => {
+  const { runtime } = runtimeFixture()
+  const { ctx, skillSources } = contextFixture()
+  skillSources.push(
+    { id: "project-memory", name: "openviking-memory", path: "/tmp/project/.opencode/skills/project-memory/SKILL.md", content: "" },
+    { id: "openviking-skills", name: "Custom skills", path: "/tmp/project/.opencode/skills/openviking-skills/SKILL.md", content: "" },
+  )
+  const cleanup = await startV2Plugin(ctx, runtime, { pluginRoot })
+  assert.deepEqual(skillSources.map((skill) => skill.id).sort(), [
+    "openviking-rule-search",
+    "openviking-skills",
+    "ov-experience-memory",
+    "project-memory",
+  ])
+  assert.equal(skillSources.find((skill) => skill.id === "openviking-skills").name, "Custom skills")
+  await cleanup()
+})
+
 test("a missing skills directory leaves MCP and hooks registered", async () => {
   const { runtime } = runtimeFixture()
   const { ctx, hooks, registered, skillSources } = contextFixture()

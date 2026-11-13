@@ -50,7 +50,10 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
       // Transforms run again after setup, so read the MCP decision on each run.
       await ctx.skill.transform((editor) => {
         if (!registered) return
-        for (const skill of skills) if (!editor.get(skill.id)) editor.add(skill)
+        // A user skill overrides a bundled one by ID or by name; the host keys
+        // skills by ID only, so a same-name skill would otherwise be listed twice.
+        const taken = new Set(editor.list().flatMap((skill) => [skill.id, skill.name]))
+        for (const skill of skills) if (!taken.has(skill.id) && !taken.has(skill.name)) editor.add(skill)
       })
     }
   } else if (!config.mcp.enabled) {
