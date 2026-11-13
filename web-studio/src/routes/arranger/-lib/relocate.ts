@@ -164,8 +164,8 @@ export async function relocateResource(options: {
       current = file.entry.uri
       if (file.mount) {
         await assertAbsent(file.mount.node_uri)
-        await mountLiveContext(file.mount, true)
-        await unmountLiveContext(current, true)
+        await mountLiveContext(file.mount)
+        await unmountLiveContext(current)
       } else {
         await moveResource(current, destination(current))
       }
@@ -179,7 +179,7 @@ export async function relocateResource(options: {
           i18n.t('arranger:errors.directoryChanged', { uri: current }),
         )
       }
-      await removeResource(current, true, true)
+      await removeResource(current, true)
     }
   } catch (error) {
     throw new RelocationError(current, destination(current), completed, error)
