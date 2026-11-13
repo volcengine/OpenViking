@@ -6,7 +6,7 @@ import { opaqueRef, safeError } from './logger.mjs';
 
 // Reminder counts by seq in this process. A restart forgets them: the ledger
 // is durable, the reminders are best effort.
-const REMINDER_HISTORY_LIMIT = 1_000;
+const REMINDER_HISTORY_LIMIT = 10_000;
 // The failure notice for an input a loop-stopped turn held twice.
 const LOOP_STOPPED_ERROR = '模型反复做没有效果的调用，这一轮被 daemon 中止了';
 
