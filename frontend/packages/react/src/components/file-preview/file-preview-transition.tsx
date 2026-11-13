@@ -210,29 +210,51 @@ export function FilePreviewTransition<T>({
   // here. Returning the latest object without storing it would send it back to its
   // creation-time placeholder (the original empty loading shell) once it steps aside,
   // defeating "the previous content stays on screen".
-  // 每层最后实际渲染的 tab。槽位退居后台后就读它，因此必须同步更新：渲染期间
-  // 写入，晚一帧写入会让切换正好落在写入之前，读到旧值。
+  // 每层最后一次**真正提交到屏幕**的 tab。槽位退居后台后读它，屏幕因此保留用户
+  // 实际看过的那份内容。
   //
-  // The tab each layer last actually rendered. A slot reads it once it steps aside, so
-  // it is written during render — deferred by a frame, a switch landing in between
-  // would read a stale value.
+  // 只在提交后写入，不能在渲染期间写：那次渲染可能被 Suspense 或 startTransition
+  // 放弃，写进去的内容从未显示过。之后切走时就会从快照里取出一份没人看过的
+  // 内容——若它还是 loading 占位，加载态会重新露出来。
+  //
+  // The tab each layer last actually **committed** to the screen. A slot reads it once
+  // it steps aside, so the screen keeps what the user really saw.
+  //
+  // Written only after commit, never during render: a render can be abandoned by
+  // Suspense or startTransition, and what it produced was never shown. Reading it back
+  // after a later switch would surface content nobody saw — a loading placeholder would
+  // reappear as a loading state.
   const shownTabs = useRef<
     Record<SlotName, { identity: string; tab: T } | null>
   >({
     a: { identity, tab },
     b: null,
   });
+  // useEffect 必要性：提交后才更新快照，正是「只记录真正显示过的内容」这一要求
+  // 本身——渲染阶段无法判断本次渲染会不会被放弃。没有需要清理的资源。
+  //
+  // The snapshot is updated after commit because "only what was really shown" cannot be
+  // decided during render, where an abandoned attempt looks identical. Nothing to clean
+  // up.
+  useEffect(() => {
+    for (const name of ['a', 'b'] as const) {
+      const slot = slots[name];
+      if (!slot) shownTabs.current[name] = null;
+      else if (slot.identity === identity)
+        shownTabs.current[name] = { identity, tab };
+    }
+  }, [slots, identity, tab]);
   const layerTab = (name: SlotName) => {
     const slot = slots[name];
-    if (!slot) {
-      shownTabs.current[name] = null;
-      return null;
-    }
-    if (slot.identity === identity) {
-      shownTabs.current[name] = { identity, tab };
-      return tab;
-    }
-    return shownTabs.current[name]?.tab ?? slot.tab;
+    if (!slot) return null;
+    // 身份与当前目标一致的槽位用实时的 tab；其余（正在退居后台的旧内容）用提交
+    // 过的快照。
+    //
+    // The slot matching the current target uses the live tab; the others — old content
+    // stepping aside — use the committed snapshot.
+    return slot.identity === identity
+      ? tab
+      : (shownTabs.current[name]?.tab ?? slot.tab);
   };
 
   return (
