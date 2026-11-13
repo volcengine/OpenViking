@@ -125,11 +125,40 @@ describe('WorkerExecutor', () => {
     assert.equal(call.argv.at(-1), 'replayed original');
   });
 
+  it('runs a DSH worker in the router profile with a stable task/turn request id', async (t) => {
+    const { config, task } = setup(t);
+    const requests = [];
+    const dshRequest = async (method, input) => {
+      requests.push({ method, input });
+      if (method === 'superagent/worker/ensure') return { sessionId: input.sessionId, preset: 'ov-superagent-worker' };
+      if (method === 'superagent/worker/submit') return { messageId: 'm1', reused: false };
+      if (method === 'superagent/worker/wait') {
+        return { text: 'DSH 完成', usage: { inputTokens: 12, cachedInputTokens: 4, outputTokens: 2 }, nativeSession: input.sessionId, error: null, transient: false };
+      }
+      throw new Error(method);
+    };
+    const executor = new WorkerExecutor({ config, settings: () => ({
+      runtime: 'dsh', model: 'deepseek/deepseek-chat', effort: 'high', dshRequest,
+    }) });
+    const result = await executor.start({ task: task({ runtime: 'dsh' }), prompt: 'work', authority: 'worker-token' }).done;
+    assert.equal(result.text, 'DSH 完成');
+    assert.equal(result.nativeSession, task().session_id);
+    assert.deepEqual(requests.map(request => request.method), [
+      'superagent/worker/ensure', 'superagent/worker/submit', 'superagent/worker/wait',
+    ]);
+    assert.equal(requests[0].input.authority, 'worker-token');
+    assert.equal(requests[0].input.provider, 'deepseek');
+    assert.equal(requests[0].input.model, 'deepseek-chat');
+    assert.equal(requests[0].input.effort, 'high');
+    assert.equal(requests[1].input.requestId, 't1:1');
+    assert.match(requests[0].input.policy, /^## Worker/);
+  });
+
   it('runs only on the runtimes it knows, and a stopped turn ends as stopped', async (t) => {
     const { dir, config, task } = setup(t);
     const executor = new WorkerExecutor({ config });
-    assert.deepEqual(['pi', 'codex', 'claude', 'durable', 'opencode', 'volc'].map((id) => executor.supports(id)),
-      [true, true, true, false, false, false]);
+    assert.deepEqual(['pi', 'codex', 'claude', 'dsh', 'durable', 'opencode', 'volc'].map((id) => executor.supports(id)),
+      [true, true, true, true, false, false, false]);
     assert.throws(() => executor.start({ task: task({ runtime: 'durable' }), prompt: 'p', authority: 'x' }), /workers do not run on durable/);
     const slow = path.join(dir, 'slow-pi');
     fs.writeFileSync(slow, '#!/usr/bin/env node\nsetTimeout(() => {}, 60_000);\n', { mode: 0o755 });

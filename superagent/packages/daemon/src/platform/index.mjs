@@ -8,6 +8,7 @@ import * as win32 from './win32.mjs';
 // set; platform-interface.test.mjs also checks that the facade exposes each key.
 export const interfaceKeys = Object.freeze([
   'codingShell',
+  'isWindows',
   'spawn',
   'execFile',
   'spawnDetached',
@@ -39,6 +40,7 @@ export const interfaceKeys = Object.freeze([
 const implementation = process.platform === 'win32' ? win32 : posix;
 export const {
   codingShell,
+  isWindows,
   spawn,
   execFile,
   spawnDetached,

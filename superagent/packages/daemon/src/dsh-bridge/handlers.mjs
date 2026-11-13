@@ -219,6 +219,7 @@ export function createBridgeHandlers({
   ctx = {}, agents, createUserMessage,
   modelsTimeoutMs = MODELS_ROUTE_TIMEOUT_MS,
   modelInfoTimeoutMs = MODEL_INFO_TIMEOUT_MS,
+  workerHandlers = null,
 }) {
   const handlers = {
     'session/steer'(params) {
@@ -351,6 +352,9 @@ export function createBridgeHandlers({
     },
   };
 
+  // Worker methods share the same advertisement/routing table as the stock
+  // bridge methods. They are still session adapters, not daemon task APIs.
+  if (workerHandlers) Object.assign(handlers, workerHandlers);
   // Installed last so the advertised method list is the handlers themselves.
   handlers['superagent/hello'] = () => ({
     bridge: BRIDGE_ID,

@@ -317,7 +317,10 @@ export class PersonalAgentDaemon {
         const executor = new WorkerExecutor({
           config: this.config,
           logger: this.logger.child({ component: 'worker' }),
-          settings: () => ({ runtime: this.agentRuntime.runtime, model: this.agentRuntime.model, effort: this.agentRuntime.effort }),
+          settings: () => ({
+            runtime: this.agentRuntime.runtime, model: this.agentRuntime.model, effort: this.agentRuntime.effort,
+            dshRequest: (method, params, timeoutMs) => this.agentRuntime.workerRequest(method, params, timeoutMs),
+          }),
         });
         this.tasks = new TaskManager({
           db: this.store.db,

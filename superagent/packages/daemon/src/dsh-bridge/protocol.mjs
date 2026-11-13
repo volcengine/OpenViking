@@ -4,8 +4,10 @@
 import { PassThrough } from 'node:stream';
 import { DshBridgeFramer, MAX_FRAME_BYTES } from './framer.mjs';
 import { BRIDGE_ID, bridgeErrorFrame, createBridgeHandlers } from './handlers.mjs';
+import { createWorkerHandlers } from './workers.mjs';
 
 export { DshBridgeError, NOT_READY_CODE, createBridgeHandlers } from './handlers.mjs';
+export { createWorkerHandlers, DSH_WORKER_METHODS, DSH_WORKER_PRESET } from './workers.mjs';
 export { DshBridgeFramer, MAX_FRAME_BYTES } from './framer.mjs';
 
 const LF_BYTES = Buffer.from('\n');
@@ -33,8 +35,9 @@ function requestParams(params) {
  * methods, so a future upstream implementation cannot be intercepted by
  * accident.
  */
-export function wireDshBridge({ ctx, stock, createUserMessage, config = {}, input = process.stdin, output = process.stdout }) {
-  const handlers = createBridgeHandlers({ ctx, agents: ctx.agents, createUserMessage });
+export function wireDshBridge({ ctx, stock, createUserMessage, scopeParentOf, config = {}, input = process.stdin, output = process.stdout }) {
+  const workerHandlers = createWorkerHandlers({ ctx, agents: ctx.agents, createUserMessage, scopeParentOf });
+  const handlers = createBridgeHandlers({ ctx, agents: ctx.agents, createUserMessage, workerHandlers });
   // Derived, never hand-listed: the advertised methods and the routed methods
   // are one set by construction.
   const HANDLED = new Set(Object.keys(handlers));

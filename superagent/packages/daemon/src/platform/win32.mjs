@@ -170,3 +170,4 @@ export const environmentCaseSensitive = false;
 
 // Native command tool used by the managed Durable runtime.
 export const codingShell = 'powershell';
+export const isWindows = true;

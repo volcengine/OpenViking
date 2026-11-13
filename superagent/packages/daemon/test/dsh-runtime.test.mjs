@@ -73,7 +73,14 @@ test('generated patch replaces SDK transport and keeps config/mcp variants', (t)
   // preset, so it is the one delegation tool a child preset cannot scope.
   assert.ok(disabled.includes('tool-subagent-fork'));
   const probe = buildDshPatch({ mcp: null });
-  assert.equal(probe.find(row => row.insert).insert.length, 1);
+  const probeRows = probe.find(row => row.insert).insert;
+  assert.equal(probeRows.length, 3);
+  assert.deepEqual(probeRows[1], {
+    id: 'agent-preset-registry', name: '@deepseek-ai/dsh-agent-preset-registry', config: { default: 'standard' },
+  });
+  assert.equal(probeRows[2].name, '@deepseek-ai/dsh-agent-preset');
+  assert.equal(probeRows[2].config.id, 'ov-superagent-worker');
+  assert.ok(!probeRows[2].config.plugins.some(row => row.id === 'delegation'));
   const native = buildDshPatch({ bridgePath: null });
   assert.equal(native.some(row => row.id === 'sdk-jsonrpc-server'), false);
   assert.equal(native.some(row => row.insert), false);

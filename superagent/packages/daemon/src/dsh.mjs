@@ -215,6 +215,12 @@ export class DshAgent {
     return Boolean(this.turn) || this.restarting || this.inflight.size > 0;
   }
 
+  // Task workers share this DSH process through the bridge's worker namespace.
+  // Their sessions have independent native turns; this is only the transport.
+  workerRequest(method, params, timeoutMs = 0) {
+    return this._request(method, params, timeoutMs);
+  }
+
   get sessionDescriptor() {
     return {
       runtime: this.runtime,

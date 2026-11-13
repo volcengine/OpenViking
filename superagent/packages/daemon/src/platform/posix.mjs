@@ -75,3 +75,4 @@ export const environmentCaseSensitive = true;
 
 // Native command tool used by the managed Durable runtime.
 export const codingShell = 'bash';
+export const isWindows = false;
