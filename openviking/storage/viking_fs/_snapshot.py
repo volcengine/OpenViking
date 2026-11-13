@@ -904,8 +904,10 @@ class _SnapshotMixin:
 
         Runs all classified ``(op, uri, level)`` rebuild tasks concurrently and
         drives the task through start → complete/fail. Per-task failures are
-        swallowed (and logged) inside :py:meth:`_run_vector_rebuild`, preserving
-        the "failures do not block" semantics.
+        logged inside :py:meth:`_run_vector_rebuild`; if any task fails the
+        tracked task is failed after all of them settle, so a ``completed``
+        status keeps its documented guarantee that every restored vector is
+        already visible to ``find``.
         """
         from openviking.service.reindex_executor import ReindexExecutor
         from openviking.service.task_tracker import get_task_tracker
@@ -932,7 +934,7 @@ class _SnapshotMixin:
                 ctx.user.user_id,
                 work_id=running_work_id,
             ):
-                await asyncio.gather(
+                results = await asyncio.gather(
                     *[
                         self._run_vector_rebuild(
                             executor,
@@ -944,6 +946,12 @@ class _SnapshotMixin:
                         )
                         for (op, uri, level) in tasks
                     ]
+                )
+            failed = results.count(False)
+            if failed:
+                raise RuntimeError(
+                    f"{failed} of {len(tasks)} vector rebuild task(s) failed; "
+                    "restored vectors may still be stale"
                 )
             await tracker.complete(
                 task_id,
@@ -973,8 +981,8 @@ class _SnapshotMixin:
         ctx: RequestContext,
         *,
         file_task_owner: Literal["current", "standalone"],
-    ) -> None:
-        """Wrapper coroutine: dispatch one vector task and swallow errors."""
+    ) -> bool:
+        """Wrapper coroutine: dispatch one vector task and report its outcome."""
         try:
             if op == "reindex_marker":
                 await executor.reindex_directory_marker(dir_uri=uri, level=level, ctx=ctx)
@@ -996,5 +1004,8 @@ class _SnapshotMixin:
                 await executor.delete_uri_level(uri=uri, level=level, ctx=ctx)
             else:  # pragma: no cover - defensive
                 logger.warning("[VikingFS] unknown vector rebuild op %r for %s", op, uri)
+                return False
         except Exception:
             logger.exception("[VikingFS] git restore vector task %s failed for %s", op, uri)
+            return False
+        return True
