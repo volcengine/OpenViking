@@ -1,7 +1,13 @@
 import { waitForEditor, setEditor } from './helpers/preview-editor-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mount, ok, recordingFetch, settle } from './helpers/module-dom.mjs';
+import {
+  deferred,
+  mount,
+  ok,
+  recordingFetch,
+  settle,
+} from './helpers/module-dom.mjs';
 import { act, createElement } from 'react';
 
 const { FilePreview } =
@@ -78,6 +84,7 @@ test('standalone preview offers editing only on the active editable level', asyn
 test('FileBrowser confirms a version note before writing and snapshots only the edited file', async () => {
   const uri = 'viking://resources/guide.md';
   let fullReads = 0;
+  const write = deferred();
   const requests = recordingFetch(({ path, body: request }) => {
     if (path.endsWith('/fs/ls')) return ok([{ uri, isDir: false }]);
     if (path.endsWith('/fs/stat')) return ok({ uri, isDir: false });
@@ -92,7 +99,7 @@ test('FileBrowser confirms a version note before writing and snapshots only the 
       assert.equal(request.content, '# Updated');
       assert.equal(request.version_message, undefined);
       assert.equal(request.expected_content_sha256, undefined);
-      return ok({});
+      return write.promise;
     }
     return ok([]);
   });
@@ -150,6 +157,9 @@ test('FileBrowser confirms a version note before writing and snapshots only the 
       note.dispatchEvent(new window.Event('input', { bubbles: true }));
     });
     await act(async () => dialog().querySelector('[type="submit"]').click());
+    assert.equal(requests.countOf('/api/v1/content/write'), 1);
+    assert.equal(requests.countOf('/api/v1/snapshot/commit'), 0);
+    await act(async () => write.resolve(await ok({})));
     await settle();
     assert.equal(dialog(), null);
     assert.deepEqual(

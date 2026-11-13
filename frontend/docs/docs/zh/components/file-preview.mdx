@@ -201,13 +201,13 @@ import '@openviking/react/components/file-preview/style.css';
 
 ### FilePreviewEditing
 
-| 参数          | 说明                                                                                                                  | 类型                                                          | 默认值 |
-| ------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- | ------ |
-| save          | 保存草稿，抛错或 reject 时保留草稿并显示保存失败的提示                                                                | `(value: string) => Promise<void>`                            | 必填   |
-| createVersion | 提供后，保存前弹出版本备注。正文写入成功后调用；失败或返回 false 时提示正文已保存、未创建版本，并照常触发 onSave      | `(note: string) => Promise<boolean>`                          | -      |
-| loadContent   | 进入编辑时读取完整文本，返回 `undefined` 放弃本次编辑；省略时使用 `content` 或 `file` 的文本，只提供 `url` 时必须提供 | `(source: FilePreviewSource) => Promise<string \| undefined>` | -      |
-| onSave        | 保存成功后触发，参数为已保存的文本                                                                                    | `(value: string) => void`                                     | -      |
-| onCancel      | 取消编辑，或切换页签、层级而丢弃草稿后触发，参数为丢弃的文本；保存成功时不触发                                        | `(value: string) => void`                                     | -      |
+| 参数                 | 说明                                                                                                                  | 类型                                                                                           | 默认值  |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------- |
+| save                 | 保存草稿及可选备注。拒绝时保留草稿；返回 `{ warning: 'version-not-created' }` 时显示提示并照常触发 `onSave`。         | `(value: string, versionNote?: string) => Promise<void \| { warning: 'version-not-created' }>` | 必填    |
+| promptForVersionNote | 调用 `save` 前弹出版本备注；取消时保留草稿。                                                                          | `boolean`                                                                                      | `false` |
+| loadContent          | 进入编辑时读取完整文本，返回 `undefined` 放弃本次编辑；省略时使用 `content` 或 `file` 的文本，只提供 `url` 时必须提供 | `(source: FilePreviewSource) => Promise<string \| undefined>`                                  | -       |
+| onSave               | 保存成功后触发，参数为已保存的文本                                                                                    | `(value: string) => void`                                                                      | -       |
+| onCancel             | 取消编辑，或切换页签、层级而丢弃草稿后触发，参数为丢弃的文本；保存成功时不触发                                        | `(value: string) => void`                                                                      | -       |
 
 ### FilePreviewAction
 

@@ -29,25 +29,17 @@ export function createFileEditing(
     return undefined;
   let wiki = isWiki;
   const canSnapshot = supportsFileHistory(uri);
-  const createVersion = async (note: string) => {
-    const result = await client.request<{ result: 'created' | 'noop' }>({
-      method: 'POST',
-      path: OV_PATHS.snapshotCommit,
-      body: { message: note || `Update ${name}`, paths: [uri] },
-      options,
-    });
-    return result?.result === 'created';
-  };
   return {
-    get createVersion() {
-      return !wiki && canSnapshot ? createVersion : undefined;
+    get promptForVersionNote() {
+      return !wiki && canSnapshot;
     },
     loadContent: async () => {
       const result = await readFileContent(client, uri, options, -1, wiki);
       wiki = result.wiki;
       return result.content;
     },
-    save: async (content) => {
+    save: async (content, note) => {
+      const shouldCreateVersion = !wiki && canSnapshot && note !== undefined;
       await client.request({
         method: 'POST',
         path: OV_PATHS.contentWrite,
@@ -61,6 +53,19 @@ export function createFileEditing(
         },
         options,
       });
+      if (!shouldCreateVersion) return;
+      try {
+        const result = await client.request<{ result: 'created' | 'noop' }>({
+          method: 'POST',
+          path: OV_PATHS.snapshotCommit,
+          body: { message: note || `Update ${name}`, paths: [uri] },
+          options,
+        });
+        if (result?.result === 'created') return;
+      } catch {
+        // The body write already succeeded; report only the missing snapshot.
+      }
+      return { warning: 'version-not-created' };
     },
     onSave,
   };

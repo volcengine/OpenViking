@@ -114,30 +114,29 @@ export function useFilePreviewEditing(activeTabKey: string) {
     if (!editing || !tab.editing || pendingSave.current || noteRequest.current)
       return false;
     const capability = tab.editing;
-    const createVersion = capability.createVersion;
+    const promptForVersionNote = capability.promptForVersionNote;
     const id = requestId.current;
-    const note = createVersion
+    const note = promptForVersionNote
       ? await new Promise<string | undefined>((resolve) => {
           noteRequest.current = { key: activeTabKey, resolve };
           setVersionNoteKey(activeTabKey);
         })
       : undefined;
-    if ((createVersion && note === undefined) || id !== requestId.current)
+    if (
+      (promptForVersionNote && note === undefined) ||
+      id !== requestId.current
+    )
       return false;
     pendingSave.current = true;
     setSaving(true);
     setSaveFailed(false);
     const value = draft;
-    let versionCreated = true;
+    let result: Awaited<ReturnType<typeof capability.save>>;
     try {
-      await capability.save(value);
-      if (createVersion) {
-        try {
-          versionCreated = await createVersion(note ?? '');
-        } catch {
-          versionCreated = false;
-        }
-      }
+      result =
+        note === undefined
+          ? await capability.save(value)
+          : await capability.save(value, note);
     } catch {
       if (id === requestId.current) setSaveFailed(true);
       return false;
@@ -149,7 +148,7 @@ export function useFilePreviewEditing(activeTabKey: string) {
     if (current) {
       setEditing(false);
       setDraft('');
-      setVersionNotCreated(!versionCreated);
+      setVersionNotCreated(result?.warning === 'version-not-created');
     }
     capability.onSave?.(value);
     return current;

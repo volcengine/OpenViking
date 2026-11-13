@@ -201,13 +201,13 @@ The component calls these methods to carry out an operation, and fires the match
 
 ### FilePreviewEditing
 
-| Property      | Description                                                                                                                                                                 | Type                                                          | Default  |
-| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- | -------- |
-| save          | Saves the draft; a throw or rejection keeps the draft and shows the save-failed message                                                                                     | `(value: string) => Promise<void>`                            | Required |
-| createVersion | When provided, Save prompts for a version note. Called after the body is saved. Rejection or false shows a partial-success message and still calls onSave                   | `(note: string) => Promise<boolean>`                          | -        |
-| loadContent   | Reads the full text when editing starts; returning `undefined` abandons the edit. Without it, text from `content` or `file` is used, and a `url`-only source must supply it | `(source: FilePreviewSource) => Promise<string \| undefined>` | -        |
-| onSave        | Called after saving succeeds, with the saved text                                                                                                                           | `(value: string) => void`                                     | -        |
-| onCancel      | Called after editing is cancelled, or a tab or level switch discards the draft, with the discarded text; not called after a successful save                                 | `(value: string) => void`                                     | -        |
+| Property             | Description                                                                                                                                                                 | Type                                                                                           | Default  |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------- |
+| save                 | Saves the draft with the optional note. Rejection keeps the draft; returning `{ warning: 'version-not-created' }` shows a warning and still calls `onSave`.                 | `(value: string, versionNote?: string) => Promise<void \| { warning: 'version-not-created' }>` | Required |
+| promptForVersionNote | Prompts for a version note before calling `save`; cancelling keeps the draft.                                                                                               | `boolean`                                                                                      | `false`  |
+| loadContent          | Reads the full text when editing starts; returning `undefined` abandons the edit. Without it, text from `content` or `file` is used, and a `url`-only source must supply it | `(source: FilePreviewSource) => Promise<string \| undefined>`                                  | -        |
+| onSave               | Called after saving succeeds, with the saved text                                                                                                                           | `(value: string) => void`                                                                      | -        |
+| onCancel             | Called after editing is cancelled, or a tab or level switch discards the draft, with the discarded text; not called after a successful save                                 | `(value: string) => void`                                                                      | -        |
 
 ### FilePreviewAction
 
