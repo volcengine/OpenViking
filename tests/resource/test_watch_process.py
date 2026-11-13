@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""New-process restart and actual multiprocess MySQL claim checks."""
+"""New-process restart and actual multiprocess relational claim checks."""
 
 import asyncio
 import json
@@ -12,6 +12,7 @@ import pytest
 from tests.resource.test_watch_store import (
     ENCRYPTION_KEY,
     MYSQL_PARAMS,
+    POSTGRES_PARAMS,
     create,
     make_store,  # noqa: F401
 )
@@ -58,13 +59,14 @@ async def test_file_restart_retries_due_watch_without_persisting_occupancy(tmp_p
 @pytest.mark.asyncio
 async def test_mysql_start_is_exclusive_across_processes(make_store):  # noqa: F811
     store = await make_store()
-    if store.provider != "mysql":
-        pytest.skip("multiprocess claims require MySQL; File is single-process")
+    if store.provider == "file":
+        pytest.skip("multiprocess claims require SQL; File is single-process")
+    material = MYSQL_PARAMS if store.provider == "mysql" else POSTGRES_PARAMS
     task = await create(store, due=True)
     config = {
         "service_name": store._service_name,
         "params": {
-            **json.loads(MYSQL_PARAMS),
+            **json.loads(material),
             "table": store._table_name,
             "credential_encryption_key": ENCRYPTION_KEY,
         },
@@ -73,7 +75,7 @@ async def test_mysql_start_is_exclusive_across_processes(make_store):  # noqa: F
     }
     results = await asyncio.gather(
         *[
-            probe("mysql", json.dumps({**config, "attempt": f"process-{index}"}))
+            probe(store.provider, json.dumps({**config, "attempt": f"process-{index}"}))
             for index in range(4)
         ]
     )

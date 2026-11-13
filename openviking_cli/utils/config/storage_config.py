@@ -32,7 +32,7 @@ class TaskStoreConfig(BaseModel):
 
 
 class WatchStoreConfig(BaseModel):
-    """Watch store: the VikingFS control file for one node, MySQL when nodes share Watches."""
+    """Watch store: a single-process control file or shared relational metadata."""
 
     provider: str = "file"
     params: Dict[str, Any] = Field(default_factory=dict)
@@ -40,9 +40,10 @@ class WatchStoreConfig(BaseModel):
     @model_validator(mode="after")
     def normalize_provider(self):
         self.provider = self.provider.strip().lower()
-        if self.provider not in {"file", "mysql"}:
+        if self.provider not in {"file", "mysql", "postgres"}:
             raise ValueError(
-                f"storage.watch_store.provider must be 'file' or 'mysql', got {self.provider!r}"
+                "storage.watch_store.provider must be 'file', 'mysql' or 'postgres', "
+                f"got {self.provider!r}"
             )
         return self
 
@@ -177,6 +178,10 @@ class StorageConfig(BaseModel):
 
     def build_watch_store(self, *, service_name: str, viking_fs: Any):
         """Build the configured Watch store."""
+        if self.watch_store.provider == "postgres":
+            from openviking.resource.watch_store_postgres import PostgresWatchStore
+
+            return PostgresWatchStore(service_name=service_name, params=self.watch_store.params)
         if self.watch_store.provider == "mysql":
             from openviking.resource.watch_store_mysql import MySQLWatchStore
 

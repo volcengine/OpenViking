@@ -311,6 +311,15 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
 | `parse_output.mode` | `agfs`, `local` | `agfs` | Backend for intermediate parser artifacts |
 | `parse_output.local_root` | path or `null` | system temp directory | Root directory used by local parser artifacts |
 | `skip_process_lock` | boolean | `false` | Skip the workspace process lock; use only when accepting concurrent-write risk |
+| `watch_store.provider` | `file`, `mysql`, `postgres` | `file` | Watch metadata and run occupancy; relational providers share persistent rows |
+
+PostgreSQL Watch storage requires `openviking[postgres]` and the provisioned
+`openviking/service/sql/001_watch_tasks_postgres.sql` schema. Configure
+`storage.watch_store.params` with connection fields and a shared
+`credential_encryption_key` (base64-encoded 32 bytes). It is independent of
+Task/Work, Account, PathLock and vector storage. See
+[Watch store configuration](../guides/01-configuration.md#watch-store) for the
+complete example, TLS settings and deployment requirements.
 
 For same-machine path locking on a local disk without recursive business-directory scans, set
 `storage.agfs.pathlock` to `{"provider":"sqlite"}`. The database defaults to

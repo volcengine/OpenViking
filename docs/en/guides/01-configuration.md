@@ -1401,7 +1401,7 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 | `agfs` | object | RAGFS (Rust-based AGFS) configuration | {} |
 | `vectordb` | object | Vector database storage configuration | {} |
 | `task_store` | object | Durable Task/Work backend configuration | `{"provider":"file"}` |
-| `watch_store` | object | Watch store: `file` (single node) or `mysql` (shared) | `{"provider":"file"}` |
+| `watch_store` | object | Watch store: `file` (single node), `mysql` or `postgres` (shared) | `{"provider":"file"}` |
 
 
 ```json
@@ -1493,13 +1493,13 @@ to the next run. `running()` only reads owner/run identifiers, start time,
 the Connector flag and instruction, and database time; it does not
 transfer or decrypt authentication, Connector state or checkpoints.
 
-MySQL persists reservation, real Task association and terminal settlement. The
+MySQL and PostgreSQL persist reservation, real Task association and terminal settlement. The
 run's checkpoint version remains in the payload, as before; checkpoint settlement
 cannot overwrite a newer source configuration. Missing Tasks
 retain the existing grace period and retry behavior. A crash after creating a Task
 but before associating it can still cause duplicate ingestion on retry.
 
-For Watch tables provisioned before pagination was added, update the indexes
+For MySQL Watch tables provisioned before pagination was added, update the indexes
 once (replace table and index names when using a custom table):
 
 ```sql
@@ -1530,17 +1530,72 @@ ALTER TABLE ov_watch_tasks
 }
 ```
 
+For PostgreSQL, install `openviking[postgres]` and provision
+`openviking/service/sql/001_watch_tasks_postgres.sql` (PostgreSQL 14+).
+Initialization validates the existing columns; it does not create or migrate tables.
+For a custom `params.table`, replace the table and index names in that script.
+
+```json
+{
+  "storage": {
+    "watch_store": {
+      "provider": "postgres",
+      "params": {
+        "user": "openviking",
+        "password": "change-me",
+        "database": "openviking",
+        "host": "127.0.0.1",
+        "port": 5432,
+        "maxsize": 10,
+        "connect_timeout": 10,
+        "sslmode": "verify-full",
+        "sslrootcert": "/etc/openviking/postgres-ca.pem",
+        "table": "ov_watch_tasks",
+        "credential_encryption_key": "base64-encoded-32-byte-key"
+      }
+    }
+  }
+}
+```
+
+PostgreSQL requires `user`, `database` and the same 32-byte
+`credential_encryption_key` used by every node. `password` is optional when the
+database authentication permits it. Connection defaults are host `127.0.0.1`,
+port `5432`, pool size `10`, connection timeout `10` seconds and `sslmode=prefer`.
+TLS fields are `sslmode`, `sslrootcert`, `sslcert` and `sslkey`; use
+`verify-full` with your CA for verified TLS. The application role needs
+SELECT/INSERT/UPDATE/DELETE on the provisioned table and schema USAGE.
+Generate a key once with
+`python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"`
+and supply it through your deployment's secret configuration.
+
+Transactions use READ COMMITTED and PostgreSQL's database clock. Exact URI
+matching and path ranges use `"C"` collation; the prefix index uses the first
+128 characters while every match still checks the full URI and `/` boundary.
+Longer prefixes retain correct filtering without that prefix-range optimization.
+Pagination uses `list_all`, with account/user filtering applied separately.
+Public pages omit authentication, connector state and large checkpoints in SQL.
+File, MySQL and PostgreSQL have the same authorization, run settlement and
+checkpoint-version rules.
+
+This setting changes only Watch metadata. It does not switch Task/Work, Account,
+PathLock, scheduler coordination, file storage or vector storage. PostgreSQL Watch
+storage requires neither Redis nor pgvector; a multi-node deployment still needs
+shared Task/Work state, file/index backends and coordination suitable for that
+deployment. Switching providers does not migrate existing Watches; do not run
+different providers as concurrent writers for the same deployment.
+
 Every node serves the Watch API. Nodes with `enable_watch_scheduler=true` may
 run the background Watch scheduler, elected through [AGFS coordination](#coordination-configuration).
 The leader polls due Watches every 15 seconds and settles finished runs. File and
-MySQL use the same Runtime polling and bounded dispatch flow. Background
+MySQL and PostgreSQL use the same Runtime polling and bounded dispatch flow. Background
 dispatch tracks unfinished Watch runs and pending submissions in leader memory
 toward its concurrency limit (default 4). Taking leadership restores occupancy
 through the existing run sweep (process-local state for File, durable rows for
-MySQL); subsequent dispatches need no extra occupancy query.
+MySQL/PostgreSQL); subsequent dispatches need no extra occupancy query.
 Manual triggers and first imports are admitted independently and enter the
 background occupancy count when observed by a sweep.
-File target moves have no 1000-Watch limit; MySQL retains that transaction limit.
+File target moves have no 1000-Watch limit; MySQL and PostgreSQL retain that transaction limit.
 A run is the
 ingestion Task itself: the
 Watch row records its Task ID while the run occupies the target, and the run

@@ -228,6 +228,11 @@ pgvector = [
     "psycopg2-binary>=2.9,<3",
 ]
 
+postgres = [
+  "sqlalchemy[asyncio]>=2.0.54,<2.1",
+  "psycopg[binary]>=3.2,<4",
+]
+
 [project.urls]
 Homepage = "https://github.com/volcengine/openviking"
 Documentation = "https://openviking.ai"

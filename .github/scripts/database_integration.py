@@ -11,7 +11,15 @@ ACCOUNT_CASES = {
     "test_mysql_load_creates_default_account",
     "test_distributed_authentication_state_is_shared_and_service_scoped",
 }
-GROUPS = ("accounts", "redis_mysql", "task_work_mysql", "watch_mysql")
+GROUPS = (
+    "accounts",
+    "redis_mysql",
+    "task_work_mysql",
+    "watch_mysql",
+    "watch_postgres",
+    "watch_process_mysql",
+    "watch_process_postgres",
+)
 
 
 def schema_statements(sql):
@@ -24,12 +32,17 @@ def schema_statements(sql):
 def prepare():
     # Imports must fail rather than letting pytest.importorskip hide missing extras.
     import aiomysql  # noqa: F401
+    import psycopg
     import pymysql
     import redis
     import sqlalchemy.ext.asyncio  # noqa: F401
 
     params = json.loads(os.environ["OV_TEST_MYSQL"])
     watch_params = json.loads(os.environ["OPENVIKING_WATCH_MYSQL_PARAMS"])
+    postgres_params = json.loads(os.environ["OPENVIKING_WATCH_POSTGRES_PARAMS"])
+    postgres_params["dbname"] = postgres_params.pop("database")
+    with psycopg.connect(**postgres_params, connect_timeout=10) as connection:
+        assert connection.execute("SELECT 1").fetchone() == (1,)
     for values in (params, watch_params):
         with pymysql.connect(**values, connect_timeout=10) as connection:
             with connection.cursor() as cursor:
@@ -61,7 +74,7 @@ def prepare():
         "encryption": {"enabled": False},
     }
     Path(os.environ["OPENVIKING_CONFIG_FILE"]).write_text(json.dumps(config), encoding="utf-8")
-    print("MySQL and Redis are reachable; account deployment schema is installed.")
+    print("PostgreSQL, MySQL and Redis are reachable; account schema is installed.")
 
 
 def database_group(case):
@@ -78,6 +91,16 @@ def database_group(case):
             return "task_work_mysql"
         if module == "tests.resource.test_watch_store":
             return "watch_mysql"
+        if module == "tests.resource.test_watch_process":
+            return "watch_process_mysql"
+    if "postgres" in parameters:
+        if module in {
+            "tests.resource.test_watch_store",
+            "tests.resource.test_watch_store_postgres",
+        }:
+            return "watch_postgres"
+        if module == "tests.resource.test_watch_process":
+            return "watch_process_postgres"
     return None
 
 

@@ -303,6 +303,14 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | `parse_output.mode` | `agfs`、`local` | `agfs` | parser 中间产物的存储后端 |
 | `parse_output.local_root` | 路径或 `null` | 系统临时目录 | local parser artifact 的根目录 |
 | `skip_process_lock` | boolean | `false` | 是否跳过 workspace 进程锁；仅在明确接受并发写风险时启用 |
+| `watch_store.provider` | `file`、`mysql`、`postgres` | `file` | Watch 元数据和运行占用；关系型 provider 共享持久化记录 |
+
+PostgreSQL Watch 存储需要安装 `openviking[postgres]`，并执行
+`openviking/service/sql/001_watch_tasks_postgres.sql` 建表。在
+`storage.watch_store.params` 中配置连接字段和所有节点共用的
+`credential_encryption_key`（base64 编码的 32 字节密钥）。
+它独立于 Task/Work、Account、PathLock 和向量存储。
+完整示例、TLS 参数与部署要求见[Watch 存储配置](../guides/01-configuration.md#watch-store)。
 
 同机本地磁盘上的路径锁可通过 SQLite 避免递归扫描业务目录。将 `storage.agfs.pathlock` 设置为
 `{"provider":"sqlite"}`。数据库默认位于
