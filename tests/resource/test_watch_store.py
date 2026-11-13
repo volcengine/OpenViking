@@ -19,6 +19,8 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
+from openviking.privacy.sanitizer import PrivacySanitizer
+from openviking.privacy.service import UserPrivacyConfigService
 from openviking.resource.watch_store import WatchStore
 from openviking.resource.watch_store_file import FileWatchStore
 from openviking.resource.watch_store_mysql import MySQLWatchStore
@@ -762,12 +764,22 @@ class TestFileRecovery:
     async def test_occupied_deletion_is_persisted_without_runtime_occupancy(
         self, watch_vfs, watch_store
     ):
+        sanitizer = PrivacySanitizer(UserPrivacyConfigService(watch_vfs))
+        connector_states = {"cursor": "x" * sanitizer.max_content_bytes}
+        retained = await create(
+            watch_store,
+            "viking://resources/retained",
+            connector_states=connector_states,
+        )
         task = await create(watch_store, initial_run_id="run-1")
+        watch_vfs.set_privacy_sanitizer(sanitizer)
         await watch_store.delete_task(task.task_id, OWNER)
         assert await watch_store.has_running_overlap(ACCOUNT, [task.to_uri])
         snapshot = await watch_vfs.read_file(FileWatchStore.STORAGE_URI)
         reopened = FileWatchStore(watch_vfs)
         await reopened.initialize()
+        loaded = await reopened.get_task(retained.task_id)
+        assert loaded is not None and loaded.connector_states == connector_states
         assert await reopened.get_task(task.task_id) is None
         assert await reopened.get_state(task.task_id) is None
         assert not await reopened.has_running_overlap(ACCOUNT, [task.to_uri])
