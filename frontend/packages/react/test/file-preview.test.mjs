@@ -107,3 +107,31 @@ test('Viking image targets survive sanitization without changing links, code, or
     './__ov_viking_image__/%invalid',
   );
 });
+
+test('recovers Viking images consumed by legacy import HTML blocks', async () => {
+  const {
+    originalImageTarget,
+    preserveVikingImages,
+    recoverImportedMarkdownImages,
+  } =
+    await import('../src/components/file-preview/file-preview-markdown-images.ts');
+  const uri = 'viking://resources/README_CN.md_4_img1.png';
+  const html =
+    '</p><a href="https://example.com">Reference</a>\n</div></KBImage>';
+  const image = `![Imported image](${uri})`;
+  const fenced = { type: 'code', value: `${html}\n${image}` };
+  const comment = { type: 'html', value: `<!-- </KBImage>\n${image}\n-->` };
+  const root = {
+    type: 'root',
+    children: [{ type: 'html', value: `${html}\r\n${image}` }, fenced, comment],
+  };
+  recoverImportedMarkdownImages(root);
+  preserveVikingImages(root);
+  assert.equal(root.children[0].value, html);
+  assert.equal(root.children[1].type, 'paragraph');
+  const [recovered] = root.children[1].children;
+  assert.equal(recovered.type, 'image');
+  assert.equal(recovered.alt, 'Imported image');
+  assert.equal(originalImageTarget(recovered.url), uri);
+  assert.deepEqual(root.children.slice(2), [fenced, comment]);
+});

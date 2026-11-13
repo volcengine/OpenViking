@@ -14,12 +14,46 @@ export function originalImageTarget(url: string): string {
 }
 type Node = {
   type: string;
+  value?: string;
   url?: string;
   identifier?: string;
   alt?: string | null;
   title?: string | null;
   children?: Node[];
 };
+
+const importedImageLine =
+  /^ {0,3}!\[([^\]\\\r\n]*)\]\((viking:\/\/[^\s<>()]+)\)[ \t]*$/i;
+
+/**
+ * Older imports put the extracted image directly after the KBImage closing
+ * tags. CommonMark consumes that line as part of the HTML block. Recover it
+ * from HTML nodes only, so examples in code spans and fences stay literal.
+ */
+export function recoverImportedMarkdownImages(root: Node): void {
+  root.children = root.children?.flatMap((node) => {
+    if (node.type !== 'html' || !node.value) return [node];
+    const lines = node.value.split(/\r?\n/);
+    const boundary = lines.findIndex((line) =>
+      /^[ \t]*(?:<\/[a-z]+>[ \t]*)*<\/kbimage>[ \t]*$/i.test(line),
+    );
+    if (boundary === -1) return [node];
+    const images = lines
+      .slice(boundary + 1)
+      .map((line) => importedImageLine.exec(line));
+    if (!images.length || !images.every((match) => match !== null))
+      return [node];
+
+    return [
+      { ...node, value: lines.slice(0, boundary + 1).join('\n') },
+      ...images.map(([, alt, url]) => ({
+        type: 'paragraph',
+        children: [{ type: 'image', url, alt }],
+      })),
+    ];
+  });
+}
+
 /** Rewrite image nodes only. Fenced code and normal links remain untouched. */
 export function preserveVikingImages(root: Node): void {
   const definitions = new Map<string, Node>();
