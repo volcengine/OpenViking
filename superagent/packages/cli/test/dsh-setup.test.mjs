@@ -80,8 +80,8 @@ test('DSH pins its binary like every other runtime and probes with the manifest 
   assert.equal(manifest.agents[0].model, 'dsh');
   assert.equal(manifest.agents[0].dshHomeMode, 'isolated');
   assert.deepEqual(manifest.agents[0].dshSkillRoots, [
-    'workspace-dsh', 'project-agents', 'host-agents', 'host-dsh', 'data-dsh', 'data-agents',
-  ]);
+    'workspace-dsh', 'project-agents', 'data-dsh', 'data-agents',
+  ], 'the two host skill roots stay unchecked in isolated mode');
   assert.equal(manifest.agents[0].displayName, '小V');
   assert.equal(probeEnv.DSH_BIN, undefined, 'nothing is pinned yet on the first run');
 });

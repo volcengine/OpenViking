@@ -197,14 +197,14 @@ patch 的分层顺序是 bundle → profile（`<DSH_HOME>/profiles/sdk/cordis.pa
 
 ## 技能目录
 
-setup 选择 DSH 后会先问配置目录，再按模式列出技能根供勾选。默认是独立模式，已有实例可以在「修改实例 → DSH 配置与技能」里改模式和勾选；每次切换模式会先选中新模式的全部根，再逐项调整。
+setup 选择 DSH 后会先问配置目录，再按模式列出技能根供勾选。默认是独立模式，列出 6 个根，其中 `~/.agents/skills` 和 `~/.dsh/skills` 默认不勾选，其余 4 个默认勾选；共享模式列出 4 个根并默认全部勾选。已有实例可以在「修改实例 → DSH 配置与技能」里改模式和勾选；每次切换模式会按新模式的这套默认值初始化，再逐项调整。
 
 | 模式 | DSH_HOME / DSH_AGENTS_HOME | 可勾选的技能根 |
 |---|---|---|
 | 独立 `isolated` | `<dataDir>/dsh/home`、`<dataDir>/dsh/agents` | `<workspace>/.dsh/skills`、`<projectRoot>/.agents/skills`、`~/.agents/skills`、`~/.dsh/skills`、`<dataDir>/dsh/home/skills`、`<dataDir>/dsh/agents/skills` |
 | 共享 `shared` | `~/.dsh`、`~/.agents` | `<workspace>/.dsh/skills`、`<projectRoot>/.agents/skills`、`~/.agents/skills`、`~/.dsh/skills` |
 
-`projectRoot` 是最近的 `.git` 祖先，没有就用工作区；Windows 的 `~` 是当前运行账号的 home。manifest 保存 `dshHomeMode` 和逻辑根 ID 数组 `dshSkillRoots`，不写死工作区路径，所以之后修改 workspace 时根会跟着移动。缺省配置按独立模式、六个根全部启用处理；`dshSkillRoots: []` 表示全部不启用。
+`projectRoot` 是最近的 `.git` 祖先，没有就用工作区；Windows 的 `~` 是当前运行账号的 home。manifest 保存 `dshHomeMode` 和逻辑根 ID 数组 `dshSkillRoots`，不写死工作区路径，所以之后修改 workspace 时根会跟着移动。缺省配置按独立模式启用 workspace、projectRoot 和实例数据目录下的 4 个根，不启用两个宿主根；`dshSkillRoots: []` 表示全部不启用。
 
 生成的 `skill-filesystem` 行会设 `includeDefaultRoots: false`，只把勾选项写进 `customSkillDirs`。这样 DSH 自己不会再把未勾选的项目根或用户根加回来。共享配置由本机 DSH 和其他工具共同使用，OpenViking SuperAgent 不创建也不修改这两个根目录的权限；`ov-superagent dsh model` 和运行时的模型设置、凭据路径都跟随同一模式。
 

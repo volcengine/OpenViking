@@ -338,7 +338,7 @@ function parseAgent(value, index, ignored) {
   }
   const dshSkillRoots = value.dshSkillRoots ?? (dshHomeMode === 'shared'
     ? ['workspace-dsh', 'project-agents', 'host-agents', 'host-dsh']
-    : ['workspace-dsh', 'project-agents', 'host-agents', 'host-dsh', 'data-dsh', 'data-agents']);
+    : ['workspace-dsh', 'project-agents', 'data-dsh', 'data-agents']);
   const allowedSkillRoots = new Set(dshHomeMode === 'shared'
     ? ['workspace-dsh', 'project-agents', 'host-agents', 'host-dsh']
     : ['workspace-dsh', 'project-agents', 'host-agents', 'host-dsh', 'data-dsh', 'data-agents']);

@@ -48,7 +48,8 @@ export function dshSkillRootChoices(mode = DSH_HOME_ISOLATED) {
 }
 
 export function defaultDshSkillRoots(mode = DSH_HOME_ISOLATED) {
-  return dshSkillRootChoices(mode);
+  const normalized = dshHomeMode(mode);
+  return dshSkillRootChoices(normalized).filter(id => normalized === DSH_HOME_SHARED || !id.startsWith('host-'));
 }
 
 // The nearest .git ancestor is DSH's project root. A .git file is accepted too
@@ -70,7 +71,7 @@ export function dshSkillDirectories({
 } = {}) {
   if (typeof workspace !== 'string' || !workspace) throw new Error('dsh workspace is required');
   const choices = dshSkillRootChoices(mode);
-  const enabled = new Set(selected === undefined ? choices : selected.filter(id => choices.includes(id)));
+  const enabled = new Set(selected === undefined ? defaultDshSkillRoots(mode) : selected.filter(id => choices.includes(id)));
   const projectRoot = dshProjectRoot(workspace);
   const directories = {
     'workspace-dsh': path.join(workspace, '.dsh', 'skills'),

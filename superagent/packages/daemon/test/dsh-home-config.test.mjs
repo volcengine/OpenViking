@@ -21,6 +21,9 @@ test('isolated mode offers six roots in setup order and shared mode offers four'
   assert.deepEqual(dshSkillRootChoices(), [
     'workspace-dsh', 'project-agents', 'host-agents', 'host-dsh', 'data-dsh', 'data-agents',
   ]);
+  assert.deepEqual(defaultDshSkillRoots(), [
+    'workspace-dsh', 'project-agents', 'data-dsh', 'data-agents',
+  ], 'isolated mode leaves both host roots unchecked by default');
   assert.deepEqual(defaultDshSkillRoots('shared'), [
     'workspace-dsh', 'project-agents', 'host-agents', 'host-dsh',
   ]);
@@ -49,11 +52,9 @@ test('only checked roots resolve, with projectRoot based on the nearest .git anc
   assert.deepEqual(dshSkillDirectories({ workspace, dataDir, homeDir }), [
     path.join(workspace, '.dsh', 'skills'),
     path.join(projectRoot, '.agents', 'skills'),
-    path.join(homeDir, '.agents', 'skills'),
-    path.join(homeDir, '.dsh', 'skills'),
     path.join(dataDir, 'dsh', 'home', 'skills'),
     path.join(dataDir, 'dsh', 'agents', 'skills'),
-  ]);
+  ], 'default resolution also leaves the host roots out');
   assert.deepEqual(dshSkillDirectories({
     workspace, dataDir, homeDir, selected: ['host-dsh', 'workspace-dsh'],
   }), [

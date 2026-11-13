@@ -118,12 +118,12 @@ describe('the daemon reads DSH from the environment only', { concurrency: false 
     assert.throws(() => getConfig(), /OV_SUPERAGENT_DSH_START_TIMEOUT_MS/);
   });
 
-  it('defaults to six isolated skill roots and accepts an empty shared selection', () => {
+  it('defaults to four isolated skill roots without host roots and accepts an empty shared selection', () => {
     setEnv('OV_SUPERAGENT_DSH_HOME_MODE', undefined);
     setEnv('OV_SUPERAGENT_DSH_SKILL_ROOTS', undefined);
     assert.equal(getConfig().dshHomeMode, 'isolated');
     assert.deepEqual([...getConfig().dshSkillRoots], [
-      'workspace-dsh', 'project-agents', 'host-agents', 'host-dsh', 'data-dsh', 'data-agents',
+      'workspace-dsh', 'project-agents', 'data-dsh', 'data-agents',
     ]);
     setEnv('OV_SUPERAGENT_DSH_HOME_MODE', 'shared');
     setEnv('OV_SUPERAGENT_DSH_SKILL_ROOTS', '[]');
@@ -198,7 +198,7 @@ describe('how the DSH variables travel through deployment', () => {
       const deployment = loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath });
       assert.equal(deployment.agents[0].dshHomeMode, 'isolated');
       assert.deepEqual([...deployment.agents[0].dshSkillRoots], [
-        'workspace-dsh', 'project-agents', 'host-agents', 'host-dsh', 'data-dsh', 'data-agents',
+        'workspace-dsh', 'project-agents', 'data-dsh', 'data-agents',
       ]);
       const env = {};
       applyDeploymentAgentEnv(env, deployment);
