@@ -16,14 +16,6 @@
   margin: 4px 0;
   overflow-wrap: anywhere;
 }
-.ov-dashboard-state button {
-  background: transparent;
-  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
-  border: 0;
-  padding: 4px 8px;
-  font: inherit;
-  cursor: pointer;
-}
 .ov-wiki-dashboard__body {
   position: relative;
   isolation: isolate;

@@ -555,26 +555,19 @@
   gap: 12px;
 }
 
+/* 轨迹标题是纯文本：可点击的是右侧的打开按钮，所以这里没有悬停变色与手型光标。 */
+/* The trajectory title is plain text: the open button on the right is the clickable
+ * one, so there is no hover colour and no pointer cursor here. */
 .ov-experience-dashboard__trajectory-name {
   overflow: hidden;
   min-width: 0;
   flex: 1;
-  padding: 0;
-  border: 0;
-  background: transparent;
   color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
-  font: inherit;
   font-size: 14px;
   font-weight: 500;
   line-height: 22px;
-  text-align: start;
   text-overflow: ellipsis;
   white-space: nowrap;
-  cursor: pointer;
-}
-
-.ov-experience-dashboard__trajectory-name:hover:not(:disabled) {
-  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
 }
 
 .ov-experience-dashboard__outcome-tag {

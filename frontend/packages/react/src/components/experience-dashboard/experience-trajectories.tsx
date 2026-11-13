@@ -137,14 +137,15 @@ export function ExperienceTrajectories({
                 </time>
               ) : null}
               <div className="ov-experience-dashboard__trajectory-title">
-                <button
-                  type="button"
-                  className="ov-experience-dashboard__trajectory-name"
-                  disabled={!onOpenUri}
-                  onClick={() => onOpenUri?.(item.uri)}
-                >
+                {/* 标题只是文字：打开动作由右侧的图标按钮负责，与控制台一致。
+                    两处都调 `onOpenUri` 会让同一行出现两个指向同一目标的入口。
+                 *
+                 * The title is plain text: the icon button on the right owns the open
+                 * action, as in the console. Two triggers for one destination would make
+                 * the same row offer the same trip twice. */}
+                <strong className="ov-experience-dashboard__trajectory-name">
                   {titleOf(item)}
-                </button>
+                </strong>
                 {item.outcome ? (
                   <span
                     className={[
