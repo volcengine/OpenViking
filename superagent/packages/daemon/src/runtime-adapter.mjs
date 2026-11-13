@@ -33,6 +33,7 @@ export class RuntimeAdapter {
   }
   get model() { return this.#implementation.model ?? ''; }
   get resolvedModel() { return this.#implementation.resolvedModel ?? ''; }
+  get account() { return this.#implementation.account ?? null; }
   get state() { return normalizeState(this.#implementation.state); }
   get turnInProgress() { return Boolean(this.#implementation.turnInProgress); }
   get modelWorking() { return Boolean(this.#implementation.modelWorking); }

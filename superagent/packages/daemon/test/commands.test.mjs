@@ -10,7 +10,20 @@ import {
   executeCommand,
   matchPrefix,
   parseCommand,
+  statusText,
 } from '../src/commands.mjs';
+
+it('shows the masked Codex account and pending login/switch state in /status', () => {
+  const snapshot = { runtime: 'codex', model: 'chosen', account: {
+    email: 'a***@gmail.com', planType: 'pro', switching: true, signedOut: false,
+  } };
+  assert.match(statusText(snapshot), /Codex 账号：a\*\*\*@gmail.com（pro）/);
+  assert.match(statusText(snapshot), /等待当前轮结束/);
+  snapshot.account = { signedOut: true };
+  assert.match(statusText(snapshot), /新消息等待登录/);
+  delete snapshot.account;
+  assert.doesNotMatch(statusText(snapshot), /Codex 账号/);
+});
 
 function fakeCodex(overrides = {}) {
   const calls = [];

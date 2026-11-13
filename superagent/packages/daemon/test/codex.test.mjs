@@ -79,12 +79,59 @@ function newAgent(store, options = {}, config = baseConfig) {
   const spawn = () => { const child = new FakeChild(); children.push(child); return child; };
   const agent = new CodexAgent(config, store, quietLogger, {
     spawn,
+    authMonitor: false,
     handshakeTimeoutMs: 1_000,
     reconnectBaseMs: 5,
     reconnectCapMs: 20,
     ...options,
   });
   return { agent, children };
+}
+
+function accountAgent(options = {}) {
+  let identity = 'outlook';
+  let turn = 0;
+  const store = makeStore();
+  const { agent, children } = newAgent(store, {
+    authMonitor: true,
+    authFile: '/unused/auth.json',
+    authMonitorOptions: { intervalMs: 60_000, readIdentity: () => identity },
+    spawn() {
+      const child = new FakeChild();
+      const current = identity;
+      const write = child.stdin.write;
+      child.stdin.write = (line) => {
+        write(line);
+        const request = JSON.parse(line);
+        if (!request.id) return true;
+        queueMicrotask(() => {
+          if (child.hold?.(request)) return;
+          let result = {};
+          if (request.method === 'account/read') result = {
+            requiresOpenaiAuth: true,
+            account: current === 'signed-out' ? null : { type: 'chatgpt', email: `alice@${current}.com`, planType: 'pro' },
+          };
+          if (request.method === 'thread/start' || request.method === 'thread/resume') result = { thread: { id: 'th-shared' } };
+          if (request.method === 'turn/start') {
+            const id = `turn-${++turn}`;
+            child.feed({ id: request.id, result: { turn: { id } } });
+            child.feed({ method: 'turn/started', params: { threadId: 'th-shared', turn: { id } } });
+            return;
+          }
+          child.feed({ id: request.id, result });
+        });
+        return true;
+      };
+      children.push(child);
+      return child;
+    },
+    ...options,
+  });
+  return { agent, children, change(next) {
+    identity = next;
+    agent.authMonitor.poll();
+    agent.authMonitor.poll();
+  } };
 }
 
 // Drive the initialize -> initialized -> thread(start|resume) handshake. Returns the
@@ -269,7 +316,7 @@ describe('formatting helpers', () => {
       sendTimeoutMs: 5_000,
       maxReplyChars: 1_000,
       dryRun: true,
-    }, store, quietLogger, { spawn, handshakeTimeoutMs: 1_000, reconnectBaseMs: 5, reconnectCapMs: 20 });
+    }, store, quietLogger, { spawn, authMonitor: false, handshakeTimeoutMs: 1_000, reconnectBaseMs: 5, reconnectCapMs: 20 });
     const started = agent.start();
     await flush();
     children[0].feed({ id: 1, result: {} });
@@ -324,6 +371,200 @@ describe('formatting helpers', () => {
     assert.equal(env.LARKSUITE_CLI_PROFILE, 'fixed-profile');
     assert.equal(env.FORCE_COLOR, '0');
     assert.equal(env.NO_COLOR, '1');
+  });
+});
+
+describe('CodexAgent account changes', () => {
+  it('reads the current account at startup and reconnects an idle native thread', async (t) => {
+    let changed = 0;
+    const fixture = accountAgent({ onAccountChanged: () => { changed += 1; } });
+    const { agent, children, change } = fixture;
+    t.after(() => { children.forEach(child => child.simulateExit()); return agent.stop(); });
+    await agent.start();
+    assert.equal(agent.account.email, 'a***@outlook.com');
+    assert.equal(agent.account.planType, 'pro');
+    change('gmail');
+    assert.equal(agent.account.switching, true);
+    assert.equal(agent.state.connected, false);
+    await waitFor(() => children.length === 2 && !agent.reconnecting);
+    assert.equal(agent.account.email, 'a***@gmail.com');
+    assert.equal(agent.account.switching, false);
+    assert.equal(agent.threadId, 'th-shared');
+    assert.equal(children[1].ofMethod('thread/resume').length, 1);
+    assert.equal(changed, 1);
+    assert.equal(children.flatMap(child => child.ofMethod('turn/start')).length, 0);
+  });
+
+  it('finishes the active turn and keeps subsequent messages off the old account', async (t) => {
+    const successes = [];
+    const failures = [];
+    const { agent, children, change } = accountAgent({
+      onTurnSucceeded: info => successes.push(info), onTurnFailed: info => failures.push(info),
+    });
+    t.after(() => { children.forEach(child => child.simulateExit()); return agent.stop(); });
+    await agent.start();
+    agent.deliver('already accepted', 1, 'receipt-1');
+    await flush();
+    const old = children[0];
+    change('gmail');
+    assert.equal(children.length, 1);
+    agent.deliverBatch([{ text: 'queued after switch', seq: 2, receiptId: 'receipt-2' }]);
+    assert.equal(agent.tryStartBatch([{ text: 'burst', seq: 3 }]), false);
+    assert.equal(old.ofMethod('turn/steer').length, 0);
+    assert.deepEqual(await agent.listModels(), [], 'do not publish the previous account catalog during a switch');
+    old.feed({ method: 'turn/completed', params: { threadId: 'th-shared', turn: { id: 'turn-1', status: 'completed' } } });
+    await waitFor(() => children.length === 2 && children[1].ofMethod('turn/start').length === 1);
+    const next = children[1];
+    assert.equal(old.ofMethod('turn/start').length, 1);
+    assert.equal(next.ofMethod('turn/start')[0].params.input[0].text, 'queued after switch');
+    next.feed({ method: 'turn/completed', params: { threadId: 'th-shared', turn: { id: 'turn-2', status: 'completed' } } });
+    assert.deepEqual(successes.map(info => info.inboundSeqs), [[1], [2]]);
+    assert.equal(failures.length, 0);
+  });
+
+  it('also waits for an unacknowledged turn/start and coalesces multiple account changes', async (t) => {
+    const { agent, children, change } = accountAgent();
+    t.after(() => { children.forEach(child => child.simulateExit()); return agent.stop(); });
+    await agent.start();
+    const old = children[0];
+    old.hold = request => request.method === 'turn/start';
+    agent.deliver('starting', 1);
+    await flush();
+    assert.equal(agent.startingTurn, true);
+    change('gmail'); change('other');
+    agent.deliver('later', 2);
+    assert.equal(children.length, 1);
+    old.feed({ method: 'turn/started', params: { threadId: 'th-shared', turn: { id: 'turn-slow' } } });
+    assert.equal(old.ofMethod('turn/steer').length, 0);
+    old.feed({ id: old.ofMethod('turn/start')[0].id, result: {} });
+    old.feed({ method: 'turn/completed', params: { threadId: 'th-shared', turn: { id: 'turn-slow', status: 'completed' } } });
+    await waitFor(() => children.length === 2 && !agent.reconnecting);
+    assert.equal(agent.account.email, 'a***@other.com');
+    assert.equal(children[1].ofMethod('turn/start').length, 1);
+  });
+
+  it('holds queued work after logout and resumes once login succeeds without changing the model', async (t) => {
+    const { agent, children, change } = accountAgent({ model: 'chosen-model', effort: 'high' });
+    t.after(() => { children.forEach(child => child.simulateExit()); return agent.stop(); });
+    await agent.start();
+    change('signed-out');
+    await waitFor(() => children.length === 2 && !agent.reconnecting);
+    assert.equal(agent.account.signedOut, true);
+    agent.deliver('waiting for login', 4);
+    assert.equal(children[1].ofMethod('turn/start').length, 0);
+    change('gmail');
+    await waitFor(() => children.length === 3 && children[2].ofMethod('turn/start').length === 1);
+    const request = children[2].ofMethod('turn/start')[0];
+    assert.equal(request.params.input[0].text, 'waiting for login');
+    assert.equal(request.params.model, 'chosen-model');
+    assert.equal(request.params.effort, 'high');
+    assert.equal(agent.account.signedOut, false);
+  });
+
+  it('does not recycle a child while /new is preparing or awaiting commit', async (t) => {
+    const { agent, children, change } = accountAgent();
+    t.after(() => { children.forEach(child => child.simulateExit()); return agent.stop(); });
+    await agent.start();
+    const old = children[0];
+    old.hold = request => request.method === 'thread/start';
+    const preparing = agent.prepareSessionRotation();
+    change('gmail');
+    assert.equal(children.length, 1);
+    old.feed({ id: old.ofMethod('thread/start').at(-1).id, result: { thread: { id: 'th-new' } } });
+    const prepared = await preparing;
+    assert.equal(children.length, 1);
+    agent.commitSessionRotation(prepared);
+    await waitFor(() => children.length === 2 && !agent.reconnecting);
+    assert.equal(children[1].ofMethod('thread/resume')[0].params.threadId, 'th-new');
+  });
+
+  it('stops monitoring on shutdown and never enables Codex auth handling for TraeX', async () => {
+    const { agent, children } = accountAgent();
+    await agent.start();
+    children[0].simulateExit();
+    await agent.stop();
+    assert.equal(agent.authMonitor.timer, null);
+    const { agent: traex } = newAgent(makeStore(), { runtimeId: 'traex', authMonitor: true });
+    assert.equal(traex.authMonitor, null);
+    assert.equal(traex.account, null);
+  });
+
+  it('keeps a second change pending when credentials change during reconnection', async (t) => {
+    const { agent, children, change } = accountAgent();
+    t.after(() => { children.forEach(child => child.simulateExit()); return agent.stop(); });
+    await agent.start();
+    change('gmail');
+    await waitFor(() => children.length === 2 && !agent.reconnecting);
+    children[1].hold = request => request.method === 'account/read';
+    children[1].simulateExit();
+    // Hold the next handshake before it has committed its auth generation.
+    const original = agent._readAccount.bind(agent);
+    let release;
+    let held = false;
+    agent._readAccount = async () => {
+      if (!held) { held = true; await new Promise(resolve => { release = resolve; }); }
+      return original();
+    };
+    await waitFor(() => held);
+    change('other');
+    agent.deliver('latest account only', 6);
+    release();
+    await waitFor(() => children.length === 4 && !agent.reconnecting);
+    assert.equal(children[2].ofMethod('turn/start').length, 0);
+    assert.equal(children[3].ofMethod('turn/start').length, 1);
+    assert.equal(agent.account.email, 'a***@other.com');
+  });
+
+  it('continues startup when an older app-server does not implement account/read', async (t) => {
+    const { agent, children } = accountAgent();
+    t.after(() => { children.forEach(child => child.simulateExit()); return agent.stop(); });
+    const read = agent._readAccount.bind(agent);
+    agent._readAccount = () => {
+      children.at(-1).hold = request => {
+        if (request.method !== 'account/read') return false;
+        children.at(-1).feed({ id: request.id, error: { code: -32601, message: 'Method not found' } });
+        return true;
+      };
+      return read();
+    };
+    await agent.start();
+    assert.equal(agent.state.connected, true);
+    assert.equal(agent.account.email, undefined);
+  });
+
+  it('bounds account introspection and ignores a late reply instead of blocking startup', async (t) => {
+    const { agent, children } = accountAgent({ accountReadTimeoutMs: 10 });
+    t.after(() => { children.forEach(child => child.simulateExit()); return agent.stop(); });
+    const read = agent._readAccount.bind(agent);
+    agent._readAccount = () => {
+      children.at(-1).hold = request => request.method === 'account/read';
+      return read();
+    };
+    const started = agent.start();
+    await waitFor(() => agent.threadId);
+    await started;
+    const request = children[0].ofMethod('account/read')[0];
+    await waitFor(() => !agent.pending.has(request.id));
+    assert.equal(agent.pending.has(request.id), false);
+    children[0].feed({ id: request.id, result: { account: { type: 'chatgpt', email: 'late@example.com' } } });
+    assert.equal(agent.account.email, undefined);
+    assert.equal(agent.state.connected, true);
+  });
+
+  it('does not let an older account/read reply overwrite a newer account notification', async (t) => {
+    const { agent, children } = accountAgent();
+    t.after(() => { children.forEach(child => child.simulateExit()); return agent.stop(); });
+    await agent.start();
+    const child = children[0];
+    child.hold = request => request.method === 'account/read';
+    const older = agent._readAccount();
+    const newer = agent._readAccount();
+    const requests = child.ofMethod('account/read').slice(-2);
+    child.feed({ id: requests[1].id, result: { account: { type: 'chatgpt', email: 'alice@gmail.com' }, requiresOpenaiAuth: true } });
+    await newer;
+    child.feed({ id: requests[0].id, result: { account: { type: 'chatgpt', email: 'alice@outlook.com' }, requiresOpenaiAuth: true } });
+    await older;
+    assert.equal(agent.account.email, 'a***@gmail.com');
   });
 });
 

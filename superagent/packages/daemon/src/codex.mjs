@@ -6,6 +6,8 @@ import * as platform from './platform/index.mjs';
 
 import { spawn as nodeSpawn } from './platform/index.mjs';
 import { createHash, randomUUID } from 'node:crypto';
+import path from 'node:path';
+import { CodexAuthMonitor, codexAccountSummary } from './codex-auth.mjs';
 import { sanitizeAgentChildEnv, terminateProcessTree } from './process-utils.mjs';
 import { agentCliCommands } from './agent-clis.mjs';
 import { agentToolEnv, agentToolServer } from './actions/api.mjs';
@@ -225,6 +227,7 @@ export class CodexAgent {
     this.reconnectBaseMs = options.reconnectBaseMs ?? 1000;
     this.reconnectCapMs = options.reconnectCapMs ?? 30_000;
     this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? 15_000;
+    this.accountReadTimeoutMs = options.accountReadTimeoutMs ?? 10_000;
     this.onTurnFailed = options.onTurnFailed ?? null; // ({ inboundSeqs, error }) => void
     this.onTurnSucceeded = options.onTurnSucceeded ?? null; // ({ inboundSeqs }) => void
     this.onTurnAbandoned = options.onTurnAbandoned ?? null; // ({ inboundSeqs }) => void
@@ -280,6 +283,30 @@ export class CodexAgent {
     this.primeWaiter = null;
     this.sessionRotation = null;
     this.forceFreshThread = false;
+    this.authGeneration = 0;
+    this.loadedAuthGeneration = 0;
+    this.authBlocked = false;
+    this.accountSummary = null;
+    this.accountReadSeq = 0;
+    this.sessionPreparing = false;
+    this.onAccountChanged = options.onAccountChanged ?? null;
+    this.authMonitor = this.runtime === 'codex' && options.authMonitor !== false
+      ? new CodexAuthMonitor(options.authFile ?? path.join(path.dirname(codexConfigFile(process.env)), 'auth.json'), () => {
+        if (this.stopping) return;
+        this.authGeneration += 1;
+        this.authBlocked = this.authMonitor.identity === 'signed-out';
+        try { this.onAccountChanged?.(); } catch (error) {
+          this.logger.warn('codex_account_notification_failed', { error: safe(error) });
+        }
+        this._drain();
+      }, options.authMonitorOptions)
+      : null;
+  }
+
+  get authChangePending() { return this.authGeneration !== this.loadedAuthGeneration; }
+
+  get account() {
+    return this.authMonitor ? { ...this.accountSummary, switching: this.authChangePending, signedOut: this.authBlocked } : null;
   }
 
   // One global thread is shared across every chat; policyHash only detects when the
@@ -295,7 +322,7 @@ export class CodexAgent {
 
   get state() {
     return {
-      connected: Boolean(this.child && this.threadId),
+      connected: Boolean(this.child && this.threadId && !this.authChangePending && !this.authBlocked),
       activeTurn: this.activeTurnId ? 1 : 0,
       queued: this.queue.length,
     };
@@ -307,7 +334,9 @@ export class CodexAgent {
 
   async start() {
     this.stopping = false;
-    await this._handshake();
+    this.authMonitor?.start();
+    try { await this._handshake(); }
+    catch (error) { this.authMonitor?.stop(); throw error; }
   }
 
   get sessionDescriptor() {
@@ -342,6 +371,11 @@ export class CodexAgent {
     if (this.stopping) return false;
     if (!Array.isArray(items) || items.length === 0) return false;
     const batch = items.map(deliveryItem);
+    if (this.authChangePending || this.authBlocked) {
+      this._enqueueBatch(batch);
+      this._drain();
+      return true;
+    }
     if (!this.child || !this.threadId) { this._enqueueBatch(batch); return true; }
     if (this.activeTurnId) {
       this._steerBatch(batch);
@@ -363,6 +397,8 @@ export class CodexAgent {
     if (this.stopping
       || !this.child
       || !this.threadId
+      || this.authChangePending
+      || this.authBlocked
       || this.turnInProgress
       || this.queue.length > 0
       || !Array.isArray(items)
@@ -544,7 +580,7 @@ export class CodexAgent {
       },
     });
     this.startingInput = null;
-    if (!this.activeTurnId) return;
+    if (!this.activeTurnId || this.authChangePending) return;
     const items = this.queue.splice(0);
     for (let index = 0; index < items.length;) {
       const queuedBatchId = items[index].queuedBatchId;
@@ -673,6 +709,15 @@ export class CodexAgent {
   _drain() {
     if (this.stopping || !this.child || !this.threadId) return;
     if (this.activeTurnId || this.startingTurn) return;
+    if (this.authChangePending) {
+      if (this.sessionPreparing || this.sessionRotation || this.reconnecting) return;
+      this._recordActivity('agent.account_changed', { summary: 'Codex 登录已变更，正在重新连接' });
+      // Idle only: no accepted turn is replayed, no queued input is discarded.
+      // The normal reconnect path reloads auth and resumes the native thread.
+      this._handleExit(this.child);
+      return;
+    }
+    if (this.authBlocked) return;
     if (this.queue.length === 0) return;
     this._claimBatch(this.queue.splice(0));
   }
@@ -688,6 +733,7 @@ export class CodexAgent {
   }
 
   _flushQueue() {
+    if (this.authChangePending || this.authBlocked) { this._drain(); return; }
     const items = this.queue.splice(0);
     for (let index = 0; index < items.length;) {
       const queuedBatchId = items[index].queuedBatchId;
@@ -710,13 +756,20 @@ export class CodexAgent {
     return { id, line: `${JSON.stringify({ id, method, params })}\n` };
   }
 
-  _request(method, params) {
+  _request(method, params, { timeoutMs = 0 } = {}) {
     const { id, line } = this._encodeRequest(method, params);
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer = timeoutMs > 0 ? setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`${method} timed out`));
+      }, timeoutMs) : null;
+      timer?.unref?.();
+      const settle = (callback) => (value) => { clearTimeout(timer); callback(value); };
+      this.pending.set(id, { resolve: settle(resolve), reject: settle(reject) });
       try {
         this.child.stdin.write(line);
       } catch (error) {
+        clearTimeout(timer);
         this.pending.delete(id);
         reject(error);
       }
@@ -795,6 +848,9 @@ export class CodexAgent {
     const threadId = params.threadId ?? params.turn?.threadId ?? null;
     if (threadId && this.threadId && threadId !== this.threadId) return;
     switch (method) {
+      case 'account/updated':
+        if (this.authMonitor) void this._readAccount();
+        break;
       case 'turn/started':
         this._onTurnStarted(params.turn?.id ?? params.turnId ?? null);
         break;
@@ -875,7 +931,7 @@ export class CodexAgent {
         }
         break;
       }
-      default: // thread/started, mcpServer/*, hook/*, thread/*, account/*, item/* — ignore
+      default: // thread/started, mcpServer/*, hook/*, thread/*, item/* — ignore
         break;
     }
   }
@@ -896,7 +952,25 @@ export class CodexAgent {
 
   // ---- connection lifecycle ---------------------------------------------------
 
+  async _readAccount() {
+    const child = this.child;
+    const readSeq = ++this.accountReadSeq;
+    try {
+      const result = await this._request('account/read', { refreshToken: false }, { timeoutMs: this.accountReadTimeoutMs });
+      if (this.child !== child || readSeq !== this.accountReadSeq || !result || !Object.hasOwn(result, 'account')) return;
+      this.accountSummary = codexAccountSummary(result);
+      this.authBlocked = result.requiresOpenaiAuth === true && result.account === null;
+      this._drain();
+      this._notifyAvailable();
+    } catch (error) {
+      // Older app-servers may lack account/read. Auth-file changes still cause
+      // reconnection; failure to inspect account details does not break startup.
+      this.logger.info('codex_account_read_failed', { error: safe(error) });
+    }
+  }
+
   async _handshake() {
+    const authGeneration = this.authGeneration;
     // Fetch before starting the app-server handshake deadline. Network/archive
     // work must not consume the native protocol's handshake timeout.
     const global = this.store.getGlobalSession();
@@ -939,6 +1013,8 @@ export class CodexAgent {
       } catch (error) { reject(error); return; }
 
       this.child = child;
+      this.accountSummary = null;
+      this.authBlocked = this.authGeneration > 0 && this.authMonitor?.identity === 'signed-out';
       this.threadId = null;
       this.activeTurnId = null;
       this.startingTurn = false;
@@ -981,9 +1057,13 @@ export class CodexAgent {
         capabilities: { experimentalApi: true },
       }).then(() => {
         this._notify('initialized', {});
+        // Account introspection can perform network routing discovery. It must
+        // not hold the native thread handshake or prevent offline startup.
+        if (this.authMonitor) void this._readAccount();
         return this._startOrResumeThread();
       }).then(() => {
         this.startedOk = true;
+        this.loadedAuthGeneration = authGeneration;
         this.backoffMs = this.reconnectBaseMs;
         this._publishSession();
         this._flushQueue();
@@ -1053,11 +1133,17 @@ export class CodexAgent {
       this.sessionRotation = Object.freeze({ id, deferred: true });
       return Object.freeze({ id, sessionReady: false, deferred: true });
     }
-    const result = await this._request('thread/start', this._threadParams());
-    const id = result?.thread?.id;
-    if (!id) throw new Error('thread/start returned no thread id');
-    this.sessionRotation = Object.freeze({ id, model: result?.model ?? '' });
-    return Object.freeze({ id, sessionReady: true });
+    this.sessionPreparing = true;
+    try {
+      const result = await this._request('thread/start', this._threadParams());
+      const id = result?.thread?.id;
+      if (!id) throw new Error('thread/start returned no thread id');
+      this.sessionRotation = Object.freeze({ id, model: result?.model ?? '' });
+      return Object.freeze({ id, sessionReady: true });
+    } finally {
+      this.sessionPreparing = false;
+      if (!this.sessionRotation) this._drain();
+    }
   }
 
   commitSessionRotation(prepared, { persist = true, preserveContext = false } = {}) {
@@ -1083,6 +1169,7 @@ export class CodexAgent {
     // The app-server has created an empty, unreachable thread only. Dropping the local
     // candidate restores the exact pre-prepare state; no live thread was swapped.
     this.sessionRotation = null;
+    this._drain();
   }
 
   // Loop breaker: turn/interrupt on the live turn, keeping the thread, the
@@ -1223,7 +1310,7 @@ export class CodexAgent {
   // for /model discovery and /effort validation. Empty while disconnected or
   // when the server lacks model/list.
   async listModels() {
-    if (!this.child) return [];
+    if (!this.child || this.authChangePending || this.authBlocked) return [];
     try {
       const result = await this._request('model/list', {});
       const models = Array.isArray(result?.data) ? result.data : [];
@@ -1310,6 +1397,8 @@ export class CodexAgent {
       }
     }
     this.reconnecting = false;
+    this._drain();
+    this._notifyAvailable();
   }
 
   _recordActivity(kind, fields = {}) {
@@ -1388,6 +1477,7 @@ export class CodexAgent {
 
   async stop() {
     this.stopping = true;
+    this.authMonitor?.stop();
     const midTurn = Boolean(this.activeTurnId || this.startingTurn);
     const failedItems = [
       ...this.startingItems,
