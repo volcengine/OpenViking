@@ -433,11 +433,10 @@
   height: 10px;
   margin-top: 4px;
   overflow: hidden;
-  /* 圆角取条高的一半，两端成胶囊形；填充条被轨道裁出同样的圆角，不用另设。
-   * 宿主可覆盖 --ov-ui-experience-bar-radius 换成别的圆角或 0。
+  /* 圆角取条高的一半，两端成胶囊形。宿主可覆盖 --ov-ui-experience-bar-radius
+   * 换成别的圆角或 0。
    *
-   * The radius is half the bar height, so both ends read as a pill; the fill is clipped
-   * to the same shape by the track and needs no radius of its own. A host overrides
+   * The radius is half the bar height, so both ends read as a pill. A host overrides
    * --ov-ui-experience-bar-radius to change it, or to 0 for square ends.
    */
   border-radius: var(--ov-ui-experience-bar-radius, 5px);
@@ -450,9 +449,15 @@
   );
 }
 
+/* 填充条自己也要圆角：轨道只裁掉它的左端，右端停在中途，不设圆角就是直角。
+ *
+ * The fill needs its own radius: the track only clips its left end, while the right end
+ * stops mid-track and would otherwise be square.
+ */
 .ov-experience-dashboard__outcome-track span {
   display: block;
   height: 100%;
+  border-radius: var(--ov-ui-experience-bar-radius, 5px);
   background: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
   transition: width 180ms ease;
 }
