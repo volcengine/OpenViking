@@ -93,6 +93,15 @@
   --ov-ui-text-description-default: rgb(0 0 0 / 40%);
   --ov-ui-text-disabled-default: #a5a7bb;
 
+  /* Chromium's native macOS non-overlay scrollbar palette. */
+  --ov-ui-scrollbar-thumb-default: #0000003a;
+  --ov-ui-scrollbar-thumb-hover-default: #00000080;
+  --ov-ui-scrollbar-track-hover-default: #fafafa;
+  --ov-ui-scrollbar-track-hover-horizontal-default: var(
+    --ov-ui-scrollbar-track-hover-default
+  );
+  --ov-ui-scrollbar-border-default: #e8e8e8;
+
   /* 边框：分隔线、控件描边、强调描边。 */
   --ov-ui-border-1-default: #f0f2fa;
   --ov-ui-border-2-default: #e1e4f2;
@@ -224,6 +233,16 @@ html.dark .ov-experience-dashboard,
   --ov-ui-empty-description-default: var(--ov-ui-text-3-default);
   --ov-ui-text-description-default: rgb(255 255 255 / 40%);
   --ov-ui-text-disabled-default: #42464e;
+
+  --ov-ui-scrollbar-thumb-default: #6b6b6b;
+  --ov-ui-scrollbar-thumb-hover-default: #939393;
+  --ov-ui-scrollbar-track-hover-default: linear-gradient(#2d2d2d, #2b2b2b);
+  --ov-ui-scrollbar-track-hover-horizontal-default: linear-gradient(
+    90deg,
+    #2d2d2d,
+    #2b2b2b
+  );
+  --ov-ui-scrollbar-border-default: #3d3d3d;
 
   --ov-ui-border-1-default: #23252a;
   --ov-ui-border-2-default: #2e3138;
