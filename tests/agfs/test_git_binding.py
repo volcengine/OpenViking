@@ -149,27 +149,50 @@ def test_restore_roundtrip(client):
     """Commit v1 → modify → commit v2 → restore v1 → file reverts; HEAD moves to v3."""
     account = "acct1"
     _write(client, account, "resources/proj/a.md", b"v1-content")
+    _write(client, account, "resources/proj/b.md", b"retained in v1")
 
     v1 = client.git_commit(
-        account=account, branch="main", message="v1",
-        author_name="a", author_email="a@e",
-        paths=["resources/proj/a.md"],
+        account=account,
+        branch="main",
+        message="v1",
+        author_name="a",
+        author_email="a@e",
+        paths=["resources/proj"],
     )
     v1_oid = v1["commit_oid"]
 
     _write(client, account, "resources/proj/a.md", b"v2-content")
+    client.rm(f"/local/{account}/resources/proj/b.md")
+    _write(client, account, "resources/proj/c.md", b"added in v2")
+    _write(client, account, "resources/other/a.md", b"outside project")
     v2 = client.git_commit(
-        account=account, branch="main", message="v2",
-        author_name="a", author_email="a@e",
-        paths=["resources/proj/a.md"],
+        account=account,
+        branch="main",
+        message="v2",
+        author_name="a",
+        author_email="a@e",
+        paths=["resources/proj", "resources/other"],
     )
     v2_oid = v2["commit_oid"]
 
+    assert client.git_diff_paths(
+        account=account, base=None, head=v1_oid, paths=["resources/proj"]
+    ) == [("resources/proj/a.md", "added"), ("resources/proj/b.md", "added")]
+    assert client.git_diff_paths(
+        account=account, base=v1_oid, head=v2_oid, paths=["resources/proj"]
+    ) == [
+        ("resources/proj/a.md", "modified"),
+        ("resources/proj/b.md", "deleted"),
+        ("resources/proj/c.md", "added"),
+    ]
+
     restored = client.git_restore(
-        account=account, branch="main",
+        account=account,
+        branch="main",
         project_dir="resources/proj",
         source_commit=v1_oid,
-        author_name="a", author_email="a@e",
+        author_name="a",
+        author_email="a@e",
     )
     assert restored["result"] == "applied"
     assert restored["source_commit"] == v1_oid
@@ -180,11 +203,17 @@ def test_restore_roundtrip(client):
     # VFS file content reverted
     content = client.read(f"/local/{account}/resources/proj/a.md")
     assert content == b"v1-content"
+    assert client.read(f"/local/{account}/resources/proj/b.md") == b"retained in v1"
+    assert client.read(f"/local/{account}/resources/other/a.md") == b"outside project"
 
     # Branch now points at the new commit
     head = client.git_show(account=account, target_ref="main")
     assert head["oid"] == restored["new_commit_oid"]
     assert head["parents"] == [v2_oid]
+    assert (
+        client.git_diff_paths(account=account, base=v1_oid, head="main", paths=["resources/proj"])
+        == []
+    )
 
 
 def test_restore_dry_run_does_not_mutate(client):

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
-use crate::SnapshotCmd;
+use crate::cli::SnapshotCmd;
 use crate::client::{HttpClient, SnapshotCommitReq, SnapshotRestoreReq, SnapshotShowResult};
 use crate::error::Result;
 use crate::output::{OutputFormat, output_success};
@@ -83,6 +83,19 @@ pub async fn dispatch(
                 .snapshot_diff(&path, from_ref.as_deref(), &to_ref)
                 .await?;
             print_diff(&value, output_format, compact);
+            Ok(())
+        }
+        SnapshotCmd::DiffPaths {
+            paths,
+            from_ref,
+            to_ref,
+            offset,
+            limit,
+        } => {
+            let value = client
+                .snapshot_diff_paths(&paths, from_ref.as_deref(), &to_ref, offset, limit)
+                .await?;
+            output_success(&value, output_format, compact);
             Ok(())
         }
         SnapshotCmd::IgnoreGet => {

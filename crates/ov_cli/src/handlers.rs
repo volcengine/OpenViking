@@ -1,4 +1,4 @@
-use crate::PrivacyCommands;
+use crate::cli::PrivacyCommands;
 use crate::client;
 use crate::commands;
 use crate::config::merge_csv_options;
@@ -9,7 +9,8 @@ use crate::terminal_ui::{
 };
 use crate::theme;
 use crate::tui;
-use crate::{CliContext, SkillAddArgs, UploadCliOptions};
+use crate::CliContext;
+use crate::cli::{SkillAddArgs, UploadCliOptions};
 use colored::Colorize;
 use serde_json::{Map, Value};
 
@@ -22,7 +23,6 @@ pub async fn handle_add_resource(
     reason: String,
     instruction: String,
     wait: bool,
-    timeout: Option<f64>,
     strict_mode: bool,
     ignore_dirs: Option<String>,
     include: Option<String>,
@@ -86,11 +86,6 @@ pub async fn handle_add_resource(
         reject_manifest_run_keys(args)?;
     }
 
-    let effective_timeout = if wait {
-        timeout.unwrap_or(60.0).max(ctx.config.timeout)
-    } else {
-        ctx.config.timeout
-    };
     let auth = ctx.config.effective_auth(ctx.sudo);
     let client = client::HttpClient::new(
         &ctx.config.url,
@@ -98,7 +93,7 @@ pub async fn handle_add_resource(
         auth.account,
         auth.user,
         ctx.config.effective_actor_peer_id(),
-        effective_timeout,
+        ctx.config.timeout,
         ctx.profile.unwrap_or(ctx.config.profile),
         ctx.config.effective_extra_headers(),
     )
@@ -113,7 +108,6 @@ pub async fn handle_add_resource(
         reason,
         instruction,
         wait,
-        timeout,
         strict,
         effective_ignore_dirs,
         effective_include,
@@ -415,13 +409,13 @@ pub async fn handle_restore(
     .await
 }
 
-use crate::{SystemBackendCommands, SystemCommands};
+use crate::cli::SystemCommands;
 
 pub async fn handle_system(cmd: SystemCommands, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     match cmd {
-        SystemCommands::Wait { timeout } => {
-            commands::system::wait(&client, timeout, ctx.output_format, ctx.compact).await
+        SystemCommands::Wait => {
+            commands::system::wait(&client, ctx.output_format, ctx.compact).await
         }
         SystemCommands::Status => {
             commands::system::status(&client, ctx.output_format, ctx.compact).await
@@ -440,20 +434,10 @@ pub async fn handle_system(cmd: SystemCommands, ctx: CliContext) -> Result<()> {
             commands::system::consistency(&client, &uri, ctx.output_format, ctx.compact).await
         }
         SystemCommands::Crypto { action } => commands::crypto::handle_crypto(action).await,
-        SystemCommands::Backend { action } => match action {
-            SystemBackendCommands::SyncStatus { uri } => {
-                commands::system::backend_sync_status(&client, &uri, ctx.output_format, ctx.compact)
-                    .await
-            }
-            SystemBackendCommands::SyncRetry { uri } => {
-                commands::system::backend_sync_retry(&client, &uri, ctx.output_format, ctx.compact)
-                    .await
-            }
-        },
     }
 }
 
-use crate::ObserverCommands;
+use crate::cli::ObserverCommands;
 
 pub async fn handle_observer(cmd: ObserverCommands, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
@@ -479,7 +463,7 @@ pub async fn handle_observer(cmd: ObserverCommands, ctx: CliContext) -> Result<(
     }
 }
 
-use crate::SessionCommands;
+use crate::cli::SessionCommands;
 
 pub async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
@@ -569,7 +553,7 @@ pub async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()>
             .await
         }
         SessionCommands::Config { action } => match action {
-            crate::SessionConfigCommands::Set {
+            crate::cli::SessionConfigCommands::Set {
                 session_id,
                 event_tags,
                 no_event_tags,
@@ -607,7 +591,7 @@ pub async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()>
     }
 }
 
-use crate::AdminCommands;
+use crate::cli::AdminCommands;
 
 pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
@@ -637,9 +621,6 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             commands::admin::delete_account(&client, &account_id, ctx.output_format, ctx.compact)
                 .await
         }
-        AdminCommands::Migrate { cleanup } => {
-            commands::admin::migrate(&client, cleanup, ctx.output_format, ctx.compact).await
-        }
         AdminCommands::RegisterUser {
             account_id,
             user_id,
@@ -665,6 +646,7 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             name,
             role,
             page,
+            reveal_api_keys,
         } => {
             commands::admin::list_users(
                 &client,
@@ -673,6 +655,7 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
                 name,
                 role,
                 page,
+                reveal_api_keys,
                 ctx.output_format,
                 ctx.compact,
             )
@@ -788,6 +771,7 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
                 &account_id,
                 &user_id,
                 seed.as_deref(),
+                if ctx.sudo { None } else { Some(&ctx.config) },
                 ctx.output_format,
                 ctx.compact,
             )
@@ -820,6 +804,19 @@ pub async fn handle_privacy(cmd: PrivacyCommands, ctx: CliContext) -> Result<()>
         PrivacyCommands::Categories => {
             commands::privacy::categories(&client, ctx.output_format, ctx.compact).await
         }
+        PrivacyCommands::Tree {
+            category,
+            references,
+        } => {
+            commands::privacy::tree(
+                &client,
+                category.as_deref(),
+                references,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
         PrivacyCommands::List { category } => {
             commands::privacy::list_targets(&client, &category, ctx.output_format, ctx.compact)
                 .await
@@ -837,12 +834,42 @@ pub async fn handle_privacy(cmd: PrivacyCommands, ctx: CliContext) -> Result<()>
             )
             .await
         }
+        PrivacyCommands::Reference {
+            category,
+            target_key,
+            field,
+        } => {
+            commands::privacy::reference(
+                &client,
+                &category,
+                &target_key,
+                field.as_deref(),
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        PrivacyCommands::Resolve {
+            selector_or_category,
+            target_key,
+            field,
+        } => {
+            commands::privacy::resolve(
+                &client,
+                &selector_or_category,
+                target_key.as_deref(),
+                field.as_deref(),
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
         PrivacyCommands::Upsert {
             category,
             target_key,
             values_json,
             values_file,
-            key,
+            field,
             change_reason,
             labels_json,
         } => {
@@ -852,7 +879,7 @@ pub async fn handle_privacy(cmd: PrivacyCommands, ctx: CliContext) -> Result<()>
                 &target_key,
                 values_json.as_deref(),
                 values_file.as_deref(),
-                &key,
+                &field,
                 &change_reason,
                 labels_json.as_deref(),
                 ctx.output_format,
@@ -903,10 +930,42 @@ pub async fn handle_privacy(cmd: PrivacyCommands, ctx: CliContext) -> Result<()>
             )
             .await
         }
+        PrivacyCommands::Delete {
+            selector_or_category,
+            target_key,
+            field,
+            yes,
+        } => {
+            commands::privacy::delete(
+                &client,
+                &selector_or_category,
+                target_key.as_deref(),
+                field.as_deref(),
+                yes,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        PrivacyCommands::Scan {
+            uri,
+            fix,
+            node_limit,
+        } => {
+            commands::privacy::scan(
+                &client,
+                &uri,
+                fix,
+                node_limit,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
     }
 }
 
-use crate::ConfigCommands;
+use crate::cli::ConfigCommands;
 use crate::config::Config;
 use crate::config_command_ui::{self, SwitchConfigRow};
 use crate::config_wizard::{self, ConfigStore};
@@ -1375,9 +1434,10 @@ fn validating_target_config(language: Language) -> &'static str {
     }
 }
 
-pub async fn handle_read(uri: String, ctx: CliContext) -> Result<()> {
+/// Read a URI with a zero-based offset and line count; -1 reads through EOF.
+pub async fn handle_read(uri: String, offset: i64, limit: i64, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::content::read(&client, &uri, ctx.output_format, ctx.compact).await
+    commands::content::read(&client, &uri, offset, limit, ctx.output_format, ctx.compact).await
 }
 
 pub async fn handle_abstract(uri: String, ctx: CliContext) -> Result<()> {
@@ -1396,11 +1456,11 @@ pub async fn handle_write(
     from_file: Option<String>,
     mode: String,
     wait: bool,
-    timeout: Option<f64>,
     processing_mode: String,
     tags: Vec<String>,
     tag_mode: String,
     acl: Option<Value>,
+    edit_source: String,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
@@ -1420,11 +1480,11 @@ pub async fn handle_write(
         &payload,
         &mode,
         wait,
-        timeout,
         &processing_mode,
         tags,
         &tag_mode,
         acl,
+        &edit_source,
         ctx.output_format,
         ctx.compact,
     )
@@ -1442,6 +1502,26 @@ pub async fn handle_set_tags(
     commands::content::set_tags(
         &client,
         &uri,
+        tags,
+        &mode,
+        recursive,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
+pub async fn handle_batch_set_tags(
+    uris: Vec<String>,
+    tags: Vec<String>,
+    mode: String,
+    recursive: bool,
+    ctx: CliContext,
+) -> Result<()> {
+    let client = ctx.get_client();
+    commands::content::batch_set_tags(
+        &client,
+        &uris,
         tags,
         &mode,
         recursive,
@@ -1561,6 +1641,7 @@ pub async fn handle_search(
     uri: String,
     image: Option<String>,
     search_type: String,
+    mode: String,
     session_id: Option<String>,
     node_limit: i32,
     threshold: Option<f64>,
@@ -1584,9 +1665,13 @@ pub async fn handle_search(
             "--image is not supported with --search-type keywords.".to_string(),
         ));
     }
+    validate_search_mode_options(&mode, &uri, read_content)?;
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
     if search_type != "semantic" {
         params.push(format!("--search-type {}", search_type));
+    }
+    if mode != "list" {
+        params.push(format!("--mode {}", mode));
     }
     if let Some(ref img) = image {
         params.push(format!("--image {}", img));
@@ -1628,6 +1713,7 @@ pub async fn handle_search(
         &uri,
         image,
         &search_type,
+        &mode,
         session_id,
         node_limit,
         threshold,
@@ -1643,6 +1729,24 @@ pub async fn handle_search(
         ctx.compact,
     )
     .await
+}
+
+fn validate_search_mode_options(mode: &str, uri: &str, read_content: bool) -> Result<()> {
+    if mode == "context" {
+        if !uri.is_empty() {
+            return Err(Error::Client(
+                "--uri is not supported with --mode context. Remove --uri or use --mode list."
+                    .to_string(),
+            ));
+        }
+        if read_content {
+            return Err(Error::Client(
+                "--read-content is not supported with --mode context; context assembly already includes content. Remove --read-content or use --mode list."
+                    .to_string(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub fn append_time_filter_params(
@@ -1886,7 +1990,6 @@ pub async fn handle_rm(
     uri: String,
     recursive: bool,
     wait: bool,
-    timeout: Option<f64>,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
@@ -1895,7 +1998,6 @@ pub async fn handle_rm(
         &uri,
         recursive,
         wait,
-        timeout,
         ctx.output_format,
         ctx.compact,
     )
@@ -1942,13 +2044,13 @@ pub async fn handle_attrs(uri: String, key: Option<String>, ctx: CliContext) -> 
     .await
 }
 
-pub async fn handle_acl(action: crate::AclCommands, ctx: CliContext) -> Result<()> {
+pub async fn handle_acl(action: crate::cli::AclCommands, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     match action {
-        crate::AclCommands::Get { uri } => {
+        crate::cli::AclCommands::Get { uri } => {
             commands::acl::get(&client, &uri, ctx.output_format, ctx.compact).await
         }
-        crate::AclCommands::Set {
+        crate::cli::AclCommands::Set {
             uri,
             entries,
             acl_mode,
@@ -1963,7 +2065,7 @@ pub async fn handle_acl(action: crate::AclCommands, ctx: CliContext) -> Result<(
             )
             .await
         }
-        crate::AclCommands::Grant {
+        crate::cli::AclCommands::Grant {
             uri,
             principal,
             level,
@@ -1978,10 +2080,10 @@ pub async fn handle_acl(action: crate::AclCommands, ctx: CliContext) -> Result<(
             )
             .await
         }
-        crate::AclCommands::Revoke { uri, principal } => {
+        crate::cli::AclCommands::Revoke { uri, principal } => {
             commands::acl::revoke(&client, &uri, &principal, ctx.output_format, ctx.compact).await
         }
-        crate::AclCommands::Rm { uri } => {
+        crate::cli::AclCommands::Rm { uri } => {
             commands::acl::remove(&client, &uri, ctx.output_format, ctx.compact).await
         }
     }

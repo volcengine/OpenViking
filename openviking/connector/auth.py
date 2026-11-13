@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Task-scoped access to centrally managed Feishu OAuth credentials."""
+"""Task-scoped access to centrally managed external OAuth credentials."""
 
 import asyncio
 import math
@@ -18,6 +18,16 @@ if TYPE_CHECKING:
     from openviking.parse.accessors.base import LocalResource
 
 OAUTH_REF_ARG = "openviking_oauth_ref"
+CONNECTOR_AUTH_CONFIG_FIELD = "connector_auth_config"
+CREDENTIAL_REF_KEY = "openviking_credential_ref"
+_CREDENTIAL_REF_REQUIRED_KEYS = (
+    "account_id",
+    "resource_id",
+    "user_id",
+    "ov_user_id",
+    "platform",
+    "type",
+)
 EXTERNAL_FEISHU_PROVIDER = "feishu_external"
 current_feishu_token: ContextVar[Optional["ExternalFeishuToken"]] = ContextVar(
     "external_feishu_token", default=None
@@ -28,6 +38,12 @@ def external_auth_url() -> str:
     from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
     return get_openviking_config().connector.auth
+
+
+def credential_resolve_url() -> str:
+    from openviking_cli.utils.config.open_viking_config import get_openviking_config
+
+    return get_openviking_config().connector.credential_resolve_url()
 
 
 def validate_feishu_auth_args(args: Dict[str, Any]) -> None:
@@ -91,7 +107,7 @@ async def feishu_auth_scope(
 async def restore_feishu_request(
     connector, state: Dict[str, Any], *, path: str, ctx: RequestContext
 ) -> tuple[str, Dict[str, Any]]:
-    api_key, add_type, args = await connector.restore_watch_request(
+    api_key, add_type, args, _ = await connector.restore_watch_request(
         state.get("credentials", {}), account_id=ctx.account_id, path=path
     )
     if add_type != "feishu_doc":
@@ -103,14 +119,18 @@ async def restore_feishu_request(
 def validate_oauth_ref(
     value: Any, ov_user_id: str, *, platform: str = "feishu_doc"
 ) -> Dict[str, str]:
-    keys = {"account_id", "user_id", "ov_user_id", "platform", "type"}
-    if (
-        not isinstance(value, dict)
-        or set(value) != keys
-        or any(not isinstance(value[key], str) or not value[key].strip() for key in keys)
-    ):
+    legacy_keys = {"account_id", "user_id", "ov_user_id", "platform", "type"}
+    scoped_keys = legacy_keys | {"resource_id", "openviking_account_id"}
+    if not isinstance(value, dict) or set(value) not in (legacy_keys, scoped_keys):
         raise InvalidArgumentError("args.openviking_oauth_ref contains an invalid OAuth reference.")
-    ref = {key: value[key].strip() for key in keys}
+    ref: Dict[str, str] = {}
+    for key in value:
+        field = value[key]
+        if not isinstance(field, str) or not field.strip():
+            raise InvalidArgumentError(
+                "args.openviking_oauth_ref contains an invalid OAuth reference."
+            )
+        ref[key] = field.strip()
     if ref["type"] != "oauth" or ref["platform"] != platform:
         raise InvalidArgumentError(f"This import requires a {platform} OAuth reference.")
     if ref["ov_user_id"] != ov_user_id:
@@ -118,6 +138,123 @@ def validate_oauth_ref(
             "OAuth reference does not belong to the current OpenViking user."
         )
     return ref
+
+
+def extract_credential_reference(
+    connector_auth_config: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Return the private credential reference, or None when absent.
+
+    The top-level ``connector_auth_config`` is managed by OpenViking and only
+    ever carries one key, ``openviking_credential_ref``. Imports that keep the
+    legacy ``args.openviking_oauth_ref`` channel (Feishu) leave it unset, so a
+    present reference is the single platform-agnostic signal that this import
+    resolves credentials through the unified resolver.
+    """
+    if not connector_auth_config:
+        return None
+    if not isinstance(connector_auth_config, dict):
+        raise InvalidArgumentError("connector_auth_config must be an object.")
+    reference = connector_auth_config.get(CREDENTIAL_REF_KEY)
+    if reference is None:
+        return None
+    if set(connector_auth_config) != {CREDENTIAL_REF_KEY}:
+        raise InvalidArgumentError("connector_auth_config contains unexpected fields.")
+    return validate_credential_reference(reference)
+
+
+def validate_credential_reference(value: Any) -> Dict[str, Any]:
+    """Validate the OpenViking-managed credential reference shape.
+
+    DingTalk references include ``ov_account_id`` and a positive
+    ``binding_version``. Historical DingTalk references use the default data
+    space. Feishu references may omit both fields.
+    """
+    if not isinstance(value, dict):
+        raise InvalidArgumentError(
+            "connector_auth_config contains an invalid credential reference."
+        )
+    extra = (
+        set(value)
+        - set(_CREDENTIAL_REF_REQUIRED_KEYS)
+        - {
+            "binding_version",
+            "ov_account_id",
+        }
+    )
+    if extra or any(key not in value for key in _CREDENTIAL_REF_REQUIRED_KEYS):
+        raise InvalidArgumentError(
+            "connector_auth_config contains an invalid credential reference."
+        )
+    reference: Dict[str, Any] = {}
+    for key in _CREDENTIAL_REF_REQUIRED_KEYS:
+        field = value[key]
+        if not isinstance(field, str) or not field.strip():
+            raise InvalidArgumentError(
+                "connector_auth_config contains an invalid credential reference."
+            )
+        reference[key] = field.strip()
+    if reference["type"] != "oauth":
+        raise InvalidArgumentError(
+            "connector_auth_config credential reference must be an OAuth type."
+        )
+    if "ov_account_id" in value:
+        ov_account_id = value["ov_account_id"]
+        if not isinstance(ov_account_id, str) or not ov_account_id.strip():
+            raise InvalidArgumentError(
+                "connector_auth_config ov_account_id must be a non-empty string."
+            )
+        reference["ov_account_id"] = ov_account_id.strip()
+    elif reference["platform"] == "dingtalk":
+        reference["ov_account_id"] = "default"
+    if "binding_version" in value:
+        binding_version = value["binding_version"]
+        if isinstance(binding_version, bool) or not isinstance(binding_version, int):
+            raise InvalidArgumentError("connector_auth_config binding_version must be an integer.")
+        reference["binding_version"] = binding_version
+    if reference["platform"] == "dingtalk" and reference.get("binding_version", 0) <= 0:
+        raise InvalidArgumentError(
+            "DingTalk credential reference requires a positive binding_version."
+        )
+    return reference
+
+
+async def resolve_connector_auth_config(
+    reference: Dict[str, Any], ctx: RequestContext
+) -> Dict[str, Any]:
+    """Resolve the current Connector ``auth_config`` for a credential reference.
+
+    Each import and each watch round resolves credentials just before use so a
+    refreshed token is always current; the resolver assembles the full
+    ``auth_config`` for the target Connector, and the kernel forwards it
+    verbatim without persisting any token or application secret.
+    """
+    reference = validate_credential_reference(reference)
+    if reference["platform"] == "dingtalk":
+        if reference["ov_account_id"] != ctx.account_id:
+            raise InvalidArgumentError(
+                "Credential reference does not belong to the current OpenViking data space."
+            )
+        if reference["ov_user_id"] != ctx.user.user_id:
+            raise InvalidArgumentError(
+                "Credential reference does not belong to the current OpenViking user."
+            )
+    resolve_url = credential_resolve_url()
+    if not resolve_url:
+        raise InvalidArgumentError(
+            "connector.auth is required to resolve external Connector credentials."
+        )
+    api_key = ctx.api_key or ""
+    if not api_key:
+        raise InvalidArgumentError("External Connector authorization requires an API key.")
+    client = ConnectorClient("", "", account_id=reference.get("account_id", ""))
+    data = await asyncio.to_thread(
+        client.resolve_connector_credential, resolve_url, api_key, reference
+    )
+    auth_config = data.get("auth_config")
+    if not isinstance(auth_config, dict) or not auth_config:
+        raise InternalError("External Connector credential resolution returned no auth_config.")
+    return {str(key): value for key, value in auth_config.items()}
 
 
 async def project_auth_config(args: Dict[str, Any], ctx: RequestContext) -> Dict[str, str]:
@@ -139,6 +276,30 @@ async def project_auth_config(args: Dict[str, Any], ctx: RequestContext) -> Dict
     return {"user_access_token": credentials["access_token"], "user_key": user_key.strip()}
 
 
+async def document_auth_config(args: Dict[str, Any], ctx: RequestContext) -> Dict[str, Any]:
+    """Resolve enumeration credentials and retain a private reference for child imports."""
+    validate_feishu_auth_args(args)
+    if "auth_config" in args:
+        raise InvalidArgumentError("OAuth references cannot be combined with auth_config.")
+    reference = validate_oauth_ref(args[OAUTH_REF_ARG], ctx.user.user_id)
+    provider = ExternalFeishuToken(reference, ctx.api_key or "")
+    token = await asyncio.to_thread(provider.get_token)
+    return {"lark_access_token": token, OAUTH_REF_ARG: reference}
+
+
+async def confluence_auth_config(args: Dict[str, Any], ctx: RequestContext) -> Dict[str, str]:
+    """Resolve a Confluence OAuth reference into the plugin's Bearer-token config."""
+    if args.get("auth_config") or any(
+        key in args for key in ("access_token", "api_token", "email")
+    ):
+        raise InvalidArgumentError(
+            "OAuth references cannot be combined with explicit Confluence credentials."
+        )
+    reference = validate_oauth_ref(args[OAUTH_REF_ARG], ctx.user.user_id, platform="confluence")
+    provider = ExternalFeishuToken(reference, ctx.api_key or "")
+    return {"access_token": await asyncio.to_thread(provider.get_token)}
+
+
 def is_external_feishu_auth(state: Optional[Dict[str, Any]]) -> bool:
     return isinstance(state, dict) and state.get("provider") == EXTERNAL_FEISHU_PROVIDER
 
@@ -150,13 +311,13 @@ class ExternalFeishuToken:
         self._url = external_auth_url()
         if not self._url:
             raise InvalidArgumentError(
-                "connector.auth is required for external Feishu authorization."
+                "connector.auth is required for external OAuth authorization."
             )
         if not api_key:
-            raise InvalidArgumentError("External Feishu authorization requires an API key.")
+            raise InvalidArgumentError("External OAuth authorization requires an API key.")
         self._reference = reference
         self._api_key = api_key
-        self._client = ConnectorClient("", "", account_id=reference["account_id"])
+        self._client = ConnectorClient("", "", account_id=reference.get("account_id", ""))
         self._lock = Lock()
         self._credentials: Dict[str, Any] = {}
         self._valid_until = 0.0

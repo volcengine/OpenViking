@@ -80,15 +80,13 @@ class TestErrorFormatConsistency:
 
     def test_find_with_negative_limit(self, api_client):
         find_resp = api_client.find(query="test", limit=-1)
-        assert find_resp.status_code == 200, (
-            f"negative limit should return error or be clamped, got {find_resp.status_code}"
-        )
+        assert find_resp.status_code == 400, find_resp.text
+        assert find_resp.json()["error"]["code"] == "INVALID_ARGUMENT"
 
     def test_find_with_zero_limit(self, api_client):
         find_resp = api_client.find(query="test", limit=0)
-        assert find_resp.status_code == 200, (
-            f"zero limit should return error or empty results, got {find_resp.status_code}"
-        )
+        assert find_resp.status_code == 400, find_resp.text
+        assert find_resp.json()["error"]["code"] == "INVALID_ARGUMENT"
 
     def test_content_write_without_uri(self, api_client):
         endpoint = "/api/v1/content/write"

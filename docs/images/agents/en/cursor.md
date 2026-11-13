@@ -18,6 +18,16 @@
 1. Open **Customize → MCPs** and confirm both **openviking User** and **openviking Plugin** are visible.
 2. Open **Customize → Hooks** and confirm the **openviking-memory** entry is visible.
 
+## Step 3: Start using
+
+Start a new Cursor session and send:
+
+```text
+Follow https://docs.openviking.net/agents/en/onboarding.md to walk me through my first use of OpenViking.
+```
+
+The agent checks the connection and walks you through the first use.
+
 ## Troubleshoot
 
 | Problem | Fix |

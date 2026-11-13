@@ -35,6 +35,7 @@ from openviking.parse.output import create_parse_artifact_writer
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.media.constants import AUDIO_EXTENSIONS
 from openviking.parse.parsers.media.naming import resolve_media_names
+from openviking.parse.temp import get_parser_download_temp_dir
 from openviking_cli.utils.config.parser_config import AudioConfig
 from openviking_cli.utils.logger import get_logger
 
@@ -197,7 +198,12 @@ class AudioParser(BaseParser):
             if not suffix:
                 suffix = ".wav"
 
-            with tempfile.NamedTemporaryFile(mode="wb", suffix=suffix, delete=False) as temp_file:
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                suffix=suffix,
+                delete=False,
+                dir=get_parser_download_temp_dir(),
+            ) as temp_file:
                 temp_file.write(audio_bytes)
                 temp_file_path = temp_file.name
 

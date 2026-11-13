@@ -14,13 +14,15 @@
  *
  * Beacons are fire-and-forget: failures are swallowed and never surface to the
  * page.
+ *
+ * Events are also sent to Google Analytics when gtag is loaded (see config.ts).
  */
 
 const COUNTER_URL = (
   (import.meta.env.VITE_COUNTER_URL as string | undefined) ?? ''
 ).replace(/\/+$/, '')
 
-export type TrackEventName = 'docs-search'
+export type TrackEventName = 'docs-search' | 'copy-code' | 'copy-agent-prompt' | 'copy-markdown'
 
 function resolveSite(): string {
   if (typeof window === 'undefined') return 'docs'
@@ -82,7 +84,16 @@ export function trackPageView(pathname: string): void {
   beacon(pathname, ref)
 }
 
-/** Report a user action as an /e/ pseudo-page. */
-export function trackEvent(name: TrackEventName): void {
+/** Report a user action as an /e/ pseudo-page and a GA event (GA names allow no hyphens). */
+export function trackEvent(name: TrackEventName, params?: Record<string, string>): void {
   beacon(`/e/${name}`)
+  try {
+    window.gtag?.('event', name.replaceAll('-', '_'), params)
+  } catch {
+    // Tracking must never break the page.
+  }
+}
+
+declare global {
+  interface Window { gtag?: (...args: unknown[]) => void }
 }

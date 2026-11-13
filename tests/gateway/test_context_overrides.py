@@ -1,0 +1,270 @@
+"""X-OpenViking-Context: per-request overrides of the key's context profile."""
+
+import json
+
+import orjson
+import pytest
+from aiohttp import web
+from conftest import make_due
+
+CHAT = "/v1/chat/completions"
+
+
+def headers(key, session, context=None):
+    values = {"Authorization": "Bearer " + key["key"], "X-OpenViking-Session": session}
+    if context is not None:
+        values["X-OpenViking-Context"] = (
+            context if isinstance(context, str) else json.dumps(context)
+        )
+    return values
+
+
+def message(text):
+    return {"model": "model", "messages": [{"role": "user", "content": text}]}
+
+
+def openviking_calls(app):
+    """Record the OpenViking paths the gateway calls, besides its health checks."""
+    calls = []
+
+    async def handler(request):
+        if request.path.startswith("/api/"):
+            calls.append(request.path)
+
+    app.state.test_backend["handler"] = handler
+    return calls
+
+
+async def test_override_takes_effect_and_is_logged(running_gateway):
+    app, client, admin, key, seen, _ = running_gateway
+    calls = openviking_calls(app)
+    response = await client.post(CHAT, headers=headers(key, "plain"), json=message("Deploy?"))
+    assert response.status_code == 200, response.text
+    assert "/api/v1/search/search" in calls
+    calls.clear()
+    response = await client.post(
+        CHAT, headers=headers(key, "no-recall", {"recall": False}), json=message("Deploy?")
+    )
+    assert response.status_code == 200, response.text
+    assert "/api/v1/search/search" not in calls
+    assert "x-openviking-context" not in {name.lower() for name in seen[-1][2]}
+    logs = (await client.get("/admin/logs", headers=admin)).json()
+    assert logs[0]["context_override"] == ["recall"]
+    assert "context_override" not in logs[1]
+
+
+async def test_override_only_narrows_tool_access(running_gateway):
+    _, client, admin, key, seen, _ = running_gateway
+
+    async def profile(settings):
+        response = await client.put(
+            "/admin/policies/default", headers=admin, json={"name": "Default", **settings}
+        )
+        assert response.status_code == 200, response.text
+
+    async def offered(session, context=None):
+        response = await client.post(
+            CHAT, headers=headers(key, session, context), json=message("Save a note")
+        )
+        assert response.status_code == 200, response.text
+        return {tool["function"]["name"] for tool in orjson.loads(seen[-1][1]).get("tools", [])}
+
+    await profile({"gateway_tools": True, "disabled_tools": ["forget"]})
+    saved = await offered("saved")
+    assert "openviking_write" in saved and "openviking_forget" not in saved
+    narrowed = await offered("narrowed", {"disabled_tools": ["write"]})
+    assert "openviking_find" in narrowed
+    assert not {"openviking_write", "openviking_forget"} & narrowed
+    assert "openviking_forget" not in await offered("cleared", {"disabled_tools": []})
+    assert not await offered("off", {"gateway_tools": False})
+    await profile({"gateway_tools": False})
+    assert not await offered("on", {"gateway_tools": True})
+
+
+@pytest.mark.parametrize(
+    "context",
+    [
+        "{",
+        "[]",
+        {"bogus": 1},
+        {"max_tokens": 10},
+        {"window_soft_ratio": 0.9},
+        {"name": "Other"},
+        {"client_overrides": False},
+        '{"idle_seconds": 1e999}',
+        '{"session_max_tokens": NaN}',
+        {"commit_tokens": 10**30},
+        {"quotas": {"events": -1}},
+        {"capture_memory_types": "events"},
+        {"recall_peer_scope": "none"},
+    ],
+)
+async def test_invalid_override_is_rejected(running_gateway, context):
+    app, client, _, key, seen, _ = running_gateway
+    calls = openviking_calls(app)
+    response = await client.post(CHAT, headers=headers(key, "bad", context), json=message("Hi"))
+    assert response.status_code == 400
+    assert response.json()["reason"] == "context_override_invalid"
+    assert not seen and not calls
+
+
+async def capture_sessions(app, client, key, session, context, status=200):
+    """Save one finished turn and return the bodies of the OpenViking sessions it creates."""
+    created = []
+
+    async def handler(request):
+        if request.path == "/api/v1/sessions":
+            created.append(await request.json())
+            if status != 200:
+                return web.json_response({"status": "error"}, status=status)
+        return None
+
+    app.state.test_backend["handler"] = handler
+    body = message("Remember the blue cluster")
+    response = await client.post(CHAT, headers=headers(key, session, context), json=body)
+    assert response.status_code == 200, response.text
+    body["messages"] += [
+        {"role": "assistant", "content": "hello"},
+        {"role": "user", "content": "And the red one"},
+    ]
+    response = await client.post(CHAT, headers=headers(key, session, context), json=body)
+    assert response.status_code == 200, response.text
+    await make_due(app.state.store)
+    for _ in range(3):
+        await app.state.worker.once()
+    return created
+
+
+async def test_capture_memory_types_reach_the_openviking_session(running_gateway):
+    app, client, _, key, _, writes = running_gateway
+    created = await capture_sessions(app, client, key, "default-types", None)
+    assert created and all("memory_types" not in body["memory_policy"] for body in created)
+    first = {body["session_id"] for body in created}
+    writes.clear()
+    created = await capture_sessions(
+        app, client, key, "events-only", {"capture_memory_types": ["events"]}
+    )
+    policies = [body["memory_policy"] for body in created if body["session_id"] not in first]
+    assert policies and all(policy["memory_types"] == ["events"] for policy in policies)
+    assert writes
+
+
+async def test_rejected_capture_memory_types_stop_delivery(running_gateway):
+    app, client, admin, key, _, writes = running_gateway
+    created = await capture_sessions(
+        app, client, key, "unknown-type", {"capture_memory_types": ["bogus"]}, status=400
+    )
+    assert created and not writes
+    logs = (await client.get("/admin/logs", headers=admin)).json()
+    capture = [log for log in logs if log["kind"] == "capture"]
+    assert capture[0]["capture_status"] == "retrying"
+    assert capture[0]["capture_reason"] == "openviking_http_400"
+
+
+async def test_override_needs_the_profile_switch(running_gateway):
+    _, client, admin, key, seen, _ = running_gateway
+    response = await client.put(
+        "/admin/policies/default",
+        headers=admin,
+        json={"name": "Locked", "gateway_tools": False, "client_overrides": False},
+    )
+    assert response.status_code == 200, response.text
+    response = await client.post(
+        CHAT, headers=headers(key, "locked", {"recall": False}), json=message("Hi")
+    )
+    assert response.status_code == 403
+    assert response.json()["reason"] == "context_override_not_allowed"
+    assert not seen
+    response = await client.post(CHAT, headers=headers(key, "locked"), json=message("Hi"))
+    assert response.status_code == 200, response.text
+    # Requests the gateway passes through unchanged check the header too.
+    response = await client.post(
+        CHAT,
+        headers={**headers(key, "locked", "garbage"), "Content-Encoding": "identity"},
+        json=message("Hi"),
+    )
+    assert response.status_code == 403
+
+
+async def test_profiles_saved_before_the_switch_accept_overrides(running_gateway):
+    app, client, _, key, _, _ = running_gateway
+    policy = await app.state.management.get("tenant", "policies", "default")
+    policy.pop("client_overrides")
+    await app.state.management.save("tenant", "policies", "default", policy)
+    response = await client.post(
+        CHAT, headers=headers(key, "legacy", {"recall": False}), json=message("Hi")
+    )
+    assert response.status_code == 200, response.text
+
+
+async def test_large_stored_settings_keep_working(running_gateway):
+    app, client, _, key, _, _ = running_gateway
+    policy = await app.state.management.get("tenant", "policies", "default")
+    large = {"quotas": {"events": 5000}, "tool_max_rounds": 20000, "session_max_tokens": 2 * 10**9}
+    await app.state.management.save("tenant", "policies", "default", {**policy, **large})
+    calls = openviking_calls(app)
+    response = await client.post(CHAT, headers=headers(key, "large"), json=message("Deploy?"))
+    assert response.status_code == 200, response.text
+    assert "/api/v1/search/search" in calls
+    response = await client.post(
+        CHAT, headers=headers(key, "large-override", {"recall": False}), json=message("Hi")
+    )
+    assert response.status_code == 200, response.text
+
+
+async def test_conversation_keeps_the_policy_it_started_with(running_gateway):
+    app, client, _, key, _, _ = running_gateway
+    calls = openviking_calls(app)
+    body = message("Deploy?")
+    response = await client.post(CHAT, headers=headers(key, "frozen", {"recall": False}), json=body)
+    assert response.status_code == 200, response.text
+    body["messages"] += [
+        {"role": "assistant", "content": "hello"},
+        {"role": "user", "content": "And the cluster?"},
+    ]
+    response = await client.post(CHAT, headers=headers(key, "frozen", {"recall": True}), json=body)
+    assert response.status_code == 200, response.text
+    assert "/api/v1/search/search" not in calls
+
+
+async def test_missing_passthrough_key_fails_before_side_effects(running_gateway):
+    app, client, _, key, seen, _ = running_gateway
+    upstream = await app.state.management.get("tenant", "upstreams", "chat")
+    await app.state.management.save(
+        "tenant", "upstreams", "chat", {**upstream, "api_key": "", "auth_mode": "passthrough"}
+    )
+    calls = openviking_calls(app)
+    response = await client.post(CHAT, headers=headers(key, "byok"), json=message("Hi"))
+    assert response.status_code == 401
+    assert not seen and not calls
+    with app.state.store.connect() as c:
+        assert not list(c.execute("SELECT 1 FROM replay"))
+    response = await client.post(
+        CHAT,
+        headers={**headers(key, "byok"), "X-OpenViking-Upstream-Key": "client-secret"},
+        json=message("Hi"),
+    )
+    assert response.status_code == 200, response.text
+    assert seen[-1][2]["Authorization"] == "Bearer client-secret"
+
+
+async def test_pinned_conversation_keeps_its_upstream_key(running_gateway):
+    app, client, _, key, seen, _ = running_gateway
+    body = message("Hi")
+    response = await client.post(CHAT, headers=headers(key, "pinned"), json=body)
+    assert response.status_code == 200, response.text
+    # A higher-priority passthrough upstream added later does not take over the conversation.
+    chat = await app.state.management.get("tenant", "upstreams", "chat")
+    await app.state.management.save(
+        "tenant",
+        "upstreams",
+        "anthropic",
+        {**chat, "id": "anthropic", "api_key": "", "auth_mode": "passthrough", "priority": 10},
+    )
+    body["messages"] += [
+        {"role": "assistant", "content": "hello"},
+        {"role": "user", "content": "And now?"},
+    ]
+    response = await client.post(CHAT, headers=headers(key, "pinned"), json=body)
+    assert response.status_code == 200, response.text
+    assert seen[-1][2]["Authorization"] == "Bearer model-secret"

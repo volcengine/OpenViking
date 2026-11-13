@@ -326,7 +326,7 @@ Manifest 中声明了 runtime slash alias：
 用途：手动把文件、目录、URL、Git 仓库或 OpenClaw media attachment 导入 OpenViking resources。
 
 ```text
-/add-resource <source> [--to URI] [--parent URI] [--reason TEXT] [--instruction TEXT] [--wait] [--timeout SEC]
+/add-resource <source> [--to URI] [--parent URI] [--reason TEXT] [--instruction TEXT] [--wait]
 ```
 
 参数：
@@ -339,7 +339,6 @@ Manifest 中声明了 runtime slash alias：
 | `--reason TEXT` | 否 | 导入原因。 |
 | `--instruction TEXT` | 否 | 导入处理指令。 |
 | `--wait` | 否 | 等待服务端处理完成。 |
-| `--timeout SEC` | 否 | `--wait` 时的等待超时秒数。 |
 
 示例：
 
@@ -354,7 +353,7 @@ Manifest 中声明了 runtime slash alias：
 用途：手动导入 `SKILL.md` 文件或 skill 目录。
 
 ```text
-/add-skill <source> [--wait] [--timeout SEC]
+/add-skill <source> [--wait]
 ```
 
 参数：
@@ -363,12 +362,11 @@ Manifest 中声明了 runtime slash alias：
 | --- | --- | --- |
 | `<source>` | 是 | `SKILL.md` 文件或 skill 目录。 |
 | `--wait` | 否 | 等待服务端处理完成。 |
-| `--timeout SEC` | 否 | `--wait` 时的等待超时秒数。 |
 
 示例：
 
 ```text
-/add-skill ./skills/my-skill --wait --timeout 30
+/add-skill ./skills/my-skill --wait
 ```
 
 ### 6.3 `/ov-search`
@@ -431,7 +429,7 @@ Manifest 中声明了 runtime slash alias：
 
 | Tool | 参数 | 用途 |
 | --- | --- | --- |
-| `add_skill` | `source?`、`data?`、`wait?`、`timeout?` | 导入或注册 OpenViking agent skill。 |
+| `add_skill` | `source?`、`data?`、`wait?` | 导入或注册 OpenViking agent skill。 |
 | `ov_search` | `query`、`uri?`、`limit?` | 搜索 OpenViking resources 和 skills。 |
 | `ov_read` | `uri` | 读取精确 `viking://...` OpenViking URI 的完整内容。 |
 | `ov_multi_read` | `uris` | 一次读取多个精确 `viking://...` URI，适合 overview + 同级切片。 |
@@ -450,7 +448,7 @@ Manifest 中声明了 runtime slash alias：
 
 | Tool | 参数 | 默认 | 开启方式 | 用途 |
 | --- | --- | --- | --- | --- |
-| `add_resource` | `source`、`to?`、`parent?`、`reason?`、`instruction?`、`wait?`、`timeout?` | 不注册 | `enableAddResourceTool=true`，且被 `enabledTools` 选中 | 允许 Agent 导入资源。 |
+| `add_resource` | `source`、`to?`、`parent?`、`reason?`、`instruction?`、`wait?` | 不注册 | `enableAddResourceTool=true`，且被 `enabledTools` 选中 | 允许 Agent 导入资源。 |
 
 安全边界：搜索、读取、trace 和资源消费路径应优先使用 `ov_search` / `ov_read`，不要让 Agent 在检索阶段自动导入新资源，除非用户明确授权。
 

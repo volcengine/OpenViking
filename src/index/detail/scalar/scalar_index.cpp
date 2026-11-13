@@ -103,6 +103,11 @@ int ScalarIndex::dump(const std::filesystem::path& dir) {
   std::ofstream output(pt, std::ios::binary);
   field_sets_->serialize_set_to_stream(output);
   output.close();
+
+  if (!output) {
+    throw std::runtime_error("Failed to write scalar index file: " + pt.string());
+  }
+
   return 0;
 }
 

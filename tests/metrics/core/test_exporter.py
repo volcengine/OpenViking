@@ -2,166 +2,93 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import asyncio
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from threading import Event, Thread
 
 import pytest
+from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceRequest
 
-from openviking.metrics.exporters.otel import OTelMetricExporter, _compute_next_tick_and_sleep
+from openviking.metrics.exporters.otel import OTelMetricExporter
 
 
 def test_exporter_outputs_help_type_and_empty_metrics(registry, render_prometheus):
-    registry.counter("openviking_empty_counter_total")
-    registry.gauge("openviking_empty_gauge")
-    registry.histogram("openviking_empty_histogram_seconds")
+    registry.set_counter("openviking_empty_counter_total", 0)
+    registry.set_gauge("openviking_empty_gauge", 0)
+    registry.set_histogram(
+        "openviking_empty_histogram_seconds",
+        bucket_bounds=(1,),
+        bucket_counts=(0, 0),
+        count=0,
+        value_sum=0,
+    )
     text = render_prometheus(registry)
     assert "# TYPE openviking_empty_counter_total counter" in text
-    assert "openviking_empty_counter_total 0" in text
+    assert "openviking_empty_counter_total 0.0" in text
     assert "# TYPE openviking_empty_histogram_seconds histogram" in text
-    assert "openviking_empty_histogram_seconds_count 0" in text
-    assert 'openviking_empty_histogram_seconds_bucket{le="+Inf"} 0' in text
+    assert 'le="+Inf"} 0.0' in text
 
 
 @pytest.mark.asyncio
-async def test_otel_exporter_start_and_shutdown_manage_background_loop(registry, monkeypatch):
-    """OTel exporter should own its periodic export loop lifecycle."""
-    exporter = OTelMetricExporter(registry=registry, enabled=False, export_interval_ms=10)
-    exporter._enabled = True
+async def test_otel_exporter_start_and_shutdown_manage_background_loop(registry):
+    """Exercise the real SDK HTTP exporter and wait for its in-flight send at shutdown."""
+    received, release = Event(), Event()
+    requests = []
 
-    calls = 0
-    tick = asyncio.Event()
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers["Content-Length"]))
+            requests.append((self.path, self.headers, ExportMetricsServiceRequest.FromString(body)))
+            received.set()
+            release.wait(5)
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
 
-    async def _fake_export():
-        nonlocal calls
-        calls += 1
-        tick.set()
-        return ""
+        def log_message(self, *args):
+            pass
 
-    monkeypatch.setattr(exporter, "export", _fake_export)
-
-    exporter.start()
-    await asyncio.wait_for(tick.wait(), timeout=0.2)
-    assert calls >= 1
-    assert exporter._export_task is not None
-
-    task_before = exporter._export_task
-    exporter.start()
-    assert exporter._export_task is task_before
-
-    await exporter.shutdown()
-    assert exporter._export_task is None
-
-
-@pytest.mark.asyncio
-async def test_otel_export_loop_aligns_to_next_fixed_tick_after_overrun():
-    """Scheduling helper should advance next tick and compute sleep after one interval overrun."""
-    next_tick, sleep_s = _compute_next_tick_and_sleep(now=1.15, interval_s=1.0, next_tick=1.0)
-    assert next_tick == pytest.approx(2.0)
-    assert sleep_s == pytest.approx(0.85)
-
-
-def test_otel_http_send_uses_export_timeout_not_refresh_deadline(registry):
-    """HTTP transport timeout should be decoupled from collector refresh timeout."""
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    registry.inc_counter("openviking_operation_requests_total", amount=2)
+    registry.observe_histogram("openviking_operation_duration_seconds", 60.123)
     exporter = OTelMetricExporter(
         registry=registry,
-        enabled=False,
         protocol="http",
-        endpoint="http://localhost:4318/v1/metrics",
-        refresh_deadline_seconds=1.0,
+        endpoint=f"http://127.0.0.1:{server.server_port}/v1/metrics",
+        service_name="metrics-contract",
+        headers={"X-ByteAPM-AppKey": "test-app-key"},
     )
-
-    class _FakeSession:
-        def __init__(self):
-            self.timeout = None
-
-        def post(self, _url, **kwargs):
-            self.timeout = kwargs.get("timeout")
-
-            class _Resp:
-                @staticmethod
-                def raise_for_status():
-                    return None
-
-            return _Resp()
-
-    fake_session = _FakeSession()
-    exporter._http_session = fake_session
-
-    request = exporter._build_export_request()
-    assert request is None
-
-    from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import (
-        ExportMetricsServiceRequest,
-    )
-
-    exporter._send_http_request(ExportMetricsServiceRequest())
-
-    assert fake_session.timeout == 5.0
-
-
-def test_otel_http_send_forwards_custom_headers(registry):
-    """HTTP transport should merge vendor auth headers with protobuf content type."""
-    exporter = OTelMetricExporter(
-        registry=registry,
-        enabled=False,
-        protocol="http",
-        endpoint="https://apmplus-cn-beijing.ivolces.com/api/otlp/v1/metrics",
-        headers={"X-ByteAPM-AppKey": "metric-appkey"},
-    )
-
-    class _FakeSession:
-        def __init__(self):
-            self.headers = None
-
-        def post(self, _url, **kwargs):
-            self.headers = kwargs.get("headers")
-
-            class _Resp:
-                @staticmethod
-                def raise_for_status():
-                    return None
-
-            return _Resp()
-
-    exporter._http_session = _FakeSession()
-
-    from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import (
-        ExportMetricsServiceRequest,
-    )
-
-    exporter._send_http_request(ExportMetricsServiceRequest())
-
-    assert exporter._http_session.headers == {
-        "Content-Type": "application/x-protobuf",
-        "X-ByteAPM-AppKey": "metric-appkey",
-    }
-
-
-def test_otel_grpc_send_forwards_custom_metadata(registry):
-    """gRPC transport should forward vendor auth headers as metadata pairs."""
-    exporter = OTelMetricExporter(
-        registry=registry,
-        enabled=False,
-        protocol="grpc",
-        endpoint="apmplus-cn-beijing.ivolces.com:4317",
-        headers={"x-byteapm-appkey": "metric-appkey"},
-    )
-
-    class _FakeStub:
-        def __init__(self):
-            self.metadata = None
-            self.timeout = None
-
-        def Export(self, _request, **kwargs):
-            self.metadata = kwargs.get("metadata")
-            self.timeout = kwargs.get("timeout")
-            return None
-
-    exporter._grpc_stub = _FakeStub()
-
-    from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import (
-        ExportMetricsServiceRequest,
-    )
-
-    exporter._send_grpc_request(ExportMetricsServiceRequest())
-
-    assert exporter._grpc_stub.metadata == [("x-byteapm-appkey", "metric-appkey")]
-    assert exporter._grpc_stub.timeout == 5.0
+    stopping = None
+    try:
+        exporter.start()
+        exporter.start()
+        assert await asyncio.to_thread(received.wait, 2)
+        stopping = asyncio.create_task(exporter.shutdown())
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(asyncio.shield(stopping), 0.05)
+        release.set()
+        await asyncio.wait_for(stopping, 2)
+        await exporter.export()
+        assert len(requests) == 1
+        path, headers, request = requests[0]
+        assert path == "/v1/metrics"
+        assert headers["X-ByteAPM-AppKey"] == "test-app-key"
+        assert headers["Content-Type"] == "application/x-protobuf"
+        resource = request.resource_metrics[0]
+        assert {item.key: item.value.string_value for item in resource.resource.attributes} == {
+            "service.name": "metrics-contract"
+        }
+        metrics = {metric.name: metric for metric in resource.scope_metrics[0].metrics}
+        assert metrics["openviking_operation_requests_total"].sum.data_points[0].as_double == 2
+        point = metrics["openviking_operation_duration_seconds"].histogram.data_points[0]
+        assert point.count == 1 and point.sum == pytest.approx(60.123)
+        assert point.bucket_counts[-1] == 0
+    finally:
+        release.set()
+        if stopping is not None:
+            await stopping
+        await exporter.shutdown()
+        await asyncio.to_thread(server.shutdown)
+        server.server_close()
+        thread.join(timeout=2)

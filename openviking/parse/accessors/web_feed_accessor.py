@@ -37,6 +37,12 @@ from urllib.parse import unquote, urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 
 from openviking.parse.base import lazy_import
+from openviking.parse.network import (
+    ParserNetworkContext,
+    ParserNetworkOperation,
+    create_parser_httpx_client,
+)
+from openviking.parse.temp import get_parser_download_temp_dir
 from openviking.utils.network_guard import build_httpx_request_validation_hooks
 from openviking_cli.utils.logger import get_logger
 
@@ -288,23 +294,32 @@ class WebFeedAccessor(DataAccessor):
         include = kwargs.get("include")
         exclude = kwargs.get("exclude")
 
-        temp_dir = await asyncio.to_thread(tempfile.mkdtemp, prefix="ov_webfeed_")
+        temp_dir = await asyncio.to_thread(
+            tempfile.mkdtemp,
+            prefix="ov_webfeed_",
+            dir=get_parser_download_temp_dir(),
+        )
         try:
             client_kwargs = _build_httpx_client_kwargs(request_validator, cfg["request_timeout"])
             httpx = lazy_import("httpx")
-            async with httpx.AsyncClient(**client_kwargs) as client:
+            client = create_parser_httpx_client(
+                ParserNetworkContext(ParserNetworkOperation.HTTP_RESOURCE, source_url),
+                client_cls=httpx.AsyncClient,
+                **client_kwargs,
+            )
+            async with client as active_client:
                 # The given URL may already be a sitemap/feed, or it may be a plain
                 # page / bare domain (e.g. args={"site": True} on "https://t0saki.com").
                 # In the latter case, auto-discover the site's sitemap/RSS.
-                feed_url, prefetched = await self._resolve_feed_source(source_url, client)
+                feed_url, prefetched = await self._resolve_feed_source(source_url, active_client)
                 entries, feed_kind = await self._collect(
-                    feed_url, client, cfg, prefetched=prefetched
+                    feed_url, active_client, cfg, prefetched=prefetched
                 )
                 if not entries:
                     raise RuntimeError(f"No pages found in sitemap/feed: {feed_url}")
 
                 entries = self._filter_entries(entries, feed_url, cfg, include, exclude)
-                entries = await self._apply_robots(entries, feed_url, client, cfg)
+                entries = await self._apply_robots(entries, feed_url, active_client, cfg)
 
                 if len(entries) > cfg["max_pages"]:
                     logger.warning(
@@ -318,7 +333,7 @@ class WebFeedAccessor(DataAccessor):
                 if not entries:
                     raise RuntimeError(f"No ingestible pages remained after filtering: {feed_url}")
 
-                pages = await self._mirror(entries, client, temp_dir, cfg)
+                pages = await self._mirror(entries, active_client, temp_dir, cfg)
 
             if not pages:
                 raise RuntimeError(f"Failed to fetch any page from: {feed_url}")
@@ -788,11 +803,16 @@ async def _discover_feed_hint(url: str, request_validator) -> Optional[str]:
 
     httpx = lazy_import("httpx")
     client_kwargs = _build_httpx_client_kwargs(request_validator, 5.0)
-    async with httpx.AsyncClient(**client_kwargs) as client:
+    client = create_parser_httpx_client(
+        ParserNetworkContext(ParserNetworkOperation.HTTP_RESOURCE, url),
+        client_cls=httpx.AsyncClient,
+        **client_kwargs,
+    )
+    async with client as active_client:
         # Fetch the page once for <link> autodiscovery (best-effort).
         page_content = b""
         try:
-            response = await client.get(url, headers={"User-Agent": _USER_AGENT})
+            response = await active_client.get(url, headers={"User-Agent": _USER_AGENT})
             if (
                 response.status_code < 400
                 and "html" in response.headers.get("content-type", "").lower()
@@ -801,9 +821,9 @@ async def _discover_feed_hint(url: str, request_validator) -> Optional[str]:
         except Exception:
             pass
 
-        for candidate in await _gather_feed_candidates(client, url, page_content):
+        for candidate in await _gather_feed_candidates(active_client, url, page_content):
             try:
-                response = await client.get(candidate, headers={"User-Agent": _USER_AGENT})
+                response = await active_client.get(candidate, headers={"User-Agent": _USER_AGENT})
                 if response.status_code >= 400:
                     continue
                 info = _classify_and_count(response.content)

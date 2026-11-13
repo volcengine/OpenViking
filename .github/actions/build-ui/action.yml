@@ -1,0 +1,31 @@
+name: Build UI
+description: Install, lint, type-check, and build the UI library and documentation
+runs:
+  using: composite
+  steps:
+    - name: Set up Node.js for UI
+      uses: actions/setup-node@v6
+      with:
+        node-version: 22
+        cache: npm
+        cache-dependency-path: frontend/package-lock.json
+
+    - name: Install UI dependencies
+      shell: bash
+      run: npm ci --prefix frontend
+
+    - name: Lint and type-check UI
+      shell: bash
+      run: npm run lint --prefix frontend
+
+    - name: Test UI library
+      shell: bash
+      run: npm test --prefix frontend
+
+    - name: Build UI library and docs
+      shell: bash
+      run: npm run build --prefix frontend
+
+    - name: Check UI docs output
+      shell: bash
+      run: test -f frontend/docs/doc_build/index.html

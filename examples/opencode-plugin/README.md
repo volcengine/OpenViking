@@ -1,5 +1,7 @@
 # OpenViking OpenCode Plugin
 
+> **Working memory is now opt-in.** Update installed plugins separately from the OV server, then restart the host. Existing explicit settings still take precedence. See the [default-off upgrade guide](../../docs/en/guides/working-memory-default-off.md) for native history, re-enabling WM, and old-conversation handoffs.
+
 A unified OpenCode plugin for OpenViking repository retrieval and long-term memory.
 
 > **Requires an OpenViking server with `viking://~` home-alias support.** Recall targets the
@@ -20,7 +22,7 @@ The plugin uses OpenCode hooks for lifecycle behavior and registers OpenViking's
 - On OpenCode v2, reads the structured session context at execution boundaries so tool calls and results are captured too.
 - Commits sessions at lifecycle boundaries for memory extraction.
 - Automatically recalls relevant memories and injects them as hidden synthetic context for the current user message.
-- Ships the `openviking-memory`, `openviking-skills`, and `ov-experience-memory` skills, which tell the agent when to use which OpenViking tool. They are added to OpenCode's skill paths together with the MCP server, and left out in hook-only mode.
+- Ships the `openviking-memory`, `openviking-skills`, `ov-experience-memory`, and `openviking-rule-search` skills, which tell the agent when to use which OpenViking tool. They are added to OpenCode's skill paths together with the MCP server, and left out in hook-only mode.
 - Blocks accidental local filesystem reads of `viking://` URIs and points the agent back to `openviking_read`, `openviking_glob`, or `openviking_search`. Shell commands that carry a `viking://` URI still run, with a notice appended to their output.
 
 ## Files
@@ -66,9 +68,19 @@ openviking-server --config ~/.openviking/ov.conf
 
 ## Installation
 
+### One-line Installer (Recommended)
+
+OpenCode shares the unified installer with the other memory plugins. It asks which harnesses to install and for your OpenViking credentials:
+
+```bash
+curl -fsSL https://openviking.ai/install | bash
+```
+
+The installer copies the plugin into `~/.config/opencode/plugins/` as a local file plugin, writes the `openviking` MCP server entry into `~/.config/opencode/opencode.json`, and configures `~/.openviking/ovcli.conf`.
+
 ### Published Package
 
-Normal users should enable it through OpenCode's package plugin mechanism:
+To enable it through OpenCode's package plugin mechanism instead:
 
 The published npm package is `@openviking/opencode-plugin`; verify availability with:
 
@@ -141,7 +153,6 @@ Behaviour knobs live in `~/.openviking/ovcli.conf` beside the connection fields,
       "recallTokenBudget": 2000,
       "minQueryLength": 3,
       "commitTokenThreshold": 20000,
-      "commitKeepRecentCount": 10,
       "profileTokenBudget": 10000,
       "skillCatalog": true,
       "skillCatalogTokenBudget": 1200,
@@ -212,9 +223,11 @@ OpenCode v2 has no plugin toast API. Service availability and other non-fatal no
 OpenCode sees the OpenViking MCP server as `openviking`, so tool names are namespaced with `openviking_`.
 
 - `openviking_search`: deep semantic retrieval across memories, resources, and skills; use `mode="context"` for balanced, injection-ready context.
+- `openviking_rule_search`: pass `task_context` to check compiled Rules before a constrained action or response. Requires a server advertising `rule_search`; returns complete Rules with their conditions and exceptions.
 - `openviking_find`: fast semantic retrieval.
 - `openviking_remember`: store important facts or decisions for memory extraction.
 - `openviking_read`: read one or more `viking://` files.
+- `openviking_download`: get a one-time URL for fetching a file's original bytes with `curl`.
 - `openviking_list`: list a `viking://` directory.
 - `openviking_tree`: show a `viking://` directory tree.
 - `openviking_grep`: exact text or regex search.

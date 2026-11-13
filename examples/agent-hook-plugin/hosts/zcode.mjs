@@ -17,6 +17,7 @@ export const zcode = {
   tracksPendingPrompt: true,
   capturesOnlyWhenEnabled: true,
   detachesCapture: true,
+  requestBudgets: { "session-start": 25_000, "user-prompt-submit": 17_000, stop: 25_000 },
   stages: { "session-start": "start", "user-prompt-submit": "prompt", stop: "capture" },
   envelope(event, block) {
     if (!block) return null;

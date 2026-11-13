@@ -49,7 +49,7 @@ test("evaluateUriGuard denies a guarded tool and passes everything else", () => 
   const denied = evaluateUriGuard("Read", { file_path: "viking://resources/a.md" })
   assert.equal(denied?.uri, "viking://resources/a.md")
   assert.match(denied?.reason ?? "", /Use OpenViking MCP read instead/)
-  assert.match(denied?.reason ?? "", /Example: read\(uris="viking:\/\/resources\/a\.md"\)/)
+  assert.match(denied?.reason ?? "", /Example: read\(uri="viking:\/\/resources\/a\.md"\)/)
 
   assert.equal(evaluateUriGuard("Read", { file_path: "/tmp/a.md" }), null)
   assert.equal(evaluateUriGuard("Task", { file_path: "viking://resources/a.md" }), null)
@@ -69,6 +69,19 @@ test("a shell command that carries a viking:// URI gets a notice, never a deny",
     assert.match(notice?.reason ?? "", /ignore this notice/, tool)
   }
   assert.equal(evaluateUriNotice("Bash", { command: "cat /tmp/a.md" }), null)
+})
+
+test("PowerShell tools are shell tools for a host that maps them, and unguarded otherwise", () => {
+  const input = { command: "Get-Content viking://resources/a.md" }
+  // The shape dsh passes for its Windows `pwsh` tool.
+  const hints = { pwsh: { tool: "openviking_read", example: (uri) => `openviking_read(uris="${uri}")` } }
+  assert.equal(evaluateUriGuard("pwsh", input, { hints }), null)
+  assert.equal(evaluateUriNotice("pwsh", input, { hints })?.uri, "viking://resources/a.md")
+  assert.equal(evaluateUriGuard("PowerShell", input, { hints: { powershell: hints.pwsh } }), null)
+  assert.equal(evaluateUriNotice("PowerShell", input, { hints: { powershell: hints.pwsh } })?.uri, "viking://resources/a.md")
+  // The default table names neither, so hosts that rely on it see no change.
+  assert.equal(evaluateUriGuard("PowerShell", input), null)
+  assert.equal(evaluateUriNotice("PowerShell", input), null)
 })
 
 test("a file tool on a viking:// path is denied, never noticed", () => {

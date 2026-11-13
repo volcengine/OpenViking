@@ -45,6 +45,17 @@ def _drain(provider):
         time.sleep(0.01)
 
 
+def _edit(old_text, content):
+    from tools.memory_tool import MEMORY_SCHEMA
+
+    actions = MEMORY_SCHEMA["parameters"]["properties"]["action"]["enum"]
+    return {
+        "action": "patch" if "patch" in actions else "replace",
+        "old_text": old_text,
+        "new_text": content,
+    }
+
+
 @contextmanager
 def _bridge(external_provider):
     from agent.memory_manager import MemoryManager
@@ -78,7 +89,7 @@ def _bridge(external_provider):
 
 @pytest.mark.parametrize("mapped", [False, True])
 @pytest.mark.parametrize("batch", [False, True])
-@pytest.mark.parametrize("action", ["remove", "replace"])
+@pytest.mark.parametrize("action", ["remove", "edit"])
 def test_native_exact_entry_does_not_mutate_its_longer_sibling(
     external_provider, mapped, batch, action
 ):
@@ -88,8 +99,8 @@ def test_native_exact_entry_does_not_mutate_its_longer_sibling(
         assert invoke({"action": "add", "content": "Prefers tea with milk"})["success"]
         expected = dict(client.files)
         operation = {"action": action, "old_text": "Prefers tea"}
-        if action == "replace":
-            operation["new_text"] = "Prefers coffee"
+        if action == "edit":
+            operation = _edit("Prefers tea", "Prefers coffee")
             if mapped:
                 expected[exact_uri] = "Prefers coffee"
         elif mapped:
@@ -97,7 +108,7 @@ def test_native_exact_entry_does_not_mutate_its_longer_sibling(
         assert invoke(operation, batch=batch)["success"]
         assert store.user_entries == (
             ["Prefers coffee", "Prefers tea with milk"]
-            if action == "replace"
+            if action == "edit"
             else ["Prefers tea with milk"]
         )
         assert client.files == expected
@@ -105,13 +116,15 @@ def test_native_exact_entry_does_not_mutate_its_longer_sibling(
 
 def test_committed_batch_mirrors_each_intermediate_entry_in_order(external_provider):
     with _bridge(external_provider) as (home, _, client, store, invoke):
+        # An unrelated native entry must survive the mirrored batch unchanged.
+        assert invoke({"action": "add", "content": "Keep this entry"}, mirror=False)["success"]
         assert invoke(
             {"action": "add", "content": "Prefers tea"},
-            {"action": "replace", "old_text": "tea", "new_text": "Prefers coffee"},
+            _edit("Prefers tea", "Prefers coffee"),
             {"action": "remove", "old_text": "coffee"},
             batch=True,
         )["success"]
-        assert store.user_entries == []
+        assert store.user_entries == ["Keep this entry"]
         assert client.files == {}
         assert [(method, body.get("mode")) for method, body in client.requests] == [
             ("write", "create"),
@@ -132,7 +145,7 @@ def test_uncommitted_batch_has_no_remote_effect(external_provider, monkeypatch, 
         before = store._path_for("user").read_bytes()
         operations = [
             {"action": "add", "content": "Prefers tea"},
-            {"action": "replace", "old_text": "tea", "content": "Prefers coffee"},
+            _edit("Prefers tea", "Prefers coffee"),
         ]
         if failure == "missing_entry":
             operations.append({"action": "remove", "old_text": "Absent entry"})
@@ -148,7 +161,12 @@ def test_uncommitted_batch_has_no_remote_effect(external_provider, monkeypatch, 
             with pytest.raises(OSError, match="disk unavailable"):
                 invoke(*operations, batch=True)
         else:
-            assert not invoke(*operations, batch=True)["success"]
+            result = invoke(*operations, batch=True)
+            assert not result["success"]
+            expected_error = (
+                "no entry matched 'absent entry'" if failure == "missing_entry" else "chars"
+            )
+            assert expected_error in result["error"].lower()
         assert client.requests == []
         assert not getattr(provider, "_native_memory_mirror", None)
         assert not (home / "openviking/memory_mirror_registry.json").exists()
@@ -184,9 +202,7 @@ def test_index_failure_preserves_mapping_for_next_replace_and_remove(
         uri = next(iter(client.files))
         client.refresh_failure = failed_status
         with caplog.at_level("WARNING", logger="plugins.memory.openviking"):
-            assert invoke({"action": "replace", "old_text": "tea", "content": "Prefers coffee"})[
-                "success"
-            ]
+            assert invoke(_edit("Prefers tea", "Prefers coffee"))["success"]
         path = home / "openviking/memory_mirror_registry.json"
         entry = json.loads(path.read_text())["entries"][0]
         assert entry["uri"] == uri
@@ -198,10 +214,27 @@ def test_index_failure_preserves_mapping_for_next_replace_and_remove(
             for record in caplog.records
         )
         client.refresh_failure = None
-        assert invoke({"action": "replace", "old_text": "coffee", "content": "Prefers water"})[
-            "success"
-        ]
+        assert invoke(_edit("Prefers coffee", "Prefers water"))["success"]
         assert client.files == {uri: "Prefers water"}
         assert invoke({"action": "remove", "old_text": "water"})["success"]
         assert client.files == {}
         assert json.loads(path.read_text())["entries"] == []
+
+
+@pytest.mark.parametrize("batch", [False, True])
+def test_native_patch_mirrors_the_complete_updated_entry(external_provider, batch):
+    if _edit("tea", "coffee")["action"] != "patch":
+        pytest.skip("This Hermes release predates the native patch action")
+
+    with _bridge(external_provider) as (home, _, client, store, invoke):
+        assert invoke({"action": "add", "content": "Prefers tea with milk"})["success"]
+        uri = next(iter(client.files))
+        assert invoke(_edit("tea", "coffee"), batch=batch)["success"]
+        assert store.user_entries == ["Prefers coffee with milk"]
+        assert client.files == {uri: "Prefers coffee with milk"}
+        entries = json.loads((home / "openviking/memory_mirror_registry.json").read_text())[
+            "entries"
+        ]
+        assert len(entries) == 1
+        assert entries[0]["content"] == "Prefers coffee with milk"
+        assert entries[0]["uri"] == uri

@@ -1,0 +1,525 @@
+/**
+ * 作用域选择器的主题变量。默认值取自设计稿：32px 高、16px 圆角的胶囊，无描边；
+ * 每段是一个与容器同高的按钮，标签 13px、500 字重，图标与文字间距 8px。宿主可
+ * 整组覆盖，也可只改其中一条。
+ *
+ * Theme variables of the scope switcher. Defaults come from the design: a 32px
+ * tall, 16px radius pill with no outline; each level is a button as tall as the
+ * container, with 13px/500 labels and an 8px icon-to-label gap. A host overrides
+ * the whole set or any single variable.
+ */
+.ov-scope-switcher {
+  /*
+   * 层级分隔符「/」的颜色，取主题的禁用文字色：亮色下浅灰，暗色下由基线换成
+   * 对应的暗色值。
+   *
+   * Separator colour, from the theme's disabled text colour so the baseline can
+   * swap it in dark mode.
+   */
+  --ov-ui-scope-switcher-divider: var(
+    --ov-ui-color-text-disabled,
+    var(--ov-ui-text-disabled-default, #a5a7bb)
+  );
+  /*
+   * 触发器上图标与展开箭头的颜色。取主题的次级文字色：亮色下是深灰，暗色下
+   * 由基线换成浅灰，写死深色会在暗色底上几乎看不见。
+   *
+   * Icon and chevron colour. Uses the theme's secondary text colour: dark grey in
+   * light mode, and the baseline swaps it for a light grey in dark mode. A fixed
+   * dark value would be nearly invisible on a dark surface.
+   */
+  --ov-ui-scope-switcher-icon: var(
+    --ov-ui-color-text-2,
+    var(--ov-ui-text-2-default, #3f3f51)
+  );
+  /* 选项行首图标的颜色，同触发器图标。 */
+  --ov-ui-scope-switcher-option-icon: var(--ov-ui-scope-switcher-icon);
+  /* 选项行的悬停底色，取主题的悬停填充色。选中态走主色浅底。 */
+  --ov-ui-scope-switcher-row-hover: var(
+    --ov-ui-color-fill-hover,
+    var(--ov-ui-fill-hover-default, #f1f2f9)
+  );
+  /* 触发器末尾标记的底色与文字色，取主题的次级底色与次级文字色。 */
+  --ov-ui-scope-switcher-tag-background: var(
+    --ov-ui-color-bg-5,
+    var(--ov-ui-bg-5-default, #f1f2f9)
+  );
+  --ov-ui-scope-switcher-tag-text: var(
+    --ov-ui-color-text-2,
+    var(--ov-ui-text-2-default, #3f3f51)
+  );
+  /* 下拉面板宽度、选项行高度与相邻行间距。 */
+  --ov-ui-scope-switcher-panel-width: 272px;
+  --ov-ui-scope-switcher-option-height: 44px;
+  --ov-ui-scope-switcher-option-gap: 2px;
+  /* 列表高度上限：超出后在列表内滚动，面板不再跟着长高。 */
+  --ov-ui-scope-switcher-list-max-height: 288px;
+  /*
+   * 面板高度上限，由列表上限加上搜索框 28px、内边距 16px、描边 2px、间距 8px
+   * 推出。默认布局与 `renderPanel` 自定义布局共用这一条，宿主接管面板内容时也
+   * 不能把它撑高；多出来的内容在面板内滚动。
+   *
+   * Panel height cap, derived from the list cap plus the 28px search box, 16px
+   * padding, 2px outline and 8px gap. The default layout and a host's
+   * `renderPanel` share this one cap, so taking over the panel cannot make it
+   * taller; overflow scrolls inside the panel instead.
+   */
+  --ov-ui-scope-switcher-panel-max-height: calc(
+    var(--ov-ui-scope-switcher-list-max-height) + 54px
+  );
+  /* 选项行首图标底槽的尺寸与圆角。宿主渲染圆形头像时把圆角改成 50%。 */
+  --ov-ui-scope-switcher-option-icon-size: 24px;
+  --ov-ui-scope-switcher-option-icon-radius: 12px;
+
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  box-sizing: border-box;
+  height: 32px;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+  font-family: var(
+    --ov-ui-font-family,
+    'PingFang SC',
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif
+  );
+  font-size: 13px;
+  line-height: 22px;
+  letter-spacing: 0.039px;
+}
+.ov-scope-switcher *,
+.ov-scope-switcher *::before,
+.ov-scope-switcher *::after {
+  box-sizing: border-box;
+}
+
+/**
+ * 一个层级。相邻层级之间由 CSS 画出「/」分隔符，宿主无需插入额外节点，
+ * 因此各级宿主都可以直接返回自己的 `ScopeSelector`。
+ *
+ * One level. The "/" separator between adjacent levels is drawn by CSS, so a host
+ * never inserts an extra node and every level can return its own selector.
+ */
+.ov-scope-switcher__level {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 1;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+.ov-scope-switcher__level + .ov-scope-switcher__level::before {
+  content: '/';
+  margin-right: 4px;
+  color: var(
+    --ov-ui-color-text-disabled,
+    var(--ov-ui-text-disabled-default, #a5a7bb)
+  );
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 22px;
+  letter-spacing: 0.039px;
+}
+
+/**
+ * 触发器。与容器同高（32px）、16px 圆角的按钮，常态无底色无描边；悬停、聚焦或
+ * 展开时描成主色，与下拉面板里选项行的悬停反馈同源。固定层级复用同一套几何
+ * 参数，只是不可点击。
+ *
+ * The trigger. A button as tall as the container (32px) with a 16px radius,
+ * transparent and unoutlined at rest; hover, focus and expand paint its outline in
+ * the primary colour, from the same source as the option-row hover. A fixed level
+ * reuses the same geometry and is simply not clickable.
+ */
+.ov-scope-switcher__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: min(260px, 100%);
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 16px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 500;
+  vertical-align: middle;
+}
+button:not(.ov-button).ov-scope-switcher__trigger {
+  cursor: pointer;
+}
+button:not(.ov-button).ov-scope-switcher__trigger:hover:not(:disabled),
+button:not(.ov-button).ov-scope-switcher__trigger:focus-visible,
+button:not(.ov-button).ov-scope-switcher__trigger[aria-expanded='true'] {
+  border-color: var(
+    --ov-ui-color-primary,
+    var(--ov-ui-primary-default, #5252ff)
+  );
+}
+
+.ov-scope-switcher__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-scope-switcher__icon {
+  display: inline-flex;
+  flex: 0 0 14px;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: var(--ov-ui-scope-switcher-icon);
+}
+.ov-scope-switcher__icon > svg,
+.ov-scope-switcher__icon > img {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+/**
+ * 触发器末尾的标记，例如套餐名。设计稿里的面包屑标记：10px 字号、浅底、
+ * 1px 描边、4px 圆角。
+ *
+ * The tag at the end of a trigger, for example a plan name. Same treatment as the
+ * design's breadcrumb tag: 10px type, tinted surface, 1px outline, 4px radius.
+ */
+.ov-scope-switcher__tag {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border: 1px solid
+    var(--ov-ui-color-border-2, var(--ov-ui-border-2-default, #e1e4f2));
+  border-radius: 4px;
+  background: var(--ov-ui-scope-switcher-tag-background);
+  color: var(--ov-ui-scope-switcher-tag-text);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 16px;
+}
+
+.ov-scope-switcher__arrow {
+  display: inline-flex;
+  flex: 0 0 14px;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: var(--ov-ui-scope-switcher-icon);
+  transition: transform 160ms ease;
+}
+.ov-scope-switcher__trigger[aria-expanded='true'] .ov-scope-switcher__arrow {
+  transform: rotate(180deg);
+}
+/**
+ * 不可切换的层级只把箭头压淡，文字保持原样：把「不可切换」表达在箭头和
+ * 悬停反馈上，而不是整体置灰。
+ *
+ * A level that cannot be switched only dims its arrow and keeps its text: the
+ * level expresses "not switchable" through the arrow and the missing hover
+ * feedback rather than greying the whole trigger.
+ */
+.ov-scope-switcher__trigger:disabled .ov-scope-switcher__arrow {
+  opacity: 0.55;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ov-scope-switcher__arrow {
+    transition: none;
+  }
+}
+
+/**
+ * 下拉面板。宽度、圆角、阴影与内边距取自设计稿；面板高度上限跟随视口，
+ * 列表在其中滚动。
+ *
+ * The dropdown panel. Width, radius, shadow and padding come from the design; the
+ * height cap tracks the viewport and the list scrolls inside it.
+ */
+.ov-scope-switcher__panel {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  width: min(var(--ov-ui-scope-switcher-panel-width), calc(100vw - 32px));
+  max-height: min(
+    var(--ov-ui-scope-switcher-panel-max-height),
+    calc(100vh - 128px)
+  );
+  overflow: hidden;
+  padding: 8px;
+  border: 1px solid
+    var(--ov-ui-color-border-1, var(--ov-ui-border-1-default, #f0f2fa));
+  border-radius: 12px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #ffffff));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+  box-shadow:
+    0 15px 35px -2px #0000000d,
+    0 5px 15px #0000000d;
+  font-size: 13px;
+  line-height: 22px;
+  letter-spacing: 0.039px;
+}
+/**
+ * 宿主用 `renderPanel` 接管面板内容时，整块内容由宿主排布，面板只负责外壳并
+ * 让内容整体滚动；默认布局则让选项列表自己滚动，面板高度随内容收缩。
+ *
+ * When a host takes over the panel with `renderPanel`, the panel is only a shell
+ * and its whole content scrolls; the default layout instead lets the option list
+ * scroll on its own while the panel shrinks to fit.
+ */
+.ov-scope-switcher__panel--custom {
+  min-height: 0;
+  overflow-y: auto;
+}
+/**
+ * 最后一个层级的面板改从右侧展开，避免它被触发器挤到容器外。宿主若自带定位
+ * 引擎可自行翻转；这里没有，用同一条规则覆盖最常见的情形。
+ *
+ * The last level's panel opens towards the right so its trigger cannot push it
+ * out of the container. A host with its own positioning engine can flip it itself;
+ * with none here, one rule covers the common case.
+ */
+.ov-scope-switcher__level:last-child:not(:first-child)
+  .ov-scope-switcher__panel {
+  right: 0;
+  left: auto;
+}
+/**
+ * 面板内层包裹。它夹在面板与内容之间，必须一起参与 flex 收缩，否则列表的
+ * `min-height: 0` 传不下去，面板又裁掉了溢出，短视口下最后几行就够不着了。
+ *
+ * The inner wrapper between the panel and its content. It has to take part in the
+ * flex shrink chain, or the list's `min-height: 0` never propagates and the
+ * panel's clipped overflow hides the last rows in a short viewport.
+ */
+.ov-scope-switcher__panel-inner {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+.ov-scope-switcher__panel-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.ov-scope-switcher .ov-scope-switcher__search-field {
+  flex-shrink: 0;
+  gap: 4px;
+  padding-inline: 8px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  font-size: 12px;
+  line-height: 22px;
+}
+.ov-scope-switcher__search-icon {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  color: var(--ov-ui-scope-switcher-icon);
+}
+
+/**
+ * 选项列表。相邻行之间留 2px 间隙：行有 6px 圆角和悬停底色，紧贴时两个悬停
+ * 底色会连成一片，看不出是两行。
+ *
+ * The option list. Adjacent rows keep a 2px gap: rows carry a 6px radius and a
+ * hover tint, and when they touch the two tints merge into one shape.
+ */
+.ov-scope-switcher__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ov-ui-scope-switcher-option-gap);
+  min-height: 0;
+  max-height: var(--ov-ui-scope-switcher-list-max-height);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/**
+ * 一个选项行。悬停铺浅底色，选中行常驻主色浅底；悬停不覆盖选中态。行内文字
+ * 在选中时加粗。
+ *
+ * One option row. Hover tints it lightly and a selected row keeps the primary
+ * tint; hover never overrides the selection. The label bolds while selected.
+ */
+.ov-scope-switcher__option {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: var(--ov-ui-scope-switcher-option-height);
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.ov-scope-switcher__option:hover:not([aria-disabled='true']):not(
+    [aria-selected='true']
+  ),
+.ov-scope-switcher__option:focus-visible:not([aria-disabled='true']):not(
+    [aria-selected='true']
+  ) {
+  background: var(--ov-ui-scope-switcher-row-hover);
+}
+.ov-scope-switcher__option[aria-selected='true'] {
+  background: var(
+    --ov-ui-color-primary-light,
+    var(--ov-ui-primary-light-default, #f5f7ff)
+  );
+}
+.ov-scope-switcher__option .ov-scope-switcher__icon {
+  flex: 0 0 var(--ov-ui-scope-switcher-option-icon-size);
+  width: var(--ov-ui-scope-switcher-option-icon-size);
+  height: var(--ov-ui-scope-switcher-option-icon-size);
+  border: 0.5px solid
+    var(--ov-ui-color-border-1, var(--ov-ui-border-1-default, #f0f2fa));
+  border-radius: var(--ov-ui-scope-switcher-option-icon-radius);
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #ffffff));
+  color: var(--ov-ui-scope-switcher-option-icon);
+}
+/**
+ * 图标底槽内的图形保持 14px，不随底槽放大；宿主传入头像时同样以 14px 居中
+ * 展示。
+ *
+ * The glyph inside the icon well stays 14px rather than scaling with the well; a
+ * host-supplied avatar is centred at the same size.
+ */
+.ov-scope-switcher__option .ov-scope-switcher__icon > svg,
+.ov-scope-switcher__option .ov-scope-switcher__icon > img {
+  width: 14px;
+  height: 14px;
+}
+
+.ov-scope-switcher__option-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+.ov-scope-switcher__option-text > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-scope-switcher__option-text small {
+  overflow: hidden;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+  font-size: 12px;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/**
+ * 选中行只加粗文字，颜色仍与未选中一致：设计稿用字重而不是颜色区分选中，底色
+ * 已经承担了选中提示。
+ *
+ * A selected row only bolds its label and keeps the same colour as an unselected
+ * one: the design distinguishes selection by weight, with the tint carrying the
+ * state.
+ */
+.ov-scope-switcher__option[aria-selected='true']
+  .ov-scope-switcher__option-text
+  > span {
+  font-weight: 500;
+}
+/**
+ * 搜索命中片段。把命中处染成主色而不是加黄底。
+ *
+ * A search hit. The match is tinted in the primary colour rather than highlighted
+ * in yellow.
+ */
+.ov-scope-switcher__option mark {
+  padding: 0;
+  background: transparent;
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+}
+
+.ov-scope-switcher__check {
+  display: inline-flex;
+  flex: 0 0 16px;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+}
+
+.ov-scope-switcher__state {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  min-height: 88px;
+  padding: 12px;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+  font-size: 13px;
+  line-height: 22px;
+  text-align: center;
+}
+
+.ov-scope-switcher button:not(.ov-button):disabled {
+  cursor: default;
+}
+.ov-scope-switcher__option[aria-disabled='true'] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/**
+ * 焦点样式。触发器与搜索框已有描边变化，其余控件补焦点环；选项行用内描边，
+ * 避免在滚动容器里被裁掉。
+ *
+ * Focus styles. The trigger and search field already change their outline, so the
+ * ring is added for everything else; option rows use an inset ring so the
+ * scrolling container never clips it.
+ */
+.ov-scope-switcher :focus-visible {
+  outline: 2px solid
+    var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+  outline-offset: 2px;
+}
+.ov-scope-switcher__trigger:focus-visible {
+  outline: none;
+}
+.ov-scope-switcher__option:focus-visible {
+  outline-offset: -2px;
+}
+
+/**
+ * 窄屏把面板改成贴底的整宽面板，避免在手机宽度下被触发器挤到屏幕外。
+ *
+ * On narrow screens the panel becomes a full-width bottom sheet so it cannot be
+ * pushed off screen by its trigger.
+ */
+@media (max-width: 600px) {
+  .ov-scope-switcher__panel,
+  .ov-scope-switcher__level:last-child:not(:first-child)
+    .ov-scope-switcher__panel {
+    position: fixed;
+    top: auto;
+    right: 16px;
+    bottom: 16px;
+    left: 16px;
+    width: auto;
+    max-height: 60dvh;
+  }
+}

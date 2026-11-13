@@ -473,10 +473,10 @@ async def oauth_verify(
     # If the verifier has no resolvable key (ROOT, trusted-mode requester
     # without a real key), refuse to mint OAuth: there's no key to bind to,
     # so we cannot honor the "OAuth lifetime ≤ key lifetime" invariant.
-    api_key_manager = getattr(request.app.state, "api_key_manager", None)
+    manager = getattr(request.app.state, "api_key_manager", None)
     verifier_fp: Optional[str] = None
-    if api_key_manager is not None and hasattr(api_key_manager, "get_user_key_fingerprint"):
-        verifier_fp = api_key_manager.get_user_key_fingerprint(
+    if manager is not None:
+        verifier_fp = await manager.get_user_key_fingerprint(
             ctx.user.account_id, ctx.user.user_id
         )
     if not verifier_fp:

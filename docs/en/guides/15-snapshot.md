@@ -30,13 +30,21 @@ A partial commit starts from the branch's previous snapshot and preserves its ve
 
 For non-ROOT explicit-path commits, locks are selected from current target state before scope authorization and snapshot creation:
 
-| Target state | Filesystem PathLock | Cache (Redis) PathLock |
+| Target state | Filesystem PathLock | Logical-path PathLock (Redis / SQLite / PostgreSQL / memory) |
 | --- | --- | --- |
 | Existing file | Exact | Exact |
 | Existing directory | Tree | Tree |
 | Missing path | Skip locking this target | Tree |
 
 Filesystem skips missing targets to avoid creating a target directory or a missing parent chain just to store a lock token. The target still participates in snapshot deletion processing. A concurrent recreation may be missed or read before its write finishes; a later commit records the final state. ROOT bypasses this explicit-path locking flow.
+
+Snapshot selection queries the actual runtime Provider's handle mode through the
+native binding. Logical-path Providers request Tree locks for missing targets
+without creating business directories; memory coordinates only within one client.
+While the lease remains valid, a conflicting acquisition by another participant
+using the same lock authority fails. Paths may still change between the initial
+state check and lock acquisition. See [PostgreSQL PathLock configuration](../configuration/01-server.md#postgresql-pathlock)
+for shared database coordination.
 
 Snapshots are not a globally atomic view of arbitrary concurrent I/O. For a deterministic checkpoint, finish writes in the intended scope before committing. Locks coordinate only operations participating in the [PathLock protocol](../concepts/09-transaction.md).
 
@@ -177,7 +185,7 @@ client.write(
     content="# Guide\n\nv1 content\n",
     mode="create",
 )
-print(client.wait_processed(timeout=120))
+print(client.wait_processed())
 v1 = client.snapshot.commit(message="v1 initial import", paths=[root])
 if not v1.get("commit_oid"):
     raise RuntimeError(f"No snapshot created: {v1}")
@@ -189,7 +197,7 @@ client.write(
     content="# Guide\n\nv2 content\n",
     mode="replace",
 )
-print(client.wait_processed(timeout=120))
+print(client.wait_processed())
 v2 = client.snapshot.commit(message="v2 update", paths=[root])
 
 # 3. Walk history

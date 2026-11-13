@@ -16,6 +16,40 @@ OpenViking requires the following model services:
 - A valid mobile phone number or email address
 - Completed real-name authentication (Individual or Enterprise)
 
+## Configure with VolcEngine account authorization
+
+For a self-hosted server, use browser authorization to configure VLM and embedding without installing ArkCLI or copying an API key:
+
+```bash
+openviking-server init
+```
+
+In an interactive terminal, select **VolcEngine account setup (火山账号授权配置)**. Choose **Agent Plan, Coding Plan, or pay-as-you-go** first. The installer opens the official VolcEngine authorization page. Confirm the displayed device code and authorize; OpenViking retrieves matching API keys in the `default` project. A single key is used automatically; multiple keys are offered by name. If retrieval fails, retry or enter another project name within the same authorization session. An empty key list also lets you switch projects, create a key in the Ark console, or return to the setup menu. After creating a key, return to the installer to fetch it automatically, without copying it. If the browser cannot be opened, use the printed link and continue in the same authorization session.
+
+After authorization, select VLM and embedding models. Agent Plan uses the active personal subscription tier to query the control-plane `ListAgentPlanVirtualModelID` catalog and classifies direct model names by returned input/output modalities; it does not request `/api/plan/v3/models`. Other access modes use the selected endpoint’s `/models` catalog. The VLM menu only includes models classified as vision-capable. The default embedding model fills its dimension and multimodal protocol automatically. Other embedding models use input capability metadata when available; otherwise confirm the text or multimodal API protocol from the model documentation, along with the dimension. Verification uses the same protocol saved in the configuration. Catalog visibility does not establish activation or invocation access. Optional verification sends one small request per model, billed by Ark. Failed verification lets you retry model selection or return to the setup menu. Verification can also be skipped before any model requests are made.
+
+Agent Plan requires an active personal subscription and completion of required service agreements. If the subscription tier or catalog cannot be resolved, the installer offers a retry without falling back to the pay-as-you-go catalog. Pay-as-you-go also checks account activation status; models without capability metadata are currently omitted. Successful invocation does not verify subscription quota deductions.
+
+The selected access mode determines the credentials, endpoint and model defaults:
+
+| Access mode | Key source | API path | Default embedding model |
+| --- | --- | --- | --- |
+| Personal Agent Plan | Dedicated personal plan key | `/api/plan/v3` | `doubao-embedding-vision` |
+| Personal Coding Plan | Ordinary Ark key | `/api/coding/v3` | `doubao-embedding-vision` |
+| Pay-as-you-go | Ordinary Ark key | `/api/v3` | `doubao-embedding-vision-251215` |
+
+Automatic authorization currently targets Beijing. Use step-by-step setup to enter team-seat credentials or other regions. Real-name verification, agreements, subscription entitlements, model activation, balance, and project permissions still apply.
+
+Authorization uses VolcEngine's public device-code protocol. Temporary OAuth / STS credentials stay in the installer process; ArkCLI and ve CLI configuration and login state are neither read nor modified. Saving requires confirmation. The selected model API key is stored in `ov.conf` with `0600` permissions and omitted from the summary.
+
+For isolated testing, use a separate configuration file. Its data directory will be next to it:
+
+```bash
+openviking-server init --config /tmp/openviking-volcengine-test/ov.conf
+```
+
+For existing configurations, choose **Start over** to use account setup; the old configuration is backed up on save. To change one model, use **Update VLM** or **Update embedding**.
+
 ## Purchase Process
 
 ### 1. Register an Account
@@ -180,7 +214,7 @@ openviking-server
 In another terminal, configure the CLI and create `quickstart.md` using the [Quick Start](../getting-started/02-quickstart.md). Import it into an unused target:
 
 ```bash
-ov add-resource ./quickstart.md --to viking://resources/model-check --wait --timeout 120
+ov add-resource ./quickstart.md --to viking://resources/model-check --wait
 ov find "Who owns the backup process?" --uri viking://resources/model-check
 ```
 

@@ -4,7 +4,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(super) const HEARTBEAT_TTL_SECS: u64 = 30;
 pub(super) const HEARTBEAT_INTERVAL_SECS: u64 = 10;
-pub(super) const STARTUP_RECOVERY_SWEEPS: usize = 3;
+pub(super) const RECOVERY_INTERVAL_SECS: u64 = 10;
+pub(super) const RECOVERY_LEADER_TTL_SECS: u64 = 30;
 
 pub(super) const CREATE_QUEUE_SCRIPT: &str = r#"
 if redis.call('SADD', KEYS[1], ARGV[1]) == 0 then
@@ -156,6 +157,24 @@ end
 return recovered
 "#;
 
+pub(super) const ACQUIRE_RECOVERY_LEADER_SCRIPT: &str = r#"
+if redis.call('SET', KEYS[1], ARGV[1], 'NX', 'PX', ARGV[2]) then
+    return 1
+end
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    redis.call('PEXPIRE', KEYS[1], ARGV[2])
+    return 1
+end
+return 0
+"#;
+
+pub(super) const RELEASE_RECOVERY_LEADER_SCRIPT: &str = r#"
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
+end
+return 0
+"#;
+
 pub(super) struct QueueKeys {
     pub(super) meta: String,
     pub(super) pending: String,
@@ -193,6 +212,10 @@ pub(super) fn instance_key_prefix(key_prefix: &str) -> String {
 
 pub(super) fn heartbeat_key(key_prefix: &str, instance_id: &str) -> String {
     format!("{}{instance_id}:alive", instance_key_prefix(key_prefix))
+}
+
+pub(super) fn recovery_leader_key(key_prefix: &str) -> String {
+    format!("{}recovery:leader", queue_key_prefix(key_prefix))
 }
 
 pub(super) fn unix_secs(time: SystemTime) -> u64 {

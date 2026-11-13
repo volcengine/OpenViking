@@ -3,11 +3,14 @@
 //! This module provides functionality to track filesystem operations,
 //! including operation counts and latency statistics.
 
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use opentelemetry::KeyValue;
+use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
+
+use crate::metrics::duration::DurationMetrics;
 
 /// Type of filesystem operation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -92,12 +95,6 @@ impl FsOperation {
     }
 }
 
-/// Inclusive upper bounds for operation duration buckets, in nanoseconds.
-pub const DURATION_BUCKET_BOUNDS_NS: [u64; 11] = [
-    100_000, 500_000, 1_000_000, 5_000_000, 10_000_000, 50_000_000,
-    100_000_000, 500_000_000, 1_000_000_000, 5_000_000_000, 10_000_000_000,
-];
-
 /// Statistics for a single operation type
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperationStats {
@@ -107,14 +104,19 @@ pub struct OperationStats {
     pub success_count: u64,
     /// Number of failed operations.
     pub error_count: u64,
+    /// Failed operations grouped by the stable RAGFS error kind.
+    #[serde(default)]
+    pub error_counts: HashMap<String, u64>,
     /// Total time spent on this operation (nanoseconds).
     pub total_time_ns: u64,
     /// Minimum time spent (nanoseconds); u64::MAX when count is zero.
     pub min_time_ns: u64,
     /// Maximum time spent (nanoseconds).
     pub max_time_ns: u64,
+    /// Inclusive duration boundaries returned by the SDK, in nanoseconds.
+    pub duration_bucket_bounds_ns: Vec<u64>,
     /// Noncumulative duration counts; the last bucket holds overflow samples.
-    pub duration_bucket_counts: [u64; 12],
+    pub duration_bucket_counts: Vec<u64>,
 }
 
 impl Default for OperationStats {
@@ -124,29 +126,17 @@ impl Default for OperationStats {
             count: 0,
             success_count: 0,
             error_count: 0,
+            error_counts: HashMap::new(),
             total_time_ns: 0,
             min_time_ns: u64::MAX,
             max_time_ns: 0,
-            duration_bucket_counts: [0; 12],
+            duration_bucket_bounds_ns: Vec::new(),
+            duration_bucket_counts: Vec::new(),
         }
     }
 }
 
 impl OperationStats {
-    /// Record the supplied duration and success flag, updating totals in place.
-    pub fn record(&mut self, duration: Duration, success: bool) {
-        let ns = u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX);
-        self.count = self.count.saturating_add(1);
-        let outcome = if success { &mut self.success_count } else { &mut self.error_count };
-        *outcome = outcome.saturating_add(1);
-        self.total_time_ns = self.total_time_ns.saturating_add(ns);
-        self.min_time_ns = self.min_time_ns.min(ns);
-        self.max_time_ns = self.max_time_ns.max(ns);
-        let bucket = DURATION_BUCKET_BOUNDS_NS.partition_point(|bound| *bound < ns);
-        self.duration_bucket_counts[bucket] =
-            self.duration_bucket_counts[bucket].saturating_add(1);
-    }
-
     /// Return this operation's average nanoseconds, or zero when no samples exist.
     pub fn avg_time_ns(&self) -> f64 {
         if self.count == 0 {
@@ -185,15 +175,12 @@ impl FilesystemStats {
         self.operations.values().map(|s| s.count).sum()
     }
 
-    /// Reset all statistics
-    pub fn reset(&mut self) {
-        *self = Self::default();
-    }
 }
 
 /// Thread-safe statistics collector
 pub struct StatsCollector {
-    stats: Arc<RwLock<FilesystemStats>>,
+    durations: RwLock<DurationMetrics>,
+    error_counts: RwLock<HashMap<(FsOperation, &'static str), u64>>,
 }
 
 impl Default for StatsCollector {
@@ -206,25 +193,80 @@ impl StatsCollector {
     /// Create a new statistics collector
     pub fn new() -> Self {
         Self {
-            stats: Arc::new(RwLock::new(FilesystemStats::default())),
+            durations: RwLock::new(DurationMetrics::default()),
+            error_counts: RwLock::new(HashMap::new()),
         }
     }
 
-    /// Record the supplied operation, duration, and success flag; return unit.
-    pub async fn record(&self, op: FsOperation, duration: Duration, success: bool) {
-        let mut stats = self.stats.write().await;
-        stats.operations.entry(op).or_default().record(duration, success);
+    /// Record the supplied operation, duration, and optional stable error kind; return unit.
+    pub async fn record(&self, op: FsOperation, duration: Duration, error_kind: Option<&'static str>) {
+        let success = error_kind.is_none();
+        self.durations.read().await.record(
+            duration,
+            &[
+                KeyValue::new("operation", op.as_str()),
+                KeyValue::new("status", if success { "success" } else { "error" }),
+            ],
+        );
+        if let Some(error_kind) = error_kind {
+            let mut error_counts = self.error_counts.write().await;
+            *error_counts.entry((op, error_kind)).or_default() += 1;
+        }
     }
 
     /// Get a snapshot of current statistics
     pub async fn snapshot(&self) -> FilesystemStats {
-        self.stats.read().await.clone()
+        let mut snapshot = FilesystemStats::default();
+        for point in self.durations.read().await.snapshot() {
+            let operation = point
+                .attributes()
+                .find(|attribute| attribute.key.as_str() == "operation")
+                .expect("filesystem duration has an operation attribute");
+            let operation = FsOperation::all()
+                .iter()
+                .find(|op| op.as_str() == operation.value.as_str())
+                .expect("filesystem duration uses a known operation");
+            let success = point.attributes().any(|attribute| {
+                attribute.key.as_str() == "status" && attribute.value.as_str() == "success"
+            });
+            let stats = snapshot.operations.get_mut(operation).unwrap();
+            stats.count = stats.count.saturating_add(point.count());
+            if success {
+                stats.success_count = point.count();
+            } else {
+                stats.error_count = point.count();
+            }
+            stats.total_time_ns = stats.total_time_ns.saturating_add(point.sum());
+            stats.min_time_ns = stats.min_time_ns.min(point.min().unwrap_or(u64::MAX));
+            stats.max_time_ns = stats.max_time_ns.max(point.max().unwrap_or(0));
+            if stats.duration_bucket_counts.is_empty() {
+                stats.duration_bucket_bounds_ns = point.bounds().map(|bound| bound as u64).collect();
+                stats.duration_bucket_counts = point.bucket_counts().collect();
+            } else {
+                for (count, incoming) in stats
+                    .duration_bucket_counts
+                    .iter_mut()
+                    .zip(point.bucket_counts())
+                {
+                    *count = count.saturating_add(incoming);
+                }
+            }
+        }
+        for ((operation, error_kind), count) in self.error_counts.read().await.iter() {
+            snapshot
+                .operations
+                .get_mut(operation)
+                .expect("filesystem stats contains every operation")
+                .error_counts
+                .insert((*error_kind).to_string(), *count);
+        }
+        snapshot
     }
 
     /// Reset all statistics
     pub async fn reset(&self) {
-        let mut stats = self.stats.write().await;
-        stats.reset();
+        *self.durations.write().await = DurationMetrics::default();
+        self.error_counts.write().await.clear();
     }
 }
 
@@ -245,9 +287,9 @@ impl OperationTimer {
         }
     }
 
-    /// Consume this timer and record elapsed time with the supplied outcome; return unit.
-    pub async fn finish(self, success: bool) {
+    /// Consume this timer and record elapsed time with an optional stable error kind; return unit.
+    pub async fn finish(self, error_kind: Option<&'static str>) {
         let duration = self.start.elapsed();
-        self.collector.record(self.op, duration, success).await;
+        self.collector.record(self.op, duration, error_kind).await;
     }
 }

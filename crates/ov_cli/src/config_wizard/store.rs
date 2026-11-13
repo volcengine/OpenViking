@@ -94,6 +94,56 @@ pub struct ConfigStore {
     active_path: PathBuf,
 }
 
+pub(crate) struct PreparedApiKeyUpdate {
+    path: PathBuf,
+    target: PathBuf,
+    old_key: String,
+    original: Vec<u8>,
+    value: Value,
+    temp_file: tempfile::NamedTempFile,
+}
+
+impl PreparedApiKeyUpdate {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn commit(mut self, new_key: &str) -> Result<()> {
+        if fs::canonicalize(&self.path)? != self.target
+            || fs::read(&self.target)? != self.original
+        {
+            return Err(Error::Config(
+                "Config changed during key rotation; refusing to overwrite it".into(),
+            ));
+        }
+        self.value["api_key"] = Value::String(new_key.to_string());
+        for field in ["extra_headers", "extra_header"] {
+            if let Some(headers) = self.value.get_mut(field).and_then(Value::as_object_mut) {
+                for (name, value) in headers {
+                    if name.eq_ignore_ascii_case("x-api-key")
+                        && value.as_str() == Some(self.old_key.as_str())
+                    {
+                        *value = Value::String(new_key.to_string());
+                    } else if name.eq_ignore_ascii_case("authorization")
+                        && value.as_str().and_then(|v| v.strip_prefix("Bearer "))
+                            == Some(self.old_key.as_str())
+                    {
+                        *value = Value::String(format!("Bearer {new_key}"));
+                    }
+                }
+            }
+        }
+        self.temp_file
+            .write_all(serde_json::to_string_pretty(&self.value)?.as_bytes())?;
+        self.temp_file.flush()?;
+        self.temp_file.as_file().sync_all()?;
+        self.temp_file.persist(&self.target).map_err(|error| {
+            Error::Config(format!("Failed to replace config file: {}", error.error))
+        })?;
+        Ok(())
+    }
+}
+
 impl ConfigStore {
     pub fn new() -> Result<Self> {
         Self::for_active_path(effective_config_path()?)
@@ -263,6 +313,39 @@ impl ConfigStore {
 
     pub(crate) fn save_active_config(&self, config: &Config) -> Result<()> {
         write_config_file(&self.active_path, config)
+    }
+
+    pub(crate) fn prepare_api_key_update(&self, expected: &Config, old_key: &str) -> Result<PreparedApiKeyUpdate> {
+        let target = fs::canonicalize(&self.active_path)?;
+        let original = fs::read(&target)?;
+        let current: Config = serde_json::from_slice(&original)?;
+        if current.url != expected.url || current.api_key != expected.api_key
+            || current.extra_headers != expected.extra_headers
+        {
+            return Err(Error::Config(
+                "Active connection changed; retry key rotation with the current config".into(),
+            ));
+        }
+        // Case variants can coexist in the JSON map but become the same HTTP
+        // header. Refuse ambiguous credentials before invalidating any key.
+        if current.extra_headers.as_ref().is_some_and(|headers| {
+            headers.iter().any(|(name, value)| {
+                name.eq_ignore_ascii_case("x-api-key") && value != old_key
+            })
+        }) {
+            return Err(Error::Config(
+                "Conflicting X-API-Key headers; remove the overrides before rotating your key".into(),
+            ));
+        }
+        Ok(PreparedApiKeyUpdate {
+            path: self.active_path.clone(),
+            old_key: old_key.to_string(),
+            value: serde_json::from_slice(&original)?,
+            original,
+            // Check that a replacement can be created before invalidating the old key.
+            temp_file: create_config_temp_file(&target)?,
+            target,
+        })
     }
 
     pub fn save_edited_config(
@@ -802,18 +885,27 @@ fn carry_over_unmodeled_keys(path: &Path, value: &mut Value) {
 }
 
 fn write_file_atomically(path: &Path, content: &[u8]) -> Result<()> {
+    let mut temp_file = create_config_temp_file(path)?;
+    temp_file.write_all(content)?;
+    temp_file.flush()?;
+    temp_file.as_file().sync_all()?;
+    temp_file.persist(path).map_err(|error| {
+        Error::Config(format!("Failed to replace config file: {}", error.error))
+    })?;
+    Ok(())
+}
+
+fn create_config_temp_file(path: &Path) -> Result<tempfile::NamedTempFile> {
     let parent = path
         .parent()
-        .ok_or_else(|| Error::Config("Could not determine config file directory".to_string()))?;
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)?;
 
-    let mut temp_file = tempfile::Builder::new()
+    let temp_file = tempfile::Builder::new()
         .prefix(".ovcli.conf.")
         .suffix(".tmp")
         .tempfile_in(parent)?;
-    temp_file.write_all(content)?;
-    temp_file.flush()?;
-
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -822,12 +914,7 @@ fn write_file_atomically(path: &Path, content: &[u8]) -> Result<()> {
         temp_file.as_file().set_permissions(permissions)?;
     }
 
-    temp_file.as_file().sync_all()?;
-    temp_file.persist(path).map_err(|error| {
-        Error::Config(format!("Failed to replace config file: {}", error.error))
-    })?;
-
-    Ok(())
+    Ok(temp_file)
 }
 
 pub(crate) fn configs_equivalent(left: &Config, right: &Config) -> Result<bool> {

@@ -1,0 +1,103 @@
+/* Arco Design Drawer structure and right-side transition; see LICENSE.arco-design. */
+.ov-drawer {
+  position: fixed;
+  z-index: var(--ov-ui-drawer-z-index, 1001);
+  inset: 0;
+}
+
+.ov-drawer__mask {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: var(--ov-ui-color-overlay, var(--ov-ui-overlay-default));
+  opacity: 1;
+}
+
+.ov-drawer__panel {
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: var(--ov-ui-drawer-width, 250px);
+  max-width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  box-shadow: -4px 0 16px
+    color-mix(
+      in srgb,
+      var(--ov-ui-color-shadow, var(--ov-ui-shadow-default)) 12%,
+      transparent
+    );
+  transform: translateX(0);
+}
+
+.ov-drawer__focus-lock,
+.ov-drawer__body {
+  height: 100%;
+}
+
+.ov-drawer__body {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.ov-drawer__close {
+  position: absolute;
+  z-index: 1;
+  top: 16px;
+  right: 16px;
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.ov-drawer__close:hover {
+  background: var(--ov-ui-color-fill-hover, var(--ov-ui-fill-hover-default));
+}
+
+.ov-drawer__close:focus-visible {
+  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
+  outline-offset: -2px;
+}
+
+.ov-drawer__mask.ov-drawer--enter,
+.ov-drawer__mask.ov-drawer--exit {
+  opacity: 0;
+}
+
+.ov-drawer__panel.ov-drawer--enter,
+.ov-drawer__panel.ov-drawer--exit {
+  transform: translateX(100%);
+}
+
+.ov-drawer__mask.ov-drawer--enter-active {
+  opacity: 1;
+}
+
+.ov-drawer__panel.ov-drawer--enter-active {
+  transform: translateX(0);
+}
+
+/* Set the entry offset without a transition, then animate the active phase. */
+@media (prefers-reduced-motion: no-preference) {
+  .ov-drawer__mask.ov-drawer--enter-active,
+  .ov-drawer__mask.ov-drawer--exit {
+    transition: opacity 300ms cubic-bezier(0.34, 0.69, 0.1, 1);
+  }
+
+  .ov-drawer__panel.ov-drawer--enter-active,
+  .ov-drawer__panel.ov-drawer--exit {
+    transition: transform 300ms cubic-bezier(0.34, 0.69, 0.1, 1);
+  }
+}

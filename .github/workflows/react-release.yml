@@ -1,0 +1,85 @@
+name: React UI Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/packages/react/src/**"
+      - "frontend/packages/icons/**"
+    tags:
+      - "react@*"
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "npm dist-tag"
+        type: choice
+        options: [latest, beta]
+        default: latest
+      version:
+        description: "Exact stable version (required for latest; leave empty for beta)"
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+# Serialize both channels so a beta never races another publisher.
+concurrency:
+  group: react-npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'volcengine/OpenViking'
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Test release routing
+        run: node --test scripts/react-release*.test.mjs
+      - name: Resolve and stage release version
+        id: release
+        env:
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: node scripts/react-release.mjs
+      - name: Check whether version already exists
+        id: published
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          VERSIONS="$(npm view @openviking/react versions --json)"
+          EXISTS="$(node -e 'const versions = JSON.parse(process.argv[1]); if (!Array.isArray(versions)) throw new Error("Expected an array of npm versions"); console.log(versions.includes(process.argv[2]))' "$VERSIONS" "$RELEASE_VERSION")"
+          echo "exists=$EXISTS" >> "$GITHUB_OUTPUT"
+          if [ "$EXISTS" = true ]; then
+            echo "@openviking/react@$RELEASE_VERSION already exists; skipping."
+          fi
+      - run: npm ci
+        if: steps.published.outputs.exists == 'false'
+      - run: npm run check
+        if: steps.published.outputs.exists == 'false'
+      - run: npm run typecheck
+        if: steps.published.outputs.exists == 'false'
+      - run: npm run test
+        if: steps.published.outputs.exists == 'false'
+      - run: npm run build:docs
+        if: steps.published.outputs.exists == 'false'
+      - run: npm pack --dry-run --workspace @openviking/react
+        if: steps.published.outputs.exists == 'false'
+      - name: Publish React UI
+        if: steps.published.outputs.exists == 'false'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_CHANNEL: ${{ steps.release.outputs.channel }}
+        run: npm publish --workspace @openviking/react --access public --provenance --tag "$RELEASE_CHANNEL"

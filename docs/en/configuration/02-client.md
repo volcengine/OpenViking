@@ -211,6 +211,7 @@ No command writes the registry file. Create it by hand at the path `ov-memory-do
 | `capture.enabled` | boolean | Whether the session is captured |
 | `capture.commit_token_threshold` | integer, `1000`–`1000000` | Tokens accumulated before a capture commits |
 | `bypass.session_patterns` | list of globs | A session whose id or working directory matches skips recall and capture |
+| `usage.view` / `usage.output` | string | Codex OV-Usage footer: `summary` / `expanded` / `off`, and `auto` / `terminal` / `desktop` |
 | `labels` | object | Free-form metadata for humans; not read by the plugins |
 
 An out-of-range number is clamped to the nearest bound and reported; an unrecognized enum value is ignored. The table lists common fields; `config-schema.mjs` defines the full shared schema. Unrecognized keys do not take effect.
@@ -255,7 +256,7 @@ The other ways to set it, highest precedence first:
 | `{git_root}` | Repository root path, with every non-alphanumeric character replaced by `-` | Outside a git repository. A `.openviking/config.json` inside a repository still leaves this the repository's own root, so marking a subdirectory does not split the default peer |
 | `{cwd}` | Working directory, with every non-alphanumeric character replaced by `-` | Never — and it is in no default chain, so a bare path becomes a peer only when you ask for one |
 | `{dir}` | The workspace root's directory name: the repository root, or the directory holding `.openviking/config.json` | The directory is not a workspace |
-| `{harness}` | The name of the agent running (`claude-code`, `codex`, `dsh`, `opencode`, `pi`, `cursor`, `trae`, `trae-cn`, `zcode`) | Never — but the MCP proxy takes no part in derivation, so a read path that goes only through it cannot resolve it |
+| `{harness}` | The name of the agent running (`claude-code`, `codebuddy`, `codex`, `dsh`, `opencode`, `pi`, `cursor`, `trae`, `trae-cn`, `zcode`) | Never — but the MCP proxy takes no part in derivation, so a read path that goes only through it cannot resolve it |
 
 In `/Users/x/Dev/OpenViking/examples/codex-memory-plugin` with `origin` `git@github.com:volcengine/OpenViking.git`, the peer is `github.com-volcengine-openviking` — the same value from any subdirectory, worktree, machine, or clone. Every clone of one repository therefore shares one peer, while a fork has a different `origin` and stays separate. The derivation reads the repository's files directly instead of running `git`, so it also works where `git` is missing from `PATH`, and the URL is normalized so that the ssh and https spellings of one repository agree and a token embedded in the URL never reaches the peer id.
 

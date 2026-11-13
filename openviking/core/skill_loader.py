@@ -70,7 +70,10 @@ class SkillLoader:
         if not frontmatter:
             raise ValueError("SKILL.md must have YAML frontmatter")
 
-        meta = yaml.safe_load(frontmatter)
+        try:
+            meta = yaml.safe_load(frontmatter)
+        except yaml.YAMLError as exc:
+            raise ValueError(f"Invalid YAML frontmatter: {exc}") from exc
         if not isinstance(meta, dict):
             raise ValueError("Invalid YAML frontmatter")
 

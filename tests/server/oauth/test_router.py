@@ -55,7 +55,7 @@ class _FpOnlyKeyManager:
     def __init__(self, fingerprints: dict[tuple[str, str], str]):
         self._fps = fingerprints
 
-    def get_user_key_fingerprint(self, account_id: str, user_id: str) -> Optional[str]:
+    async def get_user_key_fingerprint(self, account_id: str, user_id: str) -> Optional[str]:
         return self._fps.get((account_id, user_id))
 
 

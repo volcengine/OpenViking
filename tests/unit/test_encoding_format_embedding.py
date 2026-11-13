@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from openviking.models.embedder import OpenAIDenseEmbedder
+from openviking.models.embedder import OpenAIDenseEmbedder, RetryEmbedder
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
 
 
@@ -109,8 +109,9 @@ class TestEncodingFormatFactory:
             encoding_format="float",
         )
         embedder = EmbeddingConfig(dense=cfg)._create_embedder("openai", "dense", cfg)
-        assert isinstance(embedder, OpenAIDenseEmbedder)
-        assert embedder.encoding_format == "float"
+        assert isinstance(embedder, RetryEmbedder)
+        assert isinstance(embedder.inner, OpenAIDenseEmbedder)
+        assert embedder.inner.encoding_format == "float"
 
     @patch("openai.AzureOpenAI")
     def test_azure_factory_forwards(self, mock_azure_class):
@@ -125,8 +126,9 @@ class TestEncodingFormatFactory:
             encoding_format="float",
         )
         embedder = EmbeddingConfig(dense=cfg)._create_embedder("azure", "dense", cfg)
-        assert isinstance(embedder, OpenAIDenseEmbedder)
-        assert embedder.encoding_format == "float"
+        assert isinstance(embedder, RetryEmbedder)
+        assert isinstance(embedder.inner, OpenAIDenseEmbedder)
+        assert embedder.inner.encoding_format == "float"
 
     @patch("openai.OpenAI")
     def test_factory_omits_when_unset(self, mock_openai_class):
@@ -138,5 +140,6 @@ class TestEncodingFormatFactory:
             api_key="sk-test",
         )
         embedder = EmbeddingConfig(dense=cfg)._create_embedder("openai", "dense", cfg)
-        assert isinstance(embedder, OpenAIDenseEmbedder)
-        assert embedder.encoding_format is None
+        assert isinstance(embedder, RetryEmbedder)
+        assert isinstance(embedder.inner, OpenAIDenseEmbedder)
+        assert embedder.inner.encoding_format is None

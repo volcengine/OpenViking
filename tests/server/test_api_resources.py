@@ -161,36 +161,17 @@ async def test_add_resource_success(
     assert body["result"]["task_id"]
 
 
-@pytest.mark.parametrize("timeout", [None, 0.0])
 async def test_add_resource_with_wait(
     client: httpx.AsyncClient,
     sample_markdown_file,
     upload_temp_dir,
-    timeout,
 ):
-    resp = await client.post(
-        "/api/v1/resources",
-        json={
-            "temp_file_id": sample_markdown_file.name,
-            "reason": "test resource",
-            "wait": True,
-            "timeout": timeout,
-        },
-    )
-    if timeout == 0.0:
-        assert resp.status_code == 504
-        error = resp.json()["error"]
-        assert error["code"] == "DEADLINE_EXCEEDED"
-        task_id = error["details"]["task_id"]
-        assert error["details"]["timeout"] == timeout
-        assert "Waiting for resource import timed out" in error["message"]
-        assert "does not cancel or fail the background task" in error["message"]
-        assert f"ov task status {task_id}" in error["message"]
-        task = await _wait_task_terminal(client, task_id)
-        assert task["status"] == "completed"
-        assert "root_uri" in task["result"]
-        return
-
+    payload = {
+        "temp_file_id": sample_markdown_file.name,
+        "reason": "test resource",
+        "wait": True,
+    }
+    resp = await client.post("/api/v1/resources", json={**payload, "timeout": 0.0})
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
@@ -442,14 +423,12 @@ async def test_add_resource_with_telemetry_includes_resource_breakdown(
 ):
     async def fake_add_resource(**kwargs):
         telemetry = get_current_telemetry()
-        telemetry.set("resource.request.duration_ms", 152.3)
-        telemetry.set("resource.process.duration_ms", 101.7)
-        telemetry.set("resource.parse.duration_ms", 38.1)
-        telemetry.set("resource.parse.warnings_count", 1)
-        telemetry.set("resource.finalize.duration_ms", 22.4)
-        telemetry.set("resource.summarize.duration_ms", 31.8)
-        telemetry.set("resource.wait.duration_ms", 46.9)
-        telemetry.set("resource.watch.duration_ms", 0.8)
+        telemetry.set("resource.total.duration_ms", 152.3)
+        telemetry.set("resource.source_execute.duration_ms", 101.7)
+        telemetry.set("resource.parse_artifact.duration_ms", 38.1)
+        telemetry.set("resource.content_commit.duration_ms", 22.4)
+        telemetry.set("resource.derived_enqueue.duration_ms", 31.8)
+        telemetry.set("queue.semantic.queue_wait.duration_ms", 46.9)
         telemetry.set("resource.flags.wait", True)
         telemetry.set("resource.flags.build_index", True)
         telemetry.set("resource.flags.summarize", False)
@@ -476,9 +455,12 @@ async def test_add_resource_with_telemetry_includes_resource_breakdown(
     assert resp.status_code == 200
     body = resp.json()
     resource = body["telemetry"]["summary"]["resource"]
-    assert resource["request"]["duration_ms"] == 152.3
-    assert resource["process"]["parse"] == {"duration_ms": 38.1, "warnings_count": 1}
-    assert resource["wait"]["duration_ms"] == 46.9
+    assert resource["total"]["duration_ms"] == 152.3
+    assert resource["source_execute"]["duration_ms"] == 101.7
+    assert resource["parse_artifact"]["duration_ms"] == 38.1
+    assert resource["content_commit"]["duration_ms"] == 22.4
+    assert resource["derived_enqueue"]["duration_ms"] == 31.8
+    assert resource["semantic"]["queue_wait"]["duration_ms"] == 46.9
     assert resource["flags"] == {
         "wait": True,
         "build_index": True,
@@ -548,23 +530,27 @@ async def test_add_skill_business_error_uses_error_envelope(
     assert body["error"]["message"] == "Skill parse error: boom"
 
 
-async def test_add_skill_missing_name_returns_invalid_argument(client: httpx.AsyncClient):
-    resp = await client.post(
-        "/api/v1/skills",
-        json={
-            "data": {
-                "description": "Skill without name",
-                "content": "# No Name Skill\nTest content.",
-            },
-        },
-    )
+@pytest.mark.parametrize(
+    ("data", "message"),
+    [
+        (
+            {"description": "Skill without name", "content": "# No Name"},
+            "Skill must have 'name' field",
+        ),
+        ("---\nname: [broken\ndescription: invalid YAML\n---\n# Skill", "Invalid YAML frontmatter"),
+    ],
+)
+async def test_add_skill_invalid_content_returns_invalid_argument(
+    client: httpx.AsyncClient, data, message
+):
+    resp = await client.post("/api/v1/skills", json={"data": data})
 
     assert resp.status_code == 400
     body = resp.json()
     assert body["status"] == "error"
     assert "result" not in body or body["result"] is None
     assert body["error"]["code"] == "INVALID_ARGUMENT"
-    assert body["error"]["message"] == "Skill must have 'name' field"
+    assert message in body["error"]["message"]
 
 
 async def test_add_skill_empty_dict_returns_invalid_argument(client: httpx.AsyncClient):
@@ -645,13 +631,27 @@ async def test_add_resource_with_to(
     assert "custom" in body["result"]["root_uri"]
 
 
+@pytest.mark.parametrize("archive_state", ["valid", "invalid", "bad_crc", "io_error"])
 async def test_add_resource_with_resources_root_to_uses_child_uri(
     client: httpx.AsyncClient,
     upload_temp_dir,
+    monkeypatch,
+    archive_state,
 ):
     archive_path = upload_temp_dir / "tt_b.zip"
     with zipfile.ZipFile(archive_path, "w") as zf:
         zf.writestr("tt_b/bb/readme.md", "# hello\n")
+
+    if archive_state == "invalid":
+        archive_path.write_bytes(b"not a zip archive")
+    elif archive_state == "bad_crc":
+        archive_path.write_bytes(archive_path.read_bytes().replace(b"# hello", b"# wrong"))
+    elif archive_state == "io_error":
+
+        def fail_to_open(*args, **kwargs):
+            raise OSError("disk unavailable")
+
+        monkeypatch.setattr(zipfile, "ZipFile", fail_to_open)
 
     resp = await client.post(
         "/api/v1/resources",
@@ -662,6 +662,14 @@ async def test_add_resource_with_resources_root_to_uses_child_uri(
             "wait": True,
         },
     )
+    if archive_state != "valid":
+        is_bad_input = archive_state != "io_error"
+        assert resp.status_code == (400 if is_bad_input else 500), resp.text
+        error = resp.json()["error"]
+        assert error["code"] == ("INVALID_ARGUMENT" if is_bad_input else "PROCESSING_ERROR")
+        assert ("Not a valid ZIP file" if is_bad_input else "disk unavailable") in error["message"]
+        return
+
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
@@ -829,7 +837,7 @@ async def test_add_resource_non_wait_auto_name_resolves_unique_root_uri(
 async def test_wait_processed_empty_queue(client: httpx.AsyncClient):
     resp = await client.post(
         "/api/v1/system/wait",
-        json={"timeout": 30.0},
+        json={},
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -847,7 +855,7 @@ async def test_wait_processed_after_add(
     )
     resp = await client.post(
         "/api/v1/system/wait",
-        json={"timeout": 60.0},
+        json={},
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
@@ -1039,7 +1047,7 @@ async def test_temp_upload_with_watch_and_tags_is_rejected_without_watch_source(
 
     assert resp.status_code == 400, resp.text
     assert "uploaded content" in resp.text
-    task = await service.watch_scheduler.watch_manager.get_task_by_uri(
+    task = await service.watch_manager.get_task_by_uri(
         to_uri=target_uri,
         account_id="default",
         user_id="test_user",

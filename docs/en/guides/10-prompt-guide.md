@@ -18,7 +18,7 @@ OpenViking's current prompts fall into two main groups:
    - Stored under `openviking/prompts/templates/<category>/*.yaml`
    - Used to instruct the model to perform tasks such as image understanding, document summarization, memory extraction, and retrieval intent analysis
 2. Memory schema templates
-   - Stored under `openviking/prompts/templates/memory/*.yaml`
+   - Stored under `openviking/system_assets/memory/memory_templates/builtin/*.yaml`
    - Used to define the fields, filename templates, content templates, and directory rules for a memory type
 
 From a usage perspective, these templates mainly serve the following processing stages:
@@ -231,13 +231,7 @@ These YAML files define the structure of different memory types. They are not si
   - Effective stage: experience-memory persistence and update stage
   - Affects: reusable guidance distilled from task outcomes
   - Purpose: records durable execution experience and the memories it supersedes
-  - Key fields: `experience_name`, `content`, `supersedes`
-
-- `identity`
-  - Effective stage: agent identity memory persistence stage
-  - Affects: long-term consistency of the agent's identity settings
-  - Purpose: defines the agent's name, persona, vibe, avatar, and self-introduction fields
-  - Key fields: `name`, `creature`, `vibe`, `emoji`, `avatar`, `introduction`
+  - Key fields: `experience_name`, `content`, `supersedes` (optional; omit when not replacing another experience)
 
 - `preferences`
   - Effective stage: preference-memory persistence and update stage
@@ -256,12 +250,6 @@ These YAML files define the structure of different memory types. They are not si
   - Affects: skill usage statistics, experience accumulation, and recommended workflows
   - Purpose: defines skill usage counts, success rates, best-fit scenarios, and related information
   - Key fields: `skill_name`, `total_executions`, `success_count`, `fail_count`, `best_for`, `recommended_flow`
-
-- `soul`
-  - Effective stage: agent soul memory persistence stage
-  - Affects: the agent's core boundaries, continuity, and long-term identity stability
-  - Purpose: defines the agent's core truths, boundaries, vibe, and continuity
-  - Key fields: `core_truths`, `boundaries`, `vibe`, `continuity`
 
 - `tools` (disabled by default)
   - Effective stage: tool-usage memory persistence and update stage

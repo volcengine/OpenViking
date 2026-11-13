@@ -4,13 +4,13 @@
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from openviking.core.context import ContextLevel
 from openviking.core.retrieval_targets import resolve_retrieval_targets
 from openviking.core.retrieval_types import SearchType
 from openviking.server.error_mapping import is_not_found_error, map_exception
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.storage.abstract_overview import (
     AbstractOverviewFormatError,
     body_for_preview,
@@ -27,7 +27,9 @@ from openviking.storage.viking_fs._base import (
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.image_search import build_multimodal_embedding_input
 from openviking.utils.time_decay import parse_duration_ms
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.retrieve import ContextType
+from openviking_cli.utils.config.retrieval_config import RetrievalConfig
 
 
 class _SemanticMixin:
@@ -35,56 +37,30 @@ class _SemanticMixin:
 
     # ========== VikingFS Specific Capabilities ==========
 
-    async def _read_abstract_file(
-        self,
-        path: str,
-        uri: str,
-        ctx: Optional[RequestContext] = None,
+    async def _read_directory_summary(
+        self, uri: str, field: Literal["abstract", "overview"], ctx: Optional[RequestContext] = None
     ) -> str:
-        """Read and decrypt/decode .abstract.md from a known directory path.
-
-        Does NOT perform stat or isDir check -- caller is responsible for
-        ensuring the path points to a directory.
-        """
-        file_path = f"{path}/.abstract.md"
+        """Read a fixed summary file from an already authorized, known directory."""
+        real_ctx = self._ctx_or_default(ctx)
+        if real_ctx.role == Role.GLOBAL:
+            ctx = self.authorize_read(real_ctx, [uri])
+            if ctx.data_access is not None:
+                await self._ensure_access(f"{uri.rstrip('/')}/.{field}.md", ctx)
+        path = self._uri_to_path(uri, ctx=ctx)
         try:
-            content_bytes = self._handle_agfs_read(await self._async_agfs.read(file_path))
-            return body_for_preview(self._decode_bytes(content_bytes))
+            raw = self._handle_agfs_read(await self._async_agfs.read(f"{path}/.{field}.md"))
+            return body_for_preview(self._decode_bytes(raw))
         except AbstractOverviewFormatError as exc:
-            logger.warning("Malformed directory abstract for %s: %s", uri, exc)
+            logger.warning("Malformed directory %s for %s: %s", field, uri, exc)
         except Exception as exc:
             if not is_not_found_error(exc):
                 mapped = map_exception(exc, resource=uri)
                 if mapped is not None:
                     raise mapped from exc
                 raise
-        return f"# {uri} [Directory abstract is not ready]"
-
-    async def _read_abstract_for_known_dir(
-        self,
-        uri: str,
-        ctx: Optional[RequestContext] = None,
-    ) -> str:
-        """Read .abstract.md for a directory that is already known to be a directory.
-
-        Bypasses stat() and isDir check. Caller (i.e. _batch_fetch_abstracts)
-        must guarantee that the URI points to a directory.
-        """
-        await self._ensure_access(uri, ctx)
-        real_ctx = self._ctx_or_default(ctx)
-        primary_path = self._uri_to_path(uri, ctx=ctx)
-        for path in self._read_paths(uri, ctx=ctx):
-            if not await self._read_path_visible(uri, path, primary_path, real_ctx):
-                continue
-            try:
-                if not await self._agfs_path_exists(path):
-                    continue
-                return await self._read_abstract_file(path, uri, ctx=ctx)
-            except Exception as exc:
-                if is_not_found_error(exc):
-                    continue
-                raise
-        return f"# {uri} [Directory abstract is not ready]"
+        if field == "abstract":
+            return f"# {uri} [Directory abstract is not ready]"
+        return f"# {uri}\n\n[Directory overview is not ready]"
 
     async def abstract(
         self,
@@ -96,32 +72,17 @@ class _SemanticMixin:
         If the caller points to a file, its parent directory is used instead so
         the endpoint remains usable for both file and directory URIs.
         """
-        await self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
-        primary_path = self._uri_to_path(uri, ctx=ctx)
-        path = primary_path
-        last_exc: Optional[Exception] = None
-        for candidate_path in self._read_paths(uri, ctx=ctx):
-            if not await self._read_path_visible(uri, candidate_path, primary_path, real_ctx):
-                continue
-            try:
-                info = await self._async_agfs.stat(candidate_path)
-                path = candidate_path
-                break
-            except Exception as exc:
-                if is_not_found_error(exc):
-                    last_exc = exc
-                    continue
-                mapped = map_exception(exc, resource=uri)
-                if mapped is not None:
-                    raise mapped from exc
-                raise
-        else:
-            if last_exc is not None:
-                mapped = map_exception(last_exc, resource=uri)
-                if mapped is not None:
-                    raise mapped from last_exc
-            raise NotFoundError(uri, "directory") from last_exc
+        ctx = self.authorize_read(real_ctx, [uri])
+        await self._ensure_access(uri, ctx)
+        path = self._uri_to_path(uri, ctx=ctx)
+        try:
+            info = await self._async_agfs.stat(path)
+        except Exception as exc:
+            mapped = map_exception(exc, resource=uri)
+            if mapped is not None:
+                raise mapped from exc
+            raise
         if not info.get("isDir", info.get("is_dir")):
             parent_path = path.rsplit("/", 1)[0] or "/"
             parent_uri = self._path_to_uri(parent_path, ctx=ctx)
@@ -130,8 +91,8 @@ class _SemanticMixin:
                 uri,
                 parent_uri,
             )
-            return await self.abstract(parent_uri, ctx=ctx)
-        return await self._read_abstract_file(path, uri, ctx=ctx)
+            return await self.abstract(parent_uri, ctx=real_ctx)
+        return await self._read_directory_summary(uri, "abstract", ctx=ctx)
 
     async def overview(
         self,
@@ -143,32 +104,17 @@ class _SemanticMixin:
         If the caller points to a file, its parent directory is used instead so
         the endpoint remains usable for both file and directory URIs.
         """
-        await self._ensure_access(uri, ctx)
         real_ctx = self._ctx_or_default(ctx)
-        primary_path = self._uri_to_path(uri, ctx=ctx)
-        path = primary_path
-        last_exc: Optional[Exception] = None
-        for candidate_path in self._read_paths(uri, ctx=ctx):
-            if not await self._read_path_visible(uri, candidate_path, primary_path, real_ctx):
-                continue
-            try:
-                info = await self._async_agfs.stat(candidate_path)
-                path = candidate_path
-                break
-            except Exception as exc:
-                if is_not_found_error(exc):
-                    last_exc = exc
-                    continue
-                mapped = map_exception(exc, resource=uri)
-                if mapped is not None:
-                    raise mapped from exc
-                raise
-        else:
-            if last_exc is not None:
-                mapped = map_exception(last_exc, resource=uri)
-                if mapped is not None:
-                    raise mapped from last_exc
-            raise NotFoundError(uri, "directory") from last_exc
+        ctx = self.authorize_read(real_ctx, [uri])
+        await self._ensure_access(uri, ctx)
+        path = self._uri_to_path(uri, ctx=ctx)
+        try:
+            info = await self._async_agfs.stat(path)
+        except Exception as exc:
+            mapped = map_exception(exc, resource=uri)
+            if mapped is not None:
+                raise mapped from exc
+            raise
         if not info.get("isDir", info.get("is_dir")):
             parent_path = path.rsplit("/", 1)[0] or "/"
             parent_uri = self._path_to_uri(parent_path, ctx=ctx)
@@ -177,20 +123,8 @@ class _SemanticMixin:
                 uri,
                 parent_uri,
             )
-            return await self.overview(parent_uri, ctx=ctx)
-        file_path = f"{path}/.overview.md"
-        try:
-            content_bytes = self._handle_agfs_read(await self._async_agfs.read(file_path))
-            return body_for_preview(self._decode_bytes(content_bytes))
-        except AbstractOverviewFormatError as exc:
-            logger.warning("Malformed directory overview for %s: %s", uri, exc)
-        except Exception as exc:
-            if not is_not_found_error(exc):
-                mapped = map_exception(exc, resource=uri)
-                if mapped is not None:
-                    raise mapped from exc
-                raise
-        return f"# {uri}\n\n[Directory overview is not ready]"
+            return await self.overview(parent_uri, ctx=real_ctx)
+        return await self._read_directory_summary(uri, "overview", ctx=ctx)
 
     async def find(
         self,
@@ -201,7 +135,7 @@ class _SemanticMixin:
         filter: Optional[Dict] = None,
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
-        image_url: Optional[str] = None,
+        image_url: str | list[str] | None = None,
         events_time_decay_protection: Optional[str] = None,
         search_type: SearchType = "semantic",
     ):
@@ -256,6 +190,14 @@ class _SemanticMixin:
         real_ctx = self._require_request_context(ctx)
         retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx)
 
+        real_ctx = self.authorize_read(real_ctx, retrieval_targets.target_directories)
+        if real_ctx.data_access is not None:
+            from dataclasses import replace
+
+            retrieval_targets = replace(
+                retrieval_targets, target_directories=list(real_ctx.data_access.effective_targets)
+            )
+
         if filter_only:
             return await self._find_by_filter(
                 filter=filter,
@@ -304,6 +246,7 @@ class _SemanticMixin:
             limit=limit,
             mode=RetrieverMode.QUICK,
             score_threshold=score_threshold,
+            has_explicit_target=bool(retrieval_targets.first_explicit_directory),
             scope_dsl=filter,
             level=level,
             events_time_decay_protection=events_time_decay_protection,
@@ -313,7 +256,20 @@ class _SemanticMixin:
 
         # Convert QueryResult to FindResult
         memories, resources, skills = [], [], []
+        access = (
+            await self._can_access_many([hit.uri for hit in result.matched_contexts], real_ctx)
+            if real_ctx.data_access is not None
+            else None
+        )
         for ctx in result.matched_contexts:
+            if access is not None and not access.get(ctx.uri, False):
+                continue
+            if (
+                ctx.level == ContextLevel.OVERVIEW
+                and real_ctx.data_access is not None
+                and not real_ctx.data_access.allows_overview(ctx.uri)
+            ):
+                continue
             if ctx.context_type == ContextType.MEMORY:
                 memories.append(ctx)
             elif ctx.context_type == ContextType.RESOURCE:
@@ -373,9 +329,22 @@ class _SemanticMixin:
         # and L1 record and would otherwise be returned twice — inflating the
         # total and eating two of the caller's limit slots for one result.
         seen_uris: set = set()
+        access = (
+            await self._can_access_many([str(r.get("uri", "")) for r in records], ctx)
+            if ctx.data_access is not None
+            else None
+        )
         for record in records:
+            if access is not None and not access.get(str(record.get("uri", "")), False):
+                continue
             matched = build_matched_context_from_record(record)
             if matched is None or matched.uri in seen_uris:
+                continue
+            if (
+                matched.level == ContextLevel.OVERVIEW
+                and ctx.data_access is not None
+                and not ctx.data_access.allows_overview(matched.uri)
+            ):
                 continue
             seen_uris.add(matched.uri)
             if matched.context_type == ContextType.MEMORY:
@@ -399,9 +368,10 @@ class _SemanticMixin:
         filter: Optional[Dict] = None,
         ctx: Optional[RequestContext] = None,
         level: Optional[List[int]] = None,
-        image_url: Optional[str] = None,
+        image_url: str | list[str] | None = None,
         events_time_decay_protection: Optional[str] = None,
         search_type: SearchType = "semantic",
+        context_types: Optional[List[ContextType]] = None,
     ):
         """Complex search with session context.
 
@@ -427,7 +397,6 @@ class _SemanticMixin:
         from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
         from openviking.retrieve.intent_analyzer import IntentAnalyzer
         from openviking_cli.retrieve import (
-            ContextType,
             FindResult,
             QueryPlan,
             TypedQuery,
@@ -455,9 +424,17 @@ class _SemanticMixin:
             except Exception:
                 target_abstract = ""
 
-        intent_enabled = (
-            bool(self.retrieval_config.enable_intent) if self.retrieval_config is not None else True
-        )
+        retrieval_config = self.retrieval_config or RetrievalConfig()
+        # The raw query remains usable if optional intent analysis times out or fails.
+        typed_queries = [
+            TypedQuery(
+                query=query,
+                context_type=None,
+                intent="",
+                priority=1,
+                target_directories=retrieval_targets.target_directories,
+            )
+        ]
 
         # With session context: optional intent analysis
         if image_url:
@@ -472,38 +449,45 @@ class _SemanticMixin:
                     image_query=True,
                 )
             ]
-        elif intent_enabled and (session_summary or current_messages):
-            if self._vlm_resolver is None:
-                raise RuntimeError(
-                    "VikingFS requires a VLM resolver for account-owned intent analysis"
+        elif retrieval_config.enable_intent and (session_summary or current_messages):
+            try:
+                if self._vlm_resolver is None:
+                    raise RuntimeError(
+                        "VikingFS requires a VLM resolver for account-owned intent analysis"
+                    )
+                analyzer = IntentAnalyzer(
+                    max_recent_messages=5,
+                    query_planner=await self._vlm_resolver.get_query_planner(real_ctx.account_id),
                 )
-            analyzer = IntentAnalyzer(
-                max_recent_messages=5,
-                query_planner=await self._vlm_resolver.get_query_planner(
-                    real_ctx.account_id
-                ),
-            )
-            with telemetry.measure("search.intent_analysis"):
-                query_plan = await analyzer.analyze(
-                    compression_summary=session_summary or "",
-                    messages=current_messages or [],
-                    current_message=query,
-                    target_abstract=target_abstract,
+                with telemetry.measure("search.intent_analysis"):
+                    query_plan = await asyncio.wait_for(
+                        analyzer.analyze(
+                            compression_summary=session_summary or "",
+                            messages=current_messages or [],
+                            current_message=query,
+                            context_type=context_types[0]
+                            if context_types and len(context_types) == 1
+                            else None,
+                            target_abstract=target_abstract,
+                        ),
+                        timeout=retrieval_config.recall_intent_timeout_s,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Intent analysis failed (%s); using original query: %s",
+                    type(exc).__name__,
+                    exc,
                 )
-            typed_queries = query_plan.queries
-            for tq in typed_queries:
-                tq.target_directories = retrieval_targets.target_directories
-        else:
-            # No session context, or intent disabled: search with the raw query.
-            typed_queries = [
-                TypedQuery(
-                    query=query,
-                    context_type=None,
-                    intent="",
-                    priority=1,
-                    target_directories=retrieval_targets.target_directories,
-                )
-            ]
+            else:
+                typed_queries = query_plan.queries
+                for tq in typed_queries:
+                    tq.target_directories = retrieval_targets.target_directories
+                    # Caller scope is authoritative even when the planner ignores its prompt.
+                    if context_types and len(context_types) == 1:
+                        tq.context_type = context_types[0]
+                    elif context_types and tq.context_type not in context_types:
+                        # The existing scope filter searches only the caller's allowed types.
+                        tq.context_type = None
         telemetry.set("search.typed_queries_count", len(typed_queries))
 
         # Concurrent execution
@@ -525,6 +509,7 @@ class _SemanticMixin:
                 ctx=real_ctx,
                 limit=limit,
                 score_threshold=score_threshold,
+                has_explicit_target=bool(retrieval_targets.first_explicit_directory),
                 scope_dsl=filter,
                 level=level,
                 events_time_decay_protection=events_time_decay_protection,
@@ -538,6 +523,12 @@ class _SemanticMixin:
         memories, resources, skills = [], [], []
         for result in query_results:
             for ctx in result.matched_contexts:
+                if (
+                    ctx.level == ContextLevel.OVERVIEW
+                    and real_ctx.data_access is not None
+                    and not real_ctx.data_access.allows_overview(ctx.uri)
+                ):
+                    continue
                 if ctx.context_type == ContextType.MEMORY:
                     memories.append(ctx)
                 elif ctx.context_type == ContextType.RESOURCE:
@@ -567,9 +558,21 @@ class _SemanticMixin:
         *,
         lease_ref: Any = None,
     ) -> None:
-        """Write context to AGFS (L0/L1/L2)."""
+        """Write context, preparing and authorizing its directory summaries together."""
 
-        await self._ensure_access(uri, ctx, action=AclAction.WRITE)
+        summaries = [
+            (level, f"{uri}/{filename}", text)
+            for level, filename, text in (
+                (ContextLevel.ABSTRACT, ".abstract.md", abstract),
+                (ContextLevel.OVERVIEW, ".overview.md", overview),
+            )
+            if text
+        ]
+        await self._ensure_access_many(
+            [uri, *(summary_uri for _, summary_uri, _ in summaries)],
+            ctx,
+            action=AclAction.WRITE,
+        )
         path = self._uri_to_path(uri, ctx=ctx)
 
         try:
@@ -586,33 +589,16 @@ class _SemanticMixin:
                 content_uri = f"{uri}/{content_filename}"
                 await self.write_file(content_uri, content, ctx=ctx, lease_ref=lease_ref)
 
-            if abstract:
-                abstract_uri = f"{uri}/.abstract.md"
-                await self.write_file(
-                    abstract_uri,
+            # Both summary files have already been authorized, and mkdir above
+            # prepared their shared parent. Keep sanitization and write observers
+            # in the same storage path used by ordinary file writes.
+            for level, summary_uri, text in summaries:
+                await self._write_file_content(
+                    summary_uri,
                     render_abstract_overview(
-                        ContextLevel.ABSTRACT,
+                        level,
                         uri,
-                        abstract,
-                        {
-                            "generated_by": {
-                                "component": "VikingFS.write_context",
-                                "trigger": "context_write",
-                            }
-                        },
-                    ),
-                    ctx=ctx,
-                    lease_ref=lease_ref,
-                )
-
-            if overview:
-                overview_uri = f"{uri}/.overview.md"
-                await self.write_file(
-                    overview_uri,
-                    render_abstract_overview(
-                        ContextLevel.OVERVIEW,
-                        uri,
-                        overview,
+                        text,
                         {
                             "generated_by": {
                                 "component": "VikingFS.write_context",

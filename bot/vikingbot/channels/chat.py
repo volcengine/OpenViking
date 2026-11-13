@@ -47,12 +47,14 @@ class ChatChannel(BaseChannel):
         markdown: bool = True,
         logs: bool = False,
         sender: str | None = None,
+        disabled_tools: list[str] | None = None,
     ):
         super().__init__(config, bus, workspace_path)
         self.session_id = session_id
         self.markdown = markdown
         self.logs = logs
         self.sender = sender
+        self.disabled_tools = disabled_tools or []
         self._response_received = asyncio.Event()
         self._last_response: str | None = None
 
@@ -156,7 +158,7 @@ class ChatChannel(BaseChannel):
                 self._last_response = None
 
                 sender_id = self.sender or "user"
-                metadata = {}
+                metadata = {"disabled_tools": self.disabled_tools}
                 memory_peers = getattr(self.config, "memory_peer", None)
                 if memory_peers:
                     metadata["memory_peers"] = memory_peers

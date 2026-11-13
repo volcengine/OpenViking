@@ -8,6 +8,26 @@
 #include "leveldb/write_batch.h"
 
 namespace vectordb {
+namespace {
+
+std::string summarize_leveldb_status(const leveldb::Status& status) {
+  // POSIX errors are formatted as "type: file context: system reason".
+  // Keep the actionable ends while leaving the full context in server logs.
+  const std::string message = status.ToString();
+  const size_t type_separator = message.find(": ");
+  if (type_separator == std::string::npos) {
+    return "LevelDB error";
+  }
+
+  const size_t reason_separator = message.rfind(": ");
+  if (reason_separator == type_separator) {
+    return message.substr(0, type_separator);
+  }
+  return message.substr(0, type_separator + 2) +
+         message.substr(reason_separator + 2);
+}
+
+}  // namespace
 
 PersistStore::PersistStore(const std::string& path) {
   leveldb::Options options;
@@ -167,7 +187,8 @@ int PersistStore::exec_op(const std::vector<StorageOp>& ops) {
   auto status = db_->Write(write_options, &batch);
   if (!status.ok()) {
     SPDLOG_WARN("Failed to exec op data db: {}", status.ToString());
-    return -1;
+    throw std::runtime_error("PersistStore::exec_op failed: " +
+                             summarize_leveldb_status(status));
   }
   return 0;
 }

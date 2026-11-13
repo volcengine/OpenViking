@@ -1,6 +1,6 @@
 # Resource Management
 
-Resources are external knowledge that agents can reference. This page covers resource import, scheduled updates, and temporary uploads. For package export and import, see [OVPack](14-ovpack.md).
+Resources are external knowledge that agents can reference. This page covers resource import, scheduled updates, and temporary uploads. See the [data organization guide](../guides/23-data-organize.md) for directory conventions and [OVPack](14-ovpack.md) for package export and import.
 
 ## Core Concepts
 
@@ -49,7 +49,7 @@ Audio/video parsers validate and store the original files. Content understanding
 
 | Type | Description |
 |------|-------------|
-| Feishu/Lark | URL-based, supports doc/docx, wiki, sheets, bitable, mindnote/mindnotes, Drive files, and directory collections. Wiki imports include only the entry document by default; set `args.feishu_recursive=true` to include child nodes. By default uses app credentials from FEISHU_APP_ID and FEISHU_APP_SECRET; user-token imports can pass `args.feishu_access_token`, and user-token watches also pass `args.feishu_refresh_token` plus an optional `args.feishu_app_id` / `args.feishu_app_secret` pair. Mindnote and wiki-wrapped Mindnote require `mindnote:node:read` on the token used for import |
+| Feishu/Lark | URL-based, supports doc/docx, wiki, sheets, bitable, mindnote/mindnotes, slides, Drive files, and directory collections. Wiki imports include only the entry document by default; set `args.feishu_recursive=true` to include child nodes. By default uses app credentials from FEISHU_APP_ID and FEISHU_APP_SECRET; user-token imports can pass `args.feishu_access_token`, and user-token watches also pass `args.feishu_refresh_token` plus an optional `args.feishu_app_id` / `args.feishu_app_secret` pair. Mindnote and wiki-wrapped Mindnote require `mindnote:node:read` on the token used for import |
 
 **Web Pages (recursive web crawler)**
 
@@ -83,7 +83,7 @@ Source Input -> Parse -> Resource Tree Build -> Persistence -> Semantic Processi
 
 OpenViking first checks whether the source and request parameters qualify for Connector ingestion. Connector runs ingestion outside the standard pipeline. Otherwise, formats selected by [`parser_api`](../guides/01-configuration.md#parser-api) use the external Understanding parser; remaining formats use built-in parsers. External parsing replaces only the Parse stage and returns to TreeBuilder and the standard storage/semantic pipeline. Feishu documents already normalized to Markdown by an accessor bypass external parsing.
 
-Connector requires an exact `to` target and does not support `wait=true`. A `tos://` source cannot fall back to a built-in accessor. Git may fall back when Connector does not apply, except when Connector-only credentials were supplied. For supported standard-pipeline requests, `wait=true` waits for work belonging to this import, not unrelated work in the global queues; a timeout does not imply that the import was cancelled.
+Connector requires an exact `to` target and does not support `wait=true`. A `tos://` source cannot fall back to a built-in accessor. Git may fall back when Connector does not apply, except when Connector-only credentials were supplied. For supported standard-pipeline requests, `wait=true` waits for work belonging to this import, not unrelated work in the global queues; an HTTP request timeout does not imply that the import was cancelled. The legacy per-import `timeout` parameter is deprecated: requests still accept it, but ignore its value. Configure HTTP timeouts on the client.
 
 #### Stage 1: Parse
 - Uses `UnifiedResourceProcessor` to parse content based on resource type
@@ -187,7 +187,7 @@ This endpoint is the core entry point for resource management. It supports vario
 | reason | string | No | "" | Reason for adding the resource. When non-empty, OpenViking runs it through the normal session memory extraction pipeline with the resource URI and records resource references in the resulting memory |
 | instruction | string | No | "" | Processing instructions for semantic extraction (experimental feature) |
 | wait | bool | No | False | Whether to wait for semantic processing and vectorization to complete before returning |
-| timeout | float | No | None | Timeout in seconds, only effective when `wait=True` |
+| timeout | float | No | None | Deprecated: accepted for compatibility and ignored; configure HTTP timeouts on the client |
 | strict | bool | No | False | Whether to use strict mode |
 | ignore_dirs | string | No | None | Directory names to ignore (comma-separated) |
 | include | string | No | None | File patterns to include (glob) |
@@ -232,6 +232,7 @@ This endpoint is the core entry point for resource management. It supports vario
 - When `watch_interval > 0`, the watch task binds to `to` if provided; otherwise it binds to the `root_uri` returned by this import. If no stable `root_uri` is available, the request fails and asks for an explicit `to`.
 - For Connector imports, `is_active=false` creates the paused Watch before submission. Native Feishu and Git imports carry `is_active` through the resource queue and create the Watch after resolving the imported resource URI. In both cases, the initial import still runs once and periodic scheduling remains disabled.
 - Feishu/Lark app-token imports do not pass `args.feishu_access_token`. OpenViking keeps the existing app credential flow and the SDK obtains an app/tenant token from `app_id` and `app_secret`. This mode supports both one-time imports and `watch_interval > 0`.
+- Wiki imports resolve the backing object type before routing. Wiki-backed Drive files are downloaded and parsed as ordinary files. Native Slides (`/slides/{token}` or a Wiki pointing to Slides) are exported to PPTX, then parsed by the configured built-in or Understanding backend. This also applies to Slides in recursive Wiki and Drive folder imports. The calling identity needs export/download permission; readable Wiki metadata alone is insufficient. Slides export has a 120-second timeout. Drive files and Slides exports are downloaded in chunks and stop when `args.feishu_max_download_bytes` is exceeded (default: 1 GiB per import, shared across members of a directory import).
 - Feishu/Lark Mindnote URLs may use `/mindnote/{token}` or `/mindnotes/{token}`. Wiki URLs that resolve to `obj_type=mindnote` use the same reader. Mindnote uses the same authentication selection as other Feishu imports: `args.feishu_access_token` selects a user token, otherwise OpenViking falls back to the configured app/tenant token. The selected token must have `mindnote:node:read`.
 - Mindnote node images use Feishu's Drive media API and the same token type as the Mindnote import. User-token imports forward the user token to media download; app-token imports use the configured app credentials. The selected token must allow `docs:document.media:download`. If media download is unavailable, the text import still succeeds and keeps the original image reference.
 - Feishu/Lark one-time user-token imports pass `args={"feishu_access_token": "u-..."}` with `watch_interval <= 0`. OpenViking uses that user token only for the current import and does not store it.
@@ -504,6 +505,12 @@ fmt.Println(result["task_id"])
 
 **CLI**
 
+`ov add-resource --wait` submits once and polls the task without an overall
+deadline. Status-query timeouts, network errors, and HTTP 429/502/503/504
+retry; 10 consecutive failures exit with a task recovery command.
+Ctrl+C stops waiting without cancelling the task (exit 130).
+The completed CLI result retains `task_id`.
+
 ```bash
 # Add local file
 ov add-resource ./documents/guide.md --reason "User guide"
@@ -623,7 +630,7 @@ task_id      uuid-xxx
 | `errors` | array | List of errors encountered during processing |
 | `warnings` | array | Optional warnings, including partial processing or memory-linking failures |
 | `queue_status` | object | Queue summary when waiting synchronously or reading a completed task result; grouped by queue with `processed`, `requeue_count`, `error_count`, and `errors` |
-| `memory_linking` | object | Optional result of linking the resource URI to memories generated from `reason` |
+| `memory_linking` | object | Optional result of linking the resource URI to memories generated from `reason`. `status="accepted"` means the memory commit is queued, not finished: poll `commit_task_id` via `/api/v1/tasks/{task_id}` for its result |
 
 **Completed add-resource task result**
 

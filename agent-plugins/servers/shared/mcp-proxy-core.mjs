@@ -102,7 +102,7 @@ function parseSseMessages(text) {
     messages.push(JSON.parse(data));
   }
 
-  for (const rawLine of String(text || "").split(/\r?\n/)) {
+  for (const rawLine of String(text || "").split(/\r\n|\r|\n/)) {
     if (rawLine === "") {
       flush();
       continue;

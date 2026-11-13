@@ -1,0 +1,60 @@
+{
+  "hosts": [
+    {
+      "id": "dsh",
+      "name": "DeepSeek Harness",
+      "plugin": "examples/dsh-memory-plugin",
+      "probe": "@deepseek-ai/dsh",
+      "tags": [
+        "latest",
+        "next",
+        "alpha"
+      ],
+      "packages": "^@deepseek-ai/dsh(-.+)?$",
+      "includePrerelease": true,
+      "tests": "*.test.mjs",
+      "skipTests": [
+        "bundle.test.mjs"
+      ],
+      "smoke": [
+        {
+          "run": [
+            "npm",
+            "install",
+            "--no-audit",
+            "--no-fund",
+            "@deepseek-ai/dsh@{version}"
+          ]
+        },
+        {
+          "run": [
+            "./node_modules/.bin/dsh",
+            "plugin",
+            "--profile",
+            "web",
+            "add",
+            "{tarball}"
+          ]
+        },
+        {
+          "run": [
+            "./node_modules/.bin/dsh",
+            "--profile",
+            "web",
+            "--dump-config"
+          ],
+          "expect": "^- id: openviking-memory-runtime$"
+        },
+        {
+          "run": [
+            "node",
+            "{root}/.github/scripts/dsh-desktop-smoke.mjs",
+            "{tarball}",
+            "openviking-memory-runtime"
+          ]
+        }
+      ],
+      "notes": "DSH checks @deepseek-ai/dsh-* peers at plugin load with prereleases included. bundle.test.mjs asserts the dev pins stay at the tested minimum, which this check replaces on purpose. The smoke steps install that dsh release, add the packed bundle to a profile, and require the composed profile to include the bundle; DSH refuses to add a bundle whose peers reject the release, so the add step fails first. The last step emulates the DeepSeek Harness Desktop launcher with that release (Desktop itself is an Electron app with no npm package or Linux build): it initializes the reserved desktop profile the way Desktop's first launch does, adds the bundle through runCli({ manageDesktopProfile: true }), requires the profile to list and compose it, and checks that npm dsh refuses the desktop profile and that no dsh dumps its config."
+    }
+  ]
+}

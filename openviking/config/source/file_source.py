@@ -124,17 +124,37 @@ class FileConfigSource:
         return override
 
     async def update(self, scope: ConfigScope, mutate: Mutate) -> dict:
+        return await self._update(scope, mutate)
+
+    async def update_with_lease(
+        self,
+        scope: ConfigScope,
+        mutate: Mutate,
+        lease_ref: object,
+    ) -> dict:
+        """Update using an outer Tree lease owned by the provisioning caller."""
+        return await self._update(scope, mutate, lease_ref=lease_ref)
+
+    async def _update(
+        self,
+        scope: ConfigScope,
+        mutate: Mutate,
+        *,
+        lease_ref: object | None = None,
+    ) -> dict:
         path = self._path(scope)
-        try:
-            lease = await self._client.pathlock_acquire_exact(
-                path, timeout_secs=self._lock_timeout_secs
-            )
-        except LockAcquisitionError as exc:
-            raise ResourceBusyError(
-                "Another configuration update is in progress. Please retry.",
-                uri=path,
-                conflict_type="runtime_config_busy",
-            ) from exc
+        lease = lease_ref
+        if lease is None:
+            try:
+                lease = await self._client.pathlock_acquire_exact(
+                    path, timeout_secs=self._lock_timeout_secs
+                )
+            except LockAcquisitionError as exc:
+                raise ResourceBusyError(
+                    "Another configuration update is in progress. Please retry.",
+                    uri=path,
+                    conflict_type="runtime_config_busy",
+                ) from exc
         fs_ctx = _lease_fs_ctx(path, lease)
         try:
             current_raw, current = await self._read_override(scope)
@@ -142,13 +162,19 @@ class FileConfigSource:
             encoded = self._encode(new_override)
 
             try:
-                await self._client.ensure_parent_dirs(path)
+                if lease_ref is None:
+                    await self._client.ensure_parent_dirs(path)
+                else:
+                    await self._client.ensure_parent_dirs(path, fs_ctx=fs_ctx)
             except AGFSAlreadyExistsError:
                 pass
 
             backup_path = self._backup_path(scope)
             if backup_path is not None and current_raw is not None:
-                await self._client.write(backup_path, current_raw)
+                if lease_ref is None:
+                    await self._client.write(backup_path, current_raw)
+                else:
+                    await self._client.write(backup_path, current_raw, fs_ctx=fs_ctx)
 
             try:
                 await self._client.write(path, encoded, fs_ctx=fs_ctx)
@@ -165,7 +191,8 @@ class FileConfigSource:
                 raise
             return new_override
         finally:
-            await self._client.pathlock_release(lease)
+            if lease_ref is None:
+                await self._client.pathlock_release(lease)
 
     async def delete(self, scope: ConfigScope) -> None:
         path = self._path(scope)

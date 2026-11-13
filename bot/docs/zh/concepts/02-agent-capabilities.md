@@ -38,6 +38,7 @@ Skill 可以编排多个工具，但不会自动获得额外权限。工具是�
 | 命令 | `exec` | 在沙箱后端执行 shell 命令 |
 | 网络 | `web_search`、`web_fetch` | 搜索和读取网页 |
 | OpenViking | `openviking_list/search/grep/glob/multi_read` | 浏览、检索和读取上下文 |
+| OpenViking | `openviking_rule_search`（Beta） | 检索适用于具体任务的已编译约束 |
 | OpenViking | `openviking_add_resource`、`openviking_memory_commit` | 添加资源和提交记忆 |
 | 对外操作 | `message`、`generate_image` | 主动发送消息或生成图片 |
 | 自动化 | `cron` | 管理定时 Agent 任务，默认关闭 |
@@ -49,7 +50,18 @@ OpenAPI 的 `disabled_tools` 可以按请求隐藏工具；渠道的 `ov_tools_e
 
 ## MCP 扩展
 
-`bot.tools.mcp_servers` 可以连接外部 MCP Server，支持 `stdio`、`sse` 和 `streamableHttp`。远端工具会包装为普通 VikingBot Tool，并以 `mcp_<server>_<tool>` 名称注册。
+VikingBot 区分三个 MCP 概念：
+
+| 概念 | 归属与用途 | VikingBot 可见的工具 |
+|------|------------|----------------------|
+| **OpenViking MCP Interface** | OpenViking 对外提供给 MCP Client 的公共接口 | VikingBot 通过自身的 `openviking_*` 绑定访问所连接的服务，不属于 Bot 直连 MCP |
+| **OpenViking-registered MCP Servers** | 注册在 OpenViking 中，用于工具发现、代理调用和 Live Context 挂载的外部服务 | `openviking_find_mcp_tools` 和 `openviking_invoke_mcp_tool`；已编排节点通过 OpenViking 内容工具读取 |
+| **VikingBot-connected MCP Servers** | Bot 通过 `bot.tools.mcp_servers` 直接连接的外部服务 | 名为 `mcp_<server>_<tool>` 的普通工具 |
+
+两个外部服务注册表彼此独立。在 OpenViking 中注册 Server 不会生成 Bot 直连工具；在
+VikingBot 中配置 Server 也不会将其加入 OpenViking 工具目录或使其可用于 Live Context 挂载。
+
+`bot.tools.mcp_servers` 可以连接 VikingBot-connected MCP Servers，支持 `stdio`、`sse` 和 `streamableHttp`。远端工具会包装为普通 VikingBot Tool，并以 `mcp_<server>_<tool>` 名称注册。
 
 每个 MCP Server 可以配置：
 
@@ -59,6 +71,22 @@ OpenAPI 的 `disabled_tools` 可以按请求隐藏工具；渠道的 `ov_tools_e
 - `tool_timeout` 单次调用超时。
 
 MCP 参数 Schema 会先做兼容转换，再交给模型和 ToolRegistry。
+
+当 VikingBot 连接的 OpenViking Server 存在 OpenViking-registered MCP Servers 时，还会提供两个固定的
+OpenViking 工具：
+
+- `openviking_find_mcp_tools`：按意图动态发现工具并返回完整 `inputSchema` 和 annotations；
+- `openviking_invoke_mcp_tool`：使用发现结果中的 URI，通过 OpenViking 代理执行工具。
+
+这条链路不要求在 `bot.tools.mcp_servers` 中重复配置上游 MCP，也不会把发现到的工具动态
+注册到 VikingBot。OpenViking 负责上游连接、凭证和参数校验，VikingBot 只保留两个稳定的
+元工具。Agent 会优先搜索并读取已经编排好的 Live Context 节点；没有合适节点时才进行动态
+工具发现。`readonly` 模式只提供发现工具，不提供调用工具；Studio 托管群聊默认同时禁用
+这两个工具。
+
+如果同一个上游同时配置在两个注册表中，Agent 必须选择一条链路，避免重复调用。不能把
+Bot 直连工具名 `mcp_<server>_<tool>` 传给 `openviking_invoke_mcp_tool`；后者只接受
+OpenViking 发现结果返回的 `viking://agent/tools/...` URI。
 
 ## 子 Agent
 
@@ -91,12 +119,14 @@ ContextBuilder 实际读取按 `sandbox.mode` 选择的活动 Workspace：
 
 ### 启动文件
 
-ContextBuilder 在每轮构建系统提示时，按 `AGENTS.md`、`SOUL.md`、`TOOLS.md`、`IDENTITY.md` 的顺序读取存在且非空的文件：
+ContextBuilder 在每轮构建系统提示时，按本地 `AGENTS.md`、Agent 指令、本地 `TOOLS.md`、本地 `IDENTITY.md` 的顺序读取存在且非空的文件。
+
+配置 OpenViking 且当前用户的 `viking://~/memories/soul.md` 可读取、非空时，Agent 指令优先使用该文件；否则使用本地 `SOUL.md`。远端读取超时为 5 秒，文件缺失或读取失败也会回退本地。每轮只注入这两个文件中的一个，下一轮重新读取并选择。
 
 | 文件 | 适合定义的内容 |
 |------|----------------|
 | `AGENTS.md` | 全局工作方式、任务流程、输出约束和必须遵守的项目规则 |
-| `SOUL.md` | 人格、价值观、语气、回答风格和默认行为偏好 |
+| OpenViking `memories/soul.md`，本地 `SOUL.md` 兜底 | 人格、价值观、语气、回答风格和默认行为偏好 |
 | `TOOLS.md` | 工具选择原则、调用顺序、副作用确认和安全边界 |
 | `IDENTITY.md` | Agent 名称、角色、职责范围和身份背景 |
 
@@ -114,7 +144,7 @@ ContextBuilder 在每轮构建系统提示时，按 `AGENTS.md`、`SOUL.md`、`T
 
 首次使用活动 Workspace 时，VikingBot 从安装包中的 `bot/workspace` 复制启动文件、内置 Skill 模板和辅助目录。模板初始化不会覆盖已有的启动文件定制。
 
-应直接修改活动 Workspace。ContextBuilder 每轮重新读取启动文件，因此保存 `SOUL.md`、`AGENTS.md`、`TOOLS.md` 或 `IDENTITY.md` 后，通常下一轮对话即可生效，无需重启 Gateway。修改安装包或仓库中的 `bot/workspace` 只影响以后创建的新 Workspace。
+应修改当前选用的指令来源：OpenViking `soul.md` 可用时编辑该远端文件，本地兜底则编辑活动 Workspace 中的 `SOUL.md`。ContextBuilder 每轮重新读取启动文件，因此保存当前指令文件、`AGENTS.md`、`TOOLS.md` 或 `IDENTITY.md` 后，通常下一轮对话即可生效，无需重启 Gateway。修改安装包或仓库中的 `bot/workspace` 只影响以后创建的新 Workspace。
 
 启动文件等同于系统级提示的一部分，应限制写权限，并且不要存放 API Key、Token 或其他秘密。
 

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-09-04",
+  "updatedAt": "2026-10-13",
   "cdnBaseUrl": "https://docs.openviking.net/",
   "accessMethods": [
     {
@@ -101,7 +101,7 @@
       "name": "Hermes Agent",
       "tags": ["Provider"],
       "logo": "https://lf3-static.bytednsdoc.com/obj/eden-cn/lm_sth/ljhwZthlaukjlkulzlp/agent_logo/Hermes-Agent.png",
-      "summary": "Hermes 官方内置 OpenViking。跑 hermes memory setup openviking，默认选火山云，再贴上 API Key 即可",
+      "summary": "为 Hermes 提供长期记忆，自动捕获和召回。连接 OpenViking Service 或自有服务，也可通过外部插件使用 Quick Local。",
       "detailPath": "https://docs.openviking.net/agents/zh/hermes.md"
     },
     {
@@ -139,6 +139,30 @@
           "detailPath": "https://docs.openviking.net/agents/zh/deerflow-mcp.md"
         }
       ]
+    },
+    {
+      "id": "pi",
+      "name": "pi",
+      "tags": ["Plugin"],
+      "logo": "https://docs.openviking.net/agents/image/pi/logo.png",
+      "summary": "为 pi 提供跨会话长期记忆，自动召回、逐轮捕获并接管上下文；服务端的 MCP 工具注册为 pi 原生工具",
+      "detailPath": "https://docs.openviking.net/agents/zh/pi.md"
+    },
+    {
+      "id": "zcode",
+      "name": "ZCode",
+      "tags": ["Hook", "MCP"],
+      "logo": "https://docs.openviking.net/agents/image/zcode/logo.png",
+      "summary": "通过生命周期 Hook 和 MCP 工具，为 ZCode 提供画像注入、按问题召回和逐轮捕获",
+      "detailPath": "https://docs.openviking.net/agents/zh/zcode.md"
+    },
+    {
+      "id": "kimi-code",
+      "name": "Kimi Code",
+      "tags": ["Plugin"],
+      "logo": "https://docs.openviking.net/agents/image/kimi-code/logo.png",
+      "summary": "Kimi Code 原生插件，自动召回记忆、捕获对话，并提供 OpenViking MCP 工具",
+      "detailPath": "https://docs.openviking.net/agents/zh/kimi-code.md"
     }
   ]
 }

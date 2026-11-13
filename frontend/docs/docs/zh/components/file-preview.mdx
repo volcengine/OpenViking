@@ -1,0 +1,447 @@
+# FilePreview 文件预览
+
+带页签的文件预览：按格式渲染文件正文，提供路径面包屑、预览与源码切换、文本编辑和宿主自定义操作。
+
+## 何时使用
+
+- 需要在应用里预览 Markdown、代码、JSON、表格、PDF、Office 文档、图片和音视频，并保留路径、页签和操作区时。
+- 需要在同一块区域里切换文件、目录摘要（L0 摘要、L1 总览）和宿主自己的内容（看板、图谱）时：三者分别对应 `file`、`directory`、`content` 三种页签。
+- 需要自己决定数据来源、保存方式和导航时：组件不发起请求，也不需要 `OpenVikingProvider`。使用 [FileBrowser](../modules/file-browser) 时预览已经内置，不需要单独接入。
+
+## 引入
+
+FilePreview 用可选 peer `@ark-design/ui` 的 FileViewer 渲染正文。版本需满足 `>=0.0.0-beta.7`，用 `beta` 标签或具体版本号安装；它把 `@arco-design/web-react`、`three` 和 `@types/three` 声明为必需 peer，需要一并安装：
+
+```bash
+npm install @ark-design/ui@beta @arco-design/web-react three@^0.180.0 @types/three@^0.180.0
+```
+
+```tsx
+import { FilePreview } from '@openviking/react/components/file-preview';
+import '@openviking/react/components/file-preview/style.css';
+```
+
+`style.css` 已包含 FileViewer 的样式，不需要另外引入。正文的颜色取自 Arco 的主题变量，需要在应用入口再加载一份颜色主题，见下方的「主题变量」。
+
+## 代码演示
+
+### 基础用法
+
+三个页签分别是可编辑的 Markdown、原生图片预览和宿主渲染的内容页签。点击路径层级、正文里的链接，或在预览与源码之间切换，结果显示在示例下方。
+
+```tsx file="../../_demos/file-preview-basic.tsx" preview
+
+```
+
+示例用 `slots.actions` 渲染了自己的工具栏，按钮来自文档站内部控件，应用里换成自己的按钮组件。
+
+### 分级内容与图片
+
+用 `levels` 为同一个文件提供 L0、L1、L2 三级内容，Markdown 里的相对路径与 `viking://` 图片由 `resolveImage` 解析。切换层级检查各级图片，在「原始图片」里点击图片可以放大。
+
+```tsx file="../../_demos/file-preview-console.tsx" preview
+
+```
+
+示例使用固定的模拟数据；「空文件」和「图片失败」演示对应的状态。
+
+### 注入操作
+
+通过 `actions` 注入宿主操作：一个操作显示为按钮，多个操作收进「…」菜单。切换操作布局，勾选「模拟失败」查看失败提示，其余复选框控制内置入口的显隐。
+
+```tsx file="../../_demos/file-preview-actions.tsx" preview
+
+```
+
+模拟操作等待 2 秒；执行期间切换页签或勾选「自定义工具栏」，同一资源的操作仍保持锁定。
+
+### 代码编辑
+
+选择代码文件，使用 CodeMirror 6 编辑 44 种语法，支持行号、撤销和 Prism 语法高亮。
+
+```tsx file="../../_demos/file-preview-editing.tsx" preview
+
+```
+
+### 状态兜底
+
+切换文件类型和读取状态，对比内置状态与 `slots` 里的自定义状态。
+
+```tsx file="../../_demos/file-preview-fallbacks.tsx" preview
+
+```
+
+示例故意使用无效的图片和视频数据触发错误态；选择「不支持的格式」可以下载示例的原始内容。
+
+## API
+
+### FilePreview
+
+| 参数              | 说明                                                                  | 类型                                             | 默认值                   |
+| ----------------- | --------------------------------------------------------------------- | ------------------------------------------------ | ------------------------ |
+| tabs              | 页签列表，至少一个，用 `kind` 区分文件、目录和内容页签                | `readonly [FilePreviewTab, ...FilePreviewTab[]]` | 必填                     |
+| activeKey         | 受控的当前页签，找不到对应页签时显示第一个                            | `string`                                         | -                        |
+| defaultActiveKey  | 非受控时的初始页签                                                    | `string`                                         | 第一个页签               |
+| toolbar           | 统一设置所有页签的内置入口，顶层设为 `false` 的入口，页签无法重新打开 | `FilePreviewToolbarOptions`                      | -                        |
+| onActiveKeyChange | 切换页签时触发，参数为新页签的 `key`，受控时由宿主更新 `activeKey`    | `(key: string) => void`                          | -                        |
+| labels            | 覆盖界面文案，页签的 `labels` 优先                                    | `FilePreviewLabels`                              | -                        |
+| locale            | 界面语言，规则见[国际化](../guide/i18n)                               | `'zh-CN' \| 'en-US'`                             | 继承上级，默认 `'en-US'` |
+| ref               | 取得命令式句柄，切换页签或访问 FileViewer                             | `Ref<FilePreviewHandle>`                         | -                        |
+| className、style  | 外观与布局，其余 HTML 属性透传到根元素                                | HTML 属性                                        | -                        |
+
+### FilePreviewTabBase
+
+三种页签共有的字段。内容页签没有标题行，`toolbar`、`onOpenParent`、`onCopyPath` 和 `labels` 对它无效。
+
+| 参数         | 说明                                                                                          | 类型                         | 默认值                                         |
+| ------------ | --------------------------------------------------------------------------------------------- | ---------------------------- | ---------------------------------------------- |
+| key          | 页签的唯一标识                                                                                | `string`                     | 必填                                           |
+| title        | 页签行显示的内容，可以是文本或带样式的节点                                                    | `ReactNode`                  | 文件页签为 `source.fileName`，目录页签为 `key` |
+| icon         | 页签图标，省略时不占图标位，按文件名取图标可用 `@openviking/react/icons` 的 `getFileTypeIcon` | `ReactNode`                  | -                                              |
+| disabled     | 禁用该页签，禁用后不能选中                                                                    | `boolean`                    | `false`                                        |
+| toolbar      | 隐藏该页签的内置入口，不能重新打开顶层已关闭的入口                                            | `FilePreviewToolbarOptions`  | -                                              |
+| onOpenParent | 文件页签的 `operations.openParent` 完成后触发，参数为被点击层级的完整 URI，目录页签不触发     | `(uri: string) => void`      | -                                              |
+| onCopyPath   | 路径复制成功后触发，参数为已复制的路径                                                        | `(path: string) => void`     | -                                              |
+| labels       | 覆盖该页签的文案，优先于顶层 `labels`                                                         | `Partial<FilePreviewLabels>` | -                                              |
+
+### FilePreviewFileTab
+
+按格式渲染 `source` 的页签，包含 `FilePreviewTabBase` 的全部字段。
+
+| 参数           | 说明                                                                                 | 类型                                                          | 默认值  |
+| -------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------- | ------- |
+| kind           | 页签类型，固定为 `'file'`                                                            | `'file'`                                                      | 必填    |
+| source         | 要预览的内容与文件信息，有可用的 `levels` 时渲染当前层级的 `source`                  | `FilePreviewSource`                                           | 必填    |
+| loading        | 正文还在读取：正文区显示加载态，页签行和路径行照常显示，此时 `source` 可以没有内容   | `boolean`                                                     | `false` |
+| operations     | 异步执行能力，省略的方法对应的入口不可用                                             | `FilePreviewOperations`                                       | -       |
+| resources      | 伴随资源，按 `key` 匹配 Markdown 里的图片地址，可以是相对路径或 `viking://` URI      | `readonly FileViewerResource[]`                               | -       |
+| levels         | 分级内容，每级有自己的 `source`、`resources` 和 `editing`                            | `readonly FilePreviewLevel[]`                                 | -       |
+| activeLevelKey | 受控的当前层级，省略时使用第一个未禁用的层级                                         | `string`                                                      | -       |
+| resolveImage   | 解析 Markdown 里的图片地址并返回可访问的 URL，请求、取消和 Blob URL 的回收由宿主负责 | `(src: string, source: FilePreviewSource) => Promise<string>` | -       |
+| editing        | 编辑能力，省略时只读，是否可编辑只取决于它；启用 `levels` 后只取当前层级的 `editing` | `FilePreviewEditing`                                          | -       |
+| actions        | 标题行里的宿主操作，数组或接收上下文的函数，规则见「注意」                           | `FilePreviewActionSource`                                     | -       |
+| onLevelChange  | 切换层级时触发，参数为新层级的 `key`，受控时由宿主更新 `activeLevelKey`              | `(key: string) => void`                                       | -       |
+| onOpenUri      | Markdown 里的链接通过 `operations.openUri` 打开后触发，参数为被点击的链接地址        | `(uri: string) => void`                                       | -       |
+| slots          | 标题行、页脚与状态插槽                                                               | `FilePreviewFileTabSlots`                                     | -       |
+
+### FilePreviewDirectoryTab
+
+目录的多级摘要，例如 L0 摘要与 L1 总览，包含 `FilePreviewTabBase` 的全部字段。摘要只读，没有 `editing`。
+
+| 参数                | 说明                                                           | 类型                                                                   | 默认值  |
+| ------------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------- | ------- |
+| kind                | 页签类型，固定为 `'directory'`                                 | `'directory'`                                                          | 必填    |
+| levels              | 摘要层级，至少一级，多于一级时在标题行下显示切换页签           | `readonly [FilePreviewDirectoryLevel, ...FilePreviewDirectoryLevel[]]` | 必填    |
+| loading             | 摘要还在读取：正文区显示内置加载态，层级切换等数据到达后再显示 | `boolean`                                                              | `false` |
+| activeLevelKey      | 受控的当前层级                                                 | `string`                                                               | -       |
+| defaultLevelKey     | 非受控时的初始层级                                             | `string`                                                               | 第一级  |
+| resources           | 各层级共用的伴随资源，层级自己的 `resources` 优先              | `readonly FileViewerResource[]`                                        | -       |
+| resolveImage        | 解析当前层级 Markdown 里的图片地址，规则同文件页签             | `(src: string, source: FilePreviewSource) => Promise<string>`          | -       |
+| operations          | 异步执行能力，目录页签只使用 `openParent`                      | `FilePreviewOperations`                                                | -       |
+| actions             | 标题行里的宿主操作，上下文里的 `source` 和 `path` 指向当前层级 | `FilePreviewActionSource`                                              | -       |
+| onActiveLevelChange | 层级变化时触发，参数为新层级的 `key`                           | `(key: string) => void`                                                | -       |
+| slots               | 标题行、页脚与状态插槽，与文件页签相同                         | `FilePreviewFileTabSlots`                                              | -       |
+
+### FilePreviewContentTab
+
+展示宿主自己的内容，例如看板或图谱，包含 `FilePreviewTabBase` 的全部字段。
+
+| 参数    | 说明                                                 | 类型        | 默认值 |
+| ------- | ---------------------------------------------------- | ----------- | ------ |
+| kind    | 页签类型，固定为 `'content'`                         | `'content'` | 必填   |
+| title   | 页签行显示的内容，内容页签没有文件名可以回落         | `ReactNode` | 必填   |
+| content | 页签正文，铺满页签行以下的区域，排版与滚动由宿主负责 | `ReactNode` | 必填   |
+
+### FilePreviewSource
+
+`content`、`file`、`url` 同时提供时，按这个顺序取第一个有值的；三者都没有时显示「不支持预览」状态。
+
+| 参数      | 说明                                                                                      | 类型           | 默认值  |
+| --------- | ----------------------------------------------------------------------------------------- | -------------- | ------- |
+| fileName  | 文件名，用于识别格式和显示标题，无扩展名的文件按文件名匹配，例如 `Dockerfile`、`Makefile` | `string`       | 必填    |
+| content   | 文本内容，适用于 Markdown、JSON、代码等，只有空字符串显示「文件为空」                     | `string`       | -       |
+| file      | 二进制文件，适用于 PDF、Office 文档、表格和图片等                                         | `File \| Blob` | -       |
+| url       | 可访问的文件地址，组件不做鉴权                                                            | `string`       | -       |
+| path      | 完整路径，显示为面包屑并作为复制路径的内容，省略时面包屑只显示文件名                      | `string`       | -       |
+| fileType  | 显式的格式提示，优先于扩展名与 MIME                                                       | `string`       | -       |
+| truncated | 正文只读取了一部分，为 `true` 时在文件页签的正文下方提示                                  | `boolean`      | `false` |
+
+### FilePreviewLevel
+
+文件页签 `levels` 的一级内容。
+
+| 参数      | 说明                                           | 类型                            | 默认值  |
+| --------- | ---------------------------------------------- | ------------------------------- | ------- |
+| key       | 层级的唯一标识                                 | `string`                        | 必填    |
+| label     | 层级切换按钮显示的内容                         | `ReactNode`                     | 必填    |
+| source    | 该层级的内容与文件信息                         | `FilePreviewSource`             | 必填    |
+| resources | 该层级的伴随资源，省略时使用页签的 `resources` | `readonly FileViewerResource[]` | -       |
+| disabled  | 禁用该层级，禁用后不能选中                     | `boolean`                       | `false` |
+| editing   | 该层级的编辑能力，省略时该层级只读             | `FilePreviewEditing`            | -       |
+
+### FilePreviewDirectoryLevel
+
+目录页签 `levels` 的一级摘要。
+
+| 参数      | 说明                                           | 类型                            | 默认值 |
+| --------- | ---------------------------------------------- | ------------------------------- | ------ |
+| key       | 层级的唯一标识，用于切换与受控状态             | `string`                        | 必填   |
+| label     | 层级切换页签显示的内容，例如「L0 摘要」        | `ReactNode`                     | 必填   |
+| source    | 该层级的正文来源，与文件页签的 `source` 相同   | `FilePreviewSource`             | 必填   |
+| resources | 该层级的伴随资源，省略时使用页签的 `resources` | `readonly FileViewerResource[]` | -      |
+
+### FilePreviewOperations
+
+组件调用这些方法执行操作，Promise 完成后才触发对应的 `onOpenParent`、`onOpenUri`，拒绝时静默，不触发通知。
+
+| 参数       | 说明                                                                                             | 类型                             | 默认值 |
+| ---------- | ------------------------------------------------------------------------------------------------ | -------------------------------- | ------ |
+| openParent | 打开被点击的祖先层级，参数是该层级的完整 URI，省略时面包屑的层级不可点击                         | `(uri: string) => Promise<void>` | -      |
+| openUri    | 打开 Markdown 里被点击的链接，参数是 Markdown 里写的原始地址，传入后由宿主接管导航并解析相对路径 | `(uri: string) => Promise<void>` | -      |
+
+### FilePreviewEditing
+
+| 参数        | 说明                                                                                                                  | 类型                                                          | 默认值 |
+| ----------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- | ------ |
+| save        | 保存草稿，抛错或 reject 时保留草稿并显示保存失败的提示                                                                | `(value: string) => Promise<void>`                            | 必填   |
+| loadContent | 进入编辑时读取完整文本，返回 `undefined` 放弃本次编辑；省略时使用 `content` 或 `file` 的文本，只提供 `url` 时必须提供 | `(source: FilePreviewSource) => Promise<string \| undefined>` | -      |
+| onSave      | 保存成功后触发，参数为已保存的文本                                                                                    | `(value: string) => void`                                     | -      |
+| onCancel    | 取消编辑，或切换页签、层级而丢弃草稿后触发，参数为丢弃的文本；保存成功时不触发                                        | `(value: string) => void`                                     | -      |
+
+### FilePreviewAction
+
+| 参数      | 说明                                                               | 类型            | 默认值  |
+| --------- | ------------------------------------------------------------------ | --------------- | ------- |
+| key       | 操作的稳定标识，同一组内唯一                                       | `string`        | 必填    |
+| icon      | 图标，按钮的无障碍名称来自 `label`，图标作为装饰隐藏               | `ReactNode`     | 必填    |
+| label     | 悬停和聚焦时的提示、菜单项文字，同时是按钮的无障碍名称             | `string`        | 必填    |
+| onClick   | 点击时调用，可以返回 Promise，返回值被忽略，抛错或 reject 视为失败 | `() => unknown` | 必填    |
+| disabled  | 禁止点击                                                           | `boolean`       | `false` |
+| className | 附加到按钮和菜单项上的类名                                         | `string`        | -       |
+
+### FilePreviewToolbarOptions
+
+为 `false` 的入口始终隐藏，即使页签提供了对应能力；页签的 `toolbar` 只能进一步隐藏顶层允许显示的入口。
+
+| 参数       | 说明                                            | 类型      | 默认值 |
+| ---------- | ----------------------------------------------- | --------- | ------ |
+| copyPath   | 路径旁的复制按钮，有路径时显示                  | `boolean` | `true` |
+| viewSwitch | 预览与源码切换，当前格式同时支持两种视图时显示  | `boolean` | `true` |
+| edit       | 编辑按钮，当前文件或层级提供了 `editing` 时显示 | `boolean` | `true` |
+
+### FilePreviewHeaderSlots
+
+标题行与页脚的插槽。
+
+| 参数         | 说明                                                                                 | 类型                                                        | 默认值 |
+| ------------ | ------------------------------------------------------------------------------------ | ----------------------------------------------------------- | ------ |
+| actions      | 替换默认工具栏，包含编辑时的保存与取消，传 `null` 隐藏整个操作区，函数形式接收上下文 | `ReactNode \| ((actions: FilePreviewActions) => ReactNode)` | -      |
+| extraActions | 追加到默认工具栏末尾的节点，编辑时隐藏，设置了 `actions` 时不渲染                    | `ReactNode`                                                 | -      |
+| titleExtra   | 路径旁的附加内容，例如权限标记、状态徽标或版本号，组件不解释它                       | `ReactNode`                                                 | -      |
+| footer       | 正文下方的补充信息，例如更新时间和内容来源说明，位于滚动区之外，多个子节点左右对齐   | `ReactNode`                                                 | -      |
+
+### FilePreviewFileTabSlots
+
+包含 `FilePreviewHeaderSlots` 的全部字段，另有加载、失败和格式不支持时的替代内容，不传时使用内置状态。
+
+| 参数                | 说明                                                                                | 类型                               | 默认值 |
+| ------------------- | ----------------------------------------------------------------------------------- | ---------------------------------- | ------ |
+| loadingFallback     | 读取中的替代内容，`loading` 为 `true` 时也使用                                      | `ReactNode`                        | -      |
+| errorFallback       | 读取失败时的替代内容，替换内置的失败提示和重试按钮                                  | `ReactNode`                        | -      |
+| unsupportedFallback | 格式无法预览时的替代内容，传入后接管整个不支持态，FileViewer 的下载入口随之不再显示 | `ReactNode`                        | -      |
+| confirmFallback     | 大文件确认态的替代组件，收到 `onConfirm`、`onCancel` 等属性                         | `ComponentType<ConfirmSlotProps>`  | -      |
+| downloadFallback    | 无法内联预览时的替代组件，收到 `onDownload`、`onRetry` 等属性                       | `ComponentType<DownloadSlotProps>` | -      |
+
+### FilePreviewActions
+
+组件传给 `actions` 函数和 `slots.actions` 渲染函数的上下文，只读取，不需要自己构造。
+
+| 参数          | 说明                                                             | 类型                                  | 默认值 |
+| ------------- | ---------------------------------------------------------------- | ------------------------------------- | ------ |
+| source        | 当前正文的来源，启用分级内容后指向当前层级                       | `FilePreviewSource`                   | -      |
+| path          | 当前路径，启用分级内容后指向当前层级                             | `string`                              | -      |
+| viewMode      | 当前视图模式，`'preview'` 或 `'source'`                          | `FilePreviewViewMode`                 | -      |
+| setViewMode   | 切换视图模式                                                     | `(mode: FilePreviewViewMode) => void` | -      |
+| canSwitchView | 当前格式是否同时支持预览与源码，为 `false` 时不要渲染切换控件    | `boolean`                             | -      |
+| editing       | 是否处于编辑态                                                   | `boolean`                             | -      |
+| busy          | 是否有保存或读取正在进行                                         | `boolean`                             | -      |
+| canEdit       | 是否可以进入编辑：提供了 `editing`，不是图片或视频，且不在编辑态 | `boolean`                             | -      |
+| startEditing  | 进入编辑态，先读取完整文本                                       | `() => void`                          | -      |
+| saveEditing   | 保存草稿，成功时返回 `true`                                      | `() => Promise<boolean>`              | -      |
+| cancelEditing | 放弃草稿并退出编辑态                                             | `() => void`                          | -      |
+| canCopyPath   | 是否有可复制的路径                                               | `boolean`                             | -      |
+| copyPath      | 复制路径，成功时返回 `true`                                      | `() => Promise<boolean>`              | -      |
+
+### FilePreviewLabels
+
+所有字段都是可选的 `string`，省略的字段使用当前语言的默认文案。
+
+| 参数             | 说明                                                                   | 类型     | 默认值                 |
+| ---------------- | ---------------------------------------------------------------------- | -------- | ---------------------- |
+| previewImage     | 放大图片按钮的无障碍名称，后接文件名                                   | `string` | `'放大图片'`           |
+| closePreview     | 放大图片弹窗里关闭按钮的文字                                           | `string` | `'关闭预览'`           |
+| showHiddenPath   | 面包屑里折叠层级的「…」按钮的无障碍名称                                | `string` | `'显示隐藏的路径层级'` |
+| copyPath         | 复制路径按钮的提示与无障碍名称                                         | `string` | `'复制路径'`           |
+| copied           | 路径复制成功的反馈                                                     | `string` | `'已复制'`             |
+| copyFailed       | 路径复制失败的反馈                                                     | `string` | `'复制失败'`           |
+| moreActions      | 多个操作收起后的「…」按钮的提示与无障碍名称                            | `string` | `'更多操作'`           |
+| actionFailed     | 注入的操作失败时的提示，后接错误信息                                   | `string` | `'操作失败'`           |
+| previewMode      | 视图切换里「预览」的文字                                               | `string` | `'预览'`               |
+| sourceMode       | 视图切换里「源码」的文字                                               | `string` | `'源码'`               |
+| viewSwitch       | 视图切换按钮组的无障碍名称                                             | `string` | `'显示模式'`           |
+| edit             | 编辑按钮的提示与无障碍名称                                             | `string` | `'编辑'`               |
+| editFile         | 组件不渲染这条文案，设置它没有效果                                     | `string` | `'编辑文件'`           |
+| save             | 编辑时保存按钮的文字                                                   | `string` | `'保存编辑'`           |
+| editorLoadFailed | 编辑器加载失败时的提示                                                 | `string` | `'编辑器加载失败'`     |
+| highlightFailed  | 语法高亮加载失败时的提示                                               | `string` | `'语法高亮加载失败'`   |
+| editor           | 编辑区文本框的无障碍名称                                               | `string` | `'编辑正文'`           |
+| leaveEditing     | 编辑时取消按钮的文字，读取失败后退出编辑的按钮也使用它                 | `string` | `'取消编辑'`           |
+| retry            | 重试按钮的文字                                                         | `string` | `'重试'`               |
+| loadFailed       | 读取文件失败的提示，进入编辑时读取失败也使用它                         | `string` | `'文件加载失败'`       |
+| saveFailed       | 保存失败的提示                                                         | `string` | `'保存失败'`           |
+| unsupported      | 没有可用来源时的提示，格式不受支持的提示由 FileViewer 按 `locale` 显示 | `string` | `'不支持预览此格式'`   |
+| loading          | 加载提示                                                               | `string` | `'加载中…'`            |
+| fileEmpty        | `content` 为空字符串时的提示                                           | `string` | `'该文件为空'`         |
+| noContent        | 组件不渲染这条文案，设置它没有效果                                     | `string` | `'暂无可显示内容'`     |
+| truncated        | `source.truncated` 为 `true` 时的提示                                  | `string` | `'仅显示部分内容'`     |
+
+### FilePreviewHandle
+
+通过 `ref` 取得，用于命令式切换页签和访问 FileViewer。
+
+| 参数            | 说明                                                                                                            | 类型                         | 默认值 |
+| --------------- | --------------------------------------------------------------------------------------------------------------- | ---------------------------- | ------ |
+| setActiveTab    | 切换到指定页签，页签不存在、被禁用、已是当前页签或正在保存时返回 `false`                                        | `(key: string) => boolean`   | -      |
+| getActiveTab    | 返回当前页签的 `key`                                                                                            | `() => string`               | -      |
+| getViewerHandle | 返回当前文件页签的 FileViewer 句柄，用于翻页、搜索和缩放，当前不是文件页签、是图片或视频、尚未就绪时返回 `null` | `() => ViewerHandle \| null` | -      |
+
+### 其他类型
+
+- `FilePreviewTab`：`FilePreviewFileTab`、`FilePreviewDirectoryTab` 和 `FilePreviewContentTab` 的联合类型，用 `kind` 区分。
+- `FilePreviewActionItems`：由单个 `FilePreviewAction` 或 `FilePreviewAction[]`（一组操作）组成的数组。
+- `FilePreviewActionSource`：`FilePreviewActionItems`，或接收 `FilePreviewActions` 并返回它的函数。
+- `FilePreviewViewMode`：`'preview' | 'source'`。
+- `FilePreviewComponent`：`FilePreview` 的类型，`ref` 为 `FilePreviewHandle`。
+
+## 注意
+
+### 页签与布局
+
+- 尺寸：组件的宽高都是 `100%`，给父容器设置确定的高度；正文在组件内部滚动。
+- 按需加载：FileViewer 在首次渲染文件正文时才加载，导入组件时不加载它，也不访问 `window`、`document`。
+- 内容页签：没有标题行，也没有 `slots`，组件不在 `content` 外套容器，也不提供滚动，工具栏、标题和滚动容器写在 `content` 里。
+- 目录页签：摘要只读，没有 `editing`；只有一个层级时不显示层级切换。
+- 两种 `levels`：文件页签的 `levels` 显示为路径行下的按钮组，每级可以单独提供 `editing`，回调是 `onLevelChange`；目录页签的 `levels` 显示为标题行下的下划线页签，回调是 `onActiveLevelChange`。
+- 键盘：页签行和目录页签的层级切换支持方向键、Home 和 End；保存期间所有页签禁用。
+- 导出：组件和类型从 `@openviking/react/components/file-preview` 导出，包根入口不导出 `FilePreview`；`FileViewerResource`、`ViewerHandle`、`ConfirmSlotProps` 和 `DownloadSlotProps` 从 `@ark-design/ui/file-viewer/core` 导入。
+
+### 内容与格式
+
+- 二进制内容：PDF、Office 文档和图片用 `source.file` 或 `source.url` 传入，不要解码成字符串放进 `content`。
+- 支持的格式：Markdown、代码、JSON 与 JSONL、纯文本、HTML、diff 与 patch、CSV、TSV、XLSX、PDF、DOCX、PPTX、图片、视频，以及 MP3、WAV 音频；CAD 与 3D 模型不在其中。具体扩展名以 `@ark-design/ui` 的渲染器为准。
+- 图片与视频：使用浏览器原生元素显示，按扩展名（png、jpg、jpeg、gif、webp、avif、bmp、ico、svg；mp4、webm、mov）、`fileType` 或 MIME 识别，能否显示取决于浏览器。
+- 图片与视频的边界：没有源码视图，也不能编辑；音频（mp3、wav）由 FileViewer 播放。
+- 图片显示：按比例居中，右下角显示原始像素尺寸，点击在弹窗里放大；视频使用原生播放控件，不自动播放。
+- 地址生命周期：组件为图片和视频的 `content`、`file` 创建的 Blob URL，在来源替换或卸载时回收；`url` 和 `resolveImage` 返回的地址由宿主管理。
+- Markdown 元数据：开头的 YAML 元数据在预览里显示为代码块，源码、编辑、保存和复制仍使用原文。
+- 点阵背景：Markdown 正文及 PDF、Word、PPT 的页面外围显示点阵背景，随宿主主题切换，底色和点色见下方「主题变量」。
+- Markdown 图片：先匹配 `resources`，未命中再调用 `resolveImage`，`resolveImage` 拒绝时使用图片的原始地址；组件不会把 `viking://` 转成 HTTP 地址。
+- Markdown 链接：只有 Markdown 触发 `operations.openUri`，组件传出 Markdown 里写的原始地址，不补全相对路径。
+- JSON 日志：`.json` 和 `.jsonl` 渲染为 JSON 树，会话日志等需要自己呈现的结构化文件，用内容页签渲染。
+- 大文件：组件不判断文件大小，FileViewer 需要确认时显示确认态，可用 `slots.confirmFallback` 替换；编辑文本的长度上限由宿主在 `editing` 里处理。
+- 增强功能：上一张与下一张、相邻图片预加载和视频转录不在组件内，在预览区外组合，或通过 `slots.actions`、`slots.footer` 注入。
+- FileViewer 自带的控件：组件不显示它的下载、全屏、翻页、搜索和缩放入口；翻页、搜索、缩放用 `getViewerHandle()`，下载用注入的操作。
+
+### 路径与面包屑
+
+- 层级：`source.path` 按 `/` 拆成层级，协议前缀（如 `viking://`）显示在首层，最后一级是当前文件名。
+- 没有路径：省略 `source.path` 时面包屑只显示文件名，也没有复制路径按钮。
+- 导航：每个祖先层级都是按钮，点击时把该层级的完整 URI（如 `viking://a/b`）传给 `operations.openParent`，不限于直接父级；没有 `operations.openParent` 时按钮禁用。
+- 绝对路径：`/a/b/c.md` 的祖先保留开头的 `/`，相对路径保持原样。
+- 折叠：放不下时，先把首层之后的中间层级收进「…」菜单，仍放不下才连首层一起收起，菜单里的层级同样调用 `operations.openParent`。
+- 复制路径：使用 `navigator.clipboard`，需要安全上下文（HTTPS 或 localhost）；失败时显示 `labels.copyFailed`，不触发 `onCopyPath`。
+
+### 操作与编辑
+
+- 编辑器：首次进入编辑时加载 CodeMirror 6；Prism 语言包按 `source.fileType`、文件扩展名或文件名识别后加载，未知格式保持纯文本编辑。
+- 高亮依赖：编辑器与 FileViewer 使用同一个 `prismjs` 包；消费端解析到同一版本时可共用核心和语言模块，不额外加载 CodeMirror 的语言语法包。
+- 高亮更新：输入后延迟 100 毫秒重新计算全文高亮；高亮失败不影响草稿编辑和保存，可点击重试。
+
+- 操作的呈现：没有操作时不显示入口，一个操作显示为图标按钮，两个及以上收进「…」菜单。
+- 分组：连续的单个操作合并成一组，每个非空数组单独成组，空数组被忽略且不打断相邻的单个操作，组之间显示分隔线。
+- 函数形式：`actions` 和 `slots.actions` 可以是函数，在渲染时调用，只根据上下文返回内容，不要在里面发请求或更新状态。
+- 失败：失败提示显示在该资源的工具栏旁，再次点击即可重试。
+- 锁定：同一资源的注入操作在执行期间保持锁定，切换页签、层级或替换 `slots.actions` 不会重置，其他资源和其他组件实例互不影响；资源以 `source.path` 标识，没有路径时用页签的 `key` 和 `fileName`。
+- 编辑时：注入的操作与 `slots.extraActions` 暂时隐藏，工具栏显示保存和取消，视图切换禁用。
+- 替换工具栏：设置 `slots.actions` 后，默认工具栏连同保存和取消一起被替换，用上下文里的 `startEditing`、`saveEditing`、`cancelEditing` 自己渲染。
+- 编辑流程：点击编辑进入源码视图并显示文本框，保存或取消后回到预览；保存期间禁止切换页签、层级和重复提交，保存失败时保留草稿并显示 `labels.saveFailed`。
+
+### 文案与状态
+
+- `labels` 的范围：只覆盖组件自己渲染的文案；FileViewer 渲染的文案（大文件确认、无法预览时的提示、各格式渲染器里的提示）随 `locale` 切换，不能逐条覆盖。
+- 整体替换：需要自定义 FileViewer 的状态时，用 `slots` 里的 `confirmFallback`、`unsupportedFallback`、`downloadFallback` 整体替换。
+- 图片与视频的状态：同样使用 `loadingFallback`、`errorFallback`，没有来源时使用 `unsupportedFallback`。
+- 不支持的格式：传入 `unsupportedFallback` 后接管整个不支持态，FileViewer 原本提供的下载入口随之不再显示。
+- 下载入口：`downloadFallback` 收到 `onDownload` 和 `onRetry`，与 `unsupportedFallback` 同时传入时优先使用它。
+
+### 编辑器高亮格式
+
+`source.fileType` 支持语言名、扩展名或 MIME 类型；通用 `code` 按文件名识别。SVG 默认显示为图片，以源码编辑时传入 `fileType: 'xml'`。
+
+| 语法                                | 扩展名或文件名                                                         |
+| ----------------------------------- | ---------------------------------------------------------------------- |
+| JavaScript / JSX / TypeScript / TSX | `js`, `mjs`, `cjs`, `jsx`, `ts`, `tsx`                                 |
+| Python / Go / Rust / Java           | `py`, `pyw`, `go`, `rs`, `java`                                        |
+| C / C++ / C# / Objective-C          | `c`, `h`, `cpp`, `cc`, `cxx`, `hpp`, `hxx`, `cs`, `m`, `mm`            |
+| Kotlin / Swift / Dart / Scala       | `kt`, `kts`, `swift`, `dart`, `scala`                                  |
+| PHP / Ruby / Perl / Lua / R         | `php`, `rb`, `rake`, `gemspec`, `pl`, `pm`, `lua`, `r`, `rmd`          |
+| Elixir / Erlang / Haskell           | `ex`, `exs`, `erl`, `hrl`, `hs`, `lhs`                                 |
+| JSON / YAML / TOML / INI            | `json`, `jsonl`, `ndjson`, `yaml`, `yml`, `toml`, `ini`, `cfg`, `conf` |
+| HTML / XML / CSS / SCSS / Less      | `html`, `htm`, `xhtml`, `xml`, `svg`, `css`, `scss`, `less`            |
+| Markdown / LaTeX                    | `md`, `markdown`, `mdx`, `tex`, `latex`                                |
+| SQL / GraphQL / Protobuf            | `sql`, `graphql`, `gql`, `proto`                                       |
+| Bash / Fish                         | `sh`, `bash`, `zsh`, `fish`, `.bashrc`, `.zshrc`, `.bash_profile`      |
+| Docker / Makefile / Nginx           | `dockerfile`, `Dockerfile.*`, `makefile`, `GNUmakefile`, `nginx`       |
+| WebAssembly 文本                    | `wat`, `wasm`                                                          |
+| Diff                                | `diff`, `patch`                                                        |
+
+## 主题变量
+
+外壳的颜色取自 `--ov-ui-color-*`：在应用根节点或任意祖先上设置它们即可换肤，未设置时使用下表的默认值，规则见[快速开始](../guide/getting-started)。暗色读取 `<html>` 上的 `.dark` 类，不读取 `prefers-color-scheme`。
+
+| 变量                             | 亮色              | 暗色                     | 用途                   |
+| -------------------------------- | ----------------- | ------------------------ | ---------------------- |
+| `--ov-ui-color-primary`          | `#5252ff`         | `#5f5fff`                | 主色，焦点环           |
+| `--ov-ui-color-primary-hover`    | `#7075ff`         | `#7075ff`                | 主色悬停               |
+| `--ov-ui-color-text-1`           | `#0b0b0f`         | `#c7ccd6`                | 正文                   |
+| `--ov-ui-color-text-3`           | `#6e718c`         | `#737a87`                | 次要文字               |
+| `--ov-ui-color-border-2`         | `#e1e4f2`         | `#2e3138`                | 分隔线与边框           |
+| `--ov-ui-color-bg-1`             | `#ffffff`         | `#131416`                | 面板底色               |
+| `--ov-ui-color-bg-5`             | `#f1f2f9`         | `#23252a`                | 悬停背景               |
+| `--ov-ui-color-syntax-number`    | `#722ed1`         | `#b37feb`                | 编辑器中的数字与布尔值 |
+| `--ov-ui-color-preview-backdrop` | `#f8f8f8`         | `#202227`                | 预览外围的点阵底色     |
+| `--ov-ui-color-preview-dot`      | `rgb(0 0 0 / 8%)` | `rgb(255 255 255 / 12%)` | 点阵的点色             |
+
+只调整本组件时，在组件根节点上覆盖 `--ov-ui-file-preview-*`：
+
+```css
+.my-workbench .ov-file-preview {
+  --ov-ui-file-preview-accent: #0f766e;
+}
+```
+
+| 变量                                | 说明                        | 默认值                        |
+| ----------------------------------- | --------------------------- | ----------------------------- |
+| `--ov-ui-file-preview-accent`       | 强调色，例如选中的分级标签  | `--ov-ui-color-primary`       |
+| `--ov-ui-file-preview-accent-hover` | 路径层级与「…」按钮的悬停色 | `--ov-ui-color-primary-hover` |
+| `--ov-ui-file-preview-border`       | 分隔线与边框                | `--ov-ui-color-border-2`      |
+| `--ov-ui-file-preview-focus-ring`   | 键盘焦点环                  | `--ov-ui-color-primary`       |
+| `--ov-ui-file-preview-row-hover`    | 悬停背景                    | `--ov-ui-color-bg-5`          |
+| `--ov-ui-file-preview-surface`      | 页签、菜单和面板的底色      | `--ov-ui-color-bg-1`          |
+| `--ov-ui-file-preview-text`         | 正文与选中页签的文字        | `--ov-ui-color-text-1`        |
+| `--ov-ui-file-preview-text-muted`   | 次要文字与图标              | `--ov-ui-color-text-3`        |
+| `--ov-ui-file-preview-text-path`    | 路径面包屑的文字            | `--ov-ui-color-text-3`        |
+| `--ov-ui-radius`                    | 面包屑菜单项的圆角          | `6px`                         |
+| `--ov-ui-font-mono`                 | 路径与编辑区的字体          | `ui-monospace, monospace`     |
+
+正文由 `@ark-design/ui` 渲染，颜色主要取自 Arco 的 `--color-*`、`--primary-*` 变量。在应用入口加载一份 Arco 颜色主题，例如 `@ark-design/ui/styles/aml-theme.css` 或 `@arco-design/web-react/dist/css/arco.css`；未加载时这些变量没有值，正文的颜色样式不会生效。暗色下还要在 `<body>` 上设置 `arco-theme="dark"`，与 `<html>` 上的 `.dark` 同时生效。

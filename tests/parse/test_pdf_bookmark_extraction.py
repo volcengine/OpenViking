@@ -7,12 +7,17 @@ Verifies that _extract_bookmarks correctly extracts bookmark entries
 and that _convert_local injects them as markdown headings.
 """
 
+import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from pathlib import Path
+from threading import Barrier, Lock
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pdfminer.pdftypes import PDFObjRef
+from pdfminer.psparser import LIT
 
 from openviking.parse.parsers.pdf import PDFParser
 
@@ -129,7 +134,7 @@ class TestExtractBookmarks:
         self.parser = PDFParser()
 
     def test_extract_bookmarks_with_outlines(self):
-        """Bookmarks are extracted from PDF outlines with correct levels and page mapping."""
+        """Local Dest and GoTo outlines map to pages; remote GoToR does not."""
         # Mock pdfplumber PDF object
         mock_pdf = MagicMock()
 
@@ -139,20 +144,27 @@ class TestExtractBookmarks:
         # Mock page reference objects for bookmark destinations
         mock_ref1 = _make_ref(100)  # Points to page 1
         mock_ref2 = _make_ref(200)  # Points to page 2
+        mock_pdf.doc.getobj.return_value = {
+            "S": LIT("GoTo"),
+            "D": [mock_ref2, LIT("Fit")],
+        }
 
         # Mock document outlines: (level, title, dest, action, structelem)
         mock_pdf.doc.get_outlines.return_value = [
-            (1, "Chapter 1", [mock_ref1, "/Fit"], None, None),
-            (2, "Section 1.1", [mock_ref1, "/Fit"], None, None),
-            (1, "Chapter 2", [mock_ref2, "/Fit"], None, None),
+            (1, "Chapter 1", [mock_ref1, LIT("Fit")], None, None),
+            (2, "Section 1.1", None, {"S": LIT("GoTo"), "D": [mock_ref1, LIT("Fit")]}, None),
+            (1, "Chapter 2", None, PDFObjRef(mock_pdf.doc, 300), None),
+            (1, "External", None, {"S": LIT("GoToR"), "D": [0, LIT("Fit")]}, None),
         ]
 
         bookmarks = self.parser._extract_bookmarks(mock_pdf)
 
-        assert len(bookmarks) == 3
-        assert bookmarks[0] == {"title": "Chapter 1", "level": 1, "page_num": 1}
-        assert bookmarks[1] == {"title": "Section 1.1", "level": 2, "page_num": 1}
-        assert bookmarks[2] == {"title": "Chapter 2", "level": 1, "page_num": 2}
+        assert bookmarks == [
+            {"title": "Chapter 1", "level": 1, "page_num": 1},
+            {"title": "Section 1.1", "level": 2, "page_num": 1},
+            {"title": "Chapter 2", "level": 1, "page_num": 2},
+            {"title": "External", "level": 1, "page_num": None},
+        ]
 
     def test_extract_bookmarks_falls_back_to_objid_mapping(self):
         """Objid-based mapping remains supported for tests and alternate backends."""
@@ -488,17 +500,37 @@ class TestExtractImages:
     def setup_method(self):
         self.parser = PDFParser()
 
-    def test_extract_image_renders_cropped_bbox_as_png(self):
-        page = _FakeImagePage(image_bytes=b"rendered-png")
+    def test_extract_image_renders_cropped_bbox_as_png(self, monkeypatch):
+        pages = [_FakeImagePage(image_bytes=b"rendered-png") for _ in range(2)]
+        parsers = [self.parser, PDFParser()]
+        start = Barrier(2)
+        rendering = Lock()
+        original_render = _FakeCroppedPage.to_image
 
-        image_data = self.parser._extract_image_from_page(
-            page,
-            {"x0": 10, "top": 20, "x1": 40, "bottom": 60},
-        )
+        def render(page, resolution):
+            assert rendering.acquire(blocking=False), "Concurrent PDFium calls"
+            try:
+                # Native rendering releases the GIL; allow the other thread to run.
+                time.sleep(0.05)
+                return original_render(page, resolution)
+            finally:
+                rendering.release()
 
-        assert image_data == b"rendered-png"
-        assert page.crop_calls == [(10, 20, 40, 60)]
-        assert page.cropped_page.resolution_calls == [self.parser.config.image_resolution]
+        monkeypatch.setattr(_FakeCroppedPage, "to_image", render)
+
+        def extract(index):
+            start.wait(timeout=5)
+            return parsers[index]._extract_image_from_page(
+                pages[index],
+                {"x0": 10, "top": 20, "x1": 40, "bottom": 60},
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            assert list(executor.map(extract, range(2))) == [b"rendered-png"] * 2
+
+        for parser, page in zip(parsers, pages, strict=True):
+            assert page.crop_calls == [(10, 20, 40, 60)]
+            assert page.cropped_page.resolution_calls == [parser.config.image_resolution]
 
     def test_extract_image_clamps_bbox_to_page_bounds(self):
         page = _FakeImagePage()

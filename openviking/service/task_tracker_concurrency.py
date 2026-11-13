@@ -5,7 +5,6 @@
 
 import asyncio
 import threading
-import time
 from concurrent.futures import Future as ConcurrentFuture
 from concurrent.futures import InvalidStateError
 from contextlib import asynccontextmanager
@@ -13,12 +12,9 @@ from dataclasses import dataclass
 from typing import Any, AsyncIterator, Awaitable, Callable, Coroutine, Generic, TypeVar
 
 from openviking.concurrency import AsyncSemaphore
-from openviking_cli.utils.logger import get_logger
 
 _KeyT = TypeVar("_KeyT")
 _ResultT = TypeVar("_ResultT")
-
-logger = get_logger(__name__)
 
 
 async def run_to_completion(
@@ -28,12 +24,17 @@ async def run_to_completion(
 
     ``asyncio.to_thread`` cancellation cannot stop the underlying synchronous
     call. Waiting for the work to settle keeps lock and concurrency accounting
-    aligned with the physical I/O lifetime.
+    aligned with the physical I/O lifetime. Only cancellation received during
+    this call overrides a work failure.
     """
-    work: asyncio.Future[_ResultT] = asyncio.ensure_future(factory())
     caller: Any = asyncio.current_task()
+    initial_cancelling = (
+        caller.cancelling() if caller is not None and hasattr(caller, "cancelling") else 0
+    )
+    work: asyncio.Future[_ResultT] | None = None
     cancellation: asyncio.CancelledError | None = None
     try:
+        work = asyncio.ensure_future(factory())
         while not work.done():
             try:
                 await asyncio.shield(work)
@@ -42,11 +43,15 @@ async def run_to_completion(
                     raise
                 cancellation = exc
             except BaseException:
-                # A completion exception can race with delivery of caller
-                # cancellation. Honour the already-requested cancellation below.
-                if caller is None or not hasattr(caller, "cancelling") or caller.cancelling() == 0:
+                # A work failure can race with a new cancellation; historical
+                # requests do not suppress errors from cancellation cleanup.
+                if cancellation is None and (
+                    caller is None
+                    or not hasattr(caller, "cancelling")
+                    or caller.cancelling() <= initial_cancelling
+                ):
                     raise
-                cancellation = asyncio.CancelledError()
+                cancellation = cancellation or asyncio.CancelledError()
 
         if cancellation is not None:
             if not work.cancelled():
@@ -174,55 +179,6 @@ class OwnerLoopDispatcher:
                         return owner_task[0].result()
                     raise RuntimeError("owner event loop stopped while dispatch was pending")
                 return future.result()
-
-
-class StoreIOLimiter:
-    """Bound task-store concurrency and expose low-cardinality diagnostics."""
-
-    def __init__(self, max_concurrent: int, slow_threshold_seconds: float = 1.0) -> None:
-        if max_concurrent <= 0:
-            raise ValueError("max_concurrent must be positive")
-        self._semaphore = AsyncSemaphore(max_concurrent)
-        self._lock = threading.Lock()
-        self._slow_threshold_seconds = slow_threshold_seconds
-        self._inflight = 0
-        self._max_observed_inflight = 0
-
-    @property
-    def inflight(self) -> int:
-        with self._lock:
-            return self._inflight
-
-    @property
-    def max_observed_inflight(self) -> int:
-        with self._lock:
-            return self._max_observed_inflight
-
-    async def run(
-        self,
-        operation: str,
-        factory: Callable[[], Awaitable[_ResultT]],
-    ) -> _ResultT:
-        started_at = time.monotonic()
-        async with self._semaphore:
-            with self._lock:
-                self._inflight += 1
-                self._max_observed_inflight = max(
-                    self._max_observed_inflight,
-                    self._inflight,
-                )
-            try:
-                return await factory()
-            finally:
-                with self._lock:
-                    self._inflight -= 1
-                duration_seconds = time.monotonic() - started_at
-                if duration_seconds >= self._slow_threshold_seconds:
-                    logger.warning(
-                        "Slow task store operation: operation=%s duration_ms=%.1f",
-                        operation,
-                        duration_seconds * 1000,
-                    )
 
 
 @dataclass

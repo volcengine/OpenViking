@@ -1,0 +1,73 @@
+# AgentConnect
+
+A connection panel that lists mainstream agents and four developer options (MCP, CLI, API and SDK), with setup instructions and copyable code blocks in which the API key is masked by default.
+
+## When to use
+
+- You want to guide users to connect OpenViking to agents such as Codex, Claude Code or Cursor, or to build their own integration through MCP, CLI, API or SDK.
+- You want to decide where the API key and service URL come from. The component only renders and copies: it sends no requests and does not need `OpenVikingProvider`.
+- To place it at the top of the file browsing area, use [FileBrowserActionBar](./file-browser-action-bar), which shows this component in a right-side drawer through `agentConnect`.
+
+## Import
+
+```tsx
+import { AgentConnect } from '@openviking/react/components/agent-connect';
+import '@openviking/react/components/agent-connect/style.css';
+```
+
+## Examples
+
+### Basic usage
+
+Switch between the "Connect mainstream agents" and "Build your own agent" tabs and select an item on the left to read its instructions. Use the buttons on a code block to copy it, or to show or hide the API key in it.
+
+```tsx file="../../_demos/agent-connect-basic.tsx" preview
+
+```
+
+The `apiKey` in the example is for demonstration only; pass your own key in your app.
+
+## API
+
+### AgentConnect
+
+| Property         | Description                                                                                                                   | Type                                        | Default                                                 |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------- |
+| apiKey           | API key written into the instructions; masked on screen and copied in full                                                    | `string`                                    | Required                                                |
+| baseUrl          | OpenViking service URL that replaces the default one in the instructions                                                      | `string`                                    | `https://api.vikingdb.cn-beijing.volces.com/openviking` |
+| agreementUrl     | Terms of service URL; shown as a link in the footer when set, otherwise only the data access notice is shown                  | `string`                                    | -                                                       |
+| showOverseasTag  | Which agents get the "Overseas" tag: Codex and Claude Code when omitted, all applicable agents when `true`, none when `false` | `boolean`                                   | -                                                       |
+| activeTabId      | Controlled active tab; managed by the component when omitted                                                                  | `'mainstream' \| 'custom'`                  | `'mainstream'`                                          |
+| selectedId       | Controlled selected item, an `id` of `AgentConnectItem`; the first item is shown when the active tab does not contain it      | `string`                                    | First item of the active tab                            |
+| onTabChange      | Called when a tab is selected by click, arrow keys, Home or End                                                               | `(tabId: 'mainstream' \| 'custom') => void` | -                                                       |
+| onSelect         | Called when an item is selected                                                                                               | `(item: AgentConnectItem) => void`          | -                                                       |
+| onCopy           | Called after a successful copy with the copied code block or full instructions, including the original API key                | `(text: string) => void`                    | -                                                       |
+| locale           | Interface language, see [Internationalization](../guide/i18n)                                                                 | `'zh-CN' \| 'en-US'`                        | Inherited, otherwise `'en-US'`                          |
+| className, style | Appearance and layout; other HTML attributes are passed to the root element                                                   | HTML attributes                             | -                                                       |
+
+### AgentConnectItem
+
+| Property | Description                                | Type     | Default  |
+| -------- | ------------------------------------------ | -------- | -------- |
+| id       | Identifier of the built-in item, see below | `string` | Required |
+| name     | Name of the item in the current language   | `string` | Required |
+
+Built-in item ids:
+
+- `mainstream` tab (Connect mainstream agents): `codex`, `claude-code`, `doubao`, `workbuddy`, `trae`, `cursor`, `openclaw`, `hermes`, `opencode`, `deepseek-harness`, `deerflow`, `pi`, `zcode`, `kimi-code`.
+- `custom` tab (Build your own agent): `mcp`, `cli`, `api`, `sdk`.
+
+## Notes
+
+- The agent catalog, instructions and icons are built in, and no prop adds, removes or replaces them. The language is set only through `locale`, and the component has no language switcher.
+- The content and icons ship with the component, so you need no asset URLs and nothing is fetched at runtime. The component never runs the commands it shows; it only displays and copies them.
+- The default size is 1000px wide and at least 949px tall. In a narrower container the component scrolls horizontally.
+- API keys in code blocks show as `••••••••`. Click "Show API Key" on a block to reveal the original value; only one code block per set of instructions shows the key at a time. Copying always uses the original key, whatever is displayed.
+- The component does not persist `apiKey` or write it to DOM attributes. The text passed to `onCopy` contains the original key, so treat it as a credential and keep it out of logs.
+- Copying uses the Clipboard API, which needs a secure context (such as HTTPS) and clipboard permission. On failure the component shows "Copy failed. Please retry." and does not call `onCopy`.
+- DeerFlow and CLI have instruction tabs: MemoryManager and MCP for DeerFlow, "Manual terminal installation" and "Install via AI Agent" for CLI. The first one is selected by default, and copying uses the selected one.
+- Switching the item, instruction tab, locale, `apiKey` or `baseUrl` resets the key display and copy feedback. A copy started before the switch neither updates the UI nor calls `onCopy` when it finishes.
+- The TRAE command targets the international edition.
+- When Hermes uses a custom `baseUrl` (different from the default), its instructions use the Custom connection steps.
+- The Overseas tag appears at the end of an agent's tag row and follows the agent product's origin, not the region where a model is deployed. With `showOverseasTag={true}`, Cursor, OpenClaw, Hermes Agent, OpenCode and pi are tagged as well as Codex and Claude Code.
+- Types are exported from `@openviking/react/components/agent-connect`; the package root exports only the component and `AgentConnectProps`.

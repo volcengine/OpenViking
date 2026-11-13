@@ -1,0 +1,108 @@
+# 区块
+
+区块自带数据加载和状态管理，从 `@openviking/react` 导入后放进页面，就能得到一块完整的功能：文件浏览、命令面板或级联选择。
+
+## 何时使用
+
+- 想直接得到文件浏览或命令面板，由区块负责请求、分页和状态时：FileBrowser 和 Console 通过 `OpenVikingProvider` 请求 OpenViking 原生 API。
+- 需要依次选择知识库、数据空间和用户时：ScopeCascade 通过你提供的三个加载函数取数，不请求 OpenViking 原生 API。
+- 只需要纯视图、数据由自己加载时，使用[业务组件](../components/)，它们不需要 `OpenVikingProvider`。
+
+## 区块列表
+
+| 区块                                     | 说明                                                                                                                                           | 导入路径                                  | 请求配置                                           |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- | -------------------------------------------------- |
+| [FileBrowser 文件浏览](./file-browser)   | 目录树、搜索和文件预览组成的文件浏览区块：读取 OpenViking 的目录和内容，支持预览、编辑、导入导出、历史版本和权限管理，并内置 Wiki 与经验看板。 | `@openviking/react/modules/file-browser`  | 需要 `OpenVikingProvider`，支持 `requestOptions`   |
+| [Console 交互面板](./console)            | 在一块面板里提供对话和命令两种模式：对话模式通过 VikingBot 无头模块接通原生对话；命令模式把 `ov` 命令发送到 OpenViking 原生 API 并展示结果。   | `@openviking/react/modules/console`       | 需要 `OpenVikingProvider`，支持 `requestOptions`   |
+| [ScopeCascade 级联选择](./scope-cascade) | 依次选择知识库、数据空间和用户的三级选择器：上级变化时，下级清空并重新加载，三级都选中后通过 `onChange` 返回完整身份。                         | `@openviking/react/modules/scope-cascade` | 不需要 `OpenVikingProvider`，没有 `requestOptions` |
+
+## 无头模块
+
+[VikingBot](./viking-bot) 提供 `useVikingBotChat`、`useVikingBotSessions` 及契约，从 `@openviking/react/modules/viking-bot` 引入。Console 内部复用同一模块；独立宿主可以把状态接入 VikingBot 或自己的视图。此入口不导出组件或 CSS，Hook 不从包根或 Console 转导出。
+
+## 引入
+
+```tsx
+import { FileBrowser } from '@openviking/react/modules/file-browser';
+import '@openviking/react/modules/file-browser/style.css';
+```
+
+区块的子路径是 `modules`：从 `@openviking/react/modules/<名称>` 导入，完整路径见上表。根入口 `@openviking/react` 也导出区块本体和主 Props 类型，例如 `FileBrowser` 和 `FileBrowserProps`；Labels、Slots 和枚举等其他类型只从子路径导入。没有 `@openviking/react/modules` 这样的聚合入口。
+
+JavaScript 导入不会加载 CSS，从下面选一个样式入口，每个入口都可以单独使用：
+
+- `@openviking/react/modules/<名称>/style.css`：单个区块，已包含它用到的组件的样式。
+- `@openviking/react/modules/style.css`：全部区块。
+- `@openviking/react/style.css`：整个组件库。
+
+## 请求配置
+
+FileBrowser 和 Console 通过最近的 `OpenVikingProvider` 请求 OpenViking 原生 API，必须放在 Provider 内。在应用根部放一个 Provider，服务地址和凭证只配置这一次，区块本身不接收这些 props：
+
+```tsx
+import { OpenVikingProvider } from '@openviking/react/client';
+import { FileBrowser } from '@openviking/react/modules/file-browser';
+import { Console } from '@openviking/react/modules/console';
+import '@openviking/react/modules/style.css';
+
+<OpenVikingProvider baseURL={endpoint} apiKey={apiKey}>
+  <FileBrowser />
+  <Console />
+</OpenVikingProvider>;
+```
+
+没有 Provider 时，FileBrowser 不发起请求，目录树一直停在加载状态；Console 使用不带身份信息的同源默认 Client。
+
+ScopeCascade 不走共享 Client，没有 `requestOptions`，也不需要 Provider；放在 Provider 内时，它只继承 Provider 的 `locale`。
+
+### OpenVikingProvider
+
+字段省略时继承外层 Provider，最外层省略时使用「默认值」一列。
+
+| 参数        | 说明                                                                                                 | 类型                                          | 默认值                   |
+| ----------- | ---------------------------------------------------------------------------------------------------- | --------------------------------------------- | ------------------------ |
+| baseURL     | 服务地址及可选的网关前缀，不含 `/api/v1`，空字符串表示同源请求                                       | `string`                                      | `''`                     |
+| apiKey      | 凭证，作为 `X-API-Key` 请求头发送；商业版由浏览器 Cookie 鉴权，不需要传入                            | `string \| (() => string \| Promise<string>)` | -                        |
+| accountId   | OpenViking 账号 ID，对应数据空间，作为 `X-OpenViking-Account` 请求头发送                             | `string \| (() => string \| Promise<string>)` | -                        |
+| userId      | 账号内的用户 ID，作为 `X-OpenViking-User` 请求头发送                                                 | `string \| (() => string \| Promise<string>)` | -                        |
+| resourceId  | 当前库 ID，决定请求落在哪个库，作为 `V-Resource-Id` 请求头发送                                       | `string \| (() => string \| Promise<string>)` | -                        |
+| credentials | 传给 `fetch` 的 `credentials`，决定是否携带 Cookie；跨源请求仍遵循服务端 CORS 和浏览器的 Cookie 策略 | `'include' \| 'same-origin' \| 'omit'`        | `'include'`              |
+| signal      | 中止请求的信号，触发后进行中的请求被取消                                                             | `AbortSignal`                                 | -                        |
+| fetch       | 替换全局 `fetch`，用于测试、链路追踪或没有全局 `fetch` 的环境                                        | `typeof fetch`                                | 全局 `fetch`             |
+| locale      | 子树的界面语言，规则见[国际化](../guide/i18n)                                                        | `'zh-CN' \| 'en-US'`                          | 继承上级，默认 `'en-US'` |
+| children    | 使用这套请求配置的子树                                                                               | `ReactNode`                                   | -                        |
+
+- 身份字段 `apiKey`、`accountId`、`userId` 和 `resourceId` 也可以传函数，每次请求重新求值，因此能读到轮换后的凭证。
+- `fetch`、`signal` 和函数形式的身份字段按引用比较，变化会创建新的 Client，使用它的区块随之重置，请保持它们的引用稳定。
+- Provider 挂载时不发请求，也不读取浏览器里保存的凭证。
+
+### 覆盖请求配置
+
+FileBrowser 和 Console 有可选的 `requestOptions` 属性，类型是 `@openviking/react/client` 导出的 `OvRequestOptions`，用来只改这一个区块的请求配置，例如让它访问另一个库：
+
+```tsx
+const otherLibrary = { resourceId: 'library-b' };
+
+<FileBrowser requestOptions={otherLibrary} />;
+```
+
+`OvRequestOptions` 包含 `baseURL`、`apiKey`、`accountId`、`userId`、`resourceId` 和 `signal`，含义与上表相同；`credentials` 和 `fetch` 只能在 Provider 上设置。覆盖规则如下：
+
+- 逐字段解析，优先级从高到低：区块的 `requestOptions`、最近的 `OpenVikingProvider`、库默认值。
+- 嵌套 Provider 时，内层只覆盖自己声明的字段，其余继承外层。
+- 字段省略或为 `undefined` 表示继承；`baseURL` 传 `''` 则明确表示同源。
+- 身份字段传 `''` 清除继承到的值，请求不再发送对应请求头。
+- 覆盖只作用于这一个区块，不修改 Provider，也不影响其他区块。
+- `requestOptions` 对象要保持引用稳定，在组件外定义或用 `useMemo`；各区块在它变化后的行为见各自页面的「注意」。
+
+## 代码演示
+
+### 基础用法
+
+并排放置 FileBrowser 和 Console，样式来自 `modules/style.css`。
+
+```tsx file="../../_demos/modules-basic.tsx" preview
+
+```
+
+示例没有包 `OpenVikingProvider`，只用来查看样式：FileBrowser 的目录树停在加载状态，Console 不带身份信息。网格布局属于示例，应用自行决定布局。

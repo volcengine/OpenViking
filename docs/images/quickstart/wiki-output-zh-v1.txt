@@ -1,0 +1,35 @@
+﻿OpenViking 0.5.2 / VikingBot 0.5.2 / doubao-seed-2.1-lite
+Verified 2026-10-28. Real example output; wording can vary.
+
+---
+type: entity
+title: 灯塔项目
+description: 灯塔项目第一版是在隔离网络中运行的反馈试点，反馈以本地文件形式每周五离线导出。
+tags: [灯塔项目, 隔离网络, 反馈试点, v1]
+---
+
+# 灯塔项目
+
+灯塔项目是一个虚构教学样例（v1），其第一版用于隔离网络中的反馈试点，运行时无法访问外网。试点的核心机制是：用户反馈保存为本地文件，由试点管理员每周五导出并交给项目负责人；第一版不支持云端同步，是否在后续版本提供尚未决定。
+
+## 试点准备
+
+- 试点管理员需提前准备离线安装包和本地存储目录，以保证在无法访问外网的环境中运行。[灯塔项目](viking://resources/onboarding-zh-v1/project/project.md)
+- 试点开始前要准备反馈登记模板，并安排管理员演练一次离线导出（项目负责人在试点准备会议上确认）。[试点准备会议](viking://resources/onboarding-zh-v1/meeting/meeting.md)
+
+## 反馈流程
+
+- 用户反馈保存为本地文件；试点管理员每周五导出反馈并交给项目负责人。[反馈收集](viking://resources/onboarding-zh-v1/feedback/feedback.md)
+- 第一版不支持云端同步；是否在后续版本提供云端同步尚未决定。[反馈收集](viking://resources/onboarding-zh-v1/feedback/feedback.md)
+
+## 使用边界与未知事项
+
+- 本样例只覆盖第一版试点，资料未给出生产部署容量、安全认证结论或性能测试结果。[使用边界](viking://resources/onboarding-zh-v1/limits/limits.md)
+- 试点结束日期、预算和下一版本发布时间尚未确定；资料中也未给出试点开始日期。[试点准备会议](viking://resources/onboarding-zh-v1/meeting/meeting.md)
+
+## 来源
+
+- [灯塔项目](viking://resources/onboarding-zh-v1/project/project.md)
+- [反馈收集](viking://resources/onboarding-zh-v1/feedback/feedback.md)
+- [试点准备会议](viking://resources/onboarding-zh-v1/meeting/meeting.md)
+- [使用边界](viking://resources/onboarding-zh-v1/limits/limits.md)

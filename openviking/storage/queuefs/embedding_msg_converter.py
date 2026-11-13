@@ -11,7 +11,7 @@ from openviking.core.context import Context, ContextLevel
 from openviking.core.namespace import owner_fields_for_uri
 from openviking.storage.index_action import IndexAction
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
-from openviking.telemetry import get_current_telemetry
+from openviking.telemetry import get_current_telemetry, get_ingestion_source_type
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -91,6 +91,8 @@ class EmbeddingMsgConverter:
         else:
             message = vectorization_text
 
+        source_type = get_ingestion_source_type()
+
         embedding_msg = EmbeddingMsg.for_embed(
             message=message,
             context_data=context_data,
@@ -98,5 +100,6 @@ class EmbeddingMsgConverter:
                 get_current_telemetry().telemetry_id if telemetry_id is None else telemetry_id
             ),
             action=action,
+            source_type=source_type or "",
         )
         return embedding_msg

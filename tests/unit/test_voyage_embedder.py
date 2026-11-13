@@ -8,6 +8,7 @@ import pytest
 
 from openviking.models.embedder import VoyageDenseEmbedder
 from openviking.models.embedder.voyage_embedders import VOYAGE_MODEL_DIMENSIONS
+from openviking.models.model_error import ModelError
 
 
 class TestVoyageDenseEmbedder:
@@ -114,5 +115,5 @@ class TestVoyageDenseEmbedder:
             api_key="voyage-key",
         )
 
-        with pytest.raises(RuntimeError, match="Voyage API error"):
+        with pytest.raises(ModelError, match="Voyage API error"):
             embedder.embed("Hello world")

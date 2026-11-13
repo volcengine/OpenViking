@@ -1,0 +1,34 @@
+name: UI
+
+on:
+  pull_request:
+    paths:
+      - 'frontend/**'
+      - '.github/actions/build-ui/**'
+      - '.github/workflows/ui.yml'
+  push:
+    paths:
+      - 'frontend/**'
+      - '.github/actions/build-ui/**'
+      - '.github/workflows/ui.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Type-check and Build UI
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Build UI
+        uses: ./.github/actions/build-ui

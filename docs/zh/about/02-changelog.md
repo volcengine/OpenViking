@@ -7,6 +7,53 @@ OpenViking 的所有重要变更都将记录在此文件中。
 
 ## 未发布
 
+- **LangGraph Store 发现错误**：非语义 `search()` 和 `list_namespaces()` 现在会传播
+  后端文件列表查询失败，包括权限和服务不可用错误。明确不存在的命名空间根路径仍返回空结果。
+- **移除旧会话迁移（不兼容变更）**：删除旧迁移实现、`ov admin migrate`（含 `--cleanup`）
+  及 Python、TypeScript、Go SDK 的对应方法。保留仅 ROOT 可调用的
+  `POST /api/v1/admin/migrate` 入口，当前返回 `400 / INVALID_ARGUMENT`，不创建任务。
+  新版本不再提供 0.3.x 遗留会话的迁移和清理工具；升级不会自动迁移或删除这些旧目录。
+  已迁移的会话和正常会话操作不受影响。
+- **网关部署与行为**：
+  - 新增独立 Helm chart `deploy/helm/openviking-gateway`：带 PVC 的单副本 SQLite，
+    或共享 Redis 的多副本部署。在包含这些功能的版本发布之前，需要显式设置 `image.tag`，
+    见[运维指南](../guides/22-gateway-operations.md#helm)。
+  - 新增可选设置：`storage`（Redis）、`management_api`、`openviking_keys`、`tenancy`、
+    `default_upstreams` 和 `default_profile`、`request_log_sink`、`capture_concurrency` 以及 `keep_alive_seconds`。
+    默认存储仍是 SQLite。
+  - 新增 `X-OpenViking-Upstream-URL` 请求头，按 Base URL 从允许的上游中选择一个，
+    见[按请求指定上游](../gateway/07-upstreams.md#upstream-url-header)。
+  - `session_ttl_seconds`（不低于 3600）取代 `session_ttl_days`，对话可以在一天内过期；
+    旧字段会被忽略并在启动时打印警告，升级时请改用新字段。
+  - 无需修改配置的行为变化：独立网关 keep-alive 从 5 秒提高到 75 秒；
+    绑定公网地址的网关在启动时遇到 OpenViking 不可达或返回 5xx 会等待并重试；
+    空闲 SSE 流每 15 秒发送一条注释心跳；OpenViking 以 402 或 403 拒绝密钥的请求会被拒绝，
+    不再转发；保存时收到 OpenViking 401、且 `/health` 也返回 401 时，会以 `gateway_key_revoked`
+    暂停保存。
+  - 上下文配置现在默认勾选全部 OpenViking 工具，包括 `forget`、`set_acl` 等会修改数据的工具；之前的版本默认不勾选其中 8 个。已保存的配置和进行中的对话保持原来的工具。没有保存 `default` 配置的账号，以及省略 `disabled_tools` 的管理 API 请求，现在会得到全部工具；要保留原来的勾选，请设置 `default_profile.disabled_tools` 或保存一份 `default` 配置。
+  - `X-OpenViking-Context` 只能收窄工具权限：`disabled_tools` 会追加到配置的排除列表上，`gateway_tools` 不能重新打开工具。之前靠发送 `{"disabled_tools":[]}` 或 `{"gateway_tools":true}` 拿到配置不提供的工具的客户端，升级后不再拿到；请改为修改配置。
+- **火山引擎 KMS `key_file`（升级需操作）**：`encryption.volcengine_kms.key_file` 现在对服务端和网关
+  都会生效；此前版本忽略该字段，根密钥始终位于 `~/.openviking/openviking-volcengine-root-key.enc`。
+  如果配置了 `key_file`，升级前把该文件移到配置的路径。配置的文件不存在而默认文件存在时，
+  启动会失败，不会生成新的根密钥。
+- **LangChain 导入迁移（不兼容变更）**：服务端不再提供
+  `openviking.integrations.langchain` 及其转发模块，旧导入会立即失败，
+  不提供弃用过渡期或兼容占位模块。请安装 `langchain-openviking`
+  （LangGraph 使用 `pip install "langchain-openviking[langgraph]"`），
+  将导入前缀 `openviking.integrations.langchain` 改为 `langchain_openviking`，
+  子模块导入也需同步修改。例如使用
+  `from langchain_openviking import OpenVikingRetriever`。维护中的包和示例迁至
+  `integrations/frameworks/`，包名和标准导入路径保持不变。
+  详见[迁移指南](../agent-integrations/07-langchain-langgraph.md)。
+- **Working Memory 默认关闭（行为变更）**：commit 仍保存原文并抽取长期记忆，默认不生成
+  WM 或 checkpoint 摘要。用户需要单独升级已安装的 agent 插件；新版默认关闭自动归档
+  摘要注入和上下文接管，由宿主管理历史与压缩。VikingBot 仍默认使用 OV 管理上下文与压缩，
+  并在会话上下文 commit 时显式请求 WM。旧版序列化会省略 WM=true，因此过去即使
+  主动开启，保存后缺少该字段的策略升级后仍会变为 false，无法自动恢复用户当时的意图。
+  已入队的旧任务保持提交时的语义。新增 `enable_working_memory` 布尔参数仅覆盖本次
+  commit 的 WM，不覆盖其他策略。无 WM 的已完成归档仍可读取原文，摘要字段为空。
+  详见[升级说明](../guides/working-memory-default-off.md)；缺少完整宿主历史的旧会话
+  应先导出原文，通过宿主支持的入口完成历史交接，再切换模式。
 - **Watch API 迁移（不兼容变更）**：使用 `watch_interval > 0` 重新导入不再更新或恢复已有 Watch。
   原生 Watch 暂停后仍独占目标，不兼容的目标复用返回 `409 Conflict`。
   依赖重新导入来更新 Watch 的脚本应改用 `PATCH /api/v1/watches/{task_id}`

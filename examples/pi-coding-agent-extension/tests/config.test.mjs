@@ -69,9 +69,10 @@ async function withPluginSection(body, fn, env = {}, cliConfig = null) {
   }
 }
 
-test("loadConfig defaults takeover on", async () => {
+test("loadConfig defaults takeover and archive injection off", async () => {
   await withPluginSection({}, (cfg) => {
-    assert.equal(cfg.takeoverEnabled, true);
+    assert.equal(cfg.takeoverEnabled, false);
+    assert.equal(cfg.resumeArchiveInject, false);
     assert.equal(cfg.takeoverTokenThreshold, 30000);
     assert.equal(cfg.takeoverKeepRecentTurns, 3);
     assert.equal(cfg.takeoverOverviewBudget, 3000);

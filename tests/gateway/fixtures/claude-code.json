@@ -1,0 +1,885 @@
+{
+  "client": "claude-code",
+  "version": "2.1.286",
+  "recorded_at": "2026-10-02",
+  "requests": [
+    {
+      "path": "/v1/messages",
+      "headers": {
+        "x-claude-code-session-id": "<redacted-26972b4944>",
+        "anthropic-version": "2023-06-01",
+        "x-claude-code-request-class": "main"
+      },
+      "body": {
+        "model": "model",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "What is the deployment cluster for the Aurora acceptance project? Test run <redacted-26972b4944>",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "<redacted-039b2ea71c>"
+          },
+          {
+            "type": "text",
+            "text": "<redacted-0d7062851d>",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          },
+          {
+            "type": "text",
+            "text": "<redacted-4487ad096a>",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "tools": [],
+        "metadata": {
+          "user_id": "<redacted-a2692be319>"
+        },
+        "max_tokens": 32000,
+        "thinking": {
+          "type": "adaptive",
+          "display": "omitted"
+        },
+        "context_management": {
+          "edits": [
+            {
+              "type": "clear_thinking_20251015",
+              "keep": "all"
+            }
+          ]
+        },
+        "safeguards": [
+          {
+            "type": "dangerous_tool_use",
+            "classifier_context": {
+              "v": 1,
+              "permission_mode": "auto",
+              "platform": "linux",
+              "live_cwd": "/synthetic/client-workspace",
+              "home_dir": "/synthetic/path",
+              "rule_roots": {
+                "userSettings": "/synthetic/claude-config",
+                "projectSettings": "/synthetic/client-workspace",
+                "localSettings": "/synthetic/client-workspace",
+                "flagSettings": "/synthetic/client-workspace",
+                "policySettings": "/synthetic/client-workspace",
+                "cliArg": "/synthetic/client-workspace",
+                "command": "/synthetic/client-workspace",
+                "session": "/synthetic/client-workspace",
+                "toolsNarrowing": "/synthetic/client-workspace",
+                "mcpServerPolicy": "/synthetic/client-workspace",
+                "hostCredential": "/synthetic/client-workspace"
+              },
+              "trusted_directories": {
+                "primary": {
+                  "path": "/synthetic/client-workspace",
+                  "resolved": [
+                    "/synthetic/client-workspace"
+                  ]
+                },
+                "additional": [],
+                "network": [],
+                "block_reads_outside_working_directories": false
+              },
+              "rules": {
+                "allow": [],
+                "deny": [
+                  {
+                    "rule": "Agent",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "Bash",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ExitPlanMode",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "Read",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "Edit",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "Write",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "NotebookEdit",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "memory_list",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "memory_read",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "memory_write",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "WebFetch",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "TodoWrite",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ReportFindings",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "WebSearch",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "TaskStop",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "AskUserQuestion",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "SendFeedback",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "Skill",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "EnterPlanMode",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "DesignSync",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "Projects",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "TaskCreate",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "TaskGet",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "TaskUpdate",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "TaskList",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "Artifact",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ArtifactComments",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ArtifactData",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ArtifactCheck",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "AppifactRepl",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "LSP",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "EnterWorktree",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ExitWorktree",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "SendMessage",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "SendFile",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ListAgents",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ShareOnboardingGuide",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "Poll",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "Workflow",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "CronCreate",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "CronDelete",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "CronList",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ScheduleWakeup",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "RemoteTrigger",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "SearchMcpRegistry",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "SuggestConnectors",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ShowOnboardingRolePicker",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ReadNotifications",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "enable__mcp__claude-in-chrome",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "enable__mcp__remote-devices__Claude_Browser",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "enable__mcp__remote-devices__computer",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "request_computer",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ListConnectors",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "SearchPlugins",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "SearchSkills",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "SuggestPluginInstall",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "SuggestSkills",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ListPlugins",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ListSkills",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "Monitor",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "SendUserMessage",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "SendUserFile",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "propose_skills",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ProposeGoal",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "PushNotification",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "FetchInboxMessage",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "EndConversation",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ListMcpResourcesTool",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ReadMcpResourceTool",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ReadMcpResourceDirTool",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "WaitForMcpServers",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "GetTask",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "Glob",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "Grep",
+                    "source": "toolsNarrowing"
+                  }
+                ],
+                "ask": []
+              },
+              "auto_mode": {
+                "allow": [],
+                "soft_deny": [],
+                "hard_deny": [],
+                "environment": []
+              },
+              "artifact_consent_holdback": false,
+              "case_insensitive_paths": false,
+              "restricted": false,
+              "is_remote_mode": false,
+              "classify_all_shell": false,
+              "user_identity": "zhengxiao.wu",
+              "git_state": {
+                "cwd": "/synthetic/client-workspace",
+                "root": null,
+                "branch": null,
+                "default_branch": null,
+                "status": null,
+                "visibility": {
+                  "origin": null,
+                  "push_remote": null,
+                  "remotes": [],
+                  "visibility_cache": []
+                },
+                "error": "not_a_repo"
+              }
+            }
+          }
+        ],
+        "output_config": {
+          "effort": "high"
+        },
+        "stream": true
+      }
+    },
+    {
+      "path": "/v1/messages",
+      "headers": {
+        "x-claude-code-session-id": "<redacted-26972b4944>",
+        "anthropic-version": "2023-06-01",
+        "x-claude-code-request-class": "main"
+      },
+      "body": {
+        "model": "model",
+        "messages": [
+          {
+            "role": "user",
+            "content": "What is the deployment cluster for the Aurora acceptance project? Test run <redacted-26972b4944>"
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "thinking",
+                "thinking": "The user asks: What is the deployment cluster for the Aurora acceptance project? Reference says cluster cobalt-zebra-731. Note the attachment.md is a different project (amber-otter-963) \u2014 distractor. Answer briefly.",
+                "signature": ""
+              },
+              {
+                "type": "text",
+                "text": "The Aurora acceptance project deploys to cluster **cobalt-zebra-731**. (Note: amber-otter-963 belongs to the separate Attachment Import project, not Aurora.)"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Repeat the deployment cluster name only.",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "system": [
+          {
+            "type": "text",
+            "text": "<redacted-039b2ea71c>"
+          },
+          {
+            "type": "text",
+            "text": "<redacted-0d7062851d>",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          },
+          {
+            "type": "text",
+            "text": "<redacted-f1d4e426d4>",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "tools": [],
+        "metadata": {
+          "user_id": "<redacted-a2692be319>"
+        },
+        "max_tokens": 32000,
+        "thinking": {
+          "type": "adaptive",
+          "display": "omitted"
+        },
+        "context_management": {
+          "edits": [
+            {
+              "type": "clear_thinking_20251015",
+              "keep": "all"
+            }
+          ]
+        },
+        "safeguards": [
+          {
+            "type": "dangerous_tool_use",
+            "classifier_context": {
+              "v": 1,
+              "permission_mode": "auto",
+              "platform": "linux",
+              "live_cwd": "/synthetic/client-workspace",
+              "home_dir": "/synthetic/path",
+              "rule_roots": {
+                "userSettings": "/synthetic/claude-config",
+                "projectSettings": "/synthetic/client-workspace",
+                "localSettings": "/synthetic/client-workspace",
+                "flagSettings": "/synthetic/client-workspace",
+                "policySettings": "/synthetic/client-workspace",
+                "cliArg": "/synthetic/client-workspace",
+                "command": "/synthetic/client-workspace",
+                "session": "/synthetic/client-workspace",
+                "toolsNarrowing": "/synthetic/client-workspace",
+                "mcpServerPolicy": "/synthetic/client-workspace",
+                "hostCredential": "/synthetic/client-workspace"
+              },
+              "trusted_directories": {
+                "primary": {
+                  "path": "/synthetic/client-workspace",
+                  "resolved": [
+                    "/synthetic/client-workspace"
+                  ]
+                },
+                "additional": [],
+                "network": [],
+                "block_reads_outside_working_directories": false
+              },
+              "rules": {
+                "allow": [],
+                "deny": [
+                  {
+                    "rule": "Agent",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "Bash",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ExitPlanMode",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "Read",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "Edit",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "Write",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "NotebookEdit",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "memory_list",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "memory_read",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "memory_write",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "WebFetch",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "TodoWrite",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ReportFindings",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "WebSearch",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "TaskStop",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "AskUserQuestion",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "SendFeedback",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "Skill",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "EnterPlanMode",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "DesignSync",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "Projects",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "TaskCreate",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "TaskGet",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "TaskUpdate",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "TaskList",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "Artifact",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ArtifactComments",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ArtifactData",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ArtifactCheck",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "AppifactRepl",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "LSP",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "EnterWorktree",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ExitWorktree",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "SendMessage",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "SendFile",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ListAgents",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ShareOnboardingGuide",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "Poll",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "Workflow",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "CronCreate",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "CronDelete",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "CronList",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ScheduleWakeup",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "RemoteTrigger",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "SearchMcpRegistry",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "SuggestConnectors",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ShowOnboardingRolePicker",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ReadNotifications",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "enable__mcp__claude-in-chrome",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "enable__mcp__remote-devices__Claude_Browser",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "enable__mcp__remote-devices__computer",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "request_computer",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ListConnectors",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "SearchPlugins",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "SearchSkills",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "SuggestPluginInstall",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "SuggestSkills",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ListPlugins",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ListSkills",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "Monitor",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "SendUserMessage",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "SendUserFile",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "propose_skills",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ProposeGoal",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "PushNotification",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "FetchInboxMessage",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "EndConversation",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ListMcpResourcesTool",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ReadMcpResourceTool",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "ReadMcpResourceDirTool",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "WaitForMcpServers",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "GetTask",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "Glob",
+                    "source": "toolsNarrowing"
+                  },
+                  {
+                    "rule": "Grep",
+                    "source": "toolsNarrowing"
+                  }
+                ],
+                "ask": []
+              },
+              "auto_mode": {
+                "allow": [],
+                "soft_deny": [],
+                "hard_deny": [],
+                "environment": []
+              },
+              "artifact_consent_holdback": false,
+              "case_insensitive_paths": false,
+              "restricted": false,
+              "is_remote_mode": false,
+              "classify_all_shell": false,
+              "user_identity": "zhengxiao.wu",
+              "git_state": {
+                "cwd": "/synthetic/client-workspace",
+                "root": null,
+                "branch": null,
+                "default_branch": null,
+                "status": null,
+                "visibility": {
+                  "origin": null,
+                  "push_remote": null,
+                  "remotes": [],
+                  "visibility_cache": []
+                },
+                "error": "not_a_repo"
+              }
+            }
+          }
+        ],
+        "output_config": {
+          "effort": "high"
+        },
+        "stream": true
+      }
+    }
+  ]
+}

@@ -4,6 +4,7 @@
 
 import os
 from collections.abc import Iterator
+from typing import Mapping
 from urllib.parse import urljoin, urlparse
 
 import scrapy
@@ -13,7 +14,6 @@ from scrapy.exceptions import CloseSpider
 from openviking.parse.accessors.http_accessor import URLType, URLTypeDetector
 from openviking.parse.accessors.web_crawler.config import CrawlConfig
 from openviking.parse.accessors.web_crawler.models import CrawledDownload, CrawledPage
-
 
 _DOWNLOAD_URL_TYPES = frozenset(
     {
@@ -64,6 +64,7 @@ class OpenVikingWebSpider(scrapy.Spider):
         config: CrawlConfig,
         collector: list[CrawledPage],
         download_collector: list[CrawledDownload],
+        network_env: Mapping[str, str] | None = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -71,6 +72,7 @@ class OpenVikingWebSpider(scrapy.Spider):
         self.config = config
         self.collector = collector
         self.download_collector = download_collector
+        self.network_env = dict(network_env or {})
         self.root_host = urlparse(root_url).netloc.lower()
         self._success_count = 0
         self._seen_download_urls: set[str] = set()

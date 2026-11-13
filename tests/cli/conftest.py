@@ -298,9 +298,7 @@ def _write_cli_config():
 
 
 CLI_CONFIG_PATH = _write_cli_config()
-ADD_RESOURCE_WAIT_TIMEOUT = "300"
 ADD_RESOURCE_COMMAND_TIMEOUT = 360
-WRITE_WAIT_TIMEOUT = "300"
 WRITE_COMMAND_TIMEOUT = 360
 
 
@@ -493,8 +491,6 @@ def ov_add_resource(path, to_uri, *extra_args, attempts=15, interval=10):
         to_uri,
         *extra_args,
         "--wait",
-        "--timeout",
-        ADD_RESOURCE_WAIT_TIMEOUT,
         "-o",
         "json",
     ]
@@ -572,8 +568,6 @@ def ov_write(uri, content, *extra_args):
             content,
             *extra_args,
             "--wait",
-            "--timeout",
-            WRITE_WAIT_TIMEOUT,
             "-o",
             "json",
         ],

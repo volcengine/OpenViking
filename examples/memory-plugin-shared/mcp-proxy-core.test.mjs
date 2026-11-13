@@ -13,8 +13,8 @@ function jsonRpc(id, result = {}) {
   return { jsonrpc: "2.0", id, result };
 }
 
-function sseMessage(obj) {
-  return `event: message\r\ndata: ${JSON.stringify(obj)}\r\n\r\n`;
+function sseMessage(obj, lineEnding = "\r\n") {
+  return `event: message${lineEnding}data: ${JSON.stringify(obj)}${lineEnding}${lineEnding}`;
 }
 
 /**
@@ -85,33 +85,35 @@ function makeProxy({ url, fetchImpl, configOverrides = {}, localToolProvider, re
   };
 }
 
-test("captures initialize session id and forwards SSE JSON-RPC response", async () => {
-  await withServer((_req, res, entry) => {
-    assert.equal(entry.method, "POST");
-    assert.equal(entry.headers.authorization, "Bearer test-key");
-    assert.equal(entry.headers["x-openviking-account"], "default");
-    assert.equal(entry.headers["x-openviking-user"], "zeus");
-    assert.equal(entry.headers["x-openviking-actor-peer"], "peer-a");
-    assert.equal(entry.headers["user-agent"], "openviking-memory-test/9.9.9");
-    assert.equal(entry.headers["mcp-protocol-version"], "2025-06-18");
-    assert.equal(entry.headers["mcp-session-id"], undefined);
-    res.writeHead(200, {
-      "content-type": "text/event-stream",
-      "mcp-session-id": "sid-1",
+for (const [label, lineEnding] of [["CRLF", "\r\n"], ["LF", "\n"], ["CR", "\r"]]) {
+  test(`captures initialize session id and forwards ${label} SSE JSON-RPC response`, async () => {
+    await withServer((_req, res, entry) => {
+      assert.equal(entry.method, "POST");
+      assert.equal(entry.headers.authorization, "Bearer test-key");
+      assert.equal(entry.headers["x-openviking-account"], "default");
+      assert.equal(entry.headers["x-openviking-user"], "zeus");
+      assert.equal(entry.headers["x-openviking-actor-peer"], "peer-a");
+      assert.equal(entry.headers["user-agent"], "openviking-memory-test/9.9.9");
+      assert.equal(entry.headers["mcp-protocol-version"], "2025-06-18");
+      assert.equal(entry.headers["mcp-session-id"], undefined);
+      res.writeHead(200, {
+        "content-type": "text/event-stream",
+        "mcp-session-id": "sid-1",
+      });
+      res.end(`: keepalive${lineEnding}${sseMessage(jsonRpc(1, { protocolVersion: "2025-06-18" }), lineEnding)}`);
+    }, async ({ url, requests }) => {
+      const { proxy, messages } = makeProxy({ url });
+      await proxy.handleMessage({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-06-18" },
+      });
+      assert.deepEqual(await messages(), [jsonRpc(1, { protocolVersion: "2025-06-18" })]);
+      assert.equal(requests.length, 1);
     });
-    res.end(`: keepalive\r\n${sseMessage(jsonRpc(1, { protocolVersion: "2025-06-18" }))}`);
-  }, async ({ url, requests }) => {
-    const { proxy, messages } = makeProxy({ url });
-    await proxy.handleMessage({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { protocolVersion: "2025-06-18" },
-    });
-    assert.deepEqual(await messages(), [jsonRpc(1, { protocolVersion: "2025-06-18" })]);
-    assert.equal(requests.length, 1);
   });
-});
+}
 
 test("never forwards the client's un-negotiated protocol version header", async () => {
   await withServer((_req, res, entry) => {

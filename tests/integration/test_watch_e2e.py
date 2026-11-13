@@ -15,7 +15,7 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 async def get_watch_task(service, ctx: RequestContext, to_uri: str):
-    watch_manager = service.resources._watch_scheduler.watch_manager
+    watch_manager = service.watch_manager
     return await watch_manager.get_task_by_uri(
         to_uri=to_uri,
         account_id=ctx.account_id,
@@ -151,7 +151,7 @@ class TestWatchE2EBasicFlow:
                 watch_interval=120.0,
             )
 
-        watch_manager = service.resources._watch_scheduler.watch_manager
+        watch_manager = service.watch_manager
         await watch_manager.update_task(
             task_id=task_id,
             account_id=ctx.account_id,
@@ -270,7 +270,7 @@ class TestWatchE2EConflictDetection:
                 watch_interval=45.0,
             )
 
-        watch_manager = service.resources._watch_scheduler.watch_manager
+        watch_manager = service.watch_manager
         await watch_manager.update_task(
             task_id=task_id,
             account_id=ctx.account_id,
@@ -403,7 +403,7 @@ class TestWatchE2EErrorHandling:
             viking_fs=object(),
             resource_processor=MockResourceProcessor(),
             skill_processor=MockSkillProcessor(),
-            watch_scheduler=None,
+            watch_manager=None,
         )
 
         ctx = RequestContext(

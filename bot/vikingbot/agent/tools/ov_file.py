@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import hashlib
 import itertools
 import json
 import tempfile
@@ -256,6 +257,69 @@ class VikingListTool(OVFileTool):
             await self._release_client(tool_context, client)
 
 
+class VikingDiffPathsTool(OVFileTool):
+    """Expose paginated snapshot changes, including deletions, without reading file bodies."""
+
+    @property
+    def name(self) -> str:
+        return "openviking_diff_paths"
+
+    @property
+    def description(self) -> str:
+        return (
+            "List added, modified and deleted file URIs under directories between snapshots. "
+            "Omit base or pass null to list all files at head. Results include has_more and "
+            "next_offset; query all pages to enumerate the complete change set. "
+            "Read required file contents separately with openviking_multi_read."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "paths": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                    "minItems": 1,
+                    "description": "Source directory Viking URIs to compare.",
+                },
+                "base": {
+                    "anyOf": [{"type": "string"}, {"type": "null"}],
+                    "description": "Base commit ID; omitted or null means an empty tree.",
+                },
+                "head": {"type": "string", "description": "Required target snapshot commit ID."},
+                "offset": {"type": "integer", "minimum": 0, "default": 0},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100},
+            },
+            "required": ["paths", "head"],
+        }
+
+    async def execute(
+        self,
+        tool_context: ToolContext,
+        paths: list[str],
+        head: str,
+        base: str | None = None,
+        offset: int = 0,
+        limit: int = 100,
+        **kwargs: Any,
+    ) -> str:
+        """Return the requested change page as JSON, or an explicit query error."""
+        client = None
+        try:
+            client = await self._get_client(tool_context)
+            result = await client.diff_paths(
+                paths, base=base, head=head, offset=offset, limit=limit
+            )
+            return json.dumps(result, ensure_ascii=False)
+        except Exception as exc:
+            logger.warning(f"Error querying Viking snapshot changes: {exc}")
+            return f"Error querying Viking snapshot changes: {exc}"
+        finally:
+            await self._release_client(tool_context, client)
+
+
 class VikingSearchTool(OVFileTool):
     """Tool to search Viking resources."""
 
@@ -287,6 +351,12 @@ class VikingSearchTool(OVFileTool):
                     "type": "number",
                     "description": "Minimum relevance score threshold",
                     "default": 0.35,
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum candidates per search scope; increase if needed.",
+                    "minimum": 1,
+                    "default": 10,
                 },
             },
             "required": ["query"],
@@ -425,6 +495,7 @@ class VikingSearchTool(OVFileTool):
         query: str,
         target_uri: Optional[str] = "",
         min_score: float = 0.35,
+        limit: int = 10,
         **kwargs: Any,
     ) -> str:
         client = None
@@ -496,7 +567,7 @@ class VikingSearchTool(OVFileTool):
             for search_target_uri, search_user_id in search_targets:
                 search_kwargs = {
                     "target_uri": search_target_uri,
-                    "limit": 10,
+                    "limit": limit,
                 }
                 if search_user_id:
                     search_kwargs["user_id"] = search_user_id
@@ -512,6 +583,64 @@ class VikingSearchTool(OVFileTool):
             return self._format_search_items_json(grouped_items, min_score=min_score)
         except Exception as e:
             return f"Error searching Viking: {str(e)}"
+        finally:
+            await self._release_client(tool_context, client)
+
+
+class VikingRuleSearchTool(OVFileTool):
+    """Tool to retrieve compiled Rules applicable to a task."""
+
+    @property
+    def name(self) -> str:
+        return "openviking_rule_search"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Use this tool when a concrete task may be governed by OpenViking Rules. "
+            "It searches the rule set using the task context and returns every relevant Rule "
+            "the backend determines applicable, with complete applies_when, exception, and "
+            "application protocol details. Returned Rules must be strictly evaluated against "
+            "their applies_when, exception, and content."
+        )
+
+    @property
+    def preserve_complete_result(self) -> bool:
+        return True
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "task_context": {
+                    "type": "string",
+                    "description": (
+                        "Concrete task, object, evidence, and scenario used to determine which "
+                        "compiled Rules apply."
+                    ),
+                },
+            },
+            "required": ["task_context"],
+            "additionalProperties": False,
+        }
+
+    async def execute(
+        self,
+        tool_context: ToolContext,
+        task_context: str,
+        **kwargs: Any,
+    ) -> str:
+        client = None
+        try:
+            client = await self._get_client(tool_context)
+            result = await client.rule_search(task_context)
+            rendered = result.get("rendered") if isinstance(result, dict) else None
+            if isinstance(rendered, str) and rendered.strip():
+                return rendered
+            return json.dumps(result, ensure_ascii=False)
+        except Exception as e:
+            return f"Error searching OpenViking Rules: {str(e)}"
         finally:
             await self._release_client(tool_context, client)
 
@@ -984,14 +1113,68 @@ class VikingMultiReadTool(OVFileTool):
             "required": ["uris"],
         }
 
+    @classmethod
+    async def _read_image(cls, client, uri):
+        """Load one native image for multi-read and Compile using the same checks."""
+        stat = await client.stat(uri)
+        size = stat.get("size") if isinstance(stat, dict) else None
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            return {
+                "uri": uri,
+                "content": "Image size is unavailable; cannot attach it safely.",
+                "success": False,
+                "media_kind": "image",
+            }
+        if size > cls._MAX_INLINE_MEDIA_BYTES:
+            return {
+                "uri": uri,
+                "content": (
+                    f"Image is {size} bytes; the inline limit is "
+                    f"{cls._MAX_INLINE_MEDIA_BYTES} bytes."
+                ),
+                "success": False,
+                "media_kind": "image",
+            }
+        data = await client.download_bytes(uri)
+        if len(data) > size:
+            return {
+                "uri": uri,
+                "content": "Image changed after its size was checked; retry the read.",
+                "success": False,
+                "media_kind": "image",
+            }
+        image_format = sniff_image_format(data)
+        if image_format is None or image_format.mime_type not in cls._INLINE_IMAGE_MIME_TYPES:
+            return {
+                "uri": uri,
+                "content": ("File bytes do not match a supported PNG, JPEG, GIF, or WebP image."),
+                "success": False,
+                "media_kind": "image",
+            }
+        encoded = base64.b64encode(data).decode("ascii")
+        return {
+            "uri": uri,
+            "content": (f"Image resource ({image_format.mime_type}, {len(data)} bytes)."),
+            "image": {
+                "type": "image_url",
+                "image_url": {"url": f"data:{image_format.mime_type};base64,{encoded}"},
+            },
+            "media_bytes": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "success": True,
+            "media_kind": "image",
+        }
+
     async def execute(
         self,
         tool_context: ToolContext,
         uris: list[str],
         offset: int = 0,
         limit: int = -1,
+        with_revision: bool = False,
         **kwargs: Any,
     ) -> str | MultimodalToolResult:
+        """Read content; with_revision returns raw UTF-8 ranges and full-file hashes as JSON."""
         level = "read"  # 默认获取完整内容
         client = None
         try:
@@ -1011,6 +1194,12 @@ class VikingMultiReadTool(OVFileTool):
                 async with semaphore:
                     try:
                         media_kind = self._media_kind(uri)
+                        if with_revision and (
+                            media_kind or offset < 0 or (limit != -1 and limit < 1)
+                        ):
+                            raise ValueError(
+                                "Revision reads require text files and valid line ranges"
+                            )
                         if media_kind == "image":
                             if index not in inline_image_indexes:
                                 return {
@@ -1023,63 +1212,7 @@ class VikingMultiReadTool(OVFileTool):
                                     "success": False,
                                     "media_kind": media_kind,
                                 }
-                            stat = await client.stat(uri)
-                            size = stat.get("size") if isinstance(stat, dict) else None
-                            if isinstance(size, bool) or not isinstance(size, int) or size < 0:
-                                return {
-                                    "uri": uri,
-                                    "content": "Image size is unavailable; cannot attach it safely.",
-                                    "success": False,
-                                    "media_kind": media_kind,
-                                }
-                            if size > self._MAX_INLINE_MEDIA_BYTES:
-                                return {
-                                    "uri": uri,
-                                    "content": (
-                                        f"Image is {size} bytes; the inline limit is "
-                                        f"{self._MAX_INLINE_MEDIA_BYTES} bytes."
-                                    ),
-                                    "success": False,
-                                    "media_kind": media_kind,
-                                }
-                            data = await client.download_bytes(uri)
-                            if len(data) > size:
-                                return {
-                                    "uri": uri,
-                                    "content": "Image changed after its size was checked; retry the read.",
-                                    "success": False,
-                                    "media_kind": media_kind,
-                                }
-                            image_format = sniff_image_format(data)
-                            if (
-                                image_format is None
-                                or image_format.mime_type not in self._INLINE_IMAGE_MIME_TYPES
-                            ):
-                                return {
-                                    "uri": uri,
-                                    "content": (
-                                        "File bytes do not match a supported PNG, JPEG, GIF, "
-                                        "or WebP image."
-                                    ),
-                                    "success": False,
-                                    "media_kind": media_kind,
-                                }
-                            encoded = base64.b64encode(data).decode("ascii")
-                            return {
-                                "uri": uri,
-                                "content": (
-                                    f"Image resource ({image_format.mime_type}, {len(data)} bytes)."
-                                ),
-                                "image": {
-                                    "type": "image_url",
-                                    "image_url": {
-                                        "url": f"data:{image_format.mime_type};base64,{encoded}"
-                                    },
-                                },
-                                "media_bytes": len(data),
-                                "success": True,
-                                "media_kind": media_kind,
-                            }
+                            return await self._read_image(client, uri)
 
                         if media_kind in {"audio", "video"}:
                             content = await client.read_content(uri, level="overview")
@@ -1118,6 +1251,19 @@ class VikingMultiReadTool(OVFileTool):
                                     "success": False,
                                     "media_kind": None,
                                 }
+                        if with_revision:
+                            raw = await client.download_bytes(uri)
+                            lines = raw.decode("utf-8").splitlines(keepends=True)
+                            return {
+                                "uri": uri,
+                                "content": "".join(
+                                    lines[offset:]
+                                    if limit == -1
+                                    else lines[offset : offset + limit]
+                                ),
+                                "base_hash": hashlib.sha256(raw).hexdigest(),
+                                "success": True,
+                            }
                         content = await client.read_content(
                             uri, level=level, offset=offset, limit=limit
                         )
@@ -1144,6 +1290,8 @@ class VikingMultiReadTool(OVFileTool):
             # 并发读取所有URI
             read_tasks = [read_single_uri(index, uri) for index, uri in enumerate(uris)]
             results = await asyncio.gather(*read_tasks)
+            if with_revision:
+                return json.dumps(results, ensure_ascii=False)
 
             inline_media_bytes = 0
             for result in results:

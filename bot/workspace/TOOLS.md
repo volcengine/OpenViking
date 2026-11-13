@@ -28,6 +28,7 @@ Available OpenViking tools may include:
 | Tool | Use it for |
 |------|------------|
 | `openviking_search` | Semantic retrieval across resources, memories, and skills |
+| `openviking_rule_search` | Retrieving compiled constraints for a concrete task context |
 | `openviking_multi_read` | Reading the complete content of one or more known Viking URIs |
 | `openviking_list` | Browsing a Viking URI hierarchy |
 | `openviking_grep` | Regex or exact-text search inside OpenViking content |
@@ -38,6 +39,7 @@ Available OpenViking tools may include:
 ### Retrieval Workflow
 
 - Use `openviking_search` when the request is conceptual or semantic. Search results contain URIs and summaries, not necessarily full content.
+- Use `openviking_rule_search` when compiled Rules may constrain the concrete task. Search again when new evidence changes applicable conditions or exceptions. Treat returned Rules as constraints, not object evidence.
 - Use `openviking_multi_read` on the relevant result URIs before relying on details that are not present in the summary. Batch independent URIs in one call.
 - Use `openviking_grep` for known text or regex patterns, `openviking_glob` for path patterns, and `openviking_list` to explore a known directory.
 - Avoid repeating the same search intent within one turn. Search again when a follow-up asks for a different fact or when the stored state may have changed.

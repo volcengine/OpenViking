@@ -28,6 +28,15 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+
+def build_credential_encryptor(encryption_config: Any) -> "FileEncryptor":
+    """Encrypt saved credentials even when file encryption is disabled."""
+    from openviking.crypto.providers import create_root_key_provider
+
+    config = encryption_config.model_dump()
+    return FileEncryptor(create_root_key_provider(config.get("provider", "local"), config))
+
+
 # Magic number: OpenViking Encryption v1
 MAGIC = b"OVE1"
 MAGIC_LENGTH = len(MAGIC)

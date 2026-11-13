@@ -1,0 +1,120 @@
+# ExperienceDashboard
+
+Shows how Agent experiences are used: the directory view lists experience files, and the file view shows one experience's impact, source trajectories and test materials.
+
+## When to use
+
+- You need to review how experiences are used while browsing files, and jump to a specific experience or trajectory.
+- You want to decide the data source, pagination and page layout yourself. The component only renders: it sends no requests and does not need `OpenVikingProvider`.
+- When you use [FileBrowser](../modules/file-browser), the dashboard is built in and needs no separate setup.
+
+## Import
+
+```tsx
+import { ExperienceDashboard } from '@openviking/react/components/experience-dashboard';
+import '@openviking/react/components/experience-dashboard/style.css';
+```
+
+## Examples
+
+### Basic usage
+
+Switch between "Experience directory", "Experience file", "Host data" and "Error state"; the tabs support arrow keys and Home/End. "Host data" adds the impact metrics and test materials: the metrics show "—" without `effect`, and the Test tab appears only when `testMaterials` is provided.
+
+```tsx file="../../_demos/experience-dashboard-basic.tsx" preview
+
+```
+
+The example uses fixed data: click an experience name to open its file view; clicking a trajectory name only shows the URI it receives.
+
+## API
+
+### ExperienceDashboard
+
+| Property         | Description                                                                                                                                          | Type                                                                                                        | Default                        |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| uri              | URI of the current resource; changing it resets internal state such as the tab and the time range                                                    | `string`                                                                                                    | Required                       |
+| kind             | View mode, not inferred from `uri`: `directory` lists experience files, `file` shows the dashboard of one experience                                 | `'directory' \| 'file'`                                                                                     | Required                       |
+| data             | Display data; sections without data show the matching `states` entry                                                                                 | `ExperienceDashboardData`                                                                                   | `{}`                           |
+| tab              | Current tab of the file view: `impact`, `source` or `test`. Controlled when set; update it in `onTabChange`                                          | `'impact' \| 'source' \| 'test'`                                                                            | `'impact'`                     |
+| days             | Statistics period of the Impact tab, in days: `3`, `7`, `30`, or `0` for all time. Controlled when set; update it in `onDaysChange`                  | `number`                                                                                                    | `7`                            |
+| page             | Current page, starting at 0                                                                                                                          | `number`                                                                                                    | `0`                            |
+| pageSize         | Rows per page, used to turn `data.total` into a page count                                                                                           | `number`                                                                                                    | `20`                           |
+| hasMore          | Whether another page is available; without `data.total` it decides whether the paging buttons are enabled                                            | `boolean`                                                                                                   | `false`                        |
+| loadingMore      | Whether the next trajectory page is being appended; "Load more" shows a loading label while true                                                     | `boolean`                                                                                                   | `false`                        |
+| startIndex       | Number of rows before the current page; directory row numbers and test message titles continue from it                                               | `number`                                                                                                    | `0`                            |
+| states           | Loading and error state of each section; see Notes for what each key covers                                                                          | `Partial<Record<'list' \| 'outcomes' \| 'trajectories' \| 'sources' \| 'tests', ExperienceDashboardState>>` | `{}`                           |
+| onTabChange      | Called when the tab changes, with the new tab                                                                                                        | `(tab: 'impact' \| 'source' \| 'test') => void`                                                             | -                              |
+| onDaysChange     | Called when the statistics period changes, with the selected days; the component does not filter `data` by period, so reload it in the callback      | `(days: number) => void`                                                                                    | -                              |
+| onPageChange     | Called on paging with the target page; "Load more" also calls it when `onLoadMore` is absent; both omitted disables those controls                   | `(page: number) => void`                                                                                    | -                              |
+| onLoadMore       | Called when "Load more" is clicked so the host appends the next page; wins over `onPageChange`, which is used as `page + 1` when omitted             | `() => void`                                                                                                | -                              |
+| onOpenUri        | Called with the matching URI when an experience, a trajectory name or a trajectory's open button is clicked; those buttons are disabled when omitted | `(uri: string) => void`                                                                                     | -                              |
+| labels           | Overrides interface text                                                                                                                             | `Partial<ExperienceDashboardLabels>`                                                                        | -                              |
+| locale           | Interface language, see [Internationalization](../guide/i18n)                                                                                        | `'zh-CN' \| 'en-US'`                                                                                        | Inherited, otherwise `'en-US'` |
+| className, style | Appearance and layout; other HTML attributes are passed to the root element                                                                          | HTML attributes                                                                                             | -                              |
+
+### ExperienceDashboardData
+
+| Property        | Description                                                                                                                                           | Type                                                                                                      | Default |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ------- |
+| experiences     | Experience list of the directory view                                                                                                                 | `readonly ExperienceItem[]`                                                                               | -       |
+| total           | Total number of experiences, shown after the directory view title and used for the page count; hidden when omitted                                    | `number`                                                                                                  | -       |
+| effect          | Impact metrics: context injections, retrieval recalls, and an injection rate between 0 and 1 (shown as a percentage); all three show "—" when omitted | `{ injectionCount: number; recallCount: number; injectionRate: number }`                                  | -       |
+| outcomes        | Task outcome distribution, always shown in the order success, partial, unfinished, failure, unknown; outcomes you leave out count as 0                | `readonly { outcome: 'success' \| 'partial' \| 'unfinished' \| 'failure' \| 'unknown'; count: number }[]` | -       |
+| trajectories    | Injection trajectories on the Impact tab, in the order you pass them                                                                                  | `readonly ExperienceTrajectory[]`                                                                         | -       |
+| trajectoryTotal | Total number of injection trajectories, shown after the heading; hidden when omitted                                                                  | `number`                                                                                                  | -       |
+| sources         | Trajectories the experience was generated from, on the Source tab, in the order you pass them                                                         | `readonly ExperienceTrajectory[]`                                                                         | -       |
+| testMaterials   | Test materials, see `data.testMaterials` below for the fields; the Test tab appears once this is provided, even as an empty array                     | `readonly { id: string; title: string; content: string; taskQuery?: string; uri?: string }[]`             | -       |
+
+### ExperienceItem
+
+| Property        | Description                                                                                                                                                     | Type     | Default  |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | -------- |
+| uri             | URI of the experience file; also the list item key, so it must be unique                                                                                        | `string` | Required |
+| name            | Experience name; it selects the type icon and clicking it calls `onOpenUri`                                                                                     | `string` | Required |
+| modTime         | Last modified time, a string that `Date.parse` can read; shown as relative time under 3 days and as date and time after that, or as-is when it cannot be parsed | `string` | -        |
+| injectionCount  | Times the experience was injected into context; shows "—" when omitted                                                                                          | `number` | -        |
+| recallCount     | Times the experience was recalled; shows "—" when omitted                                                                                                       | `number` | -        |
+| description     | Experience description; the list does not show it                                                                                                               | `string` | -        |
+| trajectoryCount | Number of related trajectories; the list does not show it                                                                                                       | `number` | -        |
+
+### ExperienceTrajectory
+
+| Property    | Description                                                                                                                                                     | Type                                                               | Default  |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | -------- |
+| uri         | URI of the trajectory; also the list item key, so it must be unique. The copy and open buttons both act on it                                                   | `string`                                                           | Required |
+| name        | Trajectory name; clicking it calls `onOpenUri`                                                                                                                  | `string`                                                           | Required |
+| outcome     | Trajectory outcome; when set, a coloured dot and label appear beside the title: green for `success`, red for `failure`, orange for `partial`, neutral otherwise | `'success' \| 'partial' \| 'unfinished' \| 'failure' \| 'unknown'` | -        |
+| created_at  | Trajectory time, shown above the title                                                                                                                          | `string`                                                           | -        |
+| updated_at  | Update time; the interface does not show it                                                                                                                     | `string`                                                           | -        |
+| description | Trajectory description, shown below the URI row                                                                                                                 | `string`                                                           | -        |
+
+### data.testMaterials
+
+Fields of each item in the `data.testMaterials` array.
+
+| Property  | Description                                                                                                                                          | Type     | Default  |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | -------- |
+| id        | Unique identifier of the material, used as the card key                                                                                              | `string` | Required |
+| title     | Reserved; the card heading is always "Test message N"                                                                                                | `string` | Required |
+| content   | Material body, shown line by line: `User:` / `Assistant:` prefixes colour the role, `# ` headings take the muted tone; it can be copied in one click | `string` | Required |
+| taskQuery | Task description, shown in the card header and clamped to two lines                                                                                  | `string` | -        |
+| uri       | URI of the source trajectory, shown in the card header; it can be copied and opened                                                                  | `string` | -        |
+
+### ExperienceDashboardState
+
+| Property | Description                                                                                               | Type            | Default |
+| -------- | --------------------------------------------------------------------------------------------------------- | --------------- | ------- |
+| loading  | Shows the loading state when the section has no data; takes precedence over `error`                       | `boolean`       | `false` |
+| error    | Shows the error state and `error.message` when the section has no data, except appended trajectory pages  | `Error \| null` | -       |
+| onRetry  | Called when Retry is clicked; the component sends no requests itself. The button is disabled when omitted | `() => void`    | -       |
+
+## Notes
+
+- `states` is set per section and shows only while that section has no data, with one exception: when appending a trajectory page fails, the loaded rows stay and the error with its retry appears below the list. The errors and retries of different sections are independent. `list` covers the experience list of the directory view, `outcomes` the outcome distribution, `trajectories` the injection trajectories, `sources` the source trace and `tests` the test materials.
+- The pager appears when there is more than one page: `data.total` and `pageSize` decide the count, otherwise `hasMore` bounds it. The paging buttons are disabled while the matching section's `loading` is `true`.
+- The Impact tab lists injection trajectories and offers "Scroll down to load more" when `hasMore` is `true`: it calls `onLoadMore`, or `onPageChange(page + 1)` when only the latter is given, and shows a loading label while `loadingMore` is `true`.
+- Updating the test materials keeps the selected tab and time range. When `testMaterials` becomes `undefined`, a selected Test tab falls back to Impact.
+- Copying uses `navigator.clipboard.writeText`, which is available only over HTTPS or on localhost; when it is unavailable or the browser rejects it, the button shows "Copy failed".
+- The component is `100%` high and scrolls its content internally, so give its parent a height.
+- Types are exported from `@openviking/react/components/experience-dashboard`, including `ExperienceDashboardTab` and `ExperienceOutcome`; the package root exports only the component and `ExperienceDashboardProps`.
