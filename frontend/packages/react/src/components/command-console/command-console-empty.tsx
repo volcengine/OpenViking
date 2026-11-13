@@ -89,33 +89,48 @@ export function CommandConsoleEmptyRegion({
         {labels.quickStart}
       </p>
       <ul className="ov-command-console__empty-list">
-        {commands.map((command) => (
-          <li key={command.name} className="ov-command-console__empty-item">
-            <Tooltip
-              content={command.description}
-              placement="top"
+        {commands.map((command) => {
+          const action = (
+            <button
+              type="button"
+              className="ov-command-console__empty-action"
               disabled={disabled}
-              className="ov-command-console__quick-tooltip"
+              onClick={() => onPick(command.value)}
             >
-              <button
-                type="button"
-                className="ov-command-console__empty-action"
-                disabled={disabled}
-                onClick={() => onPick(command.value)}
-              >
-                <ArrowRightIcon width={14} height={14} focusable="false" />
-                <span className="ov-command-console__empty-content">
-                  <span className="ov-command-console__empty-name">
-                    {command.name}
-                  </span>
-                  <span className="ov-command-console__empty-desc">
-                    {command.summary ?? command.description}
-                  </span>
+              <ArrowRightIcon width={14} height={14} focusable="false" />
+              <span className="ov-command-console__empty-content">
+                <span className="ov-command-console__empty-name">
+                  {command.name}
                 </span>
-              </button>
-            </Tooltip>
-          </li>
-        ))}
+                <span className="ov-command-console__empty-desc">
+                  {command.summary ?? command.description}
+                </span>
+              </span>
+            </button>
+          );
+          // 行内已显示 summary ?? description，只有宿主另给了 summary 时，
+          // Tooltip 才有行内看不到的完整说明；否则弹出的会是同一句话。
+          //
+          // The row already shows `summary ?? description`, so a Tooltip only has
+          // the fuller description to add when the host supplied a `summary`;
+          // otherwise it would repeat the same sentence.
+          return (
+            <li key={command.name} className="ov-command-console__empty-item">
+              {command.summary !== undefined ? (
+                <Tooltip
+                  content={command.description}
+                  placement="top"
+                  disabled={disabled}
+                  className="ov-command-console__quick-tooltip"
+                >
+                  {action}
+                </Tooltip>
+              ) : (
+                action
+              )}
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
