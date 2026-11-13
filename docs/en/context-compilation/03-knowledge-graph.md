@@ -60,6 +60,8 @@ ov read viking://resources/journal-kg/relations.jsonl
 ov read viking://resources/journal-kg/entities/sun-wukong.md
 ```
 
+After an incremental run, check the task result's warnings. Compile reports how many input files have unreferenced ranges so you can check the graph for missing citations. The warning describes source lineage. The published graph remains available.
+
 ## Step 5: Visualize it as an interactive graph
 
 Unlike the LLM Wiki script, `knowledge_graph.py` reads from a **local directory** (it needs both `entities/` and `relations.jsonl` on disk). So download the output first, then generate the HTML.

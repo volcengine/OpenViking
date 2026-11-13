@@ -281,6 +281,40 @@ async def test_compile_image_reaches_chat_completion_wire(
     assert images == [png]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "missing_reference"),
+    [("incremental", True), ("incremental", False), ("full", True)],
+)
+async def test_compile_reports_unconfirmed_incremental_coverage(runtime, mode, missing_reference):
+    pipeline, _ = runtime
+    pipeline.changes = {"execution": {"mode": mode}}
+    await pipeline.files.put("inputs", {TEXT: "pending", URI: "pending"})
+    pipeline.evidence = {"notes": {"uri": TEXT}, "diagram": {"uri": URI}}
+    pipeline.status = {
+        "notes": "prepared",
+        "diagram": "unreferenced" if missing_reference else "prepared",
+    }
+    refs = ["notes"] if missing_reference else ["notes", "diagram"]
+    await pipeline.files.put(
+        "finalize", {"outputs": {"notes.md": {"source_refs": refs, "sha256": "test-hash"}}}
+    )
+
+    await pipeline.write_coverage()
+    assert pipeline.warnings == []
+
+    await pipeline.write_coverage([f"{pipeline.target}/notes.md"])
+    coverage = await pipeline.files.get("coverage")
+    assert coverage["counts"] == (
+        {"delivered": 1, "unreferenced": 1} if missing_reference else {"delivered": 2}
+    )
+    if mode == "incremental" and missing_reference:
+        assert len(pipeline.warnings) == 1
+        assert "unconfirmed for 1 of 2 input files" in pipeline.warnings[0]
+    else:
+        assert pipeline.warnings == []
+
+
 async def test_pipeline_inventory_combines_full_files_and_every_diff_page(runtime):
     pipeline, _ = runtime
     root, full = "viking://resources/cedar", "viking://resources/full"
