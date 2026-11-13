@@ -1,20 +1,24 @@
 // @vitest-environment jsdom
-import { Thread } from '#/features/workbench/sessions/components/thread'
-import { act, cleanup, render, screen } from '@testing-library/react'
-import { useState } from 'react'
+import { Thread } from './thread'
+import { createThreadRequest } from './thread-request'
+import { cleanup, render, screen } from '@testing-library/react'
+import type { ConsoleProps } from '@openviking/react/modules/console'
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 const m = vi.hoisted(() => ({
   provider: 'opensource',
-  create: vi.fn(),
+  request: vi.fn(),
   history: vi.fn(),
-  chat: vi.fn(),
-  send: vi.fn(),
-  onSend: undefined as undefined | ((text: string) => Promise<boolean>),
+  console: undefined as ConsoleProps | undefined,
+  invalidate: vi.fn(),
+  setTitle: vi.fn(),
 }))
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
+}))
+vi.mock('@tanstack/react-query', () => ({
+  useQueryClient: () => ({ invalidateQueries: m.invalidate }),
 }))
 vi.mock('#/features/connection/hooks/use-studio-service', () => ({
   useStudioService: () => ({ provider: m.provider, ready: true }),
@@ -23,179 +27,110 @@ vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({ identityScopeKey: 'test' }),
 }))
 vi.mock('#/features/workbench/sessions/lib/use-session-titles', () => ({
-  useSessionTitles: () => ({ getTitle: (id: string) => id, setTitle: vi.fn() }),
+  useSessionTitles: () => ({
+    getTitle: (id: string) => id,
+    setTitle: m.setTitle,
+  }),
 }))
 vi.mock('#/features/workbench/sessions/lib/use-sessions', () => ({
-  useCreateSession: () => ({ mutateAsync: m.create }),
   useSession: () => ({}),
   useSessionMessages: m.history,
 }))
-vi.mock('@openviking/react/modules/viking-bot', () => ({
-  useVikingBotChat: (options: unknown) => {
-    m.chat(options)
-    return {
-      messages: [],
-      status: 'idle',
-      canSteer: true,
-      send: m.send,
-      abort: vi.fn(),
-    }
-  },
+vi.mock('#/shared/api/module-request', () => ({
+  requestStudioModule: m.request,
 }))
-vi.mock('#/features/workbench/sessions/components/memory-impact', () => ({
-  MemoryImpact: () => null,
+vi.mock('@openviking/react/client', async (original) => ({
+  ...(await original<object>()),
+  OpenVikingProvider: ({ children }: { children: ReactNode }) => children,
 }))
-vi.mock('@openviking/react/components/viking-bot', () => ({
-  VikingBot: ({
-    onSend,
-    emptyState,
-    header,
-    footer,
-    draft,
-    composer,
-  }: {
-    onSend: (draft: { text: string; attachments: [] }) => Promise<boolean>
-    draft?: string
-    emptyState: ReactNode
-    header: ReactNode
-    footer: ReactNode
-    composer?: ReactNode
-  }) => {
-    m.onSend =
-      draft === undefined
-        ? undefined
-        : (text) => onSend({ text, attachments: [] })
+vi.mock('@openviking/react/modules/console', () => ({
+  Console: (props: ConsoleProps) => {
+    m.console = props
     return (
       <>
-        {header}
-        {emptyState}
-        {footer}
-        {composer !== false && <div data-testid="bot-composer" />}
+        {props.conversation?.header}
+        {props.conversation?.emptyState}
       </>
     )
   },
 }))
+vi.mock('./memory-impact', () => ({ MemoryImpact: () => null }))
 
 beforeEach(() => {
   vi.clearAllMocks()
   m.provider = 'opensource'
-  m.onSend = undefined
-  m.send.mockReset().mockResolvedValue(true)
-  m.history.mockReturnValue({ isPending: true })
-  Element.prototype.scrollIntoView = vi.fn()
+  m.history.mockReturnValue({ isPending: false, data: [] })
+  m.request.mockResolvedValue(Response.json({ status: 'ok', result: {} }))
 })
 afterEach(cleanup)
 
-it('does not request draft history and persists only once on first send', async () => {
-  m.create.mockResolvedValue({ session_id: 'draft' })
-  render(<Thread sessionId="draft" draft />)
-  expect(m.create).not.toHaveBeenCalled()
+it('uses conversation-only Console, skips draft history and echoes the created ID without remounting', () => {
+  const persisted = vi.fn()
+  const view = render(
+    <Thread sessionId="draft" draft onPersisted={persisted} />,
+  )
+  expect(m.console?.modes).toEqual(['conversation'])
+  expect(m.console?.conversation?.messages).toBeUndefined()
+  expect(m.console?.conversation?.onSend).toBeUndefined()
+  expect(m.console?.conversation?.sessions?.currentId).toBeUndefined()
   expect(m.history).toHaveBeenLastCalledWith(undefined)
-  await act(async () => {
-    expect(await m.onSend!('first')).toBe(true)
-  })
-  await act(async () => {
-    await m.onSend!('second')
-  })
-  expect(m.create).toHaveBeenCalledExactlyOnceWith('draft')
-  expect(m.send).toHaveBeenCalledWith('first')
-  expect(m.history).toHaveBeenLastCalledWith(undefined)
+  view.rerender(<Thread sessionId="existing" />)
+  expect(m.console?.conversation?.sessions?.currentId).toBe('existing')
+  expect(persisted).not.toHaveBeenCalled()
 })
 
-it('rejects failed creation so the composer can retain input', async () => {
-  m.create.mockRejectedValue(new Error('unavailable'))
-  render(<Thread sessionId="draft" draft />)
-  await act(async () => {
-    expect(await m.onSend!('first')).toBe(false)
-  })
-  expect(m.send).not.toHaveBeenCalled()
-})
-
-it('does not send after leaving a draft during creation', async () => {
-  let resolve!: (value: unknown) => void
-  m.create.mockImplementation(
-    () =>
-      new Promise((done) => {
-        resolve = done
-      }),
-  )
-  const view = render(<Thread sessionId="draft" draft />)
-  let pending!: Promise<boolean>
-  act(() => {
-    pending = m.onSend!('first')
-  })
-  expect(await m.onSend!('duplicate')).toBe(false)
-  view.unmount()
-  resolve({ session_id: 'draft' })
-  expect(await pending).toBe(false)
-  expect(m.send).not.toHaveBeenCalled()
-  expect(m.create).toHaveBeenCalledTimes(1)
-})
-
-it('loads the correct history when switching existing sessions', () => {
-  const view = render(<Thread sessionId="first" />)
-  expect(m.chat).toHaveBeenLastCalledWith(
-    expect.objectContaining({ sessionId: 'first', initialMessages: undefined }),
-  )
-  view.rerender(<Thread sessionId="second" />)
-  expect(m.chat).toHaveBeenLastCalledWith(
-    expect.objectContaining({
-      sessionId: 'second',
-      initialMessages: undefined,
-    }),
-  )
-  expect(m.create).not.toHaveBeenCalled()
-})
-
-it('loads persisted history and continues after switching tabs', async () => {
-  let showThread!: (visible: boolean) => void
-  function Workspace() {
-    const [draft, setDraft] = useState(true)
-    const [visible, setVisible] = useState(true)
-    showThread = setVisible
-    return visible ? (
-      <Thread
-        sessionId="draft"
-        draft={draft}
-        onPersisted={() => setDraft(false)}
-      />
-    ) : null
-  }
-  m.create
-    .mockResolvedValueOnce({ session_id: 'draft' })
-    .mockRejectedValue(new Error('Session already exists'))
-  render(<Workspace />)
-  await act(async () => {
-    expect(await m.onSend!('first')).toBe(true)
-  })
-  act(() => showThread(false))
-  act(() => showThread(true))
-  expect(m.chat).toHaveBeenLastCalledWith(
-    expect.objectContaining({ sessionId: 'draft', initialMessages: undefined }),
-  )
-  await act(async () => {
-    expect(await m.onSend!('second')).toBe(true)
-  })
-  expect(m.create).toHaveBeenCalledExactlyOnceWith('draft')
-  expect(m.send).toHaveBeenLastCalledWith('second')
-})
-
-it('reports the module completion result so failed sends preserve the draft', async () => {
-  m.send.mockResolvedValue(false)
-  render(<Thread sessionId="existing" />)
-  await expect(m.onSend!('first')).resolves.toBe(false)
-  expect(m.send).toHaveBeenCalledWith('first')
-})
-
-it('preserves hosted session history without exposing a Bot composer or draft send', () => {
+it('preserves hosted history as read-only content', () => {
   m.provider = 'volcengine'
-  m.history.mockReturnValue({ isPending: false, data: [] })
-  render(<Thread sessionId="hosted-session" />)
-  expect(m.history).toHaveBeenLastCalledWith('hosted-session')
-  expect(m.onSend).toBeUndefined()
-  expect(screen.queryByTestId('bot-composer')).toBeNull()
-  expect(m.send).not.toHaveBeenCalled()
-  expect(m.create).not.toHaveBeenCalled()
+  render(<Thread sessionId="hosted" />)
+  expect(m.history).toHaveBeenLastCalledWith('hosted')
+  expect(m.console?.conversation?.messages).toEqual([])
+  expect(m.console?.conversation?.composer).toBe(false)
   expect(screen.getByText('chat.emptyReadDescription')).toBeTruthy()
-  expect(screen.queryByText('chat.emptyDescription')).toBeNull()
+})
+
+it('preserves the Studio session ID and request cancellation signal', async () => {
+  const request = createThreadRequest({
+    sessionId: 'vikingbot-web-test',
+    onMessageSaved: vi.fn(),
+  })
+  const signal = new AbortController().signal
+  await request('/api/v1/sessions', { method: 'POST', body: '{}', signal })
+  expect(m.request).toHaveBeenCalledWith('/api/v1/sessions', {
+    method: 'POST',
+    body: JSON.stringify({ session_id: 'vikingbot-web-test' }),
+    signal,
+  })
+})
+
+it('updates product metadata only after successful saves and retains the first title', async () => {
+  const saved = vi.fn()
+  const request = createThreadRequest({ sessionId: 's', onMessageSaved: saved })
+  const send = (text: string) =>
+    request('/api/v1/sessions/s/messages', {
+      method: 'POST',
+      body: JSON.stringify({ role: 'user', parts: [{ type: 'text', text }] }),
+    })
+  m.request.mockResolvedValueOnce(Response.json({ status: 'error' }))
+  await send('failed')
+  expect(saved).not.toHaveBeenCalled()
+  await send('first')
+  await send('second')
+  expect(saved.mock.calls).toEqual([['first'], [undefined]])
+})
+
+it('does not overwrite an existing session title on follow-up', async () => {
+  const saved = vi.fn()
+  const request = createThreadRequest({
+    sessionId: 's',
+    hasTitle: true,
+    onMessageSaved: saved,
+  })
+  await request('/api/v1/sessions/s/messages', {
+    method: 'POST',
+    body: JSON.stringify({
+      role: 'user',
+      parts: [{ type: 'text', text: 'follow-up' }],
+    }),
+  })
+  expect(saved).toHaveBeenCalledWith(undefined)
 })

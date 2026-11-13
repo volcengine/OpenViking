@@ -11,9 +11,6 @@ import { useAppConnection } from '#/features/connection/hooks/use-app-connection
 import { useInvalidateVikingFs } from '#/features/workbench/resources/hooks/viking-fm'
 import { requestStudioModule } from '#/shared/api/module-request'
 import type { ResourceOpenHandler } from '../lib/types'
-import styles from '../workbench.module.css'
-
-const commandOnlyConversation: Partial<VikingBotProps> = { messages: [] }
 
 const filesystemWrites = new Set<string>([
   OV_PATHS.fsCp,
@@ -74,10 +71,10 @@ export function WorkbenchConsole({
   return (
     <OpenVikingProvider baseURL="" fetch={request}>
       <Console
-        className={conversation ? undefined : styles.commandOnlyConsole}
+        modes={conversation ? undefined : ['command']}
         mode={mode}
         onModeChange={onModeChange}
-        conversation={conversation ?? commandOnlyConversation}
+        conversation={conversation}
         scopeKey={identityScopeKey}
         slots={{ toolbar }}
         onOpenUri={(uri) => {
