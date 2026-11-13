@@ -3,9 +3,6 @@
 
 import { ovFixture } from './ov-fixture.mjs';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import { describe, it } from 'node:test';
 import { VolcAgent as BaseVolcAgent } from '../src/volc.mjs';
 
@@ -650,21 +647,15 @@ describe('Volc managed-agent runtime', () => {
       && activity.metadata.delivery === 'telemetry_only'));
   });
 
-  it('carries the instance role into the policy it injects', () => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-volc-role-'));
-    const rolePromptPath = path.join(directory, 'role.md');
-    fs.writeFileSync(rolePromptPath, '<!-- editor note -->\nROLE_MARKER: {{AGENT_NAME}} answers garden questions.\n');
-    try {
-      const agent = new VolcAgent(config({ rolePromptPath, agentName: 'Alpha' }), store(), quietLogger, { fetch: async () => json({}) });
-      assert.match(agent.transportPolicy, /## Role\n/);
-      assert.match(agent.transportPolicy, /ROLE_MARKER: Alpha answers garden questions\./);
-      assert.doesNotMatch(agent.transportPolicy, /editor note/);
-      const plain = new VolcAgent(config(), store(), quietLogger, { fetch: async () => json({}) });
-      assert.match(plain.transportPolicy, /^## Inputs\n/);
-      assert.doesNotMatch(plain.transportPolicy, /## Role/);
-    } finally {
-      fs.rmSync(directory, { recursive: true, force: true });
-    }
+  it('carries the instance soul into the policy it injects', () => {
+    const soulText = '<!-- editor note -->\nROLE_MARKER: {{AGENT_NAME}} answers garden questions.\n';
+    const agent = new VolcAgent(config({ soulText, agentName: 'Alpha' }), store(), quietLogger, { fetch: async () => json({}) });
+    assert.match(agent.transportPolicy, /## Role\n/);
+    assert.match(agent.transportPolicy, /ROLE_MARKER: Alpha answers garden questions\./);
+    assert.doesNotMatch(agent.transportPolicy, /editor note/);
+    const plain = new VolcAgent(config(), store(), quietLogger, { fetch: async () => json({}) });
+    assert.match(plain.transportPolicy, /^## Inputs\n/);
+    assert.doesNotMatch(plain.transportPolicy, /ROLE_MARKER/);
   });
 
   it('does not abort the stream when session-lifecycle events arrive before the user.message fence', () => {

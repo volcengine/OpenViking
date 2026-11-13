@@ -331,6 +331,29 @@ export class OVToolClient {
     return { text: `Stored at ${uri}. It takes effect from the next line this person sends.`, data: { stored: true, uri, directory } };
   }
 
+  // One text file in the instance's own space (viking://~/), written whole or
+  // appended to. Preferences are written only through setPreference. As
+  // there, a release that refuses `replace` or `append` on a missing file
+  // (404) gets `create`.
+  async write({ uri, content, mode = 'replace' } = {}) {
+    const target = normalizeOVUri(uri);
+    if (!target.startsWith('viking://~/')) {
+      throw ovError('openviking_reserved_target', 'Only files in your own space (viking://~/...) can be written');
+    }
+    if (target === OV_PREFERENCES || target.startsWith(`${OV_PREFERENCES}/`)) {
+      throw ovError('openviking_reserved_target', 'Preferences are kept only through openviking_remember');
+    }
+    if (!['replace', 'append'].includes(mode)) throw ovError('invalid_input', 'mode must be replace or append');
+    const send = (as) => this.conn().json('/api/v1/content/write', { uri: target, content: String(content ?? ''), mode: as, wait: true });
+    try {
+      await send(mode);
+    } catch (error) {
+      if (error?.httpStatus !== 404) throw toolError(error);
+      try { await send('create'); } catch (again) { throw toolError(again); }
+    }
+    return { text: `Wrote ${target} (${mode}).`, data: { stored: true, uri: target, mode } };
+  }
+
   // Remove one person's preference on one topic, when they withdraw it.
   async forgetPreference({ person, topic }) {
     const file = topicFile(topic);

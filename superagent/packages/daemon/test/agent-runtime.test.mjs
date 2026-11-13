@@ -514,6 +514,30 @@ describe('global Codex/Claude hard switch', () => {
     }
   });
 
+  it('rereads the soul before a runtime switch builds the new backend, and not for the same runtime', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-runtime-refresh-policy-'));
+    const store = new Store(path.join(directory, 'state.sqlite3'), quietLogger);
+    store.initializeCognition('codex', 'old-token');
+    const config = { soulText: 'old soul' };
+    const order = [];
+    const runtime = new AgentRuntime(config, store, quietLogger, {
+      refreshPolicy: async () => { order.push('refresh'); config.soulText = 'new soul'; },
+      codexFactory: (options) => backend('codex', options),
+      piFactory: (options) => { order.push(`construct pi with ${config.soulText}`); return backend('pi', options); },
+    });
+    try {
+      await runtime.start();
+      await runtime.transition({ kind: 'select-runtime', runtime: 'codex' });
+      assert.deepEqual(order, []);
+      await runtime.transition({ kind: 'select-runtime', runtime: 'pi' });
+      assert.deepEqual(order, ['refresh', 'construct pi with new soul']);
+    } finally {
+      await runtime.stop();
+      store.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('keeps the old runtime authoritative when persisting a live choice fails', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-runtime-persist-failure-'));
     const store = new Store(path.join(directory, 'state.sqlite3'), quietLogger);

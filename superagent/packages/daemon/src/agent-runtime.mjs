@@ -72,6 +72,9 @@ export class AgentRuntime {
     this.onAvailable = options.onAvailable ?? null;
     this.onAuthorityChanged = options.onAuthorityChanged ?? null;
     this.persistRuntimePreference = options.persistRuntimePreference ?? null;
+    // Rereads what the policy is assembled from (the soul) before a runtime
+    // switch constructs the new backend.
+    this.refreshPolicy = options.refreshPolicy ?? null;
     this.recordActivity = options.recordActivity ?? null;
     this.clock = options.clock ?? (() => Date.now());
     this.loopCancelGraceMs = options.loopCancelGraceMs ?? LOOP_CANCEL_GRACE_MS;
@@ -514,6 +517,7 @@ export class AgentRuntime {
         return { ok: true, kind: request.kind, ...result };
       }
       if (request.kind === 'select-runtime') {
+        if (getRuntimeDefinition(request.runtime)?.id !== this.runtime) await this.refreshPolicy?.();
         const result = await this._selectRuntime(request.runtime, request.model);
         return { ok: true, kind: request.kind, ...result };
       }

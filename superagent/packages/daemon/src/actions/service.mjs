@@ -62,6 +62,7 @@ const HANDLERS = {
   openviking_list: 'openvikingList',
   openviking_add_resource: 'openvikingAddResource',
   openviking_remember: 'openvikingRemember',
+  openviking_write: 'openvikingWrite',
 };
 
 // A refusal the model can act on; `code` is what logs and activities record.
@@ -1637,6 +1638,18 @@ export class ActionService {
     }
     this.onPreferencesChanged?.();
     return result;
+  }
+
+  // A file in the instance's own OpenViking space (its soul, notes), written
+  // only on the owner's request: decision_id must name an input the owner sent.
+  // Where it may land is the tool client's to check (ov-tools.mjs).
+  async openvikingWrite(input, caller) {
+    const row = this.resolveDecision(input, caller, 'Not written');
+    if (!this.isOwnerEvent(normalizeEvent(JSON.parse(row.event_json)))) {
+      throw blocked('owner_only', `Not written: only the owner can ask for an OpenViking write. Pass the event= of the owner's message that asks for it. ${NO_ACTION}`);
+    }
+    caller.trace.invoked = true;
+    return await this.ovToolClient().write({ uri: input.uri, content: input.content, mode: input.mode });
   }
 
   // Whether the owner sent an event, by the connector's authenticated identity.

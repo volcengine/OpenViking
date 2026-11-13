@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bundledLarkCli } from './lark-cli-bin.mjs';
 import { managedPiBin } from './pi-runtime.mjs';
-import { resolveRolePromptPath } from './conversation-policy.mjs';
+import { OV_SOUL_URI } from './conversation-policy.mjs';
 import { defaultDshSkillRoots, dshSkillRootChoices } from './dsh-config.mjs';
 
 const sourceDir = path.dirname(fileURLToPath(import.meta.url));
@@ -50,21 +50,13 @@ function boolEnv(name, fallback) {
   throw new Error(`${name} must be a boolean`);
 }
 
-// OV_SUPERAGENT_ROLE: a role shipped under agent/roles, or the absolute path of the
-// owner's own role file. Unset, the agent runs on the Core's defaults alone.
-function rolePromptEnv(promptDir) {
-  const role = (process.env.OV_SUPERAGENT_ROLE ?? '').trim();
-  if (!role) return '';
-  if (!path.isAbsolute(role) && !/^[a-z][a-z0-9-]{0,31}$/.test(role)) {
-    throw new Error('OV_SUPERAGENT_ROLE must be a role name or an absolute path');
-  }
-  const filePath = resolveRolePromptPath(role, promptDir);
-  let info = null;
-  try { info = fs.statSync(filePath); } catch {}
-  if (!info?.isFile()) {
-    throw new Error(path.isAbsolute(role) ? 'OV_SUPERAGENT_ROLE names a file that does not exist' : `OV_SUPERAGENT_ROLE ${role} is not a known role`);
-  }
-  return filePath;
+// OV_SUPERAGENT_SOUL_URI (agents[].soulUri): where the instance's soul is kept
+// in OpenViking. Unset, it is the instance's own viking://~/memories/soul.md.
+function soulUriEnv() {
+  const uri = (process.env.OV_SUPERAGENT_SOUL_URI ?? '').trim();
+  if (!uri) return OV_SOUL_URI;
+  if (!/^viking:\/\/[^\s%\\?#]+$/.test(uri)) throw new Error('OV_SUPERAGENT_SOUL_URI must be a viking:// address');
+  return uri;
 }
 
 function csvEnv(name) {
@@ -213,7 +205,10 @@ export function getConfig() {
     tempDir: configuredTempDir ? path.normalize(configuredTempDir) : path.join(dataDir, 'tmp'),
     workspace,
     promptDir,
-    rolePromptPath: rolePromptEnv(promptDir),
+    soulUri: soulUriEnv(),
+    // agents[].role: the preset an instance was set up with, used only to seed
+    // a missing soul (seedSoulFromPreset).
+    rolePreset: /^[a-z][a-z0-9-]{0,31}$/.test((process.env.OV_SUPERAGENT_ROLE ?? '').trim()) ? process.env.OV_SUPERAGENT_ROLE.trim() : '',
     // On by default; agents[].naturalWriting: false turns it off.
     naturalWriting: boolEnv('OV_SUPERAGENT_NATURAL_WRITING', true),
     openVikingConfigPath: (process.env.OPENVIKING_CLI_CONFIG_FILE || '').trim(),

@@ -94,7 +94,8 @@ is created with `memory_policy.memory_types` of `profile`, `preferences`,
 `entities` and `events`, types every release with memory policies has:
 extraction never writes the agent's own `soul` or `identity`, which a line
 that talks the agent into a new name or a global rule would otherwise
-rewrite. The agent's name and role come from its configuration; the owner's
+rewrite. The agent's name comes from its configuration and its soul is a
+file in OpenViking changed only on the owner's request; the owner's
 standing rules are the owner's preferences. Sessions created before this
 kept the server's default policy until `/new`.
 Native reasoning and arbitrary tool results are not session archives.
