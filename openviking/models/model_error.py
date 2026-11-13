@@ -7,7 +7,7 @@ from __future__ import annotations
 import functools
 import inspect
 import re
-from enum import Enum, IntEnum
+from enum import Enum
 from typing import Any, Callable, TypeVar, cast
 
 
@@ -108,28 +108,15 @@ _TRANSIENT_NETWORK_STATUS = {408, 504}
 _METRIC_ERROR_CODE_MAX_LENGTH = 64
 
 
-class _EvidenceRank(IntEnum):
-    FALLBACK = 0
-    HTTP_STATUS = 1
-    SDK_CLASS = 2
-    PROVIDER_CODE = 3
-    EXPLICIT_KIND = 4
-
-
 def model_exception_chain(error: BaseException) -> list[BaseException]:
-    """Return every reachable cause/context exception once, outermost first."""
+    """Follow the causal chain once, preferring an explicit cause over context."""
     chain: list[BaseException] = []
     seen: set[int] = set()
-    pending: list[BaseException] = [error]
-    while pending:
-        current = pending.pop(0)
-        if id(current) in seen:
-            continue
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
         chain.append(current)
         seen.add(id(current))
-        for nested in (current.__cause__, current.__context__):
-            if nested is not None and id(nested) not in seen:
-                pending.append(nested)
+        current = current.__cause__ or current.__context__
     return chain
 
 
@@ -322,46 +309,15 @@ def _kind_from_status(status_code: int | None) -> ModelErrorKind | None:
     return None
 
 
-def _best_kind(
-    error: BaseException,
-    *,
-    class_kind: ModelErrorKind | None = None,
-    include_status: bool = True,
-    extra_kind: ModelErrorKind | None = None,
-) -> tuple[ModelErrorKind, _EvidenceRank]:
-    code_kind = _kind_from_code(error)
-    if code_kind is not None:
-        return code_kind, _EvidenceRank.PROVIDER_CODE
-    if extra_kind is not None:
-        return extra_kind, _EvidenceRank.PROVIDER_CODE
-    if class_kind is not None:
-        return class_kind, _EvidenceRank.SDK_CLASS
-    if include_status:
-        status_kind = _kind_from_status(_status_code(error))
-        if status_kind is not None:
-            return status_kind, _EvidenceRank.HTTP_STATUS
-    return ModelErrorKind.UNKNOWN, _EvidenceRank.FALLBACK
-
-
-def _sdk_kind(
-    error: BaseException,
-) -> tuple[ModelErrorKind, str, _EvidenceRank] | None:
+def _sdk_kind(error: BaseException) -> tuple[ModelErrorKind, str] | None:
     module = type(error).__module__
     name = type(error).__name__
     mro_names = {base.__name__ for base in type(error).__mro__}
 
     if isinstance(error, TimeoutError):
-        return (
-            ModelErrorKind.TRANSIENT_NETWORK_ERROR,
-            "network",
-            _EvidenceRank.SDK_CLASS,
-        )
+        return ModelErrorKind.TRANSIENT_NETWORK_ERROR, "network"
     if isinstance(error, ConnectionError):
-        return (
-            ModelErrorKind.TRANSIENT_NETWORK_ERROR,
-            "network",
-            _EvidenceRank.SDK_CLASS,
-        )
+        return ModelErrorKind.TRANSIENT_NETWORK_ERROR, "network"
 
     if module.startswith("openai"):
         provider = "openai"
@@ -373,8 +329,8 @@ def _sdk_kind(
             "NotFoundError": ModelErrorKind.MODEL_NOT_FOUND,
             "InternalServerError": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
         }
-        extra_kind = None
-        if _kind_from_code(error) is None and _status_code(error) == 500:
+        kind = _kind_from_code(error)
+        if kind is None and _status_code(error) == 500:
             # llama.cpp reports inputs above its physical batch capacity as
             # HTTP 500 without a business code. Retrying the same input cannot help.
             message = _body(error).get("message")
@@ -383,13 +339,9 @@ def _sdk_kind(
                 r"increase the physical batch size \(current batch size: \d+\)",
                 message,
             ):
-                extra_kind = ModelErrorKind.INPUT_TOO_LARGE
-        kind, evidence = _best_kind(
-            error,
-            class_kind=class_kinds.get(name),
-            extra_kind=extra_kind,
-        )
-        return kind, provider, evidence
+                kind = ModelErrorKind.INPUT_TOO_LARGE
+        kind = kind or class_kinds.get(name) or _kind_from_status(_status_code(error))
+        return kind or ModelErrorKind.UNKNOWN, provider
 
     if module.startswith("volcenginesdkarkruntime"):
         provider = "volcengine"
@@ -402,8 +354,12 @@ def _sdk_kind(
             "ArkInternalServerError": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
             "ArkContentFilterFinishReasonError": ModelErrorKind.CONTENT_SAFETY,
         }
-        kind, evidence = _best_kind(error, class_kind=class_kinds.get(name))
-        return kind, provider, evidence
+        kind = (
+            _kind_from_code(error)
+            or class_kinds.get(name)
+            or _kind_from_status(_status_code(error))
+        )
+        return kind or ModelErrorKind.UNKNOWN, provider
 
     if module.startswith("litellm"):
         provider = "litellm"
@@ -420,40 +376,41 @@ def _sdk_kind(
             "ServiceUnavailableError": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
             "InternalServerError": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
         }
-        kind, evidence = _best_kind(error, class_kind=class_kinds.get(name))
-        return kind, provider, evidence
+        kind = (
+            _kind_from_code(error)
+            or class_kinds.get(name)
+            or _kind_from_status(_status_code(error))
+        )
+        return kind or ModelErrorKind.UNKNOWN, provider
 
     if module.startswith("google.genai"):
-        # A structured reason can distinguish quota exhaustion from request
-        # throttling. When Gemini omits that reason, keep the HTTP 429 fallback
-        # so the public response does not regress to INTERNAL/500.
-        kind, evidence = _best_kind(error)
-        return kind, "gemini", evidence
+        kind = _kind_from_code(error)
+        status_code = _status_code(error)
+        # RESOURCE_EXHAUSTED alone cannot distinguish quota from throttling.
+        # Keep UNKNOWN's retry/failover policy; HTTP mapping retains the 429.
+        if status_code == 429 and kind is None:
+            return ModelErrorKind.UNKNOWN, "gemini"
+        return kind or _kind_from_status(status_code) or ModelErrorKind.UNKNOWN, "gemini"
 
     if module.startswith("httpx"):
         if name == "HTTPStatusError":
-            kind, evidence = _best_kind(error)
+            kind = _kind_from_code(error) or _kind_from_status(_status_code(error))
         elif "TimeoutException" in mro_names:
             kind = ModelErrorKind.TRANSIENT_NETWORK_ERROR
-            evidence = _EvidenceRank.SDK_CLASS
         elif mro_names & {"NetworkError", "TransportError", "ProtocolError", "ProxyError"}:
             kind = ModelErrorKind.TRANSIENT_NETWORK_ERROR
-            evidence = _EvidenceRank.SDK_CLASS
         else:
-            kind = ModelErrorKind.UNKNOWN
-            evidence = _EvidenceRank.FALLBACK
-        return kind, "http", evidence
+            kind = None
+        return kind or ModelErrorKind.UNKNOWN, "http"
 
     if module.startswith("requests"):
         if name == "HTTPError":
-            kind, evidence = _best_kind(error)
+            kind = _kind_from_code(error) or _kind_from_status(_status_code(error))
         elif mro_names & {"Timeout", "ConnectTimeout", "ReadTimeout", "ConnectionError"}:
             kind = ModelErrorKind.TRANSIENT_NETWORK_ERROR
-            evidence = _EvidenceRank.SDK_CLASS
         else:
-            kind = ModelErrorKind.UNKNOWN
-            evidence = _EvidenceRank.FALLBACK
-        return kind, "http", evidence
+            kind = None
+        return kind or ModelErrorKind.UNKNOWN, "http"
 
     return None
 
@@ -493,59 +450,43 @@ def model_error_from_code(
 
 
 def model_error_from_exception(error: BaseException) -> ModelError | None:
-    """Convert the strongest structured evidence in an exception graph."""
-    selected: (
-        tuple[
-            _EvidenceRank,
-            ModelErrorKind,
-            str | None,
-            BaseException,
-        ]
-        | None
-    ) = None
-
-    for item in model_exception_chain(error):
+    """Reuse an existing classification or classify the first SDK failure."""
+    chain = model_exception_chain(error)
+    for item in chain:
+        if isinstance(item, ModelError):
+            return item
         carried_kind = getattr(item, "kind", None)
-        if isinstance(carried_kind, ModelErrorKind) and carried_kind is not ModelErrorKind.UNKNOWN:
+        if isinstance(carried_kind, ModelErrorKind):
             provider = getattr(item, "provider", None)
-            candidate = (
-                _EvidenceRank.EXPLICIT_KIND,
+            return ModelError(
                 carried_kind,
-                provider if isinstance(provider, str) else None,
-                item,
+                str(error),
+                provider=provider if isinstance(provider, str) else None,
+                status_code=_status_code(item),
+                code=_error_code(item),
             )
-        elif isinstance(item, ModelError):
-            kind, evidence = _best_kind(item)
-            candidate = (evidence, kind, item.provider, item)
-        elif isinstance(carried_kind, ModelErrorKind):
-            candidate = (_EvidenceRank.FALLBACK, carried_kind, None, item)
-        else:
-            classified = _sdk_kind(item)
-            if classified is None:
-                continue
-            kind, provider, evidence = classified
-            candidate = (evidence, kind, provider, item)
 
-        if selected is None or candidate[0] > selected[0]:
-            selected = candidate
-
-    if selected is None:
-        return None
-
-    _, kind, provider, source = selected
-    if isinstance(source, ModelError) and source.kind is kind:
-        return source
-    return ModelError(
-        kind,
-        str(error),
-        provider=provider,
-        status_code=_status_code(source),
-        code=_error_code(source),
-    )
+    for item in chain:
+        classified = _sdk_kind(item)
+        if classified is None:
+            continue
+        kind, provider = classified
+        return ModelError(
+            kind,
+            str(error),
+            provider=provider,
+            status_code=_status_code(item),
+            code=_error_code(item),
+        )
+    return None
 
 
 def model_error_kind(error: BaseException) -> ModelErrorKind | None:
     """Return the structured model kind carried by an exception chain."""
+    for item in model_exception_chain(error):
+        kind = getattr(item, "kind", None)
+        if isinstance(kind, ModelErrorKind):
+            return kind
     converted = model_error_from_exception(error)
     return converted.kind if converted is not None else None
 

@@ -7,7 +7,7 @@ from typing import Any, Iterator
 
 import httpx
 
-from openviking.models.model_error import ModelError, ModelErrorKind, model_error_from_exception
+from openviking.models.model_error import ModelError, ModelErrorKind, model_exception_chain
 from openviking.pyagfs.exceptions import (
     AGFSAlreadyExistsError,
     AGFSClientError,
@@ -354,11 +354,7 @@ _MODEL_ERROR_KIND_TO_PROTOCOL_CODE = {
 }
 
 
-def _map_structured_model_error(exc: Exception) -> OpenVikingError | None:
-    error = model_error_from_exception(exc)
-    if error is None:
-        return None
-
+def _map_structured_model_error(error: ModelError, *, context: Exception) -> OpenVikingError:
     code = _MODEL_ERROR_KIND_TO_PROTOCOL_CODE.get(error.kind, "INTERNAL")
     # These kinds do not fully describe the public error. For example, SDKs
     # group 409 conflicts and 504 timeouts with other transient failures.
@@ -370,10 +366,12 @@ def _map_structured_model_error(exc: Exception) -> OpenVikingError | None:
     } or (error.kind is ModelErrorKind.UNSUPPORTED and error.status_code == 501):
         code = error_code_from_http_status(error.status_code, default=code)
     if error.kind is ModelErrorKind.TRANSIENT_NETWORK_ERROR:
-        chain = tuple(_iter_exception_chain(exc))
-        if error.status_code in {408, 504} or any(
-            isinstance(item, TimeoutError) or "timeout" in type(item).__name__.lower()
-            for item in chain
+        if error.status_code in {408, 504} or (
+            error.status_code is None
+            and any(
+                isinstance(item, TimeoutError) or "timeout" in type(item).__name__.lower()
+                for item in model_exception_chain(error)
+            )
         ):
             code = "DEADLINE_EXCEEDED"
 
@@ -387,7 +385,7 @@ def _map_structured_model_error(exc: Exception) -> OpenVikingError | None:
         message="" if error.kind is ModelErrorKind.UNKNOWN else str(error),
         status=error.status_code,
         source=error,
-        vlm_context=exc,
+        vlm_context=context,
         extra_details=details,
     )
 
@@ -411,8 +409,9 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
     # Once a provider boundary has attached a ModelError, it is the fact owner.
     # UNKNOWN may still carry an HTTP status; keep its message redacted and
     # never fall back to message heuristics.
-    if any(isinstance(item, ModelError) for item in _iter_exception_chain(exc)):
-        return _map_structured_model_error(exc)
+    for item in model_exception_chain(exc):
+        if isinstance(item, ModelError):
+            return _map_structured_model_error(item, context=exc)
 
     status, source = _extract_structured_http_status(exc)
     if status is None:
@@ -541,7 +540,7 @@ def map_exception(
         return exc
     # A provider boundary that attached ModelError owns the classification.
     # UNKNOWN must stop here instead of entering generic text heuristics.
-    if any(isinstance(item, ModelError) for item in _iter_exception_chain(exc)):
+    if any(isinstance(item, ModelError) for item in model_exception_chain(exc)):
         return _map_upstream_api_error(exc)
     if isinstance(exc, ResourceBusyError):
         details: dict[str, Any] = {

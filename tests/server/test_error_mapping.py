@@ -364,7 +364,9 @@ def test_gemini_429_without_reason_preserves_public_status():
     assert mapped is not None
     assert mapped.code == "RESOURCE_EXHAUSTED"
     assert ERROR_CODE_TO_HTTP_STATUS[mapped.code] == 429
-    assert mapped.details["model_error_kind"] == "rate_limit_error"
+    assert mapped.details["model_error_kind"] == "unknown"
+    assert model_error.kind is ModelErrorKind.UNKNOWN
+    assert mapped.details["upstream_message"] == ""
 
 
 def _sdk_status_error(provider, status):
@@ -398,6 +400,59 @@ def _sdk_status_error(provider, status):
 @model_error_boundary
 def _raise_at_model_boundary(error):
     raise error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("provider", ["openai", "ark", "gemini", "httpx", "requests"])
+async def test_final_bad_request_ignores_prior_timeout(provider, asynchronous, monkeypatch):
+    from openviking.models import model_error as model_errors
+    from openviking.utils.circuit_breaker import CircuitBreaker
+    from openviking.utils.model_retry import retry_async, retry_sync
+
+    attempts = 0
+    classifications = 0
+    sdk_kind = model_errors._sdk_kind
+
+    def classify(error):
+        nonlocal classifications
+        classifications += 1
+        return sdk_kind(error)
+
+    monkeypatch.setattr(model_errors, "_sdk_kind", classify)
+
+    def request():
+        nonlocal attempts
+        attempts += 1
+        try:
+            raise httpx.ReadTimeout("previous route timed out")
+        except httpx.ReadTimeout:
+            raise _sdk_status_error(provider, 400)
+
+    @model_error_boundary
+    def call():
+        request()
+
+    @model_error_boundary
+    async def call_async():
+        request()
+
+    with pytest.raises(ModelError) as raised:
+        if asynchronous:
+            await retry_async(call_async, max_retries=2, base_delay=0, jitter=False)
+        else:
+            retry_sync(call, max_retries=2, base_delay=0, jitter=False)
+
+    assert attempts == 1
+    assert raised.value.kind is ModelErrorKind.INVALID_REQUEST
+    mapped = map_exception(raised.value)
+    assert mapped.code == "INVALID_ARGUMENT"
+    assert ERROR_CODE_TO_HTTP_STATUS[mapped.code] == 400
+    assert mapped.details["upstream_status_code"] == 400
+    breaker = CircuitBreaker(failure_threshold=1)
+    breaker.record_failure(raised.value)
+    breaker.check()
+    assert classifications == 1
 
 
 @pytest.mark.parametrize("provider", ["openai", "ark", "gemini", "httpx", "requests"])

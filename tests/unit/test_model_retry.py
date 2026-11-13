@@ -12,6 +12,7 @@ from openviking.models.model_error import (
     ModelError,
     ModelErrorKind,
     model_error_boundary,
+    model_error_from_exception,
     model_error_kind,
 )
 from openviking.pyagfs.exceptions import (
@@ -30,6 +31,8 @@ from openviking.utils.model_retry import (
     ERROR_CLASS_QUOTA_EXCEEDED,
     ERROR_CLASS_TRANSIENT,
     ERROR_CLASS_UNKNOWN,
+    OrderedCredentialSwitcher,
+    PrimaryBackupSwitcher,
     classify_api_error,
     extract_metric_error_code,
     is_retryable_api_error,
@@ -124,7 +127,7 @@ def test_extract_metric_error_code_uses_safe_fallbacks_only():
     branched = RuntimeError("request failed")
     branched.__cause__ = RuntimeError("primary failure")
     branched.__context__ = TimeoutError("secondary timeout")
-    assert extract_metric_error_code(branched) == "timeout"
+    assert extract_metric_error_code(branched) == "unknown"
     assert extract_metric_error_code(RuntimeError("request_id=not-a-metric-label")) == "unknown"
 
 
@@ -148,6 +151,45 @@ def test_all_credentials_failed_prefers_transient_over_auth():
     assert err.kind is ModelErrorKind.TRANSIENT_SERVICE_ERROR
     assert model_error_kind(err) is ModelErrorKind.TRANSIENT_SERVICE_ERROR
     assert is_retryable_api_error(err)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_model_boundary_reuses_unknown_classification(asynchronous):
+    error = ModelError(
+        ModelErrorKind.UNKNOWN,
+        "unclassified provider failure",
+        provider="gemini",
+        status_code=429,
+    )
+    error.__cause__ = openai.InternalServerError(
+        "earlier failure",
+        response=httpx.Response(500, request=httpx.Request("POST", "https://example.test")),
+        body=None,
+    )
+    wrapper = RuntimeError("provider request failed")
+    wrapper.__cause__ = error
+
+    @model_error_boundary
+    def call():
+        raise wrapper
+
+    @model_error_boundary
+    async def call_async():
+        raise wrapper
+
+    with pytest.raises(ModelError) as raised:
+        if asynchronous:
+            await call_async()
+        else:
+            call()
+
+    assert raised.value is error
+    assert model_error_from_exception(error) is error
+    assert model_error_kind(error) is ModelErrorKind.UNKNOWN
+    assert is_retryable_api_error(error)  # Existing UNKNOWN retries stay local.
+    assert OrderedCredentialSwitcher.is_fail_fast(model_error_kind(error))
+    assert not PrimaryBackupSwitcher().record_primary_failure(error)
 
 
 def test_retry_sync_retries_transient_error_until_success(monkeypatch):

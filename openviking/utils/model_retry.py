@@ -13,7 +13,6 @@ from typing import AsyncIterator, Awaitable, Callable, TypeVar
 from openviking.models.model_error import (
     ModelErrorKind,
     extract_model_error_code,
-    model_error_from_exception,
     model_error_kind,
     model_exception_chain,
 )
@@ -382,9 +381,9 @@ def _retry_limit(
     is_retryable: Callable[[Exception], bool],
     model_errors_only: bool,
 ) -> int:
-    model_error = model_error_from_exception(error)
-    if model_error is not None:
-        if model_error.kind in {
+    kind = model_error_kind(error)
+    if kind is not None:
+        if kind in {
             ModelErrorKind.TRANSIENT_SERVICE_ERROR,
             ModelErrorKind.TRANSIENT_NETWORK_ERROR,
             ModelErrorKind.RATE_LIMIT_ERROR,
