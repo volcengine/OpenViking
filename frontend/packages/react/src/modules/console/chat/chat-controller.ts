@@ -30,6 +30,7 @@ export function createChatController(
   let request: AbortController | undefined;
   let appendInput: AppendInput | undefined;
   let lifetime = new AbortController();
+  const undelivered: VikingBotDraft[] = [];
   const update = (patch: Partial<VikingBotChatState>) => {
     state = { ...state, ...patch };
     listeners.forEach((listener) => listener());
@@ -81,6 +82,7 @@ export function createChatController(
     persistence = persistence.then(async () => {
       try {
         for (const message of messages) {
+          if (message.clientError) continue;
           signal.throwIfAborted();
           await saveMessage(sessionId, message, signal);
         }
@@ -120,6 +122,7 @@ export function createChatController(
         service,
         state,
         draft,
+        undelivered,
         signal: signalFor(controller),
         current: () => current(controller),
         update,
@@ -137,6 +140,7 @@ export function createChatController(
   };
   const selectSession = (sessionId?: string) => {
     cancel();
+    undelivered.length = 0;
     update({
       sessionId,
       messages: [],
@@ -184,7 +188,10 @@ export function createChatController(
     selectSession,
     reset: () => selectSession(),
     setMessages: (messages: readonly VikingBotMessage[]) => {
-      if (!request) update({ messages });
+      if (!request) {
+        undelivered.length = 0;
+        update({ messages });
+      }
     },
   };
 }

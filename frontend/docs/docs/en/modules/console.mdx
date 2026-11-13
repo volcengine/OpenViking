@@ -237,6 +237,8 @@ Command mode runs only the built-in native API commands. Type `/` or run `ov hel
 
 ## Notes
 
+Failed questions and client-only errors stay in the message list. If no session was created, the next send creates one and carries undelivered user inputs as context in a single chat request, while saving the original user messages separately. Errors are excluded from persistence and model input. The native gateway accepts one `message`; writing session records alone does not restore model context.
+
 - Console sends native VikingBot chat requests by default. Providing `conversation.messages` or `conversation.onSend` gives the host ownership of chat; attachment uploads remain with the host.
 - Set `conversation.isAvailable` and `conversation.unavailableMessage` from the Bot status your app queries; when the Bot is unavailable, the composer is disabled and shows the message.
 - Commands send requests only when the user submits them, never on mount. An instance runs one command at a time and disables the input while it runs.

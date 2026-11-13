@@ -110,17 +110,18 @@ import '@openviking/react/components/viking-bot/style.css';
 
 ### VikingBotMessage
 
-| 参数      | 说明                                                                                                | 类型                                                                                                                               | 默认值   |
-| --------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| id        | 消息的唯一标识                                                                                      | `string`                                                                                                                           | 必填     |
-| role      | 消息角色；`system` 显示为提示条，`tool` 用于独立的工具块                                            | `'user' \| 'assistant' \| 'system' \| 'tool'`                                                                                      | 必填     |
-| parts     | 消息内容，由多个片段组成                                                                            | `readonly VikingBotMessagePart[]`                                                                                                  | 必填     |
-| turnId    | 轮次标识；相邻的助手消息 `turnId` 相同或任一条未设置时，合并为一轮显示                              | `string`                                                                                                                           | -        |
-| createdAt | 创建时间，ISO 时间字符串；用户消息和每轮最后一条含文本的助手回复在悬停或聚焦时显示，格式随 `locale` | `string`                                                                                                                           | -        |
-| streaming | 该助手消息是否仍在生成；为 `true` 且没有片段时显示加载气泡                                          | `boolean`                                                                                                                          | -        |
-| tone      | `system` 消息的语气，`'error'` 使用错误样式                                                         | `'info' \| 'error'`                                                                                                                | `'info'` |
-| action    | 消息下方的动作按钮，点击后触发 `onMessageAction`                                                    | `{ key: string; label?: ReactNode; status?: 'idle' \| 'pending' \| 'submitted' \| 'success' \| 'error'; disabledReason?: string }` | -        |
-| actions   | 合并同一轮助手消息后保留的动作清单，每项带原消息 ID；由组件生成，一般不需要设置                     | `readonly { messageId: string; action: NonNullable<VikingBotMessage['action']> }[]`                                                | -        |
+| 参数        | 说明                                                                                                | 类型                                                                                                                               | 默认值   |
+| ----------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| id          | 消息的唯一标识                                                                                      | `string`                                                                                                                           | 必填     |
+| role        | 消息角色；`system` 显示为提示条，`tool` 用于独立的工具块                                            | `'user' \| 'assistant' \| 'system' \| 'tool'`                                                                                      | 必填     |
+| parts       | 消息内容，由多个片段组成                                                                            | `readonly VikingBotMessagePart[]`                                                                                                  | 必填     |
+| turnId      | 轮次标识；相邻的助手消息 `turnId` 相同或任一条未设置时，合并为一轮显示                              | `string`                                                                                                                           | -        |
+| createdAt   | 创建时间，ISO 时间字符串；用户消息和每轮最后一条含文本的助手回复在悬停或聚焦时显示，格式随 `locale` | `string`                                                                                                                           | -        |
+| streaming   | 该助手消息是否仍在生成；为 `true` 且没有片段时显示加载气泡                                          | `boolean`                                                                                                                          | -        |
+| tone        | `system` 消息的语气，`'error'` 使用错误样式                                                         | `'info' \| 'error'`                                                                                                                | `'info'` |
+| clientError | 客户端失败原文，仅用于展示，不保存到会话或发送给模型                                                | `Error`                                                                                                                            | -        |
+| action      | 消息下方的动作按钮，点击后触发 `onMessageAction`                                                    | `{ key: string; label?: ReactNode; status?: 'idle' \| 'pending' \| 'submitted' \| 'success' \| 'error'; disabledReason?: string }` | -        |
+| actions     | 合并同一轮助手消息后保留的动作清单，每项带原消息 ID；由组件生成，一般不需要设置                     | `readonly { messageId: string; action: NonNullable<VikingBotMessage['action']> }[]`                                                | -        |
 
 ### VikingBotMessage.action
 

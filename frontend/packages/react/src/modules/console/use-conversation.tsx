@@ -78,7 +78,11 @@ export function useConversation(
     if (sessionId && sessionId !== selectedId) onSelect?.(sessionId);
   }, [enabled, selection, selectedId, sessionId, onSelect]);
   if (!enabled) return conversation ?? {};
-  const error = chat.error ?? chat.persistenceError;
+  const error = chat.messages.some(
+    (message) => message.clientError === chat.error,
+  )
+    ? chat.persistenceError
+    : (chat.error ?? chat.persistenceError);
   return {
     ...conversation,
     messages: chat.messages,
@@ -91,21 +95,16 @@ export function useConversation(
     onSend: (draft) => {
       const token = ++submission.current;
       const followingUp = chat.status === 'streaming';
-      if (chat.canSteer)
-        setDraft((current) =>
-          current.trim() === draft.text.trim() ? '' : current,
-        );
+      setDraft((current) =>
+        current.trim() === draft.text.trim() ? '' : current,
+      );
       void owner.send(draft).then((success) => {
         if (!owner.active) return;
         if (!success) {
-          if (chat.canSteer && token === submission.current)
+          if (followingUp && token === submission.current)
             setDraft((current) => (current === '' ? draft.text : current));
           return;
         }
-        if (!chat.canSteer)
-          setDraft((current) =>
-            current.trim() === draft.text.trim() ? '' : current,
-          );
         if (!followingUp) void sessions.refresh();
       });
     },

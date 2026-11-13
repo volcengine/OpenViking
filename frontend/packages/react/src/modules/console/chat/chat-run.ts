@@ -4,6 +4,7 @@ import type {
 } from '../../../components/viking-bot/model.js';
 import { createChatTimeline, type AppendInput } from './chat-timeline.js';
 import { OvClientError } from '../../../client/errors.js';
+import { recoverDraft } from './recover-draft.js';
 import type { VikingBotChatService, VikingBotChatState } from './types.js';
 
 /** One request owns its accumulator and snapshot, never a global conversation. */
@@ -11,6 +12,7 @@ export async function runChat({
   service,
   state,
   draft,
+  undelivered,
   signal,
   current,
   update,
@@ -20,6 +22,7 @@ export async function runChat({
   service: VikingBotChatService;
   state: VikingBotChatState;
   draft: VikingBotDraft;
+  undelivered: VikingBotDraft[];
   signal: AbortSignal;
   current: () => boolean;
   update: (patch: Partial<VikingBotChatState>) => void;
@@ -36,6 +39,10 @@ export async function runChat({
   });
   timeline.publish();
   let sessionId = state.sessionId;
+  const recoveredDraft = recoverDraft(undelivered, draft);
+  const recovered = sessionId
+    ? []
+    : state.messages.filter((message) => message.role === 'user');
   let complete = false;
   let interrupted = false;
   try {
@@ -45,8 +52,13 @@ export async function runChat({
       if (!current()) return false;
       sessionId = session.id;
       update({ sessionId });
+      save(sessionId, recovered);
+      undelivered.length = 0;
     }
-    for await (const event of service.stream({ sessionId, ...draft }, signal)) {
+    for await (const event of service.stream(
+      { sessionId, ...recoveredDraft },
+      signal,
+    )) {
       signal.throwIfAborted();
       if (!current()) return false;
       await timeline.apply(event);
@@ -76,16 +88,29 @@ export async function runChat({
     return !interrupted;
   } catch (error) {
     if (!current()) return false;
+    if (!sessionId) undelivered.push(draft);
     const finished = await timeline.finish(signal.aborted);
     if (!current()) return false;
+    const failure = error instanceof Error ? error : new Error(String(error));
+    const messages = signal.aborted
+      ? finished.messages
+      : [
+          ...finished.messages,
+          {
+            id: globalThis.crypto.randomUUID(),
+            turnId: finished.messages.at(-1)?.turnId,
+            role: 'system' as const,
+            tone: 'error' as const,
+            parts: [{ type: 'text' as const, text: failure.message }],
+            clientError: failure,
+          },
+        ];
     update({
-      messages: finished.messages,
+      messages,
       streaming: undefined,
       status: signal.aborted ? 'idle' : 'error',
       isSubmitting: false,
-      ...(!signal.aborted
-        ? { error: error instanceof Error ? error : new Error(String(error)) }
-        : {}),
+      ...(!signal.aborted ? { error: failure } : {}),
     });
     // Preserve completed segments, accepted inputs without presenting an unfinished reply as complete history.
     if (sessionId) save(sessionId, finished.added);
