@@ -40,6 +40,20 @@ def test_configuration_builds_postgres_watch_store(tmp_path):
         WatchStoreConfig(provider="unsupported")
 
 
+def test_watch_and_legacy_mysql_stores_share_one_sql_runtime():
+    from openviking.server.account_stores.mysql import MySQLAccountStore
+    from openviking.service.task_store_mysql import MySQLTaskWorkStore
+    from openviking.storage.mysql_session import MySQLAsyncSession
+    from openviking.storage.sql_session import SQLAsyncSession
+
+    watch = PostgresWatchStore(service_name="deployment", params=PARAMS)
+    connection = {"user": "u", "password": "p", "database": "d"}
+    tasks = MySQLTaskWorkStore(service_name="deployment", params=connection)
+    accounts = MySQLAccountStore(service_name="deployment", params=connection)
+    assert watch._sql_runtime is tasks._mysql_runtime is accounts._mysql_runtime
+    assert MySQLAsyncSession is SQLAsyncSession
+
+
 @pytest.mark.parametrize(
     "override",
     [
@@ -195,7 +209,7 @@ async def test_postgres_short_prefix_uses_expression_index(make_store):  # noqa:
             result = await session.execute(text("EXPLAIN " + sql))
             return "\n".join(row[0] for row in result)
 
-    plan = await store._mysql_runtime.run(explain)
+    plan = await store._sql_runtime.run(explain)
     assert f"ix_{store._table_name}_target_prefix" in plan
 
 
@@ -243,7 +257,7 @@ async def test_postgres_cancellation_rolls_back_before_reusing_pool(make_store):
             started.set()
             await session.execute(text("SELECT pg_sleep(30)"))
 
-    operation = asyncio.create_task(store._mysql_runtime.run(blocking))
+    operation = asyncio.create_task(store._sql_runtime.run(blocking))
     try:
         assert await asyncio.to_thread(started.wait, 5)
         operation.cancel()

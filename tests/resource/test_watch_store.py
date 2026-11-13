@@ -161,6 +161,63 @@ async def create(store, uri="viking://resources/a", *, initial_run_id=None, due=
 
 
 @pytest.mark.asyncio
+async def test_sql_duplicate_watch_id_reports_conflict_without_overwriting(store):
+    if store.provider == "file":
+        pytest.skip("SQL integrity-error contract")
+    task = await create(store, task_id="duplicate-id")
+    with pytest.raises(ConflictError, match="already exists"):
+        await create(store, "viking://resources/other", task_id=task.task_id)
+    assert (await store.get_task(task.task_id)).to_uri == task.to_uri
+    await create(store, "viking://resources/other", task_id="new-id")
+
+
+@pytest.mark.parametrize("violation", ["not_null", "check"])
+@pytest.mark.asyncio
+async def test_sql_create_preserves_nonduplicate_constraint_error(store, violation):
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError, OperationalError
+
+    if store.provider == "file":
+        pytest.skip("SQL integrity-error contract")
+    task = WatchTask(
+        task_id="invalid-id",
+        path="https://example.org/doc",
+        to_uri="viking://resources/invalid",
+        account_id=ACCOUNT,
+        user_id=OWNER.user_id,
+    )
+    if violation == "not_null":
+        # Bypass model validation to exercise the database constraint.
+        task = task.model_copy(update={"original_role": None})
+    else:
+
+        async def provision_check():
+            async with store._transaction() as session:
+                await session.execute(
+                    text(
+                        f"ALTER TABLE {store._table_name} ADD CONSTRAINT watch_role_guard "
+                        "CHECK (original_role <> 'invalid')"
+                    )
+                )
+
+        await store._sql_runtime.run(provision_check)
+        task.original_role = "invalid"
+    # PyMySQL classifies CHECK violations as OperationalError.
+    expected_error = (
+        OperationalError if store.provider == "mysql" and violation == "check" else IntegrityError
+    )
+    with pytest.raises(expected_error) as raised:
+        await store.create_task(task)
+    if store.provider == "postgres":
+        assert raised.value.orig.sqlstate == ("23502" if violation == "not_null" else "23514")
+    else:
+        assert raised.value.orig.args[0] == (1048 if violation == "not_null" else 3819)
+    assert await store.get_task(task.task_id) is None
+    # The failed transaction must release the connection and permit a retry.
+    await create(store, task.to_uri, task_id=task.task_id)
+
+
+@pytest.mark.asyncio
 async def test_list_pages_return_public_fields_and_stable_ties(make_store):
     first, second = await make_store(), await make_store()
     timestamp = datetime(2026, 7, 24, 10)

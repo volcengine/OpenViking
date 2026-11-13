@@ -6,6 +6,7 @@ from typing import Any, Sequence
 
 from sqlalchemy import JSON, func, literal_column
 from sqlalchemy.engine import URL
+from sqlalchemy.exc import IntegrityError
 
 from openviking.resource.watch_store_sql import SQLWatchStore
 
@@ -13,6 +14,10 @@ from openviking.resource.watch_store_sql import SQLWatchStore
 class PostgresWatchStore(SQLWatchStore):
     dialect_name = "postgresql"
     target_prefix_index_chars = 128
+
+    @staticmethod
+    def _is_duplicate_error(exc: IntegrityError) -> bool:
+        return getattr(exc.orig, "sqlstate", None) == "23505"
 
     @property
     def provider(self) -> str:

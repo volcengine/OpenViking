@@ -5,11 +5,17 @@
 from typing import Any, Sequence
 
 from sqlalchemy import JSON, func
+from sqlalchemy.exc import IntegrityError
 
 from openviking.resource.watch_store_sql import SQLWatchStore
 
 
 class MySQLWatchStore(SQLWatchStore):
+    @staticmethod
+    def _is_duplicate_error(exc: IntegrityError) -> bool:
+        args = getattr(getattr(exc, "orig", None), "args", ())
+        return bool(args and args[0] == 1062)
+
     @property
     def provider(self) -> str:
         return "mysql"

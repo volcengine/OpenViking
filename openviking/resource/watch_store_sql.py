@@ -69,10 +69,10 @@ from openviking.resource.watch_types import (
     WatchState,
     WatchTask,
 )
-from openviking.storage.mysql_runtime import (
-    get_shared_mysql_runtime,
-    mysql_runtime_store,
-    wait_mysql_cleanup,
+from openviking.storage.sql_runtime import (
+    get_shared_sql_runtime,
+    sql_runtime_store,
+    wait_sql_cleanup,
 )
 from openviking_cli.exceptions import ConflictError
 from openviking_cli.utils.config.config_utils import normalize_service_name
@@ -283,7 +283,7 @@ def watch_tables(
     return tasks
 
 
-@mysql_runtime_store
+@sql_runtime_store
 class SQLWatchStore(WatchStore):
     dialect_name = "mysql"
     target_prefix_index_chars = _TARGET_URI_KEY_INDEX_CHARS
@@ -303,8 +303,7 @@ class SQLWatchStore(WatchStore):
         self._tasks = watch_tables(self._table_name, dialect=self.dialect_name)
         self._cipher = _SecretCipher(values.pop("credential_encryption_key", None))
         self._url, self._engine_options = self._connection_options(values)
-        # This runtime and session own loop affinity/cancellation, not the driver.
-        self._mysql_runtime: Any = get_shared_mysql_runtime()
+        self._sql_runtime: Any = get_shared_sql_runtime()
         self._engine: Any = None
         self._sessions: Any = None
         self._runtime_lease = False
@@ -316,6 +315,10 @@ class SQLWatchStore(WatchStore):
     def _public_payload(self, names: Sequence[str]) -> Any:
         raise NotImplementedError
 
+    @staticmethod
+    def _is_duplicate_error(exc: IntegrityError) -> bool:
+        raise NotImplementedError
+
     @property
     def _target_key_expression(self) -> Any:
         return self._tasks.c.target_uri_key
@@ -325,14 +328,14 @@ class SQLWatchStore(WatchStore):
             return
         from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-        from openviking.storage.mysql_session import MySQLAsyncSession
+        from openviking.storage.sql_session import SQLAsyncSession
 
-        await self._mysql_runtime.acquire()
+        await self._sql_runtime.acquire()
         self._runtime_lease = True
         engine = None
         try:
             engine = create_async_engine(self._url, **self._engine_options)
-            sessions = async_sessionmaker(engine, class_=MySQLAsyncSession, expire_on_commit=False)
+            sessions = async_sessionmaker(engine, class_=SQLAsyncSession, expire_on_commit=False)
             async with sessions() as session:
                 await session.execute(select(*self._tasks.c).limit(1))
         except BaseException:
@@ -343,10 +346,10 @@ class SQLWatchStore(WatchStore):
                         await engine.dispose()
                 finally:
                     self._runtime_lease = False
-                    await self._mysql_runtime.release()
+                    await self._sql_runtime.release()
 
             try:
-                await wait_mysql_cleanup(cleanup())
+                await wait_sql_cleanup(cleanup())
             except BaseException:
                 logger.exception("Failed to clean up Watch store initialization")
             raise
@@ -361,9 +364,9 @@ class SQLWatchStore(WatchStore):
                 self._engine = self._sessions = None
                 if self._runtime_lease:
                     self._runtime_lease = False
-                    await self._mysql_runtime.release()
+                    await self._sql_runtime.release()
 
-        await wait_mysql_cleanup(cleanup())
+        await wait_sql_cleanup(cleanup())
 
     @asynccontextmanager
     async def _transaction(self) -> AsyncIterator[Any]:
@@ -642,6 +645,8 @@ class SQLWatchStore(WatchStore):
                     )
                 )
             except IntegrityError as exc:
+                if not self._is_duplicate_error(exc):
+                    raise
                 raise ConflictError(
                     f"Watch '{task.task_id}' already exists",
                     resource=task.task_id,
