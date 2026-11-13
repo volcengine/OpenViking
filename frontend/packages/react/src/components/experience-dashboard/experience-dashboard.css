@@ -433,6 +433,14 @@
   height: 10px;
   margin-top: 4px;
   overflow: hidden;
+  /* 圆角取条高的一半，两端成胶囊形；填充条被轨道裁出同样的圆角，不用另设。
+   * 宿主可覆盖 --ov-ui-experience-bar-radius 换成别的圆角或 0。
+   *
+   * The radius is half the bar height, so both ends read as a pill; the fill is clipped
+   * to the same shape by the track and needs no radius of its own. A host overrides
+   * --ov-ui-experience-bar-radius to change it, or to 0 for square ends.
+   */
+  border-radius: var(--ov-ui-experience-bar-radius, 5px);
   /* 轨道用正文色 6% 调出，与火山版同一条规则；底色随主题自动明暗。 */
   /* The track is 6% of the body colour, the console's own rule, so it follows the theme. */
   background: color-mix(
