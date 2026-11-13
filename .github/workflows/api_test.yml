@@ -90,12 +90,25 @@ jobs:
       native_artifact: native-runtime-linux-x64-cp310-abi3
 
   database-tests:
-    name: MySQL & Redis Integration Tests
+    name: PostgreSQL, MySQL & Redis Integration Tests
     needs: [prepare, native-runtime]
     if: needs.prepare.outputs.api_changed == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: openviking_test
+          POSTGRES_USER: openviking_test
+          POSTGRES_PASSWORD: integration-test-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U openviking_test -d openviking_test"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=12
       mysql:
         image: mysql:8.4
         env:
@@ -120,6 +133,7 @@ jobs:
           --health-timeout=5s
           --health-retries=12
     env:
+      OV_TEST_POSTGRES: '{"host":"127.0.0.1","port":5432,"user":"openviking_test","password":"integration-test-password","database":"openviking_test"}'
       OV_TEST_MYSQL: '{"host":"127.0.0.1","port":3306,"user":"openviking_test","password":"integration-test-password","database":"openviking_test"}'
       OPENVIKING_WATCH_MYSQL_PARAMS: '{"host":"127.0.0.1","port":3306,"user":"openviking_test","password":"integration-test-password","database":"openviking_test"}'
       OV_TEST_REDIS: redis://127.0.0.1:6379
@@ -138,8 +152,8 @@ jobs:
         uses: ./.github/actions/native-runtime
         with:
           artifact: native-runtime-linux-x64-cp310-abi3
-      - name: Install locked MySQL test dependencies
-        run: uv sync --frozen --extra test --extra mysql --no-install-project
+      - name: Install locked database test dependencies
+        run: uv sync --frozen --extra test --extra mysql --extra postgres --no-install-project
       - name: Check real backends and apply account schema
         run: |
           uv run --no-sync python -m pytest --noconftest -q -o addopts='' \
@@ -152,6 +166,7 @@ jobs:
             tests/server/test_account_services.py::test_distributed_authentication_state_is_shared_and_service_scoped \
             tests/server/test_redis_mysql_account_store.py \
             tests/service/test_task_work_contract.py \
+            tests/service/test_task_store_postgres.py \
             tests/resource/test_watch_store.py \
             --junitxml=database-integration.xml
       - name: Require executed database cases

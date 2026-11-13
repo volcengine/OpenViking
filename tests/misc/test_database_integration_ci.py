@@ -25,6 +25,7 @@ def report(tmp_path, *, skipped=None, omitted=None):
     cases = [("tests.server.test_account_services", name) for name in sorted(ci.ACCOUNT_CASES)] + [
         ("tests.server.test_redis_mysql_account_store", "test_auth[encrypted]"),
         ("tests.service.test_task_work_contract", "test_history[mysql-stage]"),
+        ("tests.service.test_task_work_contract", "test_history[postgres-stage]"),
         ("tests.resource.test_watch_store", "test_watch[mysql]"),
     ]
     for module, name in cases:
@@ -51,6 +52,7 @@ def test_verifier_accepts_real_coverage_and_expected_file_skip(tmp_path):
         "accounts": 2,
         "redis_mysql": 1,
         "task_work_mysql": 1,
+        "task_work_postgres": 1,
         "watch_mysql": 1,
     }
 
@@ -61,6 +63,7 @@ def test_verifier_accepts_real_coverage_and_expected_file_skip(tmp_path):
         *sorted(ci.ACCOUNT_CASES),
         "test_auth[encrypted]",
         "test_history[mysql-stage]",
+        "test_history[postgres-stage]",
         "test_watch[mysql]",
     ],
 )
