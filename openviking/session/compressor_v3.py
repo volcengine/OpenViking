@@ -2,12 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Session Compressor V3.
 
-V3 keeps the V2 extraction interface while changing user-memory commits to a
-patch-merge flow without directory-level memory locks.  Training cases are not
-extracted by a separate LLM call; they are a normal user-memory ``memory_type``
-(``cases``) emitted by the same ExtractLoop that extracts profile/preferences/
-events/etc.  When such case memories are produced, the same commit rollout is
-submitted to the process-global StreamingPolicyTrainer.
+V3 keeps the V2 extraction interface with a patch-merge flow and no directory-level
+memory locks. Ordinary memories can be batched; cases and execution memories retain
+the complete task. Cases use ExtractLoop and are submitted with the commit rollout
+to the process-global StreamingPolicyTrainer.
 """
 
 from __future__ import annotations
@@ -24,6 +22,11 @@ from openviking.core.context import Context
 from openviking.message import Message
 from openviking.observability.reporting.facts import event_context
 from openviking.server.identity import RequestContext
+from openviking.session.extraction_batch import (
+    ExtractionBatchLimits,
+    ExtractionMessageBatch,
+    plan_extraction_batches,
+)
 from openviking.session.memory import ExtractLoop, MemoryUpdater, StreamingMemoryUpdaterConfig
 from openviking.session.memory.constants import (
     AGENT_EVOLUTION_MEMORY_TYPES,
@@ -420,6 +423,52 @@ class SessionCompressorV3:
                 getattr(result, "skipped_operations", [])
             ),
         )
+
+    @staticmethod
+    def plan_long_term_extraction(
+        messages: List[Message],
+        limits: ExtractionBatchLimits,
+        *,
+        allowed_memory_types: Optional[set[str]] = None,
+        agent_evolution_enabled: bool = True,
+        completed_memory_steps: Optional[dict[str, set[str]]] = None,
+    ) -> list[tuple[str, Optional[set[str]], ExtractionMessageBatch]]:
+        """Plan pending extraction work without splitting execution context."""
+        scopes = [("long_term", allowed_memory_types, limits)]
+        if limits.enabled and agent_evolution_enabled:
+            effective_types = (
+                set(get_default_registry().list_names(include_disabled=False))
+                if allowed_memory_types is None
+                else allowed_memory_types
+            )
+            if effective_types & EXECUTION_MEMORY_TYPES:
+                # Cases and execution memories need the complete task, not user-memory batches.
+                scopes = []
+                user_types = effective_types - AGENT_EVOLUTION_MEMORY_TYPES
+                if user_types:
+                    scopes.append(("long_term_user", user_types, limits))
+                scopes.append(
+                    (
+                        "long_term_agent",
+                        effective_types & AGENT_EVOLUTION_MEMORY_TYPES,
+                        ExtractionBatchLimits(),
+                    )
+                )
+
+        completed = completed_memory_steps or {}
+        return [
+            (step, types, batch)
+            for step, types, scope_limits in scopes
+            for batch in plan_extraction_batches(
+                [
+                    message
+                    for message in messages
+                    if message.id not in completed.get("long_term", set())
+                    and message.id not in completed.get(step, set())
+                ],
+                scope_limits,
+            )
+        ]
 
     @tracer(ignore_result=True)
     async def extract_long_term_memories(

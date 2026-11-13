@@ -30,9 +30,6 @@ from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
-# Durable per-step memory coverage recorded in archive metadata.
-_MEMORY_STEP_NAMES = ("long_term",)
-
 
 class _ArchiveMessagesCorruptError(ValueError):
     """Raised when an archive messages file cannot be deserialized."""
@@ -176,9 +173,8 @@ class ArchiveStore:
         """Merge durable per-step message coverage from archive metadata."""
         if not isinstance(raw, dict):
             return
-        for step in _MEMORY_STEP_NAMES:
-            message_ids = raw.get(step)
-            if not isinstance(message_ids, list):
+        for step, message_ids in raw.items():
+            if not isinstance(step, str) or not step or not isinstance(message_ids, list):
                 continue
             target.setdefault(step, set()).update(
                 item for item in message_ids if isinstance(item, str) and item
@@ -188,11 +184,7 @@ class ArchiveStore:
     def serialize_completed_memory_steps(
         completed: Dict[str, set[str]],
     ) -> Dict[str, List[str]]:
-        return {
-            step: sorted(completed.get(step, set()))
-            for step in _MEMORY_STEP_NAMES
-            if completed.get(step)
-        }
+        return {step: sorted(message_ids) for step, message_ids in completed.items() if message_ids}
 
     # ------------------------------------------------------------------
     # Directory / marker reads

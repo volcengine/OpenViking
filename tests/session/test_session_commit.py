@@ -209,9 +209,9 @@ class TestCommit:
     @pytest.mark.parametrize(
         "memory_types,agent_evolution_enabled,expected_calls",
         [
-            (None, True, 1),
+            (None, True, 8),
             (["experiences"], True, 1),
-            (["events", "experiences"], True, 1),
+            (["events", "experiences"], True, 8),
             (["trajectories"], True, 0),
             (["events"], True, 7),
             (None, False, 7),
@@ -280,7 +280,7 @@ class TestCommit:
         assert task["status"] == "completed"
         assert extract_long_term.await_count == expected_calls
         assert working_memory_batches == [[message.id for message in original_messages]]
-        if expected_calls == 1:
+        if expected_calls in (1, 8):
             extracted_messages = extract_long_term.await_args.kwargs["messages"]
             assert [message.id for message in extracted_messages] == [
                 message.id for message in original_messages
@@ -288,6 +288,24 @@ class TestCommit:
             assert [message.parts for message in extracted_messages] == [
                 message.parts for message in original_messages
             ]
+            assert extract_long_term.await_args.kwargs["allowed_memory_types"] == {
+                "cases",
+                "trajectories",
+                "experiences",
+            }
+            user_calls = extract_long_term.await_args_list[:-1]
+            assert len(user_calls) == expected_calls - 1
+            for call in user_calls:
+                assert len(call.kwargs["messages"]) == 1
+                assert not {"cases", "trajectories", "experiences"}.intersection(
+                    call.kwargs["allowed_memory_types"]
+                )
+            if user_calls:
+                meta = await session._archives.read_meta(committed["archive_uri"])
+                for step in ("long_term", "long_term_user", "long_term_agent"):
+                    assert set(meta["completed_memory_steps"][step]) == {
+                        message.id for message in original_messages
+                    }
         else:
             assert all(
                 len(call.kwargs["messages"]) == 1 for call in extract_long_term.await_args_list
