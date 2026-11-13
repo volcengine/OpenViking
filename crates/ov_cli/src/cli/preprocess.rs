@@ -511,17 +511,46 @@ fn preprocess_privacy_upsert_field_flags(args: Vec<OsString>) -> Vec<OsString> {
     converted
 }
 
-fn preprocess_compact_args(args: Vec<OsString>) -> Vec<OsString> {
+pub(crate) fn preprocess_compact_args(args: Vec<OsString>) -> Vec<OsString> {
     if args.is_empty() {
         return args;
     }
+    // Skip the rewrite entirely when no compact flag is present: without this guard a
+    // value option that merely *looks* like `-c` would be treated as the compact flag.
+    if !args.iter().skip(1).any(|arg| {
+        let token = arg.to_string_lossy();
+        token == "--compact" || token == "-c"
+    }) {
+        return args;
+    }
 
+    let value_options = cli_value_options();
     let mut converted = Vec::with_capacity(args.len());
     converted.push(args[0].clone());
     let mut i = 1;
 
     while i < args.len() {
         let token = args[i].to_string_lossy();
+        if token == "--" {
+            converted.extend(args[i..].iter().cloned());
+            break;
+        }
+        // Copy an option together with its value untouched, so a `-c`/`--compact`-looking
+        // value is never rewritten into a compact flag.
+        if token != "--compact"
+            && token != "-c"
+            && !token.contains('=')
+            && value_options.consumes_value(&token)
+        {
+            converted.push(args[i].clone());
+            if let Some(value) = args.get(i + 1) {
+                converted.push(value.clone());
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
         if token == "--compact" || token == "-c" {
             if let Some(next) = args.get(i + 1) {
                 let next_value = next.to_string_lossy();
