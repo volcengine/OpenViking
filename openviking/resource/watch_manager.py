@@ -180,6 +180,15 @@ class WatchManager:
             raise ValueError("Watch requires a target URI")
         if watch_interval <= 0:
             raise ValueError("watch_interval must be > 0")
+        if processor_kwargs and "pr_radar" in processor_kwargs:
+            from openviking.resource.github_radar.models import validate_radar
+
+            validate_radar(
+                path,
+                processor_kwargs,
+                watch_interval=watch_interval,
+                add_type="connector" if ConnectorDelegate.is_watch_auth_state(auth_state) else None,
+            )
         task = WatchTask(
             path=path,
             source_type=source_type,
@@ -715,6 +724,23 @@ class WatchManager:
             if connector_auth is not None:
                 kwargs["connector_auth_config"] = connector_auth
             kwargs["connector_states"] = task.connector_states
+        if "pr_radar" in kwargs:
+            from openviking.resource.pr_radar_runner import run_radar
+
+            try:
+                await run_radar(
+                    task,
+                    self._viking_fs,
+                    getattr(self._resource_service, "_resource_processor", None),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[WatchManager] Radar failed for %s: %s; source Watch continues",
+                    task.task_id,
+                    self._public_error(str(exc)),
+                )
+            # Radar configuration remains on the Watch, outside the source parser.
+            kwargs.pop("pr_radar")
         if not connector:
             checkpoint = await self._probe_git_checkpoint(task, kwargs, ctx)
             if checkpoint is not None:
