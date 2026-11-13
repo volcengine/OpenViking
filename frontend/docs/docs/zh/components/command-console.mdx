@@ -41,22 +41,23 @@ import '@openviking/react/components/command-console/style.css';
 
 ### CommandConsole
 
-| 参数             | 说明                                                                                       | 类型                                         | 默认值                   |
-| ---------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------- | ------------------------ |
-| records          | 要展示的命令记录，按提交顺序排列                                                           | `readonly CommandConsoleRecord[]`            | 必填                     |
-| value            | 输入区的文本，受控                                                                         | `string`                                     | 必填                     |
-| disabled         | 禁用输入和提交，并在输入区下方显示 `labels.unavailableMessage`                             | `boolean`                                    | `false`                  |
-| emptyState       | 没有记录时显示的内容，替换内置空态；传 `null` 时不显示空态                                 | `ReactNode`                                  | -                        |
-| quickCommands    | 内置空态里的快捷入口，没有可用入口时内置空态不显示内容                                     | `readonly CommandConsoleQuickCommand[]`      | -                        |
-| commands         | 命令目录，用于补全、参数帮助和执行中记录的骨架；省略时仍可输入和提交，但没有候选和参数帮助 | `readonly CommandConsoleCommandDefinition[]` | `[]`                     |
-| commandGroups    | 候选列表的分组名称和顺序，没有声明的分组按出现顺序排在后面                                 | `readonly CommandConsoleCommandGroup[]`      | `[]`                     |
-| onValueChange    | 输入变化时触发，包括接受补全和示例；省略时输入区只读                                       | `(value: string) => void`                    | -                        |
-| onSubmit         | 按 Enter 提交时触发，参数是去掉首尾空白的命令文本；省略时不能提交                          | `(command: string) => void`                  | -                        |
-| onOpenUri        | 点击资源链接时触发，参数是链接地址；省略时链接按 `href` 原生跳转                           | `(uri: string) => void`                      | -                        |
-| onCopy           | 复制成功后触发，参数是已复制的文本                                                         | `(text: string) => void`                     | -                        |
-| labels           | 覆盖界面文案，字段见 [CommandConsoleLabels](#commandconsolelabels)                         | `CommandConsoleLabels`                       | -                        |
-| locale           | 界面语言，规则见[国际化](../guide/i18n)                                                    | `'zh-CN' \| 'en-US'`                         | 继承上级，默认 `'en-US'` |
-| className、style | 外观与布局，其余 HTML 属性透传到根元素                                                     | HTML 属性                                    | -                        |
+| 参数             | 说明                                                                                       | 类型                                                                  | 默认值                   |
+| ---------------- | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- | ------------------------ |
+| records          | 要展示的命令记录，按提交顺序排列                                                           | `readonly CommandConsoleRecord[]`                                     | 必填                     |
+| value            | 输入区的文本，受控                                                                         | `string`                                                              | 必填                     |
+| disabled         | 禁用输入和提交，并在输入区下方显示 `labels.unavailableMessage`                             | `boolean`                                                             | `false`                  |
+| emptyState       | 没有记录时显示的内容，替换内置空态；传 `null` 时不显示空态                                 | `ReactNode`                                                           | -                        |
+| quickCommands    | 内置空态里的快捷入口，没有可用入口时内置空态不显示内容                                     | `readonly CommandConsoleQuickCommand[]`                               | -                        |
+| commands         | 命令目录，用于补全、参数帮助和执行中记录的骨架；省略时仍可输入和提交，但没有候选和参数帮助 | `readonly CommandConsoleCommandDefinition[]`                          | `[]`                     |
+| commandGroups    | 候选列表的分组名称和顺序，没有声明的分组按出现顺序排在后面                                 | `readonly CommandConsoleCommandGroup[]`                               | `[]`                     |
+| onValueChange    | 输入变化时触发，包括接受补全和示例；省略时输入区只读                                       | `(value: string) => void`                                             | -                        |
+| onSubmit         | 按 Enter 提交时触发，参数是去掉首尾空白的命令文本；省略时不能提交                          | `(command: string) => void`                                           | -                        |
+| onOpenUri        | 点击资源链接时触发，参数是链接地址；省略时链接按 `href` 原生跳转                           | `(uri: string) => void`                                               | -                        |
+| onCopy           | 复制成功后触发，参数是已复制的文本                                                         | `(text: string) => void`                                              | -                        |
+| slots            | 替换渲染异常的展示内容，见[错误展示插槽](../guide/getting-started#自定义错误展示)          | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }` | -                        |
+| labels           | 覆盖界面文案，字段见 [CommandConsoleLabels](#commandconsolelabels)                         | `CommandConsoleLabels`                                                | -                        |
+| locale           | 界面语言，规则见[国际化](../guide/i18n)                                                    | `'zh-CN' \| 'en-US'`                                                  | 继承上级，默认 `'en-US'` |
+| className、style | 外观与布局，其余 HTML 属性透传到根元素                                                     | HTML 属性                                                             | -                        |
 
 ### CommandConsoleRecord
 

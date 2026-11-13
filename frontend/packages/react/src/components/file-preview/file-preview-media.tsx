@@ -65,18 +65,16 @@ export function FilePreviewMedia({
       : undefined
     : source.url;
   const failed = status?.owner === owner && status.failed;
+  const retry = () => {
+    setStatus(undefined);
+    setAttempt((value) => value + 1);
+  };
   if (failed)
-    return (
-      slots?.errorFallback ?? (
-        <LoadFailedState
-          text={text}
-          onRetry={() => {
-            setStatus(undefined);
-            setAttempt((value) => value + 1);
-          }}
-        />
-      )
-    );
+    return typeof slots?.errorFallback === 'function'
+      ? slots.errorFallback(retry)
+      : (slots?.errorFallback ?? (
+          <LoadFailedState text={text} onRetry={retry} />
+        ));
   if (!blob && !url)
     return slots?.unsupportedFallback ?? <UnsupportedState text={text} />;
   const loaded = status?.owner === owner && status.loaded;

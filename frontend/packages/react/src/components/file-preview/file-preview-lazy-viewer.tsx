@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { LazyContent } from '../../shared/lazy-content.js';
 
 import { LoadingState } from './file-preview-state.js';
 import type { FilePreviewViewerProps } from './file-preview-viewer.js';
@@ -14,16 +14,18 @@ import type { FilePreviewViewerProps } from './file-preview-viewer.js';
  * package's top-level import chain, breaking server rendering and module
  * resolution without `window`.
  */
-const Viewer = lazy(async () => {
+const load = async () => {
   const { FilePreviewViewer } = await import('./file-preview-viewer.js');
   return { default: FilePreviewViewer };
-});
+};
 
 /** 懒加载正文：先渲染加载态，模块就绪后交给底座。 */
 export function LazyFilePreviewViewer(props: FilePreviewViewerProps) {
   return (
-    <Suspense fallback={<LoadingState text={props.text} />}>
-      <Viewer {...props} />
-    </Suspense>
+    <LazyContent
+      load={load}
+      contentProps={props}
+      fallback={<LoadingState text={props.text} />}
+    />
   );
 }

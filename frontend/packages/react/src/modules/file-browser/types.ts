@@ -1,3 +1,4 @@
+import type { ErrorFallback } from '../../shared/error-boundary/types.js';
 import type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
 import type { FileBrowserOpenResourceOptions } from './resource-navigation-types.js';
 export type {
@@ -305,6 +306,8 @@ export interface FileBrowserProps extends Omit<
    * Custom actions render their own extras and editing controls.
    */
   previewSlots?: FileBrowserPreviewSlots;
+  /** 渲染异常时的替代内容，省略时继承外层或使用内置展示。Render-failure content; inherits or uses the default when omitted. */
+  slots?: { errorFallback?: ErrorFallback };
   /**
    * 可替换文案，未提供的项使用当前 locale 的内置文案。
    * Replaceable copy; omitted fields follow locale.

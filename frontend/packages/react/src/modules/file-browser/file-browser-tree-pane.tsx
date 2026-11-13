@@ -1,3 +1,5 @@
+import { useRenderErrors } from './file-browser-labels.js';
+import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import { Button } from '../../shared/primitives/button/button.js';
 import type { Ref } from 'react';
 import type { Locale } from '../../shared/locale.js';
@@ -55,7 +57,7 @@ export interface FileBrowserTreePaneProps {
   retryLabel: string;
 }
 
-export function FileBrowserTreePane({
+function FileBrowserTreePaneContent({
   treeRef,
   entries,
   locale,
@@ -147,5 +149,17 @@ export function FileBrowserTreePane({
         />
       </div>
     </>
+  );
+}
+
+export function FileBrowserTreePane(props: FileBrowserTreePaneProps) {
+  return (
+    <ErrorBoundary
+      message={useRenderErrors(props.locale).tree}
+      locale={props.locale}
+      resetKeys={[props.rootUri]}
+    >
+      <FileBrowserTreePaneContent {...props} />
+    </ErrorBoundary>
   );
 }

@@ -73,21 +73,30 @@ Switch the file type and the read state to compare the built-in states with the 
 
 The demo deliberately feeds invalid image and video data to trigger the error state; choose "Unsupported format" to download the demo's original bytes.
 
+### Custom error display
+
+Supply host content and styles through the component-level `slots.errorFallback`. A tab-level setting still takes priority. The retry button clears the simulated failure before calling the current region’s `reset`.
+
+```tsx file="../../_demos/file-preview-error-fallback.tsx" preview
+
+```
+
 ## API
 
 ### FilePreview
 
-| Property          | Description                                                                                         | Type                                             | Default                        |
-| ----------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------ | ------------------------------ |
-| tabs              | Tab list, at least one; `kind` tells file, directory and content tabs apart                         | `readonly [FilePreviewTab, ...FilePreviewTab[]]` | Required                       |
-| activeKey         | Controlled active tab; the first tab is shown when none matches                                     | `string`                                         | -                              |
-| defaultActiveKey  | Initial tab when uncontrolled                                                                       | `string`                                         | First tab                      |
-| toolbar           | Shows or hides the built-in controls of every tab; a tab cannot turn on a control switched off here | `FilePreviewToolbarOptions`                      | -                              |
-| onActiveKeyChange | Called when the tab changes, with the new tab's `key`; when controlled, update `activeKey` yourself | `(key: string) => void`                          | -                              |
-| labels            | Overrides interface text; a tab's own `labels` take precedence                                      | `FilePreviewLabels`                              | -                              |
-| locale            | Interface language, see [Internationalization](../guide/i18n)                                       | `'zh-CN' \| 'en-US'`                             | Inherited, otherwise `'en-US'` |
-| ref               | Gets the imperative handle to switch tabs and reach FileViewer                                      | `Ref<FilePreviewHandle>`                         | -                              |
-| className, style  | Appearance and layout; other HTML attributes are passed to the root element                         | HTML attributes                                  | -                              |
+| Property          | Description                                                                                                | Type                                                                  | Default                        |
+| ----------------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------------ |
+| tabs              | Tab list, at least one; `kind` tells file, directory and content tabs apart                                | `readonly [FilePreviewTab, ...FilePreviewTab[]]`                      | Required                       |
+| activeKey         | Controlled active tab; the first tab is shown when none matches                                            | `string`                                                              | -                              |
+| defaultActiveKey  | Initial tab when uncontrolled                                                                              | `string`                                                              | First tab                      |
+| toolbar           | Shows or hides the built-in controls of every tab; a tab cannot turn on a control switched off here        | `FilePreviewToolbarOptions`                                           | -                              |
+| onActiveKeyChange | Called when the tab changes, with the new tab's `key`; when controlled, update `activeKey` yourself        | `(key: string) => void`                                               | -                              |
+| slots             | Replaces rendering-error content; see [error display slots](../guide/getting-started#custom-error-display) | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }` | -                              |
+| labels            | Overrides interface text; a tab's own `labels` take precedence                                             | `FilePreviewLabels`                                                   | -                              |
+| locale            | Interface language, see [Internationalization](../guide/i18n)                                              | `'zh-CN' \| 'en-US'`                                                  | Inherited, otherwise `'en-US'` |
+| ref               | Gets the imperative handle to switch tabs and reach FileViewer                                             | `Ref<FilePreviewHandle>`                                              | -                              |
+| className, style  | Appearance and layout; other HTML attributes are passed to the root element                                | HTML attributes                                                       | -                              |
 
 ### FilePreviewTabBase
 
@@ -242,15 +251,15 @@ Slots of the header row and the footer.
 
 ### FilePreviewFileTabSlots
 
-Includes every field of `FilePreviewHeaderSlots`, plus replacements for the loading, failure and unsupported-format states; the built-in states are used when omitted.
+Includes every field of `FilePreviewHeaderSlots`, plus replacements for the loading, failure and unsupported-format states; the built-in states are used when omitted. A render function receives the current body’s retry action: retry loading after a read failure, or retry rendering after a rendering failure.
 
-| Property            | Description                                                                                                                                  | Type                               | Default |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- | ------- |
-| loadingFallback     | Replacement while reading; also used when `loading` is `true`                                                                                | `ReactNode`                        | -       |
-| errorFallback       | Replacement when reading fails; it replaces the built-in message and Retry button                                                            | `ReactNode`                        | -       |
-| unsupportedFallback | Replacement when the format cannot be previewed; it takes over the whole unsupported state, so FileViewer's download entry no longer appears | `ReactNode`                        | -       |
-| confirmFallback     | Replacement component for the large-file confirmation, receiving `onConfirm`, `onCancel` and more                                            | `ComponentType<ConfirmSlotProps>`  | -       |
-| downloadFallback    | Replacement component when inline preview is impossible, receiving `onDownload`, `onRetry` and more                                          | `ComponentType<DownloadSlotProps>` | -       |
+| Property            | Description                                                                                                                                  | Type                                              | Default |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- | ------- |
+| loadingFallback     | Replacement while reading; also used when `loading` is `true`                                                                                | `ReactNode`                                       | -       |
+| errorFallback       | Replaces read or render failures, overriding the component-level error slot                                                                  | `ReactNode \| ((reset: () => void) => ReactNode)` | -       |
+| unsupportedFallback | Replacement when the format cannot be previewed; it takes over the whole unsupported state, so FileViewer's download entry no longer appears | `ReactNode`                                       | -       |
+| confirmFallback     | Replacement component for the large-file confirmation, receiving `onConfirm`, `onCancel` and more                                            | `ComponentType<ConfirmSlotProps>`                 | -       |
+| downloadFallback    | Replacement component when inline preview is impossible, receiving `onDownload`, `onRetry` and more                                          | `ComponentType<DownloadSlotProps>`                | -       |
 
 ### FilePreviewActions
 

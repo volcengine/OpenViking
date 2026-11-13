@@ -271,13 +271,13 @@ export function FilePreviewViewer({
       retry,
     }) => {
       const own = latest.current.tabSlots?.errorFallback;
+      if (typeof own === 'function') return <>{own(retry)}</>;
       if (own) return <>{own}</>;
       return <LoadFailedState text={latest.current.text} onRetry={retry} />;
     };
     // 只传宿主提供的插槽；优先级由底座决定。
     // Only supply host slots; the base owns their precedence.
     const own = tab.slots;
-    const hasConfirm = Boolean(own?.confirmFallback);
     const hasHostDownload = Boolean(own?.downloadFallback);
     // 传稳定 wrapper，内部从 `latest.current` 读当前组件并转发 props。直接传宿主
     // 组件会把它冻在这一帧：同一 key 下宿主换了组件，memo 不重建，界面停在旧组件。
@@ -301,7 +301,7 @@ export function FilePreviewViewer({
     return {
       loading: loadingSlot,
       error: errorSlot,
-      ...(hasConfirm ? { confirm: confirmSlot } : {}),
+      ...(own?.confirmFallback ? { confirm: confirmSlot } : {}),
       ...(hasHostDownload ? { downloadFallback: downloadSlot } : {}),
     };
     // 依赖用「哪些插槽存在」而非对象身份：宿主每次渲染都会重建 `slots`，用对象

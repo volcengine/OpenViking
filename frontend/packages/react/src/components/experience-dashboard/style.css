@@ -1,3 +1,4 @@
+@import '../../shared/error-boundary/error-boundary.css';
 @import '../../shared/primitives/select/style.css';
 @import '../../shared/primitives/button/button.css';
 @import '../../shared/primitives/pagination/pagination.css';

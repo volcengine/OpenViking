@@ -1,4 +1,6 @@
-import { lazy, Suspense } from 'react';
+import { useRenderErrors } from '../labels.js';
+import { ErrorBoundary } from '../../../shared/error-boundary/error-boundary.js';
+import { LazyContent } from '../../../shared/lazy-content.js';
 
 import type { VikingBotInteractionProps } from './types.js';
 
@@ -13,21 +15,35 @@ import type { VikingBotInteractionProps } from './types.js';
  * package's top-level import chain, breaking server rendering and module
  * resolution without `window` — the same boundary the message list uses.
  */
-const View = lazy(async () => {
+const load = async () => {
   const { VikingBotInteractionView } =
     await import('./viking-bot-interaction.js');
   return { default: VikingBotInteractionView };
-});
+};
 
 /** 待确认交互区。The pending-interaction area. */
-export function VikingBotInteraction(props: VikingBotInteractionProps) {
+function VikingBotInteractionContent(props: VikingBotInteractionProps) {
   return (
-    <Suspense
+    <LazyContent
+      load={load}
+      contentProps={props}
       fallback={
         <section className="ov-viking-bot__interaction ov-viking-bot__interaction--loading" />
       }
+    />
+  );
+}
+
+export function VikingBotInteraction(props: VikingBotInteractionProps) {
+  const { slots, ...contentProps } = props;
+  return (
+    <ErrorBoundary
+      fallback={slots?.errorFallback}
+      message={useRenderErrors(props.locale).interaction}
+      locale={props.locale}
+      resetKeys={[props.requestKey, props.request.kind, props.index]}
     >
-      <View {...props} />
-    </Suspense>
+      <VikingBotInteractionContent {...contentProps} />
+    </ErrorBoundary>
   );
 }

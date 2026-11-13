@@ -1,4 +1,7 @@
-import { forwardRef, lazy, Suspense } from 'react';
+import { useRenderErrors } from './labels.js';
+import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
+import { forwardRef } from 'react';
+import { LazyContent } from '../../shared/lazy-content.js';
 
 import type { VikingBotComposerProps, VikingBotComposerRef } from './types.js';
 
@@ -20,29 +23,35 @@ import type { VikingBotComposerProps, VikingBotComposerRef } from './types.js';
  * React 18 intercepts `ref` instead of passing it as a prop, so the ref-as-prop
  * form would silently drop the ref there.
  */
-const View = lazy(async () => {
+const load = async () => {
   const { VikingBotComposerView } = await import('./viking-bot-composer.js');
   return { default: VikingBotComposerView };
-});
+};
 
 /** 输入区。The composer. */
 export const VikingBotComposer = forwardRef<
   VikingBotComposerRef,
   VikingBotComposerProps
->(function VikingBotComposer(props, ref) {
+>(function VikingBotComposer({ slots, ...props }, ref) {
   return (
-    <Suspense
-      fallback={
-        <div className="ov-viking-bot__composer ov-viking-bot__composer--loading">
-          {props.disabled && props.disabledReason ? (
-            <p className="ov-viking-bot__composer-hint" role="status">
-              {props.disabledReason}
-            </p>
-          ) : null}
-        </div>
-      }
+    <ErrorBoundary
+      fallback={slots?.errorFallback}
+      message={useRenderErrors(props.locale).composer}
+      locale={props.locale}
     >
-      <View {...props} ref={ref} />
-    </Suspense>
+      <LazyContent
+        load={load}
+        contentProps={{ ...props, ref }}
+        fallback={
+          <div className="ov-viking-bot__composer ov-viking-bot__composer--loading">
+            {props.disabled && props.disabledReason ? (
+              <p className="ov-viking-bot__composer-hint" role="status">
+                {props.disabledReason}
+              </p>
+            ) : null}
+          </div>
+        }
+      />
+    </ErrorBoundary>
   );
 });

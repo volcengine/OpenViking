@@ -177,11 +177,12 @@ Adapt other backends through a stable `taskService`; `chatOptions.taskService` c
 
 ### ConsoleSlots
 
-| Property            | Description                                                                                  | Type        | Default |
-| ------------------- | -------------------------------------------------------------------------------------------- | ----------- | ------- |
-| toolbar             | Content between the mode switch and the action buttons in the toolbar, shown in both modes   | `ReactNode` | -       |
-| conversationContext | Content above the composer in conversation mode; takes precedence over `conversation.footer` | `ReactNode` | -       |
-| commandHelp         | Content above the command console in command mode                                            | `ReactNode` | -       |
+| Property            | Description                                                                                  | Type                                              | Default |
+| ------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------- | ------- |
+| errorFallback       | Replaces rendering-error content in this block and its nested regions                        | `ReactNode \| ((reset: () => void) => ReactNode)` | -       |
+| toolbar             | Content between the mode switch and the action buttons in the toolbar, shown in both modes   | `ReactNode`                                       | -       |
+| conversationContext | Content above the composer in conversation mode; takes precedence over `conversation.footer` | `ReactNode`                                       | -       |
+| commandHelp         | Content above the command console in command mode                                            | `ReactNode`                                       | -       |
 
 ### ConsoleLabels
 
