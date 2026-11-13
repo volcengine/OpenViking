@@ -9,6 +9,7 @@ import type { ForwardedRef } from 'react';
 import type { FileTreeHandle } from '../../components/file-tree/index.js';
 import type { FileBrowserApi, FileBrowserHandle } from './types.js';
 import { toError } from './fs-model.js';
+import { resolveResourceNavigation } from './resource-navigation.js';
 
 interface ScrollRequest {
   uri: string;
@@ -28,7 +29,7 @@ export function useFileBrowserHandle(
     (uri, options) => {
       active.current?.resolve(false);
       return new Promise<boolean>((resolve, reject) => {
-        const request = { uri, resolve };
+        const request = { uri: resolveResourceNavigation(uri).uri, resolve };
         active.current = request;
         void open(uri, options).then(
           (found) => {
