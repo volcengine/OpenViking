@@ -131,6 +131,12 @@ test('custom single-step content highlights all rows, keeps selection and comple
     await view.render(h(DirectoryTour, props));
     await act(async () => rows[0].remove());
     await settle();
+    const fallback = document.querySelector('[role="dialog"]');
+    assert.ok(fallback.querySelector('[role="status"]'));
+    assert.equal(completions.length, 1);
+    await act(async () =>
+      fallback.querySelector('.ov-directory-tour__primary').click(),
+    );
     assert.equal(document.querySelector('[role="dialog"]'), null);
     assert.deepEqual(completions[1], { skippedStepIds: [step.id] });
   } finally {
@@ -141,6 +147,7 @@ test('custom single-step content highlights all rows, keeps selection and comple
 
 test('custom content does not mount for timed-out anchors or late resolutions', async () => {
   let resolve;
+  let signal;
   let rendered = 0;
   const completions = [];
   const rows = anchors();
@@ -150,10 +157,12 @@ test('custom content does not mount for timed-out anchors or late resolutions', 
       open: true,
       steps: [step],
       locateTimeout: 10,
-      locateTarget: () =>
-        new Promise((done) => {
+      locateTarget: (_, lookupSignal) => {
+        signal = lookupSignal;
+        return new Promise((done) => {
           resolve = done;
-        }),
+        });
+      },
       onComplete: (result) => completions.push(result),
       renderContent: () => {
         rendered++;
@@ -163,10 +172,23 @@ test('custom content does not mount for timed-out anchors or late resolutions', 
   );
   try {
     await act(async () => new Promise((done) => setTimeout(done, 20)));
-    assert.equal(document.querySelector('[role="dialog"]'), null);
-    assert.deepEqual(completions, [{ skippedStepIds: [step.id] }]);
+    assert.equal(signal.aborted, true);
+    const fallback = document.querySelector('[role="dialog"]');
+    assert.match(
+      fallback.querySelector('[role="status"]').textContent,
+      /could not be found/,
+    );
+    assert.deepEqual(completions, []);
     await act(async () => resolve(rows));
     assert.equal(rendered, 0);
+    assert.equal(
+      fallback.querySelector('.ov-directory-tour__primary').textContent,
+      'Got it',
+    );
+    await act(async () =>
+      fallback.querySelector('.ov-directory-tour__primary').click(),
+    );
+    assert.deepEqual(completions, [{ skippedStepIds: [step.id] }]);
   } finally {
     await view.unmount();
     rows.forEach((row) => row.remove());

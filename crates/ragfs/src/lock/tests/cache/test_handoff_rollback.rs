@@ -307,6 +307,7 @@ async fn late_adopt_rollback_keeps_producer_authorized_and_contender_blocked() {
         provider: "cache".into(),
         service_name: Some(provider.service_name.clone()),
         sqlite_path: None,
+        postgres_dsn_env: None,
         lock_timeout_secs: 0.0,
         lock_expire_secs: 1.0,
     };

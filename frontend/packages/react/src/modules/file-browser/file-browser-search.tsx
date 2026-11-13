@@ -68,7 +68,6 @@ export function FileBrowserSearch({
   const [generation, setGeneration] = useState(0);
   const [mode, setMode] = useState<SearchMode>(DEFAULT_SEARCH_MODE);
   const [filters, setFilters] = useState<SearchFilters>(EMPTY_FILTERS);
-  const [menuOpen, setMenuOpen] = useState(false);
 
   const scopes = useMemo(() => buildScopeOptions(rootUri), [rootUri]);
 
@@ -132,7 +131,6 @@ export function FileBrowserSearch({
     setComposing(false);
     setMode(DEFAULT_SEARCH_MODE);
     setFilters(EMPTY_FILTERS);
-    setMenuOpen(false);
     onClose();
   };
 
@@ -216,16 +214,12 @@ export function FileBrowserSearch({
             error={search.error}
             searched={search.result !== null}
             text={text}
-            menuOpen={menuOpen}
-            onToggleMenu={() => setMenuOpen((value) => !value)}
-            onCloseMenu={() => setMenuOpen(false)}
             onSelectMode={(next) => {
               setMode(next);
               // 切模式时把筛选收敛到新模式真正会用的形态，显示与请求才不会脱节。
               // Collapse the filters to what the new mode actually uses, so the display
               // and the request cannot drift apart.
               setFilters((current) => normalizeFilters(current, next));
-              setMenuOpen(false);
             }}
             onOpen={openResult}
           />

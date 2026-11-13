@@ -17,6 +17,7 @@ import type { FileViewerCoreProps } from '@ark-design/ui/file-viewer/core';
 import {
   originalImageTarget,
   preserveVikingImages,
+  recoverImportedMarkdownImages,
 } from './file-preview-markdown-images.js';
 
 /**
@@ -61,6 +62,8 @@ export function createFilePreviewAdapterList({
     markdown({
       onLinkClick,
       rendererProps: {
+        // Parse raw HTML, then keep Ark's sanitizer in charge of tags and attributes.
+        parsing: { enabledHtmlTags: true },
         sourcePlugins: (current) => [
           ...current,
           {
@@ -79,6 +82,7 @@ export function createFilePreviewAdapterList({
             name: 'ov-viking-images',
             config: { priority: 2 },
             modifier: (root) => {
+              recoverImportedMarkdownImages(root);
               preserveVikingImages(root);
             },
             before: () => {},
