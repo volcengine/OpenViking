@@ -1,5 +1,3 @@
-import type { FilePreviewSource } from './types.js';
-
 /**
  * 换层级时正文的过渡参数与判定。抽成纯函数与常量，组件只负责按阶段渲染；不
  * 引用组件或底座，因此可以直接在测试里驱动。
@@ -24,41 +22,17 @@ export type ProbeStatus = 'pending' | 'ready' | 'failed';
 export type TransitionPhase = 'idle' | 'grace' | 'loading';
 
 /**
- * 按 MIME 与扩展名判断一份来源是不是图片或音视频。
+ * 换层级时正文的过渡参数与判定。抽成纯函数与常量，组件只负责按阶段渲染；不
+ * 引用组件或底座，因此可以直接在测试里驱动。
  *
- * 与 `media-kind.ts` 同源，但这里不引用它：本模块要能被测试直接导入，而引用其他
- * 源码文件会让纯 node 解析不到 `.js` 后缀。两处都只读 `source`，规则保持一致。
+ * 媒体判定与「要不要异步加载」在 `media-kind.ts`，与正文共用同一条规则。
  *
- * Whether a source is an image or media, by MIME and extension. It mirrors
- * `media-kind.ts` without importing it: this module must be importable by tests, and
- * importing another source file would not resolve under plain node. Both read only
- * `source` and follow the same rules.
+ * The transition's parameters and decisions, as pure functions and constants so the
+ * component only renders by phase and the tests can drive them directly.
+ *
+ * Media classification and "does this need async loading" live in `media-kind.ts`,
+ * sharing one rule with the body.
  */
-function isMedia(source: FilePreviewSource): boolean {
-  const type =
-    source.fileType?.toLowerCase() || source.file?.type.toLowerCase() || '';
-  if (type === 'image' || type.startsWith('image/')) return true;
-  if (type === 'video' || type.startsWith('video/')) return true;
-  const extension = (
-    source.fileType ||
-    source.fileName.split('.').pop() ||
-    ''
-  ).toLowerCase();
-  if (/^(?:png|jpe?g|gif|webp|avif|bmp|ico|svg)$/.test(extension)) return true;
-  return /^(?:mp4|webm|mov)$/.test(extension);
-}
-
-/**
- * 一份内容是否需要异步加载。空文件、图片与音视频由各自的渲染分支同步完成，
- * 直接换即可；其余交给底座，它会先走一遍 `resolving`。
- *
- * Whether a piece of content loads asynchronously. Empty files, images and media
- * finish synchronously in their own branches and swap directly; everything else goes
- * through the base, which starts with a `resolving` pass.
- */
-export function needsAsyncLoad(source: FilePreviewSource): boolean {
-  return source.content !== '' && !isMedia(source);
-}
 
 /**
  * 把底座的加载状态折算成过渡层关心的三档。只把 `ready` 当作就绪：`idle` 表示

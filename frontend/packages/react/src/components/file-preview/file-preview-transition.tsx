@@ -9,7 +9,8 @@ import type { ProbeStatus, TransitionPhase } from './level-transition-phase.js';
 import { LoadingState } from './file-preview-state.js';
 import type { FilePreviewLabels } from './types.js';
 
-export { needsAsyncLoad, probeStatusOf } from './level-transition-phase.js';
+export { needsAsyncLoad } from './media-kind.js';
+export { probeStatusOf } from './level-transition-phase.js';
 export type { ProbeStatus } from './level-transition-phase.js';
 
 /**
@@ -109,15 +110,27 @@ export function FilePreviewTransition<T>({
   const switching = !visibleSlot || visibleSlot.identity !== identity;
 
   // 目标变化：把新内容放进隐藏槽位并开始宽限期。不需要异步加载的内容直接换上。
+  // 目标又回到屏幕上那一份时，整轮过渡作废：清掉后台槽位与所有过渡状态，否则
+  // 遮罩会一直盖着已经回到视野的内容。
   //
   // useEffect 必要性：宽限期是「从现在起 150ms」，只能由定时器推进，渲染时算
   // 不出未来的时刻；目标再变时清除上一个定时器，旧计时不会提前结束新一轮。
   //
   // The grace period is "150ms from now", which only a timer can advance; the
   // previous timer is cleared when the target changes, so a stale tick cannot end a
-  // newer grace early.
+  // newer grace early. A target that returns to what is already on screen cancels the
+  // whole transition — leaving it running would keep the overlay over visible content.
   useEffect(() => {
-    if (!switching) return;
+    if (!switching) {
+      setSlots((current) =>
+        current[hidden] ? { ...current, [hidden]: null } : current,
+      );
+      setPhase('idle');
+      setProbeStatus('pending');
+      setProbeLoading(false);
+      loadingAt.current = null;
+      return;
+    }
     setSlots((current) => ({ ...current, [hidden]: { identity, tab } }));
     setPhase(needsLoad ? 'grace' : 'idle');
     setProbeStatus('pending');
@@ -174,19 +187,24 @@ export function FilePreviewTransition<T>({
     return () => clearTimeout(timer);
   }, [switching, probeStatus, probeLoading, phase, visible, hidden]);
 
-  // 可见槽位在同一个 key 下跟随最新的页签对象：宿主每次渲染都会重建它，冻住
-  // 旧对象会让保存后的正文、新的资源表都到不了屏幕。后台槽位保留创建时的对象
-  // ——它代表的是「要换过去的那一份」，换目标时由上面的 effect 重建。
+  // 身份与当前目标一致的槽位跟随最新的页签对象：宿主每次渲染都会重建它，冻住
+  // 旧对象会让保存后的正文、新的资源表都到不了屏幕。后台槽位同样要跟——宿主常
+  // 先给一份 `loading: true` 的占位，再在同一个 key 下补上正文；冻结的话它会永远
+  // 停在加载分支，既不挂载渲染器也不上报就绪，遮罩就再也撤不掉。只有身份已经
+  // 落后的那一层（屏幕上正在被替换的旧内容）保持原样。
   //
-  // The visible slot follows the latest tab object under the same key: the host
-  // rebuilds it every render, and freezing the old one would keep a saved body or a
-  // new resource list from reaching the screen. The background slot keeps the object
-  // it was created with — it stands for "the one to switch to" and is rebuilt by the
-  // effect above when the target changes.
+  // A slot whose identity matches the current target follows the latest tab object:
+  // the host rebuilds it every render, and freezing the old one would keep a saved
+  // body or a new resource list from reaching the screen. The background slot follows
+  // too — a host often supplies a `loading: true` placeholder first and the body under
+  // the same key afterwards; frozen, it would stay on the loading branch forever,
+  // never mounting the renderer or reporting ready, and the overlay could never go
+  // away. Only a layer whose identity has fallen behind — the old content being
+  // replaced — keeps its own object.
   const layerTab = (name: SlotName) => {
     const slot = slots[name];
     if (!slot) return null;
-    return name === visible && slot.identity === identity ? tab : slot.tab;
+    return slot.identity === identity ? tab : slot.tab;
   };
 
   return (

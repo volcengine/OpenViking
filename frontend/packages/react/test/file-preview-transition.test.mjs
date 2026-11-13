@@ -10,10 +10,13 @@ import test from 'node:test';
 const {
   LEVEL_TRANSITION_GRACE_MS,
   LEVEL_TRANSITION_MIN_VISIBLE_MS,
-  needsAsyncLoad,
   probeStatusOf,
   shouldCommitProbe,
 } = await import('../src/components/file-preview/level-transition-phase.ts');
+// 媒体判定与正文共用同一条规则，测试也直接导入它的所有者。
+// The media test shares one rule with the body, so the tests import its owner too.
+const { needsAsyncLoad } =
+  await import('../src/components/file-preview/media-kind.ts');
 
 test('the grace period is shorter than the minimum a loading state stays', () => {
   assert.equal(LEVEL_TRANSITION_GRACE_MS, 150);

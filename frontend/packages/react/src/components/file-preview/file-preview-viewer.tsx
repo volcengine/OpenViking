@@ -147,25 +147,21 @@ export function FilePreviewViewer({
   // rebuild the adapters and remount the very renderer that is loading.
   const reportsRef = useRef(reports);
   reportsRef.current = reports;
-  // 后台层被压下的那一次上报，换到前台时补发：底座只在渲染器挂载时交出句柄，
-  // 切换只是翻转可见性、不会重新挂载，不补发的话屏幕上的这一层永远没有句柄。
+  // 后台层被压下的那次上报，换到前台时补发：底座只在渲染器挂载时交出句柄，切换
+  // 只翻转可见性、不重新挂载，不补发的话屏幕上的这一层永远没有句柄。
   //
-  // The report suppressed while the layer was in the background, replayed once it
-  // comes forward: the base hands the handle over at mount only, and a swap just
-  // flips visibility without remounting, so without the replay the layer now on
-  // screen would have no handle at all.
+  // The report suppressed in the background is replayed once the layer comes forward:
+  // the base hands the handle over at mount only, and a swap just flips visibility.
   const suppressed = useRef<{
     handle?: ViewerHandle | null;
     modes?: readonly ViewerViewModeOption[];
   }>({});
   // 回调用 ref 取最新值，`adapters` 因此不随层级变化重建。它一变，底座就把渲染
-  // 管线整个重启——连屏幕上那一层也会退回加载态，双层过渡等于白做。层级切换时
-  // 只有 `tab.source` 该变，回调只是「往哪儿送」。
+  // 管线整个重启——连屏幕上那一层也会退回加载态，双层过渡等于白做。
   //
   // Callbacks are read through refs so `adapters` survives a level change. A new
-  // adapters array restarts the base's whole pipeline — even the layer on screen would
-  // fall back to a loading state, wasting the two-layer transition. Only `tab.source`
-  // should change on a level switch; the callbacks just say where reports go.
+  // adapters array restarts the base's whole pipeline, sending the layer on screen back
+  // to a loading state and wasting the two-layer transition.
   const callbacks = useRef({
     onHandleChange,
     onViewModesChange,
@@ -178,6 +174,10 @@ export function FilePreviewViewer({
     onLinkClick,
     resolveImage: imageResolver ? resolveImage : undefined,
   };
+  // 只跟「有没有这个能力」变化，不跟回调身份：宿主每次渲染都可能换新函数，拿它
+  // 当依赖会每帧重建适配器、重启渲染管线。
+  //
+  // Keys on whether the capability exists, never the callback's identity.
   const adapters = useMemo(
     () =>
       createFilePreviewAdapters({
@@ -189,13 +189,24 @@ export function FilePreviewViewer({
           suppressed.current.modes = modes;
           if (reportsRef.current) callbacks.current.onViewModesChange(modes);
         },
-        onLinkClick: (event, link) =>
-          callbacks.current.onLinkClick?.(event, link),
+        // 宿主没给 `onLinkClick` 时必须保持 `undefined`：底座只要看到回调存在就把
+        // Markdown 的 `linkPolicy.navigation` 设成 `'callback'` 并停掉默认导航，此
+        // 时转发到空操作会让普通链接点了没反应。wrapper 只在能力存在时才包一层。
+        //
+        // `undefined` must survive without a host `onLinkClick`: the base switches
+        // Markdown to `linkPolicy.navigation = 'callback'` and stops the default
+        // navigation as soon as it sees one, so a no-op forward would kill the link.
+        onLinkClick: onLinkClick
+          ? (event, link) => callbacks.current.onLinkClick?.(event, link)
+          : undefined,
         resolveImage: callbacks.current.resolveImage
           ? (src: string) => callbacks.current.resolveImage!(src)
           : undefined,
       }),
-    [],
+    // 只在能力出现或消失时重建；回调身份每帧都可能是新的。
+    // Rebuilt only when the capability appears or goes away.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [Boolean(onLinkClick)],
   );
   // useEffect 必要性：补发要在 `reports` 变 true 的那次提交之后进行，此时句柄
   // 早已存在；渲染期间调用会更新父组件的 state，触发渲染阶段的状态更新警告。
