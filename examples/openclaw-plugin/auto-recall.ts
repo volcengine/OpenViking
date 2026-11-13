@@ -380,6 +380,7 @@ export async function buildAutoRecallContext(params: {
           peerScope: "actor",
           actorPeerId,
           requestTimeoutMs: cfg.autoRecallTimeoutMs,
+          eventsDecayProtection: cfg.recallEventsDecayProtection,
         });
       } catch (error) {
         requestError = error;
