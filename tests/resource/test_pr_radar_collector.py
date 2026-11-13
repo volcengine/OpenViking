@@ -1,12 +1,15 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import json
 from datetime import timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from openviking.resource.github_radar.collector import GitHubCollector
+from openviking.resource.github_radar.models import QueryRange
 from tests.utils.radar_fixtures import ANCHOR, config, node, page, state
 
 
@@ -82,9 +85,53 @@ async def test_collect_does_not_advance_incomplete_search(monkeypatch, bad_count
     assert progress.collected_until is None
 
 
-async def test_search_requires_explicit_auth_without_keychain(monkeypatch):
+@pytest.mark.parametrize(
+    "token,gh_token,github_token,expected_token",
+    [
+        (None, None, None, None),
+        ("account-token", "environment-token", None, "account-token"),
+        (None, "environment-token", None, "environment-token"),
+        (None, None, "github-environment-token", "github-environment-token"),
+    ],
+)
+async def test_search_uses_gh_login_or_explicit_token(
+    monkeypatch, token, gh_token, github_token, expected_token
+):
     monkeypatch.delenv("GH_TOKEN", raising=False)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    collector = GitHubCollector(None)
-    with pytest.raises(RuntimeError, match="requires an account GitHub token"):
-        await collector.search("a/b", state(), None)
+    if gh_token:
+        monkeypatch.setenv("GH_TOKEN", gh_token)
+    if github_token:
+        monkeypatch.setenv("GITHUB_TOKEN", github_token)
+    response = page([])
+    child = SimpleNamespace(
+        returncode=0,
+        communicate=AsyncMock(
+            return_value=(json.dumps({"data": {"search": response}}).encode(), b"")
+        ),
+    )
+    spawn = AsyncMock(return_value=child)
+    monkeypatch.setattr("asyncio.create_subprocess_exec", spawn)
+    collector = GitHubCollector(token)
+    span = QueryRange(start=ANCHOR - timedelta(days=1), end=ANCHOR)
+    assert await collector.search("a/b", span, None) == response
+    spawn.assert_awaited_once()
+    assert spawn.call_args.args == (
+        "gh",
+        "api",
+        "--hostname",
+        "github.com",
+        "graphql",
+        "--input",
+        "-",
+    )
+    env = spawn.call_args.kwargs["env"]
+    assert env["GH_PROMPT_DISABLED"] == "1"
+    if expected_token is None:
+        assert "GH_TOKEN" not in env
+        assert "GITHUB_TOKEN" not in env
+    else:
+        assert env["GH_TOKEN"] == expected_token
+    child.communicate.assert_awaited_once()
+    payload = json.loads(child.communicate.call_args.args[0])
+    assert payload["variables"]["query"].startswith("repo:a/b is:pr is:merged ")

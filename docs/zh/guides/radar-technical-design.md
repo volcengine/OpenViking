@@ -93,7 +93,7 @@ Radar 的失败需记录可核查原因，由后续触发重试；失败不改�
 - https://docs.github.com/en/graphql/reference/search#query-search
 - https://docs.github.com/en/search-github/searching-on-github/searching-issues-and-pull-requests#search-by-when-a-pull-request-was-merged
 
-鉴权使用账号配置解析出的 GitHub token，或进程环境中的 `GH_TOKEN` / `GITHUB_TOKEN`。token 只传给子进程环境，不进入 Watch、队列或日志；没有显式凭证就报错，不调用本地 Keychain 登录流程。
+鉴权优先使用账号配置解析出的 GitHub token，或进程环境中的 `GH_TOKEN` / `GITHUB_TOKEN`；没有显式 token 时沿用 `gh` 已有登录，由 `gh` 解析凭证。显式 token 只传给子进程环境，不进入 Watch、队列或日志；保留 `GH_PROMPT_DISABLED=1`，禁用 CLI 交互提示。
 
 当前旧实现已有水位：查询使用 `since=state.issues_since`；首次没有水位时才使用回溯起点。每轮从第 1 页读的是该时间范围内的结果，不是仓库全部历史。但旧水位按 `updated_at`，不能直接当作新设计的合并时间水位。
 
@@ -248,4 +248,14 @@ HTTP 导入时配置放在现有 `args` 中；下面是参数结构，不是已�
 3. 已确认 HEAD 不变也采集、只关注 merged PR；增量查询不拉取全部历史。
 4. 已确认保留原始 PR 队列和待发布记录，支持跨 Watch 积累及发布失败恢复；取消部分报告和续篇。
 
-新增 46 个单元测试全部通过；扩展单测共 84 通过、1 失败。失败用例为 `test_leader_loop_dispatches_due_watches`，原因是本地原生绑定缺少 `leader_validate_async`；原 `main` HEAD 使用同一绑定也复现相同失败。真实服务、GitHub 和模型验收尚未执行。
+初版新增 46 个单元测试全部通过；扩展单测共 84 通过、1 失败。失败用例为 `test_leader_loop_dispatches_due_watches`，原因是当时本地原生绑定缺少 `leader_validate_async`；原 `main` HEAD 使用同一绑定也复现相同失败。用户随后重新编译原生绑定并启动服务。恢复 `gh` 已有登录后，采集器单测 9 个通过，Radar 单测共 49 个通过。
+
+2026-11-14 本地 Radar 验收结果：
+
+- Watch：`47e2b05c-19f5-441b-b08b-7e91d47f0405`，服务端口 `1935`，使用 `~/.openviking/ov_radar.config`；采集周期 1 分钟、出报周期 30 分钟、首次回溯 1 天。
+- 实际目录：`viking://user/default/resources/radar/47e2b05c-19f5-441b-b08b-7e91d47f0405/`。
+- 历史报告：`reports/053a4cf4-a354-4f16-b26d-05caa6030c58.md`，与该目录下 `latest.md` 内容一致。
+- 首份窗口：北京时间 `2026-11-13 01:58:10` 至 `2026-11-14 01:58:10`；报告中 48 个 PR 编号唯一，全部为 merged，合并时间均在窗口内，链接指向对应仓库和编号。
+- 模型模式 `pr_summaries`：48 条逐 PR 摘要、12 个主题概览；已生成概览中的重点 PR 均属于相应主题。没有把部分主题概览声称为完整模型模式。
+- 状态 `backfill_done=true`、`last_error=null`、无待发布记录、原始队列为空；出报水位已到北京时间 `2026-11-14 02:28:10`，首个后续 30 分钟空窗口已关闭，`latest.md` 保留回溯报告。
+- 上述结果验证 Radar 的真实采集、模型摘要和落盘链路；没有据此宣称源码导入任务终态、所有后续窗口或真实发布故障注入已验证。
