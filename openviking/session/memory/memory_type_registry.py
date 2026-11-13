@@ -18,6 +18,7 @@ from openviking.session.memory.merge_op import MergeOp
 from openviking.session.memory.merge_op.base import FieldType
 from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking.system_assets import builtin_memory_templates_dir
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -293,12 +294,21 @@ class MemoryTypeRegistry:
 
             file_uri = f"{directory}/{filename}"
 
-            # Check if file already exists
+            # Seed the file only when it is really missing. A failed read is not
+            # proof of absence: writing the template back after a transient
+            # storage error would replace the user's accumulated memory with
+            # the empty initial content, unrecoverably.
             try:
                 await viking_fs.read_file(file_uri, ctx=ctx)
                 continue
-            except Exception:
+            except (NotFoundError, FileNotFoundError):
                 pass
+            except Exception as exc:
+                logger.warning(
+                    f"[MemoryTypeRegistry] Skipping initialization, failed to read "
+                    f"{file_uri}: {exc}"
+                )
+                continue
 
             # Add MEMORY_FIELDS comment with field metadata
             from openviking.session.memory.dataclass import MemoryFile
@@ -325,7 +335,10 @@ class MemoryTypeRegistry:
                     await viking_fs.write_file(file_uri, full_content, ctx=ctx)
                 logger.info(f"[MemoryTypeRegistry] Initialized memory file: {file_uri}")
             except Exception:
-                pass
+                logger.warning(
+                    f"[MemoryTypeRegistry] Failed to initialize memory file: {file_uri}",
+                    exc_info=True,
+                )
 
 
 _default_registry: Optional[MemoryTypeRegistry] = None

@@ -11,7 +11,7 @@ from openviking.session.memory.dataclass import MemoryField, MemoryTypeSchema
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op.base import FieldType
 from openviking.session.memory_policy import MemoryPolicy
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 
 def test_memory_policy_defaults_to_self_and_peer():
@@ -228,3 +228,87 @@ def test_working_memory_round_trips_in_task_and_user_snapshots(enabled):
     snapshot = json.loads(json.dumps(policy.to_dict()))
     assert snapshot["working_memory"]["enabled"] is enabled
     assert MemoryPolicy.from_dict(snapshot) == policy
+
+
+async def test_initialize_memory_files_does_not_overwrite_on_read_error(monkeypatch):
+    """A failed existence check must not be mistaken for a missing memory file.
+
+    Seeding the template after a transient read failure would overwrite the
+    user's accumulated memory with the empty initial content.
+    """
+
+    class FailingReadVikingFS:
+        def __init__(self):
+            self.written_uris = []
+
+        async def read_file(self, uri, ctx=None):
+            raise OSError(f"storage temporarily unavailable: {uri}")
+
+        async def write_file(self, uri, content, ctx=None):
+            del content, ctx
+            self.written_uris.append(uri)
+
+    fake_fs = FailingReadVikingFS()
+    monkeypatch.setattr("openviking.storage.viking_fs.get_viking_fs", lambda: fake_fs)
+
+    registry = MemoryTypeRegistry(load_schemas=False)
+    registry.register(
+        MemoryTypeSchema(
+            memory_type="profile",
+            directory="viking://user/{{ user_space }}/memories",
+            filename_template="profile.md",
+            content_template="{{ content }}",
+            fields=[
+                MemoryField(
+                    name="content",
+                    field_type=FieldType.STRING,
+                    init_value="profile",
+                )
+            ],
+        )
+    )
+
+    ctx = type("Ctx", (), {"user": type("User", (), {"user_id": "alice"})()})()
+    await registry.initialize_memory_files(ctx)
+
+    assert fake_fs.written_uris == []
+
+
+async def test_initialize_memory_files_seeds_missing_file(monkeypatch):
+    """A genuinely missing file is still seeded, using the real NotFoundError."""
+
+    class MissingFileVikingFS:
+        def __init__(self):
+            self.written_uris = []
+
+        async def read_file(self, uri, ctx=None):
+            raise NotFoundError(uri, "memory file")
+
+        async def write_file(self, uri, content, ctx=None):
+            del content, ctx
+            self.written_uris.append(uri)
+
+    fake_fs = MissingFileVikingFS()
+    monkeypatch.setattr("openviking.storage.viking_fs.get_viking_fs", lambda: fake_fs)
+
+    registry = MemoryTypeRegistry(load_schemas=False)
+    registry.register(
+        MemoryTypeSchema(
+            memory_type="profile",
+            directory="viking://user/{{ user_space }}/memories",
+            filename_template="profile.md",
+            content_template="{{ content }}",
+            fields=[
+                MemoryField(
+                    name="content",
+                    field_type=FieldType.STRING,
+                    init_value="profile",
+                )
+            ],
+        )
+    )
+
+    ctx = type("Ctx", (), {"user": type("User", (), {"user_id": "bob"})()})()
+    await registry.initialize_memory_files(ctx)
+
+    assert fake_fs.written_uris == ["viking://user/bob/memories/profile.md"]
