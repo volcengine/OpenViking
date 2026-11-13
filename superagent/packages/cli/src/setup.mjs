@@ -24,7 +24,7 @@ import {
   superagentHome, withChangedInstance, withDefaultTempDir, withInstance, writeManifest,
 } from './manifest.mjs';
 import { OVRegistrations, detectOpenViking, instanceOvConfig, writeInstanceOvConfig } from './ov.mjs';
-import { configureOpenViking, prepareInstanceOpenViking, saveOVConnection, takenIdentities } from './ov-setup.mjs';
+import { configureOpenViking, prepareInstanceOpenViking, saveOVConnection, takenIdentities, writeOVSoul } from './ov-setup.mjs';
 import { detectDsh, detectRuntimes, which } from './runtimes.mjs';
 import {
   collectDshModelDraft, dshSettingsDocument, validateDshModelDraft, writeDshModelDraft,
@@ -1653,6 +1653,7 @@ async function setupFlow({
   detect = { runtimes: detectRuntimes, openViking: detectOpenViking, larkApps: checkLarkApps, dsh: detectDsh },
   dshModels = null,
   configureOV = configureOpenViking,
+  writeSoul = writeOVSoul,
   connect = { lark: connectLark, weixin: connectWeixin, telegram: connectTelegram, slack: connectSlack, qq: connectQQ, onebot: connectOneBot, email: askEmail, greet, pi: loginPi },
   control = { start: startCommand, restart: restartCommand, autostart: autostartCommand },
   listen = larkMessageListener,
@@ -1979,6 +1980,12 @@ async function setupFlow({
   const mail = mailPlan(state);
   for (const { config, account } of mail.write) writeEmailAccount(config, account);
   writeRoleFile(state, id);
+  if (state.role) {
+    await step(prompter,
+      t('把角色写入 OpenViking soul.md', 'Writing the role to OpenViking soul.md'),
+      () => writeSoul({ configPath: state.ovConfig, role: state.role, fetchImpl }),
+      () => t('角色已写入 OpenViking soul.md', 'Role saved to OpenViking soul.md'));
+  }
 
   fs.mkdirSync(state.workspace, { recursive: true, mode: 0o700 });
   // The DSH route stayed in memory until here: this is where the instance is

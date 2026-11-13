@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { OVConnection, readOVConfig } from '../../daemon/src/ov-connection.mjs';
+import { OV_SOUL_URI, resolveRolePromptPath } from '../../daemon/src/conversation-policy.mjs';
 import { availableInstanceOvConfig } from './manifest.mjs';
 import {
   HOSTED_OV_URL, LOCAL_OV_URL, PEER_FIELDS, detectOpenViking, instanceOvConfig, instanceUserName, requestNamesUser,
@@ -316,6 +317,20 @@ export function saveOVConnection(detected, { env = process.env, homeDir = env.HO
     fs.renameSync(temporary, target);
   } finally { fs.rmSync(temporary, { force: true }); }
   return target;
+}
+
+// The selected Role is the instance's static identity in OV. Keep the local
+// preset/file as an offline fallback, but make OV soul.md the copy the daemon
+// uses from its first start. Other prompt files are release-owned policy, not
+// per-instance memory, and deliberately stay out of OV.
+export async function writeOVSoul({ configPath, role, fetchImpl = globalThis.fetch }) {
+  if (!role) return null;
+  const content = fs.readFileSync(resolveRolePromptPath(role), 'utf8');
+  const connection = new OVConnection(readOVConfig(configPath), { fetch: fetchImpl });
+  await connection.json('/api/v1/content/write', {
+    uri: OV_SOUL_URI, content, mode: 'replace', wait: true, processing_mode: 'vectors_only',
+  });
+  return OV_SOUL_URI;
 }
 
 // A changed connection gets a new private file. Existing files are left intact

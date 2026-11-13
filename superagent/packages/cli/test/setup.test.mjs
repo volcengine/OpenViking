@@ -34,6 +34,7 @@ function harness(t, answers, { ov = { configPath: null, url: 'http://127.0.0.1:1
   let written = '';
   output.on('data', (chunk) => { written += chunk; });
   const calls = [];
+  const souls = [];
   const options = {
     prompter: new Prompter({ input, output }),
     // A Chinese locale settles the language; the English run and the question have tests of their own.
@@ -46,6 +47,7 @@ function harness(t, answers, { ov = { configPath: null, url: 'http://127.0.0.1:1
       const detected = await detect({ ...options, configPath: preferredConfigPath });
       return preferredConfigPath ? { ...detected, configPath: preferredConfigPath } : detected;
     },
+    writeSoul: async (input) => { souls.push(input); return 'viking://~/memories/soul.md'; },
     connect: {
       qq: async ({ plan }) => { calls.push(['qq', plan.dataDir]); },
       telegram: async ({ plan }) => { calls.push(['telegram', plan.dataDir]); },
@@ -66,7 +68,7 @@ function harness(t, answers, { ov = { configPath: null, url: 'http://127.0.0.1:1
     listen: async ({ port }) => { calls.push(['listen', port]); return { wait: async () => true }; },
     allocate: async () => 3738,
   };
-  return { home, options, calls, written: () => written, manifest: () => JSON.parse(fs.readFileSync(path.join(home, '.ov-superagent', 'config.json'), 'utf8')) };
+  return { home, options, calls, souls, written: () => written, manifest: () => JSON.parse(fs.readFileSync(path.join(home, '.ov-superagent', 'config.json'), 'utf8')) };
 }
 
 test('a startup failure points to the instance logs before retrying start', async (t) => {
@@ -112,6 +114,9 @@ test('a first setup: Feishu + Weixin, Codex, OpenViking; scans run only after ev
   }]);
   // Under an API key the key is the instance's identity; the copy names no peer.
   assert.deepEqual(JSON.parse(fs.readFileSync(manifest.agents[0].ovConfig, 'utf8')), { url: 'https://ov.example', api_key: 'k' });
+  assert.deepEqual(h.souls.map(({ configPath, role }) => ({ configPath, role })),
+    [{ configPath: manifest.agents[0].ovConfig, role: 'colleague' }]);
+  assert.match(h.written(), /角色已写入 OpenViking soul\.md/);
   assert.match(h.written(), /OpenViking 已就绪，接下来接入 IM（这个实例在 OpenViking 里是用户 amy）/);
   assert.ok(fs.statSync(manifest.agents[0].workspace).isDirectory());
   const dataDir = path.join(h.home, '.ov-superagent', 'data', 'primary');
@@ -673,6 +678,7 @@ test('a new instance takes a shipped role by what it is for', async (t) => {
   const h = harness(t, ['',  '2',            '',        '1',    '2', 'y']);
   assert.equal(await setupCommand(h.options), 0);
   assert.equal(h.manifest().agents[0].role, 'assistant');
+  assert.deepEqual(h.souls.map(({ role }) => role), ['assistant']);
   assert.match(h.written(), /1\) AI 同事  你的 AI 分身[^\n]*\n  2\) 个人助理  只为你工作[^\n]*\n  3\) 答疑助手  [^\n]*\n  4\) 自己写 prompt/);
   assert.match(h.written(), /角色\s+个人助理\n/);
   assert.match(h.written(), /其他设置\s+开着：自然写作、显式不回复（以后在修改实例里调）\n/);
@@ -688,6 +694,7 @@ test('an instance can use its own role file, begun from a shipped role, written 
   const text = fs.readFileSync(roleFile(h), 'utf8');
   assert.match(text, /^<!-- Started from OpenViking SuperAgent's "qa" role\. This is asd's role: edit it freely, then run ov-superagent restart asd\./);
   assert.ok(text.endsWith(fs.readFileSync(fileURLToPath(new URL('../../daemon/agent/roles/qa.md', import.meta.url)), 'utf8')));
+  assert.deepEqual(h.souls.map(({ role }) => role), [roleFile(h)]);
   assert.equal(fs.statSync(roleFile(h)).mode & 0o777, 0o600);
   assert.match(h.written(), /角色：没有设置（只用默认规则） → ~\/\.ov-superagent\/roles\/asd\.md（模型会开一次新的会话）/);
   assert.deepEqual(h.calls, [['restart', 'asd']]);

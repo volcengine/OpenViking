@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
-import { configureOpenViking, discoverOpenViking, prepareInstanceOpenViking, saveOVConnection, takenIdentities } from '../src/ov-setup.mjs';
+import { configureOpenViking, discoverOpenViking, prepareInstanceOpenViking, saveOVConnection, takenIdentities, writeOVSoul } from '../src/ov-setup.mjs';
 import { detectOpenViking, HOSTED_OV_URL, LOCAL_OV_URL, savedOVConfigPath } from '../src/ov.mjs';
 import { Prompter } from '../src/prompt.mjs';
 import { setLanguage } from '../src/i18n.mjs';
@@ -360,4 +360,32 @@ test('a typed connection is kept privately for the next instance; a file new ins
   const before = fs.readFileSync(saved, 'utf8');
   assert.equal(saveOVConnection({ usable: true, configPath: cli }, h.options), null);
   assert.equal(fs.readFileSync(saved, 'utf8'), before, 'a copy of ovcli.conf would go stale when its key rotates');
+});
+
+test('setup writes the selected preset or custom role to OV soul.md with the instance identity', async (t) => {
+  const h = fixture(t, []);
+  const configPath = path.join(h.home, 'instance.json');
+  fs.writeFileSync(configPath, JSON.stringify({ url: remote, api_key: 'test-secret', user: 'bot' }));
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    return Response.json({ status: 'ok', result: {} });
+  };
+  assert.equal(await writeOVSoul({ configPath, role: 'qa', fetchImpl }), 'viking://~/memories/soul.md');
+  assert.equal(calls[0].url, `${remote}/api/v1/content/write`);
+  assert.equal(calls[0].init.headers['X-API-Key'], 'test-secret');
+  assert.equal(calls[0].init.headers['X-OpenViking-User'], 'bot');
+  const preset = JSON.parse(calls[0].init.body);
+  assert.equal(preset.uri, 'viking://~/memories/soul.md');
+  assert.equal(preset.mode, 'replace');
+  assert.equal(preset.wait, true);
+  assert.equal(preset.processing_mode, 'vectors_only');
+  assert.match(preset.content, /Q&A assistant/);
+
+  const role = path.join(h.home, 'role.md');
+  fs.writeFileSync(role, '<!-- local note -->\nMy own soul.\n');
+  await writeOVSoul({ configPath, role, fetchImpl });
+  assert.equal(JSON.parse(calls[1].init.body).content, '<!-- local note -->\nMy own soul.\n');
+  assert.equal(await writeOVSoul({ configPath, role: null, fetchImpl }), null);
+  assert.equal(calls.length, 2);
 });
