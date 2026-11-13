@@ -924,17 +924,35 @@ async def test_merge_requests_skips_patch_merge_for_same_session(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "case", ["alias", "duplicate", "two_replacements", "unsafe_delete", "abstain", "write_failure"]
+    "case",
+    [
+        "alias",
+        "two_outputs",
+        "ambiguous_alias",
+        "partial_word_alias",
+        "duplicate",
+        "two_replacements",
+        "unsafe_delete",
+        "abstain",
+        "write_failure",
+    ],
 )
 async def test_submit_plans_cross_session_writes_and_deletes_together(monkeypatch, case):
     """Retargeted adds and independent edits/deletes must reach the same planner."""
     update = _note_update_op("canonical")
     duplicate = _note_delete_file("duplicate")
+    other = _note_update_op("other")
+    has_other = case in {"two_outputs", "ambiguous_alias", "partial_word_alias"}
+    alias_body = "orbit" if case == "partial_word_alias" else "alias_1 content"
+    canonical_body = "a complete revolution" if case == "partial_word_alias" else alias_body
+    expected = f"new canonical\nalias_0 content + {canonical_body}"
     uri = update.uris[0]
     files = {
         uri: MemoryFileUtils.write(update.old_memory_file_content),
         duplicate.uri: MemoryFileUtils.write(duplicate),
     }
+    if has_other:
+        files[other.uris[0]] = MemoryFileUtils.write(other.old_memory_file_content)
     fs = InMemoryVikingFS(files)
     fs.rm = AsyncMock(wraps=fs.rm)
     if case == "write_failure":
@@ -950,18 +968,25 @@ async def test_submit_plans_cross_session_writes_and_deletes_together(monkeypatc
         patch = next(
             m["content"] for m in messages if m["content"].startswith("# Memory File Patches")
         )
-        assert all(f"alias_{i} content" in patch for i in (0, 1)) and "new canonical" in patch
+        assert all(text in patch for text in ("alias_0 content", alias_body, "new canonical"))
         if case == "two_replacements":
             assert _note_op("other").uris[0] in patch and uri in patch
         if case in {"unsafe_delete", "abstain"}:
             assert any("forget the canonical note" in m["content"] for m in messages)
             return ("notes_1.delete()\n" if case == "unsafe_delete" else "") + "sdk.commit()"
-        content = "new canonical\nalias_0 content + alias_1 content"
+        content = expected
         if deleting_duplicate:
             assert duplicate.uri in patch and uri in patch
             content += "\n" + duplicate.content
         edit = f"notes_1.content.edit(search='old canonical', replace={content!r})"
         delete = "notes_2.delete(replacement=notes_1)" if deleting_duplicate else ""
+        if has_other:
+            other_content = "new other"
+            if case == "ambiguous_alias":
+                other_content += f"\n{alias_body}"
+            elif case == "partial_word_alias":
+                other_content += "\norbital mechanics"
+            edit += f"\nnotes_2.content.edit(search='old other', replace={other_content!r})"
         return f"{edit}\n{delete}\nsdk.commit()"
 
     resolver = _TestVLMResolver()
@@ -977,8 +1002,12 @@ async def test_submit_plans_cross_session_writes_and_deletes_together(monkeypatc
         ops = ResolvedOperations(
             upsert_operations=[_note_op(f"alias_{i}")], delete_file_contents=[], errors=[]
         )
+        if i == 1:
+            ops.upsert_operations[0].memory_fields["content"] = alias_body
         if i == 0:
             ops.upsert_operations.append(update)
+            if has_other:
+                ops.upsert_operations.append(other)
         if deleting_duplicate and (i == 1 or case == "two_replacements"):
             ops.delete_file_contents.append(duplicate)
             ops.delete_replacements[duplicate.uri] = uri if i else _note_op("other").uris[0]
@@ -1000,12 +1029,24 @@ async def test_submit_plans_cross_session_writes_and_deletes_together(monkeypatc
         assert fs.files == files and not fs.writes
         fs.rm.assert_not_awaited()
         return
-    for result in results:
-        assert not result.apply_result.errors and uri in result.apply_result.edited_uris
-        assert result.operations.upsert_operations[0].source.task_ids == ["t0", "t1"]
+    shared = case not in {"ambiguous_alias", "partial_word_alias"}
+    for i, result in enumerate(results):
+        assert not result.apply_result.errors
+        expected_uris = [uri] if i == 0 or shared else []
+        if i == 0 and has_other:
+            expected_uris.extend(other.uris)
+        assert sorted(result.apply_result.edited_uris) == sorted(expected_uris)
         assert result.apply_result.deleted_uris == ([duplicate.uri] if deleting_duplicate else [])
-    assert [path for path, *_ in fs.writes] == [uri]
-    expected = "new canonical\nalias_0 content + alias_1 content"
+    by_uri = {op.uris[0]: op.source for op in results[0].operations.upsert_operations}
+    assert by_uri[uri].task_ids == (["t0", "t1"] if shared else ["t0"])
+    canonical = next(op for op in results[0].operations.upsert_operations if op.uris == [uri])
+    if shared:
+        assert canonical.memory_fields["source_extraction_ids"] == ["e0", "e1"]
+    else:
+        assert canonical.memory_fields["source_extraction_id"] == "e0"
+    if has_other:
+        assert by_uri[other.uris[0]].task_ids == ["t0"]
+    assert sorted(path for path, *_ in fs.writes) == sorted(results[0].apply_result.edited_uris)
     if deleting_duplicate:
         fs.rm.assert_awaited_once()
         expected += "\n" + duplicate.content
