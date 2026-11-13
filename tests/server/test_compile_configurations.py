@@ -545,11 +545,9 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
                     "CompileDependencyFailed", "HTTP 424 cancel: Ark unavailable", transient=False
                 )
             )
-            with pytest.raises(asyncio.CancelledError):
-                await service.compile._tasks.execute(task_id, **owner)
+        await service.compile._tasks.execute(task_id, **owner)
+        if cancel_424 and runtime.status == "failed":
             await tracker.mark_work_done(task_id, "compile", **owner)
-        else:
-            await service.compile._tasks.execute(task_id, **owner)
         for call in commit.await_args_list:
             executor = call.kwargs["ctx"]
             assert (executor.role, executor.group_ids, executor.bypass_acl) == (

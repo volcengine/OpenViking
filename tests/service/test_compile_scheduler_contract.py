@@ -13,12 +13,14 @@ from openviking.crypto.providers import LocalFileProvider
 from openviking.scheduling.expiry import CallbackRequest, CallbackStatus, ItemIdentity
 from openviking.server.identity import RequestContext, ResolvedIdentity, Role
 from openviking.service.compile_scheduler import TZ, CompileScheduler, _ExpiryHandler
+from openviking.service.compile_service import CompileService
 from openviking.service.compile_targets import CompileLifecycle, new_record
 from openviking.service.external_task_service import ExternalTaskService
 from openviking.service.task_domain import TaskRecord
 from openviking.storage.queuefs import QueueManager
 from openviking_cli.exceptions import FailedPreconditionError, InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.open_viking_config import CompileApiConfig
 
 COMPILE_NAME = "daily-Wiki_1"
 ACCOUNT = "account"
@@ -191,12 +193,12 @@ async def test_slot_recovery_keeps_accepted_owner_after_executor_change(monkeypa
     monkeypatch.setattr(
         "openviking.storage.queuefs.get_queue_manager", lambda: SimpleNamespace(enqueue=enqueue)
     )
-    service = SimpleNamespace(
-        lifecycle=CompileLifecycle(store, None),
-        _tasks=ExternalTaskService(),
-        create=AsyncMock(),
-    )
-    service._tasks._task_auth = AsyncMock(return_value={})
+    tasks = ExternalTaskService()
+    service = CompileService(CompileApiConfig(), tasks, None)
+    tasks.register(service)
+    service.configure_lifecycle(CompileLifecycle(store, None))
+    service.create = AsyncMock()
+    tasks._task_auth = AsyncMock(return_value={})
     scheduler = CompileScheduler(service, store)
     scheduler._executor = AsyncMock(side_effect=AssertionError("must retain accepted owner"))
     scheduler._expiry = SimpleNamespace(report=AsyncMock(), unregister=AsyncMock())
@@ -217,6 +219,7 @@ async def test_slot_recovery_keeps_accepted_owner_after_executor_change(monkeypa
     enqueue.assert_awaited_with(
         QueueManager.EXTERNAL_TASK,
         {"task_id": accepted.task_id, "account_id": ACCOUNT, "user_id": "accepted-user"},
+        serial_key='["account","compile","target","viking://resources/output"]',
     )
     assert await scheduler.trigger_if_due(ACCOUNT, OWNER, compile_name, due) == "not_due"
     assert enqueue.await_count == 2
