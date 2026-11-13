@@ -22,11 +22,11 @@ import {
 import { deriveDshSessionId } from "./session-id.mjs";
 
 export class OpenVikingRuntime {
-  constructor(client, config, logger = console, resolveSessionPeer = null) {
+  constructor(client, config, logger = console, resolveSessionConfig = null) {
     this.client = client;
     this.config = config;
     this.logger = logger;
-    this.resolveSessionPeer = resolveSessionPeer;
+    this.resolveSessionConfig = resolveSessionConfig;
     this.states = new Map();
     this.drainTimer = null;
     this.drainRunning = false;
@@ -38,7 +38,8 @@ export class OpenVikingRuntime {
     let state = this.states.get(session.id);
     if (state) return state;
     const cwd = session.header?.cwd || process.cwd();
-    const peer = this.resolveSessionPeer?.(cwd) ?? resolveEffectivePeerId({
+    const resolved = this.resolveSessionConfig?.(cwd);
+    const peer = resolved?.effectivePeer ?? resolveEffectivePeerId({
       cfg: {
         peerId: this.config.explicitPeerId,
         peerSource: this.config.peerSource,
@@ -50,7 +51,7 @@ export class OpenVikingRuntime {
     state = {
       dshSessionId: String(session.id),
       ovSessionId: deriveDshSessionId(session.id),
-      config: { ...this.config, peerId: peer.peerId, legacyPeerId: peer.legacyPeerId },
+      config: { ...this.config, ...resolved, peerId: peer.peerId, legacyPeerId: peer.legacyPeerId },
       ready: false,
       profileBlock: "",
       profileDelivered: false,
