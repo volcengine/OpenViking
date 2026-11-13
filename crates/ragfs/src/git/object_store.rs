@@ -16,6 +16,49 @@ use crate::git::error::ObjectStoreError;
 /// has the same effect as writing it once.
 #[async_trait]
 pub trait ObjectStore: Send + Sync + 'static {
+    /// Optional rebuildable history accelerator. Custom stores keep exact traversal.
+    fn supports_history_segments(&self) -> bool {
+        false
+    }
+
+    /// Load a bounded, versioned segment keyed by its first commit OID.
+    async fn get_history_segment(
+        &self,
+        _account: &str,
+        _tip: &ObjectId,
+    ) -> Result<Option<Bytes>, ObjectStoreError> {
+        Ok(None)
+    }
+
+    /// Replace derived data for the same immutable first-parent chain.
+    async fn put_history_segment(
+        &self,
+        _account: &str,
+        _tip: &ObjectId,
+        _bytes: Bytes,
+    ) -> Result<(), ObjectStoreError> {
+        Ok(())
+    }
+
+    /// Best-effort branch hint to find persisted segments past an unindexed tip.
+    async fn get_history_anchor(
+        &self,
+        _account: &str,
+        _branch: &str,
+    ) -> Result<Option<ObjectId>, ObjectStoreError> {
+        Ok(None)
+    }
+
+    /// Publish a hint only after the referenced segment was persisted.
+    async fn put_history_anchor(
+        &self,
+        _account: &str,
+        _branch: &str,
+        _tip: ObjectId,
+    ) -> Result<(), ObjectStoreError> {
+        Ok(())
+    }
+
     /// Write a zlib-compressed loose object.
     ///
     /// The `zlib_body` must be a valid zlib-compressed Git loose object,

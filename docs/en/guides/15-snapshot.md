@@ -194,6 +194,7 @@ data/                      # storage.workspace
 └── .ovgit/                # multi-version management data (new)
     └── {account_id}/      # one logical Git repository per account
         ├── objects/       # Git objects (commit/tree/blob), standard fanout aa/bb...
+        ├── info/history-v1/ # Rebuildable history acceleration segments
         ├── refs/
         │   └── heads/
         │       └── main   # branch ref, content is a 40-hex OID
@@ -206,6 +207,31 @@ Key points:
 - Its layout matches a standard Git object store (content-addressed `objects/`, loose `refs/`), but it is managed automatically by OpenViking. You should **not** run `git` commands against it.
 - For a physical backup or migration, pause writes and copy the workspace and `.ovgit` at the same checkpoint. An [OVPack export](09-ovpack.md) saves current content, not snapshot history.
 - With the `s3` backend, no local `.ovgit` directory is created; data lives under the bucket's `{prefix}/{account}/...` keys instead.
+
+## Path history performance
+
+Path-filtered `log` walks the branch's first-parent history. Its `limit` counts
+matching versions, not visited commits. An absent path can therefore require a
+longer scan than a frequently changed file. The existing 1,000-candidate scan
+limit still applies; if unexplored history remains before enough matches are
+found, the request reports a scan-limit error rather than an incomplete history.
+
+The local and S3 backends maintain a rebuildable commit-graph accelerator in
+bounded segments. Changed-path Bloom filters rule out unrelated commits before
+reading their trees; possible matches still undergo exact comparison. Tree
+comparisons share a request cache and skip unchanged subtrees. These optimizations
+preserve file and directory history, including deletions and mode changes.
+Successful commits and restores perform bounded, best-effort index maintenance;
+index maintenance failure does not invalidate the saved snapshot. Large changes
+can retain exact tree comparisons when filter construction exceeds its budget.
+Persisting the S3 accelerator requires conditional object writes (`If-Match` and
+`If-None-Match`); unsupported backends fall back to exact history traversal.
+
+Git objects remain the source of truth. Missing, incompatible or invalid
+acceleration data falls back to reading those objects. Existing history is
+backfilled lazily, so the first query after an upgrade or cache loss can be slower
+than subsequent queries. Acceleration does not provide a constant-time history
+lookup or change access checks.
 
 ## Usage
 

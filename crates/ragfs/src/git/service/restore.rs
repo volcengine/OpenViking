@@ -210,6 +210,8 @@ impl GitService {
             Err(other) => return Err(other.into()),
         }
 
+        self.record_history(account, branch, new_commit_oid, new_tree_oid, Some(head_oid), Some(head_meta.tree)).await;
+
         self.try_append_snapshot_log(
             account,
             branch,

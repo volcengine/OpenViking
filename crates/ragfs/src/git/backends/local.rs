@@ -39,6 +39,11 @@ impl LocalObjectStore {
         }
     }
 
+    /// Directory holding rebuildable history acceleration data.
+    fn history_dir(&self, account: &str) -> PathBuf {
+        self.base_dir.join(account).join("info/history-v1")
+    }
+
     /// Get the filesystem path for an object.
     fn object_path(&self, account: &str, oid: &ObjectId) -> PathBuf {
         let hex = oid.to_hex().to_string();
@@ -50,8 +55,83 @@ impl LocalObjectStore {
     }
 }
 
+/// Read a bounded history object with a content-derived CAS version. Oversized
+/// files keep a version (so CAS can replace them) but never decode.
+fn read_history_file(path: &Path) -> std::io::Result<Option<(Vec<u8>, String)>> {
+    use std::io::Read;
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let mut data = Vec::new();
+    file.take(crate::git::history::MAX_OBJECT_BYTES as u64 + 1)
+        .read_to_end(&mut data)?;
+    let version = format!("{:016x}", xxhash_rust::xxh3::xxh3_64(&data));
+    Ok(Some((data, version)))
+}
+
 #[async_trait]
 impl ObjectStore for LocalObjectStore {
+    fn supports_history(&self) -> bool {
+        true
+    }
+
+    async fn get_history_object(
+        &self,
+        account: &str,
+        name: &str,
+    ) -> Result<Option<(Bytes, String)>, ObjectStoreError> {
+        let path = self.history_dir(account).join(name);
+        tokio::task::spawn_blocking(move || read_history_file(&path))
+            .await
+            .map_err(|e| ObjectStoreError::Backend(format!("history reader: {e}")))?
+            .map(|data| data.map(|data| (Bytes::from(data.0), data.1)))
+            .map_err(Into::into)
+    }
+
+    async fn put_history_object(
+        &self,
+        account: &str,
+        name: &str,
+        bytes: Bytes,
+        expected: Option<&str>,
+    ) -> Result<bool, ObjectStoreError> {
+        if bytes.len() > crate::git::history::MAX_OBJECT_BYTES {
+            return Ok(false);
+        }
+        let dir = self.history_dir(account);
+        let path = dir.join(name);
+        let expected = expected.map(str::to_owned);
+        // One blocking OS lock per account covers compare + rename across
+        // service instances and processes; critical sections are tiny.
+        tokio::task::spawn_blocking(move || -> Result<bool, ObjectStoreError> {
+            std::fs::create_dir_all(&dir)?;
+            let lock = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(dir.join(".lock"))?;
+            lock.lock()
+                .map_err(|e| ObjectStoreError::Backend(format!("history lock: {e}")))?;
+            let current = read_history_file(&path)?.map(|(_, version)| version);
+            if current != expected {
+                return Ok(false);
+            }
+            let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+            let tmp = path.with_extension(format!("tmp.{}.{}", std::process::id(), seq));
+            std::fs::write(&tmp, &bytes)?;
+            if let Err(e) = std::fs::rename(&tmp, &path) {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(e.into());
+            }
+            Ok(true)
+        })
+        .await
+        .map_err(|e| ObjectStoreError::Backend(format!("history writer: {e}")))?
+    }
+
     async fn put(
         &self,
         account: &str,

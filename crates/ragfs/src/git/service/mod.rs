@@ -71,6 +71,7 @@ pub struct GitService {
     /// `exists()` precheck before compressing and putting a blob. Disable to
     /// fall back to an unconditional `write_object`.
     pub blob_exists_precheck: bool,
+    history_cache: crate::git::history::GraphCache,
     /// Optional SnapshotLog provider for filtered history acceleration.
     pub snapshot_log_store: Option<Arc<dyn crate::git::snapshot_log::SnapshotLogStore>>,
     /// In-process singleflight guard for SnapshotLog backfill tasks.
@@ -91,6 +92,7 @@ impl GitService {
             ref_store,
             index_store: None,
             blob_exists_precheck: true,
+            history_cache: Default::default(),
             snapshot_log_store: None,
             snapshot_log_backfills: Arc::new(Mutex::new(HashSet::new())),
         }
@@ -111,6 +113,7 @@ impl GitService {
             ref_store,
             index_store,
             blob_exists_precheck: true,
+            history_cache: Default::default(),
             snapshot_log_store: None,
             snapshot_log_backfills: Arc::new(Mutex::new(HashSet::new())),
         }

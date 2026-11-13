@@ -115,6 +115,84 @@ impl S3ObjectStore {
 
 #[async_trait]
 impl ObjectStore for S3ObjectStore {
+    fn supports_history(&self) -> bool {
+        true
+    }
+
+    async fn get_history_object(
+        &self,
+        account: &str,
+        name: &str,
+    ) -> Result<Option<(Bytes, String)>, ObjectStoreError> {
+        let key = build_ref_key(&self.prefix, account, &format!("info/history-v1/{name}"));
+        let response = match self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(error) if error.as_service_error().is_some_and(|e| e.is_no_such_key()) => {
+                return Ok(None)
+            }
+            Err(error) => return Err(ObjectStoreError::Backend(format!("history GET: {error}"))),
+        };
+        let etag = response
+            .e_tag()
+            .map(str::to_owned)
+            .ok_or_else(|| ObjectStoreError::Backend("history object has no ETag".into()))?;
+        // Oversized objects keep their ETag so CAS can replace them, but the
+        // body is truncated and will fail to decode.
+        let max = crate::git::history::MAX_OBJECT_BYTES as u64;
+        let mut bytes = Vec::new();
+        response
+            .body
+            .into_async_read()
+            .take(max + 1)
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(|e| ObjectStoreError::Backend(format!("history body: {e}")))?;
+        Ok(Some((Bytes::from(bytes), etag)))
+    }
+
+    async fn put_history_object(
+        &self,
+        account: &str,
+        name: &str,
+        bytes: Bytes,
+        expected: Option<&str>,
+    ) -> Result<bool, ObjectStoreError> {
+        if bytes.len() > crate::git::history::MAX_OBJECT_BYTES {
+            return Ok(false);
+        }
+        let key = build_ref_key(&self.prefix, account, &format!("info/history-v1/{name}"));
+        let request = self
+            .client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .body(bytes.into());
+        let request = match expected {
+            Some(etag) => request.if_match(etag),
+            None => request.if_none_match("*"),
+        };
+        match request.send().await {
+            Ok(_) => Ok(true),
+            // Backends without conditional writes surface other errors and
+            // simply lose acceleration; Git objects stay authoritative.
+            Err(error)
+                if error
+                    .raw_response()
+                    .is_some_and(|r| matches!(r.status().as_u16(), 409 | 412)) =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(ObjectStoreError::Backend(format!("history PUT: {error}"))),
+        }
+    }
+
     async fn put(
         &self,
         account: &str,

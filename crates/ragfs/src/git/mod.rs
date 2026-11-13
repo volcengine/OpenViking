@@ -32,6 +32,7 @@ pub mod config;
 pub mod enumerate;
 pub mod error;
 pub mod ignore;
+pub(crate) mod history;
 pub mod index_store;
 pub mod object_store;
 pub mod ref_store;

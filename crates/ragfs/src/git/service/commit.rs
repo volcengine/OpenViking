@@ -694,6 +694,8 @@ impl GitService {
             .await;
         }
 
+        self.record_history(&account, &branch, commit_oid, new_tree, prev_head, prev_tree).await;
+
         // 8. Persist the new commit index. Soft-fail: a save error logs and
         //    continues — the commit itself has already succeeded; the worst
         //    case is one slow-path commit next time.

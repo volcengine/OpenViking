@@ -387,6 +387,42 @@ impl TreeEditor {
 }
 
 /// Convert BTreeMap entries to a `gix_object::Tree` with Git sort order.
+/// Compare one path in two trees, pruning identical intermediate subtrees.
+/// Missing paths on both sides are equal, even when their ancestors differ.
+pub async fn path_changed(
+    store: &dyn ObjectStore,
+    account: &str,
+    base: Option<ObjectId>,
+    head: Option<ObjectId>,
+    path: &str,
+    cache: &mut TreeLookupCache,
+) -> Result<bool, GitError> {
+    let components = TreeEditor::split_path(path)?;
+    let mut sides = [base, head];
+    for (i, component) in components.iter().enumerate() {
+        if sides[0] == sides[1] {
+            return Ok(false);
+        }
+        let mut found = [None, None];
+        for side in 0..2 {
+            if let Some(oid) = sides[side] {
+                let entries = cache.entries(store, account, oid).await?;
+                found[side] = entries
+                    .get(component.as_bytes().as_bstr())
+                    .map(|e| (e.oid, e.mode));
+            }
+        }
+        if i + 1 == components.len() {
+            return Ok(found[0] != found[1]);
+        }
+        if found[0] == found[1] {
+            return Ok(false);
+        }
+        sides = found.map(|entry| entry.filter(|(_, mode)| mode.is_tree()).map(|(oid, _)| oid));
+    }
+    Ok(false)
+}
+
 #[cfg(test)]
 fn entries_to_tree(entries: &TreeEntries) -> Tree {
     let mut sorted: Vec<tree::Entry> = entries.values().cloned().collect();
@@ -547,6 +583,7 @@ pub async fn lookup(
 /// (the caller's `&mut`) so no internal locking is needed.
 pub struct TreeLookupCache {
     by_oid: HashMap<ObjectId, std::sync::Arc<TreeEntries>>,
+    bytes: usize,
 }
 
 impl TreeLookupCache {
@@ -554,14 +591,47 @@ impl TreeLookupCache {
     pub fn new() -> Self {
         Self {
             by_oid: HashMap::new(),
+            bytes: 0,
         }
+    }
+
+    fn insert(&mut self, oid: ObjectId, entries: std::sync::Arc<TreeEntries>) {
+        // Approximate heap accounting includes BTreeMap nodes and filenames.
+        const MAX_CACHE_BYTES: usize = 8 * 1024 * 1024;
+        let bytes = entries.keys().map(|name| name.len() + 160).sum::<usize>();
+        if bytes > MAX_CACHE_BYTES {
+            return;
+        }
+        if self.by_oid.contains_key(&oid) {
+            return;
+        }
+        if self.bytes + bytes > MAX_CACHE_BYTES {
+            self.by_oid.clear();
+            self.bytes = 0;
+        }
+        self.bytes += bytes;
+        self.by_oid.insert(oid, entries);
+    }
+
+    async fn entries(
+        &mut self,
+        store: &dyn ObjectStore,
+        account: &str,
+        oid: ObjectId,
+    ) -> Result<std::sync::Arc<TreeEntries>, GitError> {
+        if let Some(entries) = self.by_oid.get(&oid) {
+            return Ok(entries.clone());
+        }
+        let entries = std::sync::Arc::new(load_tree_entries(store, account, &oid).await?);
+        self.insert(oid, entries.clone());
+        Ok(entries)
     }
 
     /// Pre-seed the cache with an already-decoded tree's entries. Useful when
     /// the caller has the root entries on hand (e.g. from `TreeEditor::from_tree`)
     /// and wants the very first `lookup_cached` to skip the redundant fetch.
     pub fn seed(&mut self, oid: ObjectId, entries: TreeEntries) {
-        self.by_oid.insert(oid, std::sync::Arc::new(entries));
+        self.insert(oid, std::sync::Arc::new(entries));
     }
 }
 
@@ -598,7 +668,7 @@ pub async fn lookup_cached(
                 let loaded = std::sync::Arc::new(
                     load_tree_entries(store, account, &current_oid).await?,
                 );
-                cache.by_oid.insert(current_oid, loaded.clone());
+                cache.insert(current_oid, loaded.clone());
                 loaded
             }
         };
@@ -1341,6 +1411,57 @@ mod tests {
         ) -> Result<bool, crate::git::error::ObjectStoreError> {
             self.inner.exists(account, oid).await
         }
+    }
+
+    #[tokio::test]
+    async fn history_comparison_prunes_equal_subtrees_and_reuses_trees() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SpyObjectStore::new(crate::git::backends::local::LocalObjectStore::new(
+            dir.path(),
+        ));
+        let a = oid_hex(b"1111111111111111111111111111111111111111");
+        let b = oid_hex(b"2222222222222222222222222222222222222222");
+        let mut editor = TreeEditor::empty();
+        editor
+            .upsert(&store, "acc", "alice/deep/file", a)
+            .await
+            .unwrap();
+        editor.upsert(&store, "acc", "bob/file", a).await.unwrap();
+        let old = editor.write(&store, "acc").await.unwrap();
+        let alice = lookup(&store, "acc", old, "alice")
+            .await
+            .unwrap()
+            .unwrap()
+            .0;
+        let mut editor = TreeEditor::from_tree(&store, "acc", old).await.unwrap();
+        editor.upsert(&store, "acc", "bob/file", b).await.unwrap();
+        let new = editor.write(&store, "acc").await.unwrap();
+        store.reset();
+        let mut cache = TreeLookupCache::new();
+        assert!(!path_changed(
+            &store,
+            "acc",
+            Some(old),
+            Some(new),
+            "alice/deep/file",
+            &mut cache
+        )
+        .await
+        .unwrap());
+        assert!(!store.was_read(&alice));
+        assert_eq!(store.gets.lock().unwrap().len(), 2);
+        assert!(
+            path_changed(&store, "acc", Some(old), Some(new), "bob/file", &mut cache)
+                .await
+                .unwrap()
+        );
+        assert_eq!(store.gets.lock().unwrap().len(), 4);
+        assert!(
+            !path_changed(&store, "acc", Some(new), Some(new), "bob/file", &mut cache)
+                .await
+                .unwrap()
+        );
+        assert_eq!(store.gets.lock().unwrap().len(), 4);
     }
 
     #[tokio::test]
