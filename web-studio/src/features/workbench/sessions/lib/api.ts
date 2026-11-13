@@ -21,7 +21,7 @@ import {
   ovClient,
   OvClientError,
 } from '#/shared/api/ov-client/index'
-import { fetchSse } from '#/shared/lib/sse'
+import { fetchSse, SseResponseError } from '#/shared/lib/sse'
 
 import type { SessionMemoryDiff } from '#/features/workbench/sessions/lib/memory-diff'
 import { parseSessionMemoryDiff } from '#/features/workbench/sessions/lib/memory-diff'
@@ -29,6 +29,7 @@ import type {
   Message,
   MessagePart,
 } from '#/features/workbench/sessions/lib/types/message'
+import type { SseMessage } from '#/shared/lib/sse'
 import type {
   AddMessageResult,
   CommitSessionResult,
@@ -415,7 +416,7 @@ export async function searchSessionToolResult(
 // Bot Chat
 // ---------------------------------------------------------------------------
 
-function extractErrorMessage(text: string, fallback: string): string {
+export function extractErrorMessage(text: string, fallback: string): string {
   if (!text.trim()) return fallback
 
   try {
@@ -424,6 +425,7 @@ function extractErrorMessage(text: string, fallback: string): string {
       const record = parsed as Record<string, unknown>
       if (typeof record.detail === 'string') return record.detail
       const error = record.error
+      if (typeof error === 'string') return error
       if (error && typeof error === 'object') {
         const message = (error as Record<string, unknown>).message
         if (typeof message === 'string') return message
@@ -472,7 +474,35 @@ export async function fetchBotHealth(): Promise<unknown> {
 }
 
 /**
+ * Normalize chat stream transport failures into client errors.
+ *
+ * `fetchSse` reports non-2xx responses (and non-event-stream bodies) as
+ * `SseResponseError` while iterating, so translate it here at the session API
+ * boundary: consumers receive the meaningful server message with the response
+ * status and body preserved.
+ */
+async function* normalizeChatStreamErrors(
+  messages: AsyncGenerator<SseMessage>,
+): AsyncGenerator<SseMessage> {
+  try {
+    for await (const message of messages) yield message
+  } catch (error) {
+    if (!(error instanceof SseResponseError)) throw error
+    throw new OvClientError(
+      {
+        code: 'CHAT_STREAM_FAILED',
+        message: extractErrorMessage(error.responseBody, error.message),
+        responseBody: error.responseBody,
+        statusCode: error.response.status,
+      },
+      error,
+    )
+  }
+}
+
+/**
  * Send a streaming chat request and return standards-compliant SSE messages.
+ * Transport failures are normalized to `OvClientError` during iteration.
  */
 export async function sendChatStream(
   request: BotChatRequest,
@@ -480,7 +510,7 @@ export async function sendChatStream(
 ): Promise<ReturnType<typeof fetchSse>> {
   const baseUrl = ovClient.getOptions().baseUrl
   const conn = ovClient.getConnection()
-  return fetchSse(`${baseUrl}/bot/v1/chat/stream`, {
+  const messages = fetchSse(`${baseUrl}/bot/v1/chat/stream`, {
     method: 'POST',
     headers: {
       ...buildFetchHeaders(),
@@ -493,6 +523,7 @@ export async function sendChatStream(
     }),
     signal,
   })
+  return normalizeChatStreamErrors(messages)
 }
 
 /** Send a non-streaming chat request. */

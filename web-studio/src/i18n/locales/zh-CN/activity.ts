@@ -180,6 +180,7 @@ const activity = {
       creating: '正在创建文件系统会话...',
       detectingBot: '正在检查 VikingBot 是否可用...',
       createFailed: '创建会话失败：{{error}}',
+      sendFailed: '消息发送失败：{{error}}',
       retry: '重试',
       botDisabledFooter: '启用 VikingBot 后即可与 Agent 对话',
       historyTitle: 'Agent 会话历史',

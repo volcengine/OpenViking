@@ -188,6 +188,7 @@ const activity = {
       creating: 'Creating Filesystem session...',
       detectingBot: 'Detecting bot mode...',
       createFailed: 'Failed to create session: {{error}}',
+      sendFailed: 'Could not send message: {{error}}',
       retry: 'Retry',
       botDisabledFooter: 'Enable bot mode to chat with the Agent',
       historyTitle: 'Agent session history',

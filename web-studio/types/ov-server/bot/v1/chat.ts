@@ -7,6 +7,7 @@ export type ChatStreamEventType =
   | 'iteration'
   | 'content_delta'
   | 'reasoning_delta'
+  | 'error'
 
 export type BotChatImage = {
   type: 'image_url'
