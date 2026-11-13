@@ -56,6 +56,11 @@ the host's `/etc/ssl/certs/ca-certificates.crt`, mounted read-only at a temporar
 path until the container installs its own certificates. The host CA bundle must
 exist. Incomplete apt index downloads fail the job instead of continuing with
 missing package metadata.
+If official Ubuntu endpoints are unreachable from the dedicated machine, set
+`CI_UBUNTU_MIRROR` to a reachable HTTPS Ubuntu mirror, including its `/ubuntu` path.
+The override applies only to self-hosted builds and the readiness diagnostic;
+hosted builds retain the official sources. The diagnostic prints host/container
+TCP reachability to help distinguish mirror access from Docker networking issues.
 
 If the dedicated runner is offline or stuck, set repository Actions variable
 `CI_DISABLE_SELF_HOSTED=true`, cancel affected runs and trigger new runs.

@@ -77,8 +77,16 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
     steps:
       - name: Install native build system dependencies
+        env:
+          UBUNTU_MIRROR: ${{ runner.environment == 'self-hosted' && vars.CI_UBUNTU_MIRROR || '' }}
         run: |
           sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources
+          if [ -n "$UBUNTU_MIRROR" ]; then
+            case "$UBUNTU_MIRROR" in https://*) ;; *) exit 1 ;; esac
+            sed -i \
+              "s|https://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR%/}|g; s|https://security.ubuntu.com/ubuntu|${UBUNTU_MIRROR%/}|g" \
+              /etc/apt/sources.list.d/ubuntu.sources
+          fi
           apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
             -o Acquire::Retries=2 -o Acquire::https::Timeout=20 \
             -o APT::Update::Error-Mode=any update

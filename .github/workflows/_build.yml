@@ -56,6 +56,8 @@ jobs:
     runs-on: [self-hosted, Linux, X64, ci-linux-builds]
     permissions: {}
     timeout-minutes: 5
+    env:
+      UBUNTU_MIRROR: ${{ vars.CI_UBUNTU_MIRROR }}
     steps:
       - name: Verify runner and disposable build containers
         shell: bash
@@ -67,13 +69,33 @@ jobs:
           df -h "$RUNNER_TEMP"
           docker version
           test -s /etc/ssl/certs/ca-certificates.crt
+          for host in archive.ubuntu.com mirrors.aliyun.com; do
+            if timeout 5 bash -c 'exec 3<>/dev/tcp/$1/443' _ "$host"; then
+              echo "Host TCP reachable: $host:443"
+            else
+              echo "Host TCP unreachable: $host:443"
+            fi
+            if docker run --rm ubuntu:24.04 timeout 5 \
+              bash -c 'exec 3<>/dev/tcp/$1/443' _ "$host"; then
+              echo "Container TCP reachable: $host:443"
+            else
+              echo "Container TCP unreachable: $host:443"
+            fi
+          done
           for image in ubuntu:20.04 ubuntu:24.04; do
             docker run --rm -i \
+              --env UBUNTU_MIRROR \
               --volume /etc/ssl/certs/ca-certificates.crt:/tmp/runner-ca-certificates.crt:ro \
               "$image" bash -e <<'BOOTSTRAP'
           for source in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do
             if [ -f "$source" ]; then
               sed -i 's|http://|https://|g' "$source"
+              if [ -n "$UBUNTU_MIRROR" ]; then
+                case "$UBUNTU_MIRROR" in https://*) ;; *) exit 1 ;; esac
+                sed -i \
+                  "s|https://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR%/}|g; s|https://security.ubuntu.com/ubuntu|${UBUNTU_MIRROR%/}|g" \
+                  "$source"
+              fi
             fi
           done
           apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
@@ -212,8 +234,16 @@ jobs:
     
     steps:
     - name: Install system dependencies (Linux)
+      env:
+        UBUNTU_MIRROR: ${{ runner.environment == 'self-hosted' && vars.CI_UBUNTU_MIRROR || '' }}
       run: |
         sed -i 's|http://|https://|g' /etc/apt/sources.list
+        if [ -n "$UBUNTU_MIRROR" ]; then
+          case "$UBUNTU_MIRROR" in https://*) ;; *) exit 1 ;; esac
+          sed -i \
+            "s|https://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR%/}|g; s|https://security.ubuntu.com/ubuntu|${UBUNTU_MIRROR%/}|g" \
+            /etc/apt/sources.list
+        fi
         apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
           -o Acquire::Retries=2 -o Acquire::https::Timeout=20 \
           -o APT::Update::Error-Mode=any update
