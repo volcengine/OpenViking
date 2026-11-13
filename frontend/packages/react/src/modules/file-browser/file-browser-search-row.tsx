@@ -39,8 +39,7 @@ export interface FileBrowserSearchRowProps {
   id: string;
   active: boolean;
   query: string;
-  onHover?: () => void;
-  onLeave: () => void;
+  onHighlight: () => void;
   onOpen: (uri: string) => void;
 }
 
@@ -49,8 +48,7 @@ export function FileBrowserSearchRow({
   id,
   active,
   query,
-  onHover,
-  onLeave,
+  onHighlight,
   onOpen,
 }: FileBrowserSearchRowProps) {
   const { name, uri } = resultLocation(hit);
@@ -63,10 +61,9 @@ export function FileBrowserSearchRow({
         role="option"
         aria-selected={active}
         tabIndex={-1}
-        onPointerMove={(event) => {
-          if (event.pointerType !== 'touch') onHover?.();
+        onPointerEnter={(event) => {
+          if (event.pointerType !== 'touch') onHighlight();
         }}
-        onPointerLeave={onLeave}
         onMouseDown={(event) => event.preventDefault()}
         className="ov-file-browser-search__result"
         onClick={() => onOpen(hit.uri)}

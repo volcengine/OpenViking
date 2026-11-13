@@ -1,7 +1,5 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
+import { useId, useState, type KeyboardEvent } from 'react';
 import type { SearchHit } from './search-types.js';
-
-const HOVER_DELAY = 120;
 
 export function useSearchHighlight(
   hits: readonly SearchHit[],
@@ -16,37 +14,7 @@ export function useSearchHighlight(
   }>();
   const activeIndex = selection?.hits === hits ? selection.index : 0;
   const active = hits[activeIndex];
-  const preview = selection?.hits === hits ? active : undefined;
-  const pendingHover = useRef<{
-    index: number;
-    timer: ReturnType<typeof setTimeout>;
-  }>(undefined);
-  const onLeave = () => {
-    clearTimeout(pendingHover.current?.timer);
-    pendingHover.current = undefined;
-  };
-  // The pointer schedules a browser timer; when results change or the dialog
-  // unmounts, cancel it so a row from the previous list cannot take selection.
-  useEffect(
-    () => () => {
-      clearTimeout(pendingHover.current?.timer);
-      pendingHover.current = undefined;
-    },
-    [hits],
-  );
-  const onHover = (index: number) => {
-    if (pendingHover.current?.index === index) return;
-    onLeave();
-    if (!preview || index !== activeIndex) {
-      pendingHover.current = {
-        index,
-        timer: setTimeout(() => {
-          pendingHover.current = undefined;
-          setSelection({ hits, index });
-        }, HOVER_DELAY),
-      };
-    }
-  };
+  const onHighlight = (index: number) => setSelection({ hits, index });
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (composing || event.nativeEvent.isComposing) {
       if (event.key === 'Escape') event.stopPropagation();
@@ -54,7 +22,6 @@ export function useSearchHighlight(
     }
     if (event.key === 'Enter' && (active || onRetry)) {
       event.preventDefault();
-      onLeave();
       if (active) onOpen(active.uri);
       else onRetry?.();
     }
@@ -62,11 +29,10 @@ export function useSearchHighlight(
     event.preventDefault();
     const step = event.key === 'ArrowDown' ? 1 : -1;
     const index = (activeIndex + step + hits.length) % hits.length;
-    onLeave();
-    setSelection({ hits, index });
+    onHighlight(index);
     event.currentTarget.ownerDocument
       .getElementById(`${listId}-${index}`)
       ?.scrollIntoView?.({ block: 'nearest' });
   };
-  return { active, activeIndex, preview, listId, onHover, onLeave, onKeyDown };
+  return { active, activeIndex, listId, onHighlight, onKeyDown };
 }

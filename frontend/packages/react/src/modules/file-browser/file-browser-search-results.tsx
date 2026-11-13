@@ -1,5 +1,4 @@
 import { Button } from '../../shared/primitives/button/button.js';
-import type { ReactNode } from 'react';
 import { FileBrowserSearchRow } from './file-browser-search-row.js';
 import { FileBrowserSearchModeRow } from './file-browser-search-mode-row.js';
 import type { SearchHit, SearchMode } from './search-types.js';
@@ -22,9 +21,7 @@ export interface FileBrowserSearchResultsProps {
   listId: string;
   activeIndex: number;
   query: string;
-  preview?: ReactNode;
-  onHover?: (index: number) => void;
-  onLeave: () => void;
+  onHighlight: (index: number) => void;
   onRetry: () => void;
   hits: SearchHit[];
   loading: boolean;
@@ -44,9 +41,7 @@ export function FileBrowserSearchResults({
   listId,
   activeIndex,
   query,
-  preview,
-  onHover,
-  onLeave,
+  onHighlight,
   onRetry,
   hits,
   loading,
@@ -119,34 +114,24 @@ export function FileBrowserSearchResults({
         text={text}
         onSelectMode={onSelectMode}
       />
-      <div
-        className={
-          preview
-            ? 'ov-file-browser-search__result-layout ov-file-browser-search__result-layout--preview'
-            : 'ov-file-browser-search__result-layout'
-        }
+      <ul
+        id={listId}
+        role="listbox"
+        aria-label={text.searchTitle}
+        className="ov-file-browser-search__list"
       >
-        <ul
-          id={listId}
-          role="listbox"
-          aria-label={text.searchTitle}
-          className="ov-file-browser-search__list"
-        >
-          {hits.map((hit, index) => (
-            <FileBrowserSearchRow
-              key={`${hit.uri}#${hit.line ?? 0}-${index}`}
-              id={`${listId}-${index}`}
-              hit={hit}
-              query={query}
-              active={index === activeIndex}
-              onHover={onHover ? () => onHover(index) : undefined}
-              onLeave={onLeave}
-              onOpen={onOpen}
-            />
-          ))}
-        </ul>
-        {preview}
-      </div>
+        {hits.map((hit, index) => (
+          <FileBrowserSearchRow
+            key={`${hit.uri}#${hit.line ?? 0}-${index}`}
+            id={`${listId}-${index}`}
+            hit={hit}
+            query={query}
+            active={index === activeIndex}
+            onHighlight={() => onHighlight(index)}
+            onOpen={onOpen}
+          />
+        ))}
+      </ul>
     </>
   );
 }

@@ -258,19 +258,6 @@
 
 /* ── 结果行 ───────────────────────────────────────────────────────── */
 
-.ov-file-browser-search__result-layout {
-  display: grid;
-  flex: 1;
-  min-height: 0;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr);
-}
-
-.ov-file-browser-search__result-layout--preview {
-  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-  gap: 12px;
-}
-
 .ov-file-browser-search__error {
   color: var(--ov-ui-color-error, var(--ov-ui-error-default));
 }
@@ -279,72 +266,9 @@
   margin: 0;
 }
 
-.ov-file-browser-search__preview {
-  display: flex;
-  min-height: 0;
-  min-width: 0;
-  border: 1px solid var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
-  border-radius: 8px;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.ov-file-browser-search__preview-title {
-  display: flex;
-  min-width: 0;
-  flex: none;
-  gap: 4px;
-  padding: 11px 14px;
-  border-bottom: 1px solid
-    var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
-  font-size: 12px;
-}
-
-.ov-file-browser-search__preview-title > span {
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
-}
-
-.ov-file-browser-search__preview-title > strong {
-  flex: 0 0 auto;
-  max-width: 60%;
-  font-weight: 600;
-}
-
-.ov-file-browser-search__preview-body {
-  flex: 1;
-  min-height: 0;
-  padding: 14px 18px;
-  overflow: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-  background:
-    radial-gradient(
-        circle,
-        var(--ov-ui-color-preview-dot, var(--ov-ui-preview-dot-default)) 0.5px,
-        transparent 0.6px
-      )
-      0 0 / 10px 10px,
-    var(--ov-ui-preview-backdrop-default);
-  overflow-wrap: anywhere;
-}
-
-.ov-file-browser-search__excerpt {
-  white-space: pre-wrap;
-}
-
-.ov-file-browser-search__preview-title > * {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ov-file-browser-search__preview-body > p {
-  margin: 0;
-}
-
 .ov-file-browser-search__list {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 2px;
   min-height: 0;
@@ -842,11 +766,6 @@
 /* ── 窄屏：高级面板独占内容区 ─────────────────────────────────────── */
 
 @media (max-width: 720px) {
-  .ov-file-browser-search__result-layout--preview {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 3fr) minmax(0, 2fr);
-  }
-
   .ov-file-browser-search--advanced .ov-file-browser-search__results {
     display: none;
   }

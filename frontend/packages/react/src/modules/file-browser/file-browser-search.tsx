@@ -7,7 +7,6 @@ import { Modal } from '../../shared/primitives/modal/modal.js';
 import type { Locale } from '../../shared/locale.js';
 import { FileBrowserSearchAdvanced } from './file-browser-search-advanced.js';
 import { FileBrowserSearchHeader } from './file-browser-search-header.js';
-import { FileBrowserSearchPreview } from './file-browser-search-preview.js';
 import { useSearchHighlight } from './use-search-highlight.js';
 import type { FileBrowserHandle } from './types.js';
 import { FileBrowserSearchResults } from './file-browser-search-results.js';
@@ -149,7 +148,7 @@ export function FileBrowserSearch({
     inputRef.current?.focus();
     setGeneration((value) => value + 1);
   };
-  const { active, activeIndex, preview, listId, onKeyDown, onHover, onLeave } =
+  const { active, activeIndex, listId, onHighlight, onKeyDown } =
     useSearchHighlight(
       hits,
       composing,
@@ -205,19 +204,8 @@ export function FileBrowserSearch({
             listId={listId}
             activeIndex={activeIndex}
             query={query.trim()}
-            onHover={advancedOpen ? undefined : onHover}
-            onLeave={onLeave}
+            onHighlight={onHighlight}
             onRetry={retry}
-            preview={
-              preview && !advancedOpen ? (
-                <FileBrowserSearchPreview
-                  client={client}
-                  entry={preview}
-                  requestOptions={requestOptions}
-                  text={text}
-                />
-              ) : null
-            }
             loading={search.loading || (awaitingQuery && !!draft.trim())}
             error={search.error}
             searched={search.result !== null}
