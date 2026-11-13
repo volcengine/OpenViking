@@ -2,11 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement, StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { OpenVikingProvider } from '@openviking/react/client';
-import { useVikingBotChat } from '@openviking/react/modules/viking-bot';
+import { OpenVikingProvider } from './helpers/internal-hooks.mjs';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+const { useVikingBotChat } = await import(
+  pathToFileURL(join(process.env.OV_UI_TEST_HOOKS, 'bot-chat-hook.js'))
+);
 import { act } from './helpers/command-console-dom.mjs';
 
-test('public hook survives StrictMode, uses Provider native auth and restores context; locale changes preserve content', async () => {
+test('internal chat survives StrictMode, uses Provider native auth and restores context; locale changes preserve content', async () => {
   let chat;
   const calls = [];
   const fetch = async (url, init) => {

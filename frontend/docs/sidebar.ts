@@ -115,11 +115,6 @@ const modules: Group[] = [
     pages: [
       { slug: 'file-browser', zh: 'FileBrowser 文件浏览', en: 'FileBrowser' },
       { slug: 'console', zh: 'Console 交互面板', en: 'Console' },
-      {
-        slug: 'viking-bot',
-        zh: 'VikingBot 无头对话',
-        en: 'VikingBot headless chat',
-      },
     ],
   },
   {
