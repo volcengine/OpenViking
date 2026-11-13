@@ -844,6 +844,7 @@ function FilesystemActionPanel({
       className="shrink-0"
       title={t('actionPanel.collapse')}
       aria-label={t('actionPanel.collapse')}
+      data-collapse-panel=""
       onClick={onCollapse}
     >
       <PanelRightCloseIcon className="size-4" />

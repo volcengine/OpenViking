@@ -1,6 +1,7 @@
 /// <reference types="vitest/config" />
 
 import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import { devtools } from '@tanstack/devtools-vite'
 import tsconfigPaths from 'vite-tsconfig-paths'
@@ -11,7 +12,16 @@ import viteReact from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 const config = defineConfig({
-  resolve: { dedupe: ['react', 'react-dom'] },
+  resolve: {
+    // Ark's file viewer is loaded from the sibling frontend workspace.
+    // Keep its optimized dependencies on the same React runtime as Studio.
+    alias: {
+      react: fileURLToPath(new URL('./node_modules/react', import.meta.url)),
+      'react-dom': fileURLToPath(
+        new URL('./node_modules/react-dom', import.meta.url),
+      ),
+    },
+  },
   optimizeDeps: {
     esbuildOptions: {
       plugins: [

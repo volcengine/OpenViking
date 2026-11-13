@@ -139,6 +139,48 @@
   border-radius: 16px;
   background: var(--background);
 }
+
+.console > :global(.ov-console__toolbar) > :global(.ov-console__toolbar-slot) {
+  flex: none;
+  margin-inline-start: auto;
+}
+
+.console
+  > :global(.ov-console__toolbar)
+  > :global(.ov-console__toolbar-slot):has([data-collapse-panel]) {
+  order: 1;
+  margin-inline-start: 0;
+  border-inline-start: 1px solid var(--border);
+  padding-inline-start: 8px;
+}
+
+.console :global(.ov-viking-bot__session-meta) {
+  flex: 0 1 auto;
+}
+
+.console
+  :global(.ov-viking-bot__session-actions)
+  > :not(:global(.ov-viking-bot__session-meta)) {
+  flex: none;
+}
+
+@container (max-width: 440px) {
+  .console :global(.ov-console__toolbar) {
+    gap: 8px;
+    padding-inline: 12px;
+  }
+
+  .console :global(.ov-console__mode) {
+    width: 32px;
+    padding-inline: 0;
+  }
+
+  .console :global(.ov-console__mode) > span,
+  .console :global(.ov-viking-bot__session-meta) > span {
+    display: none;
+  }
+}
+
 :global(.dark) .assistant {
   border: 1px solid var(--border);
 }
@@ -242,9 +284,4 @@
 }
 .deleteAction:hover {
   background: color-mix(in srgb, var(--destructive) 10%, transparent);
-}
-
-/* Hosted connections expose the command panel only. */
-.commandOnlyConsole :global(.ov-console__mode[aria-pressed='false']) {
-  display: none;
 }

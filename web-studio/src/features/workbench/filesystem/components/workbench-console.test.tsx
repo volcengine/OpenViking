@@ -41,6 +41,8 @@ it('uses the Console shortcuts and routes its commands through Studio’s data c
   render(
     <WorkbenchConsole mode="command" onOpenResource={vi.fn()} toolbar={null} />,
   )
+  expect(document.querySelector('.ov-console__modes')).toBeNull()
+  expect(document.querySelector('.ov-viking-bot')).toBeNull()
   const input = screen.getByRole('textbox')
   fireEvent.click(screen.getByRole('button', { name: /^compile/i }))
   expect(input).toHaveProperty('value', 'ov compile ')
