@@ -79,6 +79,11 @@ class MockLocalAGFS:
         limit = kwargs.get("limit")
         return res[offset:] if limit is None else res[offset : offset + limit]
 
+    def ls_pages(self, path, page_size=None, ctx=None, **kwargs):
+        entries = self.ls(path, ctx=ctx, **kwargs)
+        size = page_size or max(len(entries), 1)
+        return (entries[offset : offset + size] for offset in range(0, len(entries), size))
+
     def glob_directory(
         self,
         path,

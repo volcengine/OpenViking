@@ -1089,6 +1089,55 @@ fn tree_entry_to_py_dict(py: Python<'_>, entry: &TreeEntry) -> PyResult<Py<PyDic
     Ok(dict.into())
 }
 
+enum ListingEntries {
+    Directory(std::vec::IntoIter<FileInfo>),
+    Tree(std::vec::IntoIter<TreeEntry>),
+}
+
+/// Own one enumeration, converting only the next batch to Python objects.
+/// Consumed entries are dropped; nothing is shared between listing calls.
+#[pyclass]
+struct ListingPages {
+    entries: ListingEntries,
+    page_size: usize,
+}
+
+impl ListingPages {
+    fn new(entries: ListingEntries, page_size: Option<usize>) -> PyResult<Self> {
+        if page_size == Some(0) {
+            return Err(PyValueError::new_err("page_size must be positive"));
+        }
+        Ok(Self {
+            entries,
+            page_size: page_size.unwrap_or(usize::MAX),
+        })
+    }
+}
+
+#[pymethods]
+impl ListingPages {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        let list = PyList::empty(py);
+        match &mut self.entries {
+            ListingEntries::Directory(entries) => {
+                for entry in entries.take(self.page_size) {
+                    list.append(file_info_to_py_dict(py, &entry)?)?;
+                }
+            }
+            ListingEntries::Tree(entries) => {
+                for entry in entries.take(self.page_size) {
+                    list.append(tree_entry_to_py_dict(py, &entry)?)?;
+                }
+            }
+        }
+        Ok((!list.is_empty()).then(|| list.into()))
+    }
+}
+
 /// Convert a serde_json::Value to a Python object.
 fn serde_json_to_py(py: Python<'_>, val: &serde_json::Value) -> PyResult<Py<PyAny>> {
     match val {
@@ -2071,6 +2120,32 @@ impl RAGFSBindingClient {
         })
     }
 
+    /// Enumerate once and expose bounded batches for VikingFS visibility filtering.
+    #[pyo3(signature = (path, page_size=None, ctx=None, *, offset=0, sort_by=None, sort_order=None))]
+    fn ls_pages(
+        &self,
+        py: Python<'_>,
+        path: String,
+        page_size: Option<usize>,
+        ctx: Option<HashMap<String, String>>,
+        offset: i64,
+        sort_by: Option<&str>,
+        sort_order: Option<&str>,
+    ) -> PyResult<ListingPages> {
+        let fs_ctx = build_fs_context(ctx);
+        let top = self.top.clone();
+        let offset = parse_listing_offset(offset)?;
+        let sort_by = parse_list_sort_by(sort_by)?;
+        let sort_order = parse_sort_order(sort_order)?;
+        let entries = self
+            .run_scoped(py, fs_ctx, move || async move {
+                top.read_dir(&path, Some(offset), None, sort_by, sort_order)
+                    .await
+            })
+            .map_err(to_py_err)?;
+        ListingPages::new(ListingEntries::Directory(entries.into_iter()), page_size)
+    }
+
     /// Read file content.
     ///
     /// Args:
@@ -2608,6 +2683,45 @@ impl RAGFSBindingClient {
             }
             Ok(list.into())
         })
+    }
+
+    /// Traverse once and expose bounded batches for VikingFS visibility filtering.
+    #[pyo3(signature = (path, show_hidden=false, page_size=None, level_limit=None, ctx=None, *, offset=0, sort_by=None, sort_order=None, directories_only=false))]
+    fn tree_directory_pages(
+        &self,
+        py: Python<'_>,
+        path: String,
+        show_hidden: bool,
+        page_size: Option<usize>,
+        level_limit: Option<i32>,
+        ctx: Option<HashMap<String, String>>,
+        offset: i64,
+        sort_by: Option<&str>,
+        sort_order: Option<&str>,
+        directories_only: bool,
+    ) -> PyResult<ListingPages> {
+        let fs_ctx = build_fs_context(ctx);
+        let top = self.top.clone();
+        let level_limit = level_limit.map(|n| if n < 0 { 0 } else { n as usize });
+        let offset = parse_listing_offset(offset)?;
+        let sort_by = parse_list_sort_by(sort_by)?;
+        let sort_order = parse_sort_order(sort_order)?;
+        let entries = self
+            .run_scoped(py, fs_ctx, move || async move {
+                top.tree_directory(
+                    &path,
+                    show_hidden,
+                    None,
+                    level_limit,
+                    Some(offset),
+                    sort_by,
+                    sort_order,
+                    directories_only,
+                )
+                .await
+            })
+            .map_err(to_py_err)?;
+        ListingPages::new(ListingEntries::Tree(entries.into_iter()), page_size)
     }
 
     /// Return one page of flat glob results.

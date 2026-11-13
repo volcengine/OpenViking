@@ -2443,22 +2443,28 @@ class _OpsMixin:
         if node_limit == 0:
             return []
 
-        raw_offset = 0
         raw_limit = None if node_limit is None else max(node_limit, 256)
         remaining_offset = offset
         browsable: List[tuple[Dict[str, Any], str]] = []
         acl_enabled = await self._acl_enabled(ctx)
         expose_resource_names = acl_enabled and is_acl_uri(uri)
 
+        path = self._uri_to_path(uri, ctx=ctx)
+        pages = None
         while True:
-            entry_items, consumed, exhausted = await self._list_read_path_items(
-                uri,
-                raw_offset=raw_offset,
-                raw_limit=raw_limit,
-                sort_by=sort_by,
-                sort_order=sort_order,
-                ctx=ctx,
-            )
+            try:
+                if pages is None:
+                    pages = await self._async_agfs.ls_pages(
+                        path, page_size=raw_limit, sort_by=sort_by, sort_order=sort_order
+                    )
+                raw_entries = await anext(pages)
+            except StopAsyncIteration:
+                break
+            except Exception as exc:
+                if is_not_found_error(exc):
+                    raise NotFoundError(uri, "directory") from exc
+                raise
+            entry_items = self._map_read_path_items(uri, raw_entries, ctx=ctx)
             entry_items = [
                 item
                 for item in entry_items
@@ -2505,9 +2511,6 @@ class _OpsMixin:
                 browsable.append(item)
                 if node_limit is not None and len(browsable) >= node_limit:
                     return browsable
-            if exhausted:
-                break
-            raw_offset += consumed
 
         return browsable
 
