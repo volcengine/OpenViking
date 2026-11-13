@@ -242,8 +242,10 @@
 
 .ov-file-browser-search__result-layout {
   display: grid;
+  flex: 1;
+  min-height: 0;
   grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-  align-items: start;
+  grid-template-rows: minmax(0, 1fr);
   gap: 12px;
 }
 
@@ -337,11 +339,11 @@
 
 .ov-file-browser-search__list {
   min-height: 0;
-  max-height: min(324px, 50dvh);
   margin: 0;
   padding: 0;
   overflow: auto;
   overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   list-style: none;
 }
 
@@ -397,6 +399,7 @@
 
 .ov-file-browser-search__preview {
   display: flex;
+  min-height: 0;
   min-width: 0;
   border: 1px solid var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
   border-radius: 8px;
@@ -426,11 +429,12 @@
 }
 
 .ov-file-browser-search__preview-body {
-  min-height: 88px;
-  max-height: min(250px, 42dvh);
+  flex: 1;
+  min-height: 0;
   padding: 14px 18px;
   overflow: auto;
   overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   background:
     radial-gradient(
         circle,
@@ -465,6 +469,7 @@
 }
 
 .ov-file-browser-search__item {
+  flex: none;
   margin: 0;
 }
 
@@ -789,15 +794,7 @@
 @media (max-width: 720px) {
   .ov-file-browser-search__result-layout {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .ov-file-browser-search__result-layout .ov-file-browser-search__list {
-    max-height: 36dvh;
-    overflow: auto;
-  }
-
-  .ov-file-browser-search__preview-body {
-    max-height: 25dvh;
+    grid-template-rows: minmax(0, 3fr) minmax(0, 2fr);
   }
 
   .ov-file-browser-search--advanced .ov-file-browser-search__results {

@@ -23,7 +23,8 @@ export interface FileBrowserSearchResultsProps {
   activeIndex: number;
   query: string;
   preview?: ReactNode;
-  onHighlight: (index: number) => void;
+  onHover: (index: number) => void;
+  onLeave: () => void;
   onRetry: () => void;
   hits: SearchHit[];
   loading: boolean;
@@ -44,7 +45,8 @@ export function FileBrowserSearchResults({
   activeIndex,
   query,
   preview,
-  onHighlight,
+  onHover,
+  onLeave,
   onRetry,
   hits,
   loading,
@@ -131,7 +133,8 @@ export function FileBrowserSearchResults({
               hit={hit}
               query={query}
               active={index === activeIndex}
-              onHighlight={() => onHighlight(index)}
+              onHover={() => onHover(index)}
+              onLeave={onLeave}
               onOpen={onOpen}
             />
           ))}
