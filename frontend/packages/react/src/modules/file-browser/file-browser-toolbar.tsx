@@ -1,66 +1,88 @@
-import { Tooltip } from '../../shared/components/tooltip/index.js';
-import { RefreshIcon, SearchIcon } from './file-browser-icons.js';
+import SearchIcon from '../../../../icons/svg/scope-switcher/search.svg?react';
+import FilterIcon from '../../../../icons/svg/dashboards/severity-filter.svg?react';
+import RefreshIcon from '../../../../icons/svg/file-browser/refresh-cw-01.svg?react';
 
 /**
- * 搜索行：搜索框与刷新按钮。两者都是模块自己的，宿主入口在上一行的
- * `toolbarActions` 里。
+ * 左栏的搜索行：一个搜索框形态的入口、内嵌的高级筛选按钮，以及独立的刷新。
  *
- * The search row: the search box and the refresh button. Both belong to the module;
- * host entries live in `toolbarActions` on the row above.
+ * 与 `FileTreeToolbar` 分开而不是复用：那个是 `FileTree` 的公开工具栏，两段式
+ * （搜索按钮 + 刷新按钮），改成设计稿的三段式会波及 `FileTree` 的所有使用方。
+ * 这里的形态只属于文件浏览模块。
+ *
+ * The search row of the left column: a search-box-shaped entry with an embedded
+ * advanced-filter button and a separate refresh.
+ *
+ * It is separate from `FileTreeToolbar` rather than reusing it: that one is
+ * `FileTree`'s public toolbar with two segments (search and refresh), and reshaping it
+ * into the design's three would affect every `FileTree` consumer. This shape belongs
+ * to the file browser alone.
  */
 export interface FileBrowserToolbarProps {
-  searchId: string;
-  query: string;
+  /** 刷新是否进行中。Whether a refresh is running. */
   refreshing: boolean;
+  /** 刷新是否可用。Whether refresh is available. */
   canRefresh: boolean;
+  /** 搜索入口文案。Search entry label. */
   placeholder: string;
+  /** 高级筛选按钮的无障碍名称。Accessible name of the advanced-filter button. */
+  advancedLabel: string;
+  /** 刷新按钮的无障碍名称。Accessible name of the refresh control. */
   refreshLabel: string;
-  onQueryChange: (value: string) => void;
+  /** 高级面板当前是否展开。Whether the advanced panel is open. */
+  advancedOpen?: boolean;
+  onSearch: () => void;
+  onAdvanced: () => void;
   onRefresh: () => void;
 }
 
 export function FileBrowserToolbar({
-  searchId,
-  query,
   refreshing,
   canRefresh,
   placeholder,
+  advancedLabel,
   refreshLabel,
-  onQueryChange,
+  advancedOpen = false,
+  onSearch,
+  onAdvanced,
   onRefresh,
 }: FileBrowserToolbarProps) {
   return (
     <div className="ov-file-browser__toolbar">
-      <label className="ov-file-browser__search" htmlFor={searchId}>
-        <span className="ov-file-browser__search-icon">
-          <SearchIcon />
-        </span>
-        <input
-          id={searchId}
-          type="search"
-          className="ov-file-browser__search-input"
-          placeholder={placeholder}
-          value={query}
-          onChange={(event) => onQueryChange(event.target.value)}
-        />
-      </label>
-      {/* 纯图标按钮用 Tooltip 说明用途：原生 title 的延迟与样式都不受控。 */}
-      <Tooltip content={refreshLabel}>
+      <div className="ov-file-browser__search-entry">
         <button
           type="button"
-          className={[
-            'ov-file-browser__refresh',
-            refreshing ? 'ov-file-browser__refresh--spinning' : '',
-          ]
-            .filter(Boolean)
-            .join(' ')}
-          aria-label={refreshLabel}
-          disabled={!canRefresh}
-          onClick={onRefresh}
+          className="ov-file-browser__search-trigger"
+          onClick={onSearch}
         >
-          <RefreshIcon />
+          <SearchIcon width={14} height={14} aria-hidden="true" />
+          <span className="ov-file-browser__search-trigger-label">
+            {placeholder}
+          </span>
+          <kbd className="ov-file-browser__search-kbd">⌘K</kbd>
         </button>
-      </Tooltip>
+        <button
+          type="button"
+          className="ov-file-browser__advanced-trigger"
+          aria-label={advancedLabel}
+          aria-expanded={advancedOpen}
+          onClick={onAdvanced}
+        >
+          <FilterIcon width={14} height={14} aria-hidden="true" />
+        </button>
+      </div>
+      <button
+        type="button"
+        className="ov-file-browser__refresh"
+        aria-label={refreshLabel}
+        aria-busy={refreshing}
+        disabled={!canRefresh || refreshing}
+        onClick={onRefresh}
+      >
+        <RefreshIcon
+          aria-hidden="true"
+          className="ov-file-browser__refresh-icon"
+        />
+      </button>
     </div>
   );
 }

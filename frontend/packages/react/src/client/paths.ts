@@ -16,8 +16,28 @@
  * `verbatimModuleSyntax` cannot use.
  */
 export const OV_PATHS = {
+  /** 服务健康探针。Service health probe. */
+  health: '/health',
+  systemStatus: '/api/v1/system/status',
+  /** 资源访问控制。Resource access control. */
+  acl: '/api/v1/acl',
+  resources: '/api/v1/resources',
+  skills: '/api/v1/skills',
   /** 列出目录内容。List directory contents. */
   fsLs: '/api/v1/fs/ls',
+  fsAttrs: '/api/v1/fs/attrs',
+  compile: '/api/v1/compile',
+  compileConfigs: '/api/v1/compile/configs',
+  compileConfig: '/api/v1/compile/config',
+  compileConfigUpdate: '/api/v1/compile/config/update',
+  snapshotLog: '/api/v1/snapshot/log',
+  snapshotVersions: '/api/v1/snapshot/versions',
+  snapshotShow: '/api/v1/snapshot/show',
+  resourceTempUpload: '/api/v1/resources/temp_upload',
+  packImport: '/api/v1/pack/import',
+  packExport: '/api/v1/pack/export',
+  experienceTrajectories: '/api/v1/agent-evolution/experiences/trajectories',
+  experienceOutcomes: '/api/v1/agent-evolution/experiences/outcomes',
   /** 读取条目状态。Read an entry's status. */
   fsStat: '/api/v1/fs/stat',
   /** 读取目录树。Read a directory tree. */
@@ -26,6 +46,9 @@ export const OV_PATHS = {
   fsMkdir: '/api/v1/fs/mkdir',
   /** 移动或重命名。Move or rename. */
   fsMv: '/api/v1/fs/mv',
+  fsCp: '/api/v1/fs/cp',
+  /** 删除文件或目录。Remove a file or directory. */
+  fsRm: '/api/v1/fs',
   /** 读取文件正文。Read file content. */
   contentRead: '/api/v1/content/read',
   /** 读取目录的 L0 摘要。Read a directory's L0 abstract. */
@@ -40,10 +63,13 @@ export const OV_PATHS = {
   searchGlob: '/api/v1/search/glob',
   /** 语义检索。Semantic search. */
   searchFind: '/api/v1/search/find',
+  /** 携带上下文的语义检索。Semantic search with session context. */
+  searchQuery: '/api/v1/search/search',
   /** 按正则检索正文。Search content by regular expression. */
   searchGrep: '/api/v1/search/grep',
   /** 会话列表与新建。Session list and creation. */
   sessions: '/api/v1/sessions',
+  tasks: '/api/v1/tasks',
   /** 非流式对话。Non-streaming chat. */
   botChat: '/bot/v1/chat',
   /** 流式对话。Streaming chat. */
@@ -59,10 +85,28 @@ export type OvPath = (typeof OV_PATHS)[keyof typeof OV_PATHS];
  * containing `/` is not read as a path separator.
  */
 export const OV_PATH_BUILDERS = {
+  /** 账号用户目录（可关闭凭证返回）。Account user directory. */
+  accountUsers: (accountId: string) =>
+    `/api/v1/admin/accounts/${encodeURIComponent(accountId)}/users`,
+  /** 账号用户组目录。Account group directory. */
+  accountGroups: (accountId: string) =>
+    `/api/v1/admin/accounts/${encodeURIComponent(accountId)}/groups`,
   /** 单个会话。One session. */
   session: (sessionId: string) =>
     `${OV_PATHS.sessions}/${encodeURIComponent(sessionId)}`,
   /** 会话的消息。Messages of one session. */
   sessionMessages: (sessionId: string) =>
     `${OV_PATH_BUILDERS.session(sessionId)}/messages`,
+  sessionCommit: (sessionId: string) =>
+    `${OV_PATH_BUILDERS.session(sessionId)}/commit`,
+  sessionContext: (sessionId: string) =>
+    `${OV_PATH_BUILDERS.session(sessionId)}/context`,
+  sessionArchive: (sessionId: string, archiveId: string) =>
+    `${OV_PATH_BUILDERS.session(sessionId)}/archives/${encodeURIComponent(archiveId)}`,
+  botInterrupt: (sessionId: string) =>
+    `/bot/v1/sessions/${encodeURIComponent(sessionId)}/interrupt`,
+  botSteer: (sessionId: string) =>
+    `/bot/v1/sessions/${encodeURIComponent(sessionId)}/steer`,
+  task: (taskId: string) => `${OV_PATHS.tasks}/${encodeURIComponent(taskId)}`,
+  taskCancel: (taskId: string) => `${OV_PATH_BUILDERS.task(taskId)}/cancel`,
 } as const;

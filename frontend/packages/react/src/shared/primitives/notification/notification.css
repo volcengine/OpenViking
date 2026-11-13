@@ -1,0 +1,144 @@
+/* Geometry and frosted surface from theme-ve-o-aml-design / Ark aml-theme (MIT). */
+.ov-notification-stack {
+  position: fixed;
+  inset: 4px 4px auto auto;
+  z-index: 1003;
+  box-sizing: border-box;
+  width: min(392px, calc(100vw - 8px));
+  max-height: calc(100vh - 8px);
+  max-height: calc(100dvh - 8px);
+  margin: 0;
+  padding: 16px;
+  border: 0;
+  overflow: auto;
+  background: transparent;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  font-family: inherit;
+  pointer-events: none;
+  scrollbar-width: thin;
+}
+.ov-notification-stack__list {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.ov-notification {
+  display: flex;
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 16px;
+  gap: 12px;
+  border: 0.5px solid var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
+  border-radius: 12px;
+  background: var(
+    --ov-ui-color-notification-bg,
+    var(--ov-ui-notification-bg-default)
+  );
+  box-shadow: var(
+    --ov-ui-color-notification-shadow,
+    var(--ov-ui-notification-shadow-default)
+  );
+  backdrop-filter: blur(10px);
+  font-size: 13px;
+  line-height: 1.53846154;
+  pointer-events: auto;
+}
+.ov-notification__body {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.ov-notification--closable .ov-notification__title,
+.ov-notification--closable .ov-notification__content {
+  padding-right: 20px;
+}
+.ov-notification__title {
+  margin-bottom: 4px;
+  font-size: 16px;
+  font-weight: 500;
+}
+.ov-notification__content {
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+}
+.ov-notification__icon {
+  display: inline-flex;
+  flex: none;
+  margin-top: 2px;
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+}
+.ov-notification__icon .ov-notification__loading-icon {
+  /* Match the SVG circle's 20/24 drawing area within the same 20px slot. */
+  width: calc(20px * 20 / 24);
+  height: calc(20px * 20 / 24);
+  margin: calc(20px * 2 / 24);
+}
+.ov-notification--success .ov-notification__icon {
+  color: var(--ov-ui-color-status-success, var(--ov-ui-status-success-default));
+}
+.ov-notification--warning .ov-notification__icon {
+  color: var(--ov-ui-color-warning-solid, var(--ov-ui-warning-solid-default));
+}
+.ov-notification--error .ov-notification__icon {
+  color: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
+}
+.ov-notification__icon-mark {
+  stroke: var(
+    --ov-ui-color-text-on-primary,
+    var(--ov-ui-text-on-primary-default)
+  );
+}
+.ov-notification__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+.ov-notification__close {
+  display: inline-flex;
+  position: absolute;
+  inset: 12px 12px auto auto;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  cursor: pointer;
+}
+.ov-notification__close:hover {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+}
+.ov-notification__close:focus-visible {
+  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
+  outline-offset: 2px;
+}
+.ov-notification-motion-enter {
+  opacity: 0;
+  transform: translateX(100%);
+}
+.ov-notification-motion-enter-active {
+  opacity: 1;
+  transform: translateX(0);
+  transition:
+    opacity 200ms,
+    transform 200ms;
+}
+.ov-notification-motion-exit-active {
+  opacity: 0;
+  transform: translateX(100%);
+  transition:
+    opacity 200ms,
+    transform 200ms;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ov-notification-stack__item {
+    transition: none;
+    transform: none;
+  }
+}

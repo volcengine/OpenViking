@@ -7,6 +7,8 @@ import History from '../../../icons/svg/viking-bot/history.svg?react';
 import NewSession from '../../../icons/svg/viking-bot/new-session.svg?react';
 import Remove from '../../../icons/svg/viking-bot/remove.svg?react';
 import Tool from '../../../icons/svg/viking-bot/tool.svg?react';
+import ContextFolder from '../../../icons/svg/viking-bot/context-folder.svg?react';
+import ContextClose from '../../../icons/svg/viking-bot/context-close.svg?react';
 
 const icons = {
   bulb: Bulb,
@@ -17,6 +19,8 @@ const icons = {
   newSession: NewSession,
   remove: Remove,
   tool: Tool,
+  contextFolder: ContextFolder,
+  contextClose: ContextClose,
 };
 export type VikingBotIconName =
   | 'bulb'
@@ -26,7 +30,9 @@ export type VikingBotIconName =
   | 'history'
   | 'newSession'
   | 'remove'
-  | 'tool';
+  | 'tool'
+  | 'contextFolder'
+  | 'contextClose';
 
 /** Reference artwork and the local remove glyph. See packages/icons/README.md. */
 export function VikingBotIcon({

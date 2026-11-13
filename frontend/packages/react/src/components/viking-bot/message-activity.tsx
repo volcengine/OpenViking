@@ -1,11 +1,14 @@
+import type { TaskSnapshot } from '../../shared/task-tracking/types.js';
 import { useEffect, useMemo, useState } from 'react';
 import { ActivityTimeline } from '@ark-design/ui/activity-timeline';
 import type {
   ActivityItemRenderContext,
   McpToolCallActivityItem,
+  ReasoningActivityItem,
 } from '@ark-design/ui/activity-timeline';
 import { groupActivityParts } from './ark-adapter.js';
 import { ToolActivity } from './tool-activity.js';
+import { ReasoningActivity } from './reasoning-activity.js';
 import type {
   VikingBotLabels,
   VikingBotMessagePart,
@@ -41,11 +44,21 @@ export function MessageActivity({
     }
     return links;
   }, [parts]);
+  const taskSnapshots = useMemo(() => {
+    const snapshots = new Map<string, readonly TaskSnapshot[]>();
+    for (const part of parts) {
+      if ((part.type === 'tool' || part.type === 'tool_result') && part.tasks)
+        snapshots.set(part.id, part.tasks);
+    }
+    return snapshots;
+  }, [parts]);
   const items = order.flatMap((id) => groups.get(id)?.items ?? []);
   const running = items.some(
     (item) => item.status === 'running' || item.status === 'queued',
   );
   const [now, setNow] = useState(() => Date.now());
+  // Effect necessity: the wall clock advances while a streamed activity is
+  // running, without user events; unsubscribe when complete or unmounted.
   useEffect(() => {
     if (!running) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -67,6 +80,12 @@ export function MessageActivity({
       : items.reduce((total, item) => total + (item.durationMs ?? 0), 0);
   const renderers = useMemo(
     () => ({
+      reasoning: (context: ActivityItemRenderContext) => (
+        <ReasoningActivity
+          context={context as ActivityItemRenderContext<ReasoningActivityItem>}
+          labels={labels}
+        />
+      ),
       mcpToolCall: (context: ActivityItemRenderContext) => (
         <ToolActivity
           context={
@@ -75,10 +94,11 @@ export function MessageActivity({
           labels={labels}
           onOpenUri={onOpenUri}
           results={resultLinks.get(context.item.id)}
+          tasks={taskSnapshots.get(context.item.id)}
         />
       ),
     }),
-    [labels, onOpenUri, resultLinks],
+    [labels, onOpenUri, resultLinks, taskSnapshots],
   );
   return (
     <ActivityTimeline

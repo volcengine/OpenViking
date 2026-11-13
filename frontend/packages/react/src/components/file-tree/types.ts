@@ -8,10 +8,9 @@ import type {
 } from 'react';
 
 /**
- * 所有行的公共字段。行是按宿主展平后的顺序渲染的，因此 `id` 与 `depth` 每行都要有。
+ * 所有行的公共字段。宿主负责展平行，因此每行都需要 `id` 与 `depth`。
  *
- * Fields shared by every row. Rows render in the host-flattened order, so each
- * one carries its own `id` and `depth`.
+ * Fields shared by every host-flattened row. Each row carries its own `id` and `depth`.
  */
 export interface FileTreeRowBase {
   /**
@@ -42,11 +41,10 @@ export interface FileTreeChildRow extends FileTreeRowBase {
 
 /**
  * 树中一条可见的行。宿主把自己的树状态展开成有序行列表后传入，
- * 因此展开、分页、加载、错误行都由调用方决定，组件不感知树结构。
+ * 展开、分页、加载、错误行都由调用方决定。
  *
  * One visible row of the tree. The host flattens its own tree state into this
- * ordered list, so expansion, pagination, loading and error rows all come from
- * the caller and the component never inspects the tree structure.
+ * ordered list and supplies expansion, pagination, loading and error rows.
  */
 export type FileTreeRow =
   | FileTreeEntryRow
@@ -111,10 +109,14 @@ export interface FileTreeEntryRow extends FileTreeRowBase {
    * without detail permission.
    */
   disabled?: boolean;
+  /** 允许展开但不选中，例如仅能遍历的目录。Allows expansion without selection. */
+  selectable?: boolean;
+  /** 权限状态的纯展示标签，不执行鉴权。Display-only permission status. */
+  access?: 'read-only' | 'denied' | 'container';
   /**
-   * 名称下方的次要说明，例如摘要或行内描述。
-   * Secondary line under the name, for example an abstract or inline
-   * description.
+   * 名称右侧的次要说明，例如摘要或行内描述。
+   * Secondary text beside the name on the same row, for example an abstract or
+   * inline description.
    */
   description?: string;
   /**
@@ -363,10 +365,10 @@ export type FileTreeInfoKey =
   | 'systemRoot';
 
 /**
- * 目录说明文案。未提供的键沿用内置英文；传空字符串表示该键不显示。
+ * 目录说明文案。未提供的键跟随 `locale`；传空字符串表示该键不显示。
  *
- * Directory copy. Keys left out keep the built-in English; an empty string
- * hides that key.
+ * Directory copy. Keys left out follow `locale`; an empty string hides that
+ * key.
  */
 export interface FileTreeInfoLabels {
   /**
@@ -407,6 +409,9 @@ export interface FileTreeInfoLabels {
  * Replaceable copy with built-in Chinese and English defaults.
  */
 export interface FileTreeLabels {
+  readOnly?: string;
+  noAccess?: string;
+  traverseOnly?: string;
   /** 搜索入口文案。Search trigger label. */
   search?: string;
   /** 刷新按钮的无障碍名称。Accessible refresh button label. */
@@ -467,10 +472,10 @@ export interface FileTreeSlots {
   toolbar?: ReactNode;
   /**
    * 替换目录加载子节点时展开箭头位置显示的转圈。省略时用内置的 CSS 圆环，
-   * 传入自己的节点可以换成图标或品牌化的加载态；节点按 12 × 12 显示。
+   * 传入自己的节点可以换成图标或品牌化的加载态；其中的 SVG 按 12 × 12 显示。
    * Replaces the spinner shown in the expand chevron slot while a directory
    * loads its children. Omitted uses the built-in CSS ring; pass a node to swap
-   * in an icon or a branded loader. The node renders at 12 × 12.
+   * in an icon or a branded loader. An SVG inside it renders at 12 × 12.
    */
   spinner?: ReactNode;
 }
@@ -540,8 +545,13 @@ export interface FileTreeProps extends Omit<
    * Visible rows in render order.
    */
   rows: readonly FileTreeRow[];
-  /** 内置中英文文案的语言。Language of the built-in interface copy. */
-  locale: Locale;
+  /**
+   * 默认按传入顺序渲染。设为 `context` 时，只按 Viking URI 首段调整根目录及其子树。
+   * Defaults to input order. `context` reorders root directory branches by Viking URI namespace.
+   */
+  rootOrder?: 'input' | 'context';
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
   /**
    * 操作的执行能力；省略对应方法时禁用该操作。
    * Operation capabilities; omitting a method disables its operation.
@@ -553,15 +563,17 @@ export interface FileTreeProps extends Omit<
    */
   selectedId?: string | null;
   /**
-   * 显示内置搜索入口；默认隐藏，未提供 operations.search 时禁用。
-   * Shows the built-in search trigger. Hidden by default; disabled without operations.search.
+   * 显示内置搜索入口；默认显示，未提供 operations.search 时禁用。
+   * Shows the built-in search trigger. Visible by default; disabled without operations.search.
    */
   search?: boolean | { disabled?: boolean };
   /**
-   * 显示内置刷新按钮；默认隐藏。loading 可表达宿主额外的刷新状态。
-   * Shows the refresh button. Hidden by default; loading adds a host-controlled pending state.
+   * 显示内置刷新按钮；默认显示。loading 可表达宿主额外的刷新状态。
+   * Shows the refresh button. Visible by default; loading adds a host-controlled pending state.
    */
   refresh?: boolean | { disabled?: boolean; loading?: boolean };
+  /** 刷新按钮的受控加载态，与异步刷新、refresh.loading 合并。Host-controlled refresh pending state. */
+  loading?: boolean;
   /**
    * 首次加载是否已完成。
    * Whether the tree has finished its first load.
@@ -592,13 +604,17 @@ export interface FileTreeProps extends Omit<
    */
   getRowAttributes?: (row: FileTreeRow) => HTMLAttributes<HTMLDivElement>;
   /**
-   * 渲染行尾的看板指示器。返回 `null` 时该行不显示指示器。内容与交互都由
-   * 宿主决定，包括点击行为与折叠时的数量角标。
-   * Renders the dashboard indicator at the end of a row. Returning `null` shows
-   * no indicator. Both the content and its interaction belong to the host,
-   * including the click behaviour and any collapsed-count badge.
+   * 渲染行尾标记，例如看板入口、状态角标或数量。返回 `null` 时该行不显示标记。
+   * 内容与交互都由宿主决定，包括点击行为。标记显示在行右端；行内已有层级、权限
+   * 等行尾标记时，它紧跟在这些标记之后。
+   *
+   * Renders a trailing marker at the end of a row, such as a board entry, a status
+   * badge or a count. Returning `null` shows no marker. Both the content and its
+   * interaction belong to the host, including the click behaviour. The marker sits
+   * at the right edge of the row; when the row also shows trailing markers such as
+   * the level or access, it follows them directly.
    */
-  renderDashboard?: (row: FileTreeEntryRow) => ReactNode;
+  renderRowTrailing?: (row: FileTreeEntryRow) => ReactNode;
   /**
    * 渲染文件行的行首图标，例如按扩展名区分的类型图标。返回 `null` 或省略时用
    * 内置的通用文件图标；目录行始终用内置的文件夹图标。

@@ -95,7 +95,7 @@ _CANCELLABLE_TASK_TYPES = {
 _IDENTITY_CLEANUP_TASK_TYPES = {"account_delete", "user_delete"}
 _CANCEL_POLL_INTERVAL = 30
 _WAIT_INITIAL_POLL_INTERVAL = 0.05
-_WAIT_MAX_POLL_INTERVAL = 10.0
+_WAIT_MAX_POLL_INTERVAL = 1.0
 _PUBLIC_QUEUE_NAMES = ("Semantic", "Embedding")
 
 _sanitize_error = sanitize_error
@@ -736,12 +736,12 @@ class TaskTracker:
         self._work_index.cancel_active(task_id, account_id=account_id, user_id=user_id)
         return await self.get(task_id, account_id=account_id, user_id=user_id)
 
-    async def cancel_skill_update_for_rollback(
+    async def cancel_skill_processing(
         self, task_id: str, *, account_id: str, user_id: str
     ) -> Optional[TaskRecord]:
         task = await self.get(task_id, account_id=account_id, user_id=user_id)
         if task is not None and task.task_type != "add_skill":
-            raise ValueError("Only Skill processing can be cancelled for package rollback")
+            raise ValueError("Only Skill processing can be cancelled during update cleanup")
         found = await self._request_cancellation(
             task_id,
             account_id=account_id,

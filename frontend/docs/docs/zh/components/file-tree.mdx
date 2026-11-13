@@ -1,95 +1,298 @@
 # FileTree 文件树
 
-必填 `locale: 'zh-CN' | 'en-US'` 选择内置中英文文案；已有 `labels` 可逐项覆盖，未覆盖项跟随当前语言。业务内容仍由宿主提供。
+FileTree 把宿主提供的行渲染成可展开、可键盘操作的文件树。
 
-展平后的文件树。树状态由宿主持有，宿主按顺序传入可见行；组件负责渲染并通知成功的操作。
+## 何时使用
 
-组件渲染宿主展平后的行列表，并处理选中、展开、分页与键盘交互。内置搜索入口与刷新按钮均可选；搜索弹窗、数据请求与导入流程由宿主提供。
+- 数据由宿主加载和管理（分页、懒加载、权限裁剪）时：把树状态展平成有序的行传入，展开、选中和加载更多由宿主执行，组件在操作成功后通知。
+- 需要自己决定搜索界面、导入入口和行尾操作时：组件只渲染并触发回调，不发起请求，也不需要 `OpenVikingProvider`。
+- 使用 [FileBrowser](../modules/file-browser) 时，文件树已经内置，不需要单独接入。
 
-## 控制台样式与可选工具栏
-
-树行、缩进、浅色选中态以及 32px 搜索和刷新控件对齐火山版控制台。下面使用固定的公开示例数据；搜索弹窗与刷新请求由示例宿主模拟。
-
-```tsx file="../../_demos/file-tree-console.tsx" preview
-
-```
-
-通过 `search`、`refresh` 分别开启入口，默认均隐藏。`operations.search` 打开宿主搜索界面，`operations.refresh` 执行刷新；省略对应执行方法时按钮禁用。刷新 Promise 等待期间自动禁用按钮并旋转图标，重复点击不会重复执行；失败后恢复按钮且不触发 `onRefresh`，错误提示由宿主负责。
+## 引入
 
 ```tsx
-<FileTree
-  locale="zh-CN"
-  rows={rows}
-  search
-  refresh={{ loading: isRefreshing, disabled: !canRefresh }}
-  operations={{ search: openSearch, refresh: reloadTree }}
-  labels={{ search: '搜索文件…', refresh: '刷新上下文目录' }}
-  onRefresh={() => notifySuccess()}
-/>
+import { FileTree } from '@openviking/react/components/file-tree';
+import '@openviking/react/components/file-tree/style.css';
 ```
 
-`search={{ disabled: true }}` 可禁用搜索。搜索是入口而非本地过滤框，组件不会假设当前已加载的行覆盖全部文件，也不会注册全局快捷键。如果宿主已提供快捷键，可以把提示加入 `labels.search`。`slots.toolbar` 保留，并显示在内置控件上方，适合放连接 Agent、导入资源等操作。
+## 代码演示
 
-## 基础用法
+### 基础用法
 
-行来自 `rows`，展开由使用方控制。下面的示例自己维护展开集合，把树状态展平成 `FileTreeRow[]` 并渲染，演示五种行类型与内置目录说明的实际效果。
+宿主自己维护展开集合和分页状态，把树展平成 `FileTreeRow[]` 传入，演示异步加载、分页、空目录、内置目录说明、行尾图标和刷新。展开 `resources` 下的 `archive` 和 `empty-notes` 查看分页与空目录，选择刷新结果后点击刷新查看成功和失败状态。
 
 ```tsx file="../../_demos/file-tree-basic.tsx" preview
 
 ```
 
-示例演示三种宿主职责：
+示例使用离线模拟数据：行尾的看板图标由 `renderRowTrailing` 提供，文件类型图标由 `renderRowIcon` 提供，搜索只显示 `onSearch` 事件，不打开搜索界面。勾选「宿主控制 loading」可单独查看受控的刷新加载态。
 
-- **异步加载**：展开目录先出现 `Loading…` 行，400ms 后换成子节点，对应 `FileTreeLoadingRow`。
-- **分页加载**：每次只加载 3 个子节点，还有剩余时出现 `Load more`，点一次追加一页，对应 `FileTreeLoadMoreRow`。`archive` 有 9 个文件，分三页加载完。
-- **行尾图标**：`renderDashboard` 渲染的互斥标记。`memories/experiences` 显示 Agent 经验看板图标；`project-wiki` 是 Wiki 根目录，行首用书本图标替代文件夹，行尾显示绿色看板图标；`archive` 同样按 Wiki 处理，但有待确认冲突，图标变成橙色并带感叹号。
+## API
 
-目录名后跟着的是内置说明，`memories`、`peers`、`privacy` 等都有。
+### FileTree
 
-示例直接挂载 `<FileTree />`，只保留树数据与展开、分页状态这些宿主该持有的部分。
+| 参数                    | 说明                                                                                      | 类型                                                   | 默认值                      |
+| ----------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------ | --------------------------- |
+| rows                    | 按渲染顺序排列的可见行                                                                    | `readonly FileTreeRow[]`                               | 必填                        |
+| selectedId              | 当前选中的行 `id`，由宿主持有                                                             | `string \| null`                                       | -                           |
+| rootOrder               | 根目录顺序，`'context'` 按 `user`、`session`、`agent`、`resources` 排列，其他目录在后     | `'input' \| 'context'`                                 | `'input'`                   |
+| isReady                 | 首次加载是否完成，为 `false` 时显示 `loadingFallback` 而不是行                            | `boolean`                                              | `true`                      |
+| loadingFallback         | 首次加载期间显示的内容，省略时显示 `labels.loading`                                       | `ReactNode`                                            | -                           |
+| errorFallback           | 整树加载失败时显示的内容，通常包含标题和重试入口，省略时显示错误行的 `message`            | `ReactNode`                                            | -                           |
+| emptyFallback           | `rows` 为空时显示的内容，省略时显示 `labels.empty`                                        | `ReactNode`                                            | -                           |
+| operations              | 异步执行能力，省略某个方法时对应操作不可用；Promise 被 reject 表示失败，不触发 `on…` 回调 | `FileTreeOperations`                                   | -                           |
+| search                  | 显示内置搜索入口，`false` 隐藏，`{ disabled: true }` 禁用                                 | `boolean \| { disabled?: boolean }`                    | `true`                      |
+| refresh                 | 显示内置刷新按钮，`false` 隐藏，`disabled` 禁用，`loading` 由宿主控制加载态               | `boolean \| { disabled?: boolean; loading?: boolean }` | `true`                      |
+| loading                 | 刷新按钮的受控加载态，与刷新 Promise、`refresh.loading` 合并，不影响已有行                | `boolean`                                              | `false`                     |
+| getRowAttributes        | 为每一行（包括加载、分页等状态行）追加 HTML 属性，`className` 和 `style` 与组件自身的合并 | `(row: FileTreeRow) => HTMLAttributes<HTMLDivElement>` | -                           |
+| renderRowTrailing       | 渲染行尾标记，例如看板入口或状态角标，返回 `null` 时不显示，内容和点击行为由宿主决定      | `(row: FileTreeEntryRow) => ReactNode`                 | -                           |
+| renderRowIcon           | 渲染文件行的行首图标，目录行始终使用内置文件夹图标，返回 `null` 时使用内置文件图标        | `(row: FileTreeEntryRow) => ReactNode`                 | 内置文件图标                |
+| renderRowTooltip        | 渲染行的悬停浮层，提供后不再显示内置的目录说明，返回 `null` 时该行不显示浮层              | `(row: FileTreeEntryRow) => ReactNode`                 | 按 `uri` 生成的内置目录说明 |
+| onSelect                | 条目选中成功后触发                                                                        | `(row: FileTreeEntryRow) => void`                      | -                           |
+| onToggleExpand          | 目录展开或折叠成功后触发                                                                  | `(row: FileTreeEntryRow) => void`                      | -                           |
+| onLoadMore              | 下一页子节点加载成功后触发                                                                | `(row: FileTreeLoadMoreRow) => void`                   | -                           |
+| onRetry                 | 子节点重新加载成功后触发                                                                  | `(row: FileTreeErrorRow) => void`                      | -                           |
+| onOpenRetentionSettings | 保留策略设置打开成功后触发，参数为行的 `uri`                                              | `(uri: string) => void`                                | -                           |
+| onSearch                | 搜索操作成功后触发                                                                        | `() => void`                                           | -                           |
+| onRefresh               | 刷新成功后触发                                                                            | `() => void`                                           | -                           |
+| slots                   | 自定义工具栏和加载转圈                                                                    | `FileTreeSlots`                                        | -                           |
+| labels                  | 覆盖界面文案                                                                              | `FileTreeLabels`                                       | -                           |
+| locale                  | 界面语言，规则见[国际化](../guide/i18n)                                                   | `'zh-CN' \| 'en-US'`                                   | 继承上级，默认 `'en-US'`    |
+| className、style        | 外观与布局，其余 HTML 属性透传到根元素，`aria-label` 同时作为树的无障碍名称               | HTML 属性                                              | -                           |
+| ref                     | 取得 `FileTreeHandle`，用于查找行元素或滚动到某一行                                       | `Ref<FileTreeHandle>`                                  | -                           |
 
-## 行的组织方式
+### FileTreeOperations
 
-组件不感知父子关系，宿主把自己的状态展平成有序列表：
+| 参数                  | 说明                                                                         | 类型                                          | 默认值 |
+| --------------------- | ---------------------------------------------------------------------------- | --------------------------------------------- | ------ |
+| search                | 打开宿主的搜索界面，省略时搜索入口禁用                                       | `() => Promise<void>`                         | -      |
+| refresh               | 刷新目录，等待期间刷新按钮显示加载态，省略时刷新按钮禁用                     | `() => Promise<void>`                         | -      |
+| select                | 选中条目，点击目录和点击文件都会调用，按 `row.type` 区分，省略时选中不起作用 | `(row: FileTreeEntryRow) => Promise<void>`    | -      |
+| toggleExpand          | 展开或折叠目录，省略时展开箭头禁用                                           | `(row: FileTreeEntryRow) => Promise<void>`    | -      |
+| loadMore              | 加载下一页子节点，省略时「加载更多」按钮禁用                                 | `(row: FileTreeLoadMoreRow) => Promise<void>` | -      |
+| retry                 | 重新加载失败的子节点，省略时「重试」按钮禁用                                 | `(row: FileTreeErrorRow) => Promise<void>`    | -      |
+| openRetentionSettings | 打开保留策略设置，参数为行的 `uri`，省略时行尾的过期时间不可点击             | `(uri: string) => Promise<void>`              | -      |
 
-- `entry` —— 目录或文件。
-- `loading` —— 子节点区域加载中。
-- `load-more` —— 可以继续加载的子节点分页。
-- `error` —— 子节点区域加载失败。
-- `empty` —— 已展开但没有子节点的目录。
+### FileTreeSlots
 
-只需产出数据源真正需要的行。一次性返回全部子节点的宿主不会产出 `load-more`。
+| 参数    | 说明                                                                             | 类型        | 默认值        |
+| ------- | -------------------------------------------------------------------------------- | ----------- | ------------- |
+| toolbar | 显示在内置搜索和刷新上方，可放导入来源等宿主操作                                 | `ReactNode` | -             |
+| spinner | 替换展开箭头位置、加载行和「加载更多」行里的转圈，内置转圈是 12 × 12 的 CSS 圆环 | `ReactNode` | 内置 CSS 圆环 |
 
-行按内容撑开，不把内容压进容器宽度：名称完整显示，容器横向滚动。层级很深时缩进同样靠横向滚动获得空间，深层节点不会互相挤压。说明文字限宽 200px 并按需省略——它是补充信息，一条长说明会把行拉到几百像素宽，反而让横向滚动更难用。
+### FileTreeHandle
 
-名称是辨认节点的唯一依据，因此不做省略；宿主想收紧宽度时改容器，而不是让组件截断名称。
+| 参数          | 说明                                                               | 类型                                                       | 默认值 |
+| ------------- | ------------------------------------------------------------------ | ---------------------------------------------------------- | ------ |
+| getRowElement | 按行 `id` 取得行的根元素，该行未渲染时返回 `null`                  | `(id: string) => HTMLElement \| null`                      | -      |
+| scrollToRow   | 把某行滚动到可见区域，返回是否找到该行，`block` 默认为 `'nearest'` | `(id: string, options?: ScrollIntoViewOptions) => boolean` | -      |
 
-## 插槽与宿主内容
+### FileTreeRow
 
-- `slots.toolbar` —— 内置搜索与刷新上方的自定义内容，例如连接 Agent、导入来源。
-- `slots.spinner` —— 替换目录加载子节点时的转圈，按 12 × 12 显示。省略时用内置的 `FileTreeSpinner`（纯 CSS 圆环，不依赖图标资源）。
-- `renderDashboard` —— 行尾指示器，例如看板入口。
-- `renderRowTooltip` —— 悬停内容，延迟与定位由组件处理。省略时组件按 `uri` 渲染内置浮层（说明、触发行为、路径）。
+`rows` 里的每一行是下面五种类型之一，用 `kind` 区分。
 
-## 目录说明
+| 取值          | 说明                                                                                | 类型                  |
+| ------------- | ----------------------------------------------------------------------------------- | --------------------- |
+| `'entry'`     | 目录或文件，每个节点一行                                                            | `FileTreeEntryRow`    |
+| `'loading'`   | 目录的子节点加载中，插在父节点下方，也可以不产出，改用条目行的 `busy`               | `FileTreeLoadingRow`  |
+| `'load-more'` | 子节点分页且还有下一页时的「加载更多」行，一次性返回全部子节点的数据源不需要        | `FileTreeLoadMoreRow` |
+| `'error'`     | 子节点加载失败，带重试按钮；`rows` 里只有这一行且没有 `parentId` 时表示整树加载失败 | `FileTreeErrorRow`    |
+| `'empty'`     | 已展开但没有子节点的目录                                                            | `FileTreeEmptyRow`    |
 
-组件按行 `uri` 的路径结构判定目录语义，内置一份说明与触发行为文案。宿主不需要传任何字段就能拿到说明；需要改文案时用 `labels.info` 逐键覆盖。
+### FileTreeRowBase
 
-判定只看路径形状，与节点类型无关。`viking://user/{id}/memories` 与 `viking://user/{id}/memories/` 都命中 `memories`；`viking://resources` 命中 `sharedResources`，而 `viking://resources/docs` 不再命中——内置说明只覆盖固定层级，更深层的节点由宿主自己决定。
+所有行共有的字段。
 
-| 分组       | 键                                                                                                         |
-| ---------- | ---------------------------------------------------------------------------------------------------------- |
-| 用户作用域 | `userRoot`、`memories`、`peers`、`privacy`、`userResources`、`sessions`、`skills`                          |
-| 长期记忆   | `profile`、`preferences`、`entities`、`events`、`identity`、`soul`、`cases`、`trajectories`、`experiences` |
-| 共享与根级 | `sharedResources`、`agentRoot`、`memoryRoot`、`resourceRoot`、`sessionRoot`、`systemRoot`                  |
+| 参数  | 说明                         | 类型     | 默认值 |
+| ----- | ---------------------------- | -------- | ------ |
+| id    | 行的唯一标识，用于选中和定位 | `string` | 必填   |
+| depth | 缩进层级，根层为 `0`         | `number` | 必填   |
 
-长期记忆下的九个键只在浮层里显示说明：这些目录的名称本身已经说明用途，行内再挂一行字会挤掉同级节点。
+### FileTreeEntryRow
 
-**文案优先级**：行上给了 `description` 时用宿主的，内置说明不生效；没给才用内置。这样宿主始终能完全接管。
+目录或文件行，继承 `FileTreeRowBase`。
+
+| 参数        | 说明                                                                                                      | 类型                                     | 默认值  |
+| ----------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------- | ------- |
+| kind        | 行类型，固定为 `'entry'`                                                                                  | `'entry'`                                | 必填    |
+| uri         | 资源标识，在回调里原样回传，也用于匹配内置目录说明                                                        | `string`                                 | 必填    |
+| name        | 显示名称，完整显示不省略                                                                                  | `string`                                 | 必填    |
+| type        | 节点类型                                                                                                  | `'directory' \| 'file'`                  | 必填    |
+| hasChildren | 目录是否有可加载的子节点，明确没有子节点时传 `false`，此时不显示展开箭头                                  | `boolean`                                | `true`  |
+| expanded    | 目录当前是否展开                                                                                          | `boolean`                                | `false` |
+| disabled    | 行可见但不能选中和展开，例如没有详情权限的节点                                                            | `boolean`                                | `false` |
+| selectable  | 为 `false` 时不能选中，目录仍可展开，例如仅可遍历的目录                                                   | `boolean`                                | `true`  |
+| access      | 在行尾显示权限标记：只读、无权限或仅可遍历，只做展示，行为由 `disabled` 和 `selectable` 控制              | `'read-only' \| 'denied' \| 'container'` | -       |
+| description | 名称后的说明文字，省略时按 `uri` 使用内置目录说明，空字符串表示不显示                                     | `string`                                 | -       |
+| levelLabel  | 行尾的简短标记，例如摘要层级或上下文层级                                                                  | `string`                                 | -       |
+| busy        | 节点上有进行中的加载或写入，目录行用转圈替换展开箭头，其他行在名称后显示转圈                              | `boolean`                                | `false` |
+| expiresAt   | 过期时间的显示文本，显示在名称后，提供 `operations.openRetentionSettings` 时可点击，`null` 或省略时不显示 | `string \| null`                         | -       |
+
+### FileTreeChildRow
+
+子节点区域里的行的公共字段，继承 `FileTreeRowBase`。
+
+| 参数     | 说明                                                  | 类型     | 默认值 |
+| -------- | ----------------------------------------------------- | -------- | ------ |
+| parentId | 所属父节点的 `id`，整树加载失败、没有具体父节点时省略 | `string` | -      |
+
+### FileTreeLoadingRow
+
+子节点加载中的行，继承 `FileTreeChildRow`。
+
+| 参数     | 说明                        | 类型        | 默认值 |
+| -------- | --------------------------- | ----------- | ------ |
+| kind     | 行类型，固定为 `'loading'`  | `'loading'` | 必填   |
+| parentId | 正在加载子节点的父节点 `id` | `string`    | 必填   |
+
+### FileTreeLoadMoreRow
+
+提供继续加载入口的分页行，继承 `FileTreeChildRow`。
+
+| 参数     | 说明                                               | 类型          | 默认值  |
+| -------- | -------------------------------------------------- | ------------- | ------- |
+| kind     | 行类型，固定为 `'load-more'`                       | `'load-more'` | 必填    |
+| parentId | 需要继续加载子节点的父节点 `id`                    | `string`      | 必填    |
+| loading  | 下一页是否正在加载，为 `true` 时显示转圈并禁用按钮 | `boolean`     | `false` |
+
+### FileTreeErrorRow
+
+子节点加载失败的行，带重试按钮，继承 `FileTreeChildRow`。
+
+| 参数    | 说明                                | 类型      | 默认值 |
+| ------- | ----------------------------------- | --------- | ------ |
+| kind    | 行类型，固定为 `'error'`            | `'error'` | 必填   |
+| message | 失败原因，省略时显示 `labels.error` | `string`  | -      |
+
+### FileTreeEmptyRow
+
+已展开但没有子节点的目录，继承 `FileTreeChildRow`。
+
+| 参数     | 说明                     | 类型      | 默认值 |
+| -------- | ------------------------ | --------- | ------ |
+| kind     | 行类型，固定为 `'empty'` | `'empty'` | 必填   |
+| parentId | 该空目录的 `id`          | `string`  | 必填   |
+
+### FileTreeLabels
+
+默认文案随 `locale` 切换，下表列出中文默认值。
+
+| 参数         | 说明                                        | 类型                 | 默认值            |
+| ------------ | ------------------------------------------- | -------------------- | ----------------- |
+| readOnly     | `access` 为 `'read-only'` 时的标记文案      | `string`             | `只读`            |
+| noAccess     | `access` 为 `'denied'` 时的标记文案         | `string`             | `无权限`          |
+| traverseOnly | `access` 为 `'container'` 时的标记文案      | `string`             | `仅可遍历`        |
+| search       | 搜索入口的文案                              | `string`             | `搜索文件 ⌘+K...` |
+| refresh      | 刷新按钮的提示文案和无障碍名称              | `string`             | `刷新文件树`      |
+| empty        | 空树和空目录的提示                          | `string`             | `暂无文件`        |
+| error        | 子节点或整树加载失败时的默认提示            | `string`             | `加载失败`        |
+| retry        | 「重试」按钮文案                            | `string`             | `重试`            |
+| loadMore     | 「加载更多」按钮文案                        | `string`             | `加载更多`        |
+| loading      | 加载中的提示                                | `string`             | `加载中…`         |
+| expand       | 展开按钮的无障碍名称，`{name}` 替换为节点名 | `string`             | `展开 {name}`     |
+| collapse     | 折叠按钮的无障碍名称，`{name}` 替换为节点名 | `string`             | `收起 {name}`     |
+| info         | 目录说明文案                                | `FileTreeInfoLabels` | -                 |
+
+### FileTreeInfoLabels
+
+未提供的键使用当前语言的内置文案。
+
+| 参数            | 说明                                                                                 | 类型                                                                | 默认值                     |
+| --------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------- | -------------------------- |
+| description     | 按键覆盖「说明」，显示在浮层中，部分键也显示在名称后，空字符串表示不显示             | `Partial<Record<FileTreeInfoKey, string>>`                          | -                          |
+| triggerBehavior | 按键覆盖「触发行为」（节点在什么条件下写入或生成），只显示在浮层，空字符串表示不显示 | `Partial<Record<FileTreeInfoKey, string>>`                          | -                          |
+| field           | 浮层里各行的字段名                                                                   | `{ description?: string; triggerBehavior?: string; path?: string }` | `说明`、`触发行为`、`路径` |
+
+### FileTreeInfoKey
+
+目录语义键，组件按行 `uri` 的路径结构匹配，用它取说明和触发行为文案。URI 首段 `user`、`agent`、`memory`、`session` 也接受复数写法（`users`、`agents`、`memories`、`sessions`）。
+
+| 取值              | 匹配的 URI                                 |
+| ----------------- | ------------------------------------------ |
+| `userRoot`        | `viking://user`、`viking://user/{id}`      |
+| `memories`        | `viking://user/{id}/memories`              |
+| `peers`           | `viking://user/{id}/peers`                 |
+| `privacy`         | `viking://user/{id}/privacy`               |
+| `userResources`   | `viking://user/{id}/resources`             |
+| `sessions`        | `viking://user/{id}/sessions`              |
+| `skills`          | `viking://user/{id}/skills`                |
+| `profile`         | `viking://user/{id}/memories/profile.md`   |
+| `preferences`     | `viking://user/{id}/memories/preferences`  |
+| `entities`        | `viking://user/{id}/memories/entities`     |
+| `events`          | `viking://user/{id}/memories/events`       |
+| `identity`        | `viking://user/{id}/memories/identity.md`  |
+| `soul`            | `viking://user/{id}/memories/soul.md`      |
+| `cases`           | `viking://user/{id}/memories/cases`        |
+| `trajectories`    | `viking://user/{id}/memories/trajectories` |
+| `experiences`     | `viking://user/{id}/memories/experiences`  |
+| `sharedResources` | `viking://resources`                       |
+| `agentRoot`       | `viking://agent`                           |
+| `agentEndpoints`  | `viking://agent/endpoints`                 |
+| `agentPayments`   | `viking://agent/payments`                  |
+| `agentSkills`     | `viking://agent/skills`                    |
+| `agentTools`      | `viking://agent/tools`                     |
+| `memoryRoot`      | `viking://memory`                          |
+| `resourceRoot`    | `viking://resource`                        |
+| `sessionRoot`     | `viking://session`                         |
+| `systemRoot`      | `viking://system`                          |
+
+### 其他导出
+
+| 名称                      | 说明                                                                                               | 类型                                                                                                        |
+| ------------------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `resolveFileTreeInfoKey`  | 按 URI 的路径结构返回目录说明键，没有匹配时返回 `null`                                             | `(uri: string) => FileTreeInfoKey \| null`                                                                  |
+| `showsInlineDescription`  | 该键的说明是否显示在名称后，长期记忆下的九个键（`profile` 到 `experiences`）和 `null` 返回 `false` | `(key: FileTreeInfoKey \| null) => boolean`                                                                 |
+| `resolveInfoCopy`         | 返回该键的说明和触发行为：先取传入的 `labels`，没有时取内置英文文案，空字符串返回 `undefined`      | `(key: FileTreeInfoKey, labels?: FileTreeInfoLabels) => { description?: string; triggerBehavior?: string }` |
+| `splitVikingUri`          | 把 URI 拆成小写的路径段，忽略 `viking://` 前缀、查询串和末尾斜杠                                   | `(uri: string) => string[]`                                                                                 |
+| `DEFAULT_INFO_LABELS`     | 内置的英文目录说明文案                                                                             | `FileTreeInfoLabels`                                                                                        |
+| `FILE_TREE_ROW_ATTRIBUTE` | 行元素上保存行 `id` 的属性名                                                                       | `'data-file-tree-row-id'`                                                                                   |
+| `FileTreeSpinner`         | 与内置转圈相同的 CSS 圆环，接收 `span` 的 HTML 属性                                                | `(props: HTMLAttributes<HTMLSpanElement>) => JSX.Element`                                                   |
+
+## 注意
+
+### 导出
+
+- 行、文案、句柄等类型和辅助函数从 `@openviking/react/components/file-tree` 导出，包根入口只导出 `FileTree` 和 `FileTreeProps`。
+- `FileTree` 的类型是 `FileTreeComponent`，通过 `ref` 取得 `FileTreeHandle`，React 18 和 19 都支持。
+
+### 行
+
+- 树状态由宿主持有：展开、选中和子节点加载都在宿主，组件只渲染 `rows`。展开或选中发生后，更新 `expanded` 和 `selectedId` 再传入。
+- `rows` 是展平后的一维列表，按传入顺序渲染，缩进由 `depth` 决定，组件不检查行之间的层级关系。子节点行及其状态行紧跟在父节点之后，`depth` 为父节点加 1。
+- 行是普通对象，传入前可以自行排序、过滤或按权限裁剪。
+- `rootOrder="context"` 按 URI 首段把根目录排成 `user → session → agent → resources`，接受单复数写法（如 `users`、`agents`），其他目录排在后面并保持相对顺序。只有根层的目录行参与排序，连同子树一起移动，根层的文件行和状态行（如分页行）保持原位置。
+
+### 操作与通知
+
+- `operations` 的方法返回 `Promise<void>`，完成表示成功，被 reject 表示失败。成功后才触发对应的 `on…` 回调，失败时不触发。
+- 省略某个方法，对应操作不可用：展开箭头、「加载更多」、「重试」、搜索和刷新按钮禁用，点击行不会选中。省略 `on…` 回调不影响操作执行。
+- 同一操作（同一行的选中、展开、加载更多、重试，或搜索、刷新）尚未完成时，重复触发会被忽略。
+
+### 选中、键盘与权限
+
+- 点击目录和点击文件都调用 `operations.select`，宿主按 `row.type` 区分。点击展开箭头只调用 `operations.toggleExpand`，不会选中。
+- `renderRowTrailing` 返回的内容在行内，点击会冒泡到行并触发选中。需要独立的点击行为时调用 `event.stopPropagation()`，示例中的看板图标就是这样处理的。
+- 键盘：上下方向键移动焦点，右键展开目录，左键折叠目录，Enter 和空格选中。
+- 树使用 `role="tree"`，行使用 `role="treeitem"` 并输出 `aria-level`（`depth` 加 1）、`aria-selected`、`aria-expanded` 和 `aria-disabled`，用 `aria-label` 给树命名。
+- 权限状态由宿主提供，组件不发鉴权请求：`disabled` 的行不能选中和展开，`selectable: false` 的行不能选中但可以展开，`access` 只在行尾显示文字标记，不改变行为。
+
+### 搜索与刷新
+
+- 搜索入口和刷新按钮默认显示，`search`、`refresh` 传 `false` 分别隐藏。两者都隐藏时不渲染这一行，`slots.toolbar` 不受影响。
+- 刷新等待期间（`loading`、`refresh.loading` 或 `operations.refresh` 返回的 Promise 任一在进行），按钮显示加载态并禁用，重复点击不会重复执行。`operations.refresh` 被 reject 后按钮恢复，且不触发 `onRefresh`。
+- 刷新按钮悬停或聚焦时显示提示，按 Esc 关闭。`labels.refresh` 同时是提示文案和按钮的无障碍名称。
+- 搜索入口的默认文案带有 `⌘+K` 提示，组件不注册这个快捷键，也不过滤行。搜索界面、快捷键和结果处理由宿主通过 `operations.search` 接入。
+
+### 目录说明
+
+- 组件按行 `uri` 的路径结构判断目录语义，内置对应的说明和触发行为文案，不需要宿主传入。匹配只看路径，忽略 `viking://` 前缀、大小写、查询串和末尾斜杠，与 `type` 无关。
+- 内置说明只覆盖固定层级：`viking://resources` 匹配 `sharedResources`，`viking://resources/docs` 不匹配，更深的节点由宿主决定。
+- 说明显示在名称后面。悬停行时在右侧弹出浮层，内容是标题、说明、触发行为和路径。长期记忆下的九个键（`profile` 到 `experiences`）只在浮层显示说明。
+- 行上的 `description` 优先于内置说明，空字符串表示不显示。`labels.info` 按键覆盖内置文案，空字符串同样表示不显示，没有覆盖的键使用当前语言的内置文案。
+- `uri` 没有匹配任何键时，不显示内置浮层。提供 `renderRowTooltip` 后，浮层内容完全由它决定。
 
 ```tsx
 <FileTree
-  locale="zh-CN"
   rows={rows}
   labels={{
     info: {
@@ -101,97 +304,43 @@
 />
 ```
 
-`labels.info.description` 与 `triggerBehavior` 都是 `Partial<Record<FileTreeInfoKey, string>>`，只写要改的键。传空字符串表示该键不显示。
+### 定位行
 
-判定与文案也以纯函数形式从组件子路径导出，宿主可以复用同一套规则组装自己的视图：
-
-```ts
-import {
-  resolveFileTreeInfoKey,
-  showsInlineDescription,
-  resolveInfoCopy,
-} from '@openviking/react/components/file-tree';
-
-resolveFileTreeInfoKey('viking://user/alice/memories/profile.md'); // 'profile'
-showsInlineDescription('profile'); // false，只在浮层显示
-resolveInfoCopy('memories', { description: { memories: '自定义' } });
-```
-
-## 一次性效果
-
-高亮属于页面层效果，不是树的属性。三种方式可选，也可组合：
-
-1. 每个行元素带 `data-file-tree-row-id`，属性名以 `FILE_TREE_ROW_ATTRIBUTE` 导出。
-2. `getRowAttributes(row)` 按行追加类名与属性。
-3. `ref` 句柄：`getRowElement(id)` 与 `scrollToRow(id, options)`。
+- 每个行元素都带有 `data-file-tree-row-id` 属性，值为行的 `id`，属性名以 `FILE_TREE_ROW_ATTRIBUTE` 导出。页面层可以据此实现一次性高亮或覆盖层。
+- `getRowAttributes(row)` 为行追加类名和属性：`className`、`style` 与组件自身的合并，条目行的 `onClick`、`onKeyDown` 由组件接管。
+- `ref` 提供 `getRowElement(id)` 和 `scrollToRow(id, options)`，例如在 [DirectoryTour](./directory-tour) 的 `locateTarget` 里返回要定位的行元素。
 
 ```tsx
 const treeRef = useRef<FileTreeHandle>(null);
+
+<FileTree ref={treeRef} rows={rows} />;
+
 treeRef.current?.scrollToRow('resources', { block: 'center' });
 ```
 
-`operations` 提供 `select(row)`、`toggleExpand(row)`、`loadMore(row)`、`retry(row)` 和 `openRetentionSettings(uri)`。各方法返回 `Promise<void>`，完成表示操作成功，拒绝表示失败。原有 `on…` 回调统一为可选的成功通知，不再承担操作执行；同一操作尚未完成时忽略重复触发。
+### 布局
 
-## 属性
+- 树的根元素高度为 `100%`，内容在树内部滚动，需要给外层容器设置高度。
+- 行宽按内容撑开，名称完整显示，容器横向滚动。层级很深时缩进同样靠横向滚动获得空间。
+- 说明文字最宽 200px，超出省略，避免长说明撑宽整行。
+- `renderRowTrailing` 返回的内容显示在行右端；行内还有层级、权限等行尾标记时，它紧跟在这些标记之后。
 
-| 属性                      | 类型                                                   | 默认值  | 说明                                         |
-| ------------------------- | ------------------------------------------------------ | ------- | -------------------------------------------- |
-| `locale`                  | `'zh-CN' \| 'en-US'`                                   | 必填    | 内置中英文文案。                             |
-| `rows`                    | `readonly FileTreeRow[]`                               | 必填    | 按渲染顺序排列的可见行。                     |
-| `operations`              | `FileTreeOperations`                                   | —       | 异步执行能力；省略方法时禁用对应操作。       |
-| `selectedId`              | `string \| null`                                       | —       | 当前选中的行 id，由宿主持有。                |
-| `isReady`                 | `boolean`                                              | `true`  | 首次加载是否完成。                           |
-| `loadingFallback`         | `ReactNode`                                            | —       | 首次加载期间替代行列表显示。                 |
-| `errorFallback`           | `ReactNode`                                            | —       | 存在整树级错误行时显示。                     |
-| `emptyFallback`           | `ReactNode`                                            | —       | `rows` 为空时显示。                          |
-| `slots`                   | `FileTreeSlots`                                        | —       | `toolbar` 与 `spinner` 插槽。                |
-| `labels`                  | `FileTreeLabels`                                       | locale  | 可替换文案。                                 |
-| `getRowAttributes`        | `(row) => HTMLAttributes<HTMLDivElement>`              | —       | 按行追加属性，`className` 会与组件类名合并。 |
-| `renderDashboard`         | `(row) => ReactNode`                                   | —       | 行尾指示器，返回 `null` 不显示。             |
-| `renderRowIcon`           | `(row) => ReactNode`                                   | —       | 文件行的行首图标；省略时用通用文件图标。     |
-| `renderRowTooltip`        | `(row) => ReactNode`                                   | —       | 悬停内容，返回 `null` 不显示。               |
-| `onSelect`                | `(row: FileTreeEntryRow) => void`                      | —       | 选中成功后触发；失败时不触发。               |
-| `onToggleExpand`          | `(row: FileTreeEntryRow) => void`                      | —       | 展开或折叠成功后触发；失败时不触发。         |
-| `onLoadMore`              | `(row: FileTreeLoadMoreRow) => void`                   | —       | 下一页子节点加载成功后触发；失败时不触发。   |
-| `onRetry`                 | `(row: FileTreeErrorRow) => void`                      | —       | 重新加载成功后触发；重试失败时不触发。       |
-| `search`                  | `boolean \| { disabled?: boolean }`                    | `false` | 显示内置搜索入口。                           |
-| `refresh`                 | `boolean \| { disabled?: boolean; loading?: boolean }` | `false` | 显示内置刷新按钮。                           |
-| `onSearch`                | `() => void`                                           | —       | 搜索界面成功打开后通知。                     |
-| `onRefresh`               | `() => void`                                           | —       | 刷新成功后通知。                             |
-| `onOpenRetentionSettings` | `(uri: string) => void`                                | —       | 保留策略设置成功打开后触发；失败时不触发。   |
-| 其他属性                  | `HTMLAttributes<HTMLDivElement>`                       | —       | 标准 div 属性。                              |
+## 主题变量
 
-```tsx
-import { FileTree } from '@openviking/react/components/file-tree';
-import '@openviking/react/components/file-tree/style.css';
-```
+根元素的类名是 `ov-file-tree`，内部元素为 `ov-file-tree__<元素>`，例如 `ov-file-tree__row`。颜色优先读取你在祖先元素上设置的 `--ov-ui-color-*`，没有设置时使用库的内置值，设置方法见[快速开始](../guide/getting-started)的主题一节；只调整文件树时覆盖下面的变量。
 
-## 无障碍
-
-行使用 `role="tree"` 与 `role="treeitem"`，输出 `aria-level`、`aria-selected`、`aria-expanded`。方向键在行间移动，左右键展开与折叠，回车与空格选中。状态通过可见文本表达，不只依赖颜色。
-
-## 样式
-
-类名带 `ov-` 前缀，块名为 `ov-file-tree`，元素使用 `ov-file-tree__<元素>`。颜色取自包级主题基线 `--ov-ui-color-*`（见 [入门](/guide/getting-started) 的样式章节），组件私有变量从基线派生，宿主可整组或逐条覆盖。样式通过独立入口引入：
-
-```tsx
-import '@openviking/react/components/file-tree/style.css';
-```
-
-| CSS 变量                         | 默认值                        | 用途           |
-| -------------------------------- | ----------------------------- | -------------- |
-| `--ov-ui-file-tree-text`         | `--ov-ui-color-text-1`        | 行文字。       |
-| `--ov-ui-file-tree-text-muted`   | `--ov-ui-color-text-3`        | 次要文字。     |
-| `--ov-ui-file-tree-icon`         | `--ov-ui-color-text-2`        | 行首图标。     |
-| `--ov-ui-file-tree-row-hover`    | `--ov-ui-color-bg-5`          | 悬停背景。     |
-| `--ov-ui-file-tree-row-selected` | `--ov-ui-color-primary-light` | 选中背景。     |
-| `--ov-ui-file-tree-guide`        | `--ov-ui-color-border-1`      | 层级竖线。     |
-| `--ov-ui-file-tree-spinner`      | `--ov-ui-color-primary`       | 加载指示。     |
-| `--ov-ui-file-tree-action`       | `--ov-ui-color-primary`       | 行内文字操作。 |
-| `--ov-ui-file-tree-row-height`   | `32px`                        | 行高。         |
-| `--ov-ui-file-tree-row-radius`   | `4px`                         | 行圆角。       |
-| `--ov-ui-file-tree-indent`       | `20px`                        | 每级缩进。     |
-
-## 实现范围
-
-目录加载、分页、搜索、权限与导航由宿主负责，通过 `operations` 提供异步执行能力；成功后组件才触发对应通知，失败时不触发。省略方法时禁用该操作，省略通知不影响执行。
+| CSS 变量                          | 默认值                           | 用途                             |
+| --------------------------------- | -------------------------------- | -------------------------------- |
+| `--ov-ui-file-tree-text`          | 同 `--ov-ui-color-text-1`        | 行文字                           |
+| `--ov-ui-file-tree-text-muted`    | 同 `--ov-ui-color-text-3`        | 说明、标记、展开箭头和状态行文字 |
+| `--ov-ui-file-tree-icon`          | 同 `--ov-ui-color-text-3`        | 行首图标                         |
+| `--ov-ui-file-tree-row-hover`     | 同 `--ov-ui-color-bg-5`          | 悬停背景                         |
+| `--ov-ui-file-tree-row-selected`  | 同 `--ov-ui-color-primary-light` | 选中背景                         |
+| `--ov-ui-file-tree-guide`         | 同 `--ov-ui-color-border-1`      | 层级竖线                         |
+| `--ov-ui-file-tree-spinner`       | 同 `--ov-ui-color-primary`       | 转圈的弧线                       |
+| `--ov-ui-file-tree-spinner-track` | 同 `--ov-ui-color-border-3`      | 转圈的底环                       |
+| `--ov-ui-file-tree-action`        | 同 `--ov-ui-color-primary`       | 行获得键盘焦点时的描边           |
+| `--ov-ui-file-tree-warning`       | 同 `--ov-ui-color-warning`       | 过期时间                         |
+| `--ov-ui-file-tree-row-height`    | `32px`                           | 行高                             |
+| `--ov-ui-file-tree-row-radius`    | `4px`                            | 行圆角                           |
+| `--ov-ui-file-tree-indent`        | `20px`                           | 每级缩进                         |

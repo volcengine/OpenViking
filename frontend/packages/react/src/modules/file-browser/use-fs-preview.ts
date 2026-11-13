@@ -1,26 +1,20 @@
 import { useEffect, useState } from 'react';
 
 import type {
-  FilePreviewFileTab,
+  FilePreviewDirectoryTab,
   FilePreviewTab,
 } from '../../components/file-preview/index.js';
-import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { isBinaryFile, mimeTypeOf, toBinaryTab } from './fs-file-kind.js';
-import { fileTypeIcon, directoryIcon } from './fs-icon.js';
+import { directoryIcon } from './fs-icon.js';
 import { resolveLabels, resolveSummaryLabels } from './file-browser-labels.js';
-import {
-  isAbort,
-  nameFromUri,
-  toFileTab,
-  toDirectoryTab,
-  type DirectorySummary,
-} from './fs-model.js';
+import { isAbort, toDirectoryTab, type DirectorySummary } from './fs-model.js';
+import { isSystemUri } from './preview-policy.js';
 import { readDirectory } from './fs-read-directory.js';
+import { loadingTab } from './fs-preview-loading-tab.js';
+import { toSystemDirectoryTab } from './fs-system-directory-tab.js';
+import { createPreviewImageResolver } from './fs-preview-images.js';
+import { readFile } from './fs-read-file.js';
 import { abortError, resolveIsDirectory } from './fs-stat.js';
-
-/** 读取正文的行数上限；读满即按截断处理。 */
-const MAX_LINES = 2000;
 
 export interface PreviewState {
   tabs: readonly FilePreviewTab[] | null;
@@ -49,6 +43,7 @@ export interface UseFsPreviewOptions {
    * repeatedly. The three-state value is a stable string, so that cannot happen.
    */
   resourceType?: 'directory' | 'file' | 'unknown';
+  contentKind?: 'plain' | 'wiki' | 'pending';
   /** 目录两级摘要的标题。Titles of the two summary levels. */
   labels?: { l0: string; l1: string; failure: string };
   /** 字符数文案；独立 Hook 默认英文。Character count copy; standalone Hooks default to English. */
@@ -86,6 +81,7 @@ export function useFsPreview({
   client,
   uri,
   resourceType = 'file',
+  contentKind = 'plain',
   labels = resolveSummaryLabels('en-US'),
   formatCharacterCount = resolveLabels(undefined, 'en-US').formatCharacterCount,
   openParent,
@@ -95,11 +91,13 @@ export function useFsPreview({
   const [directory, setDirectory] = useState<{
     uri: string;
     summary: DirectorySummary;
+    resolveImage: FilePreviewDirectoryTab['resolveImage'];
   } | null>(null);
   const [tabs, setTabs] = useState<FilePreviewTab[] | null>(null);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [characterCount, setCharacterCount] = useState<number>();
+  const [saveGeneration, setSaveGeneration] = useState(0);
 
   // 当前资源决定要读什么。资源切换必须取消上一次读取，否则慢的旧响应会覆盖新
   // 资源的页签；卸载时同样取消。
@@ -125,10 +123,10 @@ export function useFsPreview({
     // the whole preview area disappear and reappear, flashing on every switch.
     setTabs([loadingTab(uri, resourceType !== 'file')]);
     setActiveKey(uri);
-    setActiveKey(null);
     setError(null);
     setCharacterCount(undefined);
     const options = { ...requestOptions, signal: controller.signal };
+    if (contentKind === 'pending') return () => controller.abort();
 
     // 类型未知时先问一次 `fs/stat`。仅凭「不在已知目录集合里」就按文件处理是错的：
     // 集合只覆盖已加载的层，宿主直接传一个尚未展开过的目录 URI 时它就是空的，
@@ -146,9 +144,23 @@ export function useFsPreview({
           ? await resolveIsDirectory(client, uri, options)
           : resourceType === 'directory';
       if (controller.signal.aborted) throw abortError();
-      return isDir
-        ? { summary: await readDirectory(client, uri, options) }
-        : { tab: await readFile(client, uri, options, openParent) };
+      if (isDir)
+        return isSystemUri(uri)
+          ? { tab: toSystemDirectoryTab(uri, openParent) }
+          : { summary: await readDirectory(client, uri, options) };
+      return {
+        tab: await readFile(
+          client,
+          uri,
+          options,
+          openParent,
+          () => {
+            if (!controller.signal.aborted)
+              setSaveGeneration((value) => value + 1);
+          },
+          contentKind === 'wiki',
+        ),
+      };
     })();
 
     // 成功也要复查是否已被取消：目录的两级摘要里，一级先回来、另一级还在路上
@@ -166,7 +178,16 @@ export function useFsPreview({
       (result) => {
         if (controller.signal.aborted) return;
         if (result.summary) {
-          setDirectory({ uri, summary: result.summary });
+          setDirectory({
+            uri,
+            summary: result.summary,
+            resolveImage: createPreviewImageResolver(
+              client,
+              uri,
+              true,
+              options,
+            ),
+          });
           setActiveKey(uri);
           return;
         }
@@ -174,8 +195,8 @@ export function useFsPreview({
         setTabs([tab]);
         setActiveKey(tab.key);
         // 设计稿底部显示字符数；接口不返回行数与更新时间，先给字符数。
-        const body = tab.source.content ?? '';
-        setCharacterCount(body.length);
+        const body = tab.kind === 'file' ? tab.source.content : undefined;
+        setCharacterCount(typeof body === 'string' ? body.length : undefined);
       },
       (cause: unknown) => {
         if (isAbort(cause) || controller.signal.aborted) return;
@@ -185,17 +206,29 @@ export function useFsPreview({
     );
 
     return () => controller.abort();
-  }, [client, uri, resourceType, openParent, generation, requestOptions]);
+  }, [
+    client,
+    uri,
+    resourceType,
+    contentKind,
+    openParent,
+    generation,
+    saveGeneration,
+    requestOptions,
+  ]);
 
   const directoryTab =
     directory?.uri === uri
-      ? toDirectoryTab(
-          directory.uri,
-          directory.summary,
-          labels,
-          openParent,
-          directoryIcon(),
-        )
+      ? {
+          ...toDirectoryTab(
+            directory.uri,
+            directory.summary,
+            labels,
+            openParent,
+            directoryIcon(),
+          ),
+          resolveImage: directory.resolveImage,
+        }
       : undefined;
   const count = directoryTab
     ? (directoryTab.levels[0].source.content ?? '').length
@@ -207,95 +240,4 @@ export function useFsPreview({
     footer: count === undefined ? undefined : formatCharacterCount(count),
     setActiveKey,
   };
-}
-
-/**
- * 加载中占位页签：只带 key 与文件名，`loading` 让组件渲染加载态而不是「空文件」。
- * A placeholder tab while loading: it carries the key and file name, and `loading`
- * makes the component render its loading state rather than "empty file".
- */
-function loadingTab(uri: string, isDirectory: boolean): FilePreviewTab {
-  if (isDirectory) {
-    return {
-      kind: 'directory',
-      key: uri,
-      loading: true,
-      levels: [
-        {
-          key: 'l0',
-          label: '',
-          source: {
-            fileName: `${nameFromUri(uri)}.md`,
-            path: uri,
-            fileType: 'markdown',
-            content: '',
-          },
-        },
-        {
-          key: 'l1',
-          label: '',
-          source: {
-            fileName: `${nameFromUri(uri)}.md`,
-            path: uri,
-            fileType: 'markdown',
-            content: '',
-          },
-        },
-      ],
-    };
-  }
-  return {
-    kind: 'file',
-    key: uri,
-    loading: true,
-    source: { fileName: nameFromUri(uri), path: uri, content: '' },
-  };
-}
-
-/**
- * 读文件并包装成页签。文本走 `content/read`，二进制走 `content/download` 取原始
- * 字节——前者把内容当文本返回，二进制文件经过它只会得到一串乱码，图片与 PDF
- * 因此永远渲染不出来。
- *
- * Reads a file into a tab. Text goes through `content/read` and binary files
- * through `content/download` for the raw bytes: the former returns content as
- * text, so a binary file only yields mojibake and images or PDFs never render.
- */
-async function readFile(
-  client: OvClient,
-  uri: string,
-  options: OvRequestOptions,
-  openParent?: (uri: string) => Promise<void>,
-): Promise<FilePreviewFileTab> {
-  const name = nameFromUri(uri);
-  const icon = fileTypeIcon(name);
-
-  if (isBinaryFile(name)) {
-    const blob = await client.request<Blob>({
-      method: 'GET',
-      path: OV_PATHS.contentDownload,
-      query: { uri },
-      responseType: 'blob',
-      options,
-    });
-    // 接口返回 octet-stream，这里按扩展名补上真实类型：底座靠它选择 Adapter。
-    // The endpoint answers octet-stream; the real type is restored from the
-    // extension, which is what the base uses to pick an adapter.
-    const typed = new Blob([blob], { type: mimeTypeOf(name) });
-    return toBinaryTab(uri, name, typed, icon, openParent);
-  }
-
-  const content = await client.request<string>({
-    method: 'GET',
-    path: OV_PATHS.contentRead,
-    query: { uri, limit: MAX_LINES },
-    options,
-  });
-  return toFileTab(
-    { uri },
-    typeof content === 'string' ? content : '',
-    MAX_LINES,
-    icon,
-    openParent,
-  );
 }

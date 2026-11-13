@@ -1,40 +1,73 @@
 # AgentConnect
 
-A connection view matching the [Figma layout](https://www.figma.com/design/ecpd1ZGHKRYibm1ODKEpM6/OpenViking-Console?node-id=10468-23946), with built-in Chinese and English content and icons. Hosts must supply an API key and `locale` parameter; there is no language selection UI.
+A connection panel that lists mainstream agents and four developer options (MCP, CLI, API and SDK), with setup instructions and copyable code blocks in which the API key is masked by default.
 
-## Basic usage
+## When to use
+
+- You want to guide users to connect OpenViking to agents such as Codex, Claude Code or Cursor, or to build their own integration through MCP, CLI, API or SDK.
+- You want to decide where the API key and service URL come from. The component only renders and copies: it sends no requests and does not need `OpenVikingProvider`.
+- To place it at the top of the file browsing area, use [FileBrowserActionBar](./file-browser-action-bar), which shows this component in a right-side drawer through `agentConnect`.
+
+## Import
+
+```tsx
+import { AgentConnect } from '@openviking/react/components/agent-connect';
+import '@openviking/react/components/agent-connect/style.css';
+```
+
+## Examples
+
+### Basic usage
+
+Switch between the "Connect mainstream agents" and "Build your own agent" tabs and select an item on the left to read its instructions. Use the buttons on a code block to copy it, or to show or hide the API key in it.
 
 ```tsx file="../../_demos/agent-connect-basic.tsx" preview
 
 ```
 
-The demo uses a fictional `demo-api-key`. Default width is 1000px and minimum height is 949px, with a 200px list, 40px gap and 660px detail. Narrow containers scroll horizontally.
+The `apiKey` in the example is for demonstration only; pass your own key in your app.
 
-The mainstream tab lists fourteen agents: Codex, Claude Code, Doubao Work, WorkBuddy, TRAE, Cursor, OpenClaw, Hermes Agent, OpenCode, DeepSeek Harness, DeerFlow, pi, ZCode and Kimi Code. The developer tab lists MCP, CLI, API and SDK in the same layout. The apps tab and vscode have been removed.
+## API
 
-Codex, Claude Code, Cursor, OpenClaw, Hermes Agent, OpenCode and pi retain their integration tags and add an Overseas tag. DeerFlow includes switchable MemoryManager and MCP guides; copying uses the active guide, defaulting to MemoryManager.
+### AgentConnect
 
-CLI offers “Manual terminal installation” and “Install via AI Agent” internal tabs, defaulting to manual installation. They show local CLI steps and the AI setup prompt respectively, using the reference component's underline style. Copying uses the active guide; switching resets feedback.
+| Property         | Description                                                                                                                   | Type                                        | Default                                                 |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------- |
+| apiKey           | API key written into the instructions; masked on screen and copied in full                                                    | `string`                                    | Required                                                |
+| baseUrl          | OpenViking service URL that replaces the default one in the instructions                                                      | `string`                                    | `https://api.vikingdb.cn-beijing.volces.com/openviking` |
+| agreementUrl     | Terms of service URL; shown as a link in the footer when set, otherwise only the data access notice is shown                  | `string`                                    | -                                                       |
+| showOverseasTag  | Which agents get the "Overseas" tag: Codex and Claude Code when omitted, all applicable agents when `true`, none when `false` | `boolean`                                   | -                                                       |
+| activeTabId      | Controlled active tab; managed by the component when omitted                                                                  | `'mainstream' \| 'custom'`                  | `'mainstream'`                                          |
+| selectedId       | Controlled selected item, an `id` of `AgentConnectItem`; the first item is shown when the active tab does not contain it      | `string`                                    | First item of the active tab                            |
+| onTabChange      | Called when a tab is selected by click, arrow keys, Home or End                                                               | `(tabId: 'mainstream' \| 'custom') => void` | -                                                       |
+| onSelect         | Called when an item is selected                                                                                               | `(item: AgentConnectItem) => void`          | -                                                       |
+| onCopy           | Called after a successful copy with the copied code block or full instructions, including the original API key                | `(text: string) => void`                    | -                                                       |
+| locale           | Interface language, see [Internationalization](../guide/i18n)                                                                 | `'zh-CN' \| 'en-US'`                        | Inherited, otherwise `'en-US'`                          |
+| className, style | Appearance and layout; other HTML attributes are passed to the root element                                                   | HTML attributes                             | -                                                       |
 
-Selection updates the description, tags and instructions. Content comes from bundled local document snapshots, without runtime JSON or Markdown fetching. Installer prompts select the current agent and `cli` via `--harness`, and shell-quote URLs and keys to preserve literal values. TRAE selects the international client. Custom Hermes endpoints use Custom setup steps. Documentation links are available for users or their agents to read. The component never executes installation commands.
+### AgentConnectItem
 
-## Props
+| Property | Description                                | Type     | Default  |
+| -------- | ------------------------------------------ | -------- | -------- |
+| id       | Identifier of the built-in item, see below | `string` | Required |
+| name     | Name of the item in the current language   | `string` | Required |
 
-| Property       | Type                                 | Default                                                 | Description                                                                                                                                                                |
-| -------------- | ------------------------------------ | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apiKey`       | `string`                             | Required                                                | Host API key; masked in the view and preserved when copied.                                                                                                                |
-| `locale`       | `'zh-CN' \| 'en-US'`                 | Required                                                | Language for headings, tabs, catalog, instructions and feedback.                                                                                                           |
-| `baseUrl`      | `string`                             | `https://api.vikingdb.cn-beijing.volces.com/openviking` | Service endpoint; trailing slashes are removed for appended paths and the API example variable, while installer arguments and standalone URLs preserve the original value. |
-| `agreementUrl` | `string`                             | —                                                       | Host agreement URL; renders an accessible agreement link when supplied, otherwise only the data access notice.                                                             |
-| `activeTabId`  | `'mainstream' \| 'custom'`           | `mainstream`                                            | Optional controlled tab; managed locally when omitted.                                                                                                                     |
-| `selectedId`   | `string`                             | First item in group                                     | Optional controlled item. Defaults to `codex` or `mcp`; an ID outside the current group falls back to its first entry.                                                     |
-| `onTabChange`  | `(tabId: AgentConnectTabId) => void` | —                                                       | Tab notification, including arrow keys, Home and End.                                                                                                                      |
-| `onSelect`     | `(item: AgentConnectItem) => void`   | —                                                       | Reports the built-in ID and localized name.                                                                                                                                |
-| `onCopy`       | `(text: string) => void`             | —                                                       | Returns the full instructions containing the original key after successful clipboard writing.                                                                              |
-| Other props    | `HTMLAttributes<HTMLDivElement>`     | —                                                       | Standard div attributes, excluding `children`.                                                                                                                             |
+Built-in item ids:
 
-Mainstream IDs: `codex`, `claude-code`, `doubao`, `workbuddy`, `trae`, `cursor`, `openclaw`, `hermes`, `opencode`, `deepseek-harness`, `deerflow`, `pi`, `zcode`, `kimi-code`. Developer IDs: `mcp`, `cli`, `api`, `sdk`. Uncontrolled instances remember selection for each group.
+- `mainstream` tab (Connect mainstream agents): `codex`, `claude-code`, `doubao`, `workbuddy`, `trae`, `cursor`, `openclaw`, `hermes`, `opencode`, `deepseek-harness`, `deerflow`, `pi`, `zcode`, `kimi-code`.
+- `custom` tab (Build your own agent): `mcp`, `cli`, `api`, `sdk`.
 
-Clipboard access requires a secure context and permission. Duplicate operations are blocked while copying. Success displays “Copied”; failure displays “Copy failed. Please retry.” Changing the item, guide, locale, credentials or endpoint resets feedback and pending state. Stale completions do not notify the host, and returning to a previous guide does not restore old feedback. Clipboard writes already started cannot be cancelled. Hosts should treat the copy callback text as credential-bearing data.
+## Notes
 
-SVGs are bundled in JavaScript; developer icons preserve the reference artwork. Import `@openviking/react/components/agent-connect/style.css` separately. Dark mode follows the host's `.dark` class, preserving Codex's transparent backdrop and white symbol.
+- The agent catalog, instructions and icons are built in, and no prop adds, removes or replaces them. The language is set only through `locale`, and the component has no language switcher.
+- The content and icons ship with the component, so you need no asset URLs and nothing is fetched at runtime. The component never runs the commands it shows; it only displays and copies them.
+- The default size is 1000px wide and at least 949px tall. In a narrower container the component scrolls horizontally.
+- API keys in code blocks show as `••••••••`. Click "Show API Key" on a block to reveal the original value; only one code block per set of instructions shows the key at a time. Copying always uses the original key, whatever is displayed.
+- The component does not persist `apiKey` or write it to DOM attributes. The text passed to `onCopy` contains the original key, so treat it as a credential and keep it out of logs.
+- Copying uses the Clipboard API, which needs a secure context (such as HTTPS) and clipboard permission. On failure the component shows "Copy failed. Please retry." and does not call `onCopy`.
+- DeerFlow and CLI have instruction tabs: MemoryManager and MCP for DeerFlow, "Manual terminal installation" and "Install via AI Agent" for CLI. The first one is selected by default, and copying uses the selected one.
+- Switching the item, instruction tab, locale, `apiKey` or `baseUrl` resets the key display and copy feedback. A copy started before the switch neither updates the UI nor calls `onCopy` when it finishes.
+- The TRAE command targets the international edition.
+- When Hermes uses a custom `baseUrl` (different from the default), its instructions use the Custom connection steps.
+- The Overseas tag appears at the end of an agent's tag row and follows the agent product's origin, not the region where a model is deployed. With `showOverseasTag={true}`, Cursor, OpenClaw, Hermes Agent, OpenCode and pi are tagged as well as Codex and Claude Code.
+- Types are exported from `@openviking/react/components/agent-connect`; the package root exports only the component and `AgentConnectProps`.

@@ -1,8 +1,10 @@
+@import '../../shared/primitives/button/button.css';
 @import '../../theme.css';
-@import '../../components/tui/style.css';
+@import '../../components/command-console/style.css';
 @import '../../components/viking-bot/style.css';
-@import '../../shared/components/tooltip/style.css';
+@import '../../shared/primitives/tooltip/style.css';
 @import './console.css';
 @import './console-toolbar.css';
-@import './console-empty.css';
 @import './console-history.css';
+
+@import '../../shared/primitives/notification/style.css';

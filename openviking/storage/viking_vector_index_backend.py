@@ -5,9 +5,9 @@
 from __future__ import annotations
 
 import asyncio
-import time
 import re
 import threading
+import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -33,7 +33,7 @@ from openviking.storage.acl import (
     acl_filter,
     is_acl_uri,
 )
-from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
+from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, Range, RawDSL
 from openviking.storage.scope_filter import build_scope_filter, merge_filters
 from openviking.storage.vector_migration import (
     rewrite_transfer_uri,
@@ -235,8 +235,8 @@ class _AsyncVectorAdapter:
             while self._active:
                 self._condition.wait()
             if not self._closed:
-                self._closed = True
                 self._adapter.close()
+                self._closed = True
 
     async def collection_meta(
         self, index_name: str, *, raise_on_error: bool = False
@@ -362,6 +362,7 @@ class _SingleAccountBackend:
         self._collection_config: Dict[str, Any] = {}
         self._meta_data_cache: Dict[str, Any] = {}
         self._mode = self._adapter.mode
+        self._enable_path_glob_override = getattr(config, "enable_path_glob", None)
         self._distance_metric = config.distance_metric
         self._sparse_weight = config.sparse_weight
         self._collection_name = config.name or "context"
@@ -397,6 +398,14 @@ class _SingleAccountBackend:
 
     def _get_collection(self) -> Collection:
         return self._adapter.get_collection()
+
+    @property
+    def enable_path_glob(self) -> bool:
+        """Resolve PathGlob enablement from account configuration and adapter default."""
+        configured = getattr(self, "_enable_path_glob_override", None)
+        if configured is not None:
+            return configured
+        return getattr(self._adapter, "enable_path_glob", False) is True
 
     @property
     def collection_name(self) -> str:
@@ -1150,14 +1159,11 @@ class _SingleAccountBackend:
         await run_to_completion(self._close_after_operations)
 
     async def _close_after_operations(self) -> None:
-        try:
-            await asyncio.to_thread(self._wait_for_operations)
-            await self._async_adapter.call("close")
-            self._collection_config = {}
-            self._meta_data_cache = {}
-            logger.info("_SingleAccountBackend closed")
-        except Exception as e:
-            logger.error("Error closing backend: %s", e)
+        await asyncio.to_thread(self._wait_for_operations)
+        await self._async_adapter.call("close")
+        self._collection_config = {}
+        self._meta_data_cache = {}
+        logger.info("_SingleAccountBackend closed")
 
     @_backend_operation
     async def health_check(self) -> bool:
@@ -1316,10 +1322,8 @@ class VikingVectorIndexBackend:
             self._account_backends.pop(account_id, None)
         if backend and backend._adapter is not self._shared_adapter:
             self._retiring_backends.add(backend)
-            try:
-                await backend.close()
-            finally:
-                self._retiring_backends.discard(backend)
+            await backend.close()
+            self._retiring_backends.discard(backend)
 
     def _get_root_backend(self) -> _SingleAccountBackend:
         """获取 root 特权 backend"""
@@ -1601,6 +1605,8 @@ class VikingVectorIndexBackend:
                         full_records[0].get("search_tags"),
                         updated_record["search_tags"],
                     )
+            except InvalidArgumentError:
+                raise
             except Exception as exc:
                 logger.warning(
                     "update_search_tags failed to merge exact record tags uri=%s "
@@ -1661,6 +1667,8 @@ class VikingVectorIndexBackend:
                         full_record.get("search_tags"),
                         updated_record["search_tags"],
                     )
+            except InvalidArgumentError:
+                raise
             except Exception as exc:
                 logger.warning(
                     "update_search_tags failed to merge leveled record tags uri=%s "
@@ -1952,36 +1960,29 @@ class VikingVectorIndexBackend:
             id(self._shared_adapter): self._shared_async_adapter
         }
         backends: set[_SingleAccountBackend] = set()
-        try:
-            backends.update(self._account_backends.values())
-            backends.update(self._retiring_backends)
-            if self._root_backend is not None:
-                backends.add(self._root_backend)
-            for account_id in set(self._resolved_backends) | self._initializing_accounts:
-                async with self._account_backend_locks.acquire(account_id):
-                    backend = self._resolved_backends.get(account_id)
-                    if backend is not None:
-                        backends.add(backend)
-            for backend in backends:
-                with backend._operation_condition:
-                    backend._retired = True
-                adapters[id(backend._adapter)] = backend._async_adapter
-            for backend in backends:
-                await asyncio.to_thread(backend._wait_for_operations)
-        except Exception as e:
-            logger.error("Error preparing vector facade close: %s", e)
-        finally:
-            for adapter in adapters.values():
-                try:
-                    await adapter.call("close")
-                except Exception as e:
-                    logger.error("Error closing vector adapter: %s", e)
-            self._account_backends.clear()
-            self._resolved_backends.clear()
-            self._retiring_backends.clear()
-            self._initializing_accounts.clear()
-            self._root_backend = None
-            logger.info("VikingVectorIndexBackend facade closed")
+        backends.update(self._account_backends.values())
+        backends.update(self._retiring_backends)
+        if self._root_backend is not None:
+            backends.add(self._root_backend)
+        for account_id in set(self._resolved_backends) | self._initializing_accounts:
+            async with self._account_backend_locks.acquire(account_id):
+                backend = self._resolved_backends.get(account_id)
+                if backend is not None:
+                    backends.add(backend)
+        for backend in backends:
+            with backend._operation_condition:
+                backend._retired = True
+            adapters[id(backend._adapter)] = backend._async_adapter
+        for backend in backends:
+            await asyncio.to_thread(backend._wait_for_operations)
+        for adapter in adapters.values():
+            await adapter.call("close")
+        self._account_backends.clear()
+        self._resolved_backends.clear()
+        self._retiring_backends.clear()
+        self._initializing_accounts.clear()
+        self._root_backend = None
+        logger.info("VikingVectorIndexBackend facade closed")
 
     async def health_check(self) -> bool:
         return await self._get_default_backend().health_check()
@@ -2324,8 +2325,17 @@ class VikingVectorIndexBackend:
         output_fields: Optional[List[str]] = None,
         recursive: bool = True,
         include_direct_children: bool = False,
+        expected_levels: Optional[Mapping[str, set[int]]] = None,
     ) -> Dict[str, Dict[str, Any]]:
-        """Strictly load lightweight L0/L1/L2 metadata in a URI scope."""
+        """Scan once by timestamp, recover missing known URIs, and verify the count.
+
+        The timestamp is an inclusive lower bound; offset only skips records
+        already visited at that timestamp. Ties can still reorder, so known
+        file/directory levels identify URIs to read again with an exact query.
+        A remaining count mismatch (including an unseen orphan) fails closed.
+        """
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
         projection = list(
             dict.fromkeys(
                 [
@@ -2347,69 +2357,102 @@ class VikingVectorIndexBackend:
             ]
         )
         what = f"Incremental inventory under {canonical_uri}"
-        retry_delays = (0.0, 0.25, 1.0)
-        last_error: Exception | None = None
-        for attempt, delay in enumerate(retry_delays, start=1):
-            if delay:
-                await asyncio.sleep(delay)
-            records: Dict[str, Dict[str, Any]] = {}
-            try:
-                async for record in self._strict_scan(
-                    ctx,
-                    scope,
-                    output_fields=projection,
-                    batch_size=batch_size,
-                    what=what,
+        expected_count = await self._strict_transfer_count(ctx, scope)
+        backend = await self._get_backend_for_context(ctx)
+        page_fields = list(dict.fromkeys([*projection, "updated_at"]))
+        records: Dict[str, Dict[str, Any]] = {}
+        timestamp = None
+        offset = 0
+        while True:
+            page = await backend.strict_query(
+                filter=scope
+                if timestamp is None
+                else And([scope, Range("updated_at", gte=timestamp)]),
+                limit=batch_size,
+                offset=offset,
+                output_fields=page_fields,
+                order_by="updated_at",
+                order_desc=False,
+            )
+            for record in page:
+                record_id = str(record.get("id") or "")
+                record_uri = str(record.get("uri") or "")
+                try:
+                    level = int(record.get("level"))
+                except (TypeError, ValueError):
+                    level = -1
+                if (
+                    not record_id
+                    or level not in {0, 1, 2}
+                    or not uri_in_transfer_scope(
+                        record_uri, canonical_uri, recursive=recursive or include_direct_children
+                    )
+                    or (
+                        not recursive
+                        and include_direct_children
+                        and len(uri_parts(record_uri)) > len(uri_parts(canonical_uri)) + 1
+                    )
+                    or record.get("updated_at") is None
                 ):
-                    record_id = str(record.get("id") or "")
-                    record_uri = str(record.get("uri") or "")
-                    try:
-                        level = int(record.get("level"))
-                    except (TypeError, ValueError):
-                        level = -1
-                    if (
-                        not record_id
-                        or level not in {0, 1, 2}
-                        or not uri_in_transfer_scope(record_uri, canonical_uri, recursive=True)
-                    ):
-                        raise RuntimeError(
-                            f"{what} returned an invalid record: id={record_id or '<missing>'} "
-                            f"uri={record_uri or '<missing>'} level={level}"
-                        )
-                    if record_id in records:
-                        raise RuntimeError(f"{what} returned duplicate record id: {record_id}")
-                    records[record_id] = {
-                        field: record[field] for field in projection if field in record
+                    raise RuntimeError(
+                        f"{what} returned an invalid record: id={record_id or '<missing>'} "
+                        f"uri={record_uri or '<missing>'} level={level}"
+                    )
+                if record_id in records:
+                    continue
+                records[record_id] = {
+                    field: record[field] for field in projection if field in record
+                }
+                records[record_id].update(
+                    {
+                        "id": record_id,
+                        "uri": record_uri,
+                        "level": level,
+                        "md5": str(record.get("md5") or ""),
                     }
-                    records[record_id].update(
-                        {
-                            "id": record_id,
-                            "uri": record_uri,
-                            "level": level,
-                            "md5": str(record.get("md5") or ""),
-                        }
-                    )
-                return records
-            except RuntimeError as exc:
-                last_error = exc
-                if attempt == len(retry_delays) or not any(
-                    marker in str(exc)
-                    for marker in (
-                        "cursor ended after",
-                        "ended after",
-                        "records but count was",
-                    )
-                ):
-                    raise
-                logger.warning(
-                    "%s was incomplete; retrying full inventory attempt=%d/%d error=%s",
-                    what,
-                    attempt,
-                    len(retry_delays),
-                    exc,
                 )
-        assert last_error is not None
-        raise last_error
+            if len(records) > expected_count:
+                raise RuntimeError(
+                    f"{what} returned {len(records)} unique records but count was {expected_count}"
+                )
+            if len(page) < batch_size:
+                break
+            last_timestamp = page[-1]["updated_at"]
+            if last_timestamp == timestamp:
+                offset += len(page)
+            else:
+                timestamp = last_timestamp
+                offset = sum(record["updated_at"] == timestamp for record in page)
+
+        if len(records) < expected_count and expected_levels:
+            found_levels: Dict[str, set[int]] = {}
+            for record in records.values():
+                found_levels.setdefault(record["uri"], set()).add(record["level"])
+            missing_uris = [
+                known_uri
+                for known_uri, levels in expected_levels.items()
+                if not levels.issubset(found_levels.get(known_uri, set()))
+            ]
+            for known_uri in missing_uris:
+                if not uri_in_transfer_scope(
+                    known_uri, canonical_uri, recursive=recursive or include_direct_children
+                ) or (
+                    not recursive
+                    and include_direct_children
+                    and len(uri_parts(known_uri)) > len(uri_parts(canonical_uri)) + 1
+                ):
+                    raise ValueError(f"Recovery URI is outside inventory scope: {known_uri}")
+            recovered = await self.get_incremental_inventory_by_uris(
+                missing_uris, ctx=ctx, output_fields=projection
+            )
+            for uri_records in recovered.values():
+                for record_id, record in uri_records.items():
+                    records.setdefault(record_id, record)
+        if len(records) != expected_count:
+            raise RuntimeError(
+                f"{what} returned {len(records)} unique records but count was {expected_count}"
+            )
+        return records
 
     async def get_reindex_inventory_under_uri(
         self,
@@ -2502,7 +2545,7 @@ class VikingVectorIndexBackend:
         uris: List[str],
         *,
         ctx: RequestContext,
-        batch_size: int = 100,
+        batch_size: int = 50,
         output_fields: Optional[List[str]] = None,
     ) -> Dict[str, Dict[str, Dict[str, Any]]]:
         """Read lightweight inventory with one exact scalar query per URI chunk.
@@ -2511,9 +2554,8 @@ class VikingVectorIndexBackend:
         path scope: every returned record must belong to one of ``uris``.  The
         result remains keyed by the caller's URI spelling and then by record ID
         so file-scoped RNFV snapshots can consume a pre-hydrated V subset
-        without one vector query per file.  Canonical V has at most one record
-        per L0/L1/L2 level at each URI; request one extra result so an abnormal
-        duplicate set fails explicitly rather than being silently truncated.
+        without one vector query per file. Files have one L2 record and
+        directories have L0/L1, so 50 URIs fit within the 100-record limit.
         """
         if batch_size <= 0:
             raise ValueError("batch_size must be positive")
@@ -2524,6 +2566,9 @@ class VikingVectorIndexBackend:
         canonical_uris = list(requested_by_canonical)
         if not canonical_uris:
             return {}
+        result_limit = 100
+        batch_size = min(batch_size, result_limit // 2)
+        backend = await self._get_backend_for_context(ctx)
 
         projection = list(
             dict.fromkeys(
@@ -2539,23 +2584,21 @@ class VikingVectorIndexBackend:
             scope = And(
                 [
                     Eq("account_id", ctx.account_id),
-                    In("uri", chunk),
+                    # URI is a path field: bare In also matches descendants.
+                    # Eq compiles with depth=0, keeping this batch exact.
+                    Or([Eq("uri", item) for item in chunk]),
                     In("level", [0, 1, 2]),
                 ]
             )
             what = f"Incremental inventory for {len(chunk)} exact URI(s)"
-            result_limit = len(chunk) * 3 + 1
-            page = await self.filter(
+            page = await backend.strict_query(
                 filter=scope,
                 limit=result_limit,
+                offset=0,
                 output_fields=projection,
-                ctx=ctx,
+                order_by="updated_at",
+                order_desc=False,
             )
-            if len(page) >= result_limit:
-                raise RuntimeError(
-                    f"{what} exceeded its canonical L0/L1/L2 record limit; "
-                    "run reindex or prune the duplicate records before retrying"
-                )
             for record in page:
                 record_id = str(record.get("id") or "")
                 record_uri = str(record.get("uri") or "")
@@ -2563,13 +2606,13 @@ class VikingVectorIndexBackend:
                     level = int(record.get("level"))
                 except (TypeError, ValueError):
                     level = -1
-                if not record_id or record_uri not in records_by_uri or level not in {0, 1, 2}:
+                if not record_id or record_uri not in chunk or level not in {0, 1, 2}:
                     raise RuntimeError(
                         f"{what} returned an invalid record: id={record_id or '<missing>'} "
                         f"uri={record_uri or '<missing>'} level={level}"
                     )
                 if record_id in records_by_uri[record_uri]:
-                    raise RuntimeError(f"{what} returned duplicate record id: {record_id}")
+                    continue
                 records_by_uri[record_uri][record_id] = {
                     field: record[field] for field in projection if field in record
                 }

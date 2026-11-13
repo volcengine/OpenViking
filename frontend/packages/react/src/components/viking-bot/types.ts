@@ -18,8 +18,8 @@ import type {
 export interface VikingBotMessageListProps {
   /** 当前会话的消息。Messages in the current session. */
   messages: readonly VikingBotMessage[];
-  /** 内置中英文文案的语言。Language of the built-in interface copy. */
-  locale: Locale;
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
   /** 附加到根元素的类名。Class name applied to the root element. */
   className?: string;
   /** 助手仍在生成时追加的片段。Parts appended while the assistant is still streaming. */
@@ -60,8 +60,8 @@ export interface VikingBotComposerRef {
 export interface VikingBotComposerProps extends VikingBotInputFeatures {
   /** 受控的草稿文本。Controlled draft text. */
   value: string;
-  /** 内置中英文文案的语言。Language of the built-in interface copy. */
-  locale: Locale;
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
   /** 附加到根元素的类名。Class name applied to the root element. */
   className?: string;
   /** 宿主已选中的附件。Attachments already selected by the host. */
@@ -72,6 +72,10 @@ export interface VikingBotComposerProps extends VikingBotInputFeatures {
   disabledReason?: string;
   /** 是否正在回复；回复中停止动作替代发送。Whether a reply is streaming. */
   isSending?: boolean;
+  /** Allow sending additional input during a reply only when the host supports it. */
+  canSendWhileStreaming?: boolean;
+  /** Awaiting input acceptance; disables duplicate submissions, not editing. */
+  isSubmitting?: boolean;
   /** 输入区布局形态。Layout of the input area. */
   variant?: 'default' | 'compact';
   /** 宿主接受的 MIME 类型。MIME types the host accepts. */
@@ -86,6 +90,8 @@ export interface VikingBotComposerProps extends VikingBotInputFeatures {
   onFilesAdded?: (files: readonly File[]) => void;
   /** 移除一个附件。Removes an attachment. */
   onAttachmentRemove?: (attachment: VikingBotAttachment) => void;
+  /** 打开已选中的文件或目录引用。Opens a selected file or directory reference. */
+  onOpenUri?: (uri: string) => void;
   /** 上报发送意图；由宿主发送并清空草稿。省略时不能发送。Reports the send intent. */
   onSend?: (draft: VikingBotDraft) => void;
   /** 停止正在进行的回复。省略时不展示停止动作。Stops the streaming reply. */
@@ -101,8 +107,8 @@ export interface VikingBotProps
     Omit<HTMLAttributes<HTMLDivElement>, 'onCopy' | 'onSubmit'> {
   /** 当前会话的消息。Messages in the current session. */
   messages: readonly VikingBotMessage[];
-  /** 内置中英文文案的语言。Language of the built-in interface copy. */
-  locale: Locale;
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
   /** Host-owned session history and actions. */
   sessions?: VikingBotSessions;
   /** Optional extension controls, such as a host-provided More menu. */
@@ -117,6 +123,9 @@ export interface VikingBotProps
   attachments?: readonly VikingBotAttachment[];
   /** 是否正在回复。Whether a reply is streaming. */
   isSending?: boolean;
+  /** Supplied from the service's canSteer capability. Defaults to false. */
+  canSendWhileStreaming?: boolean;
+  isSubmitting?: boolean;
   /** 是否可接受输入。Whether the bot can accept input. */
   isAvailable?: boolean;
   /** 不可用时的说明。Message shown while the bot is unavailable. */
@@ -137,7 +146,7 @@ export interface VikingBotProps
    * 待确认交互的配置；存在时替代输入区。
    * Configuration of a pending interaction; replaces the composer.
    */
-  interaction?: Omit<VikingBotInteractionProps, 'locale'>;
+  interaction?: VikingBotInteractionProps;
   /**
    * 整块替换交互区；传值时忽略 `interaction` 的内置渲染，宿主自行渲染。
    * Replaces the whole interaction area; when set, the built-in rendering of
@@ -158,7 +167,7 @@ export interface VikingBotProps
   onSend?: (draft: VikingBotDraft) => void;
   /** 停止正在进行的回复。Stops the streaming reply. */
   onCancel?: () => void;
-  /** 打开消息中引用的资源。Opens a resource referenced by a message. */
+  /** 打开消息资源或输入区引用。Opens a message resource or composer reference. */
   onOpenUri?: (uri: string) => void;
   /** 复制由宿主执行，组件只上报意图。The host copies; the component reports intent. */
   onCopy?: (text: string) => void;

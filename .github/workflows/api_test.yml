@@ -89,6 +89,83 @@ jobs:
       python_json: '["3.11"]'
       native_artifact: native-runtime-linux-x64-cp310-abi3
 
+  database-tests:
+    name: MySQL & Redis Integration Tests
+    needs: [prepare, native-runtime]
+    if: needs.prepare.outputs.api_changed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: integration-root-password
+          MYSQL_DATABASE: openviking_test
+          MYSQL_USER: openviking_test
+          MYSQL_PASSWORD: integration-test-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+      redis:
+        image: redis:6.2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=12
+    env:
+      OV_TEST_MYSQL: '{"host":"127.0.0.1","port":3306,"user":"openviking_test","password":"integration-test-password","database":"openviking_test"}'
+      OPENVIKING_WATCH_MYSQL_PARAMS: '{"host":"127.0.0.1","port":3306,"user":"openviking_test","password":"integration-test-password","database":"openviking_test"}'
+      OV_TEST_REDIS: redis://127.0.0.1:6379
+      OPENVIKING_CONFIG_FILE: ${{ github.workspace }}/.venv/database-test-ov.conf
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Restore same-run native runtime
+        uses: ./.github/actions/native-runtime
+        with:
+          artifact: native-runtime-linux-x64-cp310-abi3
+      - name: Install locked MySQL test dependencies
+        run: uv sync --frozen --extra test --extra mysql --no-install-project
+      - name: Check real backends and apply account schema
+        run: |
+          uv run --no-sync python -m pytest --noconftest -q -o addopts='' \
+            tests/misc/test_database_integration_ci.py
+          uv run --no-sync python .github/scripts/database_integration.py prepare
+      - name: Run database contracts
+        run: |
+          uv run --no-sync python -m pytest -q -o addopts='' \
+            tests/server/test_account_services.py::test_mysql_load_creates_default_account \
+            tests/server/test_account_services.py::test_distributed_authentication_state_is_shared_and_service_scoped \
+            tests/server/test_redis_mysql_account_store.py \
+            tests/service/test_task_work_contract.py \
+            tests/resource/test_watch_store.py \
+            --junitxml=database-integration.xml
+      - name: Require executed database cases
+        if: always()
+        run: uv run --no-sync python .github/scripts/database_integration.py verify database-integration.xml
+      - name: Upload database test report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: database-integration-results
+          path: database-integration.xml
+          if-no-files-found: error
+          retention-days: 7
+
   api-tests:
     needs: [prepare, native-runtime]
     name: API & CLI Integration Tests (${{ matrix.os }})

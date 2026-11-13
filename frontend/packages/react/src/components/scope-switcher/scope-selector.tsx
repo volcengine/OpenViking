@@ -1,3 +1,4 @@
+import { useLocale } from '../../shared/locale-context.js';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import ChevronDownIcon from '../../../../icons/svg/scope-switcher/chevron-down.svg?react';
 import { resolveScopeLabels } from './labels.js';
@@ -5,7 +6,8 @@ import { ScopePanel } from './scope-panel.js';
 import type { ScopeSelectorProps } from './types.js';
 
 export function ScopeSelector(props: ScopeSelectorProps) {
-  const { identity, trigger: triggerContent, locale } = props;
+  const { identity, trigger: triggerContent } = props;
+  const locale = useLocale(props.locale);
   const labels = resolveScopeLabels(locale, props.labels);
   const selectable = props.kind === 'selectable' ? props : undefined;
   const data = selectable?.data;

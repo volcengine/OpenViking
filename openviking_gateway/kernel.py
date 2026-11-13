@@ -13,7 +13,7 @@ import orjson
 from .blocks import RECALL_PROVENANCE_NOTE, block, gateway_note, history_hint, token_estimate
 from .capture import CapturePipeline, lineage
 from .capture_store import Document
-from .client import VikingError
+from .client import VikingError, peer_argument
 from .compaction import (
     BACKOFF_SECONDS,
     active_cut,
@@ -96,6 +96,8 @@ class Prepared:
     reply_anchor: str = ""
     # What the reply starts with for the user: the recall notice of this turn's injection.
     reply_lead: str = ""
+    # The OpenViking peer this conversation is with; None leaves OpenViking unscoped.
+    peer: str | None = None
 
 
 class MemoryKernel:
@@ -109,9 +111,9 @@ class MemoryKernel:
             return {**body, adapter.field: strip_thinking(body.get(adapter.field, []))}
         return body
 
-    async def enhance(self, body, protocol, *args):
+    async def enhance(self, body, protocol, *args, **kwargs):
         try:
-            prepared = await self.prepare(body, protocol, *args)
+            prepared = await self.prepare(body, protocol, *args, **kwargs)
             return prepared.body, prepared, prepared.metrics
         except Exception:
             logger.exception("OpenViking Gateway preparation failed")
@@ -185,6 +187,7 @@ class MemoryKernel:
         counting=False,
         upstreams=(),
         summarize=None,
+        peer=None,
     ):
         """Build the upstream body; ``summarize(prepared, body)`` sends a summary request."""
         adapter = tool_protocol(protocol)
@@ -270,6 +273,7 @@ class MemoryKernel:
             ancestors=ancestors,
             thinking=thinking,
             thinking_as_text=as_text,
+            peer=peer,
             metrics={
                 "kind": kind,
                 "replay_hits": 0,
@@ -526,7 +530,12 @@ class MemoryKernel:
                 return {**decision, "reason": "budget"}
             try:
                 response = await self.viking.recall(
-                    credential["openviking_key"], query, policy, exclude, budget - overhead
+                    credential["openviking_key"],
+                    query,
+                    policy,
+                    exclude,
+                    budget - overhead,
+                    **peer_argument(request.peer),
                 )
                 rendered = response.get("rendered") or ""
                 text = lead + "\n" + rendered if rendered else ""

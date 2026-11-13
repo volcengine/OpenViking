@@ -33,6 +33,7 @@ export const sections: DocSection[] = [
         p('getting-started/08-resources'),
         p('getting-started/09-memory'),
         p('getting-started/10-skills'),
+        p('getting-started/24-live-context'),
         p('getting-started/16-rules'),
         p('getting-started/06-evaluate')
       ]),
@@ -246,7 +247,9 @@ export const sections: DocSection[] = [
       g('Storage and performance', '存储与性能', [
         p('guides/13-multi-write-storage'),
         p('guides/14-ragfs-cache'),
-        p('guides/16-cuvs')
+        p('guides/16-cuvs'),
+        p('guides/25-pgvector'),
+        p('guides/26-pgvector-directory-filtering')
       ])
     ]
   },

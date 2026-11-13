@@ -16,6 +16,7 @@ import type {
   FilePreviewFileTab,
   FilePreviewLabels,
   FilePreviewViewMode,
+  FilePreviewToolbarOptions,
 } from './types.js';
 
 /**
@@ -33,6 +34,7 @@ import type {
  * switch, so giving it the same slot would only leave a permanently empty space.
  */
 export interface FilePreviewDirectoryBodyProps {
+  toolbar?: FilePreviewToolbarOptions;
   tab: FilePreviewDirectoryTab;
   text: Required<FilePreviewLabels>;
   locale?: Locale;
@@ -42,7 +44,6 @@ export interface FilePreviewDirectoryBodyProps {
   onViewModeChange: (mode: FilePreviewViewMode) => void;
   onHandleChange: (handle: ViewerHandle | null) => void;
   onViewModesChange: (modes: readonly ViewerViewModeOption[]) => void;
-  onDownload: () => void;
   onCancelEditing: () => void;
 }
 
@@ -68,6 +69,7 @@ function levelToFileTab(
 }
 
 export function FilePreviewDirectoryBody({
+  toolbar,
   tab,
   text,
   locale,
@@ -77,7 +79,6 @@ export function FilePreviewDirectoryBody({
   onViewModeChange,
   onHandleChange,
   onViewModesChange,
-  onDownload,
   onCancelEditing,
 }: FilePreviewDirectoryBodyProps) {
   // 层级由外层持有（复制正文要跟着当前层级），这里只补一个非受控时的初值。
@@ -106,7 +107,10 @@ export function FilePreviewDirectoryBody({
     const measure = () => {
       const active = root.querySelector<HTMLElement>('[aria-selected="true"]');
       if (!active) return;
-      setIndicator({ left: active.offsetLeft, width: active.offsetWidth });
+      setIndicator({
+        left: active.offsetLeft + (active.offsetWidth - 14) / 2,
+        width: 14,
+      });
     };
     measure();
     const observer = new ResizeObserver(measure);
@@ -159,21 +163,27 @@ export function FilePreviewDirectoryBody({
   // body rather than rendering from a tab that does not exist.
   if (!fileTab) return null;
   // 摘要还在读取：只渲染外壳与加载态，层级切换与正文都等数据到了再说。
+  const header = (
+    <FilePreviewHeader
+      path={fileTab.source.path}
+      fileName={fileTab.source.fileName}
+      canOpenParent={Boolean(tab.operations?.openParent)}
+      titleExtra={tab.slots?.titleExtra}
+      slotActions={tab.slots?.actions}
+      extraActions={tab.slots?.extraActions}
+      toolbar={toolbar}
+      actionItems={tab.actions}
+      actions={actions}
+      text={text}
+      onOpenParent={(uri) => void tab.operations?.openParent?.(uri)}
+    />
+  );
   // Still reading the summary: render the shell and the loading state only; the
   // level switch and the body wait for the data.
   if (tab.loading) {
     return (
       <>
-        <FilePreviewHeader
-          path={fileTab.source.path}
-          fileName={fileTab.source.fileName}
-          canOpenParent={Boolean(tab.operations?.openParent)}
-          titleExtra={tab.slots?.titleExtra}
-          slotActions={tab.slots?.actions}
-          actions={actions}
-          text={text}
-          onOpenParent={(uri) => void tab.operations?.openParent?.(uri)}
-        />
+        {header}
         <div className="ov-file-preview__body">
           <LoadingState text={text} />
         </div>
@@ -183,16 +193,7 @@ export function FilePreviewDirectoryBody({
 
   return (
     <>
-      <FilePreviewHeader
-        path={fileTab.source.path}
-        fileName={fileTab.source.fileName}
-        canOpenParent={Boolean(tab.operations?.openParent)}
-        titleExtra={tab.slots?.titleExtra}
-        slotActions={tab.slots?.actions}
-        actions={actions}
-        text={text}
-        onOpenParent={(uri) => void tab.operations?.openParent?.(uri)}
-      />
+      {header}
       {/* 同级视图切换：下划线页签，位于标题行与正文之间。 */}
       {/* Sibling switching: underlined tabs between the header and the body. */}
       {tab.levels.length > 1 ? (
@@ -228,21 +229,18 @@ export function FilePreviewDirectoryBody({
         </div>
       ) : null}
       <div className="ov-file-preview__body">
-        {
-          <FilePreviewBody
-            key={fileTab.key}
-            fileTab={fileTab}
-            text={text}
-            locale={locale}
-            viewMode={viewMode}
-            editing={editing}
-            onViewModeChange={onViewModeChange}
-            onHandleChange={onHandleChange}
-            onViewModesChange={onViewModesChange}
-            onDownload={onDownload}
-            onCancelEditing={onCancelEditing}
-          />
-        }
+        <FilePreviewBody
+          key={fileTab.key}
+          fileTab={fileTab}
+          text={text}
+          locale={locale}
+          viewMode={viewMode}
+          editing={editing}
+          onViewModeChange={onViewModeChange}
+          onHandleChange={onHandleChange}
+          onViewModesChange={onViewModesChange}
+          onCancelEditing={onCancelEditing}
+        />
       </div>
       {tab.slots?.footer ? (
         <div className="ov-file-preview__footer">{tab.slots.footer}</div>

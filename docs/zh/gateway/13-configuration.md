@@ -162,7 +162,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | `auxiliary_patterns` | 正则表达式，不区分大小写 | 分别与 Messages 的 `system` 字段、Responses 的 `instructions` 和最后一条用户消息匹配，命中的请求算作**辅助请求**。Chat Completions `messages` 和 Responses `input` 里的 system、developer 消息不参与匹配，这类客户端要匹配用户消息里的文本。 |
 | `noise_patterns` | 正则表达式，区分大小写 | 网关读取对话时忽略这些文本：不参与请求分类和记忆检索，也不写入保存的消息和工具结果，但仍原样发给模型。删完为空的用户消息不算新用户消息，请求按同一轮的延续处理。 |
 | `noise_tags` | 标签名 | `<tag …>…</tag>` 块（不区分大小写），处理方式同 `noise_patterns`。 |
-| `plugin_tags` | 标签名 | 系统提示词或客户端消息中出现 `<tag`，表示客户端里运行着 OpenViking 记忆插件。该对话此后网关只做转发：不加记忆、不提供 OpenViking 工具、不保存（见[两者同时使用时](../guides/15-gateway.md#when-both-are-in-use)）。只添加插件自己写入的标签。 |
+| `plugin_tags` | 标签名 | 系统提示词或客户端消息中出现代码之外的完整 `<tag>…</tag>` 块，表示客户端里运行着 OpenViking 记忆插件。该对话此后网关只做转发：不加记忆、不提供 OpenViking 工具、不保存（见[两者同时使用时](../guides/15-gateway.md#when-both-are-in-use)）。只添加插件自己写入的标签。 |
 
 - **`add` 追加到内置列表，`remove` 从内置列表中去掉条目。** `remove` 的条目要和 `client-rules.json` 里的写法完全一致。没有匹配到任何条目的 `remove`（例如升级后内置条目改了写法）会被忽略，启动时打印警告。内置列表不能整体替换，这样后续版本新增的条目仍然生效。
 - **只匹配客户端自己写的文本。** 用客户端自己提示词里的整句，不要用短语。用户消息一旦命中，这一整轮都算辅助请求，不检索也不保存；如果模式还能命中主对话的系统提示词，对话里的每个请求都会这样。噪声模式要锚定整条消息（JSON 里写作 `"\\A…\\Z"`），避免从真实消息里删掉文字。
@@ -188,6 +188,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | 相关度阈值 | `score_threshold` | `0.35` | 0–1 | 接受的最低相关度分数。 |
 | 超时时间 | `recall_timeout` | `2`（秒） | 大于 0，最多 30 | 检索最多等多久，超时后消息不带记忆继续发送。 |
 | 检索文本长度 | `query_max_chars` | `8000` | 3–32,000 | 取消息的多少个字符作为检索文本。 |
+| Peer 范围 | `recall_peer_scope` | `all` | `all`、`actor` | `all`：当前请求的 Peer 优先，其他 Peer 的记忆仍可能被召回。`actor`：召回和 OpenViking 工具只能查到、读到用户自己的记忆和当前请求的 Peer 的记忆，见[只召回当前 Peer](03-connect-clients.md#peer-scope)。 |
 | 按分类限量 | `quotas` | `{}`（关闭） | 键：`events`、`entities`、`preferences`、`experiences`、`resources`、`skills`；设置时至少一项大于 0（仅 Studio 校验） | 每个分类最多取的条数；只检索大于 0 的分类。 |
 
 管理 API 保存 `context_types` 和 `quotas` 的键时不做校验。`quotas` 里出现未知的键时，OpenViking 会拒绝检索请求，导致每次召回都失败。
@@ -202,6 +203,9 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | 最新回复等待时长 | `idle_seconds` | `600`（秒） | 1 及以上 | 停顿多久之后保存最后一轮并提交会话。 |
 | 提交阈值 | `commit_tokens` | `20000` | 1 及以上 | 会话中待提交的 token 数达到这个值时提交。 |
 | 保留最近消息 | `keep_recent_messages` | `10` | 0–1,000 | 提交后会话中保留的消息数。 |
+| （仅 API） | `capture_memory_types` | `null`（Server 0.5.0 及以上继承用户策略） | 记忆类型名称，例如 `preferences`、`events`；`[]` 表示不提取 | OpenViking 从保存的对话中提取哪些记忆类型。显式列表设置会话策略。 |
+
+管理 API 保存 `capture_memory_types` 时不检查名称。网关为对话创建 OpenViking 会话时，OpenViking 会拒绝它不认识或已停用的记忆类型：对话的内容都不会保存，保存状态先显示**重试中**，再显示**已暂停**，原因为 `openviking_http_400`。修正后的配置只对之后开始的对话生效。`cases` 和 `trajectories` 只随 `experiences` 一起提取：列出 `experiences` 时会同时加入这两种，不列出时这两种会被去掉，因此只列这两种时不提取任何记忆。
 
 ### 长对话 {#profile-long-conversations}
 
@@ -224,7 +228,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | Studio 名称 | API 名称 | 默认值 | 取值范围 | 含义 |
 | --- | --- | --- | --- | --- |
 | OpenViking 工具 | `gateway_tools` | `true` | | 为 Chat Completions、完整历史的 Responses 和 Anthropic Messages 提供 OpenViking 工具。 |
-| 工具（未勾选的项） | `disabled_tools` | 会修改数据的 8 个工具 | OpenViking 工具原名，不带 `openviking_` | 新对话不提供这些工具，其余可用工具都提供，包括以后新增的。 |
+| 工具（未勾选的项） | `disabled_tools` | `[]`（不排除） | OpenViking 工具原名，不带 `openviking_` | 新对话不提供这些工具，其余可用工具都提供，包括以后新增的。 |
 | 显示工具调用 | `show_tool_calls` | `true` | | 每次 OpenViking 工具调用都在回复里加一行提示。 |
 | 每次请求的工具轮数 | `tool_max_rounds` | `null`（不限） | 1 及以上 | 工具调用达到这个轮数后，拒绝继续调用 OpenViking 工具。 |
 | 单次调用超时 | `tool_timeout_seconds` | `30`（秒） | 大于 0，最多 120 | 超时的调用向模型返回错误。 |
@@ -232,7 +236,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | 总时长 | `tool_total_seconds` | `null`（不限） | 大于 0 | 超过这个秒数模型仍在调用工具时，请求失败。 |
 | Token 预算 | `tool_total_tokens` | `null`（不限） | 1,024 及以上 | 工具调用和结果在一次请求中最多增加的估算 token 数，用完后拒绝继续调用 OpenViking 工具。 |
 
-API 请求省略 `disabled_tools` 时使用默认列表；列表为空且 `gateway_tools` 开启时，提供全部可用工具。
+API 请求省略 `disabled_tools` 时使用空列表，`gateway_tools` 开启时提供全部可用工具。
 
 ## 上游设置 {#upstream-settings}
 

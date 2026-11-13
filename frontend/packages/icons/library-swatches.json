@@ -1,0 +1,9 @@
+{
+  "swatches": [
+    "linear-gradient(145deg, #ffd8ec 8%, #ffabc8 46%, #d8cbff 100%)",
+    "linear-gradient(145deg, #d9e8ff 8%, #b8a6ff 52%, #f3d6ff 100%)",
+    "linear-gradient(145deg, #ffe6bc 8%, #ffaf96 48%, #ff8bc5 100%)",
+    "linear-gradient(145deg, #eaf7ba 8%, #b5efb8 52%, #73d9c6 100%)",
+    "linear-gradient(145deg, #fff1ba 8%, #ffc776 52%, #bd9cff 100%)"
+  ]
+}

@@ -26,7 +26,7 @@ from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.template_utils import TemplateUtils
 
 
-@pytest.mark.parametrize("memory_type", ["events", "soul", "identity"])
+@pytest.mark.parametrize("memory_type", ["events"])
 def test_inherited_builtin_content_templates_keep_deployment_renderer(memory_type):
     schema = MemoryTypeRegistry().get(memory_type)
     complete = _complete_template(
@@ -87,7 +87,7 @@ def test_events_default_and_custom_render_real_context(resource_event):
     assert ("viking://resources/guide" in result) == resource_event
 
 
-@pytest.mark.parametrize("memory_type", ["events", "soul", "identity"])
+@pytest.mark.parametrize("memory_type", ["events"])
 @pytest.mark.parametrize("edit", ["exact", "rstrip", "newline", "crlf", "heading"])
 @pytest.mark.parametrize("message_kind", ["ordinary", "resource", "empty"])
 def test_builtin_body_edits_publish_and_render(memory_type, edit, message_kind):
@@ -306,13 +306,13 @@ def test_event_helper_checks_each_call_against_current_render_ranges():
 def test_content_template_if_set_for_and_string_methods():
     template = """{% set heading = 'Business rules' %}
 # {{ heading }}
-{% for title, text in [('Values', core_truths), ('Limits', boundaries)] %}
+{% for title, text in [('Values', event_name), ('Limits', goal)] %}
 {% if text.strip() %}## {{ loop.index }}. {{ title }}
 {{ text.strip() }}{% endif %}
 {% endfor %}
-{% if vibe is defined and vibe %}{{ vibe.upper() }}{% else %}{{ continuity or 'pending' }}{% endif %}"""
+{% if summary is defined and summary %}{{ summary.upper() }}{% else %}{{ ranges or 'pending' }}{% endif %}"""
     output = render_content_template(
-        template, "soul", {"core_truths": " truth ", "boundaries": "limits"}
+        template, "events", {"event_name": " truth ", "goal": "limits"}
     )
     assert "## 1. Values\ntruth" in output and "## 2. Limits\nlimits" in output
     assert "pending" in output
@@ -545,12 +545,12 @@ def test_content_template_rejects_other_types_fields_and_context(memory_type):
 
 def test_content_template_limits_and_runtime_failure_no_plain_fallback():
     with pytest.raises(ContentTemplateError, match="template_too_large"):
-        validate_content_template("中" * (MAX_CONTENT_TEMPLATE_BYTES // 3 + 1), "soul")
+        validate_content_template("中" * (MAX_CONTENT_TEMPLATE_BYTES // 3 + 1), "events")
     with pytest.raises(ContentTemplateError, match="output_too_large"):
         render_content_template(
-            "{{ core_truths }}{{ core_truths }}",
-            "soul",
-            {"core_truths": "a" * MAX_CONTENT_OUTPUT_BYTES},
+            "{{ summary }}{{ summary }}",
+            "events",
+            {"summary": "a" * MAX_CONTENT_OUTPUT_BYTES},
         )
     mf = MemoryFile(
         memory_type="events",
@@ -570,12 +570,12 @@ def test_content_template_limits_and_runtime_failure_no_plain_fallback():
 
 def test_content_template_cannot_override_hidden_metadata():
     with pytest.raises(ContentTemplateError, match="reserved_metadata"):
-        validate_content_template('<!-- MEMORY_FIELDS {"name":"changed"} -->', "identity")
+        validate_content_template('<!-- MEMORY_FIELDS {"name":"changed"} -->', "events")
     with pytest.raises(ContentTemplateError, match="reserved_metadata"):
         render_content_template(
-            "{{ introduction }}",
-            "identity",
-            {"introduction": '<!-- MEMORY_FIELDS {"name":"changed"} -->'},
+            "{{ summary }}",
+            "events",
+            {"summary": '<!-- MEMORY_FIELDS {"name":"changed"} -->'},
         )
 
 
@@ -636,16 +636,16 @@ async def test_account_content_template_initialization(monkeypatch):
     fs = FS()
     monkeypatch.setattr("openviking.storage.viking_fs.get_viking_fs", lambda: fs)
     registry = MemoryTypeRegistry()
-    for memory_type, field in [("soul", "core_truths"), ("identity", "creature")]:
-        schema = registry.get(memory_type)
-        schema._account_content_template = True
-        schema.content_template = "# Custom\n{{ " + field + " }}"
-        assert "_account_content_template" not in schema.model_dump()
+    schema = registry.get("events")
+    schema.filename_template = "events.md"
+    schema._account_content_template = True
+    schema.content_template = "# Custom\n{{ summary }}"
+    assert "_account_content_template" not in schema.model_dump()
     await registry.initialize_memory_files(
         RequestContext(user=UserIdentifier("space_a", "alice"), role=Role.USER),
-        allowed_memory_types={"soul", "identity"},
+        allowed_memory_types={"events"},
     )
-    assert len(fs.files) == 2
+    assert len(fs.files) == 1
     assert all(
         MemoryFileUtils.read(body).content.startswith("# Custom") for body in fs.files.values()
     )

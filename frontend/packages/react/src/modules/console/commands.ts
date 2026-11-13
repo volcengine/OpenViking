@@ -1,61 +1,146 @@
+import { readTaskReferences } from '../../shared/task-tracking/read-references.js';
+import type { TaskReference } from '../../shared/task-tracking/types.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type {
-  TuiCommandDefinition,
-  TuiRecordContent,
-} from '../../components/tui/index.js';
+  CommandConsoleCommandDefinition,
+  CommandConsoleCommandGroup,
+  CommandConsoleQuickCommand,
+  CommandConsoleRecordContent,
+} from '../../components/command-console/index.js';
 import type { Locale } from '../../shared/locale.js';
-import { COMMAND_SPECS } from './command-specs.js';
+import { COMMAND_SPECS, type CommandSpec } from './command-specs.js';
 import { parseArguments, tokenize } from './command-parser.js';
 import { ConsoleCommandError } from './command-messages.js';
 import { resolveConsoleLocale } from './labels.js';
 import { formatResult } from './results.js';
+import type { ConsoleCommandGuide } from './types.js';
 
-export function consoleCommands(
+// Command palette order, restricted to the commands this Console can execute.
+const COMMAND_GROUPS = {
+  core: [
+    'add-resource',
+    'add-skill',
+    'compile',
+    'find',
+    'read',
+    'write',
+    'add-memory',
+    'compile create',
+  ],
+  filesystem: ['ls', 'tree', 'mkdir', 'rm', 'mv', 'stat', 'cp'],
+  search: ['find', 'search', 'grep', 'glob', 'abstract', 'overview', 'read'],
+  status: [
+    'help',
+    'health',
+    'status',
+    'task list',
+    'task status',
+    'task cancel',
+    'clear',
+  ],
+} satisfies Record<string, readonly CommandSpec['name'][]>;
+
+export function consoleCommandGroups(
   locale: Locale,
-): readonly TuiCommandDefinition[] {
-  const text = resolveConsoleLocale(locale);
-  return COMMAND_SPECS.map((spec) => ({
-    name: spec.name,
-    inputText: `ov ${spec.name}`,
-    description: text.commands[spec.name],
-    usage: [
-      'ov',
-      spec.name,
-      ...(spec.positional ?? []).map((arg) =>
-        arg.optional ? `[${arg.name}]` : `<${arg.name}>`,
-      ),
-      ...(spec.flags ?? []).map(
-        (flag) =>
-          `[--${flag.name}${flag.kind === 'boolean' ? '' : ` <${flag.name}>`}]`,
-      ),
-    ].join(' '),
-    params: spec.positional?.map((arg) => ({
-      label: arg.name,
-      description: arg.kind === 'uri' ? 'viking://…' : arg.name,
-      required: !arg.optional,
-    })),
-    options: spec.flags?.map((flag) => ({
-      token: `--${flag.name}`,
-      description: flag.choices?.join(' | ') ?? flag.name,
-    })),
-    skeleton: spec.skeleton,
+): readonly CommandConsoleCommandGroup[] {
+  const labels = resolveConsoleLocale(locale).commandGroups;
+  return (Object.keys(COMMAND_GROUPS) as (keyof typeof COMMAND_GROUPS)[]).map(
+    (key) => ({ key, label: labels[key] }),
+  );
+}
+
+const DEFAULT_QUICK_COMMAND_NAMES = [
+  'add-resource',
+  'add-skill',
+  'add-memory',
+  'find',
+  'compile',
+] as const;
+
+export function consoleQuickCommands(
+  locale: Locale,
+): readonly CommandConsoleQuickCommand[] {
+  const guides = resolveConsoleLocale(locale).commandGuides;
+  return DEFAULT_QUICK_COMMAND_NAMES.map((name) => ({
+    name,
+    value: name === 'compile' ? 'ov compile ' : guides[name].examples[0],
   }));
 }
 
-export function createCommandHelp(locale: Locale): TuiRecordContent {
+export function consoleCommands(
+  locale: Locale,
+): readonly CommandConsoleCommandDefinition[] {
+  const text = resolveConsoleLocale(locale);
+  const guides: Partial<Record<CommandSpec['name'], ConsoleCommandGuide>> =
+    text.commandGuides;
+  const descriptions: Record<string, string> = text.parameters;
+  const catalog = new Map(
+    COMMAND_SPECS.map((spec) => {
+      const guide = guides[spec.name];
+      return [
+        spec.name,
+        {
+          name: spec.name,
+          inputText: `ov ${spec.name}`,
+          description: guide?.description ?? text.commands[spec.name],
+          summary: text.commands[spec.name],
+          examples: guide?.examples,
+          usage: [
+            'ov',
+            spec.name,
+            ...(spec.positional ?? []).map((arg) =>
+              arg.optional ? `[${arg.name}]` : `<${arg.name}>`,
+            ),
+            ...(spec.flags ?? []).map((flag) =>
+              flag.required
+                ? `--${flag.name} <${flag.name}>`
+                : `[--${flag.name}${flag.kind === 'boolean' ? '' : ` <${flag.name}>`}]`,
+            ),
+          ].join(' '),
+          params: spec.positional?.map((arg) => ({
+            label: arg.name,
+            description:
+              descriptions[arg.name] ??
+              (arg.kind === 'uri' ? 'viking://…' : arg.name),
+            required: !arg.optional,
+          })),
+          options: spec.flags?.map((flag) => ({
+            token: flag.alias
+              ? `${flag.alias}, --${flag.name}`
+              : `--${flag.name}`,
+            required: flag.required,
+            defaultValue: flag.defaultValue,
+            description:
+              descriptions[flag.name] ?? flag.choices?.join(' | ') ?? flag.name,
+          })),
+          skeleton: spec.skeleton,
+        },
+      ] as const;
+    }),
+  );
+  return Object.entries(COMMAND_GROUPS).flatMap(([group, names]) =>
+    names.flatMap((name) => {
+      const command = catalog.get(name);
+      return command ? [{ ...command, group }] : [];
+    }),
+  );
+}
+
+export function createCommandHelp(locale: Locale): CommandConsoleRecordContent {
+  const commands = consoleCommands(locale);
   return {
     variant: 'command-help',
-    sections: [
-      {
-        key: 'commands',
-        label: resolveConsoleLocale(locale).availableCommands,
-        items: consoleCommands(locale).map((item) => ({
+    sections: consoleCommandGroups(locale).map(({ key, label }) => ({
+      key,
+      label,
+      items: commands
+        .filter((command) => command.group === key)
+        .map((item) => ({
           key: item.name,
           name: item.usage,
           description: item.description,
         })),
-      },
-    ],
+    })),
   };
 }
 
@@ -64,7 +149,8 @@ export async function executeCommand(
   client: OvClient,
   options: OvRequestOptions,
   locale: Locale,
-): Promise<TuiRecordContent> {
+  onTasks?: (tasks: readonly TaskReference[]) => void,
+): Promise<CommandConsoleRecordContent> {
   const tokens = tokenize(input);
   const spec = [...COMMAND_SPECS]
     .sort((a, b) => b.name.length - a.name.length)
@@ -89,10 +175,13 @@ export async function executeCommand(
       throw new ConsoleCommandError(error.code, error.value, usage);
     throw error;
   }
-  if (!spec.request) return createCommandHelp(locale);
-  const data = await client.request<unknown>({
-    ...spec.request(values),
-    options,
-  });
+  if (!spec.request && !spec.execute) return createCommandHelp(locale);
+  const data = spec.execute
+    ? await spec.execute(values, (request) => {
+        options.signal?.throwIfAborted();
+        return client.request({ ...request, options });
+      })
+    : await client.request({ ...spec.request!(values), options });
+  onTasks?.(readTaskReferences(spec.name, data));
   return formatResult(spec.name, data, values);
 }

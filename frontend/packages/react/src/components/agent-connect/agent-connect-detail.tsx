@@ -103,6 +103,7 @@ export function AgentConnectDetailView({
       <AgentConnectInstructionsView
         key={`${selected.id}:${locale}:${activeGuide?.id ?? ''}:${credentials.revision}`}
         instructions={instructions}
+        apiKey={apiKey}
         locale={locale}
         agreementUrl={agreementUrl}
         onCopy={onCopy}

@@ -56,6 +56,11 @@ from openviking_cli.exceptions import ConflictError
 from openviking_cli.session.user_id import UserIdentifier
 
 
+@pytest.fixture(autouse=True)
+def static_agent_file(monkeypatch):
+    monkeypatch.setattr("openviking.session.compressor_v3.ensure_agent_file", AsyncMock())
+
+
 def _ctx() -> RequestContext:
     return RequestContext(user=UserIdentifier.the_default_user("u"), role=Role.ROOT)
 
