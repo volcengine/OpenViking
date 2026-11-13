@@ -286,6 +286,56 @@ async def test_newer_snapshot_of_remembered_pr_is_emitted():
 
 
 @pytest.mark.asyncio
+async def test_same_timestamp_issue_prefix_resumes_across_triggers():
+    # 500 plain issues sharing timestamp T fill every page of the first pass;
+    # the PR at T+1 must be reached on the next pass via the persisted
+    # scan_offset instead of re-reading page 1 forever.
+    tie = "2026-11-10T00:00:00Z"
+    later = "2026-11-10T00:00:01Z"
+    rows = [_issue_row(1000 + i, tie) for i in range(500)]
+    rows.append(_pr_row(7, later))
+    config = RadarConfig(enabled=True, max_prs_per_run=50)
+    gh = GithubOffsetGh(rows)
+
+    first = await collect_prs(
+        gh, "o/r", config, RadarState(issues_since=tie)
+    )
+    assert first.prs == []
+    assert first.caught_up is False
+    # Endpoint position persisted while the watermark stays on T.
+    assert first.state.issues_since == tie
+    assert first.state.scan_offset == 500
+
+    second = await collect_prs(gh, "o/r", config, first.state)
+    assert [pr.number for pr in second.prs] == [7]
+    assert second.caught_up is True
+    # Watermark movement consumes the tie prefix and resets the offset.
+    assert second.state.issues_since == later
+    assert second.state.scan_offset == 0
+
+
+@pytest.mark.asyncio
+async def test_scan_offset_resumes_after_page_guard():
+    # A tie prefix longer than the 10-page budget (10 x per_page) requires
+    # several passes; each resumes at the persisted endpoint offset until the
+    # PR past the prefix is finally reached.
+    tie = "2026-11-10T00:00:00Z"
+    later = "2026-11-10T00:00:01Z"
+    rows = [_issue_row(1000 + i, tie) for i in range(23)]
+    rows.append(_pr_row(7, later))
+    config = RadarConfig(enabled=True, max_prs_per_run=2)
+    gh = GithubOffsetGh(rows)
+
+    first = await collect_prs(gh, "o/r", config, RadarState(issues_since=tie))
+    assert first.prs == []
+    assert first.state.scan_offset == 20  # 10 full pages consumed
+
+    second = await collect_prs(gh, "o/r", config, first.state)
+    assert [pr.number for pr in second.prs] == [7]
+    assert second.state.scan_offset == 0
+
+
+@pytest.mark.asyncio
 async def test_tied_boundary_refs_are_kept_losslessly_beyond_200():
     # 300 PRs sharing ONE timestamp: all 300 boundary refs must be remembered
     # so the inclusive `since` re-emit on the next pass collects nothing,

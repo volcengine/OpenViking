@@ -67,22 +67,25 @@ class RadarSignalStore:
 
     @staticmethod
     def merge(existing: List[PrSignal], new: List[PrSignal]) -> List[PrSignal]:
-        """Merge fresh signals into the pending queue, keyed by PR number.
+        """Merge fresh signals into the pending queue.
 
-        A PR re-emitted by the inclusive ``since`` window with the SAME
-        timestamp is a duplicate: keep the first snapshot so a digest never
-        lists the same PR twice. A snapshot with a NEWER ``updated_at``
-        (e.g. an open PR that merged while queued across a window boundary)
-        replaces the stale one; dropping it here would consume the collection
-        watermark for an update that can never reach any later report.
+        Identity is the ``(number, updated_at)`` pair, not the number alone:
+
+          * an identical re-emit (inclusive ``since`` duplicate) keeps the
+            first snapshot, so a digest never lists the same row twice;
+          * a NEWER snapshot of an already queued PR is appended as a
+            distinct version. The window splitter routes each version to the
+            report window containing its own ``updated_at``, so a PR can
+            legitimately appear as open in W1 and merged in W2 instead of one
+            of those events being silently dropped.
+
+        Per-window duplicate handling lives in ``partition_pending``.
         """
-        index = {signal.number: position for position, signal in enumerate(existing)}
+        identities = {(s.number, s.updated_at) for s in existing}
         merged = list(existing)
         for signal in new:
-            position = index.get(signal.number)
-            if position is None:
-                index[signal.number] = len(merged)
+            key = (signal.number, signal.updated_at)
+            if key not in identities:
+                identities.add(key)
                 merged.append(signal)
-            elif signal.updated_at > merged[position].updated_at:
-                merged[position] = signal
         return merged

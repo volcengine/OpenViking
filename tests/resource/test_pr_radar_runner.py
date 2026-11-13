@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import json
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -219,6 +220,55 @@ def test_owner_user_id_falls_back_to_task_then_default():
     assert PrRadarRunner._owner_user_id(task, ctx_with_user) == "alice"
     assert PrRadarRunner._owner_user_id(task, SimpleNamespace()) == "bob"
     assert PrRadarRunner._owner_user_id(SimpleNamespace(), SimpleNamespace()) == "default"
+
+
+def test_io_context_strips_acl_bypass_from_watch_context():
+    from openviking.server.identity import RequestContext, Role
+    from openviking_cli.session.user_id import UserIdentifier
+
+    watch_ctx = RequestContext(
+        user=UserIdentifier("acme", "alice"), role=Role.USER, bypass_acl=True
+    )
+    io_ctx = PrRadarRunner._io_context(watch_ctx)
+    assert io_ctx.bypass_acl is False
+    # Identity is preserved for namespace owner checks.
+    assert io_ctx.user.user_id == "alice"
+
+    plain = RequestContext(
+        user=UserIdentifier("acme", "alice"), role=Role.USER, bypass_acl=False
+    )
+    assert PrRadarRunner._io_context(plain) is plain
+    # Test doubles (non-dataclass) pass through unchanged.
+    assert PrRadarRunner._io_context(_ctx) is _ctx
+
+
+def test_radar_relative_path_covers_user_namespace_resources():
+    project = PrRadarRunner._radar_relative_path(
+        "viking://user/alice/resources/projectA"
+    )
+    other = PrRadarRunner._radar_relative_path(
+        "viking://user/alice/resources/projectB"
+    )
+    assert project == "__user__/alice/projectA"
+    assert other == "__user__/alice/projectB"
+    assert project != other
+
+    config = RadarConfig(enabled=True)
+    target_a = PrRadarRunner._target_uri(config, "volcengine/OpenViking", "alice",
+                                         "viking://user/alice/resources/projectA")
+    target_b = PrRadarRunner._target_uri(config, "volcengine/OpenViking", "alice",
+                                         "viking://user/alice/resources/projectB")
+    assert target_a != target_b
+
+    # Account resources keep their original projection and cannot collide
+    # with the reserved user-namespace marker.
+    assert PrRadarRunner._radar_relative_path(
+        "viking://resources/volcengine/OpenViking"
+    ) == "volcengine/OpenViking"
+    assert PrRadarRunner._radar_relative_path(
+        "viking://resources/__user__/forged"
+    ) is None
+    assert PrRadarRunner._radar_relative_path("viking://temp/x") is None
 
 
 def test_validate_rejects_radar_on_non_github():
@@ -502,7 +552,7 @@ def test_signal_store_merge_dedupes_by_number():
     assert [pr.number for pr in merged] == [11, 12]
 
 
-def test_signal_store_merge_replaces_stale_snapshot_with_newer_update():
+def test_signal_store_keeps_distinct_versions_and_dedupes_reemits():
     from openviking.resource.github_radar.collector import _build_pr
     from openviking.resource.github_radar.signal_store import RadarSignalStore
 
@@ -512,14 +562,37 @@ def test_signal_store_merge_replaces_stale_snapshot_with_newer_update():
     merged_row["pull_request"]["merged_at"] = merged_row["updated_at"]
     newer_merged = _build_pr(merged_row)
 
+    # A newer snapshot is a distinct version, not a replacement: the open
+    # event still belongs to its own window and the merge event to the next.
     merged = RadarSignalStore.merge([old_open], [newer_merged])
-
-    assert [pr.number for pr in merged] == [7]
-    assert merged[0].merged_at == "2026-11-01T00:45:00Z"
+    assert [pr.number for pr in merged] == [7, 7]
+    assert merged[0].merged_at == ""
+    assert merged[1].merged_at == "2026-11-01T00:45:00Z"
 
     # Equal-timestamp re-emit (inclusive since duplicate) keeps the first one.
     duplicate = _build_pr(_pr_row(7, "2026-11-01T00:45:00Z"))
     assert RadarSignalStore.merge([newer_merged], [duplicate]) == [newer_merged]
+
+
+def test_partition_renders_one_version_per_pr_within_a_window():
+    from openviking.resource.github_radar.collector import _build_pr
+    from openviking.resource.pr_radar_runner import partition_pending
+
+    start, end = "2026-11-01T00:00:00Z", "2026-11-02T00:00:00Z"
+    open_v = _build_pr(_pr_row(7, "2026-11-01T00:30:00Z"))
+    merged_row = _pr_row(7, "2026-11-01T01:30:00Z")
+    merged_row["state"] = "closed"
+    merged_row["pull_request"]["merged_at"] = merged_row["updated_at"]
+    merged_v = _build_pr(merged_row)
+    next_window_v = _build_pr(_pr_row(8, "2026-11-03T00:00:00Z"))
+
+    in_window, deferred = partition_pending(
+        [open_v, merged_v, next_window_v], start, end
+    )
+    assert [pr.number for pr in in_window] == [7]
+    # The newest in-window snapshot wins for rendering.
+    assert in_window[0].merged_at == "2026-11-01T01:30:00Z"
+    assert [pr.number for pr in deferred] == [8]
 
 
 _RADAR_URI = RADAR_TARGET_URI
@@ -1030,4 +1103,119 @@ async def test_newer_queued_snapshot_reaches_report_after_merge():
     assert result.status == "published"
     latest = fs.files[next(uri for uri in fs.files if uri.endswith(LATEST_REPORT_NAME))]
     assert "2026-11-01T00:45:00Z" in latest
+    assert fs.files[_signals_uri(fs)] == ""
+
+
+@pytest.mark.asyncio
+async def test_partial_digest_is_marked_and_later_report_continues_it():
+    from unittest.mock import patch
+
+    fs = FakeFs()
+    base = "2026-11-10T00:00:00Z"
+    _seed_state(fs, base)
+    rows = [
+        _pr_row(1, "2026-11-10T00:10:00Z"),
+        _pr_row(2, "2026-11-10T00:20:00Z"),
+        _pr_row(3, "2026-11-10T00:30:00Z"),
+    ]
+    task = SimpleNamespace(
+        task_id="watch-1",
+        path=GITHUB_URL,
+        to_uri=WATCH_TO_URI,
+        user_id="alice",
+        processor_kwargs={
+            "pr_radar": {
+                "enabled": True,
+                "target_uri": _RADAR_URI,
+                "max_prs_per_run": 1,
+                "max_pending_prs": 2,
+                "digest_interval_minutes": 1440,
+            }
+        },
+    )
+    runner = PrRadarRunner(fs, gh=_SinceGh(rows))
+
+    async def run_at(ts):
+        with patch("openviking.resource.pr_radar_runner.have_gh", return_value=True), \
+             patch("openviking.resource.pr_radar_runner.utc_now",
+                   return_value=datetime.fromisoformat(ts.replace("Z", "+00:00"))):
+            return await runner.maybe_run(task, _ctx)
+
+    partial = None
+    partial_stamp = None
+    for ts in [
+        "2026-11-11T01:00:00Z",
+        "2026-11-12T01:00:00Z",
+        "2026-11-13T01:00:00Z",
+        "2026-11-14T01:00:00Z",
+        "2026-11-15T01:00:00Z",
+    ]:
+        result = await run_at(ts)
+        if result.status == "published" and result.warnings:
+            partial = result
+            # Assert immediately: a later full digest consumes the fragment.
+            partial_archive = [
+                body
+                for uri, body in fs.files.items()
+                if "/reports/" in uri and "Partial digest" in body
+            ]
+            assert len(partial_archive) == 1
+            fragments = _read_state(fs)["partial_fragments"]
+            assert len(fragments) == 1 and "stamp" in fragments[0]
+            partial_stamp = fragments[0]["stamp"]
+
+    assert partial is not None
+    # By the end the full digest has closed the boundary and consumed the
+    # fragment log, while its continuation banner references the archive.
+    final_md = fs.files[
+        next(uri for uri in fs.files if uri.endswith(LATEST_REPORT_NAME))
+    ]
+    assert "Continuation" in final_md
+    assert partial_stamp in final_md
+    assert _read_state(fs)["partial_fragments"] == []
+
+
+@pytest.mark.asyncio
+async def test_cross_window_versions_are_both_archived():
+    from unittest.mock import patch
+
+    fs = FakeFs()
+    fs.files[f"{_RADAR_URI}/{STATE_FILENAME}"] = json.dumps({
+        "issues_since": "2026-11-10T02:00:00Z",
+        "issues_seen": [],
+        "last_digest_at": "2026-11-10T00:00:00Z",
+    })
+    old_open = _build_pr(_pr_row(7, "2026-11-10T01:00:00Z"))
+    fs.files[f"{_RADAR_URI}/{SIGNALS_FILENAME}"] = json.dumps(old_open.to_row())
+
+    merged_row = _pr_row(7, "2026-11-11T00:30:00Z")
+    merged_row["state"] = "closed"
+    merged_row["pull_request"]["merged_at"] = merged_row["updated_at"]
+    task = SimpleNamespace(
+        task_id="watch-1",
+        path=GITHUB_URL,
+        to_uri=WATCH_TO_URI,
+        user_id="alice",
+        processor_kwargs={
+            "pr_radar": {"enabled": True, "target_uri": _RADAR_URI,
+                         "digest_interval_minutes": 1440}
+        },
+    )
+    runner = PrRadarRunner(fs, gh=_SinceGh([merged_row]))
+
+    async def run_at(ts):
+        with patch("openviking.resource.pr_radar_runner.have_gh", return_value=True), \
+             patch("openviking.resource.pr_radar_runner.utc_now",
+                   return_value=datetime.fromisoformat(ts.replace("Z", "+00:00"))):
+            return await runner.maybe_run(task, _ctx)
+
+    await run_at("2026-11-11T01:00:00Z")  # window W1: open snapshot
+    await run_at("2026-11-12T01:00:00Z")  # window W2: merged snapshot
+
+    archives = [body for uri, body in fs.files.items() if "/reports/" in uri]
+    assert len(archives) == 2
+    # The older open observation is archived in its own window rather than
+    # being erased by the newer merged version.
+    assert any("2026-11-10T01:00:00Z" in body for body in archives)
+    assert any("2026-11-11T00:30:00Z" in body for body in archives)
     assert fs.files[_signals_uri(fs)] == ""

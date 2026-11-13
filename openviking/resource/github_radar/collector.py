@@ -87,25 +87,34 @@ async def collect_prs(
 
     On transport failure the previous state is returned untouched so the next
     watch trigger retries the same window. On a bounded stop the watermark only
-    advances over the complete ascending prefix already read.
+    advances over the complete ascending prefix already read; when the stop
+    happens inside a same-timestamp prefix (e.g. hundreds of issues sharing one
+    ``updated_at``), ``scan_offset`` records the endpoint position reached so
+    the next trigger resumes after it instead of re-reading page 1 forever.
     """
     since = state.issues_since or first_floor or config.first_run_floor()
     watermark = since
     previously_seen: Set[str] = set(state.issues_seen)
     boundary_refs: Set[str] = set()
     collected: List[PrSignal] = []
-    page = 1
     # Counts newly collected PRs only: issue rows advance the watermark but
     # never consume the PR budget, so the cap matches its name.
     prs_collected = 0
     caught_up = False
+    rows_consumed = 0
     # per_page must stay constant across pages within one pass: GitHub slices
     # each request at offset=(page-1)*per_page, so shrinking per_page mid-scan
     # moves the offset backwards and re-emits the previous page's rows. The PR
     # cap is enforced between pages by the while condition instead.
     per_page = min(_PER_PAGE, config.max_prs_per_run)
+    # Resume a previously interrupted same-timestamp prefix at its endpoint
+    # offset. per_page is derived deterministically from the watch config,
+    # which is immutable after watch creation.
+    page = state.scan_offset // per_page + 1
+    skip = state.scan_offset % per_page
+    pages_fetched = 0
 
-    while prs_collected < config.max_prs_per_run and page <= _MAX_PAGES_PER_RUN:
+    while prs_collected < config.max_prs_per_run and pages_fetched < _MAX_PAGES_PER_RUN:
         try:
             rows = await gh.api_get_json(
                 f"repos/{repo}/issues",
@@ -128,7 +137,13 @@ async def collect_prs(
             logger.warning("[PrRadar] issues endpoint returned %s, holding watermark", type(rows))
             return CollectOutcome(prs=collected, state=state, caught_up=False)
 
-        for row in rows:
+        pages_fetched += 1
+        page_rows = rows[skip:] if skip else rows
+        skip = 0
+        # Endpoint position includes issue and malformed rows, not just PRs.
+        rows_consumed += len(page_rows)
+
+        for row in page_rows:
             if not isinstance(row, dict):
                 continue
             stamp = norm_ts(row.get("updated_at"))
@@ -161,7 +176,15 @@ async def collect_prs(
             break
         page += 1
 
-    new_state = _advance_state(state, watermark, boundary_refs, previously_seen, since)
+    new_state = _advance_state(
+        state,
+        watermark,
+        boundary_refs,
+        previously_seen,
+        since,
+        rows_consumed,
+        caught_up,
+    )
     if not caught_up:
         logger.info(
             "[PrRadar] %s: per-run bound reached (%s PRs or %s pages), "
@@ -179,19 +202,33 @@ def _advance_state(
     boundary_refs: Set[str],
     previously_seen: Set[str],
     since: str,
+    rows_consumed: int,
+    caught_up: bool,
 ) -> RadarState:
     """Build the next watermark state.
 
     ``boundary_refs`` holds every PR ref sharing the final watermark timestamp,
     so the inclusive ``since`` does not re-emit them next pass. The set must be
     stored losslessly: truncating it would let tied boundary rows survive as
-    "new" PRs forever. Its natural bound is the rows read in one pass (the
-    10-page x 100-row page guard), typically a handful for distinct timestamps.
-    When nothing landed on the final watermark (usually an empty page), keep
-    the previous memory rather than clearing it and re-emitting an old boundary.
+    "new" PRs forever. When nothing landed on the final watermark (usually an
+    empty page), keep the previous memory rather than clearing it and
+    re-emitting an old boundary.
+
+    When the watermark did not move, the pass is still paging through a
+    same-timestamp prefix: union the boundary refs with previous memory and
+    carry the endpoint offset forward. Any watermark movement means the whole
+    tie prefix was read, so the offset resets to 0.
     """
-    next_seen = sorted(boundary_refs) if boundary_refs else sorted(previously_seen)
+    watermark_moved = watermark > since
+    if watermark_moved:
+        next_seen = sorted(boundary_refs) if boundary_refs else sorted(previously_seen)
+        next_offset = 0
+    else:
+        next_seen = sorted(previously_seen | boundary_refs)
+        next_offset = 0 if caught_up else previous.scan_offset + rows_consumed
     return RadarState(
         issues_since=watermark or since or previous.issues_since,
         issues_seen=next_seen,
+        scan_offset=next_offset,
+        partial_fragments=list(previous.partial_fragments),
     )

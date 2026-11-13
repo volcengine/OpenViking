@@ -30,6 +30,7 @@ dumping the whole backlog into a mislabeled report.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
@@ -63,6 +64,7 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _RESOURCE_URI_PREFIX = "viking://resources/"
+_USER_RESOURCE_MARKER = "__user__"
 
 
 @dataclass(frozen=True)
@@ -175,13 +177,24 @@ def partition_pending(
     Timestamps share the fixed ``%Y-%m-%dT%H:%M:%SZ`` shape, so lexicographic
     comparison equals chronological order. A row without a parseable
     timestamp cannot be placed and is treated as inside to avoid starving it.
+
+    Multiple versions of one PR (distinct ``updated_at``) may land in the same
+    window; only the newest version is rendered, so a report lists each PR
+    number at most once while older versions remain available for their own
+    windows via the deferred list.
     """
     in_window: list[PrSignal] = []
     deferred: list[PrSignal] = []
+    newest_by_number: dict[int, int] = {}
     for pr in prs:
         stamp = pr.updated_at
         if not stamp or (window_start <= stamp <= window_end):
-            in_window.append(pr)
+            position = newest_by_number.get(pr.number)
+            if position is None:
+                newest_by_number[pr.number] = len(in_window)
+                in_window.append(pr)
+            elif stamp and stamp > in_window[position].updated_at:
+                in_window[position] = pr
         else:
             deferred.append(pr)
     return in_window, deferred
@@ -225,7 +238,15 @@ class PrRadarRunner:
                 self._owner_user_id(task, ctx),
                 getattr(task, "to_uri", None),
             )
-            state = await self._load_state(target_uri, ctx)
+            # Radar writes must obey the caller's own namespace/ACL policy.
+            # The watch runtime context carries bypass_acl=True for trusted
+            # background ingestion; reusing it here would let an explicit
+            # target_uri overwrite child files (latest.md, reports, state)
+            # whose own ACL denies the user, even though directory-level
+            # creation checks passed. Derived targets live in the caller's
+            # own user namespace and pass the ordinary owner checks.
+            io_ctx = self._io_context(ctx)
+            state = await self._load_state(target_uri, io_ctx)
             # Anchor the first-run floor on the watch creation time so the
             # collected range matches the labeled backfill window: a delayed
             # first trigger (gh missing, scheduler downtime) must not shrink
@@ -239,12 +260,12 @@ class PrRadarRunner:
             # Raw-material layer: undigested PRs accumulate across capped
             # collection passes so a report always covers a complete window.
             signal_store = RadarSignalStore(self._fs, target_uri)
-            pending = await signal_store.load(ctx)
+            pending = await signal_store.load(io_ctx)
             merged = signal_store.merge(pending, outcome.prs)
-            # Compare content, not length: a newer snapshot may replace an
-            # equal-length pending entry and still needs to be persisted.
+            # Compare content, not length: a newer snapshot may append a new
+            # version of an equal-length pending queue and still needs saving.
             if merged != pending:
-                await signal_store.save(merged, ctx)
+                await signal_store.save(merged, io_ctx)
 
             plan = plan_digest(
                 state=state,
@@ -259,7 +280,7 @@ class PrRadarRunner:
                 # Persist the collection watermark; the digest boundary stays put.
                 collection_state = replace(outcome.state, last_digest_at=state.last_digest_at)
                 if collection_state != state:
-                    await self._write_state(target_uri, collection_state, ctx)
+                    await self._write_state(target_uri, collection_state, io_ctx)
                 if not merged:
                     return RadarRunResult(
                         status="empty",
@@ -292,7 +313,12 @@ class PrRadarRunner:
 
             # Collection watermark advances; digest watermark only on a full digest.
             next_digest_at = plan.advance_to or state.last_digest_at
-            new_state = replace(outcome.state, last_digest_at=next_digest_at)
+            fragments = list(state.partial_fragments)
+            new_state = replace(
+                outcome.state,
+                last_digest_at=next_digest_at,
+                partial_fragments=fragments,
+            )
 
             # Only signals inside the labeled window belong to this report;
             # newer ones stay queued for the next window instead of being
@@ -307,7 +333,7 @@ class PrRadarRunner:
                 # no report file and no LLM call. Deferred signals stay queued.
                 # No publish can fail here, so persisting the boundary is safe.
                 if new_state != state:
-                    await self._write_state(target_uri, new_state, ctx)
+                    await self._write_state(target_uri, new_state, io_ctx)
                 return RadarRunResult(
                     status="empty",
                     target_uri=target_uri,
@@ -316,10 +342,31 @@ class PrRadarRunner:
                     window_end=plan.window_end,
                 )
 
+            archive_stamp = report_stamp()
+            if plan.partial:
+                # Remember the fragment so later full-window reports label
+                # themselves as continuations instead of looking complete.
+                fragments.append(
+                    {
+                        "stamp": archive_stamp,
+                        "window_start": plan.window_start,
+                        "window_end": plan.window_end,
+                        "pr_count": len(in_window),
+                    }
+                )
+                new_state = replace(new_state, partial_fragments=fragments)
+
             report, report_mode = await self._render(
-                repo, in_window, config, ctx, plan.window_start, plan.window_end
+                repo,
+                in_window,
+                config,
+                ctx,
+                plan.window_start,
+                plan.window_end,
+                partial=plan.partial,
+                continuation_fragments=None if plan.partial else fragments,
             )
-            await self._publish_report(target_uri, report, ctx)
+            await self._publish_report(target_uri, report, io_ctx, archive_stamp)
             # Drain the queue BEFORE advancing the watermark. The two writes
             # are not transactional: if the state write landed first and the
             # queue write then failed, already-published signals would reload
@@ -328,11 +375,14 @@ class PrRadarRunner:
             # so the next trigger retries the same window (at worst a duplicate
             # report) instead of losing signals.
             if deferred:
-                await signal_store.save(deferred, ctx)
+                await signal_store.save(deferred, io_ctx)
             else:
-                await signal_store.clear(ctx)
+                await signal_store.clear(io_ctx)
+            if not plan.partial:
+                # Full digest: all earlier fragments are consumed here.
+                new_state = replace(new_state, partial_fragments=[])
             if new_state != state:
-                await self._write_state(target_uri, new_state, ctx)
+                await self._write_state(target_uri, new_state, io_ctx)
             return RadarRunResult(
                 status="published",
                 pr_count=len(in_window),
@@ -354,6 +404,21 @@ class PrRadarRunner:
             return RadarRunResult(status="failed", reason=type(exc).__name__)
 
     # -- helpers ------------------------------------------------------------
+
+    @staticmethod
+    def _io_context(ctx: Any) -> Any:
+        """Return a context that enforces the caller's normal ACL policy.
+
+        Watch runtime contexts minted by ``WatchManager.context`` carry
+        ``bypass_acl=True`` for trusted background ingestion. Radar files may
+        live at an explicit user-supplied target whose child ACLs deny the
+        caller, so radar I/O must not inherit that bypass: namespace owner
+        checks and per-file ACLs are evaluated normally. Test doubles (plain
+        namespaces) are returned unchanged.
+        """
+        if dataclasses.is_dataclass(ctx) and getattr(ctx, "bypass_acl", False):
+            return replace(ctx, bypass_acl=False)
+        return ctx
 
     @staticmethod
     def _resolve_repo(path: str) -> Optional[str]:
@@ -401,16 +466,40 @@ class PrRadarRunner:
 
     @staticmethod
     def _radar_relative_path(watch_to_uri: Optional[str]) -> Optional[str]:
-        """Project a watch's ``viking://resources/<rel>`` target onto the radar
-        namespace, preserving directory hierarchy. Returns None when the target
-        is missing or carries an unexpected shape."""
-        if not watch_to_uri or not watch_to_uri.startswith(_RESOURCE_URI_PREFIX):
+        """Project a watch resource target onto the radar namespace.
+
+        Both supported resource namespaces are covered:
+
+          * ``viking://resources/<rel>`` -> ``<rel>`` (account resources)
+          * ``viking://user/<uid>/resources/<rel>`` ->
+            ``__user__/<uid>/<rel>`` (user-owned resources)
+
+        The reserved marker keeps the two projections collision-free, so two
+        distinct watches of the same GitHub repo (e.g. projectA vs projectB
+        under a user namespace) no longer fall back to one shared slug
+        directory. Returns None when the target is missing or malformed.
+        """
+        if not watch_to_uri:
             return None
-        relative = watch_to_uri[len(_RESOURCE_URI_PREFIX):].strip("/")
-        if not relative:
-            return None
-        segments = relative.split("/")
-        if any(not segment or segment in {".", ".."} for segment in segments):
+        if watch_to_uri.startswith(_RESOURCE_URI_PREFIX):
+            relative = watch_to_uri[len(_RESOURCE_URI_PREFIX) :].strip("/")
+            segments = relative.split("/") if relative else []
+            # Refuse the reserved marker so account paths can never collide
+            # with the user-namespace projection.
+            if segments and segments[0] == _USER_RESOURCE_MARKER:
+                return None
+        else:
+            body = watch_to_uri[len("viking://") :]
+            parts = [p for p in body.split("/") if p]
+            # Canonical shape: user / <uid> / resources / <rel...>
+            if len(parts) >= 4 and parts[0] == "user" and parts[2] == "resources":
+                user_id, relative_parts = parts[1], parts[3:]
+                segments = [_USER_RESOURCE_MARKER, user_id, *relative_parts]
+            else:
+                return None
+        if not segments or any(
+            not segment or segment in {".", ".."} for segment in segments
+        ):
             return None
         return "/".join(segments)
 
@@ -454,13 +543,23 @@ class PrRadarRunner:
         ctx: Any,
         window_start: str = "",
         window_end: str = "",
+        *,
+        partial: bool = False,
+        continuation_fragments: Optional[list] = None,
     ) -> tuple[str, str]:
         """Build the report markdown. Returns (markdown, mode) where mode is
         ``enriched`` when the LLM summary layer was produced, ``template`` on
         the deterministic fallback. Summary failures never raise."""
         if not config.summary_enabled or self._vlm_resolver is None:
             return (
-                render_report(repo, prs, window_start, window_end),
+                render_report(
+                    repo,
+                    prs,
+                    window_start,
+                    window_end,
+                    partial=partial,
+                    continuation_fragments=continuation_fragments,
+                ),
                 "template",
             )
         summarizer = RadarSummarizer(
@@ -471,14 +570,38 @@ class PrRadarRunner:
             logger.warning(
                 "[PrRadar] summary unavailable for %s, publishing template report", repo
             )
-            return render_report(repo, prs, window_start, window_end), "template"
+            return (
+                render_report(
+                    repo,
+                    prs,
+                    window_start,
+                    window_end,
+                    partial=partial,
+                    continuation_fragments=continuation_fragments,
+                ),
+                "template",
+            )
         return (
-            render_enriched_report(repo, prs, summary, window_start, window_end),
+            render_enriched_report(
+                repo,
+                prs,
+                summary,
+                window_start,
+                window_end,
+                partial=partial,
+                continuation_fragments=continuation_fragments,
+            ),
             "enriched",
         )
 
-    async def _publish_report(self, target_uri: str, report: str, ctx: Any) -> None:
-        stamp = report_stamp()
+    async def _publish_report(
+        self,
+        target_uri: str,
+        report: str,
+        ctx: Any,
+        stamp: Optional[str] = None,
+    ) -> None:
+        stamp = stamp or report_stamp()
         await self._fs.write_file(f"{target_uri}/{LATEST_REPORT_NAME}", report, ctx=ctx)
         await self._fs.write_file(
             f"{target_uri}/{REPORTS_DIRNAME}/{stamp}.md",

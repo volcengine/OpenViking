@@ -113,9 +113,12 @@ class RadarSummarizer:
         prs: List[PrSignal],
     ) -> Dict[int, PrTriage]:
         template = self._load_prompt("triage.md")
-        allowed = {pr.number for pr in prs}
         rows: Dict[int, PrTriage] = {}
         for batch in self._chunk_by_bytes(prs):
+            # The allowlist must match the numbers actually sent in THIS
+            # prompt: a response naming a PR from another batch would
+            # otherwise overwrite the grounded summary earned earlier.
+            batch_allowed = {pr.number for pr in batch}
             payload = [self._pr_payload(pr) for pr in batch]
             prompt = template.format(
                 repo=repo,
@@ -142,7 +145,7 @@ class RadarSummarizer:
             if not isinstance(raw_items, list):
                 continue
             for raw_row in raw_items:
-                triage_row = self._parse_triage_row(raw_row, allowed)
+                triage_row = self._parse_triage_row(raw_row, batch_allowed)
                 if triage_row is not None:
                     rows[triage_row.number] = triage_row
         return rows
@@ -184,7 +187,10 @@ class RadarSummarizer:
         triage: Dict[int, PrTriage],
     ) -> Optional[RadarSynthesis]:
         template = self._load_prompt("synthesis.md")
-        allowed = {pr.number for pr in prs}
+        # Highlights may only name PRs present in the synthesis payload, i.e.
+        # the triage rows actually produced in stage 1 — not every collected
+        # PR, some of which were never part of this model input.
+        allowed = set(triage)
         known_topics = {row.topic for row in triage.values()}
         payload = [
             {

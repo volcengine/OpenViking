@@ -110,6 +110,32 @@ def test_report_stamp_is_unique_for_consecutive_calls():
     assert len(stamps) == 10
 
 
+def test_partial_report_carries_visible_fragment_banner():
+    report = render_report(REPO, [_pr()], "2026-11-01T00:00:00Z",
+                           "2026-11-02T00:00:00Z", partial=True)
+    assert "Partial digest" in report
+    # A normal report must not claim partial coverage.
+    normal = render_report(REPO, [_pr()], "2026-11-01T00:00:00Z",
+                           "2026-11-02T00:00:00Z")
+    assert "Partial digest" not in normal
+
+
+def test_continuation_report_references_earlier_fragments():
+    fragments = [
+        {"stamp": "2026-11-02T01-00-00-abcd1234", "pr_count": 2},
+        {"stamp": "2026-11-02T02-00-00-efef5678", "pr_count": 1},
+    ]
+    report = render_enriched_report(
+        REPO, [_pr()],
+        RadarSummary(triage={}, synthesis=None),
+        "2026-11-01T00:00:00Z", "2026-11-02T00:00:00Z",
+        continuation_fragments=fragments,
+    )
+    assert "Continuation" in report
+    assert "2026-11-02T01-00-00-abcd1234" in report
+    assert "2026-11-02T02-00-00-efef5678" in report
+
+
 def test_synthesis_report_keeps_disclaimer_and_topic_layer():
     synthesis = RadarSynthesis(
         editorial_note="编者按",

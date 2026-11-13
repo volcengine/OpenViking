@@ -251,6 +251,72 @@ async def test_scalar_sections_keeps_triage_only_result():
 
 
 @pytest.mark.asyncio
+async def test_triage_allowlist_is_scoped_to_each_batch():
+    big_body = "x" * 20_000  # forces one PR per triage batch
+    prs = [_pr(11, body=big_body), _pr(12, body=big_body)]
+
+    class Handle:
+        def __init__(self): self.calls = 0
+        async def get_completion_async(self, prompt):
+            self.calls += 1
+            if self.calls == 1:
+                # Batch 1 (PR #11): grounded summary.
+                return json.dumps({"items": [
+                    {"number": 11, "topic": "gateway", "severity": "high",
+                     "summary_zh": "批次1的正确摘要", "impact": "i",
+                     "recommended_action": ""}
+                ]}, ensure_ascii=False)
+            # Batch 2 (PR #12) wrongly names #11: must be rejected.
+            return json.dumps({"items": [
+                {"number": 12, "topic": "gateway", "severity": "low",
+                 "summary_zh": "12 摘要", "impact": "i", "recommended_action": ""},
+                {"number": 11, "topic": "gateway", "severity": "low",
+                 "summary_zh": "越权覆盖", "impact": "i", "recommended_action": ""}
+            ]}, ensure_ascii=False)
+
+    class Resolver:
+        async def get_vlm(self, account_id): return Handle()
+
+    summary = await RadarSummarizer(Resolver(), batch_bytes=500).summarize(
+        REPO, prs, "acct-1"
+    )
+    assert summary is not None
+    # The batch-1 grounded row survives untouched.
+    assert summary.triage[11].summary_zh == "批次1的正确摘要"
+    assert summary.triage[11].severity == "high"
+    assert summary.triage[12].summary_zh == "12 摘要"
+
+
+@pytest.mark.asyncio
+async def test_synthesis_highlights_reject_prs_without_triage_input():
+    # Both PRs are collected, but triage only produces a row for #11, so the
+    # synthesis payload contains just #11. A highlight naming #12 must be
+    # filtered against the actual synthesis input, not all collected PRs.
+    class Handle:
+        def __init__(self): self.calls = 0
+        async def get_completion_async(self, prompt):
+            self.calls += 1
+            if self.calls == 1:
+                return json.dumps({"items": [
+                    {"number": 11, "topic": "gateway", "severity": "high",
+                     "summary_zh": "x", "impact": "i", "recommended_action": ""}
+                ]})
+            return json.dumps({"editorial_note": "n", "sections": [
+                {"topic": "gateway", "overview_zh": "o",
+                 "highlight_numbers": [11, 12]}
+            ]})
+
+    class Resolver:
+        async def get_vlm(self, account_id): return Handle()
+
+    summary = await RadarSummarizer(Resolver(), batch_bytes=60_000).summarize(
+        REPO, [_pr(11), _pr(12)], "acct-1"
+    )
+    assert summary is not None and summary.synthesis is not None
+    assert summary.synthesis.sections[0].highlight_numbers == [11]
+
+
+@pytest.mark.asyncio
 async def test_scalar_highlight_numbers_is_treated_as_empty():
     handle = FakeVLM(
         [

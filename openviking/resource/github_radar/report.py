@@ -75,12 +75,42 @@ def _render_one(pr: PrSignal, triage: Optional[PrTriage] = None) -> List[str]:
     return lines
 
 
+def _coverage_notices(
+    partial: bool,
+    continuation_fragments: Optional[List[dict]],
+) -> List[str]:
+    """Banner lines explaining incomplete window coverage, if any."""
+    notices: List[str] = []
+    if partial:
+        notices.append(
+            "> ⚠️ **Partial digest:** the pending queue reached its safety "
+            "limit, so this report covers only the signals listed below and "
+            "does **not** advance the report window. A later digest will "
+            "cover the remainder."
+        )
+        notices.append("")
+    if continuation_fragments:
+        stamps = ", ".join(
+            _md_text(str(item.get("stamp", ""))) for item in continuation_fragments
+        )
+        notices.append(
+            f"> ℹ️ **Continuation:** this report follows partial digest(s) "
+            f"already published at {stamps}, which covered earlier fragments "
+            f"of the same boundary. Read them together for full window coverage."
+        )
+        notices.append("")
+    return notices
+
+
 def _render_header(
     repo: str,
     prs: List[PrSignal],
     generated: str,
     window_start: Optional[str] = None,
     window_end: Optional[str] = None,
+    *,
+    partial: bool = False,
+    continuation_fragments: Optional[List[dict]] = None,
 ) -> List[str]:
     lines = [
         f"# PR Radar — {repo}",
@@ -90,6 +120,9 @@ def _render_header(
     if window_start and window_end:
         lines.append(f"Window: {window_start} ~ {window_end}")
     lines.append("")
+    lines.extend(
+        _coverage_notices(partial, continuation_fragments)
+    )
     return lines
 
 
@@ -162,11 +195,22 @@ def render_report(
     prs: List[PrSignal],
     window_start: Optional[str] = None,
     window_end: Optional[str] = None,
+    *,
+    partial: bool = False,
+    continuation_fragments: Optional[List[dict]] = None,
 ) -> str:
     """Render PRs into a markdown report grouped by lifecycle bucket."""
     generated = fmt_ts(utc_now())
     return "\n".join(
-        _render_header(repo, prs, generated, window_start, window_end)
+        _render_header(
+            repo,
+            prs,
+            generated,
+            window_start,
+            window_end,
+            partial=partial,
+            continuation_fragments=continuation_fragments,
+        )
         + _render_details(prs)
     )
 
@@ -177,11 +221,22 @@ def render_enriched_report(
     summary: RadarSummary,
     window_start: Optional[str] = None,
     window_end: Optional[str] = None,
+    *,
+    partial: bool = False,
+    continuation_fragments: Optional[List[dict]] = None,
 ) -> str:
     """Render an LLM-enriched report: editorial topic layer on top, then the
     exhaustive deterministic detail list with per-PR triage notes."""
     generated = fmt_ts(utc_now())
-    lines = _render_header(repo, prs, generated, window_start, window_end)
+    lines = _render_header(
+        repo,
+        prs,
+        generated,
+        window_start,
+        window_end,
+        partial=partial,
+        continuation_fragments=continuation_fragments,
+    )
     if summary.synthesis is not None:
         # Only claim an LLM editorial layer when one was actually produced;
         # a triage-only summary contributes nothing above the detail list.

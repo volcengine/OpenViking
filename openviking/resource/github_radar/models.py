@@ -180,21 +180,38 @@ class RadarState:
         published report window. Empty means the initial backfill window has
         not been digested yet. Subsequent windows are anchored on the watch's
         ``created_at`` and advance by ``watch_interval`` per digest.
+      * :attr:`scan_offset` -- endpoint rows already consumed at the current
+        ``issues_since`` while a same-timestamp prefix is still being read;
+        lets the next trigger resume past the issue-heavy tie prefix instead
+        of re-reading page 1 forever. Reset to 0 whenever the watermark moves.
+      * :attr:`partial_fragments` -- safety-valve partial digests already
+        published for the current boundary, so later full-window reports can
+        label themselves as continuations of those fragments.
     """
 
     issues_since: str = ""
     issues_seen: List[str] = field(default_factory=list)
     last_digest_at: str = ""
+    scan_offset: int = 0
+    partial_fragments: List[Dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: Any) -> "RadarState":
         if not isinstance(data, dict):
             return cls()
         seen = data.get("issues_seen")
+        fragments = data.get("partial_fragments")
+        offset = data.get("scan_offset", 0)
         return cls(
             issues_since=str(data.get("issues_since") or ""),
             issues_seen=[str(item) for item in seen] if isinstance(seen, list) else [],
             last_digest_at=str(data.get("last_digest_at") or ""),
+            scan_offset=offset if isinstance(offset, int) and offset >= 0 else 0,
+            partial_fragments=[
+                dict(item) for item in fragments if isinstance(item, dict)
+            ]
+            if isinstance(fragments, list)
+            else [],
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -202,6 +219,8 @@ class RadarState:
             "issues_since": self.issues_since,
             "issues_seen": list(self.issues_seen),
             "last_digest_at": self.last_digest_at,
+            "scan_offset": self.scan_offset,
+            "partial_fragments": [dict(item) for item in self.partial_fragments],
         }
 
 
