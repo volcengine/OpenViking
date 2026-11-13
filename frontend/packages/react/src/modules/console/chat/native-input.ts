@@ -1,4 +1,4 @@
-import { OvClientError } from '../../client/errors.js';
+import { OvClientError } from '../../../client/errors.js';
 import type { VikingBotChatInput } from './types.js';
 
 /** Uploads belong to the host; native Bot accepts image URLs, not browser Files. */

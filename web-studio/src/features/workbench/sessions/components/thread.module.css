@@ -1,0 +1,7 @@
+/* This page already supplies its header and session navigation. */
+.console :global(.ov-console__toolbar) {
+  display: none;
+}
+.console :global(.ov-console__panel) {
+  padding: 0;
+}

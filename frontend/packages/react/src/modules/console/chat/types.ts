@@ -1,12 +1,12 @@
-import type { OvRequestOptions } from '../../client/types.js';
-import type { Locale } from '../../shared/locale.js';
+import type { OvRequestOptions } from '../../../client/types.js';
+import type { Locale } from '../../../shared/locale.js';
 import type {
   VikingBotMessage,
   VikingBotMessagePart,
   VikingBotStreamingState,
   VikingBotDraft,
-} from '../../components/viking-bot/model.js';
-import type { VikingBotSession } from '../../components/viking-bot/capabilities.js';
+} from '../../../components/viking-bot/model.js';
+import type { VikingBotSession } from '../../../components/viking-bot/capabilities.js';
 
 /** Normalized protocol events. Host adapters keep TOP/MA details outside the UI package. */
 export type VikingBotChatEvent =

@@ -243,8 +243,3 @@
 .deleteAction:hover {
   background: color-mix(in srgb, var(--destructive) 10%, transparent);
 }
-
-/* Hosted connections expose the command panel only. */
-.commandOnlyConsole :global(.ov-console__mode[aria-pressed='false']) {
-  display: none;
-}
