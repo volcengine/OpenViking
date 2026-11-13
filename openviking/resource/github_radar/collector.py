@@ -31,6 +31,10 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _PER_PAGE = 100
+# Issue rows share the endpoint budget but must not count against
+# ``max_prs_per_run``; bound pages instead so an issue-heavy repository cannot
+# turn one trigger into an unbounded pagination loop.
+_MAX_PAGES_PER_RUN = 10
 _SEEN_LIMIT = 200
 
 
@@ -86,11 +90,13 @@ async def collect_prs(
     boundary_refs: Set[str] = set()
     collected: List[PrSignal] = []
     page = 1
-    fetched = 0
+    # Counts newly collected PRs only: issue rows advance the watermark but
+    # never consume the PR budget, so the cap matches its name.
+    prs_collected = 0
     caught_up = False
 
-    while fetched < config.max_prs_per_run:
-        per_page = min(_PER_PAGE, config.max_prs_per_run - fetched)
+    while prs_collected < config.max_prs_per_run and page <= _MAX_PAGES_PER_RUN:
+        per_page = min(_PER_PAGE, config.max_prs_per_run - prs_collected)
         try:
             rows = await gh.api_get_json(
                 f"repos/{repo}/issues",
@@ -130,8 +136,8 @@ async def collect_prs(
             if signal.source_ref in previously_seen:
                 continue
             collected.append(signal)
+            prs_collected += 1
 
-        fetched += len(rows)
         if len(rows) < per_page:
             caught_up = True
             break
@@ -140,9 +146,11 @@ async def collect_prs(
     new_state = _advance_state(state, watermark, boundary_refs, previously_seen, since)
     if not caught_up:
         logger.info(
-            "[PrRadar] %s: cap of %s reached, backfill continues next trigger",
+            "[PrRadar] %s: per-run bound reached (%s PRs or %s pages), "
+            "backfill continues next trigger",
             repo,
             config.max_prs_per_run,
+            _MAX_PAGES_PER_RUN,
         )
     return CollectOutcome(prs=collected, state=new_state, caught_up=caught_up)
 

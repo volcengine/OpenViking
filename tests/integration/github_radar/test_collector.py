@@ -118,6 +118,50 @@ async def test_cap_stops_scan_and_marks_not_caught_up():
 
 
 @pytest.mark.asyncio
+async def test_issue_rows_do_not_consume_pr_budget():
+    # A full page of plain issues used to exhaust max_prs_per_run with zero
+    # PRs collected; pagination now continues until the PR budget is spent.
+    issue_page = [
+        _issue_row(100 + i, "2026-11-01T00:00:00Z") for i in range(2)
+    ]
+    pr_page = [
+        _pr_row(1, "2026-11-01T00:01:00Z"),
+        _pr_row(2, "2026-11-01T00:02:00Z"),
+    ]
+    gh = FakeGh([issue_page, pr_page])
+    config = RadarConfig(enabled=True, max_prs_per_run=2)
+    outcome = await collect_prs(
+        gh, "o/r", config, RadarState(issues_since="2026-11-01T00:00:00Z")
+    )
+
+    assert [pr.number for pr in outcome.prs] == [1, 2]
+    assert outcome.caught_up is False
+    assert len(gh.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_page_guard_bounds_issue_heavy_scans(monkeypatch):
+    from openviking.resource.github_radar import collector as collector_mod
+
+    monkeypatch.setattr(collector_mod, "_MAX_PAGES_PER_RUN", 2)
+    # Pages must be as full as the requested per_page (50) so the short-page
+    # termination does not fire before the page guard does.
+    pages = [
+        [_issue_row(100 * page + i, "2026-11-01T00:00:00Z") for i in range(50)]
+        for page in range(3)
+    ]
+    gh = FakeGh(pages)
+    config = RadarConfig(enabled=True, max_prs_per_run=50)
+    outcome = await collect_prs(
+        gh, "o/r", config, RadarState(issues_since="2026-11-01T00:00:00Z")
+    )
+
+    assert outcome.prs == []
+    assert outcome.caught_up is False
+    assert len(gh.calls) == 2
+
+
+@pytest.mark.asyncio
 async def test_transport_failure_holds_earned_prefix_without_raising():
     gh = FakeGh(
         [[_pr_row(1, "2026-11-01T00:01:00Z")]],
