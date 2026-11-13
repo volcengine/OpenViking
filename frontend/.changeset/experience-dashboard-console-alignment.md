@@ -14,4 +14,4 @@ Also carry over the console's later refinements: `ExperienceItem.isUpdated` rend
 
 The outcome distribution bars now have rounded ends. The console draws them square; `--ov-ui-experience-bar-radius` overrides the radius, and `0` restores square ends for a host that wants them.
 
-A trajectory's title is now plain text: the open button at the end of its row owns that action, as in the console, so one row no longer offers the same destination twice. The shared empty and error state's retry is a bordered secondary button instead of primary-coloured text, matching the console and reading as a control in an otherwise empty section; this applies to the Wiki dashboard too.
+A trajectory's title is now plain text: the open button at the end of its row owns that action, as in the console, so one row no longer offers the same destination twice. The shared empty and error state's retry is a secondary button instead of primary-coloured text, so it reads as a control in an otherwise empty section; this applies to the Wiki dashboard too.

@@ -9,13 +9,13 @@ export interface DashboardStatus {
 /**
  * 一个区域的状态：加载中、空、或失败加重试。
  *
- * 重试用带边框的次要按钮，与控制台一致——它是这个区域里唯一可点的东西，纯文字
- * 形态在成片留白里看不出是可操作的控件。
+ * 重试用次要按钮：它是这个区域里唯一可点的东西，纯文字形态在成片留白里看不出是
+ * 可操作的控件。
  *
  * The state of one section: loading, empty, or failed with a retry.
  *
- * The retry is a bordered secondary button, as in the console: it is the only thing to
- * click in the section, and a text-only form reads as plain copy in that much whitespace.
+ * The retry is a secondary button: it is the only thing to click in the section, and a
+ * text-only form reads as plain copy in that much whitespace.
  */
 export function DashboardState({
   state = {},
@@ -39,7 +39,7 @@ export function DashboardState({
         <>
           <p>{state.error.message}</p>
           <Button
-            type="outline"
+            type="secondary"
             size="small"
             disabled={!state.onRetry}
             onClick={state.onRetry}

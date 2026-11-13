@@ -59,7 +59,7 @@ test('the open button is disabled without a host callback', async () => {
   }
 });
 
-test('a failed section retries through a bordered secondary button', async () => {
+test('a failed section retries through a secondary button', async () => {
   let retried = 0;
   const view = await mount(
     h(ExperienceDashboard, {
@@ -75,16 +75,14 @@ test('a failed section retries through a bordered secondary button', async () =>
     }),
   );
   try {
-    // 控制台的 ContextRetryAction 是 `type="outline" size="small"`；文字形态在
-    // 成片留白里看不出是可点的控件。
+    // 次要按钮：文字形态在成片留白里看不出是可点的控件。
     //
-    // The console's ContextRetryAction is `type="outline" size="small"`; a text-only
-    // form reads as plain copy in that much whitespace.
+    // A secondary button: a text-only form reads as plain copy in that much whitespace.
     const button = [...view.container.querySelectorAll('button')].find(
       (item) => item.textContent === 'Retry',
     );
     assert.ok(button);
-    assert.match(button.className, /ov-button--outline/);
+    assert.match(button.className, /ov-button--secondary/);
     assert.match(button.className, /ov-button--small/);
     await act(async () => button.click());
     assert.equal(retried, 1);
