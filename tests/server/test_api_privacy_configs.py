@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import asyncio
+
 import httpx
 
 from openviking.privacy.reference import build_privacy_field_reference
@@ -98,7 +100,7 @@ async def test_privacy_tree_category_filter_and_route_not_shadowed(client: httpx
     assert missing.json()["result"]["categories"] == [{"category": "missing", "targets": []}]
 
 
-async def test_privacy_config_api_roundtrip(client: httpx.AsyncClient):
+async def test_privacy_config_api_roundtrip(client: httpx.AsyncClient, service):
     upsert = await client.post(
         "/api/v1/privacy-configs/skill/demo-skill",
         json={
@@ -110,6 +112,42 @@ async def test_privacy_config_api_roundtrip(client: httpx.AsyncClient):
     body = upsert.json()
     assert body["status"] == "ok"
     assert body["result"]["version"] == 1
+
+    ctx = RequestContext(
+        user=UserIdentifier(service.user.account_id, body["result"]["created_by"]),
+        role=Role.USER,
+    )
+    fs = service.viking_fs
+    target = service.privacy_configs.get_config_root(ctx, "skill", "demo-skill")
+    lease = await fs._async_agfs.pathlock_acquire_tree(
+        fs._uri_to_path(target, ctx=ctx)
+    )
+    try:
+        endpoint = "/api/v1/privacy-configs/skill/demo-skill"
+        field = build_privacy_field_reference(ctx.user.user_id, "skill", "demo-skill", "api_key")
+        for method, url, payload in [
+            ("POST", endpoint, {"values": {"api_key": "secret-2"}}),
+            ("PATCH", endpoint, {"values": {"token": "secret-2"}}),
+            ("POST", endpoint + "/activate", {"version": 1}),
+            ("DELETE", endpoint, None),
+            ("DELETE", endpoint + "/field?field=api_key", None),
+            ("DELETE", "/api/v1/privacy-configs/selector", {"selector": target}),
+            ("DELETE", "/api/v1/privacy-configs/selector", {"selector": field}),
+        ]:
+            conflict = await asyncio.wait_for(
+                client.request(method, url, json=payload), timeout=2.0
+            )
+            assert conflict.status_code == 409, conflict.text
+            assert conflict.json()["error"]["code"] == "CONFLICT"
+
+        independent = await client.post(
+            "/api/v1/privacy-configs/skill/another-skill",
+            json={"values": {"api_key": "independent-secret"}},
+        )
+        assert independent.status_code == 200, independent.text
+        assert independent.json()["result"]["version"] == 1
+    finally:
+        await fs._async_agfs.pathlock_release(lease)
 
     get_current = await client.get("/api/v1/privacy-configs/skill/demo-skill")
     assert get_current.status_code == 200
