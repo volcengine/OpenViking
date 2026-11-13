@@ -1,7 +1,7 @@
 import type {
   VikingBotDraft,
   VikingBotMessage,
-} from '../../components/viking-bot/model.js';
+} from '../../../components/viking-bot/model.js';
 import { createChatAccumulator } from './aggregate.js';
 import { draftParts } from './draft-parts.js';
 import type { VikingBotChatEvent, VikingBotChatState } from './types.js';

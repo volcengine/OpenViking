@@ -1,5 +1,5 @@
-import { OvClientError } from '../../client/errors.js';
-import type { VikingBotDraft } from '../../components/viking-bot/model.js';
+import { OvClientError } from '../../../client/errors.js';
+import type { VikingBotDraft } from '../../../components/viking-bot/model.js';
 import type { AppendInput } from './chat-timeline.js';
 import type { VikingBotChatService, VikingBotChatState } from './types.js';
 

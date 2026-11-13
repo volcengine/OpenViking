@@ -1,5 +1,5 @@
-import { OvClientError } from '../../client/errors.js';
-import { resolveLocale, type Locale } from '../../shared/locale.js';
+import { OvClientError } from '../../../client/errors.js';
+import { resolveLocale, type Locale } from '../../../shared/locale.js';
 import enUS from './locales/en-US.js';
 import zhCN from './locales/zh-CN.js';
 

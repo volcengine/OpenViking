@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
-import { createOvClient } from '../../client/client.js';
-import { useOvClient, useOvSignal } from '../../client/provider.js';
+import { createOvClient } from '../../../client/client.js';
+import { useOvClient, useOvSignal } from '../../../client/provider.js';
 import type { VikingBotHookOptions } from './types.js';
 import { createNativeBotService } from './native-service.js';
 

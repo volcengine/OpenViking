@@ -15,7 +15,6 @@ export default defineConfig({
             './src/components/directory-tour/index.ts',
           icons: './src/icons/index.tsx',
           client: './src/client/index.ts',
-          'modules/viking-bot': './src/modules/viking-bot/index.ts',
           'components/auth/invitation-confirmation':
             './src/components/auth/invitation-confirmation/index.ts',
           'components/auth/login-method-selector':

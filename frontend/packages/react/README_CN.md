@@ -3,7 +3,6 @@
 [English](README.md) / 中文
 
 用于在 OpenViking（面向 AI 智能体的上下文数据库）之上构建应用界面的 React 业务组件与区块。
-VikingBot 是无头模块：从 `@openviking/react/modules/viking-bot` 导入 `useVikingBotChat`、`useVikingBotSessions` 及契约。Console 默认内置调用；独立 VikingBot 宿主也可直接使用。它不导出组合视图或 CSS，Hook 不从包根或 Console 转导出。
 
 ## 安装
 
@@ -91,7 +90,7 @@ export function Browser({ apiKey }: { apiKey: string }) {
 | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `@openviking/react`                   | 业务组件和区块，以及各自的主 Props 类型，例如 `FileTree` 与 `FileTreeProps`。`FilePreview` 除外，需要从它的子路径导入。                                                           |
 | `@openviking/react/components/<名称>` | 单个组件及其相关类型（行、选项、句柄、文案），例如 `components/file-tree`。同族组件放在分组目录下，例如 `components/auth/email-login-form`。                                      |
-| `@openviking/react/modules/<名称>`    | 区块 `file-browser`、`console`、`scope-cascade`，或 `viking-bot` 无头模块。                                                                                                       |
+| `@openviking/react/modules/<名称>`    | 区块 `file-browser`、`console`、`scope-cascade`。                                                                                                                                 |
 | `@openviking/react/client`            | `OpenVikingProvider` 与请求客户端（`createOvClient`、`OvClientError` 等）。                                                                                                       |
 | `@openviking/react/icons`             | 图标组件与文件类型图标函数。                                                                                                                                                      |
 | `…/style.css`                         | 样式。JavaScript 不会引入 CSS，用到什么引入什么：整包用 `@openviking/react/style.css`，一类用 `components/style.css` 或 `modules/style.css`，单个组件或区块用各自的 `style.css`。 |
