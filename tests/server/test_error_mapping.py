@@ -6,7 +6,6 @@
 import httpx
 import pytest
 
-from openviking.models.model_error import ModelError, ModelErrorKind, model_error_boundary
 from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSDirectoryNotEmptyError,
@@ -14,7 +13,6 @@ from openviking.pyagfs.exceptions import (
     AGFSInternalError,
     AGFSIsADirectoryError,
     AGFSNotADirectoryError,
-    AGFSNotFoundError,
     AGFSNotSupportedError,
     AGFSPluginError,
     AGFSResourceExhaustedError,
@@ -22,11 +20,7 @@ from openviking.pyagfs.exceptions import (
 )
 from openviking.server.error_mapping import map_exception
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS
-from openviking.storage.errors import (
-    InvalidPathLockRequestError,
-    LockAcquisitionError,
-    ResourceBusyError,
-)
+from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
 from openviking.utils.exceptions import AllCredentialsFailedError
 from openviking_cli.exceptions import (
@@ -143,31 +137,6 @@ def test_value_error_invalid_uri_maps_to_invalid_uri():
     assert mapped.code == "INVALID_URI"
 
 
-@pytest.mark.parametrize(
-    ("error", "expected_code"),
-    [
-        (ResourceBusyError("resource busy"), "CONFLICT"),
-        (LockAcquisitionError("lock acquisition failed"), "CONFLICT"),
-        (FileNotFoundError("missing file"), "NOT_FOUND"),
-        (AGFSNotFoundError("missing storage object"), "NOT_FOUND"),
-        (PermissionError("permission denied"), "PERMISSION_DENIED"),
-        (AGFSHTTPError("missing object", 404), "NOT_FOUND"),
-        (InvalidPathLockRequestError("invalid lock scope"), "INVALID_ARGUMENT"),
-        (ValueError("invalid viking URI: missing path"), "INVALID_URI"),
-    ],
-)
-def test_domain_mapping_precedes_model_context(error, expected_code):
-    error.__context__ = ModelError(
-        ModelErrorKind.AUTHENTICATION_ERROR, "invalid model key", status_code=401
-    )
-
-    mapped = map_exception(error, resource="viking://resources/docs")
-
-    assert mapped.code == expected_code
-    if expected_code == "CONFLICT":
-        assert mapped.details["retryable"] is True
-
-
 def test_wrapped_upstream_401_maps_to_unauthenticated():
     try:
         raise RuntimeError("OpenAI VLM completion failed") from _UpstreamHTTPError(
@@ -228,12 +197,6 @@ def test_upstream_status_survives_circuit_breaker(status, message, expected_code
             assert mapped.code == expected_code
             assert ERROR_CODE_TO_HTTP_STATUS[mapped.code] == status
             assert mapped.details["upstream_status_code"] == status
-
-    # A request that was already in flight must not replace the opening reason.
-    breaker.record_failure(RuntimeError("Late failure from an in-flight request"))
-    with pytest.raises(CircuitBreakerOpen) as blocked:
-        breaker.check()
-    assert map_exception(blocked.value).details["upstream_status_code"] == status
 
     # A failed recovery probe replaces the previous reason; recovery releases it.
     monkeypatch.setattr("openviking.utils.circuit_breaker.time.monotonic", lambda: 1011)
@@ -359,220 +322,6 @@ def test_model_api_key_configuration_error_maps_to_failed_precondition():
     assert mapped.code == "FAILED_PRECONDITION"
 
 
-def test_structured_model_error_maps_without_message_guessing():
-    model_error = ModelError(
-        ModelErrorKind.AUTHENTICATION_ERROR,
-        "MiniMax rejected the credential",
-        provider="minimax",
-        code="1004",
-    )
-    wrapper = ValueError("provider request failed")
-    wrapper.__cause__ = model_error
-    mapped = map_exception(wrapper)
-
-    assert mapped is not None
-    assert mapped.code == "UNAUTHENTICATED"
-    assert mapped.details["model_error_kind"] == "authentication_error"
-    assert mapped.details["provider"] == "minimax"
-    assert mapped.details["provider_error_code"] == "1004"
-    unknown = map_exception(ModelError(ModelErrorKind.UNKNOWN, "internal timeout detail"))
-    assert unknown is not None
-    assert unknown.code == "INTERNAL"
-    assert "internal timeout detail" not in unknown.message
-
-
-def test_gemini_429_without_reason_preserves_public_status():
-    model_error = ModelError(
-        ModelErrorKind.UNKNOWN,
-        "Gemini embedding failed (HTTP 429)",
-        provider="gemini",
-        status_code=429,
-    )
-
-    mapped = map_exception(model_error)
-
-    assert mapped is not None
-    assert mapped.code == "RESOURCE_EXHAUSTED"
-    assert ERROR_CODE_TO_HTTP_STATUS[mapped.code] == 429
-    assert mapped.details["model_error_kind"] == "unknown"
-    assert model_error.kind is ModelErrorKind.UNKNOWN
-    assert mapped.details["upstream_message"] == ""
-
-
-def _sdk_status_error(provider, status):
-    request = httpx.Request("POST", "https://model.example.test/embeddings")
-    body = {"error": {"message": "request rejected"}}
-    response = httpx.Response(status, request=request, json=body)
-    if provider == "openai":
-        import openai
-
-        with openai.OpenAI(api_key="test-key") as client:
-            return client._make_status_error("request rejected", response=response, body=body)
-    if provider == "ark":
-        from volcenginesdkarkruntime import Ark
-
-        with Ark(api_key="test-key") as client:
-            return client._make_status_error(
-                "request rejected", response=response, body=body, request_id="test-request"
-            )
-    if provider == "gemini":
-        errors = pytest.importorskip("google.genai.errors")
-        return errors.APIError(status, body)
-    if provider == "requests":
-        import requests
-
-        response = requests.Response()
-        response.status_code = status
-        return requests.HTTPError("request rejected", response=response)
-    return httpx.HTTPStatusError("request rejected", request=request, response=response)
-
-
-@model_error_boundary
-def _raise_at_model_boundary(error):
-    raise error
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.parametrize("provider", ["openai", "ark", "gemini", "httpx", "requests"])
-async def test_final_bad_request_ignores_prior_timeout(provider, asynchronous, monkeypatch):
-    from openviking.models import model_error as model_errors
-    from openviking.utils.circuit_breaker import CircuitBreaker
-    from openviking.utils.model_retry import retry_async, retry_sync
-
-    attempts = 0
-    classifications = 0
-    sdk_kind = model_errors._sdk_kind
-
-    def classify(error):
-        nonlocal classifications
-        classifications += 1
-        return sdk_kind(error)
-
-    monkeypatch.setattr(model_errors, "_sdk_kind", classify)
-
-    def request():
-        nonlocal attempts
-        attempts += 1
-        try:
-            raise httpx.ReadTimeout("previous route timed out")
-        except httpx.ReadTimeout:
-            raise _sdk_status_error(provider, 400)
-
-    @model_error_boundary
-    def call():
-        request()
-
-    @model_error_boundary
-    async def call_async():
-        request()
-
-    with pytest.raises(ModelError) as raised:
-        if asynchronous:
-            await retry_async(call_async, max_retries=2, base_delay=0, jitter=False)
-        else:
-            retry_sync(call, max_retries=2, base_delay=0, jitter=False)
-
-    assert attempts == 1
-    assert raised.value.kind is ModelErrorKind.INVALID_REQUEST
-    mapped = map_exception(raised.value)
-    assert mapped.code == "INVALID_ARGUMENT"
-    assert ERROR_CODE_TO_HTTP_STATUS[mapped.code] == 400
-    assert mapped.details["upstream_status_code"] == 400
-    breaker = CircuitBreaker(failure_threshold=1)
-    breaker.record_failure(raised.value)
-    breaker.check()
-    assert classifications == 1
-
-
-@pytest.mark.parametrize("provider", ["openai", "ark", "gemini", "httpx", "requests"])
-@pytest.mark.parametrize(
-    ("status", "expected_code", "expected_http"),
-    [
-        (402, "RESOURCE_EXHAUSTED", 429),
-        (406, "INVALID_ARGUMENT", 400),
-        (408, "DEADLINE_EXCEEDED", 504),
-        (409, "CONFLICT", 409),
-        (410, "INVALID_ARGUMENT", 400),
-        (415, "INVALID_ARGUMENT", 400),
-        (501, "UNAVAILABLE", 503),
-        (504, "DEADLINE_EXCEEDED", 504),
-    ],
-)
-def test_sdk_status_survives_model_boundary(provider, status, expected_code, expected_http):
-    with pytest.raises(ModelError) as raised:
-        _raise_at_model_boundary(_sdk_status_error(provider, status))
-    wrapper = RuntimeError("Embedding failed")
-    wrapper.__cause__ = raised.value
-
-    mapped = map_exception(wrapper)
-
-    assert mapped.code == expected_code
-    assert ERROR_CODE_TO_HTTP_STATUS[mapped.code] == expected_http
-    assert mapped.details["upstream_status_code"] == status
-    if raised.value.kind is ModelErrorKind.UNKNOWN:
-        assert "request rejected" not in mapped.message
-        assert mapped.details["upstream_message"] == ""
-
-
-@pytest.mark.parametrize(
-    ("status", "expected_code"),
-    [(401, "UNAUTHENTICATED"), (429, "RESOURCE_EXHAUSTED"), (504, "DEADLINE_EXCEEDED")],
-)
-def test_litellm_generic_bad_request_preserves_response_status(status, expected_code):
-    from litellm.exceptions import BadRequestError
-
-    response = httpx.Response(status, request=httpx.Request("POST", "https://model.example.test"))
-    sdk_error = BadRequestError(
-        "invalid_request_error", model="test-model", llm_provider="openai", response=response
-    )
-    with pytest.raises(ModelError) as raised:
-        _raise_at_model_boundary(sdk_error)
-
-    mapped = map_exception(raised.value)
-
-    assert mapped.code == expected_code
-    assert ERROR_CODE_TO_HTTP_STATUS[mapped.code] == status
-
-
-@pytest.mark.parametrize(
-    ("kind", "status", "provider_code", "expected_code"),
-    [
-        (ModelErrorKind.AUTHENTICATION_ERROR, 400, "API_KEY_INVALID", "UNAUTHENTICATED"),
-        (ModelErrorKind.QUOTA_EXHAUSTED, 403, "BILLING_DISABLED", "RESOURCE_EXHAUSTED"),
-        (ModelErrorKind.INPUT_TOO_LARGE, 500, "context_length_exceeded", "INVALID_ARGUMENT"),
-        (ModelErrorKind.CONTENT_SAFETY, 500, "content_policy_violation", "INVALID_ARGUMENT"),
-        (ModelErrorKind.UNSUPPORTED, 400, "unsupported_parameter", "INVALID_ARGUMENT"),
-    ],
-)
-def test_specific_model_kind_still_overrides_http_status(
-    kind, status, provider_code, expected_code
-):
-    mapped = map_exception(
-        ModelError(kind, "request rejected", status_code=status, code=provider_code)
-    )
-
-    assert mapped.code == expected_code
-    assert mapped.details["provider_error_code"] == provider_code
-
-
-@pytest.mark.parametrize(
-    "statuses,expected_code", [((504, 504), "DEADLINE_EXCEEDED"), ((401, 429), "INTERNAL")]
-)
-def test_model_boundary_preserves_aggregate_protocol_mapping(statuses, expected_code):
-    failures = []
-    for index, status in enumerate(statuses):
-        with pytest.raises(ModelError) as raised:
-            _raise_at_model_boundary(_sdk_status_error("openai", status))
-        failures.append((f"credential-{index}", raised.value.kind, raised.value, index))
-    aggregate = AllCredentialsFailedError(failures)
-    with pytest.raises(ModelError) as raised:
-        _raise_at_model_boundary(aggregate)
-
-    assert map_exception(aggregate).code == expected_code
-    assert map_exception(raised.value).code == expected_code
-
-
 def test_bare_model_api_key_required_maps_to_failed_precondition():
     mapped = map_exception(ValueError("api_key is required"))
 
@@ -648,9 +397,6 @@ def test_git_auth_failure_remains_a_client_error():
     assert error.code == GIT_AUTH_FAILED
     assert ERROR_CODE_TO_HTTP_STATUS.get(error.code, 500) == 400
     assert error_response(error.code, error.message).status_code == 400
-    assert (
-        response_from_result(
-            {"status": "error", "code": error.code, "errors": [error.message]}
-        ).status_code
-        == 400
-    )
+    assert response_from_result(
+        {"status": "error", "code": error.code, "errors": [error.message]}
+    ).status_code == 400

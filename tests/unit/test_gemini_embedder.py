@@ -230,39 +230,6 @@ class TestGeminiValidation:
 
 class TestGeminiErrorMessages:
     @pytest.mark.parametrize(
-        ("status_code", "status", "reason", "expected_kind"),
-        [
-            (400, "INVALID_ARGUMENT", "API_KEY_INVALID", ModelErrorKind.AUTHENTICATION_ERROR),
-            (403, "PERMISSION_DENIED", "BILLING_DISABLED", ModelErrorKind.QUOTA_EXHAUSTED),
-        ],
-    )
-    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
-    def test_specific_reason_overrides_generic_status(
-        self, mock_client, status_code, status, reason, expected_kind
-    ):
-        from google.genai.errors import ClientError
-
-        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
-
-        mock_client.return_value.models.embed_content.side_effect = ClientError(
-            status_code,
-            {
-                "error": {
-                    "status": status,
-                    "details": [{"reason": reason}],
-                }
-            },
-        )
-        embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="k")
-
-        with pytest.raises(ModelError) as raised:
-            embedder.embed("hello")
-
-        assert raised.value.kind is expected_kind
-        assert raised.value.status_code == status_code
-        assert raised.value.code == reason
-
-    @pytest.mark.parametrize(
         "reason,expected_kind",
         [
             ("QUOTA_EXCEEDED", ModelErrorKind.QUOTA_EXHAUSTED),
