@@ -626,3 +626,89 @@ test("a subagent stopping again pushes and commits only its new turns", async ()
     await rm(root, { recursive: true, force: true });
   }
 });
+
+async function captureFinalAnswer(root, transcriptPath, input, whileRunning = async () => {}) {
+  const batches = [];
+  await withMockOpenViking(async (req, res) => {
+    const url = new URL(req.url, "http://127.0.0.1");
+    if (req.method === "GET" && url.pathname === "/health") {
+      writeJson(res, { status: "ok", result: { healthy: true } });
+    } else if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
+      batches.push(await readRequestBody(req));
+      writeJson(res, { status: "ok", result: { added: batches.at(-1).messages.length } });
+    } else {
+      writeJson(res, { status: "ok", result: {} });
+    }
+  }, async (baseUrl) => {
+    await Promise.all([
+      runAutoCapture({ session_id: "final-answer", transcript_path: transcriptPath, cwd: root, ...input }, hookEnv(root, baseUrl)),
+      whileRunning(),
+    ]);
+  });
+  return batches.flatMap((batch) => batch.messages).map((message) => [
+    message.role,
+    message.parts.filter((p) => p.type === "text").map((p) => p.text).join(""),
+  ]);
+}
+
+const question = JSON.stringify({ role: "user", content: "remember which port the server uses" });
+const answer = JSON.stringify({ role: "assistant", content: "The server listens on 1933." });
+
+test("Stop captures the final answer the transcript has not been written with yet", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-final-"));
+  const transcriptPath = join(root, "transcript.jsonl");
+  try {
+    await writeFile(transcriptPath, question);
+    const messages = await captureFinalAnswer(root, transcriptPath, {
+      last_assistant_message: "The server listens on 1933.",
+    });
+    assert.deepEqual(messages, [
+      ["user", "remember which port the server uses"],
+      ["assistant", "The server listens on 1933."],
+    ]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Stop captures a final answer once when the transcript catches up", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-final-late-"));
+  const transcriptPath = join(root, "transcript.jsonl");
+  try {
+    await writeFile(transcriptPath, question);
+    const messages = await captureFinalAnswer(root, transcriptPath, {
+      last_assistant_message: "The server listens on 1933.",
+    }, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await writeFile(transcriptPath, [question, answer].join("\n"));
+    });
+    assert.deepEqual(messages, [
+      ["user", "remember which port the server uses"],
+      ["assistant", "The server listens on 1933."],
+    ]);
+
+    const state = JSON.parse(
+      await readFile(join(root, "openviking-cc-capture-state", "final-answer.json"), "utf-8"),
+    );
+    assert.equal(state.capturedTurnCount, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Stop does not repeat a final answer the transcript already holds", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-final-present-"));
+  const transcriptPath = join(root, "transcript.jsonl");
+  try {
+    await writeFile(transcriptPath, [question, answer].join("\n"));
+    const messages = await captureFinalAnswer(root, transcriptPath, {
+      last_assistant_message: "The server listens on 1933.",
+    });
+    assert.deepEqual(messages, [
+      ["user", "remember which port the server uses"],
+      ["assistant", "The server listens on 1933."],
+    ]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

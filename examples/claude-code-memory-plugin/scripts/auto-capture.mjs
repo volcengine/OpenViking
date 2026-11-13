@@ -22,6 +22,7 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { setTimeout as sleep } from "node:timers/promises";
 import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { extractCaptureTurns, parseTranscript, sanitizeCapturedText } from "./cc-transcript.mjs";
@@ -211,6 +212,31 @@ function isMissingSessionState(error) {
 // Main
 // ---------------------------------------------------------------------------
 
+async function readTranscriptTurns(transcriptPath, cfg) {
+  let transcriptContent;
+  try {
+    transcriptContent = await readFile(transcriptPath, "utf-8");
+  } catch (err) {
+    logError("transcript_read", err);
+    return null;
+  }
+
+  if (!transcriptContent.trim()) {
+    log("skip", { stage: "transcript_read", reason: "empty transcript" });
+    return null;
+  }
+
+  return extractCaptureTurns(parseTranscript(transcriptContent), cfg);
+}
+
+// The answer may span several text blocks, each its own transcript line.
+function endsWithAnswer(turns, answer) {
+  const last = turns.at(-1);
+  if (last?.role !== "assistant") return false;
+  const text = last.parts.filter((part) => part.type === "text").at(-1)?.text.trim();
+  return Boolean(text) && answer.endsWith(text);
+}
+
 async function main({ cfg, input, cwd }) {
   const transcriptPath = input.transcript_path;
   const sessionId = input.session_id || "unknown";
@@ -224,21 +250,18 @@ async function main({ cfg, input, cwd }) {
     return;
   }
 
-  let transcriptContent;
-  try {
-    transcriptContent = await readFile(transcriptPath, "utf-8");
-  } catch (err) {
-    logError("transcript_read", err);
-    return;
+  // Claude Code writes the transcript asynchronously, so at Stop it may not
+  // hold the final answer yet. Give it a second to land (the worker is
+  // detached by default); the payload's copy covers it if it never does.
+  const finalAnswer = cfg.captureLastAssistantOnStop
+    ? String(input.last_assistant_message || "").trim()
+    : "";
+  let allTurns = await readTranscriptTurns(transcriptPath, cfg);
+  for (let i = 0; i < 10 && allTurns && finalAnswer && !endsWithAnswer(allTurns, finalAnswer); i++) {
+    await sleep(100);
+    allTurns = await readTranscriptTurns(transcriptPath, cfg);
   }
-
-  if (!transcriptContent.trim()) {
-    log("skip", { stage: "transcript_read", reason: "empty transcript" });
-    return;
-  }
-
-  const messages = parseTranscript(transcriptContent);
-  const allTurns = extractCaptureTurns(messages, cfg);
+  if (!allTurns) return;
   if (allTurns.length === 0) {
     log("skip", { stage: "transcript_parse", reason: "no user/assistant turns found" });
     return;
@@ -247,6 +270,11 @@ async function main({ cfg, input, cwd }) {
   const state = await loadState(sessionId);
   await reconcileKnownFailedCapture(cfg, sessionId, ovSessionId, state);
   const newTurns = allTurns.slice(state.capturedTurnCount);
+  // Left out of the cursor: should the transcript catch up later, the answer
+  // goes out twice rather than not at all.
+  if (finalAnswer && !endsWithAnswer(allTurns, finalAnswer)) {
+    newTurns.push({ role: "assistant", text: finalAnswer, parts: [{ type: "text", text: finalAnswer }] });
+  }
   const captureTurns = cfg.captureAssistantTurns
     ? newTurns
     : newTurns.filter(turn => turn.role === "user");
