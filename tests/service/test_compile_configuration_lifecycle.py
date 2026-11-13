@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import pytest
 
+from openviking.service.compile_service import CompileService
 from openviking.service.compile_targets import (
     CompileLifecycle,
     CompileStateStore,
@@ -16,7 +17,7 @@ from openviking.service.compile_targets import (
     new_record,
     split_control_args,
 )
-from openviking.service.external_task_service import ExternalTaskSnapshot
+from openviking.service.external_task_service import ExternalTaskError, ExternalTaskSnapshot
 from openviking.service.task_domain import TaskPatch, TaskRecord, TaskStatus
 from openviking.service.task_store import PersistentTaskStore
 from openviking.storage.errors import ResourceBusyError
@@ -517,7 +518,7 @@ async def test_changes_new_roots_and_updated_configuration_do_not_rewrite_frozen
     assert (await setup.store.get("acme", "alice", compile_name))["conflict_num"] is None
 
 
-@pytest.mark.parametrize("status", ["failed", "cancelled"])
+@pytest.mark.parametrize("status", ["failed", "cancelled", "OperationConflict"])
 async def test_unsuccessful_runs_preserve_baseline_and_redact_persisted_errors(
     setup, status, compile_metric_events
 ):
@@ -533,17 +534,28 @@ async def test_unsuccessful_runs_preserve_baseline_and_redact_persisted_errors(
     setup.fs.source_changes = [{"uri": SOURCE + "/a.md", "change_type": "modified"}]
     task = make_task(setup, compile_name=compile_name, record=record)
     assert await setup.lifecycle.on_start(task) == "proceed"
-    outcome = await setup.lifecycle.on_finish(
-        task,
-        ExternalTaskSnapshot(
-            status=status,
-            error_message="Bad request sk-secret_value Authorization: Bearer bearer-secret",
-        ),
+    snapshot = ExternalTaskSnapshot(
+        status=status,
+        error_message="Bad request sk-secret_value Authorization: Bearer bearer-secret",
     )
+    if status == "OperationConflict":
+        task.stage = "submitting"
+        rejected = await CompileService.on_cancel(
+            SimpleNamespace(),
+            task,
+            external_task_id=None,
+            payload={},
+            private_payload={},
+            connection={},
+            failure=ExternalTaskError(status, snapshot.error_message, transient=False),
+        )
+        snapshot, status = rejected.snapshot, "failed"
+    outcome = await setup.lifecycle.on_finish(task, snapshot)
     run = await setup.store.get_run("acme", "alice", compile_name, task.task_id)
     assert run["status"] == status
     assert run["meta"]["trigger"] == "initial"
     assert run["meta"]["finish_snapshot"] is not None
+    setup.fs.restore.assert_awaited_once()
     assert (await setup.store.get("acme", "alice", compile_name))["progress"] == record["progress"]
     assert "secret_value" not in run["error"] and "bearer-secret" not in run["error"]
     assert "[REDACTED]" in run["error"]

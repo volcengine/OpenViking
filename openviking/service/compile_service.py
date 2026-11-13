@@ -830,7 +830,13 @@ class CompileService:
             and not isinstance(failure, ExternalTaskRetryExhaustedError)
             and not failure.transient
             and failure.code
-            in {"INVALID_ARGUMENT", "NOT_FOUND", "PERMISSION_DENIED", "UNAUTHENTICATED"}
+            in {
+                "INVALID_ARGUMENT",
+                "NOT_FOUND",
+                "PERMISSION_DENIED",
+                "UNAUTHENTICATED",
+                "OperationConflict",
+            }
         )
         if external_task_id is None and (task.stage in {None, "queued"} or rejected):
             return ExternalTaskCancellation(None, outcome)
