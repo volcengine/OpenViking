@@ -58,12 +58,10 @@ _CODE_KINDS = {
     "ACCOUNTQUOTAEXCEEDED": ModelErrorKind.QUOTA_EXHAUSTED,
     "MODELQUOTAEXCEEDED": ModelErrorKind.QUOTA_EXHAUSTED,
     "QUOTAEXCEEDED": ModelErrorKind.QUOTA_EXHAUSTED,
-    "BILLINGDISABLED": ModelErrorKind.QUOTA_EXHAUSTED,
     "BILLINGHARDLIMITREACHED": ModelErrorKind.QUOTA_EXHAUSTED,
     "ACCOUNTOVERDUE": ModelErrorKind.QUOTA_EXHAUSTED,
     # Request rate limits.
     "RATELIMITEXCEEDED": ModelErrorKind.RATE_LIMIT_ERROR,
-    "SERVINGCAPACITYEXCEEDED": ModelErrorKind.RATE_LIMIT_ERROR,
     "REQUESTLIMITEXCEEDED": ModelErrorKind.RATE_LIMIT_ERROR,
     "REQUESTBURSTTOOFAST": ModelErrorKind.RATE_LIMIT_ERROR,
     "TOOMANYREQUESTS": ModelErrorKind.RATE_LIMIT_ERROR,
@@ -119,10 +117,6 @@ def model_exception_chain(error: BaseException) -> list[BaseException]:
 
 
 def _normalized_code(value: object) -> str | None:
-    if isinstance(value, bool) or value is None:
-        return None
-    if isinstance(value, int):
-        return str(value)
     if not isinstance(value, str) or not value:
         return None
     return "".join(character for character in value.upper() if character.isalnum())
@@ -142,7 +136,7 @@ def _kind_from_code_value(
     return _CODE_KINDS.get(normalized)
 
 
-def _response_body(error: BaseException) -> dict[str, Any]:
+def _body(error: BaseException) -> dict[str, Any]:
     value = getattr(error, "body", None)
     if not isinstance(value, dict):
         response = getattr(error, "response", None)
@@ -150,15 +144,12 @@ def _response_body(error: BaseException) -> dict[str, Any]:
             value = response.json() if response is not None else None
         except Exception:
             value = None
-    return value if isinstance(value, dict) else {}
-
-
-def _body(error: BaseException) -> dict[str, Any]:
-    value = _response_body(error)
-    nested = value.get("error")
-    if isinstance(nested, dict):
-        return {**value, **nested}
-    return value
+    if isinstance(value, dict):
+        nested = value.get("error")
+        if isinstance(nested, dict):
+            return {**value, **nested}
+        return value
+    return {}
 
 
 def _error_code(error: BaseException) -> str | None:
@@ -172,10 +163,6 @@ def _error_code(error: BaseException) -> str | None:
     ):
         if isinstance(value, str) and value:
             return value
-    for value in (getattr(error, "details", None), _response_body(error)):
-        reason = _structured_reason_code(value)
-        if reason is not None:
-            return reason
     return None
 
 
@@ -190,49 +177,37 @@ def _status_code(error: BaseException) -> int | None:
     return None
 
 
-def _structured_reason_code(value: object) -> str | None:
-    pending = [value]
-    seen: set[int] = set()
-    status_code: str | None = None
-
-    while pending:
-        current = pending.pop()
-        if isinstance(current, dict):
-            if id(current) in seen:
-                continue
-            seen.add(id(current))
-            for key, item in current.items():
-                if not isinstance(item, str) or _kind_from_code_value(item) is None:
-                    continue
-                if key == "reason":
-                    return item
-                if key == "status" and status_code is None:
-                    status_code = item
-            pending.extend(current.values())
-        elif isinstance(current, (list, tuple)):
-            if id(current) in seen:
-                continue
-            seen.add(id(current))
-            pending.extend(current)
-        elif hasattr(current, "model_dump"):
-            if id(current) in seen:
-                continue
-            seen.add(id(current))
-            try:
-                pending.append(current.model_dump())
-            except Exception:
-                continue
-
-    return status_code
+def _structured_reasons(value: object) -> set[str]:
+    reasons: set[str] = set()
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in {"reason", "status"} and isinstance(item, str):
+                normalized = _normalized_code(item)
+                if normalized:
+                    reasons.add(normalized)
+            reasons.update(_structured_reasons(item))
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            reasons.update(_structured_reasons(item))
+    elif hasattr(value, "model_dump"):
+        reasons.update(_structured_reasons(value.model_dump()))
+    return reasons
 
 
 def _kind_from_code(error: BaseException) -> ModelErrorKind | None:
-    provider = getattr(error, "provider", None)
-    kind = _kind_from_code_value(
-        _error_code(error),
-        provider if isinstance(provider, str) else None,
-    )
-    return kind
+    normalized = _normalized_code(_error_code(error))
+    if normalized in _CODE_KINDS:
+        return _CODE_KINDS[normalized]
+
+    details = getattr(error, "details", None)
+    reasons = _structured_reasons(details)
+    if reasons & {"QUOTAEXCEEDED", "BILLINGDISABLED"}:
+        return ModelErrorKind.QUOTA_EXHAUSTED
+    if reasons & {"RATELIMITEXCEEDED", "SERVINGCAPACITYEXCEEDED"}:
+        return ModelErrorKind.RATE_LIMIT_ERROR
+    if reasons & {"APIKEYINVALID", "UNAUTHENTICATED"}:
+        return ModelErrorKind.AUTHENTICATION_ERROR
+    return None
 
 
 def _kind_from_status(status_code: int | None) -> ModelErrorKind | None:
@@ -244,8 +219,6 @@ def _kind_from_status(status_code: int | None) -> ModelErrorKind | None:
         return ModelErrorKind.AUTHENTICATION_ERROR
     if status_code == 403:
         return ModelErrorKind.PERMISSION_DENIED
-    if status_code == 404:
-        return ModelErrorKind.MODEL_NOT_FOUND
     if status_code == 405 or status_code == 501:
         return ModelErrorKind.UNSUPPORTED
     if status_code == 413:
@@ -326,20 +299,14 @@ def _sdk_kind(error: BaseException) -> tuple[ModelErrorKind, str] | None:
             "ServiceUnavailableError": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
             "InternalServerError": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
         }
-        kind = (
-            _kind_from_code(error)
-            or class_kinds.get(name)
-            or _kind_from_status(_status_code(error))
-        )
-        return kind or ModelErrorKind.UNKNOWN, provider
+        return _kind_from_code(error) or class_kinds.get(name, ModelErrorKind.UNKNOWN), provider
 
     if module.startswith("google.genai"):
         kind = _kind_from_code(error)
         status_code = _status_code(error)
-        # RESOURCE_EXHAUSTED alone cannot distinguish quota from throttling.
-        # Keep UNKNOWN's retry/failover policy; HTTP mapping retains the 429.
+        # RESOURCE_EXHAUSTED is ambiguous unless Google supplies a reason.
         if status_code == 429 and kind is None:
-            return ModelErrorKind.UNKNOWN, "gemini"
+            kind = ModelErrorKind.UNKNOWN
         return kind or _kind_from_status(status_code) or ModelErrorKind.UNKNOWN, "gemini"
 
     if module.startswith("httpx"):
@@ -400,9 +367,8 @@ def model_error_from_code(
 
 
 def model_error_from_exception(error: BaseException) -> ModelError | None:
-    """Reuse an existing classification or classify the first SDK failure."""
-    chain = model_exception_chain(error)
-    for item in chain:
+    """Reuse the nearest classification or classify the first SDK failure."""
+    for item in model_exception_chain(error):
         if isinstance(item, ModelError):
             return item
         carried_kind = getattr(item, "kind", None)
@@ -416,7 +382,6 @@ def model_error_from_exception(error: BaseException) -> ModelError | None:
                 code=_error_code(item),
             )
 
-    for item in chain:
         classified = _sdk_kind(item)
         if classified is None:
             continue
