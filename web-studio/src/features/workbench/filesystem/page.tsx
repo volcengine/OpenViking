@@ -40,7 +40,6 @@ import { CompileForm } from '#/features/workbench/compile/components/compile-for
 import { AddResourceForm } from '#/features/workbench/resources/components/add-resource-page'
 import { FindPalette } from '#/features/workbench/resources/components/find-palette'
 import { WorkbenchFileBrowser } from './components/workbench-file-browser'
-import type { DirectoryLevelRequest } from './components/workbench-file-browser'
 import { SharedFilePreview } from './components/shared-file-preview'
 import {
   ResourceUploadProvider,
@@ -128,7 +127,6 @@ function FilesystemWorkbench() {
   const selectedFileRef = useRef(selectedFile)
   selectedFileRef.current = selectedFile
   const browserRef = useRef<FileBrowserHandle>(null)
-  const [directoryLevel, setDirectoryLevel] = useState<DirectoryLevelRequest>()
   const [activePanel, setActivePanel] = useState<FilesystemPanel>(
     provider === 'volcengine' ? 'terminal' : (search.panel ?? 'agent'),
   )
@@ -320,9 +318,12 @@ function FilesystemWorkbench() {
           })
         }
         const level = directoryLevelFromUri(cleaned)
-        setDirectoryLevel(level ? { uri: browserUri, level } : undefined)
-        if (expandPath || level)
-          await browserRef.current?.openResource(browserUri)
+        if (expandPath || level) {
+          const resourceUri = level
+            ? `${normalizeDirUri(normalized)}${level === 'l0' ? '.abstract.md' : '.overview.md'}`
+            : browserUri
+          await browserRef.current?.openResource(resourceUri)
+        }
       } catch (error) {
         if (version === navigationVersion.current)
           showErrorToast(error, t('readFailed', { uri: cleaned }))
@@ -599,7 +600,6 @@ function FilesystemWorkbench() {
         <WorkbenchFileBrowser
           key={`${identityScopeKey}:${refreshKey}`}
           ref={browserRef}
-          directoryLevel={directoryLevel}
           readOnly
           previewActions={{
             history: false,

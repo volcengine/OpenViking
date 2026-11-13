@@ -15,4 +15,17 @@ if (typeof jsdom !== 'undefined') {
     value: jsdom.window.localStorage,
     writable: true,
   })
+  if (!Reflect.has(globalThis, 'ResizeObserver')) {
+    globalThis.ResizeObserver = class implements ResizeObserver {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+  }
+  // jsdom hides popovers by default and has no API to show them in the top layer.
+  if (!Reflect.has(HTMLElement.prototype, 'showPopover')) {
+    HTMLElement.prototype.showPopover = function () {
+      this.style.display = 'block'
+    }
+  }
 }

@@ -123,7 +123,7 @@ function setup() {
 }
 it('deletes the active history session only after confirmation and returns to a draft', async () => {
   const pending = setup()
-  fireEvent.click(screen.getByRole('button', { name: 'agent.history' }))
+  fireEvent.click(screen.getByRole('combobox', { name: 'agent.history' }))
   fireEvent.click(screen.getAllByText('B')[0].closest('button')!)
   fireEvent.click(screen.getByLabelText('threadList.deleteSession'))
   expect(m.remove).not.toHaveBeenCalled()
@@ -140,7 +140,7 @@ it('deletes the active history session only after confirmation and returns to a 
 it('uses the Console new-session action to open an unpersisted draft', () => {
   const pending = setup()
   expect(screen.getByRole('button', { name: 'agent.newSession' })).toBeTruthy()
-  fireEvent.click(screen.getByRole('button', { name: 'agent.history' }))
+  fireEvent.click(screen.getByRole('combobox', { name: 'agent.history' }))
   fireEvent.click(screen.getAllByText('B')[0].closest('button')!)
   expect(screen.getByRole('button', { name: 'agent.newSession' })).toBeTruthy()
   fireEvent.click(screen.getByRole('button', { name: 'agent.newSession' }))

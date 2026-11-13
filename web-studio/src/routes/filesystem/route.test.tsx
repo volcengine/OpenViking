@@ -455,11 +455,13 @@ describe('filesystem workbench', () => {
   })
 
   it.each([
-    ['.abstract.md', 'l0'],
-    ['.overview.md', 'l1'],
+    ['.abstract.md', '.abstract.md'],
+    ['.overview.md', '.overview.md'],
+    ['_abstract.md', '.abstract.md'],
+    ['_overview.md', '.overview.md'],
   ])(
     'reveals the summary directory in the existing tree for %s',
-    async (name, level) => {
+    async (name, summaryFile) => {
       mocks.provider = 'volcengine'
       mocks.fetchFsStat.mockResolvedValue({ isDir: true, name: 'deep' })
       const directory = 'viking://resources/deep/'
@@ -472,12 +474,11 @@ describe('filesystem workbench', () => {
         throwOnError: true,
       })
       expect(mocks.reveal).toHaveBeenCalledExactlyOnceWith(
-        directory.slice(0, -1),
+        directory + summaryFile,
       )
       expect(mocks.mountBrowser).toHaveBeenCalledTimes(1)
       expect(mocks.preview.mock.lastCall?.[0]).toMatchObject({
         uri: directory.slice(0, -1),
-        directoryLevel: { uri: directory.slice(0, -1), level },
       })
     },
   )
