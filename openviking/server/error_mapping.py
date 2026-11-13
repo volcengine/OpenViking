@@ -382,7 +382,7 @@ def _map_structured_model_error(error: ModelError, *, context: Exception) -> Ope
         details["provider_error_code"] = error.code
     return _build_upstream_error(
         code=code,
-        message="" if error.kind is ModelErrorKind.UNKNOWN else str(error),
+        message="" if error.kind is ModelErrorKind.UNKNOWN else _upstream_detail_message(context),
         status=error.status_code,
         source=error,
         vlm_context=context,
