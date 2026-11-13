@@ -4,11 +4,9 @@ import { ActivityTimeline } from '@ark-design/ui/activity-timeline';
 import type {
   ActivityItemRenderContext,
   McpToolCallActivityItem,
-  ReasoningActivityItem,
 } from '@ark-design/ui/activity-timeline';
 import { groupActivityParts } from './ark-adapter.js';
 import { ToolActivity } from './tool-activity.js';
-import { ReasoningActivity } from './reasoning-activity.js';
 import type {
   VikingBotLabels,
   VikingBotMessagePart,
@@ -80,12 +78,6 @@ export function MessageActivity({
       : items.reduce((total, item) => total + (item.durationMs ?? 0), 0);
   const renderers = useMemo(
     () => ({
-      reasoning: (context: ActivityItemRenderContext) => (
-        <ReasoningActivity
-          context={context as ActivityItemRenderContext<ReasoningActivityItem>}
-          labels={labels}
-        />
-      ),
       mcpToolCall: (context: ActivityItemRenderContext) => (
         <ToolActivity
           context={
@@ -111,7 +103,6 @@ export function MessageActivity({
             : undefined,
       }))}
       defaultCollapseCompleted
-      defaultExpanded
       density="compact"
       durationMs={
         elapsed >= 1000 ? Math.floor(elapsed / 1000) * 1000 : undefined

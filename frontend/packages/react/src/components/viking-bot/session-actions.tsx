@@ -60,7 +60,11 @@ export function VikingBotSessionActions({
                     className="ov-viking-bot__header-action"
                     aria-label={labels.sessionHistory}
                   >
-                    <VikingBotIcon name="history" />
+                    <VikingBotIcon
+                      name="history"
+                      width={12.667}
+                      height={12.667}
+                    />
                   </Button>
                 </Tooltip>
               )}
