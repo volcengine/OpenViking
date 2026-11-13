@@ -8,15 +8,15 @@ const INDICATOR_WIDTH = 16;
 /**
  * 指示条的位置：横向居中于选中页签的**标题文字**，而不是整个按钮。
  *
- * 按钮里图标与文字并排，按按钮居中会把指示条压到「图标+文字」的中点，视觉上
- * 偏左于文字；按文字居中才对得上读者的视线。
+ * 按钮的内边距与文字宽度并不相等，按按钮居中会把指示条压到「内边距+文字」的中点，
+ * 视觉上偏左于文字；按文字居中才对得上读者的视线。
  *
  * The indicator's position: horizontally centred on the selected tab's title text
  * rather than the whole button.
  *
- * A button holds an icon beside its text, and centring on the button lands the bar on
- * the midpoint of icon-plus-text, which reads as left of the text. Centring on the text
- * is what the eye follows.
+ * A button's padding is not symmetric with its text, so centring on the button lands the
+ * bar on the midpoint of padding-plus-text, which reads as left of the text. Centring on
+ * the text is what the eye follows.
  */
 function indicatorLeft(tablist: HTMLElement, title: HTMLElement | null) {
   const target =
@@ -31,16 +31,15 @@ function indicatorLeft(tablist: HTMLElement, title: HTMLElement | null) {
 }
 
 /**
- * 看板的页签：一条带图标的页签栏加一块面板。
+ * 看板的页签：一条页签栏加一块面板。
  *
  * 方向键、Home 与 End 在页签之间移动焦点并立即切换，符合 WAI-ARIA 的 tabs 模式。
- * 图标由调用方随标题一起给出，这个组件只负责结构与键盘行为。
+ * 这个组件只负责结构与键盘行为。
  *
- * The board's tabs: an icon-bearing tab bar and a panel.
+ * The board's tabs: a tab bar and a panel.
  *
  * Arrow keys, Home and End move focus between tabs and switch immediately, following
- * the WAI-ARIA tabs pattern. The caller supplies the icon with the title; this
- * component owns the structure and keyboard behaviour.
+ * the WAI-ARIA tabs pattern. This component owns the structure and keyboard behaviour.
  */
 export function DashboardTabs<T extends string>({
   tabs,
@@ -49,7 +48,7 @@ export function DashboardTabs<T extends string>({
   onChange,
   children,
 }: {
-  tabs: readonly { key: T; title: string; icon?: ReactNode }[];
+  tabs: readonly { key: T; title: string }[];
   active: T;
   label: string;
   onChange: (key: T) => void;
@@ -147,7 +146,6 @@ export function DashboardTabs<T extends string>({
             tabIndex={active === tab.key ? 0 : -1}
             onClick={() => onChange(tab.key)}
           >
-            {tab.icon}
             <span className="ov-experience-dashboard__tab-title">
               {tab.title}
             </span>

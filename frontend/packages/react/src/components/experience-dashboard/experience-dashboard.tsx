@@ -1,11 +1,6 @@
 import { useState } from 'react';
 
 import { useLocale } from '../../shared/locale-context.js';
-import {
-  TabImpactIcon,
-  TabSourceIcon,
-  TabTestIcon,
-} from '../../icons/index.js';
 import { DashboardTabs } from './dashboard-tabs.js';
 import { experienceLabels } from './labels.js';
 import { ExperienceQueryState } from './experience-state.js';
@@ -65,11 +60,9 @@ function ExperienceDashboardContent({
   const t = experienceLabels(locale, labels);
   const directory = kind === 'directory';
   const tabs = [
-    { key: 'impact' as const, title: t.impact, icon: <TabImpactIcon /> },
-    { key: 'source' as const, title: t.source, icon: <TabSourceIcon /> },
-    ...(missingTest
-      ? []
-      : [{ key: 'test' as const, title: t.test, icon: <TabTestIcon /> }]),
+    { key: 'impact' as const, title: t.impact },
+    { key: 'source' as const, title: t.source },
+    ...(missingTest ? [] : [{ key: 'test' as const, title: t.test }]),
   ];
   const activeState = directory
     ? states.list

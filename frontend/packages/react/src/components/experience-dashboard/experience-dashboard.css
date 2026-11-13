@@ -133,10 +133,6 @@
   transition: transform 180ms ease;
 }
 
-.ov-experience-dashboard__tabs svg {
-  flex: none;
-}
-
 /* 面板：点阵底铺满，内容区自己滚动。 */
 .ov-experience-dashboard__panel {
   display: flex;

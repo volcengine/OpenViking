@@ -62,6 +62,29 @@ function layout(view) {
   return { list, titles };
 }
 
+test('the tabs carry no icons', async () => {
+  const view = await mount(render('no-icons'));
+  try {
+    // 控制台只在其独立的经验详情页画页签图标，看板这一屏没有；组件实现的是看板，
+    // 因此页签里只有标题文字。
+    //
+    // The console draws tab icons only on its standalone experience detail page, not on
+    // the dashboard screen; this component implements the dashboard, so a tab holds only
+    // its title.
+    const tabs = [...view.container.querySelectorAll('[role="tab"]')];
+    assert.ok(tabs.length > 0);
+    for (const tab of tabs) {
+      assert.equal(tab.querySelector('svg'), null);
+      assert.equal(
+        tab.querySelectorAll('.ov-experience-dashboard__tab-title').length,
+        1,
+      );
+    }
+  } finally {
+    await view.unmount();
+  }
+});
+
 test('the indicator centres on the title text, not the whole tab', async () => {
   const view = await mount(render('indicator-centre'));
   try {
@@ -70,7 +93,6 @@ test('the indicator centres on the title text, not the whole tab', async () => {
     await view.render(render('indicator-centre'));
     const bar = indicator(view);
     assert.ok(bar, 'the indicator mounts once its position is known');
-    const barBox = bar.getBoundingClientRect();
     const titleBox = titles[0].getBoundingClientRect();
     // 指示条是相对页签栏绝对定位的，位置来自 CSS 变量。
     const offset = Number.parseFloat(
@@ -81,12 +103,8 @@ test('the indicator centres on the title text, not the whole tab', async () => {
       titleBox.left + titleBox.width / 2 - 8,
       'the bar is centred on the first title',
     );
-    // 首个页签带图标，按按钮居中会落在标题左侧 24px 处。
-    assert.notEqual(
-      offset,
-      barBox.left,
-      'the bar is not pinned to the bar start',
-    );
+    // 按按钮居中会算上内边距，落在标题左侧；按标题居中才对得上视线。
+    assert.notEqual(offset, 0, 'the bar is not pinned to the bar start');
     assert.ok(titleBox.width > 0);
   } finally {
     await view.unmount();

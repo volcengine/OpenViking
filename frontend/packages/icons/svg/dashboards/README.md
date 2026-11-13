@@ -7,11 +7,14 @@ SVG geometry comes from the OpenViking console implementation, authorized for us
 - `wiki-book.svg`: `pages/ContextManagement/components/assets/wiki-book-open.svg`.
 - `severity-filter.svg` and `filter-chevron.svg`: the same `WikiPreview/assets` directory, with original geometry.
 - `warning.svg`: `pages/ContextManagement/components/ContextDetailPanel/WikiPreview/assets/warning.svg`.
-- `file-link.svg`, `tab-impact.svg`, `tab-source.svg` and `tab-test.svg`: the console's
-  `@arco-design/iconbox-react-viking` set (`IconFileLinkV2ColorfulDm`, `IconBarChart10`, `IconSourceControl`,
-  `IconBeaker2`), keeping the original path geometry. Colour tokens are replaced by `currentColor` so the host
-  theme decides. `file-link.svg` keeps all six paths: the sheet is one two-subpath `path` whose outer and inner
-  contours fill into a hollow outline, so dropping either contour turns it into a solid block.
+- `file-link.svg`: the console's `@arco-design/iconbox-react-viking` `IconFileLinkV2ColorfulDm`, keeping the
+  original path geometry. Colour tokens are replaced by `currentColor` so the host theme decides. It keeps all
+  six paths: the sheet is one two-subpath `path` whose outer and inner contours fill into a hollow outline, so
+  dropping either contour turns it into a solid block.
+
+The console's `IconBarChart10`, `IconSourceControl` and `IconBeaker2` were extracted for the experience
+dashboard's tabs, then dropped: that console screen renders the tab icons only in its standalone detail page,
+never in the dashboard this component implements.
 
 The `edit`, `success`, and `history` action SVGs come from the same `WikiPreview/assets` directory; `discuss` comes from its rendered conflict action.
 
