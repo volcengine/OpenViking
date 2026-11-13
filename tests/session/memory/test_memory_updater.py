@@ -47,6 +47,10 @@ from openviking.storage.abstract_overview import parse_abstract_overview
 from openviking.system_assets import builtin_memory_templates_dir
 from openviking_cli.exceptions import ConflictError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.open_viking_config import (
+    OpenVikingConfig,
+    OpenVikingConfigSingleton,
+)
 
 
 class TestMemoryUpdateResult:
@@ -72,25 +76,34 @@ class TestMemoryUpdater:
     @pytest.mark.parametrize(
         ("user_peer", "assistant_peer", "expected"),
         [
-            (None, None, "**user**: OWNER_REQUEST\n**assistant**: AGENT_RESPONSE"),
+            (None, None, "**user**: OWNER_REQUEST你好🌱\n**assistant**: AGENT_RESPONSE"),
             (
                 "workspace-agent",
                 "workspace-agent",
-                "**user [peer=workspace-agent]**: OWNER_REQUEST\n"
+                "**user [peer=workspace-agent]**: OWNER_REQUEST你好🌱\n"
                 "**assistant [peer=workspace-agent]**: AGENT_RESPONSE",
             ),
             (
                 "owner",
                 "agent",
-                "**user [peer=owner]**: OWNER_REQUEST\n**assistant [peer=agent]**: AGENT_RESPONSE",
+                "**user [peer=owner]**: OWNER_REQUEST你好🌱\n**assistant [peer=agent]**: AGENT_RESPONSE",
             ),
         ],
     )
-    def test_event_chatlog_preserves_role_and_peer(self, user_peer, assistant_peer, expected):
-        """通过事件模板验证持久化正文保留角色和 peer。"""
+    @pytest.mark.parametrize("max_chars", [None, 0, 1, 24, 1000])
+    def test_event_chatlog_preserves_role_and_peer(
+        self, monkeypatch, user_peer, assistant_peer, expected, max_chars
+    ):
+        """The event template caps ChatLog characters without changing source or summary."""
+        config = OpenVikingConfig.from_dict(
+            {} if max_chars is None else {"memory": {"event_chatlog_max_chars": max_chars}}
+        )
+        monkeypatch.setattr(OpenVikingConfigSingleton, "_instance", config)
         context = ExtractContext(
             [
-                Message(id="u", role="user", peer_id=user_peer, parts=[TextPart("OWNER_REQUEST")]),
+                Message(
+                    id="u", role="user", peer_id=user_peer, parts=[TextPart("OWNER_REQUEST你好🌱")]
+                ),
                 Message(
                     id="a",
                     role="assistant",
@@ -103,12 +116,19 @@ class TestMemoryUpdater:
         registry.load_from_yaml(str(builtin_memory_templates_dir() / "events.yaml"))
         schema = registry.get("events")
         assert schema is not None
+        original_messages = deepcopy(context.messages)
         rendered = MemoryFileUtils.write(
             MemoryFile(extra_fields={"ranges": "0-1", "summary": "对话记录"}),
             content_template=schema.content_template,
             extract_context=context,
         )
-        assert expected in rendered
+        chatlog = expected[:max_chars] if max_chars else expected
+        memory = MemoryFileUtils.read(rendered)
+        assert memory.content.rsplit("ChatLog:", 1)[1].strip() == chatlog.strip()
+        assert memory.extra_fields["summary"] == "对话记录"
+        assert memory.extra_fields["ranges"] == "0-1"
+        assert context.get_event_content("0-1", "对话记录", 0) == chatlog
+        assert context.messages == original_messages
 
     @pytest.mark.parametrize(
         ("second_role", "second_peer", "expected"),

@@ -524,6 +524,7 @@ See [Encryption](../guides/08-encryption.md) for provider and key-management set
 {
   "memory": {
     "custom_templates_dir": "",
+    "event_chatlog_max_chars": 0,
     "experimental_memory_switch": false,
     "eager_prefetch": true,
     "prefetch_search_topn": 5,
@@ -539,12 +540,15 @@ See [Encryption](../guides/08-encryption.md) for provider and key-management set
 | Field | Type / values | Default | Purpose |
 |---|---|---|---|
 | `custom_templates_dir` | path | `""` | Custom memory template directory; a matching `memory_type` overrides the loaded template |
+| `event_chatlog_max_chars` | integer, `>= 0` | `0` | Maximum characters in the rendered Event ChatLog; `0` means unlimited |
 | `experimental_memory_switch` | boolean | `false` | Enable experimental templates |
 | `eager_prefetch` | boolean | `true` | Search and read memories before extraction |
 | `prefetch_search_topn` | integer, `>= 1` | `5` | Results read during prefetch |
 | `extraction_enabled` | boolean | `true` | Extract long-term memories on session commit |
 | `session_skill_extraction_enabled` | boolean | `false` | Also extract reusable skills |
 | `link_enabled` | boolean | `false` | Generate and resolve memory links |
+
+`event_chatlog_max_chars` keeps a prefix of the text returned by `get_event_content`, after its original-dialogue/summary selection. It counts Unicode characters, not bytes, and does not cap the separate Summary section or change archived messages. It applies to newly rendered Event bodies, including custom templates using this helper; existing memory files and resource-derived Event bodies are unaffected.
 
 Automatic commits require a separate policy; enabling memory extraction does not make sessions commit automatically. See `memory.session_auto_commit` in [Configuration](../guides/01-configuration.md) and the [Sessions API](../api/05-sessions.md). For template loading order and when changes take effect, see the [Prompt Guide](../guides/10-prompt-guide.md).
 

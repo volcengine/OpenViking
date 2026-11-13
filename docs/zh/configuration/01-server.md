@@ -505,6 +505,7 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
 {
   "memory": {
     "custom_templates_dir": "",
+    "event_chatlog_max_chars": 0,
     "experimental_memory_switch": false,
     "eager_prefetch": true,
     "prefetch_search_topn": 5,
@@ -520,12 +521,15 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
 | 字段 | 类型 / 可选值 | 默认值 | 作用 |
 |---|---|---|---|
 | `custom_templates_dir` | path | `""` | 自定义记忆模板目录；同名 `memory_type` 覆盖已加载模板 |
+| `event_chatlog_max_chars` | integer，`>= 0` | `0` | 渲染后的 Event ChatLog 字符数上限；`0` 表示不限制 |
 | `experimental_memory_switch` | boolean | `false` | 是否启用实验性记忆模板 |
 | `eager_prefetch` | boolean | `true` | 是否在抽取前预取并读取记忆内容 |
 | `prefetch_search_topn` | integer，`>= 1` | `5` | 预取时读取的检索结果数量 |
 | `extraction_enabled` | boolean | `true` | session commit 时是否抽取长期记忆 |
 | `session_skill_extraction_enabled` | boolean | `false` | 是否同时抽取可复用 Skill |
 | `link_enabled` | boolean | `false` | 是否生成和解析记忆链接 |
+
+`event_chatlog_max_chars` 在 `get_event_content` 完成原始对话/摘要选择后保留其返回文本的前缀，按 Unicode 字符数而非字节数计量，不限制独立的 Summary 段，也不修改归档消息。它作用于新渲染的 Event 正文，包括调用此函数的自定义模板；已有记忆文件和资源派生的 Event 正文不受影响。
 
 自动提交还需要单独设置策略：记忆抽取开关不会让会话自动提交。详见[配置指南](../guides/01-configuration.md)的 `memory.session_auto_commit` 和[会话 API](../api/05-sessions.md)。模板目录的加载顺序和生效方式见 [Prompt 指南](../guides/10-prompt-guide.md)。
 

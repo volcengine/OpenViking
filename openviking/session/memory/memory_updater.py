@@ -57,6 +57,7 @@ from openviking.utils.tags import merge_search_tags
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import ConflictError, NotFoundError
 from openviking_cli.utils import VikingURI, get_logger
+from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
@@ -515,18 +516,16 @@ class ExtractContext:
     def get_event_content(
         self, ranges_str: str, summary: str | None, ratio_threshold: float = 0.2
     ) -> str:
-        """根据原始消息与 summary 的字符数比例，决定返回原始消息还是摘要。"""
-        if not ranges_str:
-            return summary or ""
-        msg_range = self.read_message_ranges(ranges_str)
-        original = msg_range.pretty_print()
-        if not summary or not summary.strip():
-            return original or ""
-        if not original:
-            return summary
-        if len(summary) / len(original) >= ratio_threshold:
-            return original
-        return summary
+        """Select original dialogue or summary, then apply the configured character cap."""
+        content = summary or ""
+        if ranges_str:
+            original = self.read_message_ranges(ranges_str).pretty_print()
+            if not summary or not summary.strip():
+                content = original or ""
+            elif original and len(summary) / len(original) >= ratio_threshold:
+                content = original
+        max_chars = get_openviking_config().memory.event_chatlog_max_chars
+        return content[:max_chars] if max_chars else content
 
     def get_resource_event_content(self, ranges_str: str, summary: str) -> str:
         """Return a user-readable event body for add-resource derived events."""
