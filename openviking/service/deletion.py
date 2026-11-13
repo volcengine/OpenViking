@@ -40,6 +40,17 @@ _TERMINAL_TASK_STATUSES = (
 )
 
 
+def _is_shared_upload_bucket(name: str) -> bool:
+    """Return True for a ``YYYYMMDDHH`` (UTC) shared-upload bucket directory."""
+    if len(name) != 10 or not name.isdigit():
+        return False
+    try:
+        time.strptime(name, "%Y%m%d%H")
+    except ValueError:
+        return False
+    return True
+
+
 def _deletion_message(
     *,
     task_id: str,
@@ -478,24 +489,50 @@ class DeletionService:
 
         for upload in uploads:
             uri = str(upload.get("uri") or "").rstrip("/")
-            if not uri or uri == _SHARED_UPLOAD_ROOT:
-                continue
-            upload_id = uri.removeprefix(f"{_SHARED_UPLOAD_ROOT}/")
             if (
-                not upload.get("isDir")
+                not uri
+                or uri == _SHARED_UPLOAD_ROOT
+                or not upload.get("isDir")
                 or not uri.startswith(f"{_SHARED_UPLOAD_ROOT}/")
-                or not upload_id
-                or "/" in upload_id
             ):
                 continue
-            meta_uri = f"{uri}/meta"
-            try:
-                meta = json.loads(await viking_fs.read_file(meta_uri, ctx=ctx))
-            except Exception:
-                logger.warning("Skipping shared upload with unreadable metadata: %s", meta_uri)
+            upload_id = uri.removeprefix(f"{_SHARED_UPLOAD_ROOT}/")
+            if not upload_id or "/" in upload_id:
                 continue
-            if meta.get("account") == ctx.account_id and meta.get("user") == ctx.user.user_id:
-                await viking_fs.rm(uri, recursive=True, ctx=ctx)
+            if _is_shared_upload_bucket(upload_id):
+                # Bucketed shared uploads store each file one level below the
+                # hour bucket: viking://upload/<bucket>/<leaf>/{content,meta}.
+                try:
+                    leaves = await viking_fs.ls(
+                        uri,
+                        show_all_hidden=True,
+                        node_limit=LS_ALL_NODES,
+                        ctx=ctx,
+                    )
+                except NotFoundError:
+                    continue
+                for leaf in leaves:
+                    leaf_uri = str(leaf.get("uri") or "").rstrip("/")
+                    if leaf.get("isDir") and leaf_uri.startswith(f"{uri}/"):
+                        await self._delete_shared_upload_if_owned(leaf_uri, ctx)
+                continue
+            await self._delete_shared_upload_if_owned(uri, ctx)
+
+    async def _delete_shared_upload_if_owned(self, uri: str, ctx: RequestContext) -> None:
+        """Remove one shared upload directory when its metadata names the user."""
+        meta_uri = f"{uri}/meta"
+        try:
+            raw = await self._service.viking_fs.read_file(meta_uri, ctx=ctx)
+        except NotFoundError:
+            logger.warning("Skipping shared upload without metadata: %s", meta_uri)
+            return
+        try:
+            meta = json.loads(raw)
+        except (TypeError, ValueError):
+            logger.warning("Skipping shared upload with invalid metadata: %s", meta_uri)
+            return
+        if meta.get("account") == ctx.account_id and meta.get("user") == ctx.user.user_id:
+            await self._service.viking_fs.rm(uri, recursive=True, ctx=ctx)
 
 
 class _DeletionProcessor(DequeueHandlerBase):
