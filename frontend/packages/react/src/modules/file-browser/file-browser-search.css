@@ -533,7 +533,7 @@
 .ov-file-browser-search__advanced-title {
   flex: 1;
   margin: 0;
-  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
   font-size: 14px;
   font-weight: 500;
   line-height: 22px;
@@ -543,7 +543,7 @@
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
   font: inherit;
   font-size: 13px;
   line-height: 22px;
@@ -565,7 +565,7 @@
 }
 
 .ov-file-browser-search__advanced-close:hover {
-  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default, #f7f8fd));
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
 }
 
 .ov-file-browser-search__advanced-body {
@@ -585,21 +585,21 @@
   flex-wrap: wrap;
   gap: 6px;
   margin: 0;
-  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
   font-size: 13px;
   font-weight: 500;
   line-height: 22px;
 }
 
 .ov-file-browser-search__group-note {
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
   font-size: 12px;
   font-weight: 400;
 }
 
 .ov-file-browser-search__group-empty {
   margin: 0;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
   font-size: 13px;
   line-height: 22px;
 }
@@ -629,7 +629,7 @@
     .ov-checkbox:not(.ov-checkbox--disabled),
     .ov-radio:not(.ov-radio--disabled)
   ) {
-  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
 }
 
 .ov-file-browser-search__advanced :is(.ov-checkbox__mask, .ov-radio__mask) {
