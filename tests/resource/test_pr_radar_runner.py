@@ -387,6 +387,31 @@ async def test_publish_failure_keeps_pending_queue_intact():
     assert '"number": 11' in queue
 
 
+@pytest.mark.asyncio
+async def test_queue_clear_failure_keeps_state_watermark_unadvanced():
+    class FailQueueClearFs(FakeFs):
+        async def write_file(self, uri, content, ctx=None, **kwargs):
+            # The initial queue save (non-empty) succeeds; only the drain
+            # after publishing fails.
+            if uri.endswith(SIGNALS_FILENAME) and not content:
+                raise RuntimeError("queue clear failed")
+            await super().write_file(uri, content, ctx=ctx, **kwargs)
+
+    fs = FailQueueClearFs()
+    runner = PrRadarRunner(fs, gh=FakeGh([_pr_row(11)]))
+    result = await runner.maybe_run(
+        _task({"pr_radar": {"enabled": True}}), _ctx
+    )
+
+    assert result.status == "failed"
+    # The report was published, but the watermark must not advance before the
+    # queue is drained: no state file and the signal survives for retry.
+    assert any(uri.endswith(LATEST_REPORT_NAME) for uri in fs.files)
+    assert not any(uri.endswith(STATE_FILENAME) for uri in fs.files)
+    queue = fs.files[_signals_uri(fs)]
+    assert '"number": 11' in queue
+
+
 def test_signal_store_merge_dedupes_by_number():
     from openviking.resource.github_radar.collector import _build_pr
     from openviking.resource.github_radar.signal_store import RadarSignalStore
@@ -724,8 +749,8 @@ async def test_lagged_watch_catches_up_one_window_per_digest():
     first = await runner.maybe_run(task, _ctx)
     assert first.status == "published"
     assert first.pr_count == 1
-    # Snapshot the first report: the archive stamp is second-resolution, so
-    # two fast digests may share an archive filename; latest.md is overwritten.
+    # Snapshot the first report: latest.md is overwritten by the second
+    # digest, while the unique archive stamps keep both archived reports.
     first_report = fs.files[
         next(uri for uri in fs.files if uri.endswith(LATEST_REPORT_NAME))
     ]
@@ -744,3 +769,6 @@ async def test_lagged_watch_catches_up_one_window_per_digest():
     assert fs.files[_signals_uri(fs)] == ""
     # The windows were digested separately, not merged into one mega-report.
     assert first.window_end != second.window_end
+    # Unique archive stamps retain both reports instead of overwriting.
+    archives = [uri for uri in fs.files if "/reports/" in uri and uri.endswith(".md")]
+    assert len(archives) == 2

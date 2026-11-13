@@ -302,15 +302,19 @@ class PrRadarRunner:
                 repo, in_window, config, ctx, plan.window_start, plan.window_end
             )
             await self._publish_report(target_uri, report, ctx)
-            # Both watermarks and the queue only advance after a successful
-            # publish: a render/publish failure leaves state and queue intact,
-            # so the next trigger retries the same window with the same boundary.
-            if new_state != state:
-                await self._write_state(target_uri, new_state, ctx)
+            # Drain the queue BEFORE advancing the watermark. The two writes
+            # are not transactional: if the state write landed first and the
+            # queue write then failed, already-published signals would reload
+            # next trigger outside every future window and strand forever.
+            # With this order a queue failure leaves state on the old boundary,
+            # so the next trigger retries the same window (at worst a duplicate
+            # report) instead of losing signals.
             if deferred:
                 await signal_store.save(deferred, ctx)
             else:
                 await signal_store.clear(ctx)
+            if new_state != state:
+                await self._write_state(target_uri, new_state, ctx)
             return RadarRunResult(
                 status="published",
                 pr_count=len(in_window),

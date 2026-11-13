@@ -6,6 +6,7 @@ from openviking.resource.github_radar.report import (
     _md_text,
     render_enriched_report,
     render_report,
+    report_stamp,
 )
 from openviking.resource.github_radar.summarizer import (
     PrTriage,
@@ -101,6 +102,12 @@ def test_llm_prose_newlines_are_folded_in_detail_lines():
     )
     report = render_enriched_report(REPO, [_pr()], summary)
     assert "第一行 第二行" in report
+
+
+def test_report_stamp_is_unique_for_consecutive_calls():
+    # Even within the same UTC second, archive filenames must not collide.
+    stamps = {report_stamp() for _ in range(10)}
+    assert len(stamps) == 10
 
 
 def test_synthesis_report_keeps_disclaimer_and_topic_layer():

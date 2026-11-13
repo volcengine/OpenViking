@@ -161,6 +161,51 @@ async def test_page_guard_bounds_issue_heavy_scans(monkeypatch):
     assert len(gh.calls) == 2
 
 
+class GithubOffsetGh:
+    """Models real GitHub REST pagination: offset=(page-1)*per_page over a
+    fixed result set. A per_page that shrinks between requests moves the
+    offset backwards and re-serves the previous page's rows."""
+
+    def __init__(self, rows: list[dict]) -> None:
+        self._rows = rows
+        self.calls: list[dict] = []
+
+    async def api_get_json(self, path, params=None):
+        per_page = int(params["per_page"])
+        page = int(params["page"])
+        self.calls.append({"page": page, "per_page": per_page})
+        start = (page - 1) * per_page
+        return self._rows[start : start + per_page]
+
+
+@pytest.mark.asyncio
+async def test_constant_per_page_keeps_github_offsets_from_overlapping():
+    # An issue-heavy first page (40 issues + 10 PRs), then PR-only pages.
+    rows = [
+        _issue_row(1000 + i, f"2026-11-01T00:{i:02d}:00Z") for i in range(40)
+    ]
+    rows += [
+        _pr_row(i, f"2026-11-01T{(i // 60) + 1:02d}:{i % 60:02d}:00Z")
+        for i in range(1, 111)
+    ]
+    gh = GithubOffsetGh(rows)
+    config = RadarConfig(enabled=True, max_prs_per_run=50)
+
+    outcome = await collect_prs(
+        gh, "o/r", config, RadarState(issues_since="2026-11-01T00:00:00Z")
+    )
+
+    numbers = [pr.number for pr in outcome.prs]
+    # No PR is double-counted: page 1 yields 10 PRs and the PR-only page 2
+    # is consumed whole (the cap gates between pages, not inside a page).
+    assert len(numbers) == len(set(numbers)) == 60
+    assert numbers == list(range(1, 61))
+    # per_page is frozen for the whole pass and pages stay sequential.
+    assert {call["per_page"] for call in gh.calls} == {50}
+    assert [call["page"] for call in gh.calls] == list(range(1, len(gh.calls) + 1))
+    assert outcome.caught_up is False
+
+
 @pytest.mark.asyncio
 async def test_transport_failure_holds_earned_prefix_without_raising():
     gh = FakeGh(

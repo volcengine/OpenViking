@@ -12,6 +12,7 @@ changing the collector contract.
 from __future__ import annotations
 
 import re
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -197,9 +198,15 @@ def render_enriched_report(
 
 
 def report_stamp(moment: datetime | None = None) -> str:
-    """Filesystem-safe timestamp for archived reports (one watch may run many times a day)."""
+    """Filesystem-safe, collision-free stamp for archived reports.
+
+    The timestamp is second-resolution, so two digests published within the
+    same UTC second (e.g. manual catch-up triggers) get a unique suffix instead
+    of silently overwriting each other's archive.
+    """
     moment = moment or datetime.now(timezone.utc)
-    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+    stamp = moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+    return f"{stamp}-{uuid.uuid4().hex[:8]}"
 
 
 def joined_numbers(prs: Iterable[PrSignal]) -> List[int]:

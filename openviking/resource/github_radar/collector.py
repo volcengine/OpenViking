@@ -94,9 +94,13 @@ async def collect_prs(
     # never consume the PR budget, so the cap matches its name.
     prs_collected = 0
     caught_up = False
+    # per_page must stay constant across pages within one pass: GitHub slices
+    # each request at offset=(page-1)*per_page, so shrinking per_page mid-scan
+    # moves the offset backwards and re-emits the previous page's rows. The PR
+    # cap is enforced between pages by the while condition instead.
+    per_page = min(_PER_PAGE, config.max_prs_per_run)
 
     while prs_collected < config.max_prs_per_run and page <= _MAX_PAGES_PER_RUN:
-        per_page = min(_PER_PAGE, config.max_prs_per_run - prs_collected)
         try:
             rows = await gh.api_get_json(
                 f"repos/{repo}/issues",
