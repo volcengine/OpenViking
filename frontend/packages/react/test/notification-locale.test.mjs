@@ -70,7 +70,8 @@ test('notification follows locale scopes and scoped theme overrides without rese
   }
 });
 
-test('notification supports server rendering without document', () => {
+test('notification supports server rendering with and without document', () => {
+  assert.doesNotThrow(() => renderToString(h(Host, { capture() {} })));
   const saved = globalThis.document;
   try {
     delete globalThis.document;

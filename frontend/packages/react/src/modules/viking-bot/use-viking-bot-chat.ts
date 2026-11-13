@@ -54,11 +54,20 @@ export function useVikingBotChat(
     controller.getSnapshot,
     controller.getSnapshot,
   );
+  // Effect necessity: register tasks from the external chat controller's stream
+  // and history events, which also arrive without a user submission here.
+  // Subscribe directly rather than mirror React message state; cleanup detaches
+  // the old controller, and useTaskTracking releases/aborts its query source.
   useEffect(() => {
     if (enabled === false) return;
-    for (const task of submittedBotTasks(state.messages, state.streaming))
-      track(task);
-  }, [state.messages, state.streaming, track, enabled]);
+    const register = () => {
+      const current = controller.getSnapshot();
+      for (const task of submittedBotTasks(current.messages, current.streaming))
+        track(task);
+    };
+    register();
+    return controller.subscribe(register);
+  }, [controller, track, enabled]);
   const projected = useMemo(
     () => projectBotTasks(state.messages, state.streaming, tasks, source.key),
     [state.messages, state.streaming, tasks, source],

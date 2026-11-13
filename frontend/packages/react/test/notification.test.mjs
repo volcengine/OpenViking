@@ -154,3 +154,45 @@ test('notification timers reset on ID updates, pause on hover and keyboard focus
   await wait(100);
   assert.equal(closed, 1);
 });
+
+test('notification reports dismissal before exit and preserves post-animation onClose', async () => {
+  let api;
+  const view = await mount(
+    h(Host, {
+      capture: (value) => {
+        api = value;
+      },
+    }),
+  );
+  try {
+    for (const timed of [false, true]) {
+      const events = [];
+      await act(() =>
+        api.info({
+          content: 'Dismissal lifecycle',
+          duration: timed ? 30 : 0,
+          onDismiss: () => events.push('dismiss'),
+          onClose: () => events.push('closed'),
+        }),
+      );
+      if (timed) {
+        await wait(80);
+      } else {
+        await act(() =>
+          cards()[0].querySelector('.ov-notification__close').click(),
+        );
+        assert.deepEqual(events, ['dismiss']);
+        assert.equal(
+          cards().length,
+          1,
+          'the notice remains during its exit animation',
+        );
+      }
+      await wait(240);
+      assert.deepEqual(events, ['dismiss', 'closed']);
+      assert.equal(cards().length, 0);
+    }
+  } finally {
+    await view.unmount();
+  }
+});

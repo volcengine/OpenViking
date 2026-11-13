@@ -29,6 +29,9 @@ export function TaskTrackingProvider({
   const [fallbackClient] = useState(() => createOvClient());
   const client = inheritedClient ?? fallbackClient;
   const [tracker] = useState(() => createTaskTracker());
+  // Effect necessity: this Console owns the scheduler's timers and network queries.
+  // Rendering must not start requests, and events cannot observe owner unmount.
+  // start() returns cleanup that clears the timer and aborts outstanding queries.
   useEffect(() => tracker.start(), [tracker]);
   const value = useMemo(
     () => ({ tracker, service, client }),
@@ -91,10 +94,17 @@ export function useTaskTracking({
     scopeKey,
     service,
   ]);
+  // Effect necessity: standalone hooks own scheduler timers/queries; Console
+  // supplies their owner otherwise. Rendering cannot start this external work.
+  // Cleanup stops only the locally owned tracker and aborts its queries.
   useEffect(
     () => (inherited ? undefined : tracker.start()),
     [tracker, inherited],
   );
+  // Effect necessity: retain the query source for this identity and subscribe to
+  // its AbortSignal; neither render nor submission events cover owner changes.
+  // Cleanup removes the listener and releases ownership, aborting/removing tasks
+  // when the last owner leaves; late query results are ignored by the tracker.
   useEffect(() => {
     const release = tracker.retain(source);
     let released = false;

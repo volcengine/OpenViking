@@ -1,5 +1,5 @@
 /** Arco Design Notification top-right stack (MIT); see LICENSE.arco-design. */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { TransitionGroup, CSSTransition } from 'react-transition-group';
 import { useLocale } from '../../locale-context.js';
@@ -9,6 +9,12 @@ import { Notice } from './notice.js';
 import type { NotificationItem, NotificationOptions } from './types.js';
 import enUS from './locales/en-US.js';
 import zhCN from './locales/zh-CN.js';
+
+// React's server/hydration snapshot keeps portals out of server rendering,
+// including server renderers that run with browser globals present.
+const subscribeToClient = () => () => {};
+const clientSnapshot = () => true;
+const serverSnapshot = () => false;
 
 interface Props extends NotificationOptions {
   notices: NotificationItem[];
@@ -23,8 +29,11 @@ export function Notification({
 }: Props) {
   const locale = useLocale(localeProp);
   const text = resolveLocale({ 'en-US': enUS, 'zh-CN': zhCN }, locale, labels);
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  const isClient = useSyncExternalStore(
+    subscribeToClient,
+    clientSnapshot,
+    serverSnapshot,
+  );
   const anchor = useRef<HTMLSpanElement>(null);
   const [surface, setSurface] = useState<HTMLDivElement | null>(null);
   usePortalTheme(Boolean(surface), anchor, surface);
@@ -41,7 +50,7 @@ export function Notification({
   return (
     <>
       <span ref={anchor} hidden />
-      {!mounted || typeof document === 'undefined'
+      {!isClient || typeof document === 'undefined'
         ? null
         : createPortal(
             <div

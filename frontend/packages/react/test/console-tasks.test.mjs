@@ -82,3 +82,45 @@ test('Console custom task adapter is isolated and aborts on identity switch', as
     await host.dispose();
   }
 });
+
+test('dismissing a task stays hidden when its pending query fails during the exit animation', async () => {
+  let resolveTask;
+  let taskSignal;
+  const taskService = {
+    getTask: (id, signal) => {
+      taskSignal = signal;
+      return new Promise((resolve) => {
+        resolveTask = resolve;
+      });
+    },
+  };
+  const host = await mount(async () => ok({ task_id: 'exit-race' }), {
+    taskService,
+    locale: 'en-US',
+  });
+  try {
+    await host.execute('ov add-resource https://example.com/resource');
+    await tick();
+    assert.equal(typeof resolveTask, 'function');
+    const close = document.querySelector(
+      'button[aria-label="Close notification"]',
+    );
+    assert.ok(close);
+    await act(() => close.click());
+    assert.equal(taskSignal.aborted, false);
+    await act(() =>
+      resolveTask({
+        id: 'exit-race',
+        status: 'failed',
+        error: 'Failed during exit',
+      }),
+    );
+    assert.equal(host.records[0].dataset.status, 'error');
+    assert.match(host.records[0].textContent, /Failed during exit/);
+    await act(() => new Promise((resolve) => setTimeout(resolve, 260)));
+    assert.equal(document.querySelectorAll('.ov-notification').length, 0);
+    assert.equal(taskSignal.aborted, false);
+  } finally {
+    await host.dispose();
+  }
+});

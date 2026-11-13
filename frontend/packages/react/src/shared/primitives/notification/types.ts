@@ -15,6 +15,9 @@ export interface NotificationConfig {
   closeIcon?: ReactNode;
   className?: string;
   style?: CSSProperties;
+  /** Called immediately when the close button or auto-dismiss timer removes the notice. */
+  onDismiss?: () => void;
+  /** Called after the exit animation, including programmatic removal and clearing. */
   onClose?: () => void;
   btn?: ReactNode;
 }

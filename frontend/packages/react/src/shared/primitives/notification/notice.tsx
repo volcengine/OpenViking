@@ -29,6 +29,7 @@ export function Notice({
     className,
     style,
     duration = 3000,
+    onDismiss,
     btn,
   } = notice;
   const [hovered, setHovered] = useState(false);
@@ -39,13 +40,18 @@ export function Notice({
     root.current = node;
     if (node) previousFocus.current = node.ownerDocument.activeElement;
   }, []);
+  const dismiss = useCallback(() => {
+    onDismiss?.();
+    onRemove(id);
+  }, [onDismiss, onRemove, id]);
   // Effect necessity: synchronize the browser auto-dismiss timer with notice updates,
-  // hover and keyboard focus. Cleanup cancels the old timer on update/unmount.
+  // hover and keyboard focus; elapsed time cannot be handled by click events.
+  // Cleanup cancels the old timer on update/unmount.
   useEffect(() => {
     if (!active || duration <= 0 || hovered || focused) return;
-    const timer = window.setTimeout(() => onRemove(id), duration);
+    const timer = window.setTimeout(dismiss, duration);
     return () => window.clearTimeout(timer);
-  }, [notice, duration, hovered, focused, id, onRemove, active]);
+  }, [notice, duration, hovered, focused, dismiss, active]);
   const close = () => {
     const element = root.current;
     if (element?.contains(document.activeElement)) {
@@ -62,7 +68,7 @@ export function Notice({
       )
         previousFocus.current.focus();
     }
-    onRemove(id);
+    dismiss();
   };
   return (
     <div
