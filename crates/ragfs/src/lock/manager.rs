@@ -569,6 +569,11 @@ pub struct PathLockManager {
 }
 
 impl PathLockManager {
+    /// Return the actual provider's lease handle representation.
+    pub fn handle_mode(&self) -> PathLockHandleMode {
+        self.provider.handle_mode()
+    }
+
     /// Return the configured default timeout for automatic lock acquisition.
     pub fn default_lock_timeout(&self) -> Duration {
         Duration::from_secs_f64(self.config.lock_timeout_secs)

@@ -30,18 +30,19 @@ USER / ADMIN 必须给 `commit` 和 `log` 传入 `paths`，给 `restore` 传入 
 
 非 ROOT 的显式路径提交先按当前状态选锁，再检查范围权限并生成快照：
 
-| 目标状态 | Filesystem PathLock | Cache（Redis）/ SQLite PathLock | PostgreSQL PathLock |
-| --- | --- | --- | --- |
-| 现有文件 | Exact | Exact | Exact |
-| 现有目录 | Tree | Tree | Tree |
-| 缺失路径 | 跳过该目标的锁 | Tree | 跳过该目标的锁 |
+| 目标状态 | Filesystem PathLock | 逻辑路径 PathLock（Redis / SQLite / PostgreSQL / memory） |
+| --- | --- | --- |
+| 现有文件 | Exact | Exact |
+| 现有目录 | Tree | Tree |
+| 缺失路径 | 跳过该目标的锁 | Tree |
 
 Filesystem 对缺失目标跳过锁，避免锁文件创建目标目录或缺失的父目录链；该目标仍参与快照删除处理。此时并发重建同一路径可能被漏记或读到尚未写完的内容，后续提交才能记录最终状态。ROOT 不经过这段显式路径加锁流程。
 
-PostgreSQL 支持对缺失路径加逻辑锁，但当前快照选锁代码仅在 `cache` 或 `sqlite`
-模式下为缺失目标申请 Tree 锁，因此 PostgreSQL 的缺失目标同样存在上述并发重建限制。
-Provider 配置见 [PostgreSQL PathLock](25-postgresql-pathlock.md)；
-本表描述快照层实际行为，不代表 Provider 的加锁能力。
+快照通过 native binding 查询实际运行的 Provider 的 handle mode。
+逻辑路径 Provider 会为缺失目标申请 Tree 锁，无需创建业务目录；
+memory 仅协调同一个客户端内的操作。租约有效期间，共享同一锁状态的参与者
+无法取得与它冲突的锁。初始状态检查与取得锁之间，路径仍可能变化。
+共享数据库协调配置见 [PostgreSQL PathLock 配置](../configuration/01-server.md#postgresql-pathlock)。
 
 快照不能视为任意并发 I/O 的全局原子视图。需要确定的业务检查点时，应先结束该范围内的写入，再提交；锁只协调参与 [PathLock 协议](../concepts/09-transaction.md) 的操作。
 

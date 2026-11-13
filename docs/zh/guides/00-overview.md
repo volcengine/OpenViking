@@ -23,4 +23,4 @@
 有存储或性能需求时，再选择[主备存储](13-multi-write-storage.md)、[RAGFS 缓存](14-ragfs-cache.md)或 [cuVS](16-cuvs.md)。这些是按需配置项，不是首次部署的必经步骤。
 
 需要在不使用 Redis 的情况下跨进程或主机共享路径锁时，参见
-[PostgreSQL PathLock](25-postgresql-pathlock.md)。
+[PostgreSQL PathLock 配置](../configuration/01-server.md#postgresql-pathlock)。

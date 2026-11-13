@@ -1647,7 +1647,7 @@ Redis 命名空间。
 |------|------|------|--------|
 | `provider` | str | `filesystem`、`memory`、`sqlite`、`postgres` 或 `cache`；`postgres` 直连 PostgreSQL，`cache` 复用 Redis CacheRuntime | `filesystem` |
 | `sqlite_path` | str / null | 可显式覆盖本地共享锁数据库的绝对路径。见 [SQLite 配置](../configuration/01-server.md#storage) | 使用 `sqlite` 时为 `{storage.workspace}/_system/pathlock/pathlock.db` |
-| `postgres_dsn_env` | str / null | `postgres` 必填；保存 PostgreSQL DSN 的环境变量名。见 [PostgreSQL 配置](25-postgresql-pathlock.md) | `null` |
+| `postgres_dsn_env` | str / null | `postgres` 必填；保存 PostgreSQL DSN 的环境变量名。见 [PostgreSQL 配置](../configuration/01-server.md#postgresql-pathlock) | `null` |
 | `lock_expire_secs` | float | 未刷新的锁进入 stale 状态前的秒数；不得小于 `1.0` | `30.0` |
 | `lock_timeout_secs` | float | 已废弃且忽略；运行时等待超时固定为 `0.0` | `0.0` |
 
@@ -1682,7 +1682,7 @@ export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=ope
 和过期时长。PostgreSQL PathLock 独立于 `cache.provider/cache.params`，
 不会启用 CacheFS，也不会改变 QueueFS、业务文件存储或向量后端的并发限制。
 特别是默认 SQLite 队列不适合在 EFS 上跨主机共享。
-配置和验证步骤见 [PostgreSQL PathLock](25-postgresql-pathlock.md)。
+配置和验证步骤见 [PostgreSQL PathLock 配置](../configuration/01-server.md#postgresql-pathlock)。
 
 多个容器或主机共享 EFS 时，也可使用下面的共享 Redis PathLock 配置。
 所有副本必须连接同一个 Redis 部署，并使用相同的顶层 `service_name` 和锁过期配置。

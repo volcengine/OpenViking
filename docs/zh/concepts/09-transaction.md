@@ -311,7 +311,7 @@ advisory lock 保护下检查 Exact/Tree 冲突、批量获取、续租和释放
 
 PostgreSQL 是独立于 Redis/CacheRuntime 的共享协调后端。它无需 Redis，
 不会启用读缓存，也不会把业务文件或 QueueFS 迁入 PostgreSQL。
-配置、权限和部署限制见 [PostgreSQL PathLock 配置指南](../guides/25-postgresql-pathlock.md)。
+配置、权限和部署限制见 [PostgreSQL PathLock 配置](../configuration/01-server.md#postgresql-pathlock)。
 
 ### Filesystem 获取锁流程（EXACT 模式）
 
@@ -537,7 +537,7 @@ filesystem → PostgreSQL 适用下面相同的停机切换流程：在第 3 步
 `provider="postgres"` 和 `postgres_dsn_env`，第 4 步验证重新取得 PostgreSQL 锁。
 PostgreSQL、Redis、SQLite 和 filesystem 是相互独立的锁协调域，
 新 Provider 不检查旧 Provider 的 token。任何 Provider 切换（包括 Redis ↔ PostgreSQL）
-都要先停止全部写入者。目标配置见 [PostgreSQL 配置指南](../guides/25-postgresql-pathlock.md)。
+都要先停止全部写入者。目标配置见 [PostgreSQL 配置](../configuration/01-server.md#postgresql-pathlock)。
 
 ### 单实例路径锁 Provider 切换：filesystem → Redis
 

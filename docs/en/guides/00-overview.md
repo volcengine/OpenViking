@@ -23,4 +23,4 @@ Choose a tool through the [observability and diagnostics guide](05-observability
 Add [multi-write storage](13-multi-write-storage.md), [RAGFS caching](14-ragfs-cache.md) or [cuVS](16-cuvs.md) when needed. These are optional configurations rather than prerequisites for a first deployment.
 
 For shared path locks across processes or hosts without Redis, see
-[PostgreSQL PathLock](25-postgresql-pathlock.md).
+[PostgreSQL PathLock configuration](../configuration/01-server.md#postgresql-pathlock).

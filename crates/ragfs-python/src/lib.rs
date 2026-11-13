@@ -2794,6 +2794,14 @@ impl RAGFSBindingClient {
 
     // ── PathLock API ──
 
+    /// Return the actual provider's handle mode without performing storage I/O.
+    fn pathlock_handle_mode(&self) -> &'static str {
+        match self.pathlock_manager.handle_mode() {
+            PathLockHandleMode::LockPath => "lock_path",
+            PathLockHandleMode::LogicalPath => "logical_path",
+        }
+    }
+
     /// Acquire an exact lock on a single path.
     #[pyo3(signature = (ctx, path, timeout_secs=0.0, owner_lease_ref=None))]
     fn pathlock_acquire_exact(

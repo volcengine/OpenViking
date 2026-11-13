@@ -1665,7 +1665,7 @@ The top-level `cache` section is a sibling of `storage`. Its public shape is Pro
 |-----------|------|-------------|---------|
 | `provider` | str | `filesystem`, `memory`, `sqlite`, `postgres`, or `cache`; `postgres` connects directly to PostgreSQL, `cache` uses the shared Redis CacheRuntime | `filesystem` |
 | `sqlite_path` | str / null | Optional absolute local shared lock database path. See [local SQLite setup](../configuration/01-server.md#storage) | `{storage.workspace}/_system/pathlock/pathlock.db` for `sqlite` |
-| `postgres_dsn_env` | str / null | Required for `postgres`; environment variable name containing the PostgreSQL DSN. See [PostgreSQL setup](25-postgresql-pathlock.md) | `null` |
+| `postgres_dsn_env` | str / null | Required for `postgres`; environment variable name containing the PostgreSQL DSN. See [PostgreSQL setup](../configuration/01-server.md#postgresql-pathlock) | `null` |
 | `lock_expire_secs` | float | Seconds before an unrefreshed lock becomes stale; must be at least `1.0` | `30.0` |
 | `lock_timeout_secs` | float | Deprecated and ignored; runtime wait timeout remains `0.0` | `0.0` |
 
@@ -1702,7 +1702,7 @@ All participants must use the same writable PostgreSQL primary, top-level
 `cache.provider/cache.params`; it does not enable CacheFS or change QueueFS,
 business file storage, or the vector backend's concurrency limits. In particular,
 the default SQLite queue is not suitable for cross-host sharing on EFS.
-See [PostgreSQL PathLock](25-postgresql-pathlock.md) for setup and verification.
+See [PostgreSQL PathLock configuration](../configuration/01-server.md#postgresql-pathlock) for setup and verification.
 
 For multiple containers or hosts sharing EFS, shared Redis PathLock is another option, as in
 the example below. All replicas must use the same Redis deployment, top-level

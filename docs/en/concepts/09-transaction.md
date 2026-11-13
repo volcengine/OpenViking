@@ -317,7 +317,7 @@ Lock timestamps and expiry checks use the primary's clock.
 
 PostgreSQL is a shared coordination backend separate from Redis/CacheRuntime.
 It does not require Redis, enable the read cache, or move business files or
-QueueFS into PostgreSQL. See [PostgreSQL PathLock setup](../guides/25-postgresql-pathlock.md)
+QueueFS into PostgreSQL. See [PostgreSQL PathLock configuration](../configuration/01-server.md#postgresql-pathlock)
 for configuration, permissions, and deployment limits.
 
 ### Filesystem Lock Acquisition (EXACT mode)
@@ -536,7 +536,7 @@ setting `provider="postgres"` and `postgres_dsn_env` in step 3 and verifying fre
 PostgreSQL locks in step 4. PostgreSQL, Redis, SQLite, and filesystem locks are
 independent coordination domains: a new provider never checks the old provider's
 tokens. Stop every writer before any provider switch, including Redis ↔ PostgreSQL.
-See [PostgreSQL setup](../guides/25-postgresql-pathlock.md) for the destination configuration.
+See [PostgreSQL configuration](../configuration/01-server.md#postgresql-pathlock) for the destination configuration.
 
 ### Single-instance path lock provider switch: filesystem → Redis
 

@@ -89,7 +89,7 @@ CacheRuntime 协调多个 OpenViking 进程的路径锁。OpenViking 会从顶�
 
 分布式 PathLock 也可选择 `provider="postgres"`，通过共享 PostgreSQL 主库协调，
 无需 Redis 或 CacheRuntime。它独立于 `cache.provider` 配置，不会启用 CacheFS
-或改变 QueueFS。详见 [PostgreSQL PathLock 配置指南](25-postgresql-pathlock.md)。
+或改变 QueueFS。详见 [PostgreSQL PathLock 配置](../configuration/01-server.md#postgresql-pathlock)。
 无论使用哪种 PathLock，CachedFileSystem 都保留单写者前提。
 
 Redis HASH key 按逻辑路径 scope 拆分：
@@ -161,7 +161,7 @@ Cache PathLock 和 cache-backed 多写 metadata 提供 Redis namespace。
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `provider` | str | `"filesystem"` | `filesystem`、`memory`、`sqlite`、`postgres` 或 `cache`；见 [SQLite 配置](../configuration/01-server.md#storage) 和 [PostgreSQL 配置](25-postgresql-pathlock.md) |
+| `provider` | str | `"filesystem"` | `filesystem`、`memory`、`sqlite`、`postgres` 或 `cache`；见 [SQLite 配置](../configuration/01-server.md#storage) 和 [PostgreSQL 配置](../configuration/01-server.md#postgresql-pathlock) |
 | `postgres_dsn_env` | str / null | `null` | `postgres` 必填；保存 DSN 的服务进程环境变量名 |
 | `lock_expire_secs` | float | `30.0` | 锁 stale 超时；不得小于 `1.0` |
 

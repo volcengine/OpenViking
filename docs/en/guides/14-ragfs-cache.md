@@ -93,7 +93,7 @@ Cache-backed PathLock only supports the built-in Redis Provider.
 Distributed PathLock can also use `provider="postgres"` to coordinate through a
 shared PostgreSQL primary without Redis or CacheRuntime. It is configured separately
 from `cache.provider` and does not enable CacheFS or change QueueFS. See
-[PostgreSQL PathLock setup](25-postgresql-pathlock.md). CachedFileSystem retains
+[PostgreSQL PathLock configuration](../configuration/01-server.md#postgresql-pathlock). CachedFileSystem retains
 its single-writer requirement with either PathLock backend.
 
 Redis HASH keys are partitioned by logical path scope:
@@ -170,7 +170,7 @@ The top-level `cache` section is a sibling of `storage`:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `provider` | str | `"filesystem"` | `filesystem`, `memory`, `sqlite`, `postgres`, or `cache`; see [SQLite setup](../configuration/01-server.md#storage) and [PostgreSQL setup](25-postgresql-pathlock.md) |
+| `provider` | str | `"filesystem"` | `filesystem`, `memory`, `sqlite`, `postgres`, or `cache`; see [SQLite setup](../configuration/01-server.md#storage) and [PostgreSQL setup](../configuration/01-server.md#postgresql-pathlock) |
 | `postgres_dsn_env` | str / null | `null` | Required for `postgres`; name of the server environment variable containing its DSN |
 | `lock_expire_secs` | float | `30.0` | Lock stale timeout; must be at least `1.0` |
 
