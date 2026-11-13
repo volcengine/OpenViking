@@ -366,6 +366,28 @@ When enabled, the default request timeout and total recall budget become 55 seco
 Explicit recall timeout settings still take precedence. Older servers fall back
 to the existing search path within that deadline.
 
+### Recall exclusions
+
+Generated directory files such as `viking://user/memories/skills` or
+`viking://agent/skills` match the context search like ordinary content and
+carry only boilerplate, but they still consume the recall budget. Configure
+subtree URIs that automatic recall must never return:
+
+```yaml
+memory:
+  openviking:
+    recall_exclude_uris:
+      - viking://user/memories/skills
+      - viking://agent/skills
+```
+
+A comma- or newline-separated string works too. `OPENVIKING_RECALL_EXCLUDE_URIS`
+overrides YAML. Entries must be `viking://` URIs and are trimmed and deduped,
+capped at 200 like the server, and forwarded as `exclude_uris` on context
+recall (the server refuses the field on list searches, so fallback searches
+rely on the server default). Unset sends nothing; invalid shapes warn and fall
+back to that default instead of failing every recall request.
+
 ### Active-session commits
 
 The plugin checks OpenViking's `pending_tokens` after each successful
