@@ -6,9 +6,32 @@ import type { useSelect } from './use-select.js';
 export function useSelectKeyboard<V extends SelectValue>(
   state: ReturnType<typeof useSelect<V>>,
 ) {
-  const { trigger, listbox, footer, search, open, setOpen, close } = state;
+  const { listbox, footer, search, open, setOpen, close } = state;
   const pending = useRef<'first' | 'last' | undefined>(undefined);
   const typed = useRef({ text: '', at: 0 });
+  const footerActions = () =>
+    [
+      ...(footer.current?.querySelectorAll<HTMLElement>(
+        'button, a[href], input, select, textarea, [tabindex], [contenteditable="true"]',
+      ) ?? []),
+    ]
+      .filter((element) => {
+        if (
+          element.tabIndex < 0 ||
+          element.matches(':disabled, [type="hidden"]') ||
+          element.closest('[hidden], [inert]')
+        )
+          return false;
+        for (
+          let node: HTMLElement | null = element;
+          node && node !== footer.current;
+          node = node.parentElement
+        ) {
+          if (getComputedStyle(node).display === 'none') return false;
+        }
+        return getComputedStyle(element).visibility === 'visible';
+      })
+      .sort((a, b) => (a.tabIndex || Infinity) - (b.tabIndex || Infinity));
   const focus = useCallback(
     (edge: 'first' | 'last') => {
       const options = [
@@ -27,7 +50,7 @@ export function useSelectKeyboard<V extends SelectValue>(
   );
   const onReady = useCallback(() => {
     if (search.current) search.current.focus();
-    else if (pending.current) focus(pending.current);
+    else focus(pending.current ?? 'first');
     pending.current = undefined;
   }, [focus, search]);
   const escape = (event: KeyboardEvent) => {
@@ -75,11 +98,7 @@ export function useSelectKeyboard<V extends SelectValue>(
         search.current.focus();
         return;
       }
-      const action =
-        !event.shiftKey &&
-        footer.current?.querySelector<HTMLButtonElement>(
-          'button:not(:disabled)',
-        );
+      const action = !event.shiftKey && footerActions()[0];
       if (action) {
         event.preventDefault();
         action.focus();
@@ -129,13 +148,22 @@ export function useSelectKeyboard<V extends SelectValue>(
     }
   };
   const footerKey = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (escape(event)) return;
+    if (
+      event.defaultPrevented ||
+      event.nativeEvent.isComposing ||
+      escape(event)
+    )
+      return;
     if (event.key === 'Tab') {
+      const actions = footerActions();
+      const boundary = event.shiftKey ? actions[0] : actions.at(-1);
+      // Preserve native navigation between footer actions; only bridge the
+      // first/last action across this portaled panel's logical boundaries.
+      if (document.activeElement !== boundary) return;
       if (event.shiftKey) {
         event.preventDefault();
         focus('last');
       } else {
-        trigger.current?.focus();
         close();
       }
     }
