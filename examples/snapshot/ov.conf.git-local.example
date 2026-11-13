@@ -37,7 +37,7 @@
             "log": {
                 "provider": "sqlite",
                 "sqlite": {
-                    "path": "/tmp/snapshot_log.db"
+                    "path": "/data/openviking/_system/snapshot/log/snapshot_log.db"
                 }
             }
         }

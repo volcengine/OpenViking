@@ -94,8 +94,8 @@ pub struct GitSnapshotLogConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct GitSnapshotLogSqliteConfig {
     /// Absolute SQLite database path.
-    #[serde(default = "default_snapshot_log_sqlite_path")]
-    pub path: String,
+    #[serde(default)]
+    pub path: Option<String>,
 }
 
 /// MySQL SnapshotLog provider configuration.
@@ -141,9 +141,7 @@ impl Default for GitSnapshotConfig {
 
 impl Default for GitSnapshotLogSqliteConfig {
     fn default() -> Self {
-        Self {
-            path: default_snapshot_log_sqlite_path(),
-        }
+        Self { path: None }
     }
 }
 
@@ -170,9 +168,6 @@ fn default_true() -> bool {
 }
 fn default_snapshot_log_provider() -> String {
     "sqlite".to_string()
-}
-fn default_snapshot_log_sqlite_path() -> String {
-    "/tmp/snapshot_log.db".to_string()
 }
 fn default_mysql_max_connections() -> u32 {
     16
@@ -205,7 +200,7 @@ mod tests {
         assert!(cfg.tuning.commit_index_enabled);
         assert!(cfg.tuning.blob_exists_precheck_enabled);
         assert_eq!(cfg.snapshot.log.provider, "sqlite");
-        assert_eq!(cfg.snapshot.log.sqlite.path, "/tmp/snapshot_log.db");
+        assert!(cfg.snapshot.log.sqlite.path.is_none());
     }
 
     #[test]

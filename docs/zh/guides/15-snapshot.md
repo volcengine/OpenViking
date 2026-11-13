@@ -70,7 +70,7 @@ Filesystem 对缺失目标跳过锁，避免锁文件创建目标目录或缺失
       "log": {
         "provider": "sqlite",
         "sqlite": {
-          "path": "/tmp/snapshot_log.db"
+          "path": "/data/openviking/_system/snapshot/log/snapshot_log.db"
         }
       }
     }
@@ -89,7 +89,7 @@ Filesystem 对缺失目标跳过锁，避免锁文件创建目标目录或缺失
 | `git.author_email` | `bot@viking.local` | 默认提交者邮箱 |
 | `git.local.base_dir` | `""` | Git 对象/引用的存放目录。**留空时默认使用 `{storage.workspace}/.ovgit`** |
 | `git.snapshot.log.provider` | `sqlite` | `snapshot/log?paths=...` 的路径历史索引 provider：`sqlite`、`mysql` 或 `none` |
-| `git.snapshot.log.sqlite.path` | `/tmp/snapshot_log.db` | SQLite 数据库绝对路径。`provider` 为 `sqlite` 时必须是绝对路径 |
+| `git.snapshot.log.sqlite.path` | `{storage.workspace}/_system/snapshot/log/snapshot_log.db` | 可选 SQLite 数据库绝对路径。留空时每个 workspace 使用自己的索引库 |
 
 > 通常把 `git.local.base_dir` 留空即可，让快照数据自动落在工作区下的 `.ovgit` 目录，便于和资源数据一起备份与迁移。
 
@@ -160,7 +160,7 @@ provider 取值：
 
 | Provider | 适用场景 |
 | --- | --- |
-| `sqlite` | 单机部署。将 `git.snapshot.log.sqlite.path` 设置为持久化的绝对路径 |
+| `sqlite` | 单机部署。默认数据库位于 `{storage.workspace}/_system/snapshot/log/snapshot_log.db`；如需覆盖，设置绝对路径 `git.snapshot.log.sqlite.path` |
 | `mysql` | 多实例部署。DSN 从 `git.snapshot.log.mysql.dsn_env` 指定的环境变量读取 |
 | `none` | 关闭索引，保留原有历史扫描逻辑 |
 

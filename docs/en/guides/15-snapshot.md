@@ -70,7 +70,7 @@ Multi-version management is **enabled** by default (`git.enabled` defaults to `t
       "log": {
         "provider": "sqlite",
         "sqlite": {
-          "path": "/tmp/snapshot_log.db"
+          "path": "/data/openviking/_system/snapshot/log/snapshot_log.db"
         }
       }
     }
@@ -89,7 +89,7 @@ Configuration reference:
 | `git.author_email` | `bot@viking.local` | Default author email |
 | `git.local.base_dir` | `""` | Directory holding Git objects/refs. **When empty, defaults to `{storage.workspace}/.ovgit`** |
 | `git.snapshot.log.provider` | `sqlite` | Path history index provider for `snapshot/log?paths=...`: `sqlite`, `mysql`, or `none` |
-| `git.snapshot.log.sqlite.path` | `/tmp/snapshot_log.db` | Absolute SQLite database path. Required to be absolute when provider is `sqlite` |
+| `git.snapshot.log.sqlite.path` | `{storage.workspace}/_system/snapshot/log/snapshot_log.db` | Optional absolute SQLite database path. When omitted, each workspace gets its own index DB |
 
 > Usually leave `git.local.base_dir` empty so snapshot data lands in `.ovgit` under the workspace, making it easy to back up and migrate alongside resource data.
 
@@ -161,7 +161,7 @@ Provider choices:
 
 | Provider | Use case |
 | --- | --- |
-| `sqlite` | Single-node deployments. Set `git.snapshot.log.sqlite.path` to a durable absolute path |
+| `sqlite` | Single-node deployments. By default the DB is stored at `{storage.workspace}/_system/snapshot/log/snapshot_log.db`; override with an absolute `git.snapshot.log.sqlite.path` if needed |
 | `mysql` | Multi-instance deployments. Set the DSN in the environment variable named by `git.snapshot.log.mysql.dsn_env` |
 | `none` | Disable the index and keep the original history scan path |
 

@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 """Git version control configuration for OpenViking."""
+import os
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
@@ -65,9 +66,10 @@ class GitS3Config(BaseModel):
 class GitSnapshotLogSqliteConfig(BaseModel):
     """SQLite SnapshotLog provider config."""
 
-    path: str = Field(
-        default="/tmp/snapshot_log.db",
-        description="Absolute SQLite database path for snapshot path history.",
+    path: Optional[str] = Field(
+        default=None,
+        description="Absolute SQLite database path for snapshot path history. "
+        "When omitted, defaults to '{storage.workspace}/_system/snapshot/log/snapshot_log.db'.",
     )
 
 
@@ -150,7 +152,8 @@ class GitConfig(BaseModel):
                 raise ValueError(
                     f"git backend 's3' requires the following fields: {', '.join(missing)}"
                 )
-        if self.enabled and self.snapshot.log.provider == "sqlite":
-            if not self.snapshot.log.sqlite.path.startswith("/"):
+        sqlite_path = self.snapshot.log.sqlite.path
+        if self.enabled and self.snapshot.log.provider == "sqlite" and sqlite_path is not None:
+            if not os.path.isabs(sqlite_path):
                 raise ValueError("git snapshot log sqlite path must be absolute")
         return self
