@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
-import { Checkbox, Button } from '#demo-controls';
+import { Checkbox, Button, Select, SelectOption } from '#demo-controls';
+
 import { offlineFetch } from '#file-browser-basic-data';
 import type {
   FileBrowserPreviewActions,
@@ -144,18 +145,20 @@ export function usePreviewControls(locale: 'zh-CN' | 'en-US') {
       <>
         <label>
           {text.actions}{' '}
-          <select
-            value={mode}
-            onChange={(event) => setMode(event.target.value)}
+          <Select
+            value={[mode]}
+            onChange={([value]) => {
+              if (value !== undefined) setMode(value);
+            }}
           >
             {(
               ['default', 'append', 'custom', 'hidden', 'limited'] as const
             ).map((value) => (
-              <option key={value} value={value}>
+              <SelectOption key={value} value={value}>
                 {text[value]}
-              </option>
+              </SelectOption>
             ))}
-          </select>
+          </Select>
         </label>{' '}
         <Checkbox checked={fail} onChange={(next) => setFail(next)}>
           {' '}

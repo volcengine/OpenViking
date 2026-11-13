@@ -74,6 +74,8 @@ export default defineConfig({
       dts: { distPath: './dist/docs' },
       source: {
         entry: {
+          'shared/primitives/select/index':
+            './src/shared/primitives/select/index.ts',
           'shared/primitives/button/button':
             './src/shared/primitives/button/button.tsx',
           'shared/primitives/notification/index':
@@ -92,6 +94,9 @@ export default defineConfig({
       style: './src/style.css',
       'docs/notification/style':
         './src/shared/primitives/notification/style.css',
+      'docs/shared/primitives/select/style':
+        './src/shared/primitives/select/style.css',
+
       'components/directory-tour/style':
         './src/components/directory-tour/style.css',
 

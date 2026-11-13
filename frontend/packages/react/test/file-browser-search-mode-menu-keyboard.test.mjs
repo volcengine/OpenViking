@@ -63,14 +63,14 @@ async function openWithResults() {
 }
 
 /**
- * 键盘打开模式菜单：焦点进第一项，选中或 Esc 后回到「切换」。
+ * 键盘打开模式菜单：焦点进入当前项，选择后回到搜索输入框，Esc 后回到「切换」。
  *
  * 菜单 portal 到 `document.body` 后不在弹窗的 DOM 子树里，只靠 `FocusLock` 的
  * shard 登记也能 Tab 到，但打开那一刻没有焦点反馈。这里断言的是真实的键盘路径，
  * 而不只是按钮存在。
  *
- * Opening the mode menu from the keyboard: focus enters the first item, and returns to
- * the switch after a selection or Escape.
+ * Keyboard opening focuses the current item. Selection restores the search input;
+ * Escape restores the switch.
  *
  * A portaled menu sits outside the dialog's DOM subtree; the shard registration makes it
  * reachable by Tab, but without moving focus on open a keyboard user gets no feedback.
@@ -83,7 +83,10 @@ test('the mode menu takes focus on open and returns it on close', async () => {
     await key(modeSwitch(), 'Enter');
     await settle();
     assert.equal(items().length, 4);
-    assert.equal(document.activeElement, items()[0]);
+    assert.equal(
+      document.activeElement,
+      items().find((item) => item.getAttribute('aria-selected') === 'true'),
+    );
 
     await act(async () => items()[2].click());
     await settle();
@@ -114,7 +117,11 @@ test('the mode menu takes focus on open and returns it on close', async () => {
 
     await key(modeSwitch(), 'ArrowDown');
     await settle();
-    assert.equal(document.activeElement, items()[0]);
+    // Select reopens on the current value, preserving the user's selection context.
+    assert.equal(
+      document.activeElement,
+      items().find((item) => item.getAttribute('aria-selected') === 'true'),
+    );
     await key(items()[0], 'Escape');
     await settle();
     assert.equal(items().length, 0);

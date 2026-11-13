@@ -19,32 +19,33 @@ test('Wiki severity picker supports selection, arrows, Escape, trigger toggle an
   const view = await mount(
     h(WikiDashboard, { kind: 'file', data: { conflicts: [] } }),
   );
-  const trigger = view.container.querySelector('[aria-haspopup="menu"]');
+  const trigger = view.container.querySelector('[aria-haspopup="listbox"]');
   assert.equal(Boolean(view.container.querySelector('select')), false);
   await key(trigger, 'ArrowDown');
-  let list = document.querySelector('[role="menu"]');
+  let list = document.querySelector('[role="listbox"]');
   assert.ok(list);
   assert.equal(document.activeElement.textContent, 'All');
   await key(document.activeElement, 'End');
   assert.equal(document.activeElement.textContent, 'Low');
   await act(async () => document.activeElement.click());
-  assert.equal(Boolean(document.querySelector('[role="menu"]')), false);
+  assert.equal(Boolean(document.querySelector('[role="listbox"]')), false);
   assert.ok(
     document.activeElement === trigger,
     'focus returns to the filter trigger',
   );
   assert.match(trigger.textContent, /Low/);
   await act(async () => trigger.click());
-  assert.equal(document.activeElement.textContent, 'All');
+  await key(trigger, 'ArrowDown');
+  assert.equal(document.activeElement.textContent, 'Low');
   assert.equal(
-    document.querySelector('[aria-checked="true"]').textContent,
+    document.querySelector('[aria-selected="true"]').textContent,
     'Low',
   );
   await key(document.activeElement, 'End');
   await key(document.activeElement, 'ArrowUp');
   assert.equal(document.activeElement.textContent, 'Medium');
   await key(document.activeElement, 'Escape');
-  assert.equal(Boolean(document.querySelector('[role="menu"]')), false);
+  assert.equal(Boolean(document.querySelector('[role="listbox"]')), false);
   assert.ok(
     document.activeElement === trigger,
     'focus returns to the filter trigger',
@@ -54,14 +55,14 @@ test('Wiki severity picker supports selection, arrows, Escape, trigger toggle an
     trigger.focus();
     trigger.click();
   });
-  assert.equal(Boolean(document.querySelector('[role="menu"]')), false);
+  assert.equal(Boolean(document.querySelector('[role="listbox"]')), false);
   await act(async () => trigger.click());
   await act(async () =>
     document.body.dispatchEvent(
       new window.MouseEvent('mousedown', { bubbles: true }),
     ),
   );
-  assert.equal(Boolean(document.querySelector('[role="menu"]')), false);
+  assert.equal(Boolean(document.querySelector('[role="listbox"]')), false);
   await view.unmount();
 });
 

@@ -1,9 +1,5 @@
-import {
-  Dropdown,
-  DropdownItem,
-} from '../../shared/primitives/dropdown/index.js';
+import { Select, SelectOption } from '../../shared/primitives/select/index.js';
 import FilterIcon from '../../../../icons/svg/dashboards/severity-filter.svg?react';
-import ChevronIcon from '../../../../icons/svg/dashboards/filter-chevron.svg?react';
 import type { WikiConflict, WikiDashboardLabels } from './types.js';
 
 type Severity = WikiConflict['severity'] | 'all';
@@ -19,33 +15,32 @@ export function WikiSeverityFilter({
   labels: WikiDashboardLabels;
 }) {
   return (
-    <Dropdown
-      className="ov-wiki-dashboard__severity-popover"
-      menuClassName="ov-wiki-dashboard__severity-menu"
+    <Select<Severity>
+      variant="simple"
+      value={[value]}
+      onChange={([severity]) => {
+        if (severity) onChange(severity);
+      }}
+      popupClassName="ov-wiki-dashboard__severity-popover"
+      listboxClassName="ov-wiki-dashboard__severity-menu"
       alignment="center"
-      trigger={
-        <button
-          type="button"
-          aria-label={`${t.severity}: ${t[value]}`}
-          className="ov-wiki-dashboard__severity-filter"
-        >
+      aria-label={`${t.severity}: ${t[value]}`}
+      className="ov-wiki-dashboard__severity-filter"
+      renderValue={(selected) => (
+        <>
           <FilterIcon aria-hidden="true" />
           <span>{t.severity}</span>
-          <span className="ov-wiki-dashboard__filter-value">{t[value]}</span>
-          <ChevronIcon aria-hidden="true" />
-        </button>
-      }
+          <span className="ov-wiki-dashboard__filter-value">
+            {selected[0]?.label}
+          </span>
+        </>
+      )}
     >
       {values.map((severity) => (
-        <DropdownItem
-          key={severity}
-          role="menuitemradio"
-          aria-checked={value === severity}
-          onClick={() => onChange(severity)}
-        >
+        <SelectOption key={severity} value={severity}>
           {t[severity]}
-        </DropdownItem>
+        </SelectOption>
       ))}
-    </Dropdown>
+    </Select>
   );
 }

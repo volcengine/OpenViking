@@ -9,7 +9,7 @@ export interface DropdownProps {
   triggerMode?: 'hover' | 'click';
   disabled?: boolean;
   placement?: PopoverPlacement;
-  alignment?: 'center' | 'end';
+  alignment?: 'start' | 'center' | 'end';
   open?: boolean;
   className?: string;
   menuClassName?: string;

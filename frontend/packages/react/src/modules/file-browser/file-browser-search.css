@@ -197,7 +197,7 @@
  * popover: a 0.5px border, 6px radius, 4px padding and the card shadow. The 259px
  * width comes from the content; `max-width` caps it on narrow viewports.
  */
-.ov-popover.ov-file-browser-search__menu-surface {
+.ov-dropdown.ov-popover.ov-select__popover.ov-file-browser-search__menu {
   /* 菜单从弹窗里弹出，必须压在弹窗之上：`Popover` 默认 1000，弹窗是 1001，
      不改这一条时菜单会渲染在弹窗背后。 */
   z-index: calc(var(--ov-ui-modal-z-index, 1001) + 1);
@@ -216,7 +216,7 @@
   box-sizing: border-box;
 }
 
-.ov-file-browser-search__menu-item {
+.ov-file-browser-search__menu .ov-file-browser-search__menu-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -231,21 +231,23 @@
   cursor: pointer;
 }
 
-.ov-file-browser-search__menu-item:hover {
+.ov-file-browser-search__menu .ov-file-browser-search__menu-item:hover {
   background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
 }
 
-.ov-file-browser-search__menu-item[aria-pressed='true'] {
+.ov-file-browser-search__menu
+  .ov-file-browser-search__menu-item[aria-selected='true'] {
   background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
   color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
 }
 
-.ov-file-browser-search__menu-item[aria-pressed='true']
+.ov-file-browser-search__menu
+  .ov-file-browser-search__menu-item[aria-selected='true']
   .ov-file-browser-search__menu-name {
   font-weight: 500;
 }
 
-.ov-file-browser-search__menu-item:focus-visible {
+.ov-file-browser-search__menu .ov-file-browser-search__menu-item:focus-visible {
   outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
   outline-offset: -2px;
 }

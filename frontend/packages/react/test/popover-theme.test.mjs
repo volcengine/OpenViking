@@ -16,7 +16,7 @@ for (const [name, component, props, selector] of [
     'VikingBot',
     VikingBotSessionActions,
     { sessions: { items: [], onSelect() {}, onNew() {} } },
-    '.ov-viking-bot__header-action[aria-haspopup="menu"]',
+    '.ov-viking-bot__header-action[aria-haspopup="listbox"]',
   ],
   ['Console', Console, { mode: 'command' }, '.ov-console__history'],
 ]) {

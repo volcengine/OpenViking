@@ -1,8 +1,4 @@
-import { ChevronRightIcon } from '../../icons/index.js';
-import {
-  Dropdown,
-  DropdownItem,
-} from '../../shared/primitives/dropdown/index.js';
+import { Select, SelectOption } from '../../shared/primitives/select/index.js';
 import type { ExperienceDashboardLabels } from './types.js';
 
 /** 可选区间：天数（`0` 表示不限时间）与对应的文案键。 Day count and its label key. */
@@ -37,36 +33,26 @@ export function ExperienceTimeRange({
 }) {
   const current = OPTIONS.find((option) => option.days === days) ?? OPTIONS[3];
   return (
-    <Dropdown
-      className="ov-experience-dashboard__range-popover"
-      menuClassName="ov-experience-dashboard__range-menu"
-      trigger={
-        <button
-          type="button"
-          className="ov-experience-dashboard__range-trigger"
-          aria-label={t.range}
-        >
-          <span>{t[current.key]}</span>
-          <ChevronRightIcon
-            aria-hidden="true"
-            width={12}
-            height={12}
-            className="ov-experience-dashboard__range-chevron"
-          />
-        </button>
-      }
+    <Select<number>
+      variant="simple"
+      value={[current.days]}
+      onChange={([selected]) => {
+        if (selected !== undefined) onChange(selected);
+      }}
+      popupClassName="ov-experience-dashboard__range-popover"
+      listboxClassName="ov-experience-dashboard__range-menu"
+      className="ov-experience-dashboard__range-trigger"
+      aria-label={t.range}
     >
       {OPTIONS.map((option) => (
-        <DropdownItem
+        <SelectOption
           key={option.days}
-          role="menuitemradio"
-          aria-checked={option === current}
+          value={option.days}
           className="ov-experience-dashboard__range-option"
-          onClick={() => onChange(option.days)}
         >
           {t[option.key]}
-        </DropdownItem>
+        </SelectOption>
       ))}
-    </Dropdown>
+    </Select>
   );
 }

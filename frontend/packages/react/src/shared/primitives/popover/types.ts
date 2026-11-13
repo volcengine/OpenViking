@@ -45,7 +45,7 @@ export interface PopoverProps {
   /** 方位，默认 `right`——内容在行尾展开，不遮挡左侧。 Placement, `right` by default. */
   placement?: PopoverPlacement;
   /** Alignment along the trigger edge; center by default. */
-  alignment?: 'center' | 'end';
+  alignment?: 'start' | 'center' | 'end';
   /** 可选的定位元素，触发事件仍在 children 上。 Optional anchor; children still handle the trigger. */
   anchorRef?: RefObject<HTMLElement | null>;
   /** 触发方式，默认 `hover`。 Trigger mode, `hover` by default. */

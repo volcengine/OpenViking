@@ -344,13 +344,14 @@
   color: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
 }
 
-.ov-experience-dashboard__range-chevron {
+.ov-experience-dashboard__range-trigger .ov-select__arrow {
   flex: none;
   color: var(--ov-ui-experience-muted);
-  transform: rotate(90deg);
+  width: 12px;
+  height: 12px;
 }
 
-.ov-dropdown.ov-popover.ov-experience-dashboard__range-popover {
+.ov-dropdown.ov-popover.ov-select__popover.ov-experience-dashboard__range-popover {
   width: max-content;
   padding: 8px;
   border-radius: 12px;
@@ -391,7 +392,7 @@
 }
 
 .ov-experience-dashboard__range-menu
-  .ov-experience-dashboard__range-option[aria-checked='true'] {
+  .ov-experience-dashboard__range-option[aria-selected='true'] {
   color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
   background: var(
     --ov-ui-color-primary-light,

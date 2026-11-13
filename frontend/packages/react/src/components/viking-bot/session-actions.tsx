@@ -2,10 +2,7 @@ import { Button } from '../../shared/primitives/button/button.js';
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
 import type { Locale } from '../../shared/locale.js';
 import { useState, type ReactNode } from 'react';
-import {
-  Dropdown,
-  DropdownItem,
-} from '../../shared/primitives/dropdown/index.js';
+import { Select, SelectOption } from '../../shared/primitives/select/index.js';
 import { VikingBotIcon } from '../../icons/viking-bot-icons.js';
 import { Tooltip } from '../../shared/primitives/tooltip/index.js';
 import { resolveVikingBotLabels } from './labels.js';
@@ -49,15 +46,24 @@ export function VikingBotSessionActions({
           <>
             <Tooltip content={labels.sessionHistory} disabled={historyOpen}>
               <span className="ov-viking-bot__popover-anchor">
-                <Dropdown
+                <Select<string>
+                  variant="simple"
+                  alignment="end"
+                  value={sessions.currentId ? [sessions.currentId] : []}
+                  onChange={([id]) => {
+                    if (id) sessions.onSelect(id);
+                  }}
                   open={historyOpen}
                   onOpenChange={(open) => {
                     setHistoryOpen(open);
                     if (open) sessions.onOpenHistory?.();
                   }}
-                  className="ov-viking-bot__popover ov-viking-bot__popover--bottom"
-                  trigger={
+                  popupClassName="ov-viking-bot__popover ov-viking-bot__popover--bottom"
+                  renderValue={() => <VikingBotIcon name="history" />}
+                  renderTrigger={({ triggerRef, triggerProps, content }) => (
                     <Button
+                      {...triggerProps}
+                      ref={triggerRef}
                       size="mini"
                       type="text"
                       iconOnly
@@ -65,8 +71,21 @@ export function VikingBotSessionActions({
                       className="ov-viking-bot__header-action"
                       aria-label={labels.sessionHistory}
                     >
-                      <VikingBotIcon name="history" />
+                      {content}
                     </Button>
+                  )}
+                  popupFooter={
+                    sessions.hasMore && sessions.onLoadMore ? (
+                      <Button
+                        type="text"
+                        size="small"
+                        htmlType="button"
+                        disabled={sessions.isLoading}
+                        onClick={sessions.onLoadMore}
+                      >
+                        {labels.loadMore}
+                      </Button>
+                    ) : undefined
                   }
                 >
                   <div
@@ -92,13 +111,12 @@ export function VikingBotSessionActions({
                         const validDate = Number.isFinite(date.getTime());
                         return (
                           <li key={item.id} role="none">
-                            <DropdownItem
+                            <SelectOption
+                              value={item.id}
+                              label={item.title}
                               aria-current={
                                 sessions.currentId === item.id || undefined
                               }
-                              onClick={() => {
-                                sessions.onSelect(item.id);
-                              }}
                             >
                               <span>{item.title}</span>
                               {validDate ? (
@@ -109,22 +127,13 @@ export function VikingBotSessionActions({
                                   }).format(date)}
                                 </time>
                               ) : null}
-                            </DropdownItem>
+                            </SelectOption>
                           </li>
                         );
                       })}
                     </ul>
-                    {sessions.hasMore && sessions.onLoadMore ? (
-                      <DropdownItem
-                        closeOnClick={false}
-                        disabled={sessions.isLoading}
-                        onClick={sessions.onLoadMore}
-                      >
-                        {labels.loadMore}
-                      </DropdownItem>
-                    ) : null}
                   </div>
-                </Dropdown>
+                </Select>
               </span>
             </Tooltip>
             <Tooltip content={labels.newSession}>
