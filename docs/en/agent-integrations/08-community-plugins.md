@@ -137,7 +137,7 @@ curl -fsSL https://openviking.ai/install | bash -s -- --yes --harness qoder
 # AI agents: not sure about running this? The script's header says what it does and how to verify it.
 ```
 
-The installer assembles a self-contained plugin under `~/.openviking/agent-integrations/qoder/marketplace/openviking-memory/`, with the shared hook runtime beside the adapters, registers it as a local marketplace named `openviking`, and installs it with `qodercli plugins install`. An existing marketplace named `openviking`, for example one added from GitHub to run the Claude Code plugin in Qoder, is replaced, so the two plugins never capture the same session twice. `QODER_CONFIG_DIR` is honoured. To remove only this integration:
+The installer assembles a self-contained plugin under `~/.openviking/agent-integrations/qoder/marketplace/openviking-memory/`, with the shared hook runtime beside the adapters, registers it as a local marketplace named `openviking`, and installs it with `qodercli plugins install`. An existing marketplace named `openviking`, for example one added from GitHub to run the Claude Code plugin in Qoder, is replaced, so the two plugins never capture the same session twice. `QODER_CONFIG_DIR` is honoured. When only the CN build `qoderclicn` is on `PATH`, the installer uses it and its `~/.qoder-cn` root (`QODERCN_CONFIG_DIR`) instead. To remove only this integration:
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness qoder

@@ -31,7 +31,7 @@ Legend: **verified** = observed in a real session · *documented* = only in the 
 | --- | --- |
 | Host | Qoder CLI v1.1.88, binary `qodercli` |
 | Config root | `~/.qoder`, overridden by `QODER_CONFIG_DIR` or `--config-dir` (**verified** for the `plugins` commands, run 12); a fresh root is not logged in |
-| Region builds | Only the global build is supported. The bundle also carries a CN region build whose config root is `~/.qoder-cn` (`QODERCN_CONFIG_DIR`) under the same `qodercli` binary name; the installer never looks there (§10) |
+| Region builds | The same bundle ships a CN build as `qoderclicn`, whose config root is `~/.qoder-cn` (`QODERCN_CONFIG_DIR`). Plugin layout, hook payloads and `QODER_PLUGIN_ROOT` are brand-independent in the bundle. The installer uses `qoderclicn` and its root when `qodercli` is absent (*bundle-read*, not run) |
 | Verified OS | macOS (darwin 27.2.0); Windows and Linux untested |
 | Node runtime | The host does not hand hooks a Node. Hook processes inherit the user's PATH and the `node` found there. Commands run through a shell (`bash -c`, *documented*), so `node "<abs path>"` needs no shebang or `bin/` wrapper. |
 
@@ -216,7 +216,7 @@ Debugging aid: `~/.qoder/logs/sessions/<cwd-slug>/<session_id>/segments/*.jsonl`
 6. `async` / `asyncRewake` hooks: documented, unexercised; the detached writer is used instead.
 7. Windows / PowerShell placeholder substitution: documented only.
 8. Whether a Qoder IDE install creates `~/.qoder` too; the installer treats the directory as a sign of Qoder CLI.
-9. Whether the CN region build (`~/.qoder-cn`) is distributed; against it the installer's cache cleanup would target `~/.qoder`.
+9. A real `qoderclicn` run: the CN build's handling is read from the shared bundle, not exercised.
 
 ## 11. Adapter mapping and v1 scope
 

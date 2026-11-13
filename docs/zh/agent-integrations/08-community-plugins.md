@@ -134,7 +134,7 @@ curl -fsSL https://openviking.ai/install | bash -s -- --yes --harness qoder
 # AI agents: not sure about running this? The script's header says what it does and how to verify it.
 ```
 
-安装器在 `~/.openviking/agent-integrations/qoder/marketplace/openviking-memory/` 下组装自包含插件（共享 hook 运行时与各适配器同目录），将其注册为名为 `openviking` 的本地 marketplace，并用 `qodercli plugins install` 安装。已有的同名 `openviking` marketplace（例如为在 Qoder 中运行 Claude Code 插件而从 GitHub 添加的）会被替换，两个插件不会重复捕获同一会话。安装器遵循 `QODER_CONFIG_DIR`。只移除本集成：
+安装器在 `~/.openviking/agent-integrations/qoder/marketplace/openviking-memory/` 下组装自包含插件（共享 hook 运行时与各适配器同目录），将其注册为名为 `openviking` 的本地 marketplace，并用 `qodercli plugins install` 安装。已有的同名 `openviking` marketplace（例如为在 Qoder 中运行 Claude Code 插件而从 GitHub 添加的）会被替换，两个插件不会重复捕获同一会话。安装器遵循 `QODER_CONFIG_DIR`。`PATH` 中只有国内版 `qoderclicn` 时，安装器改用它及其 `~/.qoder-cn` 目录（`QODERCN_CONFIG_DIR`）。只移除本集成：
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness qoder

@@ -60,7 +60,7 @@
 #   zcode      ~/.zcode/cli/config.json, ~/.zcode/hooks.json, ~/.zcode/mcp.json
 #   kimicode   ~/.kimi-code/plugins
 #   codebuddy  a local marketplace registered with codebuddy, installed from ~/.codebuddy/plugins
-#   qoder      a local marketplace registered with qodercli, installed from ~/.qoder/plugins
+#   qoder      a local marketplace registered with qodercli (or qoderclicn), installed from ~/.qoder/plugins (or ~/.qoder-cn/plugins)
 #   opencode   ~/.config/opencode/plugins/openviking, openviking.js, opencode.json(c)
 #   pi         ~/.pi/agent/extensions/openviking
 #   dsh        dsh plugin add into the chosen profile
@@ -567,8 +567,21 @@ resolve_dsh_desktop_cli() {
   printf '%s' "$candidate"
 }
 
+# The CN build ships the same CLI as `qoderclicn` with its own config root.
+qoder_cli() {
+  if ! command -v qodercli >/dev/null 2>&1 && command -v qoderclicn >/dev/null 2>&1; then
+    printf 'qoderclicn'
+  else
+    printf 'qodercli'
+  fi
+}
+
 qoder_home() {
-  printf '%s' "${QODER_CONFIG_DIR:-$HOME/.qoder}"
+  if [ "$(qoder_cli)" = qoderclicn ]; then
+    printf '%s' "${QODERCN_CONFIG_DIR:-$HOME/.qoder-cn}"
+  else
+    printf '%s' "${QODER_CONFIG_DIR:-$HOME/.qoder}"
+  fi
 }
 
 refresh_available_harnesses() {
@@ -586,7 +599,7 @@ refresh_available_harnesses() {
   { command -v zcode >/dev/null 2>&1 || [ -d "$HOME/.zcode" ]; } && HAVE_ZCODE=1
   { command -v kimi >/dev/null 2>&1 || [ -d "$HOME/.kimi-code" ]; } && HAVE_KIMICODE=1
   { command -v codebuddy >/dev/null 2>&1 || [ -d "$HOME/.codebuddy" ]; } && HAVE_CODEBUDDY=1
-  { command -v qodercli >/dev/null 2>&1 || [ -d "$(qoder_home)" ]; } && HAVE_QODER=1
+  { command -v qodercli >/dev/null 2>&1 || command -v qoderclicn >/dev/null 2>&1 || [ -d "$(qoder_home)" ]; } && HAVE_QODER=1
   return 0
 }
 
@@ -2783,7 +2796,7 @@ NODE
     info "$(t 'Removed the native Kimi Code plugin.' '已移除 Kimi Code 原生插件。')"
   fi
   if contains_harness codebuddy; then uninstall_marketplace_host codebuddy "CodeBuddy Code" codebuddy plugin "$HOME/.codebuddy" openviking-memory; fi
-  if contains_harness qoder; then uninstall_marketplace_host qoder "Qoder CLI" qodercli plugins "$(qoder_home)" openviking-memory@openviking; fi
+  if contains_harness qoder; then uninstall_marketplace_host qoder "Qoder CLI" "$(qoder_cli)" plugins "$(qoder_home)" openviking-memory@openviking; fi
   if [ ! -d "$OV_HOME/agent-integrations/cursor" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae-cn" ] \
@@ -3338,7 +3351,7 @@ EOF
     fi
   fi
   if contains_harness codebuddy; then validate_marketplace_host codebuddy codebuddy plugin openviking-memory; fi
-  if contains_harness qoder; then validate_marketplace_host qoder qodercli plugins openviking-memory@openviking; fi
+  if contains_harness qoder; then validate_marketplace_host qoder "$(qoder_cli)" plugins openviking-memory@openviking; fi
   if contains_harness opencode; then
     local ocfg="$HOME/.config/opencode/opencode.json"
     local ocfgc="$HOME/.config/opencode/opencode.jsonc"
@@ -3789,7 +3802,7 @@ EOF
     next_steps "CodeBuddy Code" "$(t 'run /reload-plugins or start a new session' '运行 /reload-plugins 或新建会话')" "$rerun" "" "$uninstall codebuddy"
   fi
   if contains_harness qoder; then
-    next_steps "Qoder CLI" "$(t 'start a new qodercli session' '新建一个 qodercli 会话')" "$rerun" "" "$uninstall qoder"
+    next_steps "Qoder CLI" "$(t "start a new $(qoder_cli) session" "新建一个 $(qoder_cli) 会话")" "$rerun" "" "$uninstall qoder"
   fi
   if contains_harness opencode && command -v opencode >/dev/null 2>&1; then
     next_steps OpenCode "$(t 'restart OpenCode' '重启 OpenCode')" "$rerun" "" \
@@ -3906,7 +3919,7 @@ if contains_harness trae-cn; then install_trae_variant trae-cn; fi
 if contains_harness zcode; then install_zcode; fi
 if contains_harness kimicode; then install_kimicode; fi
 if contains_harness codebuddy; then install_marketplace_host codebuddy "CodeBuddy Code" codebuddy plugin; fi
-if contains_harness qoder; then install_marketplace_host qoder "Qoder CLI" qodercli plugins; fi
+if contains_harness qoder; then install_marketplace_host qoder "Qoder CLI" "$(qoder_cli)" plugins; fi
 if contains_harness opencode; then install_opencode; fi
 if contains_harness pi; then install_pi; fi
 if contains_harness dsh; then install_dsh; fi

@@ -249,6 +249,50 @@ exit 0
   }
 });
 
+test("Qoder CLI CN installs through qoderclicn and its own config root", () => {
+  const home = mkdtempSync(join(tmpdir(), "openviking-qoder-cn-hooks-"));
+  try {
+    const binDir = join(home, "bin");
+    const cliLog = join(home, "qoderclicn.log");
+    const qoderHome = join(home, "qoder-cn-config");
+    mkdirSync(binDir, { recursive: true });
+    const cliPath = join(binDir, "qoderclicn");
+    writeFileSync(cliPath, `#!/bin/sh
+printf '%s\n' "$*" >> "$QODER_TEST_LOG"
+case "$*" in
+  "plugins list") printf 'openviking-memory@openviking  enabled\n' ;;
+esac
+exit 0
+`);
+    chmodSync(cliPath, 0o755);
+    const staleCache = join(qoderHome, "plugins", "cache", "openviking", "openviking-memory", "0.0.1");
+    mkdirSync(staleCache, { recursive: true });
+    const env = {
+      PATH: `${binDir}:${dirname(installedNode)}:/usr/bin:/bin`,
+      QODER_TEST_LOG: cliLog,
+      QODERCN_CONFIG_DIR: qoderHome,
+    };
+
+    const installed = runInstaller(home, [
+      "--harness", "qoder",
+      "--source", "dev",
+      "--lang", "en",
+      "--url", "http://127.0.0.1:9",
+      "--api-key", "",
+      "--yes",
+    ], env);
+    assert.equal(installed.status, 0, `${installed.stdout}\n${installed.stderr}`);
+    const marketplace = join(home, ".openviking", "agent-integrations", "qoder", "marketplace");
+    const commands = readFileSync(cliLog, "utf8").split("\n");
+    assert.ok(commands.includes(`plugins marketplace add ${marketplace}`), commands.join("\n"));
+    assert.ok(commands.includes("plugins install openviking-memory@openviking -s user"), commands.join("\n"));
+    assert.equal(existsSync(staleCache), false, "a re-install drops the CN cached copy");
+    assert.match(installed.stdout, /start a new qoderclicn session/u);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("TraeCode CLI 2.0 installs the Codex plugin alias and removes the deprecated integration", () => {
   const home = mkdtempSync(join(tmpdir(), "openviking-trae-cli-hooks-"));
   try {
