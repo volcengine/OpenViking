@@ -36,9 +36,6 @@ class _PrivacyCatalog:
     async def get_settings(self, _ctx):
         return self.settings
 
-    def catalog_revision(self, _ctx):
-        return self.revision
-
     def credential_revision(self, _ctx):
         return self.credentials_revision
 
@@ -278,7 +275,6 @@ async def test_session_change_rebuilds_local_matcher_without_rereading_credentia
 
     catalog.configs["session"]["current"] = {"key": second}
     catalog.versions["session", "current"] = 2
-    catalog.revision += 1
     refreshed = await sanitizer.prepare_matcher(_ctx(), scope=("session", "current"))
 
     assert len(refreshed(f"{credential} {second}")) == 2
