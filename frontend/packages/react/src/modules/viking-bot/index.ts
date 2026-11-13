@@ -4,6 +4,8 @@ export type {
   UseVikingBotChatOptions,
   UseVikingBotSessionsOptions,
   VikingBotChatEvent,
+  VikingBotTaskReference,
+  VikingBotTaskService,
   VikingBotChatInput,
   VikingBotChatResult,
   VikingBotChatService,

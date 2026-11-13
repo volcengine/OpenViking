@@ -17,3 +17,5 @@
 @import './viking-bot-features.css';
 @import './composer-reference-tags.css';
 @import './viking-bot-messages.css';
+
+@import '../../shared/task-status/task-status.css';

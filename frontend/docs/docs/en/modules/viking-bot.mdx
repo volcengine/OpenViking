@@ -30,6 +30,7 @@ import {
 | requestOptions  | Overrides Provider request settings                                             | `OvRequestOptions`                                 | Inherited                    |
 | scopeKey        | Change alongside a dynamic identity to cancel previous requests and clear state | `string`                                           | -                            |
 | service         | Stable service; chat and session hooks accept their corresponding contracts     | `VikingBotChatService` / `VikingBotSessionService` | Native service               |
+| taskService     | Background task query adapter; shared inside Console                            | `VikingBotTaskService`                             | Native task endpoint         |
 | sessionId       | Current session for the chat hook                                               | `string`                                           | Created on first send        |
 | initialMessages | Initial chat messages; keep the reference stable                                | `readonly VikingBotMessage[]`                      | `[]`                         |
 | persist         | Saves completed messages; omit `saveMessage` when the backend persists          | `boolean`                                          | `true`                       |
@@ -45,6 +46,12 @@ Both accept `requestOptions`, `scopeKey` and stable `service` objects. Chat also
 `canInterrupt` reports whether the service implements `interrupt`. Only wire `onCancel` when it is true; commercial adapters without it show no stop action. `abort()` can also clean up the local connection, which does not imply that the backend task stopped. Native adapters support in-flight follow-ups; current commercial adapters do not enable them.
 
 `canSteer` reports whether the adapter implements `steer(input, signal)`. Standalone views map it to `canSendWhileStreaming` and pass `isSubmitting`; both view props default to `false` and contain no protocol checks. Calling the same `send()` during generation uses steer and returns acceptance; calling it while idle starts a normal request and waits for the stream to finish. Accepted follow-ups split assistant segments at the next iteration event, preserving display and persistence order.
+
+### Background tasks
+
+Declare tasks started by a tool in `tool-result.tasks`. Each `VikingBotTaskReference` requires `id` and optionally includes `kind`, `uri` and `status`. The native adapter extracts task IDs from structured JSON returned by known submission tools, never prose. Other adapters supply `tasks` directly.
+
+Tool completion, chat completion and background task completion remain separate. Tool parts in returned messages expose current snapshots through `tasks`, preserving the original `output`. Console shares scheduling and notifications with Terminal; standalone hooks track tasks within their own instance, leaving notifications to the host. See [Console task API](./console#consoletaskservice) for query, state and lifecycle rules; `VikingBotTaskService` uses the same query contract.
 
 ## Composition
 
@@ -84,15 +91,15 @@ Every method receives the operation AbortSignal and must honor cancellation. Rej
 
 ### VikingBotChatEvent
 
-| Property    | Description                                                                            | Type                                                                     | Default |
-| ----------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ | ------- |
-| reasoning   | delta=true appends, false replaces; optional stable id updates the same reasoning item | `{ type: 'reasoning'; text: string; delta: boolean; id?: string }`       | -       |
-| text        | Append text for delta=true; otherwise replace the current text segment                 | `{ type: 'text'; text: string; delta: boolean }`                         | -       |
-| iteration   | Next model iteration boundary; accepted follow-ups start a new segment                 | `{ type: 'iteration'; iteration: number }`                               | -       |
-| tool        | Unique ID for every actual call, including identical arguments                         | `{ type: 'tool'; part: VikingBotToolPart }`                              | -       |
-| tool-result | Match calls by id; native ID-less events pair in FIFO order                            | `{ type: 'tool-result'; id: string; output: string; isError?: boolean }` | -       |
-| complete    | Normal terminal event; optional text is the final text snapshot                        | `{ type: 'complete'; text?: string }`                                    | -       |
-| interrupted | Interrupted terminal event; retains content and send returns false                     | `{ type: 'interrupted' }`                                                | -       |
+| Property    | Description                                                                            | Type                                                                                                                | Default |
+| ----------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------- |
+| reasoning   | delta=true appends, false replaces; optional stable id updates the same reasoning item | `{ type: 'reasoning'; text: string; delta: boolean; id?: string }`                                                  | -       |
+| text        | Append text for delta=true; otherwise replace the current text segment                 | `{ type: 'text'; text: string; delta: boolean }`                                                                    | -       |
+| iteration   | Next model iteration boundary; accepted follow-ups start a new segment                 | `{ type: 'iteration'; iteration: number }`                                                                          | -       |
+| tool        | Unique ID for every actual call, including identical arguments                         | `{ type: 'tool'; part: VikingBotToolPart }`                                                                         | -       |
+| tool-result | Match calls by id; native ID-less events pair in FIFO order                            | `{ type: 'tool-result'; id: string; output: string; isError?: boolean; tasks?: readonly VikingBotTaskReference[] }` | -       |
+| complete    | Normal terminal event; optional text is the final text snapshot                        | `{ type: 'complete'; text?: string }`                                                                               | -       |
+| interrupted | Interrupted terminal event; retains content and send returns false                     | `{ type: 'interrupted' }`                                                                                           | -       |
 
 `canInterrupt` / `canSteer` derive from method presence. `accepted: false` rejects follow-up input without adding a user message. Ending a stream without a terminal event produces `BOT_STREAM_TRUNCATED`.
 

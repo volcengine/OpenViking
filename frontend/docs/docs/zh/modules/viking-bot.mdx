@@ -30,6 +30,7 @@ import {
 | requestOptions  | 覆盖 Provider 的请求配置                                    | `OvRequestOptions`                                 | 继承 Provider               |
 | scopeKey        | 动态身份变化时更新，取消旧身份请求并清理状态                | `string`                                           | -                           |
 | service         | 稳定的服务对象；两个 Hook 分别接受对话或会话服务契约        | `VikingBotChatService` / `VikingBotSessionService` | 原生服务                    |
+| taskService     | 对话后台任务查询适配器，Console 内默认共享                  | `VikingBotTaskService`                             | 原生任务查询接口            |
 | sessionId       | 对话 Hook 当前会话                                          | `string`                                           | 首次发送时创建              |
 | initialMessages | 对话 Hook 的初始消息；保持引用稳定                          | `readonly VikingBotMessage[]`                      | `[]`                        |
 | persist         | 对话完成后保存消息；服务未提供 `saveMessage` 时由后端持久化 | `boolean`                                          | `true`                      |
@@ -45,6 +46,12 @@ import {
 `canInterrupt` 表示服务是否提供 `interrupt`。宿主仅在它为 `true` 时传 `onCancel`；不支持该能力的商业版适配器不显示停止入口。`abort()` 也可用于本地连接清理，但断开前端连接不等于后端任务已停止。原生适配器支持生成中追问，火山版当前适配器不启用。
 
 `canSteer` 表示适配器是否实现 `steer(input, signal)`。独立视图将它映射到 `canSendWhileStreaming`，并传入 `isSubmitting`；两项视图属性默认分别为 `false`，不包含协议判断。生成中调用同一个 `send()` 会走 steer，返回是否接受；空闲时调用会创建正常请求，等待整次流完成。已接受追问会在下一条 iteration 事件处切分助手段落和用户输入，保持渲染与持久化顺序一致。
+
+### 后台任务
+
+`tool-result.tasks` 声明本次工具调用实际发起的后台任务；每个 `VikingBotTaskReference` 包含必填 `id`，以及可选 `kind`、`uri`、`status`。原生适配器从已知提交工具的结构化 JSON 结果中提取任务 ID，不解析普通文字。其他服务在事件适配时直接提供 `tasks`。
+
+工具返回、聊天回复结束与后台任务完成分别处理。返回消息的工具片段通过 `tasks` 提供最新状态，原始 `output` 保留；在 Console 中与终端共享调度和通知，独立使用 Hook 时由当前 Hook 实例跟踪任务，宿主自行展示通知。查询、状态和生命周期规则见 [Console 后台任务 API](./console#consoletaskservice)，`VikingBotTaskService` 与其中的查询契约一致。
 
 ## 组合使用
 
@@ -84,15 +91,15 @@ import {
 
 ### VikingBotChatEvent
 
-| 参数        | 说明                                                         | 类型                                                                     | 默认值 |
-| ----------- | ------------------------------------------------------------ | ------------------------------------------------------------------------ | ------ |
-| reasoning   | delta=true 追加；false 替换；id 可选，稳定 ID 更新同一推理项 | `{ type: 'reasoning'; text: string; delta: boolean; id?: string }`       | -      |
-| text        | delta=true 追加正文；false 替换当前正文片段                  | `{ type: 'text'; text: string; delta: boolean }`                         | -      |
-| iteration   | 下一次模型迭代边界；将已接受追问归入新的交流段               | `{ type: 'iteration'; iteration: number }`                               | -      |
-| tool        | 每次实际调用唯一 ID；相同参数也不得合并                      | `{ type: 'tool'; part: VikingBotToolPart }`                              | -      |
-| tool-result | 通过 id 对应调用；原生无 ID 协议按 FIFO 配对                 | `{ type: 'tool-result'; id: string; output: string; isError?: boolean }` | -      |
-| complete    | 正常结束；可选 text 是最终正文快照                           | `{ type: 'complete'; text?: string }`                                    | -      |
-| interrupted | 中断终止；保留已有内容，send 返回 false                      | `{ type: 'interrupted' }`                                                | -      |
+| 参数        | 说明                                                         | 类型                                                                                                                | 默认值 |
+| ----------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- | ------ |
+| reasoning   | delta=true 追加；false 替换；id 可选，稳定 ID 更新同一推理项 | `{ type: 'reasoning'; text: string; delta: boolean; id?: string }`                                                  | -      |
+| text        | delta=true 追加正文；false 替换当前正文片段                  | `{ type: 'text'; text: string; delta: boolean }`                                                                    | -      |
+| iteration   | 下一次模型迭代边界；将已接受追问归入新的交流段               | `{ type: 'iteration'; iteration: number }`                                                                          | -      |
+| tool        | 每次实际调用唯一 ID；相同参数也不得合并                      | `{ type: 'tool'; part: VikingBotToolPart }`                                                                         | -      |
+| tool-result | 通过 id 对应调用；原生无 ID 协议按 FIFO 配对                 | `{ type: 'tool-result'; id: string; output: string; isError?: boolean; tasks?: readonly VikingBotTaskReference[] }` | -      |
+| complete    | 正常结束；可选 text 是最终正文快照                           | `{ type: 'complete'; text?: string }`                                                                               | -      |
+| interrupted | 中断终止；保留已有内容，send 返回 false                      | `{ type: 'interrupted' }`                                                                                           | -      |
 
 `canInterrupt` / `canSteer` 由对应方法是否存在决定。`steer` 返回 `accepted: false` 表示未接受输入；不要发出虚假的用户消息。事件流没有终止事件就结束会报 `BOT_STREAM_TRUNCATED`。
 

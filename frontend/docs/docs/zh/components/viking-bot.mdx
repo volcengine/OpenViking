@@ -172,6 +172,8 @@ import '@openviking/react/components/viking-bot/style.css';
 | label       | 显示名称，省略时显示完整 URI             | `string`                            | -      |
 | abstract    | 引用摘要，作为悬停提示                   | `string`                            | -      |
 
+`VikingBotTask` 的字段与 [ConsoleTaskSnapshot](../modules/console#consoletasksnapshot) 一致。
+
 ### VikingBotToolPart
 
 | 参数        | 说明                                                                                 | 类型                                               | 默认值 |
@@ -182,6 +184,7 @@ import '@openviking/react/components/viking-bot/style.css';
 | status      | 调用状态，决定时间线中的图标和标题                                                   | `'pending' \| 'running' \| 'completed' \| 'error'` | 必填   |
 | input       | 调用入参，以 JSON 格式显示                                                           | `Record<string, unknown>`                          | -      |
 | output      | 调用输出文本，能解析为 JSON 时格式化显示                                             | `string`                                           | -      |
+| tasks       | 后台任务快照，独立于工具调用状态                                                     | `readonly VikingBotTask[]`                         | -      |
 | results     | 检索结果卡片，设置且非空时取代原始输出；宿主把检索响应转换成卡片，组件不识别工具名称 | `readonly VikingBotToolResultLink[]`               | -      |
 | durationMs  | 耗时，单位毫秒；不足 1000 时不显示                                                   | `number`                                           | -      |
 | startedAt   | 开始时间，毫秒时间戳或 ISO 时间字符串                                                | `number \| string`                                 | -      |
@@ -198,6 +201,7 @@ import '@openviking/react/components/viking-bot/style.css';
 | id      | 对应的工具调用标识，结果并入同 `id` 的 `tool` 片段，位置不变 | `string`                             | 必填    |
 | name    | 工具名称                                                     | `string`                             | 必填    |
 | output  | 工具输出文本                                                 | `string`                             | 必填    |
+| tasks   | 后台任务快照，独立于工具调用状态                             | `readonly VikingBotTask[]`           | -       |
 | results | 检索结果卡片，规则同 `VikingBotToolPart.results`             | `readonly VikingBotToolResultLink[]` | -       |
 | isError | 该结果是否为错误；为 `true` 时对应的调用显示为失败           | `boolean`                            | `false` |
 | groupId | 所属执行块的标识；与调用合并后以调用的 `groupId` 为准        | `string`                             | -       |

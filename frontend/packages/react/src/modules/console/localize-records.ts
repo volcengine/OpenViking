@@ -10,7 +10,7 @@ export function localizeConsoleRecords(
   records: readonly ConsoleRecord[],
   locale: Locale,
 ) {
-  return records.map(({ localMessage, ...record }) => {
+  return records.map(({ localMessage, taskKeys: _taskKeys, ...record }) => {
     if (localMessage) {
       return {
         ...record,

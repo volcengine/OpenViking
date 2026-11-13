@@ -172,6 +172,8 @@ Each part in `VikingBotMessage.parts` is told apart by `type`, and `VikingBotMes
 | label       | Display name; the full URI is shown when omitted               | `string`                            | -        |
 | abstract    | Reference summary, shown as a hover hint                       | `string`                            | -        |
 
+`VikingBotTask` uses the [ConsoleTaskSnapshot](../modules/console#consoletasksnapshot) fields.
+
 ### VikingBotToolPart
 
 | Property    | Description                                                                                                                                                             | Type                                               | Default  |
@@ -182,6 +184,7 @@ Each part in `VikingBotMessage.parts` is told apart by `type`, and `VikingBotMes
 | status      | Call status, which sets the icon and title in the timeline                                                                                                              | `'pending' \| 'running' \| 'completed' \| 'error'` | Required |
 | input       | Call input, shown as JSON                                                                                                                                               | `Record<string, unknown>`                          | -        |
 | output      | Call output text; formatted when it parses as JSON                                                                                                                      | `string`                                           | -        |
+| tasks       | Background task snapshots, separate from tool invocation status                                                                                                         | `readonly VikingBotTask[]`                         | -        |
 | results     | Search result cards that replace the raw output when set and non-empty; your app converts the search response into cards, and the component does not look at tool names | `readonly VikingBotToolResultLink[]`               | -        |
 | durationMs  | Duration in milliseconds; not shown below 1000                                                                                                                          | `number`                                           | -        |
 | startedAt   | Start time, a millisecond timestamp or an ISO string                                                                                                                    | `number \| string`                                 | -        |
@@ -198,6 +201,7 @@ Each part in `VikingBotMessage.parts` is told apart by `type`, and `VikingBotMes
 | id       | Identifier of the tool call this result belongs to; the result merges into the `tool` part with the same `id`, keeping its position | `string`                             | Required |
 | name     | Tool name                                                                                                                           | `string`                             | Required |
 | output   | Tool output text                                                                                                                    | `string`                             | Required |
+| tasks    | Background task snapshots, separate from tool invocation status                                                                     | `readonly VikingBotTask[]`           | -        |
 | results  | Search result cards, same rules as `VikingBotToolPart.results`                                                                      | `readonly VikingBotToolResultLink[]` | -        |
 | isError  | Whether the result is an error; the matching call is shown as failed when `true`                                                    | `boolean`                            | `false`  |
 | groupId  | Identifier of the activity block; once merged, the call's `groupId` applies                                                         | `string`                             | -        |

@@ -1,3 +1,5 @@
+import { useTaskTracking } from '../../shared/task-tracking/context.js';
+import { projectBotTasks, submittedBotTasks } from './task-messages.js';
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import { createChatController } from './chat-controller.js';
 import { useBotService } from './use-service.js';
@@ -11,6 +13,7 @@ export function useVikingBotChat(
 ): VikingBotChatResult {
   const { service: native, signal } = useBotService(options);
   const locale = useLocale(options.locale);
+  const { track, tasks, source } = useTaskTracking(options);
   const {
     service = native,
     sessionId,
@@ -51,8 +54,18 @@ export function useVikingBotChat(
     controller.getSnapshot,
     controller.getSnapshot,
   );
+  useEffect(() => {
+    if (enabled === false) return;
+    for (const task of submittedBotTasks(state.messages, state.streaming))
+      track(task);
+  }, [state.messages, state.streaming, track, enabled]);
+  const projected = useMemo(
+    () => projectBotTasks(state.messages, state.streaming, tasks, source.key),
+    [state.messages, state.streaming, tasks, source],
+  );
   return {
     ...state,
+    ...projected,
     canInterrupt: Boolean(service.interrupt),
     canSteer: Boolean(service.steer),
     error: localizeBotError(state.error, locale),

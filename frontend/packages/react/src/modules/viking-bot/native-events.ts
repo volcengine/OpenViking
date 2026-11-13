@@ -1,3 +1,4 @@
+import { readTaskReferences } from '../../shared/task-tracking/read-references.js';
 import type { OvStreamEvent } from '../../client/types.js';
 import { OvClientError } from '../../client/errors.js';
 import type { VikingBotChatEvent } from './types.js';
@@ -17,7 +18,7 @@ const textOf = (data: unknown): string => {
 export async function* nativeChatEvents(
   source: AsyncIterable<OvStreamEvent>,
 ): AsyncGenerator<VikingBotChatEvent> {
-  const pending: { id: string }[] = [];
+  const pending: { id: string; name: string }[] = [];
   let sequence = 0;
   let iteration = 0;
   let reasoningHadDelta = false;
@@ -72,7 +73,7 @@ export async function* nativeChatEvents(
       } catch {
         input = { raw };
       }
-      pending.push({ id });
+      pending.push({ id, name });
       yield {
         type: 'tool',
         part: { type: 'tool', id, name, input, status: 'running' },
@@ -84,6 +85,7 @@ export async function* nativeChatEvents(
           type: 'tool-result',
           id: call.id,
           output: text,
+          tasks: readTaskReferences(call.name, data),
           isError:
             /^error\b/i.test(text) ||
             Boolean(

@@ -11,6 +11,7 @@ export interface ConsoleMessage {
 /** Internal metadata is formatted by the Hook and never exposed in its records. */
 export type ConsoleRecord = CommandConsoleRecord & {
   localMessage?: ConsoleMessage;
+  taskKeys?: readonly string[];
 };
 
 export function formatConsoleMessage(message: ConsoleMessage, locale: Locale) {

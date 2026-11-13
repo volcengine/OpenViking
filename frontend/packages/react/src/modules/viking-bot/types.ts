@@ -1,3 +1,9 @@
+import type {
+  TaskReference,
+  TaskService,
+} from '../../shared/task-tracking/types.js';
+export type VikingBotTaskReference = TaskReference;
+export type VikingBotTaskService = TaskService;
 import type { OvRequestOptions } from '../../client/types.js';
 import type { Locale } from '../../shared/locale.js';
 import type {
@@ -14,7 +20,13 @@ export type VikingBotChatEvent =
   | { type: 'text'; text: string; delta: boolean }
   | { type: 'iteration'; iteration: number }
   | { type: 'tool'; part: Extract<VikingBotMessagePart, { type: 'tool' }> }
-  | { type: 'tool-result'; id: string; output: string; isError?: boolean }
+  | {
+      type: 'tool-result';
+      id: string;
+      output: string;
+      isError?: boolean;
+      tasks?: readonly VikingBotTaskReference[];
+    }
   | { type: 'complete'; text?: string }
   | { type: 'interrupted' };
 
@@ -67,6 +79,8 @@ export interface VikingBotHookOptions {
 }
 
 export interface UseVikingBotChatOptions extends VikingBotHookOptions {
+  /** Adapts task queries; native HTTP is the default. Shared by Console when omitted. */
+  taskService?: VikingBotTaskService;
   sessionId?: string;
   initialMessages?: readonly VikingBotMessage[];
   /** Defaults to true. Native session persistence does not store reasoning. */

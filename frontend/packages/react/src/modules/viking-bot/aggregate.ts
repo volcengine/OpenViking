@@ -85,6 +85,7 @@ export function createChatAccumulator(turnId: string) {
             ? {
                 ...part,
                 output: event.output,
+                tasks: event.isError ? undefined : event.tasks,
                 status: event.isError ? 'error' : 'completed',
                 completedAt: Date.now(),
               }

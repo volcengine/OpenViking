@@ -48,6 +48,14 @@ Console uses both hooks from `modules/viking-bot` by default. Adapt another back
 
 This example uses simulated services, including native capabilities and the current commercial contract. The native adapter implements `interrupt` and `steer` for stopping and in-flight follow-ups. The current commercial adapter omits both: sending is disabled during generation and stop is hidden. Both support another question after completion.
 
+### Background tasks
+
+Submit `ov add-resource https://example.com/demo` in Terminal, then send a chat message to attach both records to the same simulated task. Use the completion or failure controls to update its state.
+
+```tsx file="../../_demos/console-tasks.tsx" preview
+
+```
+
 ## API
 
 ### Console
@@ -58,6 +66,7 @@ This example uses simulated services, including native capabilities and the curr
 | defaultMode      | Initial mode; ignored once `mode` is set                                                                                                                                                                                              | `ConsoleMode`                                      | `'conversation'`                                                            |
 | onModeChange     | Called when the user switches modes, with the new mode; update `mode` here when you control it                                                                                                                                        | `(mode: ConsoleMode) => void`                      | -                                                                           |
 | conversation     | Data and callbacks for conversation mode. `sessions` and `headerActions` appear in the panel toolbar, the other props go to [VikingBot](../components/viking-bot), and Console keeps the draft when you omit `draft`                  | `Partial<VikingBotProps>`                          | -                                                                           |
+| taskService      | Task query adapter shared by both modes                                                                                                                                                                                               | `ConsoleTaskService`                               | Native task endpoint                                                        |
 | chatOptions      | Chat hook options excluding `enabled`, `sessionId` and `initialMessages`; a custom service implements both chat and session contracts                                                                                                 | `UseVikingBotChatOptions` (excluding those fields) | Native service                                                              |
 | quickCommands    | Shortcuts `{ name, value }` in the command-mode empty state; clicking one fills `value` into the input without running it, and an empty array hides the empty state. See [CommandConsole](../components/command-console) for the type | `readonly CommandConsoleQuickCommand[]`            | Five defaults: `add-resource`, `add-skill`, `add-memory`, `find`, `compile` |
 | scopeKey         | Isolation key for identities resolved by functions; when it changes, the records and drafts are cleared and in-flight requests are aborted                                                                                            | `string`                                           | -                                                                           |
@@ -67,6 +76,31 @@ This example uses simulated services, including native capabilities and the curr
 | locale           | Interface language, see [Internationalization](../guide/i18n)                                                                                                                                                                         | `'zh-CN' \| 'en-US'`                               | Inherited, otherwise `'en-US'`                                              |
 | requestOptions   | Overrides the request configuration, see the [blocks overview](./)                                                                                                                                                                    | `OvRequestOptions`                                 | -                                                                           |
 | className, style | Appearance and layout; other HTML attributes are passed to the root element                                                                                                                                                           | HTML attributes                                    | -                                                                           |
+
+### ConsoleTaskService
+
+| Property | Description                                                                               | Type                                                                | Default  |
+| -------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | -------- |
+| getTask  | Query a task, returning the same ID and an explicit task status; respect the abort signal | `(id: string, signal: AbortSignal) => Promise<ConsoleTaskSnapshot>` | Required |
+
+### ConsoleTaskSnapshot
+
+| Property   | Description                                                   | Type                                                                               | Default  |
+| ---------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------- | -------- |
+| id         | Background task ID                                            | `string`                                                                           | Required |
+| status     | Task status; required in query results                        | `'pending' \| 'running' \| 'cancelling' \| 'completed' \| 'failed' \| 'cancelled'` | -        |
+| kind       | Task category used for notification titles                    | `'resource' \| 'skill' \| 'memory' \| 'compile'`                                   | -        |
+| uri        | Associated resource URI                                       | `string`                                                                           | -        |
+| stage      | Execution stage returned by the server                        | `string`                                                                           | -        |
+| result     | Server task result                                            | `unknown`                                                                          | -        |
+| error      | Server task error                                             | `string`                                                                           | -        |
+| queryError | Scheduler query error; the last known task state is preserved | `{ code: 'request' \| 'invalid-response'; message?: string }`                      | -        |
+
+Active tasks are queried every 3 seconds, with one query per scope and task ID and up to 4 concurrent requests. Query failures use exponential backoff capped at 30 seconds. Terminal states stop polling.
+
+Changing modes or chat sessions, clearing terminal history and dismissing notifications do not cancel backend tasks. Dismissing a notification leaves its records updating. Identity changes and Console unmount abort queries and discard stale responses. Task state and notifications are not persisted across page reloads.
+
+Adapt other backends through a stable `taskService`; `chatOptions.taskService` can override chat task queries. Different services, identities and `scopeKey` values are tracked separately. A host that fully controls `conversation` also supplies its task presentation state.
 
 ### ConsoleSlots
 
@@ -125,7 +159,7 @@ Command mode runs only the built-in native API commands. Type `/` or run `ov hel
 - `compile` uses the built-in llm-wiki Skill by default, and `--skill` selects another one; `compile create` only saves the compile configuration without starting a compile.
 - `task cancel` asks the server for cooperative cancellation, so a task may not stop immediately.
 - Option spelling differs by command: `add-skill` uses `--target-uri` while `find` uses `--target_uri`. Check `ov help` for the exact names.
-- A command shows what the API returned; check the final state of asynchronous operations such as imports and compiles with `task status <id>`.
+- Imports, compiles and memory commits returning task IDs are tracked automatically. Task state is separate from submission results, and the terminal unlocks when submission returns.
 - The command set covers only native APIs that a browser can call; local configuration, login, local file upload or download and session management commands are not included.
 
 ## Notes
