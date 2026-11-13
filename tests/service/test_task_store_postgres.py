@@ -140,3 +140,33 @@ async def test_non_unique_integrity_error_is_not_an_active_task_conflict(task_st
     assert (
         await first.create(TaskRecord(task_id="valid", task_type="content_write", **OWNER))
     ).created
+
+
+@pytest.mark.asyncio
+async def test_outcome_other_unique_constraint_is_not_a_business_conflict(task_stores):
+    from openviking.service.task_tracker import TaskTracker
+
+    first, second = task_stores
+    if not isinstance(first, PostgresTaskWorkStore):
+        pytest.skip("PostgreSQL constraint classification contract")
+    writer, observer = TaskTracker(first), TaskTracker(second)
+    await writer.create("content_write", "source", task_id="source", **OWNER)
+    await observer.create("content_write", "target", task_id="target", **OWNER)
+    await writer.register_work("source", "work", "Semantic", **OWNER)
+
+    async def add_constraint():
+        async with first._transaction() as session:
+            await session.execute(
+                text(
+                    f'ALTER TABLE "{first._models.Task.__tablename__}" '
+                    "ADD CONSTRAINT test_resource UNIQUE (resource_id_hash)"
+                )
+            )
+
+    await first._sql_runtime.run(add_constraint)
+    with pytest.raises(IntegrityError) as raised:
+        await writer.complete("source", {"done": True}, resource_id="target", **OWNER)
+    assert raised.value.orig.diag.constraint_name == "test_resource"
+    restored = await observer.get("source", **OWNER)
+    assert restored.resource_id == "source"
+    assert restored.result is None

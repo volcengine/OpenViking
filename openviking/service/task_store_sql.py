@@ -1153,6 +1153,77 @@ class SQLTaskWorkStore(TaskWorkStore):
         account_id: Optional[str],
         user_id: Optional[str],
     ) -> StoreOperationResult:
+        """Persist an outcome or report a current resource guard conflict."""
+        retries = 0
+        while True:
+            try:
+                return await self._record_outcome_once(
+                    task_id,
+                    result=result,
+                    error=error,
+                    resource_id=resource_id,
+                    cancelled=cancelled,
+                    account_id=account_id,
+                    user_id=user_id,
+                )
+            except IntegrityError as exc:
+                if not self._is_business_key_conflict_error(exc):
+                    raise
+                # _record_outcome_once has already rolled back all mutations.
+                # An UPDATE conflict can disappear just like an INSERT conflict.
+                async with self._transaction() as session:
+                    row = await self._load_task(
+                        session, task_id, account_id=account_id, user_id=user_id, lock=True
+                    )
+                    if row is None:
+                        return _not_found_result()
+                    if row.status not in {item.value for item in ACTIVE_TASK_STATUSES}:
+                        return StoreOperationResult.noop(StoreOperationCode.ALREADY_TERMINAL)
+                    if resource_id is None or not row.reject_if_active:
+                        raise
+                    Task = self._models.Task
+                    active = await session.scalar(
+                        select(Task.task_id)
+                        .where(
+                            Task.service_name == self._service_name,
+                            Task.task_id != task_id,
+                            Task.active_business_key
+                            == _business_key(
+                                row.account_id, row.user_id, row.task_type, resource_id
+                            ),
+                        )
+                        .with_for_update()
+                    )
+                    if active is not None:
+                        raise TaskAlreadyActive(row.task_type, resource_id) from exc
+                if retries >= 2:
+                    raise
+                retries += 1
+
+    def _is_business_key_conflict_error(self, exc: IntegrityError) -> bool:
+        """Only the active-business-key constraint is a domain conflict."""
+        constraint_name = f"uq_{self._models.table_prefix}_active_business_key"
+        original = exc.orig
+        reported = getattr(getattr(original, "diag", None), "constraint_name", None)
+        if reported is not None:
+            return self._is_duplicate_error(exc) and reported == constraint_name
+        args = getattr(original, "args", ())
+        if len(args) < 2 or args[0] != 1062:
+            return False
+        reported = str(args[1]).rsplit("for key ", 1)[-1].strip("'`").rsplit(".", 1)[-1]
+        return reported == constraint_name
+
+    async def _record_outcome_once(
+        self,
+        task_id: str,
+        *,
+        result: Optional[Dict[str, Any]],
+        error: Optional[str],
+        resource_id: Optional[str],
+        cancelled: bool,
+        account_id: Optional[str],
+        user_id: Optional[str],
+    ) -> StoreOperationResult:
         Task = self._models.Task
         async with self._transaction() as session:
             query_result = await session.execute(
@@ -1186,16 +1257,6 @@ class SQLTaskWorkStore(TaskWorkStore):
             if resource_id is not None:
                 values["resource_id"] = resource_id
                 values["resource_id_hash"] = _resource_id_hash(resource_id)
-                values["active_business_key"] = (
-                    _business_key(
-                        row.account_id,
-                        row.user_id,
-                        row.task_type,
-                        resource_id,
-                    )
-                    if row.reject_if_active
-                    else None
-                )
             next_error = row.error
             if error and next_error is None:
                 next_error = sanitize_error(error)
@@ -1205,6 +1266,14 @@ class SQLTaskWorkStore(TaskWorkStore):
             if cancelled:
                 await self._cancel_pending_and_inline_work(
                     session, task_id, row.account_id, row.user_id
+                )
+            if resource_id is not None:
+                # With no open Work this transaction will finalize the Task;
+                # terminal records need not acquire the destination guard.
+                values["active_business_key"] = (
+                    _business_key(row.account_id, row.user_id, row.task_type, resource_id)
+                    if row.reject_if_active and await self._has_open_work(session, task_id)
+                    else None
                 )
             events = None
             previous_events = None

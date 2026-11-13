@@ -248,6 +248,134 @@ async def test_duplicate_recovery_churn_has_bounded_retries(task_stores, monkeyp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", [False, True], ids=["complete", "cancel"])
+async def test_outcome_resource_conflict_preserves_task_and_work(task_stores, cancelled):
+    from sqlalchemy import select
+
+    from openviking.service.task_store import TaskAlreadyActive
+    from openviking.service.task_store_sql import SQLTaskWorkStore
+
+    first, second = task_stores
+    if not isinstance(first, SQLTaskWorkStore):
+        pytest.skip("Resource guard conflicts are a relational store contract")
+    writer, observer = TaskTracker(first), TaskTracker(second)
+    source, target = "viking://resources/source", "viking://resources/target"
+    await writer.create("content_write", source, task_id="source", reject_if_active=True, **OWNER)
+    await observer.create("content_write", target, task_id="target", reject_if_active=True, **OWNER)
+    await writer.start("source", **OWNER)
+    await writer.register_work("source", "running", "Semantic", **OWNER)
+    await writer.start_work("source", "running", **OWNER)
+    await writer.register_work("source", "pending", "Embedding", **OWNER)
+    before = await observer.get_with_events("source", **OWNER)
+
+    async def persisted_task():
+        Task = second._models.Task
+        async with second._session_factory() as session:
+            rows = await session.execute(
+                select(*Task.__table__.columns).where(
+                    Task.service_name == second._service_name, Task.task_id == "source"
+                )
+            )
+            return dict(rows.mappings().one())
+
+    persisted_before = await second._sql_runtime.run(persisted_task)
+    outcome = {
+        "result": {"done": True},
+        "error": "failed retarget" if cancelled else None,
+        "resource_id": target,
+        "cancelled": cancelled,
+        **OWNER,
+    }
+    with pytest.raises(TaskAlreadyActive) as raised:
+        await first.record_outcome("source", **outcome)
+    assert raised.value.resource_id == target
+    after = await observer.get_with_events("source", **OWNER)
+    assert await second._sql_runtime.run(persisted_task) == persisted_before
+    # Active processing_seconds is computed at read time and keeps increasing.
+    assert after.processing_seconds >= before.processing_seconds
+    before_view, after_view = (
+        before.to_dict(include_events=True),
+        after.to_dict(include_events=True),
+    )
+    before_view.pop("processing_seconds")
+    after_view.pop("processing_seconds")
+    assert after_view == before_view
+    assert after.auth == before.auth
+    assert await observer.get_work_state("source", "running", **OWNER) is WorkState.RUNNING
+    assert await observer.get_work_state("source", "pending", **OWNER) is WorkState.PENDING
+
+    # Public complete() must propagate the conflict as well.
+    if not cancelled:
+        with pytest.raises(TaskAlreadyActive):
+            await writer.complete("source", {"done": True}, resource_id=target, **OWNER)
+    await observer.complete("target", {"done": True}, **OWNER)
+    assert (await first.record_outcome("source", **outcome)).is_applied
+    changed = await observer.get("source", **OWNER)
+    assert changed.resource_id == target
+    assert changed.result == outcome["result"]
+    assert changed.status is (TaskStatus.CANCELLING if cancelled else TaskStatus.RUNNING)
+    assert await observer.create_if_no_running("content_write", source, **OWNER) is not None
+
+
+@pytest.mark.asyncio
+async def test_terminal_outcome_does_not_acquire_destination_guard(task_stores):
+    from openviking.service.task_store_sql import SQLTaskWorkStore
+
+    first, second = task_stores
+    if not isinstance(first, SQLTaskWorkStore):
+        pytest.skip("Resource guard conflicts are a relational store contract")
+    writer, observer = TaskTracker(first), TaskTracker(second)
+    target = "viking://resources/target"
+    await writer.create("content_write", "source", task_id="source", reject_if_active=True, **OWNER)
+    await observer.create("content_write", target, task_id="target", reject_if_active=True, **OWNER)
+    await writer.complete("source", {"done": True}, resource_id=target, **OWNER)
+    terminal = await observer.get_with_events("source", **OWNER)
+    assert terminal.status is TaskStatus.COMPLETED
+    assert terminal.resource_id == target
+    assert terminal.execution_events["items"][-1]["status"] == "completed"
+    assert await writer.create_if_no_running("content_write", target, **OWNER) is None
+
+
+@pytest.mark.asyncio
+async def test_outcome_conflict_retries_if_destination_guard_is_released(task_stores, monkeypatch):
+    from sqlalchemy.exc import IntegrityError
+
+    from openviking.service.task_store_sql import SQLTaskWorkStore
+
+    first, second = task_stores
+    if not isinstance(first, SQLTaskWorkStore):
+        pytest.skip("Resource guard conflicts are a relational store contract")
+    writer, observer = TaskTracker(first), TaskTracker(second)
+    target = "viking://resources/target"
+    await writer.create("content_write", "source", task_id="source", reject_if_active=True, **OWNER)
+    await observer.create("content_write", target, task_id="target", reject_if_active=True, **OWNER)
+    await writer.register_work("source", "work", "Semantic", **OWNER)
+    original = first._transaction
+    conflicts = 0
+
+    @asynccontextmanager
+    async def finalize_after_rollback():
+        nonlocal conflicts
+        try:
+            async with original() as session:
+                yield session
+        except IntegrityError:
+            conflicts += 1
+            await observer.complete("target", {"done": True}, **OWNER)
+            raise
+
+    monkeypatch.setattr(first, "_transaction", finalize_after_rollback)
+    await writer.complete("source", {"done": True}, resource_id=target, **OWNER)
+    assert conflicts == 1
+    task = await observer.get_with_events("source", **OWNER)
+    assert task.resource_id == target
+    assert task.result == {"done": True}
+    assert [item["seq"] for item in task.execution_events["items"]] == [1]
+    await writer.mark_work_done("source", "work", **OWNER)
+    assert (await observer.get("source", **OWNER)).status is TaskStatus.COMPLETED
+
+
+@pytest.mark.asyncio
 async def test_concurrent_events_preserve_history_and_lifecycle(task_stores):
     first, second = task_stores
     writer, observer = TaskTracker(first), TaskTracker(second)
