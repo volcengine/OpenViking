@@ -26,7 +26,7 @@ on:
   workflow_dispatch:
     inputs:
       check_linux_runner:
-        description: 'Check Docker readiness on the dedicated Linux build runner'
+        description: 'Check Docker and HTTPS package downloads on the dedicated Linux build runner'
         required: false
         type: boolean
         default: false
@@ -66,8 +66,24 @@ jobs:
           nproc
           df -h "$RUNNER_TEMP"
           docker version
-          docker run --rm ubuntu:20.04 getconf GNU_LIBC_VERSION
-          docker run --rm ubuntu:24.04 getconf GNU_LIBC_VERSION
+          test -s /etc/ssl/certs/ca-certificates.crt
+          for image in ubuntu:20.04 ubuntu:24.04; do
+            docker run --rm -i \
+              --volume /etc/ssl/certs/ca-certificates.crt:/tmp/runner-ca-certificates.crt:ro \
+              "$image" bash -e <<'BOOTSTRAP'
+          for source in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do
+            if [ -f "$source" ]; then
+              sed -i 's|http://|https://|g' "$source"
+            fi
+          done
+          apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
+            -o Acquire::Retries=2 -o Acquire::https::Timeout=20 \
+            -o APT::Update::Error-Mode=any update
+          apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
+            -o Acquire::Retries=2 install -y ca-certificates git
+          getconf GNU_LIBC_VERSION
+          BOOTSTRAP
+          done
 
   build-studio:
     name: Build shared Studio bundle
@@ -180,7 +196,10 @@ jobs:
            endsWith(github.run_number, '4') || endsWith(github.run_number, '6') ||
            endsWith(github.run_number, '8')) &&
           '["self-hosted","Linux","X64","ci-linux-builds"]' || '["ubuntu-24.04"]') }}
-    container: ubuntu:20.04
+    container:
+      image: ubuntu:20.04
+      # Minimal Ubuntu images lack CA certificates before the first apt install.
+      options: --volume /etc/ssl/certs/ca-certificates.crt:/tmp/runner-ca-certificates.crt:ro
     timeout-minutes: 60
     env:
       DEBIAN_FRONTEND: noninteractive
@@ -194,11 +213,12 @@ jobs:
     steps:
     - name: Install system dependencies (Linux)
       run: |
-        # Replace archive.ubuntu.com with azure.archive.ubuntu.com for better stability in GH Actions
-        sed -i 's/http:\/\/archive.ubuntu.com\/ubuntu\//http:\/\/azure.archive.ubuntu.com\/ubuntu\//g' /etc/apt/sources.list
-        # Retry apt-get update
-        for i in 1 2 3 4 5; do apt-get update && break || sleep 5; done
-        apt-get install -y \
+        sed -i 's|http://|https://|g' /etc/apt/sources.list
+        apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
+          -o Acquire::Retries=2 -o Acquire::https::Timeout=20 \
+          -o APT::Update::Error-Mode=any update
+        apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
+          -o Acquire::Retries=2 install -y \
           git ca-certificates cmake build-essential clang tzdata curl \
           pkg-config unzip xz-utils python3 libicu66 \
           libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \

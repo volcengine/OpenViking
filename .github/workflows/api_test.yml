@@ -65,7 +65,10 @@ jobs:
            endsWith(github.run_number, '5') || endsWith(github.run_number, '7') ||
            endsWith(github.run_number, '9')) &&
           '["self-hosted","Linux","X64","ci-linux-builds"]' || '["ubuntu-24.04"]') }}
-    container: ubuntu:24.04
+    container:
+      image: ubuntu:24.04
+      # Bootstrap HTTPS apt with the host's read-only CA bundle.
+      options: --volume /etc/ssl/certs/ca-certificates.crt:/tmp/runner-ca-certificates.crt:ro
     timeout-minutes: 30
     defaults:
       run:
@@ -75,8 +78,12 @@ jobs:
     steps:
       - name: Install native build system dependencies
         run: |
-          apt-get update
-          apt-get install -y \
+          sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources
+          apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
+            -o Acquire::Retries=2 -o Acquire::https::Timeout=20 \
+            -o APT::Update::Error-Mode=any update
+          apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
+            -o Acquire::Retries=2 install -y \
             git ca-certificates build-essential clang pkg-config curl unzip xz-utils \
             python3 libssl-dev
       - uses: actions/checkout@v6

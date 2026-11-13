@@ -46,9 +46,16 @@ no automatic queue fallback.
 
 Before enabling routing, dispatch `_build.yml` on this branch with
 `check_linux_runner=true`, `build_wheels=false` and `build_sdist=false`. Its
-five-minute diagnostic checks Docker access and both container images without
-checking out repository code. Enable `CI_LINUX_BUILDS_ENABLED` only after it
-passes. The runner user must be able to access Docker without interactive sudo.
+five-minute diagnostic checks Docker access, HTTPS package-index downloads and
+package installation in both container images without checking out repository
+code. Enable `CI_LINUX_BUILDS_ENABLED` only after it passes. The runner user must
+be able to access Docker without interactive sudo.
+
+Package sources use HTTPS. Minimal Ubuntu images bootstrap TLS verification with
+the host's `/etc/ssl/certs/ca-certificates.crt`, mounted read-only at a temporary
+path until the container installs its own certificates. The host CA bundle must
+exist. Incomplete apt index downloads fail the job instead of continuing with
+missing package metadata.
 
 If the dedicated runner is offline or stuck, set repository Actions variable
 `CI_DISABLE_SELF_HOSTED=true`, cancel affected runs and trigger new runs.

@@ -120,7 +120,7 @@ def test_only_selected_builds_and_explicit_diagnostic_reference_self_hosted():
 
 def test_wheels_keep_glibc_baseline_and_native_arm_runner():
     wheel = jobs("_build.yml")["build-linux"]
-    assert wheel["container"] == "ubuntu:20.04"
+    assert wheel["container"]["image"] == "ubuntu:20.04"
     assert labels(wheel["runs-on"], {"arch": "aarch64"}) == ["ubuntu-24.04-arm"]
 
 
@@ -131,7 +131,7 @@ def test_studio_stays_hosted_and_native_runtime_keeps_ubuntu24_baseline():
         assert "container" not in job
         assert all(step.get("uses") != "./.github/actions/linux-test-env" for step in job["steps"])
     native = jobs("api_test.yml")["native-runtime"]
-    assert native["container"] == "ubuntu:24.04"
+    assert native["container"]["image"] == "ubuntu:24.04"
     assert any(step.get("uses") == "./.github/actions/linux-test-env" for step in native["steps"])
 
 
@@ -149,7 +149,7 @@ def test_all_musl_targets_stay_hosted():
 
 def test_wheel_container_restores_workspace_ownership():
     job = jobs("_build.yml")["build-linux"]
-    assert job["container"] == "ubuntu:20.04"
+    assert job["container"]["image"] == "ubuntu:20.04"
     assert 0 < job["timeout-minutes"] <= 60
     assert any(step.get("uses") == "./.github/actions/linux-test-env" for step in job["steps"])
 
