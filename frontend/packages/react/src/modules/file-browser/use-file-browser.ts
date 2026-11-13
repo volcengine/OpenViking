@@ -11,6 +11,8 @@ import { useFsPreview } from './use-fs-preview.js';
 import { dashboardKey, mergeDashboardTab } from './dashboard-model.js';
 import { useBrowserDashboards } from './use-browser-dashboards.js';
 import { useFsTree } from './use-fs-tree.js';
+import { useSummaryLevel } from './use-summary-level.js';
+import { useBrowserRefresh } from './use-browser-refresh.js';
 import { findSelectedRowId } from './fs-uri.js';
 import type {
   FileBrowserActions,
@@ -46,10 +48,8 @@ export function useFileBrowser({
   const text = resolveLabels(accessLabels, locale);
   const client = useOvClient();
   const [pendingUri, setPendingUri] = useState<string | null>(currentUri);
-  const [refreshing, setRefreshing] = useState(false);
-  // External edits must refresh the directory and preview even if URI and client
-  // are unchanged; the shared generation invalidates both requests.
-  const [refreshGeneration, setRefreshGeneration] = useState(0);
+  const summaryLevel = useSummaryLevel();
+  const { resolve: resolveSummary } = summaryLevel;
   const tree = useFsTree({
     client,
     rootUri,
@@ -87,6 +87,7 @@ export function useFileBrowser({
   // forever and a selection the module reports could never take effect, leaving the
   // preview stuck on the initial resource. `pendingUri` is seeded from `currentUri`
   // anyway, so using it alone is correct.
+  const reloadTree = useBrowserRefresh(tree.refresh);
   const activeUri = controlled ? currentUri : pendingUri;
   const { identifyUri } = tree;
   const blocked = tree.accessOf(activeUri);
@@ -121,16 +122,18 @@ export function useFileBrowser({
   notifyUriChange.current = onUriChange;
   const openParent = useMemo(
     () => async (uri: string) => {
-      setPendingUri(uri);
-      notifyUriChange.current(uri);
-      await openTree(uri);
+      const target = resolveSummary(uri);
+      setPendingUri(target);
+      notifyUriChange.current(target);
+      await openTree(target);
     },
-    [openTree],
+    [openTree, resolveSummary],
   );
 
   const { rows, openPath, reveal, cancelReveal } = tree;
   const openResource = useMemo(
-    () => async (uri: string) => {
+    () => async (resource: string) => {
+      const uri = resolveSummary(resource);
       setPendingUri(uri);
       notifyUriChange.current(uri);
       const directory = tree.directoryUris.has(identifyUri(uri))
@@ -138,7 +141,7 @@ export function useFileBrowser({
         : uri.slice(0, uri.lastIndexOf('/'));
       await openPath(directory);
     },
-    [openPath, tree.directoryUris, identifyUri],
+    [openPath, tree.directoryUris, identifyUri, resolveSummary],
   );
 
   const boards = useBrowserDashboards({
@@ -146,7 +149,7 @@ export function useFileBrowser({
     metadataRows: tree.metadataRows,
     uri: blocked ? null : activeUri,
     rootUri,
-    generation: refreshGeneration,
+    generation: reloadTree.generation,
     locale,
     requestOptions,
     onOpenUri: openResource,
@@ -168,7 +171,7 @@ export function useFileBrowser({
     labels: summaryLabels ?? resolveSummaryLabels(locale),
     formatCharacterCount: formatCharacterCount ?? text.formatCharacterCount,
     openParent,
-    generation: refreshGeneration,
+    generation: reloadTree.generation,
     requestOptions,
     contentKind: boards.contentPending
       ? 'pending'
@@ -184,19 +187,23 @@ export function useFileBrowser({
 
   // 解构出具体操作，`select` 里因此不再碰整个 `tree` 对象。
   // Destructure the operations so `select` never touches the whole `tree` object.
-  const { open, toggleExpand, loadMore, retry, refresh } = tree;
+  const { open, toggleExpand, loadMore, retry } = tree;
 
   const { open: openDashboard, close: closeDashboard } = boards;
   const setActiveKey = preview.setActiveKey;
   const navigateResource = useMemo<FileBrowserActions['openResource']>(
-    () => async (uri, options) => {
+    () => async (resource, options) => {
+      // 摘要文件不在树的列表里：落到所属目录，层级交给预览。
+      // Summary files are not in the tree listing: land on the owning directory and
+      // leave the level to the preview.
+      const uri = resolveSummary(resource);
       cancelReveal();
       closeDashboard();
       setPendingUri(uri);
       notifyUriChange.current(uri);
       return options?.reveal === false ? true : reveal(uri);
     },
-    [cancelReveal, closeDashboard, reveal],
+    [cancelReveal, closeDashboard, reveal, resolveSummary],
   );
   const actions = useMemo<FileBrowserActions>(
     () => ({
@@ -217,6 +224,7 @@ export function useFileBrowser({
       // of the click, not to a listing that arrives afterwards.
       select: async (row: FileTreeEntryRow) => {
         if (row.disabled || row.selectable === false) return;
+        resolveSummary(row.uri);
         cancelReveal();
         closeDashboard();
         setPendingUri(row.uri);
@@ -232,16 +240,7 @@ export function useFileBrowser({
         const parentId = 'parentId' in row ? row.parentId : undefined;
         if (parentId) await retry(parentId);
       },
-      // Refresh the directory and preview together after external changes.
-      refresh: async () => {
-        setRefreshing(true);
-        try {
-          setRefreshGeneration((generation) => generation + 1);
-          await refresh();
-        } finally {
-          setRefreshing(false);
-        }
-      },
+      refresh: reloadTree.refresh,
       openUri: openResource,
       openResource: navigateResource,
       openDashboard: openDashboard,
@@ -268,10 +267,11 @@ export function useFileBrowser({
       toggleExpand,
       loadMore,
       retry,
-      refresh,
+      reloadTree.refresh,
       openDashboard,
       closeDashboard,
       openResource,
+      resolveSummary,
       activeUri,
     ],
   );
@@ -299,11 +299,15 @@ export function useFileBrowser({
     dashboards: boards.dashboards,
     previewDashboard: boards.current,
     dashboardError: boards.error,
-    previewTabs: mergeDashboardTab(preview.tabs, boards.tab, Boolean(blocked)),
+    previewTabs: mergeDashboardTab(
+      summaryLevel.decorate(preview.tabs),
+      boards.tab,
+      Boolean(blocked),
+    ),
     previewKey:
       boards.isOpen && activeUri ? dashboardKey(activeUri) : preview.activeKey,
     previewFooter: preview.footer,
-    refreshing,
+    refreshing: reloadTree.refreshing,
     actions,
   };
 }

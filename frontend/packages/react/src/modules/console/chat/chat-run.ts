@@ -76,6 +76,22 @@ export async function runChat({
     return !interrupted;
   } catch (error) {
     if (!current()) return false;
+    // 会话创建失败时流式请求尚未启动，这条提问没有送达服务端。撤回临时气泡，
+    // 否则原文重试会在列表里留下两条相同的提问；输入内容由宿主恢复到草稿。
+    //
+    // A failed createSession means the stream never started and the question
+    // never reached the server. Withdraw the optimistic bubble, otherwise an
+    // identical retry leaves two copies in the list; the host restores the draft.
+    if (!sessionId && !signal.aborted) {
+      update({
+        messages: state.messages,
+        streaming: undefined,
+        status: 'error',
+        isSubmitting: false,
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+      return false;
+    }
     const finished = await timeline.finish(signal.aborted);
     if (!current()) return false;
     update({

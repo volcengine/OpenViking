@@ -9,6 +9,7 @@ import type { ForwardedRef } from 'react';
 import type { FileTreeHandle } from '../../components/file-tree/index.js';
 import type { FileBrowserApi, FileBrowserHandle } from './types.js';
 import { toError } from './fs-model.js';
+import { parseSummaryUri } from './fs-summary-uri.js';
 
 interface ScrollRequest {
   uri: string;
@@ -28,7 +29,13 @@ export function useFileBrowserHandle(
     (uri, options) => {
       active.current?.resolve(false);
       return new Promise<boolean>((resolve, reject) => {
-        const request = { uri, resolve };
+        // 摘要文件落到所属目录，滚动与选中校验都以那一行为准。
+        // A summary file lands on its directory; the scroll and selection check
+        // both use that row.
+        const request = {
+          uri: parseSummaryUri(uri)?.directory ?? uri,
+          resolve,
+        };
         active.current = request;
         void open(uri, options).then(
           (found) => {
@@ -49,7 +56,11 @@ export function useFileBrowserHandle(
     },
     [open],
   );
-  useImperativeHandle(ref, () => ({ openResource }), [openResource]);
+  const refresh = browser.actions.refresh;
+  useImperativeHandle(ref, () => ({ openResource, refresh }), [
+    openResource,
+    refresh,
+  ]);
   // Synchronize the requested scroll with committed tree DOM. React may commit
   // rows after the network finishes; event-time scrolling cannot find them yet.
   // Requests are consumed once, so ordinary URI changes never scroll the tree.

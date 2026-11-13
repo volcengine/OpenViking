@@ -157,3 +157,29 @@ test('stop retains partial thinking, cancels the stream and persists the stopped
   assert.equal(saves.length, 2);
   stop();
 });
+
+test('failed session creation withdraws the pending question so a retry shows it once', async () => {
+  let attempts = 0;
+  const controller = createChatController(
+    service({
+      createSession: async () => {
+        if (++attempts === 1) throw new Error('create failed');
+        return { id: 'new', title: 'new' };
+      },
+    }),
+    {},
+  );
+  const stop = controller.start();
+  assert.equal(await controller.send('question'), false);
+  assert.equal(controller.getSnapshot().error.message, 'create failed');
+  assert.equal(controller.getSnapshot().status, 'error');
+  assert.deepEqual(controller.getSnapshot().messages, []);
+  assert.equal(await controller.send('question'), true);
+  const messages = controller.getSnapshot().messages;
+  assert.deepEqual(
+    messages.map((message) => message.role),
+    ['user', 'assistant'],
+  );
+  assert.equal(controller.getSnapshot().error, undefined);
+  stop();
+});

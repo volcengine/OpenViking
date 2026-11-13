@@ -12,6 +12,14 @@
  */
 .ov-file-tree {
   --ov-ui-file-tree-row-height: 32px;
+  --ov-ui-file-tree-scrollbar-thumb: var(
+    --ov-ui-color-border-3,
+    var(--ov-ui-border-3-default)
+  );
+  --ov-ui-file-tree-scrollbar-thumb-hover: var(
+    --ov-ui-color-text-3,
+    var(--ov-ui-text-3-default)
+  );
   --ov-ui-file-tree-row-radius: 4px;
   --ov-ui-file-tree-indent: 20px;
   --ov-ui-file-tree-text: var(
@@ -91,6 +99,36 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+  /*
+   * 滚动条由组件自己定义，不交给浏览器和系统：细滑块、透明轨道，颜色从主题
+   * 基线派生，浅色、暗色和系统常显滚动条下外观一致。横纵向滚动与拖动不受影响。
+   *
+   * The scrollbar is defined by the component rather than left to the browser and
+   * OS: a thin thumb on a transparent track, coloured from the theme baseline, so
+   * light, dark and always-visible system scrollbars look the same. Horizontal and
+   * vertical scrolling and dragging are unaffected.
+   */
+  scrollbar-width: thin;
+  scrollbar-color: var(--ov-ui-file-tree-scrollbar-thumb) transparent;
+}
+
+.ov-file-tree__body::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.ov-file-tree__body::-webkit-scrollbar-track,
+.ov-file-tree__body::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.ov-file-tree__body::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: var(--ov-ui-file-tree-scrollbar-thumb);
+}
+
+.ov-file-tree__body::-webkit-scrollbar-thumb:hover {
+  background: var(--ov-ui-file-tree-scrollbar-thumb-hover);
 }
 
 .ov-file-tree__rows {

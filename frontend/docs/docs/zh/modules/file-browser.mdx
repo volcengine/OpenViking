@@ -408,6 +408,14 @@ await browserRef.current?.openResource(resultUri, { reveal: true });
 
 `reveal` 默认 `true`；传 `{ reveal: false }` 只发出打开预览的请求，发出后返回 `true`。普通 `uri` 属性变化不会展开或滚动目录树。受控模式需要宿主在 `onUriChange` 中更新 `uri` 接受打开意图。目标行选中并滚动后 Promise 返回 `true`；目标不存在、不可访问、不在 `rootUri` 下、被后续操作替代或组件卸载时返回 `false`。根目录本身没有树行，打开其预览后返回 `false`。目录列表请求或必要的当前用户别名解析失败会 reject，宿主可捕获并展示提示。服务端明确不支持别名解析时，按原 URI 写法匹配。调用方主动取消时返回 `false`。Promise 不等待预览正文加载完成。内置搜索复用同一导航入口。
 
+传入目录摘要文件（`.abstract.md` 或 `.overview.md`）时，模块定位并选中它所属的目录，预览切到对应层级（L0 或 L1），`onUriChange` 上报的是目录 URI。摘要文件不会出现在目录树里，因此不会作为文件行定位。
+
+需要在宿主改动资源后原地刷新时调用 `refresh()`：目录树与预览重新加载，已展开的目录和当前选中项保留，不需要通过改变 `key` 重新挂载。
+
+```tsx
+await browserRef.current?.refresh();
+```
+
 ### 搜索
 
 - 左栏顶部的搜索框打开模块内置的搜索弹窗；`⌘K` 是真实快捷键，同一页面挂多个实例时只有最近交互过的那个响应。

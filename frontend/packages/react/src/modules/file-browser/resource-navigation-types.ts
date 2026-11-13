@@ -16,11 +16,19 @@ export interface FileBrowserHandle {
    * is missing, inaccessible, outside the root, or navigation was superseded.
    * Listing and required alias lookup failures reject. In controlled mode the
    * host must accept onUriChange.
+   *
+   * A directory summary file (`.abstract.md` or `.overview.md`) opens its owning
+   * directory on the matching level, L0 or L1, and reports the directory URI.
    */
   openResource: (
     uri: string,
     options?: FileBrowserOpenResourceOptions,
   ) => Promise<boolean>;
+  /**
+   * Reload the tree and the preview in place after the host changed resources,
+   * keeping expanded directories, loaded pages and the selection.
+   */
+  refresh: () => Promise<void>;
 }
 
 /** React 18 and 19 ref contract; internal loaders remain private. */
