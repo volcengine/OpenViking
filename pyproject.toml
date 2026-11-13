@@ -224,6 +224,10 @@ opengauss = [
   "psycopg2-binary>=2.9,<3",
 ]
 
+pgvector = [
+    "psycopg2-binary>=2.9,<3",
+]
+
 [project.urls]
 Homepage = "https://github.com/volcengine/openviking"
 Documentation = "https://openviking.ai"

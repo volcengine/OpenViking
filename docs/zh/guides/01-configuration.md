@@ -1368,7 +1368,7 @@ Grep 引擎配置，用于内容模式搜索。这些设置为服务端配置，
 | `engine` | str | 搜索引擎模式：`"auto"` 在可用时使用 VikingDB BM25 召回，不可用时回退到本地文件系统搜索；`"fs"` 强制仅使用本地文件系统搜索。 | `"auto"` |
 | `switch_to_remote_threshold` | int | 切换到 VikingDB BM25 召回的 L2 记录数阈值。当搜索范围内的 L2 文件数达到此阈值时，使用 VikingDB BM25 进行第一阶段召回；否则使用本地文件系统搜索。设为 `0` 表示始终使用 VikingDB BM25。必须 ≥ 0。 | `10000` |
 
-对于 VikingDB / Volcengine FullText grep，OpenViking 会写入 `content` text 字段用于 BM25 召回。源上下文中保留完整内容，仅在最终写入向量库 adapter payload 时将该字段截断到 **1 MB**，以满足后端 payload 限制。只有 VikingDB 系后端使用 `content`；其它后端（`local`、`cuvs`、`http`）不写入该字段。
+对于 VikingDB / Volcengine FullText grep，OpenViking 会写入 `content` text 字段用于 BM25 召回。源上下文中保留完整内容，仅在最终写入向量库 adapter payload 时将该字段截断到 **1 MB**，以满足后端 payload 限制。SQL 后端（`opengauss`、`pgvector`）也存储 `content`，其中 pgvector 的 grep 使用文件系统回退；`local`、`cuvs`、`http` 不写入该字段。
 
 ### glob
 
@@ -1920,7 +1920,7 @@ export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=ope
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `backend` | str | VectorDB 后端类型: 'local'（基于文件）, 'http'（远程服务）, 'volcengine'（云上 VikingDB）, 'vikingdb'（私有部署）或 'cuvs'（本地存储 + GPU dense search） | "local" |
+| `backend` | str | VectorDB 后端：`local`、`http`、`volcengine`、`vikingdb`、`cuvs`、`opengauss`、`pgvector`（PostgreSQL） | "local" |
 | `name` | str | VectorDB 的集合名称 | "context" |
 | `url` | str | 'http' 类型的远程服务 URL（例如 `http://localhost:5000`） | null |
 | `project_name` | str | 项目名称（别名 project） | "default" |
@@ -1930,6 +1930,7 @@ export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=ope
 | `volcengine` | object | 'volcengine' 类型的 VikingDB 配置 | - |
 | `vikingdb` | object | 'vikingdb' 类型的私有部署配置 | - |
 | `cuvs` | object | NVIDIA cuVS 配置，也用于在 'local' 下显式开启显存感知自动模式，参见 [cuVS 使用指南](./16-cuvs.md) | - |
+| `pgvector` | object | PostgreSQL 连接池和 flat/HNSW 参数，参见 [pgvector 使用指南](./25-pgvector.md) | - |
 
 默认使用本地模式
 ```
@@ -2660,7 +2661,7 @@ Task 记录文件位于所属账号的系统目录：
       }
     },
     "vectordb": {
-      "backend": "local|cuvs|http|volcengine|vikingdb",
+      "backend": "local|cuvs|http|volcengine|vikingdb|opengauss|pgvector",
       "url": "string",
       "project": "string"
     }
