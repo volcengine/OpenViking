@@ -1,7 +1,7 @@
 # Scheduler
 
 How accepted inputs reach the model. Set per instance with `agents[].scheduler`
-in `config.json` (`VIKA_SCHEDULER` in the daemon env), read once at start.
+in `config.json` (`OV_SUPERAGENT_SCHEDULER` in the daemon env), read once at start.
 
 | Value | Behaviour |
 |---|---|
@@ -67,7 +67,7 @@ Connector event → Harness (validate, dedupe, ledger) → inbox_pending
   never delivered are never nudged.
 - **Durability.** Waiting inputs are rows in `inbox_pending` (created on first
   use, so a legacy instance never has the table). A restart delivers them
-  again; rows older than the event age limit (`VIKA_MAX_EVENT_AGE_MS`) are
+  again; rows older than the event age limit (`OV_SUPERAGENT_MAX_EVENT_AGE_MS`) are
   dropped like a stale event. Legacy keeps its known gap: an input inside the
   400 ms group window when the process dies is not delivered.
 - **Runtimes.** The inbox needs the Core tools (`message_check`). Ark has none,

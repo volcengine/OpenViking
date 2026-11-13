@@ -524,18 +524,18 @@ test('the scheduler is legacy unless an instance picks the inbox, and is always 
   const manifest = validManifest();
   manifest.agents[1].scheduler = 'inbox';
   withManifest(manifest, (manifestPath) => {
-    const env = { VIKA_CONFIG: manifestPath, VIKA_SCHEDULER: 'inbox' };
+    const env = { OV_SUPERAGENT_CONFIG: manifestPath, OV_SUPERAGENT_SCHEDULER: 'inbox' };
     const deployment = loadDeploymentManifest(env);
     assert.equal(selectDeploymentAgent(deployment, 'alpha').scheduler, 'legacy');
     applyDeploymentAgentEnv(env, deployment, 'alpha');
-    assert.equal(env.VIKA_SCHEDULER, 'legacy');
+    assert.equal(env.OV_SUPERAGENT_SCHEDULER, 'legacy');
     applyDeploymentAgentEnv(env, deployment, 'beta');
-    assert.equal(env.VIKA_SCHEDULER, 'inbox');
+    assert.equal(env.OV_SUPERAGENT_SCHEDULER, 'inbox');
   });
   const broken = validManifest();
   broken.agents[0].scheduler = 'parallel';
   withManifest(broken, (manifestPath) => {
-    assert.throws(() => loadDeploymentManifest({ VIKA_CONFIG: manifestPath }), /agents\[0\]\.scheduler must be legacy or inbox or workers/);
+    assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /agents\[0\]\.scheduler must be legacy or inbox or workers/);
   });
 });
 
