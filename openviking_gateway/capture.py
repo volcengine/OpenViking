@@ -17,6 +17,7 @@ import logging
 import time
 import uuid
 from collections import Counter
+from dataclasses import replace
 from itertools import pairwise
 
 import async_timeout
@@ -28,6 +29,8 @@ from .client import VikingError
 from .models import Policy
 from .notices import without_notices
 from .protocols import (
+    appended_request,
+    auxiliary,
     clean_text,
     is_user,
     normalize,
@@ -311,9 +314,10 @@ class CapturePipeline:
             capture_retry_at=error.get("retry_at"),
         )
 
-    async def stage(self, request, response, policy):
-        messages = [*request.messages, *response.output]
-        chain = reply_chain(request, response.output)
+    async def stage(self, request, output, policy, extend=False):
+        """Queue a reply's turn; with ``extend``, only when it keeps everything queued."""
+        messages = [*request.messages, *output]
+        chain = reply_chain(request, output)
         while True:
             old = await self.queue.get(request.scope, request.session)
             if (
@@ -322,6 +326,9 @@ class CapturePipeline:
                 or old.value.get("epoch", 0) != request.capture.value.get("epoch", 0)
             ):
                 return  # A newer request or explicit reset superseded this response.
+            given = [old.value["delivered"], *(t["anchor"] for t in old.value["pending"])]
+            if extend and any(a and a not in chain for a in given):
+                return
             # Tool continuations replace the unconfirmed tail in place, after
             # anything a cut inside this turn already confirmed.
             value, added = await asyncio.to_thread(
@@ -342,6 +349,22 @@ class CapturePipeline:
             value = {**value, "confirmed": [*confirmed, user][-MAX_CONFIRMED:]}
             if await self.queue.swap(request.scope, request.session, old, value, ready_at(value)):
                 return
+
+    async def carry(self, request, policy):
+        """Queue the tool step a side request carries on its last tool result.
+
+        Claude Code appends its compaction instruction to the last tool result, and that
+        step reaches no other request. Without the instruction the history is the next tool
+        step of the conversation, queued only if it extends what the capture holds. A round
+        sent both here and, verbatim, kept after the summary would be saved twice; no
+        recorded client does that.
+        """
+        *history, last = request.messages or [{}]
+        if not 0 <= request.anchor < len(history) or not auxiliary(appended_request(last)):
+            return
+        step = replace(request, messages=history, capture_chain=request.capture_chain[:-1])
+        output = [{**last, "content": last["content"][:-1]}]
+        await self.stage(step, output, policy, extend=True)
 
 
 class BranchChanged(Exception):

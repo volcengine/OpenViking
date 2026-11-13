@@ -987,3 +987,77 @@ async def test_tool_steps_do_not_crowd_the_queued_user_messages_out(
     stale = await chat.reply([answer("Stale done")])
     assert stale.kind == "continuation"
     assert await store.capture.get(first.scope, first.session) == before
+
+
+COMPACT = "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.\n\nYour task is to summarize"
+
+
+@pytest.mark.parametrize("header", [True, False])
+async def test_a_compaction_request_queues_the_tool_step_it_alone_carries(
+    setup_kernel, credential, policy, header
+):
+    _, store, viking, encryption = setup_kernel
+    policy.update(recall=False, commit_tokens=1000000)
+    chat = Conversation(setup_kernel, credential, policy, "anthropic", header=header)
+    worker = await worker_for(store, encryption, credential, viking)
+    first = await chat.reply(call("anthropic", 0))
+    chat.messages.append(result("anthropic", 0))
+    await chat.reply(call("anthropic", 1))
+    # Step 1 ran; the client compacts before sending its result anywhere else.
+    last = result("anthropic", 1)
+    chat.messages.append({**last, "content": [*last["content"], {"type": "text", "text": COMPACT}]})
+    side = await chat.prepare()
+    assert side.kind == "auxiliary" and side.session == first.session
+    response = ResponseCapture(
+        "anthropic", answer("<summary>Steps so far</summary>"), complete=True
+    )
+    await chat.kernel.completed(side, credential, response)
+    await drain(store, worker)
+    # The step is saved once; the instruction and the summary are not.
+    assert sent(viking) == {first.capture_target: [*TURN, "Step 0", "call-0", "Step 1", "call-1"]}
+
+
+@pytest.mark.parametrize("request_text", ["title", "new_message", "marked_with_a_note"])
+async def test_other_side_requests_queue_nothing(setup_kernel, credential, policy, request_text):
+    _, store, viking, encryption = setup_kernel
+    policy.update(recall=False, commit_tokens=1000000)
+    chat = Conversation(setup_kernel, credential, policy, "anthropic")
+    first = await chat.reply(call("anthropic", 0))
+    chat.messages.append(result("anthropic", 0))
+    before = await store.capture.get(first.scope, first.session)
+    live = chat.messages
+    if request_text == "title":
+        chat.messages = [
+            {
+                "role": "user",
+                "content": "Generate a short kebab-case name (2-4 words) that captures the main"
+                " topic of this conversation. Use lowercase words separated by hyphens.",
+            }
+        ]
+    elif request_text == "new_message":  # The instruction as a message of its own.
+        chat.messages = [*live, {"role": "user", "content": COMPACT}]
+    else:  # Marked a side request by its header; the text after the result is not one.
+        chat.headers = {**chat.headers, "x-claude-code-request-class": "auxiliary"}
+        note = {"type": "text", "text": "also check f5 please"}
+        chat.messages = [*live[:-1], {**live[-1], "content": [*live[-1]["content"], note]}]
+    side = await chat.prepare()
+    assert side.kind == "auxiliary"
+    assert await store.capture.get(first.scope, first.session) == before
+
+
+async def test_a_compaction_request_never_replaces_what_was_queued(
+    setup_kernel, credential, policy
+):
+    _, store, viking, encryption = setup_kernel
+    policy.update(recall=False, commit_tokens=1000000)
+    chat = Conversation(setup_kernel, credential, policy, "anthropic")
+    first = await chat.reply(call("anthropic", 0))
+    chat.messages.append(result("anthropic", 0))
+    await chat.reply([answer("Done")])
+    # Compacting after the turn ended: the request carries the turn without its answer.
+    *turn, last, _ = chat.messages
+    appended = {**last, "content": [*last["content"], {"type": "text", "text": COMPACT}]}
+    chat.messages = [*turn, appended]
+    before = await store.capture.get(first.scope, first.session)
+    assert (await chat.prepare()).kind == "auxiliary"
+    assert await store.capture.get(first.scope, first.session) == before

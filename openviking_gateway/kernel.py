@@ -295,6 +295,8 @@ class MemoryKernel:
             and (kind == "user" or kind == "continuation" and rewritten(capture.value, prepared))
         ):
             await CapturePipeline(self.store.capture).confirm(prepared, credential, policy)
+        if not disabled and policy.capture and kind == "auxiliary":
+            await CapturePipeline(self.store.capture).carry(prepared, policy)
         if kind in {"user", "continuation"}:
             prepared.context_window = window_size(prepared, policy)
             prepared.context_tokens = await self.measure(prepared)
@@ -734,7 +736,7 @@ class MemoryKernel:
             return
         policy = Policy.model_validate(request.root["policy"])
         if policy.capture:
-            await CapturePipeline(self.store.capture).stage(request, response, policy)
+            await CapturePipeline(self.store.capture).stage(request, response.output, policy)
 
     @staticmethod
     def assemble(request):
