@@ -106,6 +106,11 @@ test('search runs as you type, keeps the scope, and survives a locale change', a
       dialog().querySelector('.ov-file-browser-search__menu-item'),
       null,
     );
+    await act(async () => modeSwitch().click());
+    assert.equal(
+      document.querySelectorAll('.ov-file-browser-search__menu-item').length,
+      0,
+    );
     assert.equal(
       view.container.querySelector('.ov-file-browser__tree-scroll').textContent,
       treeText,

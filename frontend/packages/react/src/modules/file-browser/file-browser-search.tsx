@@ -199,6 +199,7 @@ export function FileBrowserSearch({
             query={query.trim()}
             onHighlight={onHighlight}
             onRetry={retry}
+            fallbackFocusRef={inputRef}
             loading={search.loading || (awaitingQuery && !!draft.trim())}
             error={search.error}
             searched={search.result !== null}

@@ -1,3 +1,4 @@
+import type { RefObject } from 'react';
 import SearchEmptyArt from '../../../../icons/svg/file-browser/search-empty.svg?react';
 import { Button } from '../../shared/primitives/button/button.js';
 import { FileBrowserSearchRow } from './file-browser-search-row.js';
@@ -30,6 +31,8 @@ export interface FileBrowserSearchResultsProps {
   /** 是否已经搜过；`false` 时显示空态。Whether a search has run; `false` shows the empty state. */
   searched: boolean;
   text: ResolvedLabels;
+  /** 「切换」不在时的焦点去处，通常是搜索输入框。 Where focus goes when the switch is gone. */
+  fallbackFocusRef?: RefObject<HTMLElement | null>;
   onSelectMode: (mode: SearchMode) => void;
   onOpen: (uri: string) => void;
 }
@@ -49,6 +52,7 @@ export function FileBrowserSearchResults({
   error,
   searched,
   text,
+  fallbackFocusRef,
   onSelectMode,
   onOpen,
 }: FileBrowserSearchResultsProps) {
@@ -127,6 +131,7 @@ export function FileBrowserSearchResults({
         mode={mode}
         count={hits.length}
         text={text}
+        fallbackFocusRef={fallbackFocusRef}
         onSelectMode={onSelectMode}
       />
       <ul
