@@ -17,9 +17,9 @@ import type { ResolvedLabels } from './file-browser-labels.js';
  *
  * The surface comes from the result area's `Popover`, which portals into `document.body`
  * and positions in viewport coordinates, so the results area's clipping cannot reach it.
- * This draws the content and handles two things: handing the node to the caller after
- * mount (so a keyboard opening can move focus to the first item), and closing on a click
- * outside.
+ * This draws the content, hands the node to the caller after mount (so a keyboard opening
+ * can move focus to the first item) and closes on Escape. Outside clicks stay with
+ * `Popover`, which already excludes both the surface and the trigger.
  */
 export interface FileBrowserSearchModeMenuProps {
   value: SearchMode;
@@ -53,37 +53,34 @@ export function FileBrowserSearchModeMenu({
     },
     [menuRef, onMounted],
   );
-  // useEffect 必要性：与 document 的指针与键盘事件同步。浮层渲染在 portal 里，
-  // DOM 上不是触发按钮的子孙，点击外部关闭必须监听整个文档——只监听自己的节点
-  // 收不到外部点击。Esc 也在这里处理：菜单容器是 `role="group"`，给它挂键盘
+  // 点击外部关闭交给 `Popover`：它的点击态已经同时排除浮层与触发按钮，点「切换」
+  // 才能正常切换关闭。这里再挂一份只排除菜单的 `pointerdown` 监听，会把「切换」
+  // 当成外部点击——先关掉，随后的 click 又把它打开，菜单永远关不上。
+  //
+  // Outside clicks belong to `Popover`, whose click trigger already excludes both the
+  // surface and its trigger, so clicking the switch toggles it closed. A second
+  // `pointerdown` listener here that excludes only the menu would treat the switch as an
+  // outside click — closing on pointerdown and reopening on the following click, so the
+  // menu could never be dismissed by clicking it again.
+  //
+  // useEffect 必要性：Esc 要监听整个文档。菜单容器是 `role="group"`，给它挂键盘
   // 监听既不合语义，也拦不住焦点在按钮上时的冒泡。捕获阶段先于弹窗的 Esc 处理，
   // 一次 Esc 只关菜单。卸载时移除。
   //
-  // Syncs with the document's pointer and keyboard events. The surface renders in a
-  // portal, so it is not a DOM descendant of the trigger; closing on an outside click
-  // needs a document-level listener. Escape is handled here too: the menu is a
-  // `role="group"`, so a key listener on it is both wrong semantically and unable to
-  // intercept events while focus sits on a button. Capture runs before the dialog's own
-  // Escape handler, so one Escape closes the menu only. Removed on unmount.
+  // The Escape listener has to sit on the document. The menu is a `role="group"`, so a
+  // key listener on it is both wrong semantically and unable to intercept events while
+  // focus sits on a button. Capture runs before the dialog's own Escape handler, so one
+  // Escape closes the menu only. Removed on unmount.
   useEffect(() => {
-    const onPointerDown = (event: PointerEvent) => {
-      if (!(event.target instanceof Node)) return;
-      if (menuRef?.current?.contains(event.target)) return;
-      onDismiss();
-    };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return;
       event.preventDefault();
       event.stopPropagation();
       onDismiss();
     };
-    document.addEventListener('pointerdown', onPointerDown);
     document.addEventListener('keydown', onKeyDown, true);
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown, true);
-    };
-  }, [menuRef, onDismiss]);
+    return () => document.removeEventListener('keydown', onKeyDown, true);
+  }, [onDismiss]);
 
   return (
     <div

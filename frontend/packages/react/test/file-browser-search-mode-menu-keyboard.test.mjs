@@ -127,6 +127,39 @@ test('the mode menu takes focus on open and returns it on close', async () => {
   }
 });
 
+test('clicking the switch again toggles the menu closed', async () => {
+  const view = await openWithResults();
+  // 真实鼠标按下会先派发 pointerdown，再派发 click。只用 `element.click()` 会跳过
+  // pointerdown，测不到「先关再开」的回归。
+  //
+  // A real press dispatches pointerdown before click; `element.click()` skips
+  // pointerdown, so it cannot catch the close-then-reopen regression.
+  const press = async (target) => {
+    await act(async () => {
+      target.dispatchEvent(
+        new window.PointerEvent('pointerdown', { bubbles: true }),
+      );
+    });
+    await act(async () => target.click());
+    await settle();
+  };
+  try {
+    await press(modeSwitch());
+    assert.equal(items().length, 4);
+
+    await press(modeSwitch());
+    assert.equal(items().length, 0);
+    assert.equal(modeSwitch().getAttribute('aria-expanded'), 'false');
+
+    // 再点一次仍能打开，切换是双向的。
+    // Pressing once more opens it again; the toggle works both ways.
+    await press(modeSwitch());
+    assert.equal(items().length, 4);
+  } finally {
+    await view.unmount();
+  }
+});
+
 test('the portaled menu is part of the modal tab order', async () => {
   const view = await openWithResults();
   try {
