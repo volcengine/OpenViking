@@ -135,7 +135,7 @@ describe('live dsh bridge v2 without a provider key', { skip: liveSkip }, () => 
     assert.ok(Array.isArray(hello.methods));
     assert.equal(new Set(hello.methods).size, hello.methods.length, 'method names are unique');
     assert.deepEqual([...hello.methods].sort(), [...DSH_BRIDGE_CLI_METHODS, ...DSH_WORKER_METHODS].sort());
-    assert.equal(hello.methods.length, 9);
+    assert.equal(hello.methods.length, DSH_BRIDGE_CLI_METHODS.length + DSH_WORKER_METHODS.length);
     assert.ok(bridgeHelloSupports(hello, DSH_BRIDGE_CLI_METHODS));
     for (const name of ['superagent/settings/describe', 'superagent/settings/mutate', 'superagent/credentials/set', 'superagent/credentials/unset']) {
       assert.ok(hello.methods.includes(name), `hello must advertise ${name}`);
