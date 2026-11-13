@@ -168,6 +168,87 @@ test("Kimi installs a self-contained native bundle without legacy config edits",
   }
 });
 
+test("Qoder CLI installs a self-contained plugin through a local marketplace and uninstalls it", () => {
+  const home = mkdtempSync(join(tmpdir(), "openviking-qoder-hooks-"));
+  try {
+    const binDir = join(home, "bin");
+    const cliLog = join(home, "qodercli.log");
+    const qoderHome = join(home, "qoder-config");
+    mkdirSync(binDir, { recursive: true });
+    const cliPath = join(binDir, "qodercli");
+    writeFileSync(cliPath, `#!/bin/sh
+printf '%s\n' "$*" >> "$QODER_TEST_LOG"
+case "$*" in
+  "plugins list") printf 'openviking-memory@openviking  enabled\n' ;;
+esac
+exit 0
+`);
+    chmodSync(cliPath, 0o755);
+    const staleCache = join(qoderHome, "plugins", "cache", "openviking", "openviking-memory", "0.0.1");
+    mkdirSync(staleCache, { recursive: true });
+    const env = {
+      PATH: `${binDir}:${dirname(installedNode)}:/usr/bin:/bin`,
+      QODER_TEST_LOG: cliLog,
+      QODER_CONFIG_DIR: qoderHome,
+    };
+
+    const installed = runInstaller(home, [
+      "--harness", "qoder",
+      "--source", "dev",
+      "--lang", "en",
+      "--url", "http://127.0.0.1:9",
+      "--api-key", "",
+      "--yes",
+    ], env);
+    assert.equal(installed.status, 0, `${installed.stdout}\n${installed.stderr}`);
+    assert.match(installed.stdout, /Selected harnesses: qoder/u);
+    assert.match(installed.stdout, /qoder: plugin assembled/u);
+
+    const marketplace = join(home, ".openviking", "agent-integrations", "qoder", "marketplace");
+    const root = join(marketplace, "openviking-memory");
+    const manifest = JSON.parse(readFileSync(join(marketplace, ".qoder-plugin", "marketplace.json"), "utf8"));
+    const plugin = JSON.parse(readFileSync(join(root, ".qoder-plugin", "plugin.json"), "utf8"));
+    assert.equal(manifest.name, "openviking");
+    assert.deepEqual(manifest.plugins.map((entry) => [entry.name, entry.source, entry.version]),
+      [["openviking-memory", "./openviking-memory", plugin.version]]);
+    const hooks = JSON.parse(readFileSync(join(root, "hooks", "hooks.json"), "utf8"));
+    assert.ok(hookCommands(hooks).every((command) => command.includes("${QODER_PLUGIN_ROOT}/agent-integrations/qoder/")));
+    const mcp = JSON.parse(readFileSync(join(root, ".mcp.json"), "utf8"));
+    assert.equal(mcp.mcpServers.openviking.env.OPENVIKING_HOOK_SOURCE, "qoder");
+    assert.ok(existsSync(join(root, "skills", "openviking-memory", "SKILL.md")));
+    assert.ok(existsSync(join(root, "agent-integrations", "memory-plugin-shared", "lib", "agent-hook-runtime.mjs")));
+    const hostsDir = join(root, "agent-integrations", "qoder", "hosts");
+    assert.ok(existsSync(join(hostsDir, "qoder.mjs")));
+    assert.ok(existsSync(join(hostsDir, "qoder-turns.mjs")));
+    for (const other of ["cursor.mjs", "codebuddy.mjs", "kimicode.mjs", "trae.mjs", "zcode.mjs", "qoder"]) {
+      assert.equal(existsSync(join(hostsDir, other)), false, other);
+    }
+    assert.equal(existsSync(join(root, "agent-integrations", "qoder", "tests")), false);
+    assert.equal(existsSync(staleCache), false, "a re-install drops the cached copy");
+    assert.equal(existsSync(join(qoderHome, "settings.json")), false, "the installer never writes Qoder's settings");
+
+    const commands = readFileSync(cliLog, "utf8").split("\n");
+    const removeAt = commands.indexOf("plugins marketplace remove openviking");
+    const addAt = commands.indexOf(`plugins marketplace add ${marketplace}`);
+    const installAt = commands.indexOf("plugins install openviking-memory@openviking -s user");
+    assert.ok(removeAt !== -1 && removeAt < addAt && addAt < installAt, commands.join("\n"));
+
+    const cached = join(qoderHome, "plugins", "cache", "openviking", "openviking-memory", plugin.version);
+    mkdirSync(cached, { recursive: true });
+    writeFileSync(cliLog, "");
+    const removed = runInstaller(home, ["--harness", "qoder", "--uninstall", "--yes"], env);
+    assert.equal(removed.status, 0, `${removed.stdout}\n${removed.stderr}`);
+    const uninstallCommands = readFileSync(cliLog, "utf8").split("\n");
+    const uninstallAt = uninstallCommands.indexOf("plugins uninstall openviking-memory@openviking");
+    const marketplaceRemoveAt = uninstallCommands.indexOf("plugins marketplace remove openviking");
+    assert.ok(uninstallAt !== -1 && uninstallAt < marketplaceRemoveAt, uninstallCommands.join("\n"));
+    assert.equal(existsSync(join(home, ".openviking", "agent-integrations", "qoder")), false);
+    assert.equal(existsSync(join(qoderHome, "plugins", "cache", "openviking")), false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("TraeCode CLI 2.0 installs the Codex plugin alias and removes the deprecated integration", () => {
   const home = mkdtempSync(join(tmpdir(), "openviking-trae-cli-hooks-"));
   try {
