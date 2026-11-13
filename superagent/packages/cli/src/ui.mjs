@@ -10,6 +10,15 @@ export const RESET = `${ESC}0m`;
 export const HIDE_CURSOR = `${ESC}?25l`;
 export const SHOW_CURSOR = `${ESC}?25h`;
 
+// A write callback runs after earlier queued writes have reached the stream.
+// Setup uses this before its deliberate process.exit(): Windows terminal writes
+// are asynchronous, and exiting immediately lets the shell prompt overwrite a
+// final box that is still being drawn. The lingering-handle workaround stays,
+// but it no longer truncates the output.
+export function flushOutput(stream) {
+  return new Promise((resolve) => stream.write('', resolve));
+}
+
 // OpenViking SuperAgent's colours: the sunset gradient (also the wordmark), the sea, and accents.
 export const PALETTE = Object.freeze({
   // Gold -> orange -> orange-red -> crimson.
