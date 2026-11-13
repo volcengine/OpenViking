@@ -2,14 +2,16 @@ import type { Locale } from '../../shared/locale.js';
 import { FileViewerCore } from '@ark-design/ui/file-viewer/core';
 import type {
   FileViewerCoreProps,
+  FileViewerState,
   ViewerHandle,
   ViewerViewModeOption,
 } from '@ark-design/ui/file-viewer/core';
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 
 import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters/markdown';
 
 import { createFilePreviewAdapters } from './file-preview-handle-adapters.js';
+import { FilePreviewLoadingReporter } from './file-preview-loading-reporter.js';
 import { imagePreviewTarget } from './file-preview-markdown-images.js';
 import { toFileSource } from './file-preview-source.js';
 import {
@@ -56,6 +58,16 @@ export interface FilePreviewViewerProps {
   onViewModesChange: (modes: readonly ViewerViewModeOption[]) => void;
   /** Markdown 正文里的链接被点击时调用；传入即由宿主接管导航。 */
   onLinkClick?: MarkdownAdapterOptions['onLinkClick'];
+  /** 底座加载状态变化时调用；过渡层用它判断新内容何时就绪。 */
+  /** Called when the base's load state changes; the transition uses it as the ready signal. */
+  onStateChange?: (state: FileViewerState) => void;
+  /**
+   * 是否向外上报句柄与视图模式。过渡期间后台那一层传 `false`。
+   * Whether handles and view modes are reported outward; `false` for a background layer.
+   */
+  reports?: boolean;
+  /** 这一层自己的加载态开始与结束时调用。 Called when this layer's own loading starts and ends. */
+  onLoadingChange?: (loading: boolean) => void;
 }
 
 /**
@@ -82,6 +94,9 @@ export function FilePreviewViewer({
   onHandleChange,
   onViewModesChange,
   onLinkClick,
+  onStateChange,
+  reports = true,
+  onLoadingChange,
 }: FilePreviewViewerProps) {
   // 宿主的 `tabs` 数组每次渲染都会重建，`activeTab` 因此也是新对象，`tab.source`
   // 的引用每帧都变。`source` 是底座的加载触发点——给它一个新对象，底座会当成
@@ -122,22 +137,78 @@ export function FilePreviewViewer({
       }),
     [tab.resources],
   );
+  // 后台层不向外上报：两个实例同时在树上，它的句柄与视图模式会覆盖屏幕上那个
+  // 的。用 ref 取最新值，`adapters` 的依赖因此与 `reports` 无关——它一变就重建
+  // 适配器，等于把正在后台加载的渲染器又重挂一次。
+  //
+  // A background layer reports nothing: both instances are on the tree and its
+  // handle and view modes would overwrite the visible one's. A ref carries the latest
+  // flag so `reports` stays out of the adapter dependencies — including it would
+  // rebuild the adapters and remount the very renderer that is loading.
+  const reportsRef = useRef(reports);
+  reportsRef.current = reports;
+  // 后台层被压下的那一次上报，换到前台时补发：底座只在渲染器挂载时交出句柄，
+  // 切换只是翻转可见性、不会重新挂载，不补发的话屏幕上的这一层永远没有句柄。
+  //
+  // The report suppressed while the layer was in the background, replayed once it
+  // comes forward: the base hands the handle over at mount only, and a swap just
+  // flips visibility without remounting, so without the replay the layer now on
+  // screen would have no handle at all.
+  const suppressed = useRef<{
+    handle?: ViewerHandle | null;
+    modes?: readonly ViewerViewModeOption[];
+  }>({});
+  // 回调用 ref 取最新值，`adapters` 因此不随层级变化重建。它一变，底座就把渲染
+  // 管线整个重启——连屏幕上那一层也会退回加载态，双层过渡等于白做。层级切换时
+  // 只有 `tab.source` 该变，回调只是「往哪儿送」。
+  //
+  // Callbacks are read through refs so `adapters` survives a level change. A new
+  // adapters array restarts the base's whole pipeline — even the layer on screen would
+  // fall back to a loading state, wasting the two-layer transition. Only `tab.source`
+  // should change on a level switch; the callbacks just say where reports go.
+  const callbacks = useRef({
+    onHandleChange,
+    onViewModesChange,
+    onLinkClick,
+    resolveImage: imageResolver ? resolveImage : undefined,
+  });
+  callbacks.current = {
+    onHandleChange,
+    onViewModesChange,
+    onLinkClick,
+    resolveImage: imageResolver ? resolveImage : undefined,
+  };
   const adapters = useMemo(
     () =>
       createFilePreviewAdapters({
-        onHandleChange,
-        onViewModesChange,
-        onLinkClick,
-        resolveImage: imageResolver ? resolveImage : undefined,
+        onHandleChange: (handle) => {
+          suppressed.current.handle = handle;
+          if (reportsRef.current) callbacks.current.onHandleChange(handle);
+        },
+        onViewModesChange: (modes) => {
+          suppressed.current.modes = modes;
+          if (reportsRef.current) callbacks.current.onViewModesChange(modes);
+        },
+        onLinkClick: (event, link) =>
+          callbacks.current.onLinkClick?.(event, link),
+        resolveImage: callbacks.current.resolveImage
+          ? (src: string) => callbacks.current.resolveImage!(src)
+          : undefined,
       }),
-    [
-      onHandleChange,
-      onViewModesChange,
-      onLinkClick,
-      resolveImage,
-      imageResolver,
-    ],
+    [],
   );
+  // useEffect 必要性：补发要在 `reports` 变 true 的那次提交之后进行，此时句柄
+  // 早已存在；渲染期间调用会更新父组件的 state，触发渲染阶段的状态更新警告。
+  // 没有需要清理的资源，依赖变化只会让补发发生在最新一次上报上。
+  //
+  // The replay must run after the commit that flips `reports`; calling it during
+  // render would update the parent's state mid-render. Nothing to clean up.
+  useEffect(() => {
+    if (!reports) return;
+    if ('handle' in suppressed.current)
+      onHandleChange(suppressed.current.handle ?? null);
+    if (suppressed.current.modes) onViewModesChange(suppressed.current.modes);
+  }, [reports, onHandleChange, onViewModesChange]);
 
   // 底座把 `slots` 里的函数当依赖，换新函数会重建渲染器。而这三个来源在宿主
   // 那边每次渲染都是新值：`tabText` 是新建对象、
@@ -159,51 +230,49 @@ export function FilePreviewViewer({
   // built once per mount and the body stays mounted across copy, view switch and
   // friends. Switching tabs changes `key`, which remounts everything and refreshes
   // the ref, so it never reads the previous tab's values.
-  const latest = useRef({ text, tabSlots: tab.slots });
-  latest.current = { text, tabSlots: tab.slots };
+  const latest = useRef({ text, tabSlots: tab.slots, onLoadingChange });
+  latest.current = { text, tabSlots: tab.slots, onLoadingChange };
 
   const slotPresence = [
     Boolean(tab.slots?.confirmFallback),
     Boolean(tab.slots?.downloadFallback),
   ].join();
   const slots = useMemo<FileViewerCoreProps['slots']>(() => {
-    // 分支在调用时才决定，不在创建时决定：`slots` 只建一次（空依赖），而
-    // 宿主可能在挂载后换页签或增删插槽。创建时就把「用宿主的还是内置的」定死，
-    // 切到没有该插槽的页签后会继续渲染上一页的节点，表现为空白。
+    // 分支在调用时才决定：`slots` 只建一次（空依赖），而宿主可能在挂载后换页签
+    // 或增删插槽。创建时定死「用宿主的还是内置的」，切到没有该插槽的页签后会继续
+    // 渲染上一页的节点，表现为空白。
     //
-    // Decide the branch when called, not when created: `slots` is built once (empty
-    // dependencies) while the host may switch tabs or add/remove slots afterwards.
-    // Fixing "host's or built-in" at creation time would keep rendering the previous
-    // tab's node after switching, showing up as a blank body.
-    const loadingSlot = () => {
-      const own = latest.current.tabSlots?.loadingFallback;
-      return own ? <>{own}</> : <LoadingState text={latest.current.text} />;
-    };
+    // Decide the branch when called: `slots` is built once while the host may switch
+    // tabs or add/remove slots afterwards. Fixing it at creation time would keep
+    // rendering the previous tab's node after switching, showing up as a blank body.
+    // 加载态起止经 reporter 上报：外壳 `ready` 之后渲染器的遮罩还会再停一两帧。
+    // Loading start and end go through the reporter: the renderer's overlay lingers.
+    const loadingSlot = () => (
+      <FilePreviewLoadingReporter
+        onLoadingChange={(loading) => latest.current.onLoadingChange?.(loading)}
+      >
+        {latest.current.tabSlots?.loadingFallback ?? (
+          <LoadingState text={latest.current.text} />
+        )}
+      </FilePreviewLoadingReporter>
+    );
     const errorSlot: NonNullable<FileViewerCoreProps['slots']>['error'] = ({
       retry,
     }) => {
       const own = latest.current.tabSlots?.errorFallback;
-      return own ? (
-        <>{own}</>
-      ) : (
-        <LoadFailedState text={latest.current.text} onRetry={retry} />
-      );
+      if (own) return <>{own}</>;
+      return <LoadFailedState text={latest.current.text} onRetry={retry} />;
     };
-    // 只传宿主提供的插槽。省略下载插槽时保留底座的默认下载兜底；
-    // downloadFallback、unsupportedFallback、默认界面的优先级由底座决定。
-    // Only supply host slots: omission retains FileViewer's default download UI.
-    // The base owns precedence between downloadFallback, unsupportedFallback and its default.
+    // 只传宿主提供的插槽；优先级由底座决定。
+    // Only supply host slots; the base owns their precedence.
     const own = tab.slots;
     const hasConfirm = Boolean(own?.confirmFallback);
     const hasHostDownload = Boolean(own?.downloadFallback);
-    // 传的是稳定 wrapper，内部从 `latest.current` 读当前组件并转发 props。
-    // 直接把宿主组件本身传进去会把它冻在这一帧：同一个 key 下宿主换了组件
-    // （新的文案或回调闭包），memo 不重建，界面仍停在旧组件上。
+    // 传稳定 wrapper，内部从 `latest.current` 读当前组件并转发 props。直接传宿主
+    // 组件会把它冻在这一帧：同一 key 下宿主换了组件，memo 不重建，界面停在旧组件。
     //
-    // What goes in is a stable wrapper that reads the current component from
-    // `latest.current` and forwards props. Passing the host's component directly
-    // freezes it at this frame: a new component under the same key (fresh copy or
-    // callback closure) would not take effect while the memo holds.
+    // A stable wrapper reads the current component from `latest.current` and forwards
+    // props; passing the host's component directly would freeze it at this frame.
     const confirmSlot: NonNullable<FileViewerCoreProps['slots']>['confirm'] = (
       props,
     ) => {
@@ -224,12 +293,11 @@ export function FilePreviewViewer({
       ...(hasConfirm ? { confirm: confirmSlot } : {}),
       ...(hasHostDownload ? { downloadFallback: downloadSlot } : {}),
     };
-    // 依赖用「哪些插槽存在」而不是对象身份：宿主每次渲染都会重建 `slots`，
-    // 用对象会让 memo 每帧重建、底座重挂渲染器（表现为点击后正文闪一下）。
+    // 依赖用「哪些插槽存在」而非对象身份：宿主每次渲染都会重建 `slots`，用对象
+    // 会让 memo 每帧重建、底座重挂渲染器（表现为点击后正文闪一下）。
     //
-    // Key on which slots exist rather than on object identity: the host rebuilds
-    // `slots` every render, and keying on it would rebuild this memo each frame and
-    // remount the base renderer — the body "flashing" after any click.
+    // Key on which slots exist, not object identity: the host rebuilds `slots` every
+    // render, and keying on it would remount the base renderer on every click.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab.key, slotPresence]);
 
@@ -264,6 +332,7 @@ export function FilePreviewViewer({
       // message — so our own `downloadFallback` has to step aside for this prop to
       // ever be reached.
       unsupportedFallback={tab.slots?.unsupportedFallback}
+      onStateChange={onStateChange}
       viewMode={viewMode}
       onViewModeChange={(mode) => {
         if (mode === 'preview' || mode === 'source') onViewModeChange(mode);

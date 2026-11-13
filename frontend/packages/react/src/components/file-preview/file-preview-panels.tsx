@@ -9,6 +9,11 @@ import type { HTMLAttributes } from 'react';
 import { FilePreviewBody } from './file-preview-body.js';
 import { FilePreviewDirectoryBody } from './file-preview-directory.js';
 import { FilePreviewHeader } from './file-preview-header.js';
+import {
+  FilePreviewTransition,
+  needsAsyncLoad,
+  probeStatusOf,
+} from './file-preview-transition.js';
 import { TruncatedNotice } from './file-preview-state.js';
 import type { useFilePreviewActions } from './use-file-preview-actions.js';
 import type { FilePreviewActions, FilePreviewProps } from './types.js';
@@ -141,19 +146,30 @@ export function FilePreviewPanels({
         onOpenParent={(uri) => void actions.openParent(activeTab, uri)}
       />
       <div className="ov-file-preview__body">
-        <FilePreviewBody
-          key={JSON.stringify([fileTab.key, levelKey])}
-          fileTab={fileTab}
+        <FilePreviewTransition
+          identity={JSON.stringify([fileTab.key, levelKey])}
+          tab={fileTab}
+          needsLoad={needsAsyncLoad(fileTab.source)}
           text={text}
-          locale={locale}
-          viewMode={viewMode}
-          editing={editing}
-          onViewModeChange={setViewMode}
-          onHandleChange={onHandleChange}
-          onViewModesChange={onViewModesChange}
-          onLinkClick={linkClickHandler}
-          onCancelEditing={actionContext.cancelEditing}
-        />
+        >
+          {({ tab: layerTab, onProbeStatus, reports, onLoadingChange }) => (
+            <FilePreviewBody
+              fileTab={layerTab}
+              onLoadingChange={onLoadingChange}
+              text={text}
+              locale={locale}
+              viewMode={viewMode}
+              editing={editing}
+              onViewModeChange={setViewMode}
+              onHandleChange={onHandleChange}
+              onViewModesChange={onViewModesChange}
+              onLinkClick={linkClickHandler}
+              onCancelEditing={actionContext.cancelEditing}
+              onStateChange={(state) => onProbeStatus(probeStatusOf(state))}
+              reports={reports}
+            />
+          )}
+        </FilePreviewTransition>
       </div>
       {fileTab.source.truncated ? <TruncatedNotice text={text} /> : null}
       {fileTab.slots?.footer ? (

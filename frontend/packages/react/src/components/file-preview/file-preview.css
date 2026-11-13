@@ -38,6 +38,10 @@
     --ov-ui-color-text-1,
     var(--ov-ui-text-1-default, #0b0b0f)
   );
+  --ov-ui-file-preview-text-secondary: var(
+    --ov-ui-color-text-2,
+    var(--ov-ui-text-2-default, #3f3f51)
+  );
   --ov-ui-file-preview-text-muted: var(
     --ov-ui-color-text-3,
     var(--ov-ui-text-3-default, #6e718c)
@@ -483,6 +487,53 @@
   overflow: hidden;
 }
 
+/*
+ * 正文的双层过渡：屏幕上那一层正常参与布局，后台那一层叠在同一位置、不可见也
+ * 不参与交互，就绪后翻转哪一层可见。两层同时存在只是为了让新内容在隐藏状态下
+ * 就完成渲染，切换时不再重来一遍。
+ *
+ * The body's two layers: the visible one lays out normally while the background one
+ * sits on top of it, invisible and inert, until the swap flips which one shows. Both
+ * exist only so the new content renders while hidden and does not start over on swap.
+ */
+.ov-file-preview__layers {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ov-file-preview__layer {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+/*
+ * 后台层：绝对定位盖在同一块区域上，用 `visibility` 而不是 `display: none` 隐藏
+ * ——后者不参与布局，渲染器拿不到尺寸，Markdown 的分页与图片尺寸都算不出来，
+ * 换上来时还要再量一遍。
+ *
+ * The background layer is absolutely positioned over the same area and hidden with
+ * `visibility` rather than `display: none`: the latter removes it from layout, so the
+ * renderer has no size to work with and would have to measure again after the swap.
+ */
+.ov-file-preview__layer--hidden {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.ov-file-preview__layers-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  background: var(--ov-ui-file-preview-surface);
+}
+
 .ov-file-preview__viewer {
   flex: 1 1 auto;
   min-width: 0;
@@ -572,32 +623,36 @@
   font-size: 12px;
 }
 
-/* ── 目录页签的层级切换 ───────────────────────────────────────────── */
+/* ── 摘要层级的切换 ───────────────────────────────────────────────── */
 
 /*
- * 目录的摘要层级：下划线页签，位于标题行与正文之间。34px 高、13px 字号、
- * 间距 32px，激活项 500 字重加 2px 下划线。
+ * 摘要层级：下划线页签，位于标题行与正文之间。34px 高、13px 字号、间距
+ * 32px，激活项 500 字重加 2px 下划线。文件页签与目录页签共用同一套。
  *
- * A directory's summary levels: underlined tabs between the header and the body.
- * 34px tall, 13px, 32px apart, the active item at 500 weight with a 2px underline.
+ * Summary levels: underlined tabs between the header and the body. 34px tall,
+ * 13px, 32px apart, the active item at 500 weight with a 2px underline. File tabs
+ * and directory tabs share the same row.
  */
 .ov-file-preview__levels {
   display: flex;
   flex: none;
+  min-width: 0;
   height: 34px;
   align-items: stretch;
   position: relative;
   gap: 32px;
   padding: 0 16px;
+  overflow-x: auto;
 }
 
 .ov-file-preview__level {
   display: inline-flex;
+  flex: none;
   align-items: center;
   padding: 0 0 2px;
   border: 0;
   background: transparent;
-  color: var(--ov-ui-file-preview-text-muted);
+  color: var(--ov-ui-file-preview-text-secondary);
   font: inherit;
   font-size: 13px;
   line-height: 22px;
@@ -606,21 +661,34 @@
   transition: color 160ms ease;
 }
 
-.ov-file-preview__level:hover {
+.ov-file-preview__level:hover:not(:disabled) {
   color: var(--ov-ui-file-preview-text);
 }
 
-.ov-file-preview__level[data-active] {
+/* 文件页签用 `aria-pressed`，目录页签用 `data-active`；两者共用同一套选中样式。 */
+/* File tabs use `aria-pressed`, directory tabs `data-active`; one active style. */
+.ov-file-preview__level[data-active],
+.ov-file-preview__level[aria-pressed='true'] {
   color: var(--ov-ui-file-preview-text);
   font-weight: 500;
 }
 
+.ov-file-preview__level:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ov-file-preview__level:focus-visible {
+  outline: 2px solid var(--ov-ui-file-preview-focus-ring);
+  outline-offset: -2px;
+}
+
 /*
- * 选中指示条：一条 2px 的横线，宽度与位置跟随选中项，切换时滑动过去。它不
+ * 选中指示条：一条 14×2 的横线，宽度与位置跟随选中项，切换时滑动过去。它不
  * 属于任何一级，因此切换时是位移而不是各自显隐。
  *
- * The selection indicator: one 2px rule whose width and position follow the active
- * level and slides when it changes. It belongs to no single level, so a switch is a
+ * The selection indicator: one 14×2 rule whose position follows the active level
+ * and slides when it changes. It belongs to no single level, so a switch is a
  * movement rather than one rule hiding and another appearing.
  */
 .ov-file-preview__level-indicator {

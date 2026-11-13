@@ -3,11 +3,10 @@ import { mediaKind } from './file-preview-media.js';
 import { useLocale } from '../../shared/locale-context.js';
 import { forwardRef, useCallback, useImperativeHandle, useState } from 'react';
 
-import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters/markdown';
-
 import { mergeLabels } from '../../shared/locale.js';
 import { FilePreviewPanels } from './file-preview-panels.js';
 import { useFilePreviewViewState } from './use-file-preview-view-state.js';
+import { useLinkClickHandler } from './use-link-click-handler.js';
 import { useFilePreviewLevels } from './use-file-preview-levels.js';
 import { resolveFilePreviewLabels } from './file-preview-labels.js';
 import { FilePreviewTabRow } from './file-preview-tab-row.js';
@@ -171,14 +170,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   // Links inside a Markdown body: hand the raw target to the host's `openUri` and
   // let it resolve and navigate. The component does not resolve relative paths —
   // that needs the current document's location, which only the host knows.
-  const onLinkClick = useCallback<
-    NonNullable<MarkdownAdapterOptions['onLinkClick']>
-  >(
-    (_event, link) => {
-      if (fileTab) void actions.openUri(fileTab, link.url);
-    },
-    [actions, fileTab],
-  );
+  const onLinkClick = useLinkClickHandler(fileTab, actions);
   // 只有宿主给了 `openUri` 才接管导航：传入回调后底座会阻止默认跳转，宿主
   // 没提供能力时接管等于把链接点死。
   //
