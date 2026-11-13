@@ -114,6 +114,37 @@ test("drainTick does not hit the network while the queue is empty", async () => 
   assert.equal(fetchCalls, 0);
 });
 
+test("offline drain ticks do not deserialize queued transcripts", async t => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-drain-no-parse-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  await enqueue("addMessage", "dsh-large", {
+    role: "user", content: "offline transcript".repeat(100000),
+  });
+  let healthCalls = 0;
+  const runtime = new OpenVikingRuntime({
+    async healthResult() {
+      healthCalls += 1;
+      return { ok: false, status: 503 };
+    },
+  }, config(), { debug() {} });
+  const state = runtime.stateFor({ id: "large", header: { cwd: "/workspace" } });
+  state.hasPendingWrites = true;
+  const parse = t.mock.method(JSON, "parse");
+
+  await runtime.drainTick();
+  await runtime.drainTick();
+
+  assert.equal(healthCalls, 2);
+  assert.equal(parse.mock.callCount(), 0);
+  assert.equal(state.hasPendingWrites, true);
+  assert.equal(runtime.drainRunning, false);
+  parse.mock.restore();
+  const pending = await listPending();
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].entry.retries, 0);
+});
+
 test("commit resumes once the drain clears the backlog", async () => {
   const pendingDir = await mkdtemp(join(tmpdir(), "dsh-commit-resume-"));
   tempDirs.push(pendingDir);
