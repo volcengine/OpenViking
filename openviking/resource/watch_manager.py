@@ -485,6 +485,7 @@ class WatchManager:
         from_uri: str,
         to_uri: str,
         task_ids: Optional[Sequence[str]] = None,
+        lease_ref: Optional[Dict[str, Any]] = None,
     ) -> WatchMoveResult:
         from openviking.resource.github_radar.ownership import (
             radar_admission_guard,
@@ -531,6 +532,7 @@ class WatchManager:
                 ctx = PrRadarRunner._io_context(ctx)
                 async with radar_directory_guard(
                     self._viking_fs, self._locks, self._store, original, ctx, claim=True,
+                    lease_ref=lease_ref,
                 ):
                     pass
             async with AsyncExitStack() as stack:

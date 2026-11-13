@@ -4,7 +4,7 @@
 
 import hashlib
 import json
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 
 from openviking.resource.watch_types import WatchAuthority
 from openviking.server.error_mapping import is_not_found_error
@@ -44,7 +44,9 @@ def radar_identity(task, ctx):
 
 
 @asynccontextmanager
-async def radar_directory_guard(fs, locks, store, task, ctx, *, claim=False, watches=None):
+async def radar_directory_guard(
+    fs, locks, store, task, ctx, *, claim=False, watches=None, lease_ref=None,
+):
     """Serialize check + Watch insertion / ownership publication across workers.
 
     The Watch row reserves a fresh directory at admission; no files are changed
@@ -133,9 +135,21 @@ async def radar_directory_guard(fs, locks, store, task, ctx, *, claim=False, wat
                     else:
                         raise conflict()
                 if claim:
-                    await fs.write_file(
-                        owner_uri, json.dumps(expected, sort_keys=True), ctx=ctx,
-                    )
+                    async with AsyncExitStack() as stack:
+                        options = {}
+                        if lease_ref is not None:
+                            # The derived radar directory may lie inside or
+                            # outside the transfer. Borrow the same owner and
+                            # obtain a lease covering this write in either case.
+                            owner_lease = await stack.enter_async_context(locks.tree(
+                                ctx.account_id, target, timeout=30.0,
+                                owner_lease_ref=lease_ref,
+                            ))
+                            options["lease_ref"] = owner_lease
+                        await fs.write_file(
+                            owner_uri, json.dumps(expected, sort_keys=True), ctx=ctx,
+                            **options,
+                        )
             yield
     except LockAcquisitionError as exc:
         raise ConflictError(

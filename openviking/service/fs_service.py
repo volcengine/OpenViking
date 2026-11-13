@@ -1144,6 +1144,7 @@ class FSService:
                         account_id=ctx.account_id,
                         from_uri=from_uri,
                         to_uri=to_uri,
+                        lease_ref=lease,
                     )
                 options: Dict[str, Any] = {"lease_ref": lease}
                 if vector_mode != "transfer":
@@ -1169,6 +1170,7 @@ class FSService:
                                 from_uri=watch_move_result.to_uri,
                                 to_uri=watch_move_result.from_uri,
                                 task_ids=watch_move_result.task_ids,
+                                lease_ref=lease,
                             )
                         )
                         if set(rollback.task_ids) != set(watch_move_result.task_ids):
