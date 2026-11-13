@@ -17,6 +17,8 @@ import threading
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.result import SearchItemResult, SearchResult
 from openviking.storage.vectordb_adapters.base import CollectionAdapter
+from openviking_cli.exceptions import FailedPreconditionError
+from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.vectordb_config import PgvectorConfig
 
 from .opengauss.catalog import _create_collection_table, _ensure_meta_table, _load_collection_meta
@@ -24,6 +26,7 @@ from .opengauss.collection import OpenGaussCollection, _PgIndex
 from .opengauss.connection import _import_psycopg2, _PooledConnectionProxy
 from .opengauss.retrieval import _validate_search_parameters
 from .opengauss.sql import (
+    _META_TABLE,
     _bounded_identifier,
     _build_where_clause,
     _distance_to_similarity,
@@ -32,6 +35,8 @@ from .opengauss.sql import (
     _validate_vector,
 )
 from .opengauss_adapter import OpenGaussCollectionAdapter, _save_collection_meta
+
+logger = get_logger(__name__)
 
 
 class PgvectorCollection(OpenGaussCollection):
@@ -96,7 +101,7 @@ class PgvectorCollection(OpenGaussCollection):
     def _reconcile_index_metadata(self):
         for name in list(self._indexes):
             if not self.has_index(name):
-                raise RuntimeError(f"pgvector index {name!r} is missing or invalid")
+                self._indexes.pop(name, None)
 
     def has_index(self, index_name):
         meta = self._indexes.get(index_name)
@@ -182,7 +187,7 @@ class PgvectorCollection(OpenGaussCollection):
         return_detail_info=False,
     ):
         if dense_vector and limit and not self.has_index(index_name):
-            raise RuntimeError(f"pgvector index {index_name!r} is unavailable")
+            raise FailedPreconditionError(f"pgvector index {index_name!r} is missing or invalid")
         if sparse_vector or advance is not None:
             return super().search_by_vector(
                 index_name,
@@ -210,7 +215,7 @@ class PgvectorCollection(OpenGaussCollection):
             f"vector {op} %s::vector AS _ov_distance "
             f"FROM {_quote_identifier(self._name)} "
             f"WHERE {condition}vector IS NOT NULL "
-            f"ORDER BY vector {op} %s::vector LIMIT %s OFFSET %s",
+            f"ORDER BY vector {op} %s::vector, id LIMIT %s OFFSET %s",
             [str(vector), *params, str(vector), limit, offset],
             index_name,
         )
@@ -274,27 +279,37 @@ class PgvectorCollectionAdapter(OpenGaussCollectionAdapter):
             connect_timeout=10,
             options="-c client_encoding=UTF8 -c search_path=public",
         )
-        self._conn = _PooledConnectionProxy(self._pool)
-        cursor = self._conn.cursor()
+        self._conn = None
         try:
-            cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
-            version = cursor.fetchone()
-            if version is None:
-                raise RuntimeError("Install pgvector and CREATE EXTENSION vector in this database")
-            release = re.match(r"^(\d+)\.(\d+)\.(\d+)", version[0])
-            if not release or tuple(map(int, release.groups())) < (0, 8, 0):
-                raise RuntimeError("OpenViking requires pgvector >= 0.8.0")
-            cursor.execute(
-                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                ("openviking.pgvector.catalog",),
-            )
-            _ensure_meta_table(self._conn)
+            self._conn = _PooledConnectionProxy(self._pool)
+            cursor = self._conn.cursor()
+            try:
+                cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
+                version = cursor.fetchone()
+                if version is None:
+                    raise RuntimeError(
+                        "Install pgvector and CREATE EXTENSION vector in this database"
+                    )
+                release = re.match(r"^(\d+)\.(\d+)\.(\d+)", version[0])
+                if not release or tuple(map(int, release.groups())) < (0, 8, 0):
+                    raise RuntimeError("OpenViking requires pgvector >= 0.8.0")
+                cursor.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    ("openviking.pgvector.catalog",),
+                )
+                _ensure_meta_table(self._conn)
+            finally:
+                cursor.close()
         except Exception:
-            cursor.close()
-            self._conn.close()
+            try:
+                if self._conn is not None:
+                    self._conn.close()
+                else:
+                    self._pool.closeall()
+            finally:
+                self._conn = None
+                self._pool = None
             raise
-        finally:
-            cursor.close()
 
     @classmethod
     def from_config(cls, config):
@@ -309,7 +324,7 @@ class PgvectorCollectionAdapter(OpenGaussCollectionAdapter):
         adapter._sparse_weight = config.sparse_weight
         return adapter
 
-    def _load_existing_collection_if_needed(self):
+    def _load_existing_collection_if_needed(self, *, require_index=True):
         with self._load_lock:
             if self._collection is not None:
                 return
@@ -325,6 +340,10 @@ class PgvectorCollectionAdapter(OpenGaussCollectionAdapter):
             if meta.get("_backend") != "pgvector":
                 raise ValueError("Collection metadata belongs to a different backend")
             wrapped = self._wrap_collection(meta)
+            if not require_index:
+                # Deleting a collection must not require a usable ANN index.
+                self._collection = wrapped
+                return
             index = wrapped.get_index_meta_data(self._index_name)
             if not index:
                 raise RuntimeError(f"pgvector configured index {self._index_name!r} is missing")
@@ -335,6 +354,11 @@ class PgvectorCollectionAdapter(OpenGaussCollectionAdapter):
             if self._index_type == "hnsw" and index["build_params"] != self._build_params:
                 raise ValueError("pgvector build parameters differ; rebuild the index first")
             self._collection = wrapped
+
+    def drop_collection(self) -> bool:
+        with self._load_lock:
+            self._load_existing_collection_if_needed(require_index=False)
+            return super().drop_collection()
 
     def create_collection(self, name, schema, *, distance, sparse_weight, index_name):
         # Session lock survives the catalog helper commits. Keeping this cursor
@@ -415,7 +439,13 @@ class PgvectorCollectionAdapter(OpenGaussCollectionAdapter):
             return wrapped
         except Exception:
             if table_created:
-                self._execute_cleanup()
+                try:
+                    self._execute_cleanup()
+                except Exception:
+                    logger.exception(
+                        "pgvector_adapter: failed to clean up partially created collection %s",
+                        self._collection_name,
+                    )
             raise
 
     def _execute_cleanup(self):
@@ -423,7 +453,8 @@ class PgvectorCollectionAdapter(OpenGaussCollectionAdapter):
         try:
             cursor.execute(f"DROP TABLE {_quote_identifier(self._collection_name)}")
             cursor.execute(
-                'DELETE FROM "_ov_collection_meta" WHERE table_name = %s', (self._collection_name,)
+                f"DELETE FROM {_quote_identifier(_META_TABLE)} WHERE table_name = %s",
+                (self._collection_name,),
             )
             self._conn.commit()
         except Exception:

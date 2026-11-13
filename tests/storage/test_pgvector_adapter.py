@@ -5,11 +5,14 @@
 import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import Mock
 
 import pytest
 
 from openviking.storage.expr import And, Eq, Or, PathScope
+from openviking.storage.vectordb_adapters import pgvector_adapter
 from openviking.storage.vectordb_adapters.factory import create_collection_adapter
+from openviking_cli.exceptions import FailedPreconditionError
 from openviking_cli.utils.config.vectordb_config import PgvectorConfig, VectorDBBackendConfig
 
 
@@ -113,6 +116,24 @@ def test_sparse_hybrid_and_atomic_batch(adapter):
     assert adapter.query(sparse_query_vector={"hello": 1}) == []
 
 
+def test_dense_equal_distance_pagination(adapter):
+    ids = [f"tie_{i:02d}" for i in range(12)]
+    adapter.upsert([{"id": item_id, "vector": [1, 0, 0]} for item_id in reversed(ids)])
+    for reload in (False, True):
+        if reload:
+            adapter._collection = None
+        pages = [
+            adapter.query(query_vector=[1, 0, 0], limit=3, offset=offset)
+            for offset in range(0, len(ids), 3)
+        ]
+        assert [row["id"] for page in pages for row in page] == ids
+
+
+def test_dense_missing_index_raises_failed_precondition(adapter):
+    with pytest.raises(FailedPreconditionError, match="missing or invalid"):
+        adapter.get_collection().search_by_vector(index_name="missing", dense_vector=[1, 0, 0])
+
+
 def test_pgvector_config_rejects_4096_hnsw():
     with pytest.raises(ValueError, match="2000"):
         VectorDBBackendConfig(backend="pgvector", dimension=4096, pgvector={"index_type": "hnsw"})
@@ -175,6 +196,91 @@ def test_missing_driver_dsn(monkeypatch):
                 pgvector={"dsn_env": "OV_PGVECTOR_MISSING_DSN"},
             )
         )
+
+
+@pytest.mark.parametrize(
+    "failure_stage", ["proxy", "checkout", "cursor", "version", "metadata", "close"]
+)
+def test_connect_failure_closes_pool(monkeypatch, failure_stage):
+    error = RuntimeError(f"{failure_stage} failed")
+    cursor = Mock()
+    cursor.fetchone.return_value = ("0.8.0",)
+    connection = Mock(closed=False)
+    connection.cursor.return_value = cursor
+    pool = Mock()
+    pool.getconn.return_value = connection
+    driver = Mock()
+    driver.pool.ThreadedConnectionPool.return_value = pool
+    ensure_meta = Mock()
+    if failure_stage == "proxy":
+        monkeypatch.setattr(pgvector_adapter, "_PooledConnectionProxy", Mock(side_effect=error))
+    elif failure_stage == "checkout":
+        pool.getconn.side_effect = error
+    elif failure_stage == "cursor":
+        connection.cursor.side_effect = error
+    elif failure_stage == "version":
+        cursor.execute.side_effect = error
+    elif failure_stage == "metadata":
+        ensure_meta.side_effect = error
+    else:
+        cursor.close.side_effect = error
+    monkeypatch.setenv("OV_PGVECTOR_TEST_DSN", "unused mock DSN")
+    monkeypatch.setattr(pgvector_adapter, "_import_psycopg2", lambda: driver)
+    monkeypatch.setattr(pgvector_adapter, "_ensure_meta_table", ensure_meta)
+    adapter = pgvector_adapter.PgvectorCollectionAdapter.__new__(
+        pgvector_adapter.PgvectorCollectionAdapter
+    )
+    adapter._config = PgvectorConfig(dsn_env="OV_PGVECTOR_TEST_DSN")
+
+    with pytest.raises(RuntimeError) as caught:
+        adapter._connect()
+    assert caught.value is error
+    pool.closeall.assert_called_once_with()
+    assert adapter._conn is None
+    assert adapter._pool is None
+    if failure_stage not in {"proxy", "checkout", "cursor"}:
+        cursor.close.assert_called_once_with()
+
+
+@pytest.mark.parametrize("failure_stage", ["table", "metadata", "wrap"])
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_creation_cleanup_preserves_original_error(monkeypatch, failure_stage, cleanup_fails):
+    creation_error = ValueError(f"{failure_stage} creation failed")
+    cleanup_error = RuntimeError("cleanup failed")
+    adapter = pgvector_adapter.PgvectorCollectionAdapter.__new__(
+        pgvector_adapter.PgvectorCollectionAdapter
+    )
+    adapter._conn = Mock()
+    adapter._collection_name = "test_pg_cleanup"
+    adapter._index_type = "flat"
+    adapter._distance_metric = "cosine"
+    adapter._execute_cleanup = Mock(side_effect=cleanup_error if cleanup_fails else None)
+    meta = {"Fields": [{"FieldName": "vector", "FieldType": "vector", "Dim": 3}]}
+
+    def create_table(*args, on_table_created, **kwargs):
+        on_table_created()
+        if failure_stage == "table":
+            raise creation_error
+
+    save_meta = Mock(
+        return_value=meta, side_effect=creation_error if failure_stage == "metadata" else None
+    )
+    adapter._wrap_collection = Mock(side_effect=creation_error if failure_stage == "wrap" else None)
+    monkeypatch.setattr(pgvector_adapter, "_create_collection_table", create_table)
+    monkeypatch.setattr(pgvector_adapter, "_save_collection_meta", save_meta)
+    logger = Mock()
+    monkeypatch.setattr(pgvector_adapter, "logger", logger)
+
+    with pytest.raises(ValueError) as caught:
+        adapter._create_backend_collection(meta)
+    assert caught.value is creation_error
+    adapter._execute_cleanup.assert_called_once_with()
+    assert adapter._initializing_collection is None
+    if cleanup_fails:
+        logger.exception.assert_called_once()
+        assert logger.exception.call_args.args[1] == adapter._collection_name
+    else:
+        logger.exception.assert_not_called()
 
 
 def test_concurrent_initialization_and_writes(adapter):
@@ -280,13 +386,13 @@ def test_hnsw_physical_plan_and_missing_index(adapter):
         cursor.execute("SET LOCAL enable_seqscan = off")
         cursor.execute(
             f'EXPLAIN SELECT id FROM "{adapter.collection_name}" '
-            "ORDER BY vector <=> '[1,0,0]'::vector LIMIT 2"
+            "ORDER BY vector <=> '[1,0,0]'::vector, id LIMIT 2"
         )
         assert name in "\n".join(row[0] for row in cursor.fetchall())
         adapter._conn.rollback()
         cursor.execute(f'DROP INDEX "{name}"')
         adapter._conn.commit()
-        with pytest.raises(RuntimeError, match="unavailable"):
+        with pytest.raises(FailedPreconditionError, match="missing or invalid"):
             adapter.query(query_vector=[1, 0, 0])
         # Restore it so normal fixture cleanup can load the collection.
         cursor.execute(
@@ -296,6 +402,63 @@ def test_hnsw_physical_plan_and_missing_index(adapter):
         adapter._conn.commit()
     finally:
         cursor.close()
+
+
+@pytest.mark.parametrize("physical_index", ["missing", "wrong_operator_class"])
+def test_drop_collection_with_unavailable_hnsw_after_reload(adapter, physical_index):
+    if adapter._config.index_type != "hnsw":
+        pytest.skip("Physical ANN index is specific to HNSW")
+    seed(adapter)
+    collection = adapter.get_collection()._Collection__collection
+    name = collection.get_index_meta_data("default")["_pg_index_name"]
+    tables = [
+        adapter.collection_name,
+        collection._index_catalog_table(),
+        collection._sparse_posting_table_name(),
+    ]
+    cursor = adapter._conn.cursor()
+    try:
+        cursor.execute(f'DROP INDEX "{name}"')
+        if physical_index == "wrong_operator_class":
+            cursor.execute(
+                f'CREATE INDEX "{name}" ON "{adapter.collection_name}" '
+                "USING hnsw (vector vector_l2_ops)"
+            )
+        adapter._conn.commit()
+    finally:
+        cursor.close()
+
+    with pytest.raises(FailedPreconditionError, match="missing or invalid"):
+        adapter.query(query_vector=[1, 0, 0])
+
+    reloaded = create_collection_adapter(
+        VectorDBBackendConfig(
+            backend="pgvector",
+            name=adapter.collection_name,
+            dimension=3,
+            pgvector={"dsn_env": "OV_PGVECTOR_TEST_DSN", "index_type": "hnsw"},
+        )
+    )
+    try:
+        with pytest.raises(RuntimeError, match="missing|invalid"):
+            reloaded.query(query_vector=[1, 0, 0])
+        assert reloaded.drop_collection() is True
+        assert reloaded.drop_collection() is False
+        assert reloaded.collection_exists() is False
+        cursor = reloaded._conn.cursor()
+        try:
+            for table in tables:
+                cursor.execute("SELECT to_regclass(%s)", (table,))
+                assert cursor.fetchone()[0] is None
+            cursor.execute(
+                'SELECT 1 FROM "_ov_collection_meta" WHERE table_name = %s',
+                (adapter.collection_name,),
+            )
+            assert cursor.fetchone() is None
+        finally:
+            cursor.close()
+    finally:
+        reloaded.close()
 
 
 @pytest.mark.parametrize("metric", ["cosine", "l2", "ip", "l1"])
