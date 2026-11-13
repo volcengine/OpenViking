@@ -119,8 +119,26 @@ async def test_chat_preserves_model_retry_budget(monkeypatch, max_retries, expec
 
 
 @pytest.mark.asyncio
-async def test_chat_preserves_input_error_for_compile_without_retry():
-    fake_vlm = _FakeVLM([ModelError(ModelErrorKind.INPUT_TOO_LARGE, "Input rejected")])
+@pytest.mark.parametrize("context_limit", [None, 32768, 1048568])
+async def test_chat_preserves_input_error_for_compile_without_retry(context_limit):
+    error: Exception = ModelError(ModelErrorKind.INPUT_TOO_LARGE, "Input rejected")
+    if context_limit is not None:
+        error = ArkBadRequestError(
+            "input rejected",
+            response=httpx.Response(
+                400,
+                request=httpx.Request("POST", "https://ark.example.test/api/v3/chat/completions"),
+            ),
+            body={
+                "error": {
+                    "code": "InvalidParameter",
+                    "message": f"Input exceeds the context limit ({context_limit} tokens). "
+                    "Please shorten the input. Request id: test-request",
+                }
+            },
+            request_id="test-request",
+        )
+    fake_vlm = _FakeVLM([error])
     adapter = VLMProviderAdapter(fake_vlm, "test-model", langfuse_client=_DisabledLangfuse())
     files = SimpleNamespace(put=AsyncMock())
     model = JsonModel(adapter, "test-model", 0.0, files, CompileLimits(), {}, Counter())
@@ -130,6 +148,20 @@ async def test_chat_preserves_input_error_for_compile_without_retry():
 
     assert model_error_kind(raised.value) is ModelErrorKind.INPUT_TOO_LARGE
     assert fake_vlm.calls == 1
+    assert files.put.call_args.args[1]["error_kind"] == "input_too_large"
+
+
+@pytest.mark.parametrize("message", ["invalid max_tokens", "Unsupported image format"])
+def test_ark_invalid_parameter_keeps_non_capacity_errors(message):
+    error = ArkBadRequestError(
+        "invalid request",
+        response=httpx.Response(
+            400, request=httpx.Request("POST", "https://ark.example.test/api/v3/chat/completions")
+        ),
+        body={"error": {"code": "InvalidParameter", "message": message}},
+        request_id="test-request",
+    )
+    assert model_error_kind(error) is ModelErrorKind.INVALID_REQUEST
 
 
 @pytest.mark.asyncio

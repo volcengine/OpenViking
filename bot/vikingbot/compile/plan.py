@@ -28,11 +28,17 @@ Source-to-record extraction uses ranges. Describe work on assigned ranges rather
 than requiring the entire document. Preserve source identities, versions and
 applicability so later steps can combine evidence across ranges.
 Only file output can use input_unit=file to keep a document's ranges together.
+Source-to-record agents read only their assigned evidence and private scratch.
+They cannot execute scripts or publish ready files. Give them local extraction
+work; a source with no relevant facts may return an empty records list.
+Agent file-output Map and Reduce can use scripts for their assigned work.
 
 ### Shuffle
 
 Collects records into groups according to a grouping rule.
 Each group is a collection of records that Reduce will process together.
+Semantic groups are independent local assignments. Do not give every local group the
+same global publication duty or expect them to see each other's unfinished files.
 
 ### Reduce
 
@@ -43,6 +49,17 @@ One group may produce multiple output files.
 ### Finalize
 
 Publishes the generated files to the requested destination and ends the flow.
+It does not author a missing index, combine differently named duplicate topics,
+or perform work left in an unused contract configuration. Assign every required
+global deliverable to a step that actually runs before Finalize.
+
+## Output Content Format
+
+Transform.output selects the carrier: records or files. Contract.output_format
+separately selects content validation. Use wiki for Markdown knowledge pages,
+including a multi-page Wiki with a root index; use files for arbitrary file formats.
+A Reduce returning files can and should still select output_format=wiki for a Wiki
+task, so Markdown/YAML checks run. These two settings do not mean the same thing.
 
 ## Plan Syntax
 
@@ -257,6 +274,17 @@ class PlanProposal(PlanModel):
         max_length=8000,
         description="Assignments and operator calls as a string, connecting the chosen steps and ending with Finalize.",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def check_contract_field_locations(cls, value):
+        """Report misplaced known settings before extra-field parsing silently loses them."""
+        if isinstance(value, dict):
+            misplaced = sorted(value.keys() & Contract.model_fields.keys())
+            if misplaced:
+                paths = ", ".join(f"{name} -> contract.{name}" for name in misplaced)
+                raise ValueError(f"Misplaced contract settings: {paths}. Put them inside contract.")
+        return value
 
 
 class ReviewDecision(PlanModel):

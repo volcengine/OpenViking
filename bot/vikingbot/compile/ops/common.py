@@ -177,14 +177,27 @@ async def transform(
     def validate(response):
         validate_input_refs(records, [i for draft in response.records for i in draft.inputs])
         if isinstance(response, CombineResponse):
-            if {i for draft in response.records for i in draft.inputs} != {
-                r.record_id for r in records
-            }:
-                raise InputReferenceError("Combine must retain every supplied input")
+            included = {i for draft in response.records for i in draft.inputs}
+            missing = {r.record_id for r in records} - included
+            if missing:
+                raise InputReferenceError(
+                    f"Combine must retain every supplied input; missing={sorted(missing)}"
+                )
             if any(not draft.content.strip() for draft in response.records):
                 raise ValueError("Combined evidence must not be blank")
             return
         for index, draft in enumerate(response.records):
+            if data.get("assignment_kind") == "source_records" and (
+                draft.ready_path is not None
+                or draft.ready_content is not None
+                or draft.ready_content_base64 is not None
+                or draft.ready_content_ref is not None
+                or draft.target_uri is not None
+            ):
+                raise ValueError(
+                    "Source extraction submits local facts in payload, not ready files or target pages; "
+                    "omit ready_* and target_uri. Later stages produce deliverables."
+                )
             allowed = {ref for r in records if r.record_id in draft.inputs for ref in r.source_refs}
             for span in draft.evidence_spans:
                 if span.source_range not in allowed:

@@ -10,7 +10,7 @@ from openviking.models.model_error import ModelErrorKind, model_error_kind
 from vikingbot.compile import file_ops
 from vikingbot.compile.models import has_directory_plan
 from vikingbot.compile.ops.common import payload
-from vikingbot.compile.pipeline_io import ModelCallError, ModelCallLimitError
+from vikingbot.compile.pipeline_io import ModelCallError, ModelCallLimitError, ModelOutputError
 from vikingbot.compile.renderer import validate_relative_file_path
 from vikingbot.compile.results import FileResponse, Group
 
@@ -92,7 +92,7 @@ async def run(runtime, sources, context):
             readers[read.name].execute = read_target
 
     async def validate(response):
-        """Check delivery structure, file bodies and revisions without validating input IDs."""
+        """Check delivery structure, file bodies, supporting IDs and revisions."""
         if response.needs_pipeline:
             if response.files:
                 raise ValueError("A pipeline request must not submit files")
@@ -117,7 +117,9 @@ async def run(runtime, sources, context):
         )
     except ModelCallError as exc:
         runtime.direct_output_format = None
-        if not isinstance(exc, ModelCallLimitError) and model_error_kind(exc) not in {
+        if not isinstance(exc, (ModelCallLimitError, ModelOutputError)) and model_error_kind(
+            exc
+        ) not in {
             ModelErrorKind.INPUT_TOO_LARGE,
             ModelErrorKind.TRANSIENT_NETWORK_ERROR,
         }:

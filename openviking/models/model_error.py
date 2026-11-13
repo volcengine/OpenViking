@@ -245,11 +245,18 @@ def _sdk_kind(error: BaseException) -> tuple[ModelErrorKind, str] | None:
             "ArkInternalServerError": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
             "ArkContentFilterFinishReasonError": ModelErrorKind.CONTENT_SAFETY,
         }
-        kind = (
-            _kind_from_code(error)
-            or class_kinds.get(name)
-            or _kind_from_status(_status_code(error))
-        )
+        kind = _kind_from_code(error)
+        if (
+            kind is None
+            and _status_code(error) == 400
+            and _normalized_code(_error_code(error)) == "INVALIDPARAMETER"
+        ):
+            message = _body(error).get("message")
+            if isinstance(message, str) and re.match(
+                r"Input exceeds the context limit \(\d+ tokens\)\.", message
+            ):
+                kind = ModelErrorKind.INPUT_TOO_LARGE
+        kind = kind or class_kinds.get(name) or _kind_from_status(_status_code(error))
         return kind or ModelErrorKind.UNKNOWN, provider
 
     if module.startswith("litellm"):

@@ -15,7 +15,12 @@ from openviking.models.model_error import ModelErrorKind, model_error_kind
 from vikingbot.compile import file_ops
 from vikingbot.compile.hashing import content_hash, digest
 from vikingbot.compile.ops import common
-from vikingbot.compile.pipeline_io import ModelCallError, bounded_jobs, retry_allowed
+from vikingbot.compile.pipeline_io import (
+    ModelCallError,
+    ModelOutputError,
+    bounded_jobs,
+    retry_allowed,
+)
 from vikingbot.compile.plan import Node, Transform
 from vikingbot.compile.results import CombineResponse, FileDraft, FileResponse, Group, Record
 
@@ -156,7 +161,7 @@ async def resolve_files(runtime: Pipeline, references: list[str]) -> list[str]:
                         agent=transform.execution == "agent",
                     )
                     validate(response)
-                except ValueError as exc:
+                except (ValueError, ModelOutputError) as exc:
                     if unavailable == sorted(
                         p for p, owner in reserved.items() if owner != path
                     ) or not retry_allowed(retries, str(exc)):
