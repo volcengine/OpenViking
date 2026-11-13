@@ -119,6 +119,14 @@
 - TOS 需要先上传页面依赖的资源，再上传 HTML；无扩展名页面需对应实际 HTML 对象。保留产品文档路径，避免创建遮蔽 `/ui/` 目录的 `/ui` 对象。
 - 部署入口与产物合并规则见 [Pages 工作流](../.github/workflows/_docs-deploy.yml)、[TOS 工作流](../.github/workflows/docs-tos.yml)。分支检查通过、正式站发布和 npm 发包是不同结果，交付时分别说明。
 
+## 发布日志
+
+- 文档站发布日志只展示当前包版本所属的 major，按 minor 分组，组内版本倒序。仅 minor 分组支持折叠，默认展开最新分组，同级一次展开一项且可全部收起；组内各版本内容直接垂直展开；完整历史保留在包 CHANGELOG 中。
+
+- npm 变更通过 Changesets 记录，每个 changeset 在同一文件内提供 `## en-US` 和 `## zh-CN` 两段非空文案，共用包名和版本升级类型；两种语言包含相同的变更、破坏性影响和迁移说明。
+- 提交前运行 `npm run check:release-notes`，CI 同时校验双语文案结构和文档站生成结果；具体格式与发布命令见 [React releases](./.changeset/README.md)。
+- `npm run version:react` 生成版本号、双语 CHANGELOG 和对应语言的文档站发布日志，发布前将这些物料一起提交审核。待发布文案修改 changeset，已归档文案修改 CHANGELOG 后重新生成，不直接编辑文档站生成页。
+
 ## 验证与交付
 
 - JS/TS 文件（含 JSX、TSX）每个文件最多 200 行，不计空行和纯注释行，由 lint 的 `max-lines` 规则检查。

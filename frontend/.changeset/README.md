@@ -2,10 +2,46 @@
 
 For changes that should ship to npm, run `npm run changeset` from `frontend/`.
 Select `@openviking/react`, choose patch, minor, or major, and describe the
-change for package consumers. Commit the generated Markdown file with the PR.
+change for package consumers. Before committing, edit the generated Markdown
+file to include both language sections in the same file:
 
-Changesets remain available for preparing a stable version and changelog with
-`npm run version:react`. Merging a PR never publishes a stable version.
+```md
+---
+'@openviking/react': patch
+---
+
+## en-US
+
+Fix file preview navigation when opening a resource URI.
+
+## zh-CN
+
+修复打开资源 URI 时文件预览的导航行为。
+```
+
+Both sections are required and must describe the same change, including any
+breaking changes and migration steps. Keep package names and the version bump
+in one frontmatter block. Do not create a separate changeset for each language.
+Empty changesets created with `npm run changeset -- --empty` do not need notes.
+
+Run `npm run check:release-notes` before committing. CI checks for missing,
+duplicate or empty language sections and out-of-date documentation pages.
+Reviewers check that the two descriptions match.
+
+Run `npm run version:react` to prepare a stable version. Changesets consumes the
+files, updates versions and writes both languages into
+`packages/react/CHANGELOG.md` using the configured
+[changelog formatter](https://github.com/changesets/changesets/blob/main/docs/modifying-changelog-format.md).
+The command then updates the lockfile and generates the Chinese and English
+release-note pages under `docs/docs/{zh,en}/guide/changelog.md`. Commit these
+release materials together for review before publishing. Merging a PR never
+publishes a stable version.
+
+`CHANGELOG.md` is the archive after changeset files are consumed. Keep its
+language markers when correcting a released note, then run
+`npm run sync:release-notes`. Edit pending notes in their changeset files;
+do not edit the generated documentation pages. The documentation shows only
+the selected language and current package major, grouped by minor in descending release order. Only minor groups are collapsible, with the newest group expanded by default. All release content within a group is displayed vertically. Older majors remain in the archive. Automatic beta builds are not listed.
 
 On the official repository, pushes to `main` that change
 `frontend/packages/react/src/**` or `frontend/packages/icons/**` automatically

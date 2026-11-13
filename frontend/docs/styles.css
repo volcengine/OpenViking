@@ -276,3 +276,43 @@ html:root {
 .rp-preview--internal__card > .rp-preview-operations {
   padding-right: 12px;
 }
+
+.rp-doc details.ov-release-notes__group {
+  margin-block: 24px;
+  padding: 0;
+  background: transparent;
+  border-block-start: 1px solid var(--rp-c-divider);
+}
+.ov-release-notes__group > summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-block: 16px;
+  color: var(--rp-c-text-1);
+  font-weight: 600;
+  line-height: 1.5;
+  list-style: none;
+  cursor: pointer;
+}
+.ov-release-notes__group > summary {
+  font-size: 1.25rem;
+}
+.ov-release-notes__group > summary::-webkit-details-marker {
+  display: none;
+}
+.ov-release-notes__group > summary::before {
+  content: '';
+  flex: none;
+  inline-size: 7px;
+  block-size: 7px;
+  border-inline-end: 1.5px solid currentColor;
+  border-block-end: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+}
+.ov-release-notes__group[open] > summary::before {
+  transform: rotate(45deg);
+}
+.ov-release-notes__group > summary:focus-visible {
+  outline: 2px solid var(--rp-c-brand);
+  outline-offset: 3px;
+}
