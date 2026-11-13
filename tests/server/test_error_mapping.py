@@ -14,6 +14,7 @@ from openviking.pyagfs.exceptions import (
     AGFSInternalError,
     AGFSIsADirectoryError,
     AGFSNotADirectoryError,
+    AGFSNotFoundError,
     AGFSNotSupportedError,
     AGFSPluginError,
     AGFSResourceExhaustedError,
@@ -21,7 +22,11 @@ from openviking.pyagfs.exceptions import (
 )
 from openviking.server.error_mapping import map_exception
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS
-from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+from openviking.storage.errors import (
+    InvalidPathLockRequestError,
+    LockAcquisitionError,
+    ResourceBusyError,
+)
 from openviking.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
 from openviking.utils.exceptions import AllCredentialsFailedError
 from openviking_cli.exceptions import (
@@ -136,6 +141,31 @@ def test_value_error_invalid_uri_maps_to_invalid_uri():
 
     assert isinstance(mapped, InvalidURIError)
     assert mapped.code == "INVALID_URI"
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_code"),
+    [
+        (ResourceBusyError("resource busy"), "CONFLICT"),
+        (LockAcquisitionError("lock acquisition failed"), "CONFLICT"),
+        (FileNotFoundError("missing file"), "NOT_FOUND"),
+        (AGFSNotFoundError("missing storage object"), "NOT_FOUND"),
+        (PermissionError("permission denied"), "PERMISSION_DENIED"),
+        (AGFSHTTPError("missing object", 404), "NOT_FOUND"),
+        (InvalidPathLockRequestError("invalid lock scope"), "INVALID_ARGUMENT"),
+        (ValueError("invalid viking URI: missing path"), "INVALID_URI"),
+    ],
+)
+def test_domain_mapping_precedes_model_context(error, expected_code):
+    error.__context__ = ModelError(
+        ModelErrorKind.AUTHENTICATION_ERROR, "invalid model key", status_code=401
+    )
+
+    mapped = map_exception(error, resource="viking://resources/docs")
+
+    assert mapped.code == expected_code
+    if expected_code == "CONFLICT":
+        assert mapped.details["retryable"] is True
 
 
 def test_wrapped_upstream_401_maps_to_unauthenticated():

@@ -538,10 +538,6 @@ def map_exception(
 ) -> OpenVikingError | None:
     if isinstance(exc, OpenVikingError):
         return exc
-    # A provider boundary that attached ModelError owns the classification.
-    # UNKNOWN must stop here instead of entering generic text heuristics.
-    if any(isinstance(item, ModelError) for item in model_exception_chain(exc)):
-        return _map_upstream_api_error(exc)
     if isinstance(exc, ResourceBusyError):
         details: dict[str, Any] = {
             "resource": exc.uri or resource,
@@ -576,6 +572,12 @@ def map_exception(
         message = str(exc)
         if is_invalid_uri_error(exc):
             return InvalidURIError(resource or message, message)
+        # Generic wrappers may carry a provider error. Concrete domain errors
+        # and ValueError subclasses keep the existing mappings above/below.
+        if type(exc) is ValueError and any(
+            isinstance(item, ModelError) for item in model_exception_chain(exc)
+        ):
+            return _map_upstream_api_error(exc)
         return InvalidArgumentError(message, details={"resource": resource} if resource else None)
     if isinstance(exc, (AGFSConnectionError, AGFSTimeoutError)):
         return UnavailableError("storage backend", reason=str(exc))
