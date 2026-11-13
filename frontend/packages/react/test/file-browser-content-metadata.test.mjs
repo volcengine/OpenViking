@@ -38,6 +38,7 @@ for (const kinds of [undefined, []]) {
     try {
       assert.equal(f.tab.source.content, body);
       assert.equal(await f.tab.editing.loadContent(), body);
+      assert.equal(f.tab.editing.createVersion, undefined);
       assert.ok(
         f.history.every((value) => !value?.includes('CONFLICTS_CONTENT')),
       );

@@ -201,12 +201,13 @@ import '@openviking/react/components/file-preview/style.css';
 
 ### FilePreviewEditing
 
-| 参数        | 说明                                                                                                                  | 类型                                                          | 默认值 |
-| ----------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- | ------ |
-| save        | 保存草稿，抛错或 reject 时保留草稿并显示保存失败的提示                                                                | `(value: string) => Promise<void>`                            | 必填   |
-| loadContent | 进入编辑时读取完整文本，返回 `undefined` 放弃本次编辑；省略时使用 `content` 或 `file` 的文本，只提供 `url` 时必须提供 | `(source: FilePreviewSource) => Promise<string \| undefined>` | -      |
-| onSave      | 保存成功后触发，参数为已保存的文本                                                                                    | `(value: string) => void`                                     | -      |
-| onCancel    | 取消编辑，或切换页签、层级而丢弃草稿后触发，参数为丢弃的文本；保存成功时不触发                                        | `(value: string) => void`                                     | -      |
+| 参数          | 说明                                                                                                                  | 类型                                                          | 默认值 |
+| ------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- | ------ |
+| save          | 保存草稿，抛错或 reject 时保留草稿并显示保存失败的提示                                                                | `(value: string) => Promise<void>`                            | 必填   |
+| createVersion | 提供后，保存前弹出版本备注。正文写入成功后调用；失败或返回 false 时提示正文已保存、未创建版本，并照常触发 onSave      | `(note: string) => Promise<boolean>`                          | -      |
+| loadContent   | 进入编辑时读取完整文本，返回 `undefined` 放弃本次编辑；省略时使用 `content` 或 `file` 的文本，只提供 `url` 时必须提供 | `(source: FilePreviewSource) => Promise<string \| undefined>` | -      |
+| onSave        | 保存成功后触发，参数为已保存的文本                                                                                    | `(value: string) => void`                                     | -      |
+| onCancel      | 取消编辑，或切换页签、层级而丢弃草稿后触发，参数为丢弃的文本；保存成功时不触发                                        | `(value: string) => void`                                     | -      |
 
 ### FilePreviewAction
 
@@ -276,34 +277,40 @@ import '@openviking/react/components/file-preview/style.css';
 
 所有字段都是可选的 `string`，省略的字段使用当前语言的默认文案。
 
-| 参数             | 说明                                                                   | 类型     | 默认值                 |
-| ---------------- | ---------------------------------------------------------------------- | -------- | ---------------------- |
-| previewImage     | 放大图片按钮的无障碍名称，后接文件名                                   | `string` | `'放大图片'`           |
-| closePreview     | 放大图片弹窗里关闭按钮的文字                                           | `string` | `'关闭预览'`           |
-| showHiddenPath   | 面包屑里折叠层级的「…」按钮的无障碍名称                                | `string` | `'显示隐藏的路径层级'` |
-| copyPath         | 复制路径按钮的提示与无障碍名称                                         | `string` | `'复制路径'`           |
-| copied           | 路径复制成功的反馈                                                     | `string` | `'已复制'`             |
-| copyFailed       | 路径复制失败的反馈                                                     | `string` | `'复制失败'`           |
-| moreActions      | 多个操作收起后的「…」按钮的提示与无障碍名称                            | `string` | `'更多操作'`           |
-| actionFailed     | 注入的操作失败时的提示，后接错误信息                                   | `string` | `'操作失败'`           |
-| previewMode      | 视图切换里「预览」的文字                                               | `string` | `'预览'`               |
-| sourceMode       | 视图切换里「源码」的文字                                               | `string` | `'源码'`               |
-| viewSwitch       | 视图切换按钮组的无障碍名称                                             | `string` | `'显示模式'`           |
-| edit             | 编辑按钮的提示与无障碍名称                                             | `string` | `'编辑'`               |
-| editFile         | 组件不渲染这条文案，设置它没有效果                                     | `string` | `'编辑文件'`           |
-| save             | 编辑时保存按钮的文字                                                   | `string` | `'保存编辑'`           |
-| editorLoadFailed | 编辑器加载失败时的提示                                                 | `string` | `'编辑器加载失败'`     |
-| highlightFailed  | 语法高亮加载失败时的提示                                               | `string` | `'语法高亮加载失败'`   |
-| editor           | 编辑区文本框的无障碍名称                                               | `string` | `'编辑正文'`           |
-| leaveEditing     | 编辑时取消按钮的文字，读取失败后退出编辑的按钮也使用它                 | `string` | `'取消编辑'`           |
-| retry            | 重试按钮的文字                                                         | `string` | `'重试'`               |
-| loadFailed       | 读取文件失败的提示，进入编辑时读取失败也使用它                         | `string` | `'文件加载失败'`       |
-| saveFailed       | 保存失败的提示                                                         | `string` | `'保存失败'`           |
-| unsupported      | 没有可用来源时的提示，格式不受支持的提示由 FileViewer 按 `locale` 显示 | `string` | `'不支持预览此格式'`   |
-| loading          | 加载提示                                                               | `string` | `'加载中…'`            |
-| fileEmpty        | `content` 为空字符串时的提示                                           | `string` | `'该文件为空'`         |
-| noContent        | 组件不渲染这条文案，设置它没有效果                                     | `string` | `'暂无可显示内容'`     |
-| truncated        | `source.truncated` 为 `true` 时的提示                                  | `string` | `'仅显示部分内容'`     |
+| 参数                   | 说明                                                                   | 类型     | 默认值                         |
+| ---------------------- | ---------------------------------------------------------------------- | -------- | ------------------------------ |
+| previewImage           | 放大图片按钮的无障碍名称，后接文件名                                   | `string` | `'放大图片'`                   |
+| closePreview           | 放大图片弹窗里关闭按钮的文字                                           | `string` | `'关闭预览'`                   |
+| showHiddenPath         | 面包屑里折叠层级的「…」按钮的无障碍名称                                | `string` | `'显示隐藏的路径层级'`         |
+| copyPath               | 复制路径按钮的提示与无障碍名称                                         | `string` | `'复制路径'`                   |
+| copied                 | 路径复制成功的反馈                                                     | `string` | `'已复制'`                     |
+| copyFailed             | 路径复制失败的反馈                                                     | `string` | `'复制失败'`                   |
+| moreActions            | 多个操作收起后的「…」按钮的提示与无障碍名称                            | `string` | `'更多操作'`                   |
+| actionFailed           | 注入的操作失败时的提示，后接错误信息                                   | `string` | `'操作失败'`                   |
+| previewMode            | 视图切换里「预览」的文字                                               | `string` | `'预览'`                       |
+| sourceMode             | 视图切换里「源码」的文字                                               | `string` | `'源码'`                       |
+| viewSwitch             | 视图切换按钮组的无障碍名称                                             | `string` | `'显示模式'`                   |
+| edit                   | 编辑按钮的提示与无障碍名称                                             | `string` | `'编辑'`                       |
+| editFile               | 组件不渲染这条文案，设置它没有效果                                     | `string` | `'编辑文件'`                   |
+| save                   | 编辑时保存按钮的文字                                                   | `string` | `'保存编辑'`                   |
+| editorLoadFailed       | 编辑器加载失败时的提示                                                 | `string` | `'编辑器加载失败'`             |
+| highlightFailed        | 语法高亮加载失败时的提示                                               | `string` | `'语法高亮加载失败'`           |
+| editor                 | 编辑区文本框的无障碍名称                                               | `string` | `'编辑正文'`                   |
+| leaveEditing           | 编辑时取消按钮的文字，读取失败后退出编辑的按钮也使用它                 | `string` | `'取消编辑'`                   |
+| retry                  | 重试按钮的文字                                                         | `string` | `'重试'`                       |
+| loadFailed             | 读取文件失败的提示，进入编辑时读取失败也使用它                         | `string` | `'文件加载失败'`               |
+| saveFailed             | 保存失败的提示                                                         | `string` | `'保存失败'`                   |
+| versionNoteTitle       | 版本备注弹窗标题                                                       | `string` | `'填写版本备注'`               |
+| versionNoteLabel       | 版本备注输入框标签                                                     | `string` | `'描述'`                       |
+| versionNotePlaceholder | 版本备注输入框占位文案                                                 | `string` | `'给当前版本写句说明'`         |
+| versionNoteCancel      | 关闭备注弹窗并保留草稿                                                 | `string` | `'取消'`                       |
+| versionNoteConfirm     | 确认版本备注                                                           | `string` | `'确定'`                       |
+| versionNotCreated      | 正文已保存但未创建版本时的提示                                         | `string` | `'正文已保存，未创建新版本。'` |
+| unsupported            | 没有可用来源时的提示，格式不受支持的提示由 FileViewer 按 `locale` 显示 | `string` | `'不支持预览此格式'`           |
+| loading                | 加载提示                                                               | `string` | `'加载中…'`                    |
+| fileEmpty              | `content` 为空字符串时的提示                                           | `string` | `'该文件为空'`                 |
+| noContent              | 组件不渲染这条文案，设置它没有效果                                     | `string` | `'暂无可显示内容'`             |
+| truncated              | `source.truncated` 为 `true` 时的提示                                  | `string` | `'仅显示部分内容'`             |
 
 ### FilePreviewHandle
 

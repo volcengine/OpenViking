@@ -403,6 +403,12 @@ export interface FilePreviewEditing {
    */
   save: (value: string) => Promise<void>;
   /**
+   * 提供时保存前询问版本备注，正文写入后再调用。返回 false 表示未创建版本。
+   * When provided, prompt for a note and call after saving the body.
+   * Return false if no new version was created.
+   */
+  createVersion?: (note: string) => Promise<boolean>;
+  /**
    * 保存成功后触发，参数为已保存的文本；失败时不触发。
    * Called after saving succeeds, with the saved text; not called on failure.
    */
@@ -567,6 +573,12 @@ export interface FilePreviewLabels {
   loadFailed?: string;
   /** 保存失败时的提示。Message shown when saving failed. */
   saveFailed?: string;
+  versionNoteTitle?: string;
+  versionNoteLabel?: string;
+  versionNotePlaceholder?: string;
+  versionNoteCancel?: string;
+  versionNoteConfirm?: string;
+  versionNotCreated?: string;
   /** 无法预览该格式时的提示。Message shown when the format cannot be previewed. */
   unsupported?: string;
   /** 取回正文时的加载提示。Message shown while the text is being fetched. */

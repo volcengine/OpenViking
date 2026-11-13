@@ -4,12 +4,13 @@ import type {
   ViewerHandle,
   ViewerViewModeOption,
 } from '@ark-design/ui/file-viewer/core';
-import type { HTMLAttributes } from 'react';
+import { useRef, type HTMLAttributes } from 'react';
 
 import { FilePreviewBody } from './file-preview-body.js';
 import { FilePreviewDirectoryBody } from './file-preview-directory.js';
 import { FilePreviewHeader } from './file-preview-header.js';
 import { TruncatedNotice } from './file-preview-state.js';
+import { FilePreviewVersionNote } from './file-preview-version-note.js';
 import type { useFilePreviewActions } from './use-file-preview-actions.js';
 import type { FilePreviewActions, FilePreviewProps } from './types.js';
 import type { useFilePreviewEditing } from './use-file-preview-editing.js';
@@ -80,6 +81,7 @@ export function FilePreviewPanels({
   linkClickHandler,
   activeTab,
 }: FilePreviewPanelsProps) {
+  const panelRef = useRef<HTMLDivElement>(null);
   if (contentTab) {
     // 内容页签整块交给宿主：组件只画页签行，正文不套任何容器，也没有标题行
     // ——组件不知道该在那里显示什么，套一层只会限制宿主的排版。
@@ -123,7 +125,7 @@ export function FilePreviewPanels({
   if (!fileTab) return null;
 
   return (
-    <div {...panelProps} className={panelClass}>
+    <div {...panelProps} className={panelClass} ref={panelRef}>
       <FilePreviewHeader
         levels={fileTab.levels}
         levelKey={levelKey}
@@ -156,8 +158,25 @@ export function FilePreviewPanels({
         />
       </div>
       {fileTab.source.truncated ? <TruncatedNotice text={text} /> : null}
+      {editing.versionNotCreated ? (
+        <p
+          className="ov-file-preview__notice ov-file-preview__notice--version"
+          role="status"
+        >
+          {text.versionNotCreated}
+        </p>
+      ) : null}
       {fileTab.slots?.footer ? (
         <div className="ov-file-preview__footer">{fileTab.slots.footer}</div>
+      ) : null}
+      {editing.versionNoteOpen && fileTab.editing ? (
+        <FilePreviewVersionNote
+          locale={locale}
+          text={text}
+          triggerRef={panelRef}
+          onClose={() => editing.finishVersionNote()}
+          onConfirm={editing.finishVersionNote}
+        />
       ) : null}
     </div>
   );

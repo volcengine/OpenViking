@@ -2,7 +2,11 @@ import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type { FilePreviewEditing } from '../../components/file-preview/index.js';
 import { isExperienceFile } from './experience-data.js';
-import { isSummaryUri, isSystemUri } from './preview-policy.js';
+import {
+  isSummaryUri,
+  isSystemUri,
+  supportsFileHistory,
+} from './preview-policy.js';
 import { readFileContent } from './fs-read-content.js';
 
 const EDITABLE_TEXT = /\.(?:md|json|jsonl|txt|yaml|yml)$/i;
@@ -24,7 +28,20 @@ export function createFileEditing(
   )
     return undefined;
   let wiki = isWiki;
+  const canSnapshot = supportsFileHistory(uri);
+  const createVersion = async (note: string) => {
+    const result = await client.request<{ result: 'created' | 'noop' }>({
+      method: 'POST',
+      path: OV_PATHS.snapshotCommit,
+      body: { message: note || `Update ${name}`, paths: [uri] },
+      options,
+    });
+    return result?.result === 'created';
+  };
   return {
+    get createVersion() {
+      return !wiki && canSnapshot ? createVersion : undefined;
+    },
     loadContent: async () => {
       const result = await readFileContent(client, uri, options, -1, wiki);
       wiki = result.wiki;

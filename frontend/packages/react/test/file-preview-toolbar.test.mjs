@@ -75,13 +75,17 @@ test('standalone preview offers editing only on the active editable level', asyn
   }
 });
 
-test('FileBrowser loads the full file, writes it, and reloads the displayed body', async () => {
+test('FileBrowser confirms a version note before writing and snapshots only the edited file', async () => {
   const uri = 'viking://resources/guide.md';
   let fullReads = 0;
   const requests = recordingFetch(({ path, body: request }) => {
     if (path.endsWith('/fs/ls')) return ok([{ uri, isDir: false }]);
     if (path.endsWith('/fs/stat')) return ok({ uri, isDir: false });
     if (path.endsWith('/content/read')) return ok('');
+    if (path.endsWith('/snapshot/commit')) {
+      assert.deepEqual(request, { message: 'Update guide', paths: [uri] });
+      return ok({ result: 'created', commit_oid: 'commit-1' });
+    }
     if (path.endsWith('/content/write')) {
       assert.equal(request.uri, uri);
       assert.equal(request.mode, 'replace');
@@ -121,8 +125,39 @@ test('FileBrowser loads the full file, writes it, and reloads the displayed body
     assert.equal(fullReads, 1);
     await setEditor(view.container.querySelector('.cm-content'), '# Updated');
     await click(view, 'Save');
-    assert.equal(document.querySelector('.ov-file-preview-version-note'), null);
-    assert.equal(requests.countOf('/api/v1/content/write'), 1);
+    const dialog = () =>
+      document.querySelector('.ov-file-preview-version-note [role="dialog"]');
+    assert.ok(dialog());
+    assert.equal(requests.countOf('/api/v1/content/write'), 0);
+    await act(async () =>
+      [...dialog().querySelectorAll('button')]
+        .find((node) => node.textContent === 'Cancel')
+        .click(),
+    );
+    assert.equal(dialog(), null);
+    assert.equal(
+      view.container.querySelector('.cm-content')?.textContent,
+      '# Updated',
+    );
+
+    await click(view, 'Save');
+    const note = dialog().querySelector('textarea');
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        window.HTMLTextAreaElement.prototype,
+        'value',
+      ).set.call(note, ' Update guide ');
+      note.dispatchEvent(new window.Event('input', { bubbles: true }));
+    });
+    await act(async () => dialog().querySelector('[type="submit"]').click());
+    await settle();
+    assert.equal(dialog(), null);
+    assert.deepEqual(
+      requests.calls
+        .filter(({ path }) => /\/(write|commit)$/.test(path))
+        .map(({ path }) => path),
+      ['/api/v1/content/write', '/api/v1/snapshot/commit'],
+    );
     assert.equal(requests.countOf('/api/v1/content/read'), reads + 1);
     await view.render(render(true));
     assert.equal(button(view, 'Edit'), undefined);

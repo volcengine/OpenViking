@@ -201,12 +201,13 @@ The component calls these methods to carry out an operation, and fires the match
 
 ### FilePreviewEditing
 
-| Property    | Description                                                                                                                                                                 | Type                                                          | Default  |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- | -------- |
-| save        | Saves the draft; a throw or rejection keeps the draft and shows the save-failed message                                                                                     | `(value: string) => Promise<void>`                            | Required |
-| loadContent | Reads the full text when editing starts; returning `undefined` abandons the edit. Without it, text from `content` or `file` is used, and a `url`-only source must supply it | `(source: FilePreviewSource) => Promise<string \| undefined>` | -        |
-| onSave      | Called after saving succeeds, with the saved text                                                                                                                           | `(value: string) => void`                                     | -        |
-| onCancel    | Called after editing is cancelled, or a tab or level switch discards the draft, with the discarded text; not called after a successful save                                 | `(value: string) => void`                                     | -        |
+| Property      | Description                                                                                                                                                                 | Type                                                          | Default  |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- | -------- |
+| save          | Saves the draft; a throw or rejection keeps the draft and shows the save-failed message                                                                                     | `(value: string) => Promise<void>`                            | Required |
+| createVersion | When provided, Save prompts for a version note. Called after the body is saved. Rejection or false shows a partial-success message and still calls onSave                   | `(note: string) => Promise<boolean>`                          | -        |
+| loadContent   | Reads the full text when editing starts; returning `undefined` abandons the edit. Without it, text from `content` or `file` is used, and a `url`-only source must supply it | `(source: FilePreviewSource) => Promise<string \| undefined>` | -        |
+| onSave        | Called after saving succeeds, with the saved text                                                                                                                           | `(value: string) => void`                                     | -        |
+| onCancel      | Called after editing is cancelled, or a tab or level switch discards the draft, with the discarded text; not called after a successful save                                 | `(value: string) => void`                                     | -        |
 
 ### FilePreviewAction
 
@@ -276,34 +277,40 @@ The context the component passes to an `actions` function and a `slots.actions` 
 
 Every field is an optional `string`; omitted fields use the default text of the current language.
 
-| Property         | Description                                                                                                          | Type     | Default                                      |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------- | -------- | -------------------------------------------- |
-| previewImage     | Accessible name of the enlarge-image button, followed by the file name                                               | `string` | `'Enlarge image'`                            |
-| closePreview     | Text of the close button in the enlarged-image dialog                                                                | `string` | `'Close preview'`                            |
-| showHiddenPath   | Accessible name of the "…" button that holds the collapsed breadcrumb levels                                         | `string` | `'Show hidden path levels'`                  |
-| copyPath         | Hint and accessible name of the copy-path button                                                                     | `string` | `'Copy path'`                                |
-| copied           | Feedback after the path is copied                                                                                    | `string` | `'Copied'`                                   |
-| copyFailed       | Feedback when copying the path fails                                                                                 | `string` | `'Could not copy'`                           |
-| moreActions      | Hint and accessible name of the "…" button that holds collapsed commands                                             | `string` | `'More actions'`                             |
-| actionFailed     | Message when an injected command fails, followed by the error message                                                | `string` | `'The action failed'`                        |
-| previewMode      | Text of "Preview" in the view switch                                                                                 | `string` | `'Preview'`                                  |
-| sourceMode       | Text of "Source" in the view switch                                                                                  | `string` | `'Source'`                                   |
-| viewSwitch       | Accessible name of the view switch group                                                                             | `string` | `'View mode'`                                |
-| edit             | Hint and accessible name of the edit button                                                                          | `string` | `'Edit'`                                     |
-| editFile         | The component never renders this text, so setting it has no effect                                                   | `string` | `'Edit file'`                                |
-| save             | Text of the Save button while editing                                                                                | `string` | `'Save'`                                     |
-| editorLoadFailed | Message shown when the editor fails to load                                                                          | `string` | `'Failed to load the editor'`                |
-| highlightFailed  | Message shown when syntax highlighting fails to load                                                                 | `string` | `'Failed to load syntax highlighting'`       |
-| editor           | Accessible name of the editing text box                                                                              | `string` | `'Edit content'`                             |
-| leaveEditing     | Text of the Cancel button while editing; also used by the button that leaves editing after a failed read             | `string` | `'Cancel'`                                   |
-| retry            | Text of the Retry button                                                                                             | `string` | `'Retry'`                                    |
-| loadFailed       | Message when reading the file fails; also used when reading for edit fails                                           | `string` | `'Failed to load the file'`                  |
-| saveFailed       | Message when saving fails                                                                                            | `string` | `'Failed to save'`                           |
-| unsupported      | Message when there is no usable source; the unsupported-format message comes from FileViewer in the current `locale` | `string` | `'Preview is not supported for this format'` |
-| loading          | Loading message                                                                                                      | `string` | `'Loading…'`                                 |
-| fileEmpty        | Message when `content` is an empty string                                                                            | `string` | `'This file is empty'`                       |
-| noContent        | The component never renders this text, so setting it has no effect                                                   | `string` | `'No content to show'`                       |
-| truncated        | Message when `source.truncated` is `true`                                                                            | `string` | `'Only part of the content is shown'`        |
+| Property               | Description                                                                                                          | Type     | Default                                                    |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------- | -------- | ---------------------------------------------------------- |
+| previewImage           | Accessible name of the enlarge-image button, followed by the file name                                               | `string` | `'Enlarge image'`                                          |
+| closePreview           | Text of the close button in the enlarged-image dialog                                                                | `string` | `'Close preview'`                                          |
+| showHiddenPath         | Accessible name of the "…" button that holds the collapsed breadcrumb levels                                         | `string` | `'Show hidden path levels'`                                |
+| copyPath               | Hint and accessible name of the copy-path button                                                                     | `string` | `'Copy path'`                                              |
+| copied                 | Feedback after the path is copied                                                                                    | `string` | `'Copied'`                                                 |
+| copyFailed             | Feedback when copying the path fails                                                                                 | `string` | `'Could not copy'`                                         |
+| moreActions            | Hint and accessible name of the "…" button that holds collapsed commands                                             | `string` | `'More actions'`                                           |
+| actionFailed           | Message when an injected command fails, followed by the error message                                                | `string` | `'The action failed'`                                      |
+| previewMode            | Text of "Preview" in the view switch                                                                                 | `string` | `'Preview'`                                                |
+| sourceMode             | Text of "Source" in the view switch                                                                                  | `string` | `'Source'`                                                 |
+| viewSwitch             | Accessible name of the view switch group                                                                             | `string` | `'View mode'`                                              |
+| edit                   | Hint and accessible name of the edit button                                                                          | `string` | `'Edit'`                                                   |
+| editFile               | The component never renders this text, so setting it has no effect                                                   | `string` | `'Edit file'`                                              |
+| save                   | Text of the Save button while editing                                                                                | `string` | `'Save'`                                                   |
+| editorLoadFailed       | Message shown when the editor fails to load                                                                          | `string` | `'Failed to load the editor'`                              |
+| highlightFailed        | Message shown when syntax highlighting fails to load                                                                 | `string` | `'Failed to load syntax highlighting'`                     |
+| editor                 | Accessible name of the editing text box                                                                              | `string` | `'Edit content'`                                           |
+| leaveEditing           | Text of the Cancel button while editing; also used by the button that leaves editing after a failed read             | `string` | `'Cancel'`                                                 |
+| retry                  | Text of the Retry button                                                                                             | `string` | `'Retry'`                                                  |
+| loadFailed             | Message when reading the file fails; also used when reading for edit fails                                           | `string` | `'Failed to load the file'`                                |
+| saveFailed             | Message when saving fails                                                                                            | `string` | `'Failed to save'`                                         |
+| versionNoteTitle       | Version note dialog title                                                                                            | `string` | `'Add a version note'`                                     |
+| versionNoteLabel       | Version note field label                                                                                             | `string` | `'Description'`                                            |
+| versionNotePlaceholder | Version note placeholder                                                                                             | `string` | `'Describe this version'`                                  |
+| versionNoteCancel      | Cancels version confirmation and keeps the draft                                                                     | `string` | `'Cancel'`                                                 |
+| versionNoteConfirm     | Confirms the version note                                                                                            | `string` | `'Confirm'`                                                |
+| versionNotCreated      | Shown when the body was saved but no version was created                                                             | `string` | `'The file was saved, but a new version was not created.'` |
+| unsupported            | Message when there is no usable source; the unsupported-format message comes from FileViewer in the current `locale` | `string` | `'Preview is not supported for this format'`               |
+| loading                | Loading message                                                                                                      | `string` | `'Loading…'`                                               |
+| fileEmpty              | Message when `content` is an empty string                                                                            | `string` | `'This file is empty'`                                     |
+| noContent              | The component never renders this text, so setting it has no effect                                                   | `string` | `'No content to show'`                                     |
+| truncated              | Message when `source.truncated` is `true`                                                                            | `string` | `'Only part of the content is shown'`                      |
 
 ### FilePreviewHandle
 
