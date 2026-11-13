@@ -81,6 +81,13 @@ function ExperienceDashboardContent({
   // Only the directory view and the Test tab page by number; Impact's trajectories
   // page by cursor and use load-more, matching the console.
   const paged = directory || tab === 'test';
+  // 有总数时页数由总数换算，这里不传；没有总数时以「当前页之后还有没有下一页」
+  // 兜底。两种情况取值不同（一个是要传的数、一个是不传），不是同一种兜底，因此
+  // 保留三元而不是 `??`。
+  //
+  // With a total the page count comes from it, so nothing is passed here; without one
+  // the "there is a next page" flag bounds it. The two branches mean different things —
+  // a value versus no value — so this stays a ternary rather than `??`.
   const pageCount =
     data.total === undefined ? page + (hasMore ? 2 : 1) : undefined;
   // 目录骨架的占位行数：知道总数时按当前页还剩多少行算，最后一页不满时骨架不会
@@ -120,6 +127,9 @@ function ExperienceDashboardContent({
         <div className="ov-experience-dashboard__body">
           <h2 className="ov-experience-dashboard__list-title">
             {t.allExperiences}
+            {/* 不写成 `data.total && …`：总数可能是 0，而 0 要显示成「· 0」。
+             *
+             * Not `data.total && …`: the total may be 0, and 0 must read as "· 0". */}
             {data.total === undefined ? '' : ` · ${data.total}`}
           </h2>
           {data.experiences?.length ? (

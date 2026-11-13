@@ -32,6 +32,10 @@
 - 一词一义：`entry` 只指文件和目录条目；按钮和入口称 `action`，例如 `FileBrowserActionBar`。
 - 私有文件按职责命名：新增文件写 `labels.ts`、`types.ts`，不重复目录名；单个目录超过 20 个文件时，按职责拆子目录。
 
+## 代码写法
+
+- 优先使用较新的语言特性，用声明式写法代替手写分支：可选值兜底用 `??`（`data.total ?? pageSize`），可选链用 `?.`（`item?.name`），不用 `x === undefined ? a : b` 或 `x || fallback` 表达同一件事。
+
 ## 样式与交互
 
 - 库样式局部化，类名使用 `ov-` 前缀加 BEM 命名（块 `.ov-file-tree`，元素 `.ov-file-tree__row`，修饰 `.ov-file-preview__button--primary`），主题变量使用 `--ov-ui-` 前缀。消费者无需额外扫描库源码生成 Tailwind CSS，也不承担库的全局 reset；库样式不修改应用的 `html`、`body`、`:root` 或 `.dark`。
