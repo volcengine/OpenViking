@@ -6,8 +6,6 @@
 
 拉取并汇总了 **24 组已完成工作流记录：11 组 PR Checks attempt、11 组 API/CLI 工作流、2 组 main 安全扫描工作流**，其中包含任务跳过及提前失败的记录。成功执行的同类任务用于耗时比较，失败或跳过任务不参与性能范围计算。另引用此前已取得的 Intel 单任务重跑结果。
 
-下载的逐工作流、逐 job、逐 step 数据见 [ci-pr-timing-data.csv](ci-pr-timing-data.csv)，共 2,544 条数据记录，另有一行表头。
-
 ## 主要结论
 
 1. **最近其他 PR 的约 22–24 分钟 PR Checks，主要是 Linux x86_64 wheel 的执行时间。它们跳过了 macOS、Windows 和 Linux ARM，无法直接与我们的完整五平台 CI 比较。**
