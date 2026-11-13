@@ -247,7 +247,8 @@ export const sections: DocSection[] = [
         p('guides/13-multi-write-storage'),
         p('guides/14-ragfs-cache'),
         p('guides/16-cuvs'),
-        p('guides/25-pgvector')
+        p('guides/25-pgvector'),
+        p('guides/26-pgvector-directory-filtering')
       ])
     ]
   },

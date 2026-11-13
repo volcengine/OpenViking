@@ -101,6 +101,13 @@ Sparse term 以 JSONB 和倒排表存储。Sparse-only 只召回有正向 term o
 的记录；hybrid 合并有限 dense/sparse 候选，在候选并集中补齐分数后排序，
 不保证全局融合 TopK。`sparse_weight` 与 embedding 配置仍沿用既有语义。
 
+## 目录过滤调优
+
+大规模 collection 的归一化 URI 范围过滤可评估租户与路径的 B-tree
+复合表达式索引。索引 SQL、level/depth 语义、百万行实测和部署边界见
+[pgvector 目录过滤索引优化](26-pgvector-directory-filtering.md)。
+该索引目前需要手工评估和部署，后端不会自动创建。
+
 ## 数据与部署边界
 
 批量 upsert 和 sparse 倒排更新在同一事务中完成，失败时整批回滚。

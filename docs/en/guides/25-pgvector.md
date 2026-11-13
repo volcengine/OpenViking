@@ -111,6 +111,15 @@ and computes complete scores within that union. It does not guarantee global
 fused TopK. `sparse_weight` and embedding configuration retain their usual
 meaning.
 
+## Directory filter tuning
+
+For normalized URI scopes on large collections, evaluate a composite B-tree
+expression index over tenant and path. See
+[pgvector directory filter indexes](26-pgvector-directory-filtering.md)
+for SQL, level/depth semantics, million-row results and rollout boundaries.
+This index requires manual evaluation and deployment; the backend does not
+create it automatically.
+
 ## Data and deployment boundaries
 
 Upsert batches are transactional, including sparse postings; a failed batch
