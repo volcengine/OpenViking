@@ -142,12 +142,12 @@ import '@openviking/react/modules/file-browser/style.css';
 
 `acl` 传入对象时的配置，全部可选；传入 `true` 等同于不设置任何选项。
 
-| 参数              | 说明                                                                                                             | 类型                                                                                                                                          | 默认值   |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| readOnly          | 禁止修改授权，仍可查看                                                                                           | `boolean`                                                                                                                                     | `false`  |
-| resolvePermission | 返回当前用户在资源上的有效权限，未知时返回 `undefined`；省略时读取 `fs/stat` 的 `permission`，缺失时探测管理权限 | `(uri: string, context: FileBrowserAclContext) => Promise<FileBrowserAclLevel \| undefined>`                                                  | 内置实现 |
-| listPrincipals    | 返回可添加的 User 或 Group，`page` 从 1 开始；省略时调用账号的用户和用户组接口，不读取凭证                       | `(query: { type: 'user' \| 'group'; keyword: string; page: number }, context: FileBrowserAclContext) => Promise<FileBrowserAclPrincipalPage>` | 内置实现 |
-| onChange          | 授权保存成功后触发，保存失败时不触发；回调抛出的错误不影响保存结果                                               | `(report: FileBrowserAclReport) => void`                                                                                                      | -        |
+| 参数              | 说明                                                                                                         | 类型                                                                                                                                          | 默认值   |
+| ----------------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| readOnly          | 禁止修改授权，仍可查看                                                                                       | `boolean`                                                                                                                                     | `false`  |
+| resolvePermission | 返回当前用户在资源上的有效权限，未知时返回 `undefined`；省略时读取 `fs/stat` 的 `access`，缺失时探测管理权限 | `(uri: string, context: FileBrowserAclContext) => Promise<FileBrowserAclLevel \| undefined>`                                                  | 内置实现 |
+| listPrincipals    | 返回可添加的 User 或 Group，`page` 从 1 开始；省略时调用账号的用户和用户组接口，不读取凭证                   | `(query: { type: 'user' \| 'group'; keyword: string; page: number }, context: FileBrowserAclContext) => Promise<FileBrowserAclPrincipalPage>` | 内置实现 |
+| onChange          | 授权保存成功后触发，保存失败时不触发；回调抛出的错误不影响保存结果                                           | `(report: FileBrowserAclReport) => void`                                                                                                      | -        |
 
 ### FileBrowserAclContext
 
@@ -443,7 +443,7 @@ await browserRef.current?.openResource(resultUri, { reveal: true });
 ### 权限（ACL）
 
 - `acl` 只作用于 `viking://resources/` 下的非根节点；其他位置不显示权限标签，也不受 ACL 限制。
-- 有效权限先读 `GET /api/v1/fs/stat` 返回的 `permission`；没有该字段时调用 `GET /api/v1/acl` 探测，成功视为 `manage`，403 视为未知。
+- 有效权限先读 `GET /api/v1/fs/stat` 返回的 `access`；没有该字段时调用 `GET /api/v1/acl` 探测，成功视为 `manage`，403 视为未知。
 - 权限未知时不显示权限标签，编辑和删除不可用；权限读取失败时标题旁显示「重试」。
 - 权限标签显示有效权限，`manage` 的标签详情里有「管理权限」按钮，点击打开授权弹窗。
 - `read` 不能编辑，`write` 可以编辑和导入，`manage` 还可以删除和管理授权。
@@ -453,7 +453,7 @@ await browserRef.current?.openResource(resultUri, { reveal: true });
 - 保存期间不能重复提交或关闭弹窗；保存失败时保留上次成功的授权并显示服务端的原因。
 - 保存成功后刷新目录和预览；服务端的索引更新可能异步完成，以服务端的鉴权结果为准。
 - 目录列表（`fs/ls`）里 `access: 'denied'` 的节点不能选中或展开，`access: 'container'` 的节点只能展开以访问有权限的子节点、不能预览自身。
-- `permission: 'read'` 的节点显示只读标记。
+- `access: 'read'` 的节点显示只读标记。
 - 以上节点标记来自目录列表，不依赖 `acl`。
 - 授权调用 `GET`、`PUT`、`DELETE /api/v1/acl`；成员目录调用账号的用户和用户组接口（用户每页 20 条，`include_credentials=false`），需要在 Provider 或 `requestOptions` 里提供 `accountId`。
 - 用户组目录需要账号管理权限，资源管理者无权读取时会显示失败和重试，可以用 `acl.listPrincipals` 接入自己的目录。

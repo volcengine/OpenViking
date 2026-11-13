@@ -29,7 +29,7 @@ import '@openviking/react/components/command-console/style.css';
 
 ### 空态与快捷命令
 
-没有记录时显示快捷入口，点击只把命令填入输入区，按 Enter 才提交，提交后空态被记录取代。
+没有记录时显示快捷入口，点击只把命令填入输入区，按 Enter 才提交，提交后空态被记录取代。每行显示 `summary`，省略时回退到 `description`；提供了 `summary`，或说明被单行省略截断时，悬停该行显示完整的 `description`。
 
 ```tsx file="../../_demos/command-console-empty.tsx" preview
 
