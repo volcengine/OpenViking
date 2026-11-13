@@ -6,13 +6,14 @@ import sys
 import threading
 from typing import Any
 
+import httpx
 import pytest
 
 pytest.importorskip("langchain_core")
 pytest.importorskip("langgraph")
 pytest.importorskip("langchain_openviking")
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, ChatMessage, HumanMessage
 
 from langchain_openviking import (
     InMemoryOpenVikingClient,
@@ -968,6 +969,61 @@ async def test_async_retriever_uses_native_client_for_search_and_read():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("search_mode", ["find", "search"])
+@pytest.mark.parametrize("session_id", [None, "review-session"])
+async def test_retriever_passes_session_only_to_search(
+    monkeypatch, asynchronous, search_mode, session_id
+):
+    from openviking_sdk import AsyncHTTPClient, SyncHTTPClient
+
+    requests = []
+
+    async def request(self, method, path, **kwargs):
+        requests.append((method, path, kwargs["json"]))
+        return httpx.Response(
+            200,
+            json={
+                "status": "ok",
+                "result": {
+                    "resources": [
+                        {"uri": "viking://resources/release.md", "abstract": "Release checklist"}
+                    ]
+                },
+            },
+        )
+
+    monkeypatch.setattr(AsyncHTTPClient, "_request", request)
+    client_type = AsyncHTTPClient if asynchronous else SyncHTTPClient
+    client = client_type(url="http://openviking.test", api_key="test")
+    retriever = OpenVikingRetriever(
+        **({"async_client": client} if asynchronous else {"client": client}),
+        search_mode=search_mode,
+        session_id=session_id,
+        content_mode="abstract",
+        score_threshold=0.5,
+        tags=["env=test"],
+    )
+    try:
+        documents = (
+            await retriever.ainvoke("release") if asynchronous else retriever.invoke("release")
+        )
+    finally:
+        await retriever.aclose()
+        if asynchronous:
+            await client.close()
+        else:
+            client.close()
+
+    assert [document.page_content for document in documents] == ["Release checklist"]
+    expected = {"query": "release", "target_uri": "", "limit": 10, "score_threshold": 0.5}
+    expected["tags"] = ["env=test"]
+    if search_mode == "search" and session_id is not None:
+        expected["session_id"] = session_id
+    assert requests == [("POST", f"/api/v1/search/{search_mode}", expected)]
+
+
+@pytest.mark.asyncio
 async def test_async_recorder_preserves_batch_and_commit_semantics():
     class BatchTrackingClient(InMemoryOpenVikingClient):
         def __init__(self):
@@ -1318,16 +1374,31 @@ async def test_async_chat_history_reads_writes_and_clears_natively():
 
 
 @pytest.mark.asyncio
-async def test_async_context_assembler_combines_session_and_recall():
-    backing = InMemoryOpenVikingClient(
-        {"viking://resources/runbooks/async.md": "Async context is azure."}
-    )
+@pytest.mark.parametrize("metadata_prefix", ["openviking", "recall", "", "my_recall"])
+@pytest.mark.parametrize(
+    "uri,context_type",
+    [
+        ("viking://resources/runbooks/async.md", "resource"),
+        ("viking://user/default/memories/preferences/async.md", "memory"),
+        ("viking://skills/async.md", "skill"),
+    ],
+)
+async def test_async_context_assembler_combines_session_and_recall(
+    metadata_prefix, uri, context_type
+):
+    content = "Async context is azure. " * 30
+    backing = InMemoryOpenVikingClient({uri: content})
     backing.add_message("async-assembler", "user", content="Active async turn.")
     client = AsyncInMemoryOpenVikingClient(backing)
     assembler = OpenVikingSessionContextAssembler(
         include_session_context=True,
         async_client=client,
-        target_uri="viking://resources",
+        retriever=OpenVikingRetriever(
+            async_client=client,
+            target_uri=uri,
+            metadata_prefix=metadata_prefix,
+            search_mode="search",
+        ),
     )
 
     assembled = await assembler.aassemble(
@@ -1337,7 +1408,23 @@ async def test_async_context_assembler_combines_session_and_recall():
 
     assert "Active async turn." in assembled.block
     assert "Async context is azure." in assembled.block
-    assert assembled.context_parts[0]["uri"] == "viking://resources/runbooks/async.md"
+    assert assembled.context_parts == [
+        {"type": "context", "uri": uri, "context_type": context_type, "abstract": content[:240]}
+    ]
+    recorder = OpenVikingSessionRecorder(async_client=client)
+    await recorder.arecord(
+        "async-assembler",
+        [HumanMessage(content="Deployment question"), AIMessage(content="Deployment answer")],
+        context_parts=assembled.context_parts,
+    )
+    assert [
+        part
+        for message in backing.sessions["async-assembler"][-2:]
+        for part in message["parts"]
+        if part["type"] == "context"
+    ] == assembled.context_parts
+    await recorder.aclose()
+    await assembler.aclose()
 
 
 @pytest.mark.asyncio
@@ -1399,7 +1486,8 @@ async def test_async_history_does_not_create_session_on_non_not_found_error():
 
 
 @pytest.mark.asyncio
-async def test_async_middleware_injects_and_captures_context():
+@pytest.mark.parametrize("generic_user", [False, True])
+async def test_async_middleware_injects_and_captures_context(generic_user):
     backing = InMemoryOpenVikingClient(
         {"viking://~/memories/profile.md": "Async middleware prefers teal."}
     )
@@ -1414,12 +1502,18 @@ async def test_async_middleware_injects_and_captures_context():
     class Request:
         state: dict[str, Any] = {}
         runtime = None
-        messages = [HumanMessage(content="What teal preference?")]
+        messages = [
+            ChatMessage(role="user", id="async-user-1", content="What teal preference?")
+            if generic_user
+            else HumanMessage(id="async-user-1", content="What teal preference?")
+        ]
         system_message = None
 
         def override(self, **overrides: Any) -> Request:
             request = Request()
+            request.messages = overrides.get("messages", self.messages)
             request.system_message = overrides.get("system_message", self.system_message)
+            request.state = self.state
             return request
 
     async def handler(request: Any) -> AIMessage:
@@ -1427,25 +1521,32 @@ async def test_async_middleware_injects_and_captures_context():
         return AIMessage(content="teal")
 
     await middleware.awrap_model_call(Request(), handler)
+    recall_update = await middleware.aafter_model({}, runtime=None)
+    assert recall_update is not None
     await middleware.aafter_agent(
         {
+            **recall_update,
             "messages": [
                 HumanMessage(content="What color?"),
                 AIMessage(content="teal"),
-            ]
+            ],
         },
         runtime=None,
     )
 
-    assert "Async middleware prefers teal." in (captured_request["request"].system_message.content)
+    assert captured_request["request"].system_message is None
+    assert "Async middleware prefers teal." in captured_request["request"].messages[0].content
     assistant_parts = backing.sessions["async-middleware"][1]["parts"]
     assert any(part["type"] == "context" for part in assistant_parts)
 
 
 @pytest.mark.asyncio
-async def test_async_middleware_clears_pending_context_when_model_call_is_cancelled():
+@pytest.mark.parametrize("has_context", [False, True])
+async def test_async_middleware_clears_pending_context_when_model_call_is_cancelled(has_context):
     backing = InMemoryOpenVikingClient(
         {"viking://~/memories/profile.md": "Cancelled context must not be reused."}
+        if has_context
+        else {}
     )
     client = AsyncInMemoryOpenVikingClient(backing)
     middleware = OpenVikingContextMiddleware(
@@ -1458,12 +1559,14 @@ async def test_async_middleware_clears_pending_context_when_model_call_is_cancel
     class Request:
         state: dict[str, Any] = {}
         runtime = None
-        messages = [HumanMessage(content="Find the cancelled context.")]
+        messages = [HumanMessage(id="async-cancelled-user", content="Find the cancelled context.")]
         system_message = None
 
         def override(self, **overrides: Any) -> Request:
             request = Request()
+            request.messages = overrides.get("messages", self.messages)
             request.system_message = overrides.get("system_message", self.system_message)
+            request.state = self.state
             return request
 
     async def handler(_request: Any) -> AIMessage:
@@ -1479,3 +1582,5 @@ async def test_async_middleware_clears_pending_context_when_model_call_is_cancel
         await model_call
 
     assert middleware._pending_context_parts == {}
+    assert middleware._pending_recall_blocks == {}
+    assert await middleware.aafter_model({"messages": Request.messages}, runtime=None) is None

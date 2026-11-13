@@ -128,9 +128,7 @@ async def test_downstream_work_wait_remains_worker_occupied_time(monkeypatch):
     await tracker.register_work("task", "embedding", "Embedding", **OWNER)
 
     now[0] = 3
-    waiter = asyncio.create_task(
-        tracker.wait_for_work("task", ["embedding"], poll_interval=0.001, **OWNER)
-    )
+    waiter = asyncio.create_task(tracker.wait_for_work("task", ["embedding"], **OWNER))
     await asyncio.sleep(0.01)
     now[0] = 20
     assert (await tracker.get("task", **OWNER)).processing_seconds == 20

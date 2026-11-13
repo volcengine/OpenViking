@@ -19,7 +19,7 @@ const profiles = {
   empty: {
     title: '还没有上下文配置',
     description:
-      '每个网关密钥都需要一份上下文配置。推荐设置会为每条新消息召回记忆、保存对话、为长对话生成摘要，并让模型使用只读的 OpenViking 工具，之后可以随时修改。',
+      '每个网关密钥都需要一份上下文配置。推荐设置会为每条新消息召回记忆、保存对话、为长对话生成摘要，并让模型使用全部 OpenViking 工具，之后可以随时修改。',
     readOnly: '等待网关管理员添加上下文配置。',
   },
   summary: {
@@ -61,6 +61,11 @@ const profiles = {
     label: '名称',
     placeholder: '例如：编程',
     description: '为网关密钥选择配置时显示这个名称。',
+  },
+  clientOverrides: {
+    label: '允许客户端覆盖设置',
+    description:
+      '客户端可以用 X-OpenViking-Context 请求头为新对话修改下面的任意设置，包括预算；工具只能再排除，不能多提供。配置需要保持原样时，请关闭此项。',
   },
   recall: {
     title: '召回记忆',
@@ -111,6 +116,13 @@ const profiles = {
       label: '检索文本长度',
       description:
         '召回用最新一条用户消息作为检索文本，超出这个长度的部分会被截掉。',
+    },
+    peerScope: {
+      label: 'Peer 范围',
+      description:
+        '除用户自己的记忆外，召回和 OpenViking 工具能看到哪些 Peer 的记忆。',
+      all: '所有 Peer，当前 Peer 优先',
+      actor: '仅当前 Peer',
     },
     quotas: {
       label: '按分类限量',
@@ -190,7 +202,7 @@ const profiles = {
     available: {
       label: '工具',
       description:
-        '推荐设置勾选只读工具，会修改数据的工具不勾选。以后新增的工具会自动启用。上游也需要允许使用 OpenViking 工具。',
+        '推荐设置勾选全部工具，包括会修改数据的工具。以后新增的工具会自动启用。上游也需要允许使用 OpenViking 工具。',
     },
     empty: '签发网关密钥后即可加载工具清单。',
     loadFailed: '无法加载 OpenViking 工具',

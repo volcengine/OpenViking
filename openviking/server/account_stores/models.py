@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 """Data structures returned by account storage operations."""
+
 from typing import TypedDict
 
 
@@ -36,3 +37,12 @@ class UsersPage(TypedDict):
 class GroupSummary(TypedDict):
     group_id: str
     member_count: int
+
+
+class AuthSnapshot(TypedDict):
+    """Verified account identity and authorization state from one storage read."""
+
+    account_id: str
+    user_id: str
+    role: str
+    group_ids: tuple[str, ...]

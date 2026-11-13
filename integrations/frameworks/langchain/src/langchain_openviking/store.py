@@ -7,8 +7,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 from collections.abc import Mapping
+from contextvars import ContextVar
 from datetime import datetime, timezone
+from types import TracebackType
 from typing import TYPE_CHECKING, Any, Iterable
 from urllib.parse import quote, unquote
 
@@ -31,9 +34,11 @@ if TYPE_CHECKING:
         GetOp,
         Item,
         ListNamespacesOp,
+        MatchCondition,
         PutOp,
         SearchItem,
         SearchOp,
+        get_text_at_path,
     )
 else:
     try:
@@ -42,17 +47,23 @@ else:
             GetOp,
             Item,
             ListNamespacesOp,
+            MatchCondition,
             PutOp,
             SearchItem,
             SearchOp,
+            get_text_at_path,
         )
     except ImportError:  # pragma: no cover - exercised by optional import path
         _LANGGRAPH_IMPORT_ERROR = missing_dependency("langgraph", "langgraph")
         BaseStore = object
-        GetOp = PutOp = SearchOp = ListNamespacesOp = object
+        GetOp = PutOp = SearchOp = ListNamespacesOp = MatchCondition = object
         Item = SearchItem = object
 
 logger = logging.getLogger(__name__)
+
+_STORE_CALL_CONTEXT: ContextVar[tuple[tuple[int, threading.Event], ...]] = ContextVar(
+    "openviking_store_call_context", default=()
+)
 
 
 class OpenVikingStore(BaseStore):
@@ -62,6 +73,9 @@ class OpenVikingStore(BaseStore):
     markdown projection under ``<root_uri>/index`` gives OpenViking semantic
     retrieval a compact document to index for query-based ``search`` calls.
     Removal ignores missing targets and propagates other backend errors.
+    Every key remains one URI path segment. Encoded slash and backslash
+    separators use adapter-level escape tokens because OpenViking rejects
+    ``%2F`` and ``%5C`` within a URI segment.
 
     Args:
         root_uri: Base URI for the store. Defaults to the ``viking://~`` home alias,
@@ -76,6 +90,7 @@ class OpenVikingStore(BaseStore):
         client: Any = None,
         url: str | None = None,
         api_key: str | None = None,
+        auth_mode: str | None = None,
         account: str | None = None,
         user: str | None = None,
         user_id: str | None = None,
@@ -93,6 +108,7 @@ class OpenVikingStore(BaseStore):
             client=client,
             url=url,
             api_key=api_key,
+            auth_mode=auth_mode,
             account=account,
             user=user,
             user_id=user_id,
@@ -104,8 +120,61 @@ class OpenVikingStore(BaseStore):
         self.wait: bool = wait
         self.search_fetch_limit: int = search_fetch_limit
         self._client_cache: Any = None
+        self._client_lock = threading.Lock()
+        self._call_condition = threading.Condition()
+        self._active_calls = 0
+        self._owns_client = client is None
+        self._closed = False
+
+    def close(self) -> None:
+        """Drain backend calls and release owned clients.
+
+        Closing from an active backend call raises instead of waiting on that call.
+        """
+        with self._call_condition:
+            if any(
+                store_id == id(self) and active.is_set()
+                for store_id, active in _STORE_CALL_CONTEXT.get()
+            ):
+                raise RuntimeError("Cannot close OpenVikingStore from inside an active Store call")
+            self._closed = True
+            self._call_condition.wait_for(lambda: self._active_calls == 0)
+            with self._client_lock:
+                client = self._client_cache
+                self._client_cache = None
+                if client is not None and self._owns_client:
+                    client.close()
+
+    async def aclose(self) -> None:
+        """Close the Store without blocking the event loop."""
+        await asyncio.to_thread(self.close)
+
+    def __enter__(self) -> OpenVikingStore:
+        self._raise_if_closed()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()
+
+    async def __aenter__(self) -> OpenVikingStore:
+        self._raise_if_closed()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        await self.aclose()
 
     def batch(self, ops: Iterable[Any]) -> list[Any]:
+        self._raise_if_closed()
         results: list[Any] = []
         for op in ops:
             if isinstance(op, GetOp):
@@ -127,11 +196,9 @@ class OpenVikingStore(BaseStore):
                     )
                 )
             elif isinstance(op, ListNamespacesOp):
-                prefix, suffix = self._match_conditions_to_prefix_suffix(op.match_conditions)
                 results.append(
-                    self.list_namespaces(
-                        prefix=prefix,
-                        suffix=suffix,
+                    self._list_namespaces(
+                        op.match_conditions,
                         max_depth=op.max_depth,
                         limit=op.limit,
                         offset=op.offset,
@@ -147,7 +214,9 @@ class OpenVikingStore(BaseStore):
     def get(self, namespace: tuple[str, ...], key: str, *, refresh_ttl: Any = None) -> Any:
         try:
             record = self._read_record(self._data_uri(namespace, key))
-        except Exception:
+        except Exception as exc:
+            if not is_not_found_error(exc):
+                raise
             return None
         return Item(
             namespace=tuple(record["namespace"]),
@@ -184,7 +253,7 @@ class OpenVikingStore(BaseStore):
 
         effective_index = self.index if index is None else index
         index_uri = self._index_uri(namespace, key)
-        if effective_index is False:
+        if effective_index is False or effective_index == []:
             self._remove(index_uri)
             return
         self._write(index_uri, self._index_document(record, effective_index))
@@ -223,15 +292,38 @@ class OpenVikingStore(BaseStore):
         limit: int = 100,
         offset: int = 0,
     ) -> list[tuple[str, ...]]:
+        conditions = []
+        if prefix:
+            conditions.append(MatchCondition("prefix", prefix))
+        if suffix:
+            conditions.append(MatchCondition("suffix", suffix))
+        return self._list_namespaces(conditions, max_depth=max_depth, limit=limit, offset=offset)
+
+    def _list_namespaces(
+        self,
+        match_conditions: Iterable[Any] | None,
+        *,
+        max_depth: int | None,
+        limit: int,
+        offset: int,
+    ) -> list[tuple[str, ...]]:
+        conditions = tuple(match_conditions or ())
+        scan_prefix: tuple[str, ...] = ()
+        for condition in conditions:
+            if condition.match_type == "prefix":
+                path = tuple(condition.path)
+                literal_prefix = path[: path.index("*")] if "*" in path else path
+                if len(literal_prefix) > len(scan_prefix):
+                    scan_prefix = literal_prefix
+
         namespaces = set()
-        for uri in self._all_data_uris(prefix or ()):
+        # Wildcards match namespace labels, never physical URI path segments.
+        for uri in self._all_data_uris(scan_prefix):
             parsed = self._parse_data_uri(uri)
             if parsed is None:
                 continue
             namespace, _key = parsed
-            if prefix and not _tuple_matches_prefix(namespace, prefix):
-                continue
-            if suffix and not _tuple_matches_suffix(namespace, suffix):
+            if not all(_namespace_matches(namespace, condition) for condition in conditions):
                 continue
             if max_depth is not None and len(namespace) > max_depth:
                 namespace = namespace[:max_depth]
@@ -247,8 +339,7 @@ class OpenVikingStore(BaseStore):
         limit: int,
         offset: int,
     ) -> list[Any]:
-        result = call_openviking(
-            self._client(),
+        result = self._call(
             "find",
             query=query,
             target_uri=self._index_prefix_uri(namespace_prefix),
@@ -282,13 +373,16 @@ class OpenVikingStore(BaseStore):
         return items
 
     def _all_data_uris(self, namespace_prefix: tuple[str, ...]) -> list[str]:
+        self._raise_if_closed()
         base_uri = self._data_prefix_uri(namespace_prefix)
         uris: list[str] = []
         seen: set[str] = set()
         for pattern in ("*.json", "**/*.json"):
             try:
-                result = call_openviking(self._client(), "glob", pattern=pattern, uri=base_uri)
-            except Exception:
+                result = self._call("glob", pattern=pattern, uri=base_uri)
+            except Exception as exc:
+                if not is_not_found_error(exc):
+                    raise
                 continue
             for uri in _extract_uris(result):
                 if uri not in seen:
@@ -297,12 +391,41 @@ class OpenVikingStore(BaseStore):
         return uris
 
     def _client(self) -> Any:
-        if self._client_cache is None:
-            self._client_cache = ensure_client(self._connection)
-        return self._client_cache
+        with self._client_lock:
+            self._raise_if_closed()
+            if self._client_cache is None:
+                client = ensure_client(self._connection)
+                if self._closed:
+                    if self._owns_client:
+                        client.close()
+                    self._raise_if_closed()
+                self._client_cache = client
+            return self._client_cache
+
+    def _call(self, method_name: str, /, **kwargs: Any) -> Any:
+        active = threading.Event()
+        token = _STORE_CALL_CONTEXT.set((*_STORE_CALL_CONTEXT.get(), (id(self), active)))
+        try:
+            with self._call_condition:
+                self._raise_if_closed()
+                self._active_calls += 1
+                active.set()
+            try:
+                return call_openviking(self._client(), method_name, **kwargs)
+            finally:
+                with self._call_condition:
+                    active.clear()
+                    self._active_calls -= 1
+                    self._call_condition.notify_all()
+        finally:
+            _STORE_CALL_CONTEXT.reset(token)
+
+    def _raise_if_closed(self) -> None:
+        if self._closed:
+            raise RuntimeError("OpenVikingStore is closed")
 
     def _read_record(self, uri: str) -> dict[str, Any]:
-        content = call_openviking(self._client(), "read", uri=uri)
+        content = self._call("read", uri=uri)
         if isinstance(content, bytes):
             content = content.decode("utf-8")
         return json.loads(str(content))
@@ -317,7 +440,9 @@ class OpenVikingStore(BaseStore):
     ) -> dict[str, Any]:
         try:
             existing = self._read_record(uri)
-        except Exception:
+        except Exception as exc:
+            if not is_not_found_error(exc):
+                raise
             record = _store_record(namespace, key, value, created_at=now, updated_at=now)
             self._write_create(uri, json.dumps(record, ensure_ascii=False, indent=2))
             return record
@@ -331,16 +456,16 @@ class OpenVikingStore(BaseStore):
         try:
             self._write_create(uri, content)
             return
-        except Exception as create_exc:
-            try:
-                self._write_replace(uri, content)
-                return
-            except Exception:
-                raise create_exc
+        except Exception as exc:
+            if (
+                not isinstance(exc, FileExistsError)
+                and getattr(exc, "code", None) != "ALREADY_EXISTS"
+            ):
+                raise
+        self._write_replace(uri, content)
 
     def _write_create(self, uri: str, content: str) -> None:
-        call_openviking(
-            self._client(),
+        self._call(
             "write",
             uri=uri,
             content=content,
@@ -349,8 +474,7 @@ class OpenVikingStore(BaseStore):
         )
 
     def _write_replace(self, uri: str, content: str) -> None:
-        call_openviking(
-            self._client(),
+        self._call(
             "write",
             uri=uri,
             content=content,
@@ -360,17 +484,17 @@ class OpenVikingStore(BaseStore):
 
     def _remove(self, uri: str) -> None:
         try:
-            call_openviking(self._client(), "rm", uri=uri, recursive=False)
+            self._call("rm", uri=uri, recursive=False)
         except Exception as exc:
             if not is_not_found_error(exc):
                 raise
             logger.debug("OpenVikingStore remove ignored missing URI", exc_info=True)
 
     def _data_uri(self, namespace: tuple[str, ...], key: str) -> str:
-        return f"{self._data_prefix_uri(namespace)}/{_segment(key)}.json"
+        return _record_uri(self._data_prefix_uri(namespace), key, ".json")
 
     def _index_uri(self, namespace: tuple[str, ...], key: str) -> str:
-        return f"{self._index_prefix_uri(namespace)}/{_segment(key)}.md"
+        return _record_uri(self._index_prefix_uri(namespace), key, ".md")
 
     def _data_prefix_uri(self, namespace: tuple[str, ...]) -> str:
         return _join_uri(self.root_uri, "data", *namespace)
@@ -421,20 +545,6 @@ class OpenVikingStore(BaseStore):
             score=score,
         )
 
-    def _match_conditions_to_prefix_suffix(
-        self, conditions: Iterable[Any] | None
-    ) -> tuple[tuple[str, ...] | None, tuple[str, ...] | None]:
-        prefix = None
-        suffix = None
-        for condition in conditions or []:
-            match_type = getattr(condition, "match_type", None)
-            path = tuple(getattr(condition, "path", ()) or ())
-            if match_type == "prefix":
-                prefix = path
-            elif match_type == "suffix":
-                suffix = path
-        return prefix, suffix
-
 
 def _segment(value: str) -> str:
     return quote(str(value), safe="")
@@ -443,6 +553,20 @@ def _segment(value: str) -> str:
 def _join_uri(root: str, *segments: str) -> str:
     suffix = "/".join(_segment(segment) for segment in segments if segment)
     return root.rstrip("/") if not suffix else f"{root.rstrip('/')}/{suffix}"
+
+
+def _record_uri(prefix: str, key: str, suffix: str) -> str:
+    return f"{prefix}/{_encode_key_segment(key)}{suffix}"
+
+
+def _encode_key_segment(key: str) -> str:
+    # quote(..., safe="") encodes a literal "!" as "%21", leaving bare "!"
+    # available as an unambiguous adapter escape marker.
+    return _segment(key).replace("%2F", "!s").replace("%5C", "!b")
+
+
+def _decode_key_segment(segment: str) -> str:
+    return unquote(segment.replace("!s", "%2F").replace("!b", "%5C"))
 
 
 def _parse_canonicalized_record_uri(
@@ -454,14 +578,20 @@ def _parse_canonicalized_record_uri(
 ) -> tuple[tuple[str, ...], str] | None:
     root = classify_uri(root_uri)
     root_tail = _identity_relative_root_tail(root)
-    if root_tail is None:
-        return None
-
     candidate = classify_uri(uri)
-    if candidate.scope != root.scope or candidate.content_index is None:
-        return None
+    if root.parts[:2] == ("~", "peers") and root.content_index == 3:
+        if candidate.scope != "user" or candidate.content_index != 4:
+            return None
+        # Only the current-user alias changes; keep the peer ID in the match.
+        root_tail = root.parts[1:]
+        candidate_tail = candidate.parts[2:]
+    else:
+        if root_tail is None:
+            return None
+        if candidate.scope != root.scope or candidate.content_index is None:
+            return None
+        candidate_tail = candidate.parts[candidate.content_index :]
 
-    candidate_tail = candidate.parts[candidate.content_index :]
     if len(candidate_tail) < len(root_tail) + 2:
         return None
     if candidate_tail[: len(root_tail)] != root_tail:
@@ -490,7 +620,7 @@ def _parse_record_parts(parts: list[str]) -> tuple[tuple[str, ...], str] | None:
     if not parts or not parts[-1]:
         return None
     namespace = tuple(unquote(part) for part in parts[:-1])
-    key = unquote(parts[-1])
+    key = _decode_key_segment(parts[-1])
     return namespace, key
 
 
@@ -540,7 +670,11 @@ def _extract_uris(value: Any) -> list[str]:
 
 def _project_value(value: dict[str, Any], index: bool | list[str] | None) -> dict[str, Any]:
     if isinstance(index, list):
-        return {field: _nested_value(value, field) for field in index}
+        projected = {field: _nested_value(value, field) for field in index}
+        for field in index:
+            if projected[field] is None:
+                projected[field] = get_text_at_path(value, field) or None
+        return projected
     return value
 
 
@@ -558,13 +692,30 @@ def _matches_filter(value: dict[str, Any], filter: dict[str, Any] | None) -> boo
         return True
     for path, expected in filter.items():
         actual = _nested_value(value, path)
-        if isinstance(expected, dict):
-            for op, target in expected.items():
-                if not _compare(actual, op, target):
-                    return False
-        elif actual != expected:
+        if not _matches_value(actual, expected):
             return False
     return True
+
+
+def _matches_value(actual: Any, expected: Any) -> bool:
+    if isinstance(expected, dict):
+        if any(
+            key.startswith("$") or key in {"eq", "ne", "gt", "gte", "lt", "lte", "in"}
+            for key in expected
+        ):
+            return all(_compare(actual, op, target) for op, target in expected.items())
+        return isinstance(actual, dict) and all(
+            _matches_value(actual.get(key), target) for key, target in expected.items()
+        )
+    if isinstance(expected, (list, tuple)):
+        return (
+            isinstance(actual, (list, tuple))
+            and len(actual) == len(expected)
+            and all(
+                _matches_value(left, right) for left, right in zip(actual, expected, strict=False)
+            )
+        )
+    return actual == expected
 
 
 def _compare(actual: Any, op: str, target: Any) -> bool:
@@ -597,9 +748,16 @@ def _safe_ordered_compare(actual: Any, target: Any, compare) -> bool:
         return False
 
 
-def _tuple_matches_prefix(value: tuple[str, ...], prefix: tuple[str, ...]) -> bool:
-    return len(value) >= len(prefix) and value[: len(prefix)] == prefix
-
-
-def _tuple_matches_suffix(value: tuple[str, ...], suffix: tuple[str, ...]) -> bool:
-    return len(value) >= len(suffix) and value[-len(suffix) :] == suffix
+def _namespace_matches(value: tuple[str, ...], condition: Any) -> bool:
+    path = condition.path
+    if len(value) < len(path):
+        return False
+    if condition.match_type == "prefix":
+        selected = value[: len(path)]
+    elif condition.match_type == "suffix":
+        selected = value[-len(path) :] if path else ()
+    else:
+        raise ValueError(f"Unsupported match type: {condition.match_type}")
+    return all(
+        pattern == "*" or actual == pattern for actual, pattern in zip(selected, path, strict=False)
+    )

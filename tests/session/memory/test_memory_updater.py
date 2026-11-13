@@ -12,7 +12,6 @@ import pytest
 
 from openviking.message import Message
 from openviking.message.part import TextPart, ToolPart
-from openviking.prompts.manager import PromptManager
 from openviking.pyagfs.exceptions import AGFSIoError
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import (
@@ -28,6 +27,7 @@ from openviking.session.memory.dataclass import (
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.memory_updater import (
+    ChunkMeta,
     ExtractContext,
     MemoryReadError,
     MemoryUpdater,
@@ -44,6 +44,7 @@ from openviking.session.memory.utils import (
     parse_memory_file_with_fields,
 )
 from openviking.storage.abstract_overview import parse_abstract_overview
+from openviking.system_assets import builtin_memory_templates_dir
 from openviking_cli.exceptions import ConflictError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -67,6 +68,81 @@ class TestMemoryUpdateResult:
 
 class TestMemoryUpdater:
     """Tests for MemoryUpdater."""
+
+    @pytest.mark.parametrize(
+        ("user_peer", "assistant_peer", "expected"),
+        [
+            (None, None, "**user**: OWNER_REQUEST\n**assistant**: AGENT_RESPONSE"),
+            (
+                "workspace-agent",
+                "workspace-agent",
+                "**user [peer=workspace-agent]**: OWNER_REQUEST\n"
+                "**assistant [peer=workspace-agent]**: AGENT_RESPONSE",
+            ),
+            (
+                "owner",
+                "agent",
+                "**user [peer=owner]**: OWNER_REQUEST\n**assistant [peer=agent]**: AGENT_RESPONSE",
+            ),
+        ],
+    )
+    def test_event_chatlog_preserves_role_and_peer(self, user_peer, assistant_peer, expected):
+        """通过事件模板验证持久化正文保留角色和 peer。"""
+        context = ExtractContext(
+            [
+                Message(id="u", role="user", peer_id=user_peer, parts=[TextPart("OWNER_REQUEST")]),
+                Message(
+                    id="a",
+                    role="assistant",
+                    peer_id=assistant_peer,
+                    parts=[TextPart("AGENT_RESPONSE")],
+                ),
+            ]
+        )
+        registry = MemoryTypeRegistry(load_schemas=False)
+        registry.load_from_yaml(str(builtin_memory_templates_dir() / "events.yaml"))
+        schema = registry.get("events")
+        assert schema is not None
+        rendered = MemoryFileUtils.write(
+            MemoryFile(extra_fields={"ranges": "0-1", "summary": "对话记录"}),
+            content_template=schema.content_template,
+            extract_context=context,
+        )
+        assert expected in rendered
+
+    @pytest.mark.parametrize(
+        ("second_role", "second_peer", "expected"),
+        [
+            ("user", "workspace-agent", "**user [peer=workspace-agent]**: first second"),
+            (
+                "assistant",
+                "workspace-agent",
+                "**user [peer=workspace-agent]**: first...\n"
+                "**assistant [peer=workspace-agent]**: ...second",
+            ),
+            (
+                "user",
+                "other-agent",
+                "**user [peer=workspace-agent]**: first...\n**user [peer=other-agent]**: ...second",
+            ),
+        ],
+    )
+    def test_event_chatlog_merges_chunks_only_for_same_role_and_peer(
+        self, second_role, second_peer, expected
+    ):
+        """即使分块来源相同，也不能跨角色或 peer 合并正文。"""
+        messages = [
+            Message(id="c0", role="user", peer_id="workspace-agent", parts=[TextPart("first ")]),
+            Message(id="c1", role=second_role, peer_id=second_peer, parts=[TextPart("second")]),
+        ]
+        context = ExtractContext(
+            messages,
+            chunk_meta={
+                id(message): ChunkMeta(source_message_id="source", chunk_index=i, chunk_count=2)
+                for i, message in enumerate(messages)
+            },
+        )
+        assert context.get_event_content("0-1", "") == expected
 
     def test_extract_context_initializes_page_id_map(self):
         extract_context = ExtractContext(
@@ -127,9 +203,7 @@ class TestMemoryUpdater:
         assert "User reason" not in content
 
         registry = MemoryTypeRegistry(load_schemas=False)
-        registry.load_from_yaml(
-            str(PromptManager._get_bundled_templates_dir() / "memory" / "events.yaml")
-        )
+        registry.load_from_yaml(str(builtin_memory_templates_dir() / "events.yaml"))
         rendered = MemoryFileUtils.write(
             MemoryFile(
                 extra_fields={
@@ -194,7 +268,7 @@ class TestMemoryUpdater:
         ]
         original = deepcopy(messages)
         context = ExtractContext(messages)
-        speaker = peer_id or "assistant"
+        speaker = f"assistant [peer={peer_id}]" if peer_id else "assistant"
         expected = (
             f"**{speaker}**: Started writing. Keep spacing.\n**{speaker}**: Finished writing."
         )
@@ -205,9 +279,7 @@ class TestMemoryUpdater:
         assert messages == original
 
         registry = MemoryTypeRegistry(load_schemas=False)
-        registry.load_from_yaml(
-            str(PromptManager._get_bundled_templates_dir() / "memory" / "events.yaml")
-        )
+        registry.load_from_yaml(str(builtin_memory_templates_dir() / "events.yaml"))
         rendered = MemoryFileUtils.write(
             MemoryFile(extra_fields={"summary": "Summary", "ranges": "0-3"}),
             content_template=registry.get("events").content_template,
@@ -248,8 +320,10 @@ class TestMemoryUpdater:
         context = ExtractContext(messages)
 
         assert len(context.messages) > len(messages)
+        assistant_speaker = f"assistant [peer={peer_id}]" if peer_id else "assistant"
+        user_speaker = f"user [peer={peer_id}]" if peer_id else "user"
         assert context.get_event_content(f"0-{len(context.messages) - 1}", "", 0) == (
-            f"**{peer_id or 'assistant'}**: {text}\n**{peer_id or 'user'}**: Confirmed."
+            f"**{assistant_speaker}**: {text}\n**{user_speaker}**: Confirmed."
         )
 
     def test_create(self):
@@ -450,9 +524,10 @@ class TestMemoryUpdater:
     @pytest.mark.asyncio
     async def test_generate_overview_template_fallbacks_for_builtin_memories(self):
         registry = MemoryTypeRegistry(load_schemas=False)
-        registry.load_from_yaml("openviking/prompts/templates/memory/cases.yaml")
-        registry.load_from_yaml("openviking/prompts/templates/memory/entities.yaml")
-        registry.load_from_yaml("openviking/prompts/templates/memory/preferences.yaml")
+        memory_dir = builtin_memory_templates_dir()
+        registry.load_from_yaml(str(memory_dir / "cases.yaml"))
+        registry.load_from_yaml(str(memory_dir / "entities.yaml"))
+        registry.load_from_yaml(str(memory_dir / "preferences.yaml"))
 
         case_dir = "viking://user/alice/memories/cases"
         case_uri = f"{case_dir}/merged_case.md"
@@ -1327,7 +1402,7 @@ class TestMemoryUpdater:
             (AGFSIoError("storage I/O failure"), True, False),
             (PermissionError("read denied"), False, False),
             (OSError("unclassified read failure"), False, False),
-            (TimeoutError("read after earlier write"), False, True),
+            (TimeoutError("read after earlier write"), True, True),
         ],
     )
     async def test_apply_operations_preserves_memories_when_fresh_reads_fail(
@@ -1339,7 +1414,11 @@ class TestMemoryUpdater:
         old_file = MemoryFile(uri=source_uri, memory_type="entities", content="source")
         mock_viking_fs = MagicMock()
         reads = [NotFoundError(target_uri, "file"), read_error]
+        if retryable:
+            reads.append(read_error)
         reads.extend([FileNotFoundError(), read_error] if write_first else [read_error])
+        if retryable:
+            reads.append(read_error)
         mock_viking_fs.read_file = AsyncMock(side_effect=reads)
         mock_viking_fs.write_file = AsyncMock()
         registry = MagicMock()
@@ -1384,6 +1463,7 @@ class TestMemoryUpdater:
         }
         assert all(error.__cause__ is read_error for error in read_errors.values())
         assert read_errors[update_uri].retryable is retryable
+        assert mock_viking_fs.read_file.await_count == len(reads)
         assert result.written_uris == []
         assert result.edited_uris == []
         assert mock_viking_fs.write_file.await_count == int(write_first)
@@ -1801,7 +1881,11 @@ class TestMemoryUpdater:
         registry = MagicMock()
         registry.get.return_value = schema
 
-        store = {}
+        store = {
+            profile_uri: MemoryFileUtils.write(
+                MemoryFile(uri=profile_uri, memory_type="profile", content="Caroline's profile")
+            )
+        }
         mock_viking_fs = MagicMock()
 
         async def mock_read_file(uri, **kwargs):
@@ -1838,19 +1922,23 @@ class TestMemoryUpdater:
                     to_uri=caroline_uri,
                     match_text="career",
                     description="Caroline's profile references her career plans",
-                )
+                ),
+                StoredLink(
+                    from_uri="viking://user/Melanie/memories/cases/missing.md", to_uri=melanie_uri
+                ),
             ],
         )
 
         ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
 
-        await updater.apply_operations(operations=operations, ctx=ctx)
+        result = await updater.apply_operations(operations=operations, ctx=ctx)
 
         caroline = parse_memory_file_with_fields(store[caroline_uri])
         melanie = parse_memory_file_with_fields(store[melanie_uri])
 
         assert [link["to_uri"] for link in caroline["backlinks"]] == [caroline_uri]
         assert melanie.get("backlinks", []) == []
+        assert result.errors == []
 
     @pytest.mark.asyncio
     async def test_apply_operations_does_not_write_backlinks_to_resource_targets(self):
@@ -2447,7 +2535,9 @@ class TestConsecutivePatchesSameURI:
         )
 
     @pytest.mark.asyncio
-    async def test_apply_upsert_logs_patch_failure_from_memory_updater_only(self, monkeypatch):
+    async def test_apply_upsert_logs_patch_failure_from_memory_updater_only(
+        self, monkeypatch, caplog
+    ):
         memory_type = "notes"
         uri = "viking://user/test/memories/notes/demo.md"
 
@@ -2480,11 +2570,7 @@ class TestConsecutivePatchesSameURI:
         store[uri] = existing_content
 
         trace_info = MagicMock()
-        patch_warning = MagicMock()
         monkeypatch.setattr("openviking.session.memory.memory_updater.tracer.info", trace_info)
-        monkeypatch.setattr(
-            "openviking.session.memory.merge_op.patch_handler.logger.warning", patch_warning
-        )
 
         op = ResolvedOperation(
             old_memory_file_content=MemoryFile(
@@ -2502,7 +2588,7 @@ class TestConsecutivePatchesSameURI:
 
         parsed = parse_memory_file_with_fields(store[uri])
         assert parsed["content"] == "Original body"
-        patch_warning.assert_not_called()
+        assert not any(record.name.endswith("merge_op.patch_handler") for record in caplog.records)
         assert any(
             "[memory_updater] Skipping field update after merge_op failure" in call.args[0]
             and f"uri={uri}" in call.args[0]
@@ -2511,7 +2597,8 @@ class TestConsecutivePatchesSameURI:
         )
 
     @pytest.mark.asyncio
-    async def test_two_patches_same_uri_second_sees_first_patch(self):
+    @pytest.mark.parametrize("read_timeout", [False, True])
+    async def test_two_patches_same_uri_second_sees_first_patch(self, read_timeout):
         """Two patches to the same URI: second SEARCH/REPLACE must apply
         against the result of the first, not the original content."""
         uri = "viking://user/test/memories/notes.md"
@@ -2541,8 +2628,8 @@ class TestConsecutivePatchesSameURI:
         async def mock_write_file(uri, content, **kwargs):
             store[uri] = content
 
-        mock_viking_fs.read_file = mock_read_file
-        mock_viking_fs.write_file = mock_write_file
+        mock_viking_fs.read_file = AsyncMock(side_effect=mock_read_file)
+        mock_viking_fs.write_file = AsyncMock(side_effect=mock_write_file)
 
         updater = MemoryUpdater(registry=registry)
         updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
@@ -2566,6 +2653,8 @@ class TestConsecutivePatchesSameURI:
         # old_memory_file_content still has "alpha beta gamma" (stale),
         # but _apply_upsert reads from disk which now has "ALPHA beta gamma"
         patch2 = StrPatch(blocks=[SearchReplaceBlock(search="beta", replace="BETA")])
+        if read_timeout:
+            mock_viking_fs.read_file.side_effect = [TimeoutError("read timeout"), store[uri]]
         op2 = ResolvedOperation(
             old_memory_file_content=MemoryFile(
                 uri=uri,
@@ -2583,3 +2672,5 @@ class TestConsecutivePatchesSameURI:
         assert "ALPHA" in parsed["content"]
         assert "BETA" in parsed["content"]
         assert "gamma" in parsed["content"]
+        assert mock_viking_fs.read_file.await_count == 2 + int(read_timeout)
+        assert mock_viking_fs.write_file.await_count == 2

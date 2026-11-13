@@ -7,9 +7,11 @@ Session as Context: Sessions integrated into L0/L1/L2 system.
 
 import asyncio
 import copy
+import hashlib
 import inspect
 import json
 import re
+from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -26,11 +28,18 @@ from typing import (
 )
 from uuid import uuid4
 
+from openviking.config.generation import (
+    get_memory_extraction_enabled,
+    get_output_language_override,
+)
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import canonical_session_uri
 from openviking.core.peer_id import normalize_peer_id, safe_peer_id
 from openviking.message import Message, Part
 from openviking.message.part import TextPart, ToolPart
+from openviking.privacy.sanitizer import PrivacySanitizer
+from openviking.privacy.service import UserPrivacyConfigService
+from openviking.privacy.session_extractor import extract_and_store_session_privacy
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext, Role
@@ -53,7 +62,6 @@ from openviking.session.checkpoints import (
 )
 from openviking.session.extraction_batch import (
     ExtractionBatchLimits,
-    ExtractionMessageBatch,
     estimate_extraction_message_tokens,
     plan_extraction_batches,
     resolve_extraction_batch_limits,
@@ -80,8 +88,9 @@ from openviking.storage.abstract_overview import render_abstract_overview
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.utils.model_retry import is_retryable_api_error, retry_async
 from openviking.utils.time_utils import get_current_timestamp
-from openviking.utils.token_estimation import estimate_text_tokens
+from openviking.utils.token_estimation import estimate_text_tokens, truncate_text_to_token_budget
 from openviking_cli.exceptions import (
+    FailedPreconditionError,
     InternalError,
     NotFoundError,
 )
@@ -114,6 +123,44 @@ def _load_render_prompt() -> Callable[..., str]:
     from openviking.prompts import render_prompt
 
     return render_prompt
+
+
+def _limit_summary_output_tokens(vlm: Any, output_budget: int) -> int:
+    from openviking.models.vlm.base import FailoverVLM
+
+    if isinstance(vlm, FailoverVLM):
+        return min(
+            _limit_summary_output_tokens(vlm.primary, output_budget),
+            _limit_summary_output_tokens(vlm.backup, output_budget),
+        )
+    configured_limit = getattr(vlm, "max_tokens", None)
+    if configured_limit is not None:
+        return min(output_budget, int(configured_limit))
+    return output_budget
+
+
+def _estimate_summary_template_tokens(
+    latest_archive_overview: str,
+    checkpoint_count: int = 0,
+) -> int:
+    try:
+        render_prompt = _load_render_prompt()
+    except Exception:
+        return 0
+    is_update = any(f"## {section}" in latest_archive_overview for section in WM_SEVEN_SECTIONS)
+    variables = {
+        "messages": "",
+        "latest_archive_overview": latest_archive_overview,
+        "checkpoint_instructions": wm.checkpoint_prompt_instructions(checkpoint_count),
+        "output_language": "en",
+    }
+    if is_update:
+        variables["wm_section_reminders"] = wm.build_wm_section_reminders(latest_archive_overview)
+    prompt = render_prompt(
+        "compression.ov_wm_v2_update" if is_update else "compression.ov_wm_v2",
+        variables,
+    )
+    return max(0, estimate_text_tokens(prompt) - estimate_text_tokens(latest_archive_overview))
 
 
 def _publish_telemetry_summary_best_effort(snapshot: Any) -> None:
@@ -463,10 +510,16 @@ class Session:
         memory_policy_provider: Optional[MemoryPolicyProvider] = None,
         vlm_resolver: Optional["VLMResolver"] = None,
         expiry_reporter: Optional[SessionExpiryReporter] = None,
+        privacy_config_service: Optional[UserPrivacyConfigService] = None,
+        privacy_sanitizer: Optional[PrivacySanitizer] = None,
+        runtime_config_manager: Any = None,
     ):
         self._viking_fs = viking_fs
+        self._privacy_config_service = privacy_config_service
+        self._privacy_sanitizer = privacy_sanitizer
         self._vikingdb_manager = vikingdb_manager
         self._session_compressor = session_compressor
+        self._runtime_config_manager = runtime_config_manager
         self.user = user or UserIdentifier.the_default_user()
         self.ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
         self.session_id = (
@@ -594,6 +647,90 @@ class Session:
             ).to_dict()
         return found
 
+    async def _read_commit_meta(self) -> SessionMeta:
+        """Read a valid root metadata snapshot under the caller's Session lock.
+
+        Commit recovery and statistics must never replace unreadable metadata
+        with this instance's defaults or an earlier in-memory snapshot.
+        """
+
+        async def read() -> str:
+            return await self._viking_fs.read_file(f"{self._session_uri}/.meta.json", ctx=self.ctx)
+
+        def is_retryable(exc: Exception) -> bool:
+            if isinstance(exc, (TimeoutError, ConnectionError)):
+                return True
+            mapped = map_exception(exc)
+            return mapped is not None and mapped.code in {"UNAVAILABLE", "DEADLINE_EXCEEDED"}
+
+        content = await retry_async(
+            read,
+            max_retries=2,
+            base_delay=0.1,
+            max_delay=0.3,
+            jitter=False,
+            is_retryable=is_retryable,
+            logger=logger,
+            operation_name="session commit metadata read",
+        )
+        data = json.loads(content)
+        if not isinstance(data, dict):
+            raise ValueError("Session metadata must be an object")
+        # Preserve the normal loader's legacy coercions before validating the
+        # counters that recovery and statistics will persist.
+        meta = SessionMeta.from_dict(data)
+        for name in (
+            "message_count",
+            "total_message_count",
+            "commit_count",
+            "pending_tokens",
+            "keep_recent_count",
+            "keep_recent_turn_count",
+            "retained_message_token_budget",
+            "min_raw_tail_steps",
+        ):
+            value = getattr(meta, name)
+            if name == "total_message_count" and value is None:
+                continue
+            if type(value) is not int or value < 0:
+                raise ValueError(f"Invalid Session metadata counter: {name}")
+        for name in ("llm_token_usage", "embedding_token_usage", "memories_extracted"):
+            counters = getattr(meta, name)
+            if not isinstance(counters, dict) or any(
+                type(value) is not int or value < 0 for value in counters.values()
+            ):
+                raise ValueError(f"Invalid Session metadata counters: {name}")
+        for name in ("memory_policy", "auto_commit_policy"):
+            if getattr(meta, name) is not None and not isinstance(getattr(meta, name), dict):
+                raise ValueError(f"Invalid Session metadata policy: {name}")
+        return meta
+
+    @staticmethod
+    def _queue_payload(item: Any) -> Dict[str, Any]:
+        """Decode a QueueFS snapshot entry like ``SessionCommitProcessor`` does."""
+        payload = item.get("data", item) if isinstance(item, dict) else item
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except ValueError:
+                return {}
+        return payload if isinstance(payload, dict) else {}
+
+    @staticmethod
+    def _archive_owner_task_id(meta: Dict[str, Any]) -> str:
+        """Return the task that currently owns an archive's Phase 2 work.
+
+        Recovery hands ownership to a new task without rewriting the Phase 1
+        queue snapshot, so the latest recovery record wins.
+        """
+        recovery = meta.get("recovery")
+        if isinstance(recovery, dict) and recovery.get("task_id"):
+            return str(recovery["task_id"])
+        phase1 = meta.get("phase1")
+        queue_message = phase1.get("queue_message") if isinstance(phase1, dict) else None
+        task_id = queue_message.get("task_id") if isinstance(queue_message, dict) else None
+        return str(task_id or "")
+
     async def _rebuild_pending_tokens(self) -> None:
         """Recompute ``pending_tokens`` from the current message list.
 
@@ -686,6 +823,10 @@ class Session:
             session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
         )
         try:
+            if not filenames:
+                # Phase 1 writes different child files, each with its own lock.
+                yield session_lease
+                return
             file_lease = await agfs.pathlock_acquire_exact_batch(
                 [f"{session_path}/{name}" for name in filenames],
                 timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS,
@@ -703,9 +844,10 @@ class Session:
         if not self._viking_fs:
             return
         self._meta.updated_at = get_current_timestamp()
+        # bytes bypass VikingFS PrivacySanitizer, preserving JSON keys and identity fields.
         await self._viking_fs.write_file(
             uri=f"{self._session_uri}/.meta.json",
-            content=json.dumps(self._meta.to_dict(), ensure_ascii=False),
+            content=json.dumps(self._meta.to_dict(), ensure_ascii=False).encode("utf-8"),
             ctx=self.ctx,
             lease_ref=lease_ref,
         )
@@ -785,12 +927,9 @@ class Session:
             content = await self._reload()
             await self._apply_appended_messages_to_state(messages)
             batch_content = "".join(message.to_jsonl() + "\n" for message in messages)
-            # Preserve existing JSONL verbatim, as append_file did. Existing
-            # content is already stored bytes; only initial creation used the
-            # text-write privacy transformation.
-            persisted_content = (
-                batch_content if content is None else (content + batch_content).encode("utf-8")
-            )
+            # Payloads are already protected. Bytes bypass the generic sanitizer
+            # so it cannot rewrite JSON keys or identity fields.
+            persisted_content = ((content or "") + batch_content).encode("utf-8")
             await self._viking_fs.write_file(
                 f"{self._session_uri}/messages.jsonl",
                 persisted_content,
@@ -925,6 +1064,14 @@ class Session:
         messages_spec: List[dict],
     ) -> List[Message]:
         """Asynchronously add multiple messages without blocking the caller loop."""
+        if self._privacy_config_service is not None:
+            messages_spec = await extract_and_store_session_privacy(
+                self.session_id,
+                messages_spec,
+                self.ctx,
+                self._privacy_config_service,
+                self._privacy_sanitizer,
+            )
         message_groups = self._build_message_groups(messages_spec)
         messages = []
         for group in message_groups:
@@ -1069,7 +1216,7 @@ class Session:
             meta.update(updates)
             await self._viking_fs.write_file(
                 uri=f"{archive_uri}/.meta.json",
-                content=json.dumps(meta, ensure_ascii=False),
+                content=json.dumps(meta, ensure_ascii=False).encode("utf-8"),
                 ctx=self.ctx,
                 lease_ref=lease_ref,
             )
@@ -1151,6 +1298,15 @@ class Session:
                 "ready_at": get_current_timestamp(),
             }
         )
+        # Hash the stored bytes, not the pre-write string: write_file() may
+        # replace registered privacy values. Retry callers read this back via
+        # get_session_archive() instead of needing raw filesystem access.
+        try:
+            stored = await self._viking_fs.read_file(f"{archive_uri}/messages.jsonl", ctx=self.ctx)
+            phase1["messages_sha256"] = hashlib.sha256(stored.encode("utf-8")).hexdigest()
+        except Exception as exc:
+            if not _is_storage_not_found(exc):
+                raise
         await self._merge_archive_meta(archive_uri, {"phase1": phase1})
 
     async def _archive_file_exists(self, archive_uri: str, file_name: str) -> bool:
@@ -1181,11 +1337,7 @@ class Session:
         if await self._archives.file_exists(archive_uri, ".failed.json"):
             return False
 
-        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
-            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
-        )
-        try:
+        async with self._state_lock():
             marker = await self._read_phase1_meta(archive_uri)
             if marker.get("status") == "ready":
                 return True
@@ -1247,13 +1399,14 @@ class Session:
             # Root is authoritative and proves the rewrite completed. Reconcile
             # metadata that may have been interrupted immediately afterwards.
             try:
-                meta_content = await self._viking_fs.read_file(
-                    f"{self._session_uri}/.meta.json",
-                    ctx=self.ctx,
+                self._meta = await self._read_commit_meta()
+            except Exception as exc:
+                await self._write_failed_marker(
+                    archive_uri,
+                    stage="phase1_recovery",
+                    error=f"Cannot restore Phase 1 metadata: {exc}",
                 )
-                self._meta = SessionMeta.from_dict(json.loads(meta_content))
-            except Exception:
-                pass
+                return False
             self._messages = live_messages
             self._remember_retention_policy(
                 keep_recent_count=max(0, int(marker.get("keep_recent_count", 0) or 0)),
@@ -1270,13 +1423,15 @@ class Session:
                 self._archives.archive_index_from_uri(archive_uri),
             )
             self._meta.last_commit_at = get_current_timestamp()
+            if isinstance(queue_message, dict) and queue_message.get("record_auto_commit_success"):
+                # Recovery must restore the Phase 1 throttle stamp even if
+                # the later Phase 2 statistics update is skipped.
+                self._meta.last_auto_commit_at = get_current_timestamp()
             await self._rebuild_pending_tokens()
             await self._save_meta()
             await self._write_phase1_ready_marker(archive_uri)
             logger.warning("Recovered interrupted Session Phase 1: %s", archive_uri)
             return True
-        finally:
-            await self._viking_fs._async_agfs.pathlock_release(lease)
 
     def commit(
         self,
@@ -1288,6 +1443,10 @@ class Session:
         keep_recent_turn_count: Optional[int] = None,
         retained_message_token_budget: Optional[int] = None,
         min_raw_tail_steps: Optional[int] = None,
+        session_window_context: Optional[int] = None,
+        summary_token_ratio: Optional[float] = None,
+        retained_token_ratio: Optional[float] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Sync wrapper for commit_async()."""
         return run_async(
@@ -1299,6 +1458,10 @@ class Session:
                 keep_recent_turn_count=keep_recent_turn_count,
                 retained_message_token_budget=retained_message_token_budget,
                 min_raw_tail_steps=min_raw_tail_steps,
+                session_window_context=session_window_context,
+                summary_token_ratio=summary_token_ratio,
+                retained_token_ratio=retained_token_ratio,
+                reasoning_effort=reasoning_effort,
             )
         )
 
@@ -1313,6 +1476,10 @@ class Session:
         keep_recent_turn_count: Optional[int] = None,
         retained_message_token_budget: Optional[int] = None,
         min_raw_tail_steps: Optional[int] = None,
+        session_window_context: Optional[int] = None,
+        summary_token_ratio: Optional[float] = None,
+        retained_token_ratio: Optional[float] = None,
+        reasoning_effort: Optional[str] = None,
         persist_keep_recent_count: bool = True,
         record_auto_commit_success: bool = False,
         record_idle_commit_success: bool = False,
@@ -1377,12 +1544,27 @@ class Session:
                 "retention_mode='turn_budget' is required when Turn retention fields are set"
             )
         turn_mode = retention_mode == RETENTION_MODE_TURN_BUDGET
+        effective_window_context = max(1, int(session_window_context or 128_000))
+        effective_summary_ratio = float(
+            0.25 if summary_token_ratio is None else summary_token_ratio
+        )
+        effective_retained_ratio = float(
+            0.05 if retained_token_ratio is None else retained_token_ratio
+        )
+        if effective_summary_ratio <= 0:
+            raise ValueError("summary_token_ratio must be greater than 0")
+        if effective_retained_ratio <= 0:
+            raise ValueError("retained_token_ratio must be greater than 0")
         effective_keep_turns = max(
             0, int(3 if keep_recent_turn_count is None else keep_recent_turn_count)
         )
         effective_token_budget = max(
             0,
-            int(12_000 if retained_message_token_budget is None else retained_message_token_budget),
+            int(
+                max(1, int(effective_window_context * effective_retained_ratio))
+                if retained_message_token_budget is None
+                else retained_message_token_budget
+            ),
         )
         effective_min_tail = max(0, int(1 if min_raw_tail_steps is None else min_raw_tail_steps))
         if turn_mode and effective_token_budget <= 0:
@@ -1426,12 +1608,8 @@ class Session:
         # The exact lock on the Session directory is the mutex for root Session
         # state and archive-number allocation. Child files use their own exact
         # locks, so Phase 2 can keep writing an earlier archive concurrently.
-        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
-            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
-        )
         publication_lease: Optional[Any] = None
-        try:
+        async with self._state_lock():
             self._messages = await self._read_live_messages_strict()
             await self._load_meta()
             if (
@@ -1591,6 +1769,9 @@ class Session:
                 record_auto_commit_success=record_auto_commit_success,
                 event_search_tags=list(effective_event_tags),
                 auto_commit_policy=dict(self._meta.auto_commit_policy or {}),
+                session_window_context=effective_window_context,
+                summary_token_ratio=effective_summary_ratio,
+                reasoning_effort=reasoning_effort,
             )
             phase1_stage = "phase1_persist"
             try:
@@ -1615,7 +1796,7 @@ class Session:
                     archive_persist_tasks.append(
                         self._viking_fs.write_file(
                             uri=f"{archive_uri}/messages.jsonl",
-                            content="\n".join(lines) + "\n",
+                            content=("\n".join(lines) + "\n").encode("utf-8"),
                             ctx=self.ctx,
                         )
                     )
@@ -1667,11 +1848,9 @@ class Session:
                 # this intentional registration window as an orphan.
                 phase1_stage = "publication_lease"
                 archive_path = self._viking_fs._uri_to_path(archive_uri, ctx=self.ctx)
-                publication_lease = (
-                    await self._viking_fs._async_agfs.pathlock_acquire_exact(
-                        archive_path,
-                        timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS,
-                    )
+                publication_lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
+                    archive_path,
+                    timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS,
                 )
                 await self._write_phase1_ready_marker(archive_uri)
                 if record_idle_commit_success:
@@ -1718,8 +1897,6 @@ class Session:
                         )
                     publication_lease = None
                 raise
-        finally:
-            await self._viking_fs._async_agfs.pathlock_release(lease)
         # Lock released; Phase 1 intent, retained root, metadata and ready
         # metadata are durable before Task-store or QueueFS latency.
 
@@ -1753,6 +1930,7 @@ class Session:
                     task_id,
                     self.ctx.account_id,
                     self.ctx.user.user_id,
+                    task_type="session_commit",
                 ):
                     await get_queue_manager().enqueue(
                         QueueManager.SESSION_COMMIT,
@@ -1822,7 +2000,7 @@ class Session:
         try:
             await self._viking_fs.write_file(
                 f"{archive_uri}/.done",
-                json.dumps({"context_reset": True, "enable_working_memory": False}),
+                json.dumps({"context_reset": True, "enable_working_memory": False}).encode("utf-8"),
                 ctx=self.ctx,
             )
         except Exception as exc:
@@ -1841,6 +2019,333 @@ class Session:
             error="session commit cancelled",
         )
 
+    async def _activate_archive_recovery(self, msg: "SessionCommitMsg") -> None:
+        """Verify recovery ownership and expose a failed archive to Phase 2."""
+        recovery = msg.recovery
+        if not recovery:
+            return
+        if recovery.get("version") != 1 or recovery.get("task_id") != msg.task_id:
+            raise FailedPreconditionError("Invalid recovery queue ownership metadata")
+        fs = self._viking_fs
+        session_path = fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        lease = await fs._async_agfs.pathlock_acquire_tree(
+            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+        )
+        try:
+            meta_uri = f"{msg.archive_uri}/.meta.json"
+            try:
+                meta_raw = await fs.read_file(meta_uri, ctx=self.ctx)
+            except Exception as exc:
+                if _is_storage_not_found(exc):
+                    raise FailedPreconditionError("Archive recovery metadata is missing") from exc
+                raise
+            try:
+                meta = json.loads(meta_raw)
+            except (TypeError, ValueError) as exc:
+                raise FailedPreconditionError("Archive recovery metadata is invalid") from exc
+            if not isinstance(meta, dict):
+                raise FailedPreconditionError("Archive recovery metadata is invalid")
+            persisted = meta.get("recovery")
+            if not isinstance(persisted, dict) or persisted.get("task_id") != msg.task_id:
+                raise FailedPreconditionError("Recovery task does not own this archive")
+            for field_name in ("kind", "previous_task_id", "messages_sha256"):
+                if persisted.get(field_name) != recovery.get(field_name):
+                    raise FailedPreconditionError(
+                        f"Recovery queue metadata does not match archive field {field_name}"
+                    )
+            raw_messages = await fs.read_file(f"{msg.archive_uri}/messages.jsonl", ctx=self.ctx)
+            actual_hash = hashlib.sha256(raw_messages.encode("utf-8")).hexdigest()
+            if actual_hash != recovery.get("messages_sha256"):
+                raise FailedPreconditionError("Archive messages changed after recovery enqueue")
+            if recovery.get("kind") != "failed":
+                return
+            failed_uri = f"{msg.archive_uri}/.failed.json"
+            try:
+                failed_raw = await fs.read_file(failed_uri, ctx=self.ctx)
+            except Exception as exc:
+                if not _is_storage_not_found(exc):
+                    raise
+                # Redelivery after a crash may observe that the first attempt
+                # already removed .failed.json.  Only continue when the
+                # immutable pre-recovery copy still proves which failure was
+                # activated; an unexplained missing marker is ambiguous.
+                backup_uri = f"{msg.archive_uri}/.failure-before-{msg.task_id}.json"
+                try:
+                    failed_raw = await fs.read_file(backup_uri, ctx=self.ctx)
+                except Exception as backup_exc:
+                    if _is_storage_not_found(backup_exc):
+                        raise FailedPreconditionError(
+                            "Archive failure marker disappeared without a recovery backup"
+                        ) from backup_exc
+                    raise
+                backup_hash = hashlib.sha256(failed_raw.encode("utf-8")).hexdigest()
+                if backup_hash != persisted.get("failed_sha256"):
+                    raise FailedPreconditionError(
+                        "Archive recovery failure backup changed after enqueue"
+                    )
+                return
+            failed_hash = hashlib.sha256(failed_raw.encode("utf-8")).hexdigest()
+            if failed_hash != persisted.get("failed_sha256"):
+                raise FailedPreconditionError(
+                    "Archive failure marker changed after recovery enqueue"
+                )
+            await fs.rm(failed_uri, ctx=self.ctx, lease_ref=lease)
+        finally:
+            await fs._async_agfs.pathlock_release(lease)
+
+    async def retry_archive(
+        self,
+        archive_id: str,
+        *,
+        expected_messages_sha256: str,
+        allow_ownerless_ready: bool = False,
+        allow_cancelled_failure: bool = False,
+    ) -> Dict[str, Any]:
+        """Safely enqueue one audited failed or ownerless-ready Phase 2 archive.
+
+        A stale ``pending``/``running`` task record is not ownership.  Durable
+        QueueFS work (including active work in ``TaskWorkIndex``) is.  The
+        caller must also bind the request to the exact raw message bytes so a
+        dry-run inventory cannot be replayed after the archive changes.
+        """
+        from openviking.service.task_tracker import TaskStatus, get_task_tracker
+        from openviking.service.task_work_index import bind_task_context
+        from openviking.storage.queuefs import QueueManager, get_queue_manager
+        from openviking.storage.queuefs.session_commit_msg import SessionCommitMsg
+
+        if not re.fullmatch(r"archive_[0-9]+", archive_id):
+            raise ValueError("Invalid archive ID")
+        expected_hash = str(expected_messages_sha256 or "").lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
+            raise ValueError("expected_messages_sha256 must be a lowercase SHA-256 digest")
+
+        fs = self._viking_fs
+        session_path = fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        lease = await fs._async_agfs.pathlock_acquire_tree(
+            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
+        )
+        try:
+            states = await self._archives.scan_states()
+            if archive_id in self._archives.covered_archive_ids(states):
+                return {
+                    "status": "skipped",
+                    "reason": "already_covered",
+                    "archive_id": archive_id,
+                }
+            state = next((item for item in states if item.archive_id == archive_id), None)
+            if state is None:
+                raise NotFoundError(archive_id, "archive")
+            if await fs.exists(f"{state.archive_uri}/.done", ctx=self.ctx):
+                raise FailedPreconditionError("Completed archives cannot be retried")
+
+            raw_messages = await fs.read_file(f"{state.archive_uri}/messages.jsonl", ctx=self.ctx)
+            actual_hash = hashlib.sha256(raw_messages.encode("utf-8")).hexdigest()
+            if actual_hash != expected_hash:
+                raise FailedPreconditionError("Archive messages changed after recovery audit")
+            archive_messages = await self._archives.read_messages(state.archive_uri)
+            if not archive_messages:
+                raise FailedPreconditionError("Archive has no messages")
+            archive_message_ids = {message.id for message in archive_messages}
+
+            meta = await self._archives.read_meta(state.archive_uri)
+            phase1 = meta.get("phase1")
+            if not isinstance(phase1, dict) or phase1.get("status") != "ready":
+                raise FailedPreconditionError("Archive Phase 1 is not ready")
+            if phase1.get("messages_sha256") not in (None, actual_hash):
+                raise FailedPreconditionError(
+                    "Archive messages no longer match the hash recorded at archive time"
+                )
+            queue_snapshot = phase1.get("queue_message")
+            if not isinstance(queue_snapshot, dict):
+                raise FailedPreconditionError("Archive Phase 1 queue message is missing")
+            # Supersede the current owner, which may be an earlier recovery
+            # task rather than the original Phase 1 task.
+            original_task_id = self._archive_owner_task_id(meta)
+            if not original_task_id:
+                raise FailedPreconditionError("Archive Phase 1 task ID is missing")
+
+            tracker = get_task_tracker()
+            queue = get_queue_manager().get_queue(QueueManager.SESSION_COMMIT)
+            queue_items = await queue.snapshot()
+            for item in queue_items:
+                payload = self._queue_payload(item)
+                if payload.get("archive_uri") == state.archive_uri:
+                    return {
+                        "status": "skipped",
+                        "reason": "archive_owned",
+                        "task_id": payload.get("task_id"),
+                        "archive_uri": state.archive_uri,
+                    }
+                if payload.get("session_uri") == self._session_uri:
+                    return {
+                        "status": "skipped",
+                        "reason": "session_busy",
+                        "task_id": payload.get("task_id"),
+                        "archive_uri": state.archive_uri,
+                    }
+
+            # Snapshot and live index checks deliberately ignore stale task
+            # status.  Only work that QueueFS or the active worker still owns
+            # can prevent recovery.
+            session_tasks = await tracker.list_tasks(
+                task_type="session_commit",
+                resource_id=self.session_id,
+                limit=None,
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+            )
+            live_owner = None
+            for task in session_tasks:
+                if await tracker.has_work(task.task_id):
+                    live_owner = task
+                    break
+            if live_owner is not None:
+                return {
+                    "status": "skipped",
+                    "reason": "session_busy",
+                    "task_id": live_owner.task_id,
+                    "archive_uri": state.archive_uri,
+                }
+            original_task = next(
+                (task for task in session_tasks if task.task_id == original_task_id), None
+            )
+            if original_task is None:
+                original_task = await tracker.get(
+                    original_task_id,
+                    account_id=self.ctx.account_id,
+                    user_id=self.ctx.user.user_id,
+                )
+            if (
+                original_task is not None
+                and original_task.status == TaskStatus.CANCELLED
+                and not allow_cancelled_failure
+            ):
+                raise FailedPreconditionError("Cancelled archives require explicit review")
+
+            if state.state == "failed":
+                failure = state.failed
+                cancelled_failure = (
+                    failure.get("stage") == "cancelled"
+                    or "cancel" in str(failure.get("error") or "").lower()
+                )
+                if cancelled_failure and not allow_cancelled_failure:
+                    raise FailedPreconditionError("Cancelled archives require explicit review")
+                recovery_kind = "failed"
+            elif state.state == "pending" and allow_ownerless_ready:
+                recovery_kind = "ownerless_ready"
+            elif state.state == "pending":
+                raise FailedPreconditionError(
+                    "Ownerless Phase 1 recovery requires allow_ownerless_ready=true"
+                )
+            else:
+                raise FailedPreconditionError("Archive is not recoverable")
+
+            completed_memory_steps: Dict[str, set[str]] = {}
+            self._archives.merge_completed_memory_steps(
+                completed_memory_steps, meta.get("completed_memory_steps")
+            )
+            recorded_ids = (
+                set().union(*completed_memory_steps.values()) if completed_memory_steps else set()
+            )
+            if not recorded_ids.issubset(archive_message_ids):
+                raise FailedPreconditionError(
+                    "Archive recovery progress references messages outside the raw archive"
+                )
+            memory_diff_exists = await fs.exists(
+                f"{state.archive_uri}/memory_diff.json", ctx=self.ctx
+            )
+            if memory_diff_exists and not completed_memory_steps.get("long_term"):
+                raise FailedPreconditionError(
+                    "Archive has memory_diff.json without durable long-term completion progress"
+                )
+
+            msg = SessionCommitMsg.from_dict(queue_snapshot)
+            new_task_id = str(uuid4())
+            msg.task_id = new_task_id
+            msg.session_id = self.session_id
+            msg.session_uri = self._session_uri
+            msg.archive_uri = state.archive_uri
+            msg.user = self.ctx.user.to_dict()
+            msg.recovery = {
+                "version": 1,
+                "kind": recovery_kind,
+                "task_id": new_task_id,
+                "previous_task_id": original_task_id,
+                "messages_sha256": actual_hash,
+            }
+
+            recovery_meta = dict(msg.recovery)
+            recovery_meta["created_at"] = get_current_timestamp()
+            if state.state == "failed":
+                failed_raw = await fs.read_file(f"{state.archive_uri}/.failed.json", ctx=self.ctx)
+                recovery_meta["failed_sha256"] = hashlib.sha256(
+                    failed_raw.encode("utf-8")
+                ).hexdigest()
+                await fs.write_file(
+                    f"{state.archive_uri}/.failure-before-{new_task_id}.json",
+                    failed_raw,
+                    ctx=self.ctx,
+                    lease_ref=lease,
+                )
+            if completed_memory_steps:
+                recovery_meta["completed_memory_steps"] = (
+                    self._archives.serialize_completed_memory_steps(completed_memory_steps)
+                )
+            meta_updates: Dict[str, Any] = {"recovery": recovery_meta}
+            await self._merge_archive_meta(state.archive_uri, meta_updates, lease_ref=lease)
+
+            if original_task is not None and original_task.status in (
+                TaskStatus.PENDING,
+                TaskStatus.RUNNING,
+                TaskStatus.CANCELLING,
+            ):
+                await tracker.fail(
+                    original_task_id,
+                    f"Session commit queue work was missing; superseded by recovery task {new_task_id}",
+                    account_id=self.ctx.account_id,
+                    user_id=self.ctx.user.user_id,
+                    result={
+                        "archive_uri": state.archive_uri,
+                        "recovery_task_id": new_task_id,
+                    },
+                )
+
+            await tracker.create(
+                "session_commit",
+                resource_id=self.session_id,
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+                task_id=new_task_id,
+                meta={
+                    "archive_uri": state.archive_uri,
+                    "recovery_kind": recovery_kind,
+                    "previous_task_id": original_task_id,
+                },
+            )
+            try:
+                with bind_task_context(new_task_id, self.ctx.account_id, self.ctx.user.user_id):
+                    await get_queue_manager().enqueue(QueueManager.SESSION_COMMIT, msg.to_dict())
+            except Exception as exc:
+                await tracker.fail(
+                    new_task_id,
+                    str(exc),
+                    account_id=self.ctx.account_id,
+                    user_id=self.ctx.user.user_id,
+                )
+                raise
+            return {
+                "status": "accepted",
+                "task_id": new_task_id,
+                "archive_uri": state.archive_uri,
+                "previous_task_id": original_task_id,
+                "recovery_kind": recovery_kind,
+                "completed_memory_steps": self._archives.serialize_completed_memory_steps(
+                    completed_memory_steps
+                ),
+            }
+        finally:
+            await fs._async_agfs.pathlock_release(lease)
+
     async def resume_queued_commit(self, msg: "SessionCommitMsg") -> bool:
         """Run one durable Phase 2 job from its archived messages."""
         from openviking.service.task_tracker import get_task_tracker
@@ -1853,6 +2358,19 @@ class Session:
             user_id=self.ctx.user.user_id,
             task_id=msg.task_id,
         )
+        try:
+            await self._activate_archive_recovery(msg)
+        except FailedPreconditionError as exc:
+            # A deterministic recovery-ownership/hash failure must be consumed
+            # as a business failure. Leaving it unacknowledged would make
+            # QueueFS redeliver the same unsafe message forever.
+            await tracker.fail(
+                msg.task_id,
+                str(exc),
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+            )
+            return True
 
         try:
             await self._viking_fs.read_file(f"{msg.archive_uri}/.done", ctx=self.ctx)
@@ -1974,6 +2492,9 @@ class Session:
             record_auto_commit_success=msg.record_auto_commit_success,
             event_search_tags=list(msg.event_search_tags or []),
             auto_commit_policy=msg.auto_commit_policy,
+            session_window_context=msg.session_window_context,
+            summary_token_ratio=msg.summary_token_ratio,
+            reasoning_effort=msg.reasoning_effort,
         )
         return True
 
@@ -2103,6 +2624,9 @@ class Session:
         record_auto_commit_success: bool = False,
         event_search_tags: Optional[List[str]] = None,
         auto_commit_policy: Optional[Dict[str, Any]] = None,
+        session_window_context: int = 128_000,
+        summary_token_ratio: float = 0.25,
+        reasoning_effort: Optional[str] = None,
     ) -> None:
         """Phase 2: Extract memories and enqueue semantic work in the background."""
         from openviking.service.task_tracker import get_task_tracker
@@ -2187,22 +2711,30 @@ class Session:
                             return
                         summary_kwargs: Dict[str, Any] = {
                             "latest_archive_overview": latest_archive_overview,
+                            "session_window_context": session_window_context,
+                            "summary_token_ratio": summary_token_ratio,
+                            "reasoning_effort": reasoning_effort,
                         }
                         if checkpoint_requests:
                             summary_kwargs["checkpoint_requests"] = checkpoint_requests
-                        summary_batches = plan_extraction_batches(
-                            extraction_messages,
-                            extraction_batch_limits,
+                        material_limit = max(1, int(session_window_context * 0.7))
+                        material_tokens = estimate_extraction_message_tokens(extraction_messages)
+                        summary_material_tokens = (
+                            estimate_text_tokens(latest_archive_overview)
+                            if latest_archive_overview
+                            else 0
                         )
-                        if checkpoint_requests or len(summary_batches) <= 1:
+                        material_tokens += _estimate_summary_template_tokens(
+                            latest_archive_overview, len(checkpoint_requests)
+                        )
+                        if material_tokens + summary_material_tokens <= material_limit:
                             generated = await self._generate_archive_summary_async(
                                 extraction_messages,
                                 **summary_kwargs,
                             )
                         else:
                             generated = await self._generate_archive_summary_with_batching(
-                                summary_batches,
-                                limits=extraction_batch_limits,
+                                extraction_messages,
                                 **summary_kwargs,
                             )
                         summary_result = (
@@ -2275,9 +2807,8 @@ class Session:
                             base_delay=_MEMORY_EXTRACTION_RETRY_BASE_DELAY_SECONDS,
                             max_delay=_MEMORY_EXTRACTION_RETRY_MAX_DELAY_SECONDS,
                             is_retryable=lambda error: (
-                                error.retryable
-                                if isinstance(error, MemoryUpdateError)
-                                else is_retryable_api_error(error)
+                                not isinstance(error, MemoryUpdateError)
+                                and is_retryable_api_error(error)
                             ),
                             logger=logger,
                             operation_name=operation_name,
@@ -2309,7 +2840,9 @@ class Session:
                         return result
 
                     # Summary and V3 long-term memory extraction run concurrently.
-                    memory_extraction_enabled = ov_config.memory.extraction_enabled
+                    memory_extraction_enabled = await get_memory_extraction_enabled(
+                        self._runtime_config_manager, self.ctx.account_id
+                    )
                     config_session_skill_extraction_enabled = (
                         ov_config.memory.session_skill_extraction_enabled
                     )
@@ -2511,12 +3044,15 @@ class Session:
             # Phase 2 complete — update meta with telemetry and commit info
             snapshot = telemetry.finish("ok")
             _publish_telemetry_summary_best_effort(snapshot)
-            await self._merge_and_save_commit_meta(
+            updated_meta = await self._merge_and_save_commit_meta(
                 archive_index=archive_index,
                 memories_extracted=memories_extracted,
                 telemetry_snapshot=snapshot,
                 record_auto_commit_success=record_auto_commit_success,
             )
+            # Keep the response schema stable when cumulative statistics are
+            # unavailable. This zero snapshot is never persisted to the session.
+            usage_meta = updated_meta if updated_meta is not None else SessionMeta()
 
             result_payload = {
                 "session_id": self.session_id,
@@ -2539,13 +3075,13 @@ class Session:
                 "agent_evolution_enabled": agent_evolution_enabled,
                 "agent_memory_skip_reason": agent_memory_skip_reason,
                 "token_usage": {
-                    "llm": dict(self._meta.llm_token_usage),
-                    "embedding": dict(self._meta.embedding_token_usage),
+                    "llm": dict(usage_meta.llm_token_usage),
+                    "embedding": dict(usage_meta.embedding_token_usage),
                     "total": {
-                        "total_tokens": self._meta.llm_token_usage["total_tokens"]
-                        + self._meta.embedding_token_usage["total_tokens"],
-                        "cached_tokens": self._meta.llm_token_usage["cached_tokens"],
-                        "reasoning_tokens": self._meta.llm_token_usage["reasoning_tokens"],
+                        "total_tokens": usage_meta.llm_token_usage["total_tokens"]
+                        + usage_meta.embedding_token_usage["total_tokens"],
+                        "cached_tokens": usage_meta.llm_token_usage["cached_tokens"],
+                        "reasoning_tokens": usage_meta.llm_token_usage["reasoning_tokens"],
                     },
                 },
             }
@@ -2637,7 +3173,7 @@ class Session:
         )
         await self._viking_fs.write_file(
             uri=f"{archive_uri}/.done",
-            content=content,
+            content=content.encode("utf-8"),
             ctx=self.ctx,
         )
 
@@ -2653,6 +3189,9 @@ class Session:
         """Persist a terminal failure marker under the marker file's own lock."""
         if not self._viking_fs:
             return
+        # Sanitize error separately because bytes bypass VikingFS PrivacySanitizer.
+        if self._privacy_sanitizer is not None:
+            error = (await self._privacy_sanitizer.sanitize(error, ctx=self.ctx)).content
         payload = {
             "stage": stage,
             "error": error,
@@ -2664,7 +3203,7 @@ class Session:
             payload["blocked_by"] = blocked_by
         await self._viking_fs.write_file(
             uri=f"{archive_uri}/.failed.json",
-            content=json.dumps(payload, ensure_ascii=False),
+            content=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             ctx=self.ctx,
         )
 
@@ -2674,10 +3213,15 @@ class Session:
             raise ValueError("token_budget must be greater than or equal to 0")
 
         context = await self._collect_session_context_components()
+        latest_archive = context["latest_archive"]
+        include_latest_overview = bool(
+            latest_archive and latest_archive["overview_tokens"] < token_budget
+        )
+        latest_archive_tokens = latest_archive["overview_tokens"] if include_latest_overview else 0
         merged_messages = context["messages"]
         budgeted = fit_active_messages_to_budget(
             merged_messages,
-            token_budget=token_budget,
+            token_budget=token_budget - latest_archive_tokens,
         )
         merged_messages = budgeted.messages
         message_tokens = budgeted.estimated_tokens
@@ -2696,16 +3240,6 @@ class Session:
             f"[get_session_context] session_id={self.session_id}, "
             f"messages={len(merged_messages)}, tokens={message_tokens}"
         )
-
-        remaining_budget = max(0, token_budget - message_tokens)
-
-        latest_archive = context["latest_archive"]
-        include_latest_overview = bool(
-            latest_archive and latest_archive["overview_tokens"] <= remaining_budget
-        )
-        latest_archive_tokens = latest_archive["overview_tokens"] if include_latest_overview else 0
-        if include_latest_overview:
-            remaining_budget -= latest_archive_tokens
 
         # pre_archive_abstracts: 保留字段返回空数组，保持 API 向下兼容
         included_pre_archive_abstracts: List[Dict[str, str]] = []
@@ -2753,31 +3287,38 @@ class Session:
         }
 
     async def get_session_archive(self, archive_id: str) -> Dict[str, Any]:
-        """Get one completed archive by archive ID."""
+        """Get one archive by archive ID.
 
-        for archive in await self._archives.completed_refs():
-            if archive["archive_id"] != archive_id:
-                continue
-
-            overview = await self._archives.read_overview(archive["archive_uri"])
-            if not overview and archive.get("enable_working_memory") is not False:
-                break
-
-            abstract = (
-                await self._archives.read_abstract(archive["archive_uri"], overview)
-                if overview
-                else ""
-            )
-            return {
-                "archive_id": archive_id,
-                "abstract": abstract,
-                "overview": overview,
-                "messages": [
-                    m.to_dict() for m in await self._archives.read_messages(archive["archive_uri"])
-                ],
-            }
-
-        raise NotFoundError(archive_id, "session archive")
+        Failed and pending archives are returned too, with ``status``,
+        ``failure`` and ``messages_sha256`` so a caller can pass the hash
+        unchanged to ``retry_archive``.
+        """
+        state = next(
+            (s for s in await self._archives.scan_states() if s.archive_id == archive_id),
+            None,
+        )
+        if state is None:
+            raise NotFoundError(archive_id, "session archive")
+        overview = abstract = ""
+        if state.state == "completed":
+            overview = await self._archives.read_overview(state.archive_uri)
+            if not overview and state.done.get("enable_working_memory") is not False:
+                raise NotFoundError(archive_id, "session archive")
+            if overview:
+                abstract = await self._archives.read_abstract(state.archive_uri, overview)
+        result: Dict[str, Any] = {
+            "archive_id": archive_id,
+            "status": state.state,
+            "abstract": abstract,
+            "overview": overview,
+            "messages_sha256": await self._archives.messages_sha256(state.archive_uri),
+            "messages": [
+                m.to_dict() for m in await self._archives.read_messages(state.archive_uri)
+            ],
+        }
+        if state.failed:
+            result["failure"] = state.failed
+        return result
 
     # ============= Internal methods =============
 
@@ -2887,14 +3428,14 @@ class Session:
         if await self._archives.terminal_state(predecessor_uri) != "pending":
             return True
 
-        phase1 = await self._read_phase1_meta(predecessor_uri)
-        if not phase1:
+        meta = await self._archives.read_meta(predecessor_uri)
+        phase1 = meta.get("phase1")
+        if not isinstance(phase1, dict) or not phase1:
             return False
         if phase1.get("status") != "ready":
             return not await self._ensure_phase1_ready(predecessor_uri)
 
-        queue_message = phase1.get("queue_message")
-        task_id = queue_message.get("task_id") if isinstance(queue_message, dict) else None
+        task_id = self._archive_owner_task_id(meta)
         if not task_id:
             return False
 
@@ -2974,22 +3515,19 @@ class Session:
         telemetry_snapshot: Any,
         *,
         record_auto_commit_success: bool = False,
-    ) -> None:
-        """Merge Phase 2 results without overwriting concurrent root updates."""
-        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
-        lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
-            session_path, timeout_secs=_SESSION_PHASE1_LOCK_TIMEOUT_SECONDS
-        )
-        try:
-            latest_meta = self._meta
+    ) -> Optional[SessionMeta]:
+        """Return saved metadata, or None when its read fails and statistics are skipped."""
+        async with self._state_lock(".meta.json") as lease:
             try:
-                meta_content = await self._viking_fs.read_file(
-                    f"{self._session_uri}/.meta.json",
-                    ctx=self.ctx,
+                latest_meta = await self._read_commit_meta()
+            except Exception as exc:
+                reason = f"{type(exc).__name__}: {exc}"
+                logger.warning(
+                    "Session %s extraction completed without updating statistics: %s",
+                    self.session_id,
+                    reason,
                 )
-                latest_meta = SessionMeta.from_dict(json.loads(meta_content))
-            except Exception:
-                latest_meta = self._meta
+                return None
 
             if telemetry_snapshot:
                 llm = telemetry_snapshot.summary.get("tokens", {}).get("llm", {})
@@ -3012,28 +3550,13 @@ class Session:
                     latest_meta.memories_extracted.get("total", 0) + count
                 )
             latest_meta.last_commit_at = get_current_timestamp()
-            latest_meta.message_count = await self._read_live_message_count()
             if record_auto_commit_success:
                 # Mirror the Phase 1 success stamp so the persisted meta reflects
                 # a clean auto-commit even after Phase 2 reloads the latest meta.
                 latest_meta.last_auto_commit_at = get_current_timestamp()
             self._meta = latest_meta
-            await self._save_meta()
-        finally:
-            await self._viking_fs._async_agfs.pathlock_release(lease)
-
-    async def _read_live_message_count(self) -> int:
-        """Count current live session messages from persisted storage."""
-        if not self._viking_fs:
-            return len(self._messages)
-        try:
-            content = await self._viking_fs.read_file(
-                f"{self._session_uri}/messages.jsonl",
-                ctx=self.ctx,
-            )
-        except Exception:
-            return len(self._messages)
-        return len([line for line in content.strip().split("\n") if line.strip()])
+            await self._save_meta(lease_ref=lease)
+            return latest_meta
 
     async def _read_live_messages_strict(self) -> List[Message]:
         """Read the authoritative root JSONL without silently dropping corrupt rows."""
@@ -3068,17 +3591,29 @@ class Session:
 
     async def _generate_archive_summary_with_batching(
         self,
-        batches: List[ExtractionMessageBatch],
+        messages: List[Message],
         *,
         latest_archive_overview: str,
-        limits: ExtractionBatchLimits,
-    ) -> str:
-        messages = [message for batch in batches for message in batch.messages]
+        session_window_context: int = 128_000,
+        summary_token_ratio: float = 0.25,
+        reasoning_effort: Optional[str] = None,
+        checkpoint_requests: Optional[List[_CheckpointRequest]] = None,
+        output_language_override: str | None = None,
+    ) -> str | _ArchiveSummaryResult:
+        if output_language_override is None:
+            output_language_override = await get_output_language_override(
+                self._runtime_config_manager, self.ctx.account_id
+            )
         vlm = await self._get_vlm_config()
         if not (vlm and vlm.is_available()):
             return await self._generate_archive_summary_async(
                 messages,
                 latest_archive_overview=latest_archive_overview,
+                session_window_context=session_window_context,
+                summary_token_ratio=summary_token_ratio,
+                reasoning_effort=reasoning_effort,
+                checkpoint_requests=checkpoint_requests,
+                output_language_override=output_language_override,
             )
         try:
             _load_render_prompt()
@@ -3086,27 +3621,113 @@ class Session:
             return await self._generate_archive_summary_async(
                 messages,
                 latest_archive_overview=latest_archive_overview,
+                session_window_context=session_window_context,
+                summary_token_ratio=summary_token_ratio,
+                reasoning_effort=reasoning_effort,
+                checkpoint_requests=checkpoint_requests,
+                output_language_override=output_language_override,
             )
 
+        material_limit = max(1, int(session_window_context * 0.7))
         logger.info(
-            "Processing Phase 2 Working Memory extraction in %s planned batches "
-            "using auto-commit limits tokens=%s messages=%s",
-            len(batches),
-            limits.max_message_tokens,
-            limits.max_messages,
+            "Processing Phase 2 Working Memory rolling summary for %s estimated "
+            "message tokens with material_limit=%s",
+            estimate_extraction_message_tokens(messages),
+            material_limit,
         )
         current_overview = latest_archive_overview
+        remaining = deque(messages)
+        if (
+            estimate_text_tokens(current_overview)
+            + _estimate_summary_template_tokens(current_overview)
+            >= material_limit
+        ):
+            remaining.appendleft(
+                Message(id="previous-summary", role="assistant", parts=[TextPart(current_overview)])
+            )
+            current_overview = ""
+        segment_index = 0
 
-        for batch in batches:
-            batch_messages = list(batch.messages)
+        while remaining:
+            segment_index += 1
+            summary_tokens = estimate_text_tokens(current_overview) if current_overview else 0
+            template_tokens = _estimate_summary_template_tokens(current_overview)
+            chunk_limit = material_limit - summary_tokens - template_tokens
+            if chunk_limit <= 0:
+                raise ValueError("Generated summary exceeds the rolling material budget")
+            batch_messages: List[Message] = []
+            batch_tokens = 0
+            while remaining:
+                message_tokens = estimate_extraction_message_tokens([remaining[0]])
+                if batch_messages and batch_tokens + message_tokens > chunk_limit:
+                    break
+                if not batch_messages and message_tokens > chunk_limit:
+                    message = remaining.popleft()
+                    text = (
+                        "".join(part.text for part in message.parts)
+                        if all(isinstance(part, TextPart) for part in message.parts)
+                        else wm.format_messages_for_wm([message], [])
+                    )
+                    low, high = 0, len(text)
+                    while low < high:
+                        middle = (low + high + 1) // 2
+                        if estimate_text_tokens(text[:middle]) <= chunk_limit:
+                            low = middle
+                        else:
+                            high = middle - 1
+                    if low == 0:
+                        raise ValueError("Rolling summary leaves no room for the next message")
+                    batch_messages.append(replace(message, parts=[TextPart(text[:low])]))
+                    if low < len(text):
+                        remaining.appendleft(replace(message, parts=[TextPart(text[low:])]))
+                    batch_tokens = estimate_extraction_message_tokens(batch_messages)
+                    break
+                batch_messages.append(remaining.popleft())
+                batch_tokens += message_tokens
+                if batch_tokens >= chunk_limit:
+                    break
+            logger.info(
+                "Processing Phase 2 Working Memory rolling summary segment %s "
+                "messages=%s chunk_tokens=%s summary_tokens=%s material_limit=%s",
+                segment_index,
+                len(batch_messages),
+                batch_tokens,
+                summary_tokens,
+                material_limit,
+            )
             generated = await self._generate_archive_summary_async(
                 batch_messages,
                 latest_archive_overview=current_overview,
+                output_language_override=output_language_override,
+                session_window_context=session_window_context,
+                summary_token_ratio=summary_token_ratio,
+                reasoning_effort=reasoning_effort,
             )
             current_overview = (
                 generated.overview
                 if isinstance(generated, _ArchiveSummaryResult)
                 else str(generated or "")
+            )
+        if checkpoint_requests:
+            checkpoint_summaries = []
+            for request in checkpoint_requests:
+                source_ids = set(request.source_message_ids)
+                checkpoint_summaries.append(
+                    await self._generate_archive_summary_with_batching(
+                        [message for message in messages if message.id in source_ids],
+                        latest_archive_overview=request.previous_checkpoint_abstract,
+                        output_language_override=output_language_override,
+                        session_window_context=session_window_context,
+                        summary_token_ratio=min(
+                            summary_token_ratio,
+                            request.retained_message_token_budget / session_window_context,
+                        ),
+                        reasoning_effort=reasoning_effort,
+                    )
+                )
+            return _ArchiveSummaryResult(
+                overview=current_overview,
+                checkpoint_summaries=tuple(checkpoint_summaries),
             )
         return current_overview
 
@@ -3115,6 +3736,10 @@ class Session:
         messages: List[Message],
         latest_archive_overview: str = "",
         checkpoint_requests: Optional[List[_CheckpointRequest]] = None,
+        session_window_context: int = 128_000,
+        summary_token_ratio: float = 0.25,
+        reasoning_effort: Optional[str] = None,
+        output_language_override: str | None = None,
     ) -> str | _ArchiveSummaryResult:
         """Generate Working Memory document for the current archive (async).
 
@@ -3147,10 +3772,19 @@ class Session:
             for line in part.text.splitlines()
             if line.strip()
         )
+        if output_language_override is None:
+            output_language_override = await get_output_language_override(
+                self._runtime_config_manager, self.ctx.account_id
+            )
         output_language = resolve_output_language_from_conversation(
-            language_conversation, config=get_openviking_config()
+            language_conversation, output_language_override=output_language_override
         )
         checkpoint_instructions = wm.checkpoint_prompt_instructions(len(checkpoint_requests))
+        session_window_context = max(1, int(session_window_context or 128_000))
+        summary_budget_tokens = max(1, int(session_window_context * float(summary_token_ratio)))
+        completion_kwargs: Dict[str, Any] = {}
+        if reasoning_effort is not None:
+            completion_kwargs["reasoning_effort"] = reasoning_effort
 
         vlm = await self._get_vlm_config()
         if not (vlm and vlm.is_available()):
@@ -3171,6 +3805,152 @@ class Session:
             return (
                 f"# Session Summary\n\n**Overview**: {turn_count} turns, {len(messages)} messages"
             )
+
+        async def _complete(*, prompt="", messages=None, tools=None, **kwargs):
+            used_tokens = estimate_text_tokens(prompt) + sum(
+                estimate_text_tokens(str(message.get("content") or "")) + 4
+                for message in messages or []
+            )
+            if prompt:
+                used_tokens += 4
+            if tools:
+                used_tokens += estimate_text_tokens(json.dumps(tools, ensure_ascii=False))
+            output_budget = session_window_context - used_tokens
+            if output_budget <= 0:
+                raise ValueError("Working Memory prompt exceeds session_window_context")
+            output_budget = _limit_summary_output_tokens(vlm, output_budget)
+            return await vlm.get_completion_async(
+                prompt=prompt,
+                messages=messages,
+                tools=tools,
+                max_tokens=output_budget,
+                **completion_kwargs,
+                **kwargs,
+            )
+
+        async def _fit_summary(
+            *,
+            first_overview: str,
+            input_material: str,
+        ) -> str:
+            overview = str(first_overview or "")
+            if not getattr(
+                getattr(get_openviking_config(), "memory", None),
+                "summary_budget_retry_enabled",
+                False,
+            ):
+                return overview
+            actual_tokens = estimate_text_tokens(overview)
+            if actual_tokens <= summary_budget_tokens:
+                return overview
+
+            logger.warning(
+                "Working Memory summary exceeded budget; retrying compact summary "
+                "actual_tokens=%s summary_budget_tokens=%s overage_tokens=%s",
+                actual_tokens,
+                summary_budget_tokens,
+                actual_tokens - summary_budget_tokens,
+            )
+            second_system = (
+                "The previous Working Memory exceeded the hard summary budget.\n\n"
+                f"Hard budget: {summary_budget_tokens} tokens\n"
+                f"Previous output: {actual_tokens} tokens\n"
+                f"Overage: {max(0, actual_tokens - summary_budget_tokens)} tokens\n\n"
+                "Rewrite the supplied complete Working Memory as a more compact complete "
+                "Working Memory. Return only the full summary text, not tool calls or "
+                "section update operations. "
+                f"Write the summary in {output_language}. Merge duplicate wording, "
+                "remove low-priority process details, resolved issues that no longer "
+                "matter, and non-essential URLs or media lists. Preserve current state, "
+                "open issues, concrete decisions, dates, numbers, file paths, and user "
+                f"corrections. The final output must fit within {summary_budget_tokens} tokens."
+            )
+            second = str(
+                await _complete(
+                    messages=[
+                        {"role": "system", "content": second_system},
+                        {"role": "user", "content": overview},
+                    ],
+                )
+                or ""
+            )
+            actual_tokens = estimate_text_tokens(second)
+            if actual_tokens <= summary_budget_tokens:
+                logger.info(
+                    "Working Memory summary budget retry succeeded "
+                    "actual_tokens=%s summary_budget_tokens=%s",
+                    actual_tokens,
+                    summary_budget_tokens,
+                )
+                return second
+
+            logger.warning(
+                "Working Memory summary budget retry still exceeded budget; "
+                "using final fallback actual_tokens=%s summary_budget_tokens=%s "
+                "overage_tokens=%s",
+                actual_tokens,
+                summary_budget_tokens,
+                actual_tokens - summary_budget_tokens,
+            )
+            third_system = (
+                f"Final fallback: write at most {summary_budget_tokens} tokens. Drop details. "
+                "Keep only current task, latest state, next step, key constraints or user "
+                "corrections, and active paths, numbers, or dates. Do not preserve the "
+                "7-section structure. Put the most important information first so that "
+                "even a truncated output can support continued work."
+            )
+            third_user = (
+                f"<summary_budget_tokens>{summary_budget_tokens}</summary_budget_tokens>\n"
+                "<previous_output>\n"
+                f"{second}\n"
+                "</previous_output>\n\n"
+                "<source_material>\n"
+                f"{input_material}\n"
+                "</source_material>"
+            )
+            third_limit = _limit_summary_output_tokens(
+                vlm, min(session_window_context, summary_budget_tokens)
+            )
+            material_budget = (
+                session_window_context - third_limit - estimate_text_tokens(third_system) - 8
+            )
+            if material_budget <= 0:
+                raise ValueError("Working Memory fallback leaves no room for source material")
+            third_user = truncate_text_to_token_budget(
+                third_user, material_budget, marker="", head_ratio=0.5
+            )
+            third = str(
+                await vlm.get_completion_async(
+                    messages=[
+                        {"role": "system", "content": third_system},
+                        {"role": "user", "content": third_user},
+                    ],
+                    max_tokens=third_limit,
+                    **(
+                        {"reasoning_effort": reasoning_effort}
+                        if reasoning_effort is not None
+                        else {}
+                    ),
+                )
+                or ""
+            )
+            third_tokens = estimate_text_tokens(third)
+            if third_tokens > summary_budget_tokens:
+                logger.warning(
+                    "Working Memory summary final fallback exceeded budget "
+                    "actual_tokens=%s summary_budget_tokens=%s overage_tokens=%s",
+                    third_tokens,
+                    summary_budget_tokens,
+                    third_tokens - summary_budget_tokens,
+                )
+            else:
+                logger.info(
+                    "Working Memory summary final fallback succeeded "
+                    "actual_tokens=%s summary_budget_tokens=%s",
+                    third_tokens,
+                    summary_budget_tokens,
+                )
+            return third
 
         # -------- Detect WM v2 format --------
         _is_wm_v2 = latest_archive_overview and any(
@@ -3193,7 +3973,7 @@ class Session:
                 },
             )
             if checkpoint_requests:
-                response = await vlm.get_completion_async(
+                response = await _complete(
                     prompt=prompt,
                     tools=[WM_CREATE_WITH_CHECKPOINTS_TOOL],
                     tool_choice=(
@@ -3218,13 +3998,22 @@ class Session:
                 if not isinstance(working_memory, str) or not working_memory.strip():
                     raise ValueError("create_working_memory.working_memory is empty")
                 return _ArchiveSummaryResult(
-                    overview=working_memory,
+                    overview=await _fit_summary(
+                        first_overview=working_memory,
+                        input_material=f"{latest_archive_overview}\n\n{formatted}",
+                    ),
                     checkpoint_summaries=wm.parse_required_checkpoint_summaries(
                         args,
                         len(checkpoint_requests),
                     ),
                 )
-            return await vlm.get_completion_async(prompt)
+            first = await _complete(
+                prompt=prompt,
+            )
+            return await _fit_summary(
+                first_overview=str(first or ""),
+                input_material=formatted,
+            )
 
         # -------- Branch 2: has prior WM v2 -> tool_call incremental update --------
         wm.wm_debug(f"branch=UPDATE (prior WM={len(latest_archive_overview)}B)")
@@ -3241,7 +4030,7 @@ class Session:
                 "output_language": output_language,
             },
         )
-        resp = await vlm.get_completion_async(
+        resp = await _complete(
             prompt=update_prompt,
             tools=[WM_UPDATE_TOOL],
             tool_choice=(
@@ -3264,8 +4053,17 @@ class Session:
             if checkpoint_requests:
                 raise ValueError("Working Memory update returned no tool call for checkpoints")
             logger.warning("WM update: LLM returned no tool_call; falling back to creation prompt")
-            return await self._fallback_generate_wm_creation(
-                formatted, messages, latest_archive_overview, output_language
+            fallback = await self._fallback_generate_wm_creation(
+                formatted,
+                messages,
+                latest_archive_overview,
+                output_language,
+                session_window_context=session_window_context,
+                reasoning_effort=reasoning_effort,
+            )
+            return await _fit_summary(
+                first_overview=fallback,
+                input_material=f"{latest_archive_overview}\n\n{formatted}",
             )
 
         checkpoint_summaries: tuple[str, ...] = ()
@@ -3358,15 +4156,27 @@ class Session:
                     len(salvaged),
                     len(WM_SEVEN_SECTIONS),
                 )
-                return wm.merge_wm_sections(latest_archive_overview, salvaged)
+                return await _fit_summary(
+                    first_overview=wm.merge_wm_sections(latest_archive_overview, salvaged),
+                    input_material=f"{latest_archive_overview}\n\n{formatted}",
+                )
             wm.wm_debug("regex recovery salvaged 0 sections; falling back to creation prompt")
             logger.warning(
                 "WM update: tool_call arguments parse failed (%s); "
                 "regex recovery found nothing; falling back to creation prompt",
                 e,
             )
-            return await self._fallback_generate_wm_creation(
-                formatted, messages, latest_archive_overview, output_language
+            fallback = await self._fallback_generate_wm_creation(
+                formatted,
+                messages,
+                latest_archive_overview,
+                output_language,
+                session_window_context=session_window_context,
+                reasoning_effort=reasoning_effort,
+            )
+            return await _fit_summary(
+                first_overview=fallback,
+                input_material=f"{latest_archive_overview}\n\n{formatted}",
             )
 
         wm.wm_debug(
@@ -3374,6 +4184,10 @@ class Session:
             f"ops_summary={[(k, v.get('op') if isinstance(v, dict) else type(v).__name__) for k, v in ops.items()][:7]}"
         )
         overview = wm.merge_wm_sections(latest_archive_overview, ops)
+        overview = await _fit_summary(
+            first_overview=overview,
+            input_material=f"{latest_archive_overview}\n\n{formatted}",
+        )
         if checkpoint_requests:
             return _ArchiveSummaryResult(
                 overview=overview,
@@ -3387,6 +4201,8 @@ class Session:
         messages: List[Message],
         prior_overview: str = "",
         output_language: str = "en",
+        session_window_context: int = 128_000,
+        reasoning_effort: Optional[str] = None,
     ) -> str:
         """Regenerate WM when a successful update response cannot be parsed.
 
@@ -3409,7 +4225,17 @@ class Session:
             },
         )
         vlm = await self._get_vlm_config()
-        return await vlm.get_completion_async(prompt)
+        output_budget = int(session_window_context or 128_000) - estimate_text_tokens(prompt) - 4
+        if output_budget <= 0:
+            raise ValueError("Working Memory prompt exceeds session_window_context")
+        output_budget = _limit_summary_output_tokens(vlm, output_budget)
+        kwargs: Dict[str, Any] = {
+            "prompt": prompt,
+            "max_tokens": output_budget,
+        }
+        if reasoning_effort is not None:
+            kwargs["reasoning_effort"] = reasoning_effort
+        return await vlm.get_completion_async(**kwargs)
 
     async def _write_to_agfs_async(
         self,
@@ -3426,6 +4252,8 @@ class Session:
         abstract = self._generate_abstract()
         overview = self._generate_overview(turn_count)
 
+        # Payloads are already sanitized; bytes bypass VikingFS PrivacySanitizer
+        # to preserve JSON keys and identity fields.
         lines = [m.to_jsonl() for m in messages]
         content = "\n".join(lines) + "\n" if lines else ""
         abstract_content = render_abstract_overview(
@@ -3454,7 +4282,7 @@ class Session:
         root_write_results = await asyncio.gather(
             viking_fs.write_file(
                 uri=f"{self._session_uri}/messages.jsonl",
-                content=content,
+                content=content.encode("utf-8"),
                 ctx=self.ctx,
                 lease_ref=lease_ref,
             ),

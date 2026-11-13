@@ -33,9 +33,7 @@ VOLCENGINE_CLIENT_REQUEST_ID = "ToB-direct,OpenViking_Service,openviking-service
 T = TypeVar("T")
 
 
-def _record_failed_embedding_call(
-    embedder, *, duration_seconds: float, error: Exception
-) -> None:
+def _record_failed_embedding_call(embedder, *, duration_seconds: float, error: Exception) -> None:
     """Emit a failed Ark request attempt with the same model labels as a success."""
     try:
         root_context = get_root_observability_context()
@@ -46,6 +44,7 @@ def _record_failed_embedding_call(
             prompt_tokens=0,
             completion_tokens=0,
             error_code=extract_metric_error_code(error),
+            cost_bearer=getattr(embedder, "cost_bearer", None),
             account_id=root_context.account_id if root_context is not None else None,
         )
     except Exception:
@@ -281,9 +280,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
                         extra_headers=self.extra_headers,
                     ),
                 )
-                self._update_telemetry_token_usage(
-                    response, duration_seconds=duration_seconds
-                )
+                self._update_telemetry_token_usage(response, duration_seconds=duration_seconds)
                 vector = response.data.embedding
             else:
                 # Use text embeddings API (text-only)
@@ -296,9 +293,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
                         extra_headers=self.extra_headers,
                     ),
                 )
-                self._update_telemetry_token_usage(
-                    response, duration_seconds=duration_seconds
-                )
+                self._update_telemetry_token_usage(response, duration_seconds=duration_seconds)
                 vector = response.data[0].embedding
 
             vector = truncate_and_normalize(vector, self.dimension)
@@ -314,9 +309,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
             raise RuntimeError(f"Volcengine embedding failed: {str(e)}") from e
 
     def _get_async_client(self):
-        return self._async_client_cache.get(
-            lambda: _create_async_ark(self._ark_kwargs)
-        )
+        return self._async_client_cache.get(lambda: _create_async_ark(self._ark_kwargs))
 
     @model_error_boundary
     async def embed_async(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
@@ -332,9 +325,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
                         extra_headers=self.extra_headers,
                     ),
                 )
-                self._update_telemetry_token_usage(
-                    response, duration_seconds=duration_seconds
-                )
+                self._update_telemetry_token_usage(response, duration_seconds=duration_seconds)
                 vector = response.data.embedding
             else:
                 text = extract_text_from_content(content)
@@ -346,9 +337,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
                         extra_headers=self.extra_headers,
                     ),
                 )
-                self._update_telemetry_token_usage(
-                    response, duration_seconds=duration_seconds
-                )
+                self._update_telemetry_token_usage(response, duration_seconds=duration_seconds)
                 vector = response.data[0].embedding
 
             return EmbedResult(dense_vector=truncate_and_normalize(vector, self.dimension))
@@ -356,6 +345,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
         try:
             return await self._run_once_async(
                 _embed_call,
+                is_query=is_query,
                 logger=logger,
                 operation_name="Volcengine async embedding",
             )
@@ -468,9 +458,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
                     extra_headers=self.extra_headers,
                 ),
             )
-            self._update_telemetry_token_usage(
-                response, duration_seconds=duration_seconds
-            )
+            self._update_telemetry_token_usage(response, duration_seconds=duration_seconds)
             item = response.data
             sparse_vector = getattr(item, "sparse_embedding", None)
             return EmbedResult(sparse_vector=process_sparse_embedding(sparse_vector))
@@ -485,9 +473,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
             raise RuntimeError(f"Volcengine sparse embedding failed: {str(e)}") from e
 
     def _get_async_client(self):
-        return self._async_client_cache.get(
-            lambda: _create_async_ark(self._ark_kwargs)
-        )
+        return self._async_client_cache.get(lambda: _create_async_ark(self._ark_kwargs))
 
     @model_error_boundary
     async def embed_async(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
@@ -503,9 +489,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
                     extra_headers=self.extra_headers,
                 ),
             )
-            self._update_telemetry_token_usage(
-                response, duration_seconds=duration_seconds
-            )
+            self._update_telemetry_token_usage(response, duration_seconds=duration_seconds)
             item = response.data
             sparse_vector = getattr(item, "sparse_embedding", None)
             return EmbedResult(sparse_vector=process_sparse_embedding(sparse_vector))
@@ -513,6 +497,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
         try:
             return await self._run_once_async(
                 _embed_call,
+                is_query=is_query,
                 logger=logger,
                 operation_name="Volcengine async sparse embedding",
             )
@@ -677,9 +662,7 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
             raise RuntimeError(f"Volcengine hybrid embedding failed: {str(e)}") from e
 
     def _get_async_client(self):
-        return self._async_client_cache.get(
-            lambda: _create_async_ark(self._ark_kwargs)
-        )
+        return self._async_client_cache.get(lambda: _create_async_ark(self._ark_kwargs))
 
     @model_error_boundary
     async def embed_async(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
@@ -707,6 +690,7 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
         try:
             return await self._run_once_async(
                 _embed_call,
+                is_query=is_query,
                 logger=logger,
                 operation_name="Volcengine async hybrid embedding",
             )

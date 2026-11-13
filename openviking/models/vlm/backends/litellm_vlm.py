@@ -14,7 +14,8 @@ os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
 import litellm
 from litellm import acompletion, completion
-from litellm.types.utils import all_litellm_params
+from litellm.types.utils import LlmProviders, all_litellm_params
+from litellm.utils import ProviderConfigManager
 
 from openviking.models.model_error import model_error_boundary
 from openviking.telemetry import tracer
@@ -22,7 +23,7 @@ from openviking.utils.message_format import format_messages, sanitize_openai_mes
 from openviking.utils.multimodal import redact_image_data_urls
 from openviking_cli.utils import get_logger
 
-from ..base import ToolCall, VLMBase, VLMResponse
+from ..base import ToolCall, ToolResultMediaMode, VLMBase, VLMResponse
 
 logger = get_logger(__name__)
 
@@ -175,6 +176,22 @@ class LiteLLMVLMProvider(VLMBase):
         litellm.suppress_debug_info = True
         litellm.drop_params = True
 
+    def _declared_provider(self, model: str | None) -> str | None:
+        """Read a transport declaration without changing legacy text routing."""
+        prefix, separator, _ = str(model or "").partition("/")
+        candidates = [str(self._provider_name or "").lower(), prefix.lower() if separator else ""]
+        if _has_litellm_prefix(
+            str(model or ""), (*EXPLICIT_LITELLM_PREFIXES, "openai/", *OLLAMA_LITELLM_PREFIXES)
+        ):
+            candidates.reverse()
+        for candidate in candidates:
+            if candidate and candidate != "litellm":
+                try:
+                    return LlmProviders(candidate).value
+                except ValueError:
+                    pass
+        return None
+
     def _setup_env(self, api_key: str, model: str | None) -> None:
         """Set environment variables based on detected provider."""
         provider = self._provider_name
@@ -219,6 +236,29 @@ class LiteLLMVLMProvider(VLMBase):
         if "/" in resolved_model:
             return resolved_model.split("/", 1)[0].lower()
         return self._detected_provider or detect_provider_by_model(resolved_model) or self.provider
+
+    def tool_result_media_mode(self) -> ToolResultMediaMode:
+        """Select message placement, never infer a model's vision capability."""
+        provider = self._declared_provider(self.model)
+        if provider is None or not self.model:
+            return "user_message"
+        resolved = self._resolve_model(self.model)
+        actual_provider, separator, model = resolved.partition("/")
+        if not separator or actual_provider != provider:
+            return "user_message"
+        try:
+            config = ProviderConfigManager.get_provider_chat_config(
+                model=model, provider=LlmProviders(provider)
+            )
+        except ValueError:
+            return "user_message"
+        config_type = config if isinstance(config, type) else type(config)
+        native_protocols = ("AnthropicConfig", "AzureAnthropicConfig", "VertexAIAnthropicConfig")
+        return (
+            "native"
+            if config_type in tuple(getattr(litellm, name, None) for name in native_protocols)
+            else "user_message"
+        )
 
     def _should_forward_api_key(self, model: str) -> bool:
         if not self.api_key:
@@ -286,18 +326,21 @@ class LiteLLMVLMProvider(VLMBase):
         tool_choice: Optional[str] = None,
         thinking: Optional[bool] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> dict[str, Any]:
         """Build kwargs for LiteLLM call."""
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": sanitize_openai_messages(messages),
-            "temperature": self.temperature,
+            **({"temperature": self.temperature} if self.temperature is not None else {}),
             "timeout": self.timeout,
             "num_retries": 0,
         }
         effective_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
         if effective_max_tokens is not None:
             kwargs["max_tokens"] = effective_max_tokens
+        if reasoning_effort is not None:
+            kwargs["reasoning_effort"] = reasoning_effort
 
         if self._should_forward_api_key(model):
             kwargs["api_key"] = self.api_key
@@ -409,6 +452,9 @@ class LiteLLMVLMProvider(VLMBase):
                     "completion_tokens": response.usage.completion_tokens,
                     "total_tokens": response.usage.total_tokens,
                     "prompt_tokens_details": getattr(response.usage, "prompt_tokens_details", None),
+                    "completion_tokens_details": getattr(
+                        response.usage, "completion_tokens_details", None
+                    ),
                 }
 
             return VLMResponse(
@@ -427,11 +473,18 @@ class LiteLLMVLMProvider(VLMBase):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> dict[str, Any]:
         model = self._resolve_model(self.model or "gpt-4o-mini")
         kwargs_messages = messages or [{"role": "user", "content": prompt}]
         return self._build_kwargs(
-            model, kwargs_messages, tools, tool_choice, thinking=thinking, max_tokens=max_tokens
+            model,
+            kwargs_messages,
+            tools,
+            tool_choice,
+            thinking=thinking,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
         )
 
     def _build_vision_kwargs(
@@ -473,8 +526,11 @@ class LiteLLMVLMProvider(VLMBase):
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
             tracer.info(f"response={response}")
-            if tools:
-                return self._build_vlm_response(response, has_tools=True)
+            if tools is not None:
+                result = self._build_vlm_response(response, has_tools=True)
+                if not tools:
+                    result.content = self._clean_response(result.content or "")
+                return result
             return self._clean_response(self._extract_content_from_response(response))
 
         return _call()
@@ -488,10 +544,17 @@ class LiteLLMVLMProvider(VLMBase):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
         max_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously."""
         kwargs = self._build_text_kwargs(
-            prompt, thinking, tools, tool_choice, messages, max_tokens=max_tokens
+            prompt,
+            thinking,
+            tools,
+            tool_choice,
+            messages,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
         )
         # 用 tracer.info 打印请求（人类可读格式）
         tracer.info(
@@ -505,8 +568,11 @@ class LiteLLMVLMProvider(VLMBase):
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
             tracer.info(f"response={response}")
-            if tools:
-                return self._build_vlm_response(response, has_tools=True)
+            if tools is not None:
+                result = self._build_vlm_response(response, has_tools=True)
+                if not tools:
+                    result.content = self._clean_response(result.content or "")
+                return result
             return self._clean_response(self._extract_content_from_response(response))
 
         return await _call()
@@ -529,8 +595,11 @@ class LiteLLMVLMProvider(VLMBase):
             response = completion(**kwargs)
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
-            if tools:
-                return self._build_vlm_response(response, has_tools=True)
+            if tools is not None:
+                result = self._build_vlm_response(response, has_tools=True)
+                if not tools:
+                    result.content = self._clean_response(result.content or "")
+                return result
             return self._clean_response(self._extract_content_from_response(response))
 
         return _call()
@@ -553,8 +622,11 @@ class LiteLLMVLMProvider(VLMBase):
             response = await acompletion(**kwargs)
             elapsed = time.perf_counter() - t0
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
-            if tools:
-                return self._build_vlm_response(response, has_tools=True)
+            if tools is not None:
+                result = self._build_vlm_response(response, has_tools=True)
+                if not tools:
+                    result.content = self._clean_response(result.content or "")
+                return result
             return self._clean_response(self._extract_content_from_response(response))
 
         return await _call()
@@ -568,10 +640,14 @@ class LiteLLMVLMProvider(VLMBase):
         if hasattr(response, "usage") and response.usage:
             prompt_tokens = response.usage.prompt_tokens
             completion_tokens = response.usage.completion_tokens
+            prompt_details = getattr(response.usage, "prompt_tokens_details", None)
+            completion_details = getattr(response.usage, "completion_tokens_details", None)
             self.update_token_usage(
                 model_name=self.model or "unknown",
                 provider=self.provider,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 duration_seconds=duration_seconds,
+                prompt_cached_tokens=getattr(prompt_details, "cached_tokens", 0) or 0,
+                completion_reasoning_tokens=getattr(completion_details, "reasoning_tokens", 0) or 0,
             )

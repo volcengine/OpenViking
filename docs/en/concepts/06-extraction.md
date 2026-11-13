@@ -40,7 +40,7 @@ The internal `registry.parse()` interface is asynchronous and returns a `ParseRe
 
 ### Document Splitting
 
-The Markdown parser organizes sections by headings and size, merging short sections and splitting oversized content. Defaults are `max_section_size=2048` tokens and `max_section_chars=6000` characters. The configuration also declares `section_size_flexibility=0.3`, but the current Markdown splitting code does not use it. A single oversized table row may remain intact. These are splitting targets, not absolute limits on every output file.
+The Markdown parser organizes sections by headings and character count. The default `max_section_chars` is 2000; `max_section_size` and `section_size_flexibility` remain accepted for configuration compatibility but do not control splitting. Ordinary text obeys the character limit; an oversized table row remains intact. Explicit `no_split` mode preserves the entire body.
 
 Behavior varies by parser and `parse_mode`. Use `parse_mode="no_split"` for supported imports when a single file is needed; see [Resource Management](../api/02-resources.md).
 

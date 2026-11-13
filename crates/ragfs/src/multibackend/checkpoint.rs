@@ -6,8 +6,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use rand::Rng;
 use tokio::sync::watch;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::core::context::{FsContextInner, FS_CTX};
 use crate::core::errors::{Error, Result};
@@ -52,8 +53,7 @@ impl CheckpointWorker {
 
     /// Run checkpoint rounds at the configured interval until cancellation.
     pub async fn run(&self, interval: Duration, mut cancellation: watch::Receiver<bool>) {
-        let mut ticker = tokio::time::interval(interval);
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut ticker = checkpoint_ticker(interval);
         loop {
             tokio::select! {
                 _ = ticker.tick() => if let Err(error) = self.run_once(interval).await {
@@ -82,6 +82,7 @@ impl CheckpointWorker {
         if self.store.protocol_status().await? != ProtocolStatus::Stable {
             return Ok(());
         }
+        info!("multi-write checkpoint round started");
         let now = now_ns()?;
         let interval_ns = u64::try_from(interval.as_nanos()).unwrap_or(u64::MAX);
         for account in self.store.initialized_accounts().await? {
@@ -157,8 +158,28 @@ impl CheckpointWorker {
                 }
             }
         }
+        info!("multi-write checkpoint round completed");
         Ok(())
     }
+}
+
+/// Create the periodic timer for checkpoint discovery rounds.
+fn checkpoint_ticker(interval: Duration) -> tokio::time::Interval {
+    let jitter_bound_secs = interval.as_secs().saturating_div(60).min(i64::MAX as u64) as i64;
+    let jitter_secs = if jitter_bound_secs == 0 {
+        0
+    } else {
+        rand::thread_rng().gen_range(-jitter_bound_secs..=jitter_bound_secs)
+    };
+    let delay = if jitter_secs.is_negative() {
+        interval.saturating_sub(Duration::from_secs((-jitter_secs) as u64))
+    } else {
+        interval.saturating_add(Duration::from_secs(jitter_secs as u64))
+    };
+    let start = tokio::time::Instant::now() + delay;
+    let mut ticker = tokio::time::interval_at(start, interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    ticker
 }
 
 /// Result of one bounded checkpoint build attempt.
@@ -372,6 +393,14 @@ impl CheckpointBuilder {
                         CheckpointsManifest::validate,
                     )
                     .await?;
+                info!(
+                    account = %scope.account_id,
+                    partition = scope.partition_id,
+                    epoch = scope.epoch,
+                    checkpoint_to_seq = latest.checkpoint_to_seq,
+                    checkpoint_path = %latest.path,
+                    "multi-write checkpoint published"
+                );
                 Ok(CheckpointBuildResult::Published(latest))
             }
             .await;

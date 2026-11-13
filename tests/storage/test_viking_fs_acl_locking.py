@@ -41,7 +41,7 @@ def _fs(agfs):
     fs = VikingFS(agfs=SimpleNamespace())
     fs._async_agfs = agfs  # type: ignore[assignment]
     ctx = RequestContext(user=UserIdentifier("default", "alice"), role=Role.ADMIN)
-    fs._ensure_acl_manage = AsyncMock(return_value=ctx)  # type: ignore[method-assign]
+    fs._ensure_acl_manage = AsyncMock(return_value=(ctx, None))  # type: ignore[method-assign]
     fs._uri_to_path = lambda uri, **_: "/local/default/resources/target"  # type: ignore[method-assign]
     fs.acl_manager = SimpleNamespace(
         set_acl=AsyncMock(return_value="effective"),

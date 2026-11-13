@@ -52,6 +52,7 @@ The user message contains a JSON object with the following fields:
 - request.instruction: the user's requirements for this compile task.
 - request.to: the destination for the generated outputs.
 - target_has_content: whether request.to contains any visible files or subdirectories.
+- changes: the fixed execution mode, snapshots and source directories for this Compile.
 - source_summary: file counts, sizes and splitting statistics; sizes are Unicode characters.
 - runtime.time: the task timestamp for interpreting relative dates in the request.
 
@@ -90,6 +91,9 @@ class Pipeline:
     ):
         self.client, self.limits, self.request = client, limits, request
         self.target, self.skill = request.to, skill
+        self.changes = dict(request.changes) if request.changes is not None else None
+        self.tools = {}
+        self.tool_context = None
         self.skill_target = classify_uri(self.target).context_type == "skill"
         self.files = TaskFiles(sandbox)
         self.metrics: Counter = Counter()
@@ -100,6 +104,7 @@ class Pipeline:
         self.model.resources = self.resources
         self.contract: Contract
         self.direct_output_format: str | None = None
+        self.noop = False
         self.system = ""
         self.records: dict[str, Record] = {}
         self.evidence: dict[str, dict] = {}
@@ -143,6 +148,7 @@ class Pipeline:
         self.catalog.clear()
         self.owners.clear()
         self.direct_output_format = None
+        self.noop = False
         failed = False
         try:
             sources = await self.seed(batches)
@@ -153,11 +159,8 @@ class Pipeline:
                     "model_settings": self.model.identity,
                     "time": utc_now(),
                     "skill": self.request.skill,
-                    "wiki_links": self.request.wiki_links,
                 }
                 await self.files.put("runtime", runtime)
-            if runtime.get("wiki_links", False) != self.request.wiki_links:
-                raise ValueError("Wiki link setting differs from the task runtime")
             prompt_runtime = {
                 key: value for key, value in runtime.items() if key in {"time", "skill"}
             }
@@ -181,12 +184,17 @@ class Pipeline:
                 "source_summary": source_summary,
                 "target_has_content": target_has_content,
             }
+            if self.changes is not None:
+                planning_context["changes"] = self.changes
             direct = await entry.run(self, sources, planning_context)
             if direct is not None:
-                result = await finalize_op.run(self, direct)
+                result = await finalize_op.run(self, direct) if direct else RenderedBundle()
                 complete = not self.failures
                 self.metrics["direct_completed"] = 1
                 return result
+            planning_context["source_summary"] = self.summarize_sources(sources)
+            self.metrics["input_ranges"] = len(sources)
+            self.metrics["input_files"] = len({x["uri"] for x in self.evidence.values()})
             proposal = await self.model.ask(
                 "plan",
                 planner_prompt,
@@ -207,6 +215,8 @@ class Pipeline:
                 + json.dumps(prompt_runtime)
                 + "\n"
             )
+            if self.changes is not None:
+                self.system += "\n# Incremental source changes\n" + json.dumps(self.changes)
             await self.files.put(
                 "contract",
                 {
@@ -282,6 +292,7 @@ class Pipeline:
                         revisions,
                         REVIEW_PROMPT + self.output_instructions,
                         planning_context,
+                        completed_ops={n.op for n in nodes[:position]},
                     )
                     if accepted:
                         decision, suffix = accepted
@@ -433,6 +444,9 @@ class Pipeline:
 
         return {
             "file_count": count,
+            "image_count": sum(
+                self.evidence[r.record_id].get("media_kind") == "image" for r in sources
+            ),
             "range_count": len(sources),
             "total_chars": sum(lengths),
             "file_chars": {
@@ -445,20 +459,21 @@ class Pipeline:
             "max_ranges_per_file": max(ranges.values(), default=0),
         }
 
-    async def seed(self, batches) -> list[Record]:
-        """Write unique source ranges with bounded concurrency, retaining their input order."""
+    async def seed(self, batches, *, notices=None) -> list[Record]:
+        """Seed source ranges and deleted-file notices with stable, traceable input IDs."""
         result = []
         pending = []
         seen = set(self.records)
 
         async def write_source(item):
             """Atomically write one (ID, metadata, range); return its record and evidence."""
-            record_id, metadata, part = item
+            record_id, metadata, text, context, image = item
             await self.files.put(
-                f"sources/{record_id}", {**metadata, "text": part.content, "context": part.context}
+                f"sources/{record_id}",
+                {**metadata, **({"image": image} if image else {"text": text, "context": context})},
             )
             return Record(
-                record_id, f"sources/{record_id}", [record_id], part.uri, {}, []
+                record_id, f"sources/{record_id}", [record_id], metadata["uri"], {}, []
             ), metadata
 
         async def flush():
@@ -482,7 +497,7 @@ class Pipeline:
             for part in batch:
                 metadata = {
                     "uri": part.uri,
-                    "hash": content_hash(part.content),
+                    "hash": part.sha256 or content_hash(part.content),
                     "start_char": part.start_char,
                     "end_char": part.end_char,
                     "start_line": part.start_line,
@@ -490,15 +505,50 @@ class Pipeline:
                     "continues_before": part.continues_before,
                     "continues_after": part.continues_after,
                 }
+                if part.image:
+                    metadata["media_kind"] = "image"
                 record_id = digest(metadata)[:24]
                 if record_id in seen:
                     continue
                 seen.add(record_id)
-                pending.append((record_id, metadata, part))
+                pending.append((record_id, metadata, part.content, part.context, part.image))
                 if len(pending) >= self.limits.source_concurrency:
                     await flush()
         if pending:
             await flush()
+        deleted = sorted(
+            {notice["uri"] for notice in notices or [] if notice.get("change_type") == "deleted"}
+        )
+        if deleted:
+            manifest = await self.files.get("inputs") or {}
+            for uri in deleted:
+                text = (
+                    "Source deletion notice: this source was deleted. Remove or revise only "
+                    "content derived from it; preserve other sources and manual edits. "
+                    "This notice is not the deleted source body or evidence for new facts."
+                )
+                metadata = {
+                    "uri": uri,
+                    "change_type": "deleted",
+                    "hash": content_hash(text),
+                    "start_char": 0,
+                    "end_char": len(text),
+                    "start_line": 1,
+                    "end_line": 1,
+                    "continues_before": False,
+                    "continues_after": False,
+                }
+                record_id = digest(metadata)[:24]
+                if record_id in seen:
+                    continue
+                seen.add(record_id)
+                manifest.setdefault(uri, "pending")
+                pending.append((record_id, metadata, text, "", None))
+                if len(pending) >= self.limits.source_concurrency:
+                    await flush()
+            if pending:
+                await flush()
+            await self.files.put("inputs", manifest)
         return result
 
     def register(self, record: Record) -> None:

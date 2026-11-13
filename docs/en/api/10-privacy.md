@@ -1,10 +1,8 @@
 # Privacy Configs
 
-Privacy configs manage sensitive values by `category + target_key` (for example, a skill's `api_key` and `base_url`).
+Privacy configs manage sensitive values in Skills and Sessions (such as `api_key` and `token`) by `category + target_key` in the current user's space. Changed values create a version snapshot. You can query history and switch the active version. Submitting the same values as the current version does not create a new version.
 
-Changed values create a version snapshot. You can query history and switch the active version. Submitting the same values as the current version does not create a new version.
-
-These examples use the current user’s API key. In trusted mode, supply the identity headers required by your deployment. Reads and CLI output contain the stored values; `***` below is an example placeholder, not automatic redaction.
+These examples use the current user’s API key. In trusted mode, supply the identity headers required by your deployment. Value-reading endpoints and CLI commands return stored values; tree and field-metadata endpoints omit them. `***` below is an example placeholder, not automatic redaction.
 
 Activating a version changes only the values stored in OpenViking. It does not rotate, revoke, or restore credentials at the external provider.
 
@@ -13,6 +11,7 @@ Activating a version changes only the values stored in OpenViking. It does not r
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/privacy-configs` | List privacy config categories |
+| GET | `/api/v1/privacy-configs/tree` | List current targets and field metadata as a tree without values |
 | POST | `/api/v1/privacy-configs/scan` | Scan or repair registered values in stored content |
 | GET | `/api/v1/privacy-configs/{category}` | List targets under a category |
 | GET | `/api/v1/privacy-configs/{category}/{target_key}` | Get active config (`meta + current`) |
@@ -32,10 +31,10 @@ Activating a version changes only the values stored in OpenViking. It does not r
 
 ## Common Use Cases
 
-- Store sensitive settings for a skill
+- Store sensitive settings for a Skill or Session
 - Rotate keys by writing a new version
 - Roll back to an old version
-- Restore placeholders in skill content at read time
+- Restore values from placeholders when reading Skill or Session content
 
 ---
 
@@ -103,7 +102,8 @@ The server applies the same validation to HTTP, CLI, Embedded, and internal writ
 | Item | Limit |
 |------|------|
 | `category` / `target_key` | Non-empty, at most 255 ASCII characters; only letters, digits, `_`, `-`, `.`, and `@`; `.` and `..` are forbidden and at most one `@` is allowed |
-| Top-level values fields | At most 128 |
+| Session `target_key` | Use the Session ID when it meets the limits above; otherwise use `_` followed by the first 24 hexadecimal characters of its SHA-256 hash (the original Session ID is automatically recorded in `labels.session_id`) |
+| Top-level values fields | At most 1024 for `category=session`; at most 128 for other categories |
 | Field name | Non-empty, at most 255 UTF-8 bytes, no control characters |
 | Individual string | At most 64 KiB UTF-8 |
 | Serialized values | At most 1 MiB |
@@ -137,9 +137,62 @@ curl -X GET http://localhost:1933/api/v1/privacy-configs \
 ```json
 {
   "status": "ok",
-  "result": ["skill"]
+  "result": ["session", "skill"]
 }
 ```
+
+Only categories with stored configs are returned; a Session with no extracted values does not create a privacy config.
+
+---
+
+### list_privacy_tree()
+
+List the current user's categories, targets, active version numbers and field metadata
+in one request. Historical versions and stored values are never returned. Targets
+without a current snapshot are skipped.
+
+**HTTP API**
+
+```text
+GET /api/v1/privacy-configs/tree
+```
+
+The optional `category` query parameter limits the tree to one category. An invalid
+identifier returns `INVALID_ARGUMENT`. An empty store returns `categories: []`;
+a missing filtered category returns that category with `targets: []`.
+
+```bash
+curl "http://localhost:1933/api/v1/privacy-configs/tree?category=credential" \
+  -H "X-API-Key: your-key"
+```
+
+**Response**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "owner_user_id": "alice",
+    "categories": [{
+      "category": "credential",
+      "targets": [{
+        "target_key": "github",
+        "version": 3,
+        "fields": [{
+          "field": "pat",
+          "configured": true,
+          "reference": "{{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}"
+        }]
+      }]
+    }]
+  }
+}
+```
+
+`configured` is false for `null` or an empty string; other values, including `false`
+and `0`, are configured. References are bound to the current owner and always
+included in the API response. The CLI shows them in table output only when
+`--references` is set; JSON output preserves all metadata.
 
 ---
 
@@ -519,6 +572,12 @@ curl -X POST "http://localhost:1933/api/v1/privacy-configs/skill/byted-viking-se
 # Categories and targets
 ov privacy categories
 ov privacy list skill
+ov privacy list session
+
+# Tree of current targets and fields, without values
+ov privacy tree
+ov privacy tree --category credential --references
+ov privacy tree --output json
 
 # Active config (shortcut supported)
 ov privacy get skill byted-viking-search-knowledgebase
@@ -569,5 +628,7 @@ ov privacy scan --uri viking://~/resources/project-a --fix --node-limit 500
 ## Related Documentation
 
 - [Skills](04-skills.md) - Skill write/read APIs
+- [Sessions](05-sessions.md) - Session creation and privacy config
+- [Privacy Configs](../concepts/13-privacy.md) - Sensitive value extraction and restore
 - [File System](03-filesystem.md) - `read`/`write`/`ls`
 - [System](07-system.md) - System status and observability

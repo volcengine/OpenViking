@@ -62,7 +62,6 @@ async def client(
                 ):
                     break
                 await asyncio.sleep(0)
-            await queued_session.load()
             try:
                 while not await queued_session.resume_queued_commit(message):
                     await asyncio.sleep(0)

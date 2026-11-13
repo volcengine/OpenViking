@@ -319,15 +319,40 @@ func (c *Client) BatchWrite(
 		"operations": normalized,
 	}
 	if opts != nil {
-		setAny(payload, "wait", opts.Wait)
+		if opts.Wait != nil {
+			payload["wait"] = *opts.Wait
+		}
+		setAny(payload, "defer_processing", opts.DeferProcessing)
 		setAny(payload, "telemetry", opts.Telemetry)
 		setString(payload, "processing_mode", opts.ProcessingMode)
-		if err := mergeExtra(payload, opts.Extra); err != nil {
+		if err := mergeExtraProtected(payload, opts.Extra, "wait"); err != nil {
 			return nil, err
 		}
 	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/content/batch-write", nil, payload, &result)
+	return result, err
+}
+
+// EnsureDirectoryIndex preserves summaries and uses fallbackAbstract only when both are absent.
+// Return readable levels, or queued task metadata when Wait is false.
+func (c *Client) EnsureDirectoryIndex(
+	ctx context.Context,
+	uri string,
+	fallbackAbstract string,
+	opts *EnsureDirectoryIndexOptions,
+) (map[string]any, error) {
+	payload := map[string]any{
+		"uri":               NormalizeURI(uri),
+		"fallback_abstract": fallbackAbstract,
+		"wait":              true,
+	}
+	if opts != nil {
+		payload["wait"] = boolValue(opts.Wait, true)
+		setAny(payload, "telemetry", opts.Telemetry)
+	}
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/content/ensure_directory_index", nil, payload, &result)
 	return result, err
 }
 
@@ -360,6 +385,37 @@ func (c *Client) SetTags(ctx context.Context, uri string, tags []string, opts *S
 	}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/fs/attrs/set_tags", nil, payload, &result)
+	return result, err
+}
+
+// BatchSetTags updates retrieval tags for multiple URIs.
+func (c *Client) BatchSetTags(ctx context.Context, uris []string, tags []string, opts *SetTagsOptions) (map[string]any, error) {
+	if opts == nil {
+		opts = &SetTagsOptions{Mode: "replace"}
+	}
+	mode := opts.Mode
+	if mode == "" {
+		mode = "replace"
+	}
+	if tags == nil {
+		tags = []string{}
+	}
+	normalized := make([]string, len(uris))
+	for index, uri := range uris {
+		normalized[index] = NormalizeURI(uri)
+	}
+	payload := map[string]any{
+		"uris":      normalized,
+		"tags":      tags,
+		"mode":      mode,
+		"recursive": opts.Recursive,
+	}
+	setAny(payload, "telemetry", opts.Telemetry)
+	if err := mergeExtraProtected(payload, opts.Extra, "uris", "tags", "mode", "recursive", "telemetry"); err != nil {
+		return nil, err
+	}
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/content/batch_set_tags", nil, payload, &result)
 	return result, err
 }
 

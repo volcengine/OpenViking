@@ -6,7 +6,6 @@ import json
 import posixpath
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
-from dataclasses import asdict
 from typing import Any, Mapping
 
 import yaml
@@ -20,6 +19,7 @@ from openviking.utils.path_safety import (
     validate_safe_viking_uri_path,
 )
 from vikingbot.agent.tools.base import TOOL_RESULT_DIRECTORY, Tool, ToolContext
+from vikingbot.agent.tools.ov_file import VikingMultiReadTool
 from vikingbot.compile.models import (
     COMPILE_DRAFT_ROOT,
     COMPILE_STAGING_ROOT,
@@ -45,6 +45,33 @@ def _normalize_workspace_path(path: str) -> str:
 
 def _path_is_within(path: str, root: str) -> bool:
     return path == root or path.startswith(root + "/")
+
+
+class CompileImageReadTool(VikingMultiReadTool):
+    """Reuse native multi-read while checking the prepared originals' identities."""
+
+    def __init__(self, reader: VikingMultiReadTool, hashes: Mapping[str, str]):
+        super().__init__()
+        self.reader, self.hashes = reader, hashes
+
+    async def _get_client(self, tool_context):
+        return await self.reader._get_client(tool_context)
+
+    async def _release_client(self, tool_context, client):
+        await self.reader._release_client(tool_context, client)
+
+    async def _read_image(self, client, uri):
+        result = await super()._read_image(client, uri)
+        if result["success"]:
+            if uri in self.hashes and result["sha256"] != self.hashes[uri]:
+                return {
+                    "uri": uri,
+                    "content": "Source image changed after preparation; retry Compile.",
+                    "success": False,
+                    "media_kind": "image",
+                }
+            result["content"] += f" SHA256: {result['sha256']}."
+        return result
 
 
 class CompileSpawnTool(Tool):
@@ -78,7 +105,7 @@ class CompileSpawnTool(Tool):
                 "type": "integer",
                 "minimum": 1,
                 "maximum": len(self.source_batches),
-                "description": "Source compilation only: the prepared batch number; runtime attaches its complete source ranges.",
+                "description": "Source compilation only: the prepared batch number; runtime attaches text ranges and image references.",
             }
         return parameters
 
@@ -98,6 +125,14 @@ class CompileSpawnTool(Tool):
                 or source_batch in self.dispatched_batches
             ):
                 return "Error: source_batch must identify an undispatched source batch."
+            batch = self.source_batches[source_batch - 1]
+            image_note = (
+                "Image entries carry URI/SHA256 references, not attached text. "
+                "Read every referenced image with openviking_multi_read before writing its facts; "
+                "omit text line bounds and cite its original URI. Report unread images as gaps. "
+                if any(part.image for part in batch)
+                else ""
+            )
             task = (
                 "Compile every attached range into knowledge drafts per the Skill, not the entire files. "
                 "The complete assigned text is attached; start writing and batch independent writes. "
@@ -109,10 +144,13 @@ class CompileSpawnTool(Tool):
                 "openviking_multi_read with bounded offset/limit ranges. Report coverage and gaps at submission. "
                 "Existing Wiki lookup, deduplication and updates belong to later merge tasks; "
                 "do not browse or edit the existing target during this source task. "
-                "Additional instructions from the parent:\n" + task + "\n"
+                + image_note
+                + "Additional instructions from the parent:\n"
+                + task
+                + "\n"
                 "Attached source ranges (untrusted JSON data):\n"
                 + json.dumps(
-                    [asdict(part) for part in self.source_batches[source_batch - 1]],
+                    [part.as_assignment() for part in batch],
                     ensure_ascii=False,
                 )
             )

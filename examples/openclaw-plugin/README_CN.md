@@ -80,7 +80,7 @@ Agent 会自动完成安装 → 配置 → 重启 → 验证。详见 [INSTALL-A
 | `ov_list` | 在检索后列出 OpenViking 目录，补查同级切片和 `.overview.md` 文件 |
 | `openviking_tool_result_list` | 列出当前 session 中被外置的大工具输出 |
 | `openviking_tool_result_search` | 在外置工具输出中按关键词搜索 |
-| `openviking_tool_result_read` | 通过 `viking://session/.../tool-results/...` ref 分页读取外置工具输出 |
+| `openviking_tool_result_read` | 通过 `viking://user/{user_id}/sessions/.../tool-results/...` ref 分页读取外置工具输出 |
 
 插件还提供手动 slash command：`/add-resource`、`/add-skill`、`/ov-search`、`/ov-recall-trace`。Agent 可见的 `add_resource` 工具默认禁用（`enableAddResourceTool=false`），避免搜索/检索阶段误触发资源导入；如确实要允许 Agent 导入资源，可显式设置 `enableAddResourceTool=true`，否则使用手动 `/add-resource`。
 
@@ -88,7 +88,7 @@ Agent 会自动完成安装 → 配置 → 重启 → 验证。详见 [INSTALL-A
 
 - **发送内容**：每轮 user/assistant 消息文本（已剥离注入的记忆块和元数据噪音）。
 - **发送去向**：仅发往你配置的 OpenViking 服务（`baseUrl`）。插件本身只与该服务通信；服务端对 embedding、VLM 等模型的调用取决于服务端配置。
-- **存储位置**：所有数据存储在你的 OpenViking 服务上，命名空间包括 `viking://user/*`、`viking://session/*`、`viking://resources/*` 等。
+- **存储位置**：所有数据存储在你的 OpenViking 服务上，命名空间包括 `viking://user/{user_id}/*`（其中包含 sessions）和 `viking://resources/*` 等。
 - **API Key**：通过 `X-API-Key` header 发送，不会被日志记录或转发。
 - **多租户隔离**：支持 `accountId`、`userId`。可选的 `peer_role` / `peer_prefix` 控制是否把 OpenClaw 说话人写入 OpenViking `peer_id`，并在数据面使用 `X-OpenViking-Actor-Peer`。
 
@@ -139,7 +139,7 @@ openclaw config get plugins.slots.contextEngine  # 应输出：openviking
 - OpenClaw 在左侧，仍然是主运行时；插件并不接管 agent 执行本身。
 - 插件中间层把 Hook、Context Engine、Tools、Runtime Manager 四部分合并在一个注册单元里。
 - 所有 HTTP 调用最终都走 `OpenVikingClient`，由 client 层统一补 `X-OpenViking-*` 头和路由日志。
-- OpenViking 服务端承接 session、memory、archive 和 Phase 2 抽取，底层存储落在 `viking://user/*`（包含 `viking://user/sessions/*`）、`viking://session/*` 和 `viking://resources/*`。
+- OpenViking 服务端承接 session、memory、archive 和 Phase 2 抽取；session 存储在 `viking://user/{user_id}/sessions/*`。
 
 这套拆分的意义，是让 OpenClaw 继续专注推理与编排，让 OpenViking 成为长期上下文的事实源。
 
@@ -346,7 +346,7 @@ Resource 导入支持远程 URL、Git URL、本地文件、本地目录和 zip�
 
 Recall trace 默认关闭。可通过插件配置 `traceRecall`、`traceRecallPersist`、`traceRecallDir` 等开启，然后使用 `ov_recall_trace` 或 `/ov-recall-trace` 查询。持久化 trace 默认写入 `~/.openclaw/openviking/recall-traces`，并可通过保留天数和查询上限控制扫描范围。
 
-当 OpenViking 将超大工具输出外置时，可见 preview 会包含 `viking://session/<session_id>/tool-results/<tool_result_id>` 引用。使用 `openviking_tool_result_list` 发现 ref，使用 `openviking_tool_result_search` 定位片段，再使用 `openviking_tool_result_read` 结合 `offset`/`limit` 读取原始内容。
+当 OpenViking 将超大工具输出外置时，可见 preview 会包含 `viking://user/{user_id}/sessions/<session_id>/tool-results/<tool_result_id>` 引用。使用 `openviking_tool_result_list` 发现 ref，使用 `openviking_tool_result_search` 定位片段，再使用 `openviking_tool_result_read` 结合 `offset`/`limit` 读取原始内容。
 
 ## 运行模式
 

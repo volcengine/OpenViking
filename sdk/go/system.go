@@ -11,7 +11,8 @@ import (
 )
 
 // WaitProcessed waits until all queued processing completes.
-func (c *Client) WaitProcessed(ctx context.Context) (map[string]any, error) {
+// The optional opts argument is deprecated and ignored.
+func (c *Client) WaitProcessed(ctx context.Context, opts ...*WaitProcessedOptions) (map[string]any, error) {
 	payload := map[string]any{}
 	var result map[string]any
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/system/wait", nil, payload, &result)

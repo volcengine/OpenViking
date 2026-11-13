@@ -16,6 +16,7 @@ from volcenginesdkarkruntime._exceptions import (
 from volcenginesdkarkruntime._streaming import AsyncStream
 
 from openviking.models.model_error import ModelError, ModelErrorKind, model_error_kind
+from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
 from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
 from openviking.models.vlm.backends.volcengine_vlm import (
     VOLCENGINE_CLIENT_REQUEST_ID,
@@ -68,15 +69,21 @@ class _FakeStreamingCompletions:
 
 
 class _FakeStreamingVLM:
+    _create_chat_completion = VolcEngineVLM._create_chat_completion
+    temperature = None
     provider = "volcengine"
     model = "test-model"
     thinking = False
 
     def __init__(self, completions: _FakeStreamingCompletions, max_retries: int = 2):
         self.max_retries = max_retries
-        self._client = SimpleNamespace(
-            chat=SimpleNamespace(completions=completions),
-        )
+
+        async def post(path, *, body, options, **_kwargs):
+            assert path == "/chat/completions"
+            assert "temperature" not in body
+            return await completions.create(**body, extra_headers=options.get("headers"))
+
+        self._client = SimpleNamespace(chat=SimpleNamespace(completions=completions), post=post)
 
     def get_async_client(self):
         return self._client
@@ -157,12 +164,17 @@ async def test_chat_accepts_string_response_from_openai_backend_with_tools(monke
 
 
 @pytest.mark.asyncio
-async def test_chat_without_tools_preserves_usage_from_openai_backend(monkeypatch):
+@pytest.mark.parametrize("vlm_type", [OpenAIVLM, VolcEngineVLM, LiteLLMVLMProvider])
+@pytest.mark.parametrize("finish_reason", ["stop", "length"])
+async def test_chat_without_tools_preserves_clean_content_and_metadata(
+    monkeypatch, vlm_type, finish_reason
+):
+    raw_content = "<think>internal reasoning</think>\nplain response"
     raw_response = SimpleNamespace(
         choices=[
             SimpleNamespace(
-                message=SimpleNamespace(content="plain response", tool_calls=None),
-                finish_reason="stop",
+                message=SimpleNamespace(content=raw_content, tool_calls=None),
+                finish_reason=finish_reason,
             )
         ],
         usage=SimpleNamespace(
@@ -178,18 +190,28 @@ async def test_chat_without_tools_preserves_usage_from_openai_backend(monkeypatc
         assert "tools" not in kwargs
         return raw_response
 
+    async def post(path, *, body, **_kwargs):
+        assert path == "/chat/completions"
+        assert "temperature" not in body
+        return await create(**body)
+
     client = SimpleNamespace(
         chat=SimpleNamespace(completions=SimpleNamespace(create=create)),
+        post=post,
     )
-    vlm = OpenAIVLM({"provider": "openai", "model": "gpt-5.6-terra"})
-    monkeypatch.setattr(vlm, "get_async_client", lambda: client)
+    vlm = vlm_type({"model": "gpt-5.6-terra", "api_key": "test-key"})
+    if vlm_type is LiteLLMVLMProvider:
+        monkeypatch.setattr("openviking.models.vlm.backends.litellm_vlm.acompletion", create)
+    else:
+        monkeypatch.setattr(vlm, "get_async_client", lambda: client)
     adapter = VLMProviderAdapter(vlm, "gpt-5.6-terra", langfuse_client=_DisabledLangfuse())
 
     response = await adapter.chat(messages=[{"role": "user", "content": "hello"}])
 
     assert response.content == "plain response"
     assert response.tool_calls == []
-    assert response.finish_reason == "stop"
+    assert response.finish_reason == finish_reason
+    assert raw_response.choices[0].message.content == raw_content
     assert response.usage == {
         "prompt_tokens": 13,
         "completion_tokens": 5,
@@ -261,7 +283,7 @@ async def test_chat_stream_obeys_retry_policy(monkeypatch, code, expected_calls,
         create = AsyncMock(
             side_effect=[AsyncStream(cast_to=dict, response=r, client=client) for r in responses]
         )
-        monkeypatch.setattr(client.chat.completions, "create", create)
+        monkeypatch.setattr(client, "post", create)
         adapter = VLMProviderAdapter(vlm, "test-model", langfuse_client=_DisabledLangfuse())
         events = [event async for event in adapter.chat_stream(messages=[])]
     assert create.await_count == expected_calls
@@ -430,15 +452,16 @@ async def test_volcengine_request_settings_and_ids(monkeypatch, thinking, effort
             "reasoning_effort": "low",
         }
     )
+
+    def post(path, *, body, options, **_kwargs):
+        assert path == "/chat/completions"
+        assert "temperature" not in body
+        return create(**body, extra_headers=options.get("headers"))
+
     monkeypatch.setattr(
-        vlm,
-        "get_async_client",
-        lambda: SimpleNamespace(
-            chat=SimpleNamespace(completions=SimpleNamespace(create=AsyncMock(side_effect=create)))
-        ),
+        vlm, "get_async_client", lambda: SimpleNamespace(post=AsyncMock(side_effect=post))
     )
-    vlm._sync_client = vlm.get_async_client()
-    vlm._sync_client.chat.completions.create = create
+    vlm._sync_client = SimpleNamespace(post=post)
 
     for _ in range(2):
         assert await vlm.get_completion_async("hi", reasoning_effort=effort) == "ok"

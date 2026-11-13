@@ -29,6 +29,15 @@ When you choose a provider in the editor, its default Base URL is filled in:
 | Volcano Engine Ark | All three | `https://ark.cn-beijing.volces.com/api/v3` for Chat Completions and Responses; `https://ark.cn-beijing.volces.com/api/compatible` for Anthropic Messages |
 | BytePlus ModelArk | All three | `https://ark.ap-southeast.bytepluses.com/api/v3` for Chat Completions and Responses; `https://ark.ap-southeast.bytepluses.com/api/compatible` for Anthropic Messages |
 
+## Deployment default upstreams {#deployment-default-upstreams}
+
+Operators can set `default_upstreams` in the gateway configuration for clients that [use OpenViking API keys directly](09-gateway-keys.md#openviking-keys); see the [configuration example](13-configuration.md#gateway-fields).
+
+- Defaults apply only when the account has no stored upstreams. Once it stores any upstream, its stored set replaces the defaults as a whole, even if every stored upstream is disabled.
+- Deployment defaults are not copied into account storage and do not appear in Studio. Issued gateway keys continue to use their selected, stored upstreams.
+- Keep the object keys, such as `ark-chat`, stable: each key is the upstream ID frozen into conversations and used to route later turns.
+- For managed credentials, write `"api_key": "$ARK_API_KEY"` and inject `ARK_API_KEY` from a Secret through `extraEnv` in Helm deployments. The gateway expands environment references when loading the file; keep plaintext API keys out of ConfigMaps.
+
 ## Add an upstream {#add-an-upstream}
 
 1. On the **Upstreams** tab, choose **Add upstream**. The **New upstream** editor opens with four sections: **Endpoint**, **Credentials**, **Models** and **Routing**.
@@ -148,6 +157,15 @@ The **Routing** section sets how the gateway chooses between upstreams. For each
 Turning an upstream off moves the conversations that were using it to the next candidate. That costs one provider cache miss and drops earlier Claude thinking blocks, and those requests are flagged **Upstream switched** (see [Issues on degraded requests](12-troubleshooting.md#issues-on-degraded-requests)). Turn an upstream off instead of deleting it if you may want it back.
 
 The gateway does not fail over: when the chosen upstream returns an error, the client receives it, and an unreachable provider returns 502 "Model upstream is unavailable".
+
+### Pick the upstream per request {#upstream-url-header}
+
+A service in front of the gateway can choose the upstream for each request with the `X-OpenViking-Upstream-URL` header; clients may send it too. Its value must equal the **Base URL** of an upstream bound to the key (for an OpenViking key without stored upstreams, a [deployment default upstream](#deployment-default-upstreams)); only a trailing `/` is ignored. The header narrows routing to those upstreams, and the usual API, model and **Priority** rules choose among them, so a Chat Completions and a Responses upstream can share one Base URL.
+
+- No bound upstream has that Base URL: the request fails with 403 "Upstream URL is not allowed". The gateway never sends a request to an address that is not configured.
+- The gateway uses the selected upstream's credentials as usual. For **Each client sends its own key**, the key comes in `X-OpenViking-Upstream-Key`; a Coding Plan upstream is still rejected unless it is allowed.
+- A conversation that names a different Base URL moves to that upstream, flagged **Upstream switched** as when its upstream is turned off.
+- Without the header, routing is unchanged. Like every `X-OpenViking-*` header, it is not forwarded to the provider.
 
 ### Restore reasoning the client drops {#restore-reasoning}
 

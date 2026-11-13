@@ -508,6 +508,10 @@ test("the docs download tree holds what the installer fetches, under the address
       readFileSync(join(out, "memory-plugin-shared", "bootstrap.sh"), "utf8"),
       readFileSync(join(dirname(installer), "bootstrap.sh"), "utf8"),
     );
+    assert.equal(
+      readFileSync(join(out, "memory-plugin-shared", "import-history.mjs"), "utf8"),
+      readFileSync(join(dirname(installer), "import-history.mjs"), "utf8"),
+    );
 
     const manifest = JSON.parse(readFileSync(join(out, "plugins", "claude", "marketplace.json"), "utf8"));
     const [entry] = manifest.plugins;
@@ -521,7 +525,7 @@ test("the docs download tree holds what the installer fetches, under the address
     const channels = JSON.parse(readFileSync(join(out, "releases", "latest", "channels.json"), "utf8"));
     assert.equal(channels.schema, 1);
     assert.deepEqual(Object.keys(channels.harnesses).sort(), [
-      "claude", "codex", "cursor", "dsh", "kimicode", "opencode", "pi", "trae", "trae-cli", "trae-cn", "zcode",
+      "claude", "codebuddy", "codex", "cursor", "dsh", "kimicode", "opencode", "pi", "trae", "trae-cli", "trae-cn", "zcode",
     ]);
     assert.deepEqual(channels.harnesses.codex, {
       version,

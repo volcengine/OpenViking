@@ -23,7 +23,7 @@ decide where to look without reading everything.
 | roughly what it is about | `find(query, target_uri="viking://resources")` |
 | an exact word, name, or error string | `grep(uri, pattern=[...])` |
 | a file name or extension | `glob(pattern, uri)` e.g. `**/*.pdf` |
-| where it is | `list(uri)` and `read(uris)` |
+| where it is | `list(uri)` and `read(uri)`, or `read(uris=[...])` for several files |
 
 Default to `find`. Scope it with `target_uri` as soon as you know which
 resource you are in — narrower scopes give better hits. Use `search` instead

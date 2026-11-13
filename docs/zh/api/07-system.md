@@ -333,7 +333,7 @@ ov system consistency viking://resources/my-project
 
 **参数**
 
-无参数。HTTP 请求超时使用客户端配置。
+无必填参数。可选 JSON 请求体仍接受旧版 `timeout` 字段，但该字段已废弃，传入值会被忽略。不传请求体仍可调用。HTTP 请求超时使用客户端配置。
 
 #### 3. 使用示例
 

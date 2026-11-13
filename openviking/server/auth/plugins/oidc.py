@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import sys
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from fastapi import Request
 
+from openviking.core.identifiers import validate_account_id, validate_user_id
 from openviking.server.auth.identity_mapping import IdentityMapper
 from openviking.server.auth.oidc_config import OIDCConfig
 from openviking.server.auth.plugin import AuthPlugin
@@ -27,10 +27,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Characters allowed in OpenViking user/account identifiers. Any character
-# not in this set (e.g. Auth0's "|" in sub="auth0|123456") is replaced with
-# "_" during identity mapping.
-_ALLOWED_IDENTIFIER_CHARS = re.compile(r"[^a-zA-Z0-9_.@-]")
 
 def _check_jwt_available() -> bool:
     """Lazy check for JWT library availability (cached after first call)."""
@@ -125,14 +121,18 @@ class OIDCAuthPlugin(AuthPlugin):
         try:
             account_id = self._mapper.map_account_id(claims=claims)
             user_id = self._mapper.map_user_id(claims=claims)
-            # Sanitize: replace characters not allowed in OpenViking identifiers
-            # (e.g. Auth0's "|" in sub="auth0|123456") so that valid OIDC
-            # tokens from supported providers always produce a usable identity.
-            user_id = _ALLOWED_IDENTIFIER_CHARS.sub("_", user_id)
-            account_id = _ALLOWED_IDENTIFIER_CHARS.sub("_", account_id)
+            # Validate the operator's mapping without rewriting identities:
+            # replacing unsupported characters can merge distinct users or accounts.
+            validation_error = validate_account_id(account_id) or validate_user_id(user_id)
+            if validation_error:
+                raise ValueError(validation_error)
         except ValueError as e:
             logger.error("Failed to map claims: %s", e)
-            raise UnauthenticatedError(f"Failed to map claims: {e}") from e
+            raise UnauthenticatedError(
+                f"Failed to map OIDC identity: {e} "
+                "Configure identity claims that produce valid OpenViking IDs; "
+                "user IDs must uniquely identify users within each account."
+            ) from e
 
         logger.debug(
             "Successfully authenticated OIDC user: account=%s, user=%s, role=%s",
@@ -242,7 +242,7 @@ class OIDCAuthPlugin(AuthPlugin):
             if self._jwks_uri:
                 return self._jwks_uri
 
-            discovery_url = f"{self._config.issuer}{_DISCOVERY_PATH}"
+            discovery_url = f"{self._config.issuer.rstrip('/')}{_DISCOVERY_PATH}"
             logger.info("Performing OIDC discovery at %s", discovery_url)
             try:
                 async with httpx.AsyncClient(timeout=_DISCOVERY_TIMEOUT) as client:

@@ -2,6 +2,7 @@ import i18n from 'i18next'
 import LanguageDetector from 'i18next-browser-languagedetector'
 
 import { defaultLanguage, resources, supportedLanguages } from './resources'
+import { syncManifestLanguage } from './manifest'
 
 i18n.use(LanguageDetector).init({
   defaultNS: 'common',
@@ -20,6 +21,7 @@ export default i18n
 function syncDocumentLanguage() {
   if (typeof document !== 'undefined') {
     document.documentElement.lang = i18n.resolvedLanguage ?? defaultLanguage
+    syncManifestLanguage(document.documentElement.lang)
   }
 }
 

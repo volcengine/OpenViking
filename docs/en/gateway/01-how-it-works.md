@@ -30,7 +30,7 @@ When a request ends with a new user message, the gateway searches OpenViking wit
 What did we decide about the release date?
 
 <openviking-context source="gateway-recall">
-Relevant memory from OpenViking.
+Relevant memory from OpenViking. It is this user's own saved history (past conversations, meetings, notes) as recorded then: internal context, not an external source or established fact.
 <memory uri="viking://user/alice/memories/events/release-planning.md" type="memory" detail="abstract">
 The team moved the 2.0 release to the first week of November.
 </memory>
@@ -71,7 +71,7 @@ The OpenViking Gateway, a proxy between the client and the model, added this blo
 </openviking-context>
 
 <openviking-context source="gateway-recall">
-Relevant memory from OpenViking. Use the openviking_read tool to expand URIs.
+Relevant memory from OpenViking. It is this user's own saved history (past conversations, meetings, notes) as recorded then: internal context, not an external source or established fact. Use the openviking_read tool to expand URIs.
 ...
 </openviking-context>
 ```
@@ -108,7 +108,7 @@ When it compacts, which context window to set and what the summary contains are 
 
 ## OpenViking tools {#openviking-tools}
 
-With OpenViking tools on, the model can search, read and, if an admin allows it, write OpenViking memory itself while it answers; new context profiles turn them on with only the read-only tools selected. The gateway runs the calls and replays the rounds on later turns, so the client never declares or runs these tools and sees only a one-line notice per call. See [OpenViking tools in the gateway](04-openviking-tools.md#agentic-memory-for-any-client).
+With OpenViking tools on, the model can search, read and write OpenViking memory itself while it answers; new context profiles turn them on with every tool selected, and admins can uncheck any of them. The gateway runs the calls and replays the rounds on later turns, so the client never declares or runs these tools and sees only a one-line notice per call. See [OpenViking tools in the gateway](04-openviking-tools.md#agentic-memory-for-any-client).
 
 ## Behaviors to expect {#what-to-expect}
 
@@ -116,7 +116,7 @@ With OpenViking tools on, the model can search, read and, if an admin allows it,
 - **Settings apply to new conversations.** A conversation keeps the context profile and upstream it started with, so long-running clients such as Claude Code and Codex pick up a profile change only when they start a new conversation. See [When changes take effect](06-manage-in-studio.md#when-changes-take-effect).
 - **Changed history is saved again.** If the client edits or deletes earlier messages, regenerates an answer after it was saved, or compacts the conversation itself, the gateway saves the current full history to a new OpenViking session. Turns already saved stay in the old session.
 - **Very long sessions can hit the request size limit.** After the gateway compacts a conversation, the client still sends its full history, and request bodies over 32 MiB are rejected by default. See [Side effects](05-long-conversations.md#side-effects).
-- **One key means one memory owner.** Everyone who shares a key shares the memory of the OpenViking user behind it, so issue one key per person. See [One key per person](09-gateway-keys.md#one-key-per-person).
+- **One key means one memory owner.** Everyone who shares a key shares the memory of the OpenViking user behind it, so issue one key per person. See [One key per person](09-gateway-keys.md#one-key-per-person). A [peer](03-connect-clients.md#peer) tells that user's counterparts apart in memory and, with the profile's **Peer scope** set to [Current peer only](03-connect-clients.md#peer-scope), keeps other peers' memories out of recall, but it does not separate access.
 - **Clients cannot sign in with a subscription.** Requests with a Claude subscription token are rejected. Configure the upstream with a provider API key, or put a subscription proxy behind the gateway as a [custom upstream](07-upstreams.md#custom-upstreams). Codex can use a ChatGPT subscription this way through CLIProxyAPI; see [Use a ChatGPT subscription](03-connect-clients.md#codex-chatgpt-subscription). For other subscription services, check their terms yourself.
 - **Responses needs the full history.** Responses requests that rely on state stored at the provider are forwarded without memory; see [Client requirements](04-openviking-tools.md#client-requirements).
 - **Other endpoints pass through.** Endpoints other than the three model APIs and the model list, such as embeddings, are forwarded without memory to the highest-priority upstream bound to the key that serves the requested model.
@@ -132,8 +132,8 @@ The table explains why the gateway's main design choices were made and what they
 | Where memory goes | At the end of the newest user message, not in the system prompt: one changed character in the system prompt invalidates the whole cache, while appending at the end and replaying unchanged keeps the prefix stable. | The gateway must reliably record the exact text of every addition; a lost record costs one cache miss. |
 | When turns are saved | One turn behind: only when the next message brings the previous turn back is it clear the user kept it. | The last turn is saved only after **Save the latest reply after** (10 minutes by default). |
 | Long conversations | The gateway has the same model write the summary: only the gateway knows what the model actually received, and the summary request mostly hits the cache. | The turn that triggers compaction costs one extra, billed model call; text before the cut is no longer sent to the model. |
-| Local state | SQLite on one host, with no Postgres or Redis dependency, which suits self-hosting. | The gateway cannot fail over between machines and is a single point on the model call path. |
-| Client identity | The gateway issues its own keys instead of using OpenViking keys directly: they can be revoked on their own, and one person's clients can use different context profiles. | The gateway has to store users' OpenViking keys, so turn on encryption; a leaked gateway key exposes that user's memory. |
+| Storage | SQLite by default, with no external dependency; Redis can share state between hosts. | Multiple replicas require both storage ports to use shared Redis and the same encryption root key. |
+| Client identity | By default the gateway issues its own keys instead of using OpenViking keys directly: they can be revoked on their own, and one person's clients can use different context profiles. With `openviking_keys` on, clients can also use OpenViking API keys directly, which take the account's default profile and upstreams. | The gateway has to store users' OpenViking keys, so turn on encryption; a leaked gateway key exposes that user's memory. An OpenViking key used directly can only be revoked in OpenViking. |
 
 ## Next steps {#next-steps}
 

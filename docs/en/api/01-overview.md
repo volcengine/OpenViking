@@ -397,6 +397,8 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/content/write` | Write content and refresh semantic indexes |
 | POST | `/api/v1/content/batch-write` | Write multiple files and refresh their indexes |
 | POST | `/api/v1/content/set_tags` | Set retrieval tags |
+| POST | `/api/v1/content/batch_set_tags` | Set retrieval tags for 1-50 URIs |
+| POST | `/api/v1/content/ensure_directory_index` | Ensure indexes for one existing directory, seeding L0 only when both summaries are absent |
 | POST | `/api/v1/content/reindex` | Rebuild semantic or vector indexes |
 
 ### [Skills](04-skills.md)
@@ -410,6 +412,25 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | GET | `/api/v1/skills/{skill_name}` | Get a skill |
 | PUT | `/api/v1/skills/{skill_name}` | Update a skill |
 | DELETE | `/api/v1/skills/{skill_name}` | Delete a skill |
+
+### [MCP and Live Context](26-mcp-live-context.md)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/mcps/validate` | Validate an MCP server and discover tools without saving |
+| POST | `/api/v1/mcps` | Register an MCP server and publish its tool catalog |
+| GET | `/api/v1/mcps` | List registered MCP servers |
+| GET | `/api/v1/mcps/{name}` | Read an MCP server and its current tool definitions |
+| GET | `/api/v1/mcps/status` | Check whether an MCP server is reachable |
+| POST | `/api/v1/mcps/{name}/sync` | Synchronize tools and report affected live context mounts |
+| DELETE | `/api/v1/mcps/{name}` | Remove an MCP server and its tool catalog |
+| POST | `/api/v1/mcps/find` | Search MCP tools semantically |
+| POST | `/api/v1/mcps/invoke` | Invoke an MCP tool |
+| POST | `/api/v1/mcps/mount` | Create or replace one MCP-backed live context node |
+| POST | `/api/v1/mcps/batch-mount` | Create or replace live context nodes in a batch |
+| DELETE | `/api/v1/mcps/mount` | Remove one mount and its node |
+| POST | `/api/v1/mcps/batch-unmount` | Remove mounts and nodes in a batch |
+| GET | `/api/v1/mcps/mounts` | List mounts for an MCP server or tool |
 
 ### [Sessions](05-sessions.md), [Memory](16-memory.md), and [Agent Evolution](19-agent-evolution.md)
 
@@ -426,11 +447,21 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | GET | `/api/v1/sessions/{session_id}/archives/{archive_id}` | Get a session archive |
 | DELETE | `/api/v1/sessions/{session_id}` | Delete a session |
 | POST | `/api/v1/sessions/{session_id}/commit` | Archive a session and extract memory |
+| POST | `/api/v1/sessions/{session_id}/archives/{archive_id}/retry` | Retry a failed or ownerless session archive |
 | POST | `/api/v1/sessions/{session_id}/messages` | Add one message |
 | POST | `/api/v1/sessions/{session_id}/messages/batch` | Add messages in a batch |
 | POST | `/api/v1/search/recall` | Deprecated: thin preset over the search endpoint with `mode="context"` |
+| POST | `/api/v1/rules/compile` | Compile user rules asynchronously |
+| POST | `/api/v1/rules/search` | Retrieve complete rules applicable to a task |
 | GET | `/api/v1/agent-evolution/experiences/trajectories` | List trajectories that consumed an Experience |
 | GET | `/api/v1/agent-evolution/experiences/outcomes` | Aggregate outcomes of trajectories that consumed an Experience |
+
+### [Rules (Beta)](26-rules.md)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/rules/compile` | Submit a background rule compilation task |
+| POST | `/api/v1/rules/search` | Retrieve applicable active rules for task context |
 
 ### [Retrieval](06-retrieval.md)
 
@@ -455,9 +486,11 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | POST | `/api/v1/watches/{task_id}/trigger` | Trigger a watch by task ID |
 | POST | `/api/v1/snapshot/commit` | Create a snapshot |
 | GET | `/api/v1/snapshot/log` | Read snapshot history |
+| GET | `/api/v1/snapshot/versions` | List versions of a Compile output file |
 | POST | `/api/v1/snapshot/restore` | Restore a historical snapshot |
 | GET | `/api/v1/snapshot/show` | Inspect a snapshot or one of its files |
 | GET | `/api/v1/snapshot/diff` | Compare snapshots |
+| GET | `/api/v1/snapshot/diff-paths` | Page changed source files |
 | GET | `/api/v1/snapshot/ignore` | Read snapshot ignore rules |
 | PUT | `/api/v1/snapshot/ignore` | Replace snapshot ignore rules |
 | DELETE | `/api/v1/snapshot/ignore` | Clear snapshot ignore rules |
@@ -489,11 +522,12 @@ This catalog follows the routes actually mounted by the server. Each group headi
 
 | Method | Path | Description |
 |--------|------|-------------|
+| GET | `/api/v1/admin/metric-inventory` | Stream a ROOT-only metadata inventory for offline reporting |
 | GET | `/api/v1/admin/configuration` | Get explicit Cluster runtime configuration |
 | PATCH | `/api/v1/admin/configuration` | Update Cluster runtime configuration |
 | POST | `/api/v1/admin/configuration/test-model` | Test a draft model or embedding connection without saving it |
 | POST | `/api/v1/admin/restart` | Request a graceful restart of a supported server process (ROOT only) |
-| GET | `/api/v1/admin/accounts/{account_id}/configuration` | Get explicit Account runtime configuration |
+| GET | `/api/v1/admin/accounts/{account_id}/configuration` | Get Account settings and the effective Agent Evolution switch |
 | PATCH | `/api/v1/admin/accounts/{account_id}/configuration` | Update Account runtime configuration |
 | GET | `/api/v1/admin/agent-evolution` | Get Agent Evolution status (deprecated) |
 | PUT | `/api/v1/admin/agent-evolution` | Update Agent Evolution status (deprecated) |
@@ -505,22 +539,28 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | DELETE | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Remove a memory template override and restore deployment defaults |
 | POST | `/api/v1/admin/accounts` | Create an account and its first administrator |
 | GET | `/api/v1/admin/accounts` | List accounts |
-| POST | `/api/v1/admin/migrate` | Migrate legacy identity data |
+| POST | `/api/v1/admin/migrate` | Reserved migration endpoint; ROOT-only, currently returns 400 INVALID_ARGUMENT |
+| GET | `/api/v1/admin/accounts/{account_id}` | Get credential-free metadata for one account |
 | DELETE | `/api/v1/admin/accounts/{account_id}` | Delete an account |
 | POST | `/api/v1/admin/accounts/{account_id}/users` | Register a user |
 | GET | `/api/v1/admin/accounts/{account_id}/users` | List users |
-| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | Get a user's memory policy |
-| PATCH | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | Update a user's memory policy |
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | Get one user's credential-free membership info (user_id, role) |
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | Get User add locations, memory policy, and TTL |
+| PATCH | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | Update User add locations, memory policy, and TTL |
+| GET | `/api/v1/user-settings/add-locations` | Get current-user add locations (deprecated) |
+| PATCH | `/api/v1/user-settings/add-locations` | Update current-user add locations (deprecated) |
+| DELETE | `/api/v1/user-settings/add-locations` | Clear current-user add-location overrides (deprecated) |
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | Remove a user |
-| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | Promote a user to ADMIN |
+| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | Change a user's role between USER and ADMIN |
 | POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | Regenerate a user key |
 | POST | `/api/v1/admin/accounts/{account_id}/groups` | Create a group |
 | GET | `/api/v1/admin/accounts/{account_id}/groups` | List groups |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | Delete a group |
 | GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | List group members |
-| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Add a group member |
-| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | Remove a group member |
+| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | Add group members |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | Remove group members |
 | GET | `/api/v1/privacy-configs` | List privacy configuration categories |
+| GET | `/api/v1/privacy-configs/tree` | List current targets and field metadata as a tree without values |
 | POST | `/api/v1/privacy-configs/scan` | Scan or repair registered values in content |
 | GET | `/api/v1/privacy-configs/{category}` | List category targets |
 | GET | `/api/v1/privacy-configs/{category}/{target_key}` | Get the active configuration |
@@ -576,6 +616,12 @@ When the gateway runs inside the server, use the server's port; when it runs sta
 | MKCOL | `/webdav/resources`, `/webdav/resources/{resource_path}` | Create a directory |
 | MOVE | `/webdav/resources`, `/webdav/resources/{resource_path}` | Move or rename a resource |
 | POST | `/api/v1/compile` | Create an asynchronous Compile task |
+| GET | `/api/v1/compile/config` | Read target settings |
+| POST | `/api/v1/compile/config/update` | Update target settings |
+| GET | `/api/v1/compile/configs` | List visible targets |
+| GET | `/api/v1/compile/operations` | List target operations |
+| GET | `/api/v1/compile/operations/{operation_id}` | Read one operation |
+| GET | `/api/v1/compile/operations/{operation_id}/outputs` | List operation outputs and version references |
 | POST | `/api/v1/compile/embeddings` | Embed transient Compile routing texts |
 | GET | `/api/v1/compile/capabilities` | Check Compile availability |
 | GET | `/api/v1/compile/submissions/{key}` | Find a task by submission key |
@@ -602,4 +648,4 @@ Choose a reference page by operation type:
 | Data Lifecycle | Watches, snapshots, and OVPack |
 | Operations & Observability | System, tasks, Observer, and Metrics |
 | Identity & Governance | Administration, ACL, and privacy configuration |
-| Protocols & Extensions | OpenViking Assets, WebDAV, Agent Runtime API, and VikingBot API |
+| Protocols & Extensions | MCP and live context, OpenViking Assets, WebDAV, Agent Runtime API, and VikingBot API |

@@ -16,6 +16,25 @@ In Studio: **OpenViking Gateway** → **Keys**. A gateway key (`ovgw_…`) is wh
 
 The **Keys** tab lists your own keys. Account admins and root see every key in the account, with an **OpenViking user** column. The **Key** column shows only the first characters of each key.
 
+A gateway key is one of two credentials a client can use. The other, when the deployment allows it, is the user's own OpenViking API key; see [Use an OpenViking API key directly](#openviking-keys).
+
+## Use an OpenViking API key directly {#openviking-keys}
+
+When the deployment sets [`openviking_keys`](13-configuration.md#gateway-fields) to `true`, a client can put a user's OpenViking API key where a gateway key goes. Any key that does not start with `ovgw_` is then treated as an OpenViking API key. It is off by default, and with it off such a key is rejected without asking OpenViking.
+
+- **Its user is the key's own.** On the first request the gateway confirms the key with OpenViking; an admin or user key is accepted, a root key is not. To act as another user, the client sends that user's key; there is no header to switch identity.
+- **It uses the account's defaults.** It uses the account's `default` [context profile](08-context-profiles.md#context-profiles) (built-in defaults when there is none) and every enabled upstream, with every model allowed. The client can still change that profile's settings for a conversation with the `X-OpenViking-Context` header; see [Let clients override settings](08-context-profiles.md#client-overrides).
+- **The gateway stores it like an issued key**, so capture and logs work the same way. Turn on [encryption](../guides/22-gateway-operations.md#encryption). The **Keys** tab lists it as **OpenViking API key**, with **Account default** as its profile and upstreams.
+- **Only OpenViking can revoke it.** The **Keys** tab has no **Revoke** for it. [Deleting the user's gateway data](#delete-a-users-gateway-data) deletes the stored copy, logs and conversation state, but a client that still sends the key keeps working and starts fresh. To stop it, regenerate the key in OpenViking or turn `openviking_keys` off. After a key is regenerated, the gateway deletes its copy on a later request, as for a [gateway key](#when-the-openviking-key-changes).
+
+With `tenancy: account` (the default), keys for the same OpenViking account and user share conversation state. With `tenancy: key`, each OpenViking key gets a separate partition, even when two libraries return the same account and user identity. Conversations, recall, capture, model bindings and request logs use that partition. Set `management_api: false` and configure `default_upstreams` and `default_profile` before starting this mode; Studio and the management routes are unavailable.
+
+Rotating an OpenViking key in key tenancy starts a new partition and new conversations. For troubleshooting, derive its partition without printing the key: `"k_" + hashlib.sha256(("openviking\0" + key).encode()).hexdigest()`. The OpenViking account identity is kept separately for revocation checks.
+
+The stored OpenViking key and its user record expire after the configured `session_ttl_seconds`, measured from creation. Requests do not renew them. The next request confirms the key with OpenViking and recreates the records with the same partition and conversation scope. Issued gateway keys have no such TTL. See [Retention](11-security-and-data.md#retention) for pending capture and cleanup behavior.
+
+Use gateway keys when clients need their own context profile, upstreams or allowed models, or must be revocable on their own.
+
 ## Issue a key {#issue-a-key}
 
 If the **Keys** tab asks you to add an upstream or create a context profile first, do that, or ask whoever deployed the gateway if you cannot. On a new gateway, **Get a key** in the Overview tab's **Quick mode** card does all of this in one click; see [Get started checklist and Quick mode](06-manage-in-studio.md#get-started-checklist).
@@ -49,17 +68,21 @@ A gateway key lets its holder use the user's memory, so the right to issue keys 
 
 **Allowed models** is empty by default, which allows every model the key's [upstreams](07-upstreams.md#upstreams) serve. To restrict a key, enter the model names clients send, including aliases. The key's model list then shows only those names, and requests for any other model are rejected before they reach a provider. A key with allowed models also needs every request to name its model; for the exact errors, see [Clients get an error from the gateway](12-troubleshooting.md#clients-get-an-error-from-the-gateway).
 
+### Set a default peer {#default-peer}
+
+A key can carry a default [peer](03-connect-clients.md#peer), which requests use when they send no `X-OpenViking-Actor-Peer` header; a header on the request takes precedence. Set it with `default_peer_id` when you issue the key through the [management API](../api/25-gateway.md#gateway-keys). Studio does not show this field yet.
+
 ## After issuing {#after-issuing}
 
 A [gateway key](#gateway-keys) is fixed once issued, but the conversations it started belong to its user.
 
-- **Keys cannot be edited.** To change a key's context profile, upstreams, allowed models or user, issue a new key and revoke the old one.
+- **Keys cannot be edited.** To change a key's context profile, upstreams, allowed models, default peer or user, issue a new key and revoke the old one.
 - **Conversations belong to the user, not the key.** If the client sends the same session ID, a new key for the same user continues the existing [conversation](03-connect-clients.md#how-conversations-are-recognized), so replacing a key does not interrupt it.
 - **Revoking** a key (**Revoke** on the **Keys** tab, then **Revoke key**) stops it working at once. The user's conversation state and logs stay until they are explicitly deleted or expire. Turns not yet saved to OpenViking, such as the latest reply, are saved only if the conversation continues with a new key.
 
 ### One key per person {#one-key-per-person}
 
-Memory belongs to the OpenViking user behind a [gateway key](#gateway-keys), so everyone who shares a key shares that user's memory. Issue one key per person. Also issue separate keys per client if you want different context profiles, or want to revoke each client on its own.
+Memory belongs to the OpenViking user behind a [gateway key](#gateway-keys), so everyone who shares a key shares that user's memory. Issue one key per person. Also issue separate keys per client if you want different context profiles, or want to revoke each client on its own. A [peer](03-connect-clients.md#peer) tells one user's counterparts apart within that memory, but other peers' memories can still be recalled unless the profile is set to [Current peer only](03-connect-clients.md#peer-scope), and anyone holding the key can choose the peer, so it does not replace separate keys.
 
 ### When the user's OpenViking API key changes {#when-the-openviking-key-changes}
 
@@ -71,7 +94,7 @@ If OpenViking is only unreachable or returns an error, the gateway keeps the key
 
 Revoking keys does not delete what the gateway keeps for a user. To delete it, an account admin or root opens the **…** menu on one of the user's keys on the **Keys** tab, chooses **Delete this user's gateway data…** and confirms with **Delete gateway data**. This:
 
-- revokes all of the user's gateway keys, so their clients lose access at once;
+- revokes all of the user's gateway keys, so their clients lose access at once; a client using the user's [OpenViking API key directly](#openviking-keys) keeps working until the key is regenerated in OpenViking;
 - deletes the conversation state the gateway keeps for them, including content not yet saved to OpenViking;
 - deletes their request logs.
 

@@ -31,7 +31,7 @@ from openviking.server.app import (
 )
 from openviking.server.config import get_server_url_from_server_data, load_server_config
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
-from openviking_cli.utils.config.config_loader import resolve_config_path
+from openviking_cli.utils.config.config_loader import expand_config_environment, resolve_config_path
 from openviking_cli.utils.config.consts import (
     DEFAULT_CONFIG_DIR,
     DEFAULT_OV_CONF,
@@ -129,7 +129,7 @@ def _resolve_default_bot_log_dir(config_path: Optional[str]) -> str:
 
     try:
         with open(resolved_path, "r", encoding="utf-8-sig") as f:
-            raw = os.path.expandvars(f.read())
+            raw = expand_config_environment(f.read())
         data = json.loads(raw)
         storage = data.get("storage", {})
         workspace = storage.get("workspace") if isinstance(storage, dict) else None
@@ -459,14 +459,14 @@ def _main(recovery):
     try:
         with _sigterm_runs_finally():
             idle = getattr(getattr(ov_config, "memory", None), "session_auto_commit", None)
+            compile_api = getattr(ov_config, "compile_api", None)
             expiry = getattr(ov_config, "expiry", None)
-            if (
-                idle is not None
-                and idle.enabled
-                and idle.idle_backend == "redis"
-                and expiry is not None
-                and expiry.publisher_separate_process
-            ):
+            uses_redis = (
+                (idle is not None and idle.enabled and idle.idle_backend == "redis")
+                or (compile_api is not None and compile_api.scheduler_enabled)
+                or (config.ttl_adapter is not None and config.ttl_adapter.writer_enabled)
+            )
+            if uses_redis and expiry is not None and expiry.publisher_separate_process:
                 if resolved_config_path is None:
                     raise RuntimeError(
                         "Cannot start expiry publisher without a resolved ov.conf path"

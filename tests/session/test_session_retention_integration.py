@@ -827,6 +827,61 @@ async def test_wm_creation_detects_language_from_multiline_user_message(client, 
     assert "zh-CN" in prompts[0]["prompt"]
 
 
+@pytest.mark.parametrize(
+    "retry_enabled,summary_ratio", [(False, 0.0002), (True, 0.0002), (True, None)]
+)
+async def test_wm_creation_retries_over_budget_summary_with_reasoning_effort(
+    monkeypatch, retry_enabled, summary_ratio
+):
+    session = Session(viking_fs=None)
+    calls: list[dict] = []
+    outputs = ["x" * 12000, "y" * 12000, "final compact summary"]
+
+    class FakeVLM:
+        @staticmethod
+        def is_available() -> bool:
+            return True
+
+        async def get_completion_async(self, *args, **kwargs):
+            if args:
+                kwargs["prompt"] = args[0]
+            calls.append(kwargs)
+            return outputs[len(calls) - 1]
+
+    vlm = FakeVLM()
+    session._vlm_resolver = SimpleNamespace(get_vlm=AsyncMock(return_value=vlm))
+    monkeypatch.setattr(
+        "openviking.session.session.get_openviking_config",
+        lambda: SimpleNamespace(
+            vlm=vlm, memory=SimpleNamespace(summary_budget_retry_enabled=retry_enabled)
+        ),
+    )
+
+    result = await session._generate_archive_summary_async(
+        [_text_message("u1", "user", "summarize the latest deployment status")],
+        session_window_context=10000,
+        **({"summary_token_ratio": summary_ratio} if summary_ratio is not None else {}),
+        reasoning_effort="low",
+    )
+
+    if not retry_enabled:
+        assert result == outputs[0]
+        assert len(calls) == 1
+        assert calls[0]["reasoning_effort"] == "low"
+        return
+    assert result == "final compact summary"
+    from openviking.utils.token_estimation import estimate_text_tokens
+
+    assert calls[0]["max_tokens"] == 10000 - estimate_text_tokens(calls[0]["prompt"]) - 4
+    assert calls[1]["max_tokens"] < calls[0]["max_tokens"]
+    assert calls[2]["max_tokens"] == (2500 if summary_ratio is None else 2)
+    assert [call["reasoning_effort"] for call in calls] == ["low", "low", "low"]
+    assert "prompt" in calls[0]
+    assert calls[1]["messages"][0]["role"] == "system"
+    assert calls[1]["messages"][1]["content"] == outputs[0]
+    assert "tools" not in calls[2]
+
+
 async def test_wm_update_returns_two_products_in_one_model_call(
     client,
     monkeypatch,
@@ -1627,7 +1682,6 @@ async def test_session_state_lock_serializes_root_meta_without_blocking_archive_
 
     phase2 = client(session_id=initial.session_id)
     appending = client(session_id=initial.session_id)
-    await phase2.load()
     await appending.load()
 
     phase2_inside_save = asyncio.Event()
@@ -1875,6 +1929,14 @@ async def test_interrupted_phase1_recovers_when_root_rewrite_is_durable(
 ):
     session = client(session_id="phase1_reconcile_durable_root_test")
     await session.ensure_exists()
+    session.meta.memory_policy = {"memory_types": ["profile"]}
+    legacy_meta = session.meta.to_dict()
+    legacy_meta.update(
+        pending_tokens="123", keep_recent_count="1", memories_extracted={"total": "4"}
+    )
+    await session._viking_fs.write_file(
+        f"{session.uri}/.meta.json", json.dumps(legacy_meta), ctx=session.ctx
+    )
     original = [
         _text_message("u1", "user", "archive me"),
         _text_message("a1", "assistant", "retain me"),
@@ -1884,7 +1946,7 @@ async def test_interrupted_phase1_recovers_when_root_rewrite_is_durable(
     archive_uri = await _write_archive(session, 1, [original[0]])
     await session._write_phase1_marker(
         archive_uri,
-        queue_message={"task_id": "synthetic"},
+        queue_message={"task_id": "synthetic", "record_auto_commit_success": True},
         original_messages=original,
         archived_messages=[original[0]],
         retained_messages=[original[1]],
@@ -1901,9 +1963,28 @@ async def test_interrupted_phase1_recovers_when_root_rewrite_is_durable(
         AsyncMock(side_effect=lambda task_id: task_id == "synthetic"),
     )
 
-    assert await session._ensure_phase1_ready(archive_uri)
-    assert (await session._read_phase1_meta(archive_uri))["status"] == "ready"
-    assert session.meta.message_count == 1
+    recovering = client(session_id=session.session_id)
+    original_read = recovering._viking_fs.read_file
+    failed_once = False
+
+    async def transient_meta_read(uri, *args, **kwargs):
+        nonlocal failed_once
+        if uri == f"{session.uri}/.meta.json" and not failed_once:
+            failed_once = True
+            raise AGFSIoError("temporary metadata read failure")
+        return await original_read(uri, *args, **kwargs)
+
+    monkeypatch.setattr(recovering._viking_fs, "read_file", transient_meta_read)
+    assert await recovering._ensure_phase1_ready(archive_uri)
+    assert (await recovering._read_phase1_meta(archive_uri))["status"] == "ready"
+    assert recovering.meta.message_count == 1
+    assert recovering.meta.memory_policy == {"memory_types": ["profile"]}
+    assert recovering.meta.memories_extracted == {"total": 4}
+    assert recovering.meta.last_auto_commit_at
+    persisted = json.loads(
+        await recovering._viking_fs.read_file(f"{session.uri}/.meta.json", ctx=recovering.ctx)
+    )
+    assert persisted["last_auto_commit_at"] == recovering.meta.last_auto_commit_at
 
 
 async def test_interrupted_phase1_before_root_rewrite_becomes_failed(

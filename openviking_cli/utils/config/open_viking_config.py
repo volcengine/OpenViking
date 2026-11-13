@@ -3,10 +3,9 @@
 import hashlib
 import json
 import logging
-import os
 from pathlib import Path
 from threading import Lock
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -15,7 +14,7 @@ from openviking_cli.session.user_id import UserIdentifier
 
 from .agent_evolution_config import AgentEvolutionConfig
 from .cache_config import CacheConfig
-from .config_loader import resolve_config_path
+from .config_loader import expand_config_environment, resolve_config_path
 from .config_utils import (
     DEFAULT_SERVICE_NAME,
     format_validation_error,
@@ -60,9 +59,11 @@ from .queue_worker_config import QueueWorkersConfig
 from .reindex_config import ReindexConfig
 from .rerank_config import RerankConfig
 from .retrieval_config import RetrievalConfig
+from .rules_config import RulesConfig
 from .runtime_field import RuntimeField
 from .storage_config import StorageConfig
 from .telemetry_config import TelemetryConfig
+from .ttl_config import TTLConfig
 from .vlm_config import VLMConfig
 
 
@@ -112,6 +113,27 @@ class ConnectorConfig(BaseModel):
             raise ValueError("connector.poll_interval_ms must be > 0")
         return self
 
+    def credential_resolve_url(self) -> str:
+        """Derive the unified credential-resolve endpoint from ``auth``.
+
+        The Feishu compatibility endpoint (``.../oauth/access_token``) and the
+        unified resolver (``.../credential/resolve``) are two fixed paths on the
+        same KernelAPI inner entry, so the resolver URL is derived from the
+        configured ``auth`` rather than adding a second endpoint setting; this
+        keeps existing Feishu deployments unchanged. Returns an empty string
+        when ``auth`` is unset or uses an unrecognized path.
+        """
+        auth = self.auth.strip()
+        if not auth:
+            return ""
+        compat_suffix = "/oauth/access_token"
+        resolve_suffix = "/credential/resolve"
+        if auth.endswith(compat_suffix):
+            return auth[: -len(compat_suffix)] + resolve_suffix
+        if auth.endswith(resolve_suffix):
+            return auth
+        return ""
+
 
 class ParserApiConfig(BaseModel):
     """Configuration for the Understanding files/responses API."""
@@ -143,8 +165,8 @@ class ParserApiConfig(BaseModel):
         if self.enable:
             if not self.host.strip():
                 raise ValueError("parser_api.host is required when parser_api.enable=true")
-            if not self.api_key.strip():
-                raise ValueError("parser_api.api_key is required when parser_api.enable=true")
+            # The credential may be supplied by Account runtime configuration.
+            # UnderstandingAPI validates it when an operation starts.
         if self.host and "://" not in self.host:
             raise ValueError("parser_api.host must include scheme (e.g., https://...)")
         if self.upload_simple_max_bytes <= 0:
@@ -179,6 +201,9 @@ class CompileApiConfig(BaseModel):
     gateway_token: str = ""
     http_timeout_seconds: float = 10.0
     poll_interval_ms: int = 30000
+    # Run Redis-backed Compile scheduling on this instance.
+    scheduler_enabled: bool = False
+    scheduler_backend: Literal["redis"] = "redis"
 
     @model_validator(mode="after")
     def _validate(self) -> "CompileApiConfig":
@@ -245,6 +270,11 @@ class OpenVikingConfig(BaseModel):
     )
 
     rerank: RerankConfig = Field(default_factory=RerankConfig, description="Rerank configuration")
+
+    rules: RulesConfig = Field(
+        default_factory=RulesConfig,
+        description="Rule compilation and applicability model configuration",
+    )
 
     retrieval: RetrievalConfig = Field(
         default_factory=RetrievalConfig,
@@ -348,9 +378,24 @@ class OpenVikingConfig(BaseModel):
     enable_watch_scheduler: bool = Field(
         default=True,
         description=(
-            "Whether to start the background WatchScheduler that periodically re-processes "
-            "watched resources. Disable on read-only replicas that share a writer's data "
-            "so only the writer runs the watch/refresh background loop."
+            "Whether this node may become the Watch scheduler leader that polls due "
+            "watches and settles their runs. Every node serves the Watch API either way; "
+            "disable on nodes that should never run the background watch/refresh loop."
+        ),
+    )
+    watch_leader_provider: Literal["auto", "local", "cache"] = Field(
+        default="auto",
+        description=(
+            "Deprecated; will be removed in the next version. Use "
+            "storage.agfs.coordination.provider instead; explicit coordination takes precedence."
+        ),
+        json_schema_extra={"deprecated": True},
+    )
+    reconcile_system_assets_on_startup: bool = Field(
+        default=True,
+        description=(
+            "Whether to reconcile packaged system assets for active accounts during startup. "
+            "Disable on read-only replicas that share a writer's data."
         ),
     )
 
@@ -404,6 +449,21 @@ class OpenVikingConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _normalize_watch_leader_provider(self) -> "OpenVikingConfig":
+        if "watch_leader_provider" in self.model_fields_set:
+            _get_config_logger().warning(
+                "Config field 'watch_leader_provider' is deprecated and will be removed "
+                "in the next version; use 'storage.agfs.coordination.provider' instead."
+            )
+        coordination = self.storage.agfs.coordination
+        uses_cache = self.watch_leader_provider == "cache" or (
+            self.watch_leader_provider == "auto" and self.storage.watch_store.provider != "file"
+        )
+        if uses_cache and "provider" not in coordination.model_fields_set:
+            self.storage.agfs.coordination = coordination.model_copy(update={"provider": "cache"})
+        return self
+
+    @model_validator(mode="after")
     def _validate_cache_runtime_config(self) -> "OpenVikingConfig":
         """Require the shared cache Provider whenever AGFS selects a cache-backed runtime."""
         agfs = self.storage.agfs
@@ -412,6 +472,7 @@ class OpenVikingConfig(BaseModel):
             agfs.cachefs.backend == "cache"
             or agfs.queuefs.backend == "cache"
             or agfs.pathlock.provider == "cache"
+            or agfs.coordination.provider == "cache"
             or backups.get("provider", "filesystem") == "cache"
         )
         if uses_canonical_cache and self.cache is None:
@@ -474,7 +535,8 @@ class OpenVikingConfig(BaseModel):
         default=False,
         description=(
             "Allow fetching resources from private/non-public network addresses. "
-            "When disabled (default), only public IP addresses and hostnames are allowed."
+            "Configured code hosts may also use private networks. Loopback, link-local, "
+            "unspecified, multicast, reserved and known metadata addresses are always rejected."
         ),
     )
 
@@ -487,15 +549,42 @@ class OpenVikingConfig(BaseModel):
         description="Distributed expiry scheduling configuration",
     )
 
+    ttl: TTLConfig = RuntimeField(
+        default_factory=TTLConfig,
+        description=(
+            "Directory TTL recycling policy. Default-off; requires the enabled Redis TTL runtime."
+        ),
+    )
+
     @model_validator(mode="after")
     def _validate_expiry_backend(self) -> "OpenVikingConfig":
         self._check_expiry_backend()
         return self
 
+    @model_validator(mode="after")
+    def _validate_watch_store(self) -> "OpenVikingConfig":
+        if self.storage.watch_store.provider == "mysql":
+            if not self.storage.watch_store.params.get("credential_encryption_key"):
+                raise ValueError(
+                    "storage.watch_store.provider='mysql' requires "
+                    "storage.watch_store.params.credential_encryption_key"
+                )
+        return self
+
     def _check_expiry_backend(self) -> None:
-        idle = self.memory.session_auto_commit
-        if idle.enabled and idle.idle_backend == "redis":
+        if self.uses_redis_expiry():
             self.expiry.validate_for_runtime()
+
+    def uses_redis_session_expiry(self) -> bool:
+        idle = self.memory.session_auto_commit
+        return idle.enabled and idle.idle_backend == "redis"
+
+    def uses_redis_compile_schedule(self) -> bool:
+        return self.compile_api.scheduler_enabled
+
+    def uses_redis_expiry(self) -> bool:
+        """Whether any feature needs the distributed ExpiryScheduler."""
+        return self.uses_redis_session_expiry() or self.uses_redis_compile_schedule()
 
     agent_evolution: AgentEvolutionConfig = RuntimeField(
         default_factory=AgentEvolutionConfig,
@@ -786,9 +875,7 @@ class OpenVikingConfigSingleton:
             data = config_path.read_bytes()
             raw = data.decode("utf-8-sig")
 
-            # Expand $VAR and ${VAR} inside the JSON text (useful for container deployments).
-            # Unset variables are left unchanged by expandvars().
-            raw = os.path.expandvars(raw)
+            raw = expand_config_environment(raw)
             config_data = json.loads(raw)
 
             config = OpenVikingConfig.from_dict(config_data)

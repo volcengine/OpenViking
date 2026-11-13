@@ -1,3 +1,4 @@
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -31,6 +32,7 @@ def _service(viking_fs, resource_processor=None) -> ResourceService:
 async def test_cleanup_reserved_target_removes_only_empty_directory():
     lock = {"lease_ref": "lock-1"}
     ctx = _ctx()
+    cleanup_ctx = replace(ctx, bypass_acl=True)
     viking_fs = SimpleNamespace(
         exists=AsyncMock(return_value=True),
         stat=AsyncMock(return_value={"isDir": True}),
@@ -49,12 +51,12 @@ async def test_cleanup_reserved_target_removes_only_empty_directory():
     viking_fs.rm.assert_awaited_once_with(
         "viking://resources/empty",
         recursive=True,
-        ctx=ctx,
+        ctx=cleanup_ctx,
         lease_ref=lock,
     )
     viking_fs.stat.assert_awaited_once_with(
         "viking://resources/empty",
-        ctx=ctx,
+        ctx=cleanup_ctx,
         skip_count=True,
     )
 
@@ -80,7 +82,7 @@ async def test_cleanup_reserved_target_preserves_nonempty_directory():
     viking_fs.rm.assert_not_awaited()
     viking_fs.stat.assert_awaited_once_with(
         "viking://resources/nonempty",
-        ctx=ctx,
+        ctx=replace(ctx, bypass_acl=True),
         skip_count=True,
     )
 

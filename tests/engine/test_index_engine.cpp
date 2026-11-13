@@ -615,11 +615,60 @@ void test_paged_store_scan() {
   SPDLOG_INFO("[Passed] test_paged_store_scan");
 }
 
+void test_persist_store_write_error_is_actionable_and_path_safe() {
+  SPDLOG_INFO(
+      "[Running] test_persist_store_write_error_is_actionable_and_path_safe...");
+
+#if defined(_WIN32)
+  SPDLOG_INFO(
+      "[Skipped] open LevelDB files cannot be removed reliably on Windows");
+  return;
+#endif
+
+  const std::string db_path = "test_data_cpp/persist_store_write_failure";
+  std::filesystem::remove_all(db_path);
+  std::filesystem::create_directories(db_path);
+
+  std::string error_message;
+  {
+    PersistStore store(db_path);
+    StorageOp fill_memtable;
+    fill_memtable.key = "large-value";
+    fill_memtable.value = std::string(5 * 1024 * 1024, 'x');
+    if (store.exec_op({fill_memtable}) != 0) {
+      SPDLOG_ERROR("Failed to prepare the persistent store write failure");
+      exit(1);
+    }
+
+    // The next write rotates the oversized memtable's log. Removing the store
+    // directory makes that rotation fail through LevelDB's real write path.
+    std::filesystem::remove_all(db_path);
+    StorageOp trigger_rotation;
+    trigger_rotation.key = "trigger-rotation";
+    trigger_rotation.value = "value";
+    try {
+      store.exec_op({trigger_rotation});
+    } catch (const std::runtime_error& error) {
+      error_message = error.what();
+    }
+  }
+
+  if (error_message.find("PersistStore::exec_op failed: NotFound: ") != 0 ||
+      error_message.find(db_path) != std::string::npos) {
+    SPDLOG_ERROR("Unexpected public persistent store error: {}", error_message);
+    exit(1);
+  }
+  std::filesystem::remove_all(db_path);
+  SPDLOG_INFO(
+      "[Passed] test_persist_store_write_error_is_actionable_and_path_safe");
+}
+
 int main() {
   init_logging("INFO", "stdout", "[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
   test_basic_workflow();
   test_routed_filter_projection_edge_cases();
   test_path_bitmap_lifecycle_and_reload();
   test_paged_store_scan();
+  test_persist_store_write_error_is_actionable_and_path_safe();
   return 0;
 }

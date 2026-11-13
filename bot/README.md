@@ -367,22 +367,25 @@ The active directory used by the Agent also depends on `bot.sandbox.mode`:
 | `per-session` | `<workspace>/<session-key>` |
 | `per-channel` | `<workspace>/<channel-key>` |
 
-For example, with the default configuration, edit `~/.openviking/data/bot/workspace/shared/SOUL.md`.
+For example, the default local Soul file is `~/.openviking/data/bot/workspace/shared/SOUL.md`.
 
 ### Customize the Agent
 
 When an active Workspace is first used, VikingBot copies initial files from the built-in `bot/workspace` template. The main customization points are:
 
+When OpenViking is configured, VikingBot reads the current user's `viking://~/memories/soul.md` on each turn and uses it in place of local `SOUL.md`. If the file is missing, empty, unreadable, or the read exceeds 5 seconds, it falls back to local `SOUL.md`. Without OpenViking, it uses local `SOUL.md` directly.
+
 | File or directory | Purpose | How it is loaded |
 |-------------------|---------|------------------|
-| `SOUL.md` | Personality, values, and communication style | Added to the system prompt on every turn |
+| OpenViking `memories/soul.md` | Agent instructions | Preferred over local `SOUL.md` on every turn |
+| `SOUL.md` | Personality, values, and communication style | Local fallback when OpenViking Agent instructions are unavailable |
 | `AGENTS.md` | Global working rules and task constraints; create it when needed | Added to the system prompt on every turn |
 | `IDENTITY.md` | Agent name, role, and identity background; create it when needed | Added to the system prompt on every turn |
 | `TOOLS.md` | Tool selection, execution boundaries, and safety rules | Added to the system prompt on every turn |
 | `skills/<name>/SKILL.md` | Workflows and supporting resources for a class of tasks | A summary is injected first; full instructions are loaded progressively |
 | `HEARTBEAT.md` | Tasks checked periodically | Read only by Heartbeat |
 
-For example, edit `SOUL.md` in the active Workspace:
+For example, edit `SOUL.md` in the active Workspace to customize the local fallback:
 
 ```markdown
 # Soul
@@ -395,7 +398,7 @@ You are the team's engineering assistant.
 - State assumptions clearly and never invent results
 ```
 
-Saved changes normally take effect on the next Agent turn without restarting the Gateway. `SOUL.md` changes prompt behavior only; it cannot bypass Channel permissions, tool visibility, or Sandbox restrictions.
+Changes to the selected instruction file normally take effect on the next Agent turn without restarting the Gateway. When OpenViking `soul.md` is in use, edit that remote file; local `SOUL.md` is not added alongside it. These instructions change prompt behavior only; they cannot bypass Channel permissions, tool visibility, or Sandbox restrictions.
 
 > [!NOTE]
 > Edit files in the active Workspace. `bot/workspace` in the repository or installed package is an initialization template and does not overwrite an existing Workspace. Never store API Keys or other secrets in bootstrap files.
@@ -410,7 +413,7 @@ For the complete loading order, file responsibilities, and customization boundar
 |----------|-------|
 | Files and commands | `read_file`, `write_file`, `edit_file`, `list_dir`, `exec` |
 | Web | `web_search`, `web_fetch` |
-| OpenViking | `openviking_list`, `openviking_search`, `openviking_grep`, `openviking_glob`, `openviking_multi_read`, `openviking_add_resource`, `openviking_memory_commit` |
+| OpenViking | `openviking_list`, `openviking_search`, `openviking_rule_search`, `openviking_grep`, `openviking_glob`, `openviking_multi_read`, `openviking_add_resource`, `openviking_memory_commit` |
 | Other | `message`, `generate_image`, `cron`, `spawn` |
 
 `readonly` mode does not register `openviking_add_resource`. When a channel sets `ov_tools_enable: false`, it does not expose OpenViking tools or inject Profiles, Memories, and Experiences.

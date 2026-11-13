@@ -10,7 +10,9 @@ This page explains every card, column, label and saving status on the gateway's 
 
 Both tabs read the gateway's request log: one record per model request that went through the gateway. Users see only their own requests; account admins and root see the whole account's. The Overview figures are computed from the same records, so they cover the same requests.
 
-The log holds metadata only, never prompts, replies or memory text; see [What request logs record](11-security-and-data.md#what-request-logs-record). Records are kept for 30 days by default; see [Retention](11-security-and-data.md#retention).
+With `request_log_sink: "stdout"`, new records go only to stdout. The Requests page and Overview's request figures stay empty on a fresh deployment; previously stored records remain visible until they expire. Use the [stdout monitoring workflow](../guides/22-gateway-operations.md#monitoring) for new requests.
+
+The log holds metadata only, never prompts, replies or memory text; see [What request logs record](11-security-and-data.md#what-request-logs-record). Stored records are kept for 30 days by default; stdout retention belongs to the log collector. See [Retention](11-security-and-data.md#retention).
 
 ## Overview {#overview}
 
@@ -89,6 +91,7 @@ Expand a row to see:
 - context window use, and whether the history was compacted or the model started a new window
 - the saving status, with the next retry time
 - OpenViking tool details, including why tools were not offered
+- the profile settings the client sent in `X-OpenViking-Context`, by name only; they take effect only on a conversation's first request
 
 For a request with an issue, the expanded row also explains what happened and what to do.
 

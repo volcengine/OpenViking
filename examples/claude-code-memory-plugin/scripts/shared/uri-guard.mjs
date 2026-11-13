@@ -122,7 +122,7 @@ export function addSkillExample(uri, { call = "add_skill", edited = false } = {}
 export const DEFAULT_TOOL_HINTS = {
   read: {
     tool: "OpenViking MCP read",
-    example: (uri) => `read(uris="${uri}")`,
+    example: (uri) => `read(uri="${uri}")`,
   },
   glob: {
     tool: "OpenViking MCP glob or list",
@@ -152,22 +152,24 @@ export const DEFAULT_TOOL_HINTS = {
   },
   bash: {
     tool: "OpenViking MCP read or search",
-    example: (uri) => `read(uris="${uri}")`,
+    example: (uri) => `read(uri="${uri}")`,
   },
   runcommand: {
     tool: "OpenViking MCP read or search",
-    example: (uri) => `read(uris="${uri}")`,
+    example: (uri) => `read(uri="${uri}")`,
   },
   shell: {
     tool: "OpenViking MCP read or search",
-    example: (uri) => `read(uris="${uri}")`,
+    example: (uri) => `read(uri="${uri}")`,
   },
 };
 
 // Tools whose argument is a command line rather than a location. A viking:// URI
 // in one is data (an `ov` argument, an HTTP payload, a grep pattern) as often as
 // a path the model hoped to open, so the command runs and the model gets a notice.
-const SHELL_TOOL_NAMES = new Set(["bash", "shell", "runcommand"]);
+// Only a name the host's hint table lists is guarded at all, so the PowerShell
+// names reach no host that does not map them (dsh's Windows `pwsh` tool does).
+const SHELL_TOOL_NAMES = new Set(["bash", "shell", "runcommand", "pwsh", "powershell"]);
 
 // `pattern` is where glob looks but what grep looks for: a grep for the text
 // "viking://" in a local tree is not a path. The generic sweep still reaches

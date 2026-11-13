@@ -18,7 +18,7 @@ extension-module = ["pyo3/extension-module"]
 s3 = ["ragfs/s3"]
 
 [dependencies]
-ragfs = { path = "../ragfs", features = ["cache"] }
+ragfs = { path = "../ragfs", features = ["cache", "postgres"] }
 pyo3 = { version = "0.27", features = ["abi3", "abi3-py310"] }
 pyo3-async-runtimes = { version = "0.27", features = ["tokio-runtime"] }
 tokio = { version = "1", features = ["full"] }
@@ -31,3 +31,4 @@ toml = "0.8"
 gix-hash = "0.14"
 bytes = "1.5"
 similar = "3.1"
+uuid = { version = "1", features = ["v4"] }

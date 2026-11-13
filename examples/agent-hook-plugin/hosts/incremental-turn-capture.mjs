@@ -17,7 +17,14 @@ export function buildIncrementalCapturePlan(turns, state = {}, cfg = {}) {
     if (!decision.shouldCapture) continue;
     candidates.push({ dedupKey: turnDedupKey(turn), turn, content: decision.text });
   }
-  const toSend = candidates.filter((item) => !acknowledged.has(item.dedupKey));
+  const seenInBatch = new Set();
+  const toSend = candidates.filter((item) => {
+    if (acknowledged.has(item.dedupKey)) return false;
+    const batchKey = stableHash(item.dedupKey, item.content);
+    if (seenInBatch.has(batchKey)) return false;
+    seenInBatch.add(batchKey);
+    return true;
+  });
   const payloads = toSend.map(({ turn, content }) => ({
     role: turn.role,
     content,

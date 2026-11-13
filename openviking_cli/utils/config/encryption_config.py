@@ -2,19 +2,31 @@
 # SPDX-License-Identifier: AGPL-3.0
 from typing import Any, Dict, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class LocalEncryptionProviderConfig(BaseModel):
-    """Local file encryption provider configuration.
+    """Local encryption provider configuration.
 
-    Uses a local file to store the Root Key.
+    Reads the Root Key from a local file or directly from configuration.
     Suitable for single-user or development environments.
     """
 
-    key_file: str = Field(
-        default="~/.openviking/master.key", description="Path to local root key file"
+    key_file: Optional[str] = Field(
+        default="~/.openviking/master.key",
+        description="Path to local root key file",
     )
+    root_key: Optional[str] = Field(
+        default=None,
+        repr=False,
+        description="32-byte root key encoded as 64 hexadecimal characters",
+    )
+
+    @model_validator(mode="after")
+    def use_inline_key_without_implicit_file(self) -> "LocalEncryptionProviderConfig":
+        if self.root_key is not None and "key_file" not in self.model_fields_set:
+            self.key_file = None
+        return self
 
 
 class VaultEncryptionProviderConfig(BaseModel):
@@ -61,6 +73,7 @@ class VolcengineKMSEncryptionProviderConfig(BaseModel):
     region: str = Field(default="cn-beijing", description="Volcengine KMS region")
     access_key: Optional[str] = Field(default=None, description="Volcengine access key ID")
     secret_key: Optional[str] = Field(default=None, description="Volcengine secret access key")
+    key_file: Optional[str] = Field(default=None, description="Path to encrypted root key file")
 
 
 class APIKeyHashingConfig(BaseModel):

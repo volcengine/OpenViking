@@ -3,6 +3,8 @@
 OpenViking Server includes an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) endpoint. Clients supporting Streamable HTTP can connect directly. Clients supporting only stdio can use the proxy in the [Agent Plugins package](../agent-integrations/15-agent-plugins.md).
 
 > **Quick setup?** See [MCP Clients](../agent-integrations/06-mcp-clients.md) for client configuration snippets and platform-specific notes. This page covers the full tool reference and advanced configuration.
+>
+> **Connecting an external MCP server?** See [Live context integration and arrangement](24-live-context-arrangement.md) for `ov mcps`, the Tool Catalog, live nodes, Studio Arranger, and Context as Code.
 
 ## Prerequisites
 
@@ -124,11 +126,16 @@ Enable `oauth.enabled` on the server and configure HTTPS as described in the OAu
 
 The built-in MCP tools are listed below. Use the connected server's `tools/list` response to determine which tools are available:
 
+<div v-pre>
+
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
+| `find_mcp_tools` | Semantically discover registered upstream MCP tools for an intent. Returns ranked candidates with `uri`, `score`, and the complete MCP `tool` definition, including `inputSchema` and annotations. Use the returned `uri` directly as `invoke_mcp_tool.tool_uri`; no additional `read` is required | `query`, `limit` (default 10) |
+| `invoke_mcp_tool` | Execute a tool selected by `find_mcp_tools`. OpenViking resolves the upstream server and credentials, and transparently preserves its `content`, `structuredContent`, and `isError` result. The upstream tool may have external side effects, and calls are not retried | `tool_uri`, `arguments` (optional; must conform to the discovered `tool.inputSchema`) |
 | `find` | Fast semantic retrieval without session context. `context_type="skill"` on its own switches to package-level skill retrieval: one hit per skill package, its URI pointing at that package's `SKILL.md` and its summary taken from the skill itself, even when an auxiliary file inside the package is what matched. Without `target_uri` it searches both your own skills and the account-shared `viking://agent/skills`. Mixing `skill` with another context type keeps the generic retrieval path | `query`, `target_uri` (optional), `limit`, `min_score`, `level` (optional), `context_type` (optional), `read_content` (optional — inline each hit's content), `events_time_decay_protection` (optional) |
 | `search` | Deep semantic retrieval; `mode="context"` assembles injection-ready context and replaces the former `recall` tool. `list` mode also returns one hit per skill package, its URI pointing at `SKILL.md` and its summary taken from the package itself, but `limit` applies before that merge, so a package matching in several files takes several slots and fewer than `limit` results come back | `query`, `mode` (`list` or `context`), `target_uri` (list mode only), `session_id` (optional), `limit`, `min_score`, `level` (list mode), `context_type` (optional), `events_time_decay_protection` (optional in both modes), plus context-mode `quotas`, `purpose`, `max_tokens`, `detail` or `detail_by_category`, `dedup_turns`, `exclude_uris`, `peer_scope`, scalar `other_peer_penalty` or `other_peer_penalties` by category, and `rewrite` (`off` or `auto`) |
-| `read` | Read one or more `viking://` URIs. PNG, JPEG, GIF, and WebP return native MCP image content; WAV, MP3, FLAC, OGG, and M4A return native audio content. Video is not supported because MCP has no standard video content block; use `download` for the original bytes | `uris` (single string or array), `offset`, `limit` (text lines) |
+| `rule_search` | Retrieve active Rules applicable to a concrete task context. Returned Rules still require the caller to evaluate `applies_when` and `exception` against known facts | `task_context`, `rule_probability_threshold` (optional, default `0.65`) |
+| `read` | Read one or more `viking://` URIs. PNG, JPEG, GIF, and WebP return native MCP image content; WAV, MP3, FLAC, OGG, and M4A return native audio content. Video is not supported because MCP has no standard video content block; use `download` for the original bytes | `uri` (one file) or `uris` (array, several files in one call), `offset`, `limit` (text lines) |
 | `download` | Return a short-lived, single-use URL for fetching the original bytes of one file (any type, including PDF, images, archives, audio and video) with `curl`; it does not return the content. Directories are not supported | `uri` |
 | `list` | List entries under a `viking://` directory | `uri`, `recursive`, `offset`, `limit`, `sort_by`, `sort_order` (optional) |
 | `tree` | Show the recursive directory tree under a `viking://` URI, indented by depth — use when you need a full picture of the file tree (prefer `list` for a single level, `glob` for filename patterns) | `uri` (optional), `level_limit` (default 3), `node_limit` (default 1000), `offset`, `limit`, `include_abstract` (optional — also show each directory's summary; for a skill directory that is its name and description) |
@@ -143,10 +150,15 @@ The built-in MCP tools are listed below. Use the connected server's `tools/list`
 | `glob` | Find files matching a glob pattern | `pattern`, `uri` (optional scope), `node_limit` |
 | `forget` | Delete any `viking://` URI (use `search` to find it first; pass `recursive=true` to delete a directory). Deleting a skill directory this way leaves the skill's privacy configuration behind; remove a skill with `ov skills remove` or `DELETE /api/v1/skills/{name}` | `uri`, `recursive` (optional) |
 | `health` | Check OpenViking service health | none |
-| `list_users` | Find user IDs in the caller's account; credentials are excluded by default, including for administrators | `query` (ID substring), `limit` (100), `page` (1), `include_credentials` (false; true requires ADMIN/ROOT) |
+| `privacy_tree` | Check which credentials are saved; return active field metadata and references without values | `category` (optional) |
+| `privacy_resolve` | Turn a complete <code v-pre>{{ov_privacy:...}}</code> placeholder into one current field's actual value for immediate use | `reference` |
+| `privacy_upsert` | Save user-supplied credential fields with an atomic merge; return metadata and references without values | `category`, `target_key`, `values` |
+| `list_users` | Find user IDs in the caller's account; credentials are excluded by default, including for administrators | `query` (ID substring), `limit` (100), `page` (1), `include_credentials` (false; true applies role-based visibility) |
 | `list_groups` | List group IDs in the caller's account without membership | None |
 | `get_acl` | Read direct, inherited and effective ACL; requires resource manage or account ADMIN | `uri` |
 | `set_acl` | Update a shared resource ACL; authorize against the permissions before the change | `uri`, `acl` |
+
+</div>
 
 To address your own workspace from an MCP tool, use the home alias `viking://~`. It
 expands to `viking://user/<current-user>` on every control plane (REST API, `ov` CLI,
@@ -166,13 +178,54 @@ user spaces, not a shortcut to yours. See
 
 > `processing_mode=vectors_only` skips the VLM semantic-understanding stage. It does not generate or refresh `.abstract.md` / `.overview.md`; it only vectorizes current non-hidden resource files, preserving any older semantic artifacts that already exist.
 
+### Using saved credentials from a skill
+
+If a SKILL.md, document or tool result contains an authentication placeholder such as:
+
+```text
+Authorization: Bearer {{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}
+```
+
+and the current task needs the credential, call `privacy_resolve` with the entire
+placeholder unchanged, excluding the surrounding `Authorization: Bearer` text:
+
+```json
+{
+  "name": "privacy_resolve",
+  "arguments": {
+    "reference": "{{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}"
+  }
+}
+```
+
+These are the parameters for an MCP `tools/call` request. Use the returned `value`
+in the API's authentication field; the placeholder itself is not a working key.
+Resolution uses the current active version and rejects another owner's reference,
+even for administrators. Field-level Privacy URIs are also accepted. If you do not
+know the reference, call `privacy_tree`, optionally filtering by `category`.
+
+To save a PAT supplied by the user, call `privacy_upsert` with
+`category="credential"`, `target_key="github"` and `values={"pat":"<user-provided-token>"}`.
+It creates the target or merges the supplied fields, preserving other fields such
+as `username`. Changed values create and activate a version; this does not rotate
+credentials at the external provider. Its response describes only the updated
+fields, without echoing their values.
+
+Tree and resolve are marked read-only; upsert is marked as a potentially destructive
+write. Read-only does not mean non-sensitive: resolve returns plaintext to the MCP
+client and Agent context. Keep references in saved documents and memory, and do
+not echo resolved secrets in chat. Tree and upsert return no stored values.
+
 ### Resource permissions and sharing
 
 All account users may call `list_users` and `list_groups`; neither tool accepts a different account.
 The default output contains only user IDs and a matching total, or group IDs. Even administrators
-must explicitly set `include_credentials=true` to include available credentials. A USER requesting
-credentials receives `PERMISSION_DENIED`, even when the query matches no users. Trusted auth mode
-forbids credential disclosure. Group membership remains available through the admin API.
+must explicitly set `include_credentials=true` to include credential fields: ROOT receives
+every available plaintext key in `api_key`; ADMIN receives its own plaintext key and masked
+`key_prefix` values for every other user. USER authenticated with a personal API key receives
+only its own stored key (or prefix for hash-only storage); every other row omits both credential
+fields. USER authenticated through OAuth or other methods receives no credentials. Trusted auth
+mode forbids credential disclosure. Group membership remains available through the admin API.
 
 `get_acl` and `set_acl` require resource `manage` permission. A resource manager does not gain
 account administrator privileges. `write` and `add_resource` accept an optional `acl` object;

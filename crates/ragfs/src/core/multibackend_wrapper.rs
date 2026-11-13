@@ -15,20 +15,21 @@ use super::types::{
     BackendRole, FileInfo, GlobPage, GrepOptions, GrepResult, ListSortBy, SortOrder, TreeEntry,
     WriteFlag,
 };
-use crate::core::internal_names::is_multiwrite_internal_path;
+use crate::core::internal_names::{is_hidden_runtime_lock_name, is_multiwrite_internal_path};
 use crate::metrics::{RagfsMetric, RagfsMetricValue};
 use crate::multibackend::catch_up::CatchUpTarget;
+use crate::multibackend::constants::SYSTEM_DIR;
 use crate::multibackend::meta::{
     current_required_ctx, DefaultFsContextResolver, FsContextResolver, MetadataStore,
-    MultiWriteWorker,
+    MultiWriteMetricsSnapshot, MultiWriteWorker,
 };
 use crate::multibackend::migration::{FullDataImporter, ProtocolDetector};
 use crate::multibackend::model::{
-    PartitionState, PartitionsManifest, PendingEvent, PendingEventKind, ProtocolState,
-    ProtocolStatus, ProtocolVersion, SegmentEventType, SegmentManifest,
+    PartitionsManifest, PendingEvent, PendingEventKind, ProtocolStatus, ScopeKey, SegmentEventType,
+    SegmentManifest,
 };
 use crate::multibackend::provider::{bootstrap_account, MultiWriteProvider};
-use crate::multibackend::runtime::MultiWriteRuntime;
+use crate::multibackend::runtime::{read_active_accounts, MultiWriteRuntime};
 
 const COPY_CHUNK_SIZE: usize = 8 * 1024 * 1024;
 
@@ -47,6 +48,7 @@ pub struct BackendEntry {
 pub(crate) struct Inner {
     primary: BackendEntry,
     runtime: MultiWriteRuntime,
+    metrics: Arc<MultiWriteMetricsSnapshot>,
     ctx_resolver: Arc<dyn FsContextResolver>,
 }
 
@@ -55,7 +57,6 @@ pub(crate) struct Inner {
 pub struct MultiWriteWrappedFS {
     pub(crate) inner: Arc<Inner>,
     metadata_store: Arc<MetadataStore>,
-    metadata_provider: Arc<dyn MultiWriteProvider>,
 }
 
 /// Builder for one V2 multi-write wrapper and its flush runtime.
@@ -67,6 +68,7 @@ pub struct MultiWriteWrappedFSBuilder {
     metadata_provider: Option<Arc<dyn MultiWriteProvider>>,
     initial_partitions: u32,
     checkpoint_interval: Duration,
+    reconcile_existing_data: bool,
     ctx_resolver: Arc<dyn FsContextResolver>,
 }
 
@@ -110,6 +112,12 @@ impl MultiWriteWrappedFSBuilder {
         self
     }
 
+    /// Set whether startup should reconcile existing primary data into V2 metadata.
+    pub fn reconcile_existing_data(mut self, reconcile_existing_data: bool) -> Self {
+        self.reconcile_existing_data = reconcile_existing_data;
+        self
+    }
+
     /// Configure the resolver for mount-relative foreground paths.
     pub fn ctx_resolver(mut self, ctx_resolver: Arc<dyn FsContextResolver>) -> Self {
         self.ctx_resolver = ctx_resolver;
@@ -136,6 +144,43 @@ impl MultiWriteWrappedFSBuilder {
             .iter()
             .map(|entry| entry.name.clone())
             .collect();
+        let configured_backups = backup_names.iter().cloned().collect::<BTreeSet<_>>();
+        let reset_import_pending = metadata_store.reset_import_pending().await?;
+        let existing_metadata = if reset_import_pending {
+            ExistingMetadataScan {
+                accounts: Vec::new(),
+                membership_changed: false,
+            }
+        } else {
+            scan_existing_metadata(metadata_store.as_ref(), &configured_backups).await?
+        };
+        let reset_for_backup_change = existing_metadata.membership_changed;
+        if reset_for_backup_change {
+            for account in &existing_metadata.accounts {
+                for (scope, _) in &account.segments {
+                    metadata_provider.reset_scope(scope).await?;
+                }
+            }
+            metadata_store.mark_reset_import_pending().await?;
+            metadata_store.reset_multiwrite_metadata().await?;
+            tracing::info!(
+                scopes = existing_metadata.scope_count(),
+                "multi-write backup membership changed; reset V2 metadata"
+            );
+        } else if reset_import_pending {
+            let scopes = reset_provider_scopes_for_current_accounts(
+                metadata_provider.as_ref(),
+                self.primary_backend.as_ref(),
+                self.initial_partitions,
+            )
+            .await?;
+            metadata_store.reset_multiwrite_metadata().await?;
+            tracing::info!(
+                scopes,
+                "multi-write backup reset import pending; reset V2 metadata"
+            );
+        }
+        let metrics = Arc::new(MultiWriteMetricsSnapshot::default());
         let catch_up_targets = self
             .backup_entries
             .iter()
@@ -147,35 +192,32 @@ impl MultiWriteWrappedFSBuilder {
         let protocol = ProtocolDetector::new(metadata_store.clone())
             .detect()
             .await?;
-        let configured_backups = backup_names.iter().collect::<BTreeSet<_>>();
-        for account in metadata_store.initialized_accounts().await? {
-            let path = metadata_store.paths().account_manifest(&account)?.0;
-            let manifest: PartitionsManifest = match metadata_store.read_json(&path).await {
-                Ok(manifest) => manifest,
-                Err(Error::NotFound(_)) => continue,
-                Err(error) => return Err(error),
-            };
-            for &partition_id in manifest.partitions.keys() {
-                let path = metadata_store
-                    .paths()
-                    .segment_manifest(&account, partition_id)?
-                    .0;
-                let segments: SegmentManifest = metadata_store.read_json(&path).await?;
-                segments.validate()?;
-                let persisted = segments.backend_states.keys().collect::<BTreeSet<_>>();
-                if persisted != configured_backups {
-                    return Err(Error::not_supported(format!(
-                        "backup membership changed for account {account}"
-                    )));
+        metrics.set_protocol_status(protocol.status);
+        if !reset_for_backup_change {
+            for account_metadata in existing_metadata.accounts {
+                for (scope, segments) in &account_metadata.segments {
+                    segments.validate()?;
+                    metrics.replace_scope(scope, segments);
+                    let persisted = segments
+                        .backend_states
+                        .keys()
+                        .cloned()
+                        .collect::<BTreeSet<_>>();
+                    if persisted != configured_backups {
+                        return Err(Error::not_supported(format!(
+                            "backup membership changed for account {}",
+                            account_metadata.account
+                        )));
+                    }
                 }
+                bootstrap_account(
+                    metadata_provider.as_ref(),
+                    metadata_store.as_ref(),
+                    &account_metadata.account,
+                    &account_metadata.manifest,
+                )
+                .await?;
             }
-            bootstrap_account(
-                metadata_provider.as_ref(),
-                metadata_store.as_ref(),
-                &account,
-                &manifest,
-            )
-            .await?;
         }
         let runtime = MultiWriteRuntime::prepare(
             metadata_store.clone(),
@@ -185,6 +227,7 @@ impl MultiWriteWrappedFSBuilder {
             Some(self.primary_backend.clone()),
             catch_up_targets,
             self.checkpoint_interval,
+            metrics.clone(),
         )
         .await;
         let primary = BackendEntry {
@@ -197,30 +240,156 @@ impl MultiWriteWrappedFSBuilder {
             inner: Arc::new(Inner {
                 primary,
                 runtime,
+                metrics: metrics.clone(),
                 ctx_resolver: self.ctx_resolver,
             }),
             metadata_store: metadata_store.clone(),
-            metadata_provider: metadata_provider.clone(),
         };
         if protocol.status != ProtocolStatus::Stable {
             let importer_primary: Arc<dyn FileSystem> = Arc::new(fs.clone());
+            let import_metrics = metrics.clone();
+            let import_store = metadata_store.clone();
+            let force_reset_import = reset_for_backup_change || reset_import_pending;
             let importer = FullDataImporter::new(
                 importer_primary,
                 metadata_store,
                 metadata_provider,
                 self.initial_partitions,
                 backup_names,
+                self.reconcile_existing_data || force_reset_import,
             );
+            let catch_up_full_scan =
+                force_reset_import.then(|| fs.inner.runtime.catch_up_full_scan_requester());
             fs.inner.runtime.set_import_worker(async move {
                 let result = importer.run().await;
                 if let Err(error) = &result {
                     tracing::error!(error = %error, "multi-write full-data import failed");
+                } else {
+                    if force_reset_import {
+                        import_store.clear_reset_import_pending().await?;
+                    }
+                    import_metrics.set_protocol_status(ProtocolStatus::Stable);
+                    if let Some(catch_up_full_scan) = &catch_up_full_scan {
+                        catch_up_full_scan.request();
+                    }
                 }
                 result
             });
         }
         Ok(fs)
     }
+}
+
+/// Previously initialized account metadata read during backup membership checks.
+struct ExistingAccountMetadata {
+    account: String,
+    manifest: PartitionsManifest,
+    segments: Vec<(ScopeKey, SegmentManifest)>,
+}
+
+/// Existing metadata snapshot and whether its backup names differ from config.
+struct ExistingMetadataScan {
+    accounts: Vec<ExistingAccountMetadata>,
+    membership_changed: bool,
+}
+
+impl ExistingMetadataScan {
+    /// Return how many partition scopes were read in this scan.
+    fn scope_count(&self) -> usize {
+        self.accounts
+            .iter()
+            .map(|account| account.segments.len())
+            .sum()
+    }
+}
+
+/// Clear provider runtime state for scopes that a reset full import can recreate.
+async fn reset_provider_scopes_for_current_accounts(
+    provider: &dyn MultiWriteProvider,
+    primary: &dyn FileSystem,
+    initial_partitions: u32,
+) -> Result<usize> {
+    let mut accounts = read_active_accounts(primary).await?;
+    accounts.insert(SYSTEM_DIR.to_string());
+    let mut scopes = 0;
+    for account_id in accounts {
+        for partition_id in 0..initial_partitions {
+            provider
+                .reset_scope(&ScopeKey {
+                    account_id: account_id.clone(),
+                    partition_id,
+                    epoch: 1,
+                })
+                .await?;
+            scopes += 1;
+        }
+    }
+    Ok(scopes)
+}
+
+/// Read existing metadata once and detect whether persisted backup names differ from config.
+async fn scan_existing_metadata(
+    metadata_store: &MetadataStore,
+    configured_backups: &BTreeSet<String>,
+) -> Result<ExistingMetadataScan> {
+    let mut accounts = Vec::new();
+    let mut membership_changed = false;
+    'accounts: for account in metadata_store.initialized_accounts().await? {
+        let path = metadata_store.paths().account_manifest(&account)?.0;
+        let manifest: PartitionsManifest = match metadata_store.read_json(&path).await {
+            Ok(manifest) => manifest,
+            Err(Error::NotFound(_)) => continue,
+            Err(error) => return Err(error),
+        };
+        manifest.validate()?;
+        let mut segments_by_scope = Vec::new();
+        for &partition_id in manifest.partitions.keys() {
+            let path = metadata_store
+                .paths()
+                .segment_manifest(&account, partition_id)?
+                .0;
+            let segments: SegmentManifest = match metadata_store.read_json(&path).await {
+                Ok(segments) => segments,
+                Err(Error::NotFound(_)) => {
+                    tracing::warn!(
+                        account = %account,
+                        partition_id = partition_id,
+                        path = %path,
+                        "skip incomplete multi-write account metadata during startup"
+                    );
+                    continue 'accounts;
+                }
+                Err(error) => return Err(error),
+            };
+            segments.validate()?;
+            if segments
+                .backend_states
+                .keys()
+                .cloned()
+                .collect::<BTreeSet<_>>()
+                != *configured_backups
+            {
+                membership_changed = true;
+            }
+            segments_by_scope.push((
+                ScopeKey {
+                    account_id: account.clone(),
+                    partition_id,
+                    epoch: manifest.epoch,
+                },
+                segments,
+            ));
+        }
+        accounts.push(ExistingAccountMetadata {
+            account,
+            manifest,
+            segments: segments_by_scope,
+        });
+    }
+    Ok(ExistingMetadataScan {
+        accounts,
+        membership_changed,
+    })
 }
 
 impl MultiWriteWrappedFS {
@@ -234,6 +403,7 @@ impl MultiWriteWrappedFS {
             metadata_provider: None,
             initial_partitions: 16,
             checkpoint_interval: Duration::from_secs(86_400),
+            reconcile_existing_data: false,
             ctx_resolver: Arc::new(DefaultFsContextResolver),
         }
     }
@@ -259,33 +429,14 @@ impl MultiWriteWrappedFS {
         usize::from(self.inner.runtime.is_running())
     }
 
-    /// Read and validate one complete V2 multi-write metrics snapshot.
+    /// Return one V2 multi-write metrics snapshot without filesystem scans.
     pub(crate) async fn metrics(&self) -> Result<Vec<RagfsMetric>> {
-        let protocol_path = self.metadata_store.paths().mount_protocol().0;
-        let protocol: ProtocolState = self.metadata_store.read_json(&protocol_path).await?;
-        protocol.validate()?;
-        let mut lag = BTreeMap::<(String, u32), u64>::new();
-        for account in self.metadata_store.initialized_accounts().await? {
-            let path = self.metadata_store.paths().account_manifest(&account)?.0;
-            let manifest: PartitionsManifest = self.metadata_store.read_json(&path).await?;
-            manifest.validate()?;
-            for (&partition_id, entry) in &manifest.partitions {
-                if entry.state != PartitionState::Stable {
-                    continue;
-                }
-                let scope = crate::multibackend::model::ScopeKey {
-                    account_id: account.clone(),
-                    partition_id,
-                    epoch: manifest.epoch,
-                };
-                let segments = self.metadata_provider.read_manifest(&scope).await?;
-                segments.validate()?;
-                let tail = segments.next_seq - 1;
-                for (backend, state) in segments.backend_states {
-                    *lag.entry((backend, partition_id)).or_default() += tail - state.synced_seq;
-                }
-            }
-        }
+        let protocol_status = self
+            .inner
+            .metrics
+            .protocol_status()
+            .unwrap_or(ProtocolStatus::Migrating);
+        let lag = self.inner.metrics.backend_lag();
         let mut metrics = vec![
             RagfsMetric {
                 name: "ragfs_multiwrite_background_tasks".into(),
@@ -314,18 +465,16 @@ impl MultiWriteWrappedFS {
         metrics.push(RagfsMetric {
             name: "ragfs_multiwrite_protocol_version".into(),
             labels: BTreeMap::from([("version".into(), "v2".into())]),
-            value: RagfsMetricValue::Gauge(u64::from(
-                protocol.protocol_version == ProtocolVersion::V2,
-            ) as f64),
+            value: RagfsMetricValue::Gauge(1.0),
         });
         for (status, value) in [
             (
                 "migrating",
-                u64::from(protocol.status == ProtocolStatus::Migrating),
+                u64::from(protocol_status == ProtocolStatus::Migrating),
             ),
             (
                 "stable",
-                u64::from(protocol.status == ProtocolStatus::Stable),
+                u64::from(protocol_status == ProtocolStatus::Stable),
             ),
         ] {
             metrics.push(RagfsMetric {
@@ -373,6 +522,15 @@ impl MultiWriteWrappedFS {
         kind: SegmentEventType,
         destination_path: Option<&str>,
     ) -> Result<Option<PendingEvent>> {
+        // Runtime lock files are primary-only and may sit outside an account root.
+        if destination_path.is_none()
+            && path
+                .rsplit('/')
+                .next()
+                .is_some_and(is_hidden_runtime_lock_name)
+        {
+            return Ok(None);
+        }
         let ctx = self.resolve_context(path)?;
         let account_id = ctx.account_id().to_string();
         let mut path = logical_path(&account_id, path)?;
@@ -728,3 +886,7 @@ impl FileSystem for MultiWriteWrappedFS {
             .await
     }
 }
+
+#[cfg(test)]
+#[path = "tests/test_multibackend_wrapper.rs"]
+mod tests;

@@ -392,6 +392,8 @@ JSON 输出 - 错误：
 | POST | `/api/v1/content/write` | 写入内容并刷新语义索引 |
 | POST | `/api/v1/content/batch-write` | 写入多个文件并刷新索引 |
 | POST | `/api/v1/content/set_tags` | 设置检索标签 |
+| POST | `/api/v1/content/batch_set_tags` | 批量设置 1～50 个 URI 的检索标签 |
+| POST | `/api/v1/content/ensure_directory_index` | 确保既有目录的索引就绪，仅在两层摘要都缺失时创建 L0 |
 | POST | `/api/v1/content/reindex` | 重建语义或向量索引 |
 
 ### [技能](04-skills.md)
@@ -405,6 +407,25 @@ JSON 输出 - 错误：
 | GET | `/api/v1/skills/{skill_name}` | 获取技能 |
 | PUT | `/api/v1/skills/{skill_name}` | 更新技能 |
 | DELETE | `/api/v1/skills/{skill_name}` | 删除技能 |
+
+### [MCP 与实时上下文](26-mcp-live-context.md)
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/mcps/validate` | 校验 MCP Server 连接并发现工具，不保存配置 |
+| POST | `/api/v1/mcps` | 注册 MCP Server 并发布工具目录 |
+| GET | `/api/v1/mcps` | 列出已注册 MCP Server |
+| GET | `/api/v1/mcps/{name}` | 查看 MCP Server 和当前工具定义 |
+| GET | `/api/v1/mcps/status` | 检查 MCP Server 是否可访问 |
+| POST | `/api/v1/mcps/{name}/sync` | 同步工具目录并报告受影响的实时上下文挂载 |
+| DELETE | `/api/v1/mcps/{name}` | 删除 MCP Server 和工具目录 |
+| POST | `/api/v1/mcps/find` | 语义检索 MCP 工具 |
+| POST | `/api/v1/mcps/invoke` | 调用 MCP 工具 |
+| POST | `/api/v1/mcps/mount` | 创建或替换一个 MCP 实时上下文节点 |
+| POST | `/api/v1/mcps/batch-mount` | 批量创建或替换实时上下文节点 |
+| DELETE | `/api/v1/mcps/mount` | 删除一个挂载及其节点 |
+| POST | `/api/v1/mcps/batch-unmount` | 批量删除挂载及其节点 |
+| GET | `/api/v1/mcps/mounts` | 查询 MCP Server 或工具的挂载 |
 
 ### [会话](05-sessions.md)、[记忆](16-memory.md)与 [Agent 进化](19-agent-evolution.md)
 
@@ -421,11 +442,21 @@ JSON 输出 - 错误：
 | GET | `/api/v1/sessions/{session_id}/archives/{archive_id}` | 获取会话归档 |
 | DELETE | `/api/v1/sessions/{session_id}` | 删除会话 |
 | POST | `/api/v1/sessions/{session_id}/commit` | 归档会话并提取记忆 |
+| POST | `/api/v1/sessions/{session_id}/archives/{archive_id}/retry` | 重试失败或无主的会话归档 |
 | POST | `/api/v1/sessions/{session_id}/messages` | 添加单条消息 |
 | POST | `/api/v1/sessions/{session_id}/messages/batch` | 批量添加消息 |
 | POST | `/api/v1/search/recall` | 已弃用：search 接口 `mode="context"` 之上的轻量预设 |
+| POST | `/api/v1/rules/compile` | 异步编译用户规则 |
+| POST | `/api/v1/rules/search` | 检索适用于当前任务的完整规则 |
 | GET | `/api/v1/agent-evolution/experiences/trajectories` | 分页查询应用过指定 Experience 的 Trajectory |
 | GET | `/api/v1/agent-evolution/experiences/outcomes` | 聚合应用过指定 Experience 的 Trajectory 结果分布 |
+
+### [规则（Beta）](26-rules.md)
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/rules/compile` | 提交规则编译后台任务 |
+| POST | `/api/v1/rules/search` | 按任务上下文召回适用的 active 规则 |
 
 ### [检索](06-retrieval.md)
 
@@ -450,9 +481,11 @@ JSON 输出 - 错误：
 | POST | `/api/v1/watches/{task_id}/trigger` | 按任务 ID 触发 watch |
 | POST | `/api/v1/snapshot/commit` | 创建快照 |
 | GET | `/api/v1/snapshot/log` | 查看快照历史 |
+| GET | `/api/v1/snapshot/versions` | 列出 Compile 产出文件的版本 |
 | POST | `/api/v1/snapshot/restore` | 恢复历史快照 |
 | GET | `/api/v1/snapshot/show` | 查看快照或其中的文件 |
 | GET | `/api/v1/snapshot/diff` | 对比快照 |
+| GET | `/api/v1/snapshot/diff-paths` | 分页列出变化的源文件 |
 | GET | `/api/v1/snapshot/ignore` | 读取快照忽略规则 |
 | PUT | `/api/v1/snapshot/ignore` | 替换快照忽略规则 |
 | DELETE | `/api/v1/snapshot/ignore` | 清空快照忽略规则 |
@@ -484,11 +517,12 @@ JSON 输出 - 错误：
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| GET | `/api/v1/admin/metric-inventory` | 流式导出供离线报表使用的元数据清单（仅 ROOT） |
 | GET | `/api/v1/admin/configuration` | 获取 Cluster 层显式运行时配置 |
 | PATCH | `/api/v1/admin/configuration` | 更新 Cluster 层运行时配置 |
 | POST | `/api/v1/admin/configuration/test-model` | 测试草稿模型或 Embedding 连接，不保存配置 |
 | POST | `/api/v1/admin/restart` | 请求支持该能力的服务进程优雅重启（仅 ROOT） |
-| GET | `/api/v1/admin/accounts/{account_id}/configuration` | 获取 Account 层显式运行时配置 |
+| GET | `/api/v1/admin/accounts/{account_id}/configuration` | 获取 Account 配置及生效的 Agent 进化开关 |
 | PATCH | `/api/v1/admin/accounts/{account_id}/configuration` | 更新 Account 层运行时配置 |
 | GET | `/api/v1/admin/agent-evolution` | 获取 Agent 进化状态（deprecated） |
 | PUT | `/api/v1/admin/agent-evolution` | 更新 Agent 进化状态（deprecated） |
@@ -500,22 +534,28 @@ JSON 输出 - 错误：
 | DELETE | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | 删除记忆模板覆盖，恢复部署默认值 |
 | POST | `/api/v1/admin/accounts` | 创建账号及首个管理员 |
 | GET | `/api/v1/admin/accounts` | 列出账号 |
-| POST | `/api/v1/admin/migrate` | 迁移旧版身份数据 |
+| POST | `/api/v1/admin/migrate` | 预留迁移入口；仅 ROOT 可调用，当前返回 400 INVALID_ARGUMENT |
+| GET | `/api/v1/admin/accounts/{account_id}` | 获取单个账号的无凭据元数据 |
 | DELETE | `/api/v1/admin/accounts/{account_id}` | 删除账号 |
 | POST | `/api/v1/admin/accounts/{account_id}/users` | 注册用户 |
 | GET | `/api/v1/admin/accounts/{account_id}/users` | 列出用户 |
-| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | 获取用户记忆策略 |
-| PATCH | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | 更新用户记忆策略 |
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | 获取单个用户的无凭据成员信息（user_id、role） |
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | 获取用户添加位置、记忆策略和 TTL |
+| PATCH | `/api/v1/admin/accounts/{account_id}/users/{user_id}/settings` | 更新用户添加位置、记忆策略和 TTL |
+| GET | `/api/v1/user-settings/add-locations` | 读取当前用户的添加位置（deprecated） |
+| PATCH | `/api/v1/user-settings/add-locations` | 更新当前用户的添加位置（deprecated） |
+| DELETE | `/api/v1/user-settings/add-locations` | 清除当前用户的添加位置设置（deprecated） |
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | 移除用户 |
-| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | 将用户提升为 ADMIN |
+| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | 在 USER 与 ADMIN 之间变更用户角色 |
 | POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | 重新生成用户 Key |
 | POST | `/api/v1/admin/accounts/{account_id}/groups` | 创建用户组 |
 | GET | `/api/v1/admin/accounts/{account_id}/groups` | 列出用户组 |
 | DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}` | 删除用户组 |
 | GET | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 列出用户组成员 |
-| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 添加用户组成员 |
-| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members/{user_id}` | 移除用户组成员 |
+| PUT | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 批量添加用户组成员 |
+| DELETE | `/api/v1/admin/accounts/{account_id}/groups/{group_id}/members` | 批量移除用户组成员 |
 | GET | `/api/v1/privacy-configs` | 列出隐私配置分类 |
+| GET | `/api/v1/privacy-configs/tree` | 树形列出当前目标和字段元数据，不返回值 |
 | POST | `/api/v1/privacy-configs/scan` | 扫描或修复正文中的登记值 |
 | GET | `/api/v1/privacy-configs/{category}` | 列出分类目标 |
 | GET | `/api/v1/privacy-configs/{category}/{target_key}` | 获取生效配置 |
@@ -571,6 +611,12 @@ JSON 输出 - 错误：
 | MKCOL | `/webdav/resources`、`/webdav/resources/{resource_path}` | 创建目录 |
 | MOVE | `/webdav/resources`、`/webdav/resources/{resource_path}` | 移动或重命名资源 |
 | POST | `/api/v1/compile` | 创建异步 Compile 任务 |
+| GET | `/api/v1/compile/config` | 读取目标配置 |
+| POST | `/api/v1/compile/config/update` | 更新目标配置 |
+| GET | `/api/v1/compile/configs` | 列出可见目标 |
+| GET | `/api/v1/compile/operations` | 列出目标操作记录 |
+| GET | `/api/v1/compile/operations/{operation_id}` | 读取单条操作详情 |
+| GET | `/api/v1/compile/operations/{operation_id}/outputs` | 列出操作产出及版本引用 |
 | POST | `/api/v1/compile/embeddings` | 生成 Compile 临时路由文本的向量 |
 | GET | `/api/v1/compile/capabilities` | 检查 Compile 可用性 |
 | GET | `/api/v1/compile/submissions/{key}` | 按提交键查询任务 |
@@ -597,4 +643,4 @@ JSON 输出 - 错误：
 | 数据生命周期 | Watch、快照、OVPack |
 | 运维与观测 | 系统、任务、Observer、Metrics |
 | 身份与治理 | 管理员、ACL、隐私配置 |
-| 协议与扩展 | OpenViking Assets、WebDAV、Agent Runtime API、VikingBot API |
+| 协议与扩展 | MCP 与实时上下文、OpenViking Assets、WebDAV、Agent Runtime API、VikingBot API |

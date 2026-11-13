@@ -150,7 +150,7 @@ export function registerOpenVikingArchiveTools(deps: OpenVikingArchiveToolsDeps)
               trigger: { query, derivedKeywords: [query] },
               searches: [{
                 resourceType: "archive",
-                targetUriResolved: archiveId ? `viking://session/${ovSessionId}/history/${archiveId}` : `viking://session/${ovSessionId}/history`,
+                targetUriResolved: archiveId ? `viking://~/sessions/${ovSessionId}/history/${archiveId}` : `viking://~/sessions/${ovSessionId}/history`,
                 limit: deps.traceRecallMaxResultsPerSearch,
                 durationMs: Date.now() - started,
                 total: result.matches?.length ?? result.count ?? 0,

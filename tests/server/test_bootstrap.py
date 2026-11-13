@@ -392,7 +392,12 @@ def test_main_restart_cleans_up_managed_children_and_preserves_launch_command(
 ):
     import sys
 
-    config = ServerConfig(host="127.0.0.1", port=1933, with_bot=True)
+    config = ServerConfig(
+        host="127.0.0.1",
+        port=1933,
+        with_bot=True,
+        ttl_adapter={"enabled": True},
+    )
     steps = []
     monkeypatch.setattr(sys, "argv", ["openviking-server", "--with-bot", "--bot-port", "19000"])
     original_argv = [sys.executable, "/venv/bin/openviking-server", *sys.argv[1:]]
@@ -405,7 +410,7 @@ def test_main_restart_cleans_up_managed_children_and_preserves_launch_command(
         classmethod(
             lambda cls, **kw: SimpleNamespace(
                 memory=SimpleNamespace(
-                    session_auto_commit=SessionAutoCommitConfig(enabled=True, idle_backend="redis")
+                    session_auto_commit=SessionAutoCommitConfig(enabled=False, idle_backend="redis")
                 ),
                 expiry=ExpiryConfig(),
             )

@@ -10,7 +10,14 @@ pub async fn export(
     format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let file_path = client.export_ovpack(uri, to, include_vectors).await?;
+    let file_path = client
+        .export_ovpack(
+            uri,
+            to,
+            include_vectors,
+            matches!(format, OutputFormat::Table),
+        )
+        .await?;
 
     // Output success message with the file path
     let result = serde_json::json!({
@@ -29,7 +36,9 @@ pub async fn backup(
     format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let file_path = client.backup_ovpack(to, include_vectors).await?;
+    let file_path = client
+        .backup_ovpack(to, include_vectors, matches!(format, OutputFormat::Table))
+        .await?;
 
     let result = serde_json::json!({
         "file": file_path,
@@ -50,7 +59,13 @@ pub async fn import(
     compact: bool,
 ) -> Result<()> {
     let result = client
-        .import_ovpack(file_path, target, on_conflict, vector_mode)
+        .import_ovpack(
+            file_path,
+            target,
+            on_conflict,
+            vector_mode,
+            matches!(format, OutputFormat::Table),
+        )
         .await?;
     output_success(&result, format, compact);
     Ok(())
@@ -65,7 +80,12 @@ pub async fn restore(
     compact: bool,
 ) -> Result<()> {
     let result = client
-        .restore_ovpack(file_path, on_conflict, vector_mode)
+        .restore_ovpack(
+            file_path,
+            on_conflict,
+            vector_mode,
+            matches!(format, OutputFormat::Table),
+        )
         .await?;
     output_success(&result, format, compact);
     Ok(())

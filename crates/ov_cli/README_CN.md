@@ -40,13 +40,17 @@ ov config
 
 `ov config` 可以新增、编辑、删除、校验和切换配置。CLI 会把当前 active 客户端配置写到 `~/.openviking/ovcli.conf`。命名配置会保存为 `~/.openviking/ovcli.conf.<name>`，`ov config switch <name>` 会把选中的命名配置复制为 active 配置。
 
-较新的 CLI 版本在非交互式 shell 中运行大多数命令前，需要先保存显示语言：
+在非交互式 shell 中运行大多数命令前，可以先保存显示语言：
 
 ```bash
 ov language en
 # 或
 ov language zh-CN
 ```
+
+也可以在命令环境中设置 `OPENVIKING_LANG=en` 或 `OPENVIKING_LANG=zh-CN`。
+可识别的值满足首次语言初始化检查，无须写入设置文件。
+已有的语言设置仍优先于环境变量。
 
 脚本和 Agent 场景建议使用确定性的配置命令，并通过 stdin 或已有环境变量传递密钥：
 
@@ -89,6 +93,16 @@ ov status
 ```
 
 使用普通 user API key 时，`account` 和 `user` 通常可以省略，因为服务端可以从 key 推导身份。使用 `trusted` 鉴权或租户级操作时，建议显式配置它们。仅 root key 的配置必须显式配置 `account` 和 `user`，因为 root key 本身不包含租户身份。
+
+### 私有 CA 证书
+
+`ov` 同时信任内置的公共 CA 根证书和操作系统原生信任库中的证书。可以把组织的私有 CA 安装到系统信任库，也可以为单次命令通过 `SSL_CERT_FILE` 指定 PEM 证书包：
+
+```bash
+SSL_CERT_FILE=/path/to/company-ca.pem ov health
+```
+
+在 Unix 上，也可以通过 `SSL_CERT_DIR` 指定以冒号分隔的证书目录列表。TLS 证书校验仍然保持启用。
 
 更完整的配置说明见 [docs/zh/getting-started/05-cli-setup.md](../../docs/zh/getting-started/05-cli-setup.md)。
 
@@ -238,7 +252,6 @@ ov session commit s1 --no-event-tags
 - `admin remove-user` - 移除用户。
 - `admin set-role` - 修改用户角色，仅 ROOT。
 - `admin regenerate-key` - 轮转用户 API key。
-- `admin migrate` - 迁移 legacy agent/session 数据，仅 ROOT。
 - `system` - 管理类系统工具命令。
 - `reindex` - 为 URI 重建语义和向量产物。
 

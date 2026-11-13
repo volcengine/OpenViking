@@ -40,6 +40,14 @@ jobs:
           VITE_COUNTER_URL: ${{ vars.VITE_COUNTER_URL }}
           VITE_DOCS_SEARCH_URL: ${{ vars.VITE_DOCS_SEARCH_URL }}
 
+      - name: Build UI
+        uses: ./.github/actions/build-ui
+
+      - name: Include UI docs in site
+        run: |
+          mkdir -p docs/.vitepress/dist/ui
+          cp -a frontend/docs/doc_build/. docs/.vitepress/dist/ui/
+
       - name: Build plugin downloads
         run: bash .github/scripts/build-plugin-downloads.sh docs/.vitepress/dist/dl https://docs.openviking.ai/dl
 

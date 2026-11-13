@@ -132,7 +132,7 @@ export async function withAgentHookLock(clientId, nativeSessionId, callback) {
     }
   }
   try {
-    return await callback();
+    return await callback(file);
   } finally {
     await rm(lock, { recursive: true, force: true }).catch(() => {});
   }

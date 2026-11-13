@@ -142,7 +142,7 @@ commit() 分两阶段执行：
 
 提交会话后，OpenViking 会根据对话内容和当前记忆策略，提取对后续交互有价值的信息，并保存到当前用户的记忆空间。当对话涉及稳定的 Peer 时，相关记忆也可以保存到对应的 Peer 空间。
 
-OpenViking 内置 `profile`、`preferences`、`entities`、`events`、`identity`、`soul`、`cases`、`trajectories` 和 `experiences` 等记忆类型，也支持根据业务需要自定义。完整用途与路径见 [上下文类型](./02-context-types.md)。
+OpenViking 内置 `profile`、`preferences`、`entities`、`events`、`cases`、`trajectories` 和 `experiences` 等记忆类型，也支持根据业务需要自定义。完整用途与路径见 [上下文类型](./02-context-types.md)。
 
 在 `memory_policy.memory_types` 中，`experiences` 会启用完整的 Agent Evolution 流程，并自动激活 `cases` 和 `trajectories`。如果没有 `experiences`，显式传入的 `cases` 和 `trajectories` 会被静默忽略，不会报错。
 
@@ -169,8 +169,8 @@ Agent Evolution 还要求生效的 `agent_evolution.enabled` 开关已开启。�
   "operations": {
     "adds": [
       {
-        "uri": "viking://user/alice/memories/identity.md",
-        "memory_type": "identity",
+        "uri": "viking://user/alice/memories/profile.md",
+        "memory_type": "profile",
         "after": "新创建的文件内容"
       }
     ],
@@ -239,7 +239,6 @@ viking://user/{user_id}/sessions/{session_id}/
 
 viking://~/memories/
 ├── profile.md
-├── identity.md
 ├── soul.md
 ├── preferences/
 ├── entities/
@@ -252,8 +251,7 @@ viking://~/memories/
 `viking://~/sessions/{session_id}` 使用家目录别名，服务端会按认证身份将其展开为
 `viking://user/{user_id}/sessions/{session_id}`。无 uid 的写法
 `viking://user/sessions/{session_id}` 不再被接受，请求会报错并提示改用 `viking://~/...`。
-`viking://session/{session_id}` 仍会作为同一个 session 路径的向后兼容别名被接受，
-不是独立的存储根。
+旧 URI `viking://session/{session_id}` 也不再接受。
 
 ## 相关文档
 

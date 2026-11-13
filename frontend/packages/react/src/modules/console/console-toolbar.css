@@ -1,0 +1,110 @@
+.ov-console__toolbar {
+  display: flex;
+  box-sizing: border-box;
+  height: 56px;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+}
+.ov-console__modes {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+  border-radius: 20px;
+  background: var(--ov-ui-console-fill);
+  padding: 4px;
+}
+.ov-console__mode {
+  display: inline-flex;
+  box-sizing: border-box;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 0;
+  border-radius: 20px;
+  background: transparent;
+  padding: 0 10px 0 12px;
+  color: var(--ov-ui-console-muted);
+  font: 500 12px/20px var(--ov-ui-font-family, 'PingFang SC', sans-serif);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease;
+}
+.ov-console__mode[aria-pressed='false'] {
+  width: 36px;
+}
+.ov-console__mode[aria-pressed='true'] {
+  color: var(--ov-ui-console-text);
+  background: var(--ov-ui-console-bg);
+  box-shadow: 0 2px 6px
+    color-mix(
+      in srgb,
+      var(--ov-ui-color-shadow, var(--ov-ui-shadow-default)) 5%,
+      transparent
+    );
+}
+.ov-console__mode:hover {
+  color: var(--ov-ui-console-text);
+}
+.ov-console__mode > svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+.ov-console__toolbar-slot {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ov-ui-console-muted);
+  text-align: end;
+  font-size: 12px;
+}
+.ov-console__actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  margin-inline-start: auto;
+}
+.ov-console__action {
+  box-sizing: border-box;
+  list-style: none;
+}
+.ov-console .ov-console__action.ov-button:not(:disabled) {
+  color: var(--ov-ui-console-secondary);
+}
+.ov-console__action > svg {
+  display: block;
+  width: 12px;
+  height: 12px;
+}
+.ov-console__action > svg path {
+  stroke-width: 1.25px;
+  vector-effect: non-scaling-stroke;
+}
+
+.ov-console__mode:focus-visible {
+  outline: 2px solid var(--ov-ui-console-focus);
+  outline-offset: 2px;
+}
+@container (max-width: 360px) {
+  .ov-console__toolbar {
+    gap: 8px;
+    padding-inline: 12px;
+  }
+  .ov-console__actions {
+    gap: 8px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ov-console__mode {
+    transition: none;
+  }
+}

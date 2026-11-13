@@ -1,0 +1,64 @@
+.ov-wiki-dashboard .ov-wiki-dashboard__severity-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 16px;
+  background: transparent;
+  color: var(
+    --ov-ui-color-dashboard-muted,
+    var(--ov-ui-dashboard-muted-default)
+  );
+  font-size: 13px;
+  line-height: 22px;
+}
+.ov-wiki-dashboard__severity-filter:hover,
+.ov-wiki-dashboard__severity-filter[aria-expanded='true'] {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+}
+.ov-wiki-dashboard__severity-filter svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+.ov-wiki-dashboard__filter-value {
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+}
+.ov-wiki-dashboard__severity-popover {
+  min-width: 160px;
+  padding: 4px;
+}
+.ov-wiki-dashboard__severity-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ov-wiki-dashboard__severity-menu button {
+  min-height: 32px;
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  font: inherit;
+  font-size: 13px;
+  line-height: 22px;
+  text-align: start;
+  cursor: pointer;
+}
+.ov-wiki-dashboard__severity-menu button[aria-selected='true'] {
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  background: var(
+    --ov-ui-color-primary-light,
+    var(--ov-ui-primary-light-default)
+  );
+}
+.ov-wiki-dashboard__severity-menu button:hover {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+}
+.ov-wiki-dashboard__severity-menu button:focus-visible {
+  outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  outline-offset: -2px;
+}

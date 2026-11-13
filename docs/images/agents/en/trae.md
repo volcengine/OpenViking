@@ -33,6 +33,16 @@ If you skipped it or picked option 3, review and enable the OpenViking hooks in 
 
 An MCP entry only confirms configuration. Ask the assistant to call OpenViking `health` and `list`, then check automatic recall separately using a new conversation in the same workspace after a previous session has been committed and processed.
 
+## Step 3: Start using
+
+Start a new TRAE, TRAE CN or TraeCode CLI 2.0 session and send:
+
+```text
+Follow https://docs.openviking.net/agents/en/onboarding.md to walk me through my first use of OpenViking.
+```
+
+The agent checks the connection and walks you through the first use.
+
 ## Troubleshoot
 
 | Problem | Fix |

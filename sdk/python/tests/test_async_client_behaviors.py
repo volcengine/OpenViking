@@ -21,6 +21,93 @@ from openviking_sdk.errors import NotFoundError
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("client_type", [AsyncHTTPClient, SyncHTTPClient])
+@pytest.mark.parametrize(
+    "method_name,user_id,http_method,result",
+    [
+        ("admin_add_group_member", "alice", "PUT", {"added": True}),
+        ("admin_remove_group_member", "alice", "DELETE", {"removed": True}),
+        ("admin_remove_group_member", "missing", "DELETE", {"removed": False}),
+    ],
+)
+async def test_group_membership_clients_use_batch_http_contract(
+    client_type, method_name, user_id, http_method, result
+):
+    def handle(request):
+        assert request.method == http_method
+        assert request.url.path == "/api/v1/admin/accounts/acme/groups/engineering/members"
+        assert request.headers["content-type"] == "application/json"
+        assert json.loads(request.content) == {"user_ids": [user_id]}
+        return httpx.Response(200, json={"status": "ok", "result": result})
+
+    client = client_type(url="http://localhost:1933")
+    async_client = client if client_type is AsyncHTTPClient else client._async_client
+    async_client._http = httpx.AsyncClient(
+        base_url="http://localhost:1933", transport=httpx.MockTransport(handle)
+    )
+    try:
+        response = getattr(client, method_name)("acme", "engineering", user_id)
+        if client_type is AsyncHTTPClient:
+            response = await response
+        assert response == result
+    finally:
+        await async_client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_type", [AsyncHTTPClient, SyncHTTPClient])
+@pytest.mark.parametrize(
+    "method_name,args",
+    [
+        ("add_resource", ("https://example.com/doc.md", None, None, True)),
+        ("add_skill", ({"name": "demo"}, True)),
+        ("update_skill", ("demo", {"name": "demo"}, True)),
+        ("write", ("viking://resources/demo.md", "hello", "replace", True)),
+        (
+            "batch_write",
+            (
+                "viking://resources/demo",
+                [{"uri": "viking://resources/demo/a.md", "content": "hello"}],
+                True,
+            ),
+        ),
+    ],
+)
+async def test_write_clients_preserve_options_when_timeout_is_ignored(
+    client_type, method_name, args
+):
+    client = client_type(url="http://localhost:1933")
+    async_client = client if client_type is AsyncHTTPClient else client._async_client
+    async_client._request = AsyncMock(return_value=object())
+    async_client._handle_response_data = lambda _response: {"result": {"ok": True}}
+    method = getattr(client, method_name)
+    options = {"telemetry": {"enabled": True}}
+
+    async def invoke(*positional, **keywords):
+        result = method(*positional, **keywords)
+        return await result if client_type is AsyncHTTPClient else result
+
+    assert await invoke(*args, options=options) == {"ok": True}
+    expected_request = async_client._request.await_args
+    assert expected_request.kwargs["json"]["telemetry"] == options["telemetry"]
+    assert "timeout" not in expected_request.kwargs["json"]
+    for positional, keywords in (
+        ((*args, options), {}),
+        ((*args, 30, options), {}),
+        (args, {"timeout": 30, "options": options}),
+    ):
+        async_client._request.reset_mock()
+        assert await invoke(*positional, **keywords) == {"ok": True}
+        assert async_client._request.await_args == expected_request
+
+    async_client._request.reset_mock()
+    with pytest.raises(TypeError, match="options were provided in both"):
+        await invoke(*args, options, options=options)
+    async_client._request.assert_not_awaited()
+    assert options == {"telemetry": {"enabled": True}}
+
+
+@pytest.mark.asyncio
 async def test_async_http_client_initialize_forwards_event_hooks():
     async def request_hook(_request):
         return None
@@ -452,19 +539,6 @@ async def test_async_http_client_write_omits_default_processing_mode_for_legacy_
     assert "processing_mode" not in payload
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("cleanup", "action"), [(False, "migrate"), (True, "cleanup")])
-async def test_async_http_client_admin_migrate_posts_action_payload(cleanup, action):
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    client._request = AsyncMock(return_value=object())
-    client._handle_response = lambda _response: {"status": "accepted"}
-
-    assert await client.admin_migrate(cleanup=cleanup) == {"status": "accepted"}
-    client._request.assert_awaited_once_with(
-        "POST", "/api/v1/admin/migrate", json={"action": action}
-    )
-
-
 def test_sync_http_client_reindex_forwards_to_async_client():
     client = SyncHTTPClient(url="http://localhost:1933")
     with patch.object(
@@ -654,6 +728,8 @@ def test_sync_http_client_declares_common_sync_methods_explicitly():
         "get_task",
         "list_tasks",
         "admin_list_accounts",
+        "admin_get_account",
+        "admin_get_user",
     ]:
         assert method_name in explicit_methods, method_name
 
@@ -1191,6 +1267,35 @@ async def test_admin_seed_payloads_are_sent():
 
 
 @pytest.mark.asyncio
+async def test_admin_get_account_uses_exact_path_and_returns_metadata():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response = lambda _response: {
+        "account_id": "acct",
+        "status": "active",
+        "user_count": 2,
+    }
+
+    result = await client.admin_get_account("acct")
+
+    client._request.assert_awaited_once_with("GET", "/api/v1/admin/accounts/acct")
+    assert result["user_count"] == 2
+    assert "api_key" not in result
+
+
+@pytest.mark.asyncio
+async def test_admin_get_user_reads_membership_from_point_read_path():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response = lambda _response: {"user_id": "alice", "role": "admin"}
+
+    result = await client.admin_get_user("acct", "alice")
+    client._request.assert_awaited_once_with("GET", "/api/v1/admin/accounts/acct/users/alice")
+    assert result == {"user_id": "alice", "role": "admin"}
+    assert "api_key" not in result and "key_prefix" not in result
+
+
+@pytest.mark.asyncio
 async def test_import_ovpack_uploads_local_file_even_when_url_is_localhost(tmp_path):
     pack_file = tmp_path / "demo.ovpack"
     pack_file.write_bytes(b"ovpack")
@@ -1614,11 +1719,12 @@ async def test_batch_write_serializes_processing_mode_and_operation_metadata():
                 "acl": {"acl_mode": "restricted", "entries": []},
             }
         ],
-        options={"processing_mode": "vectors_only"},
+        options={"processing_mode": "vectors_only", "defer_processing": True},
     )
 
     payload = client._request.await_args.kwargs["json"]
     assert payload["processing_mode"] == "vectors_only"
+    assert payload["defer_processing"] is True
     assert payload["operations"][0]["tags"] == ["team=search"]
     assert payload["operations"][0]["tag_mode"] == "append"
     assert payload["operations"][0]["acl"] == {"acl_mode": "restricted", "entries": []}

@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from vikingbot.bus.events import OutboundEventType, OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.openapi import OpenAPIChannel, OpenAPIChannelConfig, PendingResponse
-from vikingbot.channels.openapi_models import ChatResponse
+from vikingbot.channels.openapi_models import ChatRequest, ChatResponse, OpenVikingConnection
 from vikingbot.compile.models import CompileAccepted
 from vikingbot.config.schema import BotChannelConfig, SessionKey
 from vikingbot.session.manager import Session
@@ -309,9 +309,7 @@ class TestOpenAPIAuth:
         assert agent_loop.msg.sender_id == "user-1"
         assert message_bus.inbound_size == 0
 
-    def test_steer_rejects_pending_session_without_active_turn(
-        self, message_bus, temp_workspace
-    ):
+    def test_steer_rejects_pending_session_without_active_turn(self, message_bus, temp_workspace):
         class FakeAgentLoop:
             def steer(self, msg):
                 return False
@@ -481,9 +479,9 @@ class TestOpenAPIAuth:
         assert created.status_code == 200
         session_id = created.json()["session_id"]
 
-        assert (
-            client.get(f"/bot/v1/sessions/{session_id}", headers=alice_headers).status_code == 200
-        )
+        detail = client.get(f"/bot/v1/sessions/{session_id}", headers=alice_headers)
+        assert detail.status_code == 200
+        assert detail.json()["estimated_tokens"] == 0
         assert client.get(f"/bot/v1/sessions/{session_id}", headers=bob_headers).status_code == 404
         assert client.get("/bot/v1/sessions", headers=bob_headers).json()["total"] == 0
 
@@ -565,6 +563,52 @@ class TestOpenAPIAuth:
 
         assert response.status_code == 200
         assert response.json()["message"] == "ok"
+
+    def test_user_chat_disables_exec_tool(self, message_bus, temp_workspace):
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+        )
+        request = ChatRequest(
+            message="hello",
+            disabled_tools=["read_file"],
+            openviking_connection=OpenVikingConnection(
+                api_key="user-key",
+                account_id="acct",
+                user_id="alice",
+                role="user",
+                api_key_type="user",
+                server_url="http://ov.local",
+            ),
+        )
+
+        metadata = channel._request_metadata(request)
+
+        assert metadata["disabled_tools"] == ["read_file", "message", "exec"]
+
+    def test_admin_chat_keeps_exec_tool_available(self, message_bus, temp_workspace):
+        channel = OpenAPIChannel(
+            OpenAPIChannelConfig(),
+            message_bus,
+            workspace_path=temp_workspace,
+        )
+        request = ChatRequest(
+            message="hello",
+            disabled_tools=["read_file"],
+            openviking_connection=OpenVikingConnection(
+                api_key="admin-key",
+                account_id="acct",
+                user_id="admin",
+                role="admin",
+                api_key_type="user",
+                server_url="http://ov.local",
+            ),
+        )
+
+        metadata = channel._request_metadata(request)
+
+        assert metadata["disabled_tools"] == ["read_file", "message"]
 
     def test_chat_accepts_request_with_configured_valid_api_key(
         self, message_bus, temp_workspace, monkeypatch
@@ -890,7 +934,9 @@ class TestOpenAPIAuth:
     ):
         class FakeCompileService:
             async def create_task(self, request, *, principal_scope, task_id=None):
-                raise AssertionError("compile task must not start for keyless authenticated forwards")
+                raise AssertionError(
+                    "compile task must not start for keyless authenticated forwards"
+                )
 
         config = SimpleNamespace(
             gateway=SimpleNamespace(host="127.0.0.1", token=""),

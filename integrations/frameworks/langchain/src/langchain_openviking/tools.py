@@ -50,6 +50,7 @@ def create_openviking_tools(
     client: Any = None,
     url: str | None = None,
     api_key: str | None = None,
+    auth_mode: str | None = None,
     account: str | None = None,
     user: str | None = None,
     user_id: str | None = None,
@@ -79,6 +80,7 @@ def create_openviking_tools(
                     client=client,
                     url=url,
                     api_key=api_key,
+                    auth_mode=auth_mode,
                     account=account,
                     user=user,
                     user_id=user_id,
@@ -142,6 +144,32 @@ def create_openviking_tools(
             score_threshold=min_score,
         )
         return _format_retrieval_result(result)
+
+    def viking_rule_search(
+        task_context: Annotated[
+            str,
+            Field(
+                min_length=1,
+                max_length=64000,
+                description="User goal, planned action, and facts affecting Rule applicability.",
+            ),
+        ],
+        rule_probability_threshold: Annotated[
+            float,
+            Field(ge=0, le=1, description="Minimum applicability probability."),
+        ] = 0.65,
+    ) -> str:
+        """Check constraints before a planned action or response and return complete compiled Rules."""
+        result = call_openviking(
+            get_client(),
+            "rule_search",
+            task_context=task_context,
+            options={"rule_probability_threshold": rule_probability_threshold},
+        )
+        rendered = item_value(result, "rendered")
+        if not isinstance(rendered, str):
+            raise ValueError("OpenViking Rule search returned no rendered Rules")
+        return rendered
 
     def viking_browse(
         uri: Annotated[
@@ -496,6 +524,7 @@ def create_openviking_tools(
     all_tools: dict[str, StructuredTool] = {
         "viking_find": StructuredTool.from_function(viking_find),
         "viking_search": StructuredTool.from_function(viking_search),
+        "viking_rule_search": StructuredTool.from_function(viking_rule_search),
         "viking_browse": StructuredTool.from_function(viking_browse),
         "viking_read": StructuredTool.from_function(viking_read),
         "viking_grep": StructuredTool.from_function(viking_grep),
@@ -519,6 +548,7 @@ def _profile_tool_names(profile: str, *, allow_forget: bool) -> list[str]:
     retrieval = [
         "viking_find",
         "viking_search",
+        "viking_rule_search",
         "viking_browse",
         "viking_read",
         "viking_grep",
@@ -729,7 +759,7 @@ def _search_archive_payload(
     *,
     max_matches: int,
 ) -> dict[str, Any]:
-    tokens = [token for token in re.findall(r"[a-z0-9_]+", query.lower()) if len(token) > 1]
+    tokens = _archive_query_tokens(query)
     sections = _archive_sections(payload)
     matches: list[dict[str, str]] = []
     for label, text in sections:
@@ -787,7 +817,11 @@ def _archive_grep_pattern(query: str) -> str:
 
 
 def _archive_query_tokens(query: str) -> list[str]:
-    return [token for token in re.findall(r"[a-z0-9_]+", query.lower()) if len(token) > 1]
+    return [
+        token
+        for token in re.findall(r"\w+", query.lower())
+        if len(token) > 1 or not token.isascii()
+    ]
 
 
 def _filter_grep_result(

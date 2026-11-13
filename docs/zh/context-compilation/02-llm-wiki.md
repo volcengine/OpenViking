@@ -15,7 +15,7 @@
 
 默认生成 `entity` 和 `concept` 页面，其他类型按 Skill 中的条件生成。多个来源中的相关内容会合并到同一主题下。
 
-Skill 源码：[examples/compile/ov-compile-skills/llm-wiki](https://github.com/volcengine/OpenViking/tree/main/examples/compile/ov-compile-skills/llm-wiki) · 可视化脚本：[examples/compile/graph-show/llm-wiki](https://github.com/volcengine/OpenViking/tree/main/examples/compile/graph-show/llm-wiki)
+Skill 源码：[openviking/system_assets/compile/example-skills/llm-wiki](https://github.com/volcengine/OpenViking/tree/main/openviking/system_assets/compile/example-skills/llm-wiki) · 可视化脚本：[examples/compile/graph-show/llm-wiki](https://github.com/volcengine/OpenViking/tree/main/examples/compile/graph-show/llm-wiki)
 
 先确认[前置条件](01-overview.md#前置条件)，并在 OpenViking 仓库根目录运行以下命令。来源目录需替换为自己的资料目录。
 
@@ -44,7 +44,7 @@ ov ls -r viking://resources/research
 本例将 Skill 安装到共享目录 `viking://agent/skills`，与后面的编译命令保持一致。省略 `-p` 会安装到用户私有目录，此时应把 `--skill` 改为安装返回的 URI：
 
 ```bash
-ov add-skill examples/compile/ov-compile-skills/llm-wiki -p viking://agent/skills --wait
+ov add-skill openviking/system_assets/compile/example-skills/llm-wiki -p viking://agent/skills --wait
 ```
 
 查看装好的 Skill URI：

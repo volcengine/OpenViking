@@ -48,6 +48,14 @@ def block(source, text):
     )
 
 
+# Recalled text is the user's own history. Without a provenance boundary a model may
+# cite an internal decision as external evidence or industry practice.
+RECALL_PROVENANCE_NOTE = (
+    "It is this user's own saved history (past conversations, meetings, notes) as recorded "
+    "then: internal context, not an external source or established fact."
+)
+
+
 def gateway_note(policy, tools):
     """Opening lines that tell the model what the gateway adds to this history."""
     if not (policy.recall or tools):

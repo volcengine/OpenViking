@@ -24,6 +24,7 @@ class ToolExecutionResult:
     result: Any
     effective_params: dict[str, Any]
     skill_uris: tuple[str, ...] = ()
+    preserve_complete_result: bool = False
 
 
 class ToolRegistry:
@@ -308,6 +309,7 @@ class ToolRegistry:
             result=result,
             effective_params=effective_params,
             skill_uris=skill_uris,
+            preserve_complete_result=getattr(tool, "preserve_complete_result", False),
         )
 
     async def execute(

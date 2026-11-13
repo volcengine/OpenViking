@@ -36,10 +36,10 @@ async def test_archive_overview_tokens_do_not_trust_stale_low_metadata():
             del uri, ctx
             return '{"overview_tokens": 1}'
 
-    store = ArchiveStore(FakeFS(), None, "viking://session/test")
+    store = ArchiveStore(FakeFS(), None, "viking://user/default/sessions/test")
 
     tokens = await store.read_overview_tokens(
-        "viking://session/test/history/archive_001",
+        "viking://user/default/sessions/test/history/archive_001",
         "\u4f60\u597d\u4e16\u754c",
     )
 
@@ -52,10 +52,10 @@ async def test_archive_overview_tokens_keep_higher_metadata_estimate():
             del uri, ctx
             return '{"overview_tokens": 5}'
 
-    store = ArchiveStore(FakeFS(), None, "viking://session/test")
+    store = ArchiveStore(FakeFS(), None, "viking://user/default/sessions/test")
 
     tokens = await store.read_overview_tokens(
-        "viking://session/test/history/archive_001",
+        "viking://user/default/sessions/test/history/archive_001",
         "abcd",
     )
 

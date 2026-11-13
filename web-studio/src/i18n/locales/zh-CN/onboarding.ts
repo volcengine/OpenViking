@@ -1,5 +1,30 @@
 export default {
-  connectionTitle: '连接你的工作区。',
+  directoryOptions: '选择其他数据身份（高级）',
+  rootSetupTitle: '开始使用工作台',
+  rootSetupDescription:
+    'Root Key 用于管理服务，不能直接访问用户数据。当前 Account：{{account}}。创建使用身份后，可在凭据结果中进入工作台；团队成员的身份不会自动替换你的工作台身份。',
+  rootSetupCreate: '创建使用身份',
+  rootSetupExisting: '配置已有 User Key',
+  verifyDirectoryHint:
+    '可选。需要额外的管理权限时填写。Account Admin 管理本 Account，Root 管理服务与所有 Account。',
+  loadDirectory: '加载 Account 和 User',
+  directoryHint: '使用 Root 或 Admin API Key 浏览可选身份。',
+  directoryControlRequired:
+    '请输入有效的 Root 或 Admin API Key 后加载账号和用户。',
+  directoryLoadFailed: '加载身份失败，请检查管理密钥和服务地址后重试。',
+  directoryAccount: '选择 Account',
+  directoryUser: '选择 User',
+  directoryAdminHint:
+    'Admin Key 仅可选择所属 Account 中的用户。访问数据还需填写该用户的 API Key。',
+  directoryKeyHint:
+    '选择身份不会自动授予数据权限。请填写对应的 User API Key；留空则仅进入账号管理。',
+  directoryIdentityMismatch:
+    '此 User API Key 属于其他账号或用户，请输入所选身份对应的密钥。',
+
+  openSourceConnection: 'OpenSource',
+  cancel: '取消',
+  exit: '退出 Studio',
+  connectionTitle: '连接 OpenViking 服务。',
   preferencesHint: '选择你熟悉的语言与外观。',
   connectionHint: '连接并验证你的 OpenViking 服务。',
 
@@ -9,8 +34,8 @@ export default {
   keyRequired: '此服务需要 API Key，请填写后重试。',
 
   steps: '选择工作区',
-  workspace: '选择 Workspace',
-  workspaceHint: '选择已有连接，或添加新连接。',
+  workspace: '选择服务',
+  workspaceHint: '选择服务类型与地址，完成首次接入。',
   savedWorkspaces: '已有连接',
   connectionChoice: '选择连接',
   newConnection: '添加新服务地址',
@@ -21,7 +46,7 @@ export default {
   preferences: '基础偏好',
   connection: '连接服务',
   welcome: '欢迎使用\nOpenViking Studio',
-  welcomeDescription: '选择已有连接或添加新连接，再配置语言与外观。',
+  welcomeDescription: '完成服务连接与语言、外观设置，即可开始使用。',
   connectionDescription: '配置服务连接。验证成功后，将显示对应的工作区和功能。',
   language: '语言',
   theme: '外观',
@@ -37,7 +62,9 @@ export default {
   healthRequestFailed: '检查服务健康状态时失败：',
   dataRequestFailed: '检查记忆访问权限时失败：',
   enter: '进入 Studio',
-  keyHelp: '填写服务提供的 API Key。开源开发模式无需填写。',
+  keyLabel: 'API Key',
+  keyHelp:
+    '可填写 User、Account Admin 或 Root Key，验证后自动识别权限和身份。开发模式无需填写。',
   hostedKeyHelp: '填写火山服务的用户 API Key，以访问当前用户的记忆。',
   advanced: '开源高级连接配置（选填）',
   loadUsers: '读取此账号的用户',

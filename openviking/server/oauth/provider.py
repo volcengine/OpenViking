@@ -98,7 +98,7 @@ class OpenVikingOAuthProvider(
         refresh_token_ttl_seconds: int = 30 * 24 * 3600,
         auth_code_ttl_seconds: int = 300,
         authorize_page_path: str = DEFAULT_AUTHORIZE_PAGE,
-        role_resolver: Optional[Callable[[str, str], Role | Awaitable[Role]]] = None,
+        role_resolver: Optional[Callable[[str, str], Role | None | Awaitable[Role | None]]] = None,
     ) -> None:
         self._store = store
         self._issuer = issuer.rstrip("/")
@@ -106,11 +106,8 @@ class OpenVikingOAuthProvider(
         self._refresh_ttl = refresh_token_ttl_seconds
         self._code_ttl = auth_code_ttl_seconds
         self._authorize_page = authorize_page_path
-        # Optional callback to look up a user's current role at refresh time.
-        # When supplied, exchange_refresh_token will reject if the embedded
-        # role outranks the current role — mirrors the bearer-auth check so
-        # that `set_role` demotion can't be laundered through token rotation.
-        # Wired in app.py from the APIKeyManager.
+        # Optional account-registry lookup used to validate the saved
+        # authorization role at refresh time, matching bearer authentication.
         self._role_resolver = role_resolver
 
     # ---- Clients (DCR) ----
@@ -287,22 +284,21 @@ class OpenVikingOAuthProvider(
         refresh_token: OVRefreshToken,
         scopes: list[str],
     ) -> OAuthToken:
-        # Role downgrade gate: if the embedded role outranks the user's
-        # current role (post-`set_role` demotion), refuse to rotate. Same
-        # invariant the bearer-auth path enforces; checked here so a
-        # demoted user can't keep minting fresh access tokens at the old
-        # privilege level just because they hold a long-lived refresh.
+        # Validate the saved authorization role without replacing it with
+        # the account-registry role. Registry reads may be cached.
         if self._role_resolver is not None:
             try:
-                token_role = Role(refresh_token.role)
+                authorized_account_role = Role.parse(refresh_token.role)
                 resolved = self._role_resolver(refresh_token.account_id, refresh_token.user_id)
-                current_role = Role(await resolved if inspect.isawaitable(resolved) else resolved)
+                registered_account_role = Role.parse(
+                    await resolved if inspect.isawaitable(resolved) else resolved
+                )
             except Exception as exc:
                 raise TokenError(
                     error="invalid_grant",
                     error_description="Unable to validate current identity; re-authorize the client",
                 ) from exc
-            if token_role.rank > current_role.rank:
+            if not registered_account_role.allows_token_role(authorized_account_role):
                 raise TokenError(
                     error="invalid_grant",
                     error_description=(

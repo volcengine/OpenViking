@@ -5,6 +5,7 @@
 What differs between wire protocols lives in their adapters in ``tool_protocols``.
 """
 
+import asyncio
 import hashlib
 import json
 import math
@@ -124,6 +125,12 @@ def parse_body(raw: bytes) -> dict | None:
         return None
 
 
+def string_type(value: Any) -> str:
+    """A block's ``type`` when it is a string; malformed histories may carry an object."""
+    kind = value.get("type") if isinstance(value, dict) else None
+    return kind if isinstance(kind, str) else ""
+
+
 def text_content(message: dict) -> str:
     content = message.get("content", "")
     if isinstance(content, str):
@@ -133,7 +140,7 @@ def text_content(message: dict) -> str:
             x.get("text", "")
             for x in content
             if isinstance(x, dict)
-            and x.get("type") in {"text", "input_text", "output_text"}
+            and string_type(x) in {"text", "input_text", "output_text"}
             and isinstance(x.get("text", ""), str)
         )
     return ""
@@ -162,10 +169,10 @@ def normalize(value: Any) -> Any:
             if not (
                 isinstance(v, dict)
                 and (
-                    v.get("type") in {"thinking", "redacted_thinking"}
+                    string_type(v) in {"thinking", "redacted_thinking"}
                     or (
-                        v.get("type") in {"text", "input_text", "output_text"}
-                        and not v.get("text", "").strip()
+                        string_type(v) in {"text", "input_text", "output_text"}
+                        and not (isinstance(v.get("text", ""), str) and v.get("text", "").strip())
                     )
                 )
             )
@@ -182,7 +189,7 @@ def normalize(value: Any) -> Any:
             content = out["content"]
             if isinstance(content, list) and len(content) == 1 and isinstance(content[0], dict):
                 block = content[0]
-                if set(block) == {"type", "text"} and block["type"] in {
+                if set(block) == {"type", "text"} and string_type(block) in {
                     "text",
                     "input_text",
                     "output_text",
@@ -191,7 +198,9 @@ def normalize(value: Any) -> Any:
             if isinstance(content, str):
                 content = unwrap_client(content).strip()
             out["content"] = content
-        if out.get("type") in {"text", "input_text", "output_text"}:
+        if string_type(out) in {"text", "input_text", "output_text"} and isinstance(
+            out.get("text", ""), str
+        ):
             out["text"] = unwrap_client(out.get("text", "")).strip()
         # Responses message items may omit type/status/id when resent by a client.
         # IDs of opaque items (item_reference, reasoning, calls) remain significant.
@@ -316,7 +325,7 @@ def client_openviking_tools(body: dict, names) -> bool:
             continue
         # Hosted MCP servers (Responses mcp, Anthropic mcp_servers and mcp_toolset) list
         # no tools, so their name is all there is.
-        server = definition.get("type") in {"mcp", "mcp_toolset", "url"}
+        server = string_type(definition) in {"mcp", "mcp_toolset", "url"}
         named_tool = isinstance(definition.get("name"), str) and not server
         # A tool must be one of OpenViking's, so a connector's authenticate tool is not.
         if any(
@@ -380,10 +389,17 @@ def classify(body: dict, headers: dict, messages: list[dict]) -> tuple[str, int]
             "x-claude-code-request-type",
             "x-claude-code-request-kind",
             "x-claude-code-agent-type",
-            "x-codex-turn-metadata",
         )
     )
     if re.search(r"compact|summar|title|classif|heartbeat|suggest|permission", hints, re.I):
+        return "auxiliary", anchor
+    # Codex sends the whole turn metadata (workspace paths, remotes, tool names) on every
+    # request; only its request_kind says what the request is.
+    try:
+        turn = orjson.loads(headers.get("x-codex-turn-metadata") or "null")
+    except orjson.JSONDecodeError:
+        turn = None
+    if isinstance(turn, dict) and turn.get("request_kind") in ("compaction", "memory"):
         return "auxiliary", anchor
     # Each part on its own and as plain text, so a pattern's anchors and line breaks hold.
     parts = [text_content({"content": body.get(key, "")}) for key in ("system", "instructions")]
@@ -429,7 +445,7 @@ def strip_thinking(messages: list[dict]) -> list[dict]:
             message["content"] = [
                 b
                 for b in message["content"]
-                if b.get("type") not in {"thinking", "redacted_thinking"}
+                if string_type(b) not in {"thinking", "redacted_thinking"}
             ]
     return result
 
@@ -476,6 +492,51 @@ def usage_of(value: dict, excludes_cache: bool = False) -> dict:
         "cached_tokens": cached,
         "cache_write_tokens": written,
     }
+
+
+# Stay below the common 60-second load-balancer idle timeout.
+HEARTBEAT_SECONDS = 15
+
+
+async def heartbeat(chunks, seconds):
+    """Yield None during idle periods while one task owns the source iterator."""
+    queue, end = asyncio.Queue(1), object()
+
+    async def pump():
+        try:
+            async for chunk in chunks:
+                await queue.put(chunk)
+        except asyncio.CancelledError as error:
+            # A deadline can cancel queue.put while the source's timeout is suspended at yield.
+            if throw := getattr(chunks, "athrow", None):
+                await throw(error)
+            raise
+        finally:
+            # Close suspended generators in the task that owns their timeout contexts.
+            if close := getattr(chunks, "aclose", None):
+                await close()
+
+    def wake_consumer(task):
+        # A full queue already wakes the consumer; completion must not block cleanup.
+        if queue.empty():
+            queue.put_nowait(end)
+
+    task = asyncio.create_task(pump())
+    task.add_done_callback(wake_consumer)
+    try:
+        while not task.done() or not queue.empty():
+            try:
+                chunk = await asyncio.wait_for(queue.get(), seconds)
+            except asyncio.TimeoutError:
+                yield None
+                continue
+            if chunk is end:
+                break
+            yield chunk
+        await task
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 class SSEDecoder:

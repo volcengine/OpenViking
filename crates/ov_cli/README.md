@@ -40,13 +40,17 @@ ov config
 
 `ov config` can add, edit, delete, validate, and switch saved configs. It writes the active client config to `~/.openviking/ovcli.conf`. Saved named configs are stored as `~/.openviking/ovcli.conf.<name>`, and `ov config switch <name>` copies the selected saved config to the active config path.
 
-Recent CLI versions require a saved display language before most commands run in non-interactive shells:
+Before most commands run in non-interactive shells, select a display language by saving it:
 
 ```bash
 ov language en
 # or
 ov language zh-CN
 ```
+
+Alternatively, set `OPENVIKING_LANG=en` or `OPENVIKING_LANG=zh-CN` in the command environment.
+A recognized value satisfies first-run language setup without writing a settings file.
+An existing saved language still takes precedence.
 
 For scripts and agents, prefer deterministic config commands and pass secrets through stdin or existing environment variables:
 
@@ -89,6 +93,16 @@ Manual editing is still supported. A minimal custom-server config looks like:
 ```
 
 `account` and `user` are usually optional when using a regular user API key because the server can derive identity from the key. They are recommended for `trusted` auth mode and tenant-scoped operations. They are required for root-key-only configs because a root key has no built-in tenant identity.
+
+### Private CA certificates
+
+`ov` trusts both the bundled public CA roots and certificates in the operating system's native trust store. Install your organization's private CA in the system trust store, or point `SSL_CERT_FILE` at a PEM bundle for a single command:
+
+```bash
+SSL_CERT_FILE=/path/to/company-ca.pem ov health
+```
+
+On Unix, `SSL_CERT_DIR` can instead name a colon-separated list of certificate directories. TLS certificate verification remains enabled.
 
 For more setup details, see [docs/en/getting-started/05-cli-setup.md](../../docs/en/getting-started/05-cli-setup.md).
 
@@ -135,7 +149,7 @@ Run `ov --help` and `ov <command> --help` for the exact command surface of your 
 - `cp` - Copy a file, or copy a directory recursively with `-r`.
 - `mv` - Move or rename a resource.
 - `stat` - Show resource metadata.
-- `attrs` - Get logical extended attributes.
+- `attrs` - Get logical extended attributes or update tags for one or multiple URIs.
 - `get` - Download a file to a local path.
 
 ```bash
@@ -239,7 +253,6 @@ Use `--sudo` for commands that require the configured `root_api_key`.
 - `admin set-role` - Change a user's role. ROOT only.
 - `admin regenerate-key` - Rotate a user's API key.
 - `admin set-account-settings` - Update allowlisted account settings.
-- `admin migrate` - Migrate legacy agent/session data. ROOT only.
 - `system` - Administrative system utility commands.
 - `reindex` - Rebuild semantic and vector artifacts for a URI.
 
