@@ -1,4 +1,5 @@
-import { Checkbox } from '#demo-controls';
+import { Checkbox, Select, SelectOption } from '#demo-controls';
+
 import { useState } from 'react';
 import { useLang } from '@rspress/core/runtime';
 import { FilePreview } from '@openviking/react/components/file-preview';
@@ -36,19 +37,20 @@ export default function FilePreviewEditing() {
       <div className="ov-demo-preview-actions__controls">
         <label>
           {text.file}
-          <select
-            value={fileName}
-            onChange={(event) => {
-              setFileName(event.target.value);
+          <Select
+            value={[fileName]}
+            onChange={([value]) => {
+              if (value === undefined) return;
+              setFileName(value);
               setSaved(false);
             }}
           >
             {codeFiles.map((item) => (
-              <option key={item.fileName} value={item.fileName}>
+              <SelectOption key={item.fileName} value={item.fileName}>
                 {item.fileName}
-              </option>
+              </SelectOption>
             ))}
-          </select>
+          </Select>
         </label>
         <Checkbox checked={fail} onChange={(next) => setFail(next)}>
           {' '}

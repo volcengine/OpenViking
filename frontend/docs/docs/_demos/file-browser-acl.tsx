@@ -1,4 +1,5 @@
-import { Checkbox } from '#demo-controls';
+import { Checkbox, Select, SelectOption } from '#demo-controls';
+
 import { useLang } from '@rspress/core/runtime';
 import { useState } from 'react';
 
@@ -32,17 +33,24 @@ export default function FileBrowserAclDemo() {
         </Checkbox>
         <label>
           {zh ? '当前权限 ' : 'Current permission '}
-          <select
-            defaultValue="manage"
-            onChange={(event) => {
-              demo.setLevel(event.target.value as 'read' | 'write' | 'manage');
+          <Select<'read' | 'write' | 'manage'>
+            defaultValue={['manage']}
+            onChange={([value]) => {
+              if (value === undefined) return;
+              demo.setLevel(value);
               setRevision((value) => value + 1);
             }}
           >
-            <option value="manage">{zh ? '可管理' : 'Can manage'}</option>
-            <option value="write">{zh ? '可编辑' : 'Can edit'}</option>
-            <option value="read">{zh ? '可阅读' : 'Can read'}</option>
-          </select>
+            <SelectOption value="manage">
+              {zh ? '可管理' : 'Can manage'}
+            </SelectOption>
+            <SelectOption value="write">
+              {zh ? '可编辑' : 'Can edit'}
+            </SelectOption>
+            <SelectOption value="read">
+              {zh ? '可阅读' : 'Can read'}
+            </SelectOption>
+          </Select>
         </label>
       </div>
       <div style={{ height: 580, minWidth: 620 }}>

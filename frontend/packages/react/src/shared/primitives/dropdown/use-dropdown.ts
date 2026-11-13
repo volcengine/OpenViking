@@ -1,9 +1,21 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, PointerEvent } from 'react';
 
 /** Pointer hover and keyboard navigation share one controlled menu. */
-export function useDropdown(hover: boolean) {
-  const [open, setOpen] = useState(false);
+export function useDropdown(
+  hover: boolean,
+  controlledOpen?: boolean,
+  onOpenChange?: (open: boolean) => void,
+) {
+  const [localOpen, setLocalOpen] = useState(false);
+  const open = controlledOpen ?? localOpen;
+  const setOpen = useCallback(
+    (next: boolean) => {
+      setLocalOpen(next);
+      onOpenChange?.(next);
+    },
+    [onOpenChange],
+  );
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement | null>(null);
   const enter = useRef<'first' | 'last' | undefined>(undefined);
@@ -13,8 +25,8 @@ export function useDropdown(hover: boolean) {
     clearTimeout(timer.current);
     timer.current = undefined;
   };
-  // The hover bridge uses a browser timer after pointerleave. Cancel it on unmount
-  // so a queued close cannot touch a removed menu; events alone cannot clean unmounts.
+  // The pointerleave timer bridges the gap to the portal. Unmount is not a
+  // pointer event, so an effect must cancel any pending browser timer on cleanup.
   useEffect(() => () => clearTimeout(timer.current), []);
   // Browser focus may leave a pointer-open menu without blurring either of its
   // own nodes. Observe document focus while open; remove the subscription on close
@@ -26,21 +38,42 @@ export function useDropdown(hover: boolean) {
       if (!trigger.current?.contains(target) && !menu.current?.contains(target))
         setOpen(false);
     };
+    const outsidePointer = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (!trigger.current?.contains(target) && !menu.current?.contains(target))
+        setOpen(false);
+    };
+    const escape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      event.preventDefault();
+      trigger.current?.focus();
+      setOpen(false);
+    };
     document.addEventListener('focusin', outsideFocus);
-    return () => document.removeEventListener('focusin', outsideFocus);
-  }, [open]);
+    document.addEventListener('mousedown', outsidePointer);
+    document.addEventListener('keydown', escape);
+    return () => {
+      document.removeEventListener('focusin', outsideFocus);
+      document.removeEventListener('mousedown', outsidePointer);
+      document.removeEventListener('keydown', escape);
+    };
+  }, [open, setOpen]);
   const close = (restore = true) => {
     clear();
     if (restore || menu.current?.contains(document.activeElement))
       trigger.current?.focus();
     setOpen(false);
   };
-  const focus = (edge: 'first' | 'last') => {
+  const focus = useCallback((edge: 'first' | 'last') => {
     const buttons = menu.current?.querySelectorAll<HTMLButtonElement>(
-      'button:not(:disabled)',
+      '.ov-dropdown__item:not(:disabled)',
     );
     (edge === 'first' ? buttons?.[0] : buttons?.[buttons.length - 1])?.focus();
-  };
+  }, []);
+  const onReady = useCallback(() => {
+    if (enter.current) focus(enter.current);
+    enter.current = undefined;
+  }, [focus]);
   const leave = (event: PointerEvent) => {
     if (!hover || event.pointerType !== 'mouse' || keyboard.current) return;
     clear();
@@ -67,7 +100,7 @@ export function useDropdown(hover: boolean) {
     keyboard.current = true;
     const buttons = [
       ...event.currentTarget.querySelectorAll<HTMLButtonElement>(
-        'button:not(:disabled)',
+        '.ov-dropdown__item:not(:disabled)',
       ),
     ];
     const current = buttons.indexOf(event.target as HTMLButtonElement);
@@ -86,22 +119,10 @@ export function useDropdown(hover: boolean) {
     menu,
     close,
     setOpen,
+    onReady,
     menuProps: {
       ref: (node: HTMLDivElement | null) => {
         menu.current = node;
-        // Native focusgroup owns roles and arrow navigation. Supply the existing
-        // menu behavior only where the browser does not implement it.
-        if (node && !('focusGroup' in HTMLElement.prototype)) {
-          node.setAttribute('role', 'menu');
-          node.querySelectorAll('button').forEach((button) => {
-            button.setAttribute('role', 'menuitem');
-            button.tabIndex = -1;
-          });
-        }
-        if (node && enter.current) {
-          focus(enter.current);
-          enter.current = undefined;
-        }
       },
       onPointerEnter: clear,
       onPointerLeave: leave,
@@ -129,8 +150,15 @@ export function useDropdown(hover: boolean) {
       onClick: (event: React.MouseEvent) => {
         keyboard.current = event.detail === 0;
         enter.current = keyboard.current ? 'first' : undefined;
+        setOpen(!open);
       },
       onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => {
+        if (open && event.key === 'Escape') {
+          event.preventDefault();
+          event.stopPropagation();
+          close();
+          return;
+        }
         if (event.key === 'Tab' && open) close();
         if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
         event.preventDefault();

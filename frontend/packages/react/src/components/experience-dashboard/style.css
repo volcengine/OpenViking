@@ -1,6 +1,8 @@
+@import '../../shared/primitives/select/style.css';
 @import '../../shared/primitives/button/button.css';
 @import '../../shared/primitives/pagination/pagination.css';
 @import '../../shared/primitives/popover/popover.css';
+@import '../../shared/primitives/dropdown/dropdown.css';
 @import '../../shared/primitives/tooltip/tooltip.css';
 @import '../../theme.css';
 @import '../../shared/dashboard/dashboard.css';

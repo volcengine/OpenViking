@@ -1,5 +1,7 @@
 @import '../packages/react/dist/docs/style.css';
 
+@import '../packages/react/dist/docs/shared/primitives/select/style.css';
+
 :root {
   --rp-c-brand: #bc3346;
   --rp-c-brand-light: #d44a5b;

@@ -1,4 +1,5 @@
-import { Checkbox } from '#demo-controls';
+import { Checkbox, Select, SelectOption } from '#demo-controls';
+
 import { useState } from 'react';
 import { useLang } from '@rspress/core/runtime';
 import {
@@ -82,20 +83,21 @@ export default function FilePreviewActionsDemo() {
         </Checkbox>
         <label>
           {text.mode}{' '}
-          <select
+          <Select
             aria-label={text.mode}
-            value={mode}
-            onChange={(event) => {
-              setMode(Number(event.target.value));
+            value={[mode]}
+            onChange={([value]) => {
+              if (value === undefined) return;
+              setMode(Number(value));
               setNotice('');
             }}
           >
             {text.modes.map((label, index) => (
-              <option key={label} value={index}>
+              <SelectOption key={label} value={index}>
                 {label}
-              </option>
+              </SelectOption>
             ))}
-          </select>
+          </Select>
         </label>
         <Checkbox checked={fail} onChange={(next) => setFail(next)}>
           {' '}

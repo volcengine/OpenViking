@@ -18,6 +18,7 @@
 
 - `button`：Arco 精简按钮，提供类型、尺寸、图标、加载态、原生事件和 ref。只有 `htmlType="submit"` 时才提交表单。不含链接、按钮组和 `ConfigProvider` 耦合。
 - `input`：Arco 精简 `Input`，提供原生事件、表单属性、ref、尺寸以及装饰性前后缀，另有带样式的 `TextArea`。不含密码显隐、计数、清空和自动尺寸。
+- `select`：通过 children 组合选项，单选和多选统一使用数组值，提供 Input 外壳、无边框 Simple 模式及自定义回显和触发器。见 [Select](./primitives/select/README.md)。
 - `modal`：改编自 Arco 的受控居中弹窗，提供过渡动画、焦点锁和共享的 body 滚动锁。关闭按钮文案放在它自己的 `locales/` 中。
 - `drawer`：右侧抽屉，提供过渡动画、焦点锁和共享的 body 滚动锁，内容通过 `children` 传入。
 - `tooltip`：渲染到 `document.body` 的定位浮层，悬停或聚焦时显示，也可以点击切换。渲染到 body 是因为祖先容器的 `overflow: hidden` 会裁掉常规浮层。
@@ -54,7 +55,7 @@
 ## 说明
 
 - Button 与 Input 只复用 Arco 的交互逻辑。视觉规则改编自 `@arco-design/theme-ve-o-aml-design@0.0.36`（MIT），不使用 Arco 默认皮肤，颜色映射到 `src/theme.css` 的 `--ov-ui-color-*`，宿主可以覆盖。不引入全局 reset、私有图标或字体资源。Arco 的声明见 [`LICENSE.arco-design`](../../LICENSE.arco-design)。
-- 文档站通过 `docs/internal-controls.ts` 使用独立的私有 `Button` 构建产物（`rslib.config.ts` 中的 `docs-controls` 入口），npm 包不包含它。示例里的 `#demo-controls` 仅供文档站使用，宿主接入时换成自己的按钮。
-- 测试通过 `scripts/test.mjs` 里的私有构建访问 `button`、`input` 和 `modal`，不经过包导出。
+- 文档站通过 `docs/internal-controls.ts` 使用内部控件的构建产物（`rslib.config.ts` 中的 `docs-controls` 入口），这些文档专用产物不进入 npm 包。示例里的 `#demo-controls` 仅供文档站使用，宿主接入时换成自己的控件。
+- 测试通过 `scripts/test.mjs` 里的私有构建访问内部基础件，不经过包导出。
 
 开发命令见[前端工作区 README](../../../../README.md)，组件约定见[组件指南](../components/AGENTS.md)。

@@ -39,6 +39,7 @@
 .ov-notification-stack,
 .ov-button,
 .ov-input,
+.ov-select,
 .ov-textarea,
 .ov-directory-tour,
 .ov-wiki-dashboard,
@@ -192,6 +193,7 @@
 html.dark .ov-notification-stack,
 html.dark .ov-button,
 html.dark .ov-input,
+html.dark .ov-select,
 html.dark .ov-textarea,
 .dark .ov-directory-tour,
 html.dark .ov-wiki-dashboard,
@@ -276,6 +278,7 @@ html.dark .ov-experience-dashboard,
  * Public --ov-ui-color-* values always take precedence in component styles. */
 .ov-button,
 .ov-input,
+.ov-select,
 .ov-textarea {
   --ov-ui-bg-white-default: var(--ov-ui-bg-1-default);
   --ov-ui-bg-2-default: #fafbfd;
@@ -300,6 +303,7 @@ html.dark .ov-experience-dashboard,
 }
 html.dark .ov-button,
 html.dark .ov-input,
+html.dark .ov-select,
 html.dark .ov-textarea {
   --ov-ui-bg-white-default: rgb(255 255 255 / 0.1%);
   --ov-ui-bg-2-default: rgb(252 253 254 / 1%);

@@ -1,3 +1,4 @@
+import { Select, SelectOption } from '#demo-controls';
 import { useId, useState } from 'react';
 import { useLang } from '@rspress/core/runtime';
 import { OpenVikingProvider } from '@openviking/react/client';
@@ -30,8 +31,8 @@ export default function LocaleInheritance() {
   const [component, setComponent] = useState<Override>('inherit');
   const options = (
     <>
-      <option value="zh-CN">简体中文</option>
-      <option value="en-US">English</option>
+      <SelectOption value="zh-CN">简体中文</SelectOption>
+      <SelectOption value="en-US">English</SelectOption>
     </>
   );
   return (
@@ -48,41 +49,51 @@ export default function LocaleInheritance() {
         >
           <label htmlFor={`${id}-global`} style={fieldStyle}>
             {zh ? '全局语言 ' : 'Global language '}
-            <select
+            <Select
               id={`${id}-global`}
               name="global-locale"
               style={controlStyle}
-              value={global}
-              onChange={(e) => setGlobal(e.target.value as Locale)}
+              value={[global]}
+              onChange={([value]) => {
+                if (value !== undefined) setGlobal(value);
+              }}
             >
               {options}
-            </select>
+            </Select>
           </label>
           <label htmlFor={`${id}-block`} style={fieldStyle}>
             {zh ? '区块语言 ' : 'Block language '}
-            <select
+            <Select
               id={`${id}-block`}
               name="block-locale"
               style={controlStyle}
-              value={block}
-              onChange={(e) => setBlock(e.target.value as Override)}
+              value={[block]}
+              onChange={([value]) => {
+                if (value !== undefined) setBlock(value);
+              }}
             >
-              <option value="inherit">{zh ? '继承上层' : 'Inherit'}</option>
+              <SelectOption value="inherit">
+                {zh ? '继承上层' : 'Inherit'}
+              </SelectOption>
               {options}
-            </select>
+            </Select>
           </label>
           <label htmlFor={`${id}-component`} style={fieldStyle}>
             {zh ? '组件语言 ' : 'Component language '}
-            <select
+            <Select
               id={`${id}-component`}
               name="component-locale"
               style={controlStyle}
-              value={component}
-              onChange={(e) => setComponent(e.target.value as Override)}
+              value={[component]}
+              onChange={([value]) => {
+                if (value !== undefined) setComponent(value);
+              }}
             >
-              <option value="inherit">{zh ? '继承上层' : 'Inherit'}</option>
+              <SelectOption value="inherit">
+                {zh ? '继承上层' : 'Inherit'}
+              </SelectOption>
               {options}
-            </select>
+            </Select>
           </label>
         </div>
       </fieldset>

@@ -85,13 +85,14 @@ test('other popovers and tooltips retain the full trigger geometry', async () =>
       clientHeight: { value: 300 },
     });
     const anchor = scrollport.querySelector('.ov-viking-bot__popover-anchor');
-    anchor.getBoundingClientRect = () => new window.DOMRect(28, 60, 625, 32);
     const button = anchor.querySelector('button');
-    const surface = document.getElementById(
-      button.getAttribute('aria-controls'),
-    );
-    surface.getBoundingClientRect = () => new window.DOMRect(0, 0, 200, 80);
+    button.getBoundingClientRect = () => new window.DOMRect(28, 60, 625, 32);
     await act(() => button.click());
+    const surface = document
+      .getElementById(button.getAttribute('aria-controls'))
+      .closest('.ov-dropdown');
+    surface.getBoundingClientRect = () => new window.DOMRect(0, 0, 200, 80);
+    await act(() => window.dispatchEvent(new window.Event('resize')));
     assert.equal(button.getAttribute('aria-expanded'), 'true');
     assert.equal(surface.style.left, '453px');
 

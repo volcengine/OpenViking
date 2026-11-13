@@ -1,6 +1,7 @@
 import { useId, useMemo, useState } from 'react';
 import { useLang } from '@rspress/core/runtime';
-import { Checkbox, Button } from '#demo-controls';
+import { Checkbox, Button, Select, SelectOption } from '#demo-controls';
+
 import { FilePreview } from '@openviking/react/components/file-preview';
 import type { FilePreviewFileTabSlots } from '@openviking/react/components/file-preview';
 import '@openviking/react/components/file-preview/style.css';
@@ -87,27 +88,31 @@ export default function FilePreviewFallbacks() {
       <div className="ov-demo-preview-actions__controls">
         <label htmlFor={`${id}-format`}>
           {text.format}{' '}
-          <select
+          <Select
             id={`${id}-format`}
-            value={format}
-            onChange={(event) => setFormat(event.target.value)}
+            value={[format]}
+            onChange={([value]) => {
+              if (value !== undefined) setFormat(value);
+            }}
           >
-            <option value="image">{text.image}</option>
-            <option value="video">{text.video}</option>
-            <option value="unsupported">{text.other}</option>
-          </select>
+            <SelectOption value="image">{text.image}</SelectOption>
+            <SelectOption value="video">{text.video}</SelectOption>
+            <SelectOption value="unsupported">{text.other}</SelectOption>
+          </Select>
         </label>{' '}
         <label htmlFor={`${id}-state`}>
           {text.state}{' '}
-          <select
+          <Select
             id={`${id}-state`}
-            value={state}
-            onChange={(event) => setState(event.target.value)}
+            value={[state]}
+            onChange={([value]) => {
+              if (value !== undefined) setState(value);
+            }}
           >
-            <option value="ready">{text.ready}</option>
-            <option value="loading">{text.loading}</option>
-            <option value="missing">{text.missing}</option>
-          </select>
+            <SelectOption value="ready">{text.ready}</SelectOption>
+            <SelectOption value="loading">{text.loading}</SelectOption>
+            <SelectOption value="missing">{text.missing}</SelectOption>
+          </Select>
         </label>{' '}
         <Checkbox
           id={`${id}-custom`}

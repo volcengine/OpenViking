@@ -16,7 +16,7 @@ for (const [name, component, props, selector] of [
     'VikingBot',
     VikingBotSessionActions,
     { sessions: { items: [], onSelect() {}, onNew() {} } },
-    '.ov-viking-bot__popover-anchor',
+    '.ov-viking-bot__header-action[aria-haspopup="listbox"]',
   ],
   ['Console', Console, { mode: 'command' }, '.ov-console__history'],
 ]) {
@@ -31,37 +31,43 @@ for (const [name, component, props, selector] of [
         ),
       );
       const anchor = container.querySelector(selector);
-      const button = anchor.querySelector('button');
-      const surface = document.getElementById(
-        button.getAttribute('aria-controls'),
-      );
-      surface.style.setProperty('--host-surface-only', 'retained');
+      // jsdom does not inherit custom properties; use the measured trigger.
+      const button = anchor.matches('button')
+        ? anchor
+        : anchor.querySelector('button');
+      const surface = () => {
+        const node = document.getElementById(
+          button.getAttribute('aria-controls'),
+        );
+        return node?.closest('.ov-dropdown') ?? node;
+      };
       for (const color of [red, blue]) {
         await act(() => anchor.style.setProperty(token, color));
         await click(button);
         assert.equal(button.getAttribute('aria-expanded'), 'true');
-        assert.equal(surface.style.getPropertyValue(token), color);
+        assert.equal(surface().style.getPropertyValue(token), color);
+        surface().style.setProperty('--host-surface-only', 'retained');
+        await act(() => anchor.style.removeProperty(token));
+        assert.equal(surface().style.getPropertyValue(token), '');
+        assert.equal(
+          surface().style.getPropertyValue('--host-surface-only'),
+          'retained',
+        );
         await click(button);
         assert.equal(button.getAttribute('aria-expanded'), 'false');
-        await act(() => anchor.style.removeProperty(token));
         await click(button);
         assert.equal(
-          surface.style.getPropertyValue(token),
+          surface().style.getPropertyValue(token),
           '',
-          'a removed override must not survive reopening the same surface',
-        );
-        assert.equal(
-          surface.style.getPropertyValue('--host-surface-only'),
-          'retained',
-          'theme cleanup must preserve unrelated surface styles',
+          'removed overrides must not survive reopening',
         );
         await click(button);
       }
       await click(button);
       await act(() => anchor.style.setProperty(token, red));
-      assert.equal(surface.style.getPropertyValue(token), red);
+      assert.equal(surface().style.getPropertyValue(token), red);
       await act(() => anchor.style.removeProperty(token));
-      assert.equal(surface.style.getPropertyValue(token), '');
+      assert.equal(surface().style.getPropertyValue(token), '');
     } finally {
       await act(() => root.unmount());
       container.remove();

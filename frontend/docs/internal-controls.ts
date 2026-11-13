@@ -6,3 +6,7 @@ export {
   TextArea,
 } from '../packages/react/dist/docs/shared/primitives/input/input.js';
 export { Checkbox } from '../packages/react/dist/docs/shared/primitives/checkbox/checkbox.js';
+export {
+  Select,
+  SelectOption,
+} from '../packages/react/dist/docs/shared/primitives/select/index.js';

@@ -22,8 +22,16 @@ try {
             entry: {
               button: './src/shared/primitives/button/button.tsx',
               input: './src/shared/primitives/input/input.tsx',
+              'overlay-position':
+                './src/shared/primitives/overlay/use-overlay-position.ts',
               modal: './src/shared/primitives/modal/modal.tsx',
               notification: './src/shared/primitives/notification/index.ts',
+              select: './src/shared/primitives/select/index.ts',
+
+              dropdown: './src/shared/primitives/dropdown/index.ts',
+              tooltip: './src/shared/primitives/tooltip/index.ts',
+              'breadcrumb-menu':
+                './src/components/file-preview/file-preview-breadcrumb-menu.tsx',
               'browser-entries':
                 './src/components/file-browser-action-bar/index.ts',
               'file-browser': './src/modules/file-browser/use-file-browser.ts',
