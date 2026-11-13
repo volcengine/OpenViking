@@ -106,6 +106,8 @@ const AGENT_FIELDS = Object.freeze([
   'role',
   'naturalWriting',
   'model',
+  'dshHomeMode',
+  'dshSkillRoots',
   'volcSessionId',
   'volcEnvironmentId',
   'meetingNotes',
@@ -330,6 +332,21 @@ function parseAgent(value, index, ignored) {
   if (value.meetingNotes && !connectors.includes('lark')) {
     throw new Error(`${label}.meetingNotes requires the lark connector`);
   }
+  const dshHomeMode = value.dshHomeMode ?? 'isolated';
+  if (!['isolated', 'shared'].includes(dshHomeMode)) {
+    throw new Error(`${label}.dshHomeMode must be isolated or shared`);
+  }
+  const dshSkillRoots = value.dshSkillRoots ?? (dshHomeMode === 'shared'
+    ? ['workspace-dsh', 'project-agents', 'host-agents', 'host-dsh']
+    : ['workspace-dsh', 'project-agents', 'data-dsh', 'data-agents']);
+  const allowedSkillRoots = new Set(dshHomeMode === 'shared'
+    ? ['workspace-dsh', 'project-agents', 'host-agents', 'host-dsh']
+    : ['workspace-dsh', 'project-agents', 'host-agents', 'host-dsh', 'data-dsh', 'data-agents']);
+  if (!Array.isArray(dshSkillRoots)
+    || dshSkillRoots.some(root => typeof root !== 'string' || !allowedSkillRoots.has(root))
+    || new Set(dshSkillRoots).size !== dshSkillRoots.length) {
+    throw new Error(`${label}.dshSkillRoots must contain unique skill root ids supported by ${dshHomeMode} mode`);
+  }
   return Object.freeze({
     id,
     displayName: manifestString(value.displayName, `${label}.displayName`, { maxLength: 40 }),
@@ -350,6 +367,8 @@ function parseAgent(value, index, ignored) {
     role: manifestRole(value.role, `${label}.role`),
     naturalWriting: value.naturalWriting ?? true,
     model,
+    dshHomeMode,
+    dshSkillRoots: Object.freeze([...dshSkillRoots]),
     volcSessionId,
     volcEnvironmentId,
     meetingNotes: value.meetingNotes ?? false,
@@ -576,6 +595,8 @@ function applyDeploymentAgentEnv(env, deployment, requestedId) {
   env.OV_SUPERAGENT_NATURAL_WRITING = agent.naturalWriting ? 'true' : 'false';
   env.OV_SUPERAGENT_STAGED_REPLIES = agent.stagedReplies ? 'true' : 'false';
   env.OV_SUPERAGENT_MEETING_NOTES = agent.meetingNotes ? 'true' : 'false';
+  env.OV_SUPERAGENT_DSH_HOME_MODE = agent.dshHomeMode;
+  env.OV_SUPERAGENT_DSH_SKILL_ROOTS = JSON.stringify(agent.dshSkillRoots);
   if (agent.role) env.OV_SUPERAGENT_ROLE = agent.role;
   else delete env.OV_SUPERAGENT_ROLE;
   env.OV_SUPERAGENT_CHANNEL = agent.channel;

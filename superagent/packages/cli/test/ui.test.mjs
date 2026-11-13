@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import assert from 'node:assert/strict';
-import { PassThrough } from 'node:stream';
+import { PassThrough, Writable } from 'node:stream';
 import test from 'node:test';
 import { BANNER_WIDTH, bannerLines, openingBanner, playBanner } from '../src/banner.mjs';
 import { Prompter } from '../src/prompt.mjs';
 import { urlOpenCommand, qrLines, showScan } from '../src/qr.mjs';
-import { ansi256, box, colorDepth, mix, stripAnsi, width } from '../src/ui.mjs';
+import { ansi256, box, colorDepth, flushOutput, mix, stripAnsi, width } from '../src/ui.mjs';
 
 // A colour terminal of a given size, recording what is written.
 function screen({ columns = 100, rows = 40, depth = 24 } = {}) {
@@ -50,6 +50,20 @@ test('colours fall back to 256 colours, and nothing without a terminal', () => {
   assert.deepEqual(mix([[0, 0, 0], [200, 100, 0]], 0.5), [100, 50, 0]);
   assert.equal(colorDepth(new PassThrough()), 1);
   assert.equal(colorDepth(screen({ depth: 8 }).output, { LC_TERMINAL: 'iTerm2' }), 24, 'iTerm2 over ssh still has truecolor');
+});
+
+test('setup exit flushing waits for earlier terminal output to finish', async () => {
+  let completed = '';
+  const output = new Writable({
+    write(chunk, encoding, callback) { setTimeout(() => { completed += chunk.toString(); callback(); }, 15); },
+  });
+  output.write('final box\n');
+  let flushed = false;
+  const waiting = flushOutput(output).then(() => { flushed = true; });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(flushed, false, 'the queued box has not reached the terminal yet');
+  await waiting;
+  assert.equal(completed, 'final box\n');
 });
 
 test('a box lines up its borders whatever the text is', () => {

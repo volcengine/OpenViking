@@ -15,6 +15,7 @@ import {
 import {
   DSH_DEFAULT_MODEL, DSH_EFFORTS, dshProfilePatchHash, parseDshModel, retryDshNotReady,
 } from '../dsh-runtime.mjs';
+import { dshHostHome } from '../dsh-config.mjs';
 
 // A catalogue query asks every route at once, and each route already carries the
 // bridge's own 10s bound: this is the outer bound for the whole answer.
@@ -422,6 +423,10 @@ export default {
   // keep counting as a change. A refused restart never moves the baseline.
   _profilePatchChanged() {
     if (this.settingsUpdate || this.restarting || this.sessionRotation) return false;
-    return dshProfilePatchHash({ dataDir: this.config.dataDir }) !== this.profilePatchHash;
+    return dshProfilePatchHash({
+      dataDir: this.config.dataDir,
+      dshHomeMode: this.config.dshHomeMode,
+      homeDir: dshHostHome(this._environment),
+    }) !== this.profilePatchHash;
   },
 };

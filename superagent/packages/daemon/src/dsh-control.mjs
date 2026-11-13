@@ -75,9 +75,9 @@ export function controlPatchPath(dataDir) {
  * @param {string} [options.bridgePath] - the bridge module to load.
  * @returns {string} the patch path.
  */
-export function writeControlPatch({ dataDir, policy = '', bridgePath = DSH_BRIDGE_PATH }) {
+export function writeControlPatch({ dataDir, policy = '', bridgePath = DSH_BRIDGE_PATH, dshHomeMode = 'isolated', homeDir }) {
   if (typeof dataDir !== 'string' || !dataDir) throw new Error('dataDir is required to write the DSH control patch');
-  const { run } = prepareDshEnvironment(dataDir);
+  const { run } = prepareDshEnvironment(dataDir, { dshHomeMode, homeDir });
   const patch = buildDshPatch({ policy, bridgePath, mcp: null });
   const patchPath = path.join(run, CONTROL_PATCH_FILE);
   const temporary = `${patchPath}.${process.pid}.tmp`;
@@ -167,6 +167,7 @@ export class DshControlClient {
     // .cmd shim on Windows, and a raw child_process.spawn of that shim throws
     // EINVAL (CreateProcess cannot run a batch file).
     dataDir, bin = 'dsh', env = process.env, spawnImpl = spawn, policy = '',
+    dshHomeMode = 'isolated', homeDir,
     bridgePath = DSH_BRIDGE_PATH,
     helloTimeoutMs = CONTROL_HELLO_TIMEOUT_MS,
     requestTimeoutMs = CONTROL_REQUEST_TIMEOUT_MS,
@@ -176,7 +177,7 @@ export class DshControlClient {
     if (typeof dataDir !== 'string' || !path.isAbsolute(dataDir)) {
       throw new DshControlError('the instance data directory must be an absolute path');
     }
-    const patchPath = writeControlPatch({ dataDir, policy, bridgePath });
+    const patchPath = writeControlPatch({ dataDir, policy, bridgePath, dshHomeMode, homeDir });
     const command = dshCommand({ bin, patchPath });
     let child;
     try {
@@ -185,7 +186,7 @@ export class DshControlClient {
         // No provider credentials are injected: the document being edited
         // names its own credential references and DSH resolves them from its
         // own credentials file.
-        env: sanitizeDshEnv(env, { dataDir }),
+        env: sanitizeDshEnv(env, { dataDir, dshHomeMode, homeDir }),
         shell: false,
         detached: spawnDetached,
         stdio: ['pipe', 'pipe', 'pipe'],

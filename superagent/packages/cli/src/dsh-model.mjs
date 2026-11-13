@@ -26,6 +26,7 @@ import { t } from './i18n.mjs';
 import { chooseInstance, loadInstances } from './instances.mjs';
 import { GoBack } from './prompt.mjs';
 import { DshControlError } from '../../daemon/src/dsh-control.mjs';
+import { dshHostHome } from '../../daemon/src/dsh-config.mjs';
 import {
   UsageError, credentialRef, credentialRefProblem, importPlan, plainObject, removeModelOps,
   routeProblem, rowsOf, text,
@@ -211,7 +212,10 @@ async function addModelInteractively({ env, stdout, prompter, agent, deployment,
   const collected = await collectModelDraft({ env, prompter, agent, deployment, known: knownRoutesOf(rows) });
   if (!collected) return false;
   const { wizard, payload } = collected;
-  const written = await wizard.writeDshModelDraft({ dataDir: agent.dataDir, draft: payload, bin: dshBin(env, deployment), env });
+  const written = await wizard.writeDshModelDraft({
+    dataDir: agent.dataDir, draft: payload, bin: dshBin(env, deployment), env,
+    dshHomeMode: agent.dshHomeMode, homeDir: dshHostHome(env),
+  });
   const id = wizard.canonicalModelId(payload);
   stdout.write(t(`已写入 ${id}（route ${payload.route}，api=${payload.api}）\n`,
     `Wrote ${id} (route ${payload.route}, api=${payload.api})\n`));
@@ -325,6 +329,7 @@ async function editModelInteractively({ env, stdout, prompter, agent, deployment
   }
   const written = await writeModelEdit({
     dataDir: agent.dataDir, draft: payload, previous: target, bin: dshBin(env, deployment), env,
+    dshHomeMode: agent.dshHomeMode, homeDir: dshHostHome(env),
   });
   const id = `${payload.route}/${payload.model}`;
   stdout.write(t(`已更新 ${id}\n`, `Updated ${id}\n`));
@@ -702,7 +707,7 @@ async function removeTarget({ agent, deployment, env, target, stdout }) {
       const result = removeModelOps(providers, target);
       keyRef = result.keyRef;
       return result.ops;
-    }, { dataDir: agent.dataDir });
+    }, { dataDir: agent.dataDir, dshHomeMode: agent.dshHomeMode, homeDir: dshHostHome(env) });
     if (ops.length === 0) throw new Error(t('没有需要删除的内容', 'Nothing to remove'));
   });
   stdout.write(target.model === null
@@ -791,7 +796,7 @@ async function runImport(client, { parsed, file, env, agent }) {
   // Read once, before the first write: from here on the set also carries every
   // reference this run created, so a re-plan can neither adopt a name somebody
   // else owns nor hand out one it has already used.
-  const stored = storedCredentialRefs(agent);
+  const stored = storedCredentialRefs(agent, env);
   const created = new Map();      // reference → the value this run wrote there
   const pinned = {};              // source route → the reference carrying its value
   const refused = [];
@@ -840,7 +845,7 @@ async function runImport(client, { parsed, file, env, agent }) {
       break;
     } catch (error) {
       if (attempt === 0 && isConcurrentWrite(error)) continue;
-      failure = settingsFailure(error, { dataDir: agent.dataDir });
+      failure = settingsFailure(error, { dataDir: agent.dataDir, dshHomeMode: agent.dshHomeMode, homeDir: dshHostHome(env) });
       outcome = commitOutcome(error);
       break;
     }
@@ -1033,7 +1038,7 @@ async function repairCommand({ argv, env, stdout, prompter }) {
   const { positionals, flags } = parseArguments(argv, { values: ['--instance'] });
   if (positionals.length) throw new UsageError(t('repair 不接受参数', 'repair takes no arguments'));
   const { agent, deployment } = await resolveInstance({ env, prompter, requested: instanceFlag(flags), question: modelInstanceQuestion() });
-  const document = settingsDocumentPath(agent);
+  const document = settingsDocumentPath(agent, dshHostHome(env));
   const probe = () => withControl({ agent, deployment, env }, async (client) => {
     let descriptor;
     let unreadable = null;
@@ -1085,7 +1090,7 @@ async function repairCommand({ argv, env, stdout, prompter }) {
   // The probe cannot distinguish "the document is unreadable" from "an upper layer
   // disabled the entry", and the rewrite only helps the first. Refusing here keeps
   // the routes of the second case intact instead of destroying them for nothing.
-  const overriding = overridingLayer({ dataDir: agent.dataDir });
+  const overriding = overridingLayer({ dataDir: agent.dataDir, dshHomeMode: agent.dshHomeMode, homeDir: dshHostHome(env) });
   if (overriding) {
     throw new Error(t(
       `llm-pi-ai 被上层覆盖层接管了（${overriding.kind}：${overriding.file}），改写 ${document} 修不好它，反而会丢掉里面全部 route。未做任何改动。\n`

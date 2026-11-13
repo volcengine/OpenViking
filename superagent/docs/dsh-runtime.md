@@ -11,7 +11,7 @@ DSH runtime 用 OpenViking SuperAgent 的常驻会话、历史同步、Agent 工
 - **DSH 的模型设置不写在 manifest 里。** `OV_SUPERAGENT_DSH_EFFORT` 只从启动 OpenViking SuperAgent 的进程环境读取；模型和路由只属于 DSH 自己的设置文档，密钥值只属于 DSH 的 credential 库（见下节）。写进 `config.json` 的这类字段会被当作未知项忽略并告警。
 - 一次启动（从 spawn 到握手结束）默认最多 30 秒。DSH 从源码树跑时是两次 `node --import tsx`（版本探测一次、进程一次），机器空闲时各约 0.4 秒，机器忙时可能是几十秒；超时会让 daemon 启动失败。机器负载高或同时起多个实例时用 `OV_SUPERAGENT_DSH_START_TIMEOUT_MS` 放宽（同样只从进程环境读取）。
 - 默认模型是内置的 `deepseek-official/deepseek-flash`，它要的 `DEEPSEEK_API_KEY` 从进程环境（`~/.ov-superagent/secrets.env` 里的值也会被载入 daemon 进程环境）或实例的 credential 库来：`ov-superagent dsh model key set DEEPSEEK_API_KEY` 存的值同样能让这条内置 route 列出 model（实测）。操作方自己的路由来自 DSH 的设置文档，用 `ov-superagent dsh model` 配置；配好凭据后不依赖环境里的 `DEEPSEEK_API_KEY`。`OV_SUPERAGENT_DSH_EFFORT` 只设置新实例的初始 effort，取值为 `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`，默认 `high`；之后由 `/effort` 与持久化设置决定。
-- 隔离的 DSH_HOME 不读用户自己 `~/.dsh` 保存的凭据或路由。`DEEPSEEK_BASE_URL` 不会被 OpenViking SuperAgent 删掉，daemon 环境里已经有它时会原样传给 DSH 子进程（OpenViking SuperAgent 不为它做转发，写进 manifest 的 `env` 会被当成未知项忽略）。工作区 `.env` 仍可能被 DSH 读取，但进程环境优先；`DSH_*`、`DEEPSEEK_BASE_URL`、`PATH` 这类启动变量不能由 `.env` 提供。
+- 默认独立模式的 DSH_HOME 不读用户自己 `~/.dsh` 保存的凭据或路由；setup 选共享模式后则直接使用它们。`DEEPSEEK_BASE_URL` 不会被 OpenViking SuperAgent 删掉，daemon 环境里已经有它时会原样传给 DSH 子进程（OpenViking SuperAgent 不为它做转发，写进 manifest 的 `env` 会被当成未知项忽略）。工作区 `.env` 仍可能被 DSH 读取，但进程环境优先；`DSH_*`、`DEEPSEEK_BASE_URL`、`PATH` 这类启动变量不能由 `.env` 提供。
 - `/runtime dsh` 直接选择。`ov-superagent setup` 的检查是 `dsh --version` 加一次 `initialize → superagent/hello → superagent/llm/models → shutdown` 探测，不创建会话，也不调用模型。探测默认使用临时 DSH_HOME，因此看不到实例自己的路由；编辑已有实例时，setup 会用该实例自己的 DSH_HOME 再跑一次同样的握手（启动补丁换成 `ov-superagent dsh model` 用的控制补丁），所以已配置的实例不会被显示成「没有路由」，见「setup 里没有可用 model 时怎么办」。
 
 ## 模型路由存在哪里、字段怎么填
@@ -150,13 +150,13 @@ DSH runtime 用 OpenViking SuperAgent 的常驻会话、历史同步、Agent 工
 1. **说明缺什么。** 打印目录里每条 route 各有几个 model（例如 `deepseek-official: 0 models; deepseek-account: 0 models`），并指出这样保存的实例启动后会反复重启（原因见「模型路由存在哪里、字段怎么填」结尾的「一条 route 都没有时」）。
 2. **问是否现在添加一个 model route**，字段依次是：网关地址（http/https，含 `/v1`）、protocol（`openai-completions`、`openai-responses`、`anthropic-messages` 三选一，默认按地址推断）、model id（可以带 `/`），最后是 credential——现在粘贴密钥，或者只写 reference（默认由 route id 派生，稍后用 `ov-superagent dsh model key set` 存值）。route id 不单独问，从网关主机推导（主机是 IP 时用 `gateway`），显示名默认等于 route id。
 3. **校验草稿。** 把草稿写进一个一次性 DSH_HOME，重跑同一个握手（`initialize → superagent/hello → superagent/llm/models → shutdown`）。通过说明「DSH 接受了这个 route，并给出 model <id>」；不通过会说明临时 DSH 的返回，并可以仍然保留或跳过。**校验只覆盖 DSH 这一侧**：它证明配置能被 DSH 解析、credential 能解析，不会真的向网关发一次请求，所以密钥对不对只有第一轮对话才知道。
-4. **保存时才写盘。** 草稿只在内存里；选「保存」时（和写 manifest 同一处）才写进 `<dataDir>/dsh/home/profiles/sdk/cordis.patch.yml`（粘贴了密钥时还会写 `<DSH_HOME>/.credentials.yaml`，0600）。取消 setup 不会留下半个实例目录。实例的 DSH home 里**既没有设置文档也没有 credential 库**时（DSH 还没启动过），setup 直接写第一份文档（JSON 也是 YAML，和 `repair` 的最小文档同一写法；实测 DSH 能读、credential 能解析）；两者任何一个已存在就改走 DSH 自己的 settings 服务，按菜单向导的 upsert 语义合并 `providers`，不会覆盖别的 route。写失败会放弃这条草稿、用原来的 `dsh` 保存并打印下面这条命令。
+4. **保存时才写盘。** 草稿只在内存里；选「保存」时（和写 manifest 同一处）才写进 `<DSH_HOME>/profiles/sdk/cordis.patch.yml`（独立模式下即 `<dataDir>/dsh/home/profiles/sdk/cordis.patch.yml`）（粘贴了密钥时还会写 `<DSH_HOME>/.credentials.yaml`，0600）。取消 setup 不会留下半个实例目录。实例的 DSH home 里**既没有设置文档也没有 credential 库**时（DSH 还没启动过），setup 直接写第一份文档（JSON 也是 YAML，和 `repair` 的最小文档同一写法；实测 DSH 能读、credential 能解析）；两者任何一个已存在就改走 DSH 自己的 settings 服务，按菜单向导的 upsert 语义合并 `providers`，不会覆盖别的 route。写失败会退出 setup，不会退回裸 `dsh` 保存一个起不来的实例。
 
 写进 manifest 的 model 是**完整限定**的 `dsh:<route>/<model>`。不写前缀会落到两个不同的坑：裸 `dsh` 解析成内置 `deepseek-official/deepseek-flash`（没有 `DEEPSEEK_API_KEY` 时零 model），裸 `<route>/<model>` 不属于任何 runtime，`resolveRuntimeModelTarget` 会按默认 runtime（`codex`）处理。
 
 编辑已有实例时同理：如果它的 manifest 里是裸 `dsh`，而它自己的 DSH_HOME（用实例目录探测，不是临时目录）能服务某个 route，保存时 setup 会把 manifest 改成那个 route 的限定写法。已经限定过的值（比如 `/model` 选过的）不会被改写。
 
-没有终端（非 TTY）时整步跳过，只打印怎么去菜单里补，不阻塞 setup；选「否」也一样。提示就是一条可以直接粘贴的命令，进去选「添加 model」：
+没有终端（非 TTY）时只打印怎么去菜单里补，然后退出；选「否」也同样不保存。提示就是一条可以直接粘贴的命令，修好后再重新 setup，进去选「添加 model」：
 
 ```sh
 ov-superagent dsh model --instance <实例>    # 菜单里选「添加 model」
@@ -193,7 +193,22 @@ patch 的分层顺序是 bundle → profile（`<DSH_HOME>/profiles/sdk/cordis.pa
 - home patch 也能把某一行整行 `disabled: true`；`disabled` 与 `config` 是不同键，两个都会留下。把 `llm-pi-ai` 整行禁用后模型插件不激活，需要删掉这一行才能继续用 `ov-superagent dsh model`。
 - 引用不存在的 id 会在 stderr 报 `patch: entry "…" not found`，其余层照常应用。
 
-无人值守策略关闭提问、DSH 定时器、插件管理和 Web 交付卡片工具，并关闭 `subagent_fork`：fork 子 agent 继承父会话历史（含 `decision_id`）且不支持独立 preset，是唯一无法被 preset 收敛的委派入口，因此在 patch 里被 `disabled` 掉。`subagent`（spawn）保留。权限模式为 `danger-full-access`，即本机进程没有额外安全边界；服务端若请求审批，OpenViking SuperAgent 一律拒绝并记录。遥测关闭。工作区 AGENTS.md 和 DSH skills 保留，用户的全局 `~/.dsh`、`~/.agents` 不会混入。
+无人值守策略关闭提问、DSH 定时器、插件管理和 Web 交付卡片工具，并关闭 `subagent_fork`：fork 子 agent 继承父会话历史（含 `decision_id`）且不支持独立 preset，是唯一无法被 preset 收敛的委派入口，因此在 patch 里被 `disabled` 掉。`subagent`（spawn）保留。权限模式为 `danger-full-access`，即本机进程没有额外安全边界；服务端若请求审批，OpenViking SuperAgent 一律拒绝并记录。遥测关闭。工作区 AGENTS.md 保留，技能根由 setup 中勾选的目录决定（见「技能目录」）。
+
+## 技能目录
+
+setup 选择 DSH 后会先问配置目录，再按模式列出技能根供勾选。默认是独立模式，列出 6 个根，其中 `~/.agents/skills` 和 `~/.dsh/skills` 默认不勾选，其余 4 个默认勾选；共享模式列出 4 个根并默认全部勾选。已有实例可以在「修改实例 → DSH 配置与技能」里改模式和勾选；每次切换模式会按新模式的这套默认值初始化，再逐项调整。
+
+| 模式 | DSH_HOME / DSH_AGENTS_HOME | 可勾选的技能根 |
+|---|---|---|
+| 独立 `isolated` | `<dataDir>/dsh/home`、`<dataDir>/dsh/agents` | `<workspace>/.dsh/skills`、`<projectRoot>/.agents/skills`、`~/.agents/skills`、`~/.dsh/skills`、`<dataDir>/dsh/home/skills`、`<dataDir>/dsh/agents/skills` |
+| 共享 `shared` | `~/.dsh`、`~/.agents` | `<workspace>/.dsh/skills`、`<projectRoot>/.agents/skills`、`~/.agents/skills`、`~/.dsh/skills` |
+
+`projectRoot` 是最近的 `.git` 祖先，没有就用工作区；Windows 的 `~` 是当前运行账号的 home。manifest 保存 `dshHomeMode` 和逻辑根 ID 数组 `dshSkillRoots`，不写死工作区路径，所以之后修改 workspace 时根会跟着移动。缺省配置按独立模式启用 workspace、projectRoot 和实例数据目录下的 4 个根，不启用两个宿主根；`dshSkillRoots: []` 表示全部不启用。
+
+生成的 `skill-filesystem` 行会设 `includeDefaultRoots: false`，只把勾选项写进 `customSkillDirs`。这样 DSH 自己不会再把未勾选的项目根或用户根加回来。共享配置由本机 DSH 和其他工具共同使用，OpenViking SuperAgent 不创建也不修改这两个根目录的权限；`ov-superagent dsh model` 和运行时的模型设置、凭据路径都跟随同一模式。
+
+技能是目录包 `<name>/SKILL.md` 或平铺 `<name>.md`，`name` 必须是 kebab-case，frontmatter 至少要有 `name` 和 `description`。目录只扫一层，不递归 `**/SKILL.md`。注意是 `.agents/skills`（两个都复数），不是 `.agent/skill`。不存在的根目录会被探测，运行中新建也能被发现，不用重启。
 
 当前支持的上限锁定 0.2.x，因为 bridge 使用 SDK 的进程内 Agent API；版本低于 `0.2.2-rc.1` 或不带该 bridge 的 DSH 会在启动/握手时被拒绝。
 
