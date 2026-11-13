@@ -7,9 +7,10 @@ import { mount } from './helpers/module-dom.mjs';
 test('loading renders a skeleton that still states the state as text', async () => {
   const view = await mount(
     h(ExperienceDashboard, {
-      uri: 'loading-list',
-      kind: 'directory',
-      states: { list: { loading: true } },
+      uri: 'loading-sources',
+      kind: 'file',
+      tab: 'source',
+      states: { sources: { loading: true } },
     }),
   );
   try {
@@ -26,7 +27,54 @@ test('loading renders a skeleton that still states the state as text', async () 
       skeleton.querySelector('[role="status"]').textContent,
       'Loading…',
     );
-    assert.doesNotMatch(view.container.textContent, /No experiences/);
+    assert.doesNotMatch(view.container.textContent, /No source records/);
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('the directory table holds its page height with a table skeleton', async () => {
+  const view = await mount(
+    h(ExperienceDashboard, {
+      uri: 'loading-table',
+      kind: 'directory',
+      pageSize: 20,
+      states: { list: { loading: true } },
+    }),
+  );
+  try {
+    // 目录表用表格骨架：表头 + 每页行数。通用占位条只有一百多像素，20 行的表是
+    // 1700 多像素，数据到达时页面会突然长高。
+    //
+    // The directory table uses a table skeleton — a header plus one row per page slot.
+    // Generic bars are a hundred-odd pixels against 1700+ for 20 rows, so the page
+    // would jump when the data lands.
+    const table = view.container.querySelector(
+      '.ov-experience-dashboard__table-skeleton',
+    );
+    assert.ok(table, 'the directory view gets the table skeleton');
+    assert.equal(table.getAttribute('aria-busy'), 'true');
+    assert.equal(
+      table.querySelector('[role="status"]').textContent,
+      'Loading…',
+    );
+    assert.ok(
+      table.querySelector('.ov-experience-dashboard__table-skeleton-head'),
+      'the header row is drawn',
+    );
+    assert.equal(
+      table.querySelectorAll('.ov-experience-dashboard__table-skeleton-row')
+        .length,
+      20,
+      'one placeholder row per page slot',
+    );
+    // 通用骨架不该出现在目录视图里。
+    //
+    // The generic skeleton must not appear in the directory view.
+    assert.equal(
+      view.container.querySelector('.ov-experience-dashboard__skeleton'),
+      null,
+    );
   } finally {
     await view.unmount();
   }

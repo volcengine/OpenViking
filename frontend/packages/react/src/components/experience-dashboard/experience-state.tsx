@@ -37,6 +37,60 @@ export function ExperienceSkeleton({
 }
 
 /**
+ * 目录表的加载骨架：按真实表格的几何占位，表头 40 高、每行 82 高。
+ *
+ * 通用占位条撑不出表格的高度——四根 16 高的条只有 148px，而一页 20 行的表有
+ * 1702px，数据到达时整页会突然长高一大截，下面的内容被推走。这里照着表的行列
+ * 骨架画：一列序号、一列文件名、两列指标，行高与真表一致。
+ *
+ * The directory table's loading skeleton, holding the real table's geometry: a 40-high
+ * header and 82-high rows.
+ *
+ * Generic placeholder bars cannot hold a table's height — four 16-high bars are 148px
+ * against 1702px for a 20-row page — so the page jumps when the data lands and pushes
+ * everything below it down. This draws the table's own shape instead: the index, the
+ * file name and the two metrics, at the real row height.
+ */
+export function ExperienceTableSkeleton({
+  rows,
+  label,
+}: {
+  rows: number;
+  label: string;
+}) {
+  return (
+    <div className="ov-experience-dashboard__table-skeleton" aria-busy="true">
+      <span className="ov-experience-dashboard__sr-only" role="status">
+        {label}
+      </span>
+      <div aria-hidden="true">
+        <div className="ov-experience-dashboard__table-skeleton-head" />
+        {Array.from({ length: rows }, (_, index) => (
+          <div
+            key={index}
+            className="ov-experience-dashboard__table-skeleton-row"
+          >
+            <span>
+              <i />
+            </span>
+            <span>
+              <i />
+              <i />
+            </span>
+            <span>
+              <i />
+            </span>
+            <span>
+              <i />
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
  * 一个区域的状态：加载中给骨架，其余情况交给共享的空态与错误态。
  *
  * 把「加载中显示什么」收在一处，各区域只声明占位条数量，避免六处重复同一个

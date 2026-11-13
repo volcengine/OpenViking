@@ -18,47 +18,46 @@ const activeTitle = (view) =>
  * 让测试环境量出真实尺寸：jsdom 不做布局，元素的盒宽与偏移默认都是 0，而指示条
  * 的位置正是按标题的盒算出来的。这里给标题与页签栏按文档顺序摆出固定几何。
  *
+ * 每格的位置必须在 `place` 里**当场快照**：闭包读外层的 `left` 会让所有标题在
+ * 布局结束后都报告同一个位置，切换页签的断言于是恒等通过。
+ *
  * Give the environment real geometry: jsdom lays nothing out, so boxes are 0 wide and
  * unpositioned by default, while the indicator's position is computed from the title's
  * box. This places the titles and the bar in document order.
+ *
+ * Each box must snapshot its position inside `place`: a closure reading the outer `left`
+ * would report the same position for every title once layout finishes, which makes the
+ * tab-switch assertion pass no matter what the indicator does.
  */
 function layout(view) {
   const list = view.container.querySelector('.ov-experience-dashboard__tabs');
   const titles = [
     ...list.querySelectorAll('.ov-experience-dashboard__tab-title'),
   ];
-  let left = 0;
-  const place = (node, width) => {
-    node.getBoundingClientRect = () => ({
-      left,
-      right: left + width,
-      width,
-      top: 0,
-      bottom: 34,
-      height: 34,
-      x: left,
-      y: 0,
-      toJSON() {},
-    });
-    left += width;
-  };
-  list.getBoundingClientRect = () => ({
-    left: 0,
-    right: left,
-    width: left,
+  let cursor = 0;
+  const box = (left, width) => ({
+    left,
+    right: left + width,
+    width,
     top: 0,
     bottom: 34,
     height: 34,
-    x: 0,
+    x: left,
     y: 0,
     toJSON() {},
   });
-  // 图标与内边距各占 40，文字宽度按标题长度给一个固定值。
+  const place = (node, width) => {
+    const left = cursor;
+    cursor += width;
+    node.getBoundingClientRect = () => box(left, width);
+  };
+  // 每格：图标与内边距 40 + 文字 48 + 右边距 12。
   for (const title of titles) {
-    left += 40;
+    cursor += 40;
     place(title, 48);
-    left += 12;
+    cursor += 12;
   }
+  list.getBoundingClientRect = () => box(0, cursor);
   return { list, titles };
 }
 
@@ -141,10 +140,24 @@ test('the indicator stays out of the tree until a title has width', async () => 
 test('switching tabs moves the same indicator element', async () => {
   const view = await mount(render('indicator-switch'));
   try {
-    const { titles } = layout(view);
+    const { list, titles } = layout(view);
     await view.render(render('indicator-switch'));
     const before = indicator(view);
     assert.ok(before);
+    const offsetOf = () =>
+      Number.parseFloat(
+        list.style.getPropertyValue('--ov-experience-indicator-left'),
+      );
+    // 两个标题必须各自占一个不同的位置，否则下面的断言无论指示条动不动都成立。
+    //
+    // The two titles must sit at distinct positions, or the assertions below hold no
+    // matter what the indicator does.
+    const firstBox = titles[0].getBoundingClientRect();
+    const secondBox = titles[1].getBoundingClientRect();
+    assert.notEqual(firstBox.left, secondBox.left);
+    const firstOffset = offsetOf();
+    assert.equal(firstOffset, firstBox.left + firstBox.width / 2 - 8);
+
     const target = [...view.container.querySelectorAll('[role="tab"]')].find(
       (tab) => tab.getAttribute('aria-selected') !== 'true',
     );
@@ -155,14 +168,9 @@ test('switching tabs moves the same indicator element', async () => {
     // The bar holds a single indicator; a switch does not remount it, only its CSS
     // variable changes.
     assert.equal(after, before);
-    const list = view.container.querySelector('.ov-experience-dashboard__tabs');
-    const titleBox = titles[1].getBoundingClientRect();
-    assert.equal(
-      Number.parseFloat(
-        list.style.getPropertyValue('--ov-experience-indicator-left'),
-      ),
-      titleBox.left + titleBox.width / 2 - 8,
-    );
+    const secondOffset = offsetOf();
+    assert.equal(secondOffset, secondBox.left + secondBox.width / 2 - 8);
+    assert.notEqual(secondOffset, firstOffset, 'the bar actually moved');
   } finally {
     await view.unmount();
   }

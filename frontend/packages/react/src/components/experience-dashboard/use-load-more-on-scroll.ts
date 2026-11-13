@@ -51,6 +51,15 @@ export function useLoadMoreOnScroll({
   // The scroll position of the last request; `null` means it is re-armed and may ask
   // again.
   const requestedAt = useRef<number | null>(null);
+  // 上一次请求时的内容高度。成功追加会让它变大，那是「又有新内容可以往下翻」的
+  // 唯一信号：此时必须重新武装，否则用户直接滚到新底部时仍在触发区内、又没有往上
+  // 滚过，下一页就永远请求不到。
+  //
+  // The content height at the last request. A successful append grows it, and that is
+  // the only signal that there is fresh content below: re-arm on it, or scrolling
+  // straight to the new bottom — still inside the trigger zone, without having scrolled
+  // up — would never ask for the next page.
+  const requestedHeight = useRef(0);
   // 上一次滚动事件看到的位置，用来判断这次是在往回滚。
   //
   // The position the previous scroll event saw, used to tell whether this one moves up.
@@ -72,16 +81,21 @@ export function useLoadMoreOnScroll({
     if (!scroller) return undefined;
     const onScroll = () => {
       const top = scroller.scrollTop;
-      const distance = scroller.scrollHeight - top - scroller.clientHeight;
+      const height = scroller.scrollHeight;
+      const distance = height - top - scroller.clientHeight;
       const movingUp = top < previousTop.current;
       previousTop.current = top;
-      // 往回滚，或者已经离开触发区，都重新武装：请求失败后内容没有变高，只有让
-      // 用户回到同一位置还能再请求一次，否则「失败后重试同一页」只是一句空话。
+      // 三种情况重新武装：往回滚、离开触发区、内容变高了。前两种覆盖失败后的
+      // 重试（内容没变高，只能靠用户回到同一位置），第三种覆盖成功后接着往下翻。
       //
-      // Scrolling back up, or leaving the trigger zone, re-arms it: after a failure the
-      // content did not grow, so the only way "the next scroll retries the same page"
-      // holds is to let the same position ask again.
-      if (requestedAt.current !== null && (movingUp || distance > THRESHOLD))
+      // Three cases re-arm it: scrolling back up, leaving the trigger zone, and content
+      // growth. The first two cover retrying after a failure, where the content did not
+      // grow and only the user's return to the same place can ask again; the third
+      // covers paging on after a success.
+      if (
+        requestedAt.current !== null &&
+        (movingUp || distance > THRESHOLD || height > requestedHeight.current)
+      )
         requestedAt.current = null;
       // 往回滚不触发：重试发生在用户回到列表末尾时，而不是往上翻的过程中。
       //
@@ -90,6 +104,7 @@ export function useLoadMoreOnScroll({
       if (movingUp || distance > THRESHOLD || requestedAt.current !== null)
         return;
       requestedAt.current = top;
+      requestedHeight.current = height;
       onLoadMore();
     };
     scroller.addEventListener('scroll', onScroll, { passive: true });

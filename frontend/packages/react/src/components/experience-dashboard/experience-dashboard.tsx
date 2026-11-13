@@ -1,9 +1,13 @@
 import { useState } from 'react';
 
 import { useLocale } from '../../shared/locale-context.js';
+import { DashboardState } from '../../shared/dashboard/dashboard-state.js';
 import { DashboardTabs } from './dashboard-tabs.js';
 import { experienceLabels } from './labels.js';
-import { ExperienceQueryState } from './experience-state.js';
+import {
+  ExperienceQueryState,
+  ExperienceTableSkeleton,
+} from './experience-state.js';
 import { ExperienceImpact } from './experience-impact.js';
 import { ExperienceList } from './experience-list.js';
 import { ExperiencePagination } from './experience-pagination.js';
@@ -112,10 +116,16 @@ function ExperienceDashboardContent({
               labels={t}
               onOpenUri={onOpenUri}
             />
+          ) : states.list?.loading ? (
+            // 目录表用表格骨架占住整页高度；通用占位条只有一百多像素，数据到达时
+            // 页面会突然长高一截。
+            //
+            // The directory table holds a page's height with its own skeleton; generic
+            // bars are a hundred-odd pixels and the page jumps when data lands.
+            <ExperienceTableSkeleton rows={pageSize} label={t.loading} />
           ) : (
-            <ExperienceQueryState
+            <DashboardState
               state={states.list}
-              rows={4}
               empty={t.empty}
               loading={t.loading}
               failed={t.failed}

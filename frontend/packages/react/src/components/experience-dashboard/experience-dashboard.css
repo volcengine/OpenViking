@@ -207,6 +207,84 @@
   white-space: nowrap;
 }
 
+/* 目录表骨架：列宽、表头 40 与行高 82 都照真表，数据到达时高度不变。
+ *
+ * The directory table's skeleton: the same columns, 40-high header and 82-high rows as
+ * the real table, so the height does not change when the data lands.
+ */
+.ov-experience-dashboard__table-skeleton {
+  overflow-x: auto;
+  max-width: 100%;
+  border-radius: 12px;
+}
+
+.ov-experience-dashboard__table-skeleton > div {
+  min-width: 560px;
+  overflow: hidden;
+  border: 1px solid var(--ov-ui-experience-border);
+  border-radius: 12px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #fff));
+}
+
+.ov-experience-dashboard__table-skeleton-head {
+  height: 40px;
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default, #f7f8fd));
+}
+
+.ov-experience-dashboard__table-skeleton-row {
+  display: grid;
+  min-height: 82px;
+  align-items: center;
+  grid-template-columns: 60px minmax(180px, 1fr) 140px 140px;
+  border-top: 0.5px solid var(--ov-ui-experience-border);
+}
+
+.ov-experience-dashboard__table-skeleton-row > span {
+  display: flex;
+  padding: 0 16px;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 文件名那一列画两条：标题与 URI 元信息，和真表的行结构一致。 */
+/* The file-name column draws two bars — the title and the URI line — matching the
+ * real row's structure. */
+.ov-experience-dashboard__table-skeleton-row > span:nth-child(2) {
+  padding: 16px;
+}
+
+.ov-experience-dashboard__table-skeleton-row i {
+  display: block;
+  height: 14px;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    var(--ov-ui-experience-border) 25%,
+    var(--ov-ui-experience-card) 50%,
+    var(--ov-ui-experience-border) 75%
+  );
+  background-size: 200% 100%;
+  animation: ov-experience-shimmer 1.4s ease-in-out infinite;
+}
+
+.ov-experience-dashboard__table-skeleton-row i:last-child {
+  width: 60%;
+  height: 12px;
+}
+
+.ov-experience-dashboard__table-skeleton-row > span:first-child,
+.ov-experience-dashboard__table-skeleton-row > span:nth-child(3),
+.ov-experience-dashboard__table-skeleton-row > span:nth-child(4) {
+  align-items: flex-start;
+}
+
+.ov-experience-dashboard__table-skeleton-row > span:first-child i,
+.ov-experience-dashboard__table-skeleton-row > span:nth-child(3) i,
+.ov-experience-dashboard__table-skeleton-row > span:nth-child(4) i {
+  width: 32px;
+  height: 14px;
+}
+
 /* 应用效果：标题行 32 高，标题与说明间隔 12。 */
 .ov-experience-dashboard__heading {
   display: flex;

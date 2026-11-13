@@ -101,6 +101,64 @@ test('reaching the bottom of the timeline loads the next page, the button stays'
   }
 });
 
+test('a successful append re-arms without scrolling back up', async () => {
+  const pages = [];
+  const render = (data) =>
+    h(ExperienceDashboard, {
+      uri: 'scroll-grow',
+      kind: 'file',
+      data,
+      hasMore: true,
+      onLoadMore: () => pages.push('more'),
+    });
+  const row = (n) => ({
+    uri: `viking://user/a/memories/trajectories/t${n}.md`,
+    name: `T${n}`,
+  });
+  const view = await mount(render({}));
+  try {
+    const body = poseScroller(view);
+    await view.render(render({ trajectories: [row(0)], trajectoryTotal: 40 }));
+    // 在触发区内请求下一页。
+    //
+    // Ask for the next page from inside the trigger zone.
+    body.scrollTop = 400;
+    await act(async () => {
+      body.dispatchEvent(new window.Event('scroll'));
+    });
+    assert.deepEqual(pages, ['more']);
+
+    // 追加成功：内容变高，底部下移。用户不往回滚，直接滚到新的底部——此时仍在
+    // 触发区内，只有「内容变高」这一条能让它再请求一次。
+    //
+    // The append succeeds: the content grows and the end moves down. The user scrolls
+    // straight to the new bottom without going back up, staying inside the trigger zone;
+    // only the growth can let it ask again.
+    Object.defineProperty(body, 'scrollHeight', {
+      value: 1400,
+      configurable: true,
+    });
+    await view.render(
+      render({ trajectories: [row(0), row(1)], trajectoryTotal: 40 }),
+    );
+    body.scrollTop = 1000;
+    await act(async () => {
+      body.dispatchEvent(new window.Event('scroll'));
+    });
+    assert.deepEqual(pages, ['more', 'more']);
+
+    // 内容没再变高时，停在新的底部不会继续请求。
+    //
+    // With no further growth, resting at the new bottom does not keep asking.
+    await act(async () => {
+      body.dispatchEvent(new window.Event('scroll'));
+    });
+    assert.deepEqual(pages, ['more', 'more']);
+  } finally {
+    await view.unmount();
+  }
+});
+
 test('scrolling does not load when there is nothing more', async () => {
   const pages = [];
   const view = await mount(
