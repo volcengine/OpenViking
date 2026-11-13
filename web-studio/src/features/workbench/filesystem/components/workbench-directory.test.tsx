@@ -23,7 +23,7 @@ vi.mock('#/features/workbench/sessions/components/thread', () => ({
   ),
 }))
 vi.mock('#/features/workbench/agent-experience', () => ({
-  AgentExperienceRoute: () => <div data-testid="experiences" />,
+  AgentExperienceList: () => <div data-testid="experiences" />,
 }))
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -97,7 +97,7 @@ describe('workbench directory previews', () => {
     expect(onNavigate).toHaveBeenCalledWith(`${uri}default/`)
     expect(screen.getByRole('button', { name: 'review.md' })).toBeTruthy()
   })
-  it('uses the special experience list for a leaf directory', () => {
+  it('uses the shared experience list for a leaf directory', () => {
     const uri = 'viking://user/alice/memories/experiences/default/'
     list.mockReturnValue({
       data: { entries: [entry(`${uri}review.md`, 'review.md', false)] },

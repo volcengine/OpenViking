@@ -3,13 +3,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  buildCustomTimeRange,
   buildExperiencesUri,
-  formatFileSize,
-  formatTimestamp,
-  getExperienceDisplayName,
-  isExperienceUpdatedSinceLastSeen,
-  markExperiencesSeen,
   normalizeOutcomeDistribution,
   normalizeTrajectoryPage,
   resolveTimeRange,
@@ -38,27 +32,6 @@ describe('buildExperiencesUri', () => {
     expect(buildExperiencesUri('  ')).toBe(
       'viking://user/default/memories/experiences',
     )
-  })
-})
-
-describe('getExperienceDisplayName', () => {
-  it('strips the markdown extension from the file name', () => {
-    expect(
-      getExperienceDisplayName(
-        'viking://user/default/memories/experiences/exchange.md',
-      ),
-    ).toBe('exchange')
-    expect(
-      getExperienceDisplayName(
-        'viking://user/default/memories/exchanges/Refund_Flow.MD',
-      ),
-    ).toBe('Refund_Flow')
-  })
-
-  it('returns the raw segment when there is no extension', () => {
-    expect(
-      getExperienceDisplayName('viking://user/default/memories/experiences/x'),
-    ).toBe('x')
   })
 })
 
@@ -160,129 +133,14 @@ describe('normalizeOutcomeDistribution', () => {
 })
 
 describe('resolveTimeRange', () => {
-  it('disables filtering for the all preset', () => {
-    expect(resolveTimeRange('all', new Date('2026-08-15T12:00:00Z'))).toEqual({
-      preset: 'all',
+  it('omits date bounds for all time', () => {
+    expect(resolveTimeRange(0)).toEqual({})
+  })
+
+  it('uses inclusive UTC days across a month boundary', () => {
+    expect(resolveTimeRange(3, new Date('2026-09-01T22:00:00Z'))).toEqual({
+      startDate: '2026-08-30',
+      endDate: '2026-09-01',
     })
-  })
-
-  it('returns no bounds for the custom preset', () => {
-    expect(resolveTimeRange('custom')).toEqual({ preset: 'custom' })
-  })
-
-  it('computes inclusive UTC bounds for the 7d preset', () => {
-    expect(resolveTimeRange('7d', new Date('2026-08-15T12:00:00Z'))).toEqual({
-      preset: '7d',
-      startDate: '2026-08-09',
-      endDate: '2026-08-15',
-    })
-  })
-
-  it('computes inclusive UTC bounds for the 30d preset', () => {
-    expect(resolveTimeRange('30d', new Date('2026-08-15T12:00:00Z'))).toEqual({
-      preset: '30d',
-      startDate: '2026-07-17',
-      endDate: '2026-08-15',
-    })
-  })
-
-  it('handles month boundaries', () => {
-    expect(resolveTimeRange('7d', new Date('2026-09-03T23:59:59Z'))).toEqual({
-      preset: '7d',
-      startDate: '2026-08-28',
-      endDate: '2026-09-03',
-    })
-  })
-})
-
-describe('buildCustomTimeRange', () => {
-  it('builds a range from both bounds', () => {
-    expect(buildCustomTimeRange('2026-08-01', '2026-08-10')).toEqual({
-      range: { preset: 'all', startDate: '2026-08-01', endDate: '2026-08-10' },
-    })
-  })
-
-  it('supports an open-ended start bound only', () => {
-    expect(buildCustomTimeRange('2026-08-01', '')).toEqual({
-      range: { preset: 'all', startDate: '2026-08-01' },
-    })
-  })
-
-  it('supports an open-ended end bound only', () => {
-    expect(buildCustomTimeRange('', '2026-08-10')).toEqual({
-      range: { preset: 'all', endDate: '2026-08-10' },
-    })
-  })
-
-  it('rejects invalid formats', () => {
-    expect(buildCustomTimeRange('2026/08/01', '2026-08-10')).toEqual({
-      error: 'invalid',
-    })
-    expect(buildCustomTimeRange('2026-13-01', '')).toEqual({
-      error: 'invalid',
-    })
-    expect(buildCustomTimeRange('', '')).toEqual({ error: 'invalid' })
-  })
-
-  it('rejects reversed ranges', () => {
-    expect(buildCustomTimeRange('2026-08-10', '2026-08-01')).toEqual({
-      error: 'order',
-    })
-  })
-})
-
-describe('last-seen tracking', () => {
-  it('reports unseen experiences as updated until marked seen', () => {
-    expect(
-      isExperienceUpdatedSinceLastSeen(
-        'viking://user/u/memories/experiences/e.md',
-        '2026-08-05T02:00:00Z',
-      ),
-    ).toBe(true)
-
-    markExperiencesSeen([{ uri: 'viking://user/u/memories/experiences/e.md' }])
-
-    expect(
-      isExperienceUpdatedSinceLastSeen(
-        'viking://user/u/memories/experiences/e.md',
-        '2026-08-05T02:00:00Z',
-      ),
-    ).toBe(false)
-    expect(
-      isExperienceUpdatedSinceLastSeen(
-        'viking://user/u/memories/experiences/e.md',
-        undefined,
-      ),
-    ).toBe(false)
-  })
-})
-
-describe('formatTimestamp', () => {
-  it('formats parseable timestamps', () => {
-    const formatted = formatTimestamp('2026-08-05T02:00:00Z', 'zh-CN')
-    expect(formatted).toBeTruthy()
-    expect(formatTimestamp('2026-08-05T02:00:00Z', 'zh-CN')).toBe(formatted)
-  })
-
-  it('returns undefined for missing or invalid values', () => {
-    expect(formatTimestamp(undefined, 'zh-CN')).toBeUndefined()
-    expect(formatTimestamp('', 'zh-CN')).toBeUndefined()
-    expect(formatTimestamp('not-a-date', 'zh-CN')).toBeUndefined()
-  })
-})
-
-describe('formatFileSize', () => {
-  it('formats bytes, kilobytes and megabytes', () => {
-    expect(formatFileSize(0)).toBe('0 B')
-    expect(formatFileSize(512)).toBe('512 B')
-    expect(formatFileSize(2048)).toBe('2 KB')
-    expect(formatFileSize(1024 * 1024)).toBe('1 MB')
-    expect(formatFileSize(1024 * 1024 * 1024)).toBe('1 GB')
-  })
-
-  it('returns undefined for missing or invalid sizes', () => {
-    expect(formatFileSize(undefined)).toBeUndefined()
-    expect(formatFileSize(-1)).toBeUndefined()
-    expect(formatFileSize(Number.NaN)).toBeUndefined()
   })
 })

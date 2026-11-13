@@ -3,7 +3,6 @@ import { StudioHeaderActions } from '#/app/layouts/studio-header-actions'
 import { useQueryClient } from '@tanstack/react-query'
 import styles from './workbench.module.css'
 import { WorkbenchDirectory } from './components/workbench-directory'
-import { ExperienceDetail } from '#/features/workbench/agent-experience/$experienceUri'
 import {
   needsExperienceDetailTab,
   isSystemUri,
@@ -14,6 +13,7 @@ import { showErrorToast } from '#/shared/lib/error-toast'
 import { getRouteApi, useNavigate, useBlocker } from '@tanstack/react-router'
 import {
   GalleryVerticalEndIcon,
+  BarChart3Icon,
   PencilIcon,
   ArrowLeftIcon,
   HistoryIcon,
@@ -198,19 +198,13 @@ function FilesystemWorkbench() {
   const { activeTaskCount, hasActiveTasks, isRefreshingTasks } =
     useResourceUpload()
   const { invalidateAll, invalidateList } = useInvalidateVikingFs()
-  const handleDocumentSaved = useCallback(
-    (uri: string) => {
-      void queryClient.invalidateQueries({
-        queryKey: ['agent-experience-content', identityScopeKey, uri],
-      })
-      void queryClient.invalidateQueries({
-        queryKey: ['agent-experience-list', identityScopeKey],
-      })
-      refreshBrowser()
-      void invalidateAll()
-    },
-    [identityScopeKey, queryClient, invalidateAll, refreshBrowser],
-  )
+  const handleDocumentSaved = useCallback(() => {
+    void queryClient.invalidateQueries({
+      queryKey: ['agent-experience-list', identityScopeKey],
+    })
+    refreshBrowser()
+    void invalidateAll()
+  }, [identityScopeKey, queryClient, invalidateAll, refreshBrowser])
 
   const syncSearch = useCallback(
     (next: {
@@ -394,11 +388,9 @@ function FilesystemWorkbench() {
     /\.(?:md|json|jsonl|txt|yaml|yml)$/i.test(selectedUri)
   const resourceDialogTitle = specialDirectory
     ? t('ide.directoryContents')
-    : specialExperience
-      ? t('ide.experienceDetails')
-      : structuredFile
-        ? t('ide.structuredPreview')
-        : t('resources:filePreview.edit')
+    : structuredFile
+      ? t('ide.structuredPreview')
+      : t('resources:filePreview.edit')
   const layoutStyle = useMemo(
     () =>
       ({
@@ -467,12 +459,24 @@ function FilesystemWorkbench() {
   }, [])
 
   const resourceActions: FilePreviewAction[] = []
-  if (specialDirectory || specialExperience || (structuredFile && !canEditFile)) {
+  if (specialDirectory || (structuredFile && !canEditFile)) {
     resourceActions.push({
       key: 'studio-resource-detail',
       icon: <PencilIcon size={16} />,
       label: resourceDialogTitle,
       onClick: () => setResourceDialogOpen(true),
+    })
+  }
+  if (specialExperience) {
+    resourceActions.push({
+      key: 'studio-experience-detail',
+      icon: <BarChart3Icon size={16} />,
+      label: t('ide.experienceDetails'),
+      onClick: () =>
+        navigate({
+          to: '/agent-experience/$experienceUri',
+          params: { experienceUri: selectedUri },
+        }),
     })
   }
   resourceActions.push({
@@ -713,8 +717,6 @@ function FilesystemWorkbench() {
                   uri={selectedUri}
                   onNavigate={openExternalResource}
                 />
-              ) : specialExperience ? (
-                <ExperienceDetail experienceUri={selectedUri} embedded />
               ) : (
                 <SharedFilePreview
                   file={selectedFile}

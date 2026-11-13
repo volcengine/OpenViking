@@ -2,6 +2,8 @@ import {
   JsonlPreview,
   StudioMarkdownPreview,
   memoryFieldsDisplayContent,
+  resolveMarkdownAssetTarget,
+  toDownloadUrl,
 } from '#/features/workbench/resources/components/structured-file-content'
 import { FilePreview } from '@openviking/react/components/file-preview'
 import type {
@@ -25,6 +27,7 @@ import {
   fetchFileContent,
   saveFileContent,
 } from '#/features/workbench/resources/lib/api'
+import { isDirectorySemanticSidecarUri } from '#/shared/lib/viking-uri'
 import { useInvalidateVikingFs } from '#/features/workbench/resources/hooks/viking-fm'
 import { getContentDownload } from '#/shared/api/ov-client'
 import { copyTextToClipboard } from '#/shared/lib/clipboard'
@@ -146,20 +149,28 @@ export function SharedFilePreview({
       onDirtyChange(false)
     }
   }, [currentScope, onDirtyChange])
+  const openUri = async (href: string) => {
+    const target = resolveMarkdownAssetTarget(href, file.uri)
+    if (target?.kind === 'viking') {
+      if (onNavigate) onNavigate(target.value)
+      else
+        window.open(
+          toDownloadUrl(target.value),
+          '_blank',
+          'noopener,noreferrer',
+        )
+    } else if (
+      target?.kind === 'external' &&
+      !/^(data|blob):/i.test(target.value)
+    ) {
+      window.open(target.value, '_blank', 'noopener,noreferrer')
+    } else if (href.startsWith('#')) {
+      window.location.hash = href
+    }
+  }
   const operations = {
-    openParent: async (uri: string) => {
-      onNavigate?.(uri)
-    },
-    openUri: async (uri: string) => {
-      if (uri.startsWith('viking://')) onNavigate?.(uri)
-      else if (/^https?:\/\//i.test(uri))
-        window.open(uri, '_blank', 'noopener,noreferrer')
-      else if (!/^[a-z][a-z\d+.-]*:/i.test(uri) && !uri.startsWith('#')) {
-        const base = new URL(file.uri.replace('viking://', 'https://viking/'))
-        const next = new URL(uri, base)
-        onNavigate?.(`viking://${next.pathname.replace(/^\//, '')}`)
-      }
-    },
+    openParent: onNavigate ? async (uri: string) => onNavigate(uri) : undefined,
+    openUri: kind === 'markdown' ? openUri : undefined,
   }
   const summaries =
     query.data && 'abstract' in query.data ? query.data : undefined
@@ -175,10 +186,18 @@ export function SharedFilePreview({
     fileText !== undefined && kind === 'markdown'
       ? memoryFieldsDisplayContent(fileText)
       : fileText
+  // The shared Markdown renderer filters viking links and owns image clicks.
+  // Keep those documents, embedded HTML and Studio metadata on the existing view.
+  const customMarkdown =
+    kind === 'markdown' &&
+    (isDirectorySemanticSidecarUri(file.uri) ||
+      /viking:\/\/|!\[|<\/?[a-z][\w-]*(?:[\s/>]|$)|^[ \t]*(?:`{3,}|~{3,})[ \t]*mermaid\b/im.test(
+        displayText ?? '',
+      ))
   const customFilePreview =
     !file.isDir &&
     fileText !== undefined &&
-    (kind === 'jsonl' || kind === 'markdown')
+    (kind === 'jsonl' || customMarkdown)
   const copy = async (value: string | undefined) => {
     if (!value) return false
     try {
@@ -461,7 +480,11 @@ export function SharedFilePreview({
       ...common,
       kind: 'file',
       operations,
-      slots: { actions: renderActions },
+      actions: (actions) => {
+        actionsRef.current = actions
+        return []
+      },
+      slots: { extraActions },
       loading: query.isPending,
       source: nativeSource,
       editing: editing
@@ -512,7 +535,10 @@ export function SharedFilePreview({
         locale={i18n.language.startsWith('zh') ? 'zh-CN' : 'en-US'}
         labels={{
           copyPath: t('filesystem:copyUri'),
+          edit: t('filePreview.edit'),
           editor: t('filePreview.edit'),
+          save: t('filePreview.save'),
+          leaveEditing: t('filePreview.cancel'),
           retry: t('filesystem:agent.retry'),
           saveFailed: t('filePreview.saveFailed'),
           loading: t('filePreview.loadingEditor'),

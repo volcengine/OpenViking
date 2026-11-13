@@ -6,11 +6,13 @@ export function isExperienceDirectory(uri: string): boolean {
 }
 
 export function needsExperienceDetailTab(uri: string): boolean {
-  // FileBrowser already supplies the board for direct user experience files.
+  // FileBrowser already supplies the board for direct user and peer experience files.
   return (
     isExperienceDirectory(uri) &&
     /\.md$/i.test(uri) &&
-    !/^viking:\/\/user\/[^/]+\/memories\/experiences\/[^/]+\.md$/i.test(uri)
+    !/^viking:\/\/user\/[^/]+(?:\/peers\/[^/]+)?\/memories\/experiences\/[^/]+\.md$/i.test(
+      uri,
+    )
   )
 }
 

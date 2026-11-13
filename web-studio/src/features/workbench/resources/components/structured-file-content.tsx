@@ -175,7 +175,7 @@ type JsonlMessage = {
   toolShape: 'call' | 'none' | 'result'
 }
 
-function toDownloadUrl(vikingUri: string): string {
+export function toDownloadUrl(vikingUri: string): string {
   const query: ContentDownloadQuery = { uri: vikingUri }
   return client.buildUrl({
     baseURL: ovClient.getOptions().baseUrl,
@@ -241,10 +241,10 @@ function safeDecodeUri(value: string): string {
   }
 }
 
-function resolveMarkdownAssetTarget(
+export function resolveMarkdownAssetTarget(
   assetPath: string,
   fileUri: string,
-): MarkdownAssetTarget {
+): MarkdownAssetTarget | null {
   const trimmed = assetPath.trim()
   if (!trimmed || trimmed.startsWith('#')) {
     return { kind: 'raw', value: trimmed }
@@ -253,6 +253,10 @@ function resolveMarkdownAssetTarget(
   if (/^(https?:|data:|blob:|mailto:|tel:)/i.test(trimmed)) {
     return { kind: 'external', value: trimmed }
   }
+
+  if (trimmed.startsWith('//')) return { kind: 'external', value: trimmed }
+  if (!trimmed.startsWith(vikingPrefix) && /^[a-z][a-z\d+.-]*:/i.test(trimmed))
+    return null
 
   // Split URL components before decoding; %23 is literal filename data.
   const decoded = safeDecodeUri(trimmed.split(/[?#]/, 1)[0])

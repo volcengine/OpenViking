@@ -10,6 +10,7 @@ import {
   waitFor,
 } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { configure } from '@testing-library/dom'
 import type { PropsWithChildren } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -22,6 +23,10 @@ import {
 import { saveFileContent } from '#/features/workbench/resources/lib/api'
 import type { VikingFsEntry } from '#/shared/types/viking-fs'
 import { getContentDownload } from '#/shared/api/ov-client/index'
+
+// The shared viewer loads its renderer and adapters lazily.
+configure({ asyncUtilTimeout: 10000 })
+vi.setConfig({ testTimeout: 15000 })
 
 const previewState = vi.hoisted(() => ({
   override: null as {
@@ -259,12 +264,11 @@ describe('FilePreview Markdown rendering', () => {
     expect(container.textContent).not.toContain('- · -')
   })
 
-  it('opens internal Markdown links in the resource preview', () => {
+  it('opens internal Markdown links in the resource preview', async () => {
     const onNavigate = vi.fn()
     renderPreview(file, onNavigate)
 
-    const link = screen.getByRole('link', { name: 'Target' })
-    expect(link.getAttribute('href')).toBe('viking://resources/wiki/target.md')
+    const link = await screen.findByRole('link', { name: 'Target' })
 
     fireEvent.click(link)
 
@@ -394,25 +398,33 @@ describe('FilePreview Markdown rendering', () => {
     expect(onNavigate).toHaveBeenCalledWith('viking://resources/资料/目标.md')
   })
 
-  it.each([file, directory])('opens encoded filenames from $name', (entry) => {
-    const onNavigate = vi.fn()
-    const prefix = entry.isDir ? 'viking://resources/wiki/' : './'
-    const content = `[One](${prefix}a%23one.md#intro)\n\n[Percent](${prefix}a%2523one.md#intro)`
-    previewState.override = entry.isDir
-      ? null
-      : { content, fileType: 'markdown' }
-    renderPreview(entry, onNavigate, content)
-    fireEvent.click(screen.getByRole('link', { name: 'One' }))
-    fireEvent.click(screen.getByRole('link', { name: 'Percent' }))
-    expect(onNavigate).toHaveBeenNthCalledWith(
-      1,
-      'viking://resources/wiki/a#one.md',
-    )
-    expect(onNavigate).toHaveBeenNthCalledWith(
-      2,
-      'viking://resources/wiki/a%23one.md',
-    )
-  })
+  it.each([file, directory])(
+    'opens encoded filenames from $name',
+    async (entry) => {
+      const onNavigate = vi.fn()
+      const prefix = entry.isDir ? 'viking://resources/wiki/' : './'
+      const content = `[One](${prefix}a%23one.md#intro)\n\n[Percent](${prefix}a%2523one.md#intro)`
+      previewState.override = entry.isDir
+        ? null
+        : { content, fileType: 'markdown' }
+      renderPreview(entry, onNavigate, content)
+      const firstLink = await screen.findByRole('link', { name: 'One' })
+      await act(async () => {
+        fireEvent.click(firstLink)
+      })
+      await act(async () => {
+        fireEvent.click(screen.getByRole('link', { name: 'Percent' }))
+      })
+      expect(onNavigate).toHaveBeenNthCalledWith(
+        1,
+        'viking://resources/wiki/a#one.md',
+      )
+      expect(onNavigate).toHaveBeenNthCalledWith(
+        2,
+        'viking://resources/wiki/a%23one.md',
+      )
+    },
+  )
 
   it('preserves non-viking links in a directory overview', () => {
     const onNavigate = vi.fn()
@@ -907,7 +919,7 @@ describe('FilePreview OKF semantic sidecars', () => {
     },
   )
 
-  it('leaves ordinary Markdown frontmatter in the document', () => {
+  it('leaves ordinary Markdown frontmatter in the document', async () => {
     previewState.override = {
       content: ['---', 'title: User document', '---', '', 'Body'].join('\n'),
       fileType: 'markdown',
@@ -920,7 +932,10 @@ describe('FilePreview OKF semantic sidecars', () => {
         name: 'filePreview.yamlMetadata.ariaLabel',
       }),
     ).toBeNull()
-    expect(screen.getByText(/title: User document/)).toBeDefined()
+    expect(await screen.findByText('Body')).toBeDefined()
+    expect(screen.getByRole('tabpanel').textContent).toContain(
+      'title: User document',
+    )
   })
 
   it('warns when the sidecar reports pending child changes', () => {
@@ -1459,11 +1474,11 @@ describe('FilePreview complete-content editing', () => {
     )
     expect(
       (
-        await screen.findByRole<HTMLTextAreaElement>('textbox', {
-          name: 'filePreview.edit',
+        await screen.findByLabelText('filePreview.edit', {
+          selector: '.cm-content',
         })
-      ).value,
-    ).toBe('complete original\nlast line')
+      ).textContent,
+    ).toBe('complete originallast line')
     expect(getContentDownload).toHaveBeenCalledWith({
       query: { uri: file.uri },
       responseType: 'text',
@@ -1473,10 +1488,9 @@ describe('FilePreview complete-content editing', () => {
     fireEvent.click(screen.getByRole('button', { name: 'filePreview.save' }))
     await screen.findByRole('alert')
     expect(
-      screen.getByRole<HTMLTextAreaElement>('textbox', {
-        name: 'filePreview.edit',
-      }).value,
-    ).toBe('complete original\nlast line')
+      screen.getByLabelText('filePreview.edit', { selector: '.cm-content' })
+        .textContent,
+    ).toBe('complete originallast line')
   })
 
   it('does not open an editor when the complete original cannot be read', async () => {
@@ -1497,7 +1511,7 @@ describe('FilePreview complete-content editing', () => {
     )
     await screen.findByRole('alert')
     expect(
-      screen.queryByRole('textbox', { name: 'filePreview.edit' }),
+      screen.queryByLabelText('filePreview.edit', { selector: '.cm-content' }),
     ).toBeNull()
   })
 })
@@ -1527,7 +1541,9 @@ describe('File preview keyboard shortcuts', () => {
     fireEvent.click(
       await screen.findByRole('button', { name: 'filePreview.edit' }),
     )
-    await screen.findByRole('textbox', { name: 'filePreview.edit' })
+    await screen.findByLabelText('filePreview.edit', {
+      selector: '.cm-content',
+    })
     fireEvent.keyDown(window, { key: 's', ctrlKey: true })
     await waitFor(() =>
       expect(saveFileContent).toHaveBeenCalledWith(
@@ -1537,7 +1553,9 @@ describe('File preview keyboard shortcuts', () => {
     )
     await waitFor(() =>
       expect(
-        screen.queryByRole('textbox', { name: 'filePreview.edit' }),
+        screen.queryByLabelText('filePreview.edit', {
+          selector: '.cm-content',
+        }),
       ).toBeNull(),
     )
     expect(

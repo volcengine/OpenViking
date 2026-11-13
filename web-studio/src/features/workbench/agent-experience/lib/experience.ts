@@ -3,7 +3,6 @@ import type {
   OutcomeCount,
   OutcomeDistribution,
   TimeRange,
-  TimeRangePreset,
   TrajectoryItem,
   TrajectoryOutcome,
   TrajectoryPage,
@@ -20,26 +19,12 @@ export const TRAJECTORY_OUTCOMES: readonly TrajectoryOutcome[] = [
   'unfinished',
 ]
 
-export const OUTCOME_COLORS: Record<TrajectoryOutcome, string> = {
-  success: 'bg-emerald-500',
-  failure: 'bg-rose-500',
-  partial: 'bg-amber-500',
-  unknown: 'bg-zinc-400',
-  unfinished: 'bg-sky-500',
-}
-
 export const DEFAULT_TRAJECTORY_PAGE_SIZE = 20
 
 /** Build the experiences directory URI for a given user id. */
 export function buildExperiencesUri(userId: string): string {
   const normalized = userId.trim() || 'default'
   return `viking://user/${encodeURIComponent(normalized)}/${EXPERIENCES_DIRECTORY}`
-}
-
-/** Extract a display name from an experience URI (`exchange.md` -> `exchange`). */
-export function getExperienceDisplayName(uri: string): string {
-  const fileName = uri.split('/').filter(Boolean).pop() ?? uri
-  return fileName.replace(/\.md$/i, '')
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -91,6 +76,9 @@ export function normalizeTrajectoryPage(
         description: readString(item.description),
         created_at: readString(item.created_at),
         updated_at: readString(item.updated_at),
+        outcome: TRAJECTORY_OUTCOMES.find(
+          (outcome) => outcome === item.outcome,
+        ),
       } satisfies TrajectoryItem,
     ]
   })
@@ -143,66 +131,15 @@ export function normalizeOutcomeDistribution(
   }
 }
 
-function toUtcDate(date: Date): string {
-  return date.toISOString().slice(0, 10)
-}
-
-/**
- * Resolve a quick time-range preset into UTC `YYYY-MM-DD` bounds.
- *
- * The Agent Evolution API filters trajectories by their UTC creation date, so
- * presets are computed in UTC as well. `all` disables filtering; `custom` is
- * built by {@link buildCustomTimeRange} and returns no bounds here.
- */
-export function resolveTimeRange(
-  preset: TimeRangePreset,
-  now: Date = new Date(),
-): TimeRange {
-  if (preset === 'all' || preset === 'custom') {
-    return { preset }
-  }
-
-  const days = preset === '7d' ? 7 : 30
-  const end = new Date(now)
+/** The server filters using inclusive UTC dates. Zero means all time. */
+export function resolveTimeRange(days: number, now = new Date()): TimeRange {
+  if (days <= 0) return {}
   const start = new Date(now)
   start.setUTCDate(start.getUTCDate() - (days - 1))
-
   return {
-    preset,
-    startDate: toUtcDate(start),
-    endDate: toUtcDate(end),
+    startDate: start.toISOString().slice(0, 10),
+    endDate: now.toISOString().slice(0, 10),
   }
-}
-
-/** Format an ISO-ish timestamp for list display; returns `undefined` on garbage input. */
-export function formatTimestamp(
-  value: string | undefined,
-  locale: string,
-): string | undefined {
-  if (!value) return undefined
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return undefined
-
-  return new Intl.DateTimeFormat(locale, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(date)
-}
-
-/** Human readable file size for the experience list. */
-export function formatFileSize(size: number | undefined): string | undefined {
-  if (size === undefined || !Number.isFinite(size) || size < 0) return undefined
-  if (size < 1024) return `${size} B`
-
-  const units = ['KB', 'MB', 'GB']
-  let value = size
-  let unit = 'B'
-  for (const next of units) {
-    if (value < 1024) break
-    value /= 1024
-    unit = next
-  }
-  return `${value >= 10 ? Math.round(value) : Math.round(value * 10) / 10} ${unit}`
 }
 
 export type SourceTrajectoryLink = {
@@ -235,94 +172,4 @@ export function normalizeSourceTrajectoryLinks(
     const reason = readString(link?.description) ?? readString(link?.match_text)
     return [{ uri, reason } satisfies SourceTrajectoryLink]
   })
-}
-
-/** Local-storage key tracking the last time each experience was seen. */
-const EXPERIENCE_LAST_SEEN_KEY = 'ov_agent_experience_last_seen'
-
-type LastSeenMap = Record<string, number>
-
-function readLastSeenMap(): LastSeenMap {
-  if (typeof window === 'undefined') return {}
-  try {
-    const raw = window.localStorage.getItem(EXPERIENCE_LAST_SEEN_KEY)
-    const parsed = raw ? (JSON.parse(raw) as unknown) : {}
-    return isRecord(parsed)
-      ? Object.fromEntries(
-          Object.entries(parsed).flatMap(([uri, value]) =>
-            typeof value === 'number' ? [[uri, value] as const] : [],
-          ),
-        )
-      : {}
-  } catch {
-    return {}
-  }
-}
-
-function writeLastSeenMap(map: LastSeenMap): void {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.setItem(EXPERIENCE_LAST_SEEN_KEY, JSON.stringify(map))
-  } catch {
-    // Ignore storage failures (private mode, quota).
-  }
-}
-
-/** Whether an experience was updated after the caller last saw it. */
-export function isExperienceUpdatedSinceLastSeen(
-  uri: string,
-  modTime: string | undefined,
-): boolean {
-  if (!modTime) return false
-  const updated = new Date(modTime).getTime()
-  if (Number.isNaN(updated)) return false
-  const map = readLastSeenMap()
-  if (!Object.prototype.hasOwnProperty.call(map, uri)) return true
-  return updated > map[uri]
-}
-
-/** Record "now" as the last-seen time for the given experiences. */
-export function markExperiencesSeen(entries: readonly { uri: string }[]): void {
-  if (entries.length === 0) return
-  const map = readLastSeenMap()
-  const now = Date.now()
-  for (const entry of entries) {
-    map[entry.uri] = now
-  }
-  writeLastSeenMap(map)
-}
-
-/** Parse a `YYYY-MM-DD` string; returns `undefined` when invalid. */
-export function parseUtcDate(value: string): Date | undefined {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value.trim())) return undefined
-  const date = new Date(`${value.trim()}T00:00:00Z`)
-  return Number.isNaN(date.getTime()) ? undefined : date
-}
-
-/**
- * Build a custom time range from user-provided UTC dates.
- *
- * Returns an error key when the combination is invalid, so callers can
- * surface inline validation instead of firing a bad request.
- */
-export function buildCustomTimeRange(
-  startDate: string,
-  endDate: string,
-): { error?: 'invalid' | 'order'; range?: TimeRange } {
-  const start = parseUtcDate(startDate)
-  const end = parseUtcDate(endDate)
-  const rawStart = startDate.trim()
-  const rawEnd = endDate.trim()
-
-  if ((rawStart && !start) || (rawEnd && !end)) return { error: 'invalid' }
-  if (!rawStart && !rawEnd) return { error: 'invalid' }
-  if (start && end && start > end) return { error: 'order' }
-
-  return {
-    range: {
-      preset: 'all',
-      startDate: rawStart || undefined,
-      endDate: rawEnd || undefined,
-    },
-  }
 }

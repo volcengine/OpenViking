@@ -48,7 +48,7 @@ describe('IDE document views', () => {
       needsExperienceDetailTab(
         'viking://user/alice/peers/project/memories/experiences/review.md',
       ),
-    ).toBe(true)
+    ).toBe(false)
     expect(
       needsExperienceDetailTab(
         'viking://agent/memories/experiences/nested/review.md',

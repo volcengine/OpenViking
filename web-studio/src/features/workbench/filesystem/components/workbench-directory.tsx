@@ -8,7 +8,7 @@ import {
   FolderIcon,
   LoaderCircleIcon,
 } from 'lucide-react'
-import { AgentExperienceRoute } from '#/features/workbench/agent-experience'
+import { AgentExperienceList } from '#/features/workbench/agent-experience'
 import { Thread } from '#/features/workbench/sessions/components/thread'
 import { useVikingFsList } from '#/features/workbench/resources/hooks/viking-fm'
 import { Button } from '#/shared/ui/button'
@@ -51,11 +51,10 @@ export function WorkbenchDirectory({
   )
     return (
       <div className={styles.directory}>
-        <AgentExperienceRoute
+        <AgentExperienceList
           key={uri}
           directoryUri={uri.replace(/\/$/, '')}
           onOpenFile={onNavigate}
-          embedded
         />
       </div>
     )

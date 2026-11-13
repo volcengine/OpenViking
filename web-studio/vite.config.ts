@@ -45,6 +45,18 @@ const config = defineConfig({
   ],
   test: {
     setupFiles: ['./src/test/setup.ts'],
+    server: {
+      deps: { inline: [/@ark-design\/ui/, /@arco-design\/web-react/] },
+    },
+    alias: [
+      {
+        find: /^@arco-design\/web-react$/,
+        replacement: new URL(
+          '../frontend/node_modules/@arco-design/web-react/es/index.js',
+          import.meta.url,
+        ).pathname,
+      },
+    ],
   },
 })
 
