@@ -2,14 +2,15 @@
 
 English / [中文](README_CN.md)
 
-OpenViking request client, exported from `@openviking/react/client`. It ships a `fetch`-based transport and the React Provider that hands configuration to the modules.
+The OpenViking request client, exported from `@openviking/react/client`: a `fetch`-based client for the native OpenViking API, and `OpenVikingProvider`, which hands its configuration to the blocks.
 
 ## Using it
 
-A host configures the Provider once at the application root. It passes values, never headers:
+Configure the Provider once at the application root. You pass values, never headers:
 
 ```tsx
 import { OpenVikingProvider } from '@openviking/react/client';
+import { FileBrowser } from '@openviking/react/modules/file-browser';
 
 <OpenVikingProvider
   baseURL="https://ov.example.com/gateway/openviking"
@@ -17,34 +18,34 @@ import { OpenVikingProvider } from '@openviking/react/client';
   userId={userId}
   resourceId={libraryId}
 >
-  <FileBrowser locale="en-US" />
+  <FileBrowser />
 </OpenVikingProvider>;
 ```
 
-The open-source edition adds `apiKey`; the commercial edition authenticates with the browser cookie, so it omits `apiKey`. `credentials` defaults to `include` and can be omitted for cross-origin calls too. Server CORS and browser cookie policies still apply.
+The open-source edition also passes `apiKey`; the commercial edition authenticates with the browser cookie and omits it. `credentials` defaults to `include`, including for cross-origin requests, and server CORS and browser cookie policies still apply.
 
-Mounting the Provider sends no request and reads no credential stored in the browser.
+Mounting the Provider sends no request and reads no credential stored in the browser. Its `locale` sets the interface language of the subtree, see [Internationalization](../../../../docs/docs/en/guide/i18n.mdx).
 
 ## Configuration fields
 
-Every field is a value. The Client assembles the headers, so no caller writes `X-API-Key`, `X-OpenViking-Account`, `X-OpenViking-User` or `V-Resource-Id` by hand.
+Every field is a value. The Client assembles the headers, so you never write `X-API-Key`, `X-OpenViking-Account`, `X-OpenViking-User` or `V-Resource-Id` by hand.
 
-| Field         | Header                 | Notes                                                                                                     |
-| ------------- | ---------------------- | --------------------------------------------------------------------------------------------------------- |
-| `baseURL`     | —                      | Service address with an optional gateway prefix, excluding `/api/v1`. Empty means same origin.            |
-| `apiKey`      | `X-API-Key`            | Open-source edition. A function is re-evaluated per request, so it can read a rotated key.                |
-| `accountId`   | `X-OpenViking-Account` | OpenViking account, which corresponds to the data space.                                                  |
-| `userId`      | `X-OpenViking-User`    | User within the account.                                                                                  |
-| `resourceId`  | `V-Resource-Id`        | Current library. Data-plane requests need it.                                                             |
-| `credentials` | —                      | `RequestCredentials` for `fetch`. Defaults to `include`; override with `same-origin` or `omit` as needed. |
-| `signal`      | —                      | The caller's `AbortSignal`.                                                                               |
-| `fetch`       | —                      | Transport override, for tests or platforms without a global `fetch`.                                      |
+| Field         | Header                 | Description                                                                                                                        |
+| ------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `baseURL`     | -                      | Service address with an optional gateway prefix, excluding `/api/v1`. Empty means same origin.                                     |
+| `apiKey`      | `X-API-Key`            | Credential of the open-source edition.                                                                                             |
+| `accountId`   | `X-OpenViking-Account` | OpenViking account ID, which corresponds to the data space.                                                                        |
+| `userId`      | `X-OpenViking-User`    | User ID within the account.                                                                                                        |
+| `resourceId`  | `V-Resource-Id`        | Current library ID. Data-plane requests need it.                                                                                   |
+| `signal`      | -                      | `AbortSignal` that aborts the requests.                                                                                            |
+| `credentials` | -                      | `RequestCredentials` for `fetch`. Defaults to `include`; override with `same-origin` or `omit`. Set on the Provider or the client. |
+| `fetch`       | -                      | Replacement for the global `fetch`, for tests, tracing or platforms without one. Set on the Provider or the client.                |
 
-An omitted or empty field sends no header. The commercial edition's control-plane requests need only the cookie, so it passes no `apiKey` and no identity headers there.
+The four identity fields also accept a function that returns a string or a Promise of one. It is evaluated once per request, so it can read a rotated credential. An omitted or empty identity field sends no header.
 
 ## Layering
 
-A module or a single request may override individual fields. Resolution is field by field — the request's own value, then the Provider's, then the default — so a caller states only what changes:
+A block or a single request can override individual fields (`baseURL`, the identity fields and `signal`). Resolution is field by field: the request's own value, then the nearest Provider's, then the default. A nested Provider inherits the fields it omits. You state only what changes:
 
 ```ts
 await client.request({
@@ -55,31 +56,41 @@ await client.request({
 });
 ```
 
-`baseURL: ''` is an explicit "same origin", distinct from omitting the field.
+`baseURL: ''` means "same origin" explicitly, which differs from omitting the field. An empty string in an identity field clears the value inherited from the layer above.
 
 ## Calling it directly
 
-`createOvClient` builds a client without React, for a host that has no Provider:
+`createOvClient` builds a client without `OpenVikingProvider`, for code outside the React tree:
 
 ```ts
 import { createOvClient, OV_PATHS } from '@openviking/react/client';
 
 const client = createOvClient({
   baseURL: 'https://ov.example.com/gateway/openviking',
-  apiKey: 'sk-...',
+  apiKey,
   accountId,
   userId,
   resourceId,
 });
 
-const rows = await client.request<FsEntry[]>({
+const rows = await client.request<{ uri: string; isDir?: boolean }[]>({
   method: 'GET',
   path: OV_PATHS.fsLs,
   query: { uri, output: 'agent' },
 });
 ```
 
-`request` returns the native response's `result`. `baseURL` is the effective address, for isolating caches and subscriptions.
+`request` returns the native response's `result`. `client.baseURL` is the address the client was created with, which suits a cache or subscription key.
+
+A listing puts `has_more` outside `result`. `requestEnvelope` returns both as `{ result, hasMore }`, and `hasMore` is `true` only when the response sets `has_more: true`:
+
+```ts
+const { result, hasMore } = await client.requestEnvelope<{ uri: string }[]>({
+  method: 'GET',
+  path: OV_PATHS.fsLs,
+  query: { uri, node_limit: 200, offset: 0 },
+});
+```
 
 ## Binary responses
 
@@ -94,7 +105,7 @@ const blob = await client.request<Blob>({
 });
 ```
 
-A failed response is still a JSON envelope, so its error code stays on `OvClientError.code`. A binary response has no body, so no `content-type: application/json` is sent.
+A failed response is still a JSON envelope, so its error code stays on `OvClientError.code`. A download request carries no `body`, so no `content-type: application/json` is sent. `requestEnvelope` does not accept `responseType: 'blob'`.
 
 ## Event streams
 
@@ -103,7 +114,7 @@ A failed response is still a JSON envelope, so its error code stays on `OvClient
 ```ts
 const stream = await client.stream({
   method: 'POST',
-  path: '/bot/v1/chat/stream',
+  path: OV_PATHS.botChatStream,
   body: { message, session_id },
 });
 
@@ -115,11 +126,12 @@ stream.abort();
 ```
 
 - `accept: text/event-stream` is sent by default; `headers` adds or overrides, while identity headers are still assembled by the Client and win on a name clash.
-- `body` accepts any fields, so a server-defined switch such as `Attach` — subscribe to an existing session only — is forwarded as-is.
+- `body` accepts any fields and is sent as given, so server-defined options pass through.
 - `data` stays verbatim and is not JSON-parsed: OpenViking puts the event type and event id inside the `data` JSON rather than in the SSE `event` / `id` fields.
 - A comment-only heartbeat block (`: keepalive`) produces no event; a trailing block without its blank line is still dispatched.
-- It resolves as soon as the response arrives. An HTTP failure, a non-event-stream `content-type`, and a `status: 'error'` envelope in a non-stream response all throw `OvClientError` before it resolves.
-- After `abort()` or a caller-signal cancellation the iteration ends quietly instead of throwing `AbortError`: cancellation is the caller's intent, not a failure.
+- `stream` resolves as soon as the response arrives. An HTTP failure, a non-event-stream `content-type`, and a `status: 'error'` envelope in a non-stream response all throw `OvClientError` before it resolves.
+- After `abort()` or a cancellation through `signal`, the iteration ends quietly instead of throwing `AbortError`: cancellation is the caller's intent, not a failure.
+- A stream can be iterated once.
 
 ## API paths
 
@@ -136,52 +148,41 @@ await client.request({
 });
 ```
 
-`OV_PATHS` is an `as const` object rather than an `enum`: a string enum is not inlined under `isolatedModules`, its emitted object counts as a side effect, and as a public export it is an ambient const enum that consumers with `isolatedModules` or `verbatimModuleSyntax` cannot compile against.
+`OV_PATHS` is an `as const` object, not an `enum`, so consumers that enable `isolatedModules` or `verbatimModuleSyntax` can still compile against it.
 
 ## Failures
 
-`OvClientError` is the single failure type. It separates an HTTP failure from a native `status: 'error'` response and keeps the server error code, status, details and request identifier. `code` is the server's when it sent one, and `HTTP_<status>` or `NETWORK_ERROR` when it did not. `isOvClientError` narrows an unknown value to it.
+`OvClientError` is the single failure type of `request`, `requestEnvelope` and `stream`. It tells an HTTP failure apart from a native `status: 'error'` response and keeps the server's error code, `statusCode`, `details`, `requestId` and `responseBody`. `isOvClientError` narrows an unknown value to it.
+
+`code` is the server's when it sent one. Otherwise it is one of:
+
+- `HTTP_<status>`: an HTTP failure.
+- `UNKNOWN`: a `status: 'error'` response without a code.
+- `NETWORK_ERROR`: the transport failed.
+- `UNEXPECTED_CONTENT_TYPE`: `stream` received something other than an event stream.
+- `INVALID_REQUEST`: `requestEnvelope` was asked for a `blob`.
+
+Cancelling a request through `signal` is not a client failure: `request` rejects with the original `AbortError`.
 
 ## Replacing the transport
 
-`OvClient` is the interface modules depend on. Implement it to reuse the host's existing axios instance or the OpenAPI-generated SDK:
+The default transport calls the global `fetch`. To send requests through your own function, pass `fetch` to `OpenVikingProvider` or `createOvClient`, for example to add tracing or to return fixed responses in tests:
 
-```ts
-class AxiosOvClient implements OvClient {
-  constructor(
-    private readonly instance: AxiosInstance,
-    readonly baseURL: string,
-  ) {}
+```tsx
+const fixedFetch: typeof fetch = async () =>
+  new Response(JSON.stringify({ result: [] }), {
+    headers: { 'content-type': 'application/json' },
+  });
 
-  async request<TResult>(spec: OvRequestSpec): Promise<TResult> {
-    const { data } = await this.instance.request({
-      method: spec.method,
-      url: spec.path,
-      params: spec.query,
-      data: spec.body,
-      signal: spec.options?.signal,
-    });
-    if (data?.status === 'error') {
-      throw new OvClientError({
-        code: data.error?.code ?? 'UNKNOWN',
-        message: data.error?.message ?? 'Request failed',
-      });
-    }
-    return data?.result ?? data;
-  }
-}
+<OpenVikingProvider fetch={fixedFetch}>
+  <FileBrowser />
+</OpenVikingProvider>;
 ```
 
-Whatever the transport, it owns three things and modules must not redo them: joining the service address with the path, turning identity fields into headers, and turning a response into either a result or an `OvClientError`. `OvClient` also has `stream`, which a custom transport must provide too; the event-stream framing follows the parser's approach, but the parser stays inside the package and is not exported on its own.
+`createOvClient` returns an `OvClient` with `request`, `requestEnvelope`, `stream` and `baseURL`, the interface blocks depend on. Blocks always use the client created by their nearest Provider, and the Provider takes no client of your own, so `fetch` is how you change the transport for them. Whatever the transport, the Client owns three things and blocks do not repeat them: joining the service address with the path, turning identity fields into headers, and turning a response into a result or an `OvClientError`.
 
-## Development
+## Server rendering
 
-From `frontend/`:
+Importing `@openviking/react/client` has no side effects, so it is safe during server rendering. `createOvClient` needs a `fetch`, either the global one or the one you pass, and throws without one.
 
-```bash
-npm run build:lib
-npm run typecheck
-npm test
-```
-
-The client has no runtime dependencies and reaches for `fetch` only when a request is made, so importing it is safe during server rendering.
+The client tests are in `packages/react/test/client*.test.mjs`; run them with `npm test` from `frontend/` (see the [workspace README](../../../../README.md)).

@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 """Git version control configuration for OpenViking."""
+import os
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
@@ -62,6 +63,41 @@ class GitS3Config(BaseModel):
     )
 
 
+class GitSnapshotLogSqliteConfig(BaseModel):
+    """SQLite SnapshotLog provider config."""
+
+    path: Optional[str] = Field(
+        default=None,
+        description="Absolute SQLite database path for snapshot path history. "
+        "When omitted, defaults to '{storage.workspace}/_system/snapshot/log/snapshot_log.db'.",
+    )
+
+
+class GitSnapshotLogMySqlConfig(BaseModel):
+    """MySQL SnapshotLog provider config."""
+
+    dsn_env: str = Field(
+        default="OPENVIKING_SNAPSHOT_LOG_DSN",
+        description="Environment variable name containing the MySQL DSN.",
+    )
+    max_connections: int = Field(default=16, ge=1)
+    connect_timeout_ms: int = Field(default=3000, ge=1)
+
+
+class GitSnapshotLogConfig(BaseModel):
+    """Snapshot path history index config."""
+
+    provider: Literal["none", "sqlite", "mysql"] = "sqlite"
+    sqlite: GitSnapshotLogSqliteConfig = Field(default_factory=GitSnapshotLogSqliteConfig)
+    mysql: GitSnapshotLogMySqlConfig = Field(default_factory=GitSnapshotLogMySqlConfig)
+
+
+class GitSnapshotConfig(BaseModel):
+    """Snapshot feature configuration."""
+
+    log: GitSnapshotLogConfig = Field(default_factory=GitSnapshotLogConfig)
+
+
 class GitConfig(BaseModel):
     """Git multi-version management configuration."""
 
@@ -96,6 +132,10 @@ class GitConfig(BaseModel):
         default=None,
         description="Configuration for the 's3' backend. Required when backend='s3'.",
     )
+    snapshot: GitSnapshotConfig = Field(
+        default_factory=GitSnapshotConfig,
+        description="Snapshot feature configuration.",
+    )
 
     @model_validator(mode="after")
     def _validate_backend(self) -> "GitConfig":
@@ -112,4 +152,8 @@ class GitConfig(BaseModel):
                 raise ValueError(
                     f"git backend 's3' requires the following fields: {', '.join(missing)}"
                 )
+        sqlite_path = self.snapshot.log.sqlite.path
+        if self.enabled and self.snapshot.log.provider == "sqlite" and sqlite_path is not None:
+            if not os.path.isabs(sqlite_path):
+                raise ValueError("git snapshot log sqlite path must be absolute")
         return self

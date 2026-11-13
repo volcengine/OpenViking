@@ -20,17 +20,37 @@ try {
           dts: false,
           source: {
             entry: {
-              button: './src/shared/components/button/button.tsx',
-              input: './src/shared/components/input/input.tsx',
-              modal: './src/shared/components/modal/modal.tsx',
+              button: './src/shared/primitives/button/button.tsx',
+              input: './src/shared/primitives/input/input.tsx',
+              modal: './src/shared/primitives/modal/modal.tsx',
+              notification: './src/shared/primitives/notification/index.ts',
               'browser-entries':
-                './src/components/file-browser-entries/index.ts',
+                './src/components/file-browser-action-bar/index.ts',
               'file-browser': './src/modules/file-browser/use-file-browser.ts',
               console: './src/modules/console/use-console.ts',
+              'task-context': './src/shared/task-tracking/context.tsx',
+              'task-tracker': './src/shared/task-tracking/tracker.ts',
+              'task-references':
+                './src/shared/task-tracking/read-references.ts',
+              'bot-chat-hook':
+                './src/modules/console/chat/use-viking-bot-chat.ts',
+              'bot-chat': './src/modules/console/chat/chat-controller.ts',
+              'bot-sessions':
+                './src/modules/console/chat/sessions-controller.ts',
+              'bot-aggregate': './src/modules/console/chat/aggregate.ts',
+              'bot-events': './src/modules/console/chat/native-events.ts',
+              'bot-client': './src/client/client.ts',
+              'bot-service': './src/modules/console/chat/native-service.ts',
+              'bot-submit': './src/components/viking-bot/composer-controls.tsx',
+              'bot-composer-events':
+                './src/components/viking-bot/composer-events.ts',
+              'console-conversation':
+                './src/modules/console/use-conversation.tsx',
               provider: './src/client/provider.tsx',
               'reference-tags':
                 './src/components/viking-bot/composer-reference-tags.tsx',
               'wiki-pane': './src/modules/file-browser/wiki-dashboard-pane.tsx',
+              'wiki-conflicts': './src/modules/file-browser/wiki-conflicts.ts',
               'experience-pane':
                 './src/modules/file-browser/experience-dashboard-pane.tsx',
             },

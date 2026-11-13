@@ -35,6 +35,7 @@ export type {
   VikingBotStreamingState,
   VikingBotTextPart,
   VikingBotToolPart,
+  VikingBotTask,
   VikingBotToolResultPart,
   VikingBotToolResultLink,
 } from './model.js';

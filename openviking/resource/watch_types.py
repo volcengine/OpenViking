@@ -36,7 +36,7 @@ PAYLOAD_FIELDS = MUTABLE_FIELDS - {
 PRIVATE_PATCH_FIELDS = frozenset(
     {"source_checkpoint", "source_checkpoint_version", "credential_version", "credential_paused"}
 )
-TERMINAL_RUN_STATUSES = frozenset({"completed", "failed", "cancelled", "error"})
+TERMINAL_RUN_STATUSES = frozenset({"completed", "partial", "failed", "cancelled", "error"})
 
 
 def uri_matches_prefix(uri: Optional[str], prefix: str) -> bool:

@@ -150,6 +150,10 @@ Starting from a branch's HEAD, walk history along the first parent (`parents[0]`
 
 Filtering happens before the result limit is applied, so `limit=10` with `paths=[X]` returns up to 10 commits related to X rather than filtering only the 10 newest commits.
 
+When `paths` is provided, the server can use the optional path history index
+configured by `git.snapshot.log` in `ov.conf`. The index is derived from
+snapshot commits and does not change this API's request or response format.
+
 To bound storage work, a filtered request inspects at most 1,000 commits. If the requested number of matches has not been collected and older uninspected history remains, the request returns an `INVALID_ARGUMENT` error instead of a partial history list. Unfiltered history is not subject to this scan budget because every inspected commit advances the result limit.
 
 **Python SDK (HTTP)**

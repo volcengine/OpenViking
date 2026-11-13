@@ -1,7 +1,7 @@
 import { Button } from '#demo-controls';
 import { useCallback, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
-import { useLang, withBase } from '@rspress/core/runtime';
+import { useLang } from '@rspress/core/runtime';
 import { FileTree } from '@openviking/react/components/file-tree';
 import type {
   FileTreeHandle,
@@ -69,7 +69,7 @@ export default function DirectoryTourBasic() {
   const locateTarget = useCallback(
     (target: string, signal: AbortSignal) => {
       const id = TARGETS[target];
-      if (signal.aborted || !id || (missing && target === 'userSessions'))
+      if (signal.aborted || !id || (missing && target === 'userExperiences'))
         return Promise.resolve(null);
       flushSync(() =>
         setExpanded(
@@ -87,30 +87,21 @@ export default function DirectoryTourBasic() {
   );
   const steps = openVikingDirectoryTourSteps.map((step, index) => ({
     ...step,
-    nextLabel: zh && index === 4 ? '下一个' : undefined,
     title: zh ? TITLES[index] : step.title,
     description: zh ? DESCRIPTIONS[index] : step.description,
-    illustration: (
-      <img
-        src={withBase(`/directory-tour/step-${index + 1}.png`)}
-        alt=""
-        width={212}
-        height={70}
-      />
-    ),
   }));
   const rows: FileTreeRow[] = [entry('user', 'Alice', 0, expanded.has('user'))];
   if (expanded.has('user')) {
     rows.push(
       entry('user/memories', 'memories', 1, expanded.has('user/memories')),
     );
-    if (expanded.has('user/memories'))
+    if (!missing && expanded.has('user/memories'))
       rows.push(entry('user/memories/experiences', 'experiences', 2));
     rows.push(
       entry('user/peers', 'peers', 1),
       entry('user/resources', 'resources', 1),
     );
-    if (!missing) rows.push(entry('user/sessions', 'sessions', 1));
+    rows.push(entry('user/sessions', 'sessions', 1));
   }
   rows.push(entry('resources', 'Resources', 0));
   return (
@@ -140,7 +131,7 @@ export default function DirectoryTourBasic() {
             }}
           />
           <span>
-            {zh ? '模拟 sessions 不存在' : 'Simulate missing sessions'}
+            {zh ? '模拟 experiences 不存在' : 'Simulate missing experiences'}
           </span>
         </label>
         <output aria-live="polite">
@@ -188,21 +179,8 @@ export default function DirectoryTourBasic() {
         onComplete={({ skippedStepIds }) => {
           close();
           setSkipped(skippedStepIds.length);
-          setComplete(skippedStepIds.length === 0);
+          setComplete(true);
         }}
-        labels={
-          zh
-            ? {
-                close: '关闭指引',
-                next: '下一步',
-                done: '知道了',
-                locating: '正在定位目录…',
-                unavailable: '目录不存在或暂时无法加载，请重试或跳过。',
-                retry: '重试',
-                skip: '跳过',
-              }
-            : undefined
-        }
       />
     </div>
   );

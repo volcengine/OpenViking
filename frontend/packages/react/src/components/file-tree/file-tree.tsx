@@ -1,9 +1,10 @@
 import { useLocale } from '../../shared/locale-context.js';
-import { forwardRef, useImperativeHandle, useRef } from 'react';
+import { forwardRef, useImperativeHandle, useMemo, useRef } from 'react';
 
 import { resolveFileTreeLabels } from './file-tree-labels.js';
 import { FileTreeBody } from './file-tree-body.js';
 import { handleRowKeyDown } from './file-tree-keyboard.js';
+import { orderContextRoots } from './file-tree-root-order.js';
 import type { FileTreeRowContext } from './file-tree-row-context.js';
 import { FileTreeToolbar } from './file-tree-toolbar.js';
 import type {
@@ -67,6 +68,7 @@ export const FileTree: FileTreeComponent = forwardRef<
 >(function FileTree(
   {
     rows,
+    rootOrder = 'input',
     locale: localeProp,
     operations,
     selectedId,
@@ -80,7 +82,7 @@ export const FileTree: FileTreeComponent = forwardRef<
     slots,
     labels,
     getRowAttributes,
-    renderDashboard,
+    renderRowTrailing,
     renderRowTooltip,
     renderRowIcon,
     onSelect,
@@ -97,6 +99,10 @@ export const FileTree: FileTreeComponent = forwardRef<
 ) {
   const locale = useLocale(localeProp);
   const rootRef = useRef<HTMLDivElement>(null);
+  const visibleRows = useMemo(
+    () => (rootOrder === 'context' ? orderContextRoots(rows) : rows),
+    [rootOrder, rows],
+  );
   const text = resolveFileTreeLabels(locale, labels);
   const actions = useFileTreeActions({
     operations,
@@ -128,7 +134,7 @@ export const FileTree: FileTreeComponent = forwardRef<
     infoLabels: text.info,
     selectedId,
     getRowAttributes,
-    renderDashboard,
+    renderRowTrailing,
     renderRowTooltip,
     renderRowIcon,
     renderSpinner: slots?.spinner ? () => slots.spinner : undefined,
@@ -166,7 +172,7 @@ export const FileTree: FileTreeComponent = forwardRef<
         className="ov-file-tree__body"
       >
         <FileTreeBody
-          rows={rows}
+          rows={visibleRows}
           isReady={isReady}
           text={text}
           loadingFallback={loadingFallback}

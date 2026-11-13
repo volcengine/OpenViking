@@ -1,4 +1,3 @@
-/* Geometry from vikingdb-fe release/openviking/2026-11-12, 40b89239f. */
 .ov-viking-bot__list {
   width: 100%;
   min-width: 0;
@@ -112,6 +111,10 @@
 }
 .ov-viking-bot__activity {
   width: min(88%, 960px);
+  border-block-end: 1px solid
+    var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
+  padding-block-end: 6px;
+  margin-block: 8px;
 }
 .ov-viking-bot__tool-details {
   display: flex;

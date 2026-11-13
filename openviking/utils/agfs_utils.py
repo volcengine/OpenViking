@@ -68,11 +68,13 @@ class RagfsBindingConfig:
             database.parent.mkdir(parents=True, exist_ok=True)
             pathlock["sqlite_path"] = str(database)
         pathlock_uses_cache = pathlock.get("provider") == "cache"
+        coordination = self.agfs.coordination.model_dump(mode="json", exclude_none=True)
         backups = getattr(self.agfs, "backups", None)
         uses_runtime = (
             cachefs_backend == "cache"
             or queue_backend == "cache"
             or pathlock_uses_cache
+            or coordination["provider"] == "cache"
             or _get_config_value(backups, "provider", "filesystem") == "cache"
         )
         if (
@@ -96,13 +98,14 @@ class RagfsBindingConfig:
             if uses_runtime:
                 raise ValueError(
                     "top-level cache config is required when CacheFS, QueueFS, cache-backed PathLock, "
-                    "or cache-backed multi-write uses the shared Runtime"
+                    "coordination, or cache-backed multi-write uses the shared Runtime"
                 )
             cache_config = _disabled_cache_config(self.service_name)
         binding_config: Dict[str, Any] = {
             "service_name": self.service_name,
             "cache": cache_config,
             "pathlock": pathlock,
+            "coordination": coordination,
         }
 
         if self.log is not None:
@@ -625,7 +628,9 @@ def _build_git_config_dict(git_config: Any, storage_path: Path) -> Dict[str, Any
     any TOML file. For ``backend == "local"`` a ``local`` sub-dict is emitted
     (defaulting ``base_dir`` to ``{storage_path}/.ovgit`` when empty); for
     ``backend == "s3"`` an ``s3`` sub-dict is emitted with keys matching the Rust
-    ``GitS3ConfigPy`` struct.
+    ``GitS3ConfigPy`` struct. ``snapshot`` is copied from the Python config
+    model, with the default SnapshotLog SQLite path resolved under
+    ``storage_path`` so independent workspaces do not share one index DB.
     """
     backend = getattr(git_config, "backend", "local")
     result: Dict[str, Any] = {
@@ -635,6 +640,19 @@ def _build_git_config_dict(git_config: Any, storage_path: Path) -> Dict[str, Any
         "author_name": getattr(git_config, "author_name", "viking-bot"),
         "author_email": getattr(git_config, "author_email", "bot@viking.local"),
     }
+    snapshot = getattr(git_config, "snapshot", None)
+    if snapshot is not None:
+        if hasattr(snapshot, "model_dump"):
+            result["snapshot"] = snapshot.model_dump(mode="json", exclude_none=True)
+        elif isinstance(snapshot, dict):
+            result["snapshot"] = dict(snapshot)
+        snapshot_log = result.get("snapshot", {}).get("log")
+        if isinstance(snapshot_log, dict) and snapshot_log.get("provider", "sqlite") == "sqlite":
+            sqlite_cfg = snapshot_log.setdefault("sqlite", {})
+            if isinstance(sqlite_cfg, dict) and not sqlite_cfg.get("path"):
+                sqlite_cfg["path"] = str(
+                    storage_path / "_system" / "snapshot" / "log" / "snapshot_log.db"
+                )
 
     if backend == "s3":
         s3_cfg = getattr(git_config, "s3", None)

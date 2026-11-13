@@ -233,12 +233,6 @@ These YAML files define the structure of different memory types. They are not si
   - Purpose: records durable execution experience and the memories it supersedes
   - Key fields: `experience_name`, `content`, `supersedes` (optional; omit when not replacing another experience)
 
-- `identity`
-  - Effective stage: agent identity memory persistence stage
-  - Affects: long-term consistency of the agent's identity settings
-  - Purpose: defines the agent's name, persona, vibe, avatar, and self-introduction fields
-  - Key fields: `name`, `creature`, `vibe`, `emoji`, `avatar`, `introduction`
-
 - `preferences`
   - Effective stage: preference-memory persistence and update stage
   - Affects: user preference recall and downstream personalization behavior
@@ -256,12 +250,6 @@ These YAML files define the structure of different memory types. They are not si
   - Affects: skill usage statistics, experience accumulation, and recommended workflows
   - Purpose: defines skill usage counts, success rates, best-fit scenarios, and related information
   - Key fields: `skill_name`, `total_executions`, `success_count`, `fail_count`, `best_for`, `recommended_flow`
-
-- `soul`
-  - Effective stage: agent soul memory persistence stage
-  - Affects: the agent's core boundaries, continuity, and long-term identity stability
-  - Purpose: defines the agent's core truths, boundaries, vibe, and continuity
-  - Key fields: `core_truths`, `boundaries`, `vibe`, `continuity`
 
 - `tools` (disabled by default)
   - Effective stage: tool-usage memory persistence and update stage

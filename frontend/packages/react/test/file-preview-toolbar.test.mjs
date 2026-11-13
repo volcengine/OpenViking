@@ -1,3 +1,4 @@
+import { waitForEditor, setEditor } from './helpers/preview-editor-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mount, ok, recordingFetch, settle } from './helpers/module-dom.mjs';
@@ -55,13 +56,20 @@ test('standalone preview offers editing only on the active editable level', asyn
     assert.equal(button(view, 'Edit'), undefined);
     await click(view, 'Body');
     await click(view, 'Edit');
-    assert.equal(view.container.querySelector('textarea')?.value, 'full text');
+    await waitForEditor(view.container);
+    assert.equal(
+      view.container.querySelector('.cm-content')?.textContent,
+      'full text',
+    );
+    assert.ok(button(view, 'Cancel')?.closest('.ov-file-preview__header'));
+    assert.ok(button(view, 'Save')?.closest('.ov-file-preview__header'));
     await click(view, 'Cancel');
     assert.deepEqual(saved, []);
     await click(view, 'Edit');
+    await waitForEditor(view.container);
     await click(view, 'Save');
     assert.deepEqual(saved, ['full text']);
-    assert.equal(view.container.querySelector('textarea'), null);
+    assert.equal(view.container.querySelector('.cm-content'), null);
   } finally {
     await view.unmount();
   }
@@ -77,7 +85,9 @@ test('FileBrowser loads the full file, writes it, and reloads the displayed body
     if (path.endsWith('/content/write')) {
       assert.equal(request.uri, uri);
       assert.equal(request.mode, 'replace');
-      assert.equal(request.content, '# Initial');
+      assert.equal(request.content, '# Updated');
+      assert.equal(request.version_message, undefined);
+      assert.equal(request.expected_content_sha256, undefined);
       return ok({});
     }
     return ok([]);
@@ -103,9 +113,15 @@ test('FileBrowser loads the full file, writes it, and reloads the displayed body
   try {
     const reads = requests.countOf('/api/v1/content/read');
     await click(view, 'Edit');
-    assert.equal(view.container.querySelector('textarea')?.value, '# Initial');
+    await waitForEditor(view.container);
+    assert.equal(
+      view.container.querySelector('.cm-content')?.textContent,
+      '# Initial',
+    );
     assert.equal(fullReads, 1);
+    await setEditor(view.container.querySelector('.cm-content'), '# Updated');
     await click(view, 'Save');
+    assert.equal(document.querySelector('.ov-file-preview-version-note'), null);
     assert.equal(requests.countOf('/api/v1/content/write'), 1);
     assert.equal(requests.countOf('/api/v1/content/read'), reads + 1);
     await view.render(render(true));

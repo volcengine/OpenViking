@@ -6,6 +6,8 @@ const messages = {
   toolInput: 'Input',
   toolOutput: 'Output',
   similarity: 'Similarity',
+  session: 'Session',
+  locateSession: 'Locate session in the file browser',
   sessionHistory: 'Session history',
   newSession: 'New session',
   emptySessions: 'No sessions yet',

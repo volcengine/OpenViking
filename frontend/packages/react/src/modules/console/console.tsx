@@ -1,30 +1,33 @@
+import { TaskTrackingProvider } from '../../shared/task-tracking/context.js';
+import { ConsoleTaskNotifications } from './task-notifications.js';
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
 import { useId, useRef } from 'react';
-import { Tui } from '../../components/tui/index.js';
+import { CommandConsole } from '../../components/command-console/index.js';
 import {
   VikingBot,
   VikingBotSessionActions,
 } from '../../components/viking-bot/index.js';
 import { useConsole } from './use-console.js';
+import { useConversation } from './use-conversation.js';
+import { consoleCommandGroups, consoleQuickCommands } from './commands.js';
 import { consoleLabels } from './labels.js';
 import { ConsoleToolbar } from './console-toolbar.js';
 import type { ConsoleProps } from './types.js';
 
-/** 终端空态默认展示的快捷命令，顺序即展示顺序。 */
-const DEFAULT_QUICK_COMMANDS = ['help', 'ls', 'find', 'read', 'status'].map(
-  (name) => ({ name, value: `ov ${name} ` }),
-);
-
-export function Console({
+function ConsoleView({
   mode,
+  modes,
   defaultMode,
   locale: localeProp,
-  quickCommands = DEFAULT_QUICK_COMMANDS,
+  quickCommands,
   scopeKey,
   requestOptions,
   onModeChange,
   onOpenUri,
   conversation,
+  command,
+  chatOptions,
+  taskService,
   slots,
   labels: overrides,
   className,
@@ -33,14 +36,20 @@ export function Console({
   const locale = useLocale(localeProp);
   const state = useConsole({
     mode,
+    modes,
     defaultMode,
     locale,
     scopeKey,
     requestOptions,
+    taskService,
     onModeChange,
   });
   const labels = consoleLabels(locale, overrides);
-  const { sessions, headerActions, ...conversationProps } = conversation ?? {};
+  const managedConversation = useConversation(
+    { conversation, chatOptions, scopeKey, requestOptions, locale, modes },
+    state.setConversationDraft,
+  );
+  const { sessions, headerActions, ...conversationProps } = managedConversation;
   const botLocale = conversationProps.locale ?? locale;
   const botLabels = {
     ...consoleLabels(botLocale, overrides).vikingBot,
@@ -60,76 +69,95 @@ export function Console({
         {...rest}
         className={['ov-console', className].filter(Boolean).join(' ')}
       >
-        <ConsoleToolbar
-          mode={state.mode}
-          panelId={id}
-          locale={locale}
-          labels={labels}
-          records={state.records}
-          isExecuting={state.isExecuting}
-          onModeChange={(next) => state.setMode(next)}
-          onClear={() => {
-            state.clear();
-            fillCommand('');
-          }}
-          onRecall={fillCommand}
-          conversationActions={
-            <VikingBotSessionActions
-              sessions={sessions}
-              extra={headerActions}
-              labels={botLabels}
-              locale={botLocale}
-            />
-          }
-        >
-          {slots?.toolbar}
-        </ConsoleToolbar>
-        <div
-          id={`${id}-conversation`}
-          className="ov-console__panel"
-          hidden={state.mode !== 'conversation'}
-        >
-          {state.mode === 'conversation' ? (
-            <VikingBot
-              {...conversationProps}
-              onOpenUri={conversationProps.onOpenUri ?? onOpenUri}
-              messages={conversationProps.messages ?? []}
-              draft={conversationProps.draft ?? state.conversationDraft}
-              onDraftChange={
-                conversationProps.draft === undefined
-                  ? (value) => {
-                      state.setConversationDraft(value);
-                      conversationProps.onDraftChange?.(value);
-                    }
-                  : conversationProps.onDraftChange
-              }
-              footer={slots?.conversationContext ?? conversationProps.footer}
-              locale={botLocale}
-              labels={botLabels}
-            />
-          ) : null}
-        </div>
-        <div
-          id={`${id}-command`}
-          ref={commandPanel}
-          className="ov-console__panel"
-          hidden={state.mode !== 'command'}
-        >
-          {slots?.commandHelp}
-          <Tui
-            records={state.records}
-            value={state.command}
-            commands={state.commands}
+        <ConsoleTaskNotifications locale={locale} />
+        {state.mode ? (
+          <ConsoleToolbar
+            mode={state.mode}
+            modes={modes ?? ['conversation', 'command']}
+            panelId={id}
             locale={locale}
-            disabled={state.isExecuting}
-            quickCommands={quickCommands}
-            onValueChange={state.setCommand}
-            onSubmit={(command) => void state.execute(command)}
-            onOpenUri={onOpenUri}
-            labels={labels.tui}
-          />
-        </div>
+            labels={labels}
+            records={state.records}
+            isExecuting={state.isExecuting}
+            onModeChange={(next) => state.setMode(next)}
+            onClear={() => {
+              state.clear();
+              fillCommand('');
+            }}
+            onRecall={fillCommand}
+            conversationActions={
+              <VikingBotSessionActions
+                sessions={sessions}
+                extra={headerActions}
+                onOpenUri={conversationProps.onOpenUri ?? onOpenUri}
+                onCopy={conversationProps.onCopy}
+                labels={botLabels}
+                locale={botLocale}
+              />
+            }
+          >
+            {slots?.toolbar}
+          </ConsoleToolbar>
+        ) : null}
+        {modes === undefined || modes.includes('conversation') ? (
+          <div
+            id={`${id}-conversation`}
+            className="ov-console__panel"
+            hidden={state.mode !== 'conversation'}
+          >
+            {state.mode === 'conversation' ? (
+              <VikingBot
+                {...conversationProps}
+                onOpenUri={conversationProps.onOpenUri ?? onOpenUri}
+                messages={conversationProps.messages ?? []}
+                draft={conversationProps.draft ?? state.conversationDraft}
+                onDraftChange={
+                  conversationProps.draft === undefined
+                    ? (value) => {
+                        state.setConversationDraft(value);
+                        conversationProps.onDraftChange?.(value);
+                      }
+                    : conversationProps.onDraftChange
+                }
+                footer={slots?.conversationContext ?? conversationProps.footer}
+                locale={botLocale}
+                labels={botLabels}
+              />
+            ) : null}
+          </div>
+        ) : null}
+        {modes === undefined || modes.includes('command') ? (
+          <div
+            id={`${id}-command`}
+            ref={commandPanel}
+            className="ov-console__panel"
+            hidden={state.mode !== 'command'}
+          >
+            {slots?.commandHelp}
+            <CommandConsole
+              records={state.records}
+              value={state.command}
+              commands={state.commands}
+              commandGroups={consoleCommandGroups(locale)}
+              locale={locale}
+              disabled={state.isExecuting}
+              quickCommands={quickCommands ?? consoleQuickCommands(locale)}
+              onValueChange={state.setCommand}
+              onSubmit={(next) => void state.execute(next)}
+              onOpenUri={command?.onOpenUri ?? onOpenUri}
+              labels={labels.commandConsole}
+            />
+          </div>
+        ) : null}
       </div>
     </LocaleProvider>
+  );
+}
+
+export function Console(props: ConsoleProps) {
+  return (
+    <TaskTrackingProvider service={props.taskService}>
+      <ConsoleView {...props} />
+    </TaskTrackingProvider>
   );
 }

@@ -71,3 +71,35 @@ test('a non-JSON response body is returned as text rather than dropped', async (
   const result = await client.request({ method: 'GET', path: '/api/v1/x' });
   assert.equal(result, 'plain text');
 });
+
+test('multipart uploads preserve identity headers and let fetch choose the boundary', async () => {
+  const fetch = fakeFetch(
+    () => new Response('{"status":"ok","result":{"temp_file_id":"upload"}}'),
+  );
+  const client = createOvClient({
+    baseURL: 'https://ov.test',
+    apiKey: 'key',
+    accountId: 'account',
+    fetch,
+  });
+  const form = new FormData();
+  form.append('file', new Blob(['archive']), 'demo.ovpack');
+  assert.deepEqual(
+    await client.request({
+      method: 'POST',
+      path: '/api/v1/resources/temp_upload',
+      body: form,
+    }),
+    { temp_file_id: 'upload' },
+  );
+  const { init } = fetch.calls[0];
+  assert.equal(init.body, form);
+  assert.equal(
+    Object.keys(init.headers).some(
+      (key) => key.toLowerCase() === 'content-type',
+    ),
+    false,
+  );
+  assert.equal(init.headers['X-API-Key'] ?? init.headers['x-api-key'], 'key');
+  assert.equal(init.headers['x-openviking-account'], 'account');
+});

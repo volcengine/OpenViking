@@ -1,4 +1,4 @@
-import { Button } from '../../shared/components/button/button.js';
+import { Button } from '../../shared/primitives/button/button.js';
 import { useRef } from 'react';
 import { VikingBotIcon } from '../../icons/viking-bot-icons.js';
 import type { VikingBotAttachment, VikingBotLabels } from './model.js';

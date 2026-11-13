@@ -6,9 +6,9 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { AgentConnect } from '@openviking/react/components/agent-connect';
 import { FileTree } from '@openviking/react/components/file-tree';
 import { FilePreview } from '@openviking/react/components/file-preview';
-import { FileBrowserEntries } from '@openviking/react/components/file-browser-entries';
+import { FileBrowserActionBar } from '@openviking/react/components/file-browser-action-bar';
 import { ScopeSelector } from '@openviking/react/components/scope-switcher';
-import { Tui } from '@openviking/react/components/tui';
+import { CommandConsole } from '@openviking/react/components/command-console';
 import {
   VikingBot,
   VikingBotMessageList,
@@ -28,7 +28,7 @@ const cases = [
   [FileTree, { rows: [] }, '暂无文件', 'No files yet'],
   [FilePreview, { tabs: previewTabs }, '该文件为空', 'This file is empty'],
   [
-    FileBrowserEntries,
+    FileBrowserActionBar,
     { onConnectAgent() {}, onImportResources() {} },
     '导入资源',
     'Import resources',
@@ -45,7 +45,7 @@ const cases = [
     'Unable to load options',
   ],
   [
-    Tui,
+    CommandConsole,
     {
       records: [],
       value: '',
@@ -63,7 +63,12 @@ const cases = [
     '新建会话',
     'New session',
   ],
-  [FileBrowser, {}, '选择一个文件查看内容', 'Select a file to preview'],
+  [
+    FileBrowser,
+    {},
+    '从左侧选中一个文件预览',
+    'Select a file on the left to preview it',
+  ],
   [
     Console,
     { defaultMode: 'command' },
@@ -103,10 +108,10 @@ test('changing locale updates copy while preserving host overrides', async () =>
     labels: { connectAgent: 'Host agent' },
   };
   const view = await mount(
-    h(FileBrowserEntries, { ...props, locale: 'zh-CN' }),
+    h(FileBrowserActionBar, { ...props, locale: 'zh-CN' }),
   );
   assert.equal(view.container.textContent, 'Host agent导入资源');
-  await view.render(h(FileBrowserEntries, { ...props, locale: 'en-US' }));
+  await view.render(h(FileBrowserActionBar, { ...props, locale: 'en-US' }));
   assert.equal(view.container.textContent, 'Host agentImport resources');
   await view.unmount();
 });

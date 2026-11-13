@@ -10,7 +10,7 @@ import {
   showsInlineDescription,
 } from './file-tree-info.js';
 import { resolveInfoCopy } from './file-tree-info-labels.js';
-import { Popover } from '../../shared/components/popover/index.js';
+import { Popover } from '../../shared/primitives/popover/index.js';
 import { resolveFileTreeInfoCopy } from './file-tree-info-tooltip.js';
 import { FileTreeTooltipContent } from './file-tree-tooltip-surface.js';
 import type { FileTreeRowContext } from './file-tree-row-context.js';
@@ -36,7 +36,7 @@ export function FileTreeRowView({
     text,
     selectedId,
     getRowAttributes,
-    renderDashboard,
+    renderRowTrailing,
     renderRowTooltip,
     renderRowIcon,
     onSelect,
@@ -55,7 +55,7 @@ export function FileTreeRowView({
     style: extraStyle,
     ...extraAttributes
   } = extra;
-  const dashboard = renderDashboard?.(row) ?? null;
+  const trailing = renderRowTrailing?.(row) ?? null;
   // 宿主给了 description 就用它（含显式空串）；否则按 uri 取内置说明。
   const infoKey = resolveFileTreeInfoKey(row.uri);
   const description =
@@ -183,8 +183,8 @@ export function FileTreeRowView({
         </span>
       ) : null}
 
-      {dashboard ? (
-        <span className="ov-file-tree__dashboard">{dashboard}</span>
+      {trailing ? (
+        <span className="ov-file-tree__trailing">{trailing}</span>
       ) : null}
       <span
         className="ov-file-tree__popover-anchor-container"

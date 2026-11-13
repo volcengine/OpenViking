@@ -238,6 +238,23 @@ async fn build_stack_with_mountable_and_runtime(
             config.pathlock.lock_expire_secs,
         )),
         "memory" => Arc::new(MemoryPathLockProvider::new()),
+        #[cfg(feature = "postgres")]
+        "postgres" => {
+            let variable = config.pathlock.postgres_dsn_env.clone().ok_or_else(|| {
+                Error::config("pathlock.postgres_dsn_env is required for PostgreSQL PathLock")
+            })?;
+            let namespace = config.pathlock.service_name.clone().ok_or_else(|| {
+                Error::config("pathlock.service_name is required for PostgreSQL PathLock")
+            })?;
+            let expire_secs = config.pathlock.lock_expire_secs;
+            let provider = tokio::task::spawn_blocking(move || {
+                crate::lock::PostgresPathLockProvider::from_env(&variable, &namespace, expire_secs)
+            })
+            .await
+            .map_err(|_| Error::config("PostgreSQL PathLock initialization worker failed"))?
+            .map_err(|error| Error::config(error.to_string()))?;
+            Arc::new(provider)
+        }
         "sqlite" => {
             let path = config.pathlock.sqlite_path.as_deref().ok_or_else(|| {
                 Error::config("pathlock.sqlite_path is required for SQLite PathLock")
@@ -392,6 +409,7 @@ mod tests {
                 provider: "filesystem".to_string(),
                 service_name: None,
                 sqlite_path: None,
+                postgres_dsn_env: None,
                 lock_timeout_secs: 0.0,
                 lock_expire_secs: 30.0,
             },

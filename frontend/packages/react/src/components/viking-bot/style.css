@@ -1,5 +1,5 @@
-@import '../../shared/components/input/input.css';
-@import '../../shared/components/button/button.css';
+@import '../../shared/primitives/input/input.css';
+@import '../../shared/primitives/button/button.css';
 @import '../../theme.css';
 @import './viking-bot.css';
 @import './viking-bot-composer.css';
@@ -13,7 +13,9 @@
 @import '@ark-design/ui/ask-human/style/index.css';
 @import '@ark-design/ui/error-card/style/index.css';
 @import '../file-tree/style.css';
-@import '../../shared/components/tooltip/style.css';
+@import '../../shared/primitives/tooltip/style.css';
 @import './viking-bot-features.css';
 @import './composer-reference-tags.css';
 @import './viking-bot-messages.css';
+
+@import '../../shared/task-status/task-status.css';
