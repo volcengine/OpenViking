@@ -52,11 +52,11 @@ Create `~/.openviking/ov.conf` in your home configuration directory:
 }
 ```
 
-For `provider: "openai-codex"`, `vlm.api_key` is optional when Codex OAuth is already available.
+For `provider: "openai-codex"`, `vlm.api_key` is optional when Codex OAuth is already available. A standard OpenAI API key is also supported when `vlm.api_base` is `https://api.openai.com/v1`; see [VLM settings](#vlm).
 
-Top-level `service_name` defaults to `"openviking-server"`. Cache-backed modules use
-it as their Redis namespace. OTel `service_name` fields keep their own value
-when set and inherit this value when omitted.
+Top-level `service_name` defaults to `"openviking-server"`. It isolates coordination
+state and provides Redis namespaces for cache-backed modules. OTel `service_name`
+fields keep their own value when set and inherit this value when omitted.
 
 ### Ordered credentials in ov.conf
 
@@ -809,10 +809,10 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `api_key` | str | API key. Optional for `openai-codex` when Codex OAuth is available, and optional for `litellm` routes that use provider-native credentials |
+| `api_key` | str | API key. Optional for `openai-codex` with Codex OAuth; a standard OpenAI API key requires `api_base: "https://api.openai.com/v1"`. Optional for `litellm` routes that use provider-native credentials |
 | `forward_api_key` | bool | LiteLLM only. Overrides whether `api_key` is forwarded to LiteLLM. By default, OpenViking does not forward placeholder keys for native AWS/GCP routes such as `bedrock/`, `sagemaker/`, and `vertex_ai/`; set to `true` when intentionally using a LiteLLM API-key route such as Bedrock bearer-token auth |
 | `model` | str | Model name |
-| `api_base` | str | API endpoint (optional) |
+| `api_base` | str | API endpoint (optional). For `openai-codex`, defaults to the ChatGPT Codex backend; set `https://api.openai.com/v1` with a standard OpenAI API key |
 | `temperature` | float or null | Sampling temperature (default: `null`). Omit or set to `null` to leave it out of requests and use the provider default |
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
 | `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `32`) |
@@ -854,12 +854,35 @@ When the VLM configuration reports `is_available() == false`, generic file summa
 **Supported providers:**
 - `volcengine`: Volcengine VLM API
 - `openai`: OpenAI-compatible VLM API
-- `openai-codex`: Codex VLM via ChatGPT/Codex OAuth
+- `openai-codex`: Responses API via ChatGPT/Codex OAuth or an explicit API key and endpoint
 - `kimi`: Kimi Coding subscription endpoint with built-in provider defaults
 - `glm`: Z.AI GLM Coding Plan endpoint with OpenAI-compatible requests
 - `litellm`: LiteLLM VLM API, including explicit LiteLLM routes such as `bedrock/`, `sagemaker/`, `vertex_ai/`, and `azure/`
 
-For `openai-codex`, authenticate through `openviking-server init`, then verify with `openviking-server doctor`.
+For `openai-codex` with OAuth, authenticate through `openviking-server init`, then verify with `openviking-server doctor`.
+
+**Responses API with an API key**
+
+To use a standard OpenAI API key with the Responses API, set both `api_key` and
+`api_base` in the `openai-codex` configuration. An explicit key skips Codex OAuth.
+Merge this `vlm` section into `ov.conf`, replacing the key and model placeholders:
+
+```json
+{
+  "vlm": {
+    "provider": "openai-codex",
+    "api_key": "YOUR_OPENAI_API_KEY",
+    "api_base": "https://api.openai.com/v1",
+    "model": "YOUR_RESPONSES_MODEL",
+    "reasoning_effort": "medium"
+  }
+}
+```
+
+Choose a Responses model that supports your tools and reasoning effort. This route
+uses `/v1/responses`; `provider: "openai"` uses Chat Completions. Setting only
+`api_key` does not select the OpenAI API endpoint: without `api_base`, the Codex
+backend remains the default.
 
 For `litellm`, `api_key` can be omitted when the underlying route authenticates through
 environment or provider-native credentials, such as AWS IAM/IRSA for Bedrock and
@@ -1060,7 +1083,7 @@ The remaining `code` configuration fields are for remote code resource network g
 
 #### Remote resource network guard
 
-For URL ingestion, the default network check rejects destinations resolving to non-public addresses. Ordinary public URLs do not need to be on the code-hosting allowlist; trusted code hosts on that list bypass the address-range check. Add self-hosted GitHub Enterprise, GitLab, or Azure DevOps hosts to the corresponding platform list under `code`:
+For URL ingestion, the default network check rejects destinations resolving to non-public addresses. Ordinary public URLs do not need to be on the code-hosting allowlist. Trusted code hosts on that list may access private networks, but their DNS addresses are still checked. Loopback, link-local, unspecified, multicast, reserved and known cloud metadata addresses are always rejected, even with an allowlist entry or `allow_private_networks=true`. Add self-hosted GitHub Enterprise, GitLab, or Azure DevOps hosts to the corresponding platform list under `code`:
 
 | Field | Type | Description | Default |
 |-------|------|-------------|---------|
@@ -1069,7 +1092,7 @@ For URL ingestion, the default network check rejects destinations resolving to n
 | `azure_devops_domains` | list[str] | Allowed Azure DevOps hosts | `["dev.azure.com", "ssh.dev.azure.com", "vs-ssh.visualstudio.com"]` |
 | `code_hosting_domains` | list[str] | Allowed generic code-hosting hosts | `["github.com", "gitlab.com", "gitcode.com", "gitee.com", "bitbucket.org", "codeberg.org", "gitea.com", "atomgit.com", "git.sr.ht"]` |
 
-To allow other private-network targets, such as internal mirrors, set the top-level `allow_private_networks` to `true`. It is disabled by default; local hostnames such as `localhost` and its subdomains remain rejected. This example enables private-network access and registers a code host:
+To allow other private-network targets, such as internal mirrors, set the top-level `allow_private_networks` to `true`. It is disabled by default. Enabling it does not override the address restrictions above; `localhost` and its subdomains also remain rejected. This example enables private-network access and registers a code host:
 
 ```json
 {
@@ -1082,7 +1105,7 @@ To allow other private-network targets, such as internal mirrors, set the top-le
 
 Use `github_domains`, `gitlab_domains`, or `azure_devops_domains` when the host
 needs those platform-specific URL semantics. Add other Git hosts to
-`code_hosting_domains`.
+`code_hosting_domains`. For HTTP server requests, Git preflight, clone and fetch do not follow HTTP redirects; use the final repository URL. GitHub/GitLab ZIP downloads support redirects and validate each destination before requesting it.
 
 ### pdf
 
@@ -1357,8 +1380,13 @@ Glob engine configuration for path pattern matching. These settings are server-s
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `engine` | str | Path matching engine mode: `"auto"` uses remote `path_glob` processing when a VikingDB / Volcengine vector store is available and the search-scope record count reaches the threshold; otherwise it falls back to local filesystem search. `"fs"` forces local filesystem search only. | `"fs"` |
+| `engine` | str | Path matching engine mode: `"auto"` uses the current account's vector backend according to `storage.vectordb.enable_path_glob` and the adapter default, when the `uri` field exists and the search-scope record count reaches the threshold. Unavailable or failed remote operations fall back to local filesystem search. `"fs"` forces local filesystem search only. | `"fs"` |
 | `switch_to_remote_threshold` | int | Record-count threshold at which `auto` mode switches to remote `path_glob`. Set to `0` to always use remote path matching. Must be ≥ 0. | `100` |
+
+Set `storage.vectordb.enable_path_glob` to `true` to enable remote support or `false` to disable it.
+Omitting it or setting `null` uses the adapter default: VikingDB and Volcengine enable support,
+while other built-in backends disable it. Custom adapters can declare a default too.
+This setting does not override `glob.engine="fs"`, the threshold, or filesystem fallback.
 
 ### storage
 
@@ -1503,10 +1531,8 @@ ALTER TABLE ov_watch_tasks
 ```
 
 Every node serves the Watch API. Nodes with `enable_watch_scheduler=true` may
-run the background Watch scheduler. `watch_leader_provider` selects leader
-mode: `auto` keeps the storage-derived default, `local` keeps leadership inside
-one process, and `cache` uses AGFS CacheRuntime for a shared leader lease. The
-leader polls due Watches every 15 seconds and settles finished runs. File and
+run the background Watch scheduler, elected through [AGFS coordination](#coordination-configuration).
+The leader polls due Watches every 15 seconds and settles finished runs. File and
 MySQL use the same Runtime polling and bounded dispatch flow. Background
 dispatch tracks unfinished Watch runs and pending submissions in leader memory
 toward its concurrency limit (default 4). Taking leadership restores occupancy
@@ -1538,6 +1564,7 @@ wait up to 10 seconds and then fail with a retryable busy error.
 | `backend` | str | `"local"`, `"s3"`, or `"memory"` | `"local"` |
 | `timeout` | float | Request timeout in seconds | `10.0` |
 | `backups` | object | Multi-write storage configuration. When set, the top-level `backend` acts as the primary backend and `backups.items[]` defines backup backends | `null` |
+| `coordination` | object | Watch leadership and semantic task revisions | `{"provider":"memory"}` |
 | `queuefs` | object | QueueFS configuration. Controls the namespace mode, backend, and runtime options for `/queue` | `{ "mode": "shared", "backend": "sqlite", "recover_stale_sec": 0, "busy_timeout_ms": 5000 }` |
 | `queue_db_path` | str (optional) | Legacy compatibility field for QueueFS sqlite DB path. Superseded by `storage.agfs.queuefs.db_path`. Defaults to `{storage.workspace}/_system/queue/queue.db` when not set. Useful when the workspace volume does not support sqlite (e.g. some network filesystems) | `null` |
 | `s3` | object | S3 backend configuration (when backend is 's3') | - |
@@ -1548,6 +1575,22 @@ RAGFS uses Rust binding mode by default, directly accessing the file system thro
 
 > [!WARNING]
 > `storage.agfs` no longer supports the AGFS HTTP client mode, and the old HTTP client entry should not be configured anymore. AGFS / RAGFS filesystem access now happens only through the in-process Rust binding (`RAGFSBindingClient`). This does not affect the OpenViking server HTTP API, the `ov` CLI, or `AsyncHTTPClient` / `SyncHTTPClient` when they connect to an OpenViking server.
+
+##### Coordination Configuration
+
+`storage.agfs.coordination` coordinates Watch leadership and revisions used to skip
+superseded semantic work. Participating nodes must share the backend and top-level `service_name`.
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `provider` | str | `memory`: one process; `sqlite`: one host; `cache`: shared top-level CacheRuntime | `"memory"` |
+| `sqlite_path` | str / null | Required for `sqlite`: absolute path to a shared database on local disk, outside EFS/NFS | `null` |
+| `operation_timeout_ms` | int | Deadline per cache coordination operation in milliseconds; cache only, must be positive | `5000` |
+
+`watch_leader_provider` is deprecated and will be removed in the next version.
+Without an explicit coordination provider, `auto` (default) selects `memory` for File
+WatchStore and `cache` for MySQL; `local` maps to `memory`, and `cache` maps to `cache`.
+Migrate by setting `storage.agfs.coordination.provider` and removing the legacy field.
 
 ##### Multi-Write Storage Configuration
 
@@ -1599,7 +1642,7 @@ See the [Multi-Write Storage Guide](./13-multi-write-storage.md) for more exampl
 ##### Global Cache Provider, CacheFS, and PathLock Configuration
 
 Top-level `service_name` names the OpenViking deployment. CacheFS, QueueFS with
-`backend=cache`, cache-backed PathLock, and cache-backed multi-write metadata
+`backend=cache`, cache-backed PathLock, coordination, and multi-write metadata
 derive their Redis namespaces from it.
 
 The top-level `cache` section is a sibling of `storage`. Its public shape is Provider-neutral:
@@ -1620,8 +1663,9 @@ The top-level `cache` section is a sibling of `storage`. Its public shape is Pro
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `provider` | str | `filesystem`, `memory`, `sqlite`, or `cache`; `cache` uses the shared Redis CacheRuntime | `filesystem` |
+| `provider` | str | `filesystem`, `memory`, `sqlite`, `postgres`, or `cache`; `postgres` connects directly to PostgreSQL, `cache` uses the shared Redis CacheRuntime | `filesystem` |
 | `sqlite_path` | str / null | Optional absolute local shared lock database path. See [local SQLite setup](../configuration/01-server.md#storage) | `{storage.workspace}/_system/pathlock/pathlock.db` for `sqlite` |
+| `postgres_dsn_env` | str / null | Required for `postgres`; environment variable name containing the PostgreSQL DSN. See [PostgreSQL setup](../configuration/01-server.md#postgresql-pathlock) | `null` |
 | `lock_expire_secs` | float | Seconds before an unrefreshed lock becomes stale; must be at least `1.0` | `30.0` |
 | `lock_timeout_secs` | float | Deprecated and ignored; runtime wait timeout remains `0.0` | `0.0` |
 
@@ -1630,10 +1674,40 @@ same machine's local disk. Do not put it on EFS/NFS/SMB or give each replica its
 own container-local database. A workspace on EFS also puts the default
 `sqlite_path` on EFS. See [SQLite deployment limits](../configuration/01-server.md#storage).
 
-For multiple containers or hosts sharing EFS, use shared Redis PathLock as in
+For multi-process or multi-host PathLock coordination without Redis, merge this
+fragment into `ov.conf` and set the named environment variable in each server and
+worker before startup:
+
+```json
+{
+  "service_name": "production",
+  "storage": {
+    "agfs": {
+      "pathlock": {
+        "provider": "postgres",
+        "postgres_dsn_env": "OV_POSTGRES_DSN",
+        "lock_expire_secs": 30.0
+      }
+    }
+  }
+}
+```
+
+```sh
+export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=openviking password=YOUR_PASSWORD sslmode=require'
+```
+
+All participants must use the same writable PostgreSQL primary, top-level
+`service_name`, and expiry duration. PostgreSQL PathLock is independent of
+`cache.provider/cache.params`; it does not enable CacheFS or change QueueFS,
+business file storage, or the vector backend's concurrency limits. In particular,
+the default SQLite queue is not suitable for cross-host sharing on EFS.
+See [PostgreSQL PathLock configuration](../configuration/01-server.md#postgresql-pathlock) for setup and verification.
+
+For multiple containers or hosts sharing EFS, shared Redis PathLock is another option, as in
 the example below. All replicas must use the same Redis deployment, top-level
-`service_name`, and lock expiry setting. The example also uses Redis QueueFS
-so its default SQLite database is not placed on EFS.
+`service_name`, and lock expiry setting. The example uses Redis for QueueFS and
+coordination, keeping SQLite state off EFS.
 
 ```json
 {
@@ -1660,6 +1734,9 @@ so its default SQLite database is not placed on EFS.
       "queuefs": {
         "backend": "cache"
       },
+      "coordination": {
+        "provider": "cache"
+      },
       "pathlock": {
         "provider": "cache",
         "lock_expire_secs": 30.0
@@ -1669,7 +1746,7 @@ so its default SQLite database is not placed on EFS.
 }
 ```
 
-The canonical configuration has no global `cache.enabled` and no per-module Redis namespace field. CacheRuntime is initialized when CacheFS or QueueFS selects `backend=cache`, PathLock selects `provider=cache`, or multi-write selects `backups.provider=cache`. Cache-backed PathLock currently requires `cache.provider=redis`; DynamicProvider is not supported for PathLock. When all modules use local providers, `cache.params` is not parsed and no Provider connection is opened.
+The canonical configuration has no global `cache.enabled` and no per-module Redis namespace field. CacheRuntime is initialized when CacheFS or QueueFS selects `backend=cache`, PathLock or coordination selects `provider=cache`, or multi-write selects `backups.provider=cache`. Cache-backed PathLock currently requires `cache.provider=redis`; DynamicProvider is not supported for PathLock. When none of these modules selects a cache provider, `cache.params` is not parsed and no CacheRuntime connection is opened, including when PathLock uses PostgreSQL.
 
 Move Provider settings to top-level `cache.provider/cache.params`, set top-level `service_name` for shared Redis names, select `cachefs.backend="cache"`, `queuefs.backend="cache"`, or `backups.provider="cache"`, use Redis `mode="standalone"` instead of `singleton`, and use `rediss://` instead of `tls_enabled`.
 

@@ -14,12 +14,15 @@ import threading
 from collections import OrderedDict
 from dataclasses import dataclass
 from time import monotonic
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from openviking.core.global_policy import GlobalAccessPolicy, global_policy_from_source
 from openviking.core.namespace import owner_fields_for_uri, relative_uri_path
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.pathlock_transfer import PathLockGuard
+from openviking.system_assets import SYSTEM_ASSETS_DIR
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
 if TYPE_CHECKING:
@@ -30,6 +33,34 @@ LOGGER = logging.getLogger(__name__)
 POLICY_CACHE_TTL_SECONDS = 600
 POLICY_CACHE_MAX_ENTRIES = 10_000
 _POLICY_URI = "viking://user/{owner_user_id}/GLOBAL_POLICY.md"
+
+
+async def ensure_global_policy_file(
+    viking_fs: "VikingFS", ctx: RequestContext, *, lease_ref: Any = None
+) -> None:
+    """Seed a user's GLOBAL policy from the packaged template, preserving existing content."""
+    uri = _POLICY_URI.format(owner_user_id=ctx.user.user_id)
+    try:
+        await viking_fs.read_file(uri, ctx=ctx)
+    except (FileNotFoundError, NotFoundError):
+        pass
+    else:
+        return
+
+    if lease_ref is None:
+        guard = PathLockGuard(viking_fs._async_agfs)
+        try:
+            path = viking_fs._uri_to_path(uri, ctx=ctx)
+            lease = await guard.acquire(
+                lambda: viking_fs._async_agfs.pathlock_acquire_exact(path, timeout_secs=10.0)
+            )
+            await ensure_global_policy_file(viking_fs, ctx, lease_ref=lease)
+        finally:
+            await guard.close()
+        return
+
+    content = (SYSTEM_ASSETS_DIR / "user" / "GLOBAL_POLICY.md").read_text(encoding="utf-8")
+    await viking_fs.write_file(uri, content, ctx=ctx, lease_ref=lease_ref)
 
 
 @dataclass(frozen=True)
@@ -174,4 +205,5 @@ __all__ = [
     "POLICY_CACHE_MAX_ENTRIES",
     "POLICY_CACHE_TTL_SECONDS",
     "UserGlobalPolicyService",
+    "ensure_global_policy_file",
 ]

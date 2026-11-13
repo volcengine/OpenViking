@@ -57,14 +57,26 @@ function buildRequest(
   headers: Record<string, string>,
 ): { url: string; init: RequestInit } {
   const hasBody = spec.body !== undefined;
+  const multipart =
+    typeof FormData !== 'undefined' && spec.body instanceof FormData;
+  const requestHeaders = { ...headers };
+  if (multipart) {
+    for (const key of Object.keys(requestHeaders))
+      if (key.toLowerCase() === 'content-type') delete requestHeaders[key];
+  }
   return {
     url: joinUrl(effective.baseURL, spec.path) + buildQuery(spec.query),
     init: {
       method: spec.method,
-      headers: hasBody
-        ? { 'content-type': 'application/json', ...headers }
-        : headers,
-      body: hasBody ? JSON.stringify(spec.body) : undefined,
+      headers:
+        hasBody && !multipart
+          ? { 'content-type': 'application/json', ...requestHeaders }
+          : requestHeaders,
+      body: multipart
+        ? (spec.body as FormData)
+        : hasBody
+          ? JSON.stringify(spec.body)
+          : undefined,
       credentials: effective.credentials,
     },
   };

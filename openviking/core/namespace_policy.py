@@ -10,6 +10,7 @@ from openviking.core.namespace import uri_parts
 
 SYSTEM_ROOT_URI = _namespace_constants.SYSTEM_ROOT_URI
 SYSTEM_COMPILE_ROOT = _namespace_constants.SYSTEM_COMPILE_ROOT
+SYSTEM_COMPILE_GLOBAL_ROOT = _namespace_constants.SYSTEM_COMPILE_GLOBAL_ROOT
 SYSTEM_EXAMPLE_SKILLS_ROOT = _namespace_constants.SYSTEM_EXAMPLE_SKILLS_ROOT
 SYSTEM_MEMORY_ROOT = _namespace_constants.SYSTEM_MEMORY_ROOT
 SYSTEM_MEMORY_TEMPLATES_ROOT = _namespace_constants.SYSTEM_MEMORY_TEMPLATES_ROOT
@@ -55,6 +56,11 @@ def _is_same_or_descendant(uri: str, root_uri: str) -> bool:
 def is_system_uri(uri: str) -> bool:
     """Return whether uri is the system namespace root or one of its descendants."""
     return _is_same_or_descendant(uri, SYSTEM_ROOT_URI)
+
+
+def is_system_compile_global_uri(uri: str) -> bool:
+    """Identify the externally managed Compile subtree without creating directories."""
+    return _is_same_or_descendant(uri, SYSTEM_COMPILE_GLOBAL_ROOT)
 
 
 def is_system_fixed_directory_uri(uri: str) -> bool:

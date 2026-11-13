@@ -1,3 +1,4 @@
+import { fenceMarkdownFrontmatter } from './file-preview-frontmatter.js';
 import { code } from '@ark-design/ui/file-viewer/adapters/code';
 import { diff } from '@ark-design/ui/file-viewer/adapters/diff';
 import { html } from '@ark-design/ui/file-viewer/adapters/html';
@@ -16,6 +17,7 @@ import type { FileViewerCoreProps } from '@ark-design/ui/file-viewer/core';
 import {
   originalImageTarget,
   preserveVikingImages,
+  recoverImportedMarkdownImages,
 } from './file-preview-markdown-images.js';
 
 /**
@@ -60,12 +62,27 @@ export function createFilePreviewAdapterList({
     markdown({
       onLinkClick,
       rendererProps: {
+        // Parse raw HTML, then keep Ark's sanitizer in charge of tags and attributes.
+        parsing: { enabledHtmlTags: true },
+        sourcePlugins: (current) => [
+          ...current,
+          {
+            name: 'ov-yaml-frontmatter',
+            config: { priority: -1 },
+            modifier: ({ source }) => fenceMarkdownFrontmatter(source),
+            before: () => {},
+            after: () => {},
+            beforeEach: () => {},
+            afterEach: () => {},
+          },
+        ],
         astPlugins: (current) => [
           ...current,
           {
             name: 'ov-viking-images',
             config: { priority: 2 },
             modifier: (root) => {
+              recoverImportedMarkdownImages(root);
               preserveVikingImages(root);
             },
             before: () => {},

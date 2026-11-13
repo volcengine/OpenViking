@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from 'react';
 
+import { toEntryRow } from './fs-model.js';
 import type { DirState } from './fs-model.js';
 /**
  * 树已知的目录 URI 集合：根目录，加上每一层已加载条目里标记为目录的那些。
@@ -18,12 +19,13 @@ import type { DirState } from './fs-model.js';
 export function knownDirectories(
   rootUri: string,
   dirs: Record<string, DirState>,
+  identifyUri: (uri: string) => string,
 ): ReadonlySet<string> {
-  const known = new Set<string>([rootUri]);
+  const known = new Set<string>([identifyUri(rootUri)]);
   for (const [parent, level] of Object.entries(dirs)) {
-    known.add(parent);
+    known.add(identifyUri(parent));
     for (const entry of level.entries) {
-      if (entry.isDir === true) known.add(entry.uri);
+      if (entry.isDir === true) known.add(identifyUri(entry.uri));
     }
   }
   return known;
@@ -39,11 +41,12 @@ export function knownDirectories(
  */
 export function knownFiles(
   dirs: Record<string, DirState>,
+  identifyUri: (uri: string) => string,
 ): ReadonlySet<string> {
   const known = new Set<string>();
   for (const level of Object.values(dirs)) {
     for (const entry of level.entries) {
-      if (entry.isDir !== true) known.add(entry.uri);
+      if (entry.isDir !== true) known.add(identifyUri(entry.uri));
     }
   }
   return known;
@@ -58,7 +61,53 @@ export function knownFiles(
  */
 export function useKnownFile(
   dirs: Record<string, DirState>,
+  identifyUri: (uri: string) => string,
 ): (uri: string) => boolean {
-  const files = useMemo(() => knownFiles(dirs), [dirs]);
-  return useCallback((uri: string) => files.has(uri), [files]);
+  const files = useMemo(
+    () => knownFiles(dirs, identifyUri),
+    [dirs, identifyUri],
+  );
+  return useCallback(
+    (uri: string) => files.has(identifyUri(uri)),
+    [files, identifyUri],
+  );
+}
+
+/** Loaded resource metadata survives collapsed ancestors, unlike the visible rows. */
+export function useTreeMetadata(
+  rootUri: string,
+  dirs: Record<string, DirState>,
+  identifyUri: (uri: string) => string,
+) {
+  const directoryUris = useMemo(
+    () => knownDirectories(rootUri, dirs, identifyUri),
+    [rootUri, dirs, identifyUri],
+  );
+  const isKnownFile = useKnownFile(dirs, identifyUri);
+  const metadataRows = useMemo(
+    () =>
+      Object.values(dirs).flatMap((dir) =>
+        dir.entries.map((entry) => toEntryRow(entry, 0, false)),
+      ),
+    [dirs],
+  );
+  const accessOf = useCallback(
+    (uri: string | null) => {
+      if (!uri) return;
+      const target = identifyUri(uri);
+      const row = metadataRows.find(
+        (entry) => identifyUri(entry.uri) === target,
+      );
+      return row?.access === 'denied' || row?.access === 'container'
+        ? row.access
+        : undefined;
+    },
+    [metadataRows, identifyUri],
+  );
+  const resourceTypeOf = (uri: string | null) => {
+    if (uri === null) return 'file';
+    if (directoryUris.has(identifyUri(uri))) return 'directory';
+    return isKnownFile(uri) ? 'file' : 'unknown';
+  };
+  return { directoryUris, metadataRows, accessOf, identifyUri, resourceTypeOf };
 }

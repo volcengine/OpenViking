@@ -1,4 +1,12 @@
+import type { FilePreviewActionSource } from './action-types.js';
+export type {
+  FilePreviewAction,
+  FilePreviewActionItems,
+  FilePreviewActionSource,
+} from './action-types.js';
 import type { Locale } from '../../shared/locale.js';
+import type { FilePreviewToolbarOptions } from './toolbar-types.js';
+export type { FilePreviewToolbarOptions } from './toolbar-types.js';
 import type {
   ConfirmSlotProps,
   DownloadSlotProps,
@@ -108,6 +116,8 @@ export interface FilePreviewTabBase {
    * Whether the tab is disabled.
    */
   disabled?: boolean;
+  /** 内置工具栏的逐项开关。Visibility of individual built-in toolbar controls. */
+  toolbar?: FilePreviewToolbarOptions;
   /**
    * 祖先导航成功打开后触发，参数为被点击那一级的完整 URI；失败时不触发。
    * Called after an ancestor opens, with the full URI of the clicked level;
@@ -141,6 +151,8 @@ export interface FilePreviewFileTab extends FilePreviewTabBase {
    * Tab kind discriminator, always `file`.
    */
   kind: 'file';
+  /** Injected commands; no copy/download/delete commands are supplied by default. */
+  actions?: FilePreviewActionSource;
   /**
    * 正文是否还在读取。为真时组件渲染加载态而不是正文，外壳（页签行、路径行）
    * 照常显示——宿主切换文件时外壳因此不闪，只有正文区在等。
@@ -188,19 +200,6 @@ export interface FilePreviewFileTab extends FilePreviewTabBase {
    * Header slots of a file tab, adding the three state fallbacks on top of the base ones.
    */
   slots?: FilePreviewFileTabSlots;
-  /**
-   * 正文复制成功后触发，参数为已复制的文本；复制失败时不触发。
-   * 省略回调不影响复制。仅文件页签提供正文复制，没有可复制文本时按钮禁用。
-   * Called after content copying succeeds, with the copied text; not called on
-   * failure. Omitting it does not affect copying. Only file tabs provide body
-   * copying; the button is disabled when no copyable text is available.
-   */
-  onCopyContent?: (text: string) => void;
-  /**
-   * 下载操作成功后触发，失败时不触发。
-   * Called after the download operation succeeds; not called on failure.
-   */
-  onDownload?: () => void;
   /**
    * 正文中的链接成功打开后触发，参数为被点击的 URI；失败时不触发。只有
    * Markdown 正文会触发。
@@ -280,6 +279,8 @@ export interface FilePreviewDirectoryTab extends FilePreviewTabBase {
    * Tab kind discriminator, always `directory`.
    */
   kind: 'directory';
+  /** Commands for the current summary level; content tabs do not have actions. */
+  actions?: FilePreviewActionSource;
   /**
    * 摘要是否还在读取。与文件页签同义：为真时正文区显示加载态，外壳照常。
    * Whether the summary is still being read. Same as a file tab: the body shows
@@ -362,8 +363,6 @@ export interface FilePreviewOperations {
    * the immediate parent of the current file.
    */
   openParent?: (uri: string) => Promise<void>;
-  /** 下载当前文件，完成后返回。Downloads the current file and resolves on completion. */
-  download?: () => Promise<void>;
   /**
    * 打开正文里被点击的链接，完成后返回。传入后由宿主接管导航，组件阻止默认
    * 跳转；相对路径的解析也归宿主，组件给出的是 Markdown 里的原始目标。
@@ -419,17 +418,17 @@ export interface FilePreviewEditing {
 /**
  * 交给宿主的动作上下文：组件持有的视图与编辑状态，以及改变它们的方法。
  *
- * 组件只渲染外壳与正文，不内置复制、下载、视图切换、编辑这些按钮；宿主在
- * `slots.actions` 里用这份上下文自己拼。状态仍由组件维护，宿主不必接管。
+ * 默认工具栏与宿主自定义的 `slots.actions` 共用此上下文。
  *
  * The action context handed to the host: the view and editing state the component
  * owns, plus the methods that change it.
  *
- * The component renders only the shell and the body — it ships no copy, download,
- * view-switch or edit buttons. A host composes them in `slots.actions` from this
- * context. The state stays with the component; the host does not take it over.
+ * The default toolbar and host overrides in `slots.actions` share this context.
  */
 export interface FilePreviewActions {
+  /** Active source/path for host commands; changing levels updates these values. */
+  source?: FilePreviewSource;
+  path?: string;
   /** 当前视图模式。The current view mode. */
   viewMode: FilePreviewViewMode;
   /** 切换到指定视图模式。Switches to the given view mode. */
@@ -452,18 +451,10 @@ export interface FilePreviewActions {
   saveEditing: () => Promise<boolean>;
   /** 放弃草稿并退出编辑态。Discards the draft and leaves editing. */
   cancelEditing: () => void;
-  /** 该页签是否有可复制的正文。Whether the tab has copyable body text. */
-  canCopyContent: boolean;
-  /** 复制正文，成功返回 `true`。Copies the body, resolving to `true` on success. */
-  copyContent: () => Promise<boolean>;
   /** 该页签是否有可复制的路径。Whether the tab has a copyable path. */
   canCopyPath: boolean;
   /** 复制路径，成功返回 `true`。Copies the path, resolving to `true` on success. */
   copyPath: () => Promise<boolean>;
-  /** 该页签是否可下载。Whether the tab can be downloaded. */
-  canDownload: boolean;
-  /** 下载当前文件。Downloads the current file. */
-  download: () => void;
 }
 
 /**
@@ -474,15 +465,10 @@ export interface FilePreviewActions {
  * body is the host's, so there is no component-provided header to fill.
  */
 export interface FilePreviewHeaderSlots {
-  /**
-   * 标题行右侧的动作区。组件不内置任何按钮，复制、下载、视图切换、编辑都由
-   * 宿主用上下文里的状态与方法自行渲染。
-   *
-   * The action area on the right of the header. The component ships no buttons of
-   * its own: copy, download, view switch and editing are all rendered by the host
-   * from the state and methods in the context.
-   */
+  /** 替换默认工具栏。Replaces the default toolbar; use null to hide it. */
   actions?: ReactNode | ((actions: FilePreviewActions) => ReactNode);
+  /** 追加到默认工具栏的宿主操作。Host actions appended to the default toolbar. */
+  extraActions?: ReactNode;
   /**
    * 标题旁的额外内容，例如权限标记、状态徽标或版本号；不需要时不传。
    * Extra content next to the title, for example a permission tag, a status badge
@@ -519,13 +505,13 @@ export interface FilePreviewFileTabSlots extends FilePreviewHeaderSlots {
   /**
    * 格式不支持时的兜底内容。格式是否可预览由底座判定，因此这个节点会交给
    * 底座，而不是在组件这边提前判断。传了就由它接管整个不支持态（含底座原本
-   * 会给出的下载入口）；不传时使用内置提示。
+   * 会给出的下载入口）；有来源时不传则保留底座默认下载兜底。
    *
    * Fallback when the format cannot be previewed. Whether a format can be
    * previewed is the base component's call, so this node is handed to it rather
    * than decided here. Supplying it takes over the whole unsupported state,
    * including the download entry the base would otherwise offer; omit it for the
-   * built-in message.
+   * base download fallback when a source is available.
    */
   unsupportedFallback?: ReactNode;
   /**
@@ -552,19 +538,27 @@ export interface FilePreviewFileTabSlots extends FilePreviewHeaderSlots {
  * Replaceable copy with built-in Chinese and English defaults.
  */
 export interface FilePreviewLabels {
+  previewImage?: string;
+  closePreview?: string;
   /** 展开折叠路径层级的无障碍名称。Accessible name for hidden path levels. */
   showHiddenPath?: string;
-  /**
-   * 复制路径按钮的文案。这是组件自己渲染的唯一按钮——其余动作按钮由宿主在
-   * `slots.actions` 里自绘，文案也归宿主。
-   *
-   * Label of the copy-path button. It is the only button the component renders
-   * itself; every other action button belongs to the host's `slots.actions`,
-   * copy included.
-   */
   copyPath?: string;
-  /** 编辑区文本框的无障碍名称。Accessible name of the editor textarea. */
+  copied?: string;
+  copyFailed?: string;
+  moreActions?: string;
+  actionFailed?: string;
+  previewMode?: string;
+  sourceMode?: string;
+  viewSwitch?: string;
+  edit?: string;
+  editFile?: string;
+  save?: string;
+  /** 编辑区文本框的无障碍名称。Accessible name of the editor. */
   editor?: string;
+  /** 编辑器加载失败时的提示。Message shown when the editor fails to load. */
+  editorLoadFailed?: string;
+  /** 语法高亮加载失败时的提示。Message shown when syntax highlighting fails to load. */
+  highlightFailed?: string;
   /** 读取失败后退出编辑态的按钮文案。Label of the button that leaves editing after a failed load. */
   leaveEditing?: string;
   /** 重试按钮文案。Retry button label. */
@@ -577,8 +571,6 @@ export interface FilePreviewLabels {
   unsupported?: string;
   /** 取回正文时的加载提示。Message shown while the text is being fetched. */
   loading?: string;
-  /** 下载按钮文案。Label of the download button. */
-  download?: string;
   /** 文件长度为 0 时的提示。Message shown when the file itself is empty. */
   fileEmpty?: string;
   /** 文件非空但没有可展示内容时的提示。Message shown for a non-empty file with nothing to render. */
@@ -629,8 +621,8 @@ export interface FilePreviewProps extends Omit<
    * component for format rendering or renders fully custom `content`.
    */
   tabs: readonly [FilePreviewTab, ...FilePreviewTab[]];
-  /** 内置中英文文案的语言。Language of the built-in interface copy. */
-  locale: Locale;
+  /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */
+  locale?: Locale;
   /**
    * 受控的当前页签 key。传入时由宿主决定当前页签，组件只上报切换意图。
    * The controlled active tab key. When given, the host owns the active tab and
@@ -642,6 +634,9 @@ export interface FilePreviewProps extends Omit<
    * Initial tab key when uncontrolled; the first tab is selected when omitted.
    */
   defaultActiveKey?: string;
+  /** Host visibility switches, true by default when supported. False hides the
+   * control for every tab, even when that tab enables it. */
+  toolbar?: FilePreviewToolbarOptions;
   /**
    * 当前页签变化后触发，参数为新的页签 key。
    * Called after the active tab changes, with the new tab key.

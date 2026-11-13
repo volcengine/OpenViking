@@ -138,6 +138,23 @@
   transition: background-color 120ms;
 }
 
+/* Keep the anchor out of row layout so it cannot share metadata's auto margins. */
+.ov-file-tree__popover-anchor-container {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  justify-content: flex-end;
+  pointer-events: none;
+}
+
+/* Keep the card's anchor at the visible row edge while the content scrolls. */
+.ov-file-tree__popover-anchor {
+  position: sticky;
+  right: 0;
+  flex: none;
+  width: 0;
+}
+
 .ov-file-tree__row:hover {
   background-color: var(--ov-ui-file-tree-row-hover);
 }
@@ -308,10 +325,24 @@
   cursor: pointer;
 }
 
-.ov-file-tree__dashboard {
+/*
+ * 行尾标记槽位：行内剩余空间都留在它前面，因此它靠行右端对齐，而不是紧挨名称。
+ * 行里还有层级、权限等其他行尾标记时，由排在前面的标记吸收空间，它紧跟在后面。
+ *
+ * The trailing-marker slot: the row's spare space is left before it, so it sits at
+ * the right edge rather than next to the name. When the row also carries other
+ * trailing markers such as the level or access, that earlier marker absorbs the
+ * space and the slot follows it directly.
+ */
+.ov-file-tree__trailing {
   display: inline-flex;
   flex: none;
   align-items: center;
+  margin-left: auto;
+}
+
+.ov-file-tree__level ~ .ov-file-tree__trailing {
+  margin-left: 0;
 }
 
 /*
@@ -420,23 +451,6 @@
  * text that turns into the primary colour on hover, with no underline — the same
  * treatment the host's tree uses.
  */
-.ov-file-tree__action {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-  transition: color 120ms;
-}
-
-.ov-file-tree__action:hover:not(:disabled) {
-  color: var(--ov-ui-file-tree-action);
-}
-
-.ov-file-tree__action:disabled {
-  cursor: default;
-}
 
 @media (prefers-reduced-motion: reduce) {
   .ov-file-tree__chevron,
@@ -464,4 +478,15 @@
 
 .dark .ov-file-tree__file-type-icon {
   color: var(--ov-file-tree-icon-dark, var(--ov-ui-file-tree-icon));
+}
+.ov-file-tree .ov-button.ov-file-tree__action,
+.ov-file-tree .ov-button.ov-file-tree__action:disabled,
+.ov-file-tree .ov-button.ov-file-tree__action[aria-disabled='true'] {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+}
+.ov-file-tree
+  .ov-button.ov-file-tree__action:not(:disabled):not(
+    [aria-disabled='true']
+  ):hover {
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
 }

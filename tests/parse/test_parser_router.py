@@ -191,9 +191,13 @@ def test_should_use_understanding_api_for_feishu_url(monkeypatch):
     router = ParserRouter(parser_registry=object())
 
     assert router.should_use_understanding_api("https://example.larkoffice.com/wiki/wikicnToken")
+    assert not router.should_use_understanding_directly(
+        "https://example.larkoffice.com/wiki/wikicnToken", feishu_access_token="u-test"
+    )
     assert router.should_use_understanding_directly(
         "https://example.larkoffice.com/wiki/wikicnToken",
         feishu_access_token="u-test",
+        _feishu_resolved_type="docx",
     )
     assert not router.should_use_understanding_api(
         "https://larkoffice.com.evil.example/wiki/wikicnToken"

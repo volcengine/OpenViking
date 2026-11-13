@@ -1,6 +1,8 @@
 import type enUS from './locales/en-US.js';
+import { OV_PATH_BUILDERS, OV_PATHS } from '../../client/paths.js';
 import type { OvRequestSpec } from '../../client/types.js';
-import type { TuiSkeletonKind } from '../../components/tui/index.js';
+import type { CommandConsoleSkeletonKind } from '../../components/command-console/index.js';
+import { CORE_COMMAND_SPECS } from './core-command-specs.js';
 import type { Argument } from './command-parser.js';
 
 type Values = Record<string, string | number | boolean>;
@@ -8,8 +10,12 @@ export interface CommandSpec {
   name: keyof typeof enUS.commands;
   positional?: readonly Argument[];
   flags?: readonly Argument[];
-  skeleton?: TuiSkeletonKind;
+  skeleton?: CommandConsoleSkeletonKind;
   request?: (values: Values) => OvRequestSpec;
+  execute?: (
+    values: Values,
+    request: (spec: OvRequestSpec) => Promise<Record<string, unknown>>,
+  ) => Promise<unknown>;
 }
 
 const uri: Argument = { name: 'uri', kind: 'uri' };
@@ -22,17 +28,18 @@ const taskId: Argument = { name: 'id' };
 export const COMMAND_SPECS: readonly CommandSpec[] = [
   { name: 'help' },
   { name: 'clear' },
+  ...CORE_COMMAND_SPECS,
   {
     name: 'health',
 
     skeleton: 'status',
-    request: () => ({ method: 'GET', path: '/health' }),
+    request: () => ({ method: 'GET', path: OV_PATHS.health }),
   },
   {
     name: 'status',
 
     skeleton: 'status',
-    request: () => ({ method: 'GET', path: '/api/v1/system/status' }),
+    request: () => ({ method: 'GET', path: OV_PATHS.systemStatus }),
   },
   ...(['ls', 'tree'] as const).map((name): CommandSpec => ({
     name,
@@ -48,7 +55,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     skeleton: 'tree',
     request: (values) => ({
       method: 'GET',
-      path: `/api/v1/fs/${name}`,
+      path: name === 'ls' ? OV_PATHS.fsLs : OV_PATHS.fsTree,
       query: { uri: 'viking://', limit: 100, ...values, output: 'original' },
     }),
   })),
@@ -57,9 +64,15 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
 
     positional: [uri],
     skeleton: 'status',
-    request: (query) => ({ method: 'GET', path: '/api/v1/fs/stat', query }),
+    request: (query) => ({ method: 'GET', path: OV_PATHS.fsStat, query }),
   },
-  ...(['read', 'abstract', 'overview'] as const).map((name): CommandSpec => ({
+  ...(
+    [
+      ['read', OV_PATHS.contentRead],
+      ['abstract', OV_PATHS.contentAbstract],
+      ['overview', OV_PATHS.contentOverview],
+    ] as const
+  ).map(([name, path]): CommandSpec => ({
     name,
 
     positional: [uri],
@@ -73,7 +86,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     skeleton: 'resource',
     request: (query) => ({
       method: 'GET',
-      path: `/api/v1/content/${name}`,
+      path,
       query,
     }),
   })),
@@ -81,11 +94,15 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     name,
 
     positional: [{ name: 'query' }],
-    flags: [{ name: 'target_uri', kind: 'uri' }, limit],
+    flags: [
+      { name: 'target_uri', kind: 'uri', alias: '-u' },
+      { ...limit, alias: '-n' },
+      { name: 'level', alias: '-L' },
+    ],
     skeleton: 'search',
     request: (body) => ({
       method: 'POST',
-      path: `/api/v1/search/${name}`,
+      path: name === 'find' ? OV_PATHS.searchFind : OV_PATHS.searchQuery,
       body,
     }),
   })),
@@ -103,7 +120,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     skeleton: 'search',
     request: (values) => ({
       method: 'POST',
-      path: `/api/v1/search/${name}`,
+      path: name === 'grep' ? OV_PATHS.searchGrep : OV_PATHS.searchGlob,
       body: { uri: 'viking://', ...values },
     }),
   })),
@@ -113,7 +130,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     positional: [uri],
     flags: [{ name: 'description' }],
     skeleton: 'write',
-    request: (body) => ({ method: 'POST', path: '/api/v1/fs/mkdir', body }),
+    request: (body) => ({ method: 'POST', path: OV_PATHS.fsMkdir, body }),
   },
   ...(['cp', 'mv'] as const).map((name): CommandSpec => ({
     name,
@@ -124,7 +141,11 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     ],
     flags: name === 'cp' ? [recursive] : [],
     skeleton: 'write',
-    request: (body) => ({ method: 'POST', path: `/api/v1/fs/${name}`, body }),
+    request: (body) => ({
+      method: 'POST',
+      path: name === 'cp' ? OV_PATHS.fsCp : OV_PATHS.fsMv,
+      body,
+    }),
   })),
   {
     name: 'rm',
@@ -132,7 +153,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     positional: [uri],
     flags: [recursive, wait],
     skeleton: 'write',
-    request: (query) => ({ method: 'DELETE', path: '/api/v1/fs', query }),
+    request: (query) => ({ method: 'DELETE', path: OV_PATHS.fsRm, query }),
   },
   {
     name: 'write',
@@ -142,7 +163,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     skeleton: 'write',
     request: (body) => ({
       method: 'POST',
-      path: '/api/v1/content/write',
+      path: OV_PATHS.contentWrite,
       body,
     }),
   },
@@ -151,7 +172,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
 
     flags: [limit, { name: 'status' }, { name: 'task_type' }],
     skeleton: 'status',
-    request: (query) => ({ method: 'GET', path: '/api/v1/tasks', query }),
+    request: (query) => ({ method: 'GET', path: OV_PATHS.tasks, query }),
   },
   {
     name: 'task status',
@@ -160,7 +181,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     skeleton: 'status',
     request: ({ id }) => ({
       method: 'GET',
-      path: `/api/v1/tasks/${encodeURIComponent(String(id))}`,
+      path: OV_PATH_BUILDERS.task(String(id)),
     }),
   },
   {
@@ -170,7 +191,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     skeleton: 'write',
     request: ({ id }) => ({
       method: 'POST',
-      path: `/api/v1/tasks/${encodeURIComponent(String(id))}/cancel`,
+      path: OV_PATH_BUILDERS.taskCancel(String(id)),
     }),
   },
 ];

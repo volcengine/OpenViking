@@ -1,3 +1,4 @@
+import type { SetStateAction } from 'react';
 import type { Locale } from '../../shared/locale.js';
 import {
   ConsoleCommandError,
@@ -170,8 +171,13 @@ export function createConsoleController(
     cancel,
     clear,
     setCommand: (command: string) => update({ command }),
-    setConversationDraft: (conversationDraft: string) =>
-      update({ conversationDraft }),
+    setConversationDraft: (conversationDraft: SetStateAction<string>) =>
+      update({
+        conversationDraft:
+          typeof conversationDraft === 'function'
+            ? conversationDraft(state.conversationDraft)
+            : conversationDraft,
+      }),
     retry: (locale: Locale) =>
       state.failedCommand
         ? execute(state.failedCommand, locale)

@@ -71,6 +71,7 @@ OpenViking 拒绝 API 密钥时，返回 401 `openviking_http_401`。
 | `status` | 服务商返回的 HTTP 状态码 |
 | `upstream_id`、`credential_id` | 处理请求的上游，以及发出请求的网关密钥 |
 | `session`、`protocol` | 对话及其协议，[重置保存](#gateway-keys)时要用 |
+| `peer` | 请求的 [Peer](../gateway/03-connect-clients.md#peer)，来自 `X-OpenViking-Actor-Peer` 或密钥的默认 Peer |
 | `degradation` | 异常代码，见[降级请求的异常](../gateway/12-troubleshooting.md#issues-on-degraded-requests) |
 | `recall_reason`、`recall_count`、`recall_ms` | 记忆检索的结果代码、补充的条数和检索耗时，见[没有补充记忆](../gateway/12-troubleshooting.md#no-memory-is-added) |
 | `replay_hits` | 原样放回记忆的历史消息数 |
@@ -190,6 +191,7 @@ Anthropic 测试同时在 `x-api-key` 和 `Authorization: Bearer` 中发送密�
 | `models` | 否 | 允许的模型名（客户端发送的名称，包括别名）；空列表表示不限。 |
 | `user_id` | 否 | 密钥归属的 OpenViking 用户，默认是调用方自己。root 不是账号里的用户，必须指定用户（或提供 `openviking_key`）。user 只能填自己。 |
 | `openviking_key` | 否 | 该用户的 OpenViking API 密钥。通常不用填，见下文。 |
+| `default_peer_id` | 否 | 请求没带 `X-OpenViking-Actor-Peer` 请求头时使用的 Peer，见[按 Peer 区分记忆](../gateway/03-connect-clients.md#peer)。规则与消息的 `peer_id` 相同；空白表示不设置。 |
 
 网关需要拿到目标用户的 OpenViking API 密钥，之后以这个用户的身份检索和保存记忆：
 
@@ -219,7 +221,7 @@ curl -X POST "$SERVER_URL/gateway/admin/keys?account_id=team" \
 }
 ```
 
-立即保存响应中的 `key`，网关只保留它的哈希。`GET` 返回同样的字段，但没有 `key`。网关密钥不能修改，没有对应的 `PUT`；要换上下文配置、上游、模型或用户，就签发新密钥，再吊销旧的。
+立即保存响应中的 `key`，网关只保留它的哈希。`GET` 返回同样的字段，但没有 `key`。网关密钥不能修改，没有对应的 `PUT`；要换上下文配置、上游、模型、默认 Peer 或用户，就签发新密钥，再吊销旧的。
 
 用户的 OpenViking API 密钥重新生成或用户被删除后，绑定它的网关密钥会失效并被删除，用户数据保留，见[网关密钥](../gateway/09-gateway-keys.md#gateway-keys)。
 

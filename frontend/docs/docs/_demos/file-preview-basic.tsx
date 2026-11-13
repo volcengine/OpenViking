@@ -1,3 +1,4 @@
+import { Button } from '#demo-controls';
 import { useState } from 'react';
 import { useLang } from '@rspress/core/runtime';
 import { FilePreview } from '@openviking/react/components/file-preview';
@@ -29,7 +30,7 @@ See [the compile notes](viking://system/compile/notes.md) and [a relative page](
     dashboard:
       'A content tab renders whatever the host passes — a dashboard, a graph, a summary. The component does not know what it is.',
     dashboardTitle: 'Dashboard',
-    hint: 'Switch tabs, copy the path or the content, or toggle preview and source.',
+    hint: 'Switch tabs, copy the content, or toggle preview and source.',
     contentCopied: 'Content copied',
     pathCopied: 'Path copied',
     permissionTag: 'Can manage',
@@ -62,7 +63,7 @@ See [the compile notes](viking://system/compile/notes.md) and [a relative page](
     dashboard:
       '内容页签原样渲染宿主传入的节点——可以是看板、图谱或摘要，组件不关心它是什么。',
     dashboardTitle: '看板',
-    hint: '切换页签、复制路径或正文，或在预览与源码之间切换。',
+    hint: '切换页签、复制正文，或在预览与源码之间切换。',
     contentCopied: '正文已复制',
     pathCopied: '路径已复制',
     permissionTag: '可管理',
@@ -117,28 +118,36 @@ export default function FilePreviewBasic() {
     return <Icon width={14} height={14} />;
   };
 
-  // 组件不内置复制、下载、视图切换与编辑按钮，这些由宿主用 `actions` 上下文
-  // 自己渲染。示例演示一个最小实现。
-  // The component ships no copy, download, view-switch or edit buttons; the host
-  // renders them from the `actions` context. This is a minimal implementation.
+  // 通过 actions 上下文替换默认工具栏；编辑态的保存与取消也由宿主渲染。
+  // Replace the default toolbar through the actions context, including Save/Cancel.
   const renderActions = (actions: FilePreviewActions) => (
     <>
-      {actions.canCopyContent ? (
-        <button
-          type="button"
+      {typeof actions.source?.content === 'string' &&
+      actions.source.content.length > 0 ? (
+        <Button
+          size="small"
+          type="default"
+          htmlType="button"
           className="ov-file-preview__button"
           disabled={actions.busy}
-          onClick={() => void actions.copyContent()}
+          onClick={() =>
+            void navigator.clipboard
+              .writeText(actions.source!.content!)
+              .then(() => setActiveHint(t.contentCopied))
+              .catch(() => setActiveHint(t.actions.copyContent))
+          }
         >
           {t.actions.copyContent}
-        </button>
+        </Button>
       ) : null}
       {actions.canSwitchView ? (
         <div className="ov-file-preview__switch" role="group">
           {(['preview', 'source'] as const).map((mode) => (
-            <button
+            <Button
+              size="small"
+              type={actions.viewMode === mode ? 'primary' : 'secondary'}
               key={mode}
-              type="button"
+              htmlType="button"
               className="ov-file-preview__switch-item"
               data-active={actions.viewMode === mode || undefined}
               aria-pressed={actions.viewMode === mode}
@@ -146,38 +155,44 @@ export default function FilePreviewBasic() {
               onClick={() => actions.setViewMode(mode)}
             >
               {mode === 'preview' ? t.actions.preview : t.actions.source}
-            </button>
+            </Button>
           ))}
         </div>
       ) : null}
       {actions.canEdit && !actions.editing ? (
-        <button
-          type="button"
+        <Button
+          size="small"
+          type="default"
+          htmlType="button"
           className="ov-file-preview__button"
           disabled={actions.busy}
           onClick={actions.startEditing}
         >
           {t.actions.edit}
-        </button>
+        </Button>
       ) : null}
       {actions.editing ? (
         <>
-          <button
-            type="button"
+          <Button
+            size="small"
+            type="default"
+            htmlType="button"
             className="ov-file-preview__button"
             disabled={actions.busy}
             onClick={actions.cancelEditing}
           >
             {t.actions.cancel}
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            size="small"
+            type="primary"
+            htmlType="button"
             className="ov-file-preview__button ov-file-preview__button--primary"
             disabled={actions.busy}
             onClick={() => void actions.saveEditing()}
           >
             {t.actions.save}
-          </button>
+          </Button>
         </>
       ) : null}
     </>
@@ -194,7 +209,6 @@ export default function FilePreviewBasic() {
         fileName: 'SKILL.md',
         path: 'viking://system/compile/llm-wiki/SKILL.md',
       },
-      onCopyContent: () => setActiveHint(t.contentCopied),
       onCopyPath: () => setActiveHint(t.pathCopied),
       operations: {
         openParent: async () => {},

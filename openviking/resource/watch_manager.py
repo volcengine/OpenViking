@@ -46,6 +46,7 @@ from openviking.service.task_tracker import get_task_tracker
 from openviking.service.task_tracker_concurrency import KeyedAsyncLockPool, run_to_completion
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.utils.git_auth import GIT_AUTH_FAILED
+from openviking.utils.network_guard import ensure_public_remote_target
 from openviking_cli.exceptions import ConflictError, FailedPreconditionError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.logger import get_logger
@@ -742,6 +743,7 @@ class WatchManager:
             return None
         try:
             probe_kwargs = dict(kwargs)
+            probe_kwargs["request_validator"] = ensure_public_remote_target
             if probe_kwargs.get("auth_config") is None:
                 processor = getattr(self._resource_service, "_resource_processor", None)
                 if processor is not None:

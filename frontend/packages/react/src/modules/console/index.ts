@@ -1,11 +1,15 @@
 export * from './console.js';
-export { useConsole } from './use-console.js';
 export type {
+  ConsoleChatOptions,
+  ConsoleCommandProps,
   ConsoleLabels,
   ConsoleMode,
-  ConsoleOptions,
-  ConsoleResult,
-  ConsoleState,
   ConsoleProps,
   ConsoleSlots,
 } from './types.js';
+export type {
+  VikingBotChatEvent,
+  VikingBotChatInput,
+  VikingBotChatService,
+  VikingBotSessionService,
+} from './chat/types.js';

@@ -53,10 +53,10 @@ openviking-server doctor
 
 ```
 
-如果 `provider` 是 `openai-codex`，并且 Codex OAuth 已经就绪，则 `vlm.api_key` 可以省略。
+如果 `provider` 是 `openai-codex`，并且 Codex OAuth 已经就绪，则 `vlm.api_key` 可以省略。将 `vlm.api_base` 设为 `https://api.openai.com/v1` 时，也支持标准 OpenAI API Key；参见 [VLM 配置](#vlm)。
 
-顶层 `service_name` 默认是 `"openviking-server"`。使用 cache 的模块会把它作为
-Redis 命名空间。OTel 的 `service_name` 显式配置时保持原值，省略时继承该值。
+顶层 `service_name` 默认是 `"openviking-server"`，用于隔离 coordination 状态和
+使用 cache 的模块的 Redis 命名空间。OTel 的 `service_name` 显式配置时保持原值，省略时继承该值。
 
 ### ov.conf 的有序凭据数组
 
@@ -799,10 +799,10 @@ provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的�
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `api_key` | str | API Key。`openai-codex` 在 Codex OAuth 可用时可省略；使用 provider 原生凭据的 `litellm` 路由也可省略 |
+| `api_key` | str | API Key。`openai-codex` 在 Codex OAuth 可用时可省略；使用标准 OpenAI API Key 时须同时设置 `api_base: "https://api.openai.com/v1"`。使用 provider 原生凭据的 `litellm` 路由也可省略 |
 | `forward_api_key` | bool | 仅 LiteLLM 使用。覆盖是否把 `api_key` 透传给 LiteLLM。默认情况下，OpenViking 不会把占位 key 透传给 `bedrock/`、`sagemaker/`、`vertex_ai/` 等 AWS/GCP 原生鉴权路由；如果明确使用 LiteLLM 的 Bedrock bearer-token API-key 鉴权，可设为 `true` |
 | `model` | str | 模型名称 |
-| `api_base` | str | API 端点（可选） |
+| `api_base` | str | API 端点（可选）。`openai-codex` 默认使用 ChatGPT Codex 后端；使用标准 OpenAI API Key 时设为 `https://api.openai.com/v1` |
 | `temperature` | float 或 null | 采样温度（默认：`null`）。省略或设为 `null` 时请求不携带该字段，使用服务端默认值 |
 | `thinking` | bool | 启用思考模式（仅对部分火山模型生效，默认：`false`） |
 | `max_concurrent` | int | 语义处理阶段 LLM 最大并发调用数（默认：`32`） |
@@ -844,12 +844,34 @@ VLM 配置返回 `is_available() == false` 时，通用文件摘要会返回空�
 **支持的 provider：**
 - `volcengine`：火山引擎 VLM API
 - `openai`：OpenAI 兼容 VLM API
-- `openai-codex`：通过 ChatGPT/Codex OAuth 使用 Codex VLM
+- `openai-codex`：通过 ChatGPT/Codex OAuth，或显式 API Key 和端点使用 Responses API
 - `kimi`：Kimi Coding 订阅端点，内置 provider 默认配置
 - `glm`：Z.AI GLM Coding Plan 端点，使用 OpenAI 兼容请求格式
 - `litellm`：LiteLLM VLM API，支持 `bedrock/`、`sagemaker/`、`vertex_ai/`、`azure/` 等显式 LiteLLM 路由
 
-对于 `openai-codex`，请通过 `openviking-server init` 完成鉴权，再使用 `openviking-server doctor` 做校验。
+对于使用 OAuth 的 `openai-codex`，请通过 `openviking-server init` 完成鉴权，再使用 `openviking-server doctor` 做校验。
+
+**使用 API Key 调用 Responses API**
+
+使用标准 OpenAI API Key 调用 Responses API 时，请在 `openai-codex` 配置中同时设置
+`api_key` 和 `api_base`。显式配置 key 后会跳过 Codex OAuth。
+将以下 `vlm` 段合并到 `ov.conf`，替换 key 和 model 占位值：
+
+```json
+{
+  "vlm": {
+    "provider": "openai-codex",
+    "api_key": "YOUR_OPENAI_API_KEY",
+    "api_base": "https://api.openai.com/v1",
+    "model": "YOUR_RESPONSES_MODEL",
+    "reasoning_effort": "medium"
+  }
+}
+```
+
+请选择支持所需工具和推理强度的 Responses 模型。该路径使用 `/v1/responses`；
+`provider: "openai"` 使用 Chat Completions。仅设置 `api_key` 不会切换到 OpenAI API
+端点：省略 `api_base` 时仍默认使用 Codex 后端。
 
 对于 `litellm`，当底层路由使用环境变量或 provider 原生凭据时可以省略
 `api_key`，例如 Bedrock/SageMaker 的 AWS IAM/IRSA，或 Vertex AI 的
@@ -1050,7 +1072,7 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 
 #### 远程资源网络防护
 
-通过 URL 拉取资源时，默认网络检查会拒绝解析到非公网地址的目标。普通公网 URL 无需加入代码托管白名单；列入白名单的可信代码主机会跳过地址范围检查。接入自建 GitHub Enterprise / GitLab / Azure DevOps 时，可将主机加入 `code` 下对应的平台列表：
+通过 URL 拉取资源时，默认网络检查会拒绝解析到非公网地址的目标。普通公网 URL 无需加入代码托管白名单；列入白名单的可信代码主机可以访问私有网络，但仍须通过 DNS 地址检查。回环、link-local、未指定、组播、保留地址和已知云元数据地址始终被拒绝，白名单和 `allow_private_networks` 均不能放行这些目标。接入自建 GitHub Enterprise / GitLab / Azure DevOps 时，可将主机加入 `code` 下对应的平台列表：
 
 | 字段 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
@@ -1059,7 +1081,7 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 | `azure_devops_domains` | list[str] | 允许的 Azure DevOps 主机 | `["dev.azure.com", "ssh.dev.azure.com", "vs-ssh.visualstudio.com"]` |
 | `code_hosting_domains` | list[str] | 允许的通用代码托管主机 | `["github.com", "gitlab.com", "gitcode.com", "gitee.com", "bitbucket.org", "codeberg.org", "gitea.com", "atomgit.com", "git.sr.ht"]` |
 
-如果需要允许其他私有网络目标（例如内部镜像），可将顶层 `allow_private_networks` 设为 `true`。该开关默认关闭；`localhost` 及其子域等本地主机名仍会被拒绝。下面同时演示启用私有网络访问和添加代码主机：
+如果需要允许其他私有网络目标（例如内部镜像），可将顶层 `allow_private_networks` 设为 `true`。该开关默认关闭，启用后仍受上述地址限制；`localhost` 及其子域也会被拒绝。下面同时演示启用私有网络访问和添加代码主机：
 
 ```json
 {
@@ -1071,7 +1093,7 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 ```
 
 需要 GitHub、GitLab 或 Azure DevOps 专属 URL 语义时，应配置到对应的平台字段；
-其他 Git 主机统一添加到 `code_hosting_domains`。
+其他 Git 主机统一添加到 `code_hosting_domains`。HTTP 服务的 Git 预检、clone 和 fetch 不跟随 HTTP 重定向，请提供最终仓库 URL；GitHub/GitLab ZIP 下载保留重定向支持，并在请求每个跳转目标前进行同样的地址校验。
 
 #### 语法包下载与镜像（网络受限 / 离线）
 
@@ -1363,8 +1385,12 @@ Glob 引擎配置，用于路径模式匹配。这些设置为服务端配置，
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `engine` | str | 路径匹配引擎模式：`"auto"` 在 VikingDB / Volcengine 向量库可用且搜索范围记录数达到阈值时，使用远程 `path_glob` 后处理；不可用或失败时回退到本地文件系统搜索。`"fs"` 强制仅使用本地文件系统搜索。 | `"fs"` |
+| `engine` | str | 路径匹配引擎模式：`"auto"` 按当前账户向量库的 `storage.vectordb.enable_path_glob` 配置及后端默认能力选择远程路径；当 `uri` 字段存在且搜索范围记录数达到阈值时，使用远程 `path_glob` 后处理。不可用或失败时回退到本地文件系统搜索。`"fs"` 强制仅使用本地文件系统搜索。 | `"fs"` |
 | `switch_to_remote_threshold` | int | `auto` 模式切换到远程 `path_glob` 的记录数阈值。当搜索范围内记录数达到此阈值时使用远程路径匹配。设为 `0` 表示始终使用远程路径匹配。必须 ≥ 0。 | `100` |
+
+`storage.vectordb.enable_path_glob` 可设为 `true`（启用远程支持）或 `false`（禁用）。
+未配置或设为 `null` 时沿用后端默认能力：VikingDB、Volcengine 默认支持，其余内置后端默认不支持。
+自定义 adapter 也可声明默认能力。此配置不改变 `glob.engine="fs"` 的行为，也不跳过阈值或失败回退。
 
 ### storage
 
@@ -1495,8 +1521,7 @@ ALTER TABLE ov_watch_tasks
 ```
 
 所有节点都提供 Watch API。`enable_watch_scheduler=true` 的节点可以运行后台 Watch
-调度器。`watch_leader_provider` 选择 leader 模式：`auto` 保持按存储类型推导的默认值，
-`local` 将 leader 限制在本进程内，`cache` 使用 AGFS CacheRuntime 的共享 leader 租约。
+调度器，通过 [AGFS coordination](#coordination-配置) 选主。
 leader 每 15 秒拉取到期 Watch 并结算已结束的运行。File 和 MySQL 共用 Runtime
 的轮询与有限并发派发流程。后台派发在 leader 内存中维护
 未结束的 Watch 运行和提交中的协程占用（默认上限 4）。接管时通过已有运行扫描
@@ -1522,6 +1547,7 @@ Connector 导入没有本地 Work，其 Task 会成为 failed，再结算 Watch 
 | `backend` | str | `"local"`、`"s3"` 或 `"memory"` | `"local"` |
 | `timeout` | float | 请求超时时间（秒） | `10.0` |
 | `backups` | object | 多写存储配置。配置后顶层 `backend` 作为 primary，`backups.items[]` 作为 backup | `null` |
+| `coordination` | object | Watch 选主和语义任务 revision | `{"provider":"memory"}` |
 | `queuefs` | object | QueueFS 配置。控制 `/queue` 的命名空间模式、后端和运行时参数 | `{ "mode": "shared", "backend": "sqlite", "recover_stale_sec": 0, "busy_timeout_ms": 5000 }` |
 | `queue_db_path` | str（可选）| 旧版兼容字段，用于覆盖 QueueFS 的 sqlite 数据库文件路径。已被 `storage.agfs.queuefs.db_path` 取代。未设置时默认为 `{storage.workspace}/_system/queue/queue.db`。适用于 workspace 卷不支持 sqlite 的场景（例如某些网络文件系统） | `null` |
 | `s3` | object | S3 后端配置（`backend=s3` 时使用） | - |
@@ -1533,6 +1559,22 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 
 > [!WARNING]
 > `storage.agfs` 已不再支持 AGFS HTTP client 模式，也无需再配置旧的 HTTP client 入口。当前 AGFS / RAGFS 文件系统访问仅通过 Rust binding（`RAGFSBindingClient`）在进程内完成。这不影响 OpenViking server 的 HTTP API、`ov` CLI，或 `AsyncHTTPClient` / `SyncHTTPClient` 访问 OpenViking 服务端的能力。
+
+##### Coordination 配置
+
+`storage.agfs.coordination` 管理 Watch 选主及用于跳过过时语义任务的 revision。
+参与协调的节点须共享同一后端和顶层 `service_name`。
+
+| 参数 | 类型 | 说明 | 默认值 |
+|------|------|------|--------|
+| `provider` | str | `memory`：进程内；`sqlite`：同机；`cache`：复用顶层共享 CacheRuntime | `"memory"` |
+| `sqlite_path` | str / null | 使用 `sqlite` 时必填：本地磁盘上共享数据库的绝对路径，不能位于 EFS/NFS | `null` |
+| `operation_timeout_ms` | int | 单次 cache 协调操作的截止时间（毫秒），仅用于 cache，必须为正数 | `5000` |
+
+`watch_leader_provider` 已 deprecated，下个版本移除。未显式指定 coordination provider 时，
+`auto`（默认）在 File WatchStore 下选择 `memory`、MySQL 下选择 `cache`；
+`local` 映射为 `memory`，`cache` 映射为 `cache`。
+迁移时显式设置 `storage.agfs.coordination.provider`，并删除旧字段。
 
 ##### 主备存储配置
 
@@ -1582,7 +1624,7 @@ Python 配置层仍接受旧 sync、retry、operations、excludes 和 redirects
 ##### 全局 Cache Provider、CacheFS 与 PathLock 配置
 
 顶层 `service_name` 表示当前 OpenViking 部署名。CacheFS、`backend=cache`
-的 QueueFS、Cache PathLock 和 cache-backed 多写 metadata 都会从它生成
+的 QueueFS，以及使用 cache 的 PathLock、coordination 和多写 metadata 都会从它生成
 Redis 命名空间。
 
 全局 `cache` 与 `storage` 并列，标准配置只包含 Provider 名称和 Provider 自有参数：
@@ -1603,8 +1645,9 @@ Redis 命名空间。
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `provider` | str | `filesystem`、`memory`、`sqlite` 或 `cache`；`cache` 复用 Redis CacheRuntime | `filesystem` |
+| `provider` | str | `filesystem`、`memory`、`sqlite`、`postgres` 或 `cache`；`postgres` 直连 PostgreSQL，`cache` 复用 Redis CacheRuntime | `filesystem` |
 | `sqlite_path` | str / null | 可显式覆盖本地共享锁数据库的绝对路径。见 [SQLite 配置](../configuration/01-server.md#storage) | 使用 `sqlite` 时为 `{storage.workspace}/_system/pathlock/pathlock.db` |
+| `postgres_dsn_env` | str / null | `postgres` 必填；保存 PostgreSQL DSN 的环境变量名。见 [PostgreSQL 配置](../configuration/01-server.md#postgresql-pathlock) | `null` |
 | `lock_expire_secs` | float | 未刷新的锁进入 stale 状态前的秒数；不得小于 `1.0` | `30.0` |
 | `lock_timeout_secs` | float | 已废弃且忽略；运行时等待超时固定为 `0.0` | `0.0` |
 
@@ -1613,9 +1656,37 @@ SQLite PathLock 仅适用于同一主机上的进程共享同一个本地磁盘�
 workspace 位于 EFS 时，默认 `sqlite_path` 也会落在 EFS。
 详见 [SQLite 部署限制](../configuration/01-server.md#storage)。
 
-多个容器或主机共享 EFS 时，使用下面的共享 Redis PathLock 配置。
+不使用 Redis 的多进程或多主机 PathLock 协调，可将下面片段合入 `ov.conf`，
+并在每个服务和 worker 启动前设置对应环境变量：
+
+```json
+{
+  "service_name": "production",
+  "storage": {
+    "agfs": {
+      "pathlock": {
+        "provider": "postgres",
+        "postgres_dsn_env": "OV_POSTGRES_DSN",
+        "lock_expire_secs": 30.0
+      }
+    }
+  }
+}
+```
+
+```sh
+export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=openviking password=YOUR_PASSWORD sslmode=require'
+```
+
+所有参与者必须连接同一可写 PostgreSQL 主库，使用相同的顶层 `service_name`
+和过期时长。PostgreSQL PathLock 独立于 `cache.provider/cache.params`，
+不会启用 CacheFS，也不会改变 QueueFS、业务文件存储或向量后端的并发限制。
+特别是默认 SQLite 队列不适合在 EFS 上跨主机共享。
+配置和验证步骤见 [PostgreSQL PathLock 配置](../configuration/01-server.md#postgresql-pathlock)。
+
+多个容器或主机共享 EFS 时，也可使用下面的共享 Redis PathLock 配置。
 所有副本必须连接同一个 Redis 部署，并使用相同的顶层 `service_name` 和锁过期配置。
-示例同时使用 Redis QueueFS，避免默认的 SQLite 队列数据库落在 EFS。
+示例同时使用 Redis QueueFS 和 coordination，避免 SQLite 状态落在 EFS。
 
 ```json
 {
@@ -1642,6 +1713,9 @@ workspace 位于 EFS 时，默认 `sqlite_path` 也会落在 EFS。
       "queuefs": {
         "backend": "cache"
       },
+      "coordination": {
+        "provider": "cache"
+      },
       "pathlock": {
         "provider": "cache",
         "lock_expire_secs": 30.0
@@ -1651,7 +1725,7 @@ workspace 位于 EFS 时，默认 `sqlite_path` 也会落在 EFS。
 }
 ```
 
-标准配置没有全局 `cache.enabled`，也没有各模块自己的 Redis namespace 字段。当 CacheFS 或 QueueFS 选择 `backend=cache`、PathLock 选择 `provider=cache`，或多写选择 `backups.provider=cache` 时初始化 CacheRuntime。Cache PathLock 当前只支持 `cache.provider=redis`，不支持 DynamicProvider。全部模块使用本地 Provider 时不解析 `cache.params`，也不连接 Provider。
+标准配置没有全局 `cache.enabled`，也没有各模块自己的 Redis namespace 字段。当 CacheFS 或 QueueFS 选择 `backend=cache`、PathLock 或 coordination 选择 `provider=cache`，或多写选择 `backups.provider=cache` 时初始化 CacheRuntime。Cache PathLock 当前只支持 `cache.provider=redis`，不支持 DynamicProvider。只要这些模块都没有选择 cache Provider，就不解析 `cache.params`，也不连接 CacheRuntime；PathLock 使用 PostgreSQL 时同样如此。
 
 请把 Provider 参数迁移到顶层 `cache.provider/cache.params`，用顶层 `service_name` 生成共享 Redis 名称，业务模块改为 `cachefs.backend="cache"`、`queuefs.backend="cache"` 或 `backups.provider="cache"`；Redis 的 `singleton` 改为 `standalone`，`tls_enabled` 改为使用 `rediss://` endpoint。
 

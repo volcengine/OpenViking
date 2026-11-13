@@ -1,3 +1,4 @@
+import { Button } from '../../shared/primitives/button/button.js';
 import type { Locale } from '../../shared/locale.js';
 import {
   useEffect,
@@ -7,17 +8,17 @@ import {
   useSyncExternalStore,
 } from 'react';
 import { createPortal } from 'react-dom';
-import type { TuiRecord } from '../../components/tui/index.js';
+import type { CommandConsoleRecord } from '../../components/command-console/index.js';
 import { ConsoleIcon } from '../../icons/console-icons.js';
-import { Tooltip } from '../../shared/components/tooltip/index.js';
-import { useOverlayPosition } from '../../shared/components/overlay/use-overlay-position.js';
+import { Tooltip } from '../../shared/primitives/tooltip/index.js';
+import { useOverlayPosition } from '../../shared/primitives/overlay/use-overlay-position.js';
 import type { consoleLabels } from './labels.js';
 
 const subscribe = () => () => {};
 const clientSnapshot = () => true;
 const serverSnapshot = () => false;
 
-function historyTime(record: TuiRecord, locale: Locale) {
+function historyTime(record: CommandConsoleRecord, locale: Locale) {
   const date = new Date(record.createdAtMs ?? NaN);
   if (!Number.isFinite(date.getTime())) return record.createdAt ?? '';
   const parts = Object.fromEntries(
@@ -42,7 +43,7 @@ export function ConsoleHistory({
   labels,
   onRecall,
 }: {
-  records: readonly TuiRecord[];
+  records: readonly CommandConsoleRecord[];
   isExecuting: boolean;
   locale: Locale;
   labels: ReturnType<typeof consoleLabels>;
@@ -105,9 +106,12 @@ export function ConsoleHistory({
   return (
     <div className="ov-console__history" ref={trigger}>
       <Tooltip content={labels.history} className="ov-console__action-tooltip">
-        <button
+        <Button
+          size="small"
+          type="text"
+          iconOnly
           {...invoker}
-          type="button"
+          htmlType="button"
           className="ov-console__action"
           aria-label={labels.history}
           aria-haspopup="dialog"
@@ -117,7 +121,7 @@ export function ConsoleHistory({
           onClick={native ? undefined : () => setOpen(!open)}
         >
           <ConsoleIcon name="history" />
-        </button>
+        </Button>
       </Tooltip>
       {mounted
         ? createPortal(

@@ -921,6 +921,29 @@ export class OpenVikingClient {
       ]),
     });
   }
+  /** Set retrieval tags for multiple URIs. */
+  batchSetTags(
+    uris: string[],
+    tags?: string[],
+    options: SetTagsOptions = {},
+  ): Promise<JsonObject> {
+    const body = compact({
+      uris: uris.map(normalizeURI),
+      tags,
+      mode: options.mode ?? "replace",
+      recursive: options.recursive ?? false,
+      telemetry: options.telemetry,
+    });
+    return this.request("POST", "/api/v1/content/batch_set_tags", {
+      body: mergeExtra(body, options.extra, [
+        "uris",
+        "tags",
+        "mode",
+        "recursive",
+        "telemetry",
+      ]),
+    });
+  }
   /** Rebuild indexes for a URI. */
   reindex(uri: string, options: ReindexOptions = {}): Promise<JsonObject> {
     const body = compact({

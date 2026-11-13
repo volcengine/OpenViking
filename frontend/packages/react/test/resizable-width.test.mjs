@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { clampResizableWidth } from '../src/shared/components/resizable/clamp.ts';
+import { clampResizableWidth } from '../src/shared/primitives/resizable/clamp.ts';
 import {
   TREE_DEFAULT_WIDTH,
   TREE_MIN_WIDTH,
@@ -21,8 +21,8 @@ test('the minimum wins when the container leaves no room for the maximum', () =>
 });
 
 test('the tree cap leaves the detail pane its readable width', () => {
-  // 800px 容器：上限 = 800 - 320(详情) - 24(分隔条)。
-  assert.equal(resolveTreeMaxWidth(800), 456);
+  // 800px 容器：上限 = 800 - 320(详情) - 1(分隔线)。
+  assert.equal(resolveTreeMaxWidth(800), 479);
   // 宽容器下不越过 520px 的绝对上限。
   assert.equal(resolveTreeMaxWidth(1600), 520);
   // 首帧还没测出宽度时用绝对上限，不把树压到最小。

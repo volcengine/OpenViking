@@ -471,6 +471,7 @@ curl -X POST "http://localhost:1933/api/v1/fs/attrs/set_tags" \
   -H "X-API-Key: your-key" \
   -H "Content-Type: application/json" \
   -d '{"uri":"viking://resources/docs","tags":["team=search"],"mode":"append","recursive":true}'
+
 ```
 
 **CLI**
@@ -481,6 +482,8 @@ ov attrs get viking://resources/docs/api.md tags
 ov attrs get viking://user/alice/memories/experiences/foo.md memory.resource_refs
 ov attrs set-tags viking://resources/docs/api.md --tags team=search,env=prod
 ov attrs set-tags viking://resources/docs --tags team=search --mode append --recursive
+ov attrs batch-set-tags viking://resources/docs/api.md viking://resources/docs/guide.md \
+  --tags count+=1 --mode append
 ```
 
 For `set-tags`, directory targets update the directory semantic records; `recursive=true` also updates existing descendant files and directory semantic records.
@@ -523,6 +526,8 @@ For `set-tags`, directory targets update the directory semantic records; `recurs
 ```
 
 `attrs.memory` is parsed from `MEMORY_FIELDS` metadata with content removed. `attrs.tags` is the explicit retrieval tag list used by `attrs set-tags` and search filters.
+
+Batch requests accept 1-50 URIs, deduplicate normalized URIs, and return `items` and `failed` in input order. Individual failures do not fail the whole HTTP request.
 
 ---
 

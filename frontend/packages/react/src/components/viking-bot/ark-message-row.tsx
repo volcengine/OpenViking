@@ -1,9 +1,11 @@
+import { Button } from '../../shared/primitives/button/button.js';
 import { Bubble } from '@ark-design/ui/bubble';
 import { ErrorCard } from '@ark-design/ui/error-card';
 
 import { MessageBody } from './ark-message-body.js';
 import { messageText } from './message-groups.js';
 import { MessageFooter } from './message-footer.js';
+import { UserMessageGroup } from './user-message-group.js';
 import type { VikingBotMessage, VikingBotStreamingState } from './model.js';
 import type { VikingBotMessageListProps } from './types.js';
 
@@ -25,9 +27,11 @@ function MessageActions({
   return (
     <div className="ov-viking-bot__message-actions">
       {actions.map(({ messageId, action }) => (
-        <button
+        <Button
+          size="small"
+          type="default"
           key={`${messageId}:${action.key}`}
-          type="button"
+          htmlType="button"
           className="ov-viking-bot__message-action"
           disabled={
             Boolean(action.disabledReason) ||
@@ -38,7 +42,7 @@ function MessageActions({
           onClick={() => onMessageAction?.(messageId, action.key)}
         >
           {action.label ?? action.key}
-        </button>
+        </Button>
       ))}
     </div>
   );
@@ -100,15 +104,12 @@ export function VikingBotMessageRow({
       className={`ov-viking-bot__message ov-viking-bot__message--${message.role}`}
     >
       {message.role === 'user' ? (
-        <Bubble
-          className="ov-viking-bot__user-bubble"
-          placement="end"
-          variant="filled"
-          maxHeight="9999px"
+        <UserMessageGroup
+          message={message}
+          labels={labels}
+          onOpenUri={onOpenUri}
           footer={footer}
-        >
-          {body}
-        </Bubble>
+        />
       ) : message.streaming && message.parts.length === 0 ? (
         <Bubble loading placement="start" variant="text" />
       ) : (

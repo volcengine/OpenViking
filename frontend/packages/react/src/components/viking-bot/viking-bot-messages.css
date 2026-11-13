@@ -1,4 +1,3 @@
-/* Geometry from vikingdb-fe release/openviking/2026-11-12, 40b89239f. */
 .ov-viking-bot__list {
   width: 100%;
   min-width: 0;
@@ -14,6 +13,14 @@
   box-sizing: border-box;
   padding-left: 32px;
 }
+.ov-viking-bot__user-message-group {
+  display: flex;
+  width: min(88%, 960px);
+  max-width: 100%;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
 .ov-viking-bot__user-bubble {
   --agentic-bubble-content-max-width: 100%;
   --agentic-bubble-content-filled-bg: var(
@@ -25,8 +32,26 @@
   --agentic-bubble-content-radius-default: 16px;
   --agentic-bubble-content-font-size: 14px;
   --agentic-bubble-content-line-height: 22px;
-  width: min(88%, 960px);
   max-width: 100%;
+}
+.ov-viking-bot__user-message-content {
+  display: flex;
+  width: max-content;
+  max-width: 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.ov-viking-bot__user-message-attachments {
+  display: flex;
+  align-self: flex-end;
+  width: 100%;
+  max-width: 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  overflow: visible;
 }
 .ov-viking-bot__user-bubble .ark-agentic-bubble__content {
   inline-size: max-content;
@@ -69,8 +94,12 @@
   pointer-events: none;
   transition: opacity 160ms ease;
 }
-.ov-viking-bot__message:hover .ov-viking-bot__message-footer,
-.ov-viking-bot__message:focus-within .ov-viking-bot__message-footer {
+.ov-viking-bot__message:not(.ov-viking-bot__message--user):hover
+  .ov-viking-bot__message-footer,
+.ov-viking-bot__message:not(.ov-viking-bot__message--user):focus-within
+  .ov-viking-bot__message-footer,
+.ov-viking-bot__user-message-group:hover .ov-viking-bot__message-footer,
+.ov-viking-bot__user-message-group:focus-within .ov-viking-bot__message-footer {
   opacity: 1;
   pointer-events: auto;
 }
@@ -80,19 +109,12 @@
 .ov-viking-bot__message-actions {
   margin-top: 10px;
 }
-.ov-viking-bot__message-action {
-  height: 36px;
-  padding: 0 16px;
-  border: 0;
-  border-radius: 24px;
-  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
-  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
-  font-size: 13px;
-  font-weight: 400;
-  line-height: 22px;
-}
 .ov-viking-bot__activity {
   width: min(88%, 960px);
+  border-block-end: 1px solid
+    var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
+  padding-block-end: 6px;
+  margin-block: 8px;
 }
 .ov-viking-bot__tool-details {
   display: flex;

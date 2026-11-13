@@ -1,22 +1,50 @@
-# Internal Shared Code
+# Internal shared code
 
 English / [中文](README_CN.md)
 
-Code used by more than one of this package's own components, with **no public entry**. Nothing here is exported from the package root, from a subpath, or listed in `package.json` exports — a host cannot import it, and it carries no compatibility promise.
+Code that several components or blocks reuse, with **no public entry**. Nothing here is exported from the package root or a subpath, or listed in `exports` in `package.json`: a host cannot import it, and it carries no compatibility promise.
 
-A shared piece is promoted here only when a second consumer actually needs it. What a single component uses stays inside that component's directory.
+Code belongs here when a second real consumer needs it; what a single component uses stays in that component's directory. Shared code never depends on `components/`, `modules/` or a host contract: the dependency runs one way, from them into this directory. A piece that needs business data, routing or a host service belongs in `modules/`. The [Frontend Agent Guide](../../../../AGENTS.md) has the placement rules.
 
-Styles here are pulled in by the consuming component's own stylesheet, not by `components/style.css`: nothing public points at this directory, so the component that uses it is responsible for importing what it needs.
+A stylesheet here is imported by the consuming component's own `style.css`, not by `components/style.css`, because no public entry points at this directory.
 
 ## Contents
 
-- `components/tooltip`: a positioned surface rendered into `document.body`, used by `file-preview` for the copy-path hint and the collapsed-level menu. It exists because an ancestor's `overflow: hidden` would clip an in-flow popover.
-- `components/popover`: the white-card surface, also portalled into `document.body`, used by the file tree's node info and by the file preview.
-- `components/divider`: a single rule whose extent and colour the caller passes inline.
-- `components/resizable`: the draggable `ResizableHandle` divider, which uses pointer capture for the drag, supports the arrow keys, and keeps the width controlled by its caller. `file-browser` uses it to resize the directory tree.
+The directories are the source of truth for what exists; each entry below says what its directory is for.
 
-## Boundaries
+### `primitives/`
 
-Shared code may not depend on `components/`, `modules/`, or any host-specific contract — the dependency runs one way, from the public components into this directory. A piece that needs business data, routing, or a host service belongs in `modules/` instead.
+General-purpose basic pieces. The caller supplies business content and specific styles through `children` or props.
 
-Development and build entry points are in the [UI workspace README](../../../../README.md); component conventions are in the [components guide](../components/AGENTS.md).
+- `button`: a trimmed Arco button with variants, sizes, icons, a loading state, native events and a ref. It submits a form only when `htmlType="submit"`. Links, button groups and `ConfigProvider` coupling are omitted.
+- `input`: a trimmed Arco `Input` with native events, form attributes, a ref, sizes and decorative prefix and suffix, plus a styled `TextArea`. Password toggle, counter, clear button and auto-size are omitted.
+- `modal`: a controlled, centered modal derived from Arco, with transitions, a focus lock and the shared body scroll lock. Its close label lives in its own `locales/`.
+- `drawer`: a right-side drawer with transitions, a focus lock and the shared body scroll lock. It receives its content through `children`.
+- `tooltip`: a positioned surface rendered into `document.body`, shown on hover or focus, or toggled by click. It renders into the body because an ancestor's `overflow: hidden` would clip an in-flow surface.
+- `popover`: the white-card counterpart of `tooltip` for structured or interactive content, also rendered into `document.body`, with the same trigger and placement options.
+- `divider`: a single `role="separator"` rule whose length, thickness and color the caller passes.
+- `resizable`: `ResizableHandle`, a draggable `role="separator"` that resizes a neighbouring panel with pointer drag or the arrow keys. The caller owns the width and receives each clamped value through `onResize`.
+- `overlay`: positioning and scroll helpers for floating surfaces such as `tooltip`, `popover`, `modal` and `drawer`. `useOverlayPosition` flips a surface to the opposite side when space runs out and clamps it to the viewport, `lockBodyScroll` counts its owners and restores the host's inline styles when the last one releases, and `OverlayPlacement` is the shared placement type.
+
+### `auth/`
+
+What the six forms in `components/auth/` share: the `<form>` frame with title, description, error alert, submit button and agreement consent (`form-frame.tsx`), fields with an optional password toggle (`fields.tsx`), agreement links and the confirmation dialog (`agreements.tsx`), `useForm` for values and validation, `useAuthLabels` for localized labels, and `auth.css`.
+
+### `dashboard/`
+
+`DashboardState`, the loading, error (with a retry button) and empty block, and `dashboard.css` for the state block, tab bar and body that WikiDashboard and ExperienceDashboard share.
+
+### Language
+
+- `locale.ts`: the `Locale` type (`'en-US' | 'zh-CN'`), `resolveLocale` and `mergeLabels`. An explicit `labels` entry beats the locale's default, `undefined` inherits the default, and an empty string stays an explicit override. It holds no business messages.
+- `locale-context.tsx`: `useLocale` and `LocaleProvider`, the language scope all public entries share. It is separate from the request client's Context, so switching language keeps requests and state.
+
+Translations stay with their owner in `locales/en-US.ts` and `locales/zh-CN.ts`; `auth/` and `primitives/modal/` follow the same layout.
+
+## Notes
+
+- Button and Input reuse Arco's interaction logic. Their visual rules adapt `@arco-design/theme-ve-o-aml-design@0.0.36` (MIT) instead of Arco's default skin, with colors mapped to `--ov-ui-color-*` in `src/theme.css` so hosts can override them. No global reset, private icon or font asset is imported. The Arco notice is in [`LICENSE.arco-design`](../../LICENSE.arco-design).
+- The documentation site uses a separate private build of `Button` through `docs/internal-controls.ts` (the `docs-controls` entry in `rslib.config.ts`), which the npm package excludes. The `#demo-controls` import in demos is for that site only; a host uses its own buttons.
+- Tests reach `button`, `input` and `modal` through a private build in `scripts/test.mjs`, not through package exports.
+
+Development commands are in the [workspace README](../../../../README.md); component conventions are in the [components guide](../components/AGENTS.md).

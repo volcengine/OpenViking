@@ -1,7 +1,8 @@
+import { Input } from '../../shared/primitives/input/input.js';
 import type { Locale } from '../../shared/locale.js';
 import { useEffect, useId, useMemo, useState } from 'react';
 import type { SenderProps } from '@ark-design/ui/sender';
-import { usePortalTheme } from '../../shared/components/tooltip/use-portal-theme.js';
+import { usePortalTheme } from '../../shared/primitives/tooltip/use-portal-theme.js';
 import { FileTree } from '../file-tree/index.js';
 import type { FileTreeEntryRow } from '../file-tree/index.js';
 import type { VikingBotLabels } from './model.js';
@@ -106,7 +107,7 @@ export function ReferencePicker({
       {editor ? null : (
         <label htmlFor={id}>
           {labels.searchReferences}
-          <input
+          <Input
             id={id}
             type="search"
             value={search}

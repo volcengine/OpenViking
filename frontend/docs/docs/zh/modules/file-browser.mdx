@@ -1,117 +1,490 @@
 # FileBrowser 文件浏览
 
-必填 `locale: 'zh-CN' | 'en-US'` 选择内置中英文文案；已有 `labels` 可逐项覆盖，未覆盖项跟随当前语言。业务内容仍由宿主提供。
+目录树、搜索和文件预览组成的文件浏览区块：读取 OpenViking 的目录和内容，支持预览、编辑、导入导出、历史版本和权限管理，并内置 Wiki 与经验看板。
 
-目录导航、搜索与内容预览作为一个模块。模块自己取数，宿主提供配置、受控的当前资源、工具栏入口与文案。
+## 何时使用
 
-组件已实现目录树、搜索与预览的联动：目录按需展开并分页，点击文件加载预览，搜索结果选中后同样打开预览。`useFileBrowser` 可单独使用，自行组装视图。
+- 需要在应用里浏览 OpenViking 的上下文目录（用户、会话、Agent、资源），并预览、编辑其中的文件。
+- 希望目录加载、分页、预览和刷新由区块协调：区块通过 `OpenVikingProvider` 请求原生 API，登录、账号作用域、路由和导入流程由宿主提供，权限由服务端校验。
+- 只需要纯视图、数据自己加载时，单独使用 [FileTree](../components/file-tree) 和 [FilePreview](../components/file-preview)；需要命令面板或对话时使用 [Console](./console)。
 
-## 基础用法
+## 引入
 
-示例用固定数据，不访问网络：
+```tsx
+import { OpenVikingProvider } from '@openviking/react/client';
+import { FileBrowser } from '@openviking/react/modules/file-browser';
+import '@openviking/react/modules/file-browser/style.css';
+
+<OpenVikingProvider baseURL={endpoint} apiKey={apiKey}>
+  <FileBrowser />
+</OpenVikingProvider>;
+```
+
+样式入口已包含 FileTree、FilePreview、FileBrowserActionBar、WikiDashboard 和 ExperienceDashboard 的样式。文件内容由 [FilePreview](../components/file-preview) 渲染，需要先安装可选的 peer 依赖 `@ark-design/ui`。Provider 与请求配置的规则见[区块概览](./)。
+
+## 代码演示
+
+### 基础用法
+
+展示目录树、搜索和预览的联动，以及 Wiki 与经验看板。底部的按钮切换预览的资源类型，下拉框切换预览操作区的模式。
 
 ```tsx file="../../_demos/file-browser-basic.tsx" preview
 
 ```
 
-## 范围
+示例使用固定数据，不访问网络。在搜索框输入 `profile` 查看搜索结果，输入 `error` 查看搜索失败；点击「导入资源」，底部会显示宿主收到的 `onImportResources` 事件。
 
-模块只覆盖文件树与文件预览两块。命令面板属于 `console`。
+### ACL 权限管理
 
-## 模块负责什么
+开启 `acl` 后，`viking://resources/` 下的节点显示当前用户的有效权限，权限为「可管理」时可以在权限标签的详情里打开授权弹窗。切换「当前权限」查看不同权限下的界面，勾选「模拟保存失败」或「模拟成员加载失败」查看失败状态。
 
-- 目录、搜索、当前 URI 与预览加载在模块内协调：点击目录节点或搜索结果即移动选中并加载预览，切换资源时丢弃过期请求。点目录同时展开它并把它设为当前资源，右侧显示该目录的 L1 概览（为空时回落到 L0 摘要）。
-- 保存、重命名或删除后刷新受影响的目录、搜索结果与预览。
-- 搜索、目录与预览区域的布局，包括树与详情之间的可拖拽分隔条。树默认 352px，可在 200px 到「给详情留出可读宽度」的上限之间拖动，分隔条获得焦点后方向键同样能改宽。
-- 工具栏里的搜索框与刷新按钮，以及行级状态，例如上传进度、冲突标记与保留策略设置。
-- 预览页签。某个资源有哪些页签由资源本身决定，宿主不需要提供。
-- 搜索视图。搜索是本模块内部的私有视图，不是公开的组件或模块：从工具栏或 ⌘K 打开，选中结果后移动目录树并加载预览。它不对外导出——离开目录树，搜索就没有去处。`console` 的 `@` 引用是基于同类接口的另一个视图，不是这一个。
+```tsx file="../../_demos/file-browser-acl.tsx" preview
 
-## 宿主负责什么
+```
 
-- 通过 Provider 提供请求配置，模块可用 `requestOptions` 逐字段覆盖。
-- 登录、账号作用域、路由与权限。
-- 顶部入口条里的入口，例如连接 Agent、导入资源。用 `FileBrowserEntries` 在 `toolbarActions` 里组合，图标、文案与分隔线由它负责。需要菜单时把它包在气泡或下拉里。
-- 接入弹窗、导入流程与引导。模块都不内置。
+示例是离线模拟，不会修改真实授权。
 
-## 入口与工具栏
+### 预览操作区
 
-顶部是宿主入口条（主色浅底），其下是模块自己的搜索框与刷新按钮。宿主通过 `toolbarActions` 添加入口，用 `FileBrowserEntries` 保证外观一致：
+`previewActions` 隐藏内置操作，`previewSlots` 追加、替换或隐藏操作区；基础用法示例底部的下拉框可以查看各种模式。
 
 ```tsx
-import { FileBrowserEntries } from '@openviking/react/components/file-browser-entries';
-import '@openviking/react/components/file-browser-entries/style.css';
-import { FileBrowser } from '@openviking/react/modules/file-browser';
-
 <FileBrowser
-  locale="zh-CN"
-  toolbarActions={
-    <FileBrowserEntries
-      locale="zh-CN"
-      onConnectAgent={connect}
-      onImportResources={openImport}
-      labels={{ connectAgent: '连接 Agent', importResources: '导入资源' }}
-    />
-  }
-/>;
+  previewActions={{
+    edit: false,
+    delete: false,
+    importPack: false,
+    configure: false,
+  }}
+  previewSlots={{
+    actionItems: (context) => [
+      ...context.defaultActions,
+      [
+        {
+          key: 'share',
+          icon: <ShareIcon />,
+          label: '分享',
+          onClick: () => share(context.path),
+        },
+      ],
+    ],
+  }}
+/>
 ```
 
-`FileBrowserEntries` 固定是两个入口，省略某个回调即隐藏对应入口；图标、文案与两者之间的分隔线都由它负责，宿主只决定显示哪几个与点击后做什么。只显示一个入口时不画分隔线。
+## API
 
-`toolbarActions` 是节点，需要菜单的入口直接把 `FileBrowserEntries` 包起来，不需要再加字段：
+### FileBrowser
+
+| 参数                     | 说明                                                                                                               | 类型                                                                    | 默认值                   |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- | ------------------------ |
+| uri                      | 受控的当前资源 URI：传入（包括空字符串）后由宿主决定，空字符串表示不选中资源                                       | `string`                                                                | -                        |
+| defaultUri               | 非受控时的初始资源 URI，省略时不选中资源                                                                           | `string`                                                                | -                        |
+| onUriChange              | 选中的资源变化后触发，参数是新的 URI；没有取消选中的操作，不会收到 `null`                                          | `(uri: string \| null) => void`                                         | -                        |
+| rootUri                  | 目录树的根，把浏览和搜索的范围限定在这个子树内                                                                     | `string`                                                                | `'viking://'`            |
+| defaultExpandedUri       | 首次加载后自动展开到的路径，逐级加载；省略时只展开根目录                                                           | `string`                                                                | -                        |
+| readOnly                 | 禁止编辑、导入和删除，编译配置只能查看；不影响权限管理弹窗，授权只读请用 `acl.readOnly`                            | `boolean`                                                               | `false`                  |
+| acl                      | 开启共享资源的权限显示与授权管理，类型见下方 `FileBrowserAclOptions`                                               | `boolean \| FileBrowserAclOptions`                                      | `false`                  |
+| agentConnect             | 显示「连接 Agent」按钮，点击后从右侧打开接入抽屉，参数见 [AgentConnect](../components/agent-connect)；省略时不显示 | `AgentConnectProps`                                                     | -                        |
+| agentConnectOpen         | 传入 `agentConnect` 后可从外层控制内置抽屉；见[受控示例](../components/file-browser-action-bar#从其他入口打开)     | `boolean`                                                               | -                        |
+| onAgentConnectOpenChange | 用户请求打开或关闭内置抽屉时触发；宿主直接改属性时不触发                                                           | `(open: boolean) => void`                                               | -                        |
+| onImportResources        | 点击「导入资源」按钮时触发，传入后显示该按钮                                                                       | `() => void`                                                            | -                        |
+| renderImportResources    | 包装或替换「导入资源」按钮，返回 `null` 隐藏，用法见 [FileBrowserActionBar](../components/file-browser-action-bar) | `(trigger: ReactElement<ComponentPropsWithRef<'button'>>) => ReactNode` | -                        |
+| previewActions           | 显示或隐藏内置的预览操作，类型见下方 `FileBrowserPreviewActions`                                                   | `FileBrowserPreviewActions`                                             | -                        |
+| previewSlots             | 追加、替换或隐藏预览操作区，看板页签不受影响，类型见下方 `FileBrowserPreviewSlots`                                 | `FileBrowserPreviewSlots`                                               | -                        |
+| dashboardKinds           | 启用的看板类型，空数组关闭看板；例如 `['experience']` 只保留经验看板，并且不再读取编译配置                         | `readonly ('wiki' \| 'experience')[]`                                   | `['wiki', 'experience']` |
+| renderDashboard          | 自定义看板页签的内容，返回 `null` 或 `undefined` 时使用内置看板，类型见下方 `FileBrowserDashboard`                 | `(dashboard: FileBrowserDashboard) => ReactNode`                        | -                        |
+| labels                   | 覆盖界面文案，类型见下方 `FileBrowserLabels`                                                                       | `FileBrowserLabels`                                                     | -                        |
+| locale                   | 界面语言，规则见[国际化](../guide/i18n)                                                                            | `'zh-CN' \| 'en-US'`                                                    | 继承上级，默认 `'en-US'` |
+| requestOptions           | 覆盖请求配置，规则见[区块概览](./)                                                                                 | `OvRequestOptions`                                                      | -                        |
+| className、style         | 外观与布局，其余 HTML 属性透传到根元素                                                                             | HTML 属性                                                               | -                        |
+
+### FileBrowserPreviewActions
+
+每一项默认在当前资源支持该操作时显示。设为 `false` 隐藏，设为 `true` 不会增加资源本来没有的能力。
+
+| 参数        | 说明                                                                                                                                          | 类型      | 默认值 |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------- | --------- | ------ |
+| copyPath    | 「复制路径」按钮，位于面包屑旁；预览有路径时显示                                                                                              | `boolean` | `true` |
+| viewSwitch  | 「预览 / 源码」切换；只在同时支持两种视图的格式上显示，图片、视频和 `viking://system` 下的目录不支持                                          | `boolean` | `true` |
+| edit        | 编辑按钮；只在可写且格式可编辑的文件上显示，经验文件、`viking://system` 下的资源和 L0/L1 摘要不可编辑                                         | `boolean` | `true` |
+| copyContent | 「复制内容」操作，复制当前预览的文本或目录摘要，超过预览行数上限时只复制已显示的部分；二进制媒体和 `viking://system` 下的目录不显示           | `boolean` | `true` |
+| download    | 「下载」操作，下载文件的原始内容；只在文件上显示                                                                                              | `boolean` | `true` |
+| history     | 「查看历史版本」操作；在支持的文本文件和 Wiki 目录上显示                                                                                      | `boolean` | `true` |
+| configure   | 「编译配置」操作；只在 Wiki 编译目标的根目录上显示，只读时仍可查看                                                                            | `boolean` | `true` |
+| importPack  | 「导入 .ovpack」操作；只在可写的目录上显示，且目录位于 `viking://user`（含 `viking://~`）或 `viking://resources` 下                           | `boolean` | `true` |
+| exportPack  | 「导出 .ovpack」操作；在 `viking://user`（含 `viking://~`）或 `viking://resources` 下的文件和目录上显示，`.relations.json` 等内部控制文件除外 | `boolean` | `true` |
+| delete      | 「删除文档」操作；只在可管理的文件上显示，目录、`viking://system` 下的文件和 L0/L1 摘要不可删除                                               | `boolean` | `true` |
+
+### FileBrowserPreviewSlots
+
+| 参数         | 说明                                                                                              | 类型                                                                                               | 默认值 |
+| ------------ | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------ |
+| actions      | 替换整个操作区，`null` 隐藏；替换后需要自己渲染保存、取消和追加的操作，复制路径和权限标签不受影响 | `ReactNode \| ((context: FileBrowserPreviewActionContext) => ReactNode)`                           | -      |
+| extraActions | 追加到默认操作区末尾，编辑状态下隐藏                                                              | `ReactNode`                                                                                        | -      |
+| actionItems  | 替换默认的操作列表；函数形式可以通过 `context.defaultActions` 复用、追加或重排默认操作            | `FilePreviewActionItems \| ((context: FileBrowserPreviewActionContext) => FilePreviewActionItems)` | -      |
+
+操作列表的每一项是单个操作或一组操作（数组），格式见 [FilePreview](../components/file-preview)。
+
+### FileBrowserPreviewActionContext
+
+`previewSlots.actions` 和 `previewSlots.actionItems` 的函数形式收到的上下文，只读取，不需要自己构造。它包含 [FilePreview](../components/file-preview) 的 `FilePreviewActions` 的全部属性（`source`、`path`、`viewMode`、`setViewMode`、`canSwitchView`、`editing`、`busy`、`canEdit`、`startEditing`、`saveEditing`、`cancelEditing`、`canCopyPath`、`copyPath`），并增加下面三项。
+
+| 参数           | 说明                                                                  | 类型                     | 默认值 |
+| -------------- | --------------------------------------------------------------------- | ------------------------ | ------ |
+| defaultActions | 内置操作，已按资源能力、`previewActions`、`readOnly` 和权限过滤       | `FilePreviewActionItems` | -      |
+| canDelete      | 当前用户能否删除当前资源，不受 `previewActions.delete` 影响           | `boolean`                | -      |
+| deleteFile     | 打开内置的删除确认框，不会关闭预览页签；`canDelete` 为 `false` 时无效 | `() => void`             | -      |
+
+`defaultActions` 分三组：复制内容、下载、历史版本和编译配置；导入和导出 .ovpack；删除。各操作的 `key` 依次是 `copyContent`、`download`、`history`、`configure`、`importPack`、`exportPack`、`delete`。
+
+### FileBrowserAclOptions
+
+`acl` 传入对象时的配置，全部可选；传入 `true` 等同于不设置任何选项。
+
+| 参数              | 说明                                                                                                             | 类型                                                                                                                                          | 默认值   |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| readOnly          | 禁止修改授权，仍可查看                                                                                           | `boolean`                                                                                                                                     | `false`  |
+| resolvePermission | 返回当前用户在资源上的有效权限，未知时返回 `undefined`；省略时读取 `fs/stat` 的 `permission`，缺失时探测管理权限 | `(uri: string, context: FileBrowserAclContext) => Promise<FileBrowserAclLevel \| undefined>`                                                  | 内置实现 |
+| listPrincipals    | 返回可添加的 User 或 Group，`page` 从 1 开始；省略时调用账号的用户和用户组接口，不读取凭证                       | `(query: { type: 'user' \| 'group'; keyword: string; page: number }, context: FileBrowserAclContext) => Promise<FileBrowserAclPrincipalPage>` | 内置实现 |
+| onChange          | 授权保存成功后触发，保存失败时不触发；回调抛出的错误不影响保存结果                                               | `(report: FileBrowserAclReport) => void`                                                                                                      | -        |
+
+### FileBrowserAclContext
+
+`resolvePermission` 和 `listPrincipals` 的第二个参数，只读取，不需要自己构造。
+
+| 参数           | 说明                                                            | 类型               | 默认值 |
+| -------------- | --------------------------------------------------------------- | ------------------ | ------ |
+| client         | 当前 Provider 的请求客户端                                      | `OvClient`         | -      |
+| requestOptions | 本次请求使用的配置，调用 `client.request` 时作为 `options` 传入 | `OvRequestOptions` | -      |
+
+### FileBrowserAclPrincipalPage
+
+| 参数       | 说明                                             | 类型       | 默认值 |
+| ---------- | ------------------------------------------------ | ---------- | ------ |
+| principals | 当前页的成员，格式为 `user:<id>` 或 `group:<id>` | `string[]` | 必填   |
+| hasMore    | 是否还有下一页                                   | `boolean`  | 必填   |
+
+### FileBrowserAclReport
+
+`acl.onChange` 收到的授权报告，只读取，不需要自己构造。`acl_mode` 为 `'none'` 表示该节点及其上级都没有设置权限，`'inherit'` 表示继承上级并叠加直接授权，`'restricted'` 表示不继承上级、只按直接授权生效。
+
+| 参数              | 说明                 | 类型                                  | 默认值 |
+| ----------------- | -------------------- | ------------------------------------- | ------ |
+| uri               | 资源 URI             | `string`                              | -      |
+| acl_mode          | 权限模式             | `'none' \| 'inherit' \| 'restricted'` | -      |
+| direct_entries    | 直接授予该资源的授权 | `FileBrowserAclEntry[]`               | -      |
+| inherited_entries | 从上级继承的授权     | `FileBrowserAclEntry[]`               | -      |
+| effective_entries | 实际生效的授权       | `FileBrowserAclEntry[]`               | -      |
+
+### FileBrowserAclEntry
+
+授权报告里的一条授权，只读取，不需要自己构造。
+
+| 参数      | 说明                                                                    | 类型                  | 默认值 |
+| --------- | ----------------------------------------------------------------------- | --------------------- | ------ |
+| principal | 被授权的成员，格式为 `user:<id>` 或 `group:<id>`，`user:*` 表示全部用户 | `string`              | -      |
+| level     | 授权级别                                                                | `FileBrowserAclLevel` | -      |
+
+### FileBrowserAclLevel
+
+`'read' | 'write' | 'manage'`：`read` 可以查看内容，`write` 可以查看和编辑，`manage` 还可以删除并管理授权。
+
+### FileBrowserDashboard
+
+`renderDashboard` 收到的看板描述，只读取，不需要自己构造。
+
+| 参数             | 说明                                            | 类型                     | 默认值 |
+| ---------------- | ----------------------------------------------- | ------------------------ | ------ |
+| kind             | 看板类型                                        | `'experience' \| 'wiki'` | -      |
+| uri              | 看板对应的资源 URI，保持树行或 `uri` 属性的写法 | `string`                 | -      |
+| pendingConflicts | Wiki：是否有待处理的冲突，未知时为 `undefined`  | `boolean`                | -      |
+| isRoot           | Wiki：是否是编译目标的根目录                    | `boolean`                | -      |
+| targetUri        | Wiki：所属编译目标的根目录 URI                  | `string`                 | -      |
+
+### FileBrowserLabels
+
+所有项都可省略，省略的项跟随 `locale`。
+
+| 参数                    | 说明                                                                                          | 类型                                 | 默认值                                   |
+| ----------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------ | ---------------------------------------- |
+| empty                   | 没有选中资源时的提示                                                                          | `string`                             | `'从左侧选中一个文件预览'`               |
+| error                   | 预览读取失败的结论，原因显示服务端返回的消息                                                  | `string`                             | `'目录加载失败'`                         |
+| retry                   | 失败状态和看板加载失败提示里的重试按钮                                                        | `string`                             | `'重试'`                                 |
+| refresh                 | 刷新按钮的无障碍名称                                                                          | `string`                             | `'刷新'`                                 |
+| loading                 | 预览读取内容时的提示                                                                          | `string`                             | `'加载中…'`                              |
+| resizeTree              | 树与预览之间分隔条的无障碍名称                                                                | `string`                             | `'调整目录树宽度'`                       |
+| systemDirectory         | 选中 `viking://system` 下的目录时，预览区的提示                                               | `string`                             | `'选择此目录中的文件以预览内容。'`       |
+| accessDenied            | 当前资源是无权查看的节点（`access: 'denied'`）时，预览区显示的原因                            | `string`                             | `'无权查看此节点。'`                     |
+| traverseOnly            | 当前资源是只能展开的节点（`access: 'container'`）时，预览区显示的原因                         | `string`                             | `'此目录仅可展开以访问有权限的子节点。'` |
+| searchPlaceholder       | 搜索入口按钮的文案                                                                            | `string`                             | `'搜索文件和内容'`                       |
+| searchTitle             | 搜索弹窗的无障碍标题                                                                          | `string`                             | `'搜索文件和内容'`                       |
+| searchEmptyTitle        | 尚未输入查询时的标题                                                                          | `string`                             | `'开始搜索'`                             |
+| searchHint              | 尚未输入查询时的说明                                                                          | `string`                             | `'输入关键词后即可搜索上下文文件或目录'` |
+| searchLoading           | 搜索进行中的提示                                                                              | `string`                             | `'搜索中…'`                              |
+| searchEmpty             | 搜索没有结果时的提示                                                                          | `string`                             | `'没有匹配的资源'`                       |
+| searchFailed            | 搜索失败的结论，原因显示服务端返回的消息                                                      | `string`                             | `'搜索失败'`                             |
+| searchModePlaceholders  | 各检索方式的输入提示，按 `find` / `search` / `grep` / `glob` 逐项覆盖                         | `Record<SearchMode, string>`         | 见内置文案                               |
+| searchModeHints         | 各检索方式下拉里的说明                                                                        | `Record<SearchMode, string>`         | 见内置文案                               |
+| searchAdvanced          | 高级筛选面板的标题                                                                            | `string`                             | `'高级选项'`                             |
+| searchClear             | 清空筛选                                                                                      | `string`                             | `'清空'`                                 |
+| searchScopes            | 目录筛选的标题                                                                                | `string`                             | `'目录'`                                 |
+| searchPickScope         | 选择目录的入口                                                                                | `string`                             | `'选择目录'`                             |
+| searchScopesUnsupported | 当前根不支持按目录筛选时的说明                                                                | `string`                             | `'当前范围不支持按目录筛选'`             |
+| searchLevels            | 内容层级筛选的标题                                                                            | `string`                             | `'内容'`                                 |
+| searchLevelLabels       | 三级内容的名称                                                                                | `[string, string, string]`           | `['L0 摘要', 'L1 总览', 'L2 全文']`      |
+| searchTime              | 时间筛选的标题                                                                                | `string`                             | `'时间'`                                 |
+| searchCreatedAt         | 按创建时间                                                                                    | `string`                             | `'按创建时间'`                           |
+| searchUpdatedAt         | 按更新时间                                                                                    | `string`                             | `'按更新时间'`                           |
+| searchSince             | 起始时间                                                                                      | `string`                             | `'起始时间'`                             |
+| searchUntil             | 结束时间                                                                                      | `string`                             | `'结束时间'`                             |
+| searchIgnoreCase        | 忽略大小写                                                                                    | `string`                             | `'忽略大小写'`                           |
+| searchFilterUnsupported | 某个筛选在当前检索方式下不可用的原因                                                          | `string`                             | `'当前检索方式不支持此筛选'`             |
+| searchResultCount       | 检索结果数量，参数为条数                                                                      | `(count: number) => string`          | `'检索到 N 条结果'`                      |
+| searchVia               | 结果数量与模式之间的分隔说明                                                                  | `string`                             | `'向量检索方式'`                         |
+| searchSwitchMode        | 切换检索方式的入口                                                                            | `string`                             | `'切换'`                                 |
+| searchAdvancedLabel     | 高级筛选按钮的无障碍名称                                                                      | `string`                             | `'高级筛选'`                             |
+| previewMode             | 「预览 / 源码」切换里的「预览」                                                               | `string`                             | `'预览'`                                 |
+| sourceMode              | 「预览 / 源码」切换里的「源码」                                                               | `string`                             | `'源码'`                                 |
+| viewSwitch              | 视图切换分组的无障碍名称                                                                      | `string`                             | `'切换视图'`                             |
+| copyPath                | 「复制路径」按钮的文案                                                                        | `string`                             | `'复制路径'`                             |
+| copyContent             | 「复制内容」操作的文案                                                                        | `string`                             | `'复制内容'`                             |
+| download                | 「下载」操作的文案                                                                            | `string`                             | `'下载'`                                 |
+| history                 | 「历史版本」操作的文案，也是弹窗的标题                                                        | `string`                             | `'查看历史版本'`                         |
+| importPack              | 「导入 .ovpack」操作的文案，也是弹窗的标题                                                    | `string`                             | `'导入 .ovpack'`                         |
+| exportPack              | 「导出 .ovpack」操作的文案                                                                    | `string`                             | `'导出 .ovpack'`                         |
+| deleteFile              | 「删除文档」操作的文案                                                                        | `string`                             | `'删除文档'`                             |
+| deleteTitle             | 删除确认框的标题                                                                              | `string`                             | `'删除文档？'`                           |
+| deleteMessage           | 删除确认框的说明，参数是文件名                                                                | `(name: string) => string`           | 内置说明                                 |
+| deleteFailed            | 删除失败的提示                                                                                | `string`                             | `'删除文档失败'`                         |
+| deleteCancel            | 删除确认框的取消按钮                                                                          | `string`                             | `'取消'`                                 |
+| deleteConfirm           | 删除确认框的确认按钮                                                                          | `string`                             | `'删除'`                                 |
+| l0Summary               | 目录预览里 L0 摘要的页签名                                                                    | `string`                             | `'L0 摘要'`                              |
+| l1Overview              | 目录预览里 L1 总览的页签名                                                                    | `string`                             | `'L1 总览'`                              |
+| summaryEmpty            | 目录某一级摘要尚未生成时的提示；预览目前不显示它，覆盖不会生效                                | `string`                             | `'暂无生成内容'`                         |
+| summaryFailed           | 某一级摘要读取失败且服务端没有返回消息时的提示                                                | `string`                             | `'摘要加载失败。'`                       |
+| formatCharacterCount    | 预览底部字符数的文案                                                                          | `(count: number) => string`          | 按 `locale` 格式化，如 `'1,234 个字符'`  |
+| actionBar               | 传给 [FileBrowserActionBar](../components/file-browser-action-bar) 操作栏的文案，包括接入抽屉 | `FileBrowserActionBarLabels`         | -                                        |
+| tree                    | 传给 [FileTree](../components/file-tree) 文件树的文案                                         | `FileTreeLabels`                     | -                                        |
+| preview                 | 传给 [FilePreview](../components/file-preview) 文件预览的文案，优先于上面同名的项             | `FilePreviewLabels`                  | -                                        |
+| dashboard               | 看板页签标题、看板图标名称和看板加载失败的文案                                                | `FileBrowserDashboardLabels`         | -                                        |
+| acl                     | 权限标签和授权弹窗的文案                                                                      | `FileBrowserAclLabels`               | -                                        |
+| workflows               | 编译配置、历史版本和导入 .ovpack 弹窗的文案                                                   | `Partial<FileBrowserWorkflowLabels>` | -                                        |
+
+### FileBrowserDashboardLabels
+
+所有项都可省略，省略的项跟随 `locale`。看板内部的文案由各看板自己的 `labels` 覆盖，在 `renderDashboard` 里渲染看板时传入。
+
+| 参数            | 说明                               | 类型     | 默认值                   |
+| --------------- | ---------------------------------- | -------- | ------------------------ |
+| experienceTitle | 经验看板页签的标题                 | `string` | `'经验看板'`             |
+| wikiTitle       | Wiki 看板页签的标题                | `string` | `'看板'`                 |
+| openExperience  | 文件树里经验看板图标的名称         | `string` | `'打开经验看板'`         |
+| openWiki        | 文件树里 Wiki 看板图标的名称       | `string` | `'打开 Wiki 看板'`       |
+| wikiConflicts   | 有待处理冲突时 Wiki 看板图标的名称 | `string` | `'查看 Wiki 待确认冲突'` |
+| failed          | 看板信息加载失败的提示             | `string` | `'看板信息加载失败'`     |
+
+### FileBrowserWorkflowLabels
+
+`labels.workflows` 接受其中任意几项，省略的项跟随 `locale`。
+
+| 参数         | 说明                               | 类型     | 默认值                                |
+| ------------ | ---------------------------------- | -------- | ------------------------------------- |
+| configure    | 编译配置操作的文案，也是弹窗的标题 | `string` | `'编译配置'`                          |
+| historyEmpty | 没有历史版本时的提示               | `string` | `'暂无历史版本'`                      |
+| historyLimit | 历史记录达到 500 条上限时的提示    | `string` | `'最多显示最近 500 条快照。'`         |
+| version      | Wiki 文件版本号前的文字            | `string` | `'版本'`                              |
+| importFile   | 导入弹窗里文件选择框的标签         | `string` | `'包文件'`                            |
+| importHint   | 导入弹窗里的说明                   | `string` | `'选择 .ovpack 包，导入到当前目录。'` |
+| importSubmit | 导入按钮                           | `string` | `'导入'`                              |
+| imported     | 导入成功的提示                     | `string` | `'导入成功。'`                        |
+| saved        | 编译配置保存成功的提示             | `string` | `'配置已保存。'`                      |
+| cancel       | 取消按钮                           | `string` | `'取消'`                              |
+| save         | 保存按钮                           | `string` | `'保存'`                              |
+| failed       | 操作失败的提示前缀                 | `string` | `'操作失败。'`                        |
+| sources      | 来源目录输入框的标签               | `string` | `'来源目录（每行一个）'`              |
+| skill        | 技能输入框的标签                   | `string` | `'技能 URI'`                          |
+| instruction  | 指令输入框的标签                   | `string` | `'指令'`                              |
+| automatic    | 自动更新复选框的标签               | `string` | `'自动更新'`                          |
+| schedule     | 定时更新选择框的标签               | `string` | `'定时更新'`                          |
+| noSchedule   | 「不设置定时更新」选项             | `string` | `'不设置定时更新'`                    |
+| daily        | 「每天」选项                       | `string` | `'每天'`                              |
+| weekly       | 「每周」选项                       | `string` | `'每周'`                              |
+| time         | 执行时间输入框的标签               | `string` | `'执行时间（北京时间）'`              |
+| weekday      | 星期选择框的标签                   | `string` | `'星期'`                              |
+
+### FileBrowserAclLabels
+
+所有项都可省略，省略的项跟随 `locale`。
+
+| 参数                     | 说明                                       | 类型     | 默认值                                                                   |
+| ------------------------ | ------------------------------------------ | -------- | ------------------------------------------------------------------------ |
+| title                    | 授权弹窗的标题                             | `string` | `'管理节点权限'`                                                         |
+| manage                   | 权限标签详情里打开授权弹窗的按钮           | `string` | `'管理权限'`                                                             |
+| read                     | `read` 级别的名称                          | `string` | `'可阅读'`                                                               |
+| write                    | `write` 级别的名称                         | `string` | `'可编辑'`                                                               |
+| manageLevel              | `manage` 级别的名称                        | `string` | `'可管理'`                                                               |
+| readDescription          | 权限标签详情里对 `read` 的说明             | `string` | `'可查看节点内容，不能编辑或管理节点权限。'`                             |
+| writeDescription         | 权限标签详情里对 `write` 的说明            | `string` | `'可查看并编辑内容，不能管理节点权限。'`                                 |
+| manageDescription        | 权限标签详情里对 `manage` 的说明           | `string` | `'可管理该节点的权限配置。'`                                             |
+| effectivePermission      | 权限标签详情里「有效权限」的标签           | `string` | `'当前 User 有效权限'`                                                   |
+| addPrincipal             | 添加成员区域的标题                         | `string` | `'添加 User 或 Group'`                                                   |
+| search                   | 成员搜索框的占位文案                       | `string` | `'搜索用户或用户组'`                                                     |
+| users                    | 成员选择里 User 页签的名称                 | `string` | `'User'`                                                                 |
+| groups                   | 成员选择里 Group 页签的名称                | `string` | `'Group'`                                                                |
+| allUsers                 | 全部用户（`user:*`）的名称                 | `string` | `'全部 User'`                                                            |
+| administrator            | 固定的管理员行的名称                       | `string` | `'数据空间管理员'`                                                       |
+| administratorDescription | 管理员行的说明                             | `string` | `'管理员始终保留隐式管理权限。'`                                         |
+| direct                   | 授权来源「直接授权」的名称                 | `string` | `'直接授权'`                                                             |
+| inherited                | 授权来源「继承自上级」的名称               | `string` | `'从父级目录继承权限'`                                                   |
+| remove                   | 授权菜单里的移除项                         | `string` | `'移除权限'`                                                             |
+| add                      | 添加成员的确认按钮                         | `string` | `'添加'`                                                                 |
+| cancel                   | 取消按钮                                   | `string` | `'取消'`                                                                 |
+| confirm                  | 确认按钮                                   | `string` | `'确定'`                                                                 |
+| close                    | 弹窗关闭按钮的无障碍名称                   | `string` | `'关闭权限管理'`                                                         |
+| retry                    | 重试按钮                                   | `string` | `'重试'`                                                                 |
+| loadMore                 | 成员列表的「加载更多」按钮                 | `string` | `'加载更多'`                                                             |
+| loading                  | 加载权限和成员时的提示                     | `string` | `'正在加载权限…'`                                                        |
+| saving                   | 保存中的提示                               | `string` | `'正在保存…'`                                                            |
+| saved                    | 保存成功的提示                             | `string` | `'权限已保存'`                                                           |
+| loadFailed               | 权限读取失败的提示                         | `string` | `'权限加载失败'`                                                         |
+| saveFailed               | 权限保存失败的提示                         | `string` | `'权限保存失败'`                                                         |
+| principalsFailed         | 成员列表加载失败的提示                     | `string` | `'用户或用户组加载失败'`                                                 |
+| empty                    | 没有可添加成员时的提示                     | `string` | `'暂无可添加成员'`                                                       |
+| noMatches                | 搜索没有匹配的成员时的提示                 | `string` | `'暂无匹配结果'`                                                         |
+| restricted               | 节点不继承上级权限时的说明                 | `string` | `'当前节点不继承父目录的权限。'`                                         |
+| restore                  | 「恢复继承」按钮                           | `string` | `'恢复继承'`                                                             |
+| stopTitle                | 停止继承确认的标题                         | `string` | `'停止继承上级权限？'`                                                   |
+| stopDescription          | 停止继承确认的说明                         | `string` | `'确定后，此节点将不再继承父级目录的权限，并按当前设置的访问权限生效。'` |
+| restoreTitle             | 恢复继承确认的标题                         | `string` | `'恢复继承上级权限？'`                                                   |
+| restoreDescription       | 恢复继承确认的说明                         | `string` | `'将清空本节点的直接授权，重新跟随上级权限。'`                           |
+| restoreRemoved           | 恢复继承时，列出将失效的直接授权前的引导语 | `string` | `'以下直接授权将不再生效：'`                                             |
+| readOnly                 | `acl.readOnly` 开启时弹窗里的提示          | `string` | `'宿主已禁止修改权限。'`                                                 |
+
+## 注意
+
+### 请求与布局
+
+- FileBrowser 的高度是父容器的 100%，父容器需要有明确的高度；组件没有外框和背景，由宿主决定。
+- `rootUri`、`defaultExpandedUri` 或 `requestOptions` 变化时，目录树回到根目录并重新加载，进行中的请求被中止；`requestOptions` 变化还会让预览重新请求。
+- 内联的 `requestOptions` 对象在每次渲染时都是新的，请在组件外定义或用 `useMemo` 保持引用稳定。
+- `acl.resolvePermission` 和 `acl.listPrincipals` 同理：引用变化会重新请求权限和成员，请在组件外定义或用 `useCallback` 保持稳定。
+- 类型从 `@openviking/react/modules/file-browser` 导出，包根入口只导出 `FileBrowser` 和 `FileBrowserProps`。
+
+### 目录与预览
+
+- 目录按需展开，每页加载 200 项，目录末尾的「加载更多」继续加载。
+- 根目录 `viking://` 下按用户、会话、Agent、资源的顺序显示，其余目录随后；`rootUri` 为其他值时保持接口返回的顺序。
+- 点击文件预览正文；点击目录展开并选中它，预览区显示该目录的 L0 摘要和 L1 总览。
+- `viking://system` 下的目录保留页签和路径，不显示摘要；目录中的文件仍可预览。
+- 设置 `uri` 只切换预览的资源，不会展开目录树；需要初始就展开到某个位置时使用 `defaultExpandedUri`。
+- 文本文件最多读取 2000 行，超出时提示内容被截断。
+- 图片、视频、音频、PDF、Office 文档和压缩包按扩展名通过内容下载接口读取。
+- 可编辑的格式有 `.md`、`.json`、`.jsonl`、`.txt`、`.yaml`、`.yml`：进入编辑时重新读取完整内容，保存调用 `POST /api/v1/content/write`，成功后重新加载预览。
+- 文件正文读取显式请求 `raw=false`，并在区块共用读取层兜底；预览、源码和编辑草稿使用同一份正文。
+- 记忆命名空间内文件末尾的 `MEMORY_FIELDS` 注释是服务端写入的内部元数据，预览和编辑时都不显示；正文中间的同形注释，以及资源和技能文档里的示例保留。
+- YAML 文件按标量范围保留值中的同名注释，独立追加的真实尾注仍会移除；正文不经过重新序列化。
+- 行边界、空白与单词字符沿用服务端的 Python 语义。读满预览上限时先取全文、过滤后再截断，避免把首屏末尾误当成文件末尾，或展示被截断的元信息。
+- Wiki 归属沿用编译目标和资源标签判断，与看板页签是否显示无关。末尾的 `CONFLICTS_CONTENT` 注释从正文分离，仍提供给冲突看板解析；损坏的 JSON 不进入正文，看板保留错误与重试。
+- 编辑保存 Wiki 文件时通过原生 `resolve_conflicts: true` 契约交由服务端保留、更新冲突记录；其他文本文件不携带此参数。
+- 所有 YAML 头、普通 HTML 注释和 Markdown 代码围栏中的示例保留；已确认作用域的 Markdown 文件中，独占一行的未闭合保留尾注隐藏至文件末尾；YAML 头、代码围栏和行内示例中的标记保留。
+- 刷新按钮重新加载已展开的目录和当前预览。
+
+### 打开并定位资源
+
+`FileBrowser` 支持 React 18/19 的 ref。导入结果、搜索结果或文件链接可调用 `openResource`：模块打开预览，逐级展开祖先目录，按需加载后续页找到目标，选中并滚动到该行。其他分支的展开状态保留；重复打开同一 URI 也会再次滚动定位。
 
 ```tsx
-<Popover content={<ResourceMenu />} trigger="hover">
-  <FileBrowserEntries locale="zh-CN" onImportResources={openImport} />
-</Popover>
+import { useRef } from 'react';
+import { FileBrowser } from '@openviking/react/modules/file-browser';
+import type { FileBrowserHandle } from '@openviking/react/modules/file-browser';
+
+const browserRef = useRef<FileBrowserHandle>(null);
+
+<FileBrowser ref={browserRef} />;
+
+await browserRef.current?.openResource(resultUri, { reveal: true });
 ```
 
-## 目录树宽度
+`reveal` 默认 `true`；传 `{ reveal: false }` 只发出打开预览的请求，发出后返回 `true`。普通 `uri` 属性变化不会展开或滚动目录树。受控模式需要宿主在 `onUriChange` 中更新 `uri` 接受打开意图。目标行选中并滚动后 Promise 返回 `true`；目标不存在、不可访问、不在 `rootUri` 下、被后续操作替代或组件卸载时返回 `false`。根目录本身没有树行，打开其预览后返回 `false`。目录列表请求或必要的当前用户别名解析失败会 reject，宿主可捕获并展示提示。服务端明确不支持别名解析时，按原 URI 写法匹配。调用方主动取消时返回 `false`。Promise 不等待预览正文加载完成。内置搜索复用同一导航入口。
 
-树与详情之间有一条可拖拽的分隔条，把指针放在上面左右拖就能改树宽；分隔条获得焦点后，左右方向键每次调整 16px。
+### 搜索
 
-- 默认 352px，与设计稿一致；最小 200px，再窄就只剩图标可辨。
-- 上限是 520px 与「容器宽度减去详情区 320px、分隔条 24px」中的较小值。宿主把模块放进窄栏时，树会跟着收窄，不会把详情挤没。
-- 拖动只改变当前实例的宽度，不写 `localStorage`：宽度属于布局，要不要记住是宿主的决定。
+- 左栏顶部的搜索框打开模块内置的搜索弹窗；`⌘K` 是真实快捷键，同一页面挂多个实例时只有最近交互过的那个响应。
+- 输入停顿 400ms 后自动请求，没有提交按钮。关闭弹窗会取消在途请求并清空输入与筛选。
+- 四种检索方式共用一套输入与结果列表。有匹配结果时，可在结果区顶部点「切换」：
 
-宽度由模块自己持有，并以 `--ov-file-browser-tree-width` 写在容器上——想改默认值或另做布局联动时读它即可，但覆盖它不会改变实际宽度，因为拖动的结果会立刻写回同一个变量。要固定宽度，请把模块包在定宽容器里，由容器的宽度上限约束。
+| 方式     | 接口                    | 输入解释   | 可用筛选                     |
+| -------- | ----------------------- | ---------- | ---------------------------- |
+| `find`   | `/api/v1/search/find`   | 自然语言   | 目录（多选）、内容层级、时间 |
+| `search` | `/api/v1/search/search` | 自然语言   | 同上                         |
+| `grep`   | `/api/v1/search/grep`   | 正则表达式 | 目录（单选）、忽略大小写     |
+| `glob`   | `/api/v1/search/glob`   | 文件模式   | 目录（单选）                 |
 
-分隔条的无障碍名称来自 `labels.resizeTree`，默认跟随 locale，也可单独覆盖。
+- 结果按 URI 去重；`grep` 例外——同一文件的多行命中是不同结果，各带自己的行号。
+- `glob` 的模式不含 `/` 时自动补 `**/` 前缀；目录命中去掉尾斜杠后再参与导航，目录这一事实记在 `isDir` 上。
+- 高级面板的筛选项按当前方式启用或禁用，禁用的分区保留可见并置灰，标题旁说明原因。目录候选从 `rootUri` 派生，用户根用 `~` 别名；切换根时失效的已选目录会被丢弃。
+- 悬停结果或按 **↑ / ↓** 查看预览。点击或按 **Enter** 关闭弹窗、打开资源并在树中定位。窄屏时预览移到列表下方。
 
-## 失败态
+### 预览操作区
 
-读不到和读到空是两件事，模块分开呈现：
+- 标题行右侧依次是「预览 / 源码」切换、编辑按钮和操作菜单，「复制路径」在面包屑旁，权限标签在其后。
+- 显隐开关只控制默认按钮是否显示，不改变能力：`previewSlots` 上下文里的 `canDelete`、`deleteFile()` 和编辑方法仍然可用。
+- `readOnly` 禁止所有写入，包括保存编译配置；开启 `acl` 后，编辑、导入和保存编译配置要求 `write` 或 `manage`，删除要求 `manage`。
+- 复制内容、下载、导出、历史版本和查看编译配置不受 `readOnly` 和 ACL 的限制。
+- 没有开启 `acl`，或资源不在 `viking://resources/` 下时，区块不探测权限，由服务端鉴权。
+- 历史版本：`GET /api/v1/snapshot/log` 读取该资源最近最多 500 条快照；Wiki 编译产物用 `GET /api/v1/snapshot/versions` 读取最多 100 个保留版本。可预览或复制历史正文，并与当前文件对比。历史弹窗为只读。
+- 编译配置：`GET /api/v1/compile/config` 读取，`POST /api/v1/compile/config/update` 保存来源目录、技能、指令、自动更新和每天或每周的定时更新。
+- 导入 .ovpack：先通过 `POST /api/v1/resources/temp_upload` 上传文件，再调用 `POST /api/v1/pack/import` 导入到当前目录；失败时保留所选文件，重试会重新上传。
+- 导出 .ovpack：调用 `POST /api/v1/pack/export`，把返回的内容保存为 `<名称>.ovpack`；下载使用 `GET /api/v1/content/download`。
+- 删除：确认后调用 `DELETE /api/v1/fs?uri=...&wait=true`；失败时保留确认框并允许重试，成功后选中父目录并刷新目录树。只能删除文件，不能删除目录。
+- 操作进行中不会重复提交，切换账号或资源、卸载组件时会中止进行中的请求。
 
-- 目录列表失败时，树里显示失败行与重试按钮，而不是「没有文件」。根目录失败也一样——把它画成空态会让 403 看起来像目录本来就没有内容。
-- 预览失败时，右侧显示失败态：`labels.error` 作结论、服务端返回的原始消息作原因、`labels.retry` 作重试。有选中的资源却读不出来时不会回落到空态插画。
-- 只有真正没选中资源时才显示空态。
-- 搜索失败同样显示原因与重试，而不是「没有匹配结果」：两者在界面上完全不同，混成空态会让一次 403 看起来像搜索确实没有命中。结论用 `labels.searchFailed`，原因取服务端返回的消息。
-- 目录的两级摘要各自可能失败。失败的一级保留失败原因而不是变成空正文——空正文意味着「还没生成」，与「取不到」（后端故障、权限不足）是两件事；两级都失败时整个预览进入失败态。服务端没给消息时用 `labels.summaryFailed` 兜底，因此这句提示也跟随界面语言。
+### 权限（ACL）
 
-失败态的重试会重新取数目录、当前预览与进行中的搜索——外部改动之后，只刷树会让右侧继续显示旧正文。
+- `acl` 只作用于 `viking://resources/` 下的非根节点；其他位置不显示权限标签，也不受 ACL 限制。
+- 有效权限先读 `GET /api/v1/fs/stat` 返回的 `permission`；没有该字段时调用 `GET /api/v1/acl` 探测，成功视为 `manage`，403 视为未知。
+- 权限未知时不显示权限标签，编辑和删除不可用；权限读取失败时标题旁显示「重试」。
+- 权限标签显示有效权限，`manage` 的标签详情里有「管理权限」按钮，点击打开授权弹窗。
+- `read` 不能编辑，`write` 可以编辑和导入，`manage` 还可以删除和管理授权。
+- 弹窗里可以搜索并添加 User 或 Group，授予 `read`、`write` 或 `manage`，也可以调整级别和移除；「数据空间管理员」一行固定为 `manage`。
+- 节点继承上级权限时，只增加权限会直接保存；降低或移除已有权限需要先在弹窗里确认停止继承，节点随后变为受限（`restricted`），取消则不写入。
+- 受限节点可以「恢复继承」：弹窗先列出将不再生效的直接授权，确认后清空直接授权并跟随上级。
+- 保存期间不能重复提交或关闭弹窗；保存失败时保留上次成功的授权并显示服务端的原因。
+- 保存成功后刷新目录和预览；服务端的索引更新可能异步完成，以服务端的鉴权结果为准。
+- 目录列表（`fs/ls`）里 `access: 'denied'` 的节点不能选中或展开，`access: 'container'` 的节点只能展开以访问有权限的子节点、不能预览自身。
+- `permission: 'read'` 的节点显示只读标记。
+- 以上节点标记来自目录列表，不依赖 `acl`。
+- 授权调用 `GET`、`PUT`、`DELETE /api/v1/acl`；成员目录调用账号的用户和用户组接口（用户每页 20 条，`include_credentials=false`），需要在 Provider 或 `requestOptions` 里提供 `accountId`。
+- 用户组目录需要账号管理权限，资源管理者无权读取时会显示失败和重试，可以用 `acl.listPrincipals` 接入自己的目录。
+- `acl.readOnly` 只禁止修改授权，与 `readOnly` 相互独立。
 
-## 属性
+### 看板
 
-模块从子路径和根入口导出 `FileBrowserProps`；`FileBrowserLabels` 只从子路径导出。入口条 `FileBrowserEntries` 属于组件层，从 `@openviking/react/components/file-browser-entries` 导入。
+- 用户的 `memories/experiences` 目录和其中直接的 `.md` 文件（包括 `peers/<peer>/` 下的）显示经验看板。
+- 带有 `compile_target=true` 标签或属于编译配置的目录显示 Wiki 看板，目录下的文件和子目录也有各自的 Wiki 看板。
+- 标签优先于编译配置：配置里缺少该目标时仍显示看板。
+- 编译配置（`GET /api/v1/compile/configs`）按需读取：打开 Wiki 看板，或正文中的 Wiki 保留尾注需要确认归属时才请求，普通浏览不请求。
+- `dashboardKinds` 不含 `'wiki'` 时，不再识别 Wiki，也不读取编译配置，Wiki 资源不再提供编译配置和编译版本索引。
+- 文件树里带看板的行显示看板图标，点击直接打开；Wiki 有待处理冲突时图标不同。
+- 预览区的页签可以在正文和看板之间切换。
+- 普通资源没有 Wiki 页签，已识别的 Wiki 即使没有冲突也保留看板。
+- `viking://~/...` 别名和规范 URI 指向同一个资源时识别结果相同，传给 `renderDashboard` 的 `uri` 保持原来的写法。
+- 两个看板也可以脱离 FileBrowser 单独使用，见 [WikiDashboard](../components/wiki-dashboard) 和 [ExperienceDashboard](../components/experience-dashboard)。
 
-| 属性                 | 类型                            | 默认值      | 说明                                                                                                                                                                                                                                                                                                                          |
-| -------------------- | ------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `requestOptions`     | `OvRequestOptions`              | —           | 请求配置覆盖，逐字段覆盖最近的 Provider。                                                                                                                                                                                                                                                                                     |
-| `uri`                | `string`                        | —           | 受控的当前资源 URI。传入时由宿主决定当前资源，模块只上报切换意图。                                                                                                                                                                                                                                                            |
-| `defaultUri`         | `string`                        | —           | 非受控时的初始资源 URI。省略时不选中任何资源。                                                                                                                                                                                                                                                                                |
-| `toolbarActions`     | `ReactNode`                     | —           | 工具栏上方的宿主入口，用 `FileBrowserEntries` 组合。搜索框与刷新按钮由模块自己渲染。                                                                                                                                                                                                                                          |
-| `onUriChange`        | `(uri: string \| null) => void` | —           | 当前资源变化后触发，参数为新的 URI。签名允许 `null`（上游契约），但模块目前不会主动上报：没有取消选中的交互，宿主不要依赖它来收起详情区。                                                                                                                                                                                     |
-| `rootUri`            | `string`                        | `viking://` | 目录树的根，宿主据此把浏览范围收敛到某个子树。                                                                                                                                                                                                                                                                                |
-| `defaultExpandedUri` | `string`                        | —           | 首次加载后自动展开到的路径，逐级展开并加载。省略时只展开根，其余折叠。                                                                                                                                                                                                                                                        |
-| `locale`             | `'zh-CN' \| 'en-US'`            | 必填        | 选择内置中英文文案。                                                                                                                                                                                                                                                                                                          |
-| `labels`             | `FileBrowserLabels`             | —           | 可替换文案：`searchPlaceholder`、`searchEmpty`、`searchFailed`、`loading`、`refresh`、`empty`、`error`、`retry`、`previewMode`、`sourceMode`、`history`、`copyPath`、`viewSwitch`、`resizeTree`，`summaryEmpty`、`summaryFailed`（某一级摘要请求失败且服务端没给消息时的兜底文案），以及透传给树与预览的 `tree` / `preview`。 |
-| `className`          | `string`                        | —           | 容器附加类名。                                                                                                                                                                                                                                                                                                                |
-| `style`              | `CSSProperties`                 | —           | 容器样式覆盖。                                                                                                                                                                                                                                                                                                                |
+### 失败状态
 
-文案为纯文本，宿主可将自身的翻译结果映射到这些属性。props 里没有数据字段——数据由模块自己加载。
+- 目录列表失败时，树里显示失败行和重试按钮，根目录失败也一样，不会显示成「没有文件」；失败行的「重试」只重新加载该目录。
+- 预览失败时，右侧显示失败状态：`labels.error` 是结论，服务端返回的原始消息是原因，`labels.retry` 是重试按钮，重试会同时重新加载目录树和当前预览。
+- 只有没选中资源时才显示空状态（`labels.empty`），选中了资源却读不出来时显示失败状态。
+- 目录的 L0 摘要和 L1 总览分别请求：一级失败时只有该级显示失败原因，两级都失败时整个预览显示失败状态；服务端没有返回消息时显示 `labels.summaryFailed`。
+- 搜索失败时，弹窗保留接口返回的原因，可以再次提交同一个关键词重试。
 
-模块通过 `useFileBrowser` 自己取数，宿主无需提供目录或预览数据；`labels.tree` 与 `labels.preview` 分别透传给文件树与文件预览组件。
+### 目录树宽度
 
-`labels.formatCharacterCount(count)` 可覆盖预览底部的字符数文案，默认随 `locale` 切换。
+- 容器小于 521px 时，目录树和预览上下排列，隐藏横向分隔条。
 
-`useFileBrowser` 可独立接收可选的 `locale`（默认 `en-US`），使用与组合视图相同的模块语言资源。`summaryLabels` 和 `formatCharacterCount` 可覆盖摘要标题、失败兜底和字符数文案；切换语言或文案只更新展示，不重新加载目录摘要或文件正文。
+- 树与预览之间有可拖拽的分隔条：拖动，或聚焦后用左右方向键（每次 16px）调整树宽；分隔条的无障碍名称来自 `labels.resizeTree`。
+- 默认 352px，最小 200px，最大为 520px 与「容器宽度减去 321px」（预览区至少 320px，加 1px 分隔线）中的较小值，因此放进窄栏时树会收窄，不会挤没预览区。
+- 宽度只在当前实例内生效，不写入 `localStorage`，是否记住由宿主决定。
+- 当前宽度以 CSS 变量 `--ov-file-browser-tree-width` 写在根元素的内联样式上，可以读取，但覆盖它不会生效。

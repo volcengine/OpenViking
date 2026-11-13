@@ -31,10 +31,10 @@ enum LanguageGateAction {
 
 fn language_gate_action(
     args: &[OsString],
-    has_saved_language: bool,
+    has_selected_language: bool,
     is_interactive: bool,
 ) -> LanguageGateAction {
-    if has_saved_language
+    if has_selected_language
         || is_language_command_request(args)
         || is_config_agent_command_request(args)
     {
@@ -49,7 +49,7 @@ fn language_gate_action(
 async fn ensure_language_selected_before_command(args: &[OsString]) -> Result<bool> {
     match language_gate_action(
         args,
-        i18n::has_saved_language(),
+        i18n::has_saved_language() || i18n::explicit_language_from_env().is_some(),
         io::stdin().is_terminal() && io::stdout().is_terminal(),
     ) {
         LanguageGateAction::Continue => Ok(true),

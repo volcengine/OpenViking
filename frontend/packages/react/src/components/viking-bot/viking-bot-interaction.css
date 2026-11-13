@@ -1,3 +1,4 @@
+@import '../../shared/primitives/input/input.css';
 /**
  * 待确认交互区样式。颜色取自 `viking-bot.css` 里从主题基线派生的组件变量。
  *
@@ -131,7 +132,7 @@
 
 /* 自绘单选圈：宿主的设计系统常把 input 的 appearance 重置成 none，
    依赖原生外观会让控件直接消失，因此这里显式绘制未选中与选中两种状态。 */
-.ov-viking-bot__interaction-option input[type='radio'] {
+.ov-viking-bot__interaction-option input:not(.ov-input__element)[type='radio'] {
   box-sizing: border-box;
   flex: none;
   width: 14px;
@@ -144,12 +145,14 @@
   cursor: pointer;
 }
 
-.ov-viking-bot__interaction-option input[type='radio']:checked {
+.ov-viking-bot__interaction-option
+  input:not(.ov-input__element)[type='radio']:checked {
   border: 4px solid var(--ov-viking-bot-accent);
   background: var(--ov-viking-bot-on-accent);
 }
 
-.ov-viking-bot__interaction-option input[type='radio']:disabled {
+.ov-viking-bot__interaction-option
+  input:not(.ov-input__element)[type='radio']:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }
@@ -168,29 +171,10 @@
 
 .ov-viking-bot__interaction-input {
   box-sizing: border-box;
-  width: 100%;
   min-width: 0;
-  border: 1px solid var(--ov-viking-bot-border);
-  border-radius: var(--ov-viking-bot-radius);
-  background: transparent;
-  padding: 6px 8px;
-  color: inherit;
-  font: inherit;
-}
-
-.ov-viking-bot__interaction-input:focus-visible {
-  outline: 2px solid var(--ov-viking-bot-focus);
-  outline-offset: -1px;
-}
-
-.ov-viking-bot__interaction-input:disabled {
-  background: var(--ov-viking-bot-surface);
-  color: var(--ov-viking-bot-text-muted);
-  cursor: not-allowed;
 }
 
 textarea.ov-viking-bot__interaction-input {
-  min-height: 72px;
   resize: vertical;
 }
 

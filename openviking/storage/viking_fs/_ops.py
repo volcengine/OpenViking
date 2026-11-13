@@ -1469,8 +1469,12 @@ class _OpsMixin:
         if vector_store is None:
             return False
 
-        backend_type = (await vector_store.get_account_backend(ctx.account_id))._mode
-        if backend_type not in ("volcengine", "vikingdb"):
+        try:
+            backend = await vector_store.get_account_backend(ctx.account_id)
+        except Exception:
+            logger.debug("glob engine=auto: backend lookup failed, falling back to fs", exc_info=True)
+            return False
+        if getattr(backend, "enable_path_glob", False) is not True:
             return False
 
         if not await self._collection_has_glob_uri_field(vector_store, ctx):
@@ -2112,8 +2116,7 @@ class _OpsMixin:
         ctx = self.authorize_read(real_ctx, [uri])
         await self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
-        # Verify the file exists before reading, because AGFS read returns
-        # empty bytes for non-existent files instead of raising an error.
+        # Verify that the path exists and is not a directory before reading.
         try:
             stat = await self._async_agfs.stat(path)
         except Exception as exc:

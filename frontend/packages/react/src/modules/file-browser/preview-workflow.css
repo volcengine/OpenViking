@@ -1,0 +1,87 @@
+.ov-file-browser-workflow {
+  --ov-ui-modal-width: 680px;
+}
+.ov-file-browser-workflow .ov-modal__body {
+  padding: 24px;
+}
+.ov-file-browser-workflow h2 {
+  margin: 0 32px 8px 0;
+  font-size: 18px;
+  line-height: 28px;
+  font-weight: 500;
+}
+.ov-file-browser-workflow__uri {
+  margin: 0 0 20px;
+  overflow-wrap: anywhere;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+}
+.ov-file-browser-workflow fieldset {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.ov-file-browser-workflow label {
+  display: block;
+  margin-block-start: 12px;
+}
+.ov-file-browser-workflow :is(input:not([type='checkbox']), textarea, select) {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+  border-radius: 6px;
+  color: inherit;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  font: inherit;
+}
+.ov-file-browser-workflow textarea {
+  min-height: 80px;
+  resize: vertical;
+}
+.ov-file-browser-workflow :is(input, textarea, select):focus-visible {
+  outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  outline-offset: 2px;
+}
+.ov-file-browser-workflow__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-block-start: 24px;
+}
+.ov-file-browser-workflow__error {
+  color: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
+  overflow-wrap: anywhere;
+}
+.ov-file-browser-workflow__versions {
+  display: grid;
+  gap: 12px;
+  padding-inline-start: 24px;
+}
+.ov-file-browser-workflow__versions time {
+  display: block;
+  margin-block-start: 4px;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  font-size: 12px;
+}
+.ov-file-browser-workflow__revision pre {
+  max-height: 360px;
+  overflow: auto;
+  padding: 16px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border-radius: 8px;
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+}
+
+.ov-file-browser-workflow input[type='checkbox'] {
+  appearance: auto;
+  width: 16px;
+  height: 16px;
+  margin-inline-end: 8px;
+  vertical-align: middle;
+  accent-color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+}

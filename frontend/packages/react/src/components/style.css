@@ -1,9 +1,18 @@
 @import '../theme.css';
 @import './file-tree/style.css';
 @import './file-preview/style.css';
-@import './file-browser-entries/style.css';
-@import './tui/style.css';
+@import './file-browser-action-bar/style.css';
+@import './command-console/style.css';
 @import './scope-switcher/style.css';
 @import './agent-connect/style.css';
 @import './viking-bot/style.css';
 @import './directory-tour/style.css';
+@import './wiki-dashboard/style.css';
+@import './experience-dashboard/style.css';
+
+@import './auth/email-login-form/style.css';
+@import './auth/api-key-login-form/style.css';
+@import './auth/password-reset-request-form/style.css';
+@import './auth/password-setup-form/style.css';
+@import './auth/login-method-selector/style.css';
+@import './auth/invitation-confirmation/style.css';

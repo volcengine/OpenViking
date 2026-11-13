@@ -1,117 +1,150 @@
 # 快速开始
 
-所有公开 UI 组件和组合模块均需显式传入 `locale: 'zh-CN' | 'en-US'`，选择内置中文或英文文案。已有的 `labels` 可逐项覆盖，未覆盖项跟随当前语言；切换 `locale` 会立即更新基础文案。业务数据、插槽与回调返回的文案仍由宿主提供。
+`@openviking/react` 是 OpenViking 的 React 组件库，提供文件树、文件预览、命令控制台、对话、登录表单和看板等[业务组件](../components/)，以及自带数据加载的[区块](../modules/)。文档里的「宿主」指嵌入这些组件的你的应用。
 
-OpenViking UI 是构建 OpenViking AI 应用界面的 React 基础。OpenViking 是面向 AI 智能体的上下文数据库；本 workspace 提供 Rslib 构建、双语文档、分层目录约定与样式隔离方案。应用负责业务界面、数据、认证与流程编排。
-
-包提供 FileTree、FilePreview、Tui、ScopeSwitcher、AgentConnect 五个视图组件、五种文件类型图标，以及两个业务模块占位组件。FileTree、FilePreview 与 Tui 已按契约实现，ScopeSwitcher 为无状态布局，AgentConnect 仍为固定尺寸占位。当前范围见[组件概览](../components/)和[模块概览](../modules/)；业务 Hook 尚未实现。
-
-## 本地运行
-
-使用 Node.js 22.12 或更新版本。在仓库根目录执行：
+## 安装
 
 ```bash
-cd frontend
-npm ci
-npm run dev
+npm install @openviking/react
 ```
 
-打开 Rspress 输出的 `/ui/` 地址。简体中文使用 `/ui/`，英文使用 `/ui/en/`；顶部语言菜单支持在对应页面间切换。
+`react` 和 `react-dom` 是 peer 依赖，版本范围是 `^18.2.0 || ^19.0.0`。包只提供 ESM 入口。
 
-workspace 开发插件会在文档服务器启动前运行 Rslib watch。文档示例通过公开导出使用构建产物，不使用源码别名。React 和 ReactDOM 为 peer dependencies，声明支持 React 18.2 和 React 19；文档应用使用 React 19。
+FilePreview 和 VikingBot 用可选 peer 依赖 `@ark-design/ui` 渲染，内置它们的 FileBrowser 和 Console 同样需要。版本和配套包见 [FilePreview](../components/file-preview) 与 [VikingBot](../components/viking-bot) 页面的「引入」。
 
-## 组织应用代码
+## 引入样式
 
-- `packages/react/src/components/`：可复用视图，通过 props 接收处理后的数据，通过回调表达用户意图。
-- `packages/react/src/modules/`：两个可导入的占位组件，业务 Hook 与组合交互后续迁入。
-- `packages/react/src/hooks/` 与 `utils/`：包内共享逻辑，没有公开子路径。
-- `docs/docs/en/` 与 `docs/docs/zh/`：对应的双语文档页面；共用的可运行示例放在 `docs/docs/_demos/`。
+JavaScript 导入不会自动加载 CSS，按需选择一个样式入口：
 
-应用专属流程与认证留在应用层；模块 Hook 通过共享 Client 加载数据。组件不获取业务数据，也不依赖应用路由。
+```ts
+// 整个组件库：全部业务组件、区块和主题
+import '@openviking/react/style.css';
 
-## 公开入口
+// 全部业务组件，或全部区块
+import '@openviking/react/components/style.css';
+import '@openviking/react/modules/style.css';
 
-根入口 `@openviking/react` 当前导出 `FileTree`、`Tui`、`ScopeSwitcher`、`AgentConnect` 与两个业务模块占位组件及其主 Props 类型；`FilePreview` 只从 `components/file-preview` 子路径导出，因为它的类型依赖可选的 `@ark-design/ui`。行类型、选项类型、句柄与文案包等子类型一律从子路径导入。`@openviking/react/icons` 提供五种文件类型图标。
+// 单个业务组件或区块
+import '@openviking/react/components/file-tree/style.css';
+import '@openviking/react/modules/file-browser/style.css';
+```
 
-没有 `components` 或 `modules` 分类聚合 JavaScript 入口。业务占位组件使用独立的 `modules/<模块>` 入口：
+每个入口都可以单独使用，并已包含所用组件的样式。图标（`@openviking/react/icons`）不需要样式表。
+
+## 使用一个业务组件
+
+业务组件是纯视图：数据由你传入，用户的操作通过回调交给宿主，组件不发起请求。下面的 FileTree 把你提供的行渲染成文件树：
 
 ```tsx
+import { useState } from 'react';
+import {
+  FileTree,
+  type FileTreeRow,
+} from '@openviking/react/components/file-tree';
+import '@openviking/react/components/file-tree/style.css';
+
+const rows: FileTreeRow[] = [
+  {
+    kind: 'entry',
+    id: 'viking://resources',
+    uri: 'viking://resources',
+    name: 'resources',
+    type: 'directory',
+    depth: 0,
+    expanded: true,
+  },
+  {
+    kind: 'entry',
+    id: 'viking://resources/intro.md',
+    uri: 'viking://resources/intro.md',
+    name: 'intro.md',
+    type: 'file',
+    depth: 1,
+  },
+];
+
+export function Tree() {
+  const [selectedId, setSelectedId] = useState<string>();
+  return (
+    <div style={{ height: 320 }}>
+      <FileTree
+        rows={rows}
+        selectedId={selectedId}
+        search={false}
+        refresh={false}
+        operations={{ select: async (row) => setSelectedId(row.id) }}
+      />
+    </div>
+  );
+}
+```
+
+FileTree 的高度是父容器的 100%，所以外层要设置高度。示例没有提供搜索和刷新的实现，用 `search={false}` 和 `refresh={false}` 隐藏了这两个入口。
+
+导入规则：
+
+- 组件和它的类型从 `@openviking/react/components/<名称>` 导入，例如 `file-tree`，每个组件的确切路径见它页面的「引入」。
+- 根入口 `@openviking/react` 也导出组件本体和主 Props 类型，例如 `FileTree` 和 `FileTreeProps`；其余类型只从子路径导入。
+- FilePreview 是例外：它依赖可选 peer `@ark-design/ui`，只从 `@openviking/react/components/file-preview` 子路径导出，不在根入口里。
+
+## 使用一个区块
+
+FileBrowser 和 Console 自己读取 OpenViking 原生 API，需要放在 `OpenVikingProvider` 内，由 Provider 提供服务地址和凭证。下面以 FileBrowser 为例：
+
+```tsx
+import { OpenVikingProvider } from '@openviking/react/client';
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import '@openviking/react/modules/file-browser/style.css';
 
-<FileBrowser locale="zh-CN" />;
-```
-
-两个模块的 props 已定型——请求配置、受控状态、回调、插槽与文案——但占位组件本体仍只消费 `className`、`style` 与一个文案字段，且均无需 Provider。可运行示例与完整属性表见[业务模块](../modules/)。
-
-业务模块将按具体能力组合取数 Hook 与视图，从对应模块入口分别导出 Hook 和组合视图，接入方可只复用 Hook 并自行组装 UI。认证、账号作用域、路由、权限及完整页面流程由宿主负责。业务 Hook 及跨模块公共 Hook 当前尚无实现或导出。
-
-模块规划聚焦个人终端：`file-browser` 将目录、搜索和预览作为一个整体，统一维护资源选择、结果定位、内容加载与刷新联动；宿主可按需受控指定当前资源。`console` 将对话视图与 TUI 作为一个交互面板，内部协调模式切换、工具栏和公共上下文，各自保留会话与命令状态。Agent 接入作为独立能力接入。宿主负责模块间布局、导航与联动；产品引导、资源与 Skill 导入流程及同步配置由宿主负责，经验看板和会话内容通过文件浏览模块的预览扩展接入，管理后台不在此范围内。这些交互仍为规划，当前模块组件仅展示占位内容。
-
-请求配置通过 `@openviking/react/client` 的 `OpenVikingProvider` 下发：`baseURL` 与身份字段（`apiKey`、`accountId`、`userId`、`resourceId`），请求头由 Client 组装。请求客户端已作为 `@openviking/react/client` 子路径落地：基于 `fetch` 的 `createOvClient`，以及 `OvRequestOptions`、`OvClient` 与 `OvClientError`。模块和独立 Hook 可通过 `requestOptions` 按字段覆盖，优先级为局部配置、最近的 Provider、库默认值；`baseURL` 为空表示同源请求。标准 API 接入无需逐模块实现 Adapter，非标准网关集中在宿主请求接入层适配。Provider 已实现并导出；模块 Hook 尚未实现。
-
-## 样式
-
-样式使用 `ov-` 前缀的稳定类名，变量使用 `--ov-ui-` 前缀，不引入全局 reset。JavaScript 导入不会自动加载 CSS；按需选择整包、分类集合或独立样式：
-
-```ts
-import '@openviking/react/style.css';
-// 也可选择 @openviking/react/components/style.css
-// 或 @openviking/react/modules/style.css。
-// 独立入口：@openviking/react/<分类>/<模块>/style.css。
-```
-
-Rslib 将 ESM JavaScript、TypeScript 声明和 CSS 输出到 `packages/react/dist/`。每个公开样式入口可独立使用；模块样式当前覆盖占位视图，组合视图迁入后须包含其组件依赖。后续单独使用 Hook 无需 CSS。
-
-### 主题
-
-颜色来自包级主题基线 `--ov-ui-color-*`（定义在 `packages/react/src/theme.css`），取值对齐 OpenViking 控制台的设计规范。所有组件私有变量都从基线派生，因此改基线即可整体换肤：
-
-```css
-.my-workbench {
-  --ov-ui-color-primary: #5252ff;
-  --ov-ui-color-bg-5: #f1f2f9;
-  --ov-ui-color-border-2: #e1e4f2;
+export function Browser({ apiKey }: { apiKey: string }) {
+  return (
+    <OpenVikingProvider baseURL="https://ov.example.com" apiKey={apiKey}>
+      <div style={{ height: 600 }}>
+        <FileBrowser />
+      </div>
+    </OpenVikingProvider>
+  );
 }
 ```
 
-暗色只认宿主放在 `<html>` 上的 `.dark` 类，不读 `prefers-color-scheme`——系统偏好可能与宿主实际呈现的主题不一致。基线自带一套暗色取值，宿主切换 `.dark` 即可生效；需要精确配色时整组覆盖。
+- `baseURL` 是服务地址，不含 `/api/v1`。
+- FileBrowser 的高度是父容器的 100%，外层要设置高度。
+- FileBrowser 预览文件内容需要先安装可选 peer 依赖 `@ark-design/ui`，见上文「安装」。
+- 登录、账号作用域和路由由宿主负责。
+- 其余身份字段、`requestOptions` 和各区块的规则见[区块](../modules/)。
 
-只想调整单个组件时，覆盖它的 `--ov-ui-<组件>-*` 变量，或直接指定类名：
+## 主题
+
+组件的颜色读取 `--ov-ui-color-*` 变量。库本身不定义这些变量：在应用根节点或任意祖先元素上设置它们，组件就使用你的值；没有设置时，组件使用内置的默认色。
 
 ```css
 .my-workbench {
-  --ov-ui-radius: 4px;
+  --ov-ui-color-primary: #0f766e;
+  --ov-ui-color-bg-5: #eef5f4;
+  --ov-ui-color-border-2: #d4e4e1;
 }
+```
 
+写在 `:root` 上则对整个应用生效。带有「主题变量」一节的组件页会列出该组件读取的变量。
+
+暗色只认 `<html>` 上的 `.dark` 类，不读 `prefers-color-scheme`，因为系统偏好可能与你的应用实际呈现的主题不一致。出现 `.dark` 后，组件自动切换到内置的暗色默认值。你设置的变量在亮色和暗色下都生效，需要暗色专用的值时，在 `.dark` 下再声明一次：
+
+```css
+.dark .my-workbench {
+  --ov-ui-color-primary: #5eead4;
+}
+```
+
+只想调整单个组件时，覆盖它的 `--ov-ui-<组件>-*` 变量。这些变量声明在组件的根元素上，设置在祖先元素上不会生效，要写在组件自己的选择器上：
+
+```css
 .my-workbench .ov-file-tree {
   --ov-ui-file-tree-row-height: 28px;
-  width: 320px;
 }
 ```
 
-## 构建与检查
+## 下一步
 
-在 `frontend/` 中执行：
-
-```bash
-npm run lint
-npm run typecheck
-npm test
-npm run build
-npm run preview
-```
-
-`lint` 先构建组件库，再通过 Rslint 检查代码规则与类型，并使用 Prettier 检查格式。`typecheck` 检查组件库、构建配置与文档 TypeScript 项目。`test` 构建组件库并验证公开包入口。`build` 生成组件库和静态文档，站点输出到 `docs/doc_build/`。
-
-在 `npm run lint --` 后传入文件或加引号的 glob，可限定格式检查和 lint 的目标；类型检查仍覆盖配置的完整项目。JavaScript 和 TypeScript 文件最多 200 行，不计空行和纯注释行。
-
-## 部署
-
-`frontend/` 下的变更触发 UI 检查。在 `main` 上，现有产品文档部署会将 UI 站点合并到同一完整产物或存储桶的 `/ui/` 路径。npm 发布使用独立的标签触发流程，本地构建与测试不会发布包。
-
-## 内置文案与语言切换
-
-组件和模块采用本地的类型化中英文语言包，共用轻量解析规则。译文在各自目录就近维护，不依赖宿主的 i18next 或翻译平台。已有 `labels` 的未定义项继承当前语言；空字符串保留为显式覆盖。
-
-独立使用 `useConsole`、`useFileBrowser` 时可传入 `locale`，默认 `en-US`。切换语言会更新库生成的提示、命令帮助和摘要标题，不重新发起请求，也不清空会话或草稿；服务端正文、错误原文和 AI 回复保持原值。
+- [业务组件总览](../components/)：全部业务组件的简介和用法。
+- [区块](../modules/)：`OpenVikingProvider`、`requestOptions` 和各区块。
+- [国际化](./i18n)：用 `locale` 切换语言，用 `labels` 覆盖文案。

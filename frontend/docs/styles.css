@@ -199,7 +199,7 @@ html:root {
   margin-top: 20px;
 }
 
-.ov-demo-controls button {
+.ov-demo-controls button:not(.ov-button) {
   padding: 6px 12px;
   border: 1px solid var(--rp-c-divider);
   border-radius: 6px;
@@ -209,13 +209,13 @@ html:root {
   cursor: pointer;
 }
 
-.ov-demo-controls button:hover,
-.ov-demo-controls button[aria-pressed='true'] {
+.ov-demo-controls button:not(.ov-button):hover,
+.ov-demo-controls button:not(.ov-button)[aria-pressed='true'] {
   border-color: var(--rp-c-brand);
   color: var(--rp-c-brand);
 }
 
-.ov-demo-controls button:focus-visible {
+.ov-demo-controls button:not(.ov-button):focus-visible {
   outline: 2px solid var(--rp-c-brand);
   outline-offset: 3px;
 }

@@ -44,15 +44,21 @@ export interface ScopeCascadeController {
     ScopeCascadeLevel,
   ];
 }
-export interface ScopeCascadeProps extends Omit<
-  HTMLAttributes<HTMLDivElement>,
-  'children'
-> {
-  controller: ScopeCascadeController;
-  /** 内置中英文文案的语言。Language of the built-in interface copy. */
-  locale: Locale;
+export interface ScopeCascadeProps
+  extends
+    Omit<HTMLAttributes<HTMLDivElement>, 'children' | 'onChange'>,
+    ScopeCascadeApi {
+  /** Optional locale; inherits the nearest module or Provider. */
+  locale?: Locale;
   /** Accessible names and placeholders, in library / space / user order. */
   levelNames?: readonly [string, string, string];
   retryLabel?: string;
+  onChange?: (selection: ScopeCascadeSelection | null) => void;
   labels?: ScopeSwitcherLabels;
+}
+
+export interface ScopeCascadeSelection {
+  libraryId: string;
+  spaceId: string;
+  userId: string;
 }

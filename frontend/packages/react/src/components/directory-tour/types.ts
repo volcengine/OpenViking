@@ -14,8 +14,33 @@ export interface DirectoryTourStep {
   target: string;
   title: ReactNode;
   description: ReactNode;
+  /** Standard semantic targets include a built-in illustration. Pass null to omit it. */
   illustration?: ReactNode;
+  /** Card width in CSS pixels; defaults to 270 and is viewport-constrained. */
+  cardWidth?: number;
   nextLabel?: string;
+}
+
+/** The first element positions the card; all connected rows define the highlight. */
+export type DirectoryTourAnchor = HTMLElement | readonly HTMLElement[];
+
+export interface DirectoryTourContentContext {
+  step: DirectoryTourStep;
+  index: number;
+  total: number;
+  complete: () => void;
+  close: () => void;
+}
+
+export interface DirectoryTourIntroProps {
+  title: ReactNode;
+  description: ReactNode;
+  /** Inherits the nearest language scope, otherwise en-US. */
+  locale?: Locale;
+  features?: readonly ReactNode[];
+  media?: ReactNode;
+  onDone?: () => void;
+  labels?: Pick<DirectoryTourLabels, 'done'>;
 }
 
 export interface DirectoryTourResult {
@@ -34,12 +59,14 @@ export interface DirectoryTourLabels {
 }
 
 export interface DirectoryTourProps {
-  locale: Locale;
   open: boolean;
   steps: readonly DirectoryTourStep[];
+  /** Inherits the nearest language scope, otherwise en-US. */
+  locale?: Locale;
   currentStep?: number;
   defaultStep?: number;
   placement?: 'right' | 'left';
+  /** Deadline before showing the current step without an anchor. Default 10000. */
   locateTimeout?: number;
   className?: string;
   style?: CSSProperties;
@@ -48,9 +75,11 @@ export interface DirectoryTourProps {
   locateTarget?: (
     target: string,
     signal: AbortSignal,
-  ) => Promise<HTMLElement | null>;
+  ) => Promise<DirectoryTourAnchor | null>;
   onStepChange?: (index: number) => void;
   onClose?: () => void;
   onComplete?: (result: DirectoryTourResult) => void;
+  /** Replaces card contents once the target resolves. */
+  renderContent?: (context: DirectoryTourContentContext) => ReactNode;
   labels?: DirectoryTourLabels;
 }

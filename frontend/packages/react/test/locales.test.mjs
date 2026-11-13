@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
+import { OpenVikingProvider } from '@openviking/react/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { AgentConnect } from '@openviking/react/components/agent-connect';
 import { FileTree } from '@openviking/react/components/file-tree';
 import { FilePreview } from '@openviking/react/components/file-preview';
-import { FileBrowserEntries } from '@openviking/react/components/file-browser-entries';
+import { FileBrowserActionBar } from '@openviking/react/components/file-browser-action-bar';
 import { ScopeSelector } from '@openviking/react/components/scope-switcher';
-import { Tui } from '@openviking/react/components/tui';
+import { CommandConsole } from '@openviking/react/components/command-console';
 import {
   VikingBot,
   VikingBotMessageList,
@@ -27,7 +28,7 @@ const cases = [
   [FileTree, { rows: [] }, '暂无文件', 'No files yet'],
   [FilePreview, { tabs: previewTabs }, '该文件为空', 'This file is empty'],
   [
-    FileBrowserEntries,
+    FileBrowserActionBar,
     { onConnectAgent() {}, onImportResources() {} },
     '导入资源',
     'Import resources',
@@ -44,10 +45,15 @@ const cases = [
     'Unable to load options',
   ],
   [
-    Tui,
-    { records: [], value: '' },
-    '运行命令后将在此显示结果。',
-    'Run a command to see its result here.',
+    CommandConsole,
+    {
+      records: [],
+      value: '',
+      commands: [{ name: 'ls', description: 'List', usage: 'ov ls' }],
+      quickCommands: [{ name: 'ls', value: '' }],
+    },
+    'CLI 直接操作上下文',
+    'Work directly with your context through the CLI',
   ],
   [VikingBot, { messages: [] }, '欢迎使用 VikingBot', 'Welcome to VikingBot'],
   [VikingBotMessageList, { messages: [] }, '开始对话', 'Start a conversation'],
@@ -57,7 +63,12 @@ const cases = [
     '新建会话',
     'New session',
   ],
-  [FileBrowser, {}, '选择一个文件查看内容', 'Select a file to preview'],
+  [
+    FileBrowser,
+    {},
+    '从左侧选中一个文件预览',
+    'Select a file on the left to preview it',
+  ],
   [
     Console,
     { defaultMode: 'command' },
@@ -73,6 +84,20 @@ for (const [Component, props, zh, en] of cases) {
     assert.ok(chinese.includes(zh), chinese);
     assert.ok(english.includes(en), english);
     assert.ok(!chinese.includes(en), chinese);
+    const defaultEnglish = render(Component, props);
+    assert.ok(defaultEnglish.includes(en), defaultEnglish);
+    const inherited = renderToStaticMarkup(
+      h(OpenVikingProvider, { locale: 'zh-CN' }, h(Component, props)),
+    );
+    assert.ok(inherited.includes(zh), inherited);
+    const overridden = renderToStaticMarkup(
+      h(
+        OpenVikingProvider,
+        { locale: 'zh-CN' },
+        h(Component, { ...props, locale: 'en-US' }),
+      ),
+    );
+    assert.ok(overridden.includes(en), overridden);
   });
 }
 
@@ -83,10 +108,10 @@ test('changing locale updates copy while preserving host overrides', async () =>
     labels: { connectAgent: 'Host agent' },
   };
   const view = await mount(
-    h(FileBrowserEntries, { ...props, locale: 'zh-CN' }),
+    h(FileBrowserActionBar, { ...props, locale: 'zh-CN' }),
   );
   assert.equal(view.container.textContent, 'Host agent导入资源');
-  await view.render(h(FileBrowserEntries, { ...props, locale: 'en-US' }));
+  await view.render(h(FileBrowserActionBar, { ...props, locale: 'en-US' }));
   assert.equal(view.container.textContent, 'Host agentImport resources');
   await view.unmount();
 });
