@@ -431,7 +431,7 @@ async def test_work_error_waits_for_task_lock_before_touching_work(task_stores, 
             first.record_work_error("task", "work", "first error", **OWNER)
         )
         assert await asyncio.to_thread(attempted.wait, 5)
-        with pytest.raises(TimeoutError):
+        with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(asyncio.shield(error_writer), 0.1)
         work = await second.get_work("task", "work", **OWNER)
         assert work.error is None
