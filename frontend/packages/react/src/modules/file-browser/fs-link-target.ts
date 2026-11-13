@@ -26,8 +26,18 @@ export function resolveLinkTarget(
     // 锚点不属于资源名：`.overview.md#section` 要按 `.overview.md` 识别。
     // The anchor is not part of the resource name: `.overview.md#section` must be
     // recognised as `.overview.md`.
-    url.hash = '';
-    return { kind: 'resource', uri: decodeURI(url.href) };
+    // 路径里的 `%23`、`%3F` 等是文件名的一部分，要按组件解码；`decodeURI` 会把
+    // 这些保留字符原样留着。
+    // `%23`, `%3F` and the like in the path are part of the file name and need
+    // component decoding; `decodeURI` leaves those reserved characters encoded.
+    try {
+      return {
+        kind: 'resource',
+        uri: `viking://${url.host}${decodeURIComponent(url.pathname)}`,
+      };
+    } catch {
+      return undefined;
+    }
   }
   if (['http:', 'https:', 'mailto:'].includes(url.protocol))
     return { kind: 'external', url: url.href };

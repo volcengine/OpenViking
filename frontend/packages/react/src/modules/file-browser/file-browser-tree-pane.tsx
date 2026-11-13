@@ -88,7 +88,7 @@ export function FileBrowserTreePane({
         placeholder={searchPlaceholder}
         advancedLabel={advancedLabel}
         refreshLabel={refreshLabel}
-        onRefresh={() => void browser.actions.refresh()}
+        onRefresh={() => void browser.actions.refresh().catch(() => {})}
       />
       <div className="ov-file-browser__tree-scroll">
         {browser.dashboardError ? (
@@ -104,7 +104,7 @@ export function FileBrowserTreePane({
               size="small"
               type="default"
               htmlType="button"
-              onClick={() => void browser.actions.refresh()}
+              onClick={() => void browser.actions.refresh().catch(() => {})}
             >
               {retryLabel}
             </Button>

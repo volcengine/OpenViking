@@ -33,7 +33,12 @@ export interface FsTreeState extends ReturnType<typeof useTreeMetadata> {
   cancelReveal: () => void;
   loadMore: (parentId: string) => Promise<void>;
   retry: (parentId: string) => Promise<void>;
-  refresh: () => Promise<void>;
+  /**
+   * Resolves to false when an account or root switch interrupted it, so callers
+   * must not continue with state captured before the switch; rejects with the
+   * first directory load failure.
+   */
+  refresh: () => Promise<boolean>;
 }
 
 export interface UseFsTreeOptions {
@@ -253,15 +258,20 @@ export function useFsTree({
       // still in the same scope: an account switch mid-loop has to stop it rather than
       // let it keep writing to the new account's tree with the old client.
       refresh: async () => {
-        if (!client) return;
+        if (!client) return false;
         const current = scope.current();
-        const open = [...expandedRef.current];
         setError(null);
         setDirs({});
-        for (const uri of open) {
-          if (scope.current().key !== current.key) return;
-          await fetchPage(uri, 0);
+        let failure: Error | null = null;
+        for (const uri of [...expandedRef.current]) {
+          if (scope.current().key !== current.key) return false;
+          // fetchPage 把失败写进目录状态并正常返回，这里要把第一个失败带出去。
+          // fetchPage records a failure in the directory state and returns normally;
+          // carry the first one out.
+          failure ??= (await fetchPage(uri, 0))?.error ?? null;
         }
+        if (failure) throw failure;
+        return scope.current().key === current.key;
       },
     };
   }, [client, rootUri, scope, fetchPage, setDirs]);

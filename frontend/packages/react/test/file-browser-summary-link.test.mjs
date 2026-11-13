@@ -7,7 +7,13 @@ import {
   useFileBrowser,
   usePreviewTabs,
 } from './helpers/internal-hooks.mjs';
-import { mount, ok, recordingFetch, settle } from './helpers/module-dom.mjs';
+import {
+  deferred,
+  mount,
+  ok,
+  recordingFetch,
+  settle,
+} from './helpers/module-dom.mjs';
 import {
   ROOT,
   DIR,
@@ -119,18 +125,21 @@ test('preview tab links resolve, drop anchors and navigate through the given ope
     await file.operations.openUri('.overview.md#section');
     await file.operations.openUri(`${FILE}#frag`);
     await file.operations.openUri(`${DIR}/.abstract.md`);
+    // Encoded reserved characters belong to the file name.
+    await file.operations.openUri(`${DIR}/a%23b%3Fc.md`);
     // A directory summary resolves relative links against the directory itself.
     await directory.operations.openUri('./child.md');
     assert.deepEqual(opened, [
       `${DIR}/.overview.md`,
       FILE,
       `${DIR}/.abstract.md`,
+      `${DIR}/a#b?c.md`,
       `${DIR}/child.md`,
     ]);
     // External links open a new window; page anchors do nothing.
     await file.operations.openUri('https://example.com/a');
     await file.operations.openUri('#section');
-    assert.equal(opened.length, 4);
+    assert.equal(opened.length, 5);
     assert.equal(windows.length, 1);
     assert.equal(windows[0][0], 'https://example.com/a');
   } finally {
@@ -154,6 +163,60 @@ test('refresh rejects when re-revealing the selection fails', async () => {
     await assert.rejects(async () => {
       await act(async () => handle.current.refresh());
     });
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('refresh rejects when an expanded directory fails to reload', async () => {
+  let failing = false;
+  const fetch = recordingFetch((call) =>
+    failing && call.path === '/api/v1/fs/ls' && call.uri === DIR
+      ? Promise.resolve(new Response('boom', { status: 500 }))
+      : answer(call),
+  );
+  const handle = createRef();
+  const view = await mount(render(fetch, handle));
+  try {
+    assert.equal(await command(handle, FILE), true);
+    failing = true;
+    await assert.rejects(async () => {
+      await act(async () => handle.current.refresh());
+    });
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('a refresh interrupted by an account switch does not reveal with the old account', async () => {
+  const gate = deferred();
+  let gated = false;
+  const fetch = recordingFetch((call) => {
+    if (gated && call.path === '/api/v1/fs/ls' && call.uri === ROOT) {
+      gated = false;
+      return gate.promise;
+    }
+    return answer(call);
+  });
+  const handle = createRef();
+  const view = await mount(render(fetch, handle, false, 'a'));
+  try {
+    assert.equal(await command(handle, FILE), true);
+    gated = true;
+    let refreshing;
+    await act(async () => {
+      refreshing = handle.current.refresh();
+    });
+    await view.render(render(fetch, handle, false, 'b'));
+    await settle();
+    const dirRequests = () =>
+      fetch.calls.filter((c) => c.path === '/api/v1/fs/ls' && c.uri === DIR)
+        .length;
+    const before = dirRequests();
+    await act(async () => gate.resolve(await ok([{ uri: DIR, isDir: true }])));
+    await refreshing.catch(() => {});
+    await settle();
+    assert.equal(dirRequests(), before);
   } finally {
     await view.unmount();
   }

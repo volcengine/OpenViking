@@ -98,7 +98,8 @@ test('a root retry that fails again restores treeError', async () => {
   );
   assert.ok(api.current.treeError, 'the first load must fail');
 
-  await api.current.actions.refresh();
+  // The failed reload is also reported to the caller.
+  await assert.rejects(api.current.actions.refresh(), /still denied/);
   await tree.render(
     createElement(
       OpenVikingProvider,

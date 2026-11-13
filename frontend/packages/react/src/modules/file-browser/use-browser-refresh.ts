@@ -16,7 +16,7 @@ import { useCallback, useState } from 'react';
  * again; otherwise the preview would stay while its tree row disappears.
  */
 export function useBrowserRefresh(
-  reloadTree: () => Promise<void>,
+  reloadTree: () => Promise<boolean>,
   reveal: (uri: string) => Promise<boolean>,
   selectedUri: string | null,
 ) {
@@ -26,7 +26,12 @@ export function useBrowserRefresh(
     setRefreshing(true);
     try {
       setGeneration((value) => value + 1);
-      await reloadTree();
+      // 刷新被账号切换打断时，`selectedUri` 和 `reveal` 还属于切换前的账号，
+      // 继续定位会把旧账号的目录响应写进新账号的树。
+      // When an account switch interrupted the reload, `selectedUri` and `reveal`
+      // still belong to the previous account; revealing would write that account's
+      // listings into the new account's tree.
+      if (!(await reloadTree())) return;
       if (selectedUri) await reveal(selectedUri);
     } finally {
       setRefreshing(false);

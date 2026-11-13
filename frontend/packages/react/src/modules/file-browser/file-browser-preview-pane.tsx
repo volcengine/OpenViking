@@ -128,7 +128,7 @@ export function FileBrowserPreviewPane({
             message={text.error}
             detail={browser.previewError.message}
             retryLabel={text.retry}
-            onRetry={() => void browser.actions.refresh()}
+            onRetry={() => void browser.actions.refresh().catch(() => {})}
           />
         </div>
       ) : (
