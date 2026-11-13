@@ -22,8 +22,13 @@ export function resolveLinkTarget(
   } catch {
     return undefined;
   }
-  if (url.protocol === 'viking:')
+  if (url.protocol === 'viking:') {
+    // 锚点不属于资源名：`.overview.md#section` 要按 `.overview.md` 识别。
+    // The anchor is not part of the resource name: `.overview.md#section` must be
+    // recognised as `.overview.md`.
+    url.hash = '';
     return { kind: 'resource', uri: decodeURI(url.href) };
+  }
   if (['http:', 'https:', 'mailto:'].includes(url.protocol))
     return { kind: 'external', url: url.href };
   return undefined;

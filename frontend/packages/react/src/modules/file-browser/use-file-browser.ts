@@ -13,7 +13,6 @@ import { useBrowserDashboards } from './use-browser-dashboards.js';
 import { useFsTree } from './use-fs-tree.js';
 import { useSummaryLevel } from './use-summary-level.js';
 import { useBrowserRefresh } from './use-browser-refresh.js';
-import { usePreviewTabs } from './use-preview-tabs.js';
 import { findSelectedRowId } from './fs-uri.js';
 import type {
   FileBrowserActions,
@@ -277,10 +276,6 @@ export function useFileBrowser({
     ],
   );
 
-  const previewTabs = usePreviewTabs(
-    summaryLevel.decorate(preview.tabs),
-    navigateResource,
-  );
   const previewError = blocked
     ? new Error(text[blocked === 'denied' ? 'accessDenied' : 'traverseOnly'])
     : preview.error;
@@ -304,7 +299,11 @@ export function useFileBrowser({
     dashboards: boards.dashboards,
     previewDashboard: boards.current,
     dashboardError: boards.error,
-    previewTabs: mergeDashboardTab(previewTabs, boards.tab, Boolean(blocked)),
+    previewTabs: mergeDashboardTab(
+      summaryLevel.decorate(preview.tabs),
+      boards.tab,
+      Boolean(blocked),
+    ),
     previewKey:
       boards.isOpen && activeUri ? dashboardKey(activeUri) : preview.activeKey,
     previewFooter: preview.footer,

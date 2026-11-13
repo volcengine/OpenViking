@@ -27,6 +27,7 @@ try {
               'browser-entries':
                 './src/components/file-browser-action-bar/index.ts',
               'file-browser': './src/modules/file-browser/use-file-browser.ts',
+              'preview-tabs': './src/modules/file-browser/use-preview-tabs.ts',
               console: './src/modules/console/use-console.ts',
               'task-context': './src/shared/task-tracking/context.tsx',
               'task-tracker': './src/shared/task-tracking/tracker.ts',

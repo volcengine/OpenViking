@@ -27,7 +27,7 @@ export interface FileBrowserHandle {
   /**
    * Reload the tree and the preview in place after the host changed resources,
    * keeping expanded directories and re-revealing the selected resource, which
-   * may sit on a later page.
+   * may sit on a later page. Rejects if the reload or the re-reveal fails.
    */
   refresh: () => Promise<void>;
 }

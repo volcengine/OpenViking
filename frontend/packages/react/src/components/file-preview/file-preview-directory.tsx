@@ -8,6 +8,7 @@ import type {
 
 import type { FilePreviewActions } from './types.js';
 import { FilePreviewBody } from './file-preview-body.js';
+import type { FilePreviewBodyProps } from './file-preview-body.js';
 import { FilePreviewHeader } from './file-preview-header.js';
 import { LoadingState } from './file-preview-state.js';
 import type { useFilePreviewEditing } from './use-file-preview-editing.js';
@@ -44,6 +45,8 @@ export interface FilePreviewDirectoryBodyProps {
   onViewModeChange: (mode: FilePreviewViewMode) => void;
   onHandleChange: (handle: ViewerHandle | null) => void;
   onViewModesChange: (modes: readonly ViewerViewModeOption[]) => void;
+  /** 摘要正文里的链接点击，由外壳按页签的 `operations.openUri` 决定是否接管。 */
+  onLinkClick?: FilePreviewBodyProps['onLinkClick'];
   onCancelEditing: () => void;
 }
 
@@ -79,6 +82,7 @@ export function FilePreviewDirectoryBody({
   onViewModeChange,
   onHandleChange,
   onViewModesChange,
+  onLinkClick,
   onCancelEditing,
 }: FilePreviewDirectoryBodyProps) {
   // 层级由外层持有（复制正文要跟着当前层级），这里只补一个非受控时的初值。
@@ -239,6 +243,7 @@ export function FilePreviewDirectoryBody({
           onViewModeChange={onViewModeChange}
           onHandleChange={onHandleChange}
           onViewModesChange={onViewModesChange}
+          onLinkClick={onLinkClick}
           onCancelEditing={onCancelEditing}
         />
       </div>

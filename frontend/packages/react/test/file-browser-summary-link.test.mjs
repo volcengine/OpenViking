@@ -5,6 +5,7 @@ import { act, createElement, createRef, useState } from 'react';
 import {
   OpenVikingProvider,
   useFileBrowser,
+  usePreviewTabs,
 } from './helpers/internal-hooks.mjs';
 import { mount, ok, recordingFetch, settle } from './helpers/module-dom.mjs';
 import {
@@ -92,31 +93,68 @@ test('ordinary resources named like Object.prototype members are not summary fil
   }
 });
 
-test('links in a preview navigate through the shared resource path', async () => {
-  const { api, view, changes } = await mountBrowser(false);
+test('preview tab links resolve, drop anchors and navigate through the given opener', async () => {
   const opened = [];
+  const windows = [];
   const originalOpen = window.open;
-  window.open = (...args) => opened.push(args);
+  window.open = (...args) => windows.push(args);
+  const tabs = [
+    { kind: 'file', key: `${DIR}/doc.md`, source: { content: '' } },
+    { kind: 'directory', key: DIR, levels: [{ key: 'l0' }] },
+    { kind: 'content', key: 'custom' },
+  ];
+  const api = { current: undefined };
+  function Probe() {
+    api.current = usePreviewTabs(
+      { previewTabs: tabs },
+      async (uri) => opened.push(uri) > 0,
+    ).previewTabs;
+    return null;
+  }
+  const view = await mount(createElement(Probe, null));
   try {
-    await open(api, `${DIR}/first.png`);
-    const link = (raw) =>
-      act(async () => api.current.previewTabs[0].operations.openUri(raw));
-    // Relative summary link: resolves against the current document.
-    await link('.overview.md');
-    assert.equal(changes.at(-1), DIR);
-    assert.equal(directoryTab(api).activeLevelKey, 'l1');
-    // Absolute summary link and a plain resource link.
-    await link(`${DIR}/.abstract.md`);
-    assert.equal(directoryTab(api).activeLevelKey, 'l0');
-    await link(FILE);
-    assert.equal(api.current.currentUri, FILE);
-    // External links open in a new window; anchors are ignored.
-    await link('https://example.com/a');
-    await link('#section');
-    assert.equal(opened.length, 1);
-    assert.equal(opened[0][0], 'https://example.com/a');
+    const [file, directory, content] = api.current;
+    assert.equal(content.operations, undefined);
+    // Relative links resolve against the document, anchors are not part of the name.
+    await file.operations.openUri('.overview.md#section');
+    await file.operations.openUri(`${FILE}#frag`);
+    await file.operations.openUri(`${DIR}/.abstract.md`);
+    // A directory summary resolves relative links against the directory itself.
+    await directory.operations.openUri('./child.md');
+    assert.deepEqual(opened, [
+      `${DIR}/.overview.md`,
+      FILE,
+      `${DIR}/.abstract.md`,
+      `${DIR}/child.md`,
+    ]);
+    // External links open a new window; page anchors do nothing.
+    await file.operations.openUri('https://example.com/a');
+    await file.operations.openUri('#section');
+    assert.equal(opened.length, 4);
+    assert.equal(windows.length, 1);
+    assert.equal(windows[0][0], 'https://example.com/a');
   } finally {
     window.open = originalOpen;
+    await view.unmount();
+  }
+});
+
+test('refresh rejects when re-revealing the selection fails', async () => {
+  let failing = false;
+  const fetch = recordingFetch((call) =>
+    failing && call.path === '/api/v1/fs/ls' && Number(call.query.offset)
+      ? Promise.resolve(new Response('boom', { status: 500 }))
+      : answer(call),
+  );
+  const handle = createRef();
+  const view = await mount(render(fetch, handle));
+  try {
+    assert.equal(await command(handle, FILE), true);
+    failing = true;
+    await assert.rejects(async () => {
+      await act(async () => handle.current.refresh());
+    });
+  } finally {
     await view.unmount();
   }
 });

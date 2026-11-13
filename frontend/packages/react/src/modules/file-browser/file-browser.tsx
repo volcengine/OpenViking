@@ -18,6 +18,7 @@ import { useFileBrowserSearchDialog } from './use-file-browser-search-dialog.js'
 import { useFileBrowser } from './use-file-browser.js';
 import { useFileBrowserAcl } from './use-file-browser-acl.js';
 import { useFileBrowserHandle } from './use-file-browser-handle.js';
+import { usePreviewTabs } from './use-preview-tabs.js';
 import type {
   FileBrowserComponent,
   FileBrowserHandle,
@@ -156,6 +157,10 @@ export const FileBrowser: FileBrowserComponent = forwardRef<
     refresh: browser.actions.refresh,
   });
   const navigation = useFileBrowserHandle(browser, ref);
+  // 预览里的链接走公开的定位入口，才会在目录树里选中并滚动到目标行。
+  // Preview links use the public reveal entry, so the target row is selected and
+  // scrolled into view in the tree.
+  const previewBrowser = usePreviewTabs(browser, navigation.openResource);
 
   const search = useFileBrowserSearchDialog(layoutRef);
   const baseClass = stacked
@@ -217,7 +222,7 @@ export const FileBrowser: FileBrowserComponent = forwardRef<
         ) : null}
 
         <FileBrowserPreviewPane
-          browser={browser}
+          browser={previewBrowser}
           permissions={permissions}
           rootUri={rootUri}
           locale={locale}

@@ -1,6 +1,10 @@
 import { useRef } from 'react';
 
-import type { FilePreviewFileTab, FilePreviewTab } from './types.js';
+import type {
+  FilePreviewDirectoryTab,
+  FilePreviewFileTab,
+  FilePreviewTab,
+} from './types.js';
 
 /** 执行能力与成功通知的配对，失败时静默且不通知。 */
 interface OperationPair<T> {
@@ -65,10 +69,15 @@ export function useFilePreviewActions() {
             { execute: tab.operations?.openParent, notify: tab.onOpenParent },
             uri,
           ),
-    openUri: (tab: FilePreviewFileTab, uri: string) =>
+    openUri: (tab: FilePreviewFileTab | FilePreviewDirectoryTab, uri: string) =>
       run(
         `openUri:${tab.key}`,
-        { execute: tab.operations?.openUri, notify: tab.onOpenUri },
+        {
+          execute: tab.operations?.openUri,
+          // 目录页签没有 `onOpenUri`，只执行导航。
+          // A directory tab has no `onOpenUri`; it only navigates.
+          notify: 'onOpenUri' in tab ? tab.onOpenUri : undefined,
+        },
         uri,
       ),
     copyPath: (tab: FilePreviewTab, path: string) =>

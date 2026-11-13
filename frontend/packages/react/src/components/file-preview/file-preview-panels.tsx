@@ -114,6 +114,7 @@ export function FilePreviewPanels({
           onViewModeChange={setViewMode}
           onHandleChange={onHandleChange}
           onViewModesChange={onViewModesChange}
+          onLinkClick={linkClickHandler}
           onCancelEditing={actionContext.cancelEditing}
         />
       </div>

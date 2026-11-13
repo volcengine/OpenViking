@@ -175,9 +175,10 @@ export const FilePreview: FilePreviewComponent = forwardRef<
     NonNullable<MarkdownAdapterOptions['onLinkClick']>
   >(
     (_event, link) => {
-      if (fileTab) void actions.openUri(fileTab, link.url);
+      const linkTab = fileTab ?? directoryTab;
+      if (linkTab) void actions.openUri(linkTab, link.url);
     },
-    [actions, fileTab],
+    [actions, fileTab, directoryTab],
   );
   // 只有宿主给了 `openUri` 才接管导航：传入回调后底座会阻止默认跳转，宿主
   // 没提供能力时接管等于把链接点死。
@@ -185,7 +186,7 @@ export const FilePreview: FilePreviewComponent = forwardRef<
   // Hand navigation over only when the host supplies `openUri`: passing the
   // callback makes the base skip the default jump, so taking over without a
   // handler would leave links dead.
-  const linkClickHandler = fileTab?.operations?.openUri
+  const linkClickHandler = (fileTab ?? directoryTab)?.operations?.openUri
     ? onLinkClick
     : undefined;
   // 目录页签的当前层级由外壳持有，复制正文、复制路径与正文因此取同一份来源。

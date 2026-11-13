@@ -6,6 +6,10 @@ if (!output) throw new Error('Run private Hook tests with npm test.');
 const browser = await import(pathToFileURL(join(output, 'file-browser.js')));
 const consoleModule = await import(pathToFileURL(join(output, 'console.js')));
 export const useFileBrowser = browser.useFileBrowser;
+const previewTabs = await import(
+  pathToFileURL(join(output, 'preview-tabs.js'))
+);
+export const usePreviewTabs = previewTabs.usePreviewTabs;
 export const useConsole = consoleModule.useConsole;
 const provider = await import(pathToFileURL(join(output, 'provider.js')));
 export const OpenVikingProvider = provider.OpenVikingProvider;

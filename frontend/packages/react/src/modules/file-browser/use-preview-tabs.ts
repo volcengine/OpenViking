@@ -12,27 +12,30 @@ import { resolveLinkTarget } from './fs-link-target.js';
  * module's own navigation (select, expand, switch summary level) and external
  * links open in a new window rather than going dead.
  */
-export function usePreviewTabs(
-  tabs: readonly FilePreviewTab[] | null,
-  openResource: (uri: string) => Promise<boolean>,
-) {
+export function usePreviewTabs<
+  T extends { previewTabs: readonly FilePreviewTab[] | null },
+>(browser: T, openResource: (uri: string) => Promise<boolean>): T {
+  const { previewTabs } = browser;
   return useMemo(
-    () =>
-      tabs?.map((tab) => {
-        if (tab.kind === 'content') return tab;
-        const openUri = async (raw: string) => {
-          const target = resolveLinkTarget(
-            raw,
-            // 目录摘要里的相对链接以目录本身为基准。
-            // Relative links in a directory summary resolve against the directory.
-            tab.kind === 'directory' ? `${tab.key}/` : tab.key,
-          );
-          if (target?.kind === 'resource') await openResource(target.uri);
-          else if (target)
-            window.open(target.url, '_blank', 'noopener,noreferrer');
-        };
-        return { ...tab, operations: { ...tab.operations, openUri } };
-      }) ?? null,
-    [tabs, openResource],
+    () => ({
+      ...browser,
+      previewTabs:
+        previewTabs?.map((tab) => {
+          if (tab.kind === 'content') return tab;
+          const openUri = async (raw: string) => {
+            const target = resolveLinkTarget(
+              raw,
+              // 目录摘要里的相对链接以目录本身为基准。
+              // Relative links in a directory summary resolve against the directory.
+              tab.kind === 'directory' ? `${tab.key}/` : tab.key,
+            );
+            if (target?.kind === 'resource') await openResource(target.uri);
+            else if (target)
+              window.open(target.url, '_blank', 'noopener,noreferrer');
+          };
+          return { ...tab, operations: { ...tab.operations, openUri } };
+        }) ?? null,
+    }),
+    [browser, previewTabs, openResource],
   );
 }

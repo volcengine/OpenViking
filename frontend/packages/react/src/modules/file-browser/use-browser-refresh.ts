@@ -27,7 +27,7 @@ export function useBrowserRefresh(
     try {
       setGeneration((value) => value + 1);
       await reloadTree();
-      if (selectedUri) await reveal(selectedUri).catch(() => false);
+      if (selectedUri) await reveal(selectedUri);
     } finally {
       setRefreshing(false);
     }
