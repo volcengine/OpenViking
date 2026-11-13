@@ -35,8 +35,8 @@ export interface FsTreeState extends ReturnType<typeof useTreeMetadata> {
   retry: (parentId: string) => Promise<void>;
   /**
    * Resolves to false when an account or root switch interrupted it, so callers
-   * must not continue with state captured before the switch; rejects with the
-   * first directory load failure.
+   * must not continue with state captured before the switch; rejects with a
+   * directory load failure after every expanded directory was requested.
    */
   refresh: () => Promise<boolean>;
 }
@@ -265,10 +265,12 @@ export function useFsTree({
         let failure: Error | null = null;
         for (const uri of [...expandedRef.current]) {
           if (scope.current().key !== current.key) return false;
-          // fetchPage 把失败写进目录状态并正常返回，这里要把第一个失败带出去。
+          // fetchPage 把失败写进目录状态并正常返回，这里要把失败带出去。必须每次都
+          // 发请求：不能写成 `??=`，它在已有失败时会跳过右侧，后面的目录就不再加载。
           // fetchPage records a failure in the directory state and returns normally;
-          // carry the first one out.
-          failure ??= (await fetchPage(uri, 0))?.error ?? null;
+          // carry a failure out. Every directory must still be requested: `??=` would
+          // skip the right-hand side once a failure exists, leaving later ones unloaded.
+          failure = (await fetchPage(uri, 0))?.error ?? failure;
         }
         if (failure) throw failure;
         return scope.current().key === current.key;

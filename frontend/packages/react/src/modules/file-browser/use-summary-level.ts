@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import type { FilePreviewTab } from '../../components/file-preview/index.js';
 import { parseSummaryUri } from './fs-summary-uri.js';
+import { normalizeResourceUri } from './fs-uri.js';
 import type { SummaryLevel } from './fs-summary-uri.js';
 
 /**
@@ -34,7 +35,10 @@ export function useSummaryLevel() {
     (tabs: readonly FilePreviewTab[] | null) =>
       target && tabs
         ? tabs.map((tab) =>
-            tab.kind === 'directory' && tab.key === target.uri
+            tab.kind === 'directory' &&
+            // 宿主可能把 URI 规范化（比如去掉末尾斜杠）后再传回来。
+            // The host may normalise the URI (e.g. drop a trailing slash) before passing it back.
+            normalizeResourceUri(tab.key) === normalizeResourceUri(target.uri)
               ? {
                   ...tab,
                   activeLevelKey: target.key,

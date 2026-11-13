@@ -107,6 +107,7 @@ test('preview tab links resolve, drop anchors and navigate through the given ope
   const tabs = [
     { kind: 'file', key: `${DIR}/doc.md`, source: { content: '' } },
     { kind: 'directory', key: DIR, levels: [{ key: 'l0' }] },
+    { kind: 'directory', key: `${DIR}/`, levels: [{ key: 'l0' }] },
     { kind: 'content', key: 'custom' },
   ];
   const api = { current: undefined };
@@ -119,7 +120,7 @@ test('preview tab links resolve, drop anchors and navigate through the given ope
   }
   const view = await mount(createElement(Probe, null));
   try {
-    const [file, directory, content] = api.current;
+    const [file, directory, slashed, content] = api.current;
     assert.equal(content.operations, undefined);
     // Relative links resolve against the document, anchors are not part of the name.
     await file.operations.openUri('.overview.md#section');
@@ -129,17 +130,20 @@ test('preview tab links resolve, drop anchors and navigate through the given ope
     await file.operations.openUri(`${DIR}/a%23b%3Fc.md`);
     // A directory summary resolves relative links against the directory itself.
     await directory.operations.openUri('./child.md');
+    // A directory URI that already ends with a slash gains no second one.
+    await slashed.operations.openUri('./child.md');
     assert.deepEqual(opened, [
       `${DIR}/.overview.md`,
       FILE,
       `${DIR}/.abstract.md`,
       `${DIR}/a#b?c.md`,
       `${DIR}/child.md`,
+      `${DIR}/child.md`,
     ]);
     // External links open a new window; page anchors do nothing.
     await file.operations.openUri('https://example.com/a');
     await file.operations.openUri('#section');
-    assert.equal(opened.length, 5);
+    assert.equal(opened.length, 6);
     assert.equal(windows.length, 1);
     assert.equal(windows[0][0], 'https://example.com/a');
   } finally {
@@ -188,6 +192,32 @@ test('refresh rejects when an expanded directory fails to reload', async () => {
   }
 });
 
+test('a failing directory does not stop the remaining expanded directories from reloading', async () => {
+  let failing = false;
+  const fetch = recordingFetch((call) =>
+    failing && call.path === '/api/v1/fs/ls' && call.uri === ROOT
+      ? Promise.resolve(new Response('boom', { status: 500 }))
+      : answer(call),
+  );
+  const handle = createRef();
+  const view = await mount(render(fetch, handle));
+  try {
+    assert.equal(await command(handle, FILE), true);
+    const before = fetch.countOf('/api/v1/fs/ls');
+    failing = true;
+    await assert.rejects(async () => {
+      await act(async () => handle.current.refresh());
+    });
+    // ROOT fails first; DIR (expanded after it) must still be requested.
+    const after = fetch.calls
+      .slice(before)
+      .filter((c) => c.path === '/api/v1/fs/ls');
+    assert.ok(after.some((c) => c.uri === DIR));
+  } finally {
+    await view.unmount();
+  }
+});
+
 test('a refresh interrupted by an account switch does not reveal with the old account', async () => {
   const gate = deferred();
   let gated = false;
@@ -217,6 +247,35 @@ test('a refresh interrupted by an account switch does not reveal with the old ac
     await refreshing.catch(() => {});
     await settle();
     assert.equal(dirRequests(), before);
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('a controlled host that normalises the URI still gets the summary level', async () => {
+  const api = { current: undefined };
+  function Probe() {
+    const [uri, setUri] = useState(null);
+    api.current = useFileBrowser({
+      rootUri: ROOT,
+      currentUri: uri,
+      controlled: true,
+      // The host stores a trailing-slash spelling of what it was told.
+      onUriChange: (next) => setUri(`${next}/`),
+    });
+    return null;
+  }
+  const view = await mount(
+    createElement(
+      OpenVikingProvider,
+      { baseURL: 'https://ov.test', fetch: recordingFetch(answer) },
+      createElement(Probe, null),
+    ),
+  );
+  try {
+    await open(api, `${DIR}/.overview.md`);
+    assert.equal(api.current.currentUri, `${DIR}/`);
+    assert.equal(directoryTab(api).activeLevelKey, 'l1');
   } finally {
     await view.unmount();
   }

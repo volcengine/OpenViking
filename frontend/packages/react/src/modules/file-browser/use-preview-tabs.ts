@@ -27,7 +27,9 @@ export function usePreviewTabs<
               raw,
               // 目录摘要里的相对链接以目录本身为基准。
               // Relative links in a directory summary resolve against the directory.
-              tab.kind === 'directory' ? `${tab.key}/` : tab.key,
+              tab.kind === 'directory'
+                ? `${tab.key.replace(/\/+$/, '')}/`
+                : tab.key,
             );
             if (target?.kind === 'resource') await openResource(target.uri);
             else if (target)
