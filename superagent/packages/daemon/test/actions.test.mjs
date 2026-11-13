@@ -498,6 +498,38 @@ describe('agent tools', () => {
     assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM outbox').get().n, 0);
   });
 
+  it('leaves reply_message undecided when local or server freshness blocks it', async (t) => {
+    let onServer = [];
+    const { store, call, inbound } = setup(t, { serverFence: true, run: (_connector, action, input) => {
+      if (action === 'chat.messages.newer') {
+        return { messages: onServer.filter((message) => message.create_time_ms > input.after_ms) };
+      }
+      return { message_id: 'om_delivered123456' };
+    } });
+    const older = inbound({ messageId: 'om_olderFresh1234', chatId: 'oc_chat12345678', createTimeMs: 1_000 });
+    const latest = inbound({ messageId: 'om_latestFresh1234', chatId: 'oc_chat12345678', createTimeMs: 2_000 });
+    const reply = (row) => call('reply_message', {
+      message_id: row.messageId, markdown: 'reconsidered answer', decision_id: row.eventId,
+    });
+
+    await assert.rejects(reply(older), (error) => error.code === 'stale_decision');
+    assert.equal(store.decisionFor(older.connectorInstance, older.eventId), null,
+      'a stale reply is not a delivered decision');
+    await reply(latest);
+    assert.equal(store.decisionFor(latest.connectorInstance, latest.eventId).outcome, 'delivered');
+
+    const remote = inbound({ messageId: 'om_remoteFresh1234', chatId: 'oc_remote123456', createTimeMs: 3_000 });
+    onServer = [{ message_id: 'om_notIngested123', create_time_ms: 4_000 }];
+    await assert.rejects(reply(remote), (error) => error.code === 'stale_decision' && /not reached you yet/.test(error.message));
+    assert.equal(store.decisionFor(remote.connectorInstance, remote.eventId), null,
+      'the server fence also leaves the input open for reconsideration');
+    assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM outbox WHERE inbound_seq = ?').get(remote.seq).n, 0);
+
+    onServer = [];
+    await reply(remote);
+    assert.equal(store.decisionFor(remote.connectorInstance, remote.eventId).outcome, 'delivered');
+  });
+
   it('asks Lark for newer messages the event stream has not delivered yet, ignoring its own', async (t) => {
     let onServer = [];
     const { store, call, connectors, logs } = setup(t, { serverFence: true, run: (_connector, action, input) => {

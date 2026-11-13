@@ -335,19 +335,21 @@ describe('daemon event path (mock env)', { concurrency: false }, () => {
     }
   });
 
-  it('reminds once about a direct message the turn did not decide on', async () => {
+  it('reminds three times about a direct message the turns did not decide on, then stops', async () => {
     const env = await startMockEnv({ codex: { behavior: 'complete' }, config: { explicitSilence: true } });
     try {
       env.receive(textMessage({ messageId: 'om-undecided', text: '在吗' }));
-      await env.waitFor(() => env.codexInput().length === 2);
+      await env.waitFor(() => env.codexInput().length === 4);
       await env.daemon.agentRuntime.whenIdle();
       const turns = env.codexInput();
       assert.doesNotMatch(turns[0].text, /undecided=1/);
-      assert.match(turns[1].text, /msg=om-undecided event=evt-om-undecided [^\]]* undecided=1\] 在吗/);
+      for (const turn of turns.slice(1)) {
+        assert.match(turn.text, /msg=om-undecided event=evt-om-undecided [^\]]* undecided=1\] 在吗/);
+      }
       assert.deepEqual(env.daemon.store.db.prepare("SELECT status FROM activities WHERE kind = 'agent.decision_missing' ORDER BY id")
-        .all().map((row) => row.status), ['NUDGED']);
+        .all().map((row) => row.status), ['NUDGED', 'NUDGED', 'NUDGED', 'MISSING']);
       await new Promise((resolve) => setTimeout(resolve, 300));
-      assert.equal(env.codexInput().length, 2, 'never a second reminder');
+      assert.equal(env.codexInput().length, 4, 'never a fourth reminder');
       assert.deepEqual(env.replies(), []);
     } finally {
       await env.stop();

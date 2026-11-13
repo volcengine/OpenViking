@@ -12,7 +12,7 @@ import { chatEvent, mailEvent } from './event-fixture.mjs';
 const quiet = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
 
 // A real Store and Harness; the runtime only records what it is handed.
-function setup(t, { runtime = 'codex', explicitSilence = true, notifyFailure = null } = {}) {
+function setup(t, { runtime = 'codex', explicitSilence = true, decisionReminderLimit = 3, notifyFailure = null } = {}) {
   const store = new Store(':memory:', quiet);
   store.initializeCognition(runtime, 'token');
   const submitted = [];
@@ -31,6 +31,7 @@ function setup(t, { runtime = 'codex', explicitSilence = true, notifyFailure = n
     logger: { ...quiet, info: (message, fields) => logs.push({ message, ...fields }) },
     recordActivity: (kind, fields) => activities.push({ kind, ...fields }),
     explicitSilence,
+    decisionReminderLimit,
     notifyFailure,
     isStopping: () => state.stopping,
   });
@@ -65,26 +66,37 @@ describe('turn-end decision settlement', () => {
       expected_unsettled: 0, optional_unsettled: 0, nudged: 0 });
   });
 
-  it('reminds once about an undecided direct message, with its own event= and no seq', async (t) => {
+  it('reminds an undecided direct message three times with its original event= and seq, then stops', async (t) => {
     const { activities, submitted, logs, ingest, turn } = setup(t);
     const row = ingest({ messageId: 'om_forgot1234567', chatId: 'oc_p2p12345678' });
     await turn([row.seq, null]);
+    for (let reminder = 2; reminder <= 3; reminder += 1) await turn([row.seq]);
     assert.deepEqual(activities.map(({ kind, status, inboundSeq, metadata }) => [kind, status, inboundSeq, metadata]),
-      [['agent.decision_missing', 'NUDGED', row.seq, { expectation: 'expected', runtime: 'codex' }]]);
-    assert.equal(submitted.length, 1);
-    assert.equal(submitted[0].seq, null);
-    assert.equal(submitted[0].receiptId, undefined);
-    assert.match(submitted[0].text, /^\[chat=oc_p2p12345678 source=lark msg=om_forgot1234567 event=message:om_forgot1234567 time=\S+ from=\S+ undecided=1\] hello$/);
-    assert.equal(logs.find((line) => line.message === 'decision_nudged').seq, row.seq);
+      Array.from({ length: 3 }, () => ['agent.decision_missing', 'NUDGED', row.seq, { expectation: 'expected', runtime: 'codex' }]));
+    assert.equal(submitted.length, 3);
+    for (const [index, item] of submitted.entries()) {
+      assert.equal(item.seq, row.seq);
+      assert.equal(item.receiptId, undefined);
+      assert.match(item.text, /^\[chat=oc_p2p12345678 source=lark msg=om_forgot1234567 event=message:om_forgot1234567 time=\S+ from=\S+ undecided=1\] hello$/);
+      assert.equal(logs.filter((line) => line.message === 'decision_nudged')[index].reminder, index + 1);
+    }
+    assert.ok(logs.filter((line) => line.message === 'decision_nudged').every((line) => line.seq === row.seq));
     assert.doesNotMatch(JSON.stringify(logs), /oc_p2p|om_forgot/);
 
-    // The same seq is never reminded about twice; a later miss is only recorded.
+    // The third reminder turn checks the same seq again but adds no fourth.
     await turn([row.seq]);
-    assert.equal(submitted.length, 1);
-    assert.deepEqual(activities.map(({ status }) => status), ['NUDGED', 'MISSING']);
-    // The reminder turn itself carries no seq, so it checks nothing.
+    assert.equal(submitted.length, 3);
+    assert.deepEqual(activities.map(({ status }) => status), ['NUDGED', 'NUDGED', 'NUDGED', 'MISSING']);
     await turn([]);
-    assert.equal(activities.length, 2);
+    assert.equal(activities.length, 4);
+  });
+
+  it('honors a zero reminder limit', async (t) => {
+    const { activities, submitted, ingest, turn } = setup(t, { decisionReminderLimit: 0 });
+    const row = ingest({ messageId: 'om_noReminder123' });
+    await turn([row.seq]);
+    assert.deepEqual(submitted, []);
+    assert.deepEqual(activities.map(({ status }) => status), ['MISSING']);
   });
 
   it('lets one decision on the newest input cover a burst, but not one on an older input', async (t) => {
