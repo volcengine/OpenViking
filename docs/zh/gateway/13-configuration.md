@@ -162,7 +162,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | `auxiliary_patterns` | 正则表达式，不区分大小写 | 分别与 Messages 的 `system` 字段、Responses 的 `instructions` 和最后一条用户消息匹配，命中的请求算作**辅助请求**。Chat Completions `messages` 和 Responses `input` 里的 system、developer 消息不参与匹配，这类客户端要匹配用户消息里的文本。 |
 | `noise_patterns` | 正则表达式，区分大小写 | 网关读取对话时忽略这些文本：不参与请求分类和记忆检索，也不写入保存的消息和工具结果，但仍原样发给模型。删完为空的用户消息不算新用户消息，请求按同一轮的延续处理。 |
 | `noise_tags` | 标签名 | `<tag …>…</tag>` 块（不区分大小写），处理方式同 `noise_patterns`。 |
-| `plugin_tags` | 标签名 | 系统提示词或客户端消息中出现 `<tag`，表示客户端里运行着 OpenViking 记忆插件。该对话此后网关只做转发：不加记忆、不提供 OpenViking 工具、不保存（见[两者同时使用时](../guides/15-gateway.md#when-both-are-in-use)）。只添加插件自己写入的标签。 |
+| `plugin_tags` | 标签名 | 系统提示词或客户端消息中出现代码之外的完整 `<tag>…</tag>` 块，表示客户端里运行着 OpenViking 记忆插件。该对话此后网关只做转发：不加记忆、不提供 OpenViking 工具、不保存（见[两者同时使用时](../guides/15-gateway.md#when-both-are-in-use)）。只添加插件自己写入的标签。 |
 
 - **`add` 追加到内置列表，`remove` 从内置列表中去掉条目。** `remove` 的条目要和 `client-rules.json` 里的写法完全一致。没有匹配到任何条目的 `remove`（例如升级后内置条目改了写法）会被忽略，启动时打印警告。内置列表不能整体替换，这样后续版本新增的条目仍然生效。
 - **只匹配客户端自己写的文本。** 用客户端自己提示词里的整句，不要用短语。用户消息一旦命中，这一整轮都算辅助请求，不检索也不保存；如果模式还能命中主对话的系统提示词，对话里的每个请求都会这样。噪声模式要锚定整条消息（JSON 里写作 `"\\A…\\Z"`），避免从真实消息里删掉文字。
