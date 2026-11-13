@@ -32,22 +32,13 @@ class VikingDBClientMixin:
     def _embedding_data(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Return embedding data or raise a structured HTTP-200 business error."""
         code = payload.get("code")
-        if code not in (None, 0, "0"):
+        # The V2 endpoint returns "Success"; retain legacy zero/absent codes.
+        if code not in (None, 0, "0", "Success"):
             code_text = str(code)
             message = payload.get("message") or payload.get("msg") or "unknown error"
-            display = f"VikingDB API error: {message}"
-            try:
-                status_code = int(code)
-            except (TypeError, ValueError):
-                status_code = None
-            if status_code is not None and 100 <= status_code <= 599:
-                raise model_error_from_status(
-                    status_code,
-                    display,
-                    provider="vikingdb",
-                    code=code_text,
-                )
-            raise model_error_from_code(code_text, display, provider="vikingdb")
+            raise model_error_from_code(
+                code_text, f"VikingDB API error: {message}", provider="vikingdb"
+            )
 
         return payload.get("result", {}).get("data", [])
 

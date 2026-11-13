@@ -61,16 +61,38 @@ def test_dense_backward_compat_no_params():
     assert embedder._resolve_input_type(is_query=True) is None
 
 
-def test_http_200_business_error_is_structured():
+@pytest.mark.parametrize(
+    ("code", "expected_kind"),
+    [
+        ("RateLimitExceeded", ModelErrorKind.RATE_LIMIT_ERROR),
+        ("AuthenticationError", ModelErrorKind.AUTHENTICATION_ERROR),
+        (429, ModelErrorKind.UNKNOWN),
+        (1000029, ModelErrorKind.UNKNOWN),
+        ("Unrecognized.BusinessCode", ModelErrorKind.UNKNOWN),
+    ],
+)
+def test_http_200_business_error_is_structured(code, expected_kind):
     embedder = VikingDBDenseEmbedder.__new__(VikingDBDenseEmbedder)
     response = Mock(status_code=200)
-    response.json.return_value = {"code": 429, "message": "rate limited"}
+    response.json.return_value = {"code": code, "message": "request rejected"}
     embedder.client = Mock()
     embedder.client.do_req.return_value = response
 
     with pytest.raises(ModelError) as raised:
         embedder._call_api(["hello"])
 
-    assert raised.value.kind is ModelErrorKind.RATE_LIMIT_ERROR
-    assert raised.value.status_code == 429
-    assert raised.value.code == "429"
+    assert raised.value.kind is expected_kind
+    assert raised.value.status_code is None  # A business code is not an HTTP status.
+    assert raised.value.code == str(code)
+
+
+@pytest.mark.parametrize("code", ["Success", 0, "0", None])
+def test_http_200_success_preserves_embedding_data(code):
+    embedder = VikingDBDenseEmbedder.__new__(VikingDBDenseEmbedder)
+    data = [{"dense_embedding": [0.1, 0.2]}]
+    response = Mock(status_code=200)
+    response.json.return_value = {"code": code, "result": {"data": data}}
+    embedder.client = Mock()
+    embedder.client.do_req.return_value = response
+
+    assert embedder._call_api(["hello"]) == data
