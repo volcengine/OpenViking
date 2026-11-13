@@ -70,6 +70,24 @@ def test_ci_plan_keeps_marketplace_checks():
     assert not selection["deps_changed"]
 
 
+def test_ci_plan_keeps_qdrant_coverage():
+    plan = runpy.run_path(str(REPO_ROOT / ".github/scripts/ci_plan.py"))["plan"]
+
+    for path in (
+        "openviking/storage/vectordb_adapters/qdrant_adapter.py",
+        "scripts/maintenance/qdrant_migrate.py",
+        "tests/storage/test_qdrant_integration.py",
+        "openviking/config/account_vector.py",
+        "openviking/storage/collection_schemas.py",
+        ".github/actions/native-runtime/action.yml",
+    ):
+        selection = plan([path])
+        assert selection["qdrant_changed"], path
+        assert selection["api_changed"], path
+    assert not plan(["docs/en/guides/01-configuration.md"])["qdrant_changed"]
+    assert plan([], full=True)["qdrant_changed"]
+
+
 def test_build_workflow_smoke_tests_windows_wheel_engine_import():
     build_workflow = _read_text(".github/workflows/_build.yml")
 

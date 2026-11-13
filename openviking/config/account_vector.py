@@ -9,6 +9,7 @@ from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, model_validator
 
 from openviking_cli.utils.config.runtime_field import RuntimeField
+from openviking_cli.utils.config.vectordb_config import QdrantConfig
 
 
 class AccountEmbeddingCredential(BaseModel):
@@ -128,6 +129,18 @@ class AccountVikingDBVectorConfig(BaseModel):
     headers: Optional[Dict[str, str]] = RuntimeField(default=None, dynamic=False)
 
 
+class AccountQdrantVectorConfig(QdrantConfig):
+    """Qdrant connection and physical identity, fixed at Account creation."""
+
+    url: Optional[str] = RuntimeField(default=None, dynamic=False)
+    api_key: Optional[str] = RuntimeField(default=None, dynamic=False)
+    timeout_seconds: float = RuntimeField(default=10.0, dynamic=False, gt=0)
+    dense_vector_name: str = RuntimeField(default="vector", dynamic=False, min_length=1)
+    sparse_vector_name: str = RuntimeField(default="sparse_vector", dynamic=False, min_length=1)
+    data_collection_name: Optional[str] = RuntimeField(default=None, dynamic=False, min_length=1)
+    metadata_collection_name: Optional[str] = RuntimeField(default=None, dynamic=False, min_length=1)
+
+
 class AccountVectorDBConfig(BaseModel):
     """Complete create-only Account VectorDB identity and schema contract.
 
@@ -136,7 +149,7 @@ class AccountVectorDBConfig(BaseModel):
     backends.
     """
 
-    backend: Literal["http", "volcengine", "vikingdb"] = RuntimeField(dynamic=False)
+    backend: Literal["http", "volcengine", "vikingdb", "qdrant"] = RuntimeField(dynamic=False)
     name: str = RuntimeField(dynamic=False, min_length=1)
     url: Optional[str] = RuntimeField(default=None, dynamic=False)
     project_name: str = RuntimeField(
@@ -160,6 +173,7 @@ class AccountVectorDBConfig(BaseModel):
         default=None,
         dynamic=False,
     )
+    qdrant: Optional[AccountQdrantVectorConfig] = RuntimeField(default=None, dynamic=False)
 
     model_config = {"populate_by_name": True}
 
@@ -168,6 +182,11 @@ class AccountVectorDBConfig(BaseModel):
         """Require a complete connection block for the selected remote backend."""
         if self.backend == "http" and not self.url:
             raise ValueError("Account HTTP VectorDB requires url")
+        if self.backend == "qdrant":
+            if not (self.url or (self.qdrant and self.qdrant.url)):
+                raise ValueError("Account Qdrant requires qdrant.url or url")
+            if not 0.0 <= self.sparse_weight <= 1.0:
+                raise ValueError("Qdrant sparse_weight must be between 0 and 1")
         if self.backend == "vikingdb":
             if self.vikingdb is None or not self.vikingdb.host:
                 raise ValueError("Account VikingDB requires vikingdb.host")

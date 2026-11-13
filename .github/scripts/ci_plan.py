@@ -51,6 +51,18 @@ def plan(paths, full=False):
             r"^tests/(vectordb/test_cuvs_|benchmark/test_cuvs_|vectordb/test_str_to_uint64)|"
             r"^benchmark/cuvs/|^examples/cuvs_smoke\.py$"
         ),
+        "qdrant_changed": changed(
+            f"{NATIVE}|{PACKAGING}|{CI}|"
+            r"^openviking/config/|"
+            r"^openviking/storage/(acl|collection_schemas|viking_vector_index_backend|expr)\.py$|"
+            r"^openviking/storage/(vectordb|vectordb_adapters)/|"
+            r"^openviking_cli/utils/config/(vectordb|embedding)_config\.py$|"
+            r"^scripts/maintenance/qdrant_(migrate|sparse_upgrade)\.py$|"
+            r"^tests/config/|^tests/conftest\.py$|"
+            r"^tests/(maintenance/test_qdrant_(migrate|sparse_upgrade)|"
+            r"storage/test_qdrant_(adapter|sparse|migration_integration|integration)|"
+            r"storage/test_collection_schemas)\.py$"
+        ),
         "api_changed": api,
         "plugins_changed": plugins,
         "langchain_changed": changed(
