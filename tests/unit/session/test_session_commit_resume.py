@@ -129,9 +129,10 @@ async def test_commit_retention_boundary_and_pending_tokens_after_reload(
     tracker = TaskTracker(_TaskStore())
     monkeypatch.setattr("openviking.session.session._enabled_memory_types", lambda: set())
     monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
+    queue_manager = SimpleNamespace(enqueue=AsyncMock())
     monkeypatch.setattr(
         "openviking.storage.queuefs.get_queue_manager",
-        lambda: SimpleNamespace(enqueue=AsyncMock()),
+        lambda: queue_manager,
     )
     try:
         session = Session(viking_fs=storage, session_id="session-1", session_uri=session_uri)
@@ -147,6 +148,10 @@ async def test_commit_retention_boundary_and_pending_tokens_after_reload(
             else {}
         )
         result = await session.commit_async(keep_recent_count=keep_count, **turn_options)
+        queued_message = SessionCommitMsg.from_dict(queue_manager.enqueue.await_args.args[1])
+        assert queue_manager.enqueue.await_args.kwargs == {
+            "group_key": queued_message.queue_group_key
+        }
         archived = await session._archives.read_messages(result["archive_uri"])
         saved = await session._merge_and_save_commit_meta(archive_count, {"events": 1}, None)
         assert saved is not None and saved.memories_extracted["events"] == 1

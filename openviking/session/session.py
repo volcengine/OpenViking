@@ -1935,6 +1935,7 @@ class Session:
                     await get_queue_manager().enqueue(
                         QueueManager.SESSION_COMMIT,
                         queue_msg.to_dict(),
+                        group_key=queue_msg.queue_group_key,
                     )
             except Exception as exc:
                 try:
@@ -2324,7 +2325,9 @@ class Session:
             )
             try:
                 with bind_task_context(new_task_id, self.ctx.account_id, self.ctx.user.user_id):
-                    await get_queue_manager().enqueue(QueueManager.SESSION_COMMIT, msg.to_dict())
+                    await get_queue_manager().enqueue(
+                        QueueManager.SESSION_COMMIT, msg.to_dict(), group_key=msg.queue_group_key
+                    )
             except Exception as exc:
                 await tracker.fail(
                     new_task_id,
