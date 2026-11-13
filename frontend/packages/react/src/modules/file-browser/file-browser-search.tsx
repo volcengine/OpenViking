@@ -6,7 +6,6 @@ import { Modal } from '../../shared/primitives/modal/modal.js';
 import type { Locale } from '../../shared/locale.js';
 import { FileBrowserSearchAdvanced } from './file-browser-search-advanced.js';
 import { FileBrowserSearchHeader } from './file-browser-search-header.js';
-import { FileBrowserSearchPreview } from './file-browser-search-preview.js';
 import { useSearchHighlight } from './use-search-highlight.js';
 import type { FileBrowserHandle } from './types.js';
 import { FileBrowserSearchResults } from './file-browser-search-results.js';
@@ -200,16 +199,7 @@ export function FileBrowserSearch({
             query={query.trim()}
             onHighlight={onHighlight}
             onRetry={retry}
-            preview={
-              active ? (
-                <FileBrowserSearchPreview
-                  client={client}
-                  entry={active}
-                  requestOptions={requestOptions}
-                  text={text}
-                />
-              ) : null
-            }
+            fallbackFocusRef={inputRef}
             loading={search.loading || (awaitingQuery && !!draft.trim())}
             error={search.error}
             searched={search.result !== null}

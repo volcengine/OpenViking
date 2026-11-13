@@ -130,9 +130,6 @@ export interface FileBrowserLabels {
   /** 搜索进行中的提示。Message shown while a search runs. */
   searchLoading?: string;
   searchDismiss?: string;
-  searchPreview?: string;
-  searchPreviewEmpty?: string;
-  searchPreviewFailed?: string;
   /** 预览读取正文时的提示。Message shown while the preview reads a resource. */
   loading?: string;
   /** 分段器里的「预览」。The "preview" segment label. */
