@@ -326,6 +326,56 @@ def test_volcengine_collection_update_data_posts_to_update_endpoint(monkeypatch)
     }
 
 
+@pytest.mark.parametrize("failure_path", ["/search/scalar", "/delete"])
+@pytest.mark.parametrize("response_kind", [429, 500, "invalid_json", "success"])
+def test_volcengine_delete_propagates_request_failures(monkeypatch, failure_path, response_kind):
+    collection = VolcengineCollection(
+        ak="test-ak",
+        sk="test-sk",
+        region="cn-beijing",
+        meta_data={"ProjectName": "default", "CollectionName": "context"},
+    )
+    adapter = VolcengineCollectionAdapter.from_config(
+        VectorDBBackendConfig(
+            backend="volcengine",
+            name="context",
+            volcengine=VolcengineConfig(ak="test-ak", sk="test-sk", region="cn-beijing"),
+        )
+    )
+    adapter._collection = Collection(collection)
+    deleted_ids = []
+
+    def fake_request(method, path, req_body):
+        response = requests.Response()
+        response.status_code = 200
+        if path.endswith("/search/scalar"):
+            response._content = (
+                b'{"result":{"data":[{"id":"doc-1"}]}}'
+                if req_body["offset"] == 0
+                else b'{"result":{"data":[]}}'
+            )
+        else:
+            assert path.endswith("/delete")
+            deleted_ids.extend(req_body["ids"])
+            response._content = b'{"result":{}}'
+        if path.endswith(failure_path) and response_kind != "success":
+            response.status_code = response_kind if isinstance(response_kind, int) else 200
+            response._content = b"invalid JSON" if response_kind == "invalid_json" else b"{}"
+        return response
+
+    monkeypatch.setattr(collection.data_client, "do_req", fake_request)
+    scope = {"op": "must", "field": "uri", "conds": ["/resources/expired"]}
+    if response_kind == "success":
+        assert adapter.delete(filter=scope) == 1
+        assert deleted_ids == ["doc-1"]
+    else:
+        message = "invalid JSON" if response_kind == "invalid_json" else str(response_kind)
+        with pytest.raises(ConnectionError, match=message):
+            adapter.delete(filter=scope)
+        if failure_path == "/search/scalar":
+            assert deleted_ids == []
+
+
 def test_volcengine_collection_update_data_sanitizes_uri_fields(monkeypatch):
     captured = {}
 
@@ -1114,42 +1164,47 @@ def test_volcengine_adapter_update_data_supports_api_key_mode():
     assert result == ["doc-1"]
 
 
-def test_http_collection_update_data_posts_to_update_endpoint(monkeypatch):
-    captured = {}
-
-    class _Response:
-        status_code = 200
-        text = '{"data": ["doc-1"]}'
-
-    def _fake_post(url, headers=None, json=None, timeout=None):
-        captured["url"] = url
-        captured["headers"] = headers
-        captured["json"] = json
-        captured["timeout"] = timeout
-        return _Response()
-
-    monkeypatch.setattr(
-        "openviking.storage.vectordb.collection.http_collection.requests.post",
-        _fake_post,
-    )
+def test_http_collection_update_and_fetch_data(monkeypatch):
+    import json
+    from dataclasses import asdict
+    from types import SimpleNamespace
 
     from openviking.storage.vectordb.collection.http_collection import HttpCollection
+    from openviking.storage.vectordb.collection.result import DataItem, FetchDataInCollectionResult
 
+    record = {"id": "doc-1", "name": "updated"}
+    expected = FetchDataInCollectionResult(
+        items=[DataItem(id="doc-1", fields=record)], ids_not_exist=["doc-2"]
+    )
+    captured = {}
+
+    def _fake_post(url, headers=None, json=None, timeout=None):
+        captured.update(url=url, json=json)
+        return SimpleNamespace(status_code=200, text='{"data": ["doc-1"]}')
+
+    monkeypatch.setattr(requests, "post", _fake_post)
+    # The bundled service serializes FetchDataInCollectionResult with asdict().
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda *args, **kwargs: SimpleNamespace(
+            status_code=200, text=json.dumps({"code": 0, "data": asdict(expected)})
+        ),
+    )
     collection = HttpCollection(
         ip="127.0.0.1",
         port=1933,
         meta_data={"ProjectName": "default", "CollectionName": "context"},
     )
 
-    result = collection.update_data([{"id": "doc-1", "name": "updated"}])
-
-    assert result == ["doc-1"]
+    assert collection.update_data([record]) == ["doc-1"]
     assert captured["url"] == "http://127.0.0.1:1933/api/vikingdb/data/update"
     assert captured["json"] == {
         "project": "default",
         "collection_name": "context",
-        "fields": '[{"id": "doc-1", "name": "updated"}]',
+        "fields": json.dumps([record]),
     }
+    assert collection.fetch_data(["doc-1", "doc-2"]) == expected
 
 
 def test_http_adapter_strict_count_propagates_http_failure(monkeypatch):

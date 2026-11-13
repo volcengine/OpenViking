@@ -1,0 +1,44 @@
+{
+  "name": "openviking-ui-workspace",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "docs"
+  ],
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "scripts": {
+    "dev": "npm run build:lib && concurrently -n lib,docs -c cyan,magenta \"npm run dev --workspace @openviking/react\" \"npm run dev --workspace @openviking/ui-docs --\"",
+    "check": "npm run lint",
+    "lint": "npm run build:lib && node scripts/lint.mjs",
+    "lint:fix": "npm run build:lib && node scripts/lint.mjs --fix",
+    "typecheck": "npm run build:lib && tsc --noEmit -p packages/react/tsconfig.json && tsc --noEmit -p packages/react/tsconfig.config.json && tsc --noEmit -p docs/tsconfig.json",
+    "test": "npm run check:swatches && npm run build:lib && node scripts/test.mjs",
+    "build:lib": "npm run build --workspace @openviking/react",
+    "clean:lib": "node -e \"require('node:fs').rmSync('packages/react/dist',{recursive:true,force:true})\"",
+    "build:docs": "npm run build --workspace @openviking/ui-docs",
+    "build": "npm run build:lib && npm run build:docs",
+    "preview": "npm run preview --workspace @openviking/ui-docs --",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "sync:swatches": "node scripts/sync-library-swatches.mjs",
+    "check:swatches": "node scripts/sync-library-swatches.mjs --check",
+    "changeset": "changeset",
+    "version:react": "changeset version && npm install --package-lock-only --ignore-scripts --no-audit --no-fund"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.31.1",
+    "@rsbuild/plugin-svgr": "^2.0.5",
+    "@rslint/core": "0.10.0",
+    "@types/node": "^22.19.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.2.0",
+    "concurrently": "^10.0.6",
+    "jsdom": "^27.4.0",
+    "prettier": "^3.6.2",
+    "typescript": "7.0.2"
+  }
+}

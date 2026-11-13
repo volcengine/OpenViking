@@ -83,6 +83,9 @@ export const KNOBS = [
   { name: "recallMaxContentChars", type: "int", default: 500, min: 100, max: 5000, env: "OPENVIKING_RECALL_MAX_CONTENT_CHARS", capability: "recall" },
   { name: "recallPreferAbstract", type: "bool", default: true, env: "OPENVIKING_RECALL_PREFER_ABSTRACT", capability: "recall" },
   { name: "recallPeerScope", type: "enum", values: ["all", "actor"], default: "all", env: "OPENVIKING_RECALL_PEER_SCOPE", workspace: "recall.peer_scope", capability: "recall" },
+  // Sent as events_time_decay_protection ("7d", "12h"): event memories keep their score for
+  // that long and decay afterwards. Empty leaves decay off, as the server does by default.
+  { name: "recallEventsDecayProtection", type: "string", default: "", env: "OPENVIKING_RECALL_EVENTS_DECAY_PROTECTION", capability: "recall" },
   { name: "recallDedupTurns", type: "int", default: 5, min: 0, max: 20, env: "OPENVIKING_RECALL_DEDUP_TURNS", workspace: "recall.dedup_turns", capability: "recall" },
   { name: "recallMaxTokens", type: "int", default: 1600, min: 64, max: 200000, env: "OPENVIKING_RECALL_MAX_TOKENS", sendOnlyWhenConfigured: true, capability: "recall" },
   { name: "recallQueryExpansion", type: "enum", values: ["auto", "off"], default: "auto", env: "OPENVIKING_RECALL_QUERY_EXPANSION", sendOnlyWhenConfigured: true, capability: "recall" },
@@ -134,6 +137,9 @@ export const KNOBS = [
     workspace: "capture.enabled",
     capability: "capture",
   },
+  // Magpie uses these for capture when its gateway has no session or yields to a native plugin.
+  { name: "captureWithoutSession", type: "bool", default: false, capability: "capture" },
+  { name: "nativeAgents", type: "list", default: [], capability: "capture" },
   { name: "captureMode", type: "enum", values: ["semantic", "keyword"], default: "semantic", env: "OPENVIKING_CAPTURE_MODE", capability: "capture" },
   { name: "captureMaxLength", type: "int", default: 24000, min: 200, max: 100000, env: "OPENVIKING_CAPTURE_MAX_LENGTH", capability: "capture" },
   // Tool output is reported verbatim; the server owns truncation via
@@ -159,7 +165,7 @@ export const KNOBS = [
   { name: "noAutoInject", type: "bool", default: false, env: "OPENVIKING_NO_AUTO_INJECT", capability: "session" },
   { name: "profileTokenBudget", type: "int", default: 10000, min: 500, max: 50000, env: "OPENVIKING_PROFILE_TOKEN_BUDGET", aliases: ["profileBudget"], capability: "session" },
   { name: "resumeContextBudget", type: "int", default: 32000, min: 1024, max: 128000, env: "OPENVIKING_RESUME_CONTEXT_BUDGET", capability: "session" },
-  { name: "resumeArchiveInject", type: "bool", default: true, env: "OPENVIKING_RESUME_ARCHIVE_INJECT", capability: "session" },
+  { name: "resumeArchiveInject", type: "bool", default: false, env: "OPENVIKING_RESUME_ARCHIVE_INJECT", capability: "session" },
   { name: "resumeArchiveTokenBudget", type: "int", default: 32000, min: 0, max: 128000, env: "OPENVIKING_RESUME_ARCHIVE_TOKEN_BUDGET", capability: "session" },
   { name: "resumeArchiveMaxChars", type: "int", default: 6000, min: 1000, max: 200000, env: "OPENVIKING_RESUME_ARCHIVE_MAX_CHARS", capability: "session" },
   { name: "skillExperience", type: "bool", default: false, env: "OPENVIKING_SKILL_EXPERIENCE", capability: "session" },
@@ -183,7 +189,7 @@ export const KNOBS = [
   { name: "repoContext", type: "bool", default: true, capability: "session" },
   { name: "repoContextCacheTtlMs", type: "int", default: 60000, min: 1000, max: 3600000, capability: "session" },
 
-  { name: "takeoverEnabled", type: "bool", default: true, env: "OPENVIKING_TAKEOVER", capability: "session" },
+  { name: "takeoverEnabled", type: "bool", default: false, env: "OPENVIKING_TAKEOVER", capability: "session" },
   { name: "takeoverTokenThreshold", type: "int", default: 30000, min: 1, max: 1000000, capability: "session" },
   { name: "takeoverKeepRecentTurns", type: "int", default: 3, min: 0, max: 100, capability: "session" },
   { name: "takeoverOverviewBudget", type: "int", default: 3000, min: 100, max: 50000, capability: "session" },
@@ -201,6 +207,11 @@ export const KNOBS = [
     workspace: "bypass.session_patterns",
     capability: "session",
   },
+
+  // Codex's OV-Usage footer. Strings rather than enums: the reader matches
+  // several spellings case-insensitively (off/false/0/disabled, expanded/full/details).
+  { name: "usageView", type: "string", default: "summary", env: "OPENVIKING_USAGE_VIEW", workspace: "usage.view", capability: "session" },
+  { name: "usageOutput", type: "string", default: "auto", env: "OPENVIKING_USAGE_OUTPUT", workspace: "usage.output", capability: "session" },
 
   // ── debug ─────────────────────────────────────────────────────────────
   { name: "debug", type: "bool", default: false, env: "OPENVIKING_DEBUG", capability: "debug" },
@@ -253,6 +264,7 @@ export const WORKSPACE_RANGES = Object.fromEntries(
  */
 export const HARNESS_KEYS = {
   claudeCode: "claude_code",
+  codebuddy: "codebuddy",
   codex: "codex",
   cursor: "cursor",
   kimicode: "kimicode",
@@ -270,9 +282,10 @@ export function harnessKey(harness) {
 }
 
 /** Both accepted spellings of every harness, for the `plugin` section. */
-export const HARNESS_CONFIG_KEYS = new Set(
-  Object.values(HARNESS_KEYS).flatMap((key) => [key, key.replace(/_/g, "-")]),
-);
+export const HARNESS_CONFIG_KEYS = new Set([
+  ...Object.values(HARNESS_KEYS).flatMap((key) => [key, key.replace(/_/g, "-")]),
+  "magpie", // Magpie supports ovcli.conf only, with no legacy ov.conf section.
+]);
 
 export function knobDefault(knob, harness = "") {
   if (harness && knob.harness && knob.harness[harness] !== undefined) return knob.harness[harness];

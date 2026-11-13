@@ -1,0 +1,123 @@
+# WikiDashboard
+
+Shows the conflicts in a Wiki directory or file: the directory view lists the files that have conflicts, and the file view lists each conflict with its details and resolution history.
+
+## When to use
+
+- You need a conflict overview while browsing files, with a way to jump to a file or a conflict.
+- You want to decide the data source, row actions and page layout yourself. The component only renders: it sends no requests and does not need `OpenVikingProvider`.
+- When you use [FileBrowser](../modules/file-browser), the dashboard is built in and needs no separate setup.
+
+## Import
+
+```tsx
+import { WikiDashboard } from '@openviking/react/components/wiki-dashboard';
+import '@openviking/react/components/wiki-dashboard/style.css';
+```
+
+## Examples
+
+### Basic usage
+
+Switch between the directory, file and no-conflict samples. Click a conflict title to expand its reason, times, fix plan and basis; the severity filter supports arrow keys, Home/End and Escape.
+
+```tsx file="../../_demos/wiki-dashboard-basic.tsx" preview
+
+```
+
+The example uses fixed data. Its action icons and click feedback come from the example itself; check "Hide host actions" to remove them.
+
+## API
+
+### WikiDashboard
+
+| Property         | Description                                                                                                      | Type                                                                                                                               | Default                        |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| kind             | View mode, known even while data is loading                                                                      | `'directory' \| 'file'`                                                                                                            | Required                       |
+| data             | Display data matching `kind`; loading or error states are shown when omitted                                     | `WikiDirectoryData` (directory), `WikiFileData` (file)                                                                             | -                              |
+| loading          | Shows the loading state when the list is empty                                                                   | `boolean`                                                                                                                          | `false`                        |
+| error            | Shows the error state when the list is empty                                                                     | `Error \| null`                                                                                                                    | -                              |
+| onRetry          | Called when Retry is clicked; the component sends no requests itself                                             | `() => void`                                                                                                                       | -                              |
+| onOpenUri        | Directory view: called when a file is clicked, with its URI. File view: called when the path is clicked          | `(uri: string) => void` (directory), `() => void` (file)                                                                           | -                              |
+| onOpenDashboard  | Directory view: called to open that file's dashboard; falls back to `onOpenUri` when omitted                     | `(uri: string) => void`                                                                                                            | -                              |
+| defineActions    | Defines the action buttons of each row; the action area is hidden when omitted or when it returns an empty array | `(uri: string) => readonly WikiDashboardAction[]` (directory), `(conflict: WikiConflict) => readonly WikiDashboardAction[]` (file) | -                              |
+| labels           | Overrides interface text                                                                                         | `Partial<WikiDashboardLabels>`                                                                                                     | -                              |
+| locale           | Interface language, see [Internationalization](../guide/i18n)                                                    | `'zh-CN' \| 'en-US'`                                                                                                               | Inherited, otherwise `'en-US'` |
+| className, style | Appearance and layout; other HTML attributes are passed to the root element                                      | HTML attributes                                                                                                                    | -                              |
+
+### WikiDirectoryData
+
+| Property          | Description                                                                             | Type                | Default  |
+| ----------------- | --------------------------------------------------------------------------------------- | ------------------- | -------- |
+| files             | URIs of the files that have conflicts                                                   | `readonly string[]` | Required |
+| conflictFileCount | Number of conflicting files                                                             | `number`            | -        |
+| limited           | Whether the file list is truncated; when `true`, the count shows `+` and a limit notice | `boolean`           | -        |
+
+### WikiFileData
+
+| Property  | Description                                                    | Type                      | Default  |
+| --------- | -------------------------------------------------------------- | ------------------------- | -------- |
+| conflicts | Conflicts in the file                                          | `readonly WikiConflict[]` | Required |
+| path      | Document path to display; the path area is hidden when omitted | `string`                  | -        |
+
+### WikiConflict
+
+| Property         | Description                                                                              | Type                                                                                                     | Default  |
+| ---------------- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------- |
+| id               | Unique identifier of the conflict                                                        | `string`                                                                                                 | Required |
+| matchText        | The conflicting text excerpt in the document                                             | `string`                                                                                                 | Required |
+| description      | Conflict title; click to expand the details                                              | `string`                                                                                                 | Required |
+| reason           | Why the conflict occurred                                                                | `string`                                                                                                 | Required |
+| severity         | Severity                                                                                 | `'high' \| 'medium' \| 'low'`                                                                            | Required |
+| state            | Fix state                                                                                | `'unfixed' \| 'fixed'`                                                                                   | Required |
+| beginTime        | Detection time as a Unix timestamp in seconds                                            | `number`                                                                                                 | Required |
+| fixTime          | Fix time as a Unix timestamp in seconds, `null` while unfixed                            | `number \| null`                                                                                         | Required |
+| fixPlan          | Fix plan                                                                                 | `string`                                                                                                 | Required |
+| resolutionBasis  | Basis of the fix                                                                         | `string`                                                                                                 | Required |
+| resolutionSource | How the conflict was fixed                                                               | `'manual' \| 'automatic'`                                                                                | -        |
+| location         | Position of the excerpt in the document; `start`, `end` and `line` are set when `unique` | `{ status: 'unique'; start: number; end: number; line: number } \| { status: 'missing' \| 'ambiguous' }` | Required |
+
+### WikiDashboardAction
+
+| Property | Description                                                                                   | Type         | Default  |
+| -------- | --------------------------------------------------------------------------------------------- | ------------ | -------- |
+| key      | Stable identifier of the action, unique within a row                                          | `string`     | Required |
+| icon     | Icon; the button provides the accessible name and the icon is hidden as decoration            | `ReactNode`  | Required |
+| tooltip  | Hint on hover and focus, also the button's accessible name; supply it in the current language | `string`     | Required |
+| disabled | Prevents activation while the button stays focusable to show the hint                         | `boolean`    | `false`  |
+| onClick  | Called on click, Enter or Space; the button is inactive when omitted                          | `() => void` | -        |
+
+### WikiDashboardLabels
+
+| Property      | Description                                               | Type     | Default                               |
+| ------------- | --------------------------------------------------------- | -------- | ------------------------------------- |
+| title         | Dashboard title                                           | `string` | `Generation results`                  |
+| conflicts     | Title of the conflict list                                | `string` | `All conflicts`                       |
+| pending       | Label of the unfixed-conflict count in the file view      | `string` | `Pending conflicts`                   |
+| conflictFiles | Label of the conflicting-file count in the directory view | `string` | `Conflicting files`                   |
+| pendingLabel  | Status tag of an unfixed conflict                         | `string` | `Pending`                             |
+| fixed         | Status tag of a fixed conflict                            | `string` | `Fixed`                               |
+| severity      | Title of the severity filter                              | `string` | `Severity`                            |
+| all           | The "All" filter option                                   | `string` | `All`                                 |
+| high          | Name of the high severity                                 | `string` | `High`                                |
+| medium        | Name of the medium severity                               | `string` | `Medium`                              |
+| low           | Name of the low severity                                  | `string` | `Low`                                 |
+| reason        | Title of the reason in the expanded details               | `string` | `Reason`                              |
+| solution      | Title of the fix plan                                     | `string` | `Solution`                            |
+| occurred      | Title of the detection time                               | `string` | `Detected`                            |
+| fixedAt       | Title of the fix time                                     | `string` | `Resolved`                            |
+| evidence      | Title of the fix basis                                    | `string` | `Resolution basis`                    |
+| empty         | Message when no conflict matches the filter               | `string` | `No matching conflicts`               |
+| loading       | Loading message                                           | `string` | `Loading…`                            |
+| failed        | Error message                                             | `string` | `Could not load conflicts`            |
+| retry         | Retry button                                              | `string` | `Retry`                               |
+| limited       | Notice when the directory file list is truncated          | `string` | `Showing up to 100 conflicting files` |
+| file          | Not used in the current version                           | `string` | `File`                                |
+| open          | Not used in the current version                           | `string` | `Open`                                |
+
+## Notes
+
+- The component has no default actions. `defineActions` runs during rendering: derive the configuration from the current row only, without making requests or updating state. It may return different actions depending on the conflict state.
+- There is no top-level `uri` prop. Capture the URIs you need for requests and navigation in the closures of `onOpenUri` and `defineActions`.
+- To reset the filter and expanded details when the document changes, set `key={documentId}` on the component in the parent.
+- Types are exported from `@openviking/react/components/wiki-dashboard`; the package root exports only the component and `WikiDashboardProps`.

@@ -176,15 +176,34 @@ export function registerOpenVikingMemoryTools(deps: OpenVikingMemoryToolsDeps): 
           }
           if (memoriesCount === 0) {
             deps.logger.warn(
-              `openviking: memory_store committed but 0 memories extracted (sessionId=${sessionId}). ` +
-                "Check OpenViking server logs for embedding/extract errors (e.g. 401 API key, or extraction pipeline).",
+              `openviking: memory_store committed but 0 memories extracted (sessionId=${sessionId}), ` +
+                `trace_id=${commitResult.trace_id ?? "none"}. ` +
+                "No memory was created or updated. Check memory.extraction_enabled, VLM configuration/API keys, or whether the content is already stored.",
             );
-          } else {
-            deps.logger.info?.(
-              `openviking: memory_store committed, memories=${memoriesCount}, ` +
-                `trace_id=${commitResult.trace_id ?? "none"}`,
-            );
+            return {
+              content: [{
+                type: "text",
+                text: `Memory extraction completed for session ${sessionId}, but created or updated no memory. ` +
+                  "The content may already be stored, memory extraction may be disabled, or the extractor found nothing new to store. " +
+                  "Tell the user no new memory was created." +
+                  (commitResult.trace_id ? ` (trace_id=${commitResult.trace_id})` : ""),
+              }],
+              details: {
+                action: "failed",
+                sessionId,
+                status: commitResult.status,
+                error: "no_memories_extracted",
+                memoriesCount,
+                archived: commitResult.archived ?? false,
+                traceId: commitResult.trace_id,
+                usedTempSession,
+              },
+            };
           }
+          deps.logger.info?.(
+            `openviking: memory_store committed, memories=${memoriesCount}, ` +
+              `trace_id=${commitResult.trace_id ?? "none"}`,
+          );
           return {
             content: [
               {

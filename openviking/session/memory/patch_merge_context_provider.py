@@ -26,7 +26,7 @@ _SYSTEM_HIDDEN_FIELDS = {
     "last_update_trace_id",
 }
 _MAX_EXTRA_CANDIDATE_FILES = 10
-_PATCH_METADATA_KEYS = ("confidence",)
+_PATCH_METADATA_KEYS = ("confidence", "delete_uri", "proposed_replacements")
 
 
 @dataclass(slots=True)
@@ -79,8 +79,14 @@ class PatchMergePatch:
         return "unknown"
 
 
-def _resolve_patch_output_language(patches: list[PatchMergePatch]) -> str:
-    return resolve_output_language_from_text(_patch_language_text(patches), fallback_language="en")
+def _resolve_patch_output_language(
+    patches: list[PatchMergePatch], *, output_language_override: str | None = None
+) -> str:
+    return resolve_output_language_from_text(
+        _patch_language_text(patches),
+        output_language_override=output_language_override,
+        fallback_language="en",
+    )
 
 
 def _patch_language_text(patches: list[PatchMergePatch]) -> str:
@@ -128,16 +134,28 @@ class PatchMergeContextProvider(SessionExtractContextProvider):
         output_language: str | None = None,
         memory_registry: MemoryTypeRegistry | None = None,
         vlm_config: VLMHandle | None = None,
+        output_language_override: str | None = None,
     ):
-        super().__init__(messages=[], vlm_config=vlm_config)
+        super().__init__(
+            messages=[], vlm_config=vlm_config, output_language_override=output_language_override
+        )
         self.memory_type = memory_type
         self._registry = memory_registry
         self.required_file_uris = list(required_file_uris or [])
         self.patches = list(patches)
-        self._output_language = output_language or _resolve_patch_output_language(self.patches)
+        self._output_language = output_language or _resolve_patch_output_language(
+            self.patches, output_language_override=self._output_language_override
+        )
 
     def instruction(self) -> str:
         output_language = self._output_language
+        supersedes_policy = ""
+        if self.memory_type == "experiences":
+            supersedes_policy = """
+For experiences, treat `supersedes` as a replacement proposal.
+If accepted under the policy above, explicitly delete the old experience with the
+final output as its replacement; otherwise keep it.
+"""
         return f"""You are a memory patch merge agent.
 
 You are given original memory files and structured memory-file field diffs. Merge them by producing final memory operations that follow the provided JSON schema.
@@ -150,6 +168,7 @@ Reconcile independent extraction patch proposals. Apply this shared policy befor
 choosing a canonical file or deleting any proposal:
 
 {MEMORY_MERGE_POLICY}
+{supersedes_policy}
 
 Normalize URI/path variants for directory/filename fields. Treat path segment
 fields as stable schema identifiers, not free-form labels. Reuse existing

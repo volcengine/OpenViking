@@ -1,0 +1,121 @@
+name: Microsoft Agent Framework Integration Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Publish target"
+        required: true
+        type: choice
+        default: "testpypi"
+        options:
+          - testpypi
+          - pypi
+          - both
+
+permissions:
+  contents: read
+
+jobs:
+  build-package:
+    name: Build openviking-ms-agent-framework
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'openviking-ms-agent-framework@')
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: integrations/frameworks/microsoft-agent-framework
+    outputs:
+      publish_target: ${{ steps.target.outputs.publish_target }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set publish target
+        id: target
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TARGET: ${{ inputs.target }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "publish_target=$TARGET" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish_target=pypi" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate release tag
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          PACKAGE_VERSION=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          EXPECTED_TAG="openviking-ms-agent-framework@$PACKAGE_VERSION"
+          if [ "$RELEASE_TAG" != "$EXPECTED_TAG" ]; then
+            echo "Tag $RELEASE_TAG does not match expected tag $EXPECTED_TAG"
+            exit 1
+          fi
+
+      - name: Install package and release dependencies
+        run: python -m pip install '.[test,dev]'
+
+      - name: Check package and offline contracts
+        run: |
+          ruff check .
+          ruff format --check .
+          mypy src
+          pytest -q --confcutdir=tests tests
+
+      - name: Build and validate distributions
+        run: |
+          python -m build
+          python -m twine check dist/*
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: agent-framework-distributions
+          path: integrations/frameworks/microsoft-agent-framework/dist/*
+          if-no-files-found: error
+
+  publish-testpypi:
+    name: Publish to TestPyPI
+    needs: [build-package]
+    if: needs.build-package.outputs.publish_target == 'testpypi' || needs.build-package.outputs.publish_target == 'both'
+    runs-on: ubuntu-24.04
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/openviking-ms-agent-framework
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: agent-framework-distributions
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+          verbose: true
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [build-package]
+    if: needs.build-package.outputs.publish_target == 'pypi' || needs.build-package.outputs.publish_target == 'both'
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+      url: https://pypi.org/p/openviking-ms-agent-framework
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: agent-framework-distributions
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+          verbose: true

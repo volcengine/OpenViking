@@ -98,7 +98,7 @@ openviking-server doctor
 
 详细配置见 [OpenViking 配置指南](01-configuration.md)。VikingBot 默认继承根级 `vlm` 作为 Agent 模型，因此通常不需要重复配置 `bot.agents`。
 
-Server 使用 `api_key` 模式时，先注册 User/Admin Key 并写入 `bot.ov_server.api_key`；不能把 root 管理 Key 当作用户 Key 使用。操作见[认证指南](04-authentication.md)。继承 `trusted` 模式时，Bot 使用服务端的可信身份配置。
+Server 使用 `api_key` 模式时，先注册 User/Admin Key 并写入 `bot.ov_server.api_key`；不能把 root API 密钥当作用户 Key 使用。操作见[认证指南](04-authentication.md)。继承 `trusted` 模式时，Bot 使用服务端的可信身份配置。
 
 ### 2. 一体启动
 

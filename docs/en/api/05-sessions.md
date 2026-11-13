@@ -12,8 +12,8 @@ viking://user/{user_id}/sessions/{session_id}
 ```
 
 Session APIs are scoped to the authenticated user and return canonical user
-session URIs. URI-based APIs may also accept the backward-compatible
-`viking://session/{session_id}` alias, resolved in the same user context.
+session URIs. URI-based APIs also accept the `viking://~/sessions/{session_id}`
+home alias for the authenticated user.
 
 ## API Reference
 
@@ -43,20 +43,20 @@ Create a new session. Sessions are containers for conversations, storing message
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | session_id | str | No | None | Session ID. Creates new session with auto-generated ID if None |
-| memory_policy | object | No | None | Default memory extraction policy for the session. Optional `self` and `peer` switches control write targets, optional `working_memory.enabled=false` skips archive summaries, and optional top-level `memory_types` limits extraction to specific enabled memory schemas. Including `experiences` automatically activates `cases` and `trajectories`; without `experiences`, explicitly supplied `cases` and `trajectories` are ignored. Use JSON booleans for every `enabled` value. Legacy boolean-like values remain accepted temporarily (including string `"false"`, which is parsed as false) but emit a deprecation warning. When `memory_types` is omitted or `null`, all enabled memory schemas are allowed. Invalid shapes or unknown memory types are rejected with `InvalidArgumentError`. |
+| memory_policy | object | No | None | Default memory extraction policy for the session. Optional `self` and `peer` switches control write targets, `working_memory.enabled` defaults to `false` (no archive/checkpoint summaries); explicitly set it to `true` to generate summaries, and optional top-level `memory_types` limits extraction to specific enabled memory schemas. Including `experiences` automatically activates `cases` and `trajectories`; without `experiences`, explicitly supplied `cases` and `trajectories` are ignored. Use JSON booleans for every `enabled` value. Legacy boolean-like values remain accepted temporarily (including string `"false"`, which is parsed as false) but emit a deprecation warning. When `memory_types` is omitted or `null`, all enabled memory schemas are allowed. Invalid shapes or unknown memory types are rejected with `InvalidArgumentError`. |
 | auto_commit_policy | object | No | None | Optional auto-commit policy (see table below). Any provided fields are validated, clamped to their bounds, and merged over the defaults; the effective policy is returned in the response `result.auto_commit_policy` and persisted into session metadata. If omitted, the new Session inherits `server.user_config_defaults.auto_commit_policy`, then the existing `memory.session_auto_commit.enabled` behavior. The policy can later be partially updated or disabled through `update_session_config()`. |
 
 `auto_commit_policy` fields (all optional; omitted fields fall back to the defaults when a policy is present):
 
-| Field | Type | Default | Max | Description |
-|-------|------|---------|-----|-------------|
-| `pending_token_threshold` | int | 150000 | 1000000 | When uncommitted pending tokens exceed this value (strictly greater-than), an auto commit is triggered after a message write. |
-| `message_count_threshold` | int | 100 | 1000 | When the uncommitted live message count exceeds this value (strictly greater-than), an auto commit is triggered after a message write. |
-| `idle_timeout_seconds` | int | 86400 | 604800 | After this many idle seconds, a session with uncommitted content becomes eligible for the server-side idle scheduler. An idle-timeout commit archives the full backlog and ignores `keep_recent_count`. |
-| `keep_recent_count` | int | 0 | 500 | Number of recent live messages to keep (not archived) on a threshold-triggered auto commit. Idle-timeout commits ignore this and commit everything. |
-| `min_commit_interval_seconds` | int | 0 | 604800 | Minimum seconds between two automatic commits (throttle). |
+| Field | Type | Default | Min | Max | Description |
+|-------|------|---------|-----|-----|-------------|
+| `pending_token_threshold` | int | 150000 | 0 | 1000000 | When uncommitted pending tokens exceed this value (strictly greater-than), an auto commit is triggered after a message write. |
+| `message_count_threshold` | int | 100 | 0 | 1000 | When the uncommitted live message count exceeds this value (strictly greater-than), an auto commit is triggered after a message write. |
+| `idle_timeout_seconds` | int | 86400 | 0 (off) or 300 | 604800 | After this many idle seconds, a session with uncommitted content becomes eligible for the server-side idle scheduler. An idle-timeout commit archives the full backlog and ignores `keep_recent_count`. |
+| `keep_recent_count` | int | 0 | 0 | 500 | Number of recent live messages to keep (not archived) on a threshold-triggered auto commit. Idle-timeout commits ignore this and commit everything. |
+| `min_commit_interval_seconds` | int | 0 | 0 | 604800 | Minimum seconds between two automatic commits (throttle). |
 
-All fields have a minimum of `0` and are clamped into `[0, max]`. Unknown keys are rejected with `InvalidArgumentError`. Idle commits also require `memory.session_auto_commit.enabled` on the server; setting `idle_timeout_seconds` alone does not start the scanner.
+New `idle_timeout_seconds` inputs must be `0` (off) or at least `300`; values above `604800` are clamped to that maximum. For stored-data compatibility, existing positive values below 300 continue to be read unchanged. Other fields have a minimum of `0` and are clamped to their ranges. Unknown keys are rejected with `InvalidArgumentError`. Idle commits also require `memory.session_auto_commit.enabled` on the server; setting `idle_timeout_seconds` alone does not start the scanner.
 
 #### 3. Usage Examples
 
@@ -589,7 +589,7 @@ curl --get http://localhost:1933/api/v1/sessions/session-id/tool-results \
 
 ### read_tool_result()
 
-Read one externalized tool result by Unicode character range.
+Read one externalized tool result by Unicode character range. The returned content may contain placeholders for sensitive values. To restore them, read the corresponding file through the [Content API](12-content.md).
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
@@ -807,7 +807,7 @@ ov session get-session-context a1b2c3d4 --token-budget 128000
 
 #### 1. API Implementation Introduction
 
-Get the full contents of one completed archive for a session. This endpoint is typically used with `get_session_context()` when you need to view older archive details.
+Get the full contents of one archive for a session. `status` is `completed`, `failed`, or `pending`. A normal WM-disabled archive returns its raw `messages` with empty `abstract` and `overview`; no summary is generated on read. Failed and pending archives also return their raw `messages` (plus `failure` when a failure marker exists) so they can be inspected before `retry_archive()`. `messages_sha256` is the SHA-256 the server recorded for `messages.jsonl` when the archive was written (computed from the current bytes for older archives); pass it unchanged as `expected_messages_sha256`. A completed archive whose required overview is missing, and missing or corrupt archives, keep their existing error behavior. This explicit history read is independent of the bounded `get_session_context()` prompt view.
 
 **Code Entries:**
 - `openviking/session/session.py:Session.get_session_archive()` - Core implementation
@@ -883,8 +883,10 @@ ov session get-session-archive a1b2c3d4 archive_002
   "status": "ok",
   "result": {
     "archive_id": "archive_002",
+    "status": "completed",
     "abstract": "User discussed deployment and authentication setup.",
     "overview": "# Session Summary\n\n**Overview**: User discussed deployment and auth setup.",
+    "messages_sha256": "3f9a...",
     "messages": [
       {
         "id": "msg_archive_1",
@@ -927,7 +929,7 @@ If the archive does not exist, is incomplete, or does not belong to the session,
 
 #### 1. API Implementation Introduction
 
-Delete the session directory, including messages, archives, and session audit records. Long-term memories already extracted into user or Peer memory directories remain; locate and delete those URIs separately when needed. This endpoint has no automatic undo.
+Delete the session directory, including messages, archives, and session audit records. Long-term memories already extracted into user or Peer memory directories remain; locate and delete those URIs separately when needed. This endpoint has no automatic undo. The corresponding Privacy config (`category=session`, `target_key=session_id`) is retained.
 
 **Code Entries:**
 - `openviking/server/routers/sessions.py:delete_session()` - HTTP route
@@ -1333,9 +1335,11 @@ ov add-memory '[{"role":"user","content":"Hello"},{"role":"assistant","content":
 
 Commit a session. Message archiving (Phase 1) completes before the response returns. Summary generation and memory extraction (Phase 2) run asynchronously in the background when messages are archived. Archived commits return `status: "accepted"` with a `task_id`; no-op commits return `status: "skipped"` with `task_id: null`.
 
+The former standalone session `extract` endpoint has been removed. Use `commit` for memory extraction. This archives messages according to the retention policy; use the returned `task_id` to check the background extraction result. An `accepted` response does not mean extraction is complete.
+
 **Two-Phase Commit Flow:**
 - **Phase 1 (Synchronous)**: Split messages according to the retention policy, persist the archive and recovery records, enqueue Phase 2, and write retained messages back to the live session
-- **Phase 2 (Asynchronous)**: Generate summaries (L0/L1) and extract long-term memories
+- **Phase 2 (Asynchronous)**: Extract long-term memories; generate WM/checkpoint summaries only when the effective WM policy is enabled (default: disabled)
 
 **Notes:**
 - Consecutive commits are accepted; only requests that produce an archive return a separate `task_id`. No-op commits do not create tasks.
@@ -1358,6 +1362,7 @@ Commit a session. Message archiving (Phase 1) completes before the response retu
 |-----------|------|----------|---------|-------------|
 | session_id | str | Yes | - | Session ID to commit |
 | keep_recent_count | int | No | 0 | Number of recent live messages to retain (kept live, not archived) after commit. `0` (default) archives all messages. |
+| enable_working_memory | bool or null | No | null | Override only WM generation for this commit. Omitted/null inherits the resolved policy; true/false leaves self/peer/memory_types and saved policies unchanged. Strings/numbers are rejected. The response includes `effective_enable_working_memory`. |
 | reset_context | bool | No | false | HTTP API: archive all live messages, then append a boundary archive containing only a `.done` marker with `context_reset`. Keeps the session ID and raw history, clears injected context and stops future summaries from inheriting pre-reset overviews. Requires `keep_recent_count=0` and no `retention_mode`. |
 
 `reset_context` is used by the OpenClaw plugin reset hook and `Session.commit_async()`. It also creates a boundary when there are no live messages, unless the newest archive is already a reset boundary. Memory extraction for older archives can finish independently; long-term memories are preserved. The SDK and CLI do not expose a dedicated `reset_context` option; use the HTTP API when needed.
@@ -1472,43 +1477,6 @@ ov session commit a1b2c3d4
 }
 ```
 
----
-
-### extract()
-
-#### 1. API Implementation Introduction
-
-Extract memories from the existing session’s current live messages and wait for the extraction result. This does not create a commit task or replace archiving; previously archived history is not included again as live input.
-
-**Code Entries:**
-- `openviking/server/routers/sessions.py:extract_session()` - HTTP route
-
-#### 2. Interface and Parameter Description
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| session_id | str | Yes | - | Session ID to extract memories from |
-
-#### 3. Usage Examples
-
-**HTTP API**
-
-```http
-POST /api/v1/sessions/{session_id}/extract
-```
-
-```bash
-curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/extract \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key"
-```
-
-**Response Example**
-
-The response’s `result` field contains the list of extracted memory writes. The exact item shape depends on which memories were produced for that session.
-
 <a id="get_task"></a><a id="list_tasks"></a>
 
 ## Session Properties
@@ -1544,6 +1512,69 @@ viking://user/{user_id}/sessions/{session_id}/
     |   +-- .failed.json      # Phase 2 failure marker
     +-- archive_002/
 ```
+
+### retry_archive()
+
+Re-enqueue Phase 2 for one archive that failed, or whose Phase 1 finished but no
+queued or running work owns it. HTTP only. The request must carry the SHA-256 of the
+archive's raw `messages.jsonl` bytes, so an audit cannot be replayed after the archive changes.
+Read it from `get_session_archive()` (`messages_sha256`) and pass it back unchanged; the server
+recomputes the hash and also checks it against the value recorded when the archive was written.
+
+Retry is a manual recovery tool with two known trade-offs:
+
+- Working Memory is not rebuilt for later archives. Retrying `archive_002` after `archive_003`
+  completed does not regenerate `archive_003`'s overview, so the latest summary can still miss
+  `archive_002`'s context.
+- Long-term memory extraction runs the older messages against the *current* memory state, so
+  older facts can overwrite newer ones. Review the archive's `memory_diff.json` afterwards.
+
+The server refuses (`FAILED_PRECONDITION`) completed archives, hash mismatches, cancelled
+failures without `allow_cancelled_failure`, and archives whose `memory_diff.json` exists without
+durable long-term progress. It returns `skipped` while QueueFS or an active worker still owns
+the archive or session. Long-term memory steps already recorded in `completed_memory_steps`
+are not applied twice.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `session_id` | string | Yes | - | Session ID |
+| `archive_id` | string | Yes | - | `archive_NNN` |
+| `expected_messages_sha256` | string | Yes | - | `messages_sha256` from `get_session_archive()` |
+| `allow_ownerless_ready` | boolean | No | `false` | Allow a Phase 1 ready archive with no owner |
+| `allow_cancelled_failure` | boolean | No | `false` | Allow an archive whose failure was a cancellation |
+
+**HTTP API**
+
+```http
+POST /api/v1/sessions/{session_id}/archives/{archive_id}/retry
+```
+
+```bash
+HASH=$(curl -s http://localhost:1933/api/v1/sessions/session-id/archives/archive_003 \
+  -H "X-API-Key: your-key" | jq -r .result.messages_sha256)
+curl -X POST http://localhost:1933/api/v1/sessions/session-id/archives/archive_003/retry \
+  -H "X-API-Key: your-key" -H "Content-Type: application/json" \
+  -d "{\"expected_messages_sha256\": \"$HASH\"}"
+```
+
+**Response example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "status": "accepted",
+    "task_id": "0b6c...",
+    "archive_uri": "viking://user/default/sessions/session-id/history/archive_003",
+    "previous_task_id": "9f1e...",
+    "recovery_kind": "failed",
+    "completed_memory_steps": {}
+  }
+}
+```
+
+Track `task_id` with the task API. `status: "skipped"` carries `reason`
+(`already_covered`, `archive_owned`, or `session_busy`).
 
 ### memory_diff.json Structure
 

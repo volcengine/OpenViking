@@ -98,7 +98,6 @@ async def test_write_result_ignores_metadata_only_changes_and_preserves_new_pend
         overview="overview",
         abstract="abstract",
         ctx=None,
-        is_stale=lambda: False,
         metadata={"freshness": freshness_metadata(160, 32)},
         consume_pending=3,
     )

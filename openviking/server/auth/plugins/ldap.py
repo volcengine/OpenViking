@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import sys
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -43,6 +44,43 @@ except ImportError:
 _LDAP_NETWORK_TIMEOUT = 10.0
 _LDAP_OPERATION_TIMEOUT = 10.0
 
+_DN_VALUE_ESCAPES = {
+    "\x00": r"\00",
+    '"': r'\"',
+    "+": r"\+",
+    ",": r"\,",
+    ";": r"\;",
+    "<": r"\<",
+    "=": r"\=",
+    ">": r"\>",
+    "\\": r"\\",
+}
+_DN_ESCAPE_RE = re.compile(r"\\([0-9A-Fa-f]{2}|[\s\S])")
+_FIRST_RDN_RE = re.compile(r"(?:\\.|[^,])*")
+
+
+def _escape_dn_value(value: str) -> str:
+    """Escape a single LDAP DN attribute value per RFC 4514."""
+    escaped = "".join(_DN_VALUE_ESCAPES.get(char, char) for char in value)
+    if not escaped:
+        return escaped
+    if value[0] in {" ", "#"}:
+        escaped = "\\" + escaped
+    if len(value) > 1 and value[-1] == " ":
+        escaped = escaped[:-1] + r"\ "
+    return escaped
+
+
+def _split_first_rdn(dn: str) -> str:
+    return _FIRST_RDN_RE.match(dn)[0]
+
+
+def _unescape_dn_value(value: str) -> str:
+    return _DN_ESCAPE_RE.sub(
+        lambda match: chr(int(match[1], 16)) if len(match[1]) == 2 else match[1],
+        value,
+    )
+
 
 def _apply_ldap_connection_options(conn: Any) -> None:
     """Apply standard connection options including network timeouts."""
@@ -63,10 +101,11 @@ def _format_user_dn(pattern: str, username: str) -> str:
       (``uid=%s,ou=users,dc=example,dc=com``).
     * ``"%(username)s"`` / ``"%(user)s"`` mapping substitution.
     """
+    safe_username = _escape_dn_value(username)
     if "%(" in pattern:
-        return pattern % {"username": username, "user": username}
+        return pattern % {"username": safe_username, "user": safe_username}
     # Only substitute a single %s; treat %% as an escaped %.
-    return pattern % (username,)
+    return pattern % (safe_username,)
 
 
 class LDAPAuthPlugin(AuthPlugin):
@@ -369,11 +408,11 @@ class LDAPAuthPlugin(AuthPlugin):
         """Parse the first RDN of a DN, returning (attr_name, value)."""
         if not dn:
             return None, None
-        first = dn.split(",", 1)[0]
+        first = _split_first_rdn(dn)
         if "=" not in first:
             return None, None
         attr, _, value = first.partition("=")
-        return attr.strip(), value.strip()
+        return attr.strip(), _unescape_dn_value(value)
 
     @classmethod
     def _attrs_from_dn(cls, dn: str) -> Dict[str, List[bytes]]:
@@ -450,11 +489,6 @@ class LDAPAuthPlugin(AuthPlugin):
         logger.info(
             "LDAP auth plugin initialized with host=%s", self._config.host
         )
-
-    def requires_api_key_manager(self) -> bool:
-        """LDAP does not map external identities to admin roles, so no
-        APIKeyManager is needed. Admin API access is gated by role checks."""
-        return False
 
     def can_skip_api_key_for_bot_proxy(self) -> bool:
         """LDAP does not declare bot-proxy compatibility until VikingBot

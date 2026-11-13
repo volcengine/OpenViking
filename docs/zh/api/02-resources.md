@@ -1,6 +1,6 @@
 # 资源管理
 
-资源是智能体可以引用的外部知识。本页介绍资源导入、定时更新和临时文件上传。数据包导出与导入见 [OVPack](14-ovpack.md)。
+资源是智能体可以引用的外部知识。本页介绍资源导入、定时更新和临时文件上传。目录规划见[数据组织指引](../guides/23-data-organize.md)，数据包导出与导入见 [OVPack](14-ovpack.md)。
 
 ## 核心概念
 
@@ -49,7 +49,7 @@ OpenViking 支持多种资源类型，按照功能分类如下：
 
 | 类型 | 说明 |
 |------|------|
-| 飞书/Lark | URL 方式，支持 doc/docx、wiki、sheets、bitable、mindnote/mindnotes、Drive 文件和目录集。Wiki 默认仅导入入口文档，设置 `args.feishu_recursive=true` 可递归导入子节点。默认使用 FEISHU_APP_ID 和 FEISHU_APP_SECRET 应用凭证；用户 token 导入可传 `args.feishu_access_token`，用户 token watch 还需传 `args.feishu_refresh_token`，并可选传入 `args.feishu_app_id` / `args.feishu_app_secret`。Mindnote 及 Wiki 中的 Mindnote 要求本次使用的 token 具备 `mindnote:node:read` |
+| 飞书/Lark | URL 方式，支持 doc/docx、wiki、sheets、bitable、mindnote/mindnotes、slides、Drive 文件和目录集。Wiki 默认仅导入入口文档，设置 `args.feishu_recursive=true` 可递归导入子节点。默认使用 FEISHU_APP_ID 和 FEISHU_APP_SECRET 应用凭证；用户 token 导入可传 `args.feishu_access_token`，用户 token watch 还需传 `args.feishu_refresh_token`，并可选传入 `args.feishu_app_id` / `args.feishu_app_secret`。Mindnote 及 Wiki 中的 Mindnote 要求本次使用的 token 具备 `mindnote:node:read` |
 
 **网页类（递归网页爬虫）**
 
@@ -83,7 +83,7 @@ URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 
 OpenViking 先检查来源和请求参数是否满足 Connector 接入条件。Connector 在标准流水线之外完成导入。其余请求中，[`parser_api`](../guides/01-configuration.md#parser-api) 选中的格式交给外部 Understanding 解析，剩余格式使用内置 Parser。外部解析只替换 Parse 阶段，结果仍进入 TreeBuilder 和后续存储、语义处理。已经由 Accessor 归一化为 Markdown 的飞书文档跳过外部解析。
 
-Connector 要求精确的 `to` 目标，不支持 `wait=true`。`tos://` 来源不能回退到内置 Accessor。Git 未命中 Connector 时可以回退，但携带 Connector 专用凭证时禁止回退。对于支持等待的标准流水线请求，`wait=true` 只等待本次导入的工作，不等待全局队列中的无关任务；等待超时不代表导入已取消。
+Connector 要求精确的 `to` 目标，不支持 `wait=true`。`tos://` 来源不能回退到内置 Accessor。Git 未命中 Connector 时可以回退，但携带 Connector 专用凭证时禁止回退。对于支持等待的标准流水线请求，`wait=true` 只等待本次导入的工作，不等待全局队列中的无关任务；HTTP 请求超时不代表导入已取消。
 
 #### 阶段 1：源解析 (Parse)
 - 使用 `UnifiedResourceProcessor` 根据资源类型解析内容
@@ -187,7 +187,7 @@ Connector 要求精确的 `to` 目标，不支持 `wait=true`。`tos://` 来源�
 | reason | string | 否 | "" | 添加资源的原因；非空时会随资源 URI 进入常规 session 记忆抽取链路，并在生成的记忆中记录资源引用 |
 | instruction | string | 否 | "" | 语义提取的处理指令（实验特性） |
 | wait | bool | 否 | False | 是否等待语义处理和向量化完成才返回 |
-| timeout | float | 否 | None | 超时时间（秒），仅 `wait=true` 时生效 |
+| timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
 | strict | bool | 否 | False | 是否使用严格模式 |
 | ignore_dirs | string | 否 | None | 要忽略的目录名（逗号分隔） |
 | include | string | 否 | None | 包含的文件模式（glob） |
@@ -232,6 +232,7 @@ Connector 要求精确的 `to` 目标，不支持 `wait=true`。`tos://` 来源�
 - `watch_interval > 0` 时，如果指定了 `to`，监控任务绑定该目标；如果未指定 `to`，监控任务绑定本次导入返回的 `root_uri`。如果无法得到稳定 `root_uri`，请求会报错并要求显式传 `to`。
 - Connector 导入设置 `is_active=false` 时会在提交前创建暂停状态的 Watch；原生飞书和 Git 导入会通过资源队列透传 `is_active`，解析出最终资源 URI 后再创建 Watch。两种情况下首次导入均执行一次，周期调度保持关闭。
 - 飞书/Lark 应用 token 导入不传 `args.feishu_access_token`。OpenViking 保持原有应用凭证流程，由 SDK 使用 `app_id` 和 `app_secret` 自动获取 app/tenant token。该模式支持一次性导入和 `watch_interval > 0`。
+- Wiki 导入先解析底层对象类型，再决定处理方式。Wiki 指向的普通文件先下载，再按文件格式解析。原生 Slides（`/slides/{token}` 或指向 Slides 的 Wiki）先导出为 PPTX，再使用配置的原生或 Understanding 后端解析；递归 Wiki 和云盘目录中的 Slides 同样适用。调用身份需具备导出/下载权限，仅能读取 Wiki 元数据并不足够。Slides 导出超时为 120 秒。 普通文件和 Slides 导出文件均分块下载，超过 `args.feishu_max_download_bytes` 即停止（默认每次导入 1 GiB，目录导入由所有成员共享额度）。
 - 飞书/Lark Mindnote URL 支持 `/mindnote/{token}` 和 `/mindnotes/{token}`；Wiki URL 若解析为 `obj_type=mindnote` 也走同一读取流程。Mindnote 使用与其他飞书导入一致的认证选择：传入 `args.feishu_access_token` 时使用用户 token，否则回退到配置的 app/tenant token。本次使用的 token 需具备 `mindnote:node:read`。
 - Mindnote 节点图片通过飞书 Drive 素材接口下载，并沿用本次 Mindnote 导入的 token 类型。用户 token 导入会向媒体下载透传用户 token；app-token 导入使用配置的应用凭证。本次使用的 token 需具备 `docs:document.media:download`。媒体下载不可用时，正文仍会成功导入并保留原始图片引用。
 - 飞书/Lark 一次性用户 token 导入通过 `args={"feishu_access_token": "u-..."}` 传入，且 `watch_interval <= 0`。OpenViking 只在本次导入使用该用户 token，不保存。
@@ -503,6 +504,11 @@ fmt.Println(result["task_id"])
 
 **CLI**
 
+`ov add-resource --wait` 只提交一次，再轮询任务，不设置整体等待期限。
+状态查询超时、网络错误及 HTTP 429/502/503/504 会重试；连续 10 次失败后
+退出并提供任务查询命令。Ctrl+C 仅停止等待，不取消任务，退出码为 130。
+完成后 CLI 结果保留 `task_id`。
+
 ```bash
 # 添加本地文件
 ov add-resource ./documents/guide.md --reason "User guide"
@@ -622,7 +628,7 @@ task_id      uuid-xxx
 | `errors` | array | 处理过程中的错误列表 |
 | `warnings` | array | 可选警告，包括部分处理失败或资源记忆关联失败 |
 | `queue_status` | object | 同步等待或已完成任务结果中的队列汇总，按队列返回 `processed`、`requeue_count`、`error_count` 和 `errors` |
-| `memory_linking` | object | （可选，仅当 `reason` 触发记忆生成时）本次资源 URI 与用户记忆的关联结果 |
+| `memory_linking` | object | （可选，仅当 `reason` 触发记忆生成时）本次资源 URI 与用户记忆的关联结果。`status="accepted"` 表示记忆提交已入队、尚未完成，需轮询 `/api/v1/tasks/{task_id}`（`commit_task_id`）获取结果 |
 
 **完成后的资源添加任务结果**
 

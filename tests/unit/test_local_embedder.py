@@ -1,7 +1,9 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event, Lock
 from types import SimpleNamespace
 
 import pytest
@@ -108,11 +110,11 @@ def test_local_embedder_downloads_default_model_and_prefixes_query(monkeypatch, 
         downloaded["count"] += 1
         return _FakeResponse(b"gguf")
 
+    monkeypatch.setattr("openviking.models.embedder.local_embedders.requests.get", _fake_get)
     monkeypatch.setattr(
         "openviking.models.embedder.local_embedders.importlib.import_module",
         lambda _name: SimpleNamespace(Llama=_FakeLlama),
     )
-    monkeypatch.setattr("openviking.models.embedder.local_embedders.requests.get", _fake_get)
 
     embedder = LocalDenseEmbedder(cache_dir=str(tmp_path))
 
@@ -122,3 +124,70 @@ def test_local_embedder_downloads_default_model_and_prefixes_query(monkeypatch, 
     result = embedder.embed("测试问题", is_query=True)
     assert len(result.dense_vector) == 512
     assert _FakeLlama.inputs[-1] == f"{DEFAULT_BGE_ZH_QUERY_INSTRUCTION}测试问题"
+
+
+@pytest.mark.parametrize("concurrent_operation", ["embed", "close"])
+@pytest.mark.parametrize("fail_first", [False, True])
+def test_local_embedder_serializes_native_calls(
+    monkeypatch, tmp_path, concurrent_operation, fail_first
+):
+    entered = Event()
+    release = Event()
+    overlapping = Event()
+    state_lock = Lock()
+    active = 0
+
+    class BlockingLlama(_FakeLlama):
+        def create_embedding(self, payload):
+            nonlocal active
+            with state_lock:
+                active += 1
+                if active > 1:
+                    overlapping.set()
+            entered.set()
+            assert release.wait(5)
+            with state_lock:
+                active -= 1
+            if fail_first and payload == "first":
+                raise ValueError("native embedding failed")
+            return super().create_embedding(payload)
+
+        def close(self):
+            with state_lock:
+                if active:
+                    overlapping.set()
+
+    model_path = tmp_path / "model.gguf"
+    model_path.write_bytes(b"gguf")
+    monkeypatch.setattr(
+        "openviking.models.embedder.local_embedders.importlib.import_module",
+        lambda _name: SimpleNamespace(Llama=BlockingLlama),
+    )
+    embedder = LocalDenseEmbedder(model_path=str(model_path), config={"max_retries": 0})
+    started = Event()
+
+    def run_second_call():
+        started.set()
+        if concurrent_operation == "embed":
+            return embedder.embed("second", is_query=True)
+        return embedder.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(embedder.embed, "first")
+        try:
+            assert entered.wait(5)
+            second = executor.submit(run_second_call)
+            assert started.wait(5)
+            assert not overlapping.wait(0.1)
+        finally:
+            release.set()
+        if fail_first:
+            with pytest.raises(RuntimeError, match="native embedding failed"):
+                first.result(timeout=5)
+        else:
+            assert first.result(timeout=5).dense_vector == [0.1] * 512
+        result = second.result(timeout=5)
+        if concurrent_operation == "embed":
+            assert result.dense_vector == [0.1] * 512
+            assert BlockingLlama.inputs[-1] == f"{DEFAULT_BGE_ZH_QUERY_INSTRUCTION}second"
+        assert not overlapping.is_set()

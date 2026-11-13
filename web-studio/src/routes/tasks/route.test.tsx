@@ -1,12 +1,10 @@
+import studioI18n from '#/i18n/core'
 // @vitest-environment jsdom
 
-import { createInstance } from 'i18next'
-import { I18nextProvider } from 'react-i18next'
-import type { ComponentType } from 'react'
-import type * as TanStackRouter from '@tanstack/react-router'
 import en from '#/i18n/locales/en/workspace'
 import zh from '#/i18n/locales/zh-CN/workspace'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type * as TanStackRouter from '@tanstack/react-router'
 import {
   cleanup,
   render,
@@ -15,6 +13,9 @@ import {
   within,
 } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { createInstance } from 'i18next'
+import type { ComponentType } from 'react'
+import { I18nextProvider } from 'react-i18next'
 import {
   afterEach,
   beforeAll,
@@ -25,10 +26,11 @@ import {
   vi,
 } from 'vitest'
 
+import { commitSession } from '#/features/workbench/sessions/lib/api'
+import type { TaskRecord } from '#/features/workbench/tasks/lib/task-record'
+import { postResources } from '#/gen/ov-client'
+import { Route } from '#/routes/tasks/route'
 import { toast } from 'sonner'
-import { commitSession } from '#/lib/sessions/api'
-import { Route } from './route'
-import type { TaskRecord } from './-lib/task-record'
 
 const clientMocks = vi.hoisted(() => ({ getTasks: vi.fn() }))
 
@@ -38,24 +40,26 @@ vi.mock('@tanstack/react-router', async (importOriginal) => ({
   useNavigate: () => navigationMocks.navigate,
 }))
 
-vi.mock('#/lib/ov-client', () => ({
+vi.mock('#/shared/api/ov-client/index', () => ({
   getOvResult: async (value: unknown) => value,
   getTasks: clientMocks.getTasks,
   ovClient: { instance: { post: vi.fn() } },
 }))
 
 vi.mock('#/gen/ov-client', () => ({ postResources: vi.fn() }))
-vi.mock('#/lib/sessions/api', () => ({ commitSession: vi.fn() }))
+vi.mock('#/features/workbench/sessions/lib/api', () => ({
+  commitSession: vi.fn(),
+}))
 vi.mock('sonner', () => ({
   toast: { info: vi.fn(), success: vi.fn(), error: vi.fn() },
 }))
-vi.mock('#/hooks/use-app-connection', () => ({
+vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({ identityScopeKey: 'test/test' }),
 }))
-vi.mock('#/routes/monitoring/-components/queue-status-card', () => ({
+vi.mock('#/features/workbench/monitoring/components/queue-status-card', () => ({
   QueueStatusCard: () => null,
 }))
-vi.mock('#/routes/tasks/-components/task-detail-sheet', () => ({
+vi.mock('#/features/workbench/tasks/components/task-detail-sheet', () => ({
   TaskDetailSheet: () => null,
 }))
 
@@ -299,28 +303,84 @@ describe('session commit re-trigger feedback', () => {
     const user = await renderPage()
     await user.click(await screen.findByTitle('Re-trigger Task'))
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith('Commit failed'),
+      expect(toast.error).toHaveBeenCalledWith(
+        studioI18n.t('studio:errors.requestFailed'),
+        { description: 'Commit failed' },
+      ),
     )
     expect(toast.info).not.toHaveBeenCalled()
     expect(toast.success).not.toHaveBeenCalled()
   })
 })
 
-
 it('groups processing and total time without inventing legacy timing', async () => {
   records = [
-    { task_id: 'measured', status: 'completed', task_type: 'add_resource', created_at: 100, updated_at: 700, processing_seconds: 61 },
-    { task_id: 'pending', status: 'pending', task_type: 'add_resource', created_at: 100, processing_seconds: 0 },
-    { task_id: 'legacy', status: 'completed', task_type: 'add_resource', created_at: 100, updated_at: 700 },
+    {
+      task_id: 'measured',
+      status: 'completed',
+      task_type: 'add_resource',
+      created_at: 100,
+      updated_at: 700,
+      processing_seconds: 61,
+    },
+    {
+      task_id: 'pending',
+      status: 'pending',
+      task_type: 'add_resource',
+      created_at: 100,
+      processing_seconds: 0,
+    },
+    {
+      task_id: 'legacy',
+      status: 'completed',
+      task_type: 'add_resource',
+      created_at: 100,
+      updated_at: 700,
+    },
   ]
   await renderPage()
-  const measured = await screen.findByRole('row', { name: 'View details for task measured' })
+  const measured = await screen.findByRole('row', {
+    name: 'View details for task measured',
+  })
   expect(within(measured).getByText('1m 1s')).toBeDefined()
   expect(within(measured).queryByText(/Waiting Time/)).toBeNull()
   expect(screen.getByRole('columnheader', { name: 'Duration' })).toBeDefined()
-  expect(within(measured).getByText('1m 1s').closest('td')).toBe(within(measured).getByText('10m').closest('td'))
+  expect(within(measured).getByText('1m 1s').closest('td')).toBe(
+    within(measured).getByText('10m').closest('td'),
+  )
   expect(within(measured).getByText('10m')).toBeDefined()
-  expect(within(screen.getByRole('row', { name: 'View details for task pending' })).getByText('Not started')).toBeDefined()
-  const legacy = screen.getByRole('row', { name: 'View details for task legacy' })
+  expect(
+    within(
+      screen.getByRole('row', { name: 'View details for task pending' }),
+    ).getByText('Not started'),
+  ).toBeDefined()
+  const legacy = screen.getByRole('row', {
+    name: 'View details for task legacy',
+  })
   expect(within(legacy).getByText('Not recorded')).toBeDefined()
+})
+
+it('retries a URL import using the resource API path field', async () => {
+  records = [
+    {
+      task_id: 'failed-import',
+      task_type: 'add_resource',
+      resource_id: 'https://example.com/article',
+      status: 'failed',
+      created_at: 100,
+    },
+  ]
+  vi.mocked(postResources).mockResolvedValue(
+    {} as Awaited<ReturnType<typeof postResources>>,
+  )
+  const user = await renderPage()
+  await user.click(await screen.findByTitle('Re-trigger Task'))
+  await waitFor(() =>
+    expect(postResources).toHaveBeenCalledWith({
+      body: {
+        path: 'https://example.com/article',
+        reason: 'Re-queued task: failed-import',
+      },
+    }),
+  )
 })

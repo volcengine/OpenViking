@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+#[cfg(feature = "cache")]
+use crate::cache_runtime::CacheRuntime;
 use crate::lock::PathLockManager;
 
 /// Encryption context used while assembling one multi-backend mount.
@@ -15,6 +17,9 @@ pub struct MultiBackendBuildContext {
     pub pathlock_manager: Arc<PathLockManager>,
     /// Mount prefix used to restore manager-visible backend paths.
     pub backend_prefix: String,
+    /// Optional shared cache runtime used by cache-backed metadata.
+    #[cfg(feature = "cache")]
+    pub cache_runtime: Option<Arc<CacheRuntime>>,
 }
 
 impl MultiBackendBuildContext {

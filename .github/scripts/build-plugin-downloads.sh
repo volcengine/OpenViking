@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build the downloads the docs site serves under /dl: the installer, the plugin
-# bundle, the Claude Code URL marketplace, the Codex git marketplace and the
+# Build the downloads the docs site serves under /dl: the installer, the history
+# import script, the plugin bundle, the Claude Code URL marketplace, the Codex git marketplace and the
 # channel data of the version check, laid out like the TOS release bucket. Each docs host publishes the tree built from
 # the commit it deploys, with its own address in the marketplace manifest.
 
@@ -35,17 +35,23 @@ case "${OUT}" in /*) ;; *) OUT="${PWD}/${OUT}" ;; esac
 
 bash "${SCRIPTS}/stamp-installer-version.sh" "${SHARED}/install.sh" "${VERSION}" "${OUT}/memory-plugin-shared/install.sh"
 cp "${SHARED}/bootstrap.sh" "${OUT}/memory-plugin-shared/bootstrap.sh"
+# The onboarding guide has agents fetch this one file and run it with node.
+cp "${SHARED}/import-history.mjs" "${OUT}/memory-plugin-shared/import-history.mjs"
 
 # The git marketplace is committed before the zips are built: zipping resets
-# the staged files' times.
+# the staged files' times. Like the zips, the repository keeps its bytes until
+# the plugins change: a new commit and pack name on every deploy leaves the CDN
+# serving refs and packs of different deploys for a while, failing git clients.
 SRC="${WORK}/memory-plugins-src"
 cp -R "${STAGE}" "${SRC}"
 git -C "${SRC}" init -q -b main
 git -C "${SRC}" add -A
-git -C "${SRC}" -c user.email=release@openviking.org -c user.name="OpenViking Release" \
-  commit -qm "plugins ${VERSION}"
+# Background auto-maintenance would repack while the clone below reads.
+GIT_AUTHOR_DATE="2000-01-01T00:00:00Z" GIT_COMMITTER_DATE="2000-01-01T00:00:00Z" \
+  git -C "${SRC}" -c maintenance.auto=false -c user.email=release@openviking.org -c user.name="OpenViking Release" \
+  commit -qm "OpenViking memory plugins"
 git clone -q --bare "${SRC}" "${OUT}/plugins/memory-plugins.git"
-git -C "${OUT}/plugins/memory-plugins.git" repack -adq
+git -C "${OUT}/plugins/memory-plugins.git" -c pack.threads=1 repack -adq
 git -C "${OUT}/plugins/memory-plugins.git" update-server-info
 # Static hosts serve files only; the sample hooks are of no use to a client.
 rm -rf "${OUT}/plugins/memory-plugins.git/hooks"
@@ -64,7 +70,7 @@ jq -n \
   --arg bundle_url "${BASE}/releases/latest/memory-plugin-marketplace.zip" \
   '{schema: 1, harnesses: (
       {codex: {version: $version, git_url: $git_url}}
-      + (["claude", "cursor", "trae", "trae-cli", "trae-cn", "zcode", "kimicode",
+      + (["claude", "cursor", "trae", "trae-cli", "trae-cn", "zcode", "kimicode", "codebuddy",
           "opencode", "pi", "dsh"] | map({key: ., value: {version: $version, bundle_url: $bundle_url}}) | from_entries)
     )}' > "${OUT}/releases/latest/channels.json"
 

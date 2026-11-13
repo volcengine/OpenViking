@@ -2,7 +2,7 @@
 // This manifest owns grouping and order; article labels come from Markdown H1.
 // Top navigation, sidebars, breadcrumbs, the homepage and llms.txt share this structure.
 export type Locale = 'en' | 'zh'
-export type DocPage = { path: string }
+export type DocPage = { path: string; reference?: boolean; en?: string; zh?: string }
 export type DocGroup = { en: string; zh: string; pages: DocPage[] }
 export type DocSection = {
   id: string; en: string; zh: string; enNote: string; zhNote: string
@@ -10,35 +10,50 @@ export type DocSection = {
   nextSteps?: DocGroup[]
 }
 const p = (path: string): DocPage => ({ path })
+const reference = (path: string, en: string, zh: string): DocPage => ({ path, reference: true, en, zh })
 const g = (en: string, zh: string, pages: DocPage[]): DocGroup => ({ en, zh, pages })
 
 export const sections: DocSection[] = [
   {
     id: 'getting-started', en: 'Quickstart', zh: '开始使用',
     enNote: 'Get a first result, evaluate it on your tasks, and choose what to connect.', zhNote: '完成首次体验，用自己的任务验证效果，再选择接入路径。',
-    entry: 'getting-started/01-introduction', aliases: [],
+    entry: 'getting-started/02-quickstart', aliases: [],
     groups: [
-      g('Get your first result', '先完成一次体验', [
-        p('getting-started/01-introduction'),
+      g('Start', '开始', [
         p('getting-started/02-quickstart'),
-        p('getting-started/05-cli-setup')
+        p('getting-started/01-introduction'),
+        p('getting-started/07-agent-onboarding'),
+        p('getting-started/05-cli-setup'),
+        p('getting-started/07-options')
       ]),
-      g('Evaluate the result', '验证实际效果', [
+      g('Studio', 'Studio', [
+        p('getting-started/23-studio')
+      ]),
+      g('Features', '功能', [
+        p('getting-started/08-resources'),
+        p('getting-started/09-memory'),
+        p('getting-started/10-skills'),
+        p('getting-started/16-rules'),
         p('getting-started/06-evaluate')
-      ])
-    ],
-    // Cross-section exits aid onboarding without changing article ownership.
-    nextSteps: [
-      g('Use it in your work', '接入你的工作', [
-        p('agent-integrations/01-overview'),
-        p('workflows/01-overview'),
-        p('context-compilation/01-overview'),
-        p('guides/17-vikingbot')
       ]),
-      g('Learn, deploy and troubleshoot', '深入与排障', [
-        p('concepts/00-overview'),
-        p('guides/00-overview'),
-        p('guides/05-observability')
+      g('Integrations', '集成', [
+        reference('agent-integrations/01-overview', 'Agent integration', 'Agent 接入'),
+        reference('workflows/01-overview', 'Application development', '应用开发'),
+        p('getting-started/11-vikingbot'),
+        p('getting-started/12-gateway')
+      ]),
+      g('Data management', '数据管理', [
+        p('getting-started/13-compile'),
+        p('getting-started/14-versions'),
+        p('getting-started/15-transfer')
+      ]),
+      g('Team management', '团队管理', [
+        p('getting-started/17-authentication'),
+        p('getting-started/18-accounts'),
+        p('getting-started/19-users'),
+        p('getting-started/20-peers'),
+        p('getting-started/21-access-control'),
+        p('getting-started/22-sharing')
       ])
     ]
   },
@@ -56,7 +71,8 @@ export const sections: DocSection[] = [
       g('Processing and memory', '处理与记忆', [
         p('concepts/06-extraction'),
         p('concepts/07-retrieval'),
-        p('concepts/08-session')
+        p('concepts/08-session'),
+        p('concepts/17-rule-scenarios')
       ]),
       g('Architecture and reliability', '架构与可靠性', [
         p('concepts/01-architecture'),
@@ -107,11 +123,63 @@ export const sections: DocSection[] = [
         p('agent-integrations/15-agent-plugins'),
         p('agent-integrations/09-log-ingestion'),
         p('agent-integrations/19-recall-tuning'),
-        p('agent-integrations/18-plugin-development')
+        p('agent-integrations/18-plugin-development'),
+        p('guides/working-memory-default-off')
       ]),
       g('VikingBot', 'VikingBot', [
         p('guides/17-vikingbot'),
         p('guides/12-vikingbot-metrics-validation')
+      ])
+    ],
+    nextSteps: [
+      g('Clients without a plugin', '没有插件的客户端', [
+        p('guides/15-gateway')
+      ])
+    ]
+  },
+  // The entry page and the deployment page keep their guides/ paths so released Studio builds,
+  // the Helm README and openviking_gateway/config.py keep linking to them; every other gateway
+  // page lives in gateway/. Ownership does not depend on file location (see the top of this file).
+  {
+    id: 'gateway', en: 'Gateway', zh: '网关',
+    enNote: 'Give any API-key client memory through one proxy, then manage and run it.', zhNote: '用一个代理为 API Key 客户端接入记忆，并管理与运维。',
+    entry: 'guides/15-gateway', aliases: [],
+    groups: [
+      g('Understand the gateway', '了解网关', [
+        p('guides/15-gateway'),
+        p('gateway/01-how-it-works')
+      ]),
+      g('Get started', '上手与接入', [
+        p('gateway/02-quickstart'),
+        p('gateway/03-connect-clients')
+      ]),
+      g('Memory and tools', '记忆与工具', [
+        p('gateway/04-openviking-tools'),
+        p('gateway/05-long-conversations')
+      ]),
+      g('Manage in Studio', '在 Studio 中管理', [
+        p('gateway/06-manage-in-studio'),
+        p('gateway/07-upstreams'),
+        p('gateway/08-context-profiles'),
+        p('gateway/09-gateway-keys'),
+        p('gateway/10-overview-and-requests')
+      ]),
+      g('Deploy and operate', '部署与运维', [
+        p('guides/22-gateway-operations'),
+        p('gateway/11-security-and-data')
+      ]),
+      g('Troubleshoot and look up', '排障与参考', [
+        p('gateway/12-troubleshooting'),
+        p('gateway/13-configuration')
+      ])
+    ],
+    nextSteps: [
+      g('Related docs', '相关文档', [
+        p('api/25-gateway'),
+        p('guides/04-authentication'),
+        p('guides/12-public-access'),
+        p('guides/06-mcp-integration'),
+        p('agent-integrations/01-overview')
       ])
     ]
   },
@@ -123,7 +191,11 @@ export const sections: DocSection[] = [
       g('Choose a workflow', '选择开发任务', [
         p('workflows/01-overview')
       ]),
+      g('Rule validation (Beta)', '规则校验（Beta）', [
+        p('workflows/02-rule-validation')
+      ]),
       g('Manage context', '组织与维护上下文', [
+        p('guides/23-data-organize'),
         p('guides/18-openviking-assets'),
         p('guides/09-ovpack'),
         p('guides/15-snapshot'),
@@ -136,6 +208,9 @@ export const sections: DocSection[] = [
         p('context-compilation/04-daily-report'),
         p('context-compilation/05-knowledge-distillation'),
         p('context-compilation/06-memory-consolidation')
+      ]),
+      g('Live context integration and arrangement', '实时上下文接入和编排', [
+        p('guides/24-live-context-arrangement')
       ])
     ]
   },
@@ -200,7 +275,11 @@ export const sections: DocSection[] = [
         p('api/04-skills'),
         p('api/19-agent-evolution')
       ]),
+      g('Rules (Beta)', '规则（Beta）', [
+        p('api/26-rules')
+      ]),
       g('Data and extension APIs', '数据与扩展 API', [
+        p('api/26-mcp-live-context'),
         p('api/11-snapshot'),
         p('api/14-ovpack'),
         p('api/22-openviking-assets'),
@@ -210,6 +289,7 @@ export const sections: DocSection[] = [
       ]),
       g('Administration and operations APIs', '管理与运维 API', [
         p('api/08-admin'),
+        p('api/25-gateway'),
         p('api/12-acl'),
         p('api/10-privacy'),
         p('api/07-system'),
@@ -244,6 +324,6 @@ export const legacyPages: Record<string, string> = {
 
 export function sectionForPage(relativePath: string): DocSection | undefined {
   const path = relativePath.replace(/^(en|zh)\//, '').replace(/\.md$/, '')
-  return sections.find(section => section.groups.some(group => group.pages.some(page => page.path === path)))
+  return sections.find(section => section.groups.some(group => group.pages.some(page => !page.reference && page.path === path)))
     || sections.find(section => section.id === legacyPages[path])
 }

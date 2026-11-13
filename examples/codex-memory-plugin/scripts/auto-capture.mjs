@@ -11,8 +11,8 @@
  *      id (`cx-<codex-session-id>`) and remember it in state.
  *   2. Read transcript_path, parse JSONL rollout, append every new
  *      user/assistant turn since last capture via add_message.
- *   3. If session pending_tokens crosses commitTokenThreshold, commit while
- *      keeping a recent live tail for continuity.
+ *   3. If session pending_tokens crosses commitTokenThreshold, commit and
+ *      archive every captured message.
  *
  * A Stop for this session also proves the thread is alive again, so the
  * SessionEnd marker (if any) is cleared before anything else. Committing is
@@ -70,14 +70,13 @@ async function maybeCommitByThreshold(ovSessionId, added) {
     ovSessionId,
     pending: pendingTokens,
     threshold: cfg.commitTokenThreshold,
-    keepRecentCount: cfg.commitKeepRecentCount,
   });
   if (pendingTokens < cfg.commitTokenThreshold) {
     return { committed: false, pendingTokens, commitCount, totalMessageCount, traceId: "" };
   }
   const commit = await fetchJSONRes(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`, {
     method: "POST",
-    body: JSON.stringify({ keep_recent_count: cfg.commitKeepRecentCount }),
+    body: JSON.stringify({ keep_recent_count: 0 }),
   });
   const committed = commit.ok;
   const traceId = commit.traceId || commit.result?.trace_id || "";

@@ -157,6 +157,8 @@ class VLMEventDataSource(EventMetricDataSource):
         completion_tokens: int,
         error_code: str = "OK",
         account_id: str | None = None,
+        source_type: str | None = None,
+        cost_bearer: str | None = None,
     ) -> None:
         """
         Emit one VLM call event with model identity, latency, token usage, error code, and account context.
@@ -174,6 +176,8 @@ class VLMEventDataSource(EventMetricDataSource):
                 "completion_tokens": int(completion_tokens),
                 "error_code": str(error_code or "unknown"),
                 "account_id": None if account_id is None else str(account_id),
+                "source_type": source_type,
+                "cost_bearer": cost_bearer,
             },
         )
 
@@ -196,6 +200,8 @@ class EmbeddingEventDataSource(EventMetricDataSource):
         completion_tokens: int,
         error_code: str = "OK",
         account_id: str | None = None,
+        source_type: str | None = None,
+        cost_bearer: str | None = None,
     ) -> None:
         """Emit one embedding provider call with tokens, latency, and optional account context."""
         EventMetricDataSource._emit(
@@ -208,6 +214,8 @@ class EmbeddingEventDataSource(EventMetricDataSource):
                 "completion_tokens": int(completion_tokens),
                 "error_code": str(error_code or "unknown"),
                 "account_id": None if account_id is None else str(account_id),
+                "source_type": source_type,
+                "cost_bearer": cost_bearer,
             },
         )
 

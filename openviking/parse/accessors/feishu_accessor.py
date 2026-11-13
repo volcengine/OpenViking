@@ -17,26 +17,37 @@ import mimetypes
 import re
 import shutil
 import tempfile
+import zipfile
 from dataclasses import dataclass, field
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, NoReturn, Optional, Tuple, Union
-from urllib.parse import parse_qs, unquote, urlparse, urlunparse
+from urllib.parse import parse_qs, quote, unquote, urlparse, urlunparse
 
 from lark_oapi.core.cache import ICache
 
 from openviking.parse.base import format_table_to_markdown
 from openviking.parse.feishu_import import FeishuImportPlan, recursive_wiki
+from openviking.parse.image_validation import IMAGE_MAX_FILE_BYTES, is_valid_image
+from openviking.parse.temp import get_parser_download_temp_dir
 from openviking.utils.exceptions import error_code_from_http_status
 from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError
 from openviking_cli.utils.logger import get_logger
 
 from .base import DataAccessor, LocalResource, SourceType
-from .feishu_session import FeishuAccessContext, FeishuApiSession
+from .feishu_session import FeishuAccessContext, FeishuApiSession, normalize_lark_file
 from .mime_types import get_preferred_extension
 
 logger = get_logger(__name__)
 
 _FEISHU_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(feishu://image/([^)]+)\)")
+_FEISHU_WHITEBOARD_RE = re.compile(r"!\[([^\]]*)\]\(feishu://whiteboard/([^)]+)\)")
+_WHITEBOARD_READ_SCOPE = "board:whiteboard:node:read"
+_MAX_WHITEBOARDS = 100
+_MAX_WHITEBOARD_NODES = 10_000
+_MAX_WHITEBOARD_JSON_BYTES = 8 * 1024 * 1024
+_MAX_WHITEBOARD_PREVIEW_BYTES = IMAGE_MAX_FILE_BYTES
+_MAX_WHITEBOARD_MEDIA_BYTES = 64 * 1024 * 1024
 _FEISHU_DOCUMENT_FORBIDDEN = 1770032
 _FEISHU_WIKI_NODE_PERMISSION_DENIED = 131006
 _FEISHU_BITABLE_PERMISSION_REQUIRED = 99991672
@@ -48,9 +59,13 @@ _FEISHU_PERMISSION_DENIED_CODES = {
     91403,
     95008,
     95009,
+    1069902,
 }
 _FEISHU_NOT_FOUND_CODES = {91402, 95006, 95007, 3410003}
 _MAX_MEDIA_DOWNLOAD_CONTEXTS = 8
+_DEFAULT_MAX_DOWNLOAD_BYTES = 1024 * 1024 * 1024
+
+
 _FEISHU_DOC_PATH_TYPES = {
     "doc",
     "docs",
@@ -60,6 +75,7 @@ _FEISHU_DOC_PATH_TYPES = {
     "base",
     "mindnote",
     "mindnotes",
+    "slides",
 }
 _FEISHU_DRIVE_DOC_TYPES = {
     "doc": "docs",
@@ -70,11 +86,17 @@ _FEISHU_DRIVE_DOC_TYPES = {
     "base": "base",
     "wiki": "wiki",
     "mindnote": "mindnote",
+    "slides": "slides",
 }
 _MAX_PATH_SEGMENT_CHARS = 120
 _MAX_PATH_SEGMENT_BYTES = 240
 
 _MediaDownloadExtras = Dict[str, List[Optional[str]]]
+
+
+class _FeishuDownloadLimitError(InvalidArgumentError):
+    def __init__(self):
+        super().__init__("Feishu import download byte limit exceeded")
 
 
 def _redact_feishu_source_url(url: str) -> str:
@@ -216,6 +238,8 @@ def _raise_from_lark_response(
     }
     if resource:
         details["resource"] = resource
+    if required_scope:
+        details["required_scope"] = required_scope
 
     logger.error(
         "[FeishuAPI] %s failed: code=%s msg=%s http=%s",
@@ -226,9 +250,8 @@ def _raise_from_lark_response(
     )
     if code == _FEISHU_BITABLE_PERMISSION_REQUIRED:
         public_code = "FAILED_PRECONDITION"
-        message = (
-            f"Feishu application is missing required Bitable permissions: code={code}, msg={msg}"
-        )
+        permission = required_scope or "Bitable permissions"
+        message = f"Feishu application is missing required {permission}: code={code}, msg={msg}"
     elif code == _FEISHU_SCOPE_PERMISSION_REQUIRED and required_scope:
         public_code = "FAILED_PRECONDITION"
         message = (
@@ -257,6 +280,7 @@ class FeishuSourcePreflight:
     token: str
     source_name: Optional[str]
     source_format: str
+    resolved_wiki: Optional[Tuple[str, str, Optional[str]]] = None
 
 
 @dataclass
@@ -280,6 +304,20 @@ class _FeishuWikiTreeNode:
     title: str
     obj_type: Optional[str] = None
     obj_token: Optional[str] = None
+
+
+@dataclass
+class _WhiteboardContent:
+    markdown: str
+    preview: Optional[Tuple[bytes, str]] = field(default=None, repr=False)
+
+
+@dataclass
+class _WhiteboardImportState:
+    cache: Dict[str, _WhiteboardContent] = field(default_factory=dict, repr=False)
+    nodes: int = 0
+    json_bytes: int = 0
+    media_bytes: int = 0
 
 
 class FeishuAccessor(DataAccessor):
@@ -324,6 +362,7 @@ class FeishuAccessor(DataAccessor):
         "image": "_handle_image",
         "table": "_table_block_to_markdown",
         "sheet": "_embedded_sheet_to_markdown",
+        "board": "_whiteboard_block_to_markdown",
     }
 
     # Attribute → markdown prefix template for text-bearing blocks.
@@ -361,6 +400,7 @@ class FeishuAccessor(DataAccessor):
         31: "table",
         32: "table_cell",
         34: "quote_container",
+        43: "board",
     }
 
     # All known content attribute names on SDK Block objects (for fallback detection).
@@ -393,6 +433,7 @@ class FeishuAccessor(DataAccessor):
             "task",
             "grid",
             "grid_column",
+            "board",
         }
     )
 
@@ -405,21 +446,27 @@ class FeishuAccessor(DataAccessor):
         """Initialize a shared selector or a request-scoped worker."""
         self._session = session
         self._tenant_token_cache = tenant_token_cache
+        self._whiteboards = _WhiteboardImportState()
+        self._source_url = ""
 
     def _new_operation(
         self,
         source: Union[str, Path],
         *,
         config: Any = None,
+        tenant_access_token: Optional[str] = None,
     ) -> "FeishuAccessor":
         context = FeishuAccessContext.from_request(
             str(source),
             config=config,
         )
         worker = copy.copy(self)
+        worker._whiteboards = _WhiteboardImportState()
+        worker._source_url = str(source)
         worker._session = FeishuApiSession(
             context,
             tenant_token_cache=self._tenant_token_cache,
+            tenant_access_token=tenant_access_token,
         )
         return worker
 
@@ -471,18 +518,32 @@ class FeishuAccessor(DataAccessor):
         feishu_access_token = kwargs.get("feishu_access_token")
         try:
             doc_type, token = self._parse_feishu_url(source_str)
+            resolved_wiki = None
+            if doc_type == "wiki" and not recursive_wiki(kwargs):
+                resolved_wiki = kwargs.get("_feishu_resolved_wiki")
+                if resolved_wiki is None:
+                    resolved_wiki = await asyncio.to_thread(
+                        self._resolve_wiki_node, token, feishu_access_token
+                    )
+                doc_type, token, _ = resolved_wiki
             if (
-                doc_type in {"folder", "file"} or (doc_type == "wiki" and recursive_wiki(kwargs))
+                doc_type in {"folder", "file", "slides"}
+                or (doc_type == "wiki" and recursive_wiki(kwargs))
             ) and kwargs.get("lark_file") is not None:
                 raise InvalidArgumentError(
                     "Feishu source preparation requires feishu_access_token or configured "
                     "Feishu application credentials, not lark_file."
                 )
-            if doc_type == "file":
-                content, content_type, filename = await asyncio.to_thread(
-                    self._download_drive_file,
+            if doc_type in {"file", "slides"}:
+                max_bytes = self._positive_int_option(
+                    kwargs.get("feishu_max_download_bytes"), default=_DEFAULT_MAX_DOWNLOAD_BYTES
+                )
+                content, content_type, filename = await self._download_binary_source(
+                    doc_type,
                     token,
                     feishu_access_token=feishu_access_token,
+                    filename_hint=resolved_wiki[2] if resolved_wiki else None,
+                    max_bytes=max_bytes,
                 )
                 local_path = self._write_temp_drive_file(
                     token,
@@ -505,7 +566,11 @@ class FeishuAccessor(DataAccessor):
                 )
 
             if doc_type == "folder":
-                temp_dir = Path(tempfile.mkdtemp(prefix="ov_feishu_folder_"))
+                temp_dir = Path(
+                    tempfile.mkdtemp(
+                        prefix="ov_feishu_folder_", dir=get_parser_download_temp_dir()
+                    )
+                )
                 plan = self._new_import_plan(temp_dir, kwargs)
                 plan.source_url = source_str
                 skipped_items: list[dict[str, Any]] = []
@@ -523,7 +588,7 @@ class FeishuAccessor(DataAccessor):
                         strict=bool(kwargs.get("strict", False)),
                         plan=plan,
                     )
-                except Exception:
+                except BaseException:
                     shutil.rmtree(temp_dir, ignore_errors=True)
                     raise
                 return LocalResource(
@@ -541,7 +606,11 @@ class FeishuAccessor(DataAccessor):
                 )
 
             if doc_type == "wiki" and recursive_wiki(kwargs):
-                temp_dir = Path(tempfile.mkdtemp(prefix="ov_feishu_wiki_"))
+                temp_dir = Path(
+                    tempfile.mkdtemp(
+                        prefix="ov_feishu_wiki_", dir=get_parser_download_temp_dir()
+                    )
+                )
                 plan = self._new_import_plan(temp_dir, kwargs)
                 plan.source_url = source_str
                 skipped_items: list[dict[str, Any]] = []
@@ -570,7 +639,7 @@ class FeishuAccessor(DataAccessor):
                             default=5000,
                         ),
                     )
-                except Exception:
+                except BaseException:
                     shutil.rmtree(temp_dir, ignore_errors=True)
                     raise
                 if not root_dir.exists():
@@ -584,7 +653,7 @@ class FeishuAccessor(DataAccessor):
                     meta={
                         "feishu_doc_type": "wiki",
                         "feishu_content_kind": "file"
-                        if root.obj_type == "file" and root_dir.is_file()
+                        if root.obj_type in {"file", "slides"} and root_dir.is_file()
                         else "markdown",
                         "feishu_token": token,
                         "feishu_title": root.title,
@@ -600,6 +669,7 @@ class FeishuAccessor(DataAccessor):
             doc = await self._fetch_document(
                 source_str,
                 feishu_access_token=feishu_access_token,
+                **({"resolved_wiki": resolved_wiki} if resolved_wiki else {}),
             )
 
             # lark-oapi media downloads are synchronous; run them off the event
@@ -621,7 +691,9 @@ class FeishuAccessor(DataAccessor):
             }
 
             if downloaded_images:
-                temp_dir = Path(tempfile.mkdtemp(prefix="ov_feishu_"))
+                temp_dir = Path(
+                    tempfile.mkdtemp(prefix="ov_feishu_", dir=get_parser_download_temp_dir())
+                )
                 markdown_path = temp_dir / "document.md"
                 markdown_path.write_text(markdown_content, encoding="utf-8")
                 for rel_path, image_bytes in downloaded_images.items():
@@ -637,6 +709,7 @@ class FeishuAccessor(DataAccessor):
                     suffix=".md",
                     prefix="ov_feishu_",
                     delete=False,
+                    dir=get_parser_download_temp_dir(),
                     encoding="utf-8",
                 )
                 temp_file.write(markdown_content)
@@ -667,17 +740,25 @@ class FeishuAccessor(DataAccessor):
         feishu_access_token: Optional[str] = None,
         feishu_config: Any = None,
         feishu_recursive: bool = False,
+        lark_file: Optional[Dict[str, str]] = None,
     ) -> FeishuSourcePreflight:
         """Resolve lightweight source identity and root permission before enqueueing."""
         source_str = str(source)
+        auth = (
+            normalize_lark_file(
+                {"lark_file": lark_file, "feishu_access_token": feishu_access_token}
+            )
+            or {}
+        )
         worker = self._new_operation(
             source_str,
             config=feishu_config,
+            tenant_access_token=auth.get("tenant_access_token"),
         )
         return await asyncio.to_thread(
             worker._preflight_source_sync,
             source_str,
-            feishu_access_token,
+            auth.get("user_access_token"),
             feishu_recursive,
         )
 
@@ -723,6 +804,7 @@ class FeishuAccessor(DataAccessor):
                 token=real_token,
                 source_name=source_name,
                 source_format="file",
+                resolved_wiki=(real_type, real_token, title),
             )
 
         if doc_type == "folder":
@@ -803,7 +885,7 @@ class FeishuAccessor(DataAccessor):
             )
             title = self._mindnote_title(nodes)
             return _title_as_filename(title)
-        if doc_type == "file":
+        if doc_type in {"file", "slides"}:
             return None
         raise ValueError(
             f"Unsupported Feishu document type: {doc_type}. "
@@ -832,6 +914,7 @@ class FeishuAccessor(DataAccessor):
         url: str,
         *,
         feishu_access_token: Optional[str] = None,
+        resolved_wiki: Optional[Tuple[str, str, str]] = None,
     ) -> FeishuDocument:
         """
         Fetch a Feishu document and convert to Markdown.
@@ -848,7 +931,7 @@ class FeishuAccessor(DataAccessor):
 
         if doc_type == "wiki":
             # Resolve wiki node to actual document type
-            real_type, real_token, title = await asyncio.to_thread(
+            real_type, real_token, title = resolved_wiki or await asyncio.to_thread(
                 self._resolve_wiki_node,
                 token,
                 feishu_access_token,
@@ -1059,13 +1142,18 @@ class FeishuAccessor(DataAccessor):
             )
         if plan.download_exhausted:
             raise ValueError("Feishu import download byte limit exceeded")
-        if doc_type == "file":
-            content, content_type, filename = await asyncio.to_thread(
-                self._download_drive_file,
-                token,
-                feishu_access_token=feishu_access_token,
-                filename_hint=title,
-            )
+        if doc_type in {"file", "slides"}:
+            try:
+                content, content_type, filename = await self._download_binary_source(
+                    doc_type,
+                    token,
+                    feishu_access_token=feishu_access_token,
+                    filename_hint=title,
+                    max_bytes=plan.max_bytes - plan.downloaded_bytes,
+                )
+            except _FeishuDownloadLimitError:
+                plan.download_exhausted = True
+                raise
             plan.account_download(len(content))
             path = self._unique_child_path(
                 target_dir,
@@ -1082,7 +1170,7 @@ class FeishuAccessor(DataAccessor):
         name = self._markdown_file_name(_safe_path_segment(title or token, fallback=token))
         path = self._unique_child_path(target_dir, name, plan.reserved)
         if plan.use_understanding and doc_type in {"docx", "sheets", "base"}:
-            plan.add(path, url, token, "url")
+            plan.add(path, url, token, "url", doc_type=doc_type)
             return path
         content_url = (
             self._import_doc_url(plan, doc_type, token)
@@ -1470,12 +1558,131 @@ class FeishuAccessor(DataAccessor):
         name = _getattr_safe(data, "name", None) or _getattr_safe(folder_meta, "name", None)
         return str(name) if name else None
 
+    async def _download_binary_source(
+        self,
+        doc_type: str,
+        token: str,
+        *,
+        feishu_access_token: Optional[str],
+        filename_hint: Optional[str],
+        max_bytes: int = _DEFAULT_MAX_DOWNLOAD_BYTES,
+    ) -> Tuple[bytes, Optional[str], Optional[str]]:
+        if max_bytes <= 0:
+            raise _FeishuDownloadLimitError()
+        if doc_type == "slides":
+            try:
+                return await asyncio.wait_for(
+                    self._export_slides(
+                        token,
+                        feishu_access_token=feishu_access_token,
+                        filename_hint=filename_hint,
+                        max_bytes=max_bytes,
+                    ),
+                    timeout=120,
+                )
+            except asyncio.TimeoutError as exc:
+                raise OpenVikingError(
+                    "Feishu Slides export timed out", "DEADLINE_EXCEEDED"
+                ) from exc
+        return await asyncio.to_thread(
+            self._download_drive_file,
+            token,
+            feishu_access_token=feishu_access_token,
+            filename_hint=filename_hint,
+            max_bytes=max_bytes,
+        )
+
+    async def _export_slides(
+        self,
+        token: str,
+        *,
+        feishu_access_token: Optional[str],
+        filename_hint: Optional[str],
+        max_bytes: int = _DEFAULT_MAX_DOWNLOAD_BYTES,
+    ) -> Tuple[bytes, Optional[str], Optional[str]]:
+        """Export native Slides as PPTX for both ordinary file backends."""
+        from lark_oapi.api.drive.v1 import (
+            CreateExportTaskRequest,
+            DownloadExportTaskRequest,
+            ExportTask,
+            GetExportTaskRequest,
+        )
+
+        client = self._get_client(use_user_token=bool(feishu_access_token))
+
+        async def call(method, request, operation):
+            response = await asyncio.to_thread(self._call_api, method, request, feishu_access_token)
+            if not response.success():
+                _raise_from_lark_response(response, operation=operation, resource=token)
+            return response
+
+        created = await call(
+            client.drive.v1.export_task.create,
+            CreateExportTaskRequest.builder()
+            .request_body(
+                ExportTask.builder().type("slides").token(token).file_extension("pptx").build()
+            )
+            .build(),
+            "create Slides export",
+        )
+        ticket = created.data.ticket
+        if not ticket:
+            raise OpenVikingError("Feishu Slides export returned no ticket", "INTERNAL")
+        while True:
+            response = await call(
+                client.drive.v1.export_task.get,
+                GetExportTaskRequest.builder().ticket(ticket).token(token).build(),
+                "poll Slides export",
+            )
+            result = response.data.result
+            status = result.job_status
+            if status == 0:
+                if not result.file_token:
+                    raise OpenVikingError("Feishu Slides export returned no file token", "INTERNAL")
+                downloaded = await self._download_export_file(
+                    client,
+                    DownloadExportTaskRequest.builder().file_token(result.file_token).build(),
+                    feishu_access_token,
+                    max_bytes=max_bytes,
+                )
+                if not downloaded.success():
+                    _raise_from_lark_response(
+                        downloaded, operation="download Slides export", resource=token
+                    )
+                content = downloaded.raw.content
+                # Validate the export container before assigning a PPTX suffix.
+                if self._guess_drive_file_ext(content, None) != ".pptx":
+                    raise InvalidArgumentError("Feishu Slides export did not return a PPTX file")
+                name = filename_hint or result.file_name or token
+                if not name.lower().endswith(".pptx"):
+                    name += ".pptx"
+                return (
+                    content,
+                    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    name,
+                )
+            if status not in {1, 2}:
+                code = {
+                    107: "INVALID_ARGUMENT",
+                    108: "DEADLINE_EXCEEDED",
+                    109: "PERMISSION_DENIED",
+                    110: "PERMISSION_DENIED",
+                    111: "NOT_FOUND",
+                }.get(status, "INTERNAL")
+                raise OpenVikingError(
+                    f"Feishu Slides export failed (status {status})",
+                    code,
+                    details={"operation": "export Slides", "ticket": ticket, "job_status": status},
+                )
+            await asyncio.sleep(1)
+
     def _download_drive_file(
         self,
         file_token: str,
         *,
         feishu_access_token: Optional[str] = None,
         filename_hint: Optional[str] = None,
+        max_bytes: int = _DEFAULT_MAX_DOWNLOAD_BYTES,
     ) -> Tuple[bytes, Optional[str], Optional[str]]:
         """Download a Feishu Drive binary file by file token."""
         import lark_oapi as lark
@@ -1491,7 +1698,7 @@ class FeishuAccessor(DataAccessor):
             .token_types({token_type})
             .build()
         )
-        response = self._call_raw_api(client, raw_req, feishu_access_token)
+        response = self._call_raw_api(client, raw_req, feishu_access_token, max_bytes=max_bytes)
         if not response.success():
             _raise_from_lark_response(
                 response,
@@ -1530,9 +1737,15 @@ class FeishuAccessor(DataAccessor):
             content_type,
             filename_hint=filename_hint,
         )
-        temp_dir = Path(tempfile.mkdtemp(prefix="ov_feishu_file_"))
+        temp_dir = Path(
+            tempfile.mkdtemp(prefix="ov_feishu_file_", dir=get_parser_download_temp_dir())
+        )
         path = temp_dir / filename
-        path.write_bytes(content)
+        try:
+            path.write_bytes(content)
+        except BaseException:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
         return path
 
     @staticmethod
@@ -1596,10 +1809,15 @@ class FeishuAccessor(DataAccessor):
         *,
         filename_hint: Optional[str] = None,
     ) -> str:
-        raw_name = filename_hint or file_token
-        if Path(raw_name).suffix:
+        from openviking.parse.parsers.upload_utils import is_text_file
+
+        raw_name = (filename_hint or file_token).strip()
+        suffix = Path(raw_name).suffix.lower()
+        if suffix and (is_text_file(raw_name) or mimetypes.guess_type("file" + suffix)[0]):
             return _safe_path_segment(raw_name, fallback=file_token)
         ext = cls._guess_drive_file_ext(content, content_type)
+        if suffix and ext == ".bin":
+            return _safe_path_segment(raw_name, fallback=file_token)
         return _safe_path_segment(f"{raw_name}{ext}", fallback=f"{file_token}{ext}")
 
     @staticmethod
@@ -1617,9 +1835,25 @@ class FeishuAccessor(DataAccessor):
             or content.startswith(b"PK\x05\x06")
             or content.startswith(b"PK\x07\x08")
         ):
+            # Office Open XML files are ZIP containers, including downloads
+            # whose Wiki title or Content-Disposition has no extension.
+            try:
+                with zipfile.ZipFile(BytesIO(content)) as archive:
+                    for marker, extension in (
+                        ("word/document.xml", ".docx"),
+                        ("xl/workbook.xml", ".xlsx"),
+                        ("ppt/presentation.xml", ".pptx"),
+                    ):
+                        if marker in archive.namelist():
+                            return extension
+            except zipfile.BadZipFile:
+                pass
             return ".zip"
         if content.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
-            return ".doc"
+            # Legacy Word, Excel and PowerPoint share the same container.
+            # A missing filename must not silently turn every OLE file into Word.
+            extension = get_preferred_extension(content_type) if content_type else None
+            return extension if extension in {".doc", ".xls", ".ppt"} else ".bin"
         if content_type:
             ext = get_preferred_extension(content_type)
             if ext:
@@ -1677,6 +1911,14 @@ class FeishuAccessor(DataAccessor):
 
     def _call_api(self, method, request, feishu_access_token: Optional[str] = None):
         option = self._user_request_option(feishu_access_token)
+        if option is None and self._require_session().tenant_access_token:
+            from lark_oapi.core.model import RequestOption
+
+            option = (
+                RequestOption.builder()
+                .tenant_access_token(self._require_session().tenant_access_token)
+                .build()
+            )
         if option is not None:
             return method(request, option)
         with self._require_session().tenant_token_cache_scope():
@@ -1716,23 +1958,116 @@ class FeishuAccessor(DataAccessor):
         msg = payload.get("msg") or payload.get("message") or "Feishu API request failed"
         return code, str(msg)
 
-    def _call_raw_api(self, client, request, feishu_access_token: Optional[str] = None):
-        """Execute a raw Lark request without JSON-decoding successful file bodies."""
-        from lark_oapi.core.http import Transport
-        from lark_oapi.core.model import BaseResponse, RequestOption
+    @staticmethod
+    def _stream_download(config, request, option, max_bytes: int):
+        """Bound binary downloads before buffering their entire response."""
+        import requests
+        from lark_oapi.core.http.transport import _build_header, _build_url
+        from lark_oapi.core.model import RawResponse
+
+        raw = RawResponse()
+        with requests.get(
+            _build_url(config.domain, request.uri, request.paths),
+            headers=_build_header(request, option),
+            params=request.queries,
+            timeout=config.timeout,
+            stream=True,
+        ) as response:
+            raw.status_code = response.status_code
+            raw.headers = dict(response.headers)
+            success = 200 <= response.status_code < 300
+            length = response.headers.get("Content-Length", "")
+            if success and length.isdigit() and int(length) > max_bytes:
+                raise _FeishuDownloadLimitError()
+            # Error bodies are bounded too, but retain their original HTTP error.
+            limit = max_bytes if success else 64 * 1024
+            with BytesIO() as body:
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    if body.tell() + len(chunk) > limit:
+                        if success:
+                            raise _FeishuDownloadLimitError()
+                        body.write(chunk[: limit - body.tell()])
+                        break
+                    body.write(chunk)
+                raw.content = body.getvalue()
+        return raw
+
+    def _raw_request_option(self, client, request, feishu_access_token):
+        from lark_oapi.core.model import RequestOption
         from lark_oapi.core.token import verify
 
         option = self._user_request_option(feishu_access_token) or RequestOption()
         if feishu_access_token:
             verify(client._config, request, option)
-            raw_resp = Transport.execute(client._config, request, option)
+        elif self._require_session().tenant_access_token:
+            option.tenant_access_token = self._require_session().tenant_access_token
+            verify(client._config, request, option)
         else:
             with self._require_session().tenant_token_cache_scope():
                 verify(client._config, request, option)
-                raw_resp = Transport.execute(client._config, request, option)
+        return option
+
+    async def _download_export_file(
+        self, client, request, feishu_access_token, *, max_bytes: int
+    ):
+        """Keep the Slides download cancellable by the export deadline."""
+        import httpx
+        from lark_oapi.core.http.transport import _build_header, _build_url
+        from lark_oapi.core.model import RawResponse
+
+        option = await asyncio.to_thread(
+            self._raw_request_option, client, request, feishu_access_token
+        )
+        raw = RawResponse()
+        async with httpx.AsyncClient(timeout=client._config.timeout, follow_redirects=True) as http:
+            async with http.stream(
+                "GET",
+                _build_url(client._config.domain, request.uri, request.paths),
+                headers=_build_header(request, option),
+                params=request.queries,
+            ) as response:
+                raw.status_code = response.status_code
+                raw.headers = dict(response.headers)
+                success = 200 <= response.status_code < 300
+                length = response.headers.get("Content-Length", "")
+                if success and length.isdigit() and int(length) > max_bytes:
+                    raise _FeishuDownloadLimitError()
+                limit = max_bytes if success else 64 * 1024
+                with BytesIO() as body:
+                    async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
+                        if body.tell() + len(chunk) > limit:
+                            if success:
+                                raise _FeishuDownloadLimitError()
+                            body.write(chunk[: limit - body.tell()])
+                            break
+                        body.write(chunk)
+                    raw.content = body.getvalue()
+        return self._raw_api_response(raw)
+
+    def _call_raw_api(
+        self,
+        client,
+        request,
+        feishu_access_token: Optional[str] = None,
+        *,
+        max_bytes: Optional[int] = None,
+    ):
+        """Execute a raw Lark request without JSON-decoding successful file bodies."""
+        from lark_oapi.core.http import Transport
+
+        option = self._raw_request_option(client, request, feishu_access_token)
+        if max_bytes is not None:
+            raw_resp = self._stream_download(client._config, request, option, max_bytes)
+        else:
+            raw_resp = Transport.execute(client._config, request, option)
+        return self._raw_api_response(raw_resp)
+
+    @classmethod
+    def _raw_api_response(cls, raw_resp):
+        from lark_oapi.core.model import BaseResponse
 
         response = BaseResponse()
-        feishu_error = self._raw_feishu_error(raw_resp)
+        feishu_error = cls._raw_feishu_error(raw_resp)
         if feishu_error:
             response.code, response.msg = feishu_error
         elif 200 <= raw_resp.status_code < 300:
@@ -2326,13 +2661,30 @@ class FeishuAccessor(DataAccessor):
                     doc_title = self._extract_text_from_elements(b.page.elements)
                 break
 
+        # Table cells render their own descendants; the flat API list contains them too.
+        table_descendants: set[str] = set()
+        pending = [
+            child_id
+            for block in blocks
+            if self._detect_block_attr(block) == "table"
+            for child_id in (block.children or [])
+        ]
+        while pending:
+            block_id = pending.pop()
+            if block_id in table_descendants:
+                continue
+            table_descendants.add(block_id)
+            child = block_map.get(block_id)
+            if child is not None:
+                pending.extend(child.children or [])
+
         # Convert blocks to markdown
         markdown_lines = []
         ordered_counter: Dict[str, int] = {}
 
         for block in blocks:
-            if block.page is not None:
-                continue  # Skip page container
+            if block.page is not None or block.block_id in table_descendants:
+                continue
 
             line = self._block_to_markdown(
                 block,
@@ -2649,6 +3001,140 @@ class FeishuAccessor(DataAccessor):
         """Best-effort extraction of the Content-Type header from a lark raw response."""
         return cls._response_header(raw, "content-type")
 
+    @staticmethod
+    def _whiteboard_node_markdown(nodes: List[Dict[str, Any]]) -> str:
+        """Keep visible text, connector captions and raw diagram source without a VLM."""
+        lines: List[str] = []
+        for node in nodes:
+            pending: List[Tuple[Any, int]] = [(node, 0)]
+            while pending:
+                value, depth = pending.pop()
+                if depth > 64:
+                    raise InvalidArgumentError("Feishu whiteboard node nesting limit exceeded")
+                if isinstance(value, dict):
+                    for key, child in value.items():
+                        if key == "syntax" and isinstance(child, dict):
+                            code = child.get("code")
+                            if isinstance(code, str) and code.strip():
+                                syntax_type = child.get("syntax_type")
+                                language = (
+                                    {1: "plantuml", 2: "mermaid"}.get(syntax_type, "")
+                                    if isinstance(syntax_type, int)
+                                    else ""
+                                )
+                                fence = "`" * max(
+                                    3, max((len(m) + 1 for m in re.findall(r"`+", code)), default=0)
+                                )
+                                lines.append(f"{fence}{language}\n{code}\n{fence}")
+                        elif key in {"text", "title"} and isinstance(child, str) and child.strip():
+                            text = html.escape(child.strip(), quote=False).replace("\n", "\n  ")
+                            lines.append(f"- {text}")
+                        elif isinstance(child, (dict, list)) and key != "style":
+                            pending.append((child, depth + 1))
+                elif isinstance(value, list):
+                    pending.extend((item, depth + 1) for item in reversed(value))
+        return "\n\n".join(lines)
+
+    def _read_whiteboard(
+        self, board_token: str, feishu_access_token: Optional[str]
+    ) -> _WhiteboardContent:
+        from lark_oapi.api.board.v1 import (
+            DownloadAsImageWhiteboardRequest,
+            ListWhiteboardNodeRequest,
+        )
+
+        state = self._whiteboards
+        if board_token in state.cache:
+            return state.cache[board_token]
+        if len(state.cache) >= _MAX_WHITEBOARDS:
+            raise InvalidArgumentError("Feishu whiteboard count limit exceeded")
+
+        client = self._get_client(use_user_token=bool(feishu_access_token))
+        request = ListWhiteboardNodeRequest.builder().whiteboard_id(board_token).build()
+        # Typed WhiteboardNode in lark-oapi 1.5.3 discards fields such as `syntax`.
+        # Read the bounded raw response so diagram source and new node types survive.
+        response = self._call_api(client.request, request, feishu_access_token)
+        if not response.success():
+            _raise_from_lark_response(
+                response, operation="read whiteboard nodes", required_scope=_WHITEBOARD_READ_SCOPE
+            )
+        raw = getattr(getattr(response, "raw", None), "content", None)
+        if not isinstance(raw, bytes):
+            raise OpenVikingError("Invalid Feishu whiteboard response", code="PROCESSING_ERROR")
+        if state.json_bytes + len(raw) > _MAX_WHITEBOARD_JSON_BYTES:
+            raise InvalidArgumentError("Feishu whiteboard JSON byte limit exceeded")
+        try:
+            payload = json.loads(raw)
+            data = payload.get("data") if isinstance(payload, dict) else None
+            nodes = data.get("nodes") if isinstance(data, dict) else None
+        except (ValueError, RecursionError) as exc:
+            raise OpenVikingError(
+                "Invalid Feishu whiteboard JSON response", code="PROCESSING_ERROR"
+            ) from exc
+        if not isinstance(nodes, list) or any(not isinstance(node, dict) for node in nodes):
+            raise OpenVikingError("Invalid Feishu whiteboard nodes", code="PROCESSING_ERROR")
+        if state.nodes + len(nodes) > _MAX_WHITEBOARD_NODES:
+            raise InvalidArgumentError("Feishu whiteboard node limit exceeded")
+        state.nodes += len(nodes)
+        state.json_bytes += len(raw)
+        content = _WhiteboardContent(self._whiteboard_node_markdown(nodes))
+
+        if self._get_config().download_images:
+            image_request = (
+                DownloadAsImageWhiteboardRequest.builder().whiteboard_id(board_token).build()
+            )
+            image_response = self._call_api(
+                client.board.v1.whiteboard.download_as_image, image_request, feishu_access_token
+            )
+            if not image_response.success():
+                _raise_from_lark_response(
+                    image_response,
+                    operation="download whiteboard preview",
+                    required_scope=_WHITEBOARD_READ_SCOPE,
+                )
+            raw_image = getattr(image_response, "raw", None)
+            image = getattr(raw_image, "content", None)
+            if not isinstance(image, bytes) or not image:
+                raise InvalidArgumentError("Feishu whiteboard preview is empty")
+            if len(image) > _MAX_WHITEBOARD_PREVIEW_BYTES:
+                raise InvalidArgumentError("Feishu whiteboard preview byte limit exceeded")
+            if state.media_bytes + len(image) > _MAX_WHITEBOARD_MEDIA_BYTES:
+                raise InvalidArgumentError("Feishu whiteboard media byte limit exceeded")
+            ext = self._guess_image_ext(image, self._response_content_type(raw_image))
+            # Match Markdown's image acceptance policy; otherwise downstream parsing
+            # could silently discard a preview after we reported a complete import.
+            if not is_valid_image(image, Path(f"whiteboard-preview{ext}")):
+                raise InvalidArgumentError("Feishu whiteboard preview is not an ingestible image")
+            content.preview = (image, ext)
+            state.media_bytes += len(image)
+
+        state.cache[board_token] = content
+        return content
+
+    def _whiteboard_block_to_markdown(
+        self,
+        block,
+        block_map: Dict,
+        *,
+        document_id: str = "",
+        feishu_access_token: Optional[str] = None,
+    ) -> str:
+        token = getattr(getattr(block, "board", None), "token", None)
+        if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", token):
+            raise InvalidArgumentError("Feishu whiteboard block has an invalid token")
+        content = self._read_whiteboard(token, feishu_access_token)
+        host = urlparse(self._source_url).hostname or "feishu.cn"
+        source = (
+            f"https://{host}/docx/{quote(document_id, safe='')}"
+            f"#{quote(block.block_id or '', safe='')}"
+        )
+        parts = [f"[Whiteboard]({source})"]
+        if content.markdown:
+            parts.append(content.markdown)
+        if content.preview is not None:
+            parts.append(f"![Whiteboard preview](feishu://whiteboard/{token})")
+        return "\n\n".join(parts)
+
     def _resolve_image_refs(
         self,
         markdown: str,
@@ -2661,12 +3147,24 @@ class FeishuAccessor(DataAccessor):
         if not getattr(config, "download_images", True):
             return markdown, {}
 
+        downloaded_images: Dict[str, bytes] = {}
+
+        def _replace_whiteboard(match: re.Match[str]) -> str:
+            token = match.group(2)
+            board = self._whiteboards.cache.get(token)
+            if board is None or board.preview is None:
+                return match.group(0)
+            image_bytes, ext = board.preview
+            rel_path = f"images/whiteboard_{self._image_filename(token, ext)}"
+            downloaded_images[rel_path] = image_bytes
+            return f"![{match.group(1)}]({rel_path})"
+
+        markdown = _FEISHU_WHITEBOARD_RE.sub(_replace_whiteboard, markdown)
         matches = list(_FEISHU_IMAGE_RE.finditer(markdown))
         if not matches:
-            return markdown, {}
+            return markdown, downloaded_images
 
         token_to_rel_path: Dict[str, str] = {}
-        downloaded_images: Dict[str, bytes] = {}
         for match in matches:
             file_token = match.group(2)
             if file_token in token_to_rel_path:
@@ -2712,13 +3210,6 @@ class FeishuAccessor(DataAccessor):
             return f"![{alt_text}]({rel_path})"
 
         return _FEISHU_IMAGE_RE.sub(_replace, markdown), downloaded_images
-
-    def _extract_block_text(self, block, attr_name: str) -> str:
-        """Extract text from a block's named attribute (e.g. block.text, block.heading2)."""
-        content_obj = getattr(block, attr_name, None)
-        if content_obj and hasattr(content_obj, "elements") and content_obj.elements:
-            return self._extract_text_from_elements(content_obj.elements)
-        return ""
 
     def _extract_text_from_elements(self, elements) -> str:
         """Convert Feishu TextElement SDK objects to formatted text."""
@@ -2780,7 +3271,15 @@ class FeishuAccessor(DataAccessor):
             text = f"~~{text}~~"
         return text
 
-    def _table_block_to_markdown(self, block, block_map: Dict, **_) -> Optional[str]:
+    def _table_block_to_markdown(
+        self,
+        block,
+        block_map: Dict,
+        *,
+        document_id: str = "",
+        feishu_access_token: Optional[str] = None,
+        **_,
+    ) -> Optional[str]:
         """Convert table block to markdown table."""
         table = block.table
         children = block.children
@@ -2803,7 +3302,12 @@ class FeishuAccessor(DataAccessor):
                 if cell_idx < len(children):
                     cell_block_id = children[cell_idx]
                     cell_block = block_map.get(cell_block_id)
-                    cell_text = self._extract_cell_text(cell_block, block_map)
+                    cell_text = self._render_table_cell(
+                        cell_block,
+                        block_map,
+                        document_id=document_id,
+                        feishu_access_token=feishu_access_token,
+                    )
                     row.append(cell_text)
                 else:
                     row.append("")
@@ -2811,22 +3315,47 @@ class FeishuAccessor(DataAccessor):
 
         return format_table_to_markdown(rows, has_header=True) if rows else None
 
-    def _extract_cell_text(self, cell_block, block_map: Dict) -> str:
-        """Extract text from a table cell block by reading its children."""
+    def _render_table_cell(
+        self,
+        cell_block,
+        block_map: Dict,
+        *,
+        document_id: str = "",
+        feishu_access_token: Optional[str] = None,
+    ) -> str:
+        """Render cell blocks before the shared table formatter folds line breaks."""
         if not cell_block or not cell_block.children:
             return ""
-        texts = []
-        for child_id in cell_block.children:
+        parts = []
+        ordered_counter: Dict[str, int] = {}
+        pending = [(child_id, 0) for child_id in reversed(cell_block.children)]
+        seen = {cell_block.block_id}
+        while pending:
+            child_id, depth = pending.pop()
+            if child_id in seen:
+                continue
+            seen.add(child_id)
             child = block_map.get(child_id)
             if not child:
                 continue
-            # Use attribute-driven detection to find text in any block type
+            content = self._block_to_markdown(
+                child,
+                block_map,
+                ordered_counter,
+                document_id=document_id,
+                feishu_access_token=feishu_access_token,
+            )
+            if content is not None:
+                indent = "&nbsp;" * (4 * depth)
+                parts.append(indent + content.replace("\n", "\n" + indent))
+            # Nested tables already own their descendants through their cell renderer.
             attr = self._detect_block_attr(child)
-            if attr:
-                text = self._extract_block_text(child, attr)
-                if text:
-                    texts.append(text)
-        return " ".join(texts)
+            if attr != "table":
+                child_depth = depth + (attr in {"ordered", "bullet"})
+                pending.extend(
+                    (child_id, child_depth) for child_id in reversed(child.children or [])
+                )
+        return "\n".join(parts)
 
     def _embedded_sheet_to_markdown(
         self,

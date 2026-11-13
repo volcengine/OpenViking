@@ -15,6 +15,7 @@ class ReindexMsg:
     account_id: str
     user_id: str
     role: str
+    _task_work_id: str = ""
     force: bool = False
     recursive: bool = True
     tags: Optional[list[str]] = None
@@ -41,6 +42,7 @@ class ReindexMsg:
             lock_handoff_retry = 0
         return cls(
             task_id=str(data["task_id"]),
+            _task_work_id=str(data.get("_task_work_id") or ""),
             uri=str(data["uri"]),
             object_type=str(data["object_type"]),
             mode=str(data["mode"]),

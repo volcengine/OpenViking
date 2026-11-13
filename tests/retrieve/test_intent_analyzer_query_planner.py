@@ -154,6 +154,35 @@ async def test_intent_analyzer_handles_bare_array_response(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_intent_analyzer_handles_compact_object_response(monkeypatch):
+    planner = RecordingModel(
+        """{
+          "queries": [
+            {
+              "query": "compact query",
+              "context_type": "resource",
+              "priority": 2
+            }
+          ]
+        }"""
+    )
+    monkeypatch.setattr(intent_module, "render_prompt", lambda prompt_id, variables: "prompt")
+
+    result = await IntentAnalyzer(query_planner=planner).analyze(
+        compression_summary="",
+        messages=[],
+        current_message="find the relevant documentation",
+    )
+
+    assert len(result.queries) == 1
+    assert result.queries[0].query == "compact query"
+    assert result.queries[0].context_type.value == "resource"
+    assert result.queries[0].intent == ""
+    assert result.queries[0].priority == 2
+    assert result.reasoning == ""
+
+
+@pytest.mark.asyncio
 async def test_intent_analyzer_uses_model_specific_prompt(monkeypatch):
     planner = RecordingModel(
         _query_plan_response("planned query"),

@@ -1,0 +1,21 @@
+/**
+ * 分隔线只提供语义与定位，尺寸和颜色由组件按 props 内联给出——它们随调用方
+ * 的上下文变化，固定成类名只能覆盖少数几种情况。
+ *
+ * 这里不写 `align-self`：`stretch` 会把线拉满父级高度，覆盖调用方给的
+ * `length`，一条本该 12px 的竖线于是贯穿整行；`center` 又会让横线在纵向容器
+ * 里居中而不是撑开。交给父级的对齐方式决定，才是调用方想要的。
+ *
+ * The divider carries semantics and positioning only; size and colour come from
+ * the component inline, because they follow the caller's context and a class name
+ * could only cover a few cases.
+ *
+ * No `align-self` here: `stretch` would fill the parent's height and override the
+ * `length` a caller gave, turning a 12px rule into a full-height one, while
+ * `center` would stop a horizontal rule from spanning. Leaving it to the parent's
+ * alignment is what a caller expects.
+ */
+.ov-divider {
+  display: block;
+  box-sizing: border-box;
+}

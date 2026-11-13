@@ -17,7 +17,7 @@ pytestmark = [pytest.mark.integration, requires_api_key]
 
 
 def _cosine_similarity(a: list, b: list) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
     norm_a = l2_norm(a)
     norm_b = l2_norm(b)
     return dot / (norm_a * norm_b) if norm_a and norm_b else 0.0
@@ -26,7 +26,7 @@ def _cosine_similarity(a: list, b: list) -> float:
 @pytest.fixture(scope="module")
 def embedder():
     e = GeminiDenseEmbedder(
-        "gemini-embedding-2-preview",
+        "gemini-embedding-2",
         api_key=GOOGLE_API_KEY,
         # dimension defaults to 3072 — test the actual default
         task_type="RETRIEVAL_DOCUMENT",
@@ -60,15 +60,17 @@ class TestGeminiE2ETextEmbedding:
         sim_related = _cosine_similarity(r1.dense_vector, r2.dense_vector)
         sim_unrelated = _cosine_similarity(r1.dense_vector, r3.dense_vector)
         assert sim_related > sim_unrelated
+
+
 class TestGeminiE2ETaskType:
     def test_query_vs_document_task_types(self):
         doc_embedder = GeminiDenseEmbedder(
-            "gemini-embedding-2-preview",
+            "gemini-embedding-2",
             api_key=GOOGLE_API_KEY,
             task_type="RETRIEVAL_DOCUMENT",
         )
         query_embedder = GeminiDenseEmbedder(
-            "gemini-embedding-2-preview",
+            "gemini-embedding-2",
             api_key=GOOGLE_API_KEY,
             task_type="RETRIEVAL_QUERY",
         )
@@ -76,8 +78,8 @@ class TestGeminiE2ETaskType:
         doc_result = doc_embedder.embed(text)
         query_result = query_embedder.embed(text)
         sim = _cosine_similarity(doc_result.dense_vector, query_result.dense_vector)
-        # gemini-embedding-2-preview may return identical vectors for same text
-        # across task types; assert vectors are at least highly correlated
+        # Stable Gemini Embedding 2 uses task-specific prompt instructions.
+        # The same source text should remain semantically correlated.
         assert sim > 0.8, f"Task type similarity {sim:.3f} unexpectedly low"
         doc_embedder.close()
         query_embedder.close()

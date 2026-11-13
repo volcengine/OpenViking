@@ -394,12 +394,18 @@ def test_ragfs_collector_replaces_recovers_and_deletes(monkeypatch):
             },
         ]
         collector.collect(registry)
-        assert dict(registry.iter_counters())["openviking_ragfs_calls_total"] == [((), count)]
+        metrics = {
+            m.name: m
+            for r in registry.collect().resource_metrics
+            for s in r.scope_metrics
+            for m in s.metrics
+        }
+        assert metrics["openviking_ragfs_calls_total"].data.data_points[0].value == count
         assert registry.gauge_get("openviking_ragfs_tasks") == count
-        hist = list(registry.iter_histograms())[0]
-        assert hist[2] == pytest.approx((1e-6,))
-        assert hist[3][0][1:3] == ((count, 0), count)
-        assert hist[3][0][3] == pytest.approx(123e-9 * count)
+        hist = metrics["openviking_ragfs_latency_seconds"].data.data_points[0]
+        assert hist.explicit_bounds == pytest.approx((1e-6,))
+        assert hist.bucket_counts == (count, 0) and hist.count == count
+        assert hist.sum == pytest.approx(123e-9 * count)
         assert "account_id" not in PrometheusExporter(registry=registry).render()
     previous = PrometheusExporter(registry=registry).render()
     records.append({"broken": True})
@@ -425,16 +431,14 @@ def test_ragfs_collector_replaces_recovers_and_deletes(monkeypatch):
         patch.setattr(registry, "set_gauge", fail)
         with pytest.raises(RuntimeError, match="injected"):
             collector.collect(registry)
-    assert dict(registry.iter_counters())["openviking_ragfs_partial_total"] == [((), 9)]
+    assert "openviking_ragfs_partial_total 9.0" in PrometheusExporter(registry=registry).render()
     records.clear()
     with monkeypatch.context() as patch:
-        patch.setattr(registry, "counter_delete_matching", fail)
+        patch.setattr(registry, "delete_matching", fail)
         with pytest.raises(RuntimeError, match="injected"):
             collector.collect(registry)
     collector.collect(registry)
-    assert list(registry.iter_counters()) == []
-    assert list(registry.iter_gauges()) == []
-    assert list(registry.iter_histograms()) == []
+    assert not registry.collect().resource_metrics[0].scope_metrics[0].metrics
     assert "openviking_ragfs_" not in PrometheusExporter(registry=registry).render()
 
 

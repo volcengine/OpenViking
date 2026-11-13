@@ -96,7 +96,9 @@ async def test_subagent_announcement_preserves_channel_metadata(tmp_path):
 async def test_system_message_response_preserves_channel_metadata(tmp_path, monkeypatch):
     monkeypatch.setattr(AgentLoop, "_register_builtin_hooks", lambda self: None)
     monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
-    monkeypatch.setattr("vikingbot.agent.loop.SubagentManager", lambda **kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        "vikingbot.agent.loop.loop.SubagentManager", lambda **kwargs: SimpleNamespace()
+    )
 
     metadata = {"reply_to": "oc_chat", "chat_type": "group", "message_id": "om_old"}
     connection = {"api_key": "request-key", "account_id": "acct", "user_id": "alice"}

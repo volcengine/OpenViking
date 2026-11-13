@@ -188,7 +188,7 @@ export default async function (pi: ExtensionAPI) {
         : [];
       if (config.takeoverEnabled) {
         takeover.restore(branch);
-        sync.restoreWatermark(takeover.state.syncedEntryCount);
+        sync.restoreWatermark(takeover.state.syncedEntryCount, branch);
       }
 
       await sync.replayPending();
@@ -199,7 +199,7 @@ export default async function (pi: ExtensionAPI) {
       // Profile injection
       profileBlock = await buildSessionProfileBlock(client, config);
 
-      if (!config.takeoverEnabled && sync.sessionId) {
+      if (!config.takeoverEnabled && config.resumeArchiveInject && sync.sessionId) {
         // Resume rehydration — fetch archive overview if session was previously committed.
         archiveOverview = await fetchArchiveOverview(client, sync.sessionId, config);
       }
@@ -275,7 +275,7 @@ export default async function (pi: ExtensionAPI) {
     // Compose system prompt additions
     const parts: string[] = [];
     if (profileBlock) parts.push(profileBlock);
-    if (!config.takeoverEnabled && archiveOverview && (compacted || archiveOverview.trim())) {
+    if (!config.takeoverEnabled && config.resumeArchiveInject && archiveOverview && (compacted || archiveOverview.trim())) {
       parts.push(archiveOverview);
     }
     // Generated from what actually registered, so it can never name a tool the
@@ -380,7 +380,7 @@ export default async function (pi: ExtensionAPI) {
 
   // --- session_before_compact ---
   pi.on("session_before_compact", async (event, ctx) => {
-    if (!connected || bypassed) return;
+    if (!connected || bypassed || !isCaptureEnabled(config)) return;
 
     if (config.takeoverEnabled) {
       const deadline = Date.now() + HANDLER_BUDGET_MS;
@@ -398,7 +398,7 @@ export default async function (pi: ExtensionAPI) {
     compacted = true;
 
     // Cache archive overview for rehydration after compaction
-    if (archiveId && sync.sessionId) {
+    if (config.resumeArchiveInject && archiveId && sync.sessionId) {
       archiveOverview = await fetchArchiveOverview(
         client, sync.sessionId, config,
       );
@@ -426,7 +426,7 @@ export default async function (pi: ExtensionAPI) {
     await sync.shutdown();
     if (config.takeoverEnabled) {
       await takeover.shutdown();
-    } else {
+    } else if (isCaptureEnabled(config)) {
       await sync.commit();
     }
   });
@@ -474,7 +474,7 @@ export default async function (pi: ExtensionAPI) {
           const reason = config.takeoverEnabled
             ? takeover.lastFailure
             : skipped
-              ? describeSkip(String(commitResult?.reason || ""), config.commitKeepRecentCount)
+              ? describeSkip(String(commitResult?.reason || ""))
               : sync.lastCommitError;
           logger.log("commit", { ok: false, manual: true, reason: reason || "unknown" });
           if (reason.startsWith("nothing")) {

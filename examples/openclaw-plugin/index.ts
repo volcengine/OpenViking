@@ -25,6 +25,7 @@ import { registerOpenVikingLifecycleHooks } from "./plugin/openviking-lifecycle-
 import { registerOpenVikingMemoryRecallTools } from "./plugin/openviking-memory-recall-tools.js";
 import { registerOpenVikingMemoryTools } from "./plugin/openviking-memory-tools.js";
 import { registerOpenVikingQueryTools } from "./plugin/openviking-query-tools.js";
+import { registerOpenVikingRuleTools } from "./plugin/openviking-rule-tools.js";
 import { registerOpenVikingRecallTraceTools } from "./plugin/openviking-recall-trace-tools.js";
 import { createOpenVikingRuntimeState } from "./plugin/openviking-runtime-state.js";
 import { createOpenVikingSessionRoutingRuntime } from "./plugin/openviking-session-routing-runtime.js";
@@ -276,6 +277,14 @@ const contextEnginePlugin = {
       readOpenVikingContent,
       multiReadOpenVikingContent,
       listOpenVikingDirectory,
+      resolvePluginSessionRouting,
+      isBypassedSession,
+      makeBypassedToolResult,
+    });
+
+    registerOpenVikingRuleTools({
+      registerTool: registerOpenVikingTool,
+      getClient,
       resolvePluginSessionRouting,
       isBypassedSession,
       makeBypassedToolResult,

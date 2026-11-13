@@ -4,7 +4,6 @@
 """Global test fixtures"""
 
 import asyncio
-import shutil
 from pathlib import Path
 from typing import AsyncGenerator, Generator
 
@@ -20,6 +19,12 @@ from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 from tests.utils.mock_agfs import MockLocalAGFS
+from tests.utils.watch_fixtures import (  # noqa: F401
+    watch_manager,
+    watch_store,
+    watch_tracker,
+    watch_vfs,
+)
 
 
 # ── Workaround: local .so may lack AGFS_Grep symbol (new in latest source) ──
@@ -83,7 +88,6 @@ _patch_agfs_grep_if_missing()
 
 # Test data root directory
 PROJECT_ROOT = Path(__file__).parent.parent
-TEST_TMP_DIR = PROJECT_ROOT / "test_data" / "tmp"
 
 
 @pytest.fixture(scope="session")
@@ -95,11 +99,9 @@ def event_loop():
 
 
 @pytest.fixture(scope="function")
-def temp_dir() -> Generator[Path, None, None]:
-    """Create temp directory, auto-cleanup before and after test"""
-    shutil.rmtree(TEST_TMP_DIR, ignore_errors=True)
-    TEST_TMP_DIR.mkdir(parents=True, exist_ok=True)
-    yield TEST_TMP_DIR
+def temp_dir(tmp_path: Path) -> Generator[Path, None, None]:
+    """Keep concurrent test runs from deleting each other's vector stores."""
+    yield tmp_path
 
 
 @pytest.fixture(scope="function")
@@ -195,3 +197,9 @@ def request_context() -> RequestContext:
         user=UserIdentifier.the_default_user(),
         role=Role.USER,
     )
+
+
+@pytest.fixture
+def working_memory_policy():
+    """Explicit opt-in for tests exercising WM/checkpoint generation."""
+    return {"working_memory": {"enabled": True}}

@@ -38,6 +38,9 @@ class FakeVikingFS:
         self.tree_calls: list[str] = []
         self.write_contexts: list[RequestContext] = []
         self.existing_roots = existing_roots or set()
+        self._ensure_destination_access = AsyncMock(
+            side_effect=lambda uri, ctx: uri in self.existing_roots
+        )
         self.removed_roots: list[str] = []
 
     async def stat(self, uri: str, ctx=None, skip_count=False):
@@ -945,6 +948,18 @@ async def test_import_ovpack_restores_required_dense_vector_snapshot(
 
     fake_fs = FakeVikingFS()
     vector_store = FakeVectorStore()
+    root_uri = "viking://resources/imported/demo"
+    fake_fs._ensure_destination_access.side_effect = PermissionDeniedError(
+        "write permission required"
+    )
+    with pytest.raises(PermissionDeniedError, match="write permission required"):
+        await import_ovpack(
+            fake_fs, str(temp_ovpack_path), "viking://resources/imported", request_ctx
+        )
+    assert fake_fs.written_files == fake_fs.removed_roots == fake_fs.created_dirs == []
+    fake_fs._ensure_destination_access.assert_awaited_once_with(root_uri, request_ctx)
+    fake_fs._ensure_destination_access.side_effect = None
+    fake_fs._ensure_destination_access.return_value = False
     result = await import_ovpack(
         fake_fs,
         str(temp_ovpack_path),

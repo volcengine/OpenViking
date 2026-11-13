@@ -287,12 +287,13 @@ class TestLocalParseOutputStore:
 
         assert outside.exists()
 
-    async def test_case_only_conflict_is_detected(self, tmp_path) -> None:
+    async def test_case_only_names_can_coexist(self, tmp_path) -> None:
         store = LocalParseOutputStore(local_root=str(tmp_path / "out"))
         ref = await store.create_artifact(root_type="dir")
         await store.write_bytes(ref, "Readme.md", b"a")
-        with pytest.raises(ValueError, match="case"):
-            await store.write_bytes(ref, "README.MD", b"b")
+        await store.write_bytes(ref, "README.MD", b"b")
+        assert await store.read_bytes(ref, "Readme.md") == b"a"
+        assert await store.read_bytes(ref, "README.MD") == b"b"
 
     async def test_missing_artifact_read_raises(self, tmp_path) -> None:
         store = LocalParseOutputStore(local_root=str(tmp_path / "out"))

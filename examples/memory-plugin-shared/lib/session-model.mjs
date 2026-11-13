@@ -26,7 +26,10 @@ export function isBypassed(cfg, { sessionId, cwd } = {}) {
   if (cfg.bypassSession) return true;
   const patterns = cfg.bypassSessionPatterns || [];
   if (patterns.length === 0) return false;
-  const haystacks = [sessionId, cwd].filter(Boolean);
+  // Windows hands hooks `C:\work\scratch`, while directory patterns are written
+  // with forward slashes.
+  const slashCwd = typeof cwd === "string" && cwd.includes("\\") ? cwd.replace(/\\/g, "/") : "";
+  const haystacks = [sessionId, cwd, slashCwd].filter(Boolean);
   for (const pat of patterns) {
     const re = globToRe(pat);
     if (haystacks.some((h) => re.test(h))) return true;

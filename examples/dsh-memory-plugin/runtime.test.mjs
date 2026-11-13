@@ -21,6 +21,19 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })));
 });
 
+test("runtime uses a portable OpenViking id for DSH IM sessions", () => {
+  const runtime = new OpenVikingRuntime({}, config(), { debug() {} });
+  const state = runtime.stateFor({
+    id: "im:weixin_fixture:dm:1790750070550:chat_fixture@im.wechat",
+    header: { cwd: "/workspace" },
+  });
+
+  assert.equal(
+    state.ovSessionId,
+    "dsh-im_weixin_fixture_dm_1790750070550_chat_fixture@im.wechat__eb8b3dae7d74",
+  );
+});
+
 test("capture queues retryable failures but drops permanent client errors", async () => {
   for (const [status, expectedPending] of [[400, 0], [503, 1]]) {
     const pendingDir = await mkdtemp(join(tmpdir(), `dsh-memory-${status}-`));
@@ -114,6 +127,38 @@ test("a retryable threshold commit failure is queued", async () => {
   ]);
 });
 
+test("compaction/start commits below the token threshold without reading session metadata", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-compaction-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  let getSessionCalls = 0;
+  let commitCalls = 0;
+  const runtime = new OpenVikingRuntime({
+    async getSession() {
+      getSessionCalls += 1;
+      return { pending_tokens: 5 };
+    },
+    async commitSession() {
+      commitCalls += 1;
+      return { ok: true };
+    },
+  }, config(), { debug() {} });
+  const session = { id: "compaction-commit", header: { cwd: "/workspace" } };
+  runtime.stateFor(session).ready = true;
+
+  runtime.maybeCommit(session, { type: "compaction/start" });
+  await runtime.flush(session);
+
+  assert.equal(getSessionCalls, 0);
+  assert.equal(commitCalls, 1);
+
+  runtime.maybeCommit(session, { type: "compaction/end" });
+  await runtime.flush(session);
+
+  assert.equal(getSessionCalls, 0);
+  assert.equal(commitCalls, 1);
+});
+
 test("once a write is queued, later messages and the final commit stay ordered on disk", async () => {
   const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-order-"));
   tempDirs.push(pendingDir);
@@ -151,11 +196,11 @@ test("once a write is queued, later messages and the final commit stay ordered o
   ]);
   assert.deepEqual(
     pending.map(item => (
-      item.entry.payload.parts?.[0]?.text
-      || item.entry.payload.content
-      || item.entry.payload.keep_recent_count
+      item.entry.type === "commitSession"
+        ? item.entry.payload
+        : item.entry.payload.parts?.[0]?.text || item.entry.payload.content
     )),
-    ["First queued message.", "Second queued message.", 10],
+    ["First queued message.", "Second queued message.", { keep_recent_count: 0 }],
   );
   assert.deepEqual(
     pending.map(item => item.entry.createdAt),
@@ -368,6 +413,23 @@ test("autoRecall false stops the recall request", async () => {
   assert.equal(await runtime.recallMessage({}, [{ role: "user", content: "what did we decide" }]), null);
 });
 
+// A batch of injected context alone (time-context, job notices) carries no
+// user query, so it must not trigger a recall request.
+test("injected context alone does not trigger recall", async () => {
+  const runtime = new OpenVikingRuntime({
+    async fetchJSON() {
+      throw new Error("recall must not run without user input");
+    },
+  }, { ...config(), minQueryLength: 0 }, { debug() {} });
+  runtime.initialize = async () => ({ ready: true, config: { ...config(), minQueryLength: 0 } });
+
+  assert.equal(await runtime.recallMessage({}, [{
+    role: "user",
+    content: [{ type: "text", text: "Current time: 2026-10-05 21:20" }],
+    source: { kind: "time-context" },
+  }]), null);
+});
+
 // recall-core reads options.excludeUris, but the DSH runtime built its options
 // without it, so nothing a user configured could stop a subtree from being
 // recalled: generated directory files came back as ordinary hits.
@@ -512,3 +574,77 @@ function userEvent(text) {
     },
   };
 }
+
+test("DSH recall modes use host digests, preserve fallbacks, and isolate session caches", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "dsh-compression-"));
+  tempDirs.push(dir);
+  process.env.OPENVIKING_STATE_DIR = dir;
+  const uri = "viking://user/test/memories/decision.md";
+  for (const mode of ["off", "client", "auto", "server"]) {
+    for (const outcome of ["ok", "invalid", "unrelated", "error"]) {
+      const bodies = [];
+      const calls = [];
+      const cfg = { ...config(), recallRewrite: mode, recallCompressMinInputChars: 0, recallCompressTimeoutMs: 1000 };
+      const runtime = new OpenVikingRuntime({
+        async fetchJSON(path, init) {
+          bodies.push(JSON.parse(init.body));
+          return { ok: true, result: {
+            rendered: `Keep PostgreSQL. source: ${uri}`,
+            entries: [{ uri, text: "Keep PostgreSQL." }], stats: {},
+          } };
+        },
+      }, cfg, { debug() {} });
+      const agent = {
+        session: { id: `${mode}-${outcome}`, header: { cwd: dir } },
+        options: { provider: "local", model: "strong" },
+        ctx: { llm: { async *stream(request) {
+          calls.push(request);
+          if (outcome === "error") throw new Error("provider failed");
+          yield { type: "text-delta", index: 0, text: outcome === "ok"
+            ? `- PostgreSQL was chosen. source: ${uri}`
+            : outcome === "unrelated" ? "NO_RELEVANT_MEMORY" : "invalid output" };
+          yield { type: "finish", reason: { kind: "stop" } };
+        } } },
+      };
+      runtime.stateFor(agent.session).ready = true;
+      const message = await runtime.recallMessage(agent, [{ role: "user", content: "which database" }]);
+      const local = mode === "client" || mode === "auto";
+      assert.equal(calls.length, local ? 1 : 0, `${mode}/${outcome}`);
+      assert.equal(bodies[0].rewrite, mode === "server" ? true : undefined);
+      if (local && outcome === "unrelated") assert.equal(message, null);
+      else {
+        const text = message.content[0].text;
+        assert.ok(text.includes(uri));
+        assert.match(text, local && outcome === "ok" ? /PostgreSQL was chosen/ : /Keep PostgreSQL/);
+      }
+      if (local && outcome === "ok") {
+        await runtime.recallMessage(agent, [{ role: "user", content: "which database" }]);
+        assert.equal(calls.length, 1, "same-session digest is cached");
+        agent.session = { id: `${mode}-other-session`, header: { cwd: dir } };
+        runtime.stateFor(agent.session).ready = true;
+        await runtime.recallMessage(agent, [{ role: "user", content: "which database" }]);
+        assert.equal(calls.length, 2, "another session does not reuse the digest cache");
+      }
+    }
+  }
+});
+
+test("missing DSH model only permits server rewrite in auto mode", async () => {
+  for (const mode of ["client", "auto"]) {
+    let body;
+    const cfg = { ...config(), recallRewrite: mode };
+    const runtime = new OpenVikingRuntime({
+      async fetchJSON(path, init) {
+        body = JSON.parse(init.body);
+        return { ok: true, result: { rendered: "original fragments", entries: [], stats: {} } };
+      },
+    }, cfg, { debug() {} });
+    runtime.initialize = async () => ({ ready: true, config: cfg });
+    const message = await runtime.recallMessage({}, [{ role: "user", content: "which database" }]);
+    assert.equal(body.rewrite, mode === "auto" ? "auto" : undefined);
+    assert.match(message.content[0].text, /original fragments/);
+    const controller = new AbortController();
+    controller.abort();
+    assert.equal(await runtime.recallMessage({}, [{ role: "user", content: "which database" }], controller.signal), null);
+  }
+});

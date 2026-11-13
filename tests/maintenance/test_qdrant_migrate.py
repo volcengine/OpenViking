@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
-import re
+import runpy
 import subprocess
 import sys
 from pathlib import Path
@@ -5897,12 +5897,9 @@ def test_qdrant_ci_workflow_lists_required_suites(monkeypatch) -> None:
     )
     check_step = next(step for step in check_deps["steps"] if step.get("id") == "check")
     check_script = check_step["run"]
-    qdrant_pattern_line = next(
-        line.strip()
-        for line in check_script.splitlines()
-        if line.strip().startswith("QDRANT_PATTERN=")
-    )
-    qdrant_pattern = qdrant_pattern_line.split("=", 1)[1].strip().strip('"')
+    assert '.github/scripts/ci_plan.py --base "$BASE_SHA"' in check_script
+    assert ".github/scripts/ci_plan.py --full" in check_script
+    plan = runpy.run_path(str(root / ".github/scripts/ci_plan.py"))["plan"]
     for path in (
         *REQUIRED_QDRANT_TESTS,
         *REQUIRED_QDRANT_SHARED_DEPENDENCIES,
@@ -5918,10 +5915,9 @@ def test_qdrant_ci_workflow_lists_required_suites(monkeypatch) -> None:
         ".github/workflows/pr.yml",
         ".github/workflows/_test_lite.yml",
     ):
-        assert re.search(qdrant_pattern, path), path
-    assert not re.search(qdrant_pattern, "docs/en/guides/01-configuration.md")
-    assert 'echo "qdrant_changed=true" >> "$GITHUB_OUTPUT"' in check_script
-    assert 'echo "qdrant_changed=false" >> "$GITHUB_OUTPUT"' in check_script
+        assert plan([path])["qdrant_changed"], path
+    assert not plan(["docs/en/guides/01-configuration.md"])["qdrant_changed"]
+    assert plan([], full=True)["qdrant_changed"]
 
     qdrant_job = workflow["jobs"]["qdrant-tests"]
     assert qdrant_job["needs"] == "check-deps"
@@ -5961,7 +5957,7 @@ def test_qdrant_ci_workflow_lists_required_suites(monkeypatch) -> None:
     assert test_step["shell"] == "bash"
 
     runner = test_step["run"].rstrip("\n")
-    prefix = "uv run python - <<'PY'\n"
+    prefix = "uv run --no-sync python - <<'PY'\n"
     suffix = "\nPY"
     assert runner.startswith(prefix)
     assert runner.endswith(suffix)
@@ -5983,7 +5979,7 @@ def test_qdrant_ci_workflow_lists_required_suites(monkeypatch) -> None:
         return captured[0]
 
     command_kwargs = {"check": True, "shell": False}
-    command_prefix = ["uv", "run", "pytest", "-q", "-o", "addopts=", "--"]
+    command_prefix = ["uv", "run", "--no-sync", "pytest", "-q", "-o", "addopts=", "--"]
     assert run_runner(list(DEFAULT_CUVS_TESTS)) == (
         [*command_prefix, *DEFAULT_CUVS_TESTS],
         command_kwargs,

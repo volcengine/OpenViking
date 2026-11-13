@@ -5,6 +5,8 @@ import ast
 import re
 from typing import Any, Iterator
 
+import httpx
+
 from openviking.pyagfs.exceptions import (
     AGFSAlreadyExistsError,
     AGFSClientError,
@@ -30,7 +32,10 @@ from openviking.pyagfs.exceptions import (
     GitConcurrentCommitError,
 )
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
-from openviking.utils.exceptions import HTTP_STATUS_TO_ERROR_CODE, error_code_from_http_status
+from openviking.utils.exceptions import (
+    AllCredentialsFailedError,
+    error_code_from_http_status,
+)
 from openviking_cli.exceptions import (
     ConflictError,
     FailedPreconditionError,
@@ -45,7 +50,6 @@ from openviking_cli.exceptions import (
     UnimplementedError,
 )
 
-_KNOWN_HTTP_STATUS_CODES = frozenset(HTTP_STATUS_TO_ERROR_CODE)
 _UPSTREAM_ERROR_MARKERS = (
     "api error",
     "apierror",
@@ -95,7 +99,7 @@ _API_KEY_CONFIG_MARKERS = (
 _HTTP_STATUS_PATTERNS = (
     re.compile(r"\bHTTP\s*(\d{3})\b", re.IGNORECASE),
     re.compile(r"\bstatus(?:\s+code)?\s*[:=]?\s*(\d{3})\b", re.IGNORECASE),
-    re.compile(r"\berror\s+code\s*[:=]?\s*(\d{3})\b", re.IGNORECASE),
+    re.compile(r"\berror(?:\s+code)?\s*[:=]?\s*(\d{3})\b", re.IGNORECASE),
 )
 
 
@@ -272,9 +276,6 @@ def _extract_text_http_status(exc: Exception) -> int | None:
             status = _coerce_http_status(match.group(1))
             if status is not None:
                 return status
-    for status in _KNOWN_HTTP_STATUS_CODES:
-        if re.search(rf"\b{status}\b", text):
-            return status
     return None
 
 
@@ -335,14 +336,36 @@ def _build_upstream_error(
 
 
 def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
-    if _is_model_api_key_configuration_error(exc):
-        return FailedPreconditionError(
-            "Model provider API key is not configured",
-            details={"reason": _trim_message(_exception_chain_text(exc))},
-        )
+    for item in _iter_exception_chain(exc):
+        if isinstance(item, AllCredentialsFailedError):
+            failures = [_map_upstream_api_error(error) for _, _, error, _ in item.errors]
+            codes = {failure.code if failure is not None else "INTERNAL" for failure in failures}
+            # A mixed failure has no single accurate status. Do not infer one
+            # from whichever credential happens to appear first in the message.
+            if len(codes) != 1 or "INTERNAL" in codes:
+                return InternalError(str(exc))
+            return _build_upstream_error(
+                code=codes.pop(),
+                message=_upstream_detail_message(exc),
+                source=item,
+                vlm_context=exc,
+            )
 
     status, source = _extract_structured_http_status(exc)
     if status is None:
+        for item in _iter_exception_chain(exc):
+            if isinstance(item, httpx.TimeoutException):
+                code = "DEADLINE_EXCEEDED"
+            elif isinstance(item, (httpx.NetworkError, httpx.RemoteProtocolError)):
+                code = "UNAVAILABLE"
+            else:
+                continue
+            return _build_upstream_error(
+                code=code,
+                message=_upstream_detail_message(exc),
+                source=item,
+                vlm_context=exc,
+            )
         status = _extract_text_http_status(exc)
     if status is not None:
         code = error_code_from_http_status(status, default="UNKNOWN")
@@ -354,6 +377,12 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
             source=source,
             message=_upstream_detail_message(exc),
             vlm_context=exc,
+        )
+
+    if _is_model_api_key_configuration_error(exc):
+        return FailedPreconditionError(
+            "Model provider API key is not configured",
+            details={"reason": _trim_message(_exception_chain_text(exc))},
         )
 
     if not _looks_like_upstream_model_error(exc):
@@ -475,12 +504,9 @@ def map_exception(
         return PermissionDeniedError(str(exc), resource=resource)
     if isinstance(exc, FileNotFoundError):
         return _not_found_error(resource, resource_type)
-    if _is_model_api_key_configuration_error(exc):
-        return FailedPreconditionError(
-            "Model provider API key is not configured",
-            details={"reason": _trim_message(_exception_chain_text(exc))},
-        )
     if isinstance(exc, ValueError):
+        if _is_model_api_key_configuration_error(exc):
+            return _map_upstream_api_error(exc)
         message = str(exc)
         if is_invalid_uri_error(exc):
             return InvalidURIError(resource or message, message)

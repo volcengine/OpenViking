@@ -32,7 +32,6 @@ from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.resource_rnfv import NON_PORTABLE_VECTOR_RECORD_FIELDS
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
-from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.embedding_input import truncate_embedding_input
 from openviking.utils.image_search import image_bytes_to_model_data_uri
 from openviking.utils.ingest_options import IngestOptions
@@ -135,29 +134,12 @@ async def _enqueue_embedding_message(
     embedding_queue,
     embedding_msg,
     *,
-    failure_message: str,
+    failure_message: str = "Failed to enqueue embedding message",
 ) -> bool:
-    """Persist one embedding message and settle request tracking on enqueue failure."""
-    wait_tracker = get_request_wait_tracker()
-    wait_tracker.register_embedding_root(embedding_msg.telemetry_id, embedding_msg.id)
-
-    try:
-        enqueue_id = await embedding_queue.enqueue(embedding_msg)
-    except BaseException as exc:
-        wait_tracker.mark_embedding_failed(
-            embedding_msg.telemetry_id,
-            embedding_msg.id,
-            f"{failure_message}: {exc}",
-        )
-        raise
-
+    """Persist one embedding message."""
+    enqueue_id = await embedding_queue.enqueue(embedding_msg)
     if not enqueue_id:
-        wait_tracker.mark_embedding_failed(
-            embedding_msg.telemetry_id,
-            embedding_msg.id,
-            failure_message,
-        )
-        return False
+        raise RuntimeError(failure_message)
     return True
 
 
@@ -492,7 +474,6 @@ async def vectorize_directory_meta(
                     enqueued = await _enqueue_embedding_message(
                         embedding_queue,
                         msg_abstract,
-                        failure_message=f"Failed to enqueue directory L0 vector for {uri}",
                     )
                     if enqueued:
                         enqueued_levels.add(int(ContextLevel.ABSTRACT.value))
@@ -554,7 +535,6 @@ async def vectorize_directory_meta(
                     enqueued = await _enqueue_embedding_message(
                         embedding_queue,
                         msg_overview,
-                        failure_message=f"Failed to enqueue directory L1 vector for {uri}",
                     )
                     if enqueued:
                         enqueued_levels.add(int(ContextLevel.OVERVIEW.value))
@@ -764,7 +744,6 @@ async def vectorize_file(
         enqueued = await _enqueue_embedding_message(
             embedding_queue,
             embedding_msg,
-            failure_message=f"Failed to enqueue file vector for {file_path}",
         )
         if not enqueued:
             return False

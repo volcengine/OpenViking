@@ -300,17 +300,17 @@ deployments and restrict local access to the credentials file.
 When the effective `watch_interval` is positive, OpenViking stores an HTTPS Git token resolved
 from `auth_ref` in the Watch task's private, repository-bound authentication state. The token is
 not written to Manifest State, ordinary ingestion queues, or watch API/MCP/CLI responses. A zero
-interval keeps the token request-local. Git PATs have no generic refresh flow, so recreate the
-Watch when a token expires or is revoked.
+interval keeps the token in the import task's private authentication state for background execution.
+Git PATs have no generic refresh flow, so recreate the Watch when a token expires or is revoked.
 
 Private watch state is stored in `viking://resources/.watch_tasks.json`. It is encrypted at rest
 when VikingFS file encryption is enabled; otherwise the server-side control file and its backup
 contain plaintext token state. Restrict server storage access and enable encryption in production.
 
-Native credential imports wait for clone and parse before the server returns a task, even without
-`--wait`; the CLI therefore uses a 300-second request timeout by default for these assets. Use
-`--timeout <seconds>` for a larger repository. The token is carried in the HTTPS request body, so
-keep diagnostic request-body dumping disabled in production.
+Native credential imports return a `task_id` after permission preflight and enqueueing; clone and
+parse run in the background. `--wait` waits for task completion. HTTP requests use the client timeout
+configuration; `add-resource` has no `--timeout` option. The token is carried in the HTTPS request body,
+so keep diagnostic request-body dumping disabled in production.
 
 Omit `auth_ref` when the target service already has the SSH keys or other authentication needed to
 access the repository.
@@ -415,7 +415,6 @@ Options used with `--manifest`:
 | `-m, --manifest <file>` | Manifest file. |
 | `--args <key:value,...>` | Manifest-run options, comma-separated; supported keys below. |
 | `--wait` | Wait for each resource to finish processing. |
-| `--timeout <seconds>` | HTTP request timeout. Native private Git imports honor it even without `--wait`; their default is 300 seconds. |
 | `--watch-interval <minutes>` | Override the refresh interval for all assets. |
 
 Run options supported by `--args`:

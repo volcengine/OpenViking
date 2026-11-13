@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from openviking.session.memory.utils.link_renderer import LinkRenderer
 from vikingbot.config.loader import load_config
 from vikingbot.openviking_mount.ov_server import VikingClient
 from vikingbot.utils.helpers import ensure_dir
@@ -392,10 +393,17 @@ class MemoryStore:
             if use_type_budgets and memory_type == "events" and content:
                 summary = self._extract_event_summary(content, fallback=abstract)
                 if summary:
-                    grouped_memories.setdefault(memory_type, []).append(
-                        self._format_summary_memory(idx, uri, score, summary)
-                    )
-                    continue
+                    summary_memory_str = self._format_summary_memory(idx, uri, score, summary)
+                    summary_chars = len(summary_memory_str) + bool(any(grouped_memories.values()))
+                    if (
+                        type_chars[memory_type] + summary_chars
+                        <= max(0, int(type_char_budgets.get(memory_type, 0)))
+                        and total_chars + summary_chars <= max_chars
+                    ):
+                        grouped_memories.setdefault(memory_type, []).append(summary_memory_str)
+                        type_chars[memory_type] += summary_chars
+                        total_chars += summary_chars
+                        continue
 
             if include_uri_entries:
                 grouped_memories.setdefault(memory_type, []).append(
@@ -1203,7 +1211,7 @@ class MemoryStore:
         if not section:
             return []
 
-        targets = re.findall(r"\[[^\]]+\]\(([^)\s]+)\)", section)
+        targets = [link.target for link in LinkRenderer.iter_markdown_links(section)]
         if not targets:
             targets = [
                 line.lstrip("- ").strip()
@@ -1225,6 +1233,7 @@ class MemoryStore:
         target = str(target or "").strip()
         if not target:
             return ""
+        target = LinkRenderer.normalize_markdown_target(target)
         if "://" in target:
             return target
         if "/" not in target:

@@ -6,8 +6,11 @@
 
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
+import { createServer } from "node:http";
 
 import { buildOvHeaders, createOvHttp } from "./lib/ov-http.mjs";
+import { isRetryableFailure } from "./lib/retryable.mjs";
+import { withMockOpenViking, writeJson } from "./testing/support.mjs";
 
 const CFG = {
   baseUrl: "http://127.0.0.1:1933",
@@ -178,6 +181,45 @@ test("a timed-out request says so in the envelope, not in its message", async ()
   assert.equal(res.error.aborted, true);
 });
 
+test("response-body transport failures remain retryable", async (t) => {
+  let resetBody = false;
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.flushHeaders();
+    response.write('{"status":"ok","result":');
+    if (resetBody) setTimeout(() => response.destroy(), 30);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  try {
+    for (resetBody of [false, true]) {
+      for (const requireJsonBody of [false, true]) {
+        await t.test(`${resetBody ? "reset" : "timeout"}, strict=${requireJsonBody}`, async () => {
+          const result = await createOvHttp({ baseUrl }, {
+            defaultTimeoutMs: 1000,
+            requireJsonBody,
+          })("/api/v1/sessions/body-read/commit");
+
+          assert.equal(result.ok, false);
+          assert.equal(result.status, 0);
+          assert.equal(result.result, null);
+          assert.equal(isRetryableFailure(result), true);
+          if (!resetBody) {
+            assert.equal(result.error.name, "AbortError");
+            assert.equal(result.error.aborted, true);
+          } else {
+            assert.ok(result.error.message);
+            assert.notEqual(result.error.aborted, true);
+          }
+        });
+      }
+    }
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("a trusted server is told who the operator is; an untrusted one only gets the key", async () => {
   const trusted = respond(200, { status: "ok", result: {} });
   await createOvHttp(CFG, { defaultTimeoutMs: 5000, resolveActorPeerId: () => "peer-a" })("/health");
@@ -258,4 +300,69 @@ test("dsh and pi name the base url `endpoint`", async () => {
   await createOvHttp({ endpoint: "http://127.0.0.1:1934" }, { defaultTimeoutMs: 5000 })("/health");
 
   assert.equal(calls[0].url, "http://127.0.0.1:1934/health");
+});
+
+test("the operator's OPENVIKING_EXTRA_HEADERS reach the wire without a caller wiring them", async () => {
+  const previous = process.env.OPENVIKING_EXTRA_HEADERS;
+  process.env.OPENVIKING_EXTRA_HEADERS = JSON.stringify({
+    "CF-Access-Client-Id": "id.access",
+    "CF-Access-Client-Secret": "gateway-secret",
+  });
+  try {
+    await withMockOpenViking(
+      (req, res) => writeJson(res, { status: "ok", result: {} }),
+      async (baseUrl, requests) => {
+        // No extraHeaders option and no harness-specific plumbing: this is the path
+        // dsh's client, the turn hooks and every other harness take.
+        await createOvHttp({ baseUrl, apiKey: "test-key" }, { defaultTimeoutMs: 5000 })("/health");
+
+        assert.equal(requests[0].headers["cf-access-client-id"], "id.access");
+        assert.equal(requests[0].headers["cf-access-client-secret"], "gateway-secret");
+        assert.equal(requests[0].headers.authorization, "Bearer test-key");
+      },
+    );
+  } finally {
+    if (previous === undefined) delete process.env.OPENVIKING_EXTRA_HEADERS;
+    else process.env.OPENVIKING_EXTRA_HEADERS = previous;
+  }
+});
+
+test("an explicit extraHeaders map still wins over the environment", async () => {
+  const previous = process.env.OPENVIKING_EXTRA_HEADERS;
+  process.env.OPENVIKING_EXTRA_HEADERS = JSON.stringify({ "CF-Access-Client-Id": "from-env" });
+  try {
+    await withMockOpenViking(
+      (req, res) => writeJson(res, { status: "ok", result: {} }),
+      async (baseUrl, requests) => {
+        await createOvHttp({ baseUrl, apiKey: "test-key" }, {
+          defaultTimeoutMs: 5000,
+          extraHeaders: { "CF-Access-Client-Id": "from-caller" },
+        })("/health");
+
+        assert.equal(requests[0].headers["cf-access-client-id"], "from-caller");
+      },
+    );
+  } finally {
+    if (previous === undefined) delete process.env.OPENVIKING_EXTRA_HEADERS;
+    else process.env.OPENVIKING_EXTRA_HEADERS = previous;
+  }
+});
+
+test("a 2xx that is not JSON is a failure, not a connected server", async () => {
+  // An authenticating gateway answers a header-less request with its login page at
+  // 200/text-html; a harness that reads only the status then reports a happy server
+  // while every request goes to the login page.
+  await withMockOpenViking(
+    (req, res) => {
+      res.writeHead(200, { "Content-Type": "text/html; charset=UTF-8" });
+      res.end("<html><head><title>302 Found</title></head><body></body></html>");
+    },
+    async (baseUrl) => {
+      const result = await createOvHttp({ baseUrl, apiKey: "test-key" }, { defaultTimeoutMs: 5000 })("/health");
+
+      assert.equal(result.ok, false);
+      assert.equal(result.status, 200);
+      assert.match(result.error.message, /non-JSON response/);
+    },
+  );
 });

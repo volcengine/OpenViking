@@ -4,7 +4,7 @@
 
 import pytest
 
-from openviking.models.embedder import VoyageDenseEmbedder
+from openviking.models.embedder import RetryEmbedder, VoyageDenseEmbedder
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
 
 
@@ -48,5 +48,6 @@ def test_voyage_get_embedder_returns_voyage_dense_embedder():
     )
 
     embedder = config.get_embedder()
-    assert isinstance(embedder, VoyageDenseEmbedder)
+    assert isinstance(embedder, RetryEmbedder)
+    assert isinstance(embedder.inner, VoyageDenseEmbedder)
     assert embedder.get_dimension() == 1024

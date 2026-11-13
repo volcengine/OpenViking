@@ -1,10 +1,9 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Helpers for copying and deleting vector records during namespace migration."""
+"""Helpers for transferring vector records when content is copied or moved."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from openviking.core.namespace import (
@@ -12,28 +11,15 @@ from openviking.core.namespace import (
     owner_fields_for_uri,
     owner_space_for_uri,
 )
-from openviking.server.identity import RequestContext, Role
+from openviking.server.identity import RequestContext
 from openviking.storage.abstract_overview import (
     rewrite_abstract_overview_for_transfer,
     rewrite_viking_uri_references,
 )
+from openviking.storage.acl import ACL_CONTEXT_FIELDS
 from openviking.storage.expr import And, Contains, Eq, Or, PathScope
 from openviking.storage.vector_ids import vector_record_id
-from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.uri import VikingURI
-
-_MAX_VECTOR_RECORDS_PER_SCOPE = 100_000
-
-
-@dataclass
-class VectorMigrationResult:
-    deleted: int = 0
-    failed: int = 0
-    warnings: list[str] = field(default_factory=list)
-
-
-def _root_ctx(account_id: str) -> RequestContext:
-    return RequestContext(user=UserIdentifier(account_id, "default"), role=Role.ROOT)
 
 
 def _normalize_uri(uri: str) -> str:
@@ -82,7 +68,11 @@ def rewrite_vector_record(
         raise ValueError("Vector record is missing a string URI")
 
     rewritten_uri = rewrite_transfer_uri(record_uri, source_uri, target_uri)
-    payload = {key: value for key, value in record.items() if key != "_score"}
+    payload = {
+        key: value
+        for key, value in record.items()
+        if key != "_score" and key not in ACL_CONTEXT_FIELDS
+    }
     owner_fields = owner_fields_for_uri(rewritten_uri)
     payload.update(
         {
@@ -125,77 +115,3 @@ def rewrite_vector_record(
                 target_scope_uri=target_uri,
             )
     return payload
-
-
-async def _records_in_scope(
-    vector_store: Any,
-    *,
-    account_id: str,
-    uri: str,
-    recursive: bool,
-) -> list[dict[str, Any]]:
-    filters = [Eq("uri", uri)]
-    if recursive:
-        filters.append(PathScope("uri", uri, depth=-1))
-    if getattr(vector_store, "mode", None) == "volcengine":
-        parent = VikingURI(uri).parent
-        if parent is not None and parent.uri != "viking://":
-            filters.append(PathScope("uri", parent.uri, depth=1))
-    else:
-        filters.append(Contains("uri", uri + "#"))
-
-    ctx = _root_ctx(account_id)
-    records = await vector_store.filter(
-        filter=And([Eq("account_id", account_id), Or(filters)]),
-        limit=_MAX_VECTOR_RECORDS_PER_SCOPE,
-        output_fields=["id", "uri"],
-        ctx=ctx,
-    )
-    return [
-        record
-        for record in records
-        if isinstance(record.get("uri"), str)
-        and uri_in_transfer_scope(record["uri"], uri, recursive=recursive)
-    ]
-
-
-async def delete_vector_records(
-    vector_store: Any,
-    *,
-    account_id: str,
-    uri: str,
-    recursive: bool = True,
-) -> VectorMigrationResult:
-    """Delete vector records for a legacy URI scope."""
-    result = VectorMigrationResult()
-    if (
-        not vector_store
-        or not hasattr(vector_store, "filter")
-        or not hasattr(vector_store, "delete")
-    ):
-        result.warnings.append(f"Skipped vector cleanup for {uri}: vector store is unavailable")
-        return result
-
-    uri = uri.rstrip("/")
-    ctx = _root_ctx(account_id)
-    try:
-        records = await _records_in_scope(
-            vector_store,
-            account_id=account_id,
-            uri=uri,
-            recursive=recursive,
-        )
-    except Exception as exc:
-        result.failed += 1
-        result.warnings.append(f"Failed to read vectors for cleanup {uri}: {exc}")
-        return result
-
-    ids = sorted({str(record["id"]) for record in records if record.get("id")})
-    if not ids:
-        return result
-    try:
-        result.deleted = int(await vector_store.delete(ids, ctx=ctx) or 0)
-    except Exception as exc:
-        result.failed += len(ids)
-        result.warnings.append(f"Failed to delete vectors for {uri}: {exc}")
-    return result

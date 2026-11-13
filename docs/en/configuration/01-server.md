@@ -17,6 +17,12 @@ openviking-server --config /path/to/ov.conf
 
 The server reads the file at startup. Restart the server after changing models, retrieval, storage, or `server` settings, then run `openviking-server doctor`.
 
+Studio's **Server configuration** page offers **Save and restart** for a single-worker `openviking-server` process. The existing ROOT-only `GET /api/v1/admin/configuration?source=file` includes restart capability and instance identity. Only ROOT can request a restart (`POST /api/v1/admin/restart`, body `{"revision":"<saved file revision>"}`). The server validates the current file and its revision, returns HTTP 202, drains active requests, stops its managed Bot, then replaces itself using the original interpreter, arguments, environment and working directory. Studio waits for a new service instance before reporting success. **Save configuration** alone continues to save without restarting.
+
+Multi-worker or embedded ASGI applications report restart as unsupported; restart these through the deployment platform. Startup can still fail because of external dependencies even after schema validation. If the address, port or ROOT credential changes, update Studio's connection settings to reconnect. Account and cluster overrides continue to take precedence over file defaults.
+
+Configurations containing environment references are read-only in the Studio form. Use file mode to edit the original text; quoted/unquoted references, escapes and formatting are saved as submitted. Windows `%VAR%` references and dollar/percent literals (including `\u0024` and `\u0025`) also use file mode to avoid introducing new references during form serialization.
+
 ## Configuration Structure
 
 This outline shows common top-level groups, not a runnable configuration. For a first deployment, start with the [minimal example](#minimal-example) and supply your models and credentials. Merge later snippets into the same `ov.conf`.
@@ -27,6 +33,7 @@ This outline shows common top-level groups, not a runnable configuration. For a 
   "vlm": {},
   "query_planner": {},
   "rerank": {},
+  "rules": {},
   "retrieval": {},
   "storage": {},
   "server": {},
@@ -38,7 +45,7 @@ This outline shows common top-level groups, not a runnable configuration. For a 
 }
 ```
 
-Optional sections use their defaults when omitted. Unknown fields in `ov.conf` and persisted account settings are ignored for upgrade compatibility. Known fields still validate types and values. Misspelled field names are also ignored, but the server logs a warning listing every field it did not apply.
+Optional sections use their defaults when omitted. Unknown fields in `ov.conf` and persisted account settings are ignored for upgrade compatibility, except in the `gateway` section. Known fields still validate types and values. Misspelled field names are also ignored, but the server logs a warning listing every field it did not apply.
 
 ## Top-Level Settings
 
@@ -50,6 +57,7 @@ Optional sections use their defaults when omitted. Unknown fields in `ov.conf` a
 | `vlm` | object | empty config | Content understanding, summaries, and memory extraction; configure a working model before using these capabilities |
 | `query_planner` | object / `null` | `null` | Model for retrieval intent analysis and recall rewriting. Falls back to `vlm` when omitted or empty; recall rewrite in `auto` mode requires a configured cluster `query_planner` or an account-level `query_planner` or `vlm` override |
 | `rerank` | object | disabled | Retrieval result reranking |
+| `rules` | object | empty config | Optional dedicated models for rule compilation and applicability matching |
 | `retrieval` | object | see below | Ranking and intent-analysis behavior |
 | `grep` | object | built-in defaults | Text search engine |
 | `glob` | object | built-in defaults | Path glob engine |
@@ -67,6 +75,7 @@ Optional sections use their defaults when omitted. Unknown fields in `ov.conf` a
 | `log` | object | console | Log level, format, and file output |
 | `telemetry` | object | disabled | OpenTelemetry tracing |
 | `oauth` | object | disabled | MCP OAuth 2.1 |
+| `gateway` | object | disabled | OpenViking Gateway, the model API gateway that adds OpenViking memory to API-key clients. Unknown keys in this section are errors. See the [configuration reference](../gateway/13-configuration.md#configuration-reference) |
 | `prompts` | object | built-in templates | Custom prompt template directory |
 | `ingest` | object | built-in defaults | Conversation-log ingestion |
 | `output_language_override` | string | `""` | Force summary/memory language; empty means auto-detect |
@@ -140,6 +149,96 @@ API-based `embedding`, `vlm`, `query_planner`, and `rerank` configurations reuse
 
 Changing the model or `dimension` can make existing vector collections incompatible and may require migration or reindexing.
 
+### `rules`
+
+Optional models and lifecycle settings for compiled Rules:
+
+```json
+{
+  "rules": {
+    "jev_rule_matcher": {
+      "provider": "typesafe",
+      "api_key": "${JEV_API_KEY}"
+    },
+    "compiler": {
+      "provider": "openai",
+      "model": "gpt-4o"
+    },
+    "compiler_context_window": 0
+  }
+}
+```
+
+| Field | Type / values | Default | Purpose |
+|---|---|---|---|
+| `jev_rule_matcher` | Jev Noul config / `null` | `null` | Jev Noul matcher for Scenario filtering and Rule applicability |
+| `compiler` | VLM config / `null` | `null` | Dedicated Rule compiler |
+| `compiler_context_window` | `0` or integer `>= 2048` | `0` | Compiler context window; `0` auto-detects with a conservative fallback |
+| `scenario_irrelevance_threshold` | number, `0.5`-`1.0` | `0.9` | Skip a Scenario only at or above this irrelevance probability |
+| `archived_retention_days` | integer, `>= 1` | `30` | Days before archived Rules are permanently removed |
+| `archived_cleanup_interval_seconds` | integer, `>= 60` | `2592000` | Archived-Rule cleanup interval |
+| `archived_cleanup_enabled` | boolean | `true` | Enable periodic archived-Rule cleanup |
+
+Rule compilation always calls the dedicated compiler, or the account VLM fallback,
+with `thinking=true`, overriding its configured default. Use a model that supports
+thinking mode, or compilation may fail.
+
+#### `rules.jev_rule_matcher`
+
+This block configures the independent Jev System One judgments used for Scenario
+filtering and Rule applicability. It does not configure retrieval reranking.
+
+| Field | Type / values | Default | Purpose |
+|---|---|---|---|
+| `provider` | `typesafe`, `vercel`, `openrouter`, `custom` | `typesafe` | Select endpoint and model defaults |
+| `api_key` | string | required | API key for the selected provider |
+| `api_base` | URL / `null` | provider default | Complete System One request URL; an explicit value is used unchanged |
+| `model` | string / `null` | provider default | Model name or endpoint ID; required for `custom` |
+| `timeout` | number | `30` | HTTP request timeout in seconds |
+| `extra_headers` | object / `null` | `null` | Additional HTTP request headers |
+| `log_payloads` | boolean | `false` | Log complete requests and responses; these may contain task and Rule content |
+
+| Provider | Default request URL | Default model | Notes |
+|---|---|---|---|
+| `typesafe` | `https://api.typesafe.ai/v1/systemone` | `jev-latest` | Direct TypeSafe access |
+| `vercel` | `https://ai-gateway.vercel.sh/typesafe/v1/systemone` | `typesafe-ai/jev` | Vercel AI Gateway TypeSafe-compatible API |
+| `openrouter` | `https://openrouter.ai/api/v1/systemone` | `jev-latest` | OpenRouter System One API |
+| `custom` | none | none | Requires both `api_base` and `model` |
+
+`api_base` and `model` override provider defaults independently. An explicit
+`api_base` is the complete POST URL and is never modified, including for `custom`.
+`extra_headers` extends provider headers and can override a provider default.
+Rule matching always uses independent Noul judgments, so it has no `mode`,
+`threshold`, or `max_input_tokens` setting. Configure Scenario filtering with
+`rules.scenario_irrelevance_threshold`; Rule applicability uses the threshold supplied
+as `rule_probability_threshold` in the Rule search request (default `0.65`).
+
+Rule status is `active`, `paused`, or `archived`. `PAUSE` suspends retrieval without
+expiry; `ARCHIVE` starts retention from `archived_at`. `RESTORE` reactivates a paused
+Rule. Compilation considers active and paused Rules; archived Rules are logically
+deleted, are not compiler candidates, and cannot be restored through Rule compilation.
+`ARCHIVE` requires explicit deletion, discard, or recycle-bin intent in the user's
+instruction; non-deletion deactivation requests use `PAUSE`.
+
+Rules live directly in `memories/rules/<scenario_id>/`: `abstract.md` stores Scenario
+metadata and `<atomic_id>.md` stores each Rule. See
+[Rules (Beta)](../concepts/17-rule-scenarios.md) for the storage format.
+
+When `jev_rule_matcher` is unconfigured, unavailable, fails, or returns invalid
+results, Scenario and Rule judgments pass the candidates without calling a VLM.
+Scenario diagnostics record `decision=pass`.
+Rules return `judge=pass`, a warning, and score `1.0` to pass the threshold; this score
+is not a model-estimated applicability probability. Agents still check applicability
+and exceptions against task facts. Compilation falls back from `compiler` to the
+account VLM. The former `rule_matcher` setting has been removed and is no longer read.
+
+Rule `applies_when` may be empty and defaults to an empty string. Empty means
+applicable in every situation unless `exception` holds. Candidates with neither an
+applicability condition nor an exception receive probability `1.0` directly.
+The Compiler prefers faithful, non-empty, decidable conditions derived from source
+objects, operations, prerequisites, and scenarios. It must not invent triggers or
+discard source restrictions. Empty does not mean unknown or inapplicable.
+
 ### `rerank`
 
 | Field | Type / values | Default | Purpose |
@@ -147,20 +246,21 @@ Changing the model or `dimension` can make existing vector collections incompati
 | `provider` | `vikingdb`, `cohere`, `openai`, `litellm`, `jev` / `null` | `null` | Rerank service; inferred from credentials when omitted |
 | `model` | string / `null` | `null` | OpenAI-compatible, LiteLLM, or Jev rerank model |
 | `mode` | `noul`, `choice`, or `null` | `noul` | Jev rerank mode; `null` also uses `noul` |
-| `threshold` | number | `0.1` | Minimum score considered relevant |
+| `threshold` | number | `0.1` | Minimum rerank score considered relevant; filters only model rerank scores, never vector scores, and a request `score_threshold` overrides it |
 | `max_input_tokens` | integer; `0` or `>= 128` | `0` | Maximum estimated tokens per query-document pair; `0` disables truncation |
 | `log_payloads` | boolean | `false` | Log complete rerank request and response payloads; may expose query and document content |
 
 Rerank has no separate `enabled` field. It becomes available when the required provider credentials are configured.
 
-`jev` supports direct TypeSafe access (`https://api.typesafe.ai`, model `jev-latest`) and Vercel AI Gateway's TypeSafe-compatible endpoint (`https://ai-gateway.vercel.sh/typesafe`, model `typesafe-ai/jev`) through the existing `api_base` and `model` fields; both speak the same protocol. Its default `noul` mode scores each candidate independently. The optional `choice` mode compares all candidates and returns relative probabilities; set `threshold` to `0` when using it. Setting `provider` explicitly requires the credentials that provider needs: `ak` and `sk` for `vikingdb`, `api_key` for `cohere` and `jev`, `api_key` and `api_base` for `openai`, `model` for `litellm`. An incomplete block is rejected when the configuration loads.
+`jev` supports direct TypeSafe access (`https://api.typesafe.ai/v1/systemone`, model `jev-latest`) and Vercel AI Gateway's TypeSafe-compatible endpoint (`https://ai-gateway.vercel.sh/typesafe/v1/systemone`, model `typesafe-ai/jev`) through the existing `api_base` and `model` fields; both speak the same protocol. For rerank, `api_base` may be either the service root or the complete System One URL; `/v1/systemone` is appended when absent. Its default `noul` mode scores each candidate independently. The optional `choice` mode compares all candidates and returns relative probabilities; set `threshold` to `0` when using it. Setting `provider` explicitly requires the credentials that provider needs: `ak` and `sk` for `vikingdb`, `api_key` for `cohere` and `jev`, `api_key` and `api_base` for `openai`, `model` for `litellm`. An incomplete block is rejected when the configuration loads.
 
 ## Retrieval Settings
 
 ```json
 {
   "retrieval": {
-    "enable_intent": true
+    "enable_intent": true,
+    "apply_rerank_to_context": false
   }
 }
 ```
@@ -170,8 +270,9 @@ Rerank has no separate `enabled` field. It becomes available when the required p
 | Field | Type / values | Default | Purpose |
 |---|---|---|---|
 | `enable_intent` | boolean | `true` | Run intent analysis/query planning when `session_id` is present |
+| `apply_rerank_to_context` | boolean | `false` | Rerank `search(mode="context")` candidates with the configured `rerank` model |
 
-Search and Find requests default to `limit: 10`; override the limit on each API or SDK request. `retrieval.enable_intent` controls LLM query planning for session-aware Search, while result reranking is enabled only when `rerank` has a usable provider configuration.
+Search and Find requests default to `limit: 10`; override the limit on each API or SDK request. `retrieval.enable_intent` controls LLM query planning for session-aware Search, while result reranking is enabled only when `rerank` has a usable provider configuration. Context mode recalls with Find's vector scores; with `retrieval.apply_rerank_to_context` and a usable `rerank`, it also reranks its merged candidates once against the original query and its expansions before quotas and the token budget apply, which adds one rerank call per request.
 
 ## Storage Settings
 
@@ -189,6 +290,9 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
     "parse_output": {
       "mode": "agfs"
     }
+  },
+  "parsers": {
+    "download_temp_dir": "/data/openviking/parser-tmp"
   }
 }
 ```
@@ -199,11 +303,167 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
 |---|---|---|---|
 | `workspace` | path | `"./data"` | OpenViking workspace |
 | `agfs.backend` | `local`, `memory`, `s3` | `local` | File and metadata backend |
+| `agfs.pathlock.provider` | `filesystem`, `memory`, `sqlite`, `postgres`, `cache` | `filesystem` | Path lock storage; `postgres` uses PostgreSQL directly, `cache` uses Redis |
+| `agfs.pathlock.sqlite_path` | absolute local file path | `{workspace}/_system/pathlock/pathlock.db` for `sqlite` | Shared SQLite lock database; optional override |
+| `agfs.pathlock.postgres_dsn_env` | environment variable name / `null` | `null` | Required for `postgres`; names the server environment variable containing the PostgreSQL DSN |
 | `vectordb.backend` | `local`, `cuvs`, `http`, `volcengine`, `vikingdb` | `local` | Vector database backend |
 | `vectordb.dimension` | integer | follows Embedding | Vector collection dimension |
 | `parse_output.mode` | `agfs`, `local` | `agfs` | Backend for intermediate parser artifacts |
 | `parse_output.local_root` | path or `null` | system temp directory | Root directory used by local parser artifacts |
 | `skip_process_lock` | boolean | `false` | Skip the workspace process lock; use only when accepting concurrent-write risk |
+
+For same-machine path locking on a local disk without recursive business-directory scans, set
+`storage.agfs.pathlock` to `{"provider":"sqlite"}`. The database defaults to
+`{storage.workspace}/_system/pathlock/pathlock.db`, resolved to an absolute path
+from the final workspace when initializing the runtime binding. An explicit absolute
+`sqlite_path` takes precedence. The database parent directory is created automatically.
+Omitting `sqlite_path` or setting it to `null` also uses this default when constructing
+`RAGFSBindingClient(config_path=..., config={"service_name": ...})` directly.
+Every participating process must access the same actual local database file,
+with the same top-level `service_name` and lock expiry setting. Containers on the
+same host must share that local file; identical paths in separate container
+filesystems refer to independent databases and do not coordinate locks.
+SQLite stores authoritative lock tokens and atomically checks Exact/Tree conflicts
+using its path index. Blocking database work runs off the async executor.
+SQLite waits up to 100 ms per attempt for transient database writer contention,
+including when the logical lock wait timeout is zero. The provider retries only
+Busy, with three total attempts and 1 ms / 4 ms backoff. Database waits can total
+about 300 ms, plus 5 ms backoff and execution/scheduling overhead. Exhausted
+retries still report Busy to the manager; logical lock Conflict is not retried. WAL uses
+`synchronous=FULL` to preserve committed lock tokens after a crash, at the cost of
+additional synchronization I/O compared with `NORMAL`.
+Lease heartbeats refresh owned paths in one SQLite transaction (bounded batches
+for large leases). `stale_locks_removed` includes tokens recovered by committed
+atomic SQLite/PostgreSQL/Redis acquisitions; failed transactions do not increment the count.
+
+SQLite acquisitions completely delete expired tokens belonging to other owners
+that conflict with the request: the target path, ancestor Tree locks, and all
+descendants of a requested Tree lock. Cleanup and acquisition share one transaction,
+so a previous owner cannot revive these tokens by refreshing them after takeover.
+Opportunistic global cleanup is limited to 256 tokens per acquisition; conflicting
+cleanup can exceed that limit and costs more for large expired subtrees.
+
+Do not place the database on EFS, NFS, or SMB. SQLite WAL requires participants
+on the same machine and is not supported on network filesystems; frequent lock
+updates also add synchronization I/O. If `storage.workspace` is on EFS, the
+default database path is on EFS too. Moving it to each container's local disk
+creates independent lock authorities and cannot coordinate replicas.
+
+#### PostgreSQL PathLock
+
+For multiple containers or hosts sharing EFS, use PostgreSQL PathLock or shared Redis PathLock.
+PostgreSQL coordinates participating processes directly without Redis or a top-level
+`cache` configuration. Merge this minimal fragment into your server's `ov.conf`:
+
+```json
+{
+  "service_name": "production",
+  "storage": {
+    "agfs": {
+      "pathlock": {
+        "provider": "postgres",
+        "postgres_dsn_env": "OV_POSTGRES_DSN",
+        "lock_expire_secs": 30.0
+      }
+    }
+  }
+}
+```
+
+Set the DSN in every server and worker environment before startup:
+
+```sh
+export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=openviking password=YOUR_PASSWORD sslmode=require'
+```
+
+Use PostgreSQL 13+ with UTF8 server encoding. All participants protecting the same
+files must use the same writable primary, database, top-level `service_name`, provider,
+and expiry duration. Different service names create independent lock namespaces;
+read replicas cannot coordinate lock operations. No PostgreSQL extension is required.
+`lock_expire_secs` must be at least `1.0` second and defaults to `30.0`.
+
+`postgres_dsn_env` is a nonempty environment variable name, not the DSN itself.
+Both PostgreSQL URLs and key/value DSNs are accepted. Credentials are read at
+initialization; restart every server and worker after rotating them.
+For remote connections, use `sslmode=require`; the native TLS connector verifies
+the certificate and hostname using the system trust store. Use `sslmode=disable`
+only for a disposable local test database.
+
+On first startup, the provider creates `public.ov_pathlock_tokens`,
+`public.path_prefix_2048(text)`, and lookup, expiry, and subtree indexes.
+The initialization role needs CONNECT to the database and USAGE/CREATE on the
+`public` schema. The runtime role needs SELECT, INSERT, UPDATE, DELETE on the
+table and EXECUTE on the helper. A migration role can pre-provision these objects
+and grant runtime permissions before startup. Pre-provision the helper with:
+
+```sql
+CREATE FUNCTION public.path_prefix_2048(text) RETURNS bytea
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+AS 'SELECT pg_catalog.substring(pg_catalog.convert_to($1, ''UTF8''), 1, 2048)';
+```
+
+Initialization creates the helper only when absent; an existing helper must use
+this definition. Upgrading the earlier `(namespace,path)` primary key requires
+the table owner and all old provider instances to be stopped. Index creation
+is transactional and subject to DDL timeouts; pre-provision indexes for large tables.
+Source installations must rebuild the Python native binding when upgrading its
+PostgreSQL support. Rust integrations enable `ragfs/postgres`.
+
+To verify coordination, start two processes with the same settings. Hold a Tree
+lease in one and request an Exact lease below that root in the other; the second
+acquisition must conflict until release or expiry takeover. PostgreSQL can lock
+nonexistent logical paths without creating business directories. Explicit-path
+snapshot commits use the runtime provider's handle mode to select Tree locks for
+missing PostgreSQL targets; see [snapshot semantics](../guides/15-snapshot.md).
+The primary's clock determines lock timestamps and expiry; batches commit in full
+or roll back, and holders renew and release independently.
+
+Operations within one namespace are serialized; measure acquisition and renewal
+at the intended concurrency. Prevent split brain and account for committed-lock
+loss during failover with asynchronous replication. PathLock does not provide
+storage-side fencing after lease loss or change CachedFileSystem's single-writer
+requirement, local vector storage's process lock, or other backend concurrency limits.
+
+| Symptom | Check |
+| --- | --- |
+| Unknown `postgres` provider | Rebuild or upgrade the native binding |
+| Missing DSN | Export the configured variable in every server and worker environment |
+| Schema initialization fails | Check UTF8 encoding, permissions, object ownership, and migration duration |
+| Participants do not conflict | Check primary, database, service name, provider, and expiry settings |
+| Database `Busy` | Check database contention and load; distinguish it from a logical path conflict |
+
+#### Redis PathLock
+
+For Redis coordination,
+set `storage.agfs.pathlock.provider="cache"` and top-level `cache.provider="redis"`.
+All replicas must use the same Redis deployment, top-level `service_name`, and
+lock expiry setting. See the [shared Redis configuration example](../guides/01-configuration.md).
+With either PathLock provider, shared QueueFS must also use a backend suitable for that deployment, such as
+`storage.agfs.queuefs.backend="cache"`; changing PathLock alone does not change
+the default SQLite queue backend.
+
+#### Provider switches and upgrades
+
+Stop all participating processes and renewal tasks before switching providers:
+Filesystem, SQLite, PostgreSQL, and Redis maintain independent lock authorities.
+Do not mix providers for processes writing the same files. Do not delete the SQLite database,
+WAL, or SHM files while participants are running. Crashed owners' tokens become
+eligible for takeover after `lock_expire_secs` (default 30 seconds). This setting
+does not change the workspace process lock or other backend concurrency constraints.
+
+Holder-lease upgrades also require stopping all lock participants, including queue
+workers, before deploying the new native binding. The SQLite provider adds a
+`holders` column automatically. New code reads legacy owner tokens, but old
+processes cannot maintain holder records; do not mix versions against the same
+database, filesystem locks, or Redis namespace. Retain durable queued handoffs.
+Each lease renews and releases its own holder. Native adoption transfers only a
+live source holder. A missing or expired source, a historic payload without a
+holder, or a provider change requires recovery through `adopt_or_reacquire`,
+which validates account and coverage and acquires a fresh holder under the
+payload's original owner after a full conflict check.
+Replaying a payload through recovery may create multiple holders, so consumers must make
+business writes idempotent. With a crashed sole holder, foreign acquisitions wait
+until its configured expiry; the recovery helper can recover its delivery after expiry.
 
 Remote backends also require endpoint, bucket/collection, credentials, and timeout fields. See [Configuration](../guides/01-configuration.md#storage) for complete examples.
 
@@ -211,6 +471,14 @@ Remote backends also require endpoint, bucket/collection, credentials, and timeo
 The same worker must commit the required bytes to the formal resource tree before
 enqueueing downstream work. Artifacts are temporary and are removed after the
 content commit; provision `local_root` with enough space for concurrent imports.
+
+### `parsers`
+
+| Field | Type / common values | Default | Purpose |
+|---|---|---|---|
+| `download_temp_dir` | path or `null` | system temp directory | Temporary directory for built-in parser downloads, Git checkouts, and archive extraction |
+
+When configured, parsers create temporary directories with prefixes such as `ov_git_` and `ov_zip_` below this directory. When unset, the system temporary directory is used.
 
 ## Queue Worker Settings
 
@@ -306,7 +574,7 @@ When `base_url` is configured, OV sends the current user's OV API key in `X-API-
 | `with_bot` | boolean | `false` | Enable the VikingBot API proxy |
 | `bot_api_url` | URL | `http://localhost:18790` | VikingBot OpenAPI endpoint |
 | `public_base_url` | URL / `null` | `null` | Externally visible base URL |
-| `upload_signed_ttl_seconds` | integer | `600` | Signed upload URL lifetime |
+| `upload_signed_ttl_seconds` | integer | `600` | Signed upload and download URL lifetime |
 | `temp_upload.default_mode` | `"local"` / `"shared"` | `"local"` | Temporary upload storage |
 
 ### Encryption and API Key Hashing

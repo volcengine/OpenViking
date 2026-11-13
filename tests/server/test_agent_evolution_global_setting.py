@@ -7,7 +7,9 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 import pytest_asyncio
+from pydantic import ValidationError
 
+from openviking.config.scope import ConfigScope
 from openviking.pyagfs import AGFSNotFoundError
 from openviking.server.app import create_app
 from openviking.server.auth.plugins import DevAuthPlugin
@@ -18,6 +20,7 @@ from openviking.service.core import OpenVikingService
 from openviking.service.session_service import SessionService
 from openviking.session import Session
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
 
 class _FakeAGFS:
@@ -50,28 +53,12 @@ class _FakeAGFS:
         self.files.pop(path, None)
         return {}
 
-    def pathlock_acquire_exact(self, ctx, path, timeout_secs, owner_lease_ref):
-        del ctx
-        del path
-        del timeout_secs
-        del owner_lease_ref
+    async def pathlock_acquire_batch_async(self, *args):
         return {"lease_ref": "test-lease"}
 
     def pathlock_release(self, ctx, lease):
         del ctx
         del lease
-
-
-class _FakeAclManager:
-    def __init__(self):
-        self.runtime_config = None
-
-    def set_runtime_config_manager(self, runtime_config) -> None:
-        self.runtime_config = runtime_config
-
-    async def is_enabled(self, account_id: str) -> bool:
-        setting = await self.runtime_config.get_account(account_id, "acl")
-        return setting.enabled if setting is not None else False
 
 
 class _FakeRuntimeConfig:
@@ -83,28 +70,23 @@ class _FakeRuntimeConfig:
 
 
 class _FakeApiKeyManager:
-    """Minimal admin-gate stand-in: account existence + user refresh no-ops."""
+    """Minimal admin-gate stand-in."""
 
     def __init__(self, account_ids):
         self._account_ids = list(account_ids)
 
-    async def refresh_accounts_from_store(self):
-        return None
-
-    async def refresh_account_users_from_store(self, account_id):
-        return None
-
-    def ensure_account_active(self, account_id):
+    async def get_account(self, account_id):
         if account_id not in self._account_ids:
-            raise AssertionError(f"unexpected account: {account_id}")
+            return None
+        return {"account_id": account_id, "status": "active"}
 
-    def get_accounts(self):
+    async def list_accounts(self):
         return [{"account_id": aid} for aid in self._account_ids]
 
 
 @pytest.fixture
 def fake_viking_fs():
-    return SimpleNamespace(agfs=_FakeAGFS(), acl_manager=_FakeAclManager())
+    return SimpleNamespace(agfs=_FakeAGFS())
 
 
 @pytest_asyncio.fixture
@@ -136,7 +118,6 @@ async def settings_http(fake_viking_fs, monkeypatch):
     await runtime_config.initialize()
     sessions = SessionService(viking_fs=fake_viking_fs)
     sessions.set_runtime_config_manager(runtime_config)
-    fake_viking_fs.acl_manager.set_runtime_config_manager(runtime_config)
     service = SimpleNamespace(
         sessions=sessions,
         viking_fs=fake_viking_fs,
@@ -200,12 +181,14 @@ async def test_server_agent_evolution_updates_initialized_runtime_baseline():
         OpenVikingConfigSingleton.reset_instance()
 
 
-def test_server_default_memory_policy_is_configured_on_session_service(
-    fake_viking_fs, monkeypatch
-):
+def test_server_default_memory_policy_is_configured_on_session_service(fake_viking_fs, monkeypatch):
     monkeypatch.setattr(
         "openviking.service.session_service.get_default_registry",
         lambda: SimpleNamespace(list_names=lambda **_: ["profile"]),
+    )
+    monkeypatch.setattr(
+        "openviking.server.app.get_openviking_config",
+        lambda: OpenVikingConfig(),
     )
     sessions = SessionService(viking_fs=fake_viking_fs)
     service = SimpleNamespace(sessions=sessions)
@@ -219,13 +202,18 @@ def test_server_default_memory_policy_is_configured_on_session_service(
         "self": {"enabled": True},
         "peer": {"enabled": True},
         "memory_types": ["profile"],
+        "working_memory": {"enabled": False},
     }
 
 
 async def test_auto_commit_defaults_apply_to_new_sessions(fake_viking_fs, monkeypatch):
+    ov_config = OpenVikingConfig()
+    monkeypatch.setattr("openviking.server.app.get_openviking_config", lambda: ov_config)
+    with pytest.raises(ValidationError, match="must be 0 or at least 300"):
+        ServerConfig(user_config_defaults={"auto_commit_policy": {"idle_timeout_seconds": 299}})
     sessions = SessionService(viking_fs=fake_viking_fs)
     config = ServerConfig(
-        user_config_defaults={"auto_commit_policy": {"idle_timeout_seconds": 7200}}
+        user_config_defaults={"auto_commit_policy": {"idle_timeout_seconds": 300}}
     )
     create_app(
         config=config,
@@ -285,44 +273,6 @@ def test_session_positional_usage_reporter_remains_compatible():
     assert session._agent_evolution_enabled_provider is None
 
 
-async def test_account_settings_admin_api_reads_and_updates_effective_value(
-    settings_http,
-):
-    client, service = settings_http
-    service.sessions.set_agent_evolution_config(AgentEvolutionConfig(enabled=False))
-
-    initial = await client.get("/api/v1/admin/accounts/default/settings")
-    assert initial.status_code == 200, initial.text
-    assert initial.json()["result"] == {
-        "account_id": "default",
-        "settings": {
-            "agent_evolution": {"enabled": False},
-            "acl": {"enabled": False},
-        },
-        "overrides": {},
-    }
-
-    updated = await client.patch(
-        "/api/v1/admin/accounts/default/settings",
-        json={
-            "agent_evolution": {"enabled": True},
-            "acl": {"enabled": True},
-        },
-    )
-    assert updated.status_code == 200, updated.text
-    assert updated.json()["result"]["settings"]["agent_evolution"]["enabled"] is True
-    assert updated.json()["result"]["settings"]["acl"] == {"enabled": True}
-    assert updated.json()["result"]["overrides"] == {
-        "agent_evolution": {"enabled": True},
-        "acl": {"enabled": True},
-    }
-    assert (
-        await service.runtime_config_manager.get_account("default", "agent_evolution")
-    ).enabled
-    assert (await service.runtime_config_manager.get_account("default", "acl")).enabled
-    assert await service.viking_fs.acl_manager.is_enabled("default")
-
-
 async def test_legacy_account_settings_preserves_null_and_empty_object_semantics(
     settings_http,
 ):
@@ -372,6 +322,7 @@ async def test_account_configuration_exposes_three_state_layer(settings_http):
         "settings": {
             "github": {"token": "account-token"},
             "acl": {"enabled": True},
+            "agent_evolution": {"enabled": False},
         },
     }
 
@@ -381,7 +332,8 @@ async def test_account_configuration_exposes_three_state_layer(settings_http):
     )
     assert removed.status_code == 200, removed.text
     assert removed.json()["result"]["settings"] == {
-        "github": {"token": "account-token"}
+        "github": {"token": "account-token"},
+        "agent_evolution": {"enabled": False},
     }
 
     from openviking.server.auth import get_request_context
@@ -403,7 +355,10 @@ async def test_account_configuration_exposes_three_state_layer(settings_http):
     try:
         visible = await client.get(url)
         assert visible.status_code == 200, visible.text
-        assert visible.json()["result"]["settings"] == {"github": {"token": "account-token"}}
+        assert visible.json()["result"]["settings"] == {
+            "github": {"token": "account-token"},
+            "agent_evolution": {"enabled": False},
+        }
         denied = await client.patch(
             url, json={"settings": {"vlm": None, "embedding": {"max_retries": 5}}}
         )
@@ -417,26 +372,32 @@ async def test_account_configuration_exposes_three_state_layer(settings_http):
 
 async def test_cluster_agent_evolution_override_is_account_fallback(settings_http):
     client, service = settings_http
+    url = "/api/v1/admin/accounts/default/configuration"
+    assert (await client.get(url)).json()["result"]["settings"]["agent_evolution"] == {
+        "enabled": False
+    }
 
     updated = await client.patch(
         "/api/v1/admin/configuration",
         json={"settings": {"agent_evolution": {"enabled": True}}},
     )
     assert updated.status_code == 200, updated.text
-    assert updated.json()["result"]["settings"] == {
-        "agent_evolution": {"enabled": True}
-    }
+    assert updated.json()["result"]["settings"] == {"agent_evolution": {"enabled": True}}
     assert await service.sessions.get_agent_evolution_enabled("default")
+    assert (await client.get(url)).json()["result"]["settings"]["agent_evolution"] == {
+        "enabled": True
+    }
 
-    await service.runtime_config_manager.patch_account(
-        "default", {"agent_evolution": {"enabled": False}}
-    )
+    disabled = await client.patch(url, json={"settings": {"agent_evolution": {"enabled": False}}})
+    assert disabled.status_code == 200, disabled.text
+    assert disabled.json()["result"]["settings"]["agent_evolution"] == {"enabled": False}
     assert not await service.sessions.get_agent_evolution_enabled("default")
 
-    await service.runtime_config_manager.patch_account(
-        "default", {"agent_evolution": None}
-    )
+    reset = await client.patch(url, json={"settings": {"agent_evolution": None}})
+    assert reset.status_code == 200, reset.text
+    assert reset.json()["result"]["settings"]["agent_evolution"] == {"enabled": True}
     assert await service.sessions.get_agent_evolution_enabled("default")
+    assert await service.runtime_config_manager.get_settings(ConfigScope.account("default")) == {}
 
 
 async def test_legacy_admin_configuration_routes_are_deprecated(settings_http):
@@ -448,20 +409,20 @@ async def test_legacy_admin_configuration_routes_are_deprecated(settings_http):
     legacy = schema["paths"]["/api/v1/admin/accounts/{account_id}/settings"]
     assert legacy["get"]["deprecated"]
     assert legacy["patch"]["deprecated"]
-    assert not schema["paths"][
-        "/api/v1/admin/accounts/{account_id}/configuration"
-    ]["patch"].get("deprecated", False)
+    assert not schema["paths"]["/api/v1/admin/accounts/{account_id}/configuration"]["patch"].get(
+        "deprecated", False
+    )
     assert "/api/v1/admin/configuration" in schema["paths"]
     assert "/api/v1/admin/settings" not in schema["paths"]
 
 
-async def test_account_settings_admin_api_rejects_non_allowlisted_fields(
+async def test_account_configuration_rejects_non_allowlisted_fields(
     settings_http,
 ):
     client, _ = settings_http
     response = await client.patch(
-        "/api/v1/admin/accounts/default/settings",
-        json={"root_api_key": "not-allowed"},
+        "/api/v1/admin/accounts/default/configuration",
+        json={"settings": {"root_api_key": "not-allowed"}},
     )
 
     assert response.status_code == 400
@@ -485,9 +446,7 @@ async def test_agent_evolution_endpoint_keeps_name_and_uses_account_settings(
 
     assert response.status_code == 200, response.text
     assert response.json()["result"]["enabled"] is True
-    assert (
-        await service.runtime_config_manager.get_account("default", "agent_evolution")
-    ).enabled
+    assert (await service.runtime_config_manager.get_account("default", "agent_evolution")).enabled
 
 
 def test_deprecated_user_agent_evolution_config_is_not_persisted():
@@ -495,25 +454,3 @@ def test_deprecated_user_agent_evolution_config_is_not_persisted():
 
     assert config.agent_evolution.enabled is True
     assert "agent_evolution" not in config.model_dump(exclude_none=True)
-
-
-async def test_manual_extract_respects_account_setting(fake_viking_fs):
-    extract = AsyncMock(return_value=[])
-    compressor = SimpleNamespace(extract_long_term_memories=extract)
-    service = SessionService(
-        viking_fs=fake_viking_fs,
-        session_compressor=compressor,
-    )
-    runtime_config = _FakeRuntimeConfig()
-    runtime_config.values[("default", "agent_evolution")] = SimpleNamespace(enabled=True)
-    service.set_runtime_config_manager(runtime_config)
-    session = SimpleNamespace(
-        uri="viking://user/default/sessions/test-session",
-        messages=[],
-    )
-    service.get = AsyncMock(return_value=session)
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
-
-    await service.extract("test-session", ctx)
-
-    assert extract.await_args.kwargs["agent_evolution_enabled"] is True

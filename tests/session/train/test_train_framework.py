@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,6 +17,7 @@ from openviking.message import Message, TextPart
 from openviking.session.memory.dataclass import StoredLink
 from openviking.session.train import (
     Case,
+    CriterionResult,
     Experience,
     ExperienceSet,
     ListCaseLoader,
@@ -746,6 +748,9 @@ async def test_batch_policy_trainer_trains_from_rollout_batch():
 
 @pytest.mark.asyncio
 async def test_streaming_policy_trainer_scopes_concurrent_submit_results_by_source_trajectory():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
     from openviking.session.train import (
         PolicyPlanItem,
         StreamingPolicyTrainer,
@@ -818,10 +823,15 @@ async def test_streaming_policy_trainer_scopes_concurrent_submit_results_by_sour
     class PassthroughUpdater:
         async def apply(self, plan, policy_set, context, *, transaction_handle=None):
             del context, transaction_handle
+            failed_uri = f"{policy_set.root_uri}/case_a.md"
+            error = f"{failed_uri}: write failed"
             return PolicyApplyResult(
                 updated_policy_set=policy_set,
-                written_uris=[item.target_uri for item in plan.items if item.target_uri],
-                errors=[],
+                written_uris=[
+                    item.target_uri for item in plan.items if item.target_uri != failed_uri
+                ],
+                errors=[error],
+                metadata={"errors_by_uri": {failed_uri: [error]}},
             )
 
     def make_case(name: str) -> Case:
@@ -833,8 +843,13 @@ async def test_streaming_policy_trainer_scopes_concurrent_submit_results_by_sour
             rubric=case.rubric,
         )
 
+    policy_set = _policy_set()
+    policy_set.viking_fs._async_agfs = SimpleNamespace(
+        pathlock_acquire_tree=AsyncMock(return_value="lease"),
+        pathlock_release=AsyncMock(),
+    )
     trainer = StreamingPolicyTrainer(
-        policy_set=_policy_set(),
+        policy_set=policy_set,
         rollout_analyzer=CaseAwareAnalyzer(),
         gradient_estimator=NewExpEstimator(),
         policy_optimizer=LinkingOptimizer(),
@@ -866,8 +881,12 @@ async def test_streaming_policy_trainer_scopes_concurrent_submit_results_by_sour
     assert {item.target_name for item in first.batch_result.plan.items} == {"case_a", "case_b"}
     assert [item.target_name for item in first.plan.items] == ["case_a"]
     assert [item.target_name for item in second.plan.items] == ["case_b"]
-    assert first.apply_result.written_uris == ["viking://user/u/memories/experiences/case_a.md"]
+    assert first.apply_result.written_uris == []
+    assert first.apply_result.errors == [
+        "viking://user/u/memories/experiences/case_a.md: write failed"
+    ]
     assert second.apply_result.written_uris == ["viking://user/u/memories/experiences/case_b.md"]
+    assert second.apply_result.errors == []
 
     assert await trainer.close() is None
 
@@ -1228,6 +1247,9 @@ class FakeSessionCommitClient:
 @pytest.mark.asyncio
 async def test_session_commit_policy_trainer_records_commit_trace_id():
     from openviking.session.train import SessionCommitPolicyTrainer
+    from openviking.session.train.components.rollout_artifact_recorder import (
+        _build_commit_messages,
+    )
 
     client = FakeSessionCommitClient()
     trainer = SessionCommitPolicyTrainer(
@@ -1244,6 +1266,40 @@ async def test_session_commit_policy_trainer_records_commit_trace_id():
         evaluation=RubricEvaluation(passed=True, score=1.0, criterion_results=[], feedback=[]),
         metadata={"data_split": "unit", "task_no": 7, "execution_metadata": {"epoch": 3}},
     )
+    report = {
+        "reward": 1.0,
+        "action_checks": [
+            {"action": {"name": "cancel", "arguments": {"id": "r1"}}, "action_match": True}
+        ],
+        "db_check": {"db_match": True},
+        "info": {"note": "reservation cancelled"},
+    }
+    raw_report = json.dumps(report)
+    rollout.evaluation.metadata["evaluation_result"] = report
+    rollout.evaluation.feedback = [raw_report, "Distinct evaluator feedback."]
+    rollout.evaluation.criterion_results = [
+        CriterionResult(
+            criterion_name="tau2_reward",
+            passed=True,
+            score=1.0,
+            feedback=[raw_report, "Action verified."],
+            evidence=[json.dumps(report, indent=2), "Independent evidence."],
+        )
+    ]
+    rollout.messages.append(
+        Message(
+            id="tau2-reward",
+            role="user",
+            parts=[
+                TextPart(
+                    text=f"task_success: True\ntask_reward: 1.0\nevaluation report: {raw_report}"
+                )
+            ],
+        )
+    )
+    for message in rollout.messages:
+        message.created_at = "2026-10-12T12:00:00+00:00"
+    original = copy.deepcopy(rollout)
 
     result = await trainer.train_rollouts([rollout], _policy_set())
 
@@ -1264,6 +1320,28 @@ async def test_session_commit_policy_trainer_records_commit_trace_id():
             },
         )
     ]
+    submitted = client.messages[commit_result["session_id"]]
+    assert submitted == _build_commit_messages(rollout)
+    assert len(submitted) == 3  # CaseSpec, conversation, one OutcomeEvaluation.
+    payload = json.loads(
+        submitted[-1]["parts"][0]["text"].split("```json\n", 1)[1].rsplit("```", 1)[0]
+    )["evaluation"]
+    assert payload["metadata"]["evaluation_result"] == report
+    assert payload["feedback"] == ["Distinct evaluator feedback."]
+    assert payload["criterion_results"][0]["feedback"] == ["Action verified."]
+    assert payload["criterion_results"][0]["evidence"] == [
+        "Independent evidence.",
+        "See evaluation.metadata.evaluation_result.",
+    ]
+    assert rollout == original
+
+    # Additional information is not a duplicate: keep the complete reward
+    # message rather than dropping details not present in the canonical report.
+    rollout.messages[-1].parts[0].text += "\nAdditional failure detail."
+    assert (
+        _build_commit_messages(rollout)[-2]["parts"][0]["text"]
+        == rollout.messages[-1].parts[0].text
+    )
 
 
 @pytest.mark.asyncio

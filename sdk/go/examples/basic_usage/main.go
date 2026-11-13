@@ -60,9 +60,7 @@ func main() {
 	fmt.Printf("   resource=%v\n", resource)
 
 	fmt.Println("3. Wait for background processing")
-	waitResult, err := client.WaitProcessed(ctx, &openviking.WaitProcessedOptions{
-		Timeout: openviking.Float64(120),
-	})
+	waitResult, err := client.WaitProcessed(ctx)
 	if err != nil {
 		fmt.Printf("   wait warning: %v\n", err)
 	} else {
@@ -184,8 +182,7 @@ func main() {
 	fmt.Printf("   validation=%v\n", validation)
 
 	skill, err := client.AddSkill(ctx, skillDir, &openviking.AddSkillOptions{
-		Wait:    true,
-		Timeout: openviking.Float64(120),
+		Wait: true,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -214,8 +211,7 @@ func main() {
 
 	updateDemoSkill(skillDir, skillName, "Updated by Go SDK smoke test.")
 	updatedSkill, err := client.UpdateSkill(ctx, skillName, skillDir, &openviking.UpdateSkillOptions{
-		Wait:    true,
-		Timeout: openviking.Float64(120),
+		Wait: true,
 		SourceMetadata: map[string]any{
 			"type":      "example",
 			"operation": "basic_usage",

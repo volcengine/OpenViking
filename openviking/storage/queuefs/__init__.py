@@ -1,5 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
+from .content_write_msg import ContentWriteMsg
+from .content_write_processor import ContentWriteProcessor
 from .embedding_msg import EmbeddingMsg
 from .embedding_queue import EmbeddingQueue
 from .named_queue import NamedQueue, QueueError, QueueStatus
@@ -29,4 +31,6 @@ __all__ = [
     "SemanticMsg",
     "SemanticProcessor",
     "SessionCommitMsg",
+    "ContentWriteMsg",
+    "ContentWriteProcessor",
 ]

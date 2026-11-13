@@ -37,6 +37,8 @@ MAX_EXCLUDE_URIS = 200
 MAX_PLANNED_QUERIES = 3
 READ_CONCURRENCY = 8
 OTHER_PEER_OVERFETCH = 4
+# Candidates reranked per served slot, as HierarchicalRetriever.RERANK_CANDIDATE_MULTIPLIER.
+RERANK_CANDIDATE_MULTIPLIER = 2
 
 ORIGIN_ORDER: Tuple[str, ...] = ("actor_peer", "self", "other_peer")
 
@@ -78,8 +80,9 @@ FULL_BODY_ABSTRACT_CATEGORIES: frozenset[str] = frozenset(
 # reading resource bodies.
 DEPTH_CEILING_BY_CATEGORY: Dict[str, Tier] = {"events": "full"}
 
-# Purpose presets are absolute bucket ceilings. Their total is the candidate
-# width for bucketed retrieval; ``limit`` belongs only to quota-free flat mode.
+# Purpose presets are first-pass bucket ceilings. Their total is the candidate
+# width for bucketed retrieval, and slots a bucket leaves unused go to the best
+# remaining hits of the other buckets; ``limit`` belongs only to flat mode.
 PURPOSE_PRESETS: Dict[str, Dict[str, int]] = {
     "coding": {
         "events": 1,
@@ -123,7 +126,7 @@ class AssembleParams:
 
     query: str = ""
     search_type: SearchType = "semantic"
-    image_url: Optional[str] = None
+    image_url: str | list[str] | None = None
     limit: int = DEFAULT_LIMIT
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None

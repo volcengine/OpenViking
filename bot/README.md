@@ -320,7 +320,8 @@ Restart `vikingbot gateway` after changing the configuration.
 | `bot.gateway.port` | `18790` | Gateway listen port |
 | `bot.sandbox.backend` | `direct` | Execution backend |
 | `bot.sandbox.mode` | `shared` | Workspace isolation mode |
-| `bot.sandbox.backends.direct.allow_compile_exec` | `true` | Set to `false` to disable |
+| `bot.sandbox.backends.direct.allow_exec` | `true` | Allow agents to execute host commands through the built-in `exec` tool; disabling it also removes the tool from subagents and Compile |
+| `bot.sandbox.backends.direct.allow_compile_exec` | `false` | Compile uses dedicated read tools; both this setting and `allow_exec` must be `true` for Compile agents to execute host commands |
 | `bot.heartbeat.enabled` | `true` | Whether to check `HEARTBEAT.md` periodically |
 | `bot.heartbeat.interval_seconds` | `600` | Heartbeat interval |
 | `bot.mode` | `normal` | One of `normal`, `readonly`, or `debug` |
@@ -366,22 +367,25 @@ The active directory used by the Agent also depends on `bot.sandbox.mode`:
 | `per-session` | `<workspace>/<session-key>` |
 | `per-channel` | `<workspace>/<channel-key>` |
 
-For example, with the default configuration, edit `~/.openviking/data/bot/workspace/shared/SOUL.md`.
+For example, the default local Soul file is `~/.openviking/data/bot/workspace/shared/SOUL.md`.
 
 ### Customize the Agent
 
 When an active Workspace is first used, VikingBot copies initial files from the built-in `bot/workspace` template. The main customization points are:
 
+When OpenViking is configured, VikingBot reads the current user's `viking://~/memories/soul.md` on each turn and uses it in place of local `SOUL.md`. If the file is missing, empty, unreadable, or the read exceeds 5 seconds, it falls back to local `SOUL.md`. Without OpenViking, it uses local `SOUL.md` directly.
+
 | File or directory | Purpose | How it is loaded |
 |-------------------|---------|------------------|
-| `SOUL.md` | Personality, values, and communication style | Added to the system prompt on every turn |
+| OpenViking `memories/soul.md` | Agent instructions | Preferred over local `SOUL.md` on every turn |
+| `SOUL.md` | Personality, values, and communication style | Local fallback when OpenViking Agent instructions are unavailable |
 | `AGENTS.md` | Global working rules and task constraints; create it when needed | Added to the system prompt on every turn |
 | `IDENTITY.md` | Agent name, role, and identity background; create it when needed | Added to the system prompt on every turn |
 | `TOOLS.md` | Tool selection, execution boundaries, and safety rules | Added to the system prompt on every turn |
 | `skills/<name>/SKILL.md` | Workflows and supporting resources for a class of tasks | A summary is injected first; full instructions are loaded progressively |
 | `HEARTBEAT.md` | Tasks checked periodically | Read only by Heartbeat |
 
-For example, edit `SOUL.md` in the active Workspace:
+For example, edit `SOUL.md` in the active Workspace to customize the local fallback:
 
 ```markdown
 # Soul
@@ -394,7 +398,7 @@ You are the team's engineering assistant.
 - State assumptions clearly and never invent results
 ```
 
-Saved changes normally take effect on the next Agent turn without restarting the Gateway. `SOUL.md` changes prompt behavior only; it cannot bypass Channel permissions, tool visibility, or Sandbox restrictions.
+Changes to the selected instruction file normally take effect on the next Agent turn without restarting the Gateway. When OpenViking `soul.md` is in use, edit that remote file; local `SOUL.md` is not added alongside it. These instructions change prompt behavior only; they cannot bypass Channel permissions, tool visibility, or Sandbox restrictions.
 
 > [!NOTE]
 > Edit files in the active Workspace. `bot/workspace` in the repository or installed package is an initialization template and does not overwrite an existing Workspace. Never store API Keys or other secrets in bootstrap files.
@@ -409,7 +413,7 @@ For the complete loading order, file responsibilities, and customization boundar
 |----------|-------|
 | Files and commands | `read_file`, `write_file`, `edit_file`, `list_dir`, `exec` |
 | Web | `web_search`, `web_fetch` |
-| OpenViking | `openviking_list`, `openviking_search`, `openviking_grep`, `openviking_glob`, `openviking_multi_read`, `openviking_add_resource`, `openviking_memory_commit` |
+| OpenViking | `openviking_list`, `openviking_search`, `openviking_rule_search`, `openviking_grep`, `openviking_glob`, `openviking_multi_read`, `openviking_add_resource`, `openviking_memory_commit` |
 | Other | `message`, `generate_image`, `cron`, `spawn` |
 
 `readonly` mode does not register `openviking_add_resource`. When a channel sets `ov_tools_enable: false`, it does not expose OpenViking tools or inject Profiles, Memories, and Experiences.
@@ -481,7 +485,22 @@ Workspace modes:
 - `per-session`: every Session has an independent workspace;
 - `per-channel`: sessions on the same channel instance share a workspace.
 
-DirectBackend defaults to `restrict_to_workspace: false`. For a Gateway exposed to untrusted users, choose an isolated backend and configure channel allowlists and network/file policies.
+Direct allows agents to execute host commands by default. To disable this capability, set the following in `ov.conf` and restart Bot:
+
+```json
+{
+  "bot": {
+    "sandbox": {
+      "backend": "direct",
+      "backends": {
+        "direct": { "allow_exec": false }
+      }
+    }
+  }
+}
+```
+
+Chat, subagents, and Compile can no longer call the built-in `exec` tool when disabled; chat, retrieval, and workspace file tools remain available. `allow_compile_exec=true` cannot override this setting. The switch only controls agent command execution with Direct: it does not affect other sandbox backends or provide file or network isolation. For a Gateway exposed to untrusted users, choose an isolated backend and configure channel allowlists and network/file policies.
 
 ```json
 {

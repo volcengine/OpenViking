@@ -17,10 +17,14 @@ import base64
 import hashlib
 import io
 import re
+import threading
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
+
+from pdfminer.pdftypes import resolve1
+from pdfminer.psparser import LIT
 
 from openviking.parse.base import (
     NodeType,
@@ -35,6 +39,9 @@ from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.parser_config import PDFConfig
 
 logger = get_logger(__name__)
+
+# PDFium is not thread-safe, even when rendering different documents.
+_PDFIUM_LOCK = threading.Lock()
 
 
 class PDFParser(BaseParser):
@@ -448,13 +455,19 @@ class PDFParser(BaseParser):
             page_ref_to_num = self._build_page_number_map(pdf)
 
             bookmarks = []
-            for level, title, dest, _action, _se in outlines:
+            for level, title, dest, action, _se in outlines:
                 if not title or not title.strip():
                     continue
 
                 page_num = None
                 try:
-                    if dest and len(dest) > 0:
+                    if not dest and action:
+                        resolved_action = resolve1(action)
+                        if isinstance(resolved_action, dict) and resolved_action.get("S") == LIT(
+                            "GoTo"
+                        ):
+                            dest = resolve1(resolved_action.get("D"))
+                    if isinstance(dest, (list, tuple)) and dest:
                         page_num = self._resolve_bookmark_page(
                             dest[0], page_ref_to_num, len(pdf.pages)
                         )
@@ -671,7 +684,8 @@ class PDFParser(BaseParser):
                 return None
 
             cropped = page.crop(bbox)
-            page_image = cropped.to_image(resolution=self.config.image_resolution)
+            with _PDFIUM_LOCK:
+                page_image = cropped.to_image(resolution=self.config.image_resolution)
 
             buffer = io.BytesIO()
             page_image.save(buffer, format="PNG")

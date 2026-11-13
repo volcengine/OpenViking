@@ -12,6 +12,7 @@ from openviking.parse.parsers.media.utils import (
 )
 from openviking.storage.index_action import FieldPatch
 from openviking.utils import embedding_utils
+from openviking.utils.embedding_input import EMBEDDING_TRUNCATION_SUFFIX
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.utils.config.parser_config import ImageConfig
 
@@ -350,82 +351,6 @@ async def test_vectorize_image_uses_supplied_bytes_without_second_read(monkeypat
     )
 
     assert fs.read_file_bytes_calls == 0
-
-
-@pytest.mark.asyncio
-async def test_vectorize_file_registers_request_wait_with_embedding_msg_id(monkeypatch):
-    queue = DummyQueueWithId()
-    registered = []
-    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
-    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("hello"))
-    monkeypatch.setattr(
-        embedding_utils,
-        "get_openviking_config",
-        lambda: types.SimpleNamespace(
-            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
-        ),
-    )
-    monkeypatch.setattr(
-        embedding_utils,
-        "get_request_wait_tracker",
-        lambda: types.SimpleNamespace(
-            register_embedding_root=lambda telemetry_id, root_id: registered.append(
-                (telemetry_id, root_id)
-            )
-        ),
-    )
-
-    await embedding_utils.vectorize_file(
-        file_path="viking://user/default/resources/test.md",
-        summary_dict={"name": "test.md", "summary": ""},
-        parent_uri="viking://user/default/resources",
-        ctx=DummyReq(),
-    )
-
-    assert len(queue.items) == 1
-    assert registered == [(queue.items[0].telemetry_id, queue.items[0].id)]
-    assert registered[0][1] != "queue-message-id"
-
-
-@pytest.mark.asyncio
-async def test_vectorize_file_marks_registered_wait_root_failed_when_enqueue_raises(monkeypatch):
-    queue = FailingQueue()
-    registered = []
-    failed = []
-    monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
-    monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: DummyFS("hello"))
-    monkeypatch.setattr(
-        embedding_utils,
-        "get_openviking_config",
-        lambda: types.SimpleNamespace(
-            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=1000)
-        ),
-    )
-    monkeypatch.setattr(
-        embedding_utils,
-        "get_request_wait_tracker",
-        lambda: types.SimpleNamespace(
-            register_embedding_root=lambda telemetry_id, root_id: registered.append(
-                (telemetry_id, root_id)
-            ),
-            mark_embedding_failed=lambda telemetry_id, root_id, message: failed.append(
-                (telemetry_id, root_id, message)
-            ),
-        ),
-    )
-
-    with pytest.raises(RuntimeError, match="queue unavailable"):
-        await embedding_utils.vectorize_file(
-            file_path="viking://user/default/resources/test.md",
-            summary_dict={"name": "test.md", "summary": ""},
-            parent_uri="viking://user/default/resources",
-            ctx=DummyReq(),
-        )
-
-    assert len(queue.items) == 1
-    assert registered == [(queue.items[0].telemetry_id, queue.items[0].id)]
-    assert failed
-    assert failed[0][0:2] == registered[0]
 
 
 @pytest.mark.asyncio
@@ -1069,9 +994,17 @@ async def test_vectorize_content_only_reads_embedding_input(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_vectorize_file_bounds_content_before_enqueue(monkeypatch):
+@pytest.mark.parametrize(
+    "content, expected",
+    [
+        ("a1👍" * 100, "a1👍" * 26 + "a1" + EMBEDDING_TRUNCATION_SUFFIX),
+        ("中文あ가Ｌ、" * 100, "中文あ가Ｌ、" * 4 + "中文" + EMBEDDING_TRUNCATION_SUFFIX),
+        ("a1中👍" * 5, "a1中👍" * 5),
+    ],
+    ids=["ordinary-characters", "wide-text", "within-budget"],
+)
+async def test_vectorize_file_bounds_content_before_enqueue(monkeypatch, content, expected):
     queue = DummyQueue()
-    content = " ".join(f"token-{i}" for i in range(200))
     fs = DummyFS(content)
     monkeypatch.setattr(embedding_utils, "get_queue_manager", lambda: DummyQueueManager(queue))
     monkeypatch.setattr(embedding_utils, "get_viking_fs", lambda: fs)
@@ -1090,8 +1023,8 @@ async def test_vectorize_file_bounds_content_before_enqueue(monkeypatch):
     )
 
     assert len(queue.items) == 1
-    assert queue.items[0].message != content
-    assert queue.items[0].message.endswith("...(truncated for embedding)")
+    message = queue.items[0].message
+    assert message == expected
     assert fs.read_file_calls == 1
 
 
@@ -1108,7 +1041,7 @@ async def test_index_resource_skips_session_namespace(monkeypatch):
         ),
     )
     await embedding_utils.index_resource(
-        uri="viking://session/default/sess_001/history/archive_001",
+        uri="viking://user/default/sessions/sess_001/history/archive_001",
         ctx=DummyReq(),
     )
 

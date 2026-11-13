@@ -33,7 +33,12 @@ from openviking.telemetry import (
     unregister_telemetry,
 )
 from openviking.telemetry.backends.memory import MemoryOperationTelemetry
-from openviking.telemetry.context import bind_telemetry, bind_telemetry_stage
+from openviking.telemetry.context import (
+    bind_ingestion_source_type,
+    bind_telemetry,
+    bind_telemetry_stage,
+    get_ingestion_source_type,
+)
 from openviking.telemetry.snapshot import TelemetrySnapshot
 from openviking.telemetry.span_models import OperationSpanAttributes, RootSpanAttributes
 from openviking_cli.utils import logger as logger_module
@@ -133,6 +138,21 @@ async def test_bind_telemetry_stage_propagates_across_async_tasks():
         "output": 4,
         "total": 10,
     }
+
+
+@pytest.mark.asyncio
+async def test_ingestion_source_type_is_scoped_and_propagates_across_async_tasks():
+    assert get_ingestion_source_type() is None
+
+    with bind_ingestion_source_type("repository"):
+        assert await asyncio.create_task(_read_ingestion_source_type()) == "repository"
+
+    assert get_ingestion_source_type() is None
+
+
+async def _read_ingestion_source_type() -> str | None:
+    await asyncio.sleep(0)
+    return get_ingestion_source_type()
 
 
 @pytest.mark.asyncio

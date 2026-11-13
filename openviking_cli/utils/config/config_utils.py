@@ -9,6 +9,8 @@ from typing import Any, Optional, get_args, get_origin
 
 from pydantic import BaseModel, ValidationError
 
+DEFAULT_SERVICE_NAME = "openviking-server"
+
 
 def suggest_closest_field(field_name: str, valid_fields: set[str]) -> Optional[str]:
     """Return the closest matching field name when it is similar enough."""
@@ -103,7 +105,9 @@ def warn_unknown_config_fields(
     """
     warn_unknown_fields(
         data=data,
-        valid_fields=set(model.model_fields) | (extra_valid_fields or set()),
+        valid_fields=set(model.model_fields)
+        | {field.alias for field in model.model_fields.values() if isinstance(field.alias, str)}
+        | (extra_valid_fields or set()),
         logger=logger,
         path_prefix=path_prefix,
     )
@@ -116,16 +120,37 @@ def warn_unknown_config_fields(
         if child_model is None:
             continue
         child_prefix = f"{path_prefix}.{key}" if path_prefix else key
+        is_mapping = get_origin(field.annotation) in (dict, Mapping)
+        if is_mapping and not isinstance(value, Mapping):
+            continue
         is_sequence = isinstance(value, (list, tuple))
-        for index, item in enumerate(value if is_sequence else (value,)):
+        items = value.items() if is_mapping else enumerate(value if is_sequence else (value,))
+        for child_key, item in items:
             if not isinstance(item, Mapping):
                 continue
+            item_prefix = child_prefix
+            if is_mapping:
+                item_prefix = f"{child_prefix}.{child_key}"
+            elif is_sequence:
+                item_prefix = f"{child_prefix}[{child_key}]"
             warn_unknown_config_fields(
                 data=item,
                 model=child_model,
                 logger=logger,
-                path_prefix=f"{child_prefix}[{index}]" if is_sequence else child_prefix,
+                path_prefix=item_prefix,
             )
+
+
+def normalize_service_name(value: Any, field_name: str = "service_name") -> str:
+    """Return a validated service name for cache namespaces and OTel defaults."""
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{field_name} must not be empty")
+    if any(not (char.isascii() and (char.isalnum() or char in "._-")) for char in normalized):
+        raise ValueError(f"{field_name} must contain only ASCII letters, digits, '.', '_' or '-'")
+    return normalized
 
 
 def format_validation_error(

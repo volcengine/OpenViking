@@ -5,15 +5,15 @@
 import asyncio
 import re
 import threading
-from contextlib import nullcontext
+from collections import Counter
 from dataclasses import dataclass, field
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Mapping, Optional, Set
 from weakref import WeakKeyDictionary
 
 from openviking.core.namespace import classify_uri
 from openviking.parse.parsers.media import get_media_type
 from openviking.server.identity import RequestContext
-from openviking.service.task_processing_time import pause_task_processing, processing_owner
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import (
     bind_task_context,
@@ -33,9 +33,10 @@ from openviking.storage.context_update_plan import FileVectorSource, SemanticAct
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.index_action import FieldPatch
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
-from openviking.telemetry import bind_telemetry, get_current_telemetry
+from openviking.telemetry import bind_ingestion_source_type, bind_telemetry, get_current_telemetry
 from openviking.utils.content_hash import content_md5
 from openviking.utils.ingest_options import IngestOptions
+from openviking.utils.log_correlation import log_correlation
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
@@ -49,6 +50,16 @@ if TYPE_CHECKING:
 # These are canonical archives (e.g. session transcripts) whose content provides
 # no additional retrieval value and would only waste tokens and add latency.
 _SKIP_FILENAMES = frozenset({"messages.jsonl"})
+
+
+@dataclass
+class _ParentAggregationStats:
+    started_at: float
+    files: int = 0
+    dirs: int = 0
+    sources: Dict[str, str] = field(default_factory=dict)
+    failed_files: Set[str] = field(default_factory=set)
+    status: str = "completed"
 
 
 @dataclass
@@ -196,6 +207,8 @@ class SemanticTreeExecutor:
         file_md5s: Optional[Dict[str, str]] = None,
         artifact_files: Optional[List[str]] = None,
         file_abstracts: Optional[Dict[str, str]] = None,
+        file_vector_actions: Optional[Dict[str, str]] = None,
+        file_ingest_options: Optional[Dict[str, IngestOptions | Dict[str, Any]]] = None,
         semantic_plan: Optional["SemanticPlan"] = None,
         telemetry_id: str | None = None,
         source_contents: Optional[Mapping[tuple[str, int], str | bytes]] = None,
@@ -215,6 +228,11 @@ class SemanticTreeExecutor:
                 semantic_plan is not None
                 and semantic_plan.file_vector_source is FileVectorSource.SUMMARY_WHEN_AVAILABLE
             )
+        )
+        self._source_type = (
+            ("repository" if self._is_code_repo else "document")
+            if context_type == "resource"
+            else None
         )
         self._changes_provided = changes is not None
         self._changes = changes or {}
@@ -240,7 +258,6 @@ class SemanticTreeExecutor:
         self._aggregate_directory = aggregate_directory
         self._copy_source_uri = copy_source_uri
         self._task_context = get_task_context()
-        self._processing_index = None
         self._telemetry = get_current_telemetry()
         self._telemetry_id = telemetry_id
         self._stale = False
@@ -255,6 +272,11 @@ class SemanticTreeExecutor:
         self._file_md5s = dict(file_md5s or {})
         self._artifact_files = [path.strip("/") for path in (artifact_files or []) if path]
         self._file_abstracts = dict(file_abstracts or {})
+        self._file_vector_actions = dict(file_vector_actions or {})
+        self._file_ingest_options = {
+            uri.rstrip("/"): IngestOptions.from_value(options)
+            for uri, options in (file_ingest_options or {}).items()
+        }
         self._plan_entries_by_uri: Dict[str, "SemanticTreeEntry"] = {}
         self._plan_children: Dict[str, tuple[List[str], List[str]]] = {}
         self._plan_active_dirs: Set[str] = set()
@@ -278,7 +300,10 @@ class SemanticTreeExecutor:
         self._file_change_status: Dict[str, bool] = {}
         self._dir_change_status: Dict[str, bool] = {}
         self._overview_cache: Dict[str, Dict[str, str]] = {}
+        self._overview_bodies: Dict[str, str] = {}
         self._overview_cache_lock = asyncio.Lock()
+        self._pending_abstract_dirs: Set[str] = set()
+        self._parent_aggregation_stats: Dict[str, _ParentAggregationStats] = {}
         self._root_write_result = AbstractOverviewWriteResult(wrote=False)
         self._scheduled_vector_record_ids: set[str] = set()
 
@@ -354,6 +379,11 @@ class SemanticTreeExecutor:
         """Run DAG execution starting from root_uri."""
         self._root_uri = root_uri
         self._root_done = asyncio.Event()
+        if self._is_parent_aggregation():
+            # Include waiting for the shared DAG scheduler's initial directory work.
+            self._parent_aggregation_stats[root_uri] = _ParentAggregationStats(
+                started_at=perf_counter()
+            )
         self._scheduler = get_semantic_tree_scheduler(self._node_concurrency)
         if self._semantic_plan is not None:
             from openviking.storage.context_update_plan import (
@@ -378,7 +408,8 @@ class SemanticTreeExecutor:
                 previous_incremental = self._incremental_update
                 self._incremental_update = False
                 try:
-                    await self._file_summary_task(root_uri, root_uri)
+                    with bind_ingestion_source_type(self._source_type):
+                        await self._file_summary_task(root_uri, root_uri)
                 finally:
                     self._incremental_update = previous_incremental
                 self._root_write_result = AbstractOverviewWriteResult(
@@ -386,36 +417,84 @@ class SemanticTreeExecutor:
                 )
                 return
 
-        owner = processing_owner.get()
-        if owner is not None and self._task_context is not None:
-            if owner[1] == self._task_context.task_id:
-                self._processing_index = owner[0]
-        with pause_task_processing():
+        try:
+            self._register_active()
+            self._schedule_dir(root_uri, parent_uri=None)
+            await self._root_done.wait()
+            if self._failure:
+                raise self._failure
+        except BaseException as exc:
+            for aggregation in self._parent_aggregation_stats.values():
+                aggregation.status = (
+                    "cancelled" if isinstance(exc, asyncio.CancelledError) else "failed"
+                )
+            self._closed = True
+            if self._context_type == "skill":
+                for task in self._skill_node_tasks:
+                    task.cancel()
+                await run_to_completion(
+                    lambda: asyncio.gather(*self._skill_node_tasks, return_exceptions=True)
+                )
+            await self._active_work_idle.wait()
+            raise
+        finally:
+            self._closed = True
             try:
-                self._register_active()
-                self._schedule_dir(root_uri, parent_uri=None)
-                await self._root_done.wait()
-                if self._failure:
-                    raise self._failure
-            except BaseException:
-                self._closed = True
                 if self._context_type == "skill":
-                    for task in self._skill_node_tasks:
-                        task.cancel()
-                    await run_to_completion(
-                        lambda: asyncio.gather(*self._skill_node_tasks, return_exceptions=True)
-                    )
-                await self._active_work_idle.wait()
-                raise
+                    await run_to_completion(self._active_work_idle.wait)
+                else:
+                    await self._active_work_idle.wait()
             finally:
-                self._closed = True
-                try:
-                    if self._context_type == "skill":
-                        await run_to_completion(self._active_work_idle.wait)
-                    else:
-                        await self._active_work_idle.wait()
-                finally:
-                    self._unregister_active()
+                self._unregister_active()
+                self._log_parent_aggregations()
+
+    def _is_parent_aggregation(self) -> bool:
+        return (
+            self._context_type == "resource"
+            and self._semantic_plan is None
+            and not self._recursive
+            and self._aggregate_directory
+            and self._generation_trigger
+            in {"content_write", "content_write_parent_refresh", "parent_refresh"}
+        )
+
+    def _record_summary_source(self, dir_uri: str, file_path: str, source: str) -> None:
+        if aggregation := self._parent_aggregation_stats.get(dir_uri):
+            # Each file has one source even when generation itself retries.
+            aggregation.sources[file_path] = source
+
+    def _record_summary_failure(self, dir_uri: str, file_path: str) -> None:
+        if aggregation := self._parent_aggregation_stats.get(dir_uri):
+            aggregation.failed_files.add(file_path)
+
+    def _log_parent_aggregations(self) -> None:
+        for dir_uri, aggregation in self._parent_aggregation_stats.items():
+            counts = Counter(aggregation.sources.values())
+            status = aggregation.status
+            if status == "completed":
+                if not self._aggregate_directory:
+                    status = "skipped"
+                elif self._stale:
+                    status = "stale"
+            logger.info(
+                "[ParentAggregation] %s uri=%s trigger=%s files=%d dirs=%d "
+                "abstract=%d overview=%d generated=%d failed_files=%d total_ms=%.3f status=%s",
+                log_correlation(
+                    task_id=self._task_context.task_id if self._task_context else "",
+                    telemetry_id=self._telemetry_id or "",
+                ),
+                dir_uri,
+                self._generation_trigger,
+                aggregation.files,
+                aggregation.dirs,
+                counts["abstract"],
+                counts["overview"],
+                counts["generated"],
+                len(aggregation.failed_files),
+                (perf_counter() - aggregation.started_at) * 1000.0,
+                status,
+            )
+        self._parent_aggregation_stats.clear()
 
     def _schedule_work(self, work: SemanticTreeWork) -> None:
         if self._closed:
@@ -517,23 +596,20 @@ class SemanticTreeExecutor:
                 self._task_context.task_id,
                 self._task_context.account_id,
                 self._task_context.user_id,
+                enqueued_work=self._task_context.enqueued_work,
+                work_id=self._task_context.work_id,
+                task_type=self._task_context.task_type,
+                mode=self._task_context.mode,
             )
             if self._task_context is not None
             else detach_task_context()
         )
-        timing = (
-            self._processing_index.measure_processing(self._task_context.task_id)
-            if self._processing_index is not None and self._task_context is not None
-            else nullcontext()
-        )
-        # Shared workers inherit their creator's ContextVars. Never let an
-        # unrelated node pause the creator's clock when it has no timing owner.
-        token = processing_owner.set(None)
-        try:
-            with bind_telemetry(self._telemetry), task_context, timing:
-                await self._run_work_bound(work)
-        finally:
-            processing_owner.reset(token)
+        with (
+            bind_telemetry(self._telemetry),
+            bind_ingestion_source_type(self._source_type),
+            task_context,
+        ):
+            await self._run_work_bound(work)
 
     async def _await_write(self, operation):
         if self._context_type == "skill":
@@ -574,26 +650,30 @@ class SemanticTreeExecutor:
             return True
 
         self._parent[dir_uri] = parent_uri
+        aggregation = self._parent_aggregation_stats.get(dir_uri)
+        if aggregation is None and self._is_parent_aggregation():
+            aggregation = _ParentAggregationStats(started_at=perf_counter())
+            self._parent_aggregation_stats[dir_uri] = aggregation
 
         try:
             children_dirs, file_paths = await self._list_dir(dir_uri, "_dispatch_dir")
+            if aggregation is not None:
+                aggregation.files = len(file_paths)
+                aggregation.dirs = len(children_dirs)
             if self._generation_trigger == "content_copy":
                 node = await self._prepare_transfer_node(dir_uri, children_dirs, file_paths)
                 self._nodes[dir_uri] = node
                 self._schedule_overview(dir_uri)
                 return False
 
-            sample_limit = getattr(
-                get_openviking_config().semantic,
-                "overview_sample_limit",
-                32,
-            )
             direct_entries = sorted(
                 [("directory", uri) for uri in children_dirs]
                 + [("file", uri) for uri in file_paths],
                 key=lambda item: item[1].rsplit("/", 1)[-1],
             )
-            sampled_entries = deterministic_sample(direct_entries, sample_limit)
+            sampled_entries = deterministic_sample(
+                direct_entries, get_openviking_config().semantic.overview_sample_limit
+            )
             sampled_children_dirs = {uri for kind, uri in sampled_entries if kind == "directory"}
             sampled_file_paths = {uri for kind, uri in sampled_entries if kind == "file"}
             pending_snapshot = 0
@@ -614,6 +694,7 @@ class SemanticTreeExecutor:
                             if self._source_raw_contents is not None
                             else None
                         ),
+                        **({"overview_body_out": self._overview_bodies} if aggregation else {}),
                     )
                 except LockAcquisitionError:
                     if self._generation_trigger != "content_write":
@@ -693,6 +774,36 @@ class SemanticTreeExecutor:
                     )
                 )
             )
+            reuse_pending = (
+                aggregation is not None
+                and self._aggregate_directory
+                and self._incremental_update
+                and pending_snapshot > 0
+            )
+            if reuse_pending:
+                self._pending_abstract_dirs.add(dir_uri)
+            directory_only = self._generation_trigger == "parent_refresh"
+            if (reuse_pending or directory_only) and not self._skip_vectorization:
+                # Directory-only work also reuses the changed files' committed abstracts.
+                missing_abstracts = required_file_paths - {
+                    uri for uri, abstract in self._file_abstracts.items() if abstract.strip()
+                }
+                if not directory_only:
+                    missing_abstracts -= self._changed_paths
+                if missing_abstracts:
+                    try:
+                        abstracts = await self._processor._load_transfer_file_summaries(
+                            sorted(missing_abstracts), ctx=self._ctx
+                        )
+                        self._file_abstracts.update(abstracts)
+                    except LockAcquisitionError:
+                        raise
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to load L2 abstracts for %s; falling back to old overview: %s",
+                            dir_uri,
+                            exc,
+                        )
             if self._recursive:
                 pending = len(children_dirs) + len(required_file_paths)
             else:
@@ -732,8 +843,12 @@ class SemanticTreeExecutor:
             # A content-write message can be dequeued before the writer releases
             # its exact-path lease. Let SemanticProcessor re-enqueue this
             # recoverable conflict instead of acknowledging unfinished file work.
+            if aggregation is not None:
+                aggregation.status = "failed"
             raise
         except Exception as e:
+            if aggregation is not None:
+                aggregation.status = "failed"
             logger.error(f"Failed to dispatch directory {dir_uri}: {e}", exc_info=True)
             self._record_skill_failure(dir_uri, e)
             if self._semantic_plan is not None or self._generation_trigger == "content_copy":
@@ -796,8 +911,9 @@ class SemanticTreeExecutor:
             [("file", uri) for uri in file_paths] + [("directory", uri) for uri in children_dirs],
             key=lambda item: (item[1].rsplit("/", 1)[-1], item[0], item[1]),
         )
-        sample_limit = getattr(get_openviking_config().semantic, "overview_sample_limit", 32)
-        primary = deterministic_sample(candidates, sample_limit)
+        primary = deterministic_sample(
+            candidates, get_openviking_config().semantic.overview_sample_limit
+        )
         loaded = await self._load_transfer_candidates(primary)
         selected = [candidate for candidate in primary if candidate in loaded]
 
@@ -921,6 +1037,10 @@ class SemanticTreeExecutor:
         )
 
     def _ingest_options_for_file(self, file_path: str) -> IngestOptions:
+        if self._generation_trigger == "content_write":
+            options = self._file_ingest_options.get(file_path.rstrip("/"))
+            if options is not None:
+                return options
         if self._generation_trigger == "content_write" and file_path not in self._changed_paths:
             return IngestOptions(acl_update=self._ingest_options.acl_update)
         return self._ingest_options
@@ -961,8 +1081,10 @@ class SemanticTreeExecutor:
         except Exception:
             return True
 
-    async def _read_existing_summary(self, file_path: str) -> Optional[Dict[str, str]]:
-        """Read existing summary from parent directory's .overview.md.
+    async def _read_existing_summary(
+        self, file_path: str, *, require_nonempty: bool = False
+    ) -> Optional[Dict[str, str]]:
+        """Read a supplied L2 abstract or a cached old parent overview entry.
 
         Args:
             file_path: Current file path
@@ -974,7 +1096,7 @@ class SemanticTreeExecutor:
         if not target_path:
             return None
         vector_abstract = self._file_abstracts.get(target_path.rstrip("/"))
-        if vector_abstract:
+        if vector_abstract and (not require_nonempty or vector_abstract.strip()):
             return {
                 "name": file_path.rsplit("/", 1)[-1],
                 "summary": vector_abstract,
@@ -994,10 +1116,13 @@ class SemanticTreeExecutor:
                     pass
                 async with self._overview_cache_lock:
                     if parent_uri not in self._overview_cache:
-                        overview_path = f"{parent_uri}/.overview.md"
-                        overview_content = await self._viking_fs.read_file(
-                            overview_path, ctx=self._ctx
-                        )
+                        if parent_uri in self._overview_bodies:
+                            overview_content = self._overview_bodies[parent_uri]
+                        else:
+                            overview_path = f"{parent_uri}/.overview.md"
+                            overview_content = await self._viking_fs.read_file(
+                                overview_path, ctx=self._ctx
+                            )
                         if overview_content:
                             self._overview_cache[parent_uri] = self._processor._parse_overview_md(
                                 body_for_preview(overview_content)
@@ -1015,7 +1140,9 @@ class SemanticTreeExecutor:
             existing_summaries = self._overview_cache.get(parent_uri, {})
             file_name = file_path.split("/")[-1]
 
-            if file_name in existing_summaries:
+            if file_name in existing_summaries and (
+                not require_nonempty or existing_summaries[file_name].strip()
+            ):
                 return {"name": file_name, "summary": existing_summaries[file_name]}
 
         except Exception as e:
@@ -1108,7 +1235,8 @@ class SemanticTreeExecutor:
         """Generate file summary and notify parent completion."""
 
         file_name = file_path.split("/")[-1]
-        need_vectorize = True
+        directory_only = self._generation_trigger == "parent_refresh"
+        need_vectorize = not directory_only
         semantic_succeeded = True
         file_content = None
         try:
@@ -1125,9 +1253,27 @@ class SemanticTreeExecutor:
                     and file_path in node.sampled_file_paths
                 )
 
-                if not content_changed and not regenerate_sampled_summary:
-                    summary_dict = await self._read_existing_summary(file_path)
+                reuse_existing = directory_only or parent_uri in self._pending_abstract_dirs
+                if (not content_changed or directory_only) and (
+                    not regenerate_sampled_summary or reuse_existing
+                ):
+                    if reuse_existing:
+                        summary_dict = await self._read_existing_summary(
+                            file_path, require_nonempty=True
+                        )
+                    else:
+                        summary_dict = await self._read_existing_summary(file_path)
                     if summary_dict is not None:
+                        need_vectorize = False
+                        vector_abstract = self._file_abstracts.get(file_path, "")
+                        self._record_summary_source(
+                            parent_uri,
+                            file_path,
+                            "abstract"
+                            if (vector_abstract.strip() if reuse_existing else vector_abstract)
+                            else "overview",
+                        )
+                    elif regenerate_sampled_summary:
                         need_vectorize = False
                     else:
                         self._file_change_status[file_path] = True
@@ -1152,15 +1298,18 @@ class SemanticTreeExecutor:
                 }
                 if file_content is not None:
                     summary_kwargs["file_content"] = file_content
+                self._record_summary_source(parent_uri, file_path, "generated")
                 summary_dict = await self._processor._generate_single_file_summary(
                     file_path, **summary_kwargs
                 )
         except (AbstractOverviewFormatError, FileNotFoundError, ValueError):
+            self._record_summary_failure(parent_uri, file_path)
             # A generated sidecar that opted into OKF must never be treated as
             # an empty file summary; doing so would silently feed metadata or
             # corrupted YAML into a later regeneration.
             raise
         except Exception as e:
+            self._record_summary_failure(parent_uri, file_path)
             logger.warning(f"Failed to generate summary for {file_path}: {e}")
             self._record_skill_failure(file_path, e)
             summary_dict = {"name": file_name, "summary": ""}
@@ -1203,6 +1352,8 @@ class SemanticTreeExecutor:
                     vectorize_kwargs["scalar_override"] = self._plan_scalar_override(file_path, 2)
                     vectorize_kwargs["field_patch"] = self._plan_field_patch(file_path, 2)
                     vectorize_kwargs["action"] = slot.action.value if slot is not None else "upsert"
+                elif action := self._file_vector_actions.get(file_path.rstrip("/")):
+                    vectorize_kwargs["action"] = action
                 enqueued = await self._processor._vectorize_single_file(
                     parent_uri=parent_uri,
                     context_type=self._context_type,
@@ -1348,10 +1499,14 @@ class SemanticTreeExecutor:
                 results.append(item)
         return results
 
-    def _is_stale(self) -> bool:
+    async def _is_stale(self) -> bool:
+        if not self._coalesce_key or self._coalesce_version <= 0:
+            return False
         from openviking.storage.queuefs.semantic_queue import is_semantic_coalesce_stale
 
-        return is_semantic_coalesce_stale(self._coalesce_key, self._coalesce_version)
+        return await is_semantic_coalesce_stale(
+            self._coalesce_key, self._coalesce_version, agfs=self._viking_fs._async_agfs
+        )
 
     async def _write_directory_semantics(
         self,
@@ -1543,6 +1698,8 @@ class SemanticTreeExecutor:
             raise
         except Exception as e:
             logger.error(f"Failed to generate overview for {dir_uri}: {e}", exc_info=True)
+            if aggregation := self._parent_aggregation_stats.get(dir_uri):
+                aggregation.status = "failed"
             self._record_skill_failure(dir_uri, e)
         else:
             slots = {}

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { readdir } from "node:fs/promises";
+import { readdir, utimes } from "node:fs/promises";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
@@ -8,7 +9,8 @@ import {
   listPending,
   replayPending,
 } from "./lib/pending-queue.mjs";
-import { withPendingDir } from "./testing/support.mjs";
+import { createOvHttp } from "./lib/ov-http.mjs";
+import { withMockOpenViking, withPendingDir, writeJson } from "./testing/support.mjs";
 
 test("replayPending sends queued entries and removes them after success", async () => {
   await withPendingDir(async () => {
@@ -74,3 +76,53 @@ test("claimForReplay atomically claims a file only once", async () => {
     assert.deepEqual(await readdir(dir), [firstClaim]);
   });
 });
+
+for (const type of ["addMessage", "commitSession"]) {
+  test(`replayPending keeps an old ${type} backlog claimed during its HTTP request`, { timeout: 20_000 }, async () => {
+    await withPendingDir(async (dir) => {
+      const payload = type === "addMessage" ? { role: "user", content: "backlog" } : { keep_recent_count: 0 };
+      const queued = await enqueue(type, "queue-old-backlog", payload);
+      const old = new Date(Date.now() - 11 * 60_000);
+      await utimes(join(dir, queued.path), old, old);
+
+      let arrived;
+      let release;
+      const firstArrived = new Promise((resolve) => { arrived = resolve; });
+      const held = new Promise((resolve) => { release = resolve; });
+      let count = 0;
+      await withMockOpenViking(async (req, res) => {
+        for await (const chunk of req) {} // Drain the real HTTP request body.
+        if (++count === 1) {
+          arrived();
+          await held;
+        }
+        writeJson(res, { status: "ok", result: {} });
+      }, async (baseUrl, requests) => {
+        const fetchJSON = createOvHttp({ baseUrl }, { defaultTimeoutMs: 10_000 });
+        const first = replayPending(fetchJSON, () => {});
+        let waitTimer;
+        const deadline = new Promise((resolve, reject) => {
+          waitTimer = setTimeout(() => reject(new Error("timed out waiting for the replay request")), 5_000);
+        });
+        let second;
+        try {
+          await Promise.race([
+            firstArrived,
+            first.then(() => { throw new Error("replay completed without sending the queued operation"); }),
+            deadline,
+          ]);
+          second = await replayPending(fetchJSON, () => {});
+        } finally {
+          clearTimeout(waitTimer);
+          release();
+        }
+        const firstResult = await first;
+
+        assert.equal(requests.length, 1);
+        assert.equal(firstResult.replayed, 1);
+        assert.equal(second.replayed, 0);
+        assert.deepEqual(await listPending(), []);
+      });
+    });
+  });
+}

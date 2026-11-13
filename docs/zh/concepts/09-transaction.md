@@ -27,7 +27,7 @@ OpenViking 是上下文数据库，FS 是源数据，VectorDB 是派生索引。
 运行时锁由 Rust RAGFS 的 `PathLockManager` 和 Provider 管理。Python 服务通过 binding 申请、续用、交接和释放 lease。后文的 `LockContext` 示例仅说明生命周期，不是当前 Python SDK 或运行时类接口。
 
 - **范围**：EXACT 保护路径本身，TREE 保护路径及其子树。
-- **Provider**：默认 filesystem 保存锁文件；cache 用 Redis 原子检查和写入 token；memory 只在当前进程内协调。
+- **Provider**：默认 filesystem 保存锁文件；SQLite 协调共享本地数据库的进程；PostgreSQL 提供共享数据库协调；cache 用 Redis 原子检查和写入 token；memory 只在当前进程内协调。
 - **lease**：记录 owner、覆盖路径、token 位置和续期状态。后台任务可以接收显式交接的 lease。
 - **失败处理**：释放前校验 owner，过期锁由后续获取时的 stale 检查清理；锁释放不会撤销已写入的数据。
 
@@ -221,6 +221,13 @@ async with LockContext(lock_manager, [src], lock_mode="mv", mv_dst_path=dst):
 
 Exact 和 Tree 表达操作范围，文件、目录或缺失路径表达目标的当前状态，两者独立。锁保护路径名字，目标不存在也可以申请锁。
 
+锁路径必须是绝对路径。Manager 在获取锁或检查租约覆盖范围前，对空路径、
+相对路径、重复 `/`、`.` 或 `..` 路径段及 NUL 返回 `InvalidRequest`。
+非根路径末尾的单个 `/` 会被移除。Redis、SQLite 和 PostgreSQL 的 token 操作要求路径
+已完成这一规范化；Redis Lua 批量获取也会在修改 token 前校验全部请求。
+应使用 `/local/account-a/file`，避免 `/local/account-a/./file`、
+`/local/account-a//file` 等别名。
+
 以下冲突关系限定为不同 owner、同一 Provider scope 内的请求：
 
 | 已持有 | 新请求 | 冲突 |
@@ -239,17 +246,17 @@ Exact 和 Tree 表达操作范围，文件、目录或缺失路径表达目标�
 
 ### Filesystem Provider 锁协议
 
-锁类型由调用者选择，Resolver 根据目标状态决定 token 位置：
+锁类型由调用者选择。Filesystem Provider 对所有目标统一使用父目录 sidecar：
 
 | 目标状态 | Exact token | Tree token |
 | --- | --- | --- |
 | 现存文件 `/docs/a` | `/docs/.exact.ovlock.a.<hash>`，内容为 E | 同一 sidecar，内容为 T |
-| 现存目录 `/docs/a` | `/docs/a/.path.ovlock`，内容为 E | 同一目录内文件，内容为 T |
-| 缺失路径 `/docs/a` | 父目录 sidecar，内容为 E | 创建目标目录后写内部 `.path.ovlock`，内容为 T |
+| 现存目录 `/docs/a` | `/docs/.exact.ovlock.a.<hash>`，内容为 E | 同一 sidecar，内容为 T |
+| 缺失路径 `/docs/a` | `/docs/.exact.ovlock.a.<hash>`，内容为 E | 同一 sidecar，内容为 T |
 
-sidecar 位于目标旁边，但只代表该目标，不会锁住整个父目录。`<hash>` 来自完整后端路径的 SHA-1 前缀，与业务文件内容无关。
+sidecar 位于目标旁边，但只代表该目标，不会锁住整个父目录。递归删除目标时不会删除位于父目录中的 token，因此锁的互斥保护会持续到 lease 正式释放。`<hash>` 来自完整后端路径的 SHA-1 前缀，与业务文件内容无关。
 
-`.exact.ovlock.*` 可以存 Tree token，`.path.ovlock` 也可以存 Exact token。文件名是存储协议的一部分，不能单凭名字判断逻辑锁类型。token 内容为：
+`.exact.ovlock.*` 根据实际锁类型存储 E 或 T。为兼容升级前遗留 token，冲突检测仍读取目标内部的 `.path.ovlock`，但新锁不再写入该位置。文件名是存储协议的一部分，不能单凭名字判断逻辑锁类型。token 内容为：
 
 ```text
 {owner_id}:{time_ns}:{lock_type}
@@ -258,6 +265,17 @@ sidecar 位于目标旁边，但只代表该目标，不会锁住整个父目录
 `lock_type` 为 `E` 或 `T`。该归属 token 用于竞争检查、续期和条件释放，不代表所有业务写入都有存储端 fencing 校验。
 
 lease 将逻辑范围 `covered_paths` 与 token 位置 `lock_paths` 分开记录。Owned lease 控制续期、释放和交接；Borrowed lease 仅提供已有锁的覆盖证明，不能释放外层锁。
+
+#### 协议迁移与发布
+
+新版本对新 sidecar 和旧 `.path.ovlock` 执行双读，但只向新 sidecar 写入 token。升级前已存在的 lease 不做原地迁移：续期、释放和交接继续使用 lease 中记录的旧 `lock_paths`，直到旧 token 正常释放或过期。
+
+旧版本不会检查祖先路径的新 sidecar，因此 Filesystem Provider 不能让新旧版本在同一后端上同时处理写请求。当前版本采用协调切换：
+
+1. 停止新的写请求，等待活跃 lease 和待交接任务排空，然后停止所有旧实例。
+2. 全量启动新版本实例，确认旧 token 已释放或可按过期规则回收，再恢复写流量。
+
+如果部署必须保持零停机滚动升级，需要拆成两个可独立发布的协议阶段：先发布“新旧双读、仍写旧 token”的兼容版本；全部实例升级后，再统一切换为“新旧双读、只写新 sidecar”。两个阶段之间不得存在旧实例读取新 sidecar 的窗口。
 
 ### Cache Provider 锁协议
 
@@ -272,15 +290,28 @@ value = owner_id:time_ns:lock_type
 HASH key 按路径 scope 隔离：
 
 ```text
-ov:pathlock:{namespace}:global:tokens
-ov:pathlock:{namespace}:scope:_system:tokens
-ov:pathlock:{namespace}:scope:account:{account}:tokens
+{service_name}:ov:pathlock:global:tokens
+{service_name}:ov:pathlock:scope:_system:tokens
+{service_name}:ov:pathlock:scope:account:{account}:tokens
 ```
 
-所有 key 都使用 `{namespace}` 作为 Redis Cluster hash tag。Exact 获取使用
+所有 key 都使用 `{service_name}` 作为 Redis Cluster hash tag。Exact 获取使用
 `HMGET` 读取目标和祖先；Tree 获取只对所属 scope 的 HASH 执行
-`HGETALL`。`/` 和 `/local` 的 global 锁不会扫描 account 或 `_system`
-HASH。跨 scope batch 会被拒绝。
+`HGETALL`。`/` 和 `/local` 的 Tree 锁会返回 `InvalidRequest`，因为它们的
+子树跨越 account 和 `_system` HASH。Tree 根路径应使用 `/local/<account>`、
+`/local/_system` 或其后代。`/` 和 `/local` 的 Exact 锁仍然支持，只保护
+对应路径本身。跨 scope batch 会被拒绝。
+
+### PostgreSQL Provider 锁协议
+
+`postgres` Provider 将 holder token 保存在 PostgreSQL 中，在 namespace 事务
+advisory lock 保护下检查 Exact/Tree 冲突、批量获取、续租和释放 holder。
+所有参与者使用同一可写主库、相同的顶层 `service_name` 和过期时长；
+锁时间戳与过期检查使用主库时钟。
+
+PostgreSQL 是独立于 Redis/CacheRuntime 的共享协调后端。它无需 Redis，
+不会启用读缓存，也不会把业务文件或 QueueFS 迁入 PostgreSQL。
+配置、权限和部署限制见 [PostgreSQL PathLock 配置](../configuration/01-server.md#postgresql-pathlock)。
 
 ### Filesystem 获取锁流程（EXACT 模式）
 
@@ -318,8 +349,8 @@ HASH。跨 scope batch 会被拒绝。
        - 目标目录不存在？ -> 视为无后代锁
        - 陈旧锁？ -> 移除后重试
        - 活跃锁？ -> 等待
-    4. 确保 Resolver 选定的 token 父目录存在；缺失目标会因此被创建成目录
-    5. 写入 TREE (T) token（现存文件用 sidecar，其余用内部 .path.ovlock）
+    4. 确保 Resolver 选定的 sidecar 父目录存在；不会创建缺失目标本身
+    5. 在父目录 sidecar 写入 TREE (T) token
     6. TOCTOU 双重检查：重新扫描后代目录和祖先目录
        - 发现冲突：比较 (timestamp, handle_id)
        - 后到者（更大的 timestamp/handle_id）主动让步（删除自己的锁），防止活锁
@@ -332,11 +363,11 @@ HASH。跨 scope batch 会被拒绝。
 
 ### 缺失目录创建规则
 
-锁系统允许为了放置锁文件而创建目录，但创建前必须先检查冲突：
+锁系统允许为了放置 sidecar 而创建缺失的父目录链，但不会创建被锁目标本身。创建前必须先检查冲突：
 
 ```
 1. 发现祖先 TreeLock / 同路径锁 / 后代锁冲突 -> 不创建目录，直接失败或等待
-2. 当前无冲突 -> 可以创建目录并写锁
+2. 当前无冲突 -> 可以创建 sidecar 的父目录并写锁
 3. 写锁后再次检查时发现新冲突 -> 删除自己的锁并失败或重试
 4. 第 3 步不会回滚刚创建的空目录
 ```
@@ -353,10 +384,9 @@ HASH。跨 scope batch 会被拒绝。
 ```
 
 如果两个请求同时创建 `java-guide`，两边都可能先看到“当前无冲突”，但最终只有
-fencing token 校验通过的一方成功持有 `TreeLock(java-guide)`；失败方会删除自己的锁，
-已创建出来的空目录可以保留。
+fencing token 校验通过的一方成功持有 `TreeLock(java-guide)`；失败方会删除自己的锁。
 
-获取失败的回滚和正常释放只清理 token，不保证删除为存放 token 创建的目录。Exact sidecar 也可能创建缺失的父目录链。Snapshot 对缺失目标采用单独的策略，见 [快照的范围与并发](../guides/15-snapshot.md#提交范围与并发)。
+获取失败的回滚和正常释放只清理 token，不保证删除为存放 sidecar 创建的父目录链。Snapshot 对缺失目标采用单独的策略，见 [快照的范围与并发](../guides/15-snapshot.md#提交范围与并发)。
 
 ### 锁过期清理
 
@@ -364,7 +394,15 @@ fencing token 校验通过的一方成功持有 `TreeLock(java-guide)`；失败�
 
 **陈旧锁检测**：PathLockEngine 检查归属 token 中的时间戳。超过 `lock_expire`（默认 30s）的锁被视为陈旧锁，在加锁过程中自动移除。
 
-**进程内清理**：Rust PathLockManager 在续期循环中检查长期未成功续期的 lease，以 `2 × lock_expire` 为阈值尝试清理，并校验归属后释放 token。
+**失锁后的授权失效**：手动和后台续租使用相同规则。token 不存在或 owner 不匹配时，同 owner 下共享实际 token 路径（`lock_paths`）的所有本地 lease 立即整份失效，包括待交接的 lease。Tree 祖先和 Exact 后代使用不同 token，不会因逻辑覆盖关系连带失效。
+
+网络等不确定错误允许短暂重试，但每个 token 距离最近一次成功确认达到 `0.8 × lock_expire`（默认 24 秒）时撤销授权。使用单调时钟分别记录各 token 的确认时间；部分续租成功、重入和本地交接/接管不会延长失败 token 的期限。写入授权检查也会检查期限，无需等待下次心跳。失效 lease 不能再授权后续受保护写入、续租、复用 owner 或交接/接管，且不会恢复有效。
+
+**进程内清理**：失效 lease 保留释放能力和本地引用，后台重试带 owner 校验的清理。token 已不存在或已被其他 owner 接管均视为清理完成，不会删除新 owner 的 token；仍被其他有效本地 lease 引用的 token 也不会被删除。从首次失效起超过六个心跳间隔（`2 × lock_expire`，默认 60 秒），即使 Provider 持续不可用也记录剩余路径并移除本地 entry，遗留的远端 token 依赖过期清理。重试不会延长该窗口。
+
+**失效诊断**：manager 在清理期间保留首次失效的时间与原因。`pathlock lease invalidated` 日志包含 `reason`、`lease_ref`、`owner_id` 和 `affected_paths`。`TokenLost` 表示必要 token 缺失或归属不符，应检查 token 过期、删除和接管情况；`ConfirmationDeadlineExceeded` 表示安全期限内未能确认归属，应检查 Provider 健康、网络延迟和续租调度，对应 token 日志还包含 `since_last_confirmation_ms` 和 `failures`；`ReleaseFailed` 表示释放或降级错误导致撤销授权并进入清理重试，释放日志会记录具体错误。后续响应和清理失败不会覆盖首次原因或重置时间，清理窗口耗尽的日志也会保留该原因。
+
+上述检查在发现失锁或达到期限后拒绝后续操作；不会中断已经通过授权检查的写入，也不提供存储侧 fencing。
 
 **孤儿锁**：进程崩溃后遗留的 Provider token，在后续 acquire 检查同一路径或 scope 时通过 stale lock 检测自动移除。
 
@@ -393,8 +431,10 @@ fencing token 校验通过的一方成功持有 `TreeLock(java-guide)`；失败�
 
 路径锁默认启用，并使用 `filesystem` Provider。多进程通过 Redis 协调时，
 设置 `storage.agfs.pathlock.provider=cache`。Cache PathLock 要求配置顶层
-Redis Cache Provider 和非空 PathLock namespace。运行时等待超时固定为
-`0.0` 秒。`storage.transaction` 仅保留为兼容旧配置：`lock_timeout`
+Redis Cache Provider，并使用顶层 `service_name` 作为 Redis namespace。
+运行时等待超时固定为 `0.0` 秒。也可选择 `provider=postgres`，在不使用 Redis
+的情况下跨进程或主机共享锁；它使用自己的 DSN 和顶层 `service_name`，独立于缓存配置。
+`storage.transaction` 仅保留为兼容旧配置：`lock_timeout`
 已废弃且会被忽略，`lock_expire` 会在未显式配置新字段时自动映射，
 `redo_recovery_enabled` 已废弃且会被忽略。
 
@@ -417,6 +457,7 @@ Redis 配置：
 
 ```json
 {
+  "service_name": "production",
   "cache": {
     "provider": "redis",
     "params": {
@@ -428,7 +469,6 @@ Redis 配置：
     "agfs": {
       "pathlock": {
         "provider": "cache",
-        "namespace": "production",
         "lock_expire_secs": 30.0
       }
     }
@@ -436,11 +476,39 @@ Redis 配置：
 }
 ```
 
+PostgreSQL 的 `ov.conf` 配置片段：
+
+```json
+{
+  "service_name": "production",
+  "storage": {
+    "agfs": {
+      "pathlock": {
+        "provider": "postgres",
+        "postgres_dsn_env": "OV_POSTGRES_DSN",
+        "lock_expire_secs": 30.0
+      }
+    }
+  }
+}
+```
+
+```sh
+export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=openviking password=YOUR_PASSWORD sslmode=require'
+```
+
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `provider` | str | `filesystem`、`memory` 或 `cache` | `filesystem` |
-| `namespace` | str 或 null | `provider=cache` 时必填，用于标识一个 OpenViking 部署 | `null` |
+| `provider` | str | `filesystem`、`memory`、`sqlite`、`postgres` 或 `cache` | `filesystem` |
+| `sqlite_path` | str / null | 使用 `sqlite` 时可覆盖本地数据库绝对路径；见 [SQLite 配置](../configuration/01-server.md#storage) | 使用 `sqlite` 时为 `{storage.workspace}/_system/pathlock/pathlock.db` |
+| `postgres_dsn_env` | str / null | `postgres` 必填；保存连接 DSN 的环境变量名 | `null` |
 | `lock_expire_secs` | float | 未刷新的锁进入 stale 状态前的秒数 | `30.0` |
+
+跨容器或主机共享 EFS 的副本可使用 `provider="postgres"` 连接共享 PostgreSQL
+主库，或使用 `provider="cache"` 连接共享 Redis。两者都不会改变 QueueFS
+或其他存储的并发要求。
+SQLite 仅支持同机共享同一个本地磁盘数据库文件，不支持 EFS/NFS/SMB
+或各容器独立的本地数据库。参见[部署限制与 Provider 选择](../configuration/01-server.md#storage)。
 
 兼容旧写法：
 
@@ -462,6 +530,103 @@ Redis 配置：
 ### QueueFS 持久化
 
 重启恢复要求队列内容已持久化。QueueFS 默认使用 SQLite；使用 cache 后端时，持久性取决于所配置的 Provider。memory 后端不保留进程退出后的任务。
+
+### 切换到 PostgreSQL {#switching-to-postgresql}
+
+filesystem → PostgreSQL 适用下面相同的停机切换流程：在第 3 步设置
+`provider="postgres"` 和 `postgres_dsn_env`，第 4 步验证重新取得 PostgreSQL 锁。
+PostgreSQL、Redis、SQLite 和 filesystem 是相互独立的锁协调域，
+新 Provider 不检查旧 Provider 的 token。任何 Provider 切换（包括 Redis ↔ PostgreSQL）
+都要先停止全部写入者。目标配置见 [PostgreSQL 配置](../configuration/01-server.md#postgresql-pathlock)。
+
+### 单实例路径锁 Provider 切换：filesystem → Redis
+
+这里切换的是 **路径锁的存储与协调后端**：从 filesystem Provider 使用的
+`.ovlock` 锁文件，切换为 cache Provider 使用的 Redis 锁记录。
+业务文件仍保存在原有文件存储中，QueueFS 仍使用原有持久化队列后端
+（例如 SQLite）；业务数据和队列消息无需迁入 Redis。
+
+此流程仅支持 **单实例、停机切换**。按以下步骤操作：
+
+1. 暂停新请求和任务提交，禁用可能自动拉起旧实例的自动重启或调度策略，
+   保留原有文件存储和持久化队列。
+2. 停止旧服务及其所有队列消费进程。在进程管理器或部署平台中核对旧实例的
+   PID / 容器已全部退出，且没有残留子进程、独立 worker 或其他访问同一存储的
+   filesystem 路径锁写入者；确认旧实例的锁心跳续租任务也已停止。
+   **完成此检查前，不得启动使用 Redis 路径锁的新实例。**
+3. 将 `storage.agfs.pathlock.provider` 从 `filesystem` 改为 `cache`，
+   并将该 cache Provider 配置为使用 Redis。
+4. 启动一个新实例，检查积压任务从原队列恢复、在 Redis 中取得新路径锁并正常消费，
+   再恢复请求入口和任务提交。
+
+`handoff` 会保留旧进程内的 lease 并继续心跳续租，因此停止请求入口或关闭监听端口
+不足以证明旧写入者已停止；必须确认上述进程全部退出。进程退出后，其内存中的
+lease registry 和心跳任务随之终止，磁盘上仍可能残留 `.ovlock` token。
+无需排空队列、删除这些锁文件或等待旧租约过期。
+
+filesystem 与 Redis 是相互独立的锁协调域，Redis 的 acquire **不会检查或阻挡
+旧 filesystem token**。如果旧进程仍在运行，同一路径可能同时被两套后端授予
+不同 owner，两个进程也可能同时写业务文件；等待旧 token 过期不能替代退出检查。
+
+新 handoff 包含 `handle_mode`；旧消息缺少该字段时仍可恢复。
+native adopt 只接管仍有效的 source holder；来源消失、过期或 Provider 变化时返回
+`HandoffRecoveryRequired`。消费者通过 `adopt_or_reacquire` 统一校验账号和覆盖范围，
+按完整逻辑路径和 Exact/Tree 类型在原 owner 下重新加锁，获得新的 holder、
+`lease_ref` 和 `ownership_ref` 后才执行任务。优先使用 `covered_paths`；
+旧 `.path.ovlock` 可反解 Tree 路径，无法反解的 Exact 文件名使用任务自身的
+完整路径请求。不会只恢复混合批次中的部分路径。
+重新加锁遇到冲突或服务错误时保留任务重试；非法覆盖和失效的本地所有权引用
+不会触发重新加锁。重复投递的来源 holder 已被消费时也走上述恢复流程，
+业务写入需保证幂等。旧 `.ovlock` 文件无需扫描或复制到 Redis。
+
+`owner_lease_ref` 是当前进程中仍有效的本地所有权凭证，包含 `lease_ref` 和
+`ownership_ref`，不能用于跨重启或 Provider 迁移恢复。
+
+恢复必须携带有效账号上下文；缺少上下文或覆盖路径不属于该账号时拒绝恢复。
+语义任务优先保留 `covered_paths` 中的 Exact/Tree 类型；历史消息缺少覆盖类型、
+无法确定原始粒度时，按任务路径保守获取 Tree 锁并记录 warning。
+这可能将原来的 Exact 锁扩大为 Tree 锁，降低恢复期间的并发度。
+
+### 恢复阻塞的重试与告警
+
+QueueFS 没有全局最大重试次数或死信队列。AddResource、Reindex、ContentWrite
+和 Semantic 消费者对 `HandoffRecoveryBlocked` 的每条投递链最多重试 8 次
+（首次尝试之外），通过替代消息中的 `lock_handoff_retry` 持久化计数。
+如果替代消息已入队、原消息尚未 ACK 时进程崩溃，恢复后两条消息可能形成
+不同的投递链，各自沿用消息中的计数，因此这不是同一 work 的全局重试上限。
+每次重试前等待
+`min(0.5 × 2^retry, 30)` 秒；退避期间仍占用当前消费者槽位。
+等待取消或重新入队失败时，不 ACK 原消息；达到上限时结束该 work 并记录失败，
+关联任务通过任务跟踪机制进入 FAILED，可查询失败原因。失败不会自动进入死信队列。
+
+每次阻塞记录 warning，达到上限记录 error，并导出
+`openviking_pathlock_recovery_blocked_total{queue, outcome}`，其中 `outcome`
+为 `retry` 或 `exhausted`。先启用 `server.observability.metrics.enabled`
+和 `server.observability.metrics.exporters.prometheus.enabled`，配置 Prometheus
+抓取 `/metrics`，再将以下示例加入 Prometheus 告警规则：
+
+```yaml
+groups:
+  - name: openviking-pathlock-recovery
+    rules:
+      - alert: OpenVikingPathlockRecoveryBlocked
+        expr: sum by (queue) (increase(openviking_pathlock_recovery_blocked_total{outcome="retry"}[5m])) >= 8
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "OpenViking 路径锁恢复反复阻塞"
+      - alert: OpenVikingPathlockRecoveryExhausted
+        expr: sum by (queue) (increase(openviking_pathlock_recovery_blocked_total{outcome="exhausted"}[5m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "OpenViking 路径锁恢复已达重试上限"
+```
+
+阈值应按业务流量调整。告警后结合日志中的 `task_id` 和失败原因检查竞争写入者或
+Redis 可用性，解决原因后重新提交失败任务。指标启用和规则配置见
+[指标体系](./12-metrics.md)及 [Grafana 与 Prometheus](../guides/11-grafana-prometheus.md)。
 
 ## 相关文档
 

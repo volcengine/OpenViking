@@ -23,6 +23,7 @@ openviking-server doctor
 
 ```json
 {
+  "service_name": "openviking-server",
   "storage": {
     "workspace": "./data",
     "vectordb": {
@@ -52,7 +53,40 @@ openviking-server doctor
 
 ```
 
-如果 `provider` 是 `openai-codex`，并且 Codex OAuth 已经就绪，则 `vlm.api_key` 可以省略。
+如果 `provider` 是 `openai-codex`，并且 Codex OAuth 已经就绪，则 `vlm.api_key` 可以省略。将 `vlm.api_base` 设为 `https://api.openai.com/v1` 时，也支持标准 OpenAI API Key；参见 [VLM 配置](#vlm)。
+
+顶层 `service_name` 默认是 `"openviking-server"`，用于隔离 coordination 状态和
+使用 cache 的模块的 Redis 命名空间。OTel 的 `service_name` 显式配置时保持原值，省略时继承该值。
+
+### ov.conf 的有序凭据数组
+
+`vlm` 和 `query_planner` 支持有序的 `credentials` 数组；Embedding 在已配置的 `dense`、`sparse` 或 `hybrid` 节内支持同样的数组。索引 0 优先级最高，后续元素提供故障切换凭据。模型配置节仍是 JSON 对象，原有单凭据配置继续兼容。
+
+将以下字段合并到你的 `ov.conf`，并在启动服务前设置 `PRIMARY_API_KEY` 和 `BACKUP_API_KEY`：
+
+```json
+{
+  "vlm": {
+    "model": "your-vlm-model",
+    "credentials": [
+      {"id": "primary", "provider": "openai", "api_key": "${PRIMARY_API_KEY}"},
+      {"id": "backup", "provider": "openai", "api_key": "${BACKUP_API_KEY}"}
+    ]
+  },
+  "embedding": {
+    "dense": {
+      "model": "text-embedding-3-small",
+      "dimension": 1536,
+      "credentials": [
+        {"id": "primary", "provider": "openai", "api_key": "${PRIMARY_API_KEY}"},
+        {"id": "backup", "provider": "openai", "api_key": "${BACKUP_API_KEY}"}
+      ]
+    }
+  }
+}
+```
+
+每项凭据可以独立指定 provider、模型及连接字段；未指定模型时使用父级的 `model`。Embedding 凭据必须与父级模型的向量维度和输入语义兼容。`query_planner.credentials` 使用与 VLM 相同的格式。Rerank 仍使用单配置，不支持 `credentials` 数组。
 
 ## 配置范围与生效方式
 
@@ -68,11 +102,13 @@ OpenViking 的配置分为两个层级：
 | Cluster | `agent_evolution` | 动态配置 | ROOT 可通过 Admin API 修改，作为集群默认值使用。 |
 | Account | `feishu`、`agent_evolution` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改。Agent Evolution 为兼容旧行为保留已废弃的 Cluster 整段回退。Feishu 默认值由业务解析器处理：Account 未设置时使用 Cluster；设置后仅 `domain` 来自 Cluster。 |
 | Account | `github`、`acl` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改；不回退到 Cluster。 |
+| Account | `output_language_override`、`memory.extraction_enabled` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改。生成内容使用任务所属 Account 的配置，未配置时由业务层使用 Cluster 默认值。 |
 | Account | `vlm`、`query_planner` | 动态配置 | 仅 ROOT 可读写。每段已配置的模型配置都必须包含 `model` 和非空 `credentials` 数组，`timeout` 可选；ADMIN 无法读取或修改这两段配置。 |
+| Account | `parser_api.api_key` | 动态配置 | 仅 ROOT 可读写。已配置的段必须包含非空白 Key；外部解析使用任务所属 Account 的凭证。 |
 | Account | `embedding` | 部分动态 | 仅 ROOT 可读写。凭证、重试、并发、故障回切和熔断参数可动态修改；模型身份、向量空间字段、文本来源和输入 token 上限仅能在创建时设置。 |
 | Account | `vectordb` | 仅创建时配置 | 仅 ROOT 可在 Account 创建请求的 `settings` 中设置，后续新增、修改和重置均被拒绝。Account 专属连接仅支持 `http`、`volcengine`、`vikingdb`、`qdrant` 远端后端。 |
 
-Cluster 的 `embedding`、`vlm`、`query_planner`、`memory`、`feishu`、存储、解析器、检索等普通配置仍然是启动配置。Account 的 `memory` 不在当前 Account 配置 API 范围内。
+Cluster 的 `embedding`、`vlm`、`query_planner`、`memory`、`feishu`、存储、解析器、检索等普通配置仍然是启动配置。Account 的 `memory` 仅开放 `extraction_enabled`。
 
 Account 与 Cluster 配置分别存储和发布。Account 未配置时是否使用 Cluster
 属于业务默认行为，不是配置框架中的隐式继承。VLM 业务解析器负责这项策略：
@@ -115,10 +151,40 @@ PATCH /api/v1/admin/accounts/{account_id}/configuration
 ```
 
 PATCH 采用三态语义：字段缺失表示不修改，具体值表示设置或替换，`null`
-表示从当前作用域删除该值。对象递归合并，数组整体替换。响应只返回该作用域
-的配置，不返回业务组合后的有效配置。声明式 `fallback` 已废弃，只支持整段
+表示从当前作用域删除该值。对象递归合并，数组整体替换。响应主要返回该作用域
+的显式配置；Account configuration 额外保证 `agent_evolution.enabled` 为实际生效值，
+其他字段不补全默认值。声明式 `fallback` 已废弃，只支持整段
 配置，且仅用于兼容旧行为；新功能需要在业务解析器中实现 Cluster 默认值。
 详见 [Admin API - 运行时配置](../api/08-admin.md#runtime-configuration)。
+
+## Account 内容生成配置
+
+创建 Account 时应在 `settings` 中显式提供所需默认值，也可以通过 Account
+配置接口更新：
+
+```json
+{
+  "settings": {
+    "output_language_override": "en",
+    "memory": {"extraction_enabled": false}
+  }
+}
+```
+
+语言字段未配置或为 `null` 时使用 Cluster 语言；显式 `""` 启用自动语言判断，
+即使 Cluster 指定了语言也不使用它。语言标识沿用现有生成规则。这项配置覆盖
+文本资源摘要、目录 overview、Working Memory、记忆抽取和手动记忆整理。
+图片摘要提示词保持原有语言行为；音视频摘要优先使用媒体自身语言，仅在媒体语言
+无法识别时使用配置语言兜底。
+
+`memory` 整段未配置或为 `null` 时使用 Cluster 抽取开关。整段存在时使用其
+`extraction_enabled`，程序默认值为 `true`；`{}` 或删除最后一个字段会保留
+这个程序默认值。`false` 关闭 SessionCommit 长期记忆抽取；开启时仍遵守 user/peer
+策略。Working Memory 和手动 `compile --skill memory` 仍可使用。
+
+语言生成和抽取开关判断分别在需要时读取各自的 Account 配置；再次执行读取
+更新后的配置。排队任务保存 owner 身份，不保存这些配置值。
+显式 Account 配置不随 Cluster 默认值改变。
 
 ## Account Embedding 与 VectorDB
 
@@ -305,7 +371,7 @@ OpenAI 已于 2026 年 8 月 31 日[停止在 ChatGPT 登录的 Codex 中提供 
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `max_concurrent` | int | 最大并发 Embedding 请求数（`embedding.max_concurrent`，默认：`10`；必须 `>= 1`） |
+| `max_concurrent` | int | 入库文档 Embedding 请求的最大并发数（`embedding.max_concurrent`，默认：`10`；必须 `>= 1`）。检索查询的 Embedding 请求不受此限制 |
 | `max_retries` | int | Embedding provider 瞬时错误的最大重试次数（`embedding.max_retries`，默认：`3`；`0` 表示禁用重试） |
 | `text_source` | str | 文本文件向量化时使用的文本来源。`content_only` 读取原文内容；`summary_first` 优先使用摘要，没有摘要时回退到原文；`summary_only` 已弃用，作为 `summary_first` 的兼容别名；旧配置仍可加载，会记录警告并归一为 `summary_first`。默认：`content_only` |
 | `max_input_tokens` | int | 使用原文内容向量化时，发送给 embedding 模型的最大估算 token 数。默认：`4096` |
@@ -350,6 +416,8 @@ OpenAI 已于 2026 年 8 月 31 日[停止在 ChatGPT 登录的 Codex 中提供 
 | `doubao-embedding-250615` | 1024 | text | 仅文本 |
 
 使用 `input: "multimodal"` 时，OpenViking 可以嵌入文本、图片（PNG、JPG 等）和混合内容。以图搜图需要该模式；纯文本 embedding 模型仍会索引图片 summary，但不能接收图片查询。
+
+Hybrid 是否支持图片取决于 dense 通道。图文完整输入进入 dense，sparse 只接收文字；纯图输入跳过 sparse。Volcengine hybrid 对纯文本保留一次合并请求，对图文分别请求多模态 dense 和文本 sparse。dense 模型和维度应与索引中已有的向量保持兼容。
 
 **支持的 provider:**
 - `openai`: OpenAI Embedding API
@@ -534,7 +602,7 @@ SDK 1.39.0 起提供所需的客户端上下文管理器和关闭方法，用于
     "dense": {
       "provider": "gemini",
       "api_key": "your-google-api-key",
-      "model": "gemini-embedding-2-preview",
+      "model": "gemini-embedding-2",
       "dimension": 3072
     }
   }
@@ -542,11 +610,15 @@ SDK 1.39.0 起提供所需的客户端上下文管理器和关闭方法，用于
 ```
 
 可用 Gemini 嵌入模型:
-- `gemini-embedding-2-preview`: 8192 token 输入限制, 1–3072 输出维度 (MRL)
+- `gemini-embedding-2`: 8192 token 输入限制, 1–3072 输出维度 (MRL)
 - `gemini-embedding-001`: 2048 token 输入限制, 1–3072 输出维度 (MRL)
 - `text-embedding-004`: 2048 token 输入限制, 768 输出维度（固定）
 
 推荐维度: `768`、`1536` 或 `3072`（默认: `3072`）。
+
+稳定版 Gemini Embedding 2 不接受 `task_type` 请求字段，而是使用文档规定的文本任务指令。
+配置 `query_param` 或 `document_param` 后，OpenViking 会自动添加相应指令。如果修改已有索引的
+embedding 模型，除非 provider 明确保证两个向量空间兼容，否则应重新生成该索引的向量。
 
 获取 API Key: https://aistudio.google.com/apikey
 
@@ -609,7 +681,7 @@ SDK 1.39.0 起提供所需的客户端上下文管理器和关闭方法，用于
     "dense": {
       "provider": "gemini",
       "api_key": "your-google-api-key",
-      "model": "gemini-embedding-2-preview",
+      "model": "gemini-embedding-2",
       "dimension": 3072,
       "query_param": "RETRIEVAL_QUERY",
       "document_param": "RETRIEVAL_DOCUMENT"
@@ -727,10 +799,11 @@ provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的�
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `api_key` | str | API Key。`openai-codex` 在 Codex OAuth 可用时可省略；使用 provider 原生凭据的 `litellm` 路由也可省略 |
+| `api_key` | str | API Key。`openai-codex` 在 Codex OAuth 可用时可省略；使用标准 OpenAI API Key 时须同时设置 `api_base: "https://api.openai.com/v1"`。使用 provider 原生凭据的 `litellm` 路由也可省略 |
 | `forward_api_key` | bool | 仅 LiteLLM 使用。覆盖是否把 `api_key` 透传给 LiteLLM。默认情况下，OpenViking 不会把占位 key 透传给 `bedrock/`、`sagemaker/`、`vertex_ai/` 等 AWS/GCP 原生鉴权路由；如果明确使用 LiteLLM 的 Bedrock bearer-token API-key 鉴权，可设为 `true` |
 | `model` | str | 模型名称 |
-| `api_base` | str | API 端点（可选） |
+| `api_base` | str | API 端点（可选）。`openai-codex` 默认使用 ChatGPT Codex 后端；使用标准 OpenAI API Key 时设为 `https://api.openai.com/v1` |
+| `temperature` | float 或 null | 采样温度（默认：`null`）。省略或设为 `null` 时请求不携带该字段，使用服务端默认值 |
 | `thinking` | bool | 启用思考模式（仅对部分火山模型生效，默认：`false`） |
 | `max_concurrent` | int | 语义处理阶段 LLM 最大并发调用数（默认：`32`） |
 | `max_retries` | int | VLM provider 瞬时错误的最大重试次数（默认：`3`；`0` 表示禁用重试） |
@@ -749,6 +822,8 @@ provider，并设置 `storage.vectordb.sparse_weight > 0`。自托管模型的�
 | `media.file_processing_timeout` | float | Provider 侧媒体预处理最长等待秒数（默认：`1800`） |
 | `media.file_poll_interval` | float | Provider 侧媒体预处理轮询间隔秒数（默认：`3`） |
 | `media.video_fps` | float | Provider 支持时使用的视频采样帧率，范围 `0.2` 到 `5.0`（默认：`1.0`） |
+
+`vlm` 及单独配置的 `query_planner` 默认不指定温度；省略 `temperature` 或设置 `"temperature": null` 均使用服务端默认采样设置，适用于固定模型和自动路由模型。同一配置下的所有凭据共享此设置，VikingBot 的独立配置和调用接口也默认不指定温度。现有显式数字配置保留各后端原有处理逻辑；如需延续原 VLM 默认温度，可显式设置 `"temperature": 0.0`（需模型支持）。从原默认值改为服务端默认值后，输出随机性可能变化；具体接口需支持省略温度参数。思考模式及其支持的参数仍由具体模型决定。
 
 `vlm.max_retries` 仅对瞬时错误生效，例如 `429`、`5xx`、超时和连接错误；认证、鉴权、欠费等永久错误不会自动重试。退避策略为指数退避，初始延迟 `0.5s`，上限 `8s`，并带随机抖动。
 
@@ -769,12 +844,34 @@ VLM 配置返回 `is_available() == false` 时，通用文件摘要会返回空�
 **支持的 provider：**
 - `volcengine`：火山引擎 VLM API
 - `openai`：OpenAI 兼容 VLM API
-- `openai-codex`：通过 ChatGPT/Codex OAuth 使用 Codex VLM
+- `openai-codex`：通过 ChatGPT/Codex OAuth，或显式 API Key 和端点使用 Responses API
 - `kimi`：Kimi Coding 订阅端点，内置 provider 默认配置
 - `glm`：Z.AI GLM Coding Plan 端点，使用 OpenAI 兼容请求格式
 - `litellm`：LiteLLM VLM API，支持 `bedrock/`、`sagemaker/`、`vertex_ai/`、`azure/` 等显式 LiteLLM 路由
 
-对于 `openai-codex`，请通过 `openviking-server init` 完成鉴权，再使用 `openviking-server doctor` 做校验。
+对于使用 OAuth 的 `openai-codex`，请通过 `openviking-server init` 完成鉴权，再使用 `openviking-server doctor` 做校验。
+
+**使用 API Key 调用 Responses API**
+
+使用标准 OpenAI API Key 调用 Responses API 时，请在 `openai-codex` 配置中同时设置
+`api_key` 和 `api_base`。显式配置 key 后会跳过 Codex OAuth。
+将以下 `vlm` 段合并到 `ov.conf`，替换 key 和 model 占位值：
+
+```json
+{
+  "vlm": {
+    "provider": "openai-codex",
+    "api_key": "YOUR_OPENAI_API_KEY",
+    "api_base": "https://api.openai.com/v1",
+    "model": "YOUR_RESPONSES_MODEL",
+    "reasoning_effort": "medium"
+  }
+}
+```
+
+请选择支持所需工具和推理强度的 Responses 模型。该路径使用 `/v1/responses`；
+`provider: "openai"` 使用 Chat Completions。仅设置 `api_key` 不会切换到 OpenAI API
+端点：省略 `api_base` 时仍默认使用 Codex 后端。
 
 对于 `litellm`，当底层路由使用环境变量或 provider 原生凭据时可以省略
 `api_key`，例如 Bedrock/SageMaker 的 AWS IAM/IRSA，或 Vertex AI 的
@@ -875,6 +972,34 @@ VLM 的 `model` 填写对应的方舟模型 endpoint ID。`video_fps` 仅用于�
 
 媒体处理会把文件内容发送给所配置的外部 provider。禁用响应存储和 best-effort 删除可以降低非预期留存风险，但不能替代 provider 自身的隐私与留存控制；上传文件未显式指定过期时间，其保留周期由方舟的默认策略决定。方舟 Files 的存储/处理以及 Responses 的模型 token 可能产生费用；启用前请确认 provider 的隐私、留存和计费条款。详见火山方舟官方[音频理解文档](https://docs.volcengine.com/docs/82379/2377589?lang=zh)和[视频理解文档](https://docs.volcengine.com/docs/82379/1895586?lang=zh)。
 
+### bot.compile
+
+配置单个 Resource Compile 任务各阶段的并发工作数，适用于直接模型调用和 agent 执行：
+
+```json
+{
+  "bot": {
+    "compile": {
+      "map_concurrency": 8,
+      "shuffle_concurrency": 4,
+      "shuffle_batch_size": 4,
+      "reduce_concurrency": 6
+    }
+  }
+}
+```
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `map_concurrency` | 继承 `vlm.max_concurrent` | Map 提取工作并发数 |
+| `shuffle_concurrency` | 继承 `vlm.max_concurrent` | Shuffle 路由工作及 embedding 批次并发数 |
+| `shuffle_batch_size` | `4` | 每次 Shuffle 路由请求的主记录数上限；与并发数、字符软预算独立 |
+| `reduce_concurrency` | 继承 `vlm.max_concurrent` | Reduce 工作并发数；同路径候选的最终 merge 复用此值 |
+
+三个并发配置项必须为正整数；省略或设为 `null` 时继承默认值。`shuffle_batch_size` 必须为正整数，省略时为 `4`，不接受 `null`。路由逐条保存合法结果，仅失败记录重新组批重试，最后一次降为单条；每条记录最多尝试三轮。修改后需重启 VikingBot 服务。一个 VikingBot 服务内的所有 Compile 任务仍共享 `vlm.max_concurrent` 限制的模型请求容量，因此提高阶段并发不会突破这一总上限。Embedding 请求另受 embedding 服务的并发限制。恢复任务默认使用相同的 reduce 配置，显式 `--concurrency` 可覆盖恢复并发数。
+
+Compile 继承模型的 thinking 和 reasoning 配置。模型请求使用有效模型超时配置（`bot.agents.timeout` 或继承的 `vlm.timeout`）。
+
 ### query_planner
 
 可选的轻量模型配置，用于检索前的意图分析和 query 规划/改写。配置结构与 `vlm` 相同，用于 `search()` 的意图分析、query expansion，以及可选的服务端 recall 摘要重写。未配置或配置为空时，OpenViking 会回退到 `vlm`，保持向后兼容。
@@ -947,7 +1072,7 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 
 #### 远程资源网络防护
 
-通过 URL 拉取资源时，默认网络检查会拒绝解析到非公网地址的目标。普通公网 URL 无需加入代码托管白名单；列入白名单的可信代码主机会跳过地址范围检查。接入自建 GitHub Enterprise / GitLab / Azure DevOps 时，可将主机加入 `code` 下对应的平台列表：
+通过 URL 拉取资源时，默认网络检查会拒绝解析到非公网地址的目标。普通公网 URL 无需加入代码托管白名单；列入白名单的可信代码主机可以访问私有网络，但仍须通过 DNS 地址检查。回环、link-local、未指定、组播、保留地址和已知云元数据地址始终被拒绝，白名单和 `allow_private_networks` 均不能放行这些目标。接入自建 GitHub Enterprise / GitLab / Azure DevOps 时，可将主机加入 `code` 下对应的平台列表：
 
 | 字段 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
@@ -956,7 +1081,7 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 | `azure_devops_domains` | list[str] | 允许的 Azure DevOps 主机 | `["dev.azure.com", "ssh.dev.azure.com", "vs-ssh.visualstudio.com"]` |
 | `code_hosting_domains` | list[str] | 允许的通用代码托管主机 | `["github.com", "gitlab.com", "gitcode.com", "gitee.com", "bitbucket.org", "codeberg.org", "gitea.com", "atomgit.com", "git.sr.ht"]` |
 
-如果需要允许其他私有网络目标（例如内部镜像），可将顶层 `allow_private_networks` 设为 `true`。该开关默认关闭；`localhost` 及其子域等本地主机名仍会被拒绝。下面同时演示启用私有网络访问和添加代码主机：
+如果需要允许其他私有网络目标（例如内部镜像），可将顶层 `allow_private_networks` 设为 `true`。该开关默认关闭，启用后仍受上述地址限制；`localhost` 及其子域也会被拒绝。下面同时演示启用私有网络访问和添加代码主机：
 
 ```json
 {
@@ -968,7 +1093,33 @@ ollama pull guoxuter/ov_intent_analysis_sft:v7_q8
 ```
 
 需要 GitHub、GitLab 或 Azure DevOps 专属 URL 语义时，应配置到对应的平台字段；
-其他 Git 主机统一添加到 `code_hosting_domains`。
+其他 Git 主机统一添加到 `code_hosting_domains`。HTTP 服务的 Git 预检、clone 和 fetch 不跟随 HTTP 重定向，请提供最终仓库 URL；GitHub/GitLab ZIP 下载保留重定向支持，并在请求每个跳转目标前进行同样的地址校验。
+
+#### 语法包下载与镜像（网络受限 / 离线）
+
+`tree-sitter-language-pack.process()` 首次解析某种语言时，会按需从 GitHub Releases 下载语法整包（单个平台包内含全部语言，约 20MB），下载后缓存在本地，之后的解析直接读缓存、不再联网。
+
+- **Docker 部署**：镜像在构建阶段已执行 `download_all()` 预热全部语法，并校验所有语言就绪（缺失则镜像构建失败）；生产环境直接命中镜像内缓存，无需也不会访问 GitHub。
+- **个人本地使用（非 Docker）**：默认仍按需从 GitHub 下载，不会强制预取。如果你的网络无法访问 GitHub，可把环境变量指向 OpenViking 随包内置的代理清单（下载地址已改写为公共代理 `gh-proxy.com`）：
+
+```bash
+# 1. 找到随包安装的代理清单路径
+python -c "import openviking.parse.parsers.code.ast as m, os; print(os.path.join(os.path.dirname(m.__file__), 'assets', 'parsers.ghproxy.json'))"
+
+# 2. 指向它（建议写入 ~/.zshrc / ~/.bashrc）
+export TREE_SITTER_LANGUAGE_PACK_MANIFEST_URL="file://<上一步输出的绝对路径>"
+```
+
+说明：
+
+- 该环境变量只替换**清单文件**地址；清单内各平台整包 URL 已改写为代理地址，整包也会走代理，`sha256` 保持不变。
+- 想彻底离线，可在能联网时手动预热一次，之后全程使用本地缓存：
+
+```bash
+python -c "from tree_sitter_language_pack import download_all; download_all()"
+```
+
+- 如需使用自建镜像，把环境变量指向你自己的 `parsers.json`（同步改写其中的整包 URL）即可，支持 `http(s)://` 与 `file://`。
 
 ### pdf
 
@@ -1007,7 +1158,7 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 | `enable` | `false` | 启用外部解析。 |
 | `extensions` | `[]` | 交给外部解析的扩展名；转为小写并去掉开头的点。 |
 | `host` | `""` | 带协议的 API 地址，如 `https://parser.example.com`；启用时必填。 |
-| `api_key` | `""` | 外部 API 凭证；启用时必填。 |
+| `api_key` | `""` | 兼容旧独享部署的凭证，仅在 Account 未配置 `parser_api` 段时使用；启动外部解析操作时必须有可用 Key。 |
 | `enable_feishu_url` | `false` | 有可用凭证时允许直接解析飞书 URL。已由 Accessor 归一化为 Markdown 的飞书文档跳过外部解析；文件附件仍按扩展名路由。 |
 | `enable_resumable_upload` | `false` | 启用断点续传。 |
 | `upload_simple_max_bytes` | `536870912`（512 MiB） | 简单上传的大小阈值。 |
@@ -1017,6 +1168,24 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 | `poll_interval_ms` | `3000` | 结果轮询间隔，单位毫秒。 |
 
 大小、超时和轮询参数都必须大于零。
+
+共享部署应通过 `POST /api/v1/admin/accounts` 为每个 Account 配置
+`settings.parser_api.api_key`，或通过
+`PATCH /api/v1/admin/accounts/{account_id}/configuration` 更新。该段仅 ROOT
+可读写；ADMIN 响应不返回该段，ADMIN 修改请求（包括 `null`）均被拒绝。
+Account 只拥有凭证，host、路由、上传和超时参数仍由 Cluster 维护。
+Account 已配置时，远端认证失败不会回退到 Cluster Key。普通 add-resource
+`args.api_key` 和 `args.parser_api` 均被拒绝。
+
+上传、提交、轮询、目录导入（包括嵌套 ZIP）和任务恢复都使用任务所属 Account。队列消息仅保存 owner
+和远端 file/response ID，不保存解析 Key。执行中的一次解析调用使用已取得的 Key，
+下一次调用或恢复读取最新 Key。轮换必须保持同一远端身份，并确保新 Key 能访问已有
+远端 ID；权限错误直接失败，不重新提交或尝试其他凭证。结果 ZIP URL 的下载不附带
+解析服务的 Authorization 头。
+
+内置文件配置源通过 AGFS 持久化 Account 配置，开启 `encryption.enabled=true`
+时沿用现有文件加密；该开关默认关闭。本次改动不会加密宿主机上的 `ov.conf`，
+也不改变自定义配置源的加密行为。
 
 ### rerank
 
@@ -1061,6 +1230,8 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
     "provider": "jev",
     "api_key": "your-typesafe-api-key",
     "model": "jev-latest",
+    "mode": "noul",
+    "candidates_visible": false,
     "timeout": 120,
     "log_payloads": false,
     "threshold": 0.1
@@ -1078,7 +1249,7 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
   "rerank": {
     "provider": "jev",
     "api_key": "your-vercel-ai-gateway-api-key",
-    "api_base": "https://ai-gateway.vercel.sh/typesafe",
+    "api_base": "https://ai-gateway.vercel.sh/typesafe/v1/systemone",
     "model": "typesafe-ai/jev",
     "threshold": 0.1
   }
@@ -1094,12 +1265,27 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 - `api_base` 必须带 `/typesafe` 后缀；`https://ai-gateway.vercel.sh/v1` 是
   Vercel 自有的 evaluate 协议，适配器不支持。
 
-Jev 适配器将 query 和候选文档作为共享的 System One `state`，支持两种模式：
+Jev 适配器支持两种评分模式：
 
 - `noul`（默认）：为每篇文档提出独立的相关性问题，返回的 yes 概率作为分数。
   所有问题放在一次 HTTP 请求中，各文档分数不要求总和为 1。
 - `choice`：用一个问题横向比较所有候选文档，以 `candidate_{index}` 对应输入
   下标，并按原文档顺序读取 `probabilities` 作为分数。
+
+Noul 的候选可见性由 `rerank.candidates_visible` 控制：
+
+- `false`（默认，仅限 Noul）：共享 `state` 只保留 query，每个问题通过
+  `instructions.candidate_document` 携带自己的文档；该问题及共享 state
+  不包含其他候选。所有问题仍在一次 HTTP 请求中发送，分数保持原文档顺序。
+- `true`：query 和所有候选文档都放在共享 `state` 中。
+  Noul 独立评分不代表候选互相不可见。
+
+Noul 现在省略 `candidates_visible` 即默认隔离。要保留共享候选上下文，需显式
+设置 `"candidates_visible": true`。
+
+Choice 不受这个 Noul 专用开关影响，始终将全部候选放入共享 `state` 进行比较。
+配置 `"mode": "choice"` 时，省略 `candidates_visible`、设置为 `false` 或 `true`，
+请求结构和评分行为均相同。
 
 通过 `rerank.mode` 选择模式；未配置或配置为 `null` 时默认使用 `noul`。Choice
 返回候选池内总和为 1 的相对概率，不是绝对相关概率，不适合使用绝对分数阈值。
@@ -1116,13 +1302,14 @@ Jev 适配器将 query 和候选文档作为共享的 System One `state`，支�
 | `sk` | str | VikingDB Secret Key（仅 `vikingdb` 提供方使用） |
 | `model_name` | str | 模型名称（仅 `vikingdb` 提供方使用，默认：`doubao-seed-rerank`） |
 | `api_key` | str | API Key（用于 `openai`、`cohere` 或 `jev` 提供方） |
-| `api_base` | str | 接口地址（用于 `openai` 或 `jev`；Jev 默认为 `https://api.typesafe.ai`，Vercel 使用 `https://ai-gateway.vercel.sh/typesafe`） |
+| `api_base` | str | 完整接口地址（用于 `openai` 或 `jev`；Jev 默认为 `https://api.typesafe.ai/v1/systemone`，Vercel 使用 `https://ai-gateway.vercel.sh/typesafe/v1/systemone`；自定义 Jev URL 会原样使用） |
 | `model` | str | 模型名称（用于 OpenAI 兼容、LiteLLM 或 `jev` 提供方） |
 | `mode` | `"noul"`、`"choice"` 或 `null` | Jev Rerank 模式；省略或 `null` 时使用 `"noul"` |
+| `candidates_visible` | bool | 仅用于 Jev Noul；默认 `false`，每个候选隔离到自己的问题中。显式 `true` 可共享候选上下文；Choice 忽略此选项。 |
 | `timeout` | float | HTTP Rerank provider（包括 Jev）的请求超时时间，单位为秒。默认：`30.0` |
 | `max_input_tokens` | int | 每个 query-document 对发送给 reranker 的最大估算原始文本 token 数；超长输入会保留开头和结尾。`0` 表示不截断。默认：`0` |
 | `log_payloads` | bool | 记录完整 rerank 请求和响应；日志可能包含 query 和文档内容。默认：`false` |
-| `threshold` | float | 分数阈值，范围为 `0.0` 到 `1.0`。低于此值的结果会被过滤。默认：`0.1` |
+| `threshold` | float | Rerank 分数阈值，范围为 `0.0` 到 `1.0`。Rerank 后低于此值的结果会被过滤；它不过滤向量分数（未使用 Rerank 或 Rerank 失败时），请求中的 `score_threshold` 优先。默认：`0.1` |
 | `extra_headers` | object | 自定义 HTTP 请求头（OpenAI 兼容 provider 可用，可选） |
 
 **支持的提供方:**
@@ -1142,6 +1329,7 @@ Jev 适配器将 query 和候选文档作为共享的 System One `state`，支�
 {
   "retrieval": {
     "enable_intent": true,
+    "apply_rerank_to_context": false,
     "recall_intent_timeout_s": 5.0,
     "recall_rewrite_timeout_s": 30.0
   }
@@ -1151,12 +1339,13 @@ Jev 适配器将 query 和候选文档作为共享的 System One `state`，支�
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `enable_intent` | bool | `search()` 收到 `session_id` 时是否执行意图分析和查询规划。 | `true` |
+| `apply_rerank_to_context` | bool | 是否用已配置的 [`rerank`](#rerank) 模型重排 `mode="context"` 的候选：每个请求用原始查询及其扩展查询统一重排一次，在配额和 token 预算之前执行。需要可用的 `rerank` 配置；图像查询保持向量分数。 | `false` |
 
-`/search` 的 `mode="context"` 组装面用到两个超时熔断：
+普通 `search()` 的会话意图分析和 `mode="context"` 的查询扩展共用 `recall_intent_timeout_s`；上下文 digest 重写使用独立的超时配置：
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `recall_intent_timeout_s` | float | 会话感知查询扩展的超时；超时后回退为用户原查询 | `5.0` |
+| `recall_intent_timeout_s` | float | 会话意图分析和上下文查询扩展的超时；超时或失败后回退为用户原查询 | `5.0` |
 | `recall_rewrite_timeout_s` | float | digest 重写的超时；超时后 `digest` 为空并照常返回 `rendered` | `30.0` |
 
 查询扩展需要传入有内容的 `session_id` 并启用意图分析，重写需要传入 `rewrite`。这些模型调用受各自超时限制；失败后回退到未扩展的查询或未重写的结果。
@@ -1196,8 +1385,12 @@ Glob 引擎配置，用于路径模式匹配。这些设置为服务端配置，
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `engine` | str | 路径匹配引擎模式：`"auto"` 在 VikingDB / Volcengine 向量库可用且搜索范围记录数达到阈值时，使用远程 `path_glob` 后处理；不可用或失败时回退到本地文件系统搜索。`"fs"` 强制仅使用本地文件系统搜索。 | `"fs"` |
+| `engine` | str | 路径匹配引擎模式：`"auto"` 按当前账户向量库的 `storage.vectordb.enable_path_glob` 配置及后端默认能力选择远程路径；当 `uri` 字段存在且搜索范围记录数达到阈值时，使用远程 `path_glob` 后处理。不可用或失败时回退到本地文件系统搜索。`"fs"` 强制仅使用本地文件系统搜索。 | `"fs"` |
 | `switch_to_remote_threshold` | int | `auto` 模式切换到远程 `path_glob` 的记录数阈值。当搜索范围内记录数达到此阈值时使用远程路径匹配。设为 `0` 表示始终使用远程路径匹配。必须 ≥ 0。 | `100` |
+
+`storage.vectordb.enable_path_glob` 可设为 `true`（启用远程支持）或 `false`（禁用）。
+未配置或设为 `null` 时沿用后端默认能力：VikingDB、Volcengine 默认支持，其余内置后端默认不支持。
+自定义 adapter 也可声明默认能力。此配置不改变 `glob.engine="fs"` 的行为，也不跳过阈值或失败回退。
 
 ### storage
 
@@ -1211,6 +1404,8 @@ Glob 引擎配置，用于路径模式匹配。这些设置为服务端配置，
 | `skip_process_lock` | bool | 是否跳过本地向量后端（`local`、`cuvs`）对 `storage.workspace` 的 `.openviking.lock` 独占文件锁。其他后端不会获取此锁。跳过检查不代表本地向量存储支持多进程共享。 | `false` |
 | `agfs` | object | RAGFS（Rust 实现的 AGFS）配置 | {} |
 | `vectordb` | object | 向量库存储配置 | {} |
+| `task_store` | object | 持久化 Task/Work 后端配置 | `{"provider":"file"}` |
+| `watch_store` | object | Watch 存储：`file`（单节点）或 `mysql`（多节点共享） | `{"provider":"file"}` |
 
 
 ```json
@@ -1228,14 +1423,131 @@ Glob 引擎配置，用于路径模式匹配。这些设置为服务端配置，
 }
 ```
 
+#### task_store
+
+Task 记录默认使用本地 FileStore。需要多个 OpenViking 进程共享
+Task/Work 状态时，先在 MySQL 中执行
+`openviking/service/sql/task_store_init.sql`，再按顺序执行
+`openviking/service/sql/changes/` 下的变更脚本，配置稳定的顶层
+`service_name` 后选择关系型后端：
+
+```json
+{
+  "service_name": "production",
+  "storage": {
+    "task_store": {
+      "provider": "mysql",
+      "params": {
+        "user": "openviking",
+        "password": "change-me",
+        "database": "openviking",
+        "host": "127.0.0.1",
+        "port": 3306,
+        "table": "ov_tasks"
+      }
+    }
+  }
+}
+```
+
+`params.table` 是表前缀，必须以 ASCII 字母开头，只能包含 ASCII 字母、数字和
+下划线，最多 38 个字符，确保派生的表名、索引名和约束名不超过 MySQL 的 64 字符上限。
+使用自定义前缀时，需要在建表 SQL 中统一替换 `ov_tasks`。
+
+MySQL 后端需要安装 `openviking[mysql]` extra。Task mutation、Task
+最终化和 execution event 更新在同一个数据库事务中提交。`task_id`
+在同一个 `service_name` 分区内唯一；顶层 `service_name` 会写入每条
+Task/Work/Event 记录，用于隔离共用同一套表的多个 OpenViking 部署。
+`account_id` 和 `user_id` 用于鉴权和查询范围。新库需要先执行 init SQL，
+再按顺序执行变更脚本；升级使用旧 TaskStore 表的库前，先执行
+`openviking/service/sql/changes/0001_task_store_service_name.sql`。同一部署
+不要同时让 FileStore 和 MySQL 表作为写入端。
+
+#### watch_store
+
+默认的 `file` provider 与旧版本一样，把 Watch 任务保存在内部控制文件
+`viking://resources/.watch_tasks.json` 中，只供单个 OpenViking 进程使用。任务启动时
+一次性加载到内存；开始运行和关联 Task 只更新内存，创建、配置、checkpoint、
+结果、删除及目标变化时写完整任务快照，内容相同的 patch 不落盘。即使其它 Watch
+发生变化，也不会保存运行占用；重启后与旧版本一样，按保存的计划重新调度过期 Watch。
+快照及其 tmp/backup 文件均为内部控制状态。当 Watch
+元数据本身需要共享存储时使用 `mysql`：安装 `openviking[mysql]`，并执行
+`openviking/service/sql/001_watch_tasks.sql`。MySQL 的 `params` 与 `task_store`
+使用相同的连接字段；`params.table` 默认为 `ov_watch_tasks`。必须配置
+`params.credential_encryption_key`：一个 base64 编码的 32 字节密钥，用于以 AES-GCM
+加密存储每个 Watch 的私有 `auth_state`（数据源 token）和 `connector_states`，密文与
+task ID 绑定。所有节点必须使用同一密钥，更换密钥会导致已有 Watch 凭证无法解密。
+`file` 模式下这些状态仍由 VikingFS 文件加密保护。
+
+候选查询按剩余并发容量分批读取 Watch ID、归属和目标 URI。Manager 的 `due()` 在
+目标 PathLock 内调用 `begin_run()`，在同一事务中读取一次当前 Watch 并占用，
+提交时直接使用快照，不再读取 Watch。占用后的参数修改从下一轮生效。
+`running()` 只读取归属和运行 ID、开始时间、Connector 标记、
+instruction 及数据库时间，不搬运或解密鉴权、Connector 状态和 checkpoint。
+
+MySQL 持久化占用、真实 Task 关联和终态结算，本轮 checkpoint 版本与之前一样
+保存在 payload 中，结算不会用旧 checkpoint 覆盖新配置。缺失 Task
+沿用现有宽限期及重试语义，创建 Task 后、关联 Watch 前崩溃的窗口仍可能造成重复导入。
+
+Watch 列表分页使用建表脚本中的 `list` 和 `list_all` 索引。若此前已创建 Watch 表，
+需执行一次索引更新；自定义表名时同步替换表名及索引名：
+
+```sql
+ALTER TABLE ov_watch_tasks
+  DROP INDEX ix_ov_watch_tasks_list,
+  ADD INDEX ix_ov_watch_tasks_list
+    (service_name(128), account_id(128), user_id(128), deleted, created_at, task_id),
+  ADD INDEX ix_ov_watch_tasks_list_all
+    (service_name, deleted, created_at, task_id);
+```
+
+```json
+{
+  "storage": {
+    "watch_store": {
+      "provider": "mysql",
+      "params": {
+        "user": "openviking",
+        "password": "change-me",
+        "database": "openviking",
+        "host": "127.0.0.1",
+        "port": 3306,
+        "table": "ov_watch_tasks",
+        "credential_encryption_key": "base64-encoded-32-byte-key"
+      }
+    }
+  }
+}
+```
+
+所有节点都提供 Watch API。`enable_watch_scheduler=true` 的节点可以运行后台 Watch
+调度器，通过 [AGFS coordination](#coordination-配置) 选主。
+leader 每 15 秒拉取到期 Watch 并结算已结束的运行。File 和 MySQL 共用 Runtime
+的轮询与有限并发派发流程。后台派发在 leader 内存中维护
+未结束的 Watch 运行和提交中的协程占用（默认上限 4）。接管时通过已有运行扫描
+恢复占用（File 为本进程状态，MySQL 为持久化行），后续派发不额外查询占用。
+手动触发和首次导入独立受理，扫描发现后计入
+后台占用。File 目标移动没有 1000 条 Watch 上限，MySQL 仍保留该事务限制。
+一次运行就是
+对应的 ingestion Task：运行占用目标期间，Watch 行记录该 Task ID，且只有在持有
+目标 Tree PathLock 时才能开始运行。提交在创建 Task 前停止（服务停机、身份删除、
+失败）时立即结算；Task 超过 1 小时仍不存在时，阻止后续提交并按 error 结算。
+运行超过 3 小时会请求取消；若 Task 仍非终态，则通过 TaskTracker 记录超时错误。
+Connector 导入没有本地 Work，其 Task 会成为 failed，再结算 Watch 并释放占用。
+仍有未结束本地 Work 的 Task 保持占用，直到 Work 结算。已有终态保持不变。
+该超时表示结束本轮本地跟踪，不保证远端执行已经停止。
+
+对与被占用 Watch 目标重叠的路径执行 `mv`、`cp`、`rm`、`mkdir` 时，最多等待
+10 秒，之后返回可重试的 busy 错误。
+
 #### agfs (RAGFS)
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `backend` | str | `"local"`、`"s3"` 或 `"memory"` | `"local"` |
 | `timeout` | float | 请求超时时间（秒） | `10.0` |
-| `backups` | object | 主备存储配置。配置后顶层 `backend` 作为 primary，`backups.items[]` 作为 backup | `null` |
-| `redirects` | array | 主备存储的文件重定向策略。命中后文件写入指定 backup，而不是 primary | `[]` |
+| `backups` | object | 多写存储配置。配置后顶层 `backend` 作为 primary，`backups.items[]` 作为 backup | `null` |
+| `coordination` | object | Watch 选主和语义任务 revision | `{"provider":"memory"}` |
 | `queuefs` | object | QueueFS 配置。控制 `/queue` 的命名空间模式、后端和运行时参数 | `{ "mode": "shared", "backend": "sqlite", "recover_stale_sec": 0, "busy_timeout_ms": 5000 }` |
 | `queue_db_path` | str（可选）| 旧版兼容字段，用于覆盖 QueueFS 的 sqlite 数据库文件路径。已被 `storage.agfs.queuefs.db_path` 取代。未设置时默认为 `{storage.workspace}/_system/queue/queue.db`。适用于 workspace 卷不支持 sqlite 的场景（例如某些网络文件系统） | `null` |
 | `s3` | object | S3 后端配置（`backend=s3` 时使用） | - |
@@ -1248,9 +1560,25 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 > [!WARNING]
 > `storage.agfs` 已不再支持 AGFS HTTP client 模式，也无需再配置旧的 HTTP client 入口。当前 AGFS / RAGFS 文件系统访问仅通过 Rust binding（`RAGFSBindingClient`）在进程内完成。这不影响 OpenViking server 的 HTTP API、`ov` CLI，或 `AsyncHTTPClient` / `SyncHTTPClient` 访问 OpenViking 服务端的能力。
 
+##### Coordination 配置
+
+`storage.agfs.coordination` 管理 Watch 选主及用于跳过过时语义任务的 revision。
+参与协调的节点须共享同一后端和顶层 `service_name`。
+
+| 参数 | 类型 | 说明 | 默认值 |
+|------|------|------|--------|
+| `provider` | str | `memory`：进程内；`sqlite`：同机；`cache`：复用顶层共享 CacheRuntime | `"memory"` |
+| `sqlite_path` | str / null | 使用 `sqlite` 时必填：本地磁盘上共享数据库的绝对路径，不能位于 EFS/NFS | `null` |
+| `operation_timeout_ms` | int | 单次 cache 协调操作的截止时间（毫秒），仅用于 cache，必须为正数 | `5000` |
+
+`watch_leader_provider` 已 deprecated，下个版本移除。未显式指定 coordination provider 时，
+`auto`（默认）在 File WatchStore 下选择 `memory`、MySQL 下选择 `cache`；
+`local` 映射为 `memory`，`cache` 映射为 `cache`。
+迁移时显式设置 `storage.agfs.coordination.provider`，并删除旧字段。
+
 ##### 主备存储配置
 
-`storage.agfs.backups` 用于启用主备存储。未配置时，OpenViking 保持单 backend 模式。
+`storage.agfs.backups` 启用异步 V2 多写。顶层 backend 始终是唯一直接读取来源。
 
 ```json
 {
@@ -1258,26 +1586,17 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
     "workspace": "./data",
     "agfs": {
       "backend": "local",
-      "redirects": [
-        {
-          "type": "FileExtensionPolicy",
-          "extensions": ["(pdf|ppt|zip)"],
-          "target": ["s3-backup"]
-        }
-      ],
       "backups": {
-        "sync_type": "async",
+        "initial_partitions": 16,
+        "checkpoint_interval_secs": 86400,
+        "reconcile_existing_data": false,
+        "provider": "filesystem",
         "items": [
           {
-            "name": "s3-backup",
-            "backend": "s3",
-            "s3": {
-              "bucket": "openviking-backup",
-              "region": "cn-beijing",
-              "endpoint": "https://tos-s3-cn-beijing.volces.com",
-              "access_key": "your-ak",
-              "secret_key": "your-sk",
-              "prefix": "multi-write"
+            "name": "local-backup",
+            "backend": "local",
+            "params": {
+              "workspace": "./data/backup"
             }
           }
         ]
@@ -1291,40 +1610,22 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `sync_type` | str | 主备同步模式，支持 `"async"` 或 `"sync"` | `"async"` |
-| `write_ack_count` | int | `sync` 模式下返回前需要的 backup 确认数 | 全部 backup |
-| `write_ack_timeout_ms` | int | `sync` 模式下等待 backup 确认的超时时间，单位毫秒 | `null` |
-| `write_concurrency` | int | 异步 backup 写入并发上限 | `null` |
-| `items` | array | backup backend 列表，每个 item 复用普通 backend 配置并增加 `name`、`operations`、`excludes`、`encryption` 等字段 | `[]` |
+| `initial_partitions` | int | account 首次初始化的 metadata partition 数；修改不影响已有 account | `16` |
+| `checkpoint_interval_secs` | int | Checkpoint 扫描间隔，最小值为 `60` | `86400` |
+| `reconcile_existing_data` | bool | 首次启用多写时，扫描 primary 已存在文件并写入 V2 metadata。仅在 backup 已对齐或明确跳过历史回填时保持 `false`。 | `false` |
+| `provider` | str | Metadata provider：`filesystem` 或复用顶层 CacheRuntime 的 `cache` | `"filesystem"` |
+| `items` | array | backup 列表，包含 `name`、`backend`、`params` 和可选 `encryption` | `[]` |
 
-`redirects` 常用字段：
-
-| 参数 | 类型 | 说明 | 默认值 |
-|------|------|------|--------|
-| `type` | str | 策略类型，支持 `"FileExtensionPolicy"` 或 `"FileOverSizePolicy"` | 必填 |
-| `extensions` | array | `FileExtensionPolicy` 使用的扩展名正则列表，例如 `["(pdf\|ppt)"]` | `[]` |
-| `max_size_mb` | int | `FileOverSizePolicy` 使用的文件大小阈值，单位 MB | `null` |
-| `target` | array | 命中策略后写入的 backup `name` 列表 | 必填 |
-
-按文件大小重定向示例：
-
-```json
-{
-  "type": "FileOverSizePolicy",
-  "max_size_mb": 100,
-  "target": ["s3-backup"]
-}
-```
-
-注意：
-
-- `redirects` 配置在顶层 `storage.agfs`，表示 primary 的重定向策略。
-- `target` 必须引用 `backups.items[]` 中已经定义的 backup `name`。
-- 命中 redirect 的文件仍会通过普通文件系统 API 呈现为可读、可列举的文件。
+Python 配置层仍接受旧 sync、retry、operations、excludes 和 redirects
+字段，输出 warning 后会在调用 Rust 前删除，字段不生效。
 
 更多配置示例见 [主备存储指南](./13-multi-write-storage.md)。
 
 ##### 全局 Cache Provider、CacheFS 与 PathLock 配置
+
+顶层 `service_name` 表示当前 OpenViking 部署名。CacheFS、`backend=cache`
+的 QueueFS，以及使用 cache 的 PathLock、coordination 和多写 metadata 都会从它生成
+Redis 命名空间。
 
 全局 `cache` 与 `storage` 并列，标准配置只包含 Provider 名称和 Provider 自有参数：
 
@@ -1338,22 +1639,58 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `backend` | str | `local` 完全沿用原文件系统；`cache` 启用 CacheFS wrapper | `local` |
-| `namespace` | str | CacheFS key 命名空间 | `openviking` |
-| `max_file_size_bytes` | int | 允许缓存的单文件最大字节数 | `1048576` |
-| `traversal_mode` | str | `backend` 或 `cached_traversal` | `backend` |
-| `bypass_prefixes` | array[str] | 绕过缓存的路径前缀 | `[]` |
+| `shared_redis_ttl_seconds` | int | 统一覆盖查询 bucket 的 TTL；`0` 表示沿用 Provider 默认 TTL。仅当 CacheFS 与 QueueFS、cache PathLock 或 expiry 调度共用同一个 Redis 服务时生效 | `0` |
 
 `storage.agfs.pathlock` 选择 PathLock 存储 Provider：
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `provider` | str | `filesystem`、`memory` 或 `cache`；`cache` 复用 Redis CacheRuntime | `filesystem` |
-| `namespace` | str（可选） | Redis PathLock key 使用的 OpenViking 实例名；`provider=cache` 时必填 | `null` |
+| `provider` | str | `filesystem`、`memory`、`sqlite`、`postgres` 或 `cache`；`postgres` 直连 PostgreSQL，`cache` 复用 Redis CacheRuntime | `filesystem` |
+| `sqlite_path` | str / null | 可显式覆盖本地共享锁数据库的绝对路径。见 [SQLite 配置](../configuration/01-server.md#storage) | 使用 `sqlite` 时为 `{storage.workspace}/_system/pathlock/pathlock.db` |
+| `postgres_dsn_env` | str / null | `postgres` 必填；保存 PostgreSQL DSN 的环境变量名。见 [PostgreSQL 配置](../configuration/01-server.md#postgresql-pathlock) | `null` |
 | `lock_expire_secs` | float | 未刷新的锁进入 stale 状态前的秒数；不得小于 `1.0` | `30.0` |
 | `lock_timeout_secs` | float | 已废弃且忽略；运行时等待超时固定为 `0.0` | `0.0` |
 
+SQLite PathLock 仅适用于同一主机上的进程共享同一个本地磁盘数据库文件。
+不能将数据库放在 EFS/NFS/SMB，也不能为每个副本配置独立的容器本地数据库。
+workspace 位于 EFS 时，默认 `sqlite_path` 也会落在 EFS。
+详见 [SQLite 部署限制](../configuration/01-server.md#storage)。
+
+不使用 Redis 的多进程或多主机 PathLock 协调，可将下面片段合入 `ov.conf`，
+并在每个服务和 worker 启动前设置对应环境变量：
+
 ```json
 {
+  "service_name": "production",
+  "storage": {
+    "agfs": {
+      "pathlock": {
+        "provider": "postgres",
+        "postgres_dsn_env": "OV_POSTGRES_DSN",
+        "lock_expire_secs": 30.0
+      }
+    }
+  }
+}
+```
+
+```sh
+export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=openviking password=YOUR_PASSWORD sslmode=require'
+```
+
+所有参与者必须连接同一可写 PostgreSQL 主库，使用相同的顶层 `service_name`
+和过期时长。PostgreSQL PathLock 独立于 `cache.provider/cache.params`，
+不会启用 CacheFS，也不会改变 QueueFS、业务文件存储或向量后端的并发限制。
+特别是默认 SQLite 队列不适合在 EFS 上跨主机共享。
+配置和验证步骤见 [PostgreSQL PathLock 配置](../configuration/01-server.md#postgresql-pathlock)。
+
+多个容器或主机共享 EFS 时，也可使用下面的共享 Redis PathLock 配置。
+所有副本必须连接同一个 Redis 部署，并使用相同的顶层 `service_name` 和锁过期配置。
+示例同时使用 Redis QueueFS 和 coordination，避免 SQLite 状态落在 EFS。
+
+```json
+{
+  "service_name": "production",
   "cache": {
     "provider": "redis",
     "params": {
@@ -1371,16 +1708,16 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
   "storage": {
     "agfs": {
       "cachefs": {
-        "backend": "cache",
-        "namespace": "production"
+        "backend": "cache"
       },
       "queuefs": {
-        "backend": "cache",
-        "cache_key_prefix": "production"
+        "backend": "cache"
+      },
+      "coordination": {
+        "provider": "cache"
       },
       "pathlock": {
         "provider": "cache",
-        "namespace": "production",
         "lock_expire_secs": 30.0
       }
     }
@@ -1388,9 +1725,9 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 }
 ```
 
-标准配置没有全局 `cache.enabled`。当 CacheFS 或 QueueFS 选择 `backend=cache`，或 PathLock 选择 `provider=cache` 时初始化 CacheRuntime。Cache PathLock 当前只支持 `cache.provider=redis`，不支持 DynamicProvider。全部模块使用本地 Provider 时不解析 `cache.params`，也不连接 Provider。
+标准配置没有全局 `cache.enabled`，也没有各模块自己的 Redis namespace 字段。当 CacheFS 或 QueueFS 选择 `backend=cache`、PathLock 或 coordination 选择 `provider=cache`，或多写选择 `backups.provider=cache` 时初始化 CacheRuntime。Cache PathLock 当前只支持 `cache.provider=redis`，不支持 DynamicProvider。只要这些模块都没有选择 cache Provider，就不解析 `cache.params`，也不连接 CacheRuntime；PathLock 使用 PostgreSQL 时同样如此。
 
-这是一次配置破坏性变更：`storage.agfs.cache`、`storage.agfs.queuefs.backend="redis"` 和 `storage.agfs.queuefs.redis` 已删除并会被拒绝。请把 Provider 参数迁移到顶层 `cache.provider/cache.params`，业务模块改为 `cachefs.backend="cache"` 或 `queuefs.backend="cache"`；Redis 的 `singleton` 改为 `standalone`，`tls_enabled` 改为使用 `rediss://` endpoint。
+请把 Provider 参数迁移到顶层 `cache.provider/cache.params`，用顶层 `service_name` 生成共享 Redis 名称，业务模块改为 `cachefs.backend="cache"`、`queuefs.backend="cache"` 或 `backups.provider="cache"`；Redis 的 `singleton` 改为 `standalone`，`tls_enabled` 改为使用 `rediss://` endpoint。
 
 ##### QueueFS 配置
 
@@ -1401,7 +1738,6 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 | `db_path` | str（可选） | 当 backend 为 `"sqlite"` 或 `"sqlite3"` 时使用的 QueueFS sqlite 数据库路径 | `null` |
 | `recover_stale_sec` | int | 启动时恢复超过该秒数的 `processing` 队列消息；`0` 表示恢复全部 stale processing 消息 | `0` |
 | `busy_timeout_ms` | int | QueueFS sqlite 的 busy timeout，单位毫秒 | `5000` |
-| `cache_key_prefix` | str | 当 backend 为 `"cache"` 时使用的 QueueFS key 命名空间 | `"default"` |
 
 说明：
 
@@ -1409,13 +1745,12 @@ RAGFS 默认使用 Rust binding 模式，通过 Rust 实现直接访问文件系
 - `mode=shared` 会继续使用历史上的全局队列命名空间 `/queue`；`mode=worker` 会为每个 worker 隔离到 `/queue/worker-<index|pid>`。
 - `db_path` 仅在 QueueFS backend 为 `sqlite` 或 `sqlite3` 时生效。
 - `recover_stale_sec` 和 `busy_timeout_ms` 仅在 QueueFS backend 为 `sqlite` 或 `sqlite3` 时生效。
-- `queuefs.backend=cache` 自动绑定顶层 `cache.provider + cache.params`。
+- `queuefs.backend=cache` 自动绑定顶层 `cache.provider + cache.params`，并使用顶层 `service_name` 作为 key 前缀。
 - Redis Cluster 模式的 endpoints 是初始节点，且必须配置 `db=0`；slot 路由、`MOVED`/`ASK`、拓扑更新和重连由 Fred RedisProvider 处理。
 - Redis Sentinel 模式的 endpoints 是 Sentinel 节点，并且必须配置非空 `master_name`；master 发现和故障切换后的重连由 Fred RedisProvider 处理。
 - `username` 和 `password` 用于 Redis 数据节点；`sentinel_username` 和 `sentinel_password` 仅用于 Sentinel 节点。
-- Cache backend 使用 `{cache_key_prefix}:ov:*` key；连接同一 Redis 集群的不同环境或租户必须配置不同的 `cache_key_prefix`。
-- Cache backend 的实例心跳 TTL 为 30 秒，每 10 秒续约一次。
-- Cache backend 会在独立的 startup recovery 任务中按实例心跳状态执行三次有界 `recover_stale` 扫描，时间点分别为启动后立即、30 秒和 60 秒，用于覆盖容器异常退出后旧实例心跳尚未过期的恢复窗口；正常关闭会先删除 heartbeat，使新实例可以立即恢复 processing 消息。
+- Cache backend 使用 `{service_name}:ov:*` key；连接同一 Redis 集群的不同部署必须配置不同的 `service_name`。
+- Cache backend 的实例心跳 TTL 为 30 秒，每 10 秒续约一次。同一 QueueFS cache namespace 中只有一个存活实例持有经 token 校验的 30 秒 leader lease，并每 10 秒扫描过期的 `processing` 消息；该实例停止后，其他实例会在 lease 到期后接管。正常关闭会删除 heartbeat，因此恢复可以立即开始。
 - 所有 Redis 读命令都发送到主节点，不提供副本读配置。
 - `tls_insecure_skip_verify=true` 时 endpoint 必须使用 `rediss://`。
 - 如果同时设置了 `storage.agfs.queuefs.db_path` 和旧字段 `storage.agfs.queue_db_path`，以前者为准。
@@ -1639,9 +1974,9 @@ acl_direct_grants
 acl_inherited_grants
 ```
 
-每个元素使用 `{mask}:{principal}` 格式，其中 `1` 表示 `read`、`3` 表示 `write`、`7` 表示 `manage`。
+每项授权使用 `{mask}:{principal}` 格式，其中 `1` 表示 `read`、`3` 表示 `write`、`7` 表示 `manage`。空 grants 存储为 `["none"]`，这也是两个字段的默认值；该标记不改变 `acl_mode`。
 
-本地、cuVS 和 Qdrant backend 会在启动时为存量 collection 增加字段并重建或更新标量索引。旧记录不做全量回填；缺失 ACL 字段按 `acl_mode=none` 和空列表读取。
+本地、cuVS 和 Qdrant backend 会在启动时为存量 collection 增加字段并重建或更新标量索引。旧记录不做全量回填；缺失 ACL 字段按 `acl_mode=none` 和空权限读取。
 
 其他远端 backend（包括火山向量库）的存量 collection 需要由部署方预先添加这些字段和 scalar index，OpenViking 只校验 schema。`volcengine` API key 数据面模式还要求 context collection 和配置的 index 已存在。权限模型详见 [资源访问控制（ACL）](../concepts/15-acl.md)。
 
@@ -1859,6 +2194,7 @@ openviking-server --config /path/to/ov.conf
   "memory": {
     "session_auto_commit": {
       "enabled": false,
+      "idle_backend": "local",
       "check_interval_seconds": 600.0,
       "scan_rate_limit_files_per_second": 2.0
     }
@@ -1869,6 +2205,7 @@ openviking-server --config /path/to/ov.conf
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `enabled` | bool | 自动 commit 总开关。开启后：未显式传入 `auto_commit_policy` 的新 session 会套用默认 policy，同时启动后台 idle 扫描器；关闭后两者都不发生 | `false` |
+| `idle_backend` | string | idle 超时发现后端：`local` 扫描 session 元数据；`redis` 使用分布式 expiry 调度 | `local` |
 | `check_interval_seconds` | float | 两轮 idle 扫描之间的最小间隔，单位秒，必须大于 `0` | `600.0` |
 | `scan_rate_limit_files_per_second` | float | idle 扫描时每秒最多读取的 session `.meta.json` 文件数，必须大于 `0`，用于限制大量 session 扫描时的存储 IO 压力 | `2.0` |
 
@@ -1879,22 +2216,56 @@ openviking-server --config /path/to/ov.conf
 - `enabled=false` 时：既无显式 policy、也无 `server.user_config_defaults.auto_commit_policy` 的新 Session 保持 auto commit 关闭，并返回 `auto_commit_policy: null`；同时不启动 `SessionAutoCommitScheduler`。
 - `enabled=true` 时：
   - 既无显式 policy、也无部署级默认 policy 的新 Session 会带上下方内置 policy。
-  - `SessionAutoCommitScheduler` 启动后立即开始一轮扫描，之后每轮结束后至少等待 `check_interval_seconds` 再开始下一轮；若一轮耗时已超过该值，则立即开始下一轮。
-  - 扫描过程中以 `scan_rate_limit_files_per_second` 为上限串行读取 session `.meta.json`，避免瞬时 IO 洪峰。
-  - 不会做单独的启动恢复扫描，idle 检查只发生在周期扫描时。
+  - `idle_backend="local"` 时，`SessionAutoCommitScheduler` 启动后立即开始扫描；扫描过程以 `scan_rate_limit_files_per_second` 为上限串行读取 session `.meta.json`，每轮结束后至少等待 `check_interval_seconds`。
+  - `idle_backend="redis"` 时，服务通过顶层 `expiry` 配置整体启用 expiry 上报、发布和 callback 消费。
 - token 和 message-count 自动触发在消息写入后内联执行，不依赖 scheduler，但同样以 session 是否带有 `auto_commit_policy` 为前提。
+
+#### 分布式 Expiry 配置
+
+共享同一份 expiry 状态的 API、publisher 和 callback 实例必须使用相同且稳定的 `service_name`。它表示部署的文档服务名，不是单个 Pod 名。
+
+```json
+{
+  "expiry": {
+    "service_name": "openviking-documents",
+    "publisher_separate_process": true,
+    "shard_count": 128,
+    "session_consumer_concurrency": 8,
+    "redis": {
+      "mode": "cluster",
+      "endpoints": ["redis://redis-proxy.example.com:6379"],
+      "username": "openviking",
+      "password_env": "OPENVIKING_EXPIRY_REDIS_PASSWORD"
+    }
+  }
+}
+```
+
+| 参数 | 类型 | 说明 | 默认值 |
+|------|------|------|--------|
+| `service_name` | string | 使用同一份 expiry 数据的所有实例共享的稳定文档服务名 | `""` |
+| `publisher_separate_process` | bool | 由 `openviking-server` 在独立子进程中托管 publisher；为 `false` 时 publisher 在各 API 进程内运行 | `true` |
+| `shard_count` | int | expiry 逻辑分片数；所有共享同一 namespace 的实例必须一致，取值范围为 `1..512` | `128` |
+| `session_consumer_concurrency` | int | 每个 API 进程中 Session expiry callback 的并发数，必须大于 `0` | `8` |
+| `redis.mode` | string | Redis 部署模式：`standalone` 或 `cluster` | `standalone` |
+| `redis.endpoints` | string array | Redis 地址；集群模式可以只配置一个统一 proxy 地址 | `[]` |
+| `redis.username` | string | Redis ACL 用户名 | `""` |
+| `redis.password_env` | string | 保存 Redis 密码的环境变量名；变量不存在时启动失败 | `""` |
+| `redis.password` | string | 兼容用明文密码；建议使用 `password_env`，两者互斥 | `""` |
+
+启用 Redis idle auto commit 时必须配置 `service_name` 和 Redis 地址。用户名与密码只能使用上述独立字段，不能写入 endpoint URI。默认 `publisher_separate_process=true` 时，`openviking-server` 会在开始服务前拉起一个内部 publisher 子进程，在服务关闭时停止它，并在子进程异常退出时一并退出。publisher 不再暴露为公共 CLI 命令。
 
 ##### 单 session 自动 commit 策略
 
-当 session 带有 `auto_commit_policy` 时，未传的字段会回退到下方内置默认值。没有存储 policy 的 session 保持 auto commit 关闭。取值会被 clamp 到 `[0, 上限]`，未知字段会以 `InvalidArgumentError` 拒绝。设置和查看方式见 [Sessions API](../api/05-sessions.md#create-session)。
+当 session 带有 `auto_commit_policy` 时，未传的字段会回退到下方内置默认值。没有存储 policy 的 session 保持 auto commit 关闭。除 idle 超时的写入下限外，取值会被 clamp 到 `[0, 上限]`；未知字段会以 `InvalidArgumentError` 拒绝。设置和查看方式见 [Sessions API](../api/05-sessions.md#create-session)。
 
-| 字段 | 类型 | 默认值 | 上限 | 说明 |
-|------|------|--------|------|------|
-| `pending_token_threshold` | int | 150000 | 1000000 | 当未提交的 pending token 超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
-| `message_count_threshold` | int | 100 | 1000 | 当未提交的 live message 数量超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
-| `idle_timeout_seconds` | int | 86400 | 604800 | 有未提交内容的 session 在空闲这么多秒后，进入服务端 idle scheduler 的处理范围。idle 触发的 commit 会归档全部积压消息，并忽略 `keep_recent_count`。 |
-| `keep_recent_count` | int | 0 | 500 | 阈值触发的自动 commit 后保留（不归档）的最近 live message 数量。idle 超时触发的 commit 会忽略该值并归档所有消息。 |
-| `min_commit_interval_seconds` | int | 0 | 604800 | 两次自动 commit 之间的最小间隔秒数（节流）。 |
+| 字段 | 类型 | 默认值 | 最小值 | 上限 | 说明 |
+|------|------|--------|--------|------|------|
+| `pending_token_threshold` | int | 150000 | 0 | 1000000 | 当未提交的 pending token 超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
+| `message_count_threshold` | int | 100 | 0 | 1000 | 当未提交的 live message 数量超过该值（严格大于）时，会在消息写入后触发一次自动 commit。 |
+| `idle_timeout_seconds` | int | 86400 | 0（关闭）或 300 | 604800 | 新传入的正数最短为 5 分钟；存量的小于 300 的正值继续按原值读取。idle 触发的 commit 会归档全部积压消息，并忽略 `keep_recent_count`。 |
+| `keep_recent_count` | int | 0 | 0 | 500 | 阈值触发的自动 commit 后保留（不归档）的最近 live message 数量。idle 超时触发的 commit 会忽略该值并归档所有消息。 |
+| `min_commit_interval_seconds` | int | 0 | 0 | 604800 | 两次自动 commit 之间的最小间隔秒数（节流）。 |
 
 代码入口：`openviking/session/auto_commit_policy.py:AutoCommitPolicy`。
 
@@ -1962,6 +2333,10 @@ ov add-resource ./docs --exclude "*.tmp"
     "port": 1933,
     "auth_mode": "api_key",
     "root_api_key": "your-secret-root-key",
+    "account_store": {
+      "provider": "file",
+      "params": {}
+    },
     "profile_enabled": false,
     "cors_origins": ["*"],
     "public_base_url": "https://ov.example.com",
@@ -1992,11 +2367,14 @@ ov add-resource ./docs --exclude "*.tmp"
 | `host` | str | 绑定地址 | `127.0.0.1` |
 | `port` | int | 绑定端口 | `1933` |
 | `auth_mode` | str / null | 内置模式：`"dev"`、`"api_key"`、`"trusted"`、`"oidc"`、`"ldap"`。省略或设为 null 时，有非空 `root_api_key` 则推导为 `api_key`，否则为 `dev`。 | `null` |
-| `root_api_key` | str | `api_key` 模式必填的 Root API Key；`trusted` 模式仅在 localhost 可省略，非 localhost 部署必填，不负责解析普通用户身份 | `null` |
+| `root_api_key` | str | `api_key` 模式必填的 Root API Key；`trusted` 模式在所有部署中均必填，包括 localhost，不负责解析普通用户身份 | `null` |
+| `account_store.provider` | str | 完整 Account Store Provider。内置 `"file"`、`"mysql"` 和 `"redis_mysql"`；统一持久化 Account、User、Group 和 API Key。`"file"` 兼容现有 AGFS JSON 注册表，并由 Provider 自身维护进程内查询索引。`"redis_mysql"` 保持 MySQL 为权威存储，并增加共享 Redis 认证和请求身份读取缓存。 | `"file"` |
+| `account_store.params` | object | Provider 启动参数。不能通过这里覆盖框架注入的 VikingFS 和 File Provider API Key Hash 配置。 | `{}` |
+| `account_store.params.read_only` | bool | 仅 File Provider。只读取 writer 已创建的注册表，启动时不写锁、不初始化、不迁移凭据，并拒绝身份变更。副本数据盘仍保持只读挂载，设置 `reconcile_system_assets_on_startup=false`；开启 `api_key_watch_enabled` 感知 writer 的变更。注册表缺失时拒绝启动。 | `false` |
 | `profile_enabled` | bool | 是否允许 HTTP 请求通过 `profile=1` 开启请求级 cProfile。关闭时服务端会忽略该请求参数；开启后，CLI 可以显示返回的 `profile`，而 Python HTTP client 默认只触发服务端 profile，不会把顶层 `profile` 字段自动附着到大多数 SDK 返回值上。 | `false` |
 | `cors_origins` | list | CORS 允许的来源 | `["*"]` |
 | `public_base_url` | str | MCP `add_resource` 和 `add_skill` 工具向客户端返回的上传指令里使用的对外可见 base URL。解析顺序：环境变量 `OPENVIKING_PUBLIC_BASE_URL` → 本字段 → 请求头 `X-Forwarded-Host` / `X-Forwarded-Proto` → 请求头 `Host` → 监听地址兜底。当 server 部署在反向代理后且代理不转发 `X-Forwarded-*` 时，请显式设置本字段（或环境变量）。 | `null` |
-| `upload_signed_ttl_seconds` | int | MCP `add_resource` 和 `add_skill` 为本地文件上传 mint 的一次性 token 的过期时间（秒），走 `POST /api/v1/resources/temp_upload?token=...`。 | `600`（10 分钟） |
+| `upload_signed_ttl_seconds` | int | MCP `add_resource` 和 `add_skill` 为本地文件上传 mint 的一次性 token 的过期时间（秒），走 `POST /api/v1/resources/temp_upload?token=...`；MCP `download` 为 `GET /api/v1/content/download?token=...` mint 的一次性 token 也用这个时长。 | `600`（10 分钟） |
 | `temp_upload.default_mode` | str | `POST /api/v1/resources/temp_upload` 的服务端默认模式（客户端未显式传 `upload_mode` 时使用）：`"local"`（仅当前实例本地磁盘，单机默认行为）或 `"shared"`（分布式共享存储，多副本部署可跨实例消费）。新的 shared 上传会固定写入内部 `viking://upload/<created_at_ms>-<uuid>/content` 和 `meta` 对象，在 `ttl_seconds` 指定的时间内可重复消费。 | `"local"` |
 | `temp_upload.shared_max_size_bytes` | int | `shared` 模式下接受的最大文件大小（字节）。超过此阈值的请求会在写入对象存储之前被拒绝。 | `536870912`（512 MiB） |
 | `temp_upload.ttl_seconds` | int | local 和 shared 临时上传文件共用的保留时间（秒）。每次对应模式的上传会清理超过此时间的文件；shared 只需一次上传根目录列举，从每个一级目录名解析创建时间，并递归删除过期目录，不依赖文件系统修改时间；设为 `0` 时禁用自动清理。 | `43200`（12 小时） |
@@ -2006,17 +2384,108 @@ ov add-resource ./docs --exclude "*.tmp"
 | `user_config_defaults.auto_commit_policy` | object | 新建 Session 未显式指定策略时使用的部署级自动 Commit 默认策略。 | `null` |
 | `agent_evolution.enabled` | bool | Agent 进化的集群启动默认值，运行时可由 Account 或 Cluster Admin settings 覆盖。开启时，session commit 可按 session `memory_policy` 生成或更新 cases、trajectories 和 experiences；关闭后已有记忆仍可读取和检索。 | `false` |
 
+MySQL Provider 默认保存高熵 API Key 的带版本 SHA-256 摘要，并通过独立摘要索引
+进行固定成本查询。将 `credential_storage` 设为 `"encrypted"` 可改用 AES-GCM
+可逆加密；此时必须提供 `credential_encryption_key`，其值为 base64 编码的
+32 字节密钥。MySQL 不会持久化 API Key 原文。哈希模式的用户列表只展示 key
+prefix；加密模式可为同一列表工作流解密展示 key。`credential_storage` 仅决定
+新写入凭证的格式，读取时根据每条记录的 `material` 前缀选择解码方式。从加密模式
+迁移到哈希模式时，应保留 `credential_encryption_key`，直到所有旧加密凭证完成
+轮换。`aesgcm:v1` 记录不包含 key id，因此不支持直接替换该加密密钥。
+
+安装 MySQL extra 后，通过顶层 `service_name` 配置部署名称。该值会写入每张
+Account Store 表的 `service_name` 列，并在多个 OpenViking 集群共用一个数据库时
+充当隔离边界。修改 `service_name` 会选择另一组逻辑 Account Store 分区。
+
+Provider 不会创建或迁移数据库表。启动服务前，应通过现有 DBA 或部署流程手工创建
+`openviking/server/account_stores/sql/init.sql` 中定义的规范化表。后续经评审的
+schema 变更按顺序存放于 `openviking/server/account_stores/sql/changes/`。
+五张 `ov_accounts*` 表的名称固定；多个 OpenViking 集群共用数据库时，通过不同的
+顶层 `service_name` 隔离部署，不使用不同表前缀。
+
+```json
+{
+  "service_name": "production",
+  "server": {
+    "account_store": {
+      "provider": "mysql",
+      "params": {
+        "host": "db.example.com",
+        "user": "openviking",
+        "password": "secret",
+        "database": "openviking",
+        "credential_storage": "encrypted",
+        "credential_encryption_key": "base64-encoded-32-byte-key"
+      }
+    }
+  }
+}
+```
+
+`redis_mysql` 需要安装 `redis-mysql` extra。`mysql` 部分使用与 MySQL provider
+相同的参数；`cache` 部分沿用顶层缓存的 `provider/params` 结构，支持
+`standalone`、`cluster` 和 `sentinel` 三种 Redis 部署模式。
+
+MySQL 是数据来源，Redis 缓存鉴权结果、用户信息、组和删除状态。缓存未命中或
+Redis 读取失败时会查询 MySQL。通过 `cache.params.ttl_seconds` 配置缓存有效期，
+默认 60 秒；命中不会延长有效期。
+
+凭据、权限和删除状态变更会失效相关缓存。如果失效操作失败，缓存可能保持旧值
+直到 TTL 到期。共享同一缓存的实例应一起升级，旧、新缓存格式无法互相失效。
+缓存版本元数据不会自动过期，需要计入 Redis 容量规划。旧的 `lock_ttl_seconds`
+和 `lock_wait_seconds` 配置兼容接受，但不再使用。
+
+Redis 连接和命令超时分别通过 `cache.params.connect_timeout_ms` 和
+`cache.params.command_timeout_ms` 配置，默认均为 5000 毫秒；它们不是整个请求的
+总超时。`cache.params.pool_size` 应按并发 Redis 请求数配置，默认 32，下面示例
+使用 100；连接池耗尽会触发连接错误并转为查询 MySQL。
+
+```json
+{
+  "server": {
+    "account_store": {
+      "provider": "redis_mysql",
+      "params": {
+        "mysql": {
+          "host": "db.example.com",
+          "user": "openviking",
+          "password": "secret",
+          "database": "openviking"
+        },
+        "cache": {
+          "provider": "redis",
+          "params": {
+            "mode": "sentinel",
+            "endpoints": [
+              "rediss://sentinel-1.example.com:26379",
+              "rediss://sentinel-2.example.com:26379",
+              "rediss://sentinel-3.example.com:26379"
+            ],
+            "master_name": "openviking",
+            "username": "openviking",
+            "password_env": "OPENVIKING_REDIS_PASSWORD",
+            "sentinel_password_env": "OPENVIKING_SENTINEL_PASSWORD",
+            "key_prefix": "ov:account-auth",
+            "pool_size": 100,
+            "ttl_seconds": 60
+          }
+        }
+      }
+    }
+  }
+}
+```
+
 省略 `auth_mode`（或设为 `null`）时，配置了非空 `root_api_key` 则选择 `api_key`，否则选择 `dev`。`dev` 仅允许监听 localhost，不进行身份认证。`root_api_key` 不能配置为空字符串。
 
-显式设置 `auth_mode: "api_key"` 时，包括 localhost 在内都必须提供非空 `root_api_key`；缺少该 key 会导致启动失败，不会回退到开发模式。使用 root key 调用 Admin API 创建 account 和 user/admin key，数据访问使用这些绑定租户身份的 key。`trusted` 模式接受可信网关注入的 account/user 身份头，无需预先创建 user key；其 root key 仅在 localhost 可省略，监听非 localhost 地址时必填。角色解析、OIDC/LDAP 配置与网关要求参见 [身份认证](04-authentication.md)。
+显式设置 `auth_mode: "api_key"` 时，包括 localhost 在内都必须提供非空 `root_api_key`；缺少该 key 会导致启动失败，不会回退到开发模式。使用 root key 调用 Admin API 创建 account 和 user/admin key，数据访问使用这些绑定租户身份的 key。`trusted` 模式接受可信网关注入的 account/user 身份头，无需预先创建 user key；其 root key 在启动和每个认证请求中均必填，包括 localhost。角色解析、OIDC/LDAP 配置与网关要求参见 [身份认证](04-authentication.md)。
 
 `user_config_defaults` 提供添加目标和记忆抽取的部署级默认配置。添加操作中，显式请求目标仍然优先：`add_resource.to` / `add_resource.parent` 优先于用户默认值，`add_skill.target_uri` 优先于用户默认值。记忆策略优先级为 Session 策略 > User `settings/user_config.json` 策略 > `server.user_config_defaults.memory_policy` > 内核默认策略。`server.agent_evolution.enabled` 提供启动默认值，运行时优先级为 Account 覆盖 > Cluster 运行时覆盖 > 启动值。无需重启的修改应使用 Admin settings 接口；直接编辑 `ov.conf` 需要重启后生效。
 
 支持的 add target URI：
 
-- `resource_uri` 作为 `add_resource` 的默认父目录使用，等价于 `parent=<uri>, create_parent=true`。它必须是当前请求用户可写的 resource 目录 URI，支持 `viking://resources` 或 `viking://resources/...`、`viking://~/resources` 或 `viking://~/resources/...`、`viking://user/{user_id}/resources` 或 `viking://user/{user_id}/resources/...`、`viking://user/{user_id}/peers/{peer_id}/resources` 或 `viking://user/{user_id}/peers/{peer_id}/resources/...`。`viking://~/...` 家目录别名会按请求用户解析。
-- `skill_uri` 作为 `add_skill` 的默认目标根目录使用。v1 只允许 `viking://~/skills` 和 `viking://agent/skills`；不支持显式写成 `viking://user/{user_id}/skills`。
-- 旧写法兼容：早期配置中的 `viking://user/resources` 和 `viking://user/skills` 会在配置加载时自动归一化为 `viking://~/resources` 和 `viking://~/skills`，并打印一条 info 日志。新配置请直接使用 `viking://~/...`；在 `add_targets` 之外，无 uid 的写法会在请求入口被拒绝。
+- `resource_uri` 作为 `add_resource` 的默认父目录使用，等价于 `parent=<uri>, create_parent=true`。它必须是当前请求用户可写的 resource 目录 URI，支持 `viking://resources` 或 `viking://resources/...`、`viking://~/resources` 或 `viking://~/resources/...`、`viking://~/peers/{peer_id}/resources` 或 `viking://~/peers/{peer_id}/resources/...`。`viking://~/...` 家目录别名会按请求用户解析。
+- `skill_uri` 作为 `add_skill` 的默认目标根目录使用。支持 `viking://~/skills` 和 `viking://agent/skills`。
 
 ### 运行时配置来源 {#runtime-configuration-source}
 
@@ -2124,9 +2593,9 @@ ov add-resource ./docs --exclude "*.tmp"
 |------|------|------|--------|
 | `enabled` | bool | 是否启用加密 | `false` |
 | `provider` | str | 密钥提供程序：`"local"`、`"vault"` 或 `"volcengine_kms"` | - |
-| `api_key_hashing.enabled` | bool | 是否对 API key 字段启用 Argon2id 单向哈希（与文件级 `enabled` 独立控制），详见 [加密指南](./08-encryption.md) | `false` |
+| `api_key_hashing.enabled` | bool | 仅 File Provider：是否对 API key 字段启用 Argon2id 单向哈希（与文件级 `enabled` 独立控制），详见 [加密指南](./08-encryption.md) | `false` |
 
-### Local（本地文件）
+### Local
 
 适合开发环境和单节点部署：
 
@@ -2145,6 +2614,10 @@ ov add-resource ./docs --exclude "*.tmp"
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `local.key_file` | str | 根密钥文件路径 | `~/.openviking/master.key` |
+| `local.root_key` | str | 直接配置的 32 字节根密钥，必须编码为恰好 64 个十六进制字符 | - |
+
+不要同时配置 `local.key_file` 和 `local.root_key`。如果两者都省略，`local.key_file` 默认使用
+`~/.openviking/master.key`。内联密钥的管理和安全要求详见[加密指南](./08-encryption.md)。
 
 ### Vault（HashiCorp Vault）
 
@@ -2202,7 +2675,7 @@ ov add-resource ./docs --exclude "*.tmp"
 
 ## storage.transaction 段
 
-`storage.transaction` 已废弃，仅保留为兼容旧配置。新配置请使用 `storage.agfs.pathlock` 配置 PathLock Provider、namespace 和过期时间。若旧字段仍然出现，OpenViking 会在运行时给出 warning；其中 `lock_timeout` 已废弃且会被忽略，`lock_expire` 会在未显式配置新字段时自动映射到新的 `pathlock` 配置，`redo_recovery_enabled` 则会被忽略。
+`storage.transaction` 已废弃，仅保留为兼容旧配置。新配置请使用 `storage.agfs.pathlock` 配置 PathLock Provider 和过期时间；Redis key 名称来自顶层 `service_name`。若旧字段仍然出现，OpenViking 会在运行时给出 warning；其中 `lock_timeout` 已废弃且会被忽略，`lock_expire` 会在未显式配置新字段时自动映射到新的 `pathlock` 配置，`redo_recovery_enabled` 则会被忽略。
 
 推荐写法：
 
@@ -2333,6 +2806,10 @@ Task 记录文件位于所属账号的系统目录：
     "host": "string",
     "port": 1933,
     "root_api_key": "string",
+    "account_store": {
+      "provider": "file",
+      "params": {}
+    },
     "cors_origins": ["string"]
   }
 }

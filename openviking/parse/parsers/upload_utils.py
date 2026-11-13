@@ -22,6 +22,7 @@ from openviking.parse.parsers.constants import (
 )
 from openviking.parse.parsers.text_encoding import normalize_text_bytes
 from openviking.utils.content_hash import content_md5
+from openviking.utils.path_safety import sanitize_relative_viking_path
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -218,6 +219,11 @@ async def upload_directory(
             # Artifact-relative path under the resource root; the store resolves it
             # to a local/agfs location.
             target = f"{base}/{rel_path_str}" if base else rel_path_str
+            try:
+                target = sanitize_relative_viking_path(target)
+            except ValueError as exc:
+                logger.warning(f"Skipping {file_path}: {exc}")
+                continue
             files_to_upload.append((file_path, target))
             if "/" in target:
                 parent_dirs.add(target.rsplit("/", 1)[0])

@@ -4,14 +4,26 @@
 
 from __future__ import annotations
 
+import urllib.request
+from email.message import Message
+from io import BytesIO
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
+from urllib.response import addinfourl
 
+import httpx
 import pytest
 
+from openviking.parse.network import (
+    ParserNetworkContext,
+    ParserNetworkOperation,
+    create_parser_httpx_client,
+    open_parser_url,
+    register_parser_network_adapter,
+    reset_parser_network_adapter,
+)
 from openviking.utils.network_guard import (
     _get_allowed_code_hosting_domains,
-    _is_public_ip,
     _normalize_host,
     _resolve_host_addresses,
     build_httpx_request_validation_hooks,
@@ -77,52 +89,6 @@ class TestNormalizeHost:
 
     def test_strips_dot_and_lowercases(self) -> None:
         assert _normalize_host("Example.COM.") == "example.com"
-
-
-# ── _is_public_ip ───────────────────────────────────────────────────────────
-
-
-class TestIsPublicIP:
-    """Verify classification of public vs non-public IPs."""
-
-    @pytest.mark.parametrize(
-        "address",
-        [
-            "8.8.8.8",
-            "1.1.1.1",
-            "151.101.1.67",
-            "2607:f8b0:4004:800::200e",  # Google IPv6
-        ],
-    )
-    def test_public_addresses_are_global(self, address: str) -> None:
-        assert _is_public_ip(address) is True
-
-    @pytest.mark.parametrize(
-        "address",
-        [
-            "127.0.0.1",
-            "10.0.0.1",
-            "172.16.0.1",
-            "172.31.255.255",
-            "192.168.1.1",
-            "0.0.0.0",
-            "169.254.1.1",  # link-local
-            "::1",
-            "fe80::1",  # IPv6 link-local
-            "fc00::1",  # IPv6 ULA
-            "::ffff:127.0.0.1",  # IPv4-mapped IPv6 loopback
-            "::ffff:10.0.0.1",  # IPv4-mapped IPv6 private
-            "::ffff:192.168.1.1",  # IPv4-mapped IPv6 private
-        ],
-    )
-    def test_non_public_addresses_are_not_global(self, address: str) -> None:
-        assert _is_public_ip(address) is False
-
-    def test_invalid_address_returns_false(self) -> None:
-        assert _is_public_ip("not-an-ip") is False
-
-    def test_empty_string_returns_false(self) -> None:
-        assert _is_public_ip("") is False
 
 
 # ── _resolve_host_addresses ──────────────────────────────────────────────────
@@ -219,30 +185,30 @@ class TestEnsurePublicRemoteTarget:
         with pytest.raises(PermissionDeniedError, match="non-public"):
             ensure_public_remote_target("http://localhost./path")
 
-    # -- Rejection: non-public resolved IPs --
-
     @pytest.mark.parametrize(
-        ("source", "resolved_ip"),
+        ("host", "address", "allow_private"),
         [
-            ("http://evil.attacker.com/path", "127.0.0.1"),
-            ("http://evil.attacker.com/path", "10.0.0.1"),
-            ("http://evil.attacker.com/path", "172.16.0.1"),
-            ("http://evil.attacker.com/path", "192.168.1.1"),
-            ("http://evil.attacker.com/path", "0.0.0.0"),
-            ("http://evil.attacker.com/path", "::1"),
-            ("http://evil.attacker.com/path", "fe80::1"),
-            ("http://evil.attacker.com/path", "::ffff:127.0.0.1"),
-            ("http://evil.attacker.com/path", "::ffff:10.0.0.1"),
-            ("http://evil.attacker.com/path", "169.254.169.254"),  # AWS metadata
+            ("git.example.com", "127.0.0.1", False),
+            ("git.example.com", "169.254.169.254", False),
+            ("other.example.com", "169.254.169.254", True),
+            ("git.example.com", "100.100.100.200", False),
+            ("other.example.com", "fd00:ec2::254", True),
+            ("other.example.com", "10.0.0.1", False),
         ],
     )
-    @patch("openviking.utils.network_guard._resolve_host_addresses")
-    def test_rejects_non_public_resolved_addresses(
-        self, mock_resolve, source: str, resolved_ip: str
-    ) -> None:
-        mock_resolve.return_value = {resolved_ip}
+    def test_rejects_non_public_resolved_addresses(self, monkeypatch, host, address, allow_private):
+        monkeypatch.setattr(
+            "openviking.utils.network_guard._resolve_host_addresses", lambda _host: {address}
+        )
+        monkeypatch.setattr(
+            "openviking.utils.network_guard._get_allowed_code_hosting_domains",
+            lambda: {"git.example.com"},
+        )
+        monkeypatch.setattr(
+            "openviking.utils.network_guard._is_allow_private_networks", lambda: allow_private
+        )
         with pytest.raises(PermissionDeniedError, match="non-public address"):
-            ensure_public_remote_target(source)
+            ensure_public_remote_target(f"https://{host}/repo")
 
     # -- Rejection: DNS rebinding with mixed results --
 
@@ -267,67 +233,77 @@ class TestEnsurePublicRemoteTarget:
 
     @patch("openviking.utils.network_guard._resolve_host_addresses")
     def test_allows_azure_devops_domain_from_platform_specific_config(self, mock_resolve) -> None:
-        mock_resolve.return_value = {"127.0.0.1"}
+        mock_resolve.return_value = {"10.0.0.1"}
         ensure_public_remote_target("git@ssh.dev.azure.com:v3/org/project/repo")  # should not raise
 
     @patch("openviking.utils.network_guard._resolve_host_addresses")
-    def test_allows_when_dns_returns_empty(self, mock_resolve) -> None:
-        """Unresolvable host is allowed through (fail-open for DNS)."""
+    def test_rejects_when_dns_returns_empty(self, mock_resolve) -> None:
+        """Unresolvable host cannot be verified as public."""
         mock_resolve.return_value = set()
-        ensure_public_remote_target("http://new-host.example.com/path")  # should not raise
+        with pytest.raises(PermissionDeniedError, match="could not be resolved"):
+            ensure_public_remote_target("https://github.com/org/repo")
 
     @patch("openviking.utils.network_guard._resolve_host_addresses")
-    def test_allows_multiple_public_addresses(self, mock_resolve) -> None:
-        mock_resolve.return_value = {"8.8.8.8", "8.8.4.4"}
-        ensure_public_remote_target("http://dns-rr.example.com/path")  # should not raise
+    def test_allows_private_network_opt_in(self, mock_resolve) -> None:
+        mock_resolve.return_value = {"8.8.8.8", "10.0.0.1"}
+        with patch("openviking.utils.network_guard._is_allow_private_networks", return_value=True):
+            ensure_public_remote_target("http://internal.example.com/path")
 
 
 # ── build_httpx_request_validation_hooks ─────────────────────────────────────
 
 
 class TestBuildHttpxRequestValidationHooks:
-    """Verify httpx hook construction."""
+    """Verify optional validation and enforcement during parser downloads."""
 
     def test_returns_none_when_no_validator(self) -> None:
         assert build_httpx_request_validation_hooks(None) is None
 
-    def test_returns_request_hook_dict(self) -> None:
-        def dummy_validator(url: str) -> None:
-            pass
-
-        hooks = build_httpx_request_validation_hooks(dummy_validator)
-        assert hooks is not None
-        assert "request" in hooks
-        assert len(hooks["request"]) == 1
-
     @pytest.mark.asyncio
-    async def test_hook_calls_validator_with_url(self) -> None:
-        calls: list[str] = []
+    async def test_parser_adapter_preserves_redirect_validation(self) -> None:
+        source = "https://example.com/document.txt"
+        private_target = "http://127.0.0.1/admin"
+        downloaded = []
 
-        def tracking_validator(url: str) -> None:
-            calls.append(url)
+        def validate(url):
+            if url == private_target:
+                raise PermissionDeniedError("blocked")
 
-        hooks = build_httpx_request_validation_hooks(tracking_validator)
-        assert hooks is not None
+        async def download(request):
+            downloaded.append(str(request.url))
+            return httpx.Response(302, headers={"Location": private_target})
 
-        mock_request = AsyncMock()
-        mock_request.url = "http://example.com/test"
+        class ArchiveResponse(urllib.request.HTTPSHandler):
+            def https_open(self, request):
+                downloaded.append(request.full_url)
+                headers = Message()
+                headers["Location"] = private_target
+                response = addinfourl(BytesIO(), headers, request.full_url, 302)
+                response.msg = "Found"
+                return response
 
-        hook_fn = hooks["request"][0]
-        await hook_fn(mock_request)
+        register_parser_network_adapter(
+            SimpleNamespace(
+                supports=lambda context: True,
+                create_httpx_transport=lambda context: httpx.MockTransport(download),
+                create_urllib_opener=lambda context: urllib.request.build_opener(ArchiveResponse()),
+            )
+        )
+        try:
+            async with create_parser_httpx_client(
+                ParserNetworkContext(ParserNetworkOperation.HTTP_RESOURCE, source),
+                follow_redirects=True,
+                event_hooks=build_httpx_request_validation_hooks(validate),
+            ) as client:
+                with pytest.raises(PermissionDeniedError, match="blocked"):
+                    await client.get(source)
+            with pytest.raises(PermissionDeniedError, match="blocked"):
+                open_parser_url(
+                    ParserNetworkContext(ParserNetworkOperation.GIT_ARCHIVE, source),
+                    source,
+                    request_validator=validate,
+                )
+        finally:
+            reset_parser_network_adapter()
 
-        assert calls == ["http://example.com/test"]
-
-    @pytest.mark.asyncio
-    async def test_hook_propagates_validator_exception(self) -> None:
-        def failing_validator(url: str) -> None:
-            raise PermissionDeniedError("blocked")
-
-        hooks = build_httpx_request_validation_hooks(failing_validator)
-        assert hooks is not None
-
-        mock_request = AsyncMock()
-        mock_request.url = "http://evil.com"
-
-        with pytest.raises(PermissionDeniedError, match="blocked"):
-            await hooks["request"][0](mock_request)
+        assert downloaded == [source, source]

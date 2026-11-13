@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SyncManager, describeCommitError } from "../sync.ts";
+import { OVClient } from "../client.ts";
 import { enqueue, listPending } from "../shared/pending-queue.mjs";
 
 function config(overrides = {}) {
@@ -129,6 +130,36 @@ test("a failed commit keeps its status and server message for /viking commit", a
   });
 });
 
+test("a commit archives every message, both when sent and when queued for retry", async () => {
+  await withPendingDir(async () => {
+    const ov = new OVClient({
+      endpoint: "http://127.0.0.1:1933",
+      apiKey: "",
+      account: "",
+      user: "",
+      authMode: "trusted",
+      sendIdentityHeaders: false,
+      peerId: "",
+      userAgent: "test",
+    });
+    const requests = [];
+    ov.fetchJSON = async (path, init) => {
+      requests.push({ path, body: JSON.parse(init.body) });
+      return { ok: false, result: null, status: 503, error: { message: "unavailable" } };
+    };
+    const sync = new SyncManager(ov, config());
+    await sync.ensureSession("pi-keep-zero");
+
+    assert.equal(await sync.commit(), null);
+    assert.deepEqual(requests, [{
+      path: `/api/v1/sessions/${encodeURIComponent(sync.sessionId)}/commit`,
+      body: { keep_recent_count: 0 },
+    }]);
+    const queued = (await listPending()).map(({ entry }) => [entry.type, entry.payload]);
+    assert.deepEqual(queued, [["commitSession", { keep_recent_count: 0 }]]);
+  });
+});
+
 test("describeCommitError names a missing response and bounds the message", () => {
   assert.equal(describeCommitError(0, { message: "fetch failed" }), "no response: fetch failed");
   assert.equal(describeCommitError(undefined, null), "no response: unknown error");
@@ -205,27 +236,37 @@ test("a current-session processing entry keeps the takeover barrier closed", asy
   });
 });
 
-test("restoreWatermark prevents pi -c from re-syncing already captured entries", async () => {
+test("capture cursor skips continuations and re-extracts sibling branches", async () => {
   await withPendingDir(async () => {
     const calls = [];
     const c = client({
       fetchJSON: async (_path, init) => {
-        calls.push(...JSON.parse(init.body).messages);
+        calls.push(JSON.parse(init.body).messages.map((payload) => payload.parts[0].text));
         return { ok: true, result: {} };
       },
     });
     const sync = new SyncManager(c, config());
     await sync.ensureSession("pi-session");
-    sync.restoreWatermark(1);
+    const [root, a, b, next] = ["root", "branch-a", "branch-b", "next"].map((id) => ({
+      id, type: "message", message: { role: "user", content: id },
+    }));
+    const branchA = [root, a];
+    const branchB = [root, b];
+    sync.restoreWatermark(1, branchA);
 
-    const result = await sync.syncBranch([
-      { type: "message", message: { role: "user", content: "Already captured entry should be skipped." } },
-      { type: "message", message: { role: "user", content: "Fresh entry should be captured now." } },
+    assert.equal((await sync.syncBranch(branchA)).added, 1);
+    assert.equal((await sync.syncBranch(branchA)).added, 0);
+    await sync.syncBranch(branchB);
+    await sync.syncBranch(branchA);
+    await sync.syncBranch([...branchB, next]);
+
+    assert.equal(sync.syncedCount, 3);
+    assert.deepEqual(calls, [
+      ["branch-a"],
+      ["root", "branch-b"],
+      ["root", "branch-a"],
+      ["root", "branch-b", "next"],
     ]);
-
-    assert.equal(result.added, 1);
-    assert.equal(calls.length, 1);
-    assert.match(calls[0].parts[0].text, /Fresh entry/);
   });
 });
 

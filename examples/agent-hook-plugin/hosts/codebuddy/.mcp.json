@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "openviking": {
+      "command": "node",
+      "args": [
+        "${CODEBUDDY_PLUGIN_ROOT}/agent-integrations/codebuddy/servers/mcp-proxy.mjs"
+      ],
+      "env": {
+        "OPENVIKING_HOOK_SOURCE": "codebuddy"
+      }
+    }
+  }
+}

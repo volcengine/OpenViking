@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import pytest
 
 from openviking.storage.acl import AclSpec, AclUpdate
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
@@ -103,6 +104,35 @@ def test_semantic_msg_defaults_file_md5s_to_empty():
     assert SemanticMsg.from_dict(msg.to_dict()).file_md5s == {}
 
 
+def test_semantic_msg_roundtrip_preserves_file_vector_actions():
+    uri = "viking://resources/x/new.md"
+    msg = SemanticMsg(
+        uri="viking://resources/x",
+        context_type="resource",
+        file_vector_actions={uri: "upsert"},
+    )
+
+    restored = SemanticMsg.from_json(msg.to_json())
+
+    assert restored.file_vector_actions == {uri: "upsert"}
+
+
+def test_semantic_msg_defaults_file_vector_actions_to_empty():
+    msg = SemanticMsg(uri="viking://resources/x", context_type="resource")
+
+    assert msg.file_vector_actions == {}
+    assert SemanticMsg.from_dict(msg.to_dict()).file_vector_actions == {}
+
+
+def test_semantic_msg_rejects_invalid_file_vector_action():
+    with pytest.raises(ValueError, match="unsupported file vector action"):
+        SemanticMsg(
+            uri="viking://resources/x",
+            context_type="resource",
+            file_vector_actions={"viking://resources/x/a.md": "delete"},
+        )
+
+
 def test_semantic_msg_roundtrip_preserves_queue_enqueue_time():
     msg = SemanticMsg(
         uri="viking://resources/x",
@@ -111,6 +141,21 @@ def test_semantic_msg_roundtrip_preserves_queue_enqueue_time():
     )
 
     assert SemanticMsg.from_dict(msg.to_dict()).queue_enqueued_at == 123.456
+
+
+def test_semantic_msg_roundtrip_preserves_failure_requeue_count():
+    msg = SemanticMsg(
+        uri="viking://resources/x",
+        context_type="resource",
+        failure_requeue_count=1,
+    )
+
+    restored = SemanticMsg.from_dict(msg.to_dict())
+    legacy = msg.to_dict()
+    legacy.pop("failure_requeue_count")
+
+    assert restored.failure_requeue_count == 1
+    assert SemanticMsg.from_dict(legacy).failure_requeue_count == 0
 
 
 def test_semantic_msg_roundtrip_preserves_local_artifact_snapshot():
@@ -152,3 +197,35 @@ def test_clear_ingest_options_survive_semantic_message_round_trip():
         search_tag_mode="clear",
         acl_update=update,
     )
+
+
+def test_semantic_msg_round_trips_per_file_ingest_options():
+    uri = "viking://resources/demo/a.md"
+    update = AclUpdate(
+        uri=uri,
+        acl=AclSpec(
+            acl_mode="restricted",
+            entries=[{"principal": "group:engineering", "level": "write"}],
+        ),
+    )
+    msg = SemanticMsg(
+        uri="viking://resources/demo",
+        context_type="resource",
+        file_ingest_options={
+            uri: IngestOptions(
+                search_tags=["team=search"],
+                search_tag_mode="append",
+                acl_update=update,
+            )
+        },
+    )
+
+    restored = SemanticMsg.from_json(msg.to_json())
+
+    assert restored.file_ingest_options == {
+        uri: IngestOptions(
+            search_tags=["team=search"],
+            search_tag_mode="append",
+            acl_update=update,
+        )
+    }

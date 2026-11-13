@@ -20,7 +20,7 @@ def test_memory_policy_defaults_to_self_and_peer():
     assert policy.self_enabled is True
     assert policy.peer_enabled is True
     assert policy.memory_types is None
-    assert policy.working_memory_enabled is True
+    assert policy.enable_working_memory is False
 
 
 def test_memory_policy_can_disable_peer_memory():
@@ -46,6 +46,7 @@ def test_memory_policy_uses_top_level_memory_types():
         "self": {"enabled": False},
         "peer": {"enabled": True},
         "memory_types": ["events", "profile"],
+        "working_memory": {"enabled": False},
     }
 
 
@@ -54,7 +55,7 @@ def test_memory_policy_can_disable_working_memory():
 
     assert policy.self_enabled is True
     assert policy.peer_enabled is True
-    assert policy.working_memory_enabled is False
+    assert policy.enable_working_memory is False
     assert policy.to_dict() == {
         "self": {"enabled": True},
         "peer": {"enabled": True},
@@ -204,5 +205,26 @@ async def test_initialize_memory_files_renders_fields_without_init_value_as_empt
     assert "{{ also_no_init }}" not in content
     assert "filled" in content
     # Fields without init_value render as empty, not as the literal placeholder.
-    assert "- **NoInit:** \n" in content
-    assert "- **AlsoNoInit:** \n" in content
+    lines = [line.rstrip() for line in content.splitlines()]
+    assert "- **NoInit:**" in lines
+    assert "- **AlsoNoInit:**" in lines
+
+
+@pytest.mark.parametrize("value", [None, {}, {"peer": {"enabled": True}}, {"working_memory": {}}])
+def test_missing_working_memory_is_disabled(value):
+    assert MemoryPolicy.from_dict(value).enable_working_memory is False
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_working_memory_round_trips_in_task_and_user_snapshots(enabled):
+    policy = MemoryPolicy.from_dict(
+        {
+            "self": {"enabled": False},
+            "peer": {"enabled": True},
+            "memory_types": ["profile"],
+            "working_memory": {"enabled": enabled},
+        }
+    )
+    snapshot = json.loads(json.dumps(policy.to_dict()))
+    assert snapshot["working_memory"]["enabled"] is enabled
+    assert MemoryPolicy.from_dict(snapshot) == policy

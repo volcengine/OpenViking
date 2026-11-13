@@ -18,7 +18,7 @@ OpenViking 当前的 prompt 主要分为两类：
    - 存放在 `openviking/prompts/templates/<category>/*.yaml`
    - 用于给模型下发任务，例如做图片理解、文档总结、记忆提取、检索意图分析等
 2. memory schema 模板
-   - 存放在 `openviking/prompts/templates/memory/*.yaml`
+   - 存放在 `openviking/system_assets/memory/memory_templates/builtin/*.yaml`
    - 用于定义某类记忆的字段、文件名模板、内容模板和目录规则
 
 从使用角度看，这些模板主要服务于以下处理环节：
@@ -231,13 +231,7 @@ peer_enabled: true
   - 生效环节：经验型记忆落盘与更新阶段
   - 影响能力：从任务结果中沉淀可复用指导
   - 作用：记录持久的执行经验及其替代的旧记忆
-  - 关键字段：`experience_name`、`content`、`supersedes`
-
-- `identity`
-  - 生效环节：agent identity 记忆落盘阶段
-  - 影响能力：agent 身份设定的长期一致性
-  - 作用：定义 agent 的名字、形象、风格、自我介绍等身份字段
-  - 关键字段：`name`、`creature`、`vibe`、`emoji`、`avatar`、`introduction`
+  - 关键字段：`experience_name`、`content`、`supersedes`（可选；不替换其他经验时可省略）
 
 - `preferences`
   - 生效环节：偏好型记忆落盘与更新阶段
@@ -256,12 +250,6 @@ peer_enabled: true
   - 影响能力：skill 使用统计、经验沉淀与推荐流程
   - 作用：定义 skill 使用次数、成功率、适用场景等信息
   - 关键字段：`skill_name`、`total_executions`、`success_count`、`fail_count`、`best_for`、`recommended_flow`
-
-- `soul`
-  - 生效环节：agent soul 记忆落盘阶段
-  - 影响能力：agent 核心边界、连续性和长期人格稳定性
-  - 作用：定义 agent 的核心真值、边界、风格和连续性
-  - 关键字段：`core_truths`、`boundaries`、`vibe`、`continuity`
 
 - `tools`（默认禁用）
   - 生效环节：工具使用记忆落盘与更新阶段

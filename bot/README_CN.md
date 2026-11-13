@@ -317,7 +317,8 @@ export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
 | `bot.gateway.port` | `18790` | Gateway 监听端口 |
 | `bot.sandbox.backend` | `direct` | 执行后端 |
 | `bot.sandbox.mode` | `shared` | 工作区隔离方式 |
-| `bot.sandbox.backends.direct.allow_compile_exec` | `true` | 如需关闭可显式设为 `false` |
+| `bot.sandbox.backends.direct.allow_exec` | `true` | 是否允许 Agent 通过内置 `exec` 工具在宿主机执行命令；关闭后也禁止子 Agent 和 Compile 使用该工具 |
+| `bot.sandbox.backends.direct.allow_compile_exec` | `false` | Compile 默认使用专用读取工具；只有此项和 `allow_exec` 均为 `true` 时，才允许 Compile Agent 在宿主机执行命令 |
 | `bot.heartbeat.enabled` | `true` | 是否周期检查 `HEARTBEAT.md` |
 | `bot.heartbeat.interval_seconds` | `600` | 心跳间隔 |
 | `bot.mode` | `normal` | 可选 `normal`、`readonly`、`debug` |
@@ -363,22 +364,25 @@ Agent 实际使用的活动目录还取决于 `bot.sandbox.mode`：
 | `per-session` | `<workspace>/<session-key>` |
 | `per-channel` | `<workspace>/<channel-key>` |
 
-例如，默认配置下应修改 `~/.openviking/data/bot/workspace/shared/SOUL.md`。
+例如，默认的本地 Soul 文件位于 `~/.openviking/data/bot/workspace/shared/SOUL.md`。
 
 ### 定制 Agent
 
 首次使用某个活动 Workspace 时，VikingBot 会从内置 `bot/workspace` 模板复制初始文件。常用定制入口如下：
 
+配置 OpenViking 后，VikingBot 每轮读取当前用户的 `viking://~/memories/soul.md`，优先使用该文件替代本地 `SOUL.md`。文件不存在、为空、读取失败或读取超过 5 秒时，回退到本地 `SOUL.md`；未配置 OpenViking 时直接使用本地 `SOUL.md`。
+
 | 文件或目录 | 作用 | 加载方式 |
 |------------|------|----------|
-| `SOUL.md` | 人格、价值观和表达风格 | 每轮自动加入系统提示 |
+| OpenViking `memories/soul.md` | Agent 指令 | 每轮优先于本地 `SOUL.md` 加载 |
+| `SOUL.md` | 人格、价值观和表达风格 | OpenViking Agent 指令不可用时的本地兜底 |
 | `AGENTS.md` | 全局工作规则和任务约束；可按需创建 | 每轮自动加入系统提示 |
 | `IDENTITY.md` | Agent 名称、角色和身份背景；可按需创建 | 每轮自动加入系统提示 |
 | `TOOLS.md` | 工具选择、调用边界和安全规则 | 每轮自动加入系统提示 |
 | `skills/<name>/SKILL.md` | 某类任务的操作流程和配套资源 | 先注入摘要，需要时渐进加载全文 |
 | `HEARTBEAT.md` | 周期检查的任务清单 | 仅由 Heartbeat 读取 |
 
-例如，可以修改活动 Workspace 中的 `SOUL.md`：
+例如，可以修改活动 Workspace 中的 `SOUL.md` 来定制本地兜底内容：
 
 ```markdown
 # Soul
@@ -391,7 +395,7 @@ Agent 实际使用的活动目录还取决于 `bot.sandbox.mode`：
 - 不确定时明确说明假设，不编造结果
 ```
 
-保存后通常会在下一轮 Agent 对话中生效，无需重启 Gateway。`SOUL.md` 只能改变提示行为，不能绕过 Channel 权限、工具可见性或 Sandbox 限制。
+当前选用的指令文件保存后，通常会在下一轮 Agent 对话中生效，无需重启 Gateway。使用 OpenViking `soul.md` 时，应编辑该远端文件，本地 `SOUL.md` 不会同时注入。这些指令只能改变提示行为，不能绕过 Channel 权限、工具可见性或 Sandbox 限制。
 
 > [!NOTE]
 > 请修改活动 Workspace 中的文件。仓库或安装包中的 `bot/workspace` 是初始化模板，不会覆盖已经存在的 Workspace。不要在启动文件中保存 API Key 等秘密。
@@ -406,7 +410,7 @@ Agent 实际使用的活动目录还取决于 `bot.sandbox.mode`：
 |------|------|
 | 文件与命令 | `read_file`、`write_file`、`edit_file`、`list_dir`、`exec` |
 | Web | `web_search`、`web_fetch` |
-| OpenViking | `openviking_list`、`openviking_search`、`openviking_grep`、`openviking_glob`、`openviking_multi_read`、`openviking_add_resource`、`openviking_memory_commit` |
+| OpenViking | `openviking_list`、`openviking_search`、`openviking_rule_search`、`openviking_grep`、`openviking_glob`、`openviking_multi_read`、`openviking_add_resource`、`openviking_memory_commit` |
 | 其他 | `message`、`generate_image`、`cron`、`spawn` |
 
 `readonly` 模式不会注册 `openviking_add_resource`。渠道设置 `ov_tools_enable: false` 时，该渠道不显示 OpenViking 工具，也不注入 Profile、Memory 和 Experience。
@@ -478,7 +482,22 @@ Agent 实际使用的活动目录还取决于 `bot.sandbox.mode`：
 - `per-session`：每个 Session 独立；
 - `per-channel`：同一渠道实例共享。
 
-DirectBackend 默认 `restrict_to_workspace: false`。对不可信用户开放 Gateway 时，应选择隔离后端，并设置渠道白名单和网络/文件策略。
+Direct 默认允许 Agent 在宿主机执行命令。要关闭这项能力，在 `ov.conf` 中设置并重启 Bot：
+
+```json
+{
+  "bot": {
+    "sandbox": {
+      "backend": "direct",
+      "backends": {
+        "direct": { "allow_exec": false }
+      }
+    }
+  }
+}
+```
+
+关闭后，聊天、子 Agent 和 Compile 均不能调用内置 `exec` 工具；聊天、检索和工作区文件工具仍可使用。`allow_compile_exec=true` 不能覆盖此设置。此开关仅针对 Direct 的 Agent 命令执行，不影响其他沙箱后端，也不提供文件或网络隔离。对不可信用户开放 Gateway 时，应选择隔离后端，并设置渠道白名单和网络/文件策略。
 
 ```json
 {

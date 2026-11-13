@@ -7,6 +7,63 @@ This changelog is automatically generated from [GitHub Releases](https://github.
 
 ## Unreleased
 
+- **LangGraph Store discovery errors**: Non-semantic `search()` and
+  `list_namespaces()` now propagate backend listing failures, including permission
+  and availability errors. Explicitly missing namespace roots still return empty results.
+- **Legacy session migration removed (breaking change)**: Removed the legacy
+  implementation, `ov admin migrate` (including `--cleanup`), and the corresponding
+  Python, TypeScript, and Go SDK methods. The ROOT-only `POST /api/v1/admin/migrate`
+  endpoint remains reserved and currently returns `400 / INVALID_ARGUMENT` without
+  creating a task. New releases no longer
+  provide migration or cleanup of legacy 0.3.x sessions; upgrading does not move or
+  delete those old directories. Migrated sessions and normal session operations
+  are unaffected.
+- **Gateway deployment and behavior**:
+  - New standalone Helm chart, `deploy/helm/openviking-gateway`: one SQLite replica with a
+    PVC, or several replicas sharing Redis. Until a release includes these features, set
+    `image.tag` explicitly; see the [operations guide](../guides/22-gateway-operations.md#helm).
+  - New opt-in settings: `storage` (Redis), `management_api`, `openviking_keys`, `tenancy`,
+    `default_upstreams` and `default_profile`, `request_log_sink`, `capture_concurrency` and `keep_alive_seconds`.
+    SQLite remains the default storage.
+  - New `X-OpenViking-Upstream-URL` request header picks one of the allowed upstreams by its
+    Base URL; see [Pick the upstream per request](../gateway/07-upstreams.md#upstream-url-header).
+  - `session_ttl_days` is replaced by `session_ttl_seconds` (at least 3600), so sessions can
+    expire in under a day. The old setting is ignored with a startup warning; set the new one
+    when upgrading.
+  - Behavior changes with no configuration change: standalone keep-alive rises from 5 to 75
+    seconds; a gateway bound to a public address waits and retries at startup while
+    OpenViking is unreachable or returns 5xx; idle SSE streams carry a comment heartbeat every
+    15 seconds; a request whose key OpenViking refuses with 402 or 403 is rejected instead of
+    forwarded; and an OpenViking 401 while saving, once `/health` also returns 401, pauses
+    saving with `gateway_key_revoked`.
+  - Context profiles now select every OpenViking tool by default, including the ones that change data such as `forget` and `set_acl`; earlier releases left 8 of them unchecked. Saved profiles and ongoing conversations keep their tools. Accounts without a saved `default` profile, and management API requests that omit `disabled_tools`, now get every tool; set `default_profile.disabled_tools` or save a `default` profile to keep the old selection.
+  - `X-OpenViking-Context` can only narrow tool access: `disabled_tools` adds to the profile's exclusions and `gateway_tools` cannot turn tools back on. Clients that sent `{"disabled_tools":[]}` or `{"gateway_tools":true}` to get tools the profile withholds no longer get them; change the profile instead.
+- **Volcengine KMS `key_file` (upgrade action)**: `encryption.volcengine_kms.key_file` now takes
+  effect for the server and the gateway; earlier releases ignored it and kept the root key at
+  `~/.openviking/openviking-volcengine-root-key.enc`. If you set `key_file`, move that file to
+  the configured path before upgrading. While the configured file is missing and the default
+  one exists, startup fails instead of creating a new root key.
+- **LangChain import migration (breaking change)**: The server no longer ships
+  `openviking.integrations.langchain` or its forwarding modules. Old imports fail
+  immediately; there is no deprecation period or compatibility stub. Install
+  `langchain-openviking` (or `pip install "langchain-openviking[langgraph]"` for
+  LangGraph) and replace the `openviking.integrations.langchain` prefix with
+  `langchain_openviking`, including submodule imports. For example, use
+  `from langchain_openviking import OpenVikingRetriever`. The maintained packages
+  and examples now live under `integrations/frameworks/`; package names and
+  canonical imports are unchanged. See the [migration guide](../agent-integrations/07-langchain-langgraph.md).
+- **Working Memory defaults off (behavior change)**: Commits continue to archive raw messages
+  and extract long-term memories, but generate no WM/checkpoint summaries by default.
+  Update installed agent plugins separately: automatic archive injection and takeover now
+  default off, and host history/compaction stays in use. VikingBot retains OV-managed
+  context and compaction and explicitly requests WM on session-context commits.
+  The old serializer omitted WM=true,
+  so previously saved policies without that field now become false even if true was once
+  chosen explicitly. Already-queued legacy tasks retain their submission-time semantics.
+  A new per-commit `enable_working_memory` boolean can opt in without replacing other
+  policy fields. Completed WM-off archives remain readable as raw messages with empty
+  summary fields. See the [upgrade guide](../guides/working-memory-default-off.md), including
+  handoffs for old conversations that no longer have complete host history.
 - **Watch API migration (breaking change)**: Re-importing with `watch_interval > 0`
   no longer updates or reactivates an existing Watch. Native Watches retain exclusive
   ownership while paused, and incompatible target reuse returns `409 Conflict`.

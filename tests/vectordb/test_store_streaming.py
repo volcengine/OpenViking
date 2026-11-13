@@ -12,6 +12,7 @@ from openviking.storage.vectordb.store.local_store import (
     STORE_SCAN_PAGE_SIZE,
     StoreEngineProxy,
 )
+from openviking.storage.vectordb.store.store import BatchOp, Op, OpType
 from openviking.storage.vectordb.store.store_manager import StoreManager
 
 
@@ -195,6 +196,37 @@ def test_closing_store_stream_releases_the_current_encoded_page():
     gc.collect()
 
     assert not any(page_ref() is not None for page_ref in storage_engine.page_refs)
+
+
+@pytest.mark.parametrize(
+    ("operation", "native_method"),
+    [
+        ("write", "put_data"),
+        ("delete", "delete_data"),
+        ("clear", "clear_data"),
+        ("exec_sequence", "exec_op"),
+        ("exec_sequence_batch_op", "exec_op"),
+    ],
+)
+@pytest.mark.parametrize("status", [0, -1])
+def test_store_proxy_checks_native_mutation_status(operation, native_method, status, monkeypatch):
+    native = engine.VolatileStore()
+    monkeypatch.setattr(native, native_method, lambda *_args: status)
+    store = StoreEngineProxy(native)
+    calls = {
+        "write": lambda: store.write(["key"], [b"value"], "test:"),
+        "delete": lambda: store.delete(["key"], "test:"),
+        "clear": store.clear,
+        "exec_sequence": lambda: store.exec_sequence([Op(OpType.PUT, "key", b"value")], "test:"),
+        "exec_sequence_batch_op": lambda: store.exec_sequence_batch_op(
+            [BatchOp("test:", OpType.PUT, ["key"], [b"value"])]
+        ),
+    }
+    if status:
+        with pytest.raises(RuntimeError, match=f"{native_method}.*{status}"):
+            calls[operation]()
+    else:
+        assert calls[operation]() is None
 
 
 def test_native_volatile_store_paged_scan_abi():

@@ -11,7 +11,6 @@ from openviking.core.context import ContextLevel
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_queue_middleware import TaskWorkQueueMiddleware
 from openviking.service.task_work_index import (
-    TaskWorkIndex,
     TaskWorkRejected,
     bind_task_context,
     get_task_context,
@@ -236,7 +235,6 @@ async def test_semantic_executor_bounds_active_node_work(monkeypatch):
         context_type="resource",
         max_concurrent_llm=3,
         ctx=ctx,
-        skip_vectorization=True,
     )
 
     max_running = 0
@@ -253,10 +251,13 @@ async def test_semantic_executor_bounds_active_node_work(monkeypatch):
     assert stats.in_progress_nodes == 0
     assert processor.max_active_summaries <= 3
     assert max_running <= 3
+    assert len(processor.vectorized_files) == 40
+    assert len(processor.overview_inputs[-1][1]) == 32
 
 
 @pytest.mark.asyncio
-async def test_incremental_wide_directory_samples_before_summary_work(monkeypatch):
+@pytest.mark.parametrize("sample_limit", [4, 32])
+async def test_incremental_wide_directory_samples_summary_inputs(monkeypatch, sample_limit):
     root_uri = "viking://resources/wide"
     tree = {
         root_uri: [{"name": f"file-{idx:03}.txt", "isDir": False} for idx in range(40)],
@@ -265,7 +266,7 @@ async def test_incremental_wide_directory_samples_before_summary_work(monkeypatc
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
     )
-    _patch_semantic_config(monkeypatch, overview_sample_limit=4)
+    _patch_semantic_config(monkeypatch, overview_sample_limit=sample_limit)
 
     processor = _FakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
@@ -277,20 +278,25 @@ async def test_incremental_wide_directory_samples_before_summary_work(monkeypatc
         incremental_update=True,
         target_uri=root_uri,
         recursive=False,
-        changes={"modified": [f"{root_uri}/file-020.txt"]},
-        skip_vectorization=True,
+        changes={"modified": [f"{root_uri}/file-004.txt"]},
     )
 
     await executor.run(root_uri)
 
-    # Four deterministic aggregation inputs plus the changed file, when it is
-    # outside that sample, are the only files that need summary preparation.
-    assert len(processor.summarized_files) <= 5
-    assert executor.get_stats().total_nodes <= 6
+    assert len(processor.summarized_files) == sample_limit + 1
+    assert f"{root_uri}/file-004.txt" in processor.vectorized_files
+    _, summaries, _, coverage = processor.overview_inputs[-1]
+    assert len(summaries) == sample_limit
+    assert summaries[0]["name"] == "file-000.txt"
+    assert summaries[-1]["name"] == "file-039.txt"
+    assert "file-004.txt" not in {item["name"] for item in summaries}
+    assert coverage["total_files"] == 40
+    overview = parse_abstract_overview(dict(fake_fs.writes)[f"{root_uri}/.overview.md"])
+    assert overview.metadata["freshness"] == freshness_metadata(40, sample_limit)
 
 
 @pytest.mark.asyncio
-async def test_non_recursive_memory_samples_files_and_reads_child_abstracts(monkeypatch):
+async def test_non_recursive_memory_samples_files_and_child_abstracts_together(monkeypatch):
     root_uri = "viking://user/alice/memories"
     child_a = f"{root_uri}/a-child"
     child_d = f"{root_uri}/d-child"
@@ -326,13 +332,15 @@ async def test_non_recursive_memory_samples_files_and_reads_child_abstracts(monk
 
     await executor.run(root_uri)
 
-    assert processor.summarized_files == [f"{root_uri}/c.md", f"{root_uri}/f.md"]
+    assert processor.summarized_files == [f"{root_uri}/{name}.md" for name in ("c", "f")]
     assert executor.get_stats().total_nodes == 3
     assert processor.vectorized_files == []
     assert processor.vectorized_dirs == []
     _, file_summaries, child_abstracts, coverage = processor.overview_inputs[-1]
     assert [item["name"] for item in file_summaries] == ["c.md", "f.md"]
-    assert child_abstracts == [{"name": "a-child", "abstract": "child a abstract"}]
+    assert child_abstracts == [
+        {"name": "a-child", "abstract": "child a abstract"},
+    ]
     assert coverage["total_files"] == 4
     assert coverage["total_children"] == 2
 
@@ -468,20 +476,11 @@ async def test_semantic_executor_shares_node_scheduler_across_roots(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_task_work_rejection_does_not_stop_shared_semantic_worker():
-    work_index = TaskWorkIndex()
-
-    async def finalize_before_ack(_metadata):
-        return None
-
-    work_index.set_callbacks(
-        finalize_before_ack=finalize_before_ack,
-        is_cancellation_requested=lambda _task_id: True,
-    )
     embedding_queue = NamedQueue(
         None,
         "/queue",
         "Embedding",
-        middlewares=[TaskWorkQueueMiddleware(work_index)],
+        middlewares=[TaskWorkQueueMiddleware()],
     )
     embedding_queue._initialized = True
     unrelated_ran = asyncio.Event()

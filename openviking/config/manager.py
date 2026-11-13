@@ -365,11 +365,23 @@ class RuntimeConfigManager(Generic[C, A]):
         return await run_to_completion(lambda: self._patch(scope, patch))
 
     async def patch_account(
-        self, account_id: str, patch: dict, *, creating: bool = False
+        self,
+        account_id: str,
+        patch: dict,
+        *,
+        creating: bool = False,
+        lease_ref: object | None = None,
     ) -> ConfigChangeEvent:
         """Apply a three-state PATCH to one Account configuration and publish."""
         scope = ConfigScope.account(account_id)
-        return await run_to_completion(lambda: self._patch(scope, patch, creating=creating))
+        return await run_to_completion(
+            lambda: self._patch(
+                scope,
+                patch,
+                creating=creating,
+                lease_ref=lease_ref,
+            )
+        )
 
     async def delete_account(self, account_id: str) -> ConfigChangeEvent:
         """Delete one Account configuration and evict all manager-owned state."""
@@ -392,7 +404,12 @@ class RuntimeConfigManager(Generic[C, A]):
         return event
 
     async def _patch(
-        self, scope: ConfigScope, patch: dict, *, creating: bool = False
+        self,
+        scope: ConfigScope,
+        patch: dict,
+        *,
+        creating: bool = False,
+        lease_ref: object | None = None,
     ) -> ConfigChangeEvent:
         # Phase 1: validate only the request boundary. Candidate validation
         # happens after the current document has been merged.
@@ -400,7 +417,12 @@ class RuntimeConfigManager(Generic[C, A]):
 
         # Phase 2: serialize the scope's read/merge/validate/write operation.
         async with self._lock_for(scope):
-            prepared = await self._persist_validated_patch(scope, patch, creating=creating)
+            prepared = await self._persist_validated_patch(
+                scope,
+                patch,
+                creating=creating,
+                lease_ref=lease_ref,
+            )
 
             # Phase 3: publish only the already-built candidate. Account and
             # Cluster publications are independent; a Cluster pointer change
@@ -434,6 +456,7 @@ class RuntimeConfigManager(Generic[C, A]):
         patch: dict,
         *,
         creating: bool,
+        lease_ref: object | None = None,
     ) -> _PreparedPatch:
         """Prepare one candidate and persist its explicit scope document."""
         prepared: Optional[_PreparedPatch] = None
@@ -443,7 +466,11 @@ class RuntimeConfigManager(Generic[C, A]):
             prepared = self._prepare_patch(scope, current, patch, creating=creating)
             return prepared.persisted_settings
 
-        persisted_settings = await self._source.update(scope, mutate)
+        update_with_lease = getattr(self._source, "update_with_lease", None)
+        if lease_ref is not None and callable(update_with_lease):
+            persisted_settings = await update_with_lease(scope, mutate, lease_ref)
+        else:
+            persisted_settings = await self._source.update(scope, mutate)
         if prepared is None:
             raise RuntimeError("config source update did not invoke its mutate callback")
         if prepared.persisted_settings is not persisted_settings:

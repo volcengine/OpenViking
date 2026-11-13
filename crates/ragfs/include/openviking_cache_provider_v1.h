@@ -177,6 +177,8 @@ typedef int32_t (*OvCacheProviderDelV1)(
     uint64_t *removed,
     OvCacheOwnedBufferV1 *error);
 
+typedef OvCacheProviderDelV1 OvCacheProviderUnlinkV1;
+
 typedef int32_t (*OvCacheProviderMgetV1)(
     void *provider,
     const OvCacheByteSliceV1 *keys,
@@ -197,6 +199,28 @@ typedef int32_t (*OvCacheProviderIncrbyV1)(
     int64_t *value,
     OvCacheOwnedBufferV1 *error);
 
+typedef int32_t (*OvCacheProviderExpireV1)(
+    void *provider,
+    OvCacheByteSliceV1 key,
+    uint64_t duration_ms,
+    uint8_t *applied,
+    OvCacheOwnedBufferV1 *error);
+
+typedef int32_t (*OvCacheProviderHgetV1)(
+    void *provider,
+    OvCacheByteSliceV1 key,
+    OvCacheByteSliceV1 field,
+    OvCacheOptionalOwnedBufferV1 *output,
+    OvCacheOwnedBufferV1 *error);
+
+typedef int32_t (*OvCacheProviderHsetV1)(
+    void *provider,
+    OvCacheByteSliceV1 key,
+    OvCacheByteSliceV1 field,
+    OvCacheByteSliceV1 value,
+    uint64_t *added,
+    OvCacheOwnedBufferV1 *error);
+
 typedef int32_t (*OvCacheProviderSismemberV1)(
     void *provider,
     OvCacheByteSliceV1 key,
@@ -214,6 +238,39 @@ typedef int32_t (*OvCacheProviderScardV1)(
     void *provider,
     OvCacheByteSliceV1 key,
     uint64_t *count,
+    OvCacheOwnedBufferV1 *error);
+
+typedef int32_t (*OvCacheProviderZaddV1)(
+    void *provider,
+    OvCacheByteSliceV1 key,
+    double score,
+    OvCacheByteSliceV1 member,
+    uint64_t *added,
+    OvCacheOwnedBufferV1 *error);
+
+typedef int32_t (*OvCacheProviderZscanV1)(
+    void *provider,
+    OvCacheByteSliceV1 key,
+    OvCacheByteSliceV1 pattern,
+    uint32_t count,
+    OvCacheOwnedBufferArrayV1 *output,
+    OvCacheOwnedBufferV1 *error);
+
+typedef int32_t (*OvCacheProviderZrangeByScoreV1)(
+    void *provider,
+    OvCacheByteSliceV1 key,
+    double min,
+    double max,
+    uint32_t limit,
+    OvCacheOwnedBufferArrayV1 *output,
+    OvCacheOwnedBufferV1 *error);
+
+typedef int32_t (*OvCacheProviderZremV1)(
+    void *provider,
+    OvCacheByteSliceV1 key,
+    const OvCacheByteSliceV1 *members,
+    size_t members_len,
+    uint64_t *removed,
     OvCacheOwnedBufferV1 *error);
 
 typedef int32_t (*OvCacheProviderListPushV1)(
@@ -332,6 +389,14 @@ typedef struct {
     OvCacheProviderLinsertV1 linsert;
     OvCacheProviderLmoveV1 lmove;
     OvCacheProviderExecuteScriptV1 execute_script;
+    OvCacheProviderExpireV1 expire;
+    OvCacheProviderHgetV1 hget;
+    OvCacheProviderHsetV1 hset;
+    OvCacheProviderZaddV1 zadd;
+    OvCacheProviderZscanV1 zscan;
+    OvCacheProviderZremV1 zrem;
+    OvCacheProviderUnlinkV1 unlink;
+    OvCacheProviderZrangeByScoreV1 zrangebyscore;
 } OvCacheProviderApiV1;
 
 /* The only symbol resolved by DynamicProvider. */

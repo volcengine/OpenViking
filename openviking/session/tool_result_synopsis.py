@@ -224,17 +224,23 @@ def _try_table(
     preview_chars: int,
 ) -> Optional[ToolResultSynopsis]:
     try:
-        rows = list(csv.reader(io.StringIO(content), delimiter=delimiter))
+        rows: List[List[str]] = []
+        row_count = 0
+        for row in csv.reader(io.StringIO(content), delimiter=delimiter):
+            if not any(cell.strip() for cell in row):
+                continue
+            row_count += 1
+            if len(rows) < 10:
+                rows.append(row)
     except csv.Error:
         return None
-    rows = [row for row in rows if any(cell.strip() for cell in row)]
     if len(rows) < 2 or len(rows[0]) < 2:
         return None
     column_count = len(rows[0])
     if any(len(row) != column_count for row in rows[1 : min(len(rows), 10)]):
         return None
     columns = [cell.strip() or f"column_{idx + 1}" for idx, cell in enumerate(rows[0])]
-    data_rows = len(rows) - 1
+    data_rows = row_count - 1
     first_data = (
         _normalize_text_for_line(delimiter.join(rows[1]), _TABLE_FIRST_ROW_SAMPLE_CHARS)
         if len(rows) > 1

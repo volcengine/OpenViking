@@ -224,15 +224,6 @@ class Collection:
         )
         self.__collection: Optional[ICollection] = collection
 
-    def __del__(self):
-        """
-        Destructor method that cleans up the underlying ICollection instance.
-        Closes the collection connection and sets the reference to None to free resources.
-        """
-        if self.__collection:
-            self.__collection.close()
-            self.__collection = None
-
     def update(self, fields: Optional[Dict[str, Any]] = None, description: Optional[str] = None):
         """
         Update the collection's metadata fields and/or description.
@@ -721,7 +712,7 @@ class Collection:
     def close(self):
         """
         Close the connection to the collection and release associated resources.
-        Should be called explicitly when the collection is no longer needed (in addition to destructor).
+        The owner must call this before releasing the collection or reopening its path.
         """
         if self.__collection:
             self.__collection.close()
