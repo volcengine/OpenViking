@@ -118,7 +118,7 @@ class StoreManager:
                 BatchOp(
                     StoreManager.TTLTable,
                     [OpType.PUT] * len(cands_list),
-                    [str(data.expire_ns_ts) for data in cands_list],
+                    [f"{data.expire_ns_ts}_{data.label}" for data in cands_list],
                     [str(data.label).encode("utf-8") for data in cands_list],
                 )
             )
@@ -252,9 +252,7 @@ class StoreManager:
     def get_delta_data_after_ts(self, ns_ts: int) -> Iterator[DeltaRecord]:
         """Lazily deserialize delta records so a large delta table can be replayed on
         memory-constrained hosts without materializing the whole list."""
-        for _, bytes_data in self.storage.iter_seek_to_end(
-            str(ns_ts), StoreManager.DeltaTable
-        ):
+        for _, bytes_data in self.storage.iter_seek_to_end(str(ns_ts), StoreManager.DeltaTable):
             yield DeltaRecord.from_bytes(data=bytes_data)
 
     def delete_delta_data_before_ts(self, ns_ts: int) -> int:
@@ -310,7 +308,9 @@ class StoreManager:
             # Efficiently check expiration without full object creation if possible
             # But CandidateData takes bytes_data in init, so we might as well use helper
             expire_ts = CandidateData.bytes_row.deserialize_field(byte_data, "expire_ns_ts")
-            if expire_ts <= now_time:
+            # expire_ns_ts == 0 marks a record written without a TTL. A stale TTL
+            # index row from an earlier ttl > 0 write must not expire such a record.
+            if expire_ts and expire_ts <= now_time:
                 label = CandidateData.bytes_row.deserialize_field(byte_data, "label")
                 fields = CandidateData.bytes_row.deserialize_field(byte_data, "fields")
                 expired_cands_data.append((label, fields))
