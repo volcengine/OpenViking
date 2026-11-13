@@ -361,6 +361,12 @@ Set `OPENVIKING_RECALL_COMPRESS=server` to enable cloud recall compression, or
 The server digest takes precedence over the original search results, and `no_relevant`
 adds no memory to the prompt. The default is `off`. No local compressor is started.
 
+Context-mode recall also uses the OpenViking session to expand short follow-up queries
+and suppresses memories served within the last five session turns. Set
+`memory.openviking.recall_dedup_turns` from 0 through 100 to change that window; 0
+disables cross-turn suppression. `OPENVIKING_RECALL_DEDUP_TURNS` overrides YAML.
+This setting applies only when `recall_compress` is `server` or `auto`.
+
 The Hermes config equivalent is `memory.openviking.recall_compress: server`.
 When enabled, the default request timeout and total recall budget become 55 seconds.
 Explicit recall timeout settings still take precedence. Older servers fall back

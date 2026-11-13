@@ -129,7 +129,14 @@ class GatewayBackend:
 
 
 def initialize(
-    external_provider, monkeypatch, *, name="gateway", scope="peer", compress="off", **identity
+    external_provider,
+    monkeypatch,
+    *,
+    name="gateway",
+    scope="peer",
+    compress="off",
+    dedup_turns=None,
+    **identity,
 ):
     from agent.memory_manager import MemoryManager
 
@@ -146,6 +153,8 @@ def initialize(
         "recall_timeout_seconds": 10,
         "recall_request_timeout_seconds": 5,
     }
+    if dedup_turns is not None:
+        config["recall_dedup_turns"] = dedup_turns
     (home / "config.yaml").write_text(
         yaml.safe_dump({"memory": {"provider": "openviking", "openviking": config}})
     )
@@ -163,6 +172,32 @@ def initialize(
             **identity,
         )
     return home, provider, module, manager, backend
+
+
+@pytest.mark.parametrize("configured,expected", [(None, 5), (0, 0), (8, 8)])
+def test_context_recall_passes_cross_turn_dedup_window(
+    external_provider, monkeypatch, configured, expected
+):
+    home, provider, _, manager, backend = initialize(
+        external_provider,
+        monkeypatch,
+        name=f"dedup-{expected}",
+        scope="shared",
+        compress="auto",
+        dedup_turns=configured,
+    )
+    try:
+        with profile_scope(home):
+            provider.on_turn_start(1, "Recall preferences", author_id="alice")
+            result = provider.prefetch("Recall preferences", session_id="shared-group")
+        assert "common" in result
+        context_payload = next(
+            payload for _request, payload in backend.searches if payload.get("mode") == "context"
+        )
+        assert context_payload["session_id"] == "shared-group"
+        assert context_payload["dedup_turns"] == expected
+    finally:
+        manager.shutdown_all()
 
 
 @pytest.mark.parametrize("compress", ["off", "server"])
