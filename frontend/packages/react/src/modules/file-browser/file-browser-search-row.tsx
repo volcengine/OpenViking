@@ -1,21 +1,23 @@
 import type { SearchHit } from './search-types.js';
+import SearchFileIcon from '../../../../icons/svg/file-browser/file-04.svg?react';
 import { nameFromUri } from './fs-model.js';
-import { fileTypeIcon } from './fs-icon.js';
+import { directoryIcon } from './fs-icon.js';
 
 /**
- * 结果行的显示名：文件名，grep 命中再带上行号。
- *
- * 文件名复用 `fs-model` 的 `nameFromUri`，与树行、预览页签取同一份规则——各写
- * 一份在 `viking://` 这类边界上会给出不同结果。
- *
- * Display name of a result row: the file name, with a grep hit's line number appended.
- *
- * The name comes from `fs-model`'s `nameFromUri`, the same rule the tree row and the
- * preview tab use; separate copies disagree at boundaries such as `viking://`.
+ * 用最近一级父目录区分同名文件，URI 保留根和末段。
+ * Keep the nearest parent for same-name files and retain the URI root and leaf.
  */
-function hitName(hit: SearchHit): string {
+function resultLocation(hit: SearchHit) {
   const name = nameFromUri(hit.uri);
-  return hit.line === undefined ? name : `${name}:${hit.line}`;
+  const path = hit.uri.startsWith('viking://')
+    ? hit.uri.slice('viking://'.length).split('/').filter(Boolean)
+    : [];
+  const parent = path.length > 2 ? path.at(-2) : undefined;
+  const label = parent ? `${parent}/${name}` : name;
+  return {
+    name: hit.line === undefined ? label : `${label}:${hit.line}`,
+    uri: parent ? `viking://${path[0]}/.../${name}` : hit.uri,
+  };
 }
 
 /**
@@ -37,7 +39,7 @@ export interface FileBrowserSearchRowProps {
   id: string;
   active: boolean;
   query: string;
-  onHover: () => void;
+  onHover?: () => void;
   onLeave: () => void;
   onOpen: (uri: string) => void;
 }
@@ -51,7 +53,7 @@ export function FileBrowserSearchRow({
   onLeave,
   onOpen,
 }: FileBrowserSearchRowProps) {
-  const name = hitName(hit);
+  const { name, uri } = resultLocation(hit);
   const index = query ? name.toLowerCase().indexOf(query.toLowerCase()) : -1;
   return (
     <li className="ov-file-browser-search__item" role="presentation">
@@ -61,37 +63,41 @@ export function FileBrowserSearchRow({
         role="option"
         aria-selected={active}
         tabIndex={-1}
-        onPointerEnter={(event) => {
-          if (event.pointerType !== 'touch') onHover();
+        onPointerMove={(event) => {
+          if (event.pointerType !== 'touch') onHover?.();
         }}
         onPointerLeave={onLeave}
         onMouseDown={(event) => event.preventDefault()}
         className="ov-file-browser-search__result"
         onClick={() => onOpen(hit.uri)}
       >
-        <span className="ov-file-browser-search__icon" aria-hidden="true">
-          {fileTypeIcon(nameFromUri(hit.uri))}
-        </span>
-        <span className="ov-file-browser-search__body">
-          <span className="ov-file-browser-search__line">
-            <span className="ov-file-browser-search__name">
-              {index < 0 ? (
-                name
-              ) : (
-                <>
-                  {name.slice(0, index)}
-                  <mark>{name.slice(index, index + query.length)}</mark>
-                  {name.slice(index + query.length)}
-                </>
-              )}
-            </span>
-            <span className="ov-file-browser-search__uri">{hit.uri}</span>
+        <span className="ov-file-browser-search__row-content">
+          <span className="ov-file-browser-search__icon" aria-hidden="true">
+            {hit.isDir ? directoryIcon() : <SearchFileIcon />}
           </span>
-          {hit.abstract ? (
-            <span className="ov-file-browser-search__abstract">
-              {hit.abstract}
+          <span className="ov-file-browser-search__body">
+            <span className="ov-file-browser-search__line">
+              <span className="ov-file-browser-search__name" title={name}>
+                {index < 0 ? (
+                  name
+                ) : (
+                  <>
+                    {name.slice(0, index)}
+                    <mark>{name.slice(index, index + query.length)}</mark>
+                    {name.slice(index + query.length)}
+                  </>
+                )}
+              </span>
+              <span className="ov-file-browser-search__uri" title={hit.uri}>
+                {uri}
+              </span>
             </span>
-          ) : null}
+            {hit.abstract ? (
+              <span className="ov-file-browser-search__abstract">
+                {hit.abstract}
+              </span>
+            ) : null}
+          </span>
         </span>
       </button>
     </li>

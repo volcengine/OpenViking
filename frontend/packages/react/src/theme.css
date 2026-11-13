@@ -337,6 +337,26 @@ html.dark .ov-file-browser {
   --ov-ui-file-browser-refresh-border-default: var(--ov-ui-border-3-default);
 }
 
+.ov-file-browser-search {
+  --ov-ui-file-search-advanced-default: #fbfbfc;
+  --ov-ui-file-search-active-default: #f7f7f9;
+  --ov-ui-file-search-icon-default: #f7f7f9;
+  --ov-ui-file-search-outline-default: #e1e3ea;
+  --ov-ui-file-search-radio-default: #c9cbd4;
+  --ov-ui-file-search-divider-default: #edeef2;
+  --ov-ui-file-search-muted-default: #787c91;
+}
+
+html.dark .ov-file-browser-search {
+  --ov-ui-file-search-advanced-default: var(--ov-ui-bg-3-default);
+  --ov-ui-file-search-active-default: var(--ov-ui-bg-3-default);
+  --ov-ui-file-search-icon-default: var(--ov-ui-bg-4-default);
+  --ov-ui-file-search-outline-default: var(--ov-ui-border-2-default);
+  --ov-ui-file-search-radio-default: var(--ov-ui-border-2-default);
+  --ov-ui-file-search-divider-default: var(--ov-ui-border-1-default);
+  --ov-ui-file-search-muted-default: var(--ov-ui-text-3-default);
+}
+
 .ov-file-preview {
   --ov-ui-syntax-number-default: #722ed1;
 }

@@ -16,20 +16,35 @@ export function useSearchHighlight(
   }>();
   const activeIndex = selection?.hits === hits ? selection.index : 0;
   const active = hits[activeIndex];
-  const hoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined,
-  );
+  const preview = selection?.hits === hits ? active : undefined;
+  const pendingHover = useRef<{
+    index: number;
+    timer: ReturnType<typeof setTimeout>;
+  }>(undefined);
+  const onLeave = () => {
+    clearTimeout(pendingHover.current?.timer);
+    pendingHover.current = undefined;
+  };
   // The pointer schedules a browser timer; when results change or the dialog
   // unmounts, cancel it so a row from the previous list cannot take selection.
-  useEffect(() => () => clearTimeout(hoverTimer.current), [hits]);
-  const onLeave = () => clearTimeout(hoverTimer.current);
+  useEffect(
+    () => () => {
+      clearTimeout(pendingHover.current?.timer);
+      pendingHover.current = undefined;
+    },
+    [hits],
+  );
   const onHover = (index: number) => {
+    if (pendingHover.current?.index === index) return;
     onLeave();
-    if (index !== activeIndex) {
-      hoverTimer.current = setTimeout(
-        () => setSelection({ hits, index }),
-        HOVER_DELAY,
-      );
+    if (!preview || index !== activeIndex) {
+      pendingHover.current = {
+        index,
+        timer: setTimeout(() => {
+          pendingHover.current = undefined;
+          setSelection({ hits, index });
+        }, HOVER_DELAY),
+      };
     }
   };
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -53,5 +68,5 @@ export function useSearchHighlight(
       .getElementById(`${listId}-${index}`)
       ?.scrollIntoView?.({ block: 'nearest' });
   };
-  return { active, activeIndex, listId, onHover, onLeave, onKeyDown };
+  return { active, activeIndex, preview, listId, onHover, onLeave, onKeyDown };
 }

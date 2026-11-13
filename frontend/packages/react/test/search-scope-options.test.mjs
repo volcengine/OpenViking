@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildScopeOptions } from '../src/modules/file-browser/search-model.ts';
-import { normalizeFilters } from '../src/modules/file-browser/search-model.ts';
+import {
+  buildScopeOptions,
+  isSearchScopeAllowed,
+  normalizeFilters,
+} from '../src/modules/file-browser/search-model.ts';
 
 const HOME = 'viking://~';
 const ALL = [
@@ -44,6 +47,31 @@ test('a root outside every retrievable scope offers nothing', () => {
   assert.deepEqual(buildScopeOptions('viking://unknown'), []);
 });
 
+test('a directory picked within the current root cannot carry over to a sibling root', () => {
+  const selected = 'viking://resources/project-a/docs';
+  assert.equal(
+    isSearchScopeAllowed(
+      buildScopeOptions('viking://resources/project-a'),
+      selected,
+    ),
+    true,
+  );
+  assert.equal(
+    isSearchScopeAllowed(
+      buildScopeOptions('viking://resources/project-ab'),
+      selected,
+    ),
+    false,
+  );
+  assert.equal(
+    isSearchScopeAllowed(
+      buildScopeOptions('viking://resources/project-a/docs/deeper'),
+      selected,
+    ),
+    false,
+  );
+});
+
 test('switching to a single-select mode collapses the scopes to one', () => {
   // 两项都留着时，单选控件只能勾中一个、请求也只取第一个，界面与请求脱节。
   //
@@ -61,6 +89,7 @@ test('switching to a single-select mode collapses the scopes to one', () => {
   const single = normalizeFilters(filters, 'grep');
   assert.deepEqual(single.scopes, ['viking://resources']);
   assert.deepEqual(single.levels, []);
+  assert.equal(single.timeField, '');
   assert.equal(single.since, '');
   assert.equal(single.until, '');
   assert.equal(single.caseInsensitive, true);

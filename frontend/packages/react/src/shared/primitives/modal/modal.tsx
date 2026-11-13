@@ -35,6 +35,7 @@ export function Modal({
   onClose,
   children,
   closeLabel,
+  closeIcon,
 }: ModalProps) {
   const locale = useLocale(localeProp);
   const text = resolveLocale({ 'en-US': enUS, 'zh-CN': zhCN }, locale);
@@ -122,7 +123,9 @@ export function Modal({
               disabled={!onClose}
               onClick={onClose}
             >
-              <CloseIcon width={16} height={16} aria-hidden="true" />
+              {closeIcon ?? (
+                <CloseIcon width={16} height={16} aria-hidden="true" />
+              )}
             </button>
             <div className="ov-modal__body">{children}</div>
           </FocusLock>

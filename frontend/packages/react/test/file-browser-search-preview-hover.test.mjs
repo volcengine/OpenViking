@@ -51,18 +51,20 @@ test('passing over results keeps the current preview until the pointer settles',
       input.dispatchEvent(new window.Event('input', { bubbles: true }));
     });
     await wait(450);
-    await wait(150);
     const options = [...modal.querySelectorAll('[role="option"]')];
-    const preview = modal.querySelector('aside');
     const pointer = (index, type) =>
       options[index].dispatchEvent(
         new window.MouseEvent(type, { bubbles: true }),
       );
+    assert.equal(modal.querySelector('aside'), null);
+    await act(async () => pointer(0, 'pointermove'));
+    await wait(180);
+    const preview = modal.querySelector('aside');
     assert.match(preview.textContent, /First file body/);
-    await act(async () => pointer(1, 'pointerover'));
+    await act(async () => pointer(1, 'pointermove'));
     assert.match(preview.textContent, /First file body/);
     await act(async () => pointer(1, 'pointerout'));
-    await act(async () => pointer(2, 'pointerover'));
+    await act(async () => pointer(2, 'pointermove'));
     assert.match(preview.textContent, /First file body/);
     await wait(180);
     assert.match(

@@ -121,7 +121,7 @@ export interface FileBrowserLabels {
   searchFilterUnsupported?: string;
   /** 检索结果数量，参数为条数。Result count; receives the number. */
   searchResultCount?: (count: number) => string;
-  /** 结果数量与模式之间的分隔说明。Copy between the count and the mode chip. */
+  /** 模式标签旁的说明。Description beside the mode chip. */
   searchVia?: string;
   /** 切换检索方式的入口。Entry that switches the retrieval mode. */
   searchSwitchMode?: string;

@@ -23,7 +23,7 @@ export interface FileBrowserSearchResultsProps {
   activeIndex: number;
   query: string;
   preview?: ReactNode;
-  onHover: (index: number) => void;
+  onHover?: (index: number) => void;
   onLeave: () => void;
   onRetry: () => void;
   hits: SearchHit[];
@@ -119,7 +119,13 @@ export function FileBrowserSearchResults({
         text={text}
         onSelectMode={onSelectMode}
       />
-      <div className="ov-file-browser-search__result-layout">
+      <div
+        className={
+          preview
+            ? 'ov-file-browser-search__result-layout ov-file-browser-search__result-layout--preview'
+            : 'ov-file-browser-search__result-layout'
+        }
+      >
         <ul
           id={listId}
           role="listbox"
@@ -133,7 +139,7 @@ export function FileBrowserSearchResults({
               hit={hit}
               query={query}
               active={index === activeIndex}
-              onHover={() => onHover(index)}
+              onHover={onHover ? () => onHover(index) : undefined}
               onLeave={onLeave}
               onOpen={onOpen}
             />

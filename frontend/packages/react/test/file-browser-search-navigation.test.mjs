@@ -54,28 +54,39 @@ test('ranked results highlight by keyboard and replace stale previews', async ()
       field.dispatchEvent(new window.Event('input', { bubbles: true }));
     });
     await wait(450);
-    await wait(140);
-    const previous = fetch.calls.find(
-      (call) => call.path === '/api/v1/content/read' && call.uri === first,
+    assert.equal(modal().querySelector('aside'), null);
+    assert.equal(
+      fetch.calls.some((call) => call.path === '/api/v1/content/read'),
+      false,
     );
-    assert.equal(previous.query.limit, '20');
     assert.equal(
       modal()
         .querySelector('[role="option"][aria-selected="true"]')
         .textContent.includes('one.md'),
       true,
     );
-    await act(async () =>
-      field.dispatchEvent(
-        new window.KeyboardEvent('keydown', {
-          bubbles: true,
-          cancelable: true,
-          key: 'ArrowDown',
-        }),
-      ),
+    const press = (key) =>
+      act(async () =>
+        field.dispatchEvent(
+          new window.KeyboardEvent('keydown', {
+            bubbles: true,
+            cancelable: true,
+            key,
+          }),
+        ),
+      );
+    await press('ArrowDown');
+    assert.match(
+      modal().querySelector('aside').textContent,
+      /Second file body/,
     );
+    await press('ArrowUp');
+    const previous = fetch.calls.find(
+      (call) => call.path === '/api/v1/content/read' && call.uri === first,
+    );
+    assert.equal(previous.query.limit, '20');
+    await press('ArrowDown');
     assert.equal(previous.init.signal.aborted, true);
-    await wait(150);
     assert.match(
       modal().querySelector('aside').textContent,
       /Second file body/,
@@ -85,15 +96,7 @@ test('ranked results highlight by keyboard and replace stale previews', async ()
       modal().querySelector('aside').textContent,
       /Stale first body/,
     );
-    await act(async () =>
-      field.dispatchEvent(
-        new window.KeyboardEvent('keydown', {
-          bubbles: true,
-          cancelable: true,
-          key: 'Enter',
-        }),
-      ),
-    );
+    await press('Enter');
     assert.deepEqual(opened, [second]);
   } finally {
     await view.unmount();
