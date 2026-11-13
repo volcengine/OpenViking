@@ -997,8 +997,13 @@ async def test_vectorize_content_only_reads_embedding_input(monkeypatch):
 @pytest.mark.parametrize(
     "content, expected",
     [
-        ("a1👍" * 100, "a1👍" * 26 + "a1" + EMBEDDING_TRUNCATION_SUFFIX),
-        ("中文あ가Ｌ、" * 100, "中文あ가Ｌ、" * 4 + "中文" + EMBEDDING_TRUNCATION_SUFFIX),
+        # 0.4 token per ordinary character, and the truncation marker itself is
+        # reserved from the budget, so the final message stays within the bound.
+        ("a1👍" * 100, "a1👍" * 15 + "a" + EMBEDDING_TRUNCATION_SUFFIX),
+        (
+            "中文あ가Ｌ、" * 100,
+            "中文あ가Ｌ、" * 3 + "中文あ가" + EMBEDDING_TRUNCATION_SUFFIX,
+        ),
         ("a1中👍" * 5, "a1中👍" * 5),
     ],
     ids=["ordinary-characters", "wide-text", "within-budget"],
@@ -1012,7 +1017,7 @@ async def test_vectorize_file_bounds_content_before_enqueue(monkeypatch, content
         embedding_utils,
         "get_openviking_config",
         lambda: types.SimpleNamespace(
-            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=20)
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_tokens=30)
         ),
     )
     await embedding_utils.vectorize_file(
