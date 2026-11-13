@@ -3456,6 +3456,9 @@ async def test_embedding_handler_requeues_transient_throttle(
         "insufficient_quota",
         "billing_hard_limit_reached",
         "account_overdue",
+        # #7308 classified this on main. An account out of prepaid credit must
+        # not be re-enqueued as if the throttle would clear on the next window.
+        "credit_balance_exhausted",
     ],
 )
 async def test_embedding_handler_fails_terminally_on_billing_exhaustion(monkeypatch, provider_code):
