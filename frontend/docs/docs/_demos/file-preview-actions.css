@@ -10,6 +10,7 @@
   align-items: center;
   gap: 6px;
 }
+
 .ov-demo-preview-actions__controls select {
   min-width: 0;
   max-width: 100%;
@@ -23,11 +24,4 @@
 .ov-demo-preview-actions__remove.ov-file-preview__menu-item,
 .ov-demo-preview-actions__remove.ov-button {
   color: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
-}
-
-.ov-demo-preview-actions__controls input[type='checkbox'] {
-  appearance: auto;
-  inline-size: 16px;
-  block-size: 16px;
-  accent-color: var(--ov-ui-color-primary);
 }

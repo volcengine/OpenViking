@@ -1,12 +1,7 @@
+import { Checkbox } from '#demo-controls';
 import { useLang } from '@rspress/core/runtime';
-import { useState, type CSSProperties } from 'react';
+import { useState } from 'react';
 
-const checkboxStyle: CSSProperties = {
-  display: 'inline-block',
-  appearance: 'auto',
-  width: 16,
-  height: 16,
-};
 import { OpenVikingProvider } from '@openviking/react/client';
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import '@openviking/react/modules/file-browser/style.css';
@@ -27,22 +22,14 @@ export default function FileBrowserAclDemo() {
       <div
         style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginBottom: 16 }}
       >
-        <label>
-          <input
-            type="checkbox"
-            style={checkboxStyle}
-            onChange={(event) => demo.setFailSave(event.target.checked)}
-          />{' '}
+        <Checkbox onChange={(next) => demo.setFailSave(next)}>
+          {' '}
           {zh ? '模拟保存失败' : 'Simulate save failure'}
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            style={checkboxStyle}
-            onChange={(event) => demo.setFailDirectory(event.target.checked)}
-          />{' '}
+        </Checkbox>
+        <Checkbox onChange={(next) => demo.setFailDirectory(next)}>
+          {' '}
           {zh ? '模拟成员加载失败' : 'Simulate directory failure'}
-        </label>
+        </Checkbox>
         <label>
           {zh ? '当前权限 ' : 'Current permission '}
           <select

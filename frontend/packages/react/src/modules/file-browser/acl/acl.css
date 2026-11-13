@@ -128,12 +128,10 @@
 .ov-file-browser-acl__candidate > label > span:last-child {
   overflow-wrap: anywhere;
 }
-.ov-file-browser-acl__candidate input:not(.ov-input__element) {
-  display: inline-block;
-  appearance: auto;
-  width: 16px;
-  height: 16px;
-  accent-color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+.ov-file-browser-acl__candidate .ov-checkbox__text {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .ov-file-browser-acl__buttons {
   display: flex;
