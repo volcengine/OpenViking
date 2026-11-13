@@ -24,7 +24,7 @@ type Node = {
 
 const importedImageLine =
   /^ {0,3}!\[([^\]\\\r\n]*)\]\((viking:\/\/[^\s<>()]+)\)[ \t]*$/i;
-const importedImageBoundary = /^[ \t]*(?:<\/[a-z]+>[ \t]*)*<\/kbimage>[ \t]*$/i;
+const importedImageBoundary = /<\/kbimage>[ \t]*$/i;
 
 function escapeHtmlAttribute(value: string): string {
   return value
@@ -36,7 +36,8 @@ function escapeHtmlAttribute(value: string): string {
 
 /**
  * Older imports put the extracted image directly after the KBImage closing
- * tags. CommonMark consumes that line as HTML. Recover each image run in
+ * tags, even when the closing tag follows visible text on the same line.
+ * CommonMark consumes that line as HTML. Recover each image run in
  * place so the HTML parser still handles surrounding markup and comments,
  * and the resulting image still passes through the sanitizer.
  */

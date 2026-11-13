@@ -303,6 +303,7 @@ export function useFileBrowser({
     previewKey:
       boards.isOpen && activeUri ? dashboardKey(activeUri) : preview.activeKey,
     previewFooter: preview.footer,
+    previewUpdatedAt: preview.updatedAt,
     refreshing,
     actions,
   };

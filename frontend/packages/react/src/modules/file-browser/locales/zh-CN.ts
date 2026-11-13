@@ -1,7 +1,9 @@
 import type { ShellLabels } from '../file-browser-labels.js';
 
 const messages = {
-  formatCharacterCount: (count) => `${count.toLocaleString('zh-CN')} 个字符`,
+  formatCharacterCount: (count) => `${count.toLocaleString('zh-CN')} 字符数`,
+  formatPreviewUpdatedAt: (time) => `更新于 ${time}`,
+  previewModelNotice: '内容解析由 内容理解大模型 提供',
   accessDenied: '无权查看此节点。',
   traverseOnly: '此目录仅可展开以访问有权限的子节点。',
   systemDirectory: '选择此目录中的文件以预览内容。',

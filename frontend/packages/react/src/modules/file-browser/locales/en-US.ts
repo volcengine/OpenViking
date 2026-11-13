@@ -3,6 +3,9 @@ import type { ShellLabels } from '../file-browser-labels.js';
 const messages = {
   formatCharacterCount: (count) =>
     `${count.toLocaleString('en-US')} ${count === 1 ? 'character' : 'characters'}`,
+  formatPreviewUpdatedAt: (time) => `Updated on ${time}`,
+  previewModelNotice:
+    'Content parsing provided by the Content Understanding Model',
   accessDenied: 'You do not have permission to view this node.',
   traverseOnly:
     'This directory can only be expanded to reach accessible children.',

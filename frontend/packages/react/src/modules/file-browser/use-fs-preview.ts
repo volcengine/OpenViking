@@ -14,7 +14,7 @@ import { loadingTab } from './fs-preview-loading-tab.js';
 import { toSystemDirectoryTab } from './fs-system-directory-tab.js';
 import { createPreviewImageResolver } from './fs-preview-images.js';
 import { readFile } from './fs-read-file.js';
-import { abortError, resolveIsDirectory } from './fs-stat.js';
+import { abortError, readPreviewStat } from './fs-stat.js';
 
 export interface PreviewState {
   tabs: readonly FilePreviewTab[] | null;
@@ -22,6 +22,7 @@ export interface PreviewState {
   error: Error | null;
   /** 底部元信息，例如字符数。Footer metadata such as the character count. */
   footer?: string;
+  updatedAt?: string;
   setActiveKey: (key: string) => void;
 }
 
@@ -96,7 +97,7 @@ export function useFsPreview({
   const [tabs, setTabs] = useState<FilePreviewTab[] | null>(null);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [error, setError] = useState<Error | null>(null);
-  const [characterCount, setCharacterCount] = useState<number>();
+  const [stat, setStat] = useState<{ uri: string; updatedAt: string }>();
   const [saveGeneration, setSaveGeneration] = useState(0);
 
   // 当前资源决定要读什么。资源切换必须取消上一次读取，否则慢的旧响应会覆盖新
@@ -107,11 +108,11 @@ export function useFsPreview({
   // same happens on unmount.
   useEffect(() => {
     setDirectory(null);
+    setStat(undefined);
     if (!client || !uri) {
       setTabs(null);
       setActiveKey(null);
       setError(null);
-      setCharacterCount(undefined);
       return;
     }
     const controller = new AbortController();
@@ -124,9 +125,13 @@ export function useFsPreview({
     setTabs([loadingTab(uri, resourceType !== 'file')]);
     setActiveKey(uri);
     setError(null);
-    setCharacterCount(undefined);
     const options = { ...requestOptions, signal: controller.signal };
     if (contentKind === 'pending') return () => controller.abort();
+    const metadata = readPreviewStat(client, uri, options);
+    void metadata.then((result) => {
+      if (!controller.signal.aborted && result?.updatedAt)
+        setStat({ uri, updatedAt: result.updatedAt });
+    });
 
     // 类型未知时先问一次 `fs/stat`。仅凭「不在已知目录集合里」就按文件处理是错的：
     // 集合只覆盖已加载的层，宿主直接传一个尚未展开过的目录 URI 时它就是空的，
@@ -141,7 +146,7 @@ export function useFsPreview({
     const read = (async () => {
       const isDir =
         resourceType === 'unknown'
-          ? await resolveIsDirectory(client, uri, options)
+          ? (await metadata)?.isDirectory
           : resourceType === 'directory';
       if (controller.signal.aborted) throw abortError();
       if (isDir)
@@ -194,9 +199,6 @@ export function useFsPreview({
         const tab = result.tab;
         setTabs([tab]);
         setActiveKey(tab.key);
-        // 设计稿底部显示字符数；接口不返回行数与更新时间，先给字符数。
-        const body = tab.kind === 'file' ? tab.source.content : undefined;
-        setCharacterCount(typeof body === 'string' ? body.length : undefined);
       },
       (cause: unknown) => {
         if (isAbort(cause) || controller.signal.aborted) return;
@@ -230,14 +232,20 @@ export function useFsPreview({
           resolveImage: directory.resolveImage,
         }
       : undefined;
-  const count = directoryTab
-    ? (directoryTab.levels[0].source.content ?? '').length
-    : characterCount;
+  const current = tabs?.[0];
+  const body =
+    !directoryTab &&
+    current?.key === uri &&
+    current.kind === 'file' &&
+    !current.loading
+      ? current.source.content
+      : undefined;
   return {
     tabs: directoryTab ? [directoryTab] : tabs,
     activeKey,
     error,
-    footer: count === undefined ? undefined : formatCharacterCount(count),
+    footer: body === undefined ? undefined : formatCharacterCount(body.length),
+    updatedAt: stat?.uri === uri ? stat.updatedAt : undefined,
     setActiveKey,
   };
 }

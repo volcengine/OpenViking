@@ -263,7 +263,9 @@ import '@openviking/react/modules/file-browser/style.css';
 | l1Overview              | 目录预览里 L1 总览的页签名                                                                    | `string`                             | `'L1 总览'`                              |
 | summaryEmpty            | 目录某一级摘要尚未生成时的提示；预览目前不显示它，覆盖不会生效                                | `string`                             | `'暂无生成内容'`                         |
 | summaryFailed           | 某一级摘要读取失败且服务端没有返回消息时的提示                                                | `string`                             | `'摘要加载失败。'`                       |
-| formatCharacterCount    | 预览底部字符数的文案                                                                          | `(count: number) => string`          | 按 `locale` 格式化，如 `'1,234 个字符'`  |
+| formatCharacterCount    | 预览底部字符数的文案                                                                          | `(count: number) => string`          | 按 `locale` 格式化，如 `'1,234 字符数'`  |
+| formatPreviewUpdatedAt  | 预览底部更新时间的文案                                                                        | `(time: string) => string`           | `'更新于 {time}'`                        |
+| previewModelNotice      | 资源预览右侧的模型解析提示，传空字符串可隐藏                                                  | `string`                             | `'内容解析由 内容理解大模型 提供'`       |
 | actionBar               | 传给 [FileBrowserActionBar](../components/file-browser-action-bar) 操作栏的文案，包括接入抽屉 | `FileBrowserActionBarLabels`         | -                                        |
 | tree                    | 传给 [FileTree](../components/file-tree) 文件树的文案                                         | `FileTreeLabels`                     | -                                        |
 | preview                 | 传给 [FilePreview](../components/file-preview) 文件预览的文案，优先于上面同名的项             | `FilePreviewLabels`                  | -                                        |

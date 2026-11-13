@@ -67,6 +67,10 @@ export interface FileBrowserLabels {
   acl?: FileBrowserAclLabels;
   /** 预览底部字符数。Character count in the preview footer. */
   formatCharacterCount?: (count: number) => string;
+  /** 预览底部更新时间的文案。Copy for the formatted update time. */
+  formatPreviewUpdatedAt?: (time: string) => string;
+  /** 资源预览的模型提示。空字符串可隐藏。Model notice for resources; pass an empty string to hide it. */
+  previewModelNotice?: string;
   /** 未选中资源时的提示。Message shown when no resource is selected. */
   empty?: string;
   /** 加载失败提示。Load failure message. */
@@ -341,8 +345,10 @@ export interface FileBrowserApi {
   currentUri: string | null;
   /** 刷新是否进行中。Whether a refresh is running. */
   refreshing: boolean;
-  /** 预览底部元信息，例如字符数与更新时间；没有时为 `undefined`。 */
+  /** 预览字符数文案。Localized preview character count. */
   previewFooter?: string;
+  /** 当前资源的更新时间（ISO 8601）。Update time of the current resource (ISO 8601). */
+  previewUpdatedAt?: string;
   /** 首次加载是否已完成。Whether the first load has finished. */
   isReady: boolean;
   /** 整体加载失败的原因。Reason the whole tree failed to load. */

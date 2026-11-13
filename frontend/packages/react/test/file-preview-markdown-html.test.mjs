@@ -65,7 +65,12 @@ test('FilePreview sanitizes Markdown HTML and resolves imported images in mixed 
       },
     });
     const { document } = dom.window;
-    const names = ['with-caption', 'second-block', 'third-block'];
+    const names = [
+      'with-caption',
+      'second-block',
+      'third-block',
+      'readme-logo',
+    ];
     const expected = names.map(
       (name) =>
         `https://preview.test/resolved/${encodeURIComponent(`viking://resources/${name}.png`)}`,
@@ -80,13 +85,14 @@ test('FilePreview sanitizes Markdown HTML and resolves imported images in mixed 
     assert.ok(document.querySelector('a[href="https://example.com/"]'));
     assert.deepEqual(
       images().map((img) => img.alt),
-      ['with-caption', 'Second "quoted" & <label>', 'third-block'],
+      ['with-caption', 'Second "quoted" & <label>', 'third-block', 'image'],
     );
     assert.deepEqual(
       images().map((img) => img.src),
       expected,
     );
     assert.match(document.body.textContent, /Caption after the first image\./);
+    assert.match(document.body.textContent, /OpenViking/);
     assert.match(document.querySelector('pre')?.textContent, /!\[literal\]/);
     assert.equal(
       document.querySelector('kbimage, [onclick], a[href^="javascript:"]'),
@@ -95,7 +101,7 @@ test('FilePreview sanitizes Markdown HTML and resolves imported images in mixed 
     assert.equal(document.querySelector('#root script'), null);
     assert.doesNotMatch(
       document.body.textContent,
-      /untrustedScript|!\[with-caption\]|!\[second-block\]|!\[third-block\]/,
+      /untrustedScript|!\[(?:with-caption|second-block|third-block|image)\]/,
     );
     assert.equal(dom.window.untrustedScript, undefined);
   } finally {
