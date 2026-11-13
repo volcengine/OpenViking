@@ -47,7 +47,6 @@ curl -fsSL https://openviking.ai/install | bash
 
 - **没有设置页面。** 通过 `ovcli.conf` 或 `OPENVIKING_*` 环境变量配置插件。行为参数也可以写进 `~/.dsh/profiles/desktop/cordis.patch.yml` 的 `openviking-memory-runtime` 条目。恢复对话框里的“禁用第三方插件、备份 profile patch 并重启”会重置 profile 的插件，并把这个文件挪作备份，所以长期设置请放在 `ovcli.conf`，恢复后记得重新启用插件。
 - **工具身份。** 自动召回和捕获按每个对话所在的项目区分。OpenViking 工具每个 profile 只启动一次，工作目录是 profile 目录，所以在 `OPENVIKING_RECALL_PEER_SCOPE=actor` 下它们没有项目 peer。需要时在 `ovcli.conf` 里设置 `actor_peer_id`，或设置 `OPENVIKING_PEER_ID`。这个 peer 也会取代每个对话的项目 peer 用于召回和捕获，因此所有对话共用它。
-- **让某个工作区退出记忆。** 在 `<工作区根>/.openviking/config.json` 里写 `{"version": 1, "enabled": false}`，该目录下的所有对话都不再参与记忆：不注入 profile、不召回、不捕获、不提交，也不向服务端发任何请求。同一进程里其他工作区照常工作。只想停一半能力时用 `recall.enabled` 或 `capture.enabled`；`OPENVIKING_MEMORY_ENABLED=0` 仍然优先于该文件，会全局关闭。
 - **技能。** 内置技能只对预设里带技能工具的 agent 可见。`minimal` 预设不带，用它的 agent 看不到这些技能。
 - **日志。** Desktop 不显示插件输出。要排查 OpenViking 工具，设置 `OPENVIKING_DEBUG=1` 和 `OPENVIKING_DEBUG_LOG=<文件>`，然后重新打开 Desktop。
 

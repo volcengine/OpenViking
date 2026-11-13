@@ -14,18 +14,12 @@ export function apply(ctx, input = {}) {
   const client = new OpenVikingClient(config);
   const runtime = new OpenVikingRuntime(client, config, ctx.logger, cwd => (
     // Rebuild from the host input, not the config already merged for boot's cwd.
-    // Every knob a workspace file may name comes back per session, so a workspace
-    // that sets `enabled: false` turns memory off for its own sessions only — the
-    // host/env layers still outrank it, exactly as the peer rules already do.
+    // The shared loader preserves host/env precedence over workspace settings.
     resolveConfig(input, process.env, cwd)
   ));
-  const skipMemory = session => {
-    if (!session) return true;
-    if (config.skipSubagentSessions && session.header?.origin === "subagent") return true;
-    // A session with no id cannot be cached against its workspace, so it takes
-    // the conservative branch: memory on, decided by the boot configuration.
-    return Boolean(session.id) && runtime.isDisabled(session);
-  };
+  const skipMemory = session => (
+    config.skipSubagentSessions && session?.header?.origin === "subagent"
+  );
   ctx.provide("openvikingMemory", runtime);
   ctx.effect(
     () => () => runtime.disposeAll(),
