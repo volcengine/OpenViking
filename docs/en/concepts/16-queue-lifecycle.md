@@ -138,8 +138,8 @@ Extended enqueue uses a big-endian `QFSE` v1 frame (fixed header, TLVs, raw
 payload), with a 64 KiB header limit. `group_key` / `serial_key` use TLV types
 `2` / `3`, flags `1`, and 1–4096 UTF-8 bytes. Both keys together, duplicate or
 invalid keys, and unknown required fields are rejected; unknown optional fields
-are skipped. See the [protocol implementation](../../../crates/ragfs/src/plugins/queuefs/enqueue_protocol.rs)
-for the complete frame definition.
+are skipped. The complete frame definition is in
+`crates/ragfs/src/plugins/queuefs/enqueue_protocol.rs` in the source tree.
 
 Legacy `/enqueue` still accepts raw payload; dequeue, peek, messages and ACK
 formats are unchanged. `/dequeue` returns `{}` when nothing is eligible, even

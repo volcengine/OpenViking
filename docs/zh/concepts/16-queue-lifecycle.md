@@ -123,7 +123,8 @@ Redis 布局与旧版不兼容：升级前须排空 service 下共享队列、�
 扩展入队使用 `QFSE` v1 大端帧（固定头、TLV、原始 payload），header 上限 64 KiB。
 `group_key` / `serial_key` 的 TLV type 为 `2` / `3`，flags 为 `1`，
 key 长度为 1–4096 UTF-8 bytes；拒绝互斥字段并存、重复或无效 key、未知必选字段，
-跳过未知可选字段。完整帧定义见[协议实现](../../../crates/ragfs/src/plugins/queuefs/enqueue_protocol.rs)。
+跳过未知可选字段。完整帧定义见源码树中的
+`crates/ragfs/src/plugins/queuefs/enqueue_protocol.rs`。
 
 旧 `/enqueue` 仍接收原始 payload；dequeue、peek、messages 和 ACK 格式不变。
 无可投递消息时 `/dequeue` 返回 `{}`，即使 pending 非零。扩展 write 返回字节数，
