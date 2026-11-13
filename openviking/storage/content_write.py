@@ -103,7 +103,11 @@ from openviking.utils.embedding_utils import vectorize_directory_meta
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.path_safety import normalize_storage_target_uri, validate_safe_viking_uri_path
 from openviking.utils.summarizer import FileRefreshRequest, Summarizer
-from openviking.utils.tags import merge_search_tags, normalize_search_tags
+from openviking.utils.tags import (
+    merge_search_tags,
+    normalize_search_tag,
+    normalize_search_tags,
+)
 from openviking_cli.exceptions import (
     ConflictError,
     DeadlineExceededError,
@@ -331,34 +335,39 @@ class ContentWriteCoordinator:
                     user_id=ctx.user.user_id,
                     resource_id=uri,
                     task_id=task_id,
+                    meta={"mode": mode},
                 )
             if task is None:
                 raise RuntimeError("Content write Task was not created")
             return task
 
-        try:
-            result = await self._write(
-                uri=uri,
-                content=content,
-                ctx=ctx,
-                mode=mode,
-                wait=wait,
-                processing_mode=processing_mode,
-                tags=tags,
-                tag_mode=tag_mode,
-                acl=acl,
-                resolve_conflicts=resolve_conflicts,
-                root_operation="content_write",
-                root_task_factory=create_root_task,
-            )
-        except BaseException as exc:
-            if task_id is not None and not _root_owns_failure(exc):
-                await self._fail_content_write_task(
-                    task.task_id if task is not None else task_id, exc, ctx=ctx
+        from openviking.observability.reporting.facts import defer_file_changes
+
+        with defer_file_changes() as pending_file_changes:
+            try:
+                result = await self._write(
+                    uri=uri,
+                    content=content,
+                    ctx=ctx,
+                    mode=mode,
+                    wait=wait,
+                    processing_mode=processing_mode,
+                    tags=tags,
+                    tag_mode=tag_mode,
+                    acl=acl,
+                    resolve_conflicts=resolve_conflicts,
+                    root_operation="content_write",
+                    root_task_factory=create_root_task,
                 )
-            raise
-        if task is None:
-            raise RuntimeError("Content write completed without creating a root Task")
+            except BaseException as exc:
+                if task_id is not None and not _root_owns_failure(exc):
+                    await self._fail_content_write_task(
+                        task.task_id if task is not None else task_id, exc, ctx=ctx
+                    )
+                raise
+            if task is None:
+                raise RuntimeError("Content write completed without creating a root Task")
+            pending_file_changes.publish(task)
         return await self._return_or_wait_for_content_write_task(
             task.task_id,
             result,
@@ -460,6 +469,8 @@ class ContentWriteCoordinator:
                 ctx.account_id,
                 ctx.user.user_id,
                 enqueued_work=[],
+                task_type=task.task_type,
+                mode=task.meta.get("mode"),
             ):
                 return await self._enqueue_content_write_root(
                     operation=operation,
@@ -1445,9 +1456,12 @@ class ContentWriteCoordinator:
         self._validate_tag_mode(mode)
         normalized_uri = self._validate_uri_path(uri, field_name="uri")
         requested_mode = mode
-        normalized_tags = (
-            [] if requested_mode == "clear" else normalize_search_tags(tags, discard_invalid=True)
-        )
+        if requested_mode == "clear":
+            normalized_tags = []
+        elif requested_mode == "append":
+            normalized_tags = [normalize_search_tag(tag) for tag in tags]
+        else:
+            normalized_tags = normalize_search_tags(tags, discard_invalid=True)
         if not namespace_policy_for_uri(normalized_uri).supports_tags:
             raise InvalidArgumentError(f"tags are not supported for namespace: {normalized_uri}")
         await self._viking_fs._ensure_access(normalized_uri, ctx, action=AclAction.WRITE)

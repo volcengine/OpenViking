@@ -45,6 +45,7 @@ from openviking.service.task_work_index import detach_task_context, get_task_con
 from openviking.storage.abstract_overview import (
     AbstractOverviewWriteResult,
     body_for_preview,
+    deterministic_sample,
     freshness_metadata,
     markdown_safe_viking_uri,
     parse_overview_file_summaries,
@@ -450,6 +451,11 @@ class SemanticProcessor(DequeueHandlerBase):
             )
             return
 
+        await self._enqueue_directory_refresh(msg, parent_uri, changes={"modified": [uri]})
+
+    async def _enqueue_directory_refresh(
+        self, msg: SemanticMsg, parent_uri: str, *, changes: Dict[str, List[str]]
+    ) -> None:
         from openviking.storage.queuefs import get_queue_manager
 
         queue_manager = get_queue_manager()
@@ -464,14 +470,18 @@ class SemanticProcessor(DequeueHandlerBase):
             peer_id=msg.peer_id,
             role=msg.role,
             skip_vectorization=msg.skip_vectorization,
-            changes={"modified": [uri]},
+            changes=changes,
             generation_trigger="parent_refresh",
-            coalesce_key=build_semantic_coalesce_key(
-                context_type=msg.context_type,
-                uri=parent_uri,
-                account_id=msg.account_id,
-                user_id=msg.user_id,
-                peer_id=msg.peer_id,
+            # Directory refreshes must not supersede pending file indexing.
+            coalesce_key=(
+                "directory|"
+                + build_semantic_coalesce_key(
+                    context_type=msg.context_type,
+                    uri=parent_uri,
+                    account_id=msg.account_id,
+                    user_id=msg.user_id,
+                    peer_id=msg.peer_id,
+                )
             ),
         )
         with detach_task_context():
@@ -545,6 +555,7 @@ class SemanticProcessor(DequeueHandlerBase):
         queue_wait_ms = 0.0
         execute_status = "ok"
         breaker = None
+        syncing_source = False
         try:
             breaker = self._account_breaker(msg.account_id)
             work = self._message_work(msg, lock)
@@ -556,7 +567,9 @@ class SemanticProcessor(DequeueHandlerBase):
                 logger.warning("Skipping semantic generation for root URI: %s", msg.uri)
                 await self._cleanup_local_artifact(msg)
                 return ProcessResult.success()
-            if is_semantic_msg_stale(msg):
+            if msg.coalesce_key and await is_semantic_msg_stale(
+                msg, agfs=get_viking_fs()._async_agfs
+            ):
                 live_file_changes = {
                     kind: list(msg.changes.get(kind, []))
                     for kind in ("added", "modified")
@@ -712,6 +725,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                         "Syncing semantic source into target before processing: "
                                         f"{msg.uri} -> {msg.target_uri}"
                                     )
+                                    syncing_source = True
                                     diff = await work.run_write(
                                         lambda: self._sync_topdown_recursive(
                                             msg.uri,
@@ -720,6 +734,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                             lock=semantic_lock.lock,
                                         )
                                     )
+                                    syncing_source = False
                                     logger.info(
                                         "[SyncDiff] Diff computed: "
                                         f"added_files={len(diff.added_files)}, "
@@ -748,6 +763,13 @@ class SemanticProcessor(DequeueHandlerBase):
                                     f"Using direct incremental semantic update for: {msg.uri}"
                                 )
 
+                            defer_directory_refresh = (
+                                msg.generation_trigger == "content_write"
+                                and msg.context_type == "resource"
+                                and not msg.recursive
+                                and msg.changes is not None
+                                and msg.aggregate_directory
+                            )
                             executor = SemanticTreeExecutor(
                                 processor=self,
                                 context_type=msg.context_type,
@@ -765,7 +787,9 @@ class SemanticProcessor(DequeueHandlerBase):
                                 coalesce_version=msg.coalesce_version,
                                 source=msg.source,
                                 generation_trigger=msg.generation_trigger,
-                                aggregate_directory=msg.aggregate_directory,
+                                aggregate_directory=(
+                                    msg.aggregate_directory and not defer_directory_refresh
+                                ),
                                 copy_source_uri=msg.copy_source_uri,
                                 file_md5s=msg.file_md5s,
                                 artifact_files=msg.artifact_files,
@@ -781,7 +805,13 @@ class SemanticProcessor(DequeueHandlerBase):
                                 run_uri,
                                 dag_stats,
                             )
-                            if not executor.stale and msg.aggregate_directory:
+                            if not executor.stale and defer_directory_refresh:
+                                # The shared directory task reads committed file abstracts.
+                                await work._wait_for_embedding_work(
+                                    stop_waiting=self._embedding_worker_stopped,
+                                )
+                                await self._enqueue_directory_refresh(msg, run_uri, changes=changes)
+                            elif not executor.stale and msg.aggregate_directory:
                                 write_result = getattr(
                                     executor,
                                     "root_write_result",
@@ -813,7 +843,8 @@ class SemanticProcessor(DequeueHandlerBase):
                 await work.cancel()
             raise
         except Exception as e:
-            if isinstance(e, LockAcquisitionError):
+            # A move-based sync may already have consumed part of its source.
+            if isinstance(e, LockAcquisitionError) and not syncing_source:
                 execute_status = "requeued"
                 logger.warning(
                     "Lock error processing semantic message, re-enqueueing without "
@@ -1093,9 +1124,12 @@ class SemanticProcessor(DequeueHandlerBase):
                 await asyncio.gather(*[_gen(i, fp) for i, fp in batch])
 
         completed_summaries = [s for s in file_summaries if s is not None]
+        sampled_summaries = deterministic_sample(
+            completed_summaries, get_openviking_config().semantic.overview_sample_limit
+        )
         generated_content = await self._generate_overview(
             dir_uri,
-            completed_summaries,
+            sampled_summaries,
             [],
             llm_sem=llm_sem,
             total_files=len(file_paths),
@@ -1113,7 +1147,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 ctx=ctx,
                 lock=lock,
                 total_entries=len(file_paths),
-                sampled_entries=len(completed_summaries),
+                sampled_entries=len(sampled_summaries),
             )
         except LockAcquisitionError:
             raise
@@ -1161,7 +1195,7 @@ class SemanticProcessor(DequeueHandlerBase):
             overview=overview,
             abstract=abstract,
             ctx=ctx,
-            is_stale=lambda: is_semantic_msg_stale(msg),
+            is_stale=lambda: is_semantic_msg_stale(msg, agfs=viking_fs._async_agfs),
             metadata={
                 **({"source": msg.source} if msg.source else {}),
                 "generated_by": {
@@ -1394,7 +1428,6 @@ class SemanticProcessor(DequeueHandlerBase):
                 "output_language": output_language,
             }
         prompt = render_prompt(prompt_id, prompt_variables)
-
 
         async with llm_sem:
             with bind_telemetry_stage("semantic_execute"):
@@ -1968,7 +2001,6 @@ class SemanticProcessor(DequeueHandlerBase):
                 overview=overview,
                 ctx=ctx,
                 lock=lock,
-                is_stale=lambda: False,
                 metadata={
                     "generated_by": {"component": "SkillProcessor", "trigger": "skill_refresh"}
                 },

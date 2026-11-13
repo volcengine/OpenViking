@@ -20,6 +20,7 @@
     "mcp.mjs",
     "mcp-env.mjs",
     "runtime.mjs",
+    "compressor.mjs",
     "session-id.mjs",
     "skills.mjs",
     "uri-guard.mjs",

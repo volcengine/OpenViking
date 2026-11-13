@@ -63,7 +63,7 @@ dependencies = [
     "protobuf>=6.33.5",
     "pdfminer-six>=20251230",
     "typer>=0.12.0",
-    "litellm>=1.102.4,<1.102.5",
+    "litellm>=1.103.10,<1.103.11",
     "python-multipart>=0.0.31",
     # Pin the parsing stack to avoid unvalidated upstream API and grammar changes.
     "tree-sitter==0.25.2",
@@ -96,6 +96,9 @@ dependencies = [
 
 
 [project.optional-dependencies]
+reporting = [
+    "kafka-python>=3.0.12,<4",
+]
 expiry = [
   "redis>=5.3.1,<7",
 ]
@@ -219,6 +222,10 @@ local-embed = [
 opengauss = [
   # PostgreSQL wire-compatible driver verified against openGauss DataVec 7.0.
   "psycopg2-binary>=2.9,<3",
+]
+
+pgvector = [
+    "psycopg2-binary>=2.9,<3",
 ]
 
 [project.urls]

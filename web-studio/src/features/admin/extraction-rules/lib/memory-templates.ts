@@ -7,8 +7,6 @@ export const editableMemoryTypes = [
   'preferences',
   'entities',
   'events',
-  'soul',
-  'identity',
 ] as const
 
 export type EditableMemoryType = (typeof editableMemoryTypes)[number]

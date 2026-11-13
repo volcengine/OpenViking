@@ -14,6 +14,8 @@ def _processor(**kwargs):
 
 
 class _FakeVikingFS:
+    _async_agfs = None
+
     async def exists(self, uri, ctx=None):
         return True
 
@@ -160,7 +162,7 @@ async def test_stale_content_write_keeps_file_work_without_directory_aggregation
     )
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_processor.is_semantic_msg_stale",
-        lambda msg: bool(msg.coalesce_key),
+        AsyncMock(side_effect=lambda msg, **kwargs: bool(msg.coalesce_key)),
     )
 
     _FakeTreeExecutor.calls = []

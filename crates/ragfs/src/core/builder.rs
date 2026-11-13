@@ -9,6 +9,8 @@
 //! When pathlock is enabled, `PathLockWrappedFS` sits between `StatsWrappedFS` and `MountableFS`.
 
 use std::sync::Arc;
+#[cfg(feature = "cache")]
+use std::time::Duration;
 
 use super::filesystem::FileSystem;
 use super::mountable::MountableFS;
@@ -79,6 +81,8 @@ pub struct CacheFsConfig {
     pub enabled: bool,
     /// OpenViking instance name used by CacheFS keys.
     pub service_name: String,
+    /// Optional TTL override for query buckets on a shared Redis service.
+    pub shared_redis_ttl: Option<Duration>,
 }
 
 #[cfg(feature = "cache")]
@@ -87,6 +91,7 @@ impl Default for CacheFsConfig {
         Self {
             enabled: false,
             service_name: String::new(),
+            shared_redis_ttl: None,
         }
     }
 }
@@ -193,12 +198,13 @@ pub async fn build_configured_stack(
             .map_err(|error| Error::config(format!("CacheFS provider is incompatible: {error}")))?;
     }
     let mountable = if cache.cachefs.enabled {
-        Arc::new(MountableFS::with_cache_runtime(
+        Arc::new(MountableFS::with_cache_runtime_and_shared_redis_ttl(
             runtime
                 .as_ref()
                 .expect("cache provider is validated")
                 .clone(),
             cache.cachefs.service_name,
+            cache.cachefs.shared_redis_ttl,
         ))
     } else if let Some(runtime) = runtime.as_ref() {
         Arc::new(MountableFS::with_shared_cache_runtime(runtime.clone()))
@@ -232,6 +238,23 @@ async fn build_stack_with_mountable_and_runtime(
             config.pathlock.lock_expire_secs,
         )),
         "memory" => Arc::new(MemoryPathLockProvider::new()),
+        #[cfg(feature = "postgres")]
+        "postgres" => {
+            let variable = config.pathlock.postgres_dsn_env.clone().ok_or_else(|| {
+                Error::config("pathlock.postgres_dsn_env is required for PostgreSQL PathLock")
+            })?;
+            let namespace = config.pathlock.service_name.clone().ok_or_else(|| {
+                Error::config("pathlock.service_name is required for PostgreSQL PathLock")
+            })?;
+            let expire_secs = config.pathlock.lock_expire_secs;
+            let provider = tokio::task::spawn_blocking(move || {
+                crate::lock::PostgresPathLockProvider::from_env(&variable, &namespace, expire_secs)
+            })
+            .await
+            .map_err(|_| Error::config("PostgreSQL PathLock initialization worker failed"))?
+            .map_err(|error| Error::config(error.to_string()))?;
+            Arc::new(provider)
+        }
         "sqlite" => {
             let path = config.pathlock.sqlite_path.as_deref().ok_or_else(|| {
                 Error::config("pathlock.sqlite_path is required for SQLite PathLock")
@@ -386,6 +409,7 @@ mod tests {
                 provider: "filesystem".to_string(),
                 service_name: None,
                 sqlite_path: None,
+                postgres_dsn_env: None,
                 lock_timeout_secs: 0.0,
                 lock_expire_secs: 30.0,
             },

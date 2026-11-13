@@ -341,7 +341,8 @@ def create_app(
             usage_reporter = build_usage_reporter(config.usage_reporter)
         return usage_reporter
 
-    def _configure_session_runtime(service_obj) -> None:  # noqa: ANN001
+    def _configure_service_runtime(service_obj) -> None:  # noqa: ANN001
+        service_obj.user_config_defaults = config.user_config_defaults
         sessions = getattr(service_obj, "sessions", None)
         tool_output_setter = getattr(sessions, "set_tool_output_externalization_config", None)
         if callable(tool_output_setter):
@@ -370,7 +371,7 @@ def create_app(
             auto_commit_setter(config.user_config_defaults.auto_commit_policy)
 
     if service is not None:
-        _configure_session_runtime(service)
+        _configure_service_runtime(service)
 
     bot_gateway_token = load_bot_gateway_token() if config.with_bot else ""
 
@@ -390,7 +391,7 @@ def create_app(
         assert service is not None
         if config.with_bot:
             service.compile.configure_local_backend(config.bot_api_url, bot_gateway_token)
-        _configure_session_runtime(service)
+        _configure_service_runtime(service)
         set_service(service)
 
         from openviking.metrics.global_api import (
@@ -402,6 +403,9 @@ def create_app(
         if config.observability.metrics.enabled:
             logger.info("Prometheus metrics enabled at /metrics")
         await init_usage_audit_from_server_config(config, app=app, service=service)
+        from openviking.observability.reporting import start_reporting
+
+        app.state.event_reporter = await start_reporting(config.observability.reporting)
 
         # Initialize OAuth 2.1 store + provider when enabled in OpenViking config.
         # The store + provider instances were already constructed at app
@@ -496,6 +500,9 @@ def create_app(
                 logger.warning("Auth plugin shutdown failed: %s", e)
         if usage_reporter is not usage_reporter_unset and usage_reporter is not None:
             await usage_reporter.close()
+        from openviking.observability.reporting import stop_reporting
+
+        await stop_reporting()
 
     app = FastAPI(
         title="OpenViking API",

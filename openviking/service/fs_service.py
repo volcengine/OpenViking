@@ -13,6 +13,7 @@ from dataclasses import dataclass, replace
 from functools import partial
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Literal, Optional, Sequence
 
+from openviking.concurrency import bounded_map
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import (
     canonical_session_root,
@@ -27,12 +28,14 @@ from openviking.core.namespace_policy import (
     NamespaceProcessingMode,
     namespace_policy_for_uri,
 )
+from openviking.core.path_variables import resolve_path_variables
+from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.privacy.session_restore import get_session_id_from_uri, restore_session_content
 from openviking.privacy.skill_restore import get_skill_name_from_uri, restore_skill_content
 from openviking.resource.watch_storage import is_watch_task_control_uri
-from openviking.server.error_mapping import is_not_found_error
+from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import TaskStatus, get_task_tracker, run_tracked_operation
 from openviking.service.task_tracker_concurrency import run_to_completion
@@ -525,7 +528,7 @@ class FSService:
                     f"directory descriptions are not supported for namespace: {directory_uri}"
                 )
             async with self._hold_watch_scope(
-                [await self._existing_tree_lock_request(directory_uri, ctx)], [directory_uri], ctx
+                [self._tree_lock_request(directory_uri, ctx)], [directory_uri], ctx
             ) as lease:
                 await viking_fs.mkdir(uri, ctx=ctx, lease_ref=lease)
                 return
@@ -539,7 +542,7 @@ class FSService:
             if managed:
                 await viking_fs._ensure_access(directory_uri, ctx, action=AclAction.WRITE)
             async with self._hold_watch_scope(
-                [await self._existing_tree_lock_request(directory_uri, ctx)], [directory_uri], ctx
+                [self._tree_lock_request(directory_uri, ctx)], [directory_uri], ctx
             ) as lease:
                 acl_update = (
                     await viking_fs.prepare_acl_update(directory_uri, acl, ctx)
@@ -593,19 +596,10 @@ class FSService:
         else:
             await create()
 
-    async def _existing_tree_lock_request(self, uri: str, ctx: RequestContext) -> Dict[str, str]:
-        """Tree-lock the deepest existing ancestor-or-self of *uri*.
-
-        Locking a missing path materializes it on some PathLock backends.
-        """
+    def _tree_lock_request(self, uri: str, ctx: RequestContext) -> Dict[str, str]:
+        """Lock the target subtree, including when the target does not exist."""
         viking_fs = self._ensure_initialized()
-        existing = uri
-        while not await viking_fs.exists(existing, ctx=ctx):
-            parent = VikingURI(existing).parent
-            if parent is None:
-                break
-            existing = parent.uri
-        return {"path": viking_fs._uri_to_path(existing, ctx=ctx), "kind": "tree"}
+        return {"path": viking_fs._uri_to_path(uri, ctx=ctx), "kind": "tree"}
 
     @staticmethod
     def _normalize_directory_description(description: Optional[str]) -> Optional[str]:
@@ -668,12 +662,19 @@ class FSService:
         context_type = context_type_for_uri(uri)
         refresh_parent_uri = self._semantic_refresh_parent_uri(uri, context_type)
         memory_overview_uri = self._memory_overview_parent_uri(uri, context_type)
-        async with self._hold_watch_scope(
-            [await self._existing_tree_lock_request(uri, ctx)], [uri], ctx
-        ) as watch_lease:
-            result = await viking_fs.rm(
-                uri, recursive=recursive, ctx=delete_ctx, lease_ref=watch_lease
-            )
+        parent_uri = VikingURI(uri).parent
+        if parent_uri is not None and await viking_fs.exists(parent_uri.uri, ctx=ctx):
+            async with self._hold_watch_scope(
+                [self._tree_lock_request(uri, ctx)], [uri], ctx
+            ) as watch_lease:
+                result = await viking_fs.rm(
+                    uri, recursive=recursive, ctx=delete_ctx, lease_ref=watch_lease
+                )
+                await self._sync_watch_after_rm(
+                    uri, account_id=ctx.account_id, context_type=context_type
+                )
+        else:
+            result = await viking_fs.rm(uri, recursive=recursive, ctx=delete_ctx)
             await self._sync_watch_after_rm(
                 uri, account_id=ctx.account_id, context_type=context_type
             )
@@ -1267,13 +1268,11 @@ class FSService:
             raise InvalidArgumentError(
                 f"{operation} destination for a file must include the target file name: {to_uri}"
             )
-        # Locking a missing path materializes it on some PathLock backends, so the
-        # native pre-lock checks run first and only existing paths are locked.
+        # Validate before acquiring the same source and target scopes as the
+        # native transfer, without extending a missing target to its parent.
         await viking_fs._ensure_transfer_parent_directory(target_path, to_uri, operation=operation)
         await viking_fs._ensure_transfer_target_type(target_path, to_uri, is_dir=is_dir)
         if is_dir:
-            if not await viking_fs.exists(to_uri, ctx=ctx):
-                target_path = viking_fs._transfer_parent_path(target_path)
             roots = sorted({source_path, target_path}, key=lambda path: (len(path), path))
             requests = [
                 {"path": path, "kind": "tree"}
@@ -1479,6 +1478,7 @@ class FSService:
     ) -> Dict[str, Any]:
         """Get resource status."""
         viking_fs = self._ensure_initialized()
+        uri = await self._resolve_uri(uri, ctx)
         namespace_policy = namespace_policy_for_uri(uri)
         kwargs = {
             "ctx": ctx,
@@ -1894,6 +1894,105 @@ class FSService:
             recursive=recursive,
             ctx=ctx,
         )
+
+    async def batch_set_tags(
+        self,
+        uris: list[str],
+        tags: list[str],
+        mode: str,
+        recursive: bool,
+        ctx: RequestContext,
+    ) -> Dict[str, Any]:
+        """规范化并去重目标，复用单 URI 写入，按输入顺序汇总成功和失败项。"""
+        if not 1 <= len(uris) <= 50:
+            raise InvalidArgumentError("uris must contain between 1 and 50 items")
+        targets: dict[str, Exception | None] = {}
+        for uri in uris:
+            try:
+                uri = validate_safe_viking_uri_path(
+                    validate_request_viking_uri(resolve_path_variables(uri), ctx)
+                )
+                targets.setdefault(uri, None)
+            except Exception as exc:
+                targets.setdefault(uri, exc)
+
+        async def update(uri: str) -> tuple[bool, Dict[str, Any]]:
+            try:
+                if targets[uri] is not None:
+                    raise targets[uri]
+                result = await self.set_tags(
+                    uri=uri,
+                    tags=tags,
+                    mode=mode,
+                    recursive=recursive,
+                    ctx=ctx,
+                )
+                return True, result
+            except Exception as exc:
+                error = map_exception(exc, resource=uri)
+                if error is None:
+                    logger.exception("Batch tag update failed for %s", uri)
+                    error = OpenVikingError("Tag update failed", code="INTERNAL")
+                return False, {
+                    "uri": uri,
+                    "error": {"code": error.code, "message": error.message},
+                }
+
+        results = await bounded_map(targets, update, concurrency=8)
+        return {
+            "items": [result for success, result in results if success],
+            "failed": [result for success, result in results if not success],
+        }
+
+    async def attrs(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
+        """读取单 URI 的标签及记忆属性，复用现有 stat/read 权限检查。"""
+        stat_result = await self.stat(uri, ctx=ctx, skip_count=True)
+        namespace_policy = namespace_policy_for_uri(uri)
+        tags = (
+            await self._tags_attr(uri, ctx, is_dir=stat_result.get("isDir", False))
+            if namespace_policy.supports_tags
+            else []
+        )
+        result = {
+            "uri": uri,
+            "context_type": context_type_for_uri(uri),
+            "attrs": {"tags": tags},
+        }
+        if result["context_type"] == "memory" and not stat_result.get("isDir", False):
+            result["attrs"]["memory"] = self._clean_memory_attrs(await self.read(uri, ctx=ctx))
+        return result
+
+    @staticmethod
+    def _clean_memory_attrs(raw: str) -> Dict[str, Any]:
+        from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+
+        mf = MemoryFileUtils.read(raw)
+        attrs: Dict[str, Any] = mf.to_metadata()
+        attrs.pop("content", None)
+        return attrs
+
+    async def _tags_attr(self, uri: str, ctx: RequestContext, *, is_dir: bool) -> list[str]:
+        if not self._vikingdb:
+            return []
+
+        # Tags are written per level (see ContentWriteCoordinator.set_tags): a
+        # directory carries them on its L0/L1 summary records, while a file carries
+        # them on its L2 content record. Mirror that here so the exact node's tags
+        # are read back instead of unrelated records. Eq("uri", ...) compiles to an
+        # exact path match (-d=0), avoiding prefix/subtree matches over the path field.
+        levels = [0, 1] if is_dir else [2]
+        records = await VikingDBManagerProxy(self._vikingdb, ctx).filter(
+            filter=And([Eq("uri", uri), In("level", levels)]),
+            limit=10,
+            output_fields=["level", "search_tags"],
+        )
+        records = sorted(records, key=lambda item: item.get("level", 99))
+        tags: list[str] = []
+        for record in records:
+            for tag in normalize_search_tags(record.get("search_tags"), discard_invalid=True):
+                if tag not in tags:
+                    tags.append(tag)
+        return tags
 
     async def _directory_index_records(self, uri: str, ctx: RequestContext) -> List[Dict[str, Any]]:
         """Read L0/L1 records and tags; propagate store errors."""

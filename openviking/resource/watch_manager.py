@@ -46,9 +46,9 @@ from openviking.service.task_tracker import get_task_tracker
 from openviking.service.task_tracker_concurrency import KeyedAsyncLockPool, run_to_completion
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.utils.git_auth import GIT_AUTH_FAILED
+from openviking.utils.network_guard import ensure_public_remote_target
 from openviking_cli.exceptions import ConflictError, FailedPreconditionError
 from openviking_cli.session.user_id import UserIdentifier
-from openviking_cli.utils import VikingURI
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -69,19 +69,6 @@ class WatchPathLocks:
 
         return RequestContext(user=UserIdentifier(account_id, "default"), role=Role.ROOT)
 
-    async def _existing_path(self, account_id: str, uri: str) -> str:
-        """Deepest existing ancestor-or-self of *uri*, whose Tree lock covers *uri*.
-
-        Locking a missing path materializes it on some PathLock backends.
-        """
-        ctx = self._context(account_id)
-        while not await self._fs.exists(uri, ctx=ctx):
-            parent = VikingURI(uri).parent
-            if parent is None:
-                break
-            uri = parent.uri
-        return self._fs._uri_to_path(uri, ctx=ctx)
-
     @asynccontextmanager
     async def tree(
         self,
@@ -93,7 +80,7 @@ class WatchPathLocks:
     ) -> AsyncIterator[Dict[str, Any]]:
         agfs = self._fs._async_agfs
         lease = await agfs.pathlock_acquire_tree(
-            await self._existing_path(account_id, uri),
+            self._fs._uri_to_path(uri, ctx=self._context(account_id)),
             timeout_secs=timeout,
             owner_lease_ref=owner_lease_ref,
         )
@@ -609,7 +596,13 @@ class WatchManager:
             if actual_run.run_id is None:
                 if isinstance(result, WatchRunResult):
                     outcome = result
-                elif (result or {}).get("status") in {"completed", "failed", "error", "cancelled"}:
+                elif (result or {}).get("status") in {
+                    "completed",
+                    "partial",
+                    "failed",
+                    "error",
+                    "cancelled",
+                }:
                     outcome = self.result(run.task, result["status"], result, None)
                 else:
                     raise RuntimeError("Resource submission did not create a Task")
@@ -756,6 +749,7 @@ class WatchManager:
             return None
         try:
             probe_kwargs = dict(kwargs)
+            probe_kwargs["request_validator"] = ensure_public_remote_target
             if probe_kwargs.get("auth_config") is None:
                 processor = getattr(self._resource_service, "_resource_processor", None)
                 if processor is not None:
@@ -802,6 +796,8 @@ class WatchManager:
         instruction: str,
     ) -> WatchRunResult:
         result = result or {}
+        if status == "completed" and result.get("import_complete") is False:
+            status = "partial"
         states = result.get("connector_states")
         has_states = connector and status == "completed" and "connector_states" in result
         if has_states and not isinstance(states, dict):
@@ -811,7 +807,11 @@ class WatchManager:
             error = "; ".join(str(item) for item in errors) if errors else "watch ingestion failed"
         # A successful source import may later fail in semantic/embedding Work.
         # Its explicit checkpoint still describes the revision actually imported.
-        checkpoint = result.get("source_checkpoint") if status != "cancelled" else None
+        checkpoint = (
+            result.get("source_checkpoint")
+            if status != "cancelled" and result.get("import_complete") is not False
+            else None
+        )
         if status == "completed":
             from openviking.service.resource_service import ResourceService
 

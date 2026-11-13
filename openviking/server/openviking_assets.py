@@ -18,13 +18,20 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from openviking.core.namespace import classify_uri, uri_parts
 from openviking.core.uri_validation import validate_content_target_uri, validate_viking_uri
+from openviking.parse.network import (
+    ParserNetworkContext,
+    ParserNetworkOperation,
+    overlay_parser_subprocess_env,
+)
 from openviking.server.identity import RequestContext
 from openviking.server.local_input_guard import require_remote_resource_source
 from openviking.utils.git_auth import (
     GitHttpAuthConfig,
+    append_git_process_config,
     build_git_http_auth_env,
     reject_git_http_userinfo,
 )
+from openviking.utils.network_guard import ensure_public_remote_target
 from openviking_cli.exceptions import (
     DeadlineExceededError,
     InvalidArgumentError,
@@ -258,18 +265,6 @@ def _normalize_commit_sha(commit: str | None, where: str) -> str | None:
     return normalized.lower()
 
 
-def _append_git_process_config(env: dict[str, str], key: str, value: str) -> None:
-    """Append one process-local Git config entry without putting secrets in argv."""
-
-    try:
-        count = int(env.get("GIT_CONFIG_COUNT", "0"))
-    except ValueError:
-        count = 0
-    env[f"GIT_CONFIG_KEY_{count}"] = key
-    env[f"GIT_CONFIG_VALUE_{count}"] = value
-    env["GIT_CONFIG_COUNT"] = str(count + 1)
-
-
 async def preflight_git_repository(
     *,
     asset_name: str,
@@ -324,7 +319,13 @@ async def preflight_git_repository(
             base_env=env,
         )
     elif normalized_username:
-        _append_git_process_config(env, "credential.username", normalized_username)
+        append_git_process_config(env, "credential.username", normalized_username)
+
+    env = overlay_parser_subprocess_env(
+        ParserNetworkContext(ParserNetworkOperation.GIT_COMMAND, repo_url),
+        env,
+        request_validator=ensure_public_remote_target,
+    )
 
     command = ["git", "ls-remote", "--exit-code", repo_url]
     if normalized_branch:

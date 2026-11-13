@@ -1,10 +1,82 @@
+/**
+ * 文件树的组件变量。颜色全部从包级主题基线 `src/theme.css` 的
+ * `--ov-ui-color-*` 派生，因此跟随宿主主题切换；只有纯几何量（行高、圆角、
+ * 缩进）在组件里直接赋值。宿主想换肤时改基线，只想调这一处时覆盖下面任意
+ * 一条即可。
+ *
+ * Component variables of the file tree. Every colour derives from the
+ * package-level baseline in `src/theme.css` (`--ov-ui-color-*`), so it follows the
+ * host's theme; only pure geometry (row height, radius, indent) is assigned here.
+ * A host re-skins by overriding the baseline, or adjusts just this component by
+ * overriding any variable below.
+ */
 .ov-file-tree {
+  --ov-ui-file-tree-row-height: 32px;
+  --ov-ui-file-tree-row-radius: 4px;
+  --ov-ui-file-tree-indent: 20px;
+  --ov-ui-file-tree-text: var(
+    --ov-ui-color-text-1,
+    var(--ov-ui-text-1-default)
+  );
+  --ov-ui-file-tree-text-muted: var(
+    --ov-ui-color-text-3,
+    var(--ov-ui-text-3-default)
+  );
+  /* 图标比名称浅一档：名称是正文，图标只是辅助识别，与设计稿的 fill-3 一致。 */
+  /* Icons sit one step lighter than names: the name is the content, the icon only
+     aids recognition, matching the design's fill-3. */
+  /*
+   * 目录图标用中性色；文件类型图标带品牌色，由行图标上的两个私有变量给出，
+   * 浅色取 `-light`、暗色取 `-dark`。宿主只改 `--ov-ui-color-text-3` 就能让
+   * 目录图标跟随，文件图标不受影响。
+   *
+   * Directory icons use the neutral colour; file-type icons carry brand colours
+   * through two private variables on the row icon — `-light` in the light theme and
+   * `-dark` under `.dark`. A host changing `--ov-ui-color-text-3` moves directory
+   * icons only, leaving file icons alone.
+   */
+  --ov-ui-file-tree-icon: var(
+    --ov-ui-color-text-3,
+    var(--ov-ui-text-3-default)
+  );
+  --ov-ui-file-tree-row-hover: var(
+    --ov-ui-color-bg-5,
+    var(--ov-ui-bg-5-default)
+  );
+  /* Match the console's pale selected surface rather than a dark neutral fill. */
+  --ov-ui-file-tree-row-selected: var(
+    --ov-ui-color-primary-light,
+    var(--ov-ui-primary-light-default)
+  );
+  --ov-ui-file-tree-guide: var(
+    --ov-ui-color-border-1,
+    var(--ov-ui-border-1-default)
+  );
+  --ov-ui-file-tree-spinner-track: var(
+    --ov-ui-color-border-3,
+    var(--ov-ui-border-3-default)
+  );
+  --ov-ui-file-tree-spinner: var(
+    --ov-ui-color-primary,
+    var(--ov-ui-primary-default)
+  );
+  --ov-ui-file-tree-action: var(
+    --ov-ui-color-primary,
+    var(--ov-ui-primary-default)
+  );
+  --ov-ui-file-tree-warning: var(
+    --ov-ui-color-warning,
+    var(--ov-ui-warning-default)
+  );
+
   display: flex;
-  flex-direction: column;
   box-sizing: border-box;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
-  color: inherit;
+  height: 100%;
+  max-width: 100%;
+  color: var(--ov-ui-file-tree-text);
   font-family: inherit;
   font-size: 13px;
   line-height: 20px;
@@ -24,55 +96,108 @@
 .ov-file-tree__rows {
   display: flex;
   flex-direction: column;
+  /*
+   * 行按内容撑开，不把内容硬塞进栏宽：名称、说明与行尾标记都保持完整，容器
+   * 横向滚动。层级很深时缩进也靠它获得空间，否则深层节点只能互相挤。
+   *
+   * Rows size to their content instead of being forced into the column width, so
+   * names, descriptions and row-end markers stay whole and the container scrolls
+   * sideways. Deep indentation gets its space the same way; without it, deep nodes
+   * only squeeze each other.
+   */
+  width: max-content;
+  min-width: 100%;
+}
+
+/* 行：缩进、竖向连线、图标、名称与行尾内容的横向排布。 */
+.ov-file-tree__row,
+.ov-file-tree__state-row {
+  position: relative;
+  display: flex;
+  flex: none;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 2px;
+  width: max-content;
+  min-width: 100%;
+  height: var(--ov-ui-file-tree-row-height);
+  min-height: var(--ov-ui-file-tree-row-height);
+  padding-right: 8px;
+  border-radius: var(--ov-ui-file-tree-row-radius);
+  /* 行本身可点选，光标提示它可交互；禁用的行单独覆盖。 */
+  /* A row is clickable, so the cursor says so; a disabled row overrides it. */
+  cursor: pointer;
+  outline: none;
+  user-select: none;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 20px;
 }
 
 .ov-file-tree__row {
-  position: relative;
+  transition: background-color 120ms;
+}
+
+/* Keep the anchor out of row layout so it cannot share metadata's auto margins. */
+.ov-file-tree__popover-anchor-container {
+  position: absolute;
+  inset: 0;
   display: flex;
-  align-items: center;
-  gap: 4px;
-  box-sizing: border-box;
-  height: 28px;
-  padding-right: 8px;
-  border-radius: var(--ov-ui-radius, 6px);
-  color: inherit;
-  cursor: default;
-  outline: none;
-  user-select: none;
+  justify-content: flex-end;
+  pointer-events: none;
+}
+
+/* Keep the card's anchor at the visible row edge while the content scrolls. */
+.ov-file-tree__popover-anchor {
+  position: sticky;
+  right: 0;
+  flex: none;
+  width: 0;
 }
 
 .ov-file-tree__row:hover {
-  background: var(
-    --ov-ui-row-hover,
-    color-mix(in srgb, currentColor 6%, transparent)
-  );
-}
-
-.ov-file-tree__row:focus-visible {
-  outline: 2px solid var(--ov-ui-focus-ring, #2563c5);
-  outline-offset: -2px;
+  background-color: var(--ov-ui-file-tree-row-hover);
 }
 
 .ov-file-tree__row[data-selected] {
-  background: var(--ov-ui-row-selected, rgb(37 99 197 / 10%));
+  background-color: var(--ov-ui-file-tree-row-selected);
+}
+
+.ov-file-tree__row:focus-visible,
+.ov-file-tree__state-row:focus-visible {
+  outline: 2px solid var(--ov-ui-file-tree-action);
+  outline-offset: -2px;
 }
 
 .ov-file-tree__row[data-disabled] {
-  color: var(
-    --ov-ui-text-muted,
-    color-mix(in srgb, currentColor 62%, transparent)
-  );
+  color: var(--ov-ui-file-tree-text-muted);
   cursor: not-allowed;
+}
+
+/* 每一级祖先的竖线；上下各溢出 1px，让相邻行接成一条连续线。 */
+.ov-file-tree__guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background-color: var(--ov-ui-file-tree-guide);
+  pointer-events: none;
 }
 
 .ov-file-tree__toggle,
 .ov-file-tree__toggle-spacer {
   display: inline-flex;
   flex: none;
-  align-items: center;
-  justify-content: center;
   width: 16px;
   height: 16px;
+  align-items: center;
+  justify-content: center;
+}
+
+.ov-file-tree__toggle svg {
+  display: block;
+  width: 12px;
+  height: 12px;
 }
 
 .ov-file-tree__toggle {
@@ -80,80 +205,113 @@
   border: 0;
   border-radius: 4px;
   background: none;
-  color: var(
-    --ov-ui-text-muted,
-    color-mix(in srgb, currentColor 62%, transparent)
-  );
+  color: var(--ov-ui-file-tree-text-muted);
   cursor: pointer;
 }
 
-.ov-file-tree__toggle:hover {
-  background: color-mix(in srgb, currentColor 10%, transparent);
+.ov-file-tree__toggle:hover:not(:disabled) {
+  background-color: var(--ov-ui-file-tree-row-hover);
+}
+
+.ov-file-tree__toggle:disabled {
+  cursor: default;
 }
 
 .ov-file-tree__chevron {
-  transition: transform 120ms ease;
+  transition: transform 150ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .ov-file-tree__chevron[data-expanded] {
   transform: rotate(90deg);
 }
 
+/* 图标槽位：固定 16px，内部图形统一 14px，展开与收起大小一致。 */
 .ov-file-tree__icon-slot {
   display: inline-flex;
   flex: none;
+  width: 16px;
+  height: 16px;
   align-items: center;
-  color: var(--ov-ui-icon, color-mix(in srgb, currentColor 62%, transparent));
+  justify-content: center;
+  color: var(--ov-ui-file-tree-icon);
 }
 
-.ov-file-tree__icon {
-  display: block;
+.ov-file-tree__folder {
+  position: relative;
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+}
+
+.ov-file-tree__folder-layer {
+  position: absolute;
+  inset: 0;
+  width: 14px;
+  height: 14px;
+  opacity: 0;
+  transition: opacity 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.ov-file-tree__folder-layer[data-open='true'] {
+  opacity: 1;
+}
+
+.ov-file-tree__file-icon {
+  width: 16px;
+  height: 16px;
 }
 
 .ov-file-tree__label-group {
   display: flex;
-  flex: 1 1 auto;
-  min-width: 0;
-  align-items: baseline;
-  gap: 6px;
+  flex: none;
+  align-items: center;
+  gap: 8px;
 }
 
+/**
+ * 名称不截断：它是辨认节点的唯一依据，长名字被换成省略号就只能靠悬停去猜。行
+ * 本身按内容撑开、容器横向滚动，因此不必为了塞进栏宽牺牲名称。
+ *
+ * 说明仍然限制宽度——它是补充信息，一条长说明会把行拉到几百像素之外，横向滚动
+ * 反而更难用。
+ *
+ * The name never truncates: it is the only way to tell nodes apart, and an ellipsis
+ * leaves a long name to be guessed at on hover. Rows size to their content and the
+ * container scrolls sideways, so nothing has to be sacrificed to fit the column.
+ *
+ * The description is still capped: it is supplementary, and one long description
+ * would drag the row hundreds of pixels wide, making horizontal scrolling worse
+ * rather than better.
+ */
 .ov-file-tree__label {
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex: none;
   white-space: nowrap;
 }
 
 .ov-file-tree__description {
+  flex: none;
+  max-width: 200px;
   overflow: hidden;
-  color: var(
-    --ov-ui-text-muted,
-    color-mix(in srgb, currentColor 62%, transparent)
-  );
-  font-size: 12px;
+  color: var(--ov-ui-file-tree-text-muted);
+  /* 设计稿里说明比名称小两号，靠字号而不是颜色区分主次。 */
+  /* The design drops the description two steps below the name, using size rather than colour. */
+  font-size: 10px;
+  line-height: 20px;
+  letter-spacing: 0.03px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .ov-file-tree__level {
   flex: none;
-  padding: 0 4px;
-  border-radius: 3px;
-  background: var(
-    --ov-ui-chip,
-    color-mix(in srgb, currentColor 10%, transparent)
-  );
-  color: var(
-    --ov-ui-text-muted,
-    color-mix(in srgb, currentColor 62%, transparent)
-  );
-  font-size: 11px;
-  line-height: 16px;
+  margin-left: auto;
+  color: var(--ov-ui-file-tree-text-muted);
+  font-size: 14px;
 }
 
 .ov-file-tree__expiry {
   flex: none;
-  color: var(--ov-ui-warning, #b26a00);
+  color: var(--ov-ui-file-tree-warning);
   font-size: 12px;
 }
 
@@ -167,57 +325,80 @@
   cursor: pointer;
 }
 
-.ov-file-tree__dashboard {
+/*
+ * 行尾标记槽位：行内剩余空间都留在它前面，因此它靠行右端对齐，而不是紧挨名称。
+ * 行里还有层级、权限等其他行尾标记时，由排在前面的标记吸收空间，它紧跟在后面。
+ *
+ * The trailing-marker slot: the row's spare space is left before it, so it sits at
+ * the right edge rather than next to the name. When the row also carries other
+ * trailing markers such as the level or access, that earlier marker absorbs the
+ * space and the slot follows it directly.
+ */
+.ov-file-tree__trailing {
   display: inline-flex;
   flex: none;
   align-items: center;
+  margin-left: auto;
 }
 
-.ov-file-tree__tooltip {
-  position: absolute;
-  z-index: 1;
-  top: calc(100% + 4px);
-  left: 0;
-  max-width: 320px;
-  padding: 6px 8px;
-  border-radius: var(--ov-ui-radius, 6px);
-  background: var(--ov-ui-tooltip-bg, #1f2329);
-  color: var(--ov-ui-tooltip-text, #fff);
-  font-size: 12px;
-  line-height: 18px;
-  pointer-events: none;
+.ov-file-tree__level ~ .ov-file-tree__trailing {
+  margin-left: 0;
 }
 
-.ov-file-tree__child-row {
+/*
+ * 内置浮层内容：标题、说明、触发行为与路径。外壳由共享的 Popover 提供（白底
+ * 卡片、右侧定位、portal 到 body），这里只负责内部排版，颜色取基线。
+ *
+ * Built-in surface content: title, description, trigger copy and path. The shell
+ * comes from the shared Popover — white card, right placement, portal into the
+ * body — so this only lays out the inside, with colours from the baseline.
+ */
+.ov-file-tree__info {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  box-sizing: border-box;
-  height: 28px;
-  padding-right: 8px;
-  color: var(
-    --ov-ui-text-muted,
-    color-mix(in srgb, currentColor 62%, transparent)
-  );
+  flex-direction: column;
+  gap: 8px;
 }
 
-.ov-file-tree__child-row[data-tone='error'] {
-  color: var(--ov-ui-status-error, #c43838);
+.ov-file-tree__info-title {
+  color: var(--ov-ui-file-tree-text);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 22px;
+  word-break: break-all;
 }
 
-.ov-file-tree__child-action {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-decoration: underline;
-  cursor: pointer;
+.ov-file-tree__info-row {
+  display: flex;
+  min-width: 0;
+  gap: 8px;
 }
 
-.ov-file-tree__child-action:disabled {
-  cursor: default;
-  opacity: 0.6;
+/* 字段名弱化、取值用正文色：与设计稿一致，靠颜色而不是透明度分层。 */
+/* The field name recedes and the value uses body colour, matching the design: the
+   split is by colour rather than opacity. */
+.ov-file-tree__info-label {
+  flex: none;
+  color: var(--ov-ui-file-tree-text-muted);
+}
+
+.ov-file-tree__info-value {
+  min-width: 0;
+  color: var(--ov-ui-file-tree-text);
+  word-break: break-word;
+}
+
+.ov-file-tree__info-path {
+  min-width: 0;
+  color: var(--ov-ui-file-tree-text-muted);
+  word-break: break-all;
+}
+
+.ov-file-tree__state-row {
+  color: var(--ov-ui-file-tree-text-muted);
+}
+
+.ov-file-tree__state-row[data-tone='error'] {
+  color: var(--ov-ui-color-status-error, var(--ov-ui-status-error-default));
 }
 
 .ov-file-tree__state {
@@ -227,22 +408,33 @@
   box-sizing: border-box;
   min-height: 120px;
   padding: 24px;
+  color: var(--ov-ui-file-tree-text-muted);
 }
 
 .ov-file-tree__muted {
+  overflow: hidden;
   color: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
+/**
+ * 展开目录加载子节点时，替换展开箭头显示的转圈。
+ * 由纯 CSS 画环，不依赖图标资源。
+ *
+ * The spinner shown in place of the expand chevron while a directory loads its
+ * children. Drawn with CSS alone, so it needs no icon asset.
+ */
 .ov-file-tree__spinner {
   display: inline-block;
   flex: none;
   box-sizing: border-box;
   width: 12px;
   height: 12px;
-  border: 1.5px solid currentColor;
-  border-right-color: transparent;
+  border: 1px solid var(--ov-ui-file-tree-spinner-track);
+  border-top-color: var(--ov-ui-file-tree-spinner);
   border-radius: 50%;
-  animation: ov-file-tree-spin 720ms linear infinite;
+  animation: ov-file-tree-spin 900ms linear infinite;
 }
 
 @keyframes ov-file-tree-spin {
@@ -251,12 +443,50 @@
   }
 }
 
+/**
+ * 行内文字操作，例如「加载更多」「加载失败，点击重试」。次要文字色，
+ * 悬停转主色；不加下划线，与宿主的树一致。
+ *
+ * A text action inside a row, such as "Load more" or a retry hint. Secondary
+ * text that turns into the primary colour on hover, with no underline — the same
+ * treatment the host's tree uses.
+ */
+
 @media (prefers-reduced-motion: reduce) {
-  .ov-file-tree__chevron {
+  .ov-file-tree__chevron,
+  .ov-file-tree__folder-layer {
     transition: none;
   }
 
   .ov-file-tree__spinner {
     animation-duration: 2s;
   }
+}
+
+/*
+ * 文件类型图标：用图标集自带的品牌色，暗色下换另一套。没有登记色值的键回退
+ * 到目录图标的中性色，因此未识别类型不会突兀地变成品牌色。
+ *
+ * File-type icons use the icon set's own brand colours, swapping to the dark
+ * variant under `.dark`. A key without a registered colour falls back to the
+ * neutral used by directory icons, so an unrecognised type never turns brand
+ * coloured by accident.
+ */
+.ov-file-tree__file-type-icon {
+  color: var(--ov-file-tree-icon-light, var(--ov-ui-file-tree-icon));
+}
+
+.dark .ov-file-tree__file-type-icon {
+  color: var(--ov-file-tree-icon-dark, var(--ov-ui-file-tree-icon));
+}
+.ov-file-tree .ov-button.ov-file-tree__action,
+.ov-file-tree .ov-button.ov-file-tree__action:disabled,
+.ov-file-tree .ov-button.ov-file-tree__action[aria-disabled='true'] {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+}
+.ov-file-tree
+  .ov-button.ov-file-tree__action:not(:disabled):not(
+    [aria-disabled='true']
+  ):hover {
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
 }

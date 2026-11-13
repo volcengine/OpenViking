@@ -1,17 +1,42 @@
+import type { ScopeSwitcherProps } from './types.js';
+import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
+export { ScopeSelector } from './scope-selector.js';
 export { SCOPE_SWITCHER_SEARCH_THRESHOLD } from './types.js';
 export type {
-  ScopeSwitcherFixedLevel,
+  ScopeSelectorBaseProps,
+  ScopeSelectorFixedProps,
+  ScopeSelectorProps,
+  ScopeSelectorSelectableProps,
+  ScopeSwitcherActions,
+  ScopeSwitcherData,
+  ScopeSwitcherIdentity,
   ScopeSwitcherLabels,
-  ScopeSwitcherLevel,
-  ScopeSwitcherLevelBase,
   ScopeSwitcherOption,
   ScopeSwitcherPanelContent,
   ScopeSwitcherProps,
   ScopeSwitcherScrollMetrics,
-  ScopeSwitcherSelectableLevel,
+  ScopeSwitcherSlots,
+  ScopeSwitcherState,
+  ScopeSwitcherTrigger,
 } from './types.js';
 
-/** 占位组件：仅渲染固定尺寸的空壳，真实实现按 props 契约重写。 */
-export function ScopeSwitcher() {
-  return <div className="ov-scope-switcher">ScopeSwitcher</div>;
+/** Layout and language scope only; selectors own data and interaction state. */
+export function ScopeSwitcher({
+  locale: localeProp,
+  children,
+  className = '',
+  ...props
+}: ScopeSwitcherProps) {
+  const locale = useLocale(localeProp);
+  return (
+    <LocaleProvider locale={locale}>
+      <div
+        lang={locale}
+        {...props}
+        className={`ov-scope-switcher ${className}`}
+      >
+        {children}
+      </div>
+    </LocaleProvider>
+  );
 }

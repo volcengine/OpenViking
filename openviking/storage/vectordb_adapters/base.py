@@ -100,6 +100,9 @@ class CollectionAdapter(ABC):
     _DATA_BATCH_SIZE: int | None = None
 
     mode: str
+    # Remote glob can use this adapter's random-search post-processing path.
+    # Used when enable_path_glob is unspecified in VectorDB configuration.
+    enable_path_glob: bool = False
     _URI_FIELD_NAMES = {"uri", "parent_uri"}
 
     # Only derived fields may be shortened silently. An oversized abstract is
@@ -213,9 +216,7 @@ class CollectionAdapter(ABC):
         except NotImplementedError:
             logger.warning("Collection drop is not supported by backend mode=%s", self.mode)
             return False
-        finally:
-            self._collection = None
-
+        self._collection = None
         return True
 
     def close(self) -> None:
@@ -487,7 +488,7 @@ class CollectionAdapter(ABC):
         advance: Optional[Dict[str, Any]] = None,
     ) -> list[Dict[str, Any]]:
         decay_request = (advance or {}).get("time_decay")
-        if decay_request is not None and self.mode != "opengauss":
+        if decay_request is not None and self.mode not in {"opengauss", "pgvector"}:
             from openviking.utils.time_decay import (
                 build_time_decay_fusion_spec,
                 build_time_decay_post_process_ops,

@@ -9,6 +9,8 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.storage import viking_fs as viking_fs_module
+from openviking.storage.acl import AclLevel
+from openviking.storage.expr import And, Eq, PathScope
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -66,6 +68,82 @@ async def test_stat_queries_lock_status_only_when_requested(monkeypatch, fs):
 
     assert result["isLocked"] is True
     assert lock_queries == [path]
+
+
+@pytest.mark.asyncio
+async def test_stat_returns_l2_vector_count_as_count(monkeypatch, fs):
+    path = "/local/default/resources/docs"
+    vector_store = SimpleNamespace(
+        count=AsyncMock(return_value=4),
+    )
+
+    async def resolve_uri(uri, _ctx):
+        return uri
+
+    async def stat_path(_path):
+        return {"name": "docs", "isDir": True}
+
+    monkeypatch.setattr(fs, "resolve_uri", resolve_uri)
+    monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: path)
+    monkeypatch.setattr(fs._async_agfs, "stat", stat_path)
+    monkeypatch.setattr(fs, "_get_vector_store", lambda: vector_store)
+
+    result = await fs.stat("viking://resources/docs", ctx=_default_ctx())
+
+    assert result["count"] == 4
+    assert "l2_count" not in result
+    vector_store.count.assert_awaited_once_with(
+        filter=And(
+            [
+                PathScope("uri", "viking://resources/docs", depth=-1),
+                Eq("level", 2),
+            ]
+        ),
+        ctx=_default_ctx(),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("extra_fields", "expected", "count_calls"),
+    [
+        (["count"], {"count": 4}, 1),
+        (["l2_count"], {}, 0),
+        (["count", "l2_count"], {"count": 4}, 1),
+    ],
+)
+async def test_directory_count_is_l2_only_and_legacy_l2_count_is_ignored(
+    monkeypatch,
+    fs,
+    extra_fields,
+    expected,
+    count_calls,
+):
+    vector_store = SimpleNamespace(
+        count=AsyncMock(return_value=4),
+    )
+    monkeypatch.setattr(fs, "_get_vector_store", lambda: vector_store)
+    entry = {
+        "name": "docs",
+        "isDir": True,
+        "uri": "viking://resources/docs",
+    }
+
+    await fs._augment_entries_extra_fields([entry], extra_fields, ctx=_default_ctx())
+
+    assert {key: entry[key] for key in expected} == expected
+    assert "l2_count" not in entry
+    assert vector_store.count.await_count == count_calls
+    if count_calls:
+        vector_store.count.assert_awaited_once_with(
+            filter=And(
+                [
+                    PathScope("uri", "viking://resources/docs", depth=-1),
+                    Eq("level", 2),
+                ]
+            ),
+            ctx=_default_ctx(),
+        )
 
 
 def test_viking_fs_no_longer_exposes_python_encryption_api(fs: VikingFS):
@@ -400,19 +478,12 @@ async def test_iter_visible_tree_entries_level_limit_passed_to_rust(monkeypatch,
 @pytest.mark.asyncio
 async def test_iter_visible_tree_entries_offset_and_node_limit_after_acl(monkeypatch, fs):
     """PY-ITER-002: offset and node_limit apply after ACL filtering."""
-    visible_count = 0
-
     entries = [
         make_entry(f"/local/test_account/resources/{name}", name, is_dir=False)
         for name in ["a", "b", "c", "d", "e"]
     ]
 
-    def fake_is_accessible(_uri, _ctx):
-        nonlocal visible_count
-        visible_count += 1
-        return True
-
-    patch_tree_env(monkeypatch, fs, entries, is_accessible=fake_is_accessible)
+    patch_tree_env(monkeypatch, fs, entries)
 
     results = []
     async for entry, _entry_uri in fs._iter_visible_tree_entries(
@@ -421,7 +492,6 @@ async def test_iter_visible_tree_entries_offset_and_node_limit_after_acl(monkeyp
         results.append(entry)
 
     assert [entry["info"]["name"] for entry in results] == ["b", "c"]
-    assert visible_count == 3, "only skipped and returned entries should be ACL checked"
 
 
 @pytest.mark.asyncio
@@ -627,10 +697,10 @@ async def test_tree_original_dfs_order(monkeypatch, fs):
 
     fs.acl_manager = SimpleNamespace(is_enabled=acl_enabled)
 
-    async def fake_can_access_many(uris, _ctx):
-        return {uri: "/restricted" not in uri for uri in uris}
+    async def fake_permissions_many(uris, _ctx):
+        return {uri: None if "/restricted" in uri else AclLevel.READ for uri in uris}
 
-    monkeypatch.setattr(fs, "_can_access_many", fake_can_access_many)
+    monkeypatch.setattr(fs, "_permissions_many", fake_permissions_many)
 
     result = await fs._tree_original("viking://resources", ctx=_default_ctx())
     assert result[0]["name"] == "sub"
@@ -674,6 +744,7 @@ async def test_tree_agent_structure(monkeypatch, fs):
             "modTime": "2026-01-01T00:00:00.000Z",
             "rel_path": "a",
             "abstract": "",
+            "access": "manage",
         },
         {
             "uri": "viking://resources/sub",
@@ -682,6 +753,7 @@ async def test_tree_agent_structure(monkeypatch, fs):
             "modTime": "2026-01-01T00:00:00.000Z",
             "rel_path": "sub",
             "abstract": "L0 summary",
+            "access": "manage",
         },
     ]
     summary.assert_awaited_once_with("viking://resources/sub", "abstract", ctx=_default_ctx())
@@ -722,7 +794,7 @@ async def test_tree_agent_normalizes_modtime_to_utc(monkeypatch, fs):
         ctx=_default_ctx(),
     )
 
-    assert set(result[0].keys()) == {"uri", "size", "isDir", "modTime", "rel_path", "abstract"}
+    assert set(result[0]) == {"uri", "size", "isDir", "modTime", "rel_path", "abstract", "access"}
     assert result[0]["modTime"] == "2026-06-10T16:30:17.000Z"
 
 
@@ -758,10 +830,10 @@ async def test_ls_agent_preserves_metadata_acl_and_summary_controls(monkeypatch,
 
     fs.acl_manager = SimpleNamespace(is_enabled=acl_enabled)
 
-    async def fake_can_access_many(uris, _ctx, **_kwargs):
-        return {uri: not uri.endswith("/restricted") for uri in uris}
+    async def fake_permissions_many(uris, _ctx):
+        return {uri: None if uri.endswith("/restricted") else AclLevel.WRITE for uri in uris}
 
-    monkeypatch.setattr(fs, "_can_access_many", fake_can_access_many)
+    monkeypatch.setattr(fs, "_permissions_many", fake_permissions_many)
     summary = AsyncMock(
         side_effect=lambda uri, field, ctx: "L0 summary" if field == "abstract" else "L1 overview"
     )
@@ -775,7 +847,8 @@ async def test_ls_agent_preserves_metadata_acl_and_summary_controls(monkeypatch,
         ctx=_default_ctx(),
     )
 
-    assert set(result[0].keys()) == {"uri", "size", "isDir", "modTime", "abstract"}
+    assert set(result[0].keys()) == {"uri", "size", "isDir", "modTime", "abstract", "access"}
+    assert result[0]["access"] == "write"
     assert result[0]["modTime"] == "2026-06-10T16:30:17.000Z"
     assert result[1] == {
         "name": "restricted",

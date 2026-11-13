@@ -26,7 +26,7 @@ _SYSTEM_HIDDEN_FIELDS = {
     "last_update_trace_id",
 }
 _MAX_EXTRA_CANDIDATE_FILES = 10
-_PATCH_METADATA_KEYS = ("confidence",)
+_PATCH_METADATA_KEYS = ("confidence", "delete_uri", "proposed_replacements")
 
 
 @dataclass(slots=True)
@@ -149,6 +149,13 @@ class PatchMergeContextProvider(SessionExtractContextProvider):
 
     def instruction(self) -> str:
         output_language = self._output_language
+        supersedes_policy = ""
+        if self.memory_type == "experiences":
+            supersedes_policy = """
+For experiences, treat `supersedes` as a replacement proposal.
+If accepted under the policy above, explicitly delete the old experience with the
+final output as its replacement; otherwise keep it.
+"""
         return f"""You are a memory patch merge agent.
 
 You are given original memory files and structured memory-file field diffs. Merge them by producing final memory operations that follow the provided JSON schema.
@@ -161,6 +168,7 @@ Reconcile independent extraction patch proposals. Apply this shared policy befor
 choosing a canonical file or deleting any proposal:
 
 {MEMORY_MERGE_POLICY}
+{supersedes_policy}
 
 Normalize URI/path variants for directory/filename fields. Treat path segment
 fields as stable schema identifiers, not free-form labels. Reuse existing

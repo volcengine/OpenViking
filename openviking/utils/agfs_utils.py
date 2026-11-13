@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Thread
 from typing import Any, Callable, Dict
+from urllib.parse import urlsplit
 
 from openviking_cli.utils.config.config_loader import resolve_config_path
 from openviking_cli.utils.config.config_utils import (
@@ -33,6 +34,7 @@ class RagfsBindingConfig:
     provider_type: int | None = None
     log: Dict[str, Any] | None = None
     service_name: str = DEFAULT_SERVICE_NAME
+    shared_redis_backend: bool = False
 
     def __post_init__(self) -> None:
         """Validate the service name used by cache-backed modules."""
@@ -66,11 +68,13 @@ class RagfsBindingConfig:
             database.parent.mkdir(parents=True, exist_ok=True)
             pathlock["sqlite_path"] = str(database)
         pathlock_uses_cache = pathlock.get("provider") == "cache"
+        coordination = self.agfs.coordination.model_dump(mode="json", exclude_none=True)
         backups = getattr(self.agfs, "backups", None)
         uses_runtime = (
             cachefs_backend == "cache"
             or queue_backend == "cache"
             or pathlock_uses_cache
+            or coordination["provider"] == "cache"
             or _get_config_value(backups, "provider", "filesystem") == "cache"
         )
         if (
@@ -86,19 +90,22 @@ class RagfsBindingConfig:
                 uses_runtime,
                 self.service_name,
             )
+            shared_redis_ttl = int(getattr(cachefs, "shared_redis_ttl_seconds", 0))
+            cache_config["shared_redis_ttl_seconds"] = shared_redis_ttl if self.shared_redis_backend else 0
         elif self.cache is not None:
             cache_config = _disabled_cache_config(self.service_name)
         else:
             if uses_runtime:
                 raise ValueError(
                     "top-level cache config is required when CacheFS, QueueFS, cache-backed PathLock, "
-                    "or cache-backed multi-write uses the shared Runtime"
+                    "coordination, or cache-backed multi-write uses the shared Runtime"
                 )
             cache_config = _disabled_cache_config(self.service_name)
         binding_config: Dict[str, Any] = {
             "service_name": self.service_name,
             "cache": cache_config,
             "pathlock": pathlock,
+            "coordination": coordination,
         }
 
         if self.log is not None:
@@ -177,6 +184,62 @@ def _run_coro_blocking(coro: Any) -> Any:
     return result[0] if result else None
 
 
+def _redis_service_keys(endpoints: Any, *, tls: bool = False) -> set[str]:
+    """Normalize Redis endpoints into comparable service keys.
+
+    Endpoints may be full URLs (``redis://host:port``) or bare ``host:port``
+    addresses. ``ExpiryRedisConfig`` accepts both and resolves bare addresses
+    with its ``tls`` flag at runtime, so bare addresses are resolved the same
+    way here. The transport scheme is not part of the key: one host and port
+    identifies one Redis service, and Redis applies ``maxmemory`` and the
+    eviction policy to the whole service.
+    """
+    if not endpoints:
+        return set()
+    if isinstance(endpoints, str):
+        endpoints = [endpoints]
+    keys = set()
+    for endpoint in endpoints:
+        address = str(endpoint).strip()
+        if not address:
+            continue
+        if "://" not in address:
+            address = ("rediss" if tls else "redis") + f"://{address}"
+        try:
+            parsed = urlsplit(address)
+            host = (parsed.hostname or "").lower()
+            port = parsed.port
+        except ValueError:
+            continue
+        if not host:
+            continue
+        keys.add(f"{host}:{port or 6379}")
+    return keys
+
+
+def _cache_shares_redis_backend(cache_config: Any, agfs_config: Any, expiry_config: Any) -> bool:
+    """Whether cache entries compete with stateful keys in the same Redis service.
+
+    QueueFS and PathLock reuse the top-level cache provider, so they always share
+    the cache backend. The expiry scheduler owns its own Redis connection and only
+    shares the backend when both configurations point at the same service.
+    """
+    queuefs = _get_config_value(agfs_config, "queuefs")
+    if _get_config_value(queuefs, "backend") == "cache":
+        return True
+    pathlock = _get_config_value(agfs_config, "pathlock")
+    if _get_config_value(pathlock, "provider") == "cache":
+        return True
+    cache_params = _get_config_value(cache_config, "params")
+    expiry_redis = _get_config_value(expiry_config, "redis")
+    cache_keys = _redis_service_keys(_get_config_value(cache_params, "endpoints"))
+    expiry_keys = _redis_service_keys(
+        _get_config_value(expiry_redis, "endpoints"),
+        tls=bool(_get_config_value(expiry_redis, "tls", False)),
+    )
+    return bool(cache_keys & expiry_keys)
+
+
 def _dump_openviking_config(config: Any) -> Dict[str, Any]:
     """Return a full OpenViking config dict for encryption bootstrap."""
     if hasattr(config, "to_dict"):
@@ -201,6 +264,8 @@ def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig,
     if agfs_config is None:
         raise ValueError("OpenViking config storage.agfs is required")
     cache_config = _get_config_value(config, "cache")
+    expiry_config = _get_config_value(config, "expiry")
+    shared_redis_backend = _cache_shares_redis_backend(cache_config, agfs_config, expiry_config)
 
     log_config = _get_config_value(config, "log")
     log_level = _get_config_value(log_config, "level", "INFO")
@@ -223,6 +288,7 @@ def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig,
             cache=cache_config,
             log=binding_log,
             service_name=_get_config_value(config, "service_name", DEFAULT_SERVICE_NAME),
+            shared_redis_backend=shared_redis_backend,
         ), None
 
     root_key = _run_coro_blocking(encryptor.provider.get_root_key())
@@ -237,6 +303,7 @@ def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig,
             provider_type=encryptor.provider_type,
             log=binding_log,
             service_name=_get_config_value(config, "service_name", DEFAULT_SERVICE_NAME),
+            shared_redis_backend=shared_redis_backend,
         ),
         encryptor,
     )
@@ -561,7 +628,9 @@ def _build_git_config_dict(git_config: Any, storage_path: Path) -> Dict[str, Any
     any TOML file. For ``backend == "local"`` a ``local`` sub-dict is emitted
     (defaulting ``base_dir`` to ``{storage_path}/.ovgit`` when empty); for
     ``backend == "s3"`` an ``s3`` sub-dict is emitted with keys matching the Rust
-    ``GitS3ConfigPy`` struct.
+    ``GitS3ConfigPy`` struct. ``snapshot`` is copied from the Python config
+    model, with the default SnapshotLog SQLite path resolved under
+    ``storage_path`` so independent workspaces do not share one index DB.
     """
     backend = getattr(git_config, "backend", "local")
     result: Dict[str, Any] = {
@@ -571,6 +640,19 @@ def _build_git_config_dict(git_config: Any, storage_path: Path) -> Dict[str, Any
         "author_name": getattr(git_config, "author_name", "viking-bot"),
         "author_email": getattr(git_config, "author_email", "bot@viking.local"),
     }
+    snapshot = getattr(git_config, "snapshot", None)
+    if snapshot is not None:
+        if hasattr(snapshot, "model_dump"):
+            result["snapshot"] = snapshot.model_dump(mode="json", exclude_none=True)
+        elif isinstance(snapshot, dict):
+            result["snapshot"] = dict(snapshot)
+        snapshot_log = result.get("snapshot", {}).get("log")
+        if isinstance(snapshot_log, dict) and snapshot_log.get("provider", "sqlite") == "sqlite":
+            sqlite_cfg = snapshot_log.setdefault("sqlite", {})
+            if isinstance(sqlite_cfg, dict) and not sqlite_cfg.get("path"):
+                sqlite_cfg["path"] = str(
+                    storage_path / "_system" / "snapshot" / "log" / "snapshot_log.db"
+                )
 
     if backend == "s3":
         s3_cfg = getattr(git_config, "s3", None)

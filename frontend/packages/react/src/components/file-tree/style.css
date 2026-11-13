@@ -1,1 +1,6 @@
+@import '../../shared/primitives/button/button.css';
+@import '../../theme.css';
+@import '../../shared/primitives/popover/popover.css';
+@import '../../shared/primitives/tooltip/tooltip.css';
 @import './file-tree.css';
+@import './file-tree-toolbar.css';

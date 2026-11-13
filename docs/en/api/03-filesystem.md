@@ -178,12 +178,27 @@ The HTTP `result` remains an entry array. `has_more=true` means more matching no
       "mode": 16877,
       "modTime": "2024-01-01T00:00:00Z",
       "isDir": true,
-      "uri": "viking://resources/docs/"
+      "uri": "viking://resources/docs/",
+      "access": "read"
     }
   ],
   "has_more": true
 }
 ```
+
+Entries returned by `ls`, recursive listings, `tree`, and `stat` include `access`: the current caller's effective permission for that URI. Both `original` and `agent` outputs include it; the URI-only `simple=true` output is unchanged.
+
+| access | Meaning |
+|------------|---------|
+| `denied` | No access; listings retain only a name placeholder that cannot be expanded; direct `stat` requests still return 403 |
+| `container` | A directory that can only be expanded to reach authorized descendants, without reading its own content or modifying it |
+| `read` | Read |
+| `write` | Read and write |
+| `manage` | Read, write, and manage |
+
+Shared resources combine direct and inherited grants, group membership, and implicit administrator access. Missing ACL fields or empty direct grants do not automatically mean `denied`: ancestor ACLs and shared defaults still apply. Restricted nodes without matching grants deny ordinary users. When ACL is disabled, or the URI is outside shared resources, existing identity and namespace rules apply, including read-only system files. Having a vector record does not itself grant permission.
+
+Clients can reuse the listing `access` value to control editing without a per-item `stat` or manager-only ACL request. This field does not guarantee an editable format, permission to delete a namespace root, or access to every descendant; operations still enforce their path restrictions and current authorization. The underlying filesystem `mode` is not the caller's permission.
 
 ---
 
@@ -384,6 +399,7 @@ ov stat viking://resources/my-project/docs
     "modTime": "2024-01-01T00:00:00Z",
     "isDir": false,
     "isLocked": false,
+    "access": "write",
     "id": "a1b2c3d4e5f678901234567890abcdef",
     "uri": "viking://resources/docs/api.md"
   }
@@ -402,6 +418,7 @@ ov stat viking://resources/my-project/docs
     "modTime": "2024-01-01T00:00:00Z",
     "isDir": true,
     "isLocked": false,
+    "access": "manage",
     "uri": "viking://resources/docs",
     "count": 42
   }
@@ -412,7 +429,9 @@ The `isLocked` field reports whether the path is currently held by a path lock: 
 
 The `id` field (files only) is the deterministic vector record primary key in VikingDB, computed as `md5(f"{account_id}:{uri}")` for level 2 (regular file) records. This value matches the `id` field in the vector collection schema and can be used to cross-reference vector records without an additional lookup. The field is omitted for directories because a directory may have multiple vector records across semantic levels (L0 abstract, L1 overview). Because indexing is asynchronous, a newly returned ID might not be resolvable immediately; lookup by ID can also fail after its vector record is deleted. In either case, `stat(id)` returns `NOT_FOUND` with a reason indicating that the data may not have been indexed yet or may have been deleted.
 
-The `count` field (directories only) contains the estimated number of items (files and subdirectories) under this directory (from vector index).
+The `count` field (directories only) is the number of visible `level=2` vector records under the directory URI subtree. It depends on asynchronous indexing and orphan cleanup, so it is not a physical filesystem entry count. `ls`, `tree`, and `glob` expose it through `extra_fields=count`.
+
+**Breaking change:** `count` previously included all indexed vector levels. It now counts only caller-visible `level=2` records.
 
 On case-insensitive `localfs`, `stat` may also return metadata for a real file or directory through a case-only alias. For example, `viking://resources/docs/REPORT.md` may hit the real `viking://resources/docs/report.md`; on case-sensitive systems, the alias target returns `NOT_FOUND` when it does not exist.
 
@@ -469,6 +488,7 @@ curl -X POST "http://localhost:1933/api/v1/fs/attrs/set_tags" \
   -H "X-API-Key: your-key" \
   -H "Content-Type: application/json" \
   -d '{"uri":"viking://resources/docs","tags":["team=search"],"mode":"append","recursive":true}'
+
 ```
 
 **CLI**
@@ -479,6 +499,8 @@ ov attrs get viking://resources/docs/api.md tags
 ov attrs get viking://user/alice/memories/experiences/foo.md memory.resource_refs
 ov attrs set-tags viking://resources/docs/api.md --tags team=search,env=prod
 ov attrs set-tags viking://resources/docs --tags team=search --mode append --recursive
+ov attrs batch-set-tags viking://resources/docs/api.md viking://resources/docs/guide.md \
+  --tags count+=1 --mode append
 ```
 
 For `set-tags`, directory targets update the directory semantic records; `recursive=true` also updates existing descendant files and directory semantic records.
@@ -521,6 +543,8 @@ For `set-tags`, directory targets update the directory semantic records; `recurs
 ```
 
 `attrs.memory` is parsed from `MEMORY_FIELDS` metadata with content removed. `attrs.tags` is the explicit retrieval tag list used by `attrs set-tags` and search filters.
+
+Batch requests accept 1-50 URIs, deduplicate normalized URIs, and return `items` and `failed` in input order. Individual failures do not fail the whole HTTP request.
 
 ---
 

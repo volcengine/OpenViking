@@ -207,8 +207,9 @@ class FileWatchStore(WatchStore):
         # control URIs, so the file needs no PathLock; taking one would collide
         # with a caller's Tree lock on the resources root.
         ctx = self._ctx()
-        content = json.dumps(data, ensure_ascii=False, indent=indent)
-        await self._fs.write_file(tmp_uri, content, ctx=ctx, auto_pathlock=False)
+        # Internal control state must round-trip verbatim, without content sanitization.
+        content = json.dumps(data, ensure_ascii=False, indent=indent).encode("utf-8")
+        await self._fs.write_file_bytes(tmp_uri, content, ctx=ctx, auto_pathlock=False)
         try:
             if await self._fs.exists(uri, ctx=ctx):
                 try:

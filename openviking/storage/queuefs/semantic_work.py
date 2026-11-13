@@ -129,7 +129,7 @@ class SkillSemanticMessageWork(SemanticMessageWork):
     """Keep Skill tracking and package ownership alive until writes settle.
 
     A failed run retains its lease for retry; cancellation drains started work
-    before update rollback can proceed. None of this state is shared by messages.
+    before update cleanup can proceed. None of this state is shared by messages.
     """
 
     def __init__(
@@ -235,5 +235,5 @@ class SkillSemanticMessageWork(SemanticMessageWork):
             unregister_telemetry(self.msg.telemetry_id)
 
     async def cancel_queued(self) -> None:
-        # Skill rollback must observe release before this item is settled.
+        # Skill update cleanup must observe release before this item is settled.
         await self.processor._release_cancelled_semantic_lock(self.msg)

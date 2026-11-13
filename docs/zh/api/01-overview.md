@@ -392,6 +392,7 @@ JSON 输出 - 错误：
 | POST | `/api/v1/content/write` | 写入内容并刷新语义索引 |
 | POST | `/api/v1/content/batch-write` | 写入多个文件并刷新索引 |
 | POST | `/api/v1/content/set_tags` | 设置检索标签 |
+| POST | `/api/v1/content/batch_set_tags` | 批量设置 1～50 个 URI 的检索标签 |
 | POST | `/api/v1/content/ensure_directory_index` | 确保既有目录的索引就绪，仅在两层摘要都缺失时创建 L0 |
 | POST | `/api/v1/content/reindex` | 重建语义或向量索引 |
 
@@ -516,6 +517,7 @@ JSON 输出 - 错误：
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
+| GET | `/api/v1/admin/metric-inventory` | 流式导出供离线报表使用的元数据清单（仅 ROOT） |
 | GET | `/api/v1/admin/configuration` | 获取 Cluster 层显式运行时配置 |
 | PATCH | `/api/v1/admin/configuration` | 更新 Cluster 层运行时配置 |
 | POST | `/api/v1/admin/configuration/test-model` | 测试草稿模型或 Embedding 连接，不保存配置 |

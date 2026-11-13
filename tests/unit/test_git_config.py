@@ -11,6 +11,12 @@ from openviking_cli.utils.config import (
     GitS3Config,
     OpenVikingConfig,
 )
+from openviking_cli.utils.config.git_config import (
+    GitSnapshotConfig,
+    GitSnapshotLogConfig,
+    GitSnapshotLogMySqlConfig,
+    GitSnapshotLogSqliteConfig,
+)
 from openviking.utils.agfs_utils import _build_git_config_dict
 
 
@@ -63,6 +69,29 @@ class TestGitConfigOnOpenVikingConfig:
         )
         assert cfg.git.enabled is True
         assert cfg.git.local.base_dir == "/tmp/g"
+
+    def test_open_viking_config_accepts_nested_snapshot_log_section(self):
+        """Verify ov.conf JSON accepts git.snapshot.log as the SnapshotLog config path."""
+        cfg = OpenVikingConfig(
+            storage={"workspace": "/tmp/x"},
+            git={
+                "snapshot": {
+                    "log": {
+                        "provider": "mysql",
+                        "mysql": {
+                            "dsn_env": "OV_TEST_DSN",
+                            "max_connections": 7,
+                            "connect_timeout_ms": 1234,
+                        },
+                    },
+                },
+            },
+        )
+
+        assert cfg.git.snapshot.log.provider == "mysql"
+        assert cfg.git.snapshot.log.mysql.dsn_env == "OV_TEST_DSN"
+        assert cfg.git.snapshot.log.mysql.max_connections == 7
+        assert cfg.git.snapshot.log.mysql.connect_timeout_ms == 1234
 
     def test_git_config_round_trip_via_config_file(self, tmp_path):
         """Round-trip the new `git` section through the runtime JSON file loader."""
@@ -252,6 +281,31 @@ class TestBuildGitConfigDictS3:
         assert "access_key" not in out["s3"]
         assert "secret_key" not in out["s3"]
 
+    def test_snapshot_log_config_is_passed_through(self):
+        """S3 git config passes the nested SnapshotLog provider settings to binding."""
+        cfg = GitConfig(
+            enabled=True,
+            backend="s3",
+            s3=GitS3Config(bucket="my-bucket", region="cn-beijing"),
+            snapshot=GitSnapshotConfig(
+                log=GitSnapshotLogConfig(
+                    provider="mysql",
+                    sqlite=GitSnapshotLogSqliteConfig(path="/tmp/snapshot-log.db"),
+                    mysql=GitSnapshotLogMySqlConfig(
+                        dsn_env="OV_TEST_DSN",
+                        max_connections=7,
+                        connect_timeout_ms=1234,
+                    ),
+                ),
+            ),
+        )
+        out = _build_git_config_dict(cfg, Path("/tmp/storage"))
+        assert out["snapshot"]["log"]["provider"] == "mysql"
+        assert out["snapshot"]["log"]["sqlite"]["path"] == "/tmp/snapshot-log.db"
+        assert out["snapshot"]["log"]["mysql"]["dsn_env"] == "OV_TEST_DSN"
+        assert out["snapshot"]["log"]["mysql"]["max_connections"] == 7
+        assert out["snapshot"]["log"]["mysql"]["connect_timeout_ms"] == 1234
+
     def test_missing_s3_section_raises(self):
         # Build a disabled config (skips model validation) then force s3=None to
         # exercise the builder's own guard.
@@ -275,3 +329,13 @@ class TestBuildGitConfigDictLocal:
         cfg = GitConfig(enabled=True, backend="local")
         out = _build_git_config_dict(cfg, Path("/tmp/storage"))
         assert out["local"]["base_dir"] == str(Path("/tmp/storage") / ".ovgit")
+
+    def test_snapshot_log_config_is_passed_through(self):
+        """Local git config passes the SnapshotLog provider switch to binding."""
+        cfg = GitConfig(
+            enabled=True,
+            backend="local",
+            snapshot=GitSnapshotConfig(log=GitSnapshotLogConfig(provider="none")),
+        )
+        out = _build_git_config_dict(cfg, Path("/tmp/storage"))
+        assert out["snapshot"]["log"]["provider"] == "none"

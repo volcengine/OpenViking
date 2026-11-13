@@ -10,7 +10,10 @@ import pytest
 
 from openviking.utils.agfs_utils import (
     RagfsBindingConfig,
+    _cache_shares_redis_backend,
     _generate_plugin_config,
+    _redis_service_keys,
+    build_runtime_ragfs_binding_config,
     create_agfs_client,
     mount_agfs_backend,
 )
@@ -22,6 +25,24 @@ from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 from openviking_cli.utils.config.storage_config import StorageConfig
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig, VolcengineConfig
 from openviking_cli.utils.config.vlm_config import VLMConfig
+
+
+def test_postgres_pathlock_binding_without_redis(tmp_path):
+    config = AGFSConfig(
+        path=str(tmp_path),
+        pathlock={"provider": "postgres", "postgres_dsn_env": "OV_POSTGRES_DSN"},
+    )
+    binding = RagfsBindingConfig(agfs=config, service_name="pg-community").to_binding_dict()
+    assert binding["pathlock"]["provider"] == "postgres"
+    assert binding["pathlock"]["postgres_dsn_env"] == "OV_POSTGRES_DSN"
+    assert binding["service_name"] == "pg-community"
+    assert not binding["cache"]["enabled"]
+
+
+@pytest.mark.parametrize("value", [None, "", "  ", 42])
+def test_postgres_pathlock_requires_dsn_environment_name(value):
+    with pytest.raises(ValueError):
+        AGFSConfig(pathlock={"provider": "postgres", "postgres_dsn_env": value})
 
 
 def test_agfs_validation():
@@ -347,7 +368,7 @@ def test_openviking_config_dump_uses_only_canonical_cache_schema():
     ).to_binding_dict()
 
     assert dumped["cache"] == {"provider": "redis", "params": {}}
-    assert dumped["storage"]["agfs"]["cachefs"] == {"backend": "cache"}
+    assert dumped["storage"]["agfs"]["cachefs"] == {"backend": "cache", "shared_redis_ttl_seconds": 0}
     assert "cache" not in dumped["storage"]["agfs"]
     assert "max_file_size_bytes" not in binding["cache"]
     assert "traversal_mode" not in binding["cache"]
@@ -1317,18 +1338,263 @@ def test_watch_store_defaults_to_file_and_rejects_unknown_providers():
 
 
 def test_mysql_watch_store_requires_credential_encryption_key():
+    data = _mysql_watch_store_config({})
+    data["storage"]["agfs"] = {"coordination": {"provider": "memory"}}
     with pytest.raises(ValueError, match="credential_encryption_key"):
-        OpenVikingConfig.from_dict(_mysql_watch_store_config({}))
-    config = OpenVikingConfig.from_dict(
-        _mysql_watch_store_config({"credential_encryption_key": "a" * 43 + "="})
-    )
+        OpenVikingConfig.from_dict(data)
+    data["storage"]["watch_store"]["params"]["credential_encryption_key"] = "a" * 43 + "="
+    config = OpenVikingConfig.from_dict(data)
     assert config.storage.watch_store.provider == "mysql"
     assert config.storage.task_store.provider == "file"
     assert config.storage.agfs.pathlock.provider == "filesystem"
 
 
-def test_watch_leader_provider_config():
-    assert OpenVikingConfig.from_dict({}).watch_leader_provider == "auto"
-    assert OpenVikingConfig.from_dict({"watch_leader_provider": "local"}).watch_leader_provider == "local"
-    with pytest.raises(ValueError, match="watch_leader_provider"):
-        OpenVikingConfig.from_dict({"watch_leader_provider": "redis"})
+def test_coordination_defaults_to_memory_and_sqlite_requires_local_path(tmp_path):
+    assert AGFSConfig().coordination.provider == "memory"
+    path = str(tmp_path / "host-disk" / "coordination.db")
+    AGFSConfig(path="/efs/workspace", coordination={"provider": "sqlite", "sqlite_path": path})
+    for coordination in [
+        {"provider": "sqlite"},
+        {"provider": "sqlite", "sqlite_path": "relative.db"},
+        {"provider": "memory", "sqlite_path": path},
+        {"provider": "unknown"},
+    ]:
+        with pytest.raises(ValueError):
+            AGFSConfig(coordination=coordination)
+
+
+def test_coordination_cache_activates_shared_runtime_without_cachefs():
+    agfs = AGFSConfig(coordination={"provider": "cache"})
+    with pytest.raises(ValueError, match="top-level cache"):
+        RagfsBindingConfig(agfs=agfs).to_binding_dict()
+    binding = RagfsBindingConfig(
+        agfs=agfs,
+        cache=CacheConfig(provider="redis", params={}),
+    ).to_binding_dict()
+    assert binding["cache"]["runtime_enabled"]
+    assert not binding["cache"]["enabled"]
+
+
+@pytest.mark.parametrize("leader_provider", ["cache", "auto", None])
+def test_legacy_watch_cache_selects_coordination_and_activates_shared_runtime(leader_provider):
+    data = (
+        _mysql_watch_store_config({"credential_encryption_key": "a" * 43 + "="})
+        if leader_provider != "cache"
+        else {}
+    )
+    if leader_provider is not None:
+        data["watch_leader_provider"] = leader_provider
+    with pytest.raises(ValueError, match="top-level cache"):
+        OpenVikingConfig.from_dict(data)
+    data["cache"] = {"provider": "redis", "params": {}}
+    config = OpenVikingConfig.from_dict(data)
+    assert config.storage.agfs.coordination.provider == "cache"
+    assert OpenVikingConfig.model_json_schema()["properties"]["watch_leader_provider"]["deprecated"]
+    binding = RagfsBindingConfig(agfs=config.storage.agfs, cache=config.cache).to_binding_dict()
+    assert binding["coordination"]["provider"] == "cache"
+    assert binding["cache"]["runtime_enabled"]
+    assert not binding["cache"]["enabled"]
+
+
+@pytest.mark.parametrize("provider", ["memory", "sqlite", "cache"])
+@pytest.mark.parametrize("leader_provider", ["cache", "auto"])
+def test_explicit_coordination_provider_overrides_legacy_watch_cache(
+    provider, leader_provider, tmp_path
+):
+    coordination = {"provider": provider}
+    if provider == "sqlite":
+        coordination["sqlite_path"] = str(tmp_path / "coordination.db")
+    data = _mysql_watch_store_config({"credential_encryption_key": "a" * 43 + "="})
+    data["watch_leader_provider"] = leader_provider
+    data["storage"]["agfs"] = {"coordination": coordination}
+    if provider == "cache":
+        data["cache"] = {"provider": "redis", "params": {}}
+    config = OpenVikingConfig.from_dict(data)
+    assert config.storage.agfs.coordination.provider == provider
+
+
+@pytest.mark.parametrize("provider,store", [("auto", "file"), ("local", "file"), ("local", "mysql")])
+def test_legacy_watch_local_selection_keeps_default_coordination(provider, store):
+    data = (
+        _mysql_watch_store_config({"credential_encryption_key": "a" * 43 + "="})
+        if store == "mysql"
+        else {}
+    )
+    data["watch_leader_provider"] = provider
+    config = OpenVikingConfig.from_dict(data)
+    assert config.storage.agfs.coordination.provider == "memory"
+
+
+@pytest.mark.parametrize(
+    "coordination",
+    [
+        {"provider": "cache", "operation_timeout_ms": 0},
+        {"provider": "memory", "operation_timeout_ms": 100},
+    ],
+)
+def test_coordination_deadline_must_be_positive_and_cache_only(coordination):
+    with pytest.raises(ValueError):
+        AGFSConfig(coordination=coordination)
+
+
+def test_shared_redis_ttl_requires_shared_redis_backend(tmp_path):
+    agfs = AGFSConfig(
+        path=str(tmp_path),
+        cachefs={"backend": "cache", "shared_redis_ttl_seconds": 7200},
+    )
+    cache = CacheConfig(provider="redis", params={})
+
+    shared = RagfsBindingConfig(
+        agfs=agfs,
+        cache=cache,
+        shared_redis_backend=True,
+    ).to_binding_dict()
+    isolated = RagfsBindingConfig(
+        agfs=agfs,
+        cache=cache,
+        shared_redis_backend=False,
+    ).to_binding_dict()
+
+    assert shared["cache"]["shared_redis_ttl_seconds"] == 7200
+    assert isolated["cache"]["shared_redis_ttl_seconds"] == 0
+
+
+def _redis_cache(endpoints=None):
+    """Build the top-level cache section used by the shared-backend checks."""
+    return {
+        "provider": "redis",
+        "params": {"endpoints": endpoints or ["redis://127.0.0.1:6379"]},
+    }
+
+
+def test_cache_shared_redis_backend_detection():
+    cache = _redis_cache()
+
+    assert _cache_shares_redis_backend(
+        cache,
+        {"queuefs": {"backend": "cache"}},
+        None,
+    )
+    assert _cache_shares_redis_backend(
+        cache,
+        {"pathlock": {"provider": "cache"}},
+        None,
+    )
+    assert _cache_shares_redis_backend(
+        cache,
+        {},
+        {"redis": {"endpoints": ["redis://127.0.0.1:6379"]}},
+    )
+    assert not _cache_shares_redis_backend(
+        cache,
+        {},
+        {"redis": {"endpoints": ["redis://127.0.0.1:6380"]}},
+    )
+
+
+def test_cache_shares_redis_backend_with_scheme_less_expiry_endpoint():
+    """`ExpiryRedisConfig` accepts bare `host:port` endpoints and resolves them at runtime."""
+    cache = _redis_cache()
+
+    assert _cache_shares_redis_backend(
+        cache,
+        {},
+        {"redis": {"endpoints": ["127.0.0.1:6379"]}},
+    )
+    assert _cache_shares_redis_backend(
+        cache,
+        {},
+        {"redis": {"endpoints": ["127.0.0.1:6379"], "tls": True}},
+    )
+    assert _cache_shares_redis_backend(
+        _redis_cache(["rediss://127.0.0.1:6379"]),
+        {},
+        {"redis": {"endpoints": ["127.0.0.1:6379"], "tls": True}},
+    )
+    assert not _cache_shares_redis_backend(
+        cache,
+        {},
+        {"redis": {"endpoints": ["127.0.0.2:6379"]}},
+    )
+    assert not _cache_shares_redis_backend(
+        cache,
+        {},
+        {"redis": {"endpoints": ["127.0.0.1:6380"]}},
+    )
+    assert not _cache_shares_redis_backend(
+        cache,
+        {},
+        {"redis": {"endpoints": []}},
+    )
+    assert not _cache_shares_redis_backend(cache, {}, None)
+
+
+def test_cache_shares_redis_backend_compares_service_identity():
+    """One host and port identifies one Redis service, whatever the transport scheme."""
+    assert _cache_shares_redis_backend(
+        _redis_cache(["redis://Redis.Local:6379"]),
+        {},
+        {"redis": {"endpoints": ["redis.local:6379"]}},
+    )
+    assert _cache_shares_redis_backend(
+        _redis_cache(["redis://127.0.0.1:6379"]),
+        {},
+        {"redis": {"endpoints": ["rediss://127.0.0.1:6379"]}},
+    )
+
+
+def test_redis_service_keys_normalizes_endpoints():
+    assert _redis_service_keys(["127.0.0.1:6379"]) == {"127.0.0.1:6379"}
+    assert _redis_service_keys(["127.0.0.1:6379"], tls=True) == {"127.0.0.1:6379"}
+    assert _redis_service_keys(["redis://127.0.0.1:6379"]) == {"127.0.0.1:6379"}
+    assert _redis_service_keys(["redis://127.0.0.1"]) == {"127.0.0.1:6379"}
+    assert _redis_service_keys("127.0.0.1:6379") == {"127.0.0.1:6379"}
+    assert _redis_service_keys([" 127.0.0.1:6379 "]) == {"127.0.0.1:6379"}
+    assert _redis_service_keys(["REDIS://127.0.0.1:6379"]) == {"127.0.0.1:6379"}
+    assert _redis_service_keys([]) == set()
+    assert _redis_service_keys(None) == set()
+    assert _redis_service_keys([""]) == set()
+    assert _redis_service_keys(["redis://"]) == set()
+    assert _redis_service_keys(["redis://host:not-a-port"]) == set()
+    assert _redis_service_keys(["redis://[::1"]) == set()
+
+
+def test_shared_redis_ttl_follows_the_expiry_redis_endpoint(tmp_path):
+    """A bare expiry endpoint still marks the cache Redis as a shared service."""
+    config = OpenVikingConfig.from_dict(
+        {
+            "storage": {
+                "workspace": str(tmp_path),
+                "agfs": {
+                    "cachefs": {"backend": "cache", "shared_redis_ttl_seconds": 600},
+                },
+            },
+            "cache": _redis_cache(),
+            "expiry": {"redis": {"endpoints": ["127.0.0.1:6379"]}},
+        }
+    )
+
+    binding, _ = build_runtime_ragfs_binding_config(config)
+
+    assert binding.shared_redis_backend is True
+    assert binding.to_binding_dict()["cache"]["shared_redis_ttl_seconds"] == 600
+
+
+def test_shared_redis_ttl_is_disabled_for_an_isolated_expiry_redis(tmp_path):
+    config = OpenVikingConfig.from_dict(
+        {
+            "storage": {
+                "workspace": str(tmp_path),
+                "agfs": {
+                    "cachefs": {"backend": "cache", "shared_redis_ttl_seconds": 600},
+                },
+            },
+            "cache": _redis_cache(),
+            "expiry": {"redis": {"endpoints": ["127.0.0.1:6380"]}},
+        }
+    )
+
+    binding, _ = build_runtime_ragfs_binding_config(config)
+
+    assert binding.shared_redis_backend is False
+    assert binding.to_binding_dict()["cache"]["shared_redis_ttl_seconds"] == 0

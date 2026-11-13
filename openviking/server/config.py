@@ -189,6 +189,10 @@ def validate_config_input(
 class UserConfigDefaults(UserConfig):
     """Deployment defaults for users without persisted overrides."""
 
+    preset_global_policy: bool = Field(
+        default=False,
+        description="Create the packaged GLOBAL_POLICY.md during user initialization.",
+    )
     auto_commit_policy: Optional[Dict[str, Any]] = None
 
     @field_validator("auto_commit_policy", mode="before")
@@ -320,6 +324,14 @@ class TraceDumpBodyConfig(BaseModel):
     max_bytes: int = 4096
 
 
+class EventReportingConfig(BaseModel):
+    """Optional business-event exporter configured in ov.conf."""
+
+    enabled: bool = False
+    kafka: Dict[str, Any] = Field(default_factory=dict)
+    telemetry: Dict[str, Any] = Field(default_factory=dict)
+
+
 class ObservabilityConfig(BaseModel):
     """Server-side observability configuration."""
 
@@ -328,6 +340,7 @@ class ObservabilityConfig(BaseModel):
     traces: OTelExporterConfig = Field(default_factory=OTelExporterConfig)
     logs: OTelExporterConfig = Field(default_factory=OTelExporterConfig)
     dump_body: TraceDumpBodyConfig = Field(default_factory=TraceDumpBodyConfig)
+    reporting: EventReportingConfig = Field(default_factory=EventReportingConfig)
 
 
 class TempUploadConfig(BaseModel):

@@ -1,123 +1,352 @@
 # FileTree
 
-A flattened file tree. The host owns the tree state and passes the visible rows in order; the component renders them and reports successful operations.
+FileTree renders the rows your app provides as an expandable, keyboard-operable file tree.
 
-This is a placeholder implementation: it renders every documented row type and honours the public props, so consumers can integrate against the API before the full view lands. Styling, iconography and interaction details will change, and the view will be rewritten against this contract.
+## When to use
 
-## Basic usage
+- Your app already loads and manages the tree data, for example with paging, lazy loading or permission trimming: flatten the tree state into ordered rows, run expand, select and load-more yourself, and the component reports each operation that succeeds.
+- You want to decide the search UI, import entry points and row-end actions yourself: the component only renders and calls back. It sends no requests and does not need `OpenVikingProvider`.
+- When you use [FileBrowser](../modules/file-browser), the file tree is built in and needs no separate setup.
 
-Expand a directory to reveal its children. Rows come from `rows`; selection and expansion are controlled by the consumer.
-
-```tsx file="../../_demos/file-tree-basic.tsx" preview
-
-```
-
-## How rows work
-
-The tree never inspects parent/child relationships. The host flattens its own state into an ordered list:
-
-- `entry` — a directory or file.
-- `loading` — a children area that is still loading.
-- `load-more` — a children page the host can fetch next.
-- `error` — a children area that failed.
-- `empty` — an expanded directory with no children.
-
-Emit only the ones your data source needs. A host that returns all children at once never emits `load-more`.
-
-## Slots and host content
-
-- `slots.toolbar` — search, import sources, refresh. The component does not know what is inside.
-- `renderDashboard` — the row-end indicator, for example a dashboard entry.
-- `renderRowTooltip` — hover content; the component handles the delay and positioning.
-
-## One-off effects
-
-Highlighting is a page-level effect, not a tree prop. Three options are available and can be combined:
-
-1. `data-file-tree-row-id` on every row element, exported as `FILE_TREE_ROW_ATTRIBUTE`.
-2. `getRowAttributes(row)` for per-row classes and attributes.
-3. The `ref` handle: `getRowElement(id)` and `scrollToRow(id, options)`.
-
-```tsx
-const treeRef = useRef<FileTreeHandle>(null);
-treeRef.current?.scrollToRow('resources', { block: 'center' });
-```
-
-`operations` provides `select(row)`, `toggleExpand(row)`, `loadMore(row)`, `retry(row)` and `openRetentionSettings(uri)`. Each returns `Promise<void>`: resolution means success, rejection means failure. The existing `on…` callbacks are optional success notifications and no longer perform these operations. Repeated requests for the same pending operation are ignored.
-
-## Props
-
-| Property                  | Type                                      | Default  | Description                                                                    |
-| ------------------------- | ----------------------------------------- | -------- | ------------------------------------------------------------------------------ |
-| `rows`                    | `readonly FileTreeRow[]`                  | Required | Visible rows in render order.                                                  |
-| `operations`              | `FileTreeOperations`                      | —        | Asynchronous operation capabilities; missing methods disable their operations. |
-| `selectedId`              | `string \| null`                          | —        | Selected row id, owned by the host.                                            |
-| `isReady`                 | `boolean`                                 | `true`   | Whether the first load finished.                                               |
-| `loadingFallback`         | `ReactNode`                               | —        | Shown instead of rows while the first load runs.                               |
-| `errorFallback`           | `ReactNode`                               | —        | Shown when a whole-tree error row is present.                                  |
-| `emptyFallback`           | `ReactNode`                               | —        | Shown when `rows` is empty.                                                    |
-| `slots`                   | `FileTreeSlots`                           | —        | `toolbar` slot above the rows.                                                 |
-| `labels`                  | `FileTreeLabels`                          | English  | Replaceable copy.                                                              |
-| `getRowAttributes`        | `(row) => HTMLAttributes<HTMLDivElement>` | —        | Extra attributes per row; `className` is merged.                               |
-| `renderDashboard`         | `(row) => ReactNode`                      | —        | Row-end indicator; `null` hides it.                                            |
-| `renderRowTooltip`        | `(row) => ReactNode`                      | —        | Hover content; `null` hides it.                                                |
-| `onSelect`                | `(row: FileTreeEntryRow) => void`         | —        | Called after selection succeeds; not called on failure.                        |
-| `onToggleExpand`          | `(row: FileTreeEntryRow) => void`         | —        | Called after expansion or collapse succeeds; not called on failure.            |
-| `onLoadMore`              | `(row: FileTreeLoadMoreRow) => void`      | —        | Called after loading more children succeeds; not called on failure.            |
-| `onRetry`                 | `(row: FileTreeErrorRow) => void`         | —        | Called after a retry succeeds; not called on failure.                          |
-| `onOpenRetentionSettings` | `(uri: string) => void`                   | —        | Called after retention settings open successfully; not called on failure.      |
-| Other props               | `HTMLAttributes<HTMLDivElement>`          | —        | Standard div attributes.                                                       |
+## Import
 
 ```tsx
 import { FileTree } from '@openviking/react/components/file-tree';
 import '@openviking/react/components/file-tree/style.css';
 ```
 
-## Accessibility
+## Examples
 
-The tree uses `role="tree"` with `role="treeitem"` rows and reports `aria-level`, `aria-selected` and `aria-expanded`. Arrow keys move between rows, Right/Left expand and collapse, Enter and Space select. Status is carried by visible text, not colour alone.
+### Basic usage
 
-## Class names
+Your app keeps the expanded set and the paging state and passes the flattened tree as `FileTreeRow[]`. The example covers async loading, paging, empty directories, built-in directory descriptions, row-end icons and refresh. Expand `archive` and `empty-notes` under `resources` to see paging and an empty directory, then pick a refresh result and click refresh to see success and failure.
 
-Class names are prefixed with `ov-`. The block is `ov-file-tree`; elements use `ov-file-tree__<element>`.
+```tsx file="../../_demos/file-tree-basic.tsx" preview
 
-| Class name                  | Element       | Purpose                                  |
-| --------------------------- | ------------- | ---------------------------------------- |
-| `ov-file-tree`              | Root          | Column layout and base typography.       |
-| `ov-file-tree__toolbar`     | Toolbar slot  | Host toolbar above the rows.             |
-| `ov-file-tree__body`        | Scroll body   | The scrolling region.                    |
-| `ov-file-tree__rows`        | Row container | Vertical stack of rows.                  |
-| `ov-file-tree__row`         | Row           | One entry row; carries `data-selected`.  |
-| `ov-file-tree__row:hover`   | Row           | Hover background.                        |
-| `ov-file-tree__toggle`      | Expand button | Expand/collapse control.                 |
-| `ov-file-tree__chevron`     | Chevron icon  | Rotates when `data-expanded` is present. |
-| `ov-file-tree__label`       | Name          | The row's primary text.                  |
-| `ov-file-tree__description` | Description   | Secondary text next to the name.         |
-| `ov-file-tree__level`       | Level badge   | Context level chip.                      |
-| `ov-file-tree__expiry`      | Expiry hint   | Expiry text and its action button.       |
-| `ov-file-tree__tooltip`     | Tooltip       | Row tooltip surface.                     |
-| `ov-file-tree__child-row`   | Child row     | Loading, empty, and error rows.          |
-| `ov-file-tree__state`       | State panel   | Full-height loading, empty, and error.   |
-
-```css
-.my-workbench .ov-file-tree__row {
-  height: 32px;
-}
 ```
 
-## Theme tokens
+The example uses simulated offline data: the row-end board icons come from `renderRowTrailing`, the file-type icons from `renderRowIcon`, and search only shows the `onSearch` event without opening a search UI. Check "Host-controlled loading" to see the controlled refresh state on its own.
 
-| CSS variable           | Default                | Purpose                        |
-| ---------------------- | ---------------------- | ------------------------------ |
-| `--ov-ui-text`         | `#1f2329`              | Row text.                      |
-| `--ov-ui-text-muted`   | `#8f959e`              | Secondary text and icons.      |
-| `--ov-ui-row-hover`    | `rgb(0 0 0 / 4%)`      | Row hover background.          |
-| `--ov-ui-row-selected` | `rgb(37 99 197 / 10%)` | Selected row background.       |
-| `--ov-ui-focus-ring`   | `#2563c5`              | Keyboard focus ring.           |
-| `--ov-ui-chip`         | `rgb(0 0 0 / 6%)`      | Level badge background.        |
-| `--ov-ui-warning`      | `#b26a00`              | Expiry hint text.              |
-| `--ov-ui-radius`       | `6px`                  | Row and tooltip corner radius. |
+## API
 
-## Implementation scope
+### FileTree
 
-The host supplies asynchronous execution capabilities through `operations`; the component calls the matching success notification only after the operation resolves. Rejection does not trigger a success notification. Omitting a method disables that operation; omitting a notification does not prevent execution. Directory loading, pagination, search, permissions and navigation remain host-owned.
+| Property                | Description                                                                                                                                 | Type                                                   | Default                                       |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | --------------------------------------------- |
+| rows                    | Visible rows in render order                                                                                                                | `readonly FileTreeRow[]`                               | Required                                      |
+| selectedId              | `id` of the selected row, owned by your app                                                                                                 | `string \| null`                                       | -                                             |
+| rootOrder               | Order of root directories; `'context'` sorts them as `user`, `session`, `agent`, `resources`, with other directories after them             | `'input' \| 'context'`                                 | `'input'`                                     |
+| isReady                 | Whether the first load has finished; when `false`, `loadingFallback` is shown instead of the rows                                           | `boolean`                                              | `true`                                        |
+| loadingFallback         | Shown during the first load; falls back to `labels.loading`                                                                                 | `ReactNode`                                            | -                                             |
+| errorFallback           | Shown when the whole tree fails to load, usually with a title and a retry entry; falls back to the `message` of the error row               | `ReactNode`                                            | -                                             |
+| emptyFallback           | Shown when `rows` is empty; falls back to `labels.empty`                                                                                    | `ReactNode`                                            | -                                             |
+| operations              | Async operations; omitting a method disables that operation, and a rejected Promise counts as a failure and fires no `on…` callback         | `FileTreeOperations`                                   | -                                             |
+| search                  | Shows the built-in search trigger; `false` hides it and `{ disabled: true }` disables it                                                    | `boolean \| { disabled?: boolean }`                    | `true`                                        |
+| refresh                 | Shows the built-in refresh button; `false` hides it, `disabled` disables it and `loading` sets a host-controlled pending state              | `boolean \| { disabled?: boolean; loading?: boolean }` | `true`                                        |
+| loading                 | Host-controlled pending state of the refresh button, combined with the refresh Promise and `refresh.loading`; existing rows stay visible    | `boolean`                                              | `false`                                       |
+| getRowAttributes        | Adds HTML attributes to every row, including loading and paging rows; `className` and `style` are merged with the component's own           | `(row: FileTreeRow) => HTMLAttributes<HTMLDivElement>` | -                                             |
+| renderRowTrailing       | Renders a trailing marker such as a board entry or a status badge; `null` hides it, and the content and click behavior are yours            | `(row: FileTreeEntryRow) => ReactNode`                 | -                                             |
+| renderRowIcon           | Renders the leading icon of a file row; directory rows always use the built-in folder icon, and `null` falls back to the built-in file icon | `(row: FileTreeEntryRow) => ReactNode`                 | Built-in file icon                            |
+| renderRowTooltip        | Renders the hover tooltip of a row; when provided it replaces the built-in directory description, and `null` hides the tooltip for that row | `(row: FileTreeEntryRow) => ReactNode`                 | Built-in directory description based on `uri` |
+| onSelect                | Called after an entry is selected                                                                                                           | `(row: FileTreeEntryRow) => void`                      | -                                             |
+| onToggleExpand          | Called after a directory is expanded or collapsed                                                                                           | `(row: FileTreeEntryRow) => void`                      | -                                             |
+| onLoadMore              | Called after the next page of children loads                                                                                                | `(row: FileTreeLoadMoreRow) => void`                   | -                                             |
+| onRetry                 | Called after a failed children load is retried successfully                                                                                 | `(row: FileTreeErrorRow) => void`                      | -                                             |
+| onOpenRetentionSettings | Called after retention settings open, with the row's `uri`                                                                                  | `(uri: string) => void`                                | -                                             |
+| onSearch                | Called after the search operation succeeds                                                                                                  | `() => void`                                           | -                                             |
+| onRefresh               | Called after the refresh succeeds                                                                                                           | `() => void`                                           | -                                             |
+| slots                   | Custom toolbar and loading spinner                                                                                                          | `FileTreeSlots`                                        | -                                             |
+| labels                  | Overrides interface text                                                                                                                    | `FileTreeLabels`                                       | -                                             |
+| locale                  | Interface language, see [Internationalization](../guide/i18n)                                                                               | `'zh-CN' \| 'en-US'`                                   | Inherited, otherwise `'en-US'`                |
+| className, style        | Appearance and layout; other HTML attributes are passed to the root element, and `aria-label` also names the tree                           | HTML attributes                                        | -                                             |
+| ref                     | Gives access to `FileTreeHandle` for finding row elements or scrolling to a row                                                             | `Ref<FileTreeHandle>`                                  | -                                             |
+
+### FileTreeOperations
+
+| Property              | Description                                                                                                           | Type                                          | Default |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- | ------- |
+| search                | Opens your search UI; the search trigger is disabled when omitted                                                     | `() => Promise<void>`                         | -       |
+| refresh               | Refreshes the tree and shows a pending state on the refresh button meanwhile; the button is disabled when omitted     | `() => Promise<void>`                         | -       |
+| select                | Selects an entry; called for both directories and files, so branch on `row.type`; selection does nothing when omitted | `(row: FileTreeEntryRow) => Promise<void>`    | -       |
+| toggleExpand          | Expands or collapses a directory; the expand arrow is disabled when omitted                                           | `(row: FileTreeEntryRow) => Promise<void>`    | -       |
+| loadMore              | Loads the next page of children; the "Load more" button is disabled when omitted                                      | `(row: FileTreeLoadMoreRow) => Promise<void>` | -       |
+| retry                 | Retries a failed children load; the "Retry" button is disabled when omitted                                           | `(row: FileTreeErrorRow) => Promise<void>`    | -       |
+| openRetentionSettings | Opens retention settings with the row's `uri`; the expiry text is not clickable when omitted                          | `(uri: string) => Promise<void>`              | -       |
+
+### FileTreeSlots
+
+| Property | Description                                                                                                              | Type        | Default           |
+| -------- | ------------------------------------------------------------------------------------------------------------------------ | ----------- | ----------------- |
+| toolbar  | Shown above the built-in search and refresh controls, for host actions such as importing resources                       | `ReactNode` | -                 |
+| spinner  | Replaces the spinner in the expand arrow slot, loading rows and "Load more" rows; the built-in one is a 12 × 12 CSS ring | `ReactNode` | Built-in CSS ring |
+
+### FileTreeHandle
+
+| Property      | Description                                                                                | Type                                                       | Default |
+| ------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------- | ------- |
+| getRowElement | Returns the root element of the row with the given `id`, or `null` when it is not rendered | `(id: string) => HTMLElement \| null`                      | -       |
+| scrollToRow   | Scrolls a row into view and returns whether it was found; `block` defaults to `'nearest'`  | `(id: string, options?: ScrollIntoViewOptions) => boolean` | -       |
+
+### FileTreeRow
+
+Every item in `rows` is one of the five types below, told apart by `kind`.
+
+| Value         | Description                                                                                                                        | Type                  |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| `'entry'`     | A directory or a file, one row per node                                                                                            | `FileTreeEntryRow`    |
+| `'loading'`   | The children of a directory are loading; sits under the parent, and you can skip it and use `busy` on the entry row instead        | `FileTreeLoadingRow`  |
+| `'load-more'` | The "Load more" row for paged children when another page exists; not needed when a data source returns all children at once        | `FileTreeLoadMoreRow` |
+| `'error'`     | A failed children load with a retry button; when it is the only row in `rows` and has no `parentId`, the whole tree failed to load | `FileTreeErrorRow`    |
+| `'empty'`     | An expanded directory with no children                                                                                             | `FileTreeEmptyRow`    |
+
+### FileTreeRowBase
+
+Fields shared by every row.
+
+| Property | Description                                                 | Type     | Default  |
+| -------- | ----------------------------------------------------------- | -------- | -------- |
+| id       | Unique identifier of the row, used for selection and lookup | `string` | Required |
+| depth    | Indentation level; the root level is `0`                    | `number` | Required |
+
+### FileTreeEntryRow
+
+A directory or file row; extends `FileTreeRowBase`.
+
+| Property    | Description                                                                                                                                         | Type                                     | Default  |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | -------- |
+| kind        | Row type, always `'entry'`                                                                                                                          | `'entry'`                                | Required |
+| uri         | Resource identifier, passed back unchanged in callbacks and used to match built-in directory descriptions                                           | `string`                                 | Required |
+| name        | Display name, always shown in full                                                                                                                  | `string`                                 | Required |
+| type        | Node type                                                                                                                                           | `'directory' \| 'file'`                  | Required |
+| hasChildren | Whether a directory has children to load; pass `false` when it is known to be empty, and the expand arrow is hidden                                 | `boolean`                                | `true`   |
+| expanded    | Whether the directory is currently expanded                                                                                                         | `boolean`                                | `false`  |
+| disabled    | The row is visible but can be neither selected nor expanded, for example a node without detail permission                                           | `boolean`                                | `false`  |
+| selectable  | When `false` the row cannot be selected, but a directory can still be expanded, for example a traverse-only directory                               | `boolean`                                | `true`   |
+| access      | Shows a permission badge at the row end: read-only, no access or traverse only; display only, behavior is controlled by `disabled` and `selectable` | `'read-only' \| 'denied' \| 'container'` | -        |
+| description | Text after the name; falls back to the built-in directory description for the `uri`, and an empty string hides it                                   | `string`                                 | -        |
+| levelLabel  | Short badge at the row end, for example a summary or context level                                                                                  | `string`                                 | -        |
+| busy        | The node has a load or write in progress; directory rows swap the expand arrow for a spinner and other rows show a spinner after the name           | `boolean`                                | `false`  |
+| expiresAt   | Display text of the expiry time, shown after the name; clickable when `operations.openRetentionSettings` is provided, hidden when `null` or omitted | `string \| null`                         | -        |
+
+### FileTreeChildRow
+
+Fields shared by rows inside a children area; extends `FileTreeRowBase`.
+
+| Property | Description                                                                 | Type     | Default |
+| -------- | --------------------------------------------------------------------------- | -------- | ------- |
+| parentId | `id` of the owning parent; omit it when the failure is not tied to a parent | `string` | -       |
+
+### FileTreeLoadingRow
+
+A row shown while children are loading; extends `FileTreeChildRow`.
+
+| Property | Description                                   | Type        | Default  |
+| -------- | --------------------------------------------- | ----------- | -------- |
+| kind     | Row type, always `'loading'`                  | `'loading'` | Required |
+| parentId | `id` of the parent whose children are loading | `string`    | Required |
+
+### FileTreeLoadMoreRow
+
+A paging row that offers to load more; extends `FileTreeChildRow`.
+
+| Property | Description                                                                              | Type          | Default  |
+| -------- | ---------------------------------------------------------------------------------------- | ------------- | -------- |
+| kind     | Row type, always `'load-more'`                                                           | `'load-more'` | Required |
+| parentId | `id` of the parent whose children should be loaded next                                  | `string`      | Required |
+| loading  | Whether the next page is loading; when `true` a spinner shows and the button is disabled | `boolean`     | `false`  |
+
+### FileTreeErrorRow
+
+A failed children load with a retry button; extends `FileTreeChildRow`.
+
+| Property | Description                                  | Type      | Default  |
+| -------- | -------------------------------------------- | --------- | -------- |
+| kind     | Row type, always `'error'`                   | `'error'` | Required |
+| message  | Failure reason; falls back to `labels.error` | `string`  | -        |
+
+### FileTreeEmptyRow
+
+An expanded directory with no children; extends `FileTreeChildRow`.
+
+| Property | Description                 | Type      | Default  |
+| -------- | --------------------------- | --------- | -------- |
+| kind     | Row type, always `'empty'`  | `'empty'` | Required |
+| parentId | `id` of the empty directory | `string`  | Required |
+
+### FileTreeLabels
+
+Defaults follow `locale`; the table lists the English ones.
+
+| Property     | Description                                                                     | Type                 | Default               |
+| ------------ | ------------------------------------------------------------------------------- | -------------------- | --------------------- |
+| readOnly     | Badge text when `access` is `'read-only'`                                       | `string`             | `Read-only`           |
+| noAccess     | Badge text when `access` is `'denied'`                                          | `string`             | `No access`           |
+| traverseOnly | Badge text when `access` is `'container'`                                       | `string`             | `Traverse only`       |
+| search       | Text of the search trigger                                                      | `string`             | `Search files ⌘+K...` |
+| refresh      | Hint and accessible name of the refresh button                                  | `string`             | `Refresh file tree`   |
+| empty        | Message for an empty tree or directory                                          | `string`             | `No files yet`        |
+| error        | Default message when a children load or the whole tree fails                    | `string`             | `Failed to load`      |
+| retry        | Text of the retry button                                                        | `string`             | `Retry`               |
+| loadMore     | Text of the load-more button                                                    | `string`             | `Load more`           |
+| loading      | Message while loading                                                           | `string`             | `Loading…`            |
+| expand       | Accessible name of the expand button; `{name}` is replaced with the node name   | `string`             | `Expand {name}`       |
+| collapse     | Accessible name of the collapse button; `{name}` is replaced with the node name | `string`             | `Collapse {name}`     |
+| info         | Directory description copy                                                      | `FileTreeInfoLabels` | -                     |
+
+### FileTreeInfoLabels
+
+Keys you leave out use the built-in copy for the current language.
+
+| Property        | Description                                                                                                                     | Type                                                                | Default                          |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | -------------------------------- |
+| description     | Overrides the description per key; shown in the tooltip and, for some keys, after the name; an empty string hides it            | `Partial<Record<FileTreeInfoKey, string>>`                          | -                                |
+| triggerBehavior | Overrides the trigger copy per key (when the node is written or generated); shown in the tooltip only; an empty string hides it | `Partial<Record<FileTreeInfoKey, string>>`                          | -                                |
+| field           | Field names of the rows inside the tooltip                                                                                      | `{ description?: string; triggerBehavior?: string; path?: string }` | `Description`, `Trigger`, `Path` |
+
+### FileTreeInfoKey
+
+Semantic key of a directory. The component matches it from the structure of a row's `uri` and uses it to pick the description and trigger copy. The first URI segments `user`, `agent`, `memory` and `session` also accept their plural forms (`users`, `agents`, `memories`, `sessions`).
+
+| Value             | Matching URI                               |
+| ----------------- | ------------------------------------------ |
+| `userRoot`        | `viking://user`, `viking://user/{id}`      |
+| `memories`        | `viking://user/{id}/memories`              |
+| `peers`           | `viking://user/{id}/peers`                 |
+| `privacy`         | `viking://user/{id}/privacy`               |
+| `userResources`   | `viking://user/{id}/resources`             |
+| `sessions`        | `viking://user/{id}/sessions`              |
+| `skills`          | `viking://user/{id}/skills`                |
+| `profile`         | `viking://user/{id}/memories/profile.md`   |
+| `preferences`     | `viking://user/{id}/memories/preferences`  |
+| `entities`        | `viking://user/{id}/memories/entities`     |
+| `events`          | `viking://user/{id}/memories/events`       |
+| `identity`        | `viking://user/{id}/memories/identity.md`  |
+| `soul`            | `viking://user/{id}/memories/soul.md`      |
+| `cases`           | `viking://user/{id}/memories/cases`        |
+| `trajectories`    | `viking://user/{id}/memories/trajectories` |
+| `experiences`     | `viking://user/{id}/memories/experiences`  |
+| `sharedResources` | `viking://resources`                       |
+| `agentRoot`       | `viking://agent`                           |
+| `agentEndpoints`  | `viking://agent/endpoints`                 |
+| `agentPayments`   | `viking://agent/payments`                  |
+| `agentSkills`     | `viking://agent/skills`                    |
+| `agentTools`      | `viking://agent/tools`                     |
+| `memoryRoot`      | `viking://memory`                          |
+| `resourceRoot`    | `viking://resource`                        |
+| `sessionRoot`     | `viking://session`                         |
+| `systemRoot`      | `viking://system`                          |
+
+### Other exports
+
+| Name                      | Description                                                                                                                                      | Type                                                                                                        |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `resolveFileTreeInfoKey`  | Returns the directory description key matched by the structure of a URI, or `null` when none matches                                             | `(uri: string) => FileTreeInfoKey \| null`                                                                  |
+| `showsInlineDescription`  | Whether the description of a key is shown after the name; `false` for `null` and for the nine long-term memory keys (`profile` to `experiences`) | `(key: FileTreeInfoKey \| null) => boolean`                                                                 |
+| `resolveInfoCopy`         | Returns the description and trigger copy of a key: the passed `labels` first, then the built-in English copy; an empty string yields `undefined` | `(key: FileTreeInfoKey, labels?: FileTreeInfoLabels) => { description?: string; triggerBehavior?: string }` |
+| `splitVikingUri`          | Splits a URI into lower-cased path segments, ignoring the `viking://` prefix, query string and trailing slashes                                  | `(uri: string) => string[]`                                                                                 |
+| `DEFAULT_INFO_LABELS`     | The built-in English directory copy                                                                                                              | `FileTreeInfoLabels`                                                                                        |
+| `FILE_TREE_ROW_ATTRIBUTE` | Name of the attribute that holds the row `id` on row elements                                                                                    | `'data-file-tree-row-id'`                                                                                   |
+| `FileTreeSpinner`         | The same CSS ring as the built-in spinner; accepts `span` HTML attributes                                                                        | `(props: HTMLAttributes<HTMLSpanElement>) => JSX.Element`                                                   |
+
+## Notes
+
+### Exports
+
+- Types and helper functions are exported from `@openviking/react/components/file-tree`; the package root exports only `FileTree` and `FileTreeProps`.
+- `FileTree` is typed as `FileTreeComponent`. Get `FileTreeHandle` through `ref`; React 18 and 19 are both supported.
+
+### Rows
+
+- Your app owns the tree state: expansion, selection and children loading all live there, and the component only renders `rows`. After an expand or a select, update `expanded` and `selectedId` and pass the rows in again.
+- `rows` is a flat list rendered in the order you pass it and indented by `depth`; the component does not check how rows relate to each other. Place child rows and their state rows right after the parent, with a `depth` one higher.
+- Rows are plain objects, so you can sort, filter or trim them by permission before passing them in.
+- `rootOrder="context"` orders root directories by the first URI segment as `user → session → agent → resources`, accepting singular and plural forms (such as `users` and `agents`); other directories follow in their original order. Only root-level directory rows are sorted, and each moves together with its subtree. Root-level file rows and state rows, such as a paging row, stay in place.
+
+### Operations and notifications
+
+- Methods in `operations` return `Promise<void>`: resolving means success and rejecting means failure. The matching `on…` callback fires only after a success, never after a failure.
+- Omitting a method makes its operation unavailable: the expand arrow, "Load more", "Retry", search and refresh buttons are disabled, and clicking a row does not select it. Omitting an `on…` callback does not affect execution.
+- While an operation is still pending (a select, expand, load more or retry on the same row, or search or refresh), repeated triggers are ignored.
+
+### Selection, keyboard and permissions
+
+- Clicking a directory and clicking a file both call `operations.select`, so branch on `row.type`. Clicking the expand arrow only calls `operations.toggleExpand` and does not select.
+- Content returned by `renderRowTrailing` sits inside the row, so a click on it bubbles up and selects the row. Call `event.stopPropagation()` when it needs its own click behavior, as the board icons in the example do.
+- Keyboard: Up and Down move focus, Right expands a directory, Left collapses it, and Enter and Space select.
+- The tree uses `role="tree"` and rows use `role="treeitem"` with `aria-level` (`depth` plus 1), `aria-selected`, `aria-expanded` and `aria-disabled`. Name the tree with `aria-label`.
+- Permission state comes from your app and the component sends no authorization requests: a `disabled` row can be neither selected nor expanded, a row with `selectable: false` cannot be selected but can be expanded, and `access` only shows a text badge at the row end without changing behavior.
+
+### Search and refresh
+
+- The search trigger and refresh button are shown by default. Pass `false` to `search` or `refresh` to hide one; when both are hidden the row is not rendered, and `slots.toolbar` is unaffected.
+- While a refresh is pending (any of `loading`, `refresh.loading` or the Promise returned by `operations.refresh`), the button shows a loading state and is disabled, so repeated clicks do not run it twice. After `operations.refresh` rejects, the button recovers and `onRefresh` does not fire.
+- The refresh button shows a hint on hover or focus and closes it on Escape. `labels.refresh` is both the hint and the button's accessible name.
+- The default search text includes a `⌘+K` hint, but the component registers no shortcut and filters no rows. Provide the search UI, the shortcut and the result handling yourself through `operations.search`.
+
+### Directory descriptions
+
+- The component derives a directory's meaning from the structure of a row's `uri` and ships built-in description and trigger copy, so you pass nothing. Matching looks only at the path, ignoring the `viking://` prefix, letter case, query string and trailing slashes, and never at `type`.
+- Built-in copy covers fixed levels only: `viking://resources` matches `sharedResources`, `viking://resources/docs` does not, and deeper nodes are up to you.
+- The description appears after the name. Hovering a row opens a tooltip on its right with the title, description, trigger copy and path. The nine long-term memory keys (`profile` to `experiences`) show their description in the tooltip only.
+- A row's own `description` wins over the built-in one, and an empty string hides it. `labels.info` overrides copy per key, an empty string hides that key too, and keys you leave out use the built-in copy for the current language.
+- A `uri` that matches no key gets no built-in tooltip. When you provide `renderRowTooltip`, the tooltip content is entirely yours.
+
+```tsx
+<FileTree
+  rows={rows}
+  labels={{
+    info: {
+      description: { userRoot: 'Current user' },
+      triggerBehavior: {
+        memories: 'Distilled whenever a session is committed',
+      },
+      field: {
+        description: 'Description',
+        triggerBehavior: 'Trigger',
+        path: 'Path',
+      },
+    },
+  }}
+/>
+```
+
+### Finding rows
+
+- Every row element carries `data-file-tree-row-id` with the row's `id`; the attribute name is exported as `FILE_TREE_ROW_ATTRIBUTE`. Use it for one-off highlights or overlays at the page level.
+- `getRowAttributes(row)` adds classes and attributes per row: `className` and `style` are merged with the component's own, and for entry rows `onClick` and `onKeyDown` stay under the component's control.
+- `ref` gives you `getRowElement(id)` and `scrollToRow(id, options)`, for example to return the target row from `locateTarget` of [DirectoryTour](./directory-tour).
+
+```tsx
+const treeRef = useRef<FileTreeHandle>(null);
+
+<FileTree ref={treeRef} rows={rows} />;
+
+treeRef.current?.scrollToRow('resources', { block: 'center' });
+```
+
+### Layout
+
+- The root element is `100%` tall and scrolls its content internally, so give its container a height.
+- Rows size to their content: names render in full, the container scrolls sideways, and deep indentation gets its space the same way.
+- Descriptions are at most 200px wide and truncate beyond that, so a long description does not stretch the row.
+- Content returned by `renderRowTrailing` sits at the right edge of the row; when the row also shows trailing markers such as the level or access, it follows them directly.
+
+## Theme variables
+
+The root element has the class `ov-file-tree` and inner elements use `ov-file-tree__<element>`, for example `ov-file-tree__row`. Colors read the `--ov-ui-color-*` variables you set on an ancestor element and fall back to built-in values when they are not set, see the Theme section of [Getting started](../guide/getting-started); override the variables below to restyle only the file tree.
+
+| CSS variable                      | Default                               | Purpose                                         |
+| --------------------------------- | ------------------------------------- | ----------------------------------------------- |
+| `--ov-ui-file-tree-text`          | Same as `--ov-ui-color-text-1`        | Row text                                        |
+| `--ov-ui-file-tree-text-muted`    | Same as `--ov-ui-color-text-3`        | Descriptions, badges, expand arrows, state rows |
+| `--ov-ui-file-tree-icon`          | Same as `--ov-ui-color-text-3`        | Leading icon                                    |
+| `--ov-ui-file-tree-row-hover`     | Same as `--ov-ui-color-bg-5`          | Hover background                                |
+| `--ov-ui-file-tree-row-selected`  | Same as `--ov-ui-color-primary-light` | Selected background                             |
+| `--ov-ui-file-tree-guide`         | Same as `--ov-ui-color-border-1`      | Level guides                                    |
+| `--ov-ui-file-tree-spinner`       | Same as `--ov-ui-color-primary`       | Spinner arc                                     |
+| `--ov-ui-file-tree-spinner-track` | Same as `--ov-ui-color-border-3`      | Spinner track                                   |
+| `--ov-ui-file-tree-action`        | Same as `--ov-ui-color-primary`       | Outline of a row that has keyboard focus        |
+| `--ov-ui-file-tree-warning`       | Same as `--ov-ui-color-warning`       | Expiry time                                     |
+| `--ov-ui-file-tree-row-height`    | `32px`                                | Row height                                      |
+| `--ov-ui-file-tree-row-radius`    | `4px`                                 | Row radius                                      |
+| `--ov-ui-file-tree-indent`        | `20px`                                | Indent per level                                |

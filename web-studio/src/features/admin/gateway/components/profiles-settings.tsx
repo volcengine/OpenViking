@@ -15,6 +15,13 @@ import { Button } from '#/shared/ui/button'
 import { Checkbox } from '#/shared/ui/checkbox'
 import { FieldError } from '#/shared/ui/field'
 import { Label } from '#/shared/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '#/shared/ui/select'
 
 import {
   ErrorState,
@@ -41,6 +48,7 @@ import {
   PROFILE_DEFAULTS,
   PROFILE_LIMITS,
   QUOTA_LIMIT,
+  RECALL_PEER_SCOPES,
 } from '#/features/admin/gateway/lib/profile-schema'
 import { useTools } from '#/features/admin/gateway/lib/use-gateway'
 import type {
@@ -115,7 +123,7 @@ const LIST_FIELD_SECTIONS: Partial<Record<string, ProfileSection>> = {
 
 /** Fields under each section's "Advanced settings". */
 const ADVANCED_FIELDS: Partial<Record<ProfileSection, string[]>> = {
-  recall: ['query_max_chars', 'quotas'],
+  recall: ['query_max_chars', 'recall_peer_scope', 'quotas'],
   longConversations: ['context_window'],
   tools: [
     'tool_max_rounds',
@@ -493,6 +501,39 @@ export function ProfileSettingsForm({
           <>
             <div className="grid gap-5 md:grid-cols-2">
               {numberField('query_max_chars')}
+              <SettingField
+                label={t('profiles.recall.peerScope.label')}
+                htmlFor="profile-recall_peer_scope"
+                description={t('profiles.recall.peerScope.description')}
+              >
+                <Select
+                  value={value.recall_peer_scope}
+                  onValueChange={(scope) => {
+                    const recall_peer_scope = RECALL_PEER_SCOPES.find(
+                      (item) => item === scope,
+                    )
+                    if (recall_peer_scope) onChange({ recall_peer_scope })
+                  }}
+                >
+                  <SelectTrigger
+                    id="profile-recall_peer_scope"
+                    className="w-full"
+                  >
+                    <SelectValue>
+                      {t(
+                        `profiles.recall.peerScope.${value.recall_peer_scope}`,
+                      )}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {RECALL_PEER_SCOPES.map((scope) => (
+                      <SelectItem key={scope} value={scope}>
+                        {t(`profiles.recall.peerScope.${scope}`)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </SettingField>
             </div>
             {quotas}
           </>

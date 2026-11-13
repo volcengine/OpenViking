@@ -8,7 +8,7 @@ import json
 import threading
 import time
 from copy import deepcopy
-from unittest.mock import create_autospec
+from unittest.mock import AsyncMock, create_autospec
 
 import pytest
 
@@ -226,6 +226,21 @@ async def test_wait_uses_short_initial_poll(monkeypatch, tracker: TaskTracker):
 
     assert (await tracker.wait(task.task_id, **_owner_kwargs())).status is TaskStatus.COMPLETED
     assert delays == [0.05]
+
+
+async def test_wait_caps_backoff_at_one_second(monkeypatch, tracker: TaskTracker):
+    task = await tracker.create("add_resource", task_id="task", **_owner_kwargs())
+    delays = []
+
+    async def sleep(delay):
+        delays.append(delay)
+        if len(delays) == 6:
+            await tracker.complete(task.task_id, {}, **_owner_kwargs())
+
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+
+    assert (await tracker.wait(task.task_id, **_owner_kwargs())).status is TaskStatus.COMPLETED
+    assert delays == [0.05, 0.1, 0.2, 0.4, 0.8, 1.0]
 
 
 async def test_wait_for_task_work_uses_short_initial_poll(monkeypatch, tracker: TaskTracker):
@@ -1466,18 +1481,42 @@ async def test_execution_events_survive_restart_and_preserve_reported_facts():
 
 
 @pytest.mark.parametrize("outcome", ["complete", "fail"])
-async def test_terminal_event_waits_for_owned_work(tracker, outcome):
+async def test_terminal_event_waits_for_owned_work(tracker, outcome, monkeypatch):
+    from openviking.observability.events import get_event_bus
+    from openviking.observability.reporting import runtime
+
+    monkeypatch.setattr(runtime, "_reporter", object())
     owner = _owner_kwargs()
     task = await tracker.create("add_resource", **owner)
     await tracker.start(task.task_id, **owner)
     await tracker.register_work(task.task_id, "child-work", "Semantic", **owner)
-    await getattr(tracker, outcome)(
-        task.task_id, {"done": True} if outcome == "complete" else "error", **owner
-    )
-    snapshot = await tracker.get_with_events(task.task_id, **owner)
-    assert snapshot.status == TaskStatus.RUNNING
-    await tracker.mark_work_done(task.task_id, "child-work", **owner)
-    snapshot = await tracker.get_with_events(task.task_id, **owner)
+    events = []
+    bus = get_event_bus()
+    bus.register("terminal-reporting", events.append)
+    get_task = AsyncMock(wraps=tracker.get)
+    monkeypatch.setattr(tracker, "get", get_task)
+    try:
+        for index in range(20):
+            work_id = f"work-{index}"
+            await tracker.register_work(task.task_id, work_id, "Semantic", **owner)
+            await tracker.start_work(task.task_id, work_id, **owner)
+            await tracker.mark_work_done(task.task_id, work_id, **owner)
+        await getattr(tracker, outcome)(
+            task.task_id, {"done": True} if outcome == "complete" else "error", **owner
+        )
+        # Reporting must not reload growing Work details while the root remains open.
+        get_task.assert_not_awaited()
+        assert not events
+        snapshot = await tracker.get_with_events(task.task_id, **owner)
+        assert snapshot.status == TaskStatus.RUNNING
+        await tracker.mark_work_done(task.task_id, "child-work", **owner)
+        get_task.assert_awaited_once()
+        assert [(e.event_name, e.payload["task_id"], e.payload["status"]) for e in events] == [
+            ("task_terminal", task.task_id, "completed" if outcome == "complete" else "failed")
+        ]
+        snapshot = await tracker.get_with_events(task.task_id, **owner)
+    finally:
+        bus.unregister("terminal-reporting")
     last = snapshot.execution_events["items"][-1]
     assert last["kind"] == "status_changed"
     assert last["status"] == ("completed" if outcome == "complete" else "failed")

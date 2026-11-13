@@ -16,6 +16,7 @@ import asyncio
 import json
 import mimetypes
 import tempfile
+import time
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Union
@@ -369,13 +370,20 @@ class UnderstandingAPI(BaseParser):
     @classmethod
     def can_submit_url_directly(cls, source: str, **kwargs) -> bool:
         """Return whether this URL can bypass source materialization."""
+        if kwargs.get("_feishu_prepared_source"):
+            return False
         if not source.startswith(("http://", "https://")) or not cls._is_feishu_url(source):
             return False
         from openviking.parse.accessors.feishu_accessor import FeishuAccessor
         from openviking.parse.feishu_import import recursive_wiki
 
         doc_type, _ = FeishuAccessor._parse_feishu_url(source)
-        if doc_type in {"folder", "file"} or (doc_type == "wiki" and recursive_wiki(kwargs)):
+        if doc_type in {"folder", "file", "slides"} or (doc_type == "wiki" and recursive_wiki(kwargs)):
+            return False
+        resolved_type = kwargs.get("_feishu_resolved_type")
+        if resolved_type in {"folder", "file", "slides"}:
+            return False
+        if doc_type == "wiki" and not resolved_type:
             return False
         if cls._normalize_lark_file(kwargs):
             return True
@@ -536,15 +544,7 @@ class UnderstandingAPI(BaseParser):
             "tools": [{"type": "understanding"}],
             "store": True,
         }
-        async with httpx.AsyncClient(
-            timeout=self._http_timeout_sec, follow_redirects=True
-        ) as client:
-            rsp = await client.post(
-                f"{self._api_base}/responses",
-                content=self._json_bytes(payload),
-                headers=self._auth_headers({"Content-Type": "application/json;charset=UTF-8"}),
-            )
-        return self._read_api_response(rsp, context="responses api error")
+        return await self._submit_response(payload)
 
     async def _create_response_for_url(
         self,
@@ -568,15 +568,40 @@ class UnderstandingAPI(BaseParser):
             "tools": [{"type": "understanding"}],
             "store": True,
         }
-        async with httpx.AsyncClient(
-            timeout=self._http_timeout_sec, follow_redirects=True
-        ) as client:
-            rsp = await client.post(
-                f"{self._api_base}/responses",
-                content=self._json_bytes(payload),
-                headers=self._auth_headers({"Content-Type": "application/json;charset=UTF-8"}),
+        return await self._submit_response(payload)
+
+    async def _submit_response(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Count one actual parse submission; uploads and polling are not model calls."""
+        from openviking.observability.events import try_publish_event
+
+        started = time.monotonic()
+        status = "error"
+        model_name = "unknown"
+        try:
+            async with httpx.AsyncClient(
+                timeout=self._http_timeout_sec, follow_redirects=True
+            ) as client:
+                rsp = await client.post(
+                    f"{self._api_base}/responses",
+                    content=self._json_bytes(payload),
+                    headers=self._auth_headers({"Content-Type": "application/json;charset=UTF-8"}),
+                )
+            result = self._read_api_response(rsp, context="responses api error")
+            status = "ok" if result.get("id") else "error"
+            model_name = str(result.get("model") or "unknown")
+            return result
+        finally:
+            try_publish_event(
+                "understanding_call",
+                {
+                    "provider": "understanding_api",
+                    "model_name": model_name,
+                    "usage_purpose": "resource_parse",
+                    "status": status,
+                    "error_code": "OK" if status == "ok" else "ERROR",
+                    "duration_seconds": time.monotonic() - started,
+                },
             )
-        return self._read_api_response(rsp, context="responses api error")
 
     @staticmethod
     def _is_feishu_url(source: str) -> bool:
@@ -589,22 +614,9 @@ class UnderstandingAPI(BaseParser):
 
     @staticmethod
     def _normalize_lark_file(kwargs: Dict[str, Any]) -> Optional[Dict[str, str]]:
-        raw_lark_file = kwargs.get("lark_file")
-        if raw_lark_file is None:
-            raw_lark_file = {"user_access_token": kwargs.get("feishu_access_token")}
-        if not isinstance(raw_lark_file, dict):
-            raise ValueError("lark_file must be an object")
+        from openviking.parse.accessors.feishu_session import normalize_lark_file
 
-        auth = {}
-        for key in ("user_access_token", "tenant_access_token"):
-            value = raw_lark_file.get(key)
-            if isinstance(value, str) and value.strip():
-                auth[key] = value.strip()
-        if len(auth) > 1:
-            raise ValueError(
-                "lark_file must contain exactly one of user_access_token or tenant_access_token"
-            )
-        return auth or None
+        return normalize_lark_file(kwargs)
 
     async def _resolve_lark_file(self, kwargs: Dict[str, Any]) -> Dict[str, str]:
         from openviking.connector.auth import current_feishu_token

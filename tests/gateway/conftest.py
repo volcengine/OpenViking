@@ -55,6 +55,7 @@ class FakeViking:
         self.tool_keys = []
         self.tools_failure = None
         self.recalls = []
+        self.recall_peers = []
         self.writes = []
         self.write_sessions = []
         self.archive_status = "pending"
@@ -81,8 +82,9 @@ class FakeViking:
             raise self.tools_failure
         return copy.deepcopy(self.catalog)
 
-    async def recall(self, key, query, policy, exclude, budget):
+    async def recall(self, key, query, policy, exclude, budget, peer=None):
         self.recalls.append((key, query, copy.deepcopy(exclude), budget))
+        self.recall_peers.append(peer)
         if self.failure:
             raise self.failure
         entries = [x for x in self.entries if x["uri"] not in exclude]
@@ -111,7 +113,7 @@ class FakeViking:
     async def health(self, key="", require_identity=True):
         return {"version": "0.4.16", "role": "user", "account_id": "tenant", "user_id": "alice"}
 
-    async def create_session(self, key, session):
+    async def create_session(self, key, session, memory_types=None):
         return {}
 
     async def write(self, key, session, messages):

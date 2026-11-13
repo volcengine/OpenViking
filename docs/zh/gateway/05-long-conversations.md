@@ -108,7 +108,7 @@ description: OpenViking 网关如何压缩长对话、要设置哪个上下文�
 
 ## 副作用 {#side-effects}
 
-**不再生成 Working Memory 摘要。** 摘要由对话所用的模型生成，不使用 OpenViking 的会话摘要。网关新建的 OpenViking 会话都关闭了 Working Memory：提交时照常归档消息、提取记忆，只是不生成会话摘要。
+**不再生成 Working Memory 摘要。** 摘要由网关使用的模型生成。在 OpenViking Server 0.5.0 及以上版本，网关提交设置 `enable_working_memory=false`，仍按解析后的记忆策略归档消息、提取记忆。新建的网关会话继承用户策略，除非 `capture_memory_types` 显式设置了会话策略。旧版服务继续使用会话级 Working Memory 关闭策略。已有会话保留原来存储的策略；要继承用户策略，请开始新对话。
 
 **记忆预算重新计算。** 每压缩一次，**单个上下文窗口预算**（见[召回记忆](08-context-profiles.md#recall-memory)）就重新计算，截断点之前补充过的记忆可能再次补充。
 

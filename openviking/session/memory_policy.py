@@ -11,6 +11,7 @@ from typing import Any, Optional
 from openviking.session.memory.constants import (
     AGENT_EVOLUTION_MEMORY_TYPES,
     EXPERIENCE_MEMORY_TYPE,
+    RETIRED_MEMORY_TYPES,
 )
 from openviking_cli.exceptions import InvalidArgumentError
 
@@ -92,6 +93,11 @@ class MemoryPolicy:
     peer_enabled: bool = True
     memory_types: Optional[set[str]] = None
     enable_working_memory: bool = False
+
+    def __post_init__(self) -> None:
+        # Persisted policies may still name types retired by a newer deployment.
+        if self.memory_types is not None:
+            self.memory_types = self.memory_types - RETIRED_MEMORY_TYPES
 
     @classmethod
     def default(cls) -> "MemoryPolicy":
