@@ -1,64 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mount, act, dom } from './helpers/command-console-dom.mjs';
-
-// Tooltip 定位 hook 需要 MutationObserver；jsdom 只提供它，ResizeObserver 由
-// helper 装了空替身。这里换成能手动触发回调的版本，用来模拟容器尺寸变化。
-//
-// The Tooltip's positioning hook needs MutationObserver, which jsdom provides;
-// the helper stubs ResizeObserver. This file swaps in one whose callbacks can be
-// fired by hand to simulate a container resize.
-globalThis.MutationObserver = dom.window.MutationObserver;
-const resizeCallbacks = new Set();
-globalThis.ResizeObserver = class {
-  constructor(callback) {
-    this.callback = callback;
-    resizeCallbacks.add(callback);
-  }
-  observe() {}
-  unobserve() {}
-  disconnect() {
-    resizeCallbacks.delete(this.callback);
-  }
-};
-/** 触发所有 ResizeObserver 回调，模拟容器尺寸变化。 Fires the observers. */
-const resize = () =>
-  act(() => {
-    for (const callback of [...resizeCallbacks]) callback([]);
-  });
-
-// 说明节点的可用宽度，测试里按需改。The width a description node reports.
-let descClientWidth = 1000;
-
-// 只让说明节点报告宽度，且脱离 DOM 后一律为 0：真实浏览器里脱离文档的节点没有
-// 布局盒。把宽度装在原型上会让任何元素都报宽度，测不出「测量盯着已卸载节点」这
-// 类问题。
-//
-// Only description nodes report a width, and a detached node reports 0: a node
-// outside the document has no layout box in a real browser. Putting the width on
-// the prototype would make every element report one and hide regressions where the
-// measurement holds an unmounted node.
-{
-  const proto = dom.window.HTMLElement.prototype;
-  Object.defineProperty(proto, 'clientWidth', {
-    configurable: true,
-    get() {
-      if (!this.classList?.contains('ov-command-console__empty-desc')) return 0;
-      return this.isConnected ? descClientWidth : 0;
-    },
-  });
-  Object.defineProperty(proto, 'scrollWidth', {
-    configurable: true,
-    get() {
-      if (!this.classList?.contains('ov-command-console__empty-desc')) return 0;
-      if (!this.isConnected) return 0;
-      return (this.textContent?.length ?? 0) * 8;
-    },
-  });
-}
-const setDescWidth = (width) => {
-  descClientWidth = width;
-};
+import { mount } from './helpers/command-console-dom.mjs';
+import {
+  hover,
+  resize,
+  setDescWidth,
+} from './helpers/quick-command-widths.mjs';
 
 const commands = [
   {
@@ -77,26 +24,6 @@ const commands = [
 const actions = (container) => [
   ...container.querySelectorAll('.ov-command-console__empty-action'),
 ];
-
-/**
- * 悬停并等过 Tooltip 的 300ms 延迟，返回浮层文本。
- *
- * React 由冒泡的 mouseover 合成 onMouseEnter，不监听 mouseenter 本身。
- *
- * Hovers past the Tooltip's 300ms delay and returns the surface text.
- *
- * React synthesises `onMouseEnter` from a bubbling `mouseover`, not from
- * `mouseenter` itself.
- */
-async function hover(button) {
-  await act(() =>
-    button.dispatchEvent(
-      new dom.window.MouseEvent('mouseover', { bubbles: true }),
-    ),
-  );
-  await act(() => new Promise((resolve) => setTimeout(resolve, 340)));
-  return document.querySelector('[role="tooltip"]')?.textContent ?? null;
-}
 
 test('a row shows its description on hover only when a summary hides it', async () => {
   const withSummary = await mount({
