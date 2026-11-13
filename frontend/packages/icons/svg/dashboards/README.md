@@ -10,7 +10,8 @@ SVG geometry comes from the OpenViking console implementation, authorized for us
 - `file-link.svg`, `tab-impact.svg`, `tab-source.svg` and `tab-test.svg`: the console's
   `@arco-design/iconbox-react-viking` set (`IconFileLinkV2ColorfulDm`, `IconBarChart10`, `IconSourceControl`,
   `IconBeaker2`), keeping the original path geometry. Colour tokens are replaced by `currentColor` so the host
-  theme decides.
+  theme decides. `file-link.svg` keeps all six paths: the sheet is one two-subpath `path` whose outer and inner
+  contours fill into a hollow outline, so dropping either contour turns it into a solid block.
 
 The `edit`, `success`, and `history` action SVGs come from the same `WikiPreview/assets` directory; `discuss` comes from its rendered conflict action.
 

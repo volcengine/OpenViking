@@ -77,6 +77,7 @@
 
 /* 页签：34 高、12/20 标题、选中项用主色文字加 2 高下划线。 */
 .ov-experience-dashboard__tabs {
+  position: relative;
   display: flex;
   flex: none;
   gap: 0;
@@ -112,14 +113,24 @@
   font-weight: 500;
 }
 
-.ov-experience-dashboard__tabs button[aria-selected='true']::after {
+/* 指示条：整条页签栏共用一个，横向位置由 JS 量出选中页签的标题文字再传进来，
+ * 因此图标有无都不会让视觉重心偏移；切换时靠 transform 过渡滑过去，而不是在新
+ * 页签上重新画一条。
+ *
+ * The indicator is one element shared by the whole bar. Its horizontal position is
+ * measured from the selected tab's title text and passed in, so the presence of an icon
+ * never skews the visual centre; on a switch it slides with a transform instead of being
+ * redrawn under the new tab.
+ */
+.ov-experience-dashboard__tab-indicator {
   position: absolute;
-  content: '';
   inset-block-end: 0;
-  inset-inline-start: calc(50% - 8px);
+  inset-inline-start: 0;
   width: 16px;
   height: 2px;
-  background: currentColor;
+  background: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+  transform: translateX(var(--ov-experience-indicator-left, 0));
+  transition: transform 180ms ease;
 }
 
 .ov-experience-dashboard__tabs svg {
