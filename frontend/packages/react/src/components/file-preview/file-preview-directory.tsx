@@ -1,5 +1,5 @@
 import type { Locale } from '../../shared/locale.js';
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 
 import type {
   ViewerHandle,
@@ -9,8 +9,14 @@ import type {
 import type { FilePreviewActions } from './types.js';
 import { FilePreviewBody } from './file-preview-body.js';
 import { FilePreviewHeader } from './file-preview-header.js';
+import {
+  FilePreviewTransition,
+  needsAsyncLoad,
+  probeStatusOf,
+} from './file-preview-transition.js';
 import { LoadingState } from './file-preview-state.js';
 import type { useFilePreviewEditing } from './use-file-preview-editing.js';
+import { useLevelIndicator } from './use-level-indicator.js';
 import type {
   FilePreviewDirectoryTab,
   FilePreviewFileTab,
@@ -90,33 +96,11 @@ export function FilePreviewDirectoryBody({
   const activeKey = tab.activeLevelKey ?? internalKey;
   const fileTab =
     levelToFileTab(tab, activeKey) ?? levelToFileTab(tab, tab.levels[0].key);
-  const tabsRef = useRef<HTMLDivElement>(null);
-  const [indicator, setIndicator] = useState({ left: 0, width: 0 });
-
-  // useLayoutEffect 必要性：指示条的位置来自页签按钮的实际布局盒，只有提交后
-  // 才可测量；字体加载、容器缩放与层级变化都会改变它，无法在渲染时算出。用
-  // 位移动画让它在两级之间滑动，而不是各画一条静止的下划线。
-  //
-  // A layout effect is required: the indicator's position comes from the tab
-  // buttons' layout boxes, measurable only after commit, and font loading,
-  // container resizing or a level change all move them. The offset animation makes
-  // it slide between levels instead of drawing a static underline on each.
-  useLayoutEffect(() => {
-    const root = tabsRef.current;
-    if (!root) return;
-    const measure = () => {
-      const active = root.querySelector<HTMLElement>('[aria-selected="true"]');
-      if (!active) return;
-      setIndicator({
-        left: active.offsetLeft + (active.offsetWidth - 14) / 2,
-        width: 14,
-      });
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(root);
-    return () => observer.disconnect();
-  }, [activeKey, tab.levels]);
+  const { ref: tabsRef, indicator } = useLevelIndicator(
+    '[aria-selected="true"]',
+    activeKey,
+    tab.levels.length,
+  );
 
   const changeLevel = (key: string) => {
     if (tab.activeLevelKey === undefined) setInternalKey(key);
@@ -229,18 +213,29 @@ export function FilePreviewDirectoryBody({
         </div>
       ) : null}
       <div className="ov-file-preview__body">
-        <FilePreviewBody
-          key={fileTab.key}
-          fileTab={fileTab}
+        <FilePreviewTransition
+          identity={fileTab.key}
+          tab={fileTab}
+          needsLoad={needsAsyncLoad(fileTab.source)}
           text={text}
-          locale={locale}
-          viewMode={viewMode}
-          editing={editing}
-          onViewModeChange={onViewModeChange}
-          onHandleChange={onHandleChange}
-          onViewModesChange={onViewModesChange}
-          onCancelEditing={onCancelEditing}
-        />
+        >
+          {({ tab: layerTab, onProbeStatus, reports, onLoadingChange }) => (
+            <FilePreviewBody
+              fileTab={layerTab}
+              onLoadingChange={onLoadingChange}
+              text={text}
+              locale={locale}
+              viewMode={viewMode}
+              editing={editing}
+              onViewModeChange={onViewModeChange}
+              onHandleChange={onHandleChange}
+              onViewModesChange={onViewModesChange}
+              onCancelEditing={onCancelEditing}
+              onStateChange={(state) => onProbeStatus(probeStatusOf(state))}
+              reports={reports}
+            />
+          )}
+        </FilePreviewTransition>
       </div>
       {tab.slots?.footer ? (
         <div className="ov-file-preview__footer">{tab.slots.footer}</div>

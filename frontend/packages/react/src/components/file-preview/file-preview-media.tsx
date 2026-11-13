@@ -12,23 +12,7 @@ import {
 } from './file-preview-state.js';
 import { FilePreviewImageFrame } from './file-preview-image-frame.js';
 
-export function mediaKind(
-  source: FilePreviewSource,
-): 'image' | 'video' | undefined {
-  const type =
-    source.fileType?.toLowerCase() || source.file?.type.toLowerCase() || '';
-  if (type === 'image' || type.startsWith('image/')) return 'image';
-  if (type === 'video' || type.startsWith('video/')) return 'video';
-  const extension = (
-    source.fileType ||
-    source.fileName.split('.').pop() ||
-    ''
-  ).toLowerCase();
-  if (/^(?:png|jpe?g|gif|webp|avif|bmp|ico|svg)$/.test(extension))
-    return 'image';
-  if (/^(?:mp4|webm|mov)$/.test(extension)) return 'video';
-  return undefined;
-}
+export { mediaKind } from './media-kind.js';
 
 /** Native images/video do not initialize FileViewer or its media adapters. */
 export function FilePreviewMedia({

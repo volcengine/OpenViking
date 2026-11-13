@@ -1,5 +1,6 @@
 import type { Locale } from '../../shared/locale.js';
 import type {
+  FileViewerState,
   ViewerHandle,
   ViewerViewModeOption,
 } from '@ark-design/ui/file-viewer/core';
@@ -31,6 +32,19 @@ export interface FilePreviewBodyProps {
   onLinkClick?: MarkdownAdapterOptions['onLinkClick'];
   /** 读取失败后退出编辑态。Leaves editing after a failed load. */
   onCancelEditing: () => void;
+  /** 底座加载状态变化时调用；过渡层用它判断新内容何时就绪。 */
+  /** Called when the base's load state changes; the transition uses it as the ready signal. */
+  onStateChange?: (state: FileViewerState) => void;
+  /**
+   * 是否向外上报句柄与视图模式。过渡期间后台那一层传 `false`，避免它覆盖屏幕上
+   * 那一层的句柄。
+   *
+   * Whether handles and view modes are reported outward. The background layer passes
+   * `false` during a transition so it cannot overwrite the visible layer's handle.
+   */
+  reports?: boolean;
+  /** 这一层自己的加载态开始与结束时调用。 Called when this layer's own loading starts and ends. */
+  onLoadingChange?: (loading: boolean) => void;
 }
 
 /**
@@ -51,6 +65,9 @@ export function FilePreviewBody({
   onViewModesChange,
   onLinkClick,
   onCancelEditing,
+  onStateChange,
+  reports = true,
+  onLoadingChange,
 }: FilePreviewBodyProps) {
   // `editFailed` 也要走编辑器分支：读取失败时 `editing` 与 `loadingEdit` 都是
   // false，只检查这两项会直接落回普通预览，用户看不到读取失败的提示。
@@ -109,6 +126,9 @@ export function FilePreviewBody({
         onHandleChange={onHandleChange}
         onViewModesChange={onViewModesChange}
         onLinkClick={onLinkClick}
+        onStateChange={onStateChange}
+        reports={reports}
+        onLoadingChange={onLoadingChange}
       />
     </FilePreviewImageFrame>
   );
