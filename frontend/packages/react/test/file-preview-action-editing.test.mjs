@@ -1,3 +1,4 @@
+import { waitForEditor } from './helpers/preview-editor-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { act, createElement as h } from 'react';
@@ -44,7 +45,8 @@ for (const fails of [false, true]) {
     try {
       await click(button('Run'));
       await click(button('Edit'));
-      assert.ok(document.querySelector('textarea'));
+      await waitForEditor(view.container);
+      assert.ok(document.querySelector('.cm-content'));
       await click(button('Cancel'));
       await click(button('Run'));
       assert.equal(calls, 1);

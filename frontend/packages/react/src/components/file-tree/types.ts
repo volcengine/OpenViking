@@ -604,13 +604,17 @@ export interface FileTreeProps extends Omit<
    */
   getRowAttributes?: (row: FileTreeRow) => HTMLAttributes<HTMLDivElement>;
   /**
-   * 渲染行尾的看板指示器。返回 `null` 时该行不显示指示器。内容与交互都由
-   * 宿主决定，包括点击行为与折叠时的数量角标。
-   * Renders the dashboard indicator at the end of a row. Returning `null` shows
-   * no indicator. Both the content and its interaction belong to the host,
-   * including the click behaviour and any collapsed-count badge.
+   * 渲染行尾标记，例如看板入口、状态角标或数量。返回 `null` 时该行不显示标记。
+   * 内容与交互都由宿主决定，包括点击行为。标记显示在行右端；行内已有层级、权限
+   * 等行尾标记时，它紧跟在这些标记之后。
+   *
+   * Renders a trailing marker at the end of a row, such as a board entry, a status
+   * badge or a count. Returning `null` shows no marker. Both the content and its
+   * interaction belong to the host, including the click behaviour. The marker sits
+   * at the right edge of the row; when the row also shows trailing markers such as
+   * the level or access, it follows them directly.
    */
-  renderDashboard?: (row: FileTreeEntryRow) => ReactNode;
+  renderRowTrailing?: (row: FileTreeEntryRow) => ReactNode;
   /**
    * 渲染文件行的行首图标，例如按扩展名区分的类型图标。返回 `null` 或省略时用
    * 内置的通用文件图标；目录行始终用内置的文件夹图标。
