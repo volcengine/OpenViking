@@ -8,7 +8,7 @@ import json
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional
 
-from openviking.models.model_error import ModelError, model_error_from_status
+from openviking.models.model_error import model_error_from_status
 
 
 def _convert_content_for_responses(content: Any) -> Any:
@@ -230,26 +230,6 @@ def _build_final_response_from_stream_events(
     )
 
 
-class CodexResponseError(ModelError):
-    """A structured Responses failure, with terminal token usage retained."""
-
-    def __init__(self, event_type: str, response: Any, model: str, event: Any = None):
-        provider_error = _item_get(response, "error")
-        code = _item_get(provider_error, "code") or _item_get(event, "code")
-        provider_message = _item_get(provider_error, "message") or _item_get(event, "message")
-        message = f"Codex stream ended with {event_type}; expected response.completed"
-        if provider_message:
-            message = f"{message}: {provider_message}"
-        classified = model_error_from_status(
-            None, message, provider="openai-codex", code=code if isinstance(code, str) else None
-        )
-        super().__init__(
-            classified.kind, message, provider=classified.provider, code=classified.code
-        )
-        self.response = response
-        self.usage = _build_chat_completion_like_response(response, model).usage
-
-
 class CodexCompletionsAdapter:
     def __init__(
         self,
@@ -294,9 +274,7 @@ class CodexCompletionsAdapter:
         collected_output_items: List[Any] = []
         collected_text_deltas: List[str] = []
         has_function_calls = False
-        completed_response = None
         terminal_event = None
-        terminal_type = "EOF"
         try:
             stream = client.responses.create(**response_kwargs, stream=True)
         except Exception as exc:
@@ -329,24 +307,33 @@ class CodexCompletionsAdapter:
                     "response.incomplete",
                     "error",
                 }:
-                    terminal_type = event_type
                     terminal_event = event
-                    completed_response = getattr(event, "response", None)
                     break
         finally:
             close = getattr(stream, "close", None)
             if callable(close):
                 close()
+        terminal_type = getattr(terminal_event, "type", "EOF")
+        completed_response = getattr(terminal_event, "response", None)
         status = getattr(completed_response, "status", None)
         if (
             terminal_type != "response.completed"
             or completed_response is None
             or status not in {None, "completed"}
         ):
-            error = CodexResponseError(terminal_type, completed_response, model, terminal_event)
             if self._on_failed_response is not None:
-                self._on_failed_response(error)
-            raise error
+                self._on_failed_response(
+                    _build_chat_completion_like_response(completed_response, model)
+                )
+            provider_error = _item_get(completed_response, "error") or terminal_event
+            code = _item_get(provider_error, "code") or _item_get(
+                _item_get(completed_response, "incomplete_details"), "reason"
+            )
+            detail = _item_get(provider_error, "message") or code
+            message = f"Codex stream ended with {terminal_type}; expected response.completed"
+            if detail:
+                message += f": {detail}"
+            raise model_error_from_status(None, message, provider="openai-codex", code=code)
         final_response = _build_final_response_from_stream_events(
             completed_response,
             collected_output_items,
