@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 import { FilePreview } from '@openviking/react/components/file-preview'
-import type { FileBrowserProps } from '@openviking/react/modules/file-browser'
+import type {
+  FileBrowserHandle,
+  FileBrowserProps,
+} from '@openviking/react/modules/file-browser'
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
@@ -12,7 +15,8 @@ import {
   waitFor,
 } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import type { ComponentType, PropsWithChildren } from 'react'
+import { useEffect, useImperativeHandle } from 'react'
+import type { ComponentType, PropsWithChildren, Ref } from 'react'
 import {
   afterAll,
   afterEach,
@@ -34,6 +38,8 @@ const mocks = vi.hoisted(() => ({
   agent: vi.fn(),
   console: vi.fn(),
   fetchFsStat: vi.fn(),
+  reveal: vi.fn(),
+  mountBrowser: vi.fn(),
   invalidateList: vi.fn(),
   invalidateAll: vi.fn(),
   navigate: vi.fn(),
@@ -103,7 +109,13 @@ vi.mock('#/features/workbench/resources/hooks/use-resource-upload', () => ({
 vi.mock(
   '#/features/workbench/filesystem/components/workbench-file-browser',
   () => ({
-    WorkbenchFileBrowser: (props: FileBrowserProps) => {
+    WorkbenchFileBrowser: (
+      props: FileBrowserProps & { ref?: Ref<FileBrowserHandle> },
+    ) => {
+      useImperativeHandle(props.ref, () => ({ openResource: mocks.reveal }))
+      useEffect(() => {
+        mocks.mountBrowser()
+      }, [])
       mocks.preview(props)
       return (
         <>
@@ -114,7 +126,11 @@ vi.mock(
               {
                 kind: 'file',
                 key: props.uri ?? 'empty',
-                source: { path: props.uri, fileName: 'preview.md', content: '' },
+                source: {
+                  path: props.uri,
+                  fileName: 'preview.md',
+                  content: '',
+                },
                 slots: { extraActions: props.previewSlots?.extraActions },
                 actions: (context) => {
                   const actionItems = props.previewSlots?.actionItems
@@ -245,6 +261,8 @@ describe('filesystem workbench', () => {
     mocks.console.mockReset().mockReturnValue(null)
     mocks.search = { file: firstFile, uri: parentDirectory }
     mocks.fetchFsStat.mockReset()
+    mocks.reveal.mockReset().mockResolvedValue(true)
+    mocks.mountBrowser.mockClear()
     mocks.invalidateList.mockReset().mockResolvedValue(undefined)
     mocks.invalidateAll.mockReset().mockResolvedValue(undefined)
     mocks.navigate.mockReset()
@@ -435,4 +453,32 @@ describe('filesystem workbench', () => {
     expect(mocks.console.mock.lastCall?.[0].conversation).toBeUndefined()
     expect(screen.queryByText('addResource.title')).toBeNull()
   })
+
+  it.each([
+    ['.abstract.md', 'l0'],
+    ['.overview.md', 'l1'],
+  ])(
+    'reveals the summary directory in the existing tree for %s',
+    async (name, level) => {
+      mocks.provider = 'volcengine'
+      mocks.fetchFsStat.mockResolvedValue({ isDir: true, name: 'deep' })
+      const directory = 'viking://resources/deep/'
+      renderFilesystem()
+      const { onOpenResource } = mocks.console.mock.lastCall![0]
+
+      await act(async () => onOpenResource(directory + name))
+
+      expect(mocks.fetchFsStat).toHaveBeenCalledExactlyOnceWith(directory, {
+        throwOnError: true,
+      })
+      expect(mocks.reveal).toHaveBeenCalledExactlyOnceWith(
+        directory.slice(0, -1),
+      )
+      expect(mocks.mountBrowser).toHaveBeenCalledTimes(1)
+      expect(mocks.preview.mock.lastCall?.[0]).toMatchObject({
+        uri: directory.slice(0, -1),
+        directoryLevel: { uri: directory.slice(0, -1), level },
+      })
+    },
+  )
 })

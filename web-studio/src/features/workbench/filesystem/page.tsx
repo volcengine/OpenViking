@@ -1,4 +1,5 @@
 import type { FilePreviewAction } from '@openviking/react/components/file-preview'
+import type { FileBrowserHandle } from '@openviking/react/modules/file-browser'
 import { StudioHeaderActions } from '#/app/layouts/studio-header-actions'
 import { useQueryClient } from '@tanstack/react-query'
 import styles from './workbench.module.css'
@@ -39,6 +40,7 @@ import { CompileForm } from '#/features/workbench/compile/components/compile-for
 import { AddResourceForm } from '#/features/workbench/resources/components/add-resource-page'
 import { FindPalette } from '#/features/workbench/resources/components/find-palette'
 import { WorkbenchFileBrowser } from './components/workbench-file-browser'
+import type { DirectoryLevelRequest } from './components/workbench-file-browser'
 import { SharedFilePreview } from './components/shared-file-preview'
 import {
   ResourceUploadProvider,
@@ -83,6 +85,7 @@ import {
   clampNumber,
   cleanVikingUri,
   createEntryFromUri,
+  directoryLevelFromUri,
   isDirectoryLevelFile,
   normalizeFilesystemResourceUri,
   readStoredNumber,
@@ -124,6 +127,8 @@ function FilesystemWorkbench() {
   )
   const selectedFileRef = useRef(selectedFile)
   selectedFileRef.current = selectedFile
+  const browserRef = useRef<FileBrowserHandle>(null)
+  const [directoryLevel, setDirectoryLevel] = useState<DirectoryLevelRequest>()
   const [activePanel, setActivePanel] = useState<FilesystemPanel>(
     provider === 'volcengine' ? 'terminal' : (search.panel ?? 'agent'),
   )
@@ -294,25 +299,36 @@ function FilesystemWorkbench() {
           ? normalizeDirUri(normalized)
           : normalizeDirUri(parentUri(normalized))
 
-        if (!confirmDocumentNavigation(normalized)) return
-        setCurrentUri(nextCurrentUri)
-        setSelectedFile({
-          ...stat,
-          isDir,
-          name: stat.name || fileNameFromUri(normalized),
-          uri: normalized,
-        })
-        syncSearch({
-          file: isDir ? undefined : normalized,
-          uri: nextCurrentUri,
-        })
-        if (expandPath) refreshBrowser()
+        const browserUri = normalizeFileUri(normalized)
+        const current = selectedFileRef.current
+        const isCurrent =
+          current && normalizeFileUri(current.uri) === browserUri
+        if (!isCurrent) {
+          if (!confirmDocumentNavigation(normalized)) return
+          const entry = {
+            ...stat,
+            isDir,
+            name: stat.name || fileNameFromUri(normalized),
+            uri: normalized,
+          }
+          selectedFileRef.current = entry
+          setCurrentUri(nextCurrentUri)
+          setSelectedFile(entry)
+          syncSearch({
+            file: isDir ? undefined : normalized,
+            uri: nextCurrentUri,
+          })
+        }
+        const level = directoryLevelFromUri(cleaned)
+        setDirectoryLevel(level ? { uri: browserUri, level } : undefined)
+        if (expandPath || level)
+          await browserRef.current?.openResource(browserUri)
       } catch (error) {
         if (version === navigationVersion.current)
           showErrorToast(error, t('readFailed', { uri: cleaned }))
       }
     },
-    [syncSearch, t, confirmDocumentNavigation, refreshBrowser],
+    [syncSearch, t, confirmDocumentNavigation],
   )
 
   const openExternalResource = useCallback(
@@ -582,6 +598,8 @@ function FilesystemWorkbench() {
       <div ref={layoutRef} className={styles.layout} style={layoutStyle}>
         <WorkbenchFileBrowser
           key={`${identityScopeKey}:${refreshKey}`}
+          ref={browserRef}
+          directoryLevel={directoryLevel}
           readOnly
           previewActions={{
             history: false,
@@ -611,7 +629,11 @@ function FilesystemWorkbench() {
           uri={normalizeFileUri(selectedUri)}
           defaultExpandedUri={normalizeFileUri(currentUri)}
           onUriChange={(uri) => {
-            if (uri && uri !== normalizeFileUri(selectedUri))
+            if (
+              uri &&
+              normalizeFileUri(uri) !==
+                normalizeFileUri(selectedFileRef.current?.uri ?? selectedUri)
+            )
               void revealResource(uri)
           }}
           onImportResources={

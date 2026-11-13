@@ -167,8 +167,14 @@ export function getAncestorUris(uri: string): string[] {
 }
 
 export function isDirectoryLevelFile(uri: string): boolean {
+  return directoryLevelFromUri(uri) !== undefined
+}
+
+export function directoryLevelFromUri(uri: string): 'l0' | 'l1' | undefined {
+  if (uri.endsWith('/')) return
   const name = fileNameFromUri(uri)
-  return name === '_abstract.md' || name === '_overview.md'
+  if (name === '.abstract.md' || name === '_abstract.md') return 'l0'
+  if (name === '.overview.md' || name === '_overview.md') return 'l1'
 }
 
 export function normalizeFilesystemResourceUri(uri: string): string {
