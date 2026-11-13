@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import TYPE_CHECKING
 
 from openviking.utils.path_safety import safe_join_viking_uri
+from openviking_cli.exceptions import OpenVikingError
 from vikingbot.compile import file_ops
 from vikingbot.compile.hashing import content_hash
 from vikingbot.compile.models import CompileFailure
-from vikingbot.compile.renderer import RenderedBundle, validate_relative_file_path
+from vikingbot.compile.renderer import (
+    RenderedBundle,
+    normalize_wiki_page_links,
+    validate_relative_file_path,
+    validate_wiki_page,
+    wiki_page_link_targets,
+)
 
 if TYPE_CHECKING:
     from vikingbot.compile.pipeline import Pipeline
@@ -51,9 +59,65 @@ async def run(runtime: Pipeline, references: list[str]) -> RenderedBundle:
             payload.decode("utf-8")
         if path.endswith(".json"):
             json.loads(payload)
+        if path.lower().endswith(".md") and runtime.output_format == "wiki":
+            validate_wiki_page(payload.decode("utf-8"), path)
         files[path] = payload
         revisions[path] = artifact["base_hash"]
         outputs[path] = {"source_refs": artifact["source_refs"]}
+    normalized_links = 0
+    if runtime.output_format == "wiki" and not runtime.skill_target:
+        known_paths = set(files) | {
+            path for path, content in runtime.old.items() if content is not None
+        }
+        checked = set(runtime.old) | set(known_paths)
+
+        async def exists(path):
+            if path not in checked:
+                try:
+                    entry = await runtime.client.stat(safe_join_viking_uri(runtime.target, path))
+                    if not entry.get("isDir"):
+                        known_paths.add(path)
+                except OpenVikingError as error:
+                    if error.code != "NOT_FOUND":
+                        raise
+                checked.add(path)
+            return path in known_paths
+
+        targets = {
+            pair
+            for path, payload in files.items()
+            if path.lower().endswith(".md")
+            for pair in wiki_page_link_targets(payload.decode("utf-8"), path)
+        }
+        concurrency = 8
+
+        async def check_paths(paths):
+            pending = sorted(set(paths) - checked)
+            for start in range(0, len(pending), concurrency):
+                # A failed/auth-denied check must finish its siblings before
+                # propagating; no background requests may outlive finalization.
+                results = await asyncio.gather(
+                    *(exists(path) for path in pending[start : start + concurrency]),
+                    return_exceptions=True,
+                )
+                for result in results:
+                    if isinstance(result, BaseException):
+                        raise result
+
+        await check_paths(relative for _, relative in targets)
+        await check_paths(
+            destination for destination, relative in targets if relative not in known_paths
+        )
+        for path, payload in files.items():
+            if path.lower().endswith(".md"):
+                text, count = normalize_wiki_page_links(
+                    payload.decode("utf-8"), path=path, known_paths=known_paths
+                )
+                if count:
+                    validate_wiki_page(text, path)
+                files[path] = text.encode("utf-8")
+                normalized_links += count
+        runtime.metrics["wiki_links_normalized"] += normalized_links
     if runtime.skill_target and files:
         file_ops.validate_skill_output(
             {path: file_ops.encode_content(raw)["content"] for path, raw in files.items()}
@@ -99,6 +163,7 @@ async def run(runtime: Pipeline, references: list[str]) -> RenderedBundle:
             "prepared_files": len(files),
             "outputs": outputs,
             "excluded": {},
+            "normalized_links": normalized_links,
         },
     )
     return rendered

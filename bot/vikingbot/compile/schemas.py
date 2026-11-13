@@ -54,6 +54,14 @@ def result_schema(schema, data):
         paths = [item["group"]["path"] for item in data["indexes"]]
         result["properties"]["files"].update(minItems=len(paths), maxItems=len(paths))
         result["$defs"]["FileDraft"]["properties"]["path"]["enum"] = paths
+    if issubclass(schema, FileResponse) and data.get("inputs"):
+        file = result["$defs"]["FileDraft"]
+        file["required"] = list(dict.fromkeys([*file["required"], "inputs"]))
+        file["properties"]["inputs"].update(
+            minItems=1,
+            uniqueItems=True,
+            items={"type": "string", "enum": [item["id"] for item in data["inputs"]]},
+        )
     if schema is RecordResponse and "record_fields" in data:
         record = result["$defs"]["RecordDraft"]
         properties = record["properties"]

@@ -92,7 +92,7 @@ async def run(runtime, sources, context):
             readers[read.name].execute = read_target
 
     async def validate(response):
-        """Check delivery structure, file bodies and revisions without validating input IDs."""
+        """Check delivery structure, file bodies, supporting IDs and revisions."""
         if response.needs_pipeline:
             if response.files:
                 raise ValueError("A pipeline request must not submit files")

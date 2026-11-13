@@ -31,9 +31,11 @@ from vikingbot.compile.models import (
     WikiLanguage,
 )
 
-_FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
+_FRONTMATTER_RE = re.compile(
+    r"\A---[ \t]*\r?\n(.*?)^---[ \t]*(?:\r?\n|\Z)", re.DOTALL | re.MULTILINE
+)
 _FRONTMATTER_START_RE = re.compile(rb"\A---[ \t]*\r?\n")
-_FRONTMATTER_END_RE = re.compile(rb"\r?\n---[ \t]*(?:\r?\n|\Z)")
+_FRONTMATTER_END_RE = re.compile(rb"(?m)^---[ \t]*(?:\r?\n|\Z)")
 _OKF_TYPE_DECLARATION_RE = re.compile(rb"""(?m)^(?:type|["']type["'])[ \t]*:""")
 _BARE_VIKING_URI_RE = re.compile(r"""viking://[^\s<>\[\](){}"'«»，。；：！？]+""")
 _LEADING_H1_RE = re.compile(r"\A(?:[ \t]*\r?\n)*#[ \t]+[^\r\n]*(?:\r?\n|\Z)")
@@ -78,6 +80,19 @@ def strip_okf_frontmatter(content: str) -> str:
 def has_unclosed_frontmatter(content: bytes) -> bool:
     opening = _FRONTMATTER_START_RE.match(content)
     return opening is not None and _FRONTMATTER_END_RE.search(content[opening.end() :]) is None
+
+
+def validate_wiki_page(content: str, path: str) -> None:
+    """Validate Wiki frontmatter and editable body before staging or publication."""
+    if has_unclosed_frontmatter(content.encode("utf-8")):
+        raise ValueError(f'Wiki page "{path}" has unterminated YAML frontmatter')
+    try:
+        _, body = _split_frontmatter(content)
+    except yaml.YAMLError as exc:
+        raise ValueError(f'Wiki page "{path}" has invalid YAML frontmatter') from exc
+    if not body.strip():
+        raise ValueError(f'Wiki page "{path}" requires a Markdown body after frontmatter')
+    validate_wiki_link_destinations(body)
 
 
 def validate_declared_okf_markdown(path: str, content: bytes) -> str | None:
@@ -279,13 +294,82 @@ def _body_markdown_links(body: str) -> list[MarkdownLink]:
     link_spans = {(link.start, link.end) for link in links}
     protected = [s for s in LinkRenderer.protected_markdown_spans(body) if s not in link_spans]
     protected.extend((m.start(), m.end()) for m in re.finditer(r"<!--.*?-->", body, re.DOTALL))
-    protected.extend((m.start(), m.end()) for m in re.finditer(r"(?m)^(?: {4}|\t)[^\n]*", body))
     return [
         link
         for link in links
         if not (link.start > 0 and body[link.start - 1] == "!")
         and not any(link.start < end and link.end > start for start, end in protected)
     ]
+
+
+def validate_wiki_link_destinations(body: str) -> None:
+    """Reject bare whitespace destinations while retaining valid titles and code examples."""
+    for link in _body_markdown_links(body):
+        target = link.target
+        if target.startswith("<") and target.endswith(">"):
+            continue
+        if re.search(r"[ \t\r\n\f]", target):
+            raise ValueError(
+                f"Markdown link destination has unescaped whitespace: {target!r}. "
+                "Encode spaces as %20 or wrap the destination in <...>."
+            )
+
+
+def _local_wiki_links(content: str, path: str):
+    directory = posixpath.dirname(path) or "."
+    frontmatter = _FRONTMATTER_RE.match(content)
+    offset = frontmatter.end() if frontmatter else 0
+    for link in _body_markdown_links(content[offset:]):
+        link = MarkdownLink(link.start + offset, link.end + offset, link.text, link.target)
+        target = link.target
+        angle = target.startswith("<") and target.endswith(">")
+        bare = target[1:-1] if angle else target
+        if not bare or bare.startswith(("/", "#", "?")) or re.match(r"^[A-Za-z][\w+.-]*:", bare):
+            continue
+        separator = re.search(r"[?#]", bare)
+        raw_path = bare[: separator.start()] if separator else bare
+        suffix = bare[separator.start() :] if separator else ""
+        destination = LinkRenderer.normalize_markdown_target(raw_path)
+        relative = posixpath.normpath(posixpath.join(directory, destination))
+        if destination in {".", ".."} or destination.startswith("../"):
+            continue
+        yield link, angle, suffix, destination, relative
+
+
+def wiki_page_link_targets(content: str, path: str) -> set[tuple[str, str]]:
+    """Return root/page-relative candidates to check against the actual target namespace."""
+    return {
+        (destination, relative)
+        for _, _, _, destination, relative in _local_wiki_links(content, path)
+        if destination != relative
+    }
+
+
+def normalize_wiki_page_links(content: str, *, path: str, known_paths: set[str]) -> tuple[str, int]:
+    """Repair verified root-relative links while preserving valid page-relative meaning.
+
+    Callers resolve candidate paths against existing targets as well as new files;
+    absence from a partial catalog does not prove a destination is missing.
+    Unknown destinations and external evidence stay as-is.
+    """
+    edits = []
+    directory = posixpath.dirname(path) or "."
+    for link, angle, suffix, destination, relative in _local_wiki_links(content, path):
+        if relative in known_paths or destination not in known_paths:
+            continue
+        replacement = (
+            LinkRenderer.encode_markdown_target(posixpath.relpath(destination, directory)) + suffix
+        )
+        target = link.target
+        if angle:
+            replacement = "<" + replacement + ">"
+        # Change only the destination, retaining label, optional title and whitespace.
+        start = content.find(target, link.start + len(link.text) + 3, link.end)
+        if start >= 0:
+            edits.append((start, start + len(target), replacement))
+    for start, end, replacement in reversed(edits):
+        content = content[:start] + replacement + content[end:]
+    return content, len(edits)
 
 
 def _link_uri(target: str, source_uri: str) -> str:
