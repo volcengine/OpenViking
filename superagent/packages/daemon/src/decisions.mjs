@@ -38,10 +38,8 @@ export function warnIfStagedRepliesInert(config, runtime, logger) {
 // one. Non-chat events (mail) stay optional: each is its own subject scope and
 // one owner notice may rightly cover several, so a mail without its own
 // decision is not reliably a miss, and nobody is waiting in a conversation.
-// Recalls and reactions mostly need nothing, so they are optional too.
 function expected(row) {
-  return Boolean(row.chatId) && Boolean(row.kind?.startsWith('message.'))
-    && row.kind !== 'message.recalled' && !row.kind.startsWith('message.reaction.');
+  return Boolean(row.chatId) && Boolean(row.kind?.startsWith('message.'));
 }
 
 // Turn-end check that every input a successful turn consumed ended in a
