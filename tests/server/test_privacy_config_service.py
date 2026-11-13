@@ -105,6 +105,17 @@ async def test_patch_values_preserves_snapshot_history():
 
 
 @pytest.mark.asyncio
+async def test_credential_revision_tracks_only_credentials():
+    privacy = UserPrivacyConfigService(_MemoryPrivacyStorage())
+    ctx = RequestContext(user=UserIdentifier.the_default_user("privacy_revision"), role=Role.ROOT)
+
+    await privacy.patch_values(ctx, "session", "demo", {"key": "session-value"})
+    assert privacy.credential_revision(ctx) == 0
+    await privacy.patch_values(ctx, "credential", "demo", {"key": "credential-value"})
+    assert privacy.credential_revision(ctx) == 1
+
+
+@pytest.mark.asyncio
 async def test_privacy_config_service_versions(service):
     ctx = RequestContext(user=UserIdentifier.the_default_user("privacy_user"), role=Role.ROOT)
     await service.initialize_user_directories(ctx)

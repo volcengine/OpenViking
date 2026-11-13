@@ -190,11 +190,24 @@ class PrivacySanitizer:
         settings: ResolvedPrivacyConfig | None = None,
     ) -> PrivacySanitizationResult:
         """Replace registered values in an explicitly selected document."""
-        if not content or self._is_privacy_storage_uri(uri, ctx):
+        if (
+            not content
+            or self._is_privacy_storage_uri(uri, ctx)
+            or PrivacyContent.is_skill_metadata(uri)
+        ):
             return PrivacySanitizationResult(content=content)
         if settings is None:
             settings = await self._privacy.get_settings(ctx)
         if settings.mode == "off":
+            return PrivacySanitizationResult(content=content)
+        effective_max_replacements = (
+            self._max_replacements if max_replacements is None else max_replacements
+        )
+        if effective_max_replacements <= 0:
+            raise ValueError("max_replacements must be positive")
+        scope = self.scope_from_uri(uri, ctx)
+        matcher = await self._matcher(ctx, scope=scope, settings=settings)
+        if not matcher.has_values:
             return PrivacySanitizationResult(content=content)
         content_bytes = len(content.encode("utf-8"))
         if content_bytes > self._max_content_bytes:
@@ -206,17 +219,6 @@ class PrivacySanitizer:
                     "max_bytes": self._max_content_bytes,
                 },
             )
-        if PrivacyContent.is_skill_metadata(uri):
-            return PrivacySanitizationResult(content=content)
-        scope = self.scope_from_uri(uri, ctx)
-        matcher = await self._matcher(ctx, scope=scope, settings=settings)
-        effective_max_replacements = (
-            self._max_replacements if max_replacements is None else max_replacements
-        )
-        if effective_max_replacements <= 0:
-            raise ValueError("max_replacements must be positive")
-        if not matcher.has_values:
-            return PrivacySanitizationResult(content=content)
         return await asyncio.to_thread(
             self._sanitize_content,
             content,
@@ -375,7 +377,7 @@ class PrivacySanitizer:
             (
                 ctx.account_id,
                 ctx.user.user_id,
-                self._privacy.catalog_revision(ctx),
+                self._privacy.credential_revision(ctx),
                 settings_hash,
                 scope,
                 current.version if current else 0,
