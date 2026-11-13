@@ -661,20 +661,20 @@ async def test_hints_name_the_sessions_that_hold_earlier_history(setup_kernel, c
     await prepare(kernel, "chat", messages, credential, policy)
     assert await worker.once()
     # The client compacts its own history: the new history's opening block points
-    # to the session that holds the old one.
+    # to the session that holds the old one, which a named session keeps.
     messages = [{"role": "user", "content": "Summary of our deploy work. Continue."}]
     fresh = await prepare(kernel, "chat", messages, credential, policy)
-    assert fresh.capture_target != first.capture_target
+    assert fresh.capture_target == first.capture_target
     tools = fresh.root["tools"]
     hint = history_hint("alice", [first.capture_target], tools, True)
     assert hint and hint in opening_block(fresh.records, fresh.chain)
-    # A gateway cut names the current session first: the replaced part is queued for it.
+    # A gateway cut names the current session: the replaced part is queued for it.
     await answered(kernel, fresh, credential, reply)
     messages += [reply, {"role": "user", "content": "Next?"}]
     second = await prepare(
         kernel, "chat", messages, credential, policy, summarize=Summarizer("chat")
     )
-    hint = history_hint("alice", [fresh.capture_target, first.capture_target], tools, True)
+    hint = history_hint("alice", [first.capture_target], tools, True)
     summary_block = second.body["messages"][0]["content"].split("</openviking-context>")[0]
     assert summary_block.endswith("\n\n" + hint + "\n")
 

@@ -8,6 +8,7 @@ from test_review_regressions import history, prepare, worker_for
 
 from openviking_gateway.blocks import history_hint
 from openviking_gateway.capture import (
+    MAX_CONFIRMED,
     CapturePipeline,
     lineage,
     new_capture,
@@ -62,8 +63,9 @@ def answer(text):
 class Conversation:
     """One client session driven through the kernel the way a client sends it."""
 
-    def __init__(self, setup, credential, policy, protocol="chat", messages=None):
+    def __init__(self, setup, credential, policy, protocol="chat", messages=None, header=True):
         self.kernel, self.store = setup[0], setup[1]
+        self.headers = {"x-openviking-session": "cut"} if header else {}
         self.credential, self.policy, self.protocol = credential, policy, protocol
         self.messages = messages or [*history(1), {"role": "user", "content": "Fix the build"}]
 
@@ -77,7 +79,7 @@ class Conversation:
         return await self.kernel.prepare(
             body,
             self.protocol,
-            {"x-openviking-session": "cut"},
+            self.headers,
             self.credential,
             {"id": "upstream"},
             self.policy,
@@ -270,21 +272,23 @@ async def test_idle_tail_that_gains_its_tool_result_in_flight_is_delivered_again
     assert_once(viking)
 
 
-async def test_only_a_due_tail_moves_a_changed_history_to_a_new_session(
-    setup_kernel, credential, policy
-):
+async def test_regenerating_an_answer_keeps_a_named_session(setup_kernel, credential, policy):
+    _, store, viking, encryption = setup_kernel
     policy.update(recall=False)
     chat = Conversation(setup_kernel, credential, policy)
     first = await chat.reply([answer("Answer A")])
-    # Regenerating an answer that is not due for saving keeps the session.
+    # Regenerating an answer that is not due for saving replaces it.
     chat.messages.pop()
     assert (await chat.prepare()).capture_target == first.capture_target
     await chat.reply([answer("Answer B")])
-    # The worker may already be writing a due answer, so changing it starts over.
-    await make_due(setup_kernel[1])
+    # One the worker may already be writing is kept, and the new one follows it.
+    await make_due(store)
     chat.messages.pop()
-    assert (await chat.prepare()).capture_target != first.capture_target
-    assert (await chat.state(first))["reason"] == "history_changed"
+    assert (await chat.prepare()).capture_target == first.capture_target
+    assert (await chat.state(first))["reason"] == ""
+    await chat.reply([answer("Answer C")])
+    await drain(store, await worker_for(store, encryption, credential, viking))
+    assert sent(viking) == {first.capture_target: [*TURN, "Answer B", "Answer C"]}
 
 
 @pytest.mark.parametrize("cut", [False, True])
@@ -319,7 +323,7 @@ async def test_extending_a_turn_delivered_while_idle_starts_a_new_session(
 
 
 @pytest.mark.parametrize("change", ["edit", "regenerate"])
-async def test_cut_then_changed_history_moves_to_a_linked_session(
+async def test_cut_then_changed_history_stays_in_the_named_session(
     setup_kernel, credential, policy, change
 ):
     _, store, viking, encryption = setup_kernel
@@ -341,19 +345,20 @@ async def test_cut_then_changed_history_moves_to_a_linked_session(
     else:
         chat.messages = chat.messages[:3]
     revised = await chat.reply([answer("Done differently")])
-    assert revised.capture_target != first.capture_target
+    assert revised.capture_target == first.capture_target
     before = await store.capture.get(first.scope, first.session)
     await CapturePipeline(store.capture).confirm_cut(stale, stale.capture_chain[-1])
     assert (await store.capture.get(first.scope, first.session)).version == before.version
     await chat.say("Thanks")
     assert await worker.once()
+    # The session keeps the abandoned attempt, including its queued step; an edited
+    # first message is not resent, but the user message after it is.
+    edited = ["Question 0, corrected", "Answer 0", "Fix the build"] if change == "edit" else []
     assert sent(viking) == {
-        first.capture_target: [*TURN, "Step 0", "call-0"],
-        revised.capture_target: [chat.messages[0]["content"], *TURN[1:], "Done differently"],
+        first.capture_target: [*TURN, "Step 0", "call-0", "Step 1", *edited, "Done differently"]
     }
-    assert_once(viking)
     state = await chat.state(first)
-    assert lineage(state) == [revised.capture_target, first.capture_target]
+    assert lineage(state) == [first.capture_target]
 
 
 @pytest.mark.parametrize("case", ["capture_off", "disabled", "already_delivered", "superseded"])
@@ -550,3 +555,435 @@ async def test_delivery_401_keeps_key_when_health_accepts_it(setup_kernel, crede
     assert state["error"]["reason"] == "openviking_http_401"
     assert state["error"]["retry_at"] is not None
     worker.management.close()
+
+
+SUMMARY = "This session is being continued from a previous conversation. Fix the build."
+BEFORE = [*TURN, "Step 0", "call-0", "Step 1"]
+# The client's summary, the latest step it kept, and the reply.
+AFTER = [SUMMARY, "Step 1", "call-1", "Done"]
+LEADS = {
+    "chat": {"role": "system", "content": "Be brief."},
+    "responses": {"role": "developer", "content": "Be brief."},
+}
+
+
+async def compact_mid_turn(chat, worker, keep_first=False):
+    """A tool loop the client compacts: its summary follows the instructions, which carry
+    no anchor, and the first user message if kept; the last step stays."""
+    lead = [m for m in chat.messages[:1] if m.get("role") in {"system", "developer"}]
+    lead = chat.messages[: len(lead) + keep_first]
+    protocol = chat.protocol
+    first = await chat.reply(call(protocol, 0))
+    assert await worker.once()  # The confirmed history is delivered at once.
+    chat.messages.append(result(protocol, 0))
+    await chat.reply(call(protocol, 1))
+    summary = {"role": "user", "content": SUMMARY}
+    chat.messages = [*lead, summary, *call(protocol, 1), result(protocol, 1)]
+    return first
+
+
+async def drain(store, worker):
+    await make_due(store)
+    while await worker.once():
+        pass
+
+
+@pytest.mark.parametrize(
+    "then, lead, keep_first",
+    [
+        ("next_message", "chat", False),
+        ("session_ends", "responses", False),
+    ],
+)
+async def test_mid_turn_client_compaction_keeps_the_named_session(
+    setup_kernel, credential, policy, then, lead, keep_first
+):
+    _, store, viking, encryption = setup_kernel
+    policy.update(recall=False, commit_tokens=1000000)
+    protocol = lead or "chat"
+    messages = [*history(1), {"role": "user", "content": "Fix the build"}]
+    chat = Conversation(
+        setup_kernel, credential, policy, protocol, [*([LEADS[lead]] if lead else []), *messages]
+    )
+    worker = await worker_for(store, encryption, credential, viking)
+    first = await compact_mid_turn(chat, worker, keep_first)
+    after = await chat.reply([answer("Done")])
+    assert after.capture_target == first.capture_target
+    assert await worker.once()  # What was queued before the compaction is due at once.
+    # A kept user message the session cannot prove it holds is saved again.
+    kept = ["Question 0"] if keep_first else []
+    assert sent(viking) == {first.capture_target: [*BEFORE, *kept]}
+    tail = []
+    if then == "next_message":  # Within the idle window.
+        chat.messages.append({"role": "user", "content": "Thanks"})
+        later = await chat.reply([answer("Welcome")])
+        assert later.capture_target == first.capture_target
+        tail = ["Thanks", "Welcome"]
+    await drain(store, worker)
+    assert sent(viking) == {first.capture_target: [*BEFORE, *kept, *AFTER, *tail]}
+    if not keep_first:
+        assert_once(viking)
+
+
+async def test_mid_turn_client_compaction_without_a_header_starts_a_new_session(
+    setup_kernel, credential, policy
+):
+    _, store, viking, encryption = setup_kernel
+    policy.update(recall=False, commit_tokens=1000000)
+    chat = Conversation(setup_kernel, credential, policy, header=False)
+    worker = await worker_for(store, encryption, credential, viking)
+    first = await compact_mid_turn(chat, worker)
+    after = await chat.reply([answer("Done")])
+    assert after.session != first.session
+    await drain(store, worker)
+    assert sent(viking) == {first.capture_target: BEFORE}
+    # The new session's first request is a tool step, so it is saved from the next message.
+    chat.messages.append({"role": "user", "content": "Thanks"})
+    later = await chat.reply([answer("Welcome")])
+    assert later.session == after.session
+    await drain(store, worker)
+    assert sent(viking) == {
+        first.capture_target: BEFORE,
+        later.capture_target: [*AFTER, "Thanks", "Welcome"],
+    }
+
+
+@pytest.mark.parametrize("failure", [False, True])
+async def test_mid_turn_client_compaction_during_delivery_loses_nothing(
+    setup_kernel, credential, policy, failure
+):
+    from openviking_gateway.client import VikingError
+
+    _, store, viking, encryption = setup_kernel
+    policy.update(recall=False, commit_tokens=1000000)
+    chat = Conversation(setup_kernel, credential, policy)
+    worker = await worker_for(store, encryption, credential, viking)
+    first = await compact_mid_turn(chat, worker)
+    await make_due(store)  # The worker writes the idle tail while the client compacts.
+
+    async def compact():
+        await chat.reply(call("chat", 2))
+
+    await while_delivering(worker, viking, compact)
+    chat.messages.append(result("chat", 2))
+    await chat.reply([answer("Done")])
+    chat.messages.append({"role": "user", "content": "Thanks"})
+    later = await chat.reply([answer("Welcome")])
+    assert later.capture_target == first.capture_target
+    if failure:
+        write = viking.write
+
+        async def failing(*args):
+            viking.write = write
+            raise VikingError("openviking_http_503", 503)
+
+        viking.write = failing
+        assert await worker.once()
+        assert (await chat.state(first))["error"]["reason"] == "openviking_http_503"
+    await drain(store, worker)
+    steps = [SUMMARY, "Step 1", "call-1", "Step 2", "call-2", "Done", "Thanks", "Welcome"]
+    assert sent(viking) == {first.capture_target: [*BEFORE, *steps]}
+    assert_once(viking)
+
+
+@pytest.mark.parametrize("case", ["in_flight", "sent_late", "regenerated", "across_compaction"])
+async def test_a_continuation_of_an_abandoned_history_leaves_the_capture_alone(
+    setup_kernel, credential, policy, case
+):
+    _, store, viking, encryption = setup_kernel
+    policy.update(recall=False, commit_tokens=1000000)
+    chat = Conversation(setup_kernel, credential, policy)
+    worker = await worker_for(store, encryption, credential, viking)
+    first = await chat.reply(call("chat", 0))
+    assert await worker.once()
+    chat.messages.append(result("chat", 0))
+    if case == "regenerated":  # Saved steps the regenerated history lacks.
+        await chat.reply(call("chat", 1), cut=True)
+        assert await worker.once()
+        chat.messages.append(result("chat", 1))
+    abandoned = [*chat.messages]
+    stale = None if case == "sent_late" else await chat.prepare()
+    if case == "across_compaction":
+        chat.messages = [{"role": "user", "content": SUMMARY}, *chat.messages[3:]]
+        live = await chat.reply([answer("Done")])
+        expected = [*TURN, "Step 0", SUMMARY, "Step 0", "call-0", "Done"]
+    elif case == "regenerated":
+        chat.messages = chat.messages[:3]
+        live = await chat.reply([answer("Done differently")])
+        expected = [*TURN, "Step 0", "call-0", "Step 1", "Done differently"]
+    else:
+        chat.messages.append({"role": "user", "content": "Do something else"})
+        live = await chat.reply([answer("Other done")])
+        expected = [*TURN, "Step 0", "call-0", "Do something else", "Other done"]
+    if stale is None:
+        live_messages, chat.messages = chat.messages, abandoned
+        stale = await chat.prepare()
+        chat.messages = live_messages
+    before = await store.capture.get(live.scope, live.session)
+    response = ResponseCapture("chat", answer("Stale done"), complete=True)
+    await chat.kernel.completed(stale, credential, response)
+    assert await store.capture.get(live.scope, live.session) == before
+    await drain(store, worker)
+    assert sent(viking) == {first.capture_target: expected}
+
+
+async def test_clearing_an_old_tool_result_mid_turn_keeps_the_turn(
+    setup_kernel, credential, policy
+):
+    _, store, viking, encryption = setup_kernel
+    policy.update(recall=False, commit_tokens=1000000)
+    earlier = [{"role": "user", "content": "Question 0"}, *call("chat", 9), result("chat", 9)]
+    messages = [*earlier, answer("Answer 0"), {"role": "user", "content": "Fix the build"}]
+    chat = Conversation(setup_kernel, credential, policy, messages=messages)
+    worker = await worker_for(store, encryption, credential, viking)
+    first = await chat.reply(call("chat", 0))
+    assert await worker.once()
+    chat.messages.append(result("chat", 0))
+    await chat.reply(call("chat", 1))
+    chat.messages[2] = {**chat.messages[2], "content": "[Old tool result content cleared]"}
+    chat.messages.append(result("chat", 1))
+    after = await chat.reply([answer("Done")])
+    assert after.capture_target == first.capture_target
+    await drain(store, worker)
+    # The session proves none of the rewritten history, so all of it is saved again.
+    turn = ["Question 0", "Step 9", "call-9", "Answer 0", "Fix the build", "Step 0", "call-0"]
+    assert sent(viking) == {
+        first.capture_target: [*turn, "Step 1", *turn, "Step 1", "call-1", "Done"]
+    }
+
+
+async def test_editing_the_last_message_keeps_its_queued_attempt(setup_kernel, credential, policy):
+    _, store, viking, encryption = setup_kernel
+    policy.update(recall=False, commit_tokens=1000000)
+    chat = Conversation(setup_kernel, credential, policy)
+    worker = await worker_for(store, encryption, credential, viking)
+    first = await chat.reply(call("chat", 0))
+    chat.messages = [*chat.messages[:2], {"role": "user", "content": "Fix the tests"}]
+    edited = await chat.reply([answer("Fixed")])
+    assert edited.capture_target == first.capture_target
+    await drain(store, worker)
+    # What was queued happened: the attempt the user edited away is saved too.
+    expected = [*TURN, "Step 0", "Fix the tests", "Fixed"]
+    assert sent(viking) == {first.capture_target: expected}
+
+
+async def test_a_stale_step_older_than_the_confirmed_list_is_taken_as_a_rewrite(
+    setup_kernel, credential, policy
+):
+    _, store, viking, encryption = setup_kernel
+    policy.update(recall=False, commit_tokens=1000000)
+    chat = Conversation(setup_kernel, credential, policy)
+    worker = await worker_for(store, encryption, credential, viking)
+    first = await chat.reply(call("chat", 0))
+    stale_history = [*chat.messages, result("chat", 0)]
+    for turn in range(MAX_CONFIRMED):
+        chat.messages.append({"role": "user", "content": f"Turn {turn}"})
+        await chat.reply([answer(f"Reply {turn}")])
+    live = [*chat.messages]
+    chat.messages = stale_history
+    stale = await chat.reply([answer("Stale done")])
+    chat.messages = [*live, {"role": "user", "content": "Last"}]
+    await chat.reply([answer("Bye")])
+    assert stale.capture_target == first.capture_target
+    await drain(store, worker)
+    # The live history replaces the stale reply, and everything after the point the stale
+    # step realigned to is saved again: nothing is lost, the later turns are duplicated.
+    turns = [x for turn in range(MAX_CONFIRMED) for x in (f"Turn {turn}", f"Reply {turn}")]
+    since = ["Step 0", *turns]
+    again = ["Fix the build", *since]
+    assert sent(viking) == {first.capture_target: [*TURN, *since, *again, "Last", "Bye"]}
+
+
+async def test_a_capture_saved_before_the_confirmed_list_detects_a_compaction(
+    setup_kernel, credential, policy
+):
+    _, store, viking, encryption = setup_kernel
+    policy.update(recall=False, commit_tokens=1000000)
+    chat = Conversation(setup_kernel, credential, policy)
+    worker = await worker_for(store, encryption, credential, viking)
+    first = await compact_mid_turn(chat, worker)
+    # As the released gateway saved it: without the list of confirmed user messages.
+    old = await store.capture.get(first.scope, first.session)
+    value = {k: v for k, v in old.value.items() if k != "confirmed"}
+    assert await store.capture.swap(first.scope, first.session, old, value, None)
+    after = await chat.reply([answer("Done")])
+    assert after.capture_target == first.capture_target
+    await drain(store, worker)
+    assert sent(viking) == {first.capture_target: [*BEFORE, *AFTER]}
+
+
+@pytest.mark.parametrize("protocol", ["chat", "responses"])
+@pytest.mark.parametrize("change", ["cleared", "compacted"])
+async def test_instructions_before_a_new_message_do_not_resend_the_history(
+    setup_kernel, credential, policy, protocol, change
+):
+    _, store, viking, encryption = setup_kernel
+    policy.update(recall=False, commit_tokens=1000000)
+    chat = Conversation(setup_kernel, credential, policy, protocol)
+    worker = await worker_for(store, encryption, credential, viking)
+    first = await chat.reply(call(protocol, 0))
+    chat.messages.append(result(protocol, 0))
+    await chat.reply([answer("Done")])
+    await chat.say("Thanks")
+    await drain(store, worker)
+    saved = [*TURN, "Step 0", "call-0", "Done"]
+    assert sent(viking) == {first.capture_target: saved}
+    note = {"role": "developer" if protocol == "responses" else "system", "content": "Note"}
+    if change == "cleared":  # A client clears an old tool result.
+        index = chat.messages.index(result(protocol, 0))
+        key = "output" if protocol == "responses" else "content"
+        chat.messages[index] = {**chat.messages[index], key: "[cleared]"}
+        # The session saves again what follows the last user message it knows.
+        again = ["Step 0", "call-0", "Done", "Thanks"]
+    else:
+        chat.messages = [{"role": "user", "content": SUMMARY}]
+        again = [SUMMARY]
+    chat.messages.append(note)  # Codex sends instructions before a user message.
+    await chat.say("Next")
+    later = await chat.reply([answer("Fine")])
+    assert later.capture_target == first.capture_target
+    await drain(store, worker)
+    assert sent(viking) == {first.capture_target: [*saved, *again, "Next", "Fine"]}
+
+
+@pytest.mark.parametrize("shape", ["side_question", "alternating"])
+async def test_another_history_under_the_same_header_loses_nothing(
+    setup_kernel, credential, policy, shape
+):
+    _, store, viking, encryption = setup_kernel
+    policy.update(recall=False, commit_tokens=1000000)
+    main = Conversation(
+        setup_kernel, credential, policy, messages=[{"role": "user", "content": "Main task"}]
+    )
+    other = Conversation(
+        setup_kernel, credential, policy, messages=[{"role": "user", "content": "Other task"}]
+    )
+    worker = await worker_for(store, encryption, credential, viking)
+    first = await main.reply(call("chat", 0))
+    main.messages.append(result("chat", 0))
+    if shape == "side_question":  # Such as /btw, sent with the main history.
+        other.messages = [*main.messages, {"role": "user", "content": "btw what is X?"}]
+        await other.reply([answer("X is Y")])
+    else:
+        await other.reply([answer("Other done")])
+    await main.reply(call("chat", 1))
+    if shape == "alternating":
+        other.messages.append({"role": "user", "content": "Other next"})
+        await other.reply([answer("Other next done")])
+    main.messages.append(result("chat", 1))
+    last = await main.reply([answer("Main done")])
+    main.messages.append({"role": "user", "content": "Next"})
+    await main.reply([answer("Next done")])
+    await drain(store, worker)
+    assert last.capture_target == first.capture_target
+    rest = ["Step 1", "call-1", "Main done", "Next", "Next done"]
+    if shape == "side_question":
+        expected = ["Main task", "Step 0", "call-0", "btw what is X?", "X is Y", *rest]
+    else:  # The other history's turns come between; the step they interrupted is saved again.
+        other = ["Other task", "Other done", "Other next", "Other next done"]
+        expected = ["Main task", "Step 0", *other, "Step 0", "call-0", *rest]
+    assert sent(viking) == {first.capture_target: expected}
+
+
+async def test_compaction_before_delivery_keeps_the_confirmed_turn(
+    setup_kernel, credential, policy
+):
+    _, store, viking, encryption = setup_kernel
+    policy.update(recall=False, commit_tokens=1000000)
+    chat = Conversation(setup_kernel, credential, policy)
+    worker = await worker_for(store, encryption, credential, viking)
+    first = await chat.reply([answer("Done")])
+    await chat.say("Thanks")
+    chat.messages = [{"role": "user", "content": SUMMARY}, {"role": "user", "content": "Go on"}]
+    after = await chat.reply([answer("Went on")])
+    await drain(store, worker)
+    assert after.capture_target == first.capture_target
+    assert sent(viking) == {first.capture_target: [*TURN, "Done", SUMMARY, "Go on", "Went on"]}
+
+
+@pytest.mark.parametrize(
+    "main_request", ["step_late", "answer_late", "failed", "regenerate_failed", "regenerate_late"]
+)
+async def test_a_user_message_never_queued_is_saved_after_another_history(
+    setup_kernel, credential, policy, main_request
+):
+    _, store, viking, encryption = setup_kernel
+    policy.update(recall=False, commit_tokens=1000000)
+    main = Conversation(
+        setup_kernel, credential, policy, messages=[{"role": "user", "content": "Main task"}]
+    )
+    other = Conversation(
+        setup_kernel, credential, policy, messages=[{"role": "user", "content": "Other task"}]
+    )
+    worker = await worker_for(store, encryption, credential, viking)
+    if main_request.startswith("regenerate"):
+        await main.reply([answer("Answer 1")])
+        main.messages.pop()  # The user regenerates the answer.
+    pending = await main.prepare()  # Its reply comes after the other history's turn, or never.
+    await other.reply([answer("Other done")])
+    late = {"step_late": call("chat", 0), "answer_late": [answer("Main done")]}
+    late["regenerate_late"] = [answer("Main done")]
+    if main_request in late:
+        response = ResponseCapture("chat", late[main_request][-1], complete=True)
+        await main.kernel.completed(pending, credential, response)
+        main.messages.extend(late[main_request])
+    if main_request == "step_late":
+        main.messages.append(result("chat", 0))
+    if main_request not in ("answer_late", "regenerate_late"):  # A tool step, or a retry.
+        await main.reply([answer("Main done")])
+    main.messages.append({"role": "user", "content": "Next"})
+    await main.reply([answer("Next done")])
+    await drain(store, worker)
+    steps = ["Step 0", "call-0"] if main_request == "step_late" else []
+    mine = ["Main task", *steps, "Main done", "Next", "Next done"]
+    assert list(sent(viking).values()) == [["Other task", "Other done", *mine]]
+
+
+@pytest.mark.parametrize("change", ["compacted_keeping_a_step", "compacted", "edited"])
+async def test_a_realigned_turn_written_while_a_reply_is_queued_is_written_once(
+    setup_kernel, credential, policy, change
+):
+    _, store, viking, encryption = setup_kernel
+    policy.update(recall=False, commit_tokens=1000000)
+    chat = Conversation(setup_kernel, credential, policy)
+    worker = await worker_for(store, encryption, credential, viking)
+    first = await chat.reply(call("chat", 0))
+    assert await worker.once()  # Question 0 and Answer 0 are saved.
+    chat.messages.append(result("chat", 0))
+    await chat.reply(call("chat", 1))
+    if change == "compacted_keeping_a_step":
+        chat.messages = [{"role": "user", "content": SUMMARY}, *call("chat", 1), result("chat", 1)]
+    elif change == "compacted":
+        chat.messages = [{"role": "user", "content": SUMMARY}]
+    else:
+        chat.messages = [*chat.messages[:2], {"role": "user", "content": "Fix the tests"}]
+    request = await chat.prepare()  # Realigns: the queued turn is due at once.
+
+    async def reply():
+        response = ResponseCapture("chat", answer("Done"), complete=True)
+        await chat.kernel.completed(request, credential, response)
+
+    await while_delivering(worker, viking, reply)
+    await drain(store, worker)
+    assert_once(viking)
+    assert request.capture_target == first.capture_target
+
+
+async def test_tool_steps_do_not_crowd_the_queued_user_messages_out(
+    setup_kernel, credential, policy
+):
+    _, store, viking, encryption = setup_kernel
+    policy.update(recall=False, commit_tokens=1000000)
+    chat = Conversation(setup_kernel, credential, policy)
+    first = await chat.reply(call("chat", 0))
+    stale_history = [*chat.messages, result("chat", 0)]
+    for turn in range(1, MAX_CONFIRMED):  # Each turn queues its user message twice.
+        chat.messages.append({"role": "user", "content": f"Turn {turn}"})
+        await chat.reply(call("chat", turn))
+        chat.messages.append(result("chat", turn))
+        await chat.reply([answer(f"Reply {turn}")])
+    before = await store.capture.get(first.scope, first.session)
+    chat.messages = stale_history
+    stale = await chat.reply([answer("Stale done")])
+    assert stale.kind == "continuation"
+    assert await store.capture.get(first.scope, first.session) == before

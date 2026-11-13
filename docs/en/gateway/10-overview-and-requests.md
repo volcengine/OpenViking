@@ -129,7 +129,7 @@ The expanded row and the **Saving** badge's tooltip show the reason for the late
 | OpenViking is unreachable or didn't answer in time | `openviking_unavailable` | OpenViking is down, unreachable or too slow. |
 | Saving to OpenViking failed | `delivery_failed` | A save failed for another reason; the gateway retries as above. |
 | Saving works again | `delivery_recovered` | A save succeeded after failures. |
-| The conversation history changed, so saving continues in a new OpenViking session | `history_changed` | Normal: the client edited, regenerated or compacted the conversation, and the gateway continues saving the current history in a new OpenViking session. |
+| The conversation history changed, so saving continues in a new OpenViking session | `history_changed` | Normal: the client edited, regenerated or compacted a conversation without a session header, and the gateway continues saving the current history in a new OpenViking session. |
 | The history changed while saving, so saving continues in a new OpenViking session | `history_changed_during_delivery` | Normal: the same, while a save was in progress. |
 | A saved turn continued after a pause, so saving continues in a new OpenViking session | `continued_after_idle` | Normal: a turn already saved after **Save the latest reply after** continued. |
 | Resynced by an administrator | `manual_reset` | Someone used **Resync conversation…** (see below). |

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field, replace
 import orjson
 
 from .blocks import RECALL_PROVENANCE_NOTE, block, gateway_note, history_hint, token_estimate
-from .capture import CapturePipeline, lineage
+from .capture import CapturePipeline, lineage, rewritten
 from .capture_store import Document
 from .client import VikingError, peer_argument
 from .compaction import (
@@ -288,7 +288,12 @@ class MemoryKernel:
         # Replay first: it decides whether replies keep their reasoning, which tools depend on.
         self.replay(prepared)
         self.configure_tools(prepared, policy, owner)
-        if not disabled and policy.capture and kind == "user" and anchor >= 0:
+        if (
+            not disabled
+            and policy.capture
+            and anchor >= 0
+            and (kind == "user" or kind == "continuation" and rewritten(capture.value, prepared))
+        ):
             await CapturePipeline(self.store.capture).confirm(prepared, credential, policy)
         if kind in {"user", "continuation"}:
             prepared.context_window = window_size(prepared, policy)

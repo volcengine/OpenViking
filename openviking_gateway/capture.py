@@ -4,9 +4,10 @@
 
 Requests replace the unconfirmed tail, and a gateway cut confirms the history
 before it at once. The sole lease holder advances delivery and archives. A
-changed confirmed prefix starts a new OpenViking session that remembers the
-earlier ones. Replay records are independent: a failed capture never
-invalidates an old replacement.
+session named by a header keeps its OpenViking session when its history
+changes; without one, a changed confirmed prefix starts a new OpenViking session
+that remembers the earlier ones. Replay records are independent: a failed
+capture never invalidates an old replacement.
 """
 
 import asyncio
@@ -42,6 +43,10 @@ MAX_ATTEMPTS = 5
 RECOVERY_SECONDS = 300
 DELIVERY_SECONDS = 100  # below the 120 s claim lease
 MAX_PREVIOUS = 5
+# User messages queued for the session that a capture remembers. Tool steps in flight lag
+# a few behind at most; an older one is taken as a rewrite, and the turns since it are
+# saved again.
+MAX_CONFIRMED = 8
 SOURCE = "gateway:"
 
 
@@ -57,6 +62,8 @@ def new_capture(reason="", old=None):
         "idle": False,
         "reason": reason,
         "previous": lineage(old or {})[:MAX_PREVIOUS],
+        "epoch": 0,
+        "confirmed": [],
     }
     # A new OpenViking session receives the history again, from the same peers.
     if (old or {}).get("peers"):
@@ -64,10 +71,63 @@ def new_capture(reason="", old=None):
     return value
 
 
+def rewritten(value, request):
+    """Whether a named session's tool step comes from a history its client rewrote, as
+    by compacting it mid-turn.
+
+    Rewriting the history changes the anchor of its last user message; a step of a
+    history the user moved on from keeps one this capture queued before.
+    """
+    if request.anonymous:
+        return False
+    confirmed = [value.get("request_anchor"), *value.get("confirmed", [])]
+    return request.capture_chain[request.anchor] not in confirmed
+
+
+def diverged(value, chain):
+    """Whether a history lacks what the capture delivered, confirmed or may be writing.
+
+    A changed reply to the last user message replaces the unconfirmed tail; the tail is
+    kept when the history changed before that message, as a compacting client does.
+    """
+    now = time.time()
+    pending = value["pending"]
+    kept = [
+        value["delivered"],
+        *(t["anchor"] for t in pending if t["ready"] <= now),
+    ]
+    if any(not t["confirmed"] for t in pending):
+        kept.append(value.get("request_anchor"))  # The user message the tail answers.
+    return any(a and a not in chain for a in kept)
+
+
+def realign(value, request):
+    """Carry a named session's capture over to its changed history, delivering all it queued.
+
+    The session holds the new history up to the newest message it was given there, and
+    receives everything after it; a history with no such message is sent again in full.
+    """
+    chain = request.capture_chain
+    # A turn not yet confirmed may lack tool calls answered since.
+    given = {
+        value["delivered"],
+        *value.get("confirmed", []),
+        *(t["anchor"] for t in value["pending"] if t["confirmed"]),
+    }
+    anchor = next((a for a in reversed(chain[: request.anchor + 1]) if a and a in given), "")
+    pending = [{**t, "anchor": anchor, "confirmed": True, "ready": 0} for t in value["pending"]]
+    delivered = anchor if value["delivered"] else ""
+    # Requests prepared before, such as an attempt the user regenerated, no longer stage.
+    epoch = value.get("epoch", 0) + 1
+    return {**value, "pending": pending, "delivered": delivered, "idle": False, "epoch": epoch}
+
+
 def lineage(value):
     """The OpenViking sessions holding this history's saved messages, newest first."""
     previous = value.get("previous", [])
-    return [value["ov_session"], *previous] if value.get("delivered") else list(previous)
+    # A realigned capture's session holds the earlier history, though no anchor of it.
+    holds = value.get("delivered") or value.get("epoch")
+    return [value["ov_session"], *previous] if holds else list(previous)
 
 
 def ready_at(state):
@@ -151,10 +211,14 @@ class CapturePipeline:
         user_anchor = request.capture_chain[request.anchor]
         while True:
             value = old.value or new_capture()
-            # The worker may be writing a due tail, so a changed one starts over here;
-            # advance() drops any other unconfirmed tail.
+            # A named session realigns to a changed history. Otherwise the worker may be
+            # writing a due tail, so a changed one starts over here; advance() drops any
+            # other unconfirmed tail.
             now = time.time()
-            if any(t["anchor"] not in positions for t in value["pending"] if t["ready"] <= now):
+            if not request.anonymous:
+                if diverged(value, request.capture_chain):
+                    value = realign(value, request)
+            elif any(t["anchor"] not in positions for t in value["pending"] if t["ready"] <= now):
                 value = new_capture("history_changed", value)
             value = record_peers(value, request)
             value, _ = await asyncio.to_thread(
@@ -172,6 +236,8 @@ class CapturePipeline:
             # Reusing a prepared prompt does not generate another queue write.
             value.update(
                 request_anchor=user_anchor,
+                # Queued again by stage(): advance() may have dropped the tail holding it.
+                confirmed=[a for a in value.get("confirmed", []) if a != user_anchor],
                 credential_id=credential["id"],
                 account=credential["account"],
                 user_id=credential["user_id"],
@@ -208,6 +274,7 @@ class CapturePipeline:
             if (
                 old.value.get("ov_session") != request.capture_target
                 or old.value.get("request_anchor") != chain[request.anchor]
+                or old.value.get("epoch", 0) != request.capture.value.get("epoch", 0)
             ):
                 return  # A newer request or explicit reset owns the capture document.
             value, added = await asyncio.to_thread(
@@ -252,6 +319,7 @@ class CapturePipeline:
             if (
                 old.value.get("ov_session") != request.capture_target
                 or old.value.get("request_anchor") != request.capture_chain[request.anchor]
+                or old.value.get("epoch", 0) != request.capture.value.get("epoch", 0)
             ):
                 return  # A newer request or explicit reset superseded this response.
             # Tool continuations replace the unconfirmed tail in place, after
@@ -268,6 +336,10 @@ class CapturePipeline:
             )
             if not added:
                 return
+            # The user messages queued for the session, which tool steps of theirs still name.
+            user = chain[request.anchor]
+            confirmed = [a for a in value.get("confirmed", []) if a != user]
+            value = {**value, "confirmed": [*confirmed, user][-MAX_CONFIRMED:]}
             if await self.queue.swap(request.scope, request.session, old, value, ready_at(value)):
                 return
 
@@ -284,7 +356,7 @@ class CaptureWorker:
     async def save(self, item, previous, value, written=None):
         """Merge worker-owned progress into a concurrently updated request tail.
 
-        ``written`` is the delivered message when this save moves ``delivered``.
+        ``written`` is the message this save records as delivered.
         """
         while True:
             if await self.queue.swap(
@@ -301,7 +373,15 @@ class CaptureWorker:
                 raise BranchChanged
             # The writer may only advance through the queued messages it read.
             pending = fresh.value["pending"]
-            if value["delivered"] != previous.value["delivered"]:
+            if written is not None:
+                turn = next((t for t in pending if written in t["messages"]), None)
+                if (
+                    turn
+                    and turn["messages"][-1] == written
+                    and turn["anchor"] != value["delivered"]
+                ):
+                    # A request realigned the queue to a changed history meanwhile.
+                    value = {**value, "delivered": turn["anchor"], "idle": not turn["confirmed"]}
                 pending = remaining(pending, written)
                 if pending is None:
                     # An idle reply was edited, or gained its tool results, while its
