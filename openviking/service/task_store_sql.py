@@ -1242,14 +1242,12 @@ class SQLTaskWorkStore(TaskWorkStore):
                 )
             )
             await self._append_event_history(session, task_id, events, previous_events)
-            finalized = await self._finalize_if_closed(
+            await self._finalize_if_closed(
                 session,
                 task_id,
                 account_id=account_id,
                 user_id=user_id,
             )
-            if finalized is not None:
-                return StoreOperationResult.applied()
             return StoreOperationResult.applied()
 
     async def request_cancellation(
@@ -1330,14 +1328,12 @@ class SQLTaskWorkStore(TaskWorkStore):
             await self._append_event_history(
                 session, task_id, task.execution_events, previous.execution_events
             )
-            finalized = await self._finalize_if_closed(
+            await self._finalize_if_closed(
                 session,
                 task_id,
                 account_id=account_id,
                 user_id=user_id,
             )
-            if finalized is not None:
-                return StoreOperationResult.applied()
             return StoreOperationResult.applied()
 
     async def add_work(
@@ -1465,14 +1461,12 @@ class SQLTaskWorkStore(TaskWorkStore):
                 return StoreOperationResult.noop(StoreOperationCode.NOT_FOUND)
             await session.delete(work)
             await session.flush()
-            finalized = await self._finalize_if_closed(
+            await self._finalize_if_closed(
                 session,
                 task_id,
                 account_id=account_id,
                 user_id=user_id,
             )
-            if finalized is not None:
-                return StoreOperationResult.applied()
             return StoreOperationResult.applied()
 
     async def get_work(
@@ -1695,14 +1689,12 @@ class SQLTaskWorkStore(TaskWorkStore):
                 .where(*self._work_query(Work, task_id, work_id, account_id, user_id))
                 .values(**values)
             )
-            finalized = await self._finalize_if_closed(
+            await self._finalize_if_closed(
                 session,
                 task_id,
                 account_id=account_id,
                 user_id=user_id,
             )
-            if finalized is not None:
-                return StoreOperationResult.applied()
             return StoreOperationResult.applied()
 
     async def requeue_work(
