@@ -324,6 +324,14 @@ html.dark .ov-textarea {
   --ov-ui-connect-notice-default: var(--ov-ui-text-2-default);
 }
 
+.ov-file-browser {
+  --ov-ui-file-browser-refresh-border-default: #c9cbd4;
+}
+
+html.dark .ov-file-browser {
+  --ov-ui-file-browser-refresh-border-default: var(--ov-ui-border-3-default);
+}
+
 .ov-file-preview,
 .ov-file-browser-search {
   --ov-ui-preview-backdrop-default: #f8f8f8;
