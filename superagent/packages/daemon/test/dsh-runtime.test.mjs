@@ -106,6 +106,16 @@ test('generated patch replaces SDK transport and keeps config/mcp variants', (t)
   assert.equal(JSON.parse(fs.readFileSync(written, 'utf8')).some(row => row.id === 'llm-pi-ai'), false);
 });
 
+test('the worker preset selects the native shell on Unix and Windows', () => {
+  for (const [windows, enabled, disabled] of [[false, 'tool-bash', 'tool-pwsh'], [true, 'tool-pwsh', 'tool-bash']]) {
+    const patch = buildDshPatch({ platformIsWindows: windows });
+    const preset = patch.find(row => row.insert).insert.find(row => row.config?.id === 'ov-superagent-worker');
+    const shell = preset.config.plugins.find(row => row.id === 'shell').config;
+    assert.equal(shell.find(row => row.id === enabled).disabled, false);
+    assert.equal(shell.find(row => row.id === disabled).disabled, true);
+  }
+});
+
 test('a setup skill selection replaces default discovery, including an empty selection', () => {
   assert.deepEqual(buildDshPatch({
     mcp: null, skillDirs: ['/work/.dsh/skills'], includeDefaultSkillRoots: false,
