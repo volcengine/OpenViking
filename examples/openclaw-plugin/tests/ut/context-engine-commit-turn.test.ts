@@ -10,6 +10,13 @@ function makeEngine(hostVersion: string | undefined, overrides = {}) {
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const client = {
     addSessionMessage: vi.fn().mockResolvedValue(undefined),
+    getSessionContext: vi.fn().mockResolvedValue({
+      latest_archive_overview: "",
+      pre_archive_abstracts: [],
+      messages: [{ id: "stored", role: "user", parts: [], created_at: "2026-01-01T00:00:00Z" }],
+      estimatedTokens: 1,
+      stats: { totalArchives: 0 },
+    }),
     getSession: vi.fn().mockResolvedValue({ pending_tokens: 100_000 }),
     commitSession: vi.fn().mockResolvedValue({ status: "accepted" }),
   };
@@ -38,6 +45,18 @@ const messages = [
 ];
 const turn = { advancementKey: "k1", sessionId: "session-1", messages };
 const afterTurn = { ...turn, sessionFile: "unused", prePromptMessageCount: 0 };
+const prefixMessages = [
+  { role: "user", content: "Earlier user message." },
+  { role: "assistant", content: "Earlier assistant message." },
+];
+
+async function assembleNativePrefix(engine: ReturnType<typeof makeEngine>["engine"]) {
+  await engine.assemble({
+    sessionId: turn.sessionId,
+    messages: prefixMessages,
+    prompt: "Continue the conversation.",
+  });
+}
 
 function deferred() {
   let resolve!: () => void;
@@ -133,6 +152,73 @@ describe("durable capture failures and skips", () => {
     const { engine, getClient } = makeEngine("2026.9.3", config);
     await expect(engine.commitTurn(params)).resolves.toEqual({ status: "committed" });
     expect(getClient).not.toHaveBeenCalled();
+  });
+});
+
+describe("native missing-session continuity", () => {
+  it.each(["missing", "empty"] as const)(
+    "replays the captured host prefix when the server session is %s", async (state) => {
+      const { engine, client } = makeEngine("2026.9.3");
+      await assembleNativePrefix(engine);
+      if (state === "missing") {
+        client.getSessionContext.mockRejectedValueOnce(new Error("[NOT_FOUND] Session not found"));
+      } else {
+        client.getSessionContext.mockResolvedValueOnce({
+          latest_archive_overview: "",
+          pre_archive_abstracts: [],
+          messages: [],
+          estimatedTokens: 0,
+          stats: { totalArchives: 0 },
+        });
+      }
+
+      await expect(engine.commitTurn(turn)).resolves.toEqual({ status: "committed" });
+      expect(client.addSessionMessage.mock.calls.map((call) => call[1])).toEqual([
+        "user", "assistant", "user", "assistant",
+      ]);
+      expect(client.addSessionMessage.mock.calls.map((call) => call[2][0].text)).toEqual([
+        "Earlier user message.",
+        "Earlier assistant message.",
+        "Remember that my preferred editor is Vim.",
+        "I will remember your editor preference.",
+      ]);
+    },
+  );
+
+  it("fails closed on an ambiguous lookup and permits retry with the same key", async () => {
+    const { engine, client } = makeEngine("2026.9.3");
+    await assembleNativePrefix(engine);
+    client.getSessionContext.mockRejectedValueOnce(new Error("service unavailable"));
+
+    await expect(engine.commitTurn(turn)).rejects.toThrow(
+      "cannot verify native session continuity",
+    );
+    expect(client.addSessionMessage).not.toHaveBeenCalled();
+    await expect(engine.commitTurn(turn)).resolves.toEqual({ status: "committed" });
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails closed when recovery has no captured host prefix", async () => {
+    const { engine, client } = makeEngine("2026.9.3");
+    client.getSessionContext.mockRejectedValueOnce(new Error("[NOT_FOUND] Session not found"));
+
+    await expect(engine.commitTurn(turn)).rejects.toThrow(
+      "no host transcript prefix is available",
+    );
+    expect(client.addSessionMessage).not.toHaveBeenCalled();
+  });
+
+  it("removes the prefix snapshot after a successful replay", async () => {
+    const { engine, client } = makeEngine("2026.9.3");
+    await assembleNativePrefix(engine);
+    client.getSessionContext.mockRejectedValue(new Error("[NOT_FOUND] Session not found"));
+
+    await expect(engine.commitTurn(turn)).resolves.toEqual({ status: "committed" });
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(4);
+    await expect(engine.commitTurn({ ...turn, advancementKey: "k2" })).rejects.toThrow(
+      "no host transcript prefix is available",
+    );
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(4);
   });
 });
 
