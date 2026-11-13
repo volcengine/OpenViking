@@ -69,7 +69,9 @@
       "stagedReplies": false,
       "role": "/Users/you/.ov-superagent/roles/research.md",
       "naturalWriting": false,
-      "model": "gpt-5.6-sol"
+      "model": "dsh:deepseek/deepseek-chat",
+      "dshHomeMode": "shared",
+      "dshSkillRoots": ["workspace-dsh", "project-agents", "host-agents", "host-dsh"]
     }
   ]
 }

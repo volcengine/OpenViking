@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { bundledLarkCli } from './lark-cli-bin.mjs';
 import { managedPiBin } from './pi-runtime.mjs';
 import { resolveRolePromptPath } from './conversation-policy.mjs';
+import { defaultDshSkillRoots, dshSkillRootChoices } from './dsh-config.mjs';
 
 const sourceDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -179,6 +180,12 @@ export function getConfig() {
   if (pathsOverlap(workspace, dataDir)) {
     throw new Error('OV_SUPERAGENT_WORKSPACE must not overlap OV_SUPERAGENT_DATA_DIR');
   }
+  const dshHomeMode = enumEnv('OV_SUPERAGENT_DSH_HOME_MODE', 'isolated', ['isolated', 'shared']);
+  const dshSkillRoots = jsonStringArrayEnv('OV_SUPERAGENT_DSH_SKILL_ROOTS', defaultDshSkillRoots(dshHomeMode));
+  const allowedDshSkillRoots = new Set(dshSkillRootChoices(dshHomeMode));
+  if (dshSkillRoots.some(root => !allowedDshSkillRoots.has(root)) || new Set(dshSkillRoots).size !== dshSkillRoots.length) {
+    throw new Error('OV_SUPERAGENT_DSH_SKILL_ROOTS contains an unknown or repeated root for the selected DSH mode');
+  }
   const daemonProfile = (process.env.OV_SUPERAGENT_LARK_PROFILE ?? '').trim();
   const cliProfile = (process.env.LARKSUITE_CLI_PROFILE ?? '').trim();
   if (daemonProfile && cliProfile && daemonProfile !== cliProfile) {
@@ -262,6 +269,8 @@ export function getConfig() {
     opencodeModel: process.env.OV_SUPERAGENT_OPENCODE_MODEL || '',
     agyModel: process.env.OV_SUPERAGENT_AGY_MODEL || '',
     dshBin: process.env.DSH_BIN || 'dsh',
+    dshHomeMode,
+    dshSkillRoots: Object.freeze([...dshSkillRoots]),
     // Model routes are DSH's own settings document, not a daemon setting and not
     // a manifest field: DSH's own settings service is the only writer, and
     // `ov-superagent dsh model` plus `/model` are the only callers. This is the effort a

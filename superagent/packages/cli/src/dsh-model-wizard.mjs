@@ -22,18 +22,19 @@ import {
 } from './dsh-model-plan.mjs';
 import { modelSpecFromDraft, writeModelDraft } from './dsh-model-store.mjs';
 import { probeDsh } from './runtime-probe.mjs';
+import { dshHomePath } from '../../daemon/src/dsh-config.mjs';
 
 // The namespace row of DSH's settings document; the settings service is the
 // document's writer, and its global `ns` for the model plugin is this same id.
 export const DSH_MODEL_NAMESPACE = 'llm-pi-ai';
 
 // The document paths of one instance's DSH home.
-export function dshSettingsDocument(dataDir) {
-  return path.join(dataDir, 'dsh', 'home', 'profiles', 'sdk', 'cordis.patch.yml');
+export function dshSettingsDocument(dataDir, { dshHomeMode = 'isolated', homeDir = os.homedir() } = {}) {
+  return path.join(dshHomePath({ dataDir, mode: dshHomeMode, homeDir }), 'profiles', 'sdk', 'cordis.patch.yml');
 }
 
-export function dshCredentialsDocument(dataDir) {
-  return path.join(dataDir, 'dsh', 'home', '.credentials.yaml');
+export function dshCredentialsDocument(dataDir, { dshHomeMode = 'isolated', homeDir = os.homedir() } = {}) {
+  return path.join(dshHomePath({ dataDir, mode: dshHomeMode, homeDir }), '.credentials.yaml');
 }
 
 /**
@@ -97,11 +98,11 @@ export function freshDshModelDocuments(draft) {
  * @param {object} options - `dataDir`, the draft, the dsh `bin` and `env`.
  * @returns {Promise<{via: 'file'|'service', settings: string, credentials: string|null, keyRef: string, notes: string[]}>}
  */
-export async function writeDshModelDraft({ dataDir, draft, bin = 'dsh', env = process.env }) {
-  const settings = dshSettingsDocument(dataDir);
-  const credentials = dshCredentialsDocument(dataDir);
+export async function writeDshModelDraft({ dataDir, draft, bin = 'dsh', env = process.env, dshHomeMode = 'isolated', homeDir = os.homedir() }) {
+  const settings = dshSettingsDocument(dataDir, { dshHomeMode, homeDir });
+  const credentials = dshCredentialsDocument(dataDir, { dshHomeMode, homeDir });
   if (fs.existsSync(settings) || fs.existsSync(credentials)) {
-    const written = await writeModelDraft({ dataDir, draft, bin, env });
+    const written = await writeModelDraft({ dataDir, draft, bin, env, dshHomeMode, homeDir });
     return { via: 'service', settings, credentials: null, keyRef: written.keyRef, notes: written.notes };
   }
   const documents = freshDshModelDocuments(draft);

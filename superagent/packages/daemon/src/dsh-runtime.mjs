@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { sanitizeAgentChildEnv } from './process-utils.mjs';
 import { preparePrivateDirectory } from './private-temp.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
+import { DSH_HOME_SHARED, dshAgentsHomePath, dshHomePath, dshHostHome } from './dsh-config.mjs';
 
 const RUNTIME = getRuntimeDefinition('dsh');
 export const DSH_BRIDGE_PATH = fileURLToPath(new URL('./dsh-bridge.mjs', import.meta.url));
@@ -20,10 +21,9 @@ export const DSH_EFFORTS = RUNTIME?.efforts
 // Operator routes live in DSH's own settings document, not in this process.
 export const DSH_DEFAULT_MODEL = 'deepseek-official/deepseek-flash';
 
-// `<DSH_HOME>/profiles/sdk/cordis.patch.yml` relative to the instance dataDir.
 // DSH's settings service writes this file; it is the single source of truth for
 // model configuration (design §1), so the daemon only ever reads it.
-const DSH_PROFILE_PATCH_SEGMENTS = Object.freeze(['dsh', 'home', 'profiles', 'sdk', 'cordis.patch.yml']);
+const DSH_PROFILE_PATCH_SEGMENTS = Object.freeze(['profiles', 'sdk', 'cordis.patch.yml']);
 
 /**
  * The `llm-pi-ai` settings document of one instance.
@@ -31,9 +31,9 @@ const DSH_PROFILE_PATCH_SEGMENTS = Object.freeze(['dsh', 'home', 'profiles', 'sd
  * @param {string} options.dataDir - the instance data directory.
  * @returns {string} the absolute path, whether or not it exists yet.
  */
-export function dshProfilePatchPath({ dataDir } = {}) {
-  if (typeof dataDir !== 'string' || !dataDir) throw new Error('dsh dataDir is required');
-  return path.join(dataDir, ...DSH_PROFILE_PATCH_SEGMENTS);
+export function dshProfilePatchPath({ dataDir, dshHomeMode = 'isolated', homeDir } = {}) {
+  const home = dshHomePath({ dataDir, mode: dshHomeMode, homeDir });
+  return path.join(home, ...DSH_PROFILE_PATCH_SEGMENTS);
 }
 
 /**
@@ -44,9 +44,9 @@ export function dshProfilePatchPath({ dataDir } = {}) {
  * @param {string} options.dataDir - the instance data directory.
  * @returns {string|null} lowercase sha256 hex, or null when there is no document.
  */
-export function dshProfilePatchHash({ dataDir } = {}) {
+export function dshProfilePatchHash({ dataDir, dshHomeMode = 'isolated', homeDir } = {}) {
   try {
-    return createHash('sha256').update(fs.readFileSync(dshProfilePatchPath({ dataDir }))).digest('hex');
+    return createHash('sha256').update(fs.readFileSync(dshProfilePatchPath({ dataDir, dshHomeMode, homeDir }))).digest('hex');
   } catch {
     return null;
   }
@@ -205,23 +205,28 @@ export function parseDshModel(value) {
   return { provider, model };
 }
 
-export function prepareDshEnvironment(dataDir) {
+export function prepareDshEnvironment(dataDir, { dshHomeMode = 'isolated', homeDir } = {}) {
   const root = preparePrivateDirectory(path.join(dataDir, 'dsh'));
+  const home = dshHomePath({ dataDir, mode: dshHomeMode, homeDir });
+  const agents = dshAgentsHomePath({ dataDir, mode: dshHomeMode, homeDir });
   return {
     root,
-    home: preparePrivateDirectory(path.join(root, 'home')),
-    agents: preparePrivateDirectory(path.join(root, 'agents')),
+    // Never chmod or create the host's shared configuration roots. They belong
+    // to DSH and the other agent CLIs, not to this instance.
+    home: dshHomeMode === DSH_HOME_SHARED ? home : preparePrivateDirectory(home),
+    agents: dshHomeMode === DSH_HOME_SHARED ? agents : preparePrivateDirectory(agents),
     run: preparePrivateDirectory(path.join(root, 'run')),
   };
 }
 
 export function sanitizeDshEnv(environment, {
   profile = '', actions = null, cliBins = [], dataDir, execPath = process.execPath,
+  dshHomeMode = 'isolated', homeDir = dshHostHome(environment),
 } = {}) {
   const safeEnv = sanitizeAgentChildEnv(environment, { profile, actions, cliBins });
   for (const key of Object.keys(safeEnv)) if (/^DSH_/i.test(key)) delete safeEnv[key];
   if (!dataDir) throw new Error('dsh dataDir is required');
-  const directories = prepareDshEnvironment(dataDir);
+  const directories = prepareDshEnvironment(dataDir, { dshHomeMode, homeDir });
   Object.assign(safeEnv, {
     DSH_HOME: directories.home,
     DSH_AGENTS_HOME: directories.agents,
@@ -253,6 +258,7 @@ export function dshCommand({ bin = 'dsh', patchPath }) {
 // be editing a document nothing reads.
 export function buildDshPatch({
   policy = '', bridgePath = DSH_BRIDGE_PATH, mcp = null,
+  skillDirs = [], includeDefaultSkillRoots = true,
 } = {}) {
   const insert = [];
   const patch = [];
@@ -274,6 +280,16 @@ export function buildDshPatch({
     },
   });
   if (insert.length > 0) patch.push({ insert });
+  // Setup owns the six/four standard roots. Default discovery must be off when
+  // it supplies a selection, including an empty one; otherwise DSH would put
+  // unchecked project/user roots straight back. Older callers keep the original
+  // additive customSkillDirs behaviour by leaving includeDefaultSkillRoots on.
+  if (skillDirs.length > 0 || !includeDefaultSkillRoots) {
+    patch.push({ id: 'skill-filesystem', config: {
+      ...(!includeDefaultSkillRoots ? { includeDefaultRoots: false } : {}),
+      customSkillDirs: [...skillDirs],
+    } });
+  }
   patch.push({ id: 'system-prompt', config: { personaPrefix: escapeDshTemplate(policy) } });
   for (const id of ['tool-ask-user', 'schedule', 'tool-schedule', 'tool-plugin-manager', 'present', 'tool-subagent-fork']) {
     patch.push({ id, disabled: true });
@@ -283,9 +299,11 @@ export function buildDshPatch({
 
 export function writeDshPatch({
   dataDir, policy = '', bridgePath = DSH_BRIDGE_PATH, mcp = null,
+  skillDirs = [], includeDefaultSkillRoots = true,
+  dshHomeMode = 'isolated', homeDir,
 } = {}) {
-  const { run } = prepareDshEnvironment(dataDir);
-  const patch = buildDshPatch({ policy, bridgePath, mcp });
+  const { run } = prepareDshEnvironment(dataDir, { dshHomeMode, homeDir });
+  const patch = buildDshPatch({ policy, bridgePath, mcp, skillDirs, includeDefaultSkillRoots });
   const patchPath = path.join(run, 'patch.yml');
   const temporary = `${patchPath}.${process.pid}.tmp`;
   const content = `${JSON.stringify(patch, null, 2)}\n`;

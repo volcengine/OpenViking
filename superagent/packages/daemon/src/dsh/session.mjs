@@ -32,6 +32,7 @@ import {
   sanitizeDshEnv,
   writeDshPatch,
 } from '../dsh-runtime.mjs';
+import { dshHostHome, dshSkillDirectories } from '../dsh-config.mjs';
 import { number } from './shared.mjs';
 import {
   appliedSelection, initializeFailure, modelSelection, modelUnavailable,
@@ -68,6 +69,8 @@ export default {
       actions: agentToolEnv(this.config, this.authorityToken),
       cliBins: agentCliCommands(this.config).map(({ bin }) => bin),
       dataDir: this.config.dataDir,
+      dshHomeMode: this.config.dshHomeMode,
+      homeDir: dshHostHome(this._environment),
     });
   },
 
@@ -172,8 +175,17 @@ export default {
     // answers the first turn with MISSING_CREDENTIAL -- naming the credentials
     // service and the export route. Refusing to spawn would block a working
     // configuration on a premise that does not hold.
-    prepareDshEnvironment(this.config.dataDir);
+    const dshHomeMode = this.config.dshHomeMode;
+    const homeDir = dshHostHome(this._environment);
+    prepareDshEnvironment(this.config.dataDir, { dshHomeMode, homeDir });
     const tools = agentToolServer(this.config, this.authorityToken);
+    const skillDirs = dshSkillDirectories({
+      workspace: this.config.workspace,
+      dataDir: this.config.dataDir,
+      mode: dshHomeMode,
+      selected: this.config.dshSkillRoots,
+      homeDir,
+    });
     const patchPath = writeDshPatch({
       dataDir: this.config.dataDir,
       policy: this.systemPrompt,
@@ -182,6 +194,10 @@ export default {
         ...tools,
         toolCallTimeoutMs: Math.max(10_000, number(this.config.sendTimeoutMs) + 5_000),
       },
+      skillDirs,
+      includeDefaultSkillRoots: false,
+      dshHomeMode,
+      homeDir,
     });
     const command = dshCommand({ bin: this.config.dshBin || 'dsh', patchPath });
     // The change-detection baseline is the document this child is started from,
@@ -190,7 +206,7 @@ export default {
     // write that landed mid-handshake as applied and silently swallow it (§4.4).
     // A write that still lands between here and DSH's own read only costs one
     // extra restart, which is the safe direction.
-    const startedFrom = dshProfilePatchHash({ dataDir: this.config.dataDir });
+    const startedFrom = dshProfilePatchHash({ dataDir: this.config.dataDir, dshHomeMode, homeDir });
 
     return new Promise((resolve, reject) => {
       let child;
@@ -377,7 +393,11 @@ export default {
     }
     if (descriptor) return;
     this.logger.warn('dsh_model_settings_invalid', {
-      path: dshProfilePatchPath({ dataDir: this.config.dataDir }),
+      path: dshProfilePatchPath({
+        dataDir: this.config.dataDir,
+        dshHomeMode: this.config.dshHomeMode,
+        homeDir: dshHostHome(this._environment),
+      }),
       detail: 'llm-pi-ai did not activate; only the built-in routes are available',
     });
   },
@@ -658,7 +678,11 @@ export default {
     // attempt cannot loop on it. The child is spawned much later, so `_handshake`
     // samples the document again right before spawning it and records that value
     // as the baseline (a write landing in between is then still a change).
-    this.profilePatchHash = dshProfilePatchHash({ dataDir: this.config.dataDir });
+    this.profilePatchHash = dshProfilePatchHash({
+      dataDir: this.config.dataDir,
+      dshHomeMode: this.config.dshHomeMode,
+      homeDir: dshHostHome(this._environment),
+    });
     this.settingsUpdate = (async () => {
       try {
         this.logger.info('dsh_restart_for_settings', { reason });

@@ -143,12 +143,14 @@ function harness(t, { runtimes, detectDsh, script = [], answers = [], onAsk = ()
 
 // Every answer the DSH questions need, in a terminal flow, with `weixin` as the
 // only IM (no Feishu scan, so the DSH questions are the only interactive ones).
-function dshAnswers({ add = true, pasteKey = 'sk-test-only' } = {}) {
+function dshAnswers({ add = true, pasteKey = 'sk-test-only', mode = 'isolated', skills = null } = {}) {
   return [
     { match: /Bot name/, answer: 'OpenViking SuperAgent' },
     { match: /Its role/, answer: 'colleague' },
     { match: /Workspace/, answer: '' },
     { match: /Agent runtime/, answer: (choices) => choices.find((choice) => choice.value?.id === 'dsh').value },
+    { match: /DSH configuration/, answer: mode },
+    { match: /Which skill directories/, answer: (choices) => skills ?? choices.map(choice => choice.value) },
     { match: /Add a model route now\?/, answer: add },
     // The route id is derived from this host (`api.deepseek.com` -> `deepseek`),
     // so the four answers below are the whole wizard.
@@ -162,6 +164,22 @@ function dshAnswers({ add = true, pasteKey = 'sk-test-only' } = {}) {
     { match: /Start scanning\?/, answer: true },
   ];
 }
+
+test('shared DSH setup saves only the checked host skill root', async (t) => {
+  const h = harness(t, {
+    runtimes: [dshRuntime(), ...OTHER_RUNTIMES], detectDsh: () => null,
+    script: dshAnswers({ mode: 'shared', skills: ['host-dsh'] }),
+  });
+  assert.equal(await setupCommand(h.options), 0);
+  const agent = h.manifest().agents[0];
+  assert.equal(agent.dshHomeMode, 'shared');
+  assert.deepEqual(agent.dshSkillRoots, ['host-dsh']);
+  const skills = h.prompter.choices.get('Which skill directories are enabled (4 shared; unchecked roots stay off)');
+  assert.equal(skills.length, 4);
+  assert.ok(skills.every(choice => !choice.label.includes(`${path.sep}dsh${path.sep}home${path.sep}skills`)));
+  assert.equal(fs.existsSync(path.join(h.home, '.dsh', 'profiles', 'sdk', 'cordis.patch.yml')), true,
+    'the model route is written into the shared home');
+});
 
 test('choosing DSH with no usable route offers the add-model step and writes it at save', async (t) => {
   const h = harness(t, { runtimes: [dshRuntime(), ...OTHER_RUNTIMES], detectDsh: () => null, script: dshAnswers() });
@@ -219,13 +237,13 @@ test('the draft is not written to the instance home before the instance is saved
   assert.equal(fs.existsSync(h.dataDir), true, 'the instance exists once it is saved');
 });
 
-test('declining the offer keeps the old note and prints the menu to open later', async (t) => {
+test('declining the model offer explains the problem and saves nothing', async (t) => {
   const h = harness(t, { runtimes: [dshRuntime(), ...OTHER_RUNTIMES], detectDsh: () => null, script: dshAnswers({ add: false }) });
-  assert.equal(await setupCommand(h.options), 0);
+  await assert.rejects(setupCommand(h.options), /DeepSeek Harness has no usable model; nothing was saved/);
 
   // Nothing about a route was asked after the refusal, and nothing was written.
   assert.equal(h.prompter.questions.some((question) => /Gateway base URL/.test(question)), false);
-  assert.equal(h.manifest().agents[0].model, 'dsh', 'today\'s value is kept');
+  assert.equal(fs.existsSync(path.join(h.home, '.ov-superagent', 'config.json')), false);
   assert.equal(fs.existsSync(path.join(h.dataDir, 'dsh')), false);
   // Adding is the menu's job now: the hint is the command that opens it, with
   // the instance named, not a flag form the CLI no longer has.
@@ -234,23 +252,23 @@ test('declining the offer keeps the old note and prints the menu to open later',
   assert.doesNotMatch(h.written(), /dsh model add /);
 });
 
-test('without a terminal, setup prints the hint and continues instead of asking', async (t) => {
+test('without a terminal, setup prints the hint and refuses to save a model-less DSH', async (t) => {
   const h = harness(t, {
     runtimes: [dshRuntime()],
     detectDsh: () => null,
     // A line-driven Prompter (no isTTY): the wizard must not add a question.
-    // name, role, workspace, runtime, IMs, confirm
-    answers: ['小V', '', '', '1', '2', 'y'],
+    // name, role, workspace, runtime, DSH mode, skill roots, IMs, confirm
+    answers: ['小V', '', '', '1', '1', '', '2', 'y'],
   });
-  assert.equal(await setupCommand(h.options), 0);
+  await assert.rejects(setupCommand(h.options), /DeepSeek Harness has no usable model; nothing was saved/);
   assert.match(h.written(), /ov-superagent dsh model --instance/);
   assert.doesNotMatch(h.written(), /ov-superagent dsh model add /);
-  assert.equal(h.manifest().agents[0].model, 'dsh');
+  assert.equal(fs.existsSync(path.join(h.home, '.ov-superagent', 'config.json')), false);
 });
 
 test('editing an instance that already has DSH routes probes its own home and does not prompt', async (t) => {
-  // First, a normal setup that declined the offer: an instance with no routes.
-  const h = harness(t, { runtimes: [dshRuntime(), ...OTHER_RUNTIMES], detectDsh: () => null, script: dshAnswers({ add: false }) });
+  // First, a normal setup; the edit probe below supplies the instance's route.
+  const h = harness(t, { runtimes: [dshRuntime(), ...OTHER_RUNTIMES], detectDsh: () => null, script: dshAnswers() });
   assert.equal(await setupCommand(h.options), 0);
   // An instance that runs keeps its DSH home; this one never got a route.
   fs.mkdirSync(path.join(h.dataDir, 'dsh', 'home'), { recursive: true, mode: 0o700 });
@@ -272,6 +290,8 @@ test('editing an instance that already has DSH routes probes its own home and do
       },
     },
     { match: /^Agent runtime$/, answer: (choices) => choices.find((choice) => choice.value?.route).value },
+    { match: /DSH configuration/, answer: 'isolated' },
+    { match: /Which skill directories/, answer: (choices) => choices.map(choice => choice.value) },
     { match: /Add a model route now\?/, answer: false },
   ];
   const output = new PassThrough();
@@ -290,12 +310,43 @@ test('editing an instance that already has DSH routes probes its own home and do
   assert.match(choices.find((choice) => choice.value?.id === 'dsh').hint, /deepseek\/deepseek-chat/);
 });
 
+test('an existing DSH instance can change configuration mode and skill roots directly', async (t) => {
+  const h = harness(t, { runtimes: [dshRuntime(), ...OTHER_RUNTIMES], detectDsh: () => null, script: dshAnswers() });
+  assert.equal(await setupCommand(h.options), 0);
+  assert.match(h.manifest().agents[0].model, /^dsh:/);
+  let menuCalls = 0;
+  const script = [
+    { match: /What to do/, answer: (choices) => choices.find(choice => choice.value?.id === 'primary').value },
+    { match: /Change OpenViking SuperAgent \(primary\)/, answer: (choices) => {
+      menuCalls += 1;
+      return menuCalls === 1
+        ? choices.find(choice => choice.label.trim() === 'DSH configuration & skills').value
+        : choices.find(choice => choice.value === 'save').value;
+    } },
+    { match: /DSH configuration/, answer: 'shared' },
+    { match: /Which skill directories/, answer: ['host-agents'] },
+  ];
+  const output = new PassThrough();
+  output.on('data', () => {});
+  h.options.prompter = new ScriptedPrompter({ input: new PassThrough(), output, script });
+  h.options.detect.dsh = async () => dshRuntime({ route: 'deepseek/deepseek-chat' });
+  fs.mkdirSync(path.join(h.home, '.dsh'), { recursive: true });
+  assert.equal(await setupCommand(h.options), 0);
+  assert.equal(h.manifest().agents[0].dshHomeMode, 'shared');
+  assert.deepEqual(h.manifest().agents[0].dshSkillRoots, ['host-agents']);
+  assert.match(h.manifest().agents[0].model, /^dsh:/, 'the configured route survives a config-only edit');
+});
+
 test('saving an instance whose own home serves a route replaces the bare dsh alias with the qualified id', async (t) => {
   // The state the owner's machine was in: the manifest says `dsh`, but the
   // instance's own DSH home serves a custom route. Setup must not keep the
   // alias, because `dsh` resolves to the built-in route that serves nothing.
-  const h = harness(t, { runtimes: [dshRuntime(), ...OTHER_RUNTIMES], detectDsh: () => null, script: dshAnswers({ add: false }) });
+  const h = harness(t, { runtimes: [dshRuntime(), ...OTHER_RUNTIMES], detectDsh: () => null, script: dshAnswers() });
   assert.equal(await setupCommand(h.options), 0);
+  const configPath = path.join(h.home, '.ov-superagent', 'config.json');
+  const initial = h.manifest();
+  initial.agents[0].model = 'dsh';
+  fs.writeFileSync(configPath, JSON.stringify(initial));
   assert.equal(h.manifest().agents[0].model, 'dsh');
   fs.mkdirSync(path.join(h.dataDir, 'dsh', 'home'), { recursive: true, mode: 0o700 });
 
