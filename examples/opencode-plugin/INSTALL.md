@@ -67,9 +67,15 @@ cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/op
 cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
+cp -r examples/opencode-plugin/skills ~/.config/opencode/plugins/openviking/
+(cd ~/.config/opencode/plugins/openviking && \
+  npm install --omit=dev --ignore-scripts --package-lock=false --no-audit --no-fund && \
+  node --input-type=module -e 'await import("./index.mjs"); await import("./servers/mcp-proxy.mjs"); await (await import("./lib/v2-skills.mjs")).loadBundledV2Skills(process.cwd())')
 ```
 
 `sync.mjs` generates `lib/shared/`, the shared modules the plugin and its MCP proxy import. That directory is not in git, so run it before copying, and again after every `git pull`.
+
+File/source installs require npm and registry access or a populated cache to install runtime dependencies, including `yaml`. The unified installer checks both entrypoints and reads the bundled skills before replacing the installed plugin; dependency or skill-loading failures preserve the previous plugin and registration.
 
 After installation, the layout should look like this:
 
@@ -80,7 +86,9 @@ After installation, the layout should look like this:
     ├── index.mjs
     ├── package.json
     ├── lib/
-    └── servers/
+    ├── servers/
+    ├── skills/
+    └── node_modules/
 ```
 
 The top-level `openviking.js` forwards the first-level `.js` entry that OpenCode can discover to the actual plugin directory:
