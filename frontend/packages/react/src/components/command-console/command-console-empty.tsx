@@ -8,6 +8,7 @@ import {
   DEFAULT_COMMAND_CONSOLE_LABELS,
   type ResolvedCommandConsoleLabels,
 } from './command-console-labels.js';
+import { useCommandConsoleQuickOverflow } from './use-command-console-quick-overflow.js';
 
 /**
  * 按名称从宿主目录中取快捷命令，保持传入顺序，未命中的名称直接跳过。
@@ -53,6 +54,12 @@ export function CommandConsoleEmptyRegion({
   disabled?: boolean;
   onPick: (value: string) => void;
 }) {
+  // Hook 必须在提前返回之前调用；内置空态不渲染时列表 ref 为空，测量直接跳过。
+  // Hooks run before the early returns; with no built-in empty state the list ref
+  // stays null and the measurement is skipped.
+  const { listRef, truncated } = useCommandConsoleQuickOverflow(
+    commands.length,
+  );
   if (emptyState !== undefined) {
     return emptyState === null ? null : (
       <div className="ov-command-console__empty">{emptyState}</div>
@@ -88,8 +95,8 @@ export function CommandConsoleEmptyRegion({
       <p className="ov-command-console__empty-quick-label">
         {labels.quickStart}
       </p>
-      <ul className="ov-command-console__empty-list">
-        {commands.map((command) => {
+      <ul ref={listRef} className="ov-command-console__empty-list">
+        {commands.map((command, index) => {
           const action = (
             <button
               type="button"
@@ -108,15 +115,19 @@ export function CommandConsoleEmptyRegion({
               </span>
             </button>
           );
-          // 行内已显示 summary ?? description，只有宿主另给了 summary 时，
-          // Tooltip 才有行内看不到的完整说明；否则弹出的会是同一句话。
+          // 行内显示 summary ?? description：宿主另给了 summary 时完整说明被藏起来，
+          // 没有 summary 但说明被单行省略截断时同样看不到全文。两种情况下 Tooltip
+          // 才有行内没有的内容，其余情况弹出的会是同一句话。
           //
-          // The row already shows `summary ?? description`, so a Tooltip only has
-          // the fuller description to add when the host supplied a `summary`;
-          // otherwise it would repeat the same sentence.
+          // The row shows `summary ?? description`: the full description is hidden
+          // when the host supplied a `summary`, and equally when the description is
+          // truncated by the single-line ellipsis. Only then does the Tooltip add
+          // something the row does not already show.
+          const showTooltip =
+            command.summary !== undefined || truncated.includes(index);
           return (
             <li key={command.name} className="ov-command-console__empty-item">
-              {command.summary !== undefined ? (
+              {showTooltip ? (
                 <Tooltip
                   content={command.description}
                   placement="top"

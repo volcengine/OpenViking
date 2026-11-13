@@ -13,6 +13,19 @@ Object.defineProperty(globalThis, 'navigator', {
   value: dom.window.navigator,
 });
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+// jsdom 没有 ResizeObserver，而快捷命令的截断测量依赖它；替身只记录目标、
+// 从不回调，测试断言的是渲染结果而非尺寸变化。需要模拟尺寸的用例自行覆盖。
+//
+// jsdom has no ResizeObserver and the quick-command truncation measurement needs
+// one; the stub records its target and never calls back, since these tests assert
+// on rendered output rather than size changes. Cases that need sizes override it.
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+}
 const { createRoot } = await import('react-dom/client');
 after(() => dom.window.close());
 
