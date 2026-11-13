@@ -1,5 +1,5 @@
-import type { OvStreamEvent } from '../../client/types.js';
-import { OvClientError } from '../../client/errors.js';
+import type { OvStreamEvent } from '../../../client/types.js';
+import { OvClientError } from '../../../client/errors.js';
 import type { VikingBotChatEvent } from './types.js';
 
 const textOf = (data: unknown): string => {

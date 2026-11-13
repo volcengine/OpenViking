@@ -1,7 +1,7 @@
 import type {
   VikingBotChatService,
   VikingBotSessionService,
-} from '@openviking/react/modules/viking-bot';
+} from '@openviking/react/modules/console';
 import type { VikingBotMessage } from '@openviking/react/components/viking-bot';
 
 /** Fixed public data; this adapter never accesses a real server. */

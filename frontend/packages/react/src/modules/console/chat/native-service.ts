@@ -1,11 +1,11 @@
-import { OV_PATHS, OV_PATH_BUILDERS } from '../../client/paths.js';
+import { OV_PATHS, OV_PATH_BUILDERS } from '../../../client/paths.js';
 import type {
   OvClient,
   OvRequestOptions,
   OvRequestSpec,
-} from '../../client/types.js';
-import type { VikingBotSession } from '../../components/viking-bot/capabilities.js';
-import { isOvClientError } from '../../client/errors.js';
+} from '../../../client/types.js';
+import type { VikingBotSession } from '../../../components/viking-bot/capabilities.js';
+import { isOvClientError } from '../../../client/errors.js';
 import { nativeChatEvents } from './native-events.js';
 import { readNativeMessages, writeNativeParts } from './native-messages.js';
 import { nativeChatInput } from './native-input.js';

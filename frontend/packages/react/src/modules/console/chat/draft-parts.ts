@@ -1,7 +1,7 @@
 import type {
   VikingBotDraft,
   VikingBotMessagePart,
-} from '../../components/viking-bot/model.js';
+} from '../../../components/viking-bot/model.js';
 
 export function draftParts(draft: VikingBotDraft): VikingBotMessagePart[] {
   return [
