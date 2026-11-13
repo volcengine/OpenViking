@@ -206,11 +206,14 @@ try {
 `$env:NO_COLOR = '1'
 & '$installer' -File '$first' -Lang en -NoSetup
 if ((`$env:PATH -split [IO.Path]::PathSeparator) -contains (Join-Path `$env:OV_SUPERAGENT_HOME 'bin')) { 'SESSION-PATH-OK' } else { "MISSING: `$env:PATH" }
+`$command = Get-Command ov-superagent -ErrorAction Stop
+if (`$command.CommandType -eq 'Alias' -and `$command.Definition -eq (Join-Path `$env:OV_SUPERAGENT_HOME 'bin\ov-superagent.cmd')) { 'SESSION-COMMAND-OK' } else { "MISSING COMMAND: `$(`$command | Out-String)" }
 "@
     $sessionResult = Invoke-TestProcess -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $probe)
     $session = $sessionResult.Output
     if ($sessionResult.Code -ne 0) { throw "session probe failed: $session" }
     if ($session -notmatch 'SESSION-PATH-OK') { throw "the current terminal was not given ov-superagent:`n$session" }
+    if ($session -notmatch 'SESSION-COMMAND-OK') { throw "the current terminal cannot resolve ov-superagent after setup exits:`n$session" }
 
     # A second run of the same package is a no-op that still names the version.
     # English output: redirected streams use the console code page, which turns CJK into ?.

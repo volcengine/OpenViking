@@ -541,6 +541,11 @@ function Add-ToPath([string]$binDir) {
     # typed in, and a child process cannot change its parent's PATH.
     $parts = @($env:PATH -split [regex]::Escape($separator) | Where-Object { $_ })
     if ($parts -notcontains $binDir) { $env:PATH = (@($binDir) + $parts) -join $separator }
+    # Do not rely on PowerShell noticing a PATH change after it has started. An
+    # alias in the global scope survives this script (including irm | iex) and
+    # pins the command to this install, so the recovery commands printed by a
+    # failed setup work in the same terminal. New terminals use the user PATH.
+    Set-Alias -Name 'ov-superagent' -Value (Join-Path $binDir 'ov-superagent.cmd') -Scope Global -Force -ErrorAction Stop
     if (-not $PersistPath) { return }
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     $persistent = @($userPath -split [regex]::Escape($separator) | Where-Object { $_ })
