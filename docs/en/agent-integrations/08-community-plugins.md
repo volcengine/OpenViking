@@ -115,6 +115,42 @@ The plugin reads its connection from `~/.openviking/ovcli.conf`; `OPENVIKING_URL
 
 The verified host contract, the transcript format, and the adapter's v1 scope are recorded in [`hosts/codebuddy/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/codebuddy/DESIGN.md).
 
+## Qoder CLI memory integration
+
+Source: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
+
+The Qoder CLI integration is an `agent-hook-plugin` host adapter, installed as a native Qoder plugin. It reuses the shared OpenViking hook runtime and adds only Qoder-specific event mapping, transcript decoding, output envelopes, and commit policy:
+
+- **SessionStart** injects the user profile and replays anything the offline queue is holding.
+- **UserPromptSubmit** recalls relevant memories and injects them as an `<openviking-context>` block in `additionalContext`.
+- **PreToolUse** denies reading or writing a `viking://` URI as a local path and points the Agent at the OpenViking MCP tools. Shell commands are not checked, so `ov` invocations and literal `viking://` arguments still work.
+- **Stop**, **PreCompact**, and **SessionEnd** capture new transcript turns incrementally in a detached worker. `Stop` commits the OpenViking session every 8 captured messages (`commitTurnThreshold`); `PreCompact` and `SessionEnd` commit everything not yet committed, including messages `Stop` already sent.
+
+The plugin also exposes the OpenViking MCP server as a stdio proxy onto the same resolved configuration, and ships the `openviking-memory`, `openviking-skills`, `ov-experience-memory`, and `openviking-rule-search` skills. Hooks and MCP read the same credentials, so they cannot disagree about the server, account, or user. Subagent capture is not supported in v1: the host fires `SubagentStart`/`SubagentStop`, but the shared dispatcher has no subagent stage yet.
+
+### Install
+
+Prerequisites: Qoder CLI (`qodercli`), Node.js 18+, and a running OpenViking server.
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --yes --harness qoder
+# AI agents: not sure about running this? The script's header says what it does and how to verify it.
+```
+
+The installer assembles a self-contained plugin under `~/.openviking/agent-integrations/qoder/marketplace/openviking-memory/`, with the shared hook runtime beside the adapters, registers it as a local marketplace named `openviking`, and installs it with `qodercli plugins install`. An existing marketplace named `openviking`, for example one added from GitHub to run the Claude Code plugin in Qoder, is replaced, so the two plugins never capture the same session twice. `QODER_CONFIG_DIR` is honoured. To remove only this integration:
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness qoder
+```
+
+The plugin reads its connection from `~/.openviking/ovcli.conf`; `OPENVIKING_URL` and `OPENVIKING_API_KEY` override that file, and per-plugin settings live under `plugin.qoder` (see [Plugin Settings](../configuration/02-client.md#plugin-settings)). Start a new `qodercli` session after installing, and confirm with `qodercli plugins list` that `openviking-memory@openviking` is enabled. With `OPENVIKING_DEBUG=1`, the hooks log to `~/.openviking/logs/qoder-hooks.log`.
+
+### Behaviour that follows from the host
+
+`UserPromptSubmit` and `SessionEnd` fire in the TUI and in headless `-p` runs alike, so a headless session is recalled and committed too. Qoder records injected context in its transcript as separate attachment records; capture reads only the conversation records, so recalled memories are never captured back. Every `-p` run also ends an auxiliary session that has no transcript; its `SessionEnd` is ignored. Qoder lists plugin skills under the plugin's name, for example `openviking-memory:openviking-skills`, and loads MCP tools lazily through `mcp_call`; in headless runs with the default permission mode, the MCP tools need a permission rule or a permissive mode. Use the `qodercli` command for the plugin commands: `qoder` also opens the Qoder IDE for some arguments.
+
+The verified host contract, the transcript format, and the adapter's v1 scope are recorded in [`hosts/qoder/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/qoder/DESIGN.md).
+
 ## AstrBot plugin
 
 [AstrBot](https://github.com/AstrBotDevs/AstrBot) is a multi-platform IM bot framework supporting QQ, Telegram, Discord, Lark, and 20+ other platforms.

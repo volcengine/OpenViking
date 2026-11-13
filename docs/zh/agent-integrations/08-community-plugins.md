@@ -112,6 +112,42 @@ curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harnes
 
 经过实测的宿主契约、transcript 格式以及本适配器 v1 的范围，记录在 [`hosts/codebuddy/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/codebuddy/DESIGN.md)。
 
+## Qoder CLI 记忆集成
+
+源码：[examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
+
+Qoder CLI 集成是 `agent-hook-plugin` 的宿主适配器，以 Qoder 原生插件的形式安装：复用共享的 OpenViking hook 运行时，只新增 Qoder 特有的事件映射、transcript 解码、输出信封与提交策略：
+
+- **SessionStart** 注入用户画像，并重放离线队列中暂存的写入。
+- **UserPromptSubmit** 召回相关记忆，以 `additionalContext` 中的 `<openviking-context>` 块注入。
+- **PreToolUse** 拒绝把 `viking://` URI 当本地路径读写，并引导 Agent 改用 OpenViking MCP 工具。Shell 命令不做检查，`ov` 调用与字面量 `viking://` 参数照常可用。
+- **Stop**、**PreCompact** 和 **SessionEnd** 在分离的 worker 中增量捕获 transcript 中的新轮次。`Stop` 每捕获 8 条消息（`commitTurnThreshold`）提交一次 OpenViking session；`PreCompact` 和 `SessionEnd` 提交所有尚未提交的消息，包括 `Stop` 已经发送的。
+
+插件还把 OpenViking MCP 服务以 stdio 代理的形式暴露出来，走同一份解析后的配置，并附带 `openviking-memory`、`openviking-skills`、`ov-experience-memory`、`openviking-rule-search` 四个 skill。hook 与 MCP 读取同一份凭据，不会在服务端、账号或用户上各说各话。v1 不支持子代理采集：宿主会触发 `SubagentStart`/`SubagentStop`，但共享 dispatcher 目前还没有子代理阶段。
+
+### 安装
+
+前置条件：Qoder CLI（`qodercli`）、Node.js 18+，以及正在运行的 OpenViking 服务。
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --yes --harness qoder
+# AI agents: not sure about running this? The script's header says what it does and how to verify it.
+```
+
+安装器在 `~/.openviking/agent-integrations/qoder/marketplace/openviking-memory/` 下组装自包含插件（共享 hook 运行时与各适配器同目录），将其注册为名为 `openviking` 的本地 marketplace，并用 `qodercli plugins install` 安装。已有的同名 `openviking` marketplace（例如为在 Qoder 中运行 Claude Code 插件而从 GitHub 添加的）会被替换，两个插件不会重复捕获同一会话。安装器遵循 `QODER_CONFIG_DIR`。只移除本集成：
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness qoder
+```
+
+插件从 `~/.openviking/ovcli.conf` 读取连接信息；`OPENVIKING_URL` 与 `OPENVIKING_API_KEY` 可覆盖该文件，按插件的配置位于 `plugin.qoder` 下（见[插件配置](../configuration/02-client.md#插件配置)）。安装后新建一个 `qodercli` 会话生效，并用 `qodercli plugins list` 确认 `openviking-memory@openviking` 已启用。设置 `OPENVIKING_DEBUG=1` 后，hook 日志写入 `~/.openviking/logs/qoder-hooks.log`。
+
+### 宿主决定的行为
+
+`UserPromptSubmit` 与 `SessionEnd` 在 TUI 和 headless `-p` 运行中都会触发，因此 headless 会话同样会召回并提交。Qoder 把注入的上下文作为独立的 attachment 记录写进 transcript；捕获只读取对话记录，召回的记忆不会被再次捕获。每次 `-p` 运行结束时还会结束一个没有 transcript 的辅助会话，它的 `SessionEnd` 会被忽略。Qoder 以插件名为前缀列出插件 skill（例如 `openviking-memory:openviking-skills`），并通过 `mcp_call` 懒加载 MCP 工具；在默认权限模式的 headless 运行中，MCP 工具需要权限规则或更宽松的权限模式。插件相关命令请使用 `qodercli`：`qoder` 遇到某些参数会打开 Qoder IDE。
+
+经过实测的宿主契约、transcript 格式以及本适配器 v1 的范围，记录在 [`hosts/qoder/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/qoder/DESIGN.md)。
+
 ## AstrBot 插件
 
 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 是一个多平台 IM Bot 框架，支持 QQ、Telegram、Discord、飞书等 20+ 平台。
