@@ -1,5 +1,43 @@
 # @openviking/react
 
+## 0.1.11
+
+### Patch Changes
+
+<!-- release-note:en-US -->
+
+- Add Console mode selection for conversations, commands, or both, plus independent `command.onOpenUri` routing. Track asynchronous tasks across both modes with status snapshots, notifications, and optional query adapters.
+- Recover Console inputs after session creation or delivery failures, preserve undelivered questions, and show theme-aware red error notices without storing client errors in conversation history or sending them to the model.
+- Open `.abstract.md` and `.overview.md` links at their parent directory's L0 and L1 preview. Fix file-only system directory listings by omitting retrieval tags.
+- Align FileBrowser search with the console design, remove the result preview panel, and retain keyboard result navigation. Keep preview bodies mounted across L0/L1/L2 transitions and update the level indicator without flashing the content.
+- Render sanitized HTML and recover imported images in Markdown previews. Show a Next action when a directory-guide target is unavailable.
+- Refine ExperienceDashboard with Updated tags, accessible metric explanations, loading skeletons, one-decimal injection rates, scroll-based trajectory pagination, sliding tab indicators, and configurable rounded outcome bars. Open trajectories through their row action and use secondary retry buttons in shared dashboard states.
+- Isolate rendering failures in blocks, file previews, command results, and conversation regions. Add `slots.errorFallback`, local reset callbacks, and retryable lazy content while preserving healthy regions and drafts.
+- Unify FileTree scrollbar colors, themed form controls, and dropdown/select keyboard behavior. Show full quick-command descriptions when summaries or truncation hide them. Add bilingual release notes to the documentation.
+
+Migration: the public `@openviking/react/modules/viking-bot` hook entry is removed; use Console with `modes={['conversation']}` and its conversation services. Remove imports of `TabImpactIcon`, `TabSourceIcon`, and `TabTestIcon`. Remove the obsolete `FileBrowserLabels.searchPreview`, `searchPreviewEmpty`, and `searchPreviewFailed` overrides.
+
+[Full changes](https://github.com/volcengine/OpenViking/compare/react@0.1.10...react@0.1.11)
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- Console 支持选择对话、命令或双模式，并新增独立的 `command.onOpenUri` 路由。两种模式统一跟踪异步任务，提供状态快照、通知和可选的查询适配器。
+- 会话创建或消息送达失败后恢复 Console 输入，保留未送达的提问，并显示跟随主题的红色错误提示；客户端错误不保存到会话历史，也不发送给模型。
+- 点击 `.abstract.md` 和 `.overview.md` 时定位到父目录的 L0、L1 预览。列出仅包含文件的系统目录时不再请求检索标签。
+- FileBrowser 搜索对齐控制台设计，移除结果预览面板，保留键盘导航。L0/L1/L2 切换时保持预览正文挂载，更新层级指示器时避免内容闪烁。
+- Markdown 预览支持经过安全清理的 HTML，并恢复导入图片。目录引导目标不可用时显示“下一步”操作。
+- ExperienceDashboard 新增“已更新”标签、可访问的指标说明、加载骨架屏、保留一位小数的注入率、滚动加载轨迹、滑动页签指示器及可配置圆角的结果分布条。轨迹统一通过行尾操作打开，共用看板状态使用次级重试按钮。
+- 隔离区块、文件预览、命令结果和对话区域的渲染错误。新增 `slots.errorFallback`、局部重置回调和懒加载重试，保留正常区域及草稿。
+- 统一 FileTree 滚动条颜色、跟随主题的表单控件和下拉选择的键盘交互。快捷命令配置摘要或描述被截断时展示完整提示。文档站新增双语发布日志。
+
+迁移说明：移除公开的 `@openviking/react/modules/viking-bot` Hook 入口，请改用 `modes={['conversation']}` 的 Console 及其对话服务。请移除 `TabImpactIcon`、`TabSourceIcon`、`TabTestIcon` 导入，以及已废弃的 `FileBrowserLabels.searchPreview`、`searchPreviewEmpty`、`searchPreviewFailed` 文案覆盖。
+
+[完整变更](https://github.com/volcengine/OpenViking/compare/react@0.1.10...react@0.1.11)
+
+<!-- /release-note:zh-CN -->
+
 ## 0.1.10
 
 <!-- release-note:en-US -->
