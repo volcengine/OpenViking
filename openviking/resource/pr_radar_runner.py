@@ -65,6 +65,7 @@ logger = get_logger(__name__)
 
 _RESOURCE_URI_PREFIX = "viking://resources/"
 _USER_RESOURCE_MARKER = "__user__"
+_ACCOUNT_RESOURCE_MARKER = "__account__"
 
 
 @dataclass(frozen=True)
@@ -128,11 +129,15 @@ def plan_digest(
             return DigestPlan(
                 action="digest",
                 window_start=fmt_ts(window_start),
-                window_end=fmt_ts(now),
+                window_end=fmt_ts(min(now, window_end)),
                 partial=True,
             )
         if not caught_up:
-            return DigestPlan(action="accumulate")
+            return DigestPlan(
+                action="accumulate",
+                window_start=fmt_ts(window_start),
+                window_end=fmt_ts(window_end),
+            )
         return DigestPlan(
             action="digest",
             window_start=fmt_ts(window_start),
@@ -146,17 +151,23 @@ def plan_digest(
         return DigestPlan(
             action="digest",
             window_start=state.last_digest_at,
-            window_end=fmt_ts(now),
+            window_end=fmt_ts(min(now, next_digest)),
             partial=True,
         )
     if now < next_digest:
-        return DigestPlan(action="accumulate")
+        return DigestPlan(
+            action="accumulate", window_start=state.last_digest_at,
+            window_end=fmt_ts(next_digest),
+        )
     if not caught_up:
         # The boundary is due but collection has not read the full window
         # (per-run cap or a transport failure). Closing it now would strand
         # unread in-window PRs outside every future window, so hold the
         # boundary and retry on the next trigger, mirroring backfill gating.
-        return DigestPlan(action="accumulate")
+        return DigestPlan(
+            action="accumulate", window_start=state.last_digest_at,
+            window_end=fmt_ts(next_digest),
+        )
     return DigestPlan(
         action="digest",
         window_start=state.last_digest_at,
@@ -208,10 +219,14 @@ class PrRadarRunner:
         viking_fs: Any,
         gh: Optional[GhCli] = None,
         vlm_resolver: Any = None,
+        group_resolver: Any = None,
+        context_resolver: Any = None,
     ) -> None:
         self._fs = viking_fs
         self._gh = gh or GhCli()
         self._vlm_resolver = vlm_resolver
+        self._group_resolver = group_resolver
+        self._context_resolver = context_resolver
 
     async def maybe_run(self, task: Any, ctx: Any) -> RadarRunResult:
         """Entry point for a watch trigger. Never raises."""
@@ -227,11 +242,6 @@ class PrRadarRunner:
                     reason="pr_radar only supports GitHub repositories",
                 )
 
-            if not have_gh():
-                warning = "`gh` CLI not found on PATH; PR radar deferred to next watch trigger"
-                logger.warning("[PrRadar] %s: %s", repo, warning)
-                return RadarRunResult(status="skipped", reason=warning)
-
             target_uri = self._target_uri(
                 config,
                 repo,
@@ -246,7 +256,20 @@ class PrRadarRunner:
             # creation checks passed. Derived targets live in the caller's
             # own user namespace and pass the ordinary owner checks.
             io_ctx = self._io_context(ctx)
+            if self._context_resolver is not None:
+                io_ctx = self._io_context(await self._context_resolver(io_ctx))
+            if self._group_resolver is not None:
+                groups = await self._group_resolver(
+                    ctx.account_id, self._owner_user_id(task, ctx)
+                )
+                io_ctx = replace(io_ctx, group_ids=tuple(groups))
             state = await self._load_state(target_uri, io_ctx)
+            if state.pending_publish is not None:
+                return await self._finish_publication(target_uri, state.pending_publish, io_ctx)
+            if not have_gh():
+                warning = "`gh` CLI not found on PATH; PR radar deferred to next watch trigger"
+                logger.warning("[PrRadar] %s: %s", repo, warning)
+                return RadarRunResult(status="skipped", reason=warning)
             # Anchor the first-run floor on the watch creation time so the
             # collected range matches the labeled backfill window: a delayed
             # first trigger (gh missing, scheduler downtime) must not shrink
@@ -267,13 +290,26 @@ class PrRadarRunner:
             if merged != pending:
                 await signal_store.save(merged, io_ctx)
 
+            now = utc_now()
+            window = plan_digest(
+                state=state, config=config, pending_count=0,
+                caught_up=outcome.caught_up, anchor=anchor, now=now,
+            )
+            # Count versions owned by this window, not future-window rows.
+            # An empty due window must be able to close even with a full
+            # future queue; the safety valve must not erase older snapshots
+            # by expanding across multiple report windows.
+            owned_count = sum(
+                not pr.updated_at or window.window_start <= pr.updated_at <= window.window_end
+                for pr in merged
+            )
             plan = plan_digest(
                 state=state,
                 config=config,
-                pending_count=len(merged),
+                pending_count=owned_count,
                 caught_up=outcome.caught_up,
                 anchor=anchor,
-                now=utc_now(),
+                now=now,
             )
 
             if plan.action == "accumulate":
@@ -313,7 +349,10 @@ class PrRadarRunner:
 
             # Collection watermark advances; digest watermark only on a full digest.
             next_digest_at = plan.advance_to or state.last_digest_at
-            fragments = list(state.partial_fragments)
+            fragments = [
+                fragment for fragment in state.partial_fragments
+                if fragment.get("window_start") == plan.window_start
+            ]
             new_state = replace(
                 outcome.state,
                 last_digest_at=next_digest_at,
@@ -332,6 +371,8 @@ class PrRadarRunner:
                 # Boundary reached with nothing in-window: advance silently,
                 # no report file and no LLM call. Deferred signals stay queued.
                 # No publish can fail here, so persisting the boundary is safe.
+                if not plan.partial:
+                    new_state = replace(new_state, partial_fragments=[])
                 if new_state != state:
                     await self._write_state(target_uri, new_state, io_ctx)
                 return RadarRunResult(
@@ -366,32 +407,23 @@ class PrRadarRunner:
                 partial=plan.partial,
                 continuation_fragments=None if plan.partial else fragments,
             )
-            await self._publish_report(target_uri, report, io_ctx, archive_stamp)
-            # Drain the queue BEFORE advancing the watermark. The two writes
-            # are not transactional: if the state write landed first and the
-            # queue write then failed, already-published signals would reload
-            # next trigger outside every future window and strand forever.
-            # With this order a queue failure leaves state on the old boundary,
-            # so the next trigger retries the same window (at worst a duplicate
-            # report) instead of losing signals.
-            if deferred:
-                await signal_store.save(deferred, io_ctx)
-            else:
-                await signal_store.clear(io_ctx)
             if not plan.partial:
-                # Full digest: all earlier fragments are consumed here.
                 new_state = replace(new_state, partial_fragments=[])
-            if new_state != state:
-                await self._write_state(target_uri, new_state, io_ctx)
-            return RadarRunResult(
-                status="published",
-                pr_count=len(in_window),
-                target_uri=target_uri,
-                report_mode=report_mode,
-                warnings=warnings,
-                window_start=plan.window_start,
-                window_end=plan.window_end,
+            journal = {
+                "stamp": archive_stamp, "report": report,
+                "next_state": replace(new_state, pending_publish=None).to_dict(),
+                "deferred": [pr.to_row() for pr in deferred],
+                "pr_count": len(in_window), "report_mode": report_mode,
+                "warnings": warnings, "window_start": plan.window_start,
+                "window_end": plan.window_end,
+            }
+            # Prepare before publishing or draining. If any subsequent write
+            # fails, the exact report, archive identity and final state remain
+            # recoverable even when the signal queue has already been cleared.
+            await self._write_state(
+                target_uri, replace(state, pending_publish=journal), io_ctx
             )
+            return await self._finish_publication(target_uri, journal, io_ctx)
         except GhCliUnavailable as exc:
             logger.warning("[PrRadar] gh unavailable: %s", exc)
             return RadarRunResult(status="skipped", reason=str(exc))
@@ -404,6 +436,22 @@ class PrRadarRunner:
             return RadarRunResult(status="failed", reason=type(exc).__name__)
 
     # -- helpers ------------------------------------------------------------
+
+    async def _finish_publication(
+        self, target_uri: str, journal: dict, ctx: Any
+    ) -> RadarRunResult:
+        await self._publish_report(target_uri, journal["report"], ctx, journal["stamp"])
+        deferred = [PrSignal.from_row(row) for row in journal["deferred"]]
+        await RadarSignalStore(self._fs, target_uri).save(deferred, ctx)
+        await self._write_state(
+            target_uri, RadarState.from_dict(journal["next_state"]), ctx
+        )
+        return RadarRunResult(
+            status="published", target_uri=target_uri,
+            pr_count=journal["pr_count"], report_mode=journal["report_mode"],
+            warnings=journal["warnings"], window_start=journal["window_start"],
+            window_end=journal["window_end"],
+        )
 
     @staticmethod
     def _io_context(ctx: Any) -> Any:
@@ -474,6 +522,9 @@ class PrRadarRunner:
           * ``viking://user/<uid>/resources/<rel>`` ->
             ``__user__/<uid>/<rel>`` (user-owned resources)
 
+        Account paths starting with ``__user__`` or ``__account__`` gain an
+        ``__account__`` prefix; the escape marker is escaped too. These paths
+        previously shared ambiguous state, which is intentionally not copied.
         The reserved marker keeps the two projections collision-free, so two
         distinct watches of the same GitHub repo (e.g. projectA vs projectB
         under a user namespace) no longer fall back to one shared slug
@@ -484,10 +535,10 @@ class PrRadarRunner:
         if watch_to_uri.startswith(_RESOURCE_URI_PREFIX):
             relative = watch_to_uri[len(_RESOURCE_URI_PREFIX) :].strip("/")
             segments = relative.split("/") if relative else []
-            # Refuse the reserved marker so account paths can never collide
-            # with the user-namespace projection.
-            if segments and segments[0] == _USER_RESOURCE_MARKER:
-                return None
+            # Escape both markers, including the escape marker itself. This
+            # remains injective for every legal account resource path.
+            if segments and segments[0] in {_USER_RESOURCE_MARKER, _ACCOUNT_RESOURCE_MARKER}:
+                segments.insert(0, _ACCOUNT_RESOURCE_MARKER)
         else:
             body = watch_to_uri[len("viking://") :]
             parts = [p for p in body.split("/") if p]
@@ -641,12 +692,12 @@ async def authorize_pr_radar_target(
 ) -> None:
     """Authorize an explicit radar target with the caller's own authority.
 
-    Radar I/O runs inside the watch context, whose ``bypass_acl=True`` skips
-    namespace/ACL enforcement, so a user-supplied ``target_uri`` must be
-    WRITE-checked at watch creation with the original request context. Without
-    this, a user could redirect radar writes at ACL-protected resources they
-    cannot otherwise write. Derived targets live in the caller's own user
-    namespace (target_uri is None) and need no extra check.
+    ResourceService checks the original request context. WatchManager also
+    checks the refreshed background context before persisting the watch, so
+    trusted request-only assertions cannot create an unusable report target.
+    Runtime radar still checks each individual file with bypass disabled.
+    Derived targets live in the caller's own user namespace (target_uri is
+    None) and need no extra directory check.
     """
     config = radar_config_or_none(processor_kwargs)
     if config is None or not config.enabled or not config.target_uri:

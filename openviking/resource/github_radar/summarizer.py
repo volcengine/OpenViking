@@ -157,7 +157,7 @@ class RadarSummarizer:
         if not isinstance(raw, dict):
             return None
         number = raw.get("number")
-        if not isinstance(number, int) or number not in allowed_numbers:
+        if type(number) is not int or number not in allowed_numbers:
             # Unknown or fabricated PR number: never let it into the report.
             return None
         severity = str(raw.get("severity") or "low").lower()
@@ -240,7 +240,7 @@ class RadarSummarizer:
                 highlights = [
                     number
                     for number in raw_highlights
-                    if isinstance(number, int) and number in allowed
+                    if type(number) is int and number in allowed
                 ]
                 sections.append(
                     TopicSection(

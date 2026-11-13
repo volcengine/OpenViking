@@ -47,7 +47,8 @@ from openviking.service.task_tracker_concurrency import KeyedAsyncLockPool, run_
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.utils.git_auth import GIT_AUTH_FAILED
 from openviking.utils.network_guard import ensure_public_remote_target
-from openviking_cli.exceptions import ConflictError, FailedPreconditionError
+from openviking_cli.exceptions import ConflictError, FailedPreconditionError, InvalidArgumentError
+from openviking_cli.exceptions import PermissionDeniedError as FsPermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.logger import get_logger
 
@@ -115,8 +116,42 @@ class WatchManager:
         self._resource_service = resource_service
         self._runtime_config_manager = runtime_config_manager
         self._vlm_resolver = vlm_resolver
+        self._pr_radar_group_resolver = None
+        self._pr_radar_context_resolver = None
         self._trigger_locks: KeyedAsyncLockPool[str] = KeyedAsyncLockPool()
         self._deletion_guard: Optional[Callable[[str, str], Any]] = None
+
+    def set_pr_radar_group_resolver(self, resolver: Any) -> None:
+        """Refresh the owner's current groups before each radar invocation."""
+        self._pr_radar_group_resolver = resolver
+
+    def set_pr_radar_context_resolver(self, resolver: Any) -> None:
+        """Resolve current radar authority without changing ingestion authority."""
+        self._pr_radar_context_resolver = resolver
+
+    async def _authorize_radar_task(self, task: WatchTask) -> None:
+        """Reject targets with no refreshable authority for background radar."""
+        if self._pr_radar_context_resolver is None:
+            return
+        from openviking.resource.pr_radar_runner import (
+            PrRadarRunner,
+            authorize_pr_radar_target,
+            radar_config_or_none,
+        )
+
+        config = radar_config_or_none(task.processor_kwargs)
+        if config is None or not config.enabled or not config.target_uri:
+            return
+        ctx = PrRadarRunner._io_context(self.context(task))
+        ctx = PrRadarRunner._io_context(await self._pr_radar_context_resolver(ctx))
+        try:
+            await authorize_pr_radar_target(self._viking_fs, task.processor_kwargs, ctx)
+        except FsPermissionDeniedError as exc:
+            raise InvalidArgumentError(
+                "pr_radar.target_uri requires persistent local WRITE permission for "
+                "scheduled reports; request-only trusted role/group assertions cannot "
+                "authorize background radar. Grant local access or use the derived target."
+            ) from exc
 
     def set_deletion_guard(self, guard: Optional[Callable[[str, str], Any]]) -> None:
         """Refuse new Watches for identities the guard reports as being deleted."""
@@ -203,6 +238,7 @@ class WatchManager:
             original_role=original_role,
         )
         task.next_execution_time = task.calculate_next_execution_time() if is_active else None
+        await self._authorize_radar_task(task)
         if await self._owner_deleting(account_id, user_id):
             raise FailedPreconditionError("Identity deletion is in progress")
         created = False
@@ -743,7 +779,11 @@ class WatchManager:
         from openviking.resource.pr_radar_runner import PrRadarRunner
 
         try:
-            runner = PrRadarRunner(self._viking_fs, vlm_resolver=self._vlm_resolver)
+            runner = PrRadarRunner(
+                self._viking_fs, vlm_resolver=self._vlm_resolver,
+                group_resolver=self._pr_radar_group_resolver,
+                context_resolver=self._pr_radar_context_resolver,
+            )
             result = await runner.maybe_run(task, ctx)
             if result.status in {"skipped", "failed"}:
                 logger.warning(

@@ -180,10 +180,10 @@ class RadarState:
         published report window. Empty means the initial backfill window has
         not been digested yet. Subsequent windows are anchored on the watch's
         ``created_at`` and advance by ``watch_interval`` per digest.
-      * :attr:`scan_offset` -- endpoint rows already consumed at the current
-        ``issues_since`` while a same-timestamp prefix is still being read;
-        lets the next trigger resume past the issue-heavy tie prefix instead
-        of re-reading page 1 forever. Reset to 0 whenever the watermark moves.
+      * :attr:`scan_offset` -- size of the previously scanned prefix, used
+        only to budget replay. Live ``updated_at`` offsets are not cursors.
+      * :attr:`scan_seen` -- observed row versions while a changing prefix
+        prevents verified watermark advancement.
       * :attr:`partial_fragments` -- safety-valve partial digests already
         published for the current boundary, so later full-window reports can
         label themselves as continuations of those fragments.
@@ -193,13 +193,18 @@ class RadarState:
     issues_seen: List[str] = field(default_factory=list)
     last_digest_at: str = ""
     scan_offset: int = 0
+    scan_seen: List[str] = field(default_factory=list)
     partial_fragments: List[Dict[str, Any]] = field(default_factory=list)
+    # Prepared publication is replayed before collecting again. It survives
+    # report/queue/final-state failures without losing the window association.
+    pending_publish: Optional[Dict[str, Any]] = None
 
     @classmethod
     def from_dict(cls, data: Any) -> "RadarState":
         if not isinstance(data, dict):
             return cls()
         seen = data.get("issues_seen")
+        scan_seen = data.get("scan_seen")
         fragments = data.get("partial_fragments")
         offset = data.get("scan_offset", 0)
         return cls(
@@ -207,11 +212,15 @@ class RadarState:
             issues_seen=[str(item) for item in seen] if isinstance(seen, list) else [],
             last_digest_at=str(data.get("last_digest_at") or ""),
             scan_offset=offset if isinstance(offset, int) and offset >= 0 else 0,
+            scan_seen=[str(item) for item in scan_seen] if isinstance(scan_seen, list) else [],
             partial_fragments=[
                 dict(item) for item in fragments if isinstance(item, dict)
             ]
             if isinstance(fragments, list)
             else [],
+            pending_publish=dict(data["pending_publish"])
+            if isinstance(data.get("pending_publish"), dict)
+            else None,
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -220,7 +229,9 @@ class RadarState:
             "issues_seen": list(self.issues_seen),
             "last_digest_at": self.last_digest_at,
             "scan_offset": self.scan_offset,
+            "scan_seen": list(self.scan_seen),
             "partial_fragments": [dict(item) for item in self.partial_fragments],
+            "pending_publish": self.pending_publish,
         }
 
 

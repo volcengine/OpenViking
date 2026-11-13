@@ -136,7 +136,8 @@ async def test_issue_rows_do_not_consume_pr_budget():
 
     assert [pr.number for pr in outcome.prs] == [1, 2]
     assert outcome.caught_up is False
-    assert len(gh.calls) == 2
+    # The consumed prefix is replayed before its watermark is committed.
+    assert [call["params"]["page"] for call in gh.calls] == ["1", "2", "1", "2"]
 
 
 @pytest.mark.asyncio
@@ -178,6 +179,68 @@ class GithubOffsetGh:
         return self._rows[start : start + per_page]
 
 
+class MutableUpdatedGh(GithubOffsetGh):
+    """Live endpoint: changes updated_at ordering between requests."""
+
+    async def api_get_json(self, path, params=None):
+        rows = sorted(
+            (row for row in self._rows if row["updated_at"] >= params["since"]),
+            key=lambda row: row["updated_at"],
+        )
+        per_page = int(params["per_page"])
+        start = (int(params["page"]) - 1) * per_page
+        return rows[start : start + per_page]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["update", "delete"])
+async def test_resumption_reconciles_shifted_issue_prefix(change):
+    tie = "2026-11-10T00:00:00Z"
+    rows = [_issue_row(100 + i, tie) for i in range(20)]
+    rows += [_pr_row(7, "2026-11-10T00:00:01Z"), _pr_row(8, "2026-11-10T00:00:02Z")]
+    gh = MutableUpdatedGh(rows)
+    config = RadarConfig(enabled=True, max_prs_per_run=2)
+    first = await collect_prs(gh, "o/r", config, RadarState(issues_since=tie))
+    assert first.prs == [] and not first.caught_up
+
+    if change == "update":
+        rows[0]["updated_at"] = "2026-11-10T00:00:03Z"
+    else:
+        rows.pop(0)
+    emitted = []
+    state = first.state
+    for _ in range(4):
+        outcome = await collect_prs(gh, "o/r", config, state)
+        emitted.extend(pr.number for pr in outcome.prs)
+        state = outcome.state
+        if outcome.caught_up:
+            break
+    assert set(emitted) == {7, 8}
+    assert outcome.caught_up
+
+
+@pytest.mark.asyncio
+async def test_in_pass_page_shift_does_not_advance_past_unread_pr():
+    tie = "2026-11-10T00:00:00Z"
+    rows = [_issue_row(100, tie), _issue_row(101, tie)]
+    rows += [_pr_row(7, "2026-11-10T00:00:01Z"), _pr_row(8, "2026-11-10T00:00:02Z")]
+
+    class ChangingGh(MutableUpdatedGh):
+        changed = False
+
+        async def api_get_json(self, path, params=None):
+            if int(params["page"]) == 2 and not self.changed:
+                rows[0]["updated_at"] = "2026-11-10T00:00:03Z"
+                self.changed = True
+            return await super().api_get_json(path, params)
+
+    gh = ChangingGh(rows)
+    config = RadarConfig(enabled=True, max_prs_per_run=2)
+    first = await collect_prs(gh, "o/r", config, RadarState(issues_since=tie))
+    second = await collect_prs(gh, "o/r", config, first.state)
+    assert {pr.number for pr in first.prs + second.prs} == {7, 8}
+
+
 @pytest.mark.asyncio
 async def test_constant_per_page_keeps_github_offsets_from_overlapping():
     # An issue-heavy first page (40 issues + 10 PRs), then PR-only pages.
@@ -200,9 +263,9 @@ async def test_constant_per_page_keeps_github_offsets_from_overlapping():
     # is consumed whole (the cap gates between pages, not inside a page).
     assert len(numbers) == len(set(numbers)) == 60
     assert numbers == list(range(1, 61))
-    # per_page is frozen for the whole pass and pages stay sequential.
+    # per_page stays fixed; both collection and verification scan sequentially.
     assert {call["per_page"] for call in gh.calls} == {50}
-    assert [call["page"] for call in gh.calls] == list(range(1, len(gh.calls) + 1))
+    assert [call["page"] for call in gh.calls] == [1, 2, 1, 2]
     assert outcome.caught_up is False
 
 
@@ -288,8 +351,8 @@ async def test_newer_snapshot_of_remembered_pr_is_emitted():
 @pytest.mark.asyncio
 async def test_same_timestamp_issue_prefix_resumes_across_triggers():
     # 500 plain issues sharing timestamp T fill every page of the first pass;
-    # the PR at T+1 must be reached on the next pass via the persisted
-    # scan_offset instead of re-reading page 1 forever.
+    # the PR at T+1 must be reached on the next pass by budgeting replay of
+    # the persisted prefix in addition to ten fresh pages.
     tie = "2026-11-10T00:00:00Z"
     later = "2026-11-10T00:00:01Z"
     rows = [_issue_row(1000 + i, tie) for i in range(500)]
@@ -302,7 +365,7 @@ async def test_same_timestamp_issue_prefix_resumes_across_triggers():
     )
     assert first.prs == []
     assert first.caught_up is False
-    # Endpoint position persisted while the watermark stays on T.
+    # Replay budget persisted while the watermark stays on T.
     assert first.state.issues_since == tie
     assert first.state.scan_offset == 500
 
@@ -317,8 +380,8 @@ async def test_same_timestamp_issue_prefix_resumes_across_triggers():
 @pytest.mark.asyncio
 async def test_scan_offset_resumes_after_page_guard():
     # A tie prefix longer than the 10-page budget (10 x per_page) requires
-    # several passes; each resumes at the persisted endpoint offset until the
-    # PR past the prefix is finally reached.
+    # several passes; each replays the known prefix before reading further
+    # until the PR past the prefix is finally reached.
     tie = "2026-11-10T00:00:00Z"
     later = "2026-11-10T00:00:01Z"
     rows = [_issue_row(1000 + i, tie) for i in range(23)]

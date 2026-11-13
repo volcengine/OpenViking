@@ -81,6 +81,23 @@ def _synthesis_response():
 
 
 @pytest.mark.asyncio
+async def test_boolean_identifiers_cannot_replace_pr_one_or_enter_highlights():
+    valid = _triage_response([1])
+    forged = _triage_response([True])["items"][0]
+    forged["summary_zh"] = "fabricated boolean row"
+    valid["items"].append(forged)
+    synthesis = _synthesis_response()
+    synthesis["sections"][0]["highlight_numbers"] = [True, 1]
+    handle = FakeVLM([valid, synthesis])
+    summary = await RadarSummarizer(FakeResolver(handle), batch_bytes=60_000).summarize(
+        REPO, [_pr(1)], "acct-1"
+    )
+    assert summary is not None
+    assert summary.triage[1].summary_zh == "摘要 1"
+    assert summary.synthesis.sections[0].highlight_numbers == [1]
+
+
+@pytest.mark.asyncio
 async def test_summarize_drops_unknown_pr_numbers():
     handle = FakeVLM(
         [
