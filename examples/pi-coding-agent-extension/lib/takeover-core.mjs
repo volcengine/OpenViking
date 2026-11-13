@@ -586,6 +586,12 @@ export class TakeoverCore {
     return this.commitAndAdvance(branch, { deadline });
   }
 
+  /** Account for a durably queued turn without trimming history off-handler. */
+  recordQueuedTokens(estTokens) {
+    if (!this.enabled) return;
+    this.pendingTokens += Math.max(0, Math.floor(Number(estTokens) || 0));
+  }
+
   /**
    * Check a pending archive once, outside `turn_end` — `before_agent_start`
    * calls this so a summary that finished between prompts (or between `pi -p`

@@ -151,6 +151,16 @@ function restoreBoundary(core, coveredThroughEntryId, data = {}) {
   }]);
 }
 
+test("queued capture counts takeover pressure without advancing its boundary", async () => {
+  const { core, calls } = makeCore();
+  core.recordQueuedTokens(120);
+  assert.equal(core.state.pendingTokens, 120);
+  assert.equal(calls.committed, 0);
+  assert.equal(calls.persisted.length, 0);
+  await core.shutdown();
+  assert.equal(calls.persisted.at(-1).data.pendingTokens, 120);
+});
+
 test("flattenContent handles strings and text arrays", () => {
   assert.equal(flattenContent({ role: "user", content: "hello" }), "hello");
   assert.equal(flattenContent({ role: "user", content: [{ type: "text", text: "a" }, { type: "image" }, { type: "text", text: "b" }] }), "ab");
