@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -28,6 +29,7 @@ from openviking.server.account_stores.sql_schema import Account, Base
 from openviking.server.config import AccountStoreConfig
 from openviking.server.identity import Role
 from openviking.server.store_assembly import build_api_key_manager
+from openviking.storage import sql_runtime
 from openviking_cli.exceptions import (
     AlreadyExistsError,
     FailedPreconditionError,
@@ -165,6 +167,29 @@ async def pg_manager(pg_database):
     await manager.load()
     try:
         yield manager
+    finally:
+        await manager.close()
+
+
+async def test_pg_startup_on_simulated_windows_private_loop(pg_database, monkeypatch):
+    params, _, _, _ = pg_database
+    monkeypatch.setattr(sql_runtime, "sys", SimpleNamespace(platform="win32"))
+    manager = build_api_key_manager(
+        "root",
+        None,
+        service_name="windows-" + uuid4().hex,
+        account_store_provider="postgres",
+        account_store_params=params,
+    )
+    runtime = sql_runtime.SQLRuntime()
+    manager._store._sql_runtime = runtime
+    try:
+        await manager.load()
+        assert isinstance(runtime._loop, asyncio.SelectorEventLoop)
+        assert runtime._loop is not asyncio.get_running_loop()
+        assert [account["account_id"] for account in await manager.list_accounts()] == ["default"]
+        await manager.create_account("acme", "admin")
+        assert (await manager.get_account("acme"))["user_count"] == 1
     finally:
         await manager.close()
 
