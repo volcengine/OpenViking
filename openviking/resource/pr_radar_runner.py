@@ -22,7 +22,10 @@ Window semantics are anchored on the watch's ``created_at``: the first report
 covers ``[anchor - backfill_days, anchor]`` once the backfill is fully read;
 every later report covers one ``watch_interval`` window. Triggers inside a
 window only accumulate; the pending safety valve may force a clearly-labeled
-partial digest without moving the window boundary.
+partial digest without moving the window boundary. A digest renders only the
+signals whose ``updated_at`` falls inside its labeled window; newer signals
+stay queued, so a delayed trigger catches up one window per digest instead of
+dumping the whole backlog into a mislabeled report.
 """
 
 from __future__ import annotations
@@ -38,6 +41,7 @@ from openviking.resource.github_radar.models import (
     LATEST_REPORT_NAME,
     REPORTS_DIRNAME,
     STATE_FILENAME,
+    PrSignal,
     RadarConfig,
     RadarState,
     escape_repo_slug,
@@ -153,6 +157,30 @@ def plan_digest(
     )
 
 
+def partition_pending(
+    prs: list[PrSignal], window_start: str, window_end: str
+) -> tuple[list[PrSignal], list[PrSignal]]:
+    """Split pending signals into (inside-window, deferred-to-next-window).
+
+    A digest only owns signals whose ``updated_at`` falls inside its labeled
+    window; anything newer stays queued so a delayed trigger can neither
+    mislabel a PR under an earlier window nor swallow several windows into one
+    report. Bounds are inclusive, matching the inclusive collection ``since``.
+    Timestamps share the fixed ``%Y-%m-%dT%H:%M:%SZ`` shape, so lexicographic
+    comparison equals chronological order. A row without a parseable
+    timestamp cannot be placed and is treated as inside to avoid starving it.
+    """
+    in_window: list[PrSignal] = []
+    deferred: list[PrSignal] = []
+    for pr in prs:
+        stamp = pr.updated_at
+        if not stamp or (window_start <= stamp <= window_end):
+            in_window.append(pr)
+        else:
+            deferred.append(pr)
+    return in_window, deferred
+
+
 class PrRadarRunner:
     """Orchestrates gh-based PR collection and report persistence for one watch."""
 
@@ -248,10 +276,18 @@ class PrRadarRunner:
             next_digest_at = plan.advance_to or state.last_digest_at
             new_state = replace(outcome.state, last_digest_at=next_digest_at)
 
-            if not merged:
-                # Boundary reached with nothing to report: advance silently,
-                # no report file and no LLM call. No publish can fail here, so
-                # persisting the boundary immediately is safe.
+            # Only signals inside the labeled window belong to this report;
+            # newer ones stay queued for the next window instead of being
+            # mislabeled under an earlier boundary or swallowed when a lagging
+            # watch has to catch up several windows one digest at a time.
+            in_window, deferred = partition_pending(
+                merged, plan.window_start, plan.window_end
+            )
+
+            if not in_window:
+                # Boundary reached with nothing in-window: advance silently,
+                # no report file and no LLM call. Deferred signals stay queued.
+                # No publish can fail here, so persisting the boundary is safe.
                 if new_state != state:
                     await self._write_state(target_uri, new_state, ctx)
                 return RadarRunResult(
@@ -263,7 +299,7 @@ class PrRadarRunner:
                 )
 
             report, report_mode = await self._render(
-                repo, merged, config, ctx, plan.window_start, plan.window_end
+                repo, in_window, config, ctx, plan.window_start, plan.window_end
             )
             await self._publish_report(target_uri, report, ctx)
             # Both watermarks and the queue only advance after a successful
@@ -271,10 +307,13 @@ class PrRadarRunner:
             # so the next trigger retries the same window with the same boundary.
             if new_state != state:
                 await self._write_state(target_uri, new_state, ctx)
-            await signal_store.clear(ctx)
+            if deferred:
+                await signal_store.save(deferred, ctx)
+            else:
+                await signal_store.clear(ctx)
             return RadarRunResult(
                 status="published",
-                pr_count=len(merged),
+                pr_count=len(in_window),
                 target_uri=target_uri,
                 report_mode=report_mode,
                 warnings=warnings,

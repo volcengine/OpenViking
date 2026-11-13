@@ -7,13 +7,19 @@ from types import SimpleNamespace
 import pytest
 
 import openviking.resource.pr_radar_runner as runner_module
+from openviking.resource.github_radar.collector import _build_pr
 from openviking.resource.github_radar.gh_cli import GhCliError
 from openviking.resource.github_radar.models import (
     LATEST_REPORT_NAME,
+    SIGNALS_FILENAME,
     STATE_FILENAME,
     RadarConfig,
 )
-from openviking.resource.pr_radar_runner import PrRadarRunner, validate_pr_radar_config
+from openviking.resource.pr_radar_runner import (
+    PrRadarRunner,
+    partition_pending,
+    validate_pr_radar_config,
+)
 from openviking_cli.exceptions import InvalidArgumentError
 
 GITHUB_URL = "https://github.com/volcengine/OpenViking"
@@ -40,8 +46,8 @@ class FakeGh:
         return list(self._rows)
 
 
-def _pr_row(number: int) -> dict:
-    ts = "2026-11-10T08:00:00Z"
+def _pr_row(number: int, updated_at: str = "2026-11-10T08:00:00Z") -> dict:
+    ts = updated_at
     return {
         "number": number,
         "title": f"PR {number}",
@@ -454,13 +460,19 @@ async def test_steady_window_advances_by_watch_interval():
     last_digest_ts = fmt_ts(last_digest)
     _seed_state(fs, last_digest_ts)
 
+    # The PR must carry an updated_at inside the due window, otherwise the
+    # window filter defers it to the next digest instead of publishing.
+    in_window_ts = fmt_ts(datetime.now(timezone.utc) - timedelta(seconds=90))
+
     # Digest cadence is owned by RadarConfig, independent of the watch interval.
     task = _task_at(
         datetime.now(),
         1.0,
         {"pr_radar": {"enabled": True, "digest_interval_minutes": 1}},
     )
-    result = await PrRadarRunner(fs, gh=FakeGh([_pr_row(22)])).maybe_run(task, _ctx)
+    result = await PrRadarRunner(
+        fs, gh=FakeGh([_pr_row(22, in_window_ts)])
+    ).maybe_run(task, _ctx)
 
     assert result.status == "published"
     expected_next = fmt_ts(parse_ts(last_digest_ts) + timedelta(minutes=1))
@@ -634,3 +646,101 @@ async def test_summary_disabled_makes_no_llm_call():
     assert result.status == "published"
     assert result.report_mode == "template"
     assert handle.calls == 0
+
+
+def test_partition_pending_splits_on_window_bounds():
+    from dataclasses import replace
+
+    start = "2026-11-10T00:00:00Z"
+    end = "2026-11-10T01:00:00Z"
+    inside_low = _build_pr(_pr_row(1, start))
+    inside_high = _build_pr(_pr_row(2, end))
+    deferred = _build_pr(_pr_row(3, "2026-11-10T01:00:01Z"))
+    timestampless = replace(_build_pr(_pr_row(4, start)), updated_at="")
+
+    in_window, outside = partition_pending(
+        [inside_low, inside_high, deferred, timestampless], start, end
+    )
+
+    # Bounds are inclusive; a row without a parseable timestamp cannot be
+    # placed and must not starve in the queue.
+    assert [pr.number for pr in in_window] == [1, 2, 4]
+    assert [pr.number for pr in outside] == [3]
+
+
+@pytest.mark.asyncio
+async def test_digest_defers_signals_newer_than_window_end():
+    from datetime import datetime, timedelta, timezone
+
+    from openviking.resource.github_radar.models import fmt_ts
+
+    fs = FakeFs()
+    last_digest_ts = fmt_ts(datetime.now(timezone.utc) - timedelta(minutes=2))
+    _seed_state(fs, last_digest_ts)
+    in_window_ts = fmt_ts(datetime.now(timezone.utc) - timedelta(seconds=90))
+    future_ts = fmt_ts(datetime.now(timezone.utc) + timedelta(hours=1))
+    task = _task_at(
+        datetime.now(),
+        1.0,
+        {"pr_radar": {"enabled": True, "digest_interval_minutes": 1}},
+    )
+
+    result = await PrRadarRunner(
+        fs, gh=FakeGh([_pr_row(31, in_window_ts), _pr_row(32, future_ts)])
+    ).maybe_run(task, _ctx)
+
+    assert result.status == "published"
+    assert result.pr_count == 1
+    latest = fs.files[next(uri for uri in fs.files if uri.endswith(LATEST_REPORT_NAME))]
+    assert "#31" in latest and "#32" not in latest
+    # The future PR stays queued for its own window instead of being cleared.
+    queue = fs.files[_signals_uri(fs)]
+    assert '"number": 32' in queue and '"number": 31' not in queue
+
+
+@pytest.mark.asyncio
+async def test_lagged_watch_catches_up_one_window_per_digest():
+    from datetime import datetime, timedelta, timezone
+
+    from openviking.resource.github_radar.models import fmt_ts
+
+    fs = FakeFs()
+    now = datetime.now(timezone.utc)
+    _seed_state(fs, fmt_ts(now - timedelta(minutes=3)))
+    window1_ts = fmt_ts(now - timedelta(seconds=150))
+    window2_ts = fmt_ts(now - timedelta(seconds=90))
+    # Pre-seed the pending queue; gh returns nothing new during both triggers.
+    signals = [_build_pr(_pr_row(41, window1_ts)), _build_pr(_pr_row(42, window2_ts))]
+    fs.files[f"{_RADAR_URI}/{SIGNALS_FILENAME}"] = "\n".join(
+        json.dumps(signal.to_row()) for signal in signals
+    )
+    task = _task_at(
+        datetime.now(),
+        1.0,
+        {"pr_radar": {"enabled": True, "digest_interval_minutes": 1}},
+    )
+    runner = PrRadarRunner(fs, gh=FakeGh([]))
+
+    first = await runner.maybe_run(task, _ctx)
+    assert first.status == "published"
+    assert first.pr_count == 1
+    # Snapshot the first report: the archive stamp is second-resolution, so
+    # two fast digests may share an archive filename; latest.md is overwritten.
+    first_report = fs.files[
+        next(uri for uri in fs.files if uri.endswith(LATEST_REPORT_NAME))
+    ]
+    assert "#41" in first_report and "#42" not in first_report
+    queue_after_first = fs.files[_signals_uri(fs)]
+    assert '"number": 42' in queue_after_first
+    assert '"number": 41' not in queue_after_first
+
+    second = await runner.maybe_run(task, _ctx)
+    assert second.status == "published"
+    assert second.pr_count == 1
+    second_report = fs.files[
+        next(uri for uri in fs.files if uri.endswith(LATEST_REPORT_NAME))
+    ]
+    assert "#42" in second_report and "#41" not in second_report
+    assert fs.files[_signals_uri(fs)] == ""
+    # The windows were digested separately, not merged into one mega-report.
+    assert first.window_end != second.window_end
