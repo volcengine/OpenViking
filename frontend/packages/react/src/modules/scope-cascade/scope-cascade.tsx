@@ -1,3 +1,5 @@
+import { useRenderErrors } from './labels.js';
+import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import { Button } from '../../shared/primitives/button/button.js';
 import { resolveScopeCascadeLabels } from './labels.js';
 import { useState } from 'react';
@@ -120,7 +122,7 @@ function LevelView({
 }
 
 /** Only leaf selectors subscribe to request state; this wrapper resolves language. */
-export function ScopeCascade({
+function ScopeCascadeContent({
   locale: localeProp,
   loadLibraries,
   loadSpaces,
@@ -164,5 +166,18 @@ export function ScopeCascade({
         retryLabel={retryLabel}
       />
     </ScopeSwitcher>
+  );
+}
+
+export function ScopeCascade(props: ScopeCascadeProps) {
+  const { slots, ...contentProps } = props;
+  return (
+    <ErrorBoundary
+      fallback={slots?.errorFallback}
+      message={useRenderErrors(props.locale).selector}
+      locale={props.locale}
+    >
+      <ScopeCascadeContent {...contentProps} />
+    </ErrorBoundary>
   );
 }

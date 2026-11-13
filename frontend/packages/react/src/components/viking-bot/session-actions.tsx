@@ -1,14 +1,14 @@
 import { Button } from '../../shared/primitives/button/button.js';
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
 import type { Locale } from '../../shared/locale.js';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
+import { Select, SelectOption } from '../../shared/primitives/select/index.js';
 import { VikingBotIcon } from '../../icons/viking-bot-icons.js';
 import { Tooltip } from '../../shared/primitives/tooltip/index.js';
 import { resolveVikingBotLabels } from './labels.js';
 import type { VikingBotLabels } from './model.js';
 import type { VikingBotSessions } from './capabilities.js';
 import { SessionMeta } from './session-meta.js';
-import { BotPopover } from './bot-popover.js';
 
 /** Session controls can be used alone by a host's shared header. */
 export function VikingBotSessionActions({
@@ -26,6 +26,7 @@ export function VikingBotSessionActions({
   labels?: VikingBotLabels;
   locale?: Locale;
 }) {
+  const [historyOpen, setHistoryOpen] = useState(false);
   const locale = useLocale(localeProp);
   const labels = resolveVikingBotLabels(locale, overrides);
   return (
@@ -43,92 +44,98 @@ export function VikingBotSessionActions({
         {extra}
         {sessions ? (
           <>
-            <BotPopover
-              label={labels.sessionHistory}
-              onOpen={sessions.onOpenHistory}
-              trigger={(props) => (
-                <Tooltip
-                  content={labels.sessionHistory}
-                  disabled={props['aria-expanded'] === true}
-                >
-                  <Button
-                    {...props}
-                    size="mini"
-                    type="text"
-                    iconOnly
-                    htmlType="button"
-                    className="ov-viking-bot__header-action"
-                    aria-label={labels.sessionHistory}
-                  >
-                    <VikingBotIcon
-                      name="history"
-                      width={12.667}
-                      height={12.667}
-                    />
-                  </Button>
-                </Tooltip>
-              )}
-            >
-              {(close) => (
-                <div
-                  className="ov-viking-bot__session-history"
-                  aria-busy={sessions.isLoading}
-                >
-                  {sessions.isLoading ? (
-                    <p role="status">{labels.loading}</p>
-                  ) : null}
-                  {sessions.error ? <p role="alert">{sessions.error}</p> : null}
-                  {!sessions.isLoading &&
-                  !sessions.error &&
-                  !sessions.items.length ? (
-                    <p className="ov-viking-bot__empty-history">
-                      {labels.emptySessions}
-                    </p>
-                  ) : null}
-                  <ul>
-                    {sessions.items.map((item) => {
-                      const date = new Date(item.updatedAt ?? '');
-                      const validDate = Number.isFinite(date.getTime());
-                      return (
-                        <li key={item.id}>
-                          <button
-                            type="button"
-                            aria-current={
-                              sessions.currentId === item.id || undefined
-                            }
-                            onClick={() => {
-                              close();
-                              sessions.onSelect(item.id);
-                            }}
-                          >
-                            <span>{item.title}</span>
-                            {validDate ? (
-                              <time dateTime={item.updatedAt}>
-                                {new Intl.DateTimeFormat(locale, {
-                                  dateStyle: 'short',
-                                  timeStyle: 'short',
-                                }).format(date)}
-                              </time>
-                            ) : null}
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                  {sessions.hasMore && sessions.onLoadMore ? (
+            <Tooltip content={labels.sessionHistory} disabled={historyOpen}>
+              <span className="ov-viking-bot__popover-anchor">
+                <Select<string>
+                  variant="simple"
+                  alignment="end"
+                  value={sessions.currentId ? [sessions.currentId] : []}
+                  onChange={([id]) => {
+                    if (id) sessions.onSelect(id);
+                  }}
+                  open={historyOpen}
+                  onOpenChange={(open) => {
+                    setHistoryOpen(open);
+                    if (open) sessions.onOpenHistory?.();
+                  }}
+                  popupClassName="ov-viking-bot__popover ov-viking-bot__popover--bottom"
+                  renderValue={() => <VikingBotIcon name="history" />}
+                  renderTrigger={({ triggerRef, triggerProps, content }) => (
                     <Button
-                      size="small"
-                      type="default"
+                      {...triggerProps}
+                      ref={triggerRef}
+                      size="mini"
+                      type="text"
+                      iconOnly
                       htmlType="button"
-                      disabled={sessions.isLoading}
-                      onClick={sessions.onLoadMore}
+                      className="ov-viking-bot__header-action"
+                      aria-label={labels.sessionHistory}
                     >
-                      {labels.loadMore}
+                      {content}
                     </Button>
-                  ) : null}
-                </div>
-              )}
-            </BotPopover>
+                  )}
+                  popupFooter={
+                    sessions.hasMore && sessions.onLoadMore ? (
+                      <Button
+                        type="text"
+                        size="small"
+                        htmlType="button"
+                        disabled={sessions.isLoading}
+                        onClick={sessions.onLoadMore}
+                      >
+                        {labels.loadMore}
+                      </Button>
+                    ) : undefined
+                  }
+                >
+                  <div
+                    className="ov-viking-bot__session-history"
+                    aria-busy={sessions.isLoading}
+                  >
+                    {sessions.isLoading ? (
+                      <p role="status">{labels.loading}</p>
+                    ) : null}
+                    {sessions.error ? (
+                      <p role="alert">{sessions.error}</p>
+                    ) : null}
+                    {!sessions.isLoading &&
+                    !sessions.error &&
+                    !sessions.items.length ? (
+                      <p className="ov-viking-bot__empty-history">
+                        {labels.emptySessions}
+                      </p>
+                    ) : null}
+                    <ul role="none">
+                      {sessions.items.map((item) => {
+                        const date = new Date(item.updatedAt ?? '');
+                        const validDate = Number.isFinite(date.getTime());
+                        return (
+                          <li key={item.id} role="none">
+                            <SelectOption
+                              value={item.id}
+                              label={item.title}
+                              aria-current={
+                                sessions.currentId === item.id || undefined
+                              }
+                            >
+                              <span>{item.title}</span>
+                              {validDate ? (
+                                <time dateTime={item.updatedAt}>
+                                  {new Intl.DateTimeFormat(locale, {
+                                    dateStyle: 'short',
+                                    timeStyle: 'short',
+                                  }).format(date)}
+                                </time>
+                              ) : null}
+                            </SelectOption>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                </Select>
+              </span>
+            </Tooltip>
             <Tooltip content={labels.newSession}>
               <Button
                 size="mini"

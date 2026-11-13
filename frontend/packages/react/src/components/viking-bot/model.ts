@@ -180,6 +180,8 @@ export interface VikingBotMessage {
    * Tone of a system message, `info` by default; `error` for failures.
    */
   tone?: 'info' | 'error';
+  /** 客户端失败提示，不进入会话存储或模型输入。Client-only failure notice. */
+  clientError?: Error;
   /**
    * 合并后的消息携带的原始动作清单；合并时保留每条消息自己的 messageId，
    * 渲染时按原始消息回传，避免把动作挂到错误的消息上。

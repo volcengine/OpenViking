@@ -25,17 +25,14 @@
  */
 .ov-file-browser-search .ov-modal__panel {
   height: min(640px, calc(100dvh - 48px));
-  border-radius: 20px;
 }
 
 /*
- * 面板有了固定高度，内层还得一路撑满，否则空态的 `flex: 1` 拿不到可分配的空间，
- * 两行文案会贴在顶部。`focus-lock` 基线只声明了 `max-height: inherit`，没有
- * `height`，因此这里补上。
+ * 面板有了固定高度，内层还得一路撑满，否则空态的 `flex: 1` 拿不到可分配的空间。
+ * `focus-lock` 基线只声明了 `max-height: inherit`，没有 `height`，因此这里补上。
  *
- * With the panel at a fixed height the inner layers have to fill it, or the empty
- * state's `flex: 1` has nothing to distribute and its two lines sit at the top. The
- * base `focus-lock` declares `max-height: inherit` but no height, so add one here.
+ * With the panel at a fixed height the inner layers have to fill it. The base
+ * `focus-lock` declares `max-height: inherit` but no height, so add one here.
  */
 .ov-file-browser-search .ov-modal__focus-lock {
   height: 100%;
@@ -47,7 +44,6 @@
   right: 24px;
   width: 28px;
   height: 28px;
-  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
 }
 
 /* 头部与内容区自己控制内边距，Modal 的 24 会让头部的下边框缩进。 */
@@ -70,7 +66,7 @@
   height: 64px;
   padding: 0 24px;
   border-bottom: 0.5px solid
-    var(--ov-ui-color-border-2, var(--ov-ui-file-search-outline-default));
+    var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
 }
 
 .ov-file-browser-search__input {
@@ -79,20 +75,21 @@
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
   font: inherit;
   font-size: 16px;
   line-height: 24px;
 }
 
 .ov-file-browser-search__input::placeholder {
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
 }
 
 .ov-file-browser-search__input:focus {
   outline: none;
 }
 
+/* 漏斗与 Modal 的关闭按钮同尺寸，两者相距 8；关闭按钮宽 28，所以右侧留 36。 */
 .ov-file-browser-search__advanced-toggle {
   display: inline-flex;
   flex: none;
@@ -105,20 +102,18 @@
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
   cursor: pointer;
 }
 
-.ov-file-browser-search__advanced-toggle:hover {
-  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default, #f7f8fd));
+.ov-file-browser-search__advanced-toggle:hover,
+.ov-file-browser-search__advanced-toggle[aria-expanded='true'] {
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
 }
 
-.ov-file-browser-search__advanced-toggle[aria-expanded='true'] {
-  background: var(
-    --ov-ui-color-primary-light,
-    var(--ov-ui-primary-light-default)
-  );
-  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+.ov-file-browser-search__advanced-toggle:focus-visible {
+  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
+  outline-offset: -2px;
 }
 
 /* ── 内容区 ───────────────────────────────────────────────────────── */
@@ -133,32 +128,26 @@
   display: flex;
   flex: 1;
   min-width: 0;
+  min-height: 0;
   flex-direction: column;
   gap: 12px;
   box-sizing: border-box;
   padding: 16px 16px 16px 12px;
-  overflow: auto;
-  overscroll-behavior: contain;
+  overflow: hidden;
 }
 
 /* ── 计数行与模式切换 ─────────────────────────────────────────────── */
 
+/* 计数行比结果行再缩进 12，与行内文字左对齐（行自身左右各留 12）。 */
 .ov-file-browser-search__summary {
   display: flex;
   flex: none;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 2px 6px;
-  padding-inline: 12px;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-file-search-muted-default));
+  gap: 8px;
+  padding-left: 12px;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
   font-size: 13px;
   line-height: 22px;
-}
-
-.ov-file-browser-search__mode {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
 }
 
 .ov-file-browser-search__mode-chip {
@@ -166,29 +155,22 @@
   align-items: center;
   justify-content: center;
   padding: 0 4px;
-  border: 0.5px solid
-    var(--ov-ui-color-border-2, var(--ov-ui-file-search-outline-default));
+  border: 0.5px solid var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
   border-radius: 4px;
-  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
   font-size: 12px;
+  font-weight: 500;
   line-height: 20px;
-}
-
-/* 下拉挂在「切换」按钮上，位置由按钮决定：计数行文案随语言变长时按钮会移动，
-   写死坐标会立刻错位。 */
-.ov-file-browser-search__switch-wrap {
-  position: relative;
-  display: inline-flex;
-  margin-inline-start: 2px;
 }
 
 .ov-file-browser-search__switch {
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
   font: inherit;
   font-size: 13px;
+  line-height: 22px;
   cursor: pointer;
 }
 
@@ -196,53 +178,84 @@
   text-decoration: underline;
 }
 
-/* ── 模式下拉 ─────────────────────────────────────────────────────── */
-
-.ov-file-browser-search__menu {
-  position: absolute;
-  z-index: 2;
-  /* 按钮下方左对齐；宽度固定，右边界可能超出内容列，靠 max-width 兜住。 */
-  top: calc(100% + 4px);
-  left: 0;
-  display: flex;
-  flex-direction: column;
-  width: 251px;
-  max-width: min(251px, 70vw);
-  padding: 4px;
-  border: 1px solid
-    var(--ov-ui-color-border-2, var(--ov-ui-border-2-default, #e1e4f2));
-  border-radius: 8px;
-  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #fff));
-  box-shadow: 0 4px 16px rgb(0 0 0 / 8%);
+.ov-file-browser-search__switch:focus-visible {
+  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
+  outline-offset: 2px;
 }
 
-.ov-file-browser-search__menu-item {
+/* ── 模式下拉 ─────────────────────────────────────────────────────── */
+
+/*
+ * 浮层由 `Popover` 渲染到 `document.body` 并用视口坐标定位，因此这里不能再给
+ * 绝对定位——那会把 `Popover` 写好的 `top`/`left` 顶掉。只把外观改成设计稿的
+ * Popover：0.5 描边、6 圆角、4 内边距、卡片悬浮投影；宽度 259 由内容决定，
+ * 窄屏时 `max-width` 收住。
+ *
+ * The surface is rendered by `Popover` into `document.body` with viewport
+ * coordinates, so this must not set absolute positioning — that would override the
+ * `top`/`left` the popover writes. It only re-skins the surface to the design's
+ * popover: a 0.5px border, 6px radius, 4px padding and the card shadow. The 259px
+ * width comes from the content; `max-width` caps it on narrow viewports.
+ */
+.ov-dropdown.ov-popover.ov-select__popover.ov-file-browser-search__menu {
+  /* 菜单从弹窗里弹出，必须压在弹窗之上：`Popover` 默认 1000，弹窗是 1001，
+     不改这一条时菜单会渲染在弹窗背后。 */
+  z-index: calc(var(--ov-ui-modal-z-index, 1001) + 1);
+  width: 259px;
+  max-width: min(259px, calc(100vw - 16px));
+  padding: 4px;
+  border: 0.5px solid var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
+  border-radius: 6px;
+  box-shadow: var(--ov-ui-tour-shadow-default);
+}
+
+.ov-file-browser-search__menu {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-sizing: border-box;
+}
+
+.ov-file-browser-search__menu .ov-file-browser-search__menu-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 10px;
+  padding: 4px 4px 4px 8px;
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
 
-.ov-file-browser-search__menu-item:hover,
-.ov-file-browser-search__menu-item[aria-pressed='true'] {
-  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default, #f7f8fd));
+.ov-file-browser-search__menu .ov-file-browser-search__menu-item:hover {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
 }
 
-.ov-file-browser-search__menu-item[aria-pressed='true'] {
-  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+.ov-file-browser-search__menu
+  .ov-file-browser-search__menu-item[aria-selected='true'] {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+}
+
+.ov-file-browser-search__menu
+  .ov-file-browser-search__menu-item[aria-selected='true']
+  .ov-file-browser-search__menu-name {
+  font-weight: 500;
+}
+
+.ov-file-browser-search__menu .ov-file-browser-search__menu-item:focus-visible {
+  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
+  outline-offset: -2px;
 }
 
 .ov-file-browser-search__menu-text {
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
 
 .ov-file-browser-search__menu-name {
@@ -251,27 +264,19 @@
 }
 
 .ov-file-browser-search__menu-hint {
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
   font-size: 12px;
   line-height: 20px;
 }
 
 /* ── 结果行 ───────────────────────────────────────────────────────── */
 
-.ov-file-browser-search__error {
-  color: var(--ov-ui-color-error, var(--ov-ui-error-default));
-}
-
-.ov-file-browser-search__error p {
-  margin: 0;
-}
-
 .ov-file-browser-search__list {
   display: flex;
   flex: 1;
+  min-height: 0;
   flex-direction: column;
   gap: 2px;
-  min-height: 0;
   margin: 0;
   padding: 0;
   overflow: auto;
@@ -280,65 +285,51 @@
 }
 
 .ov-file-browser-search__item {
-  flex: none;
   margin: 0;
 }
 
+/* 整行是按钮：图标、名称与 URI、摘要三段。分隔线落在行内，左右各留 12。 */
 .ov-file-browser-search__result {
-  display: block;
-  box-sizing: border-box;
+  display: flex;
   width: 100%;
-  padding: 0 12px;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  padding: 20px 12px;
   border: 0;
+  border-bottom: 1px solid
+    var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
   border-radius: 6px;
   background: transparent;
   color: inherit;
   font: inherit;
-  text-align: start;
+  text-align: left;
   cursor: pointer;
 }
 
-.ov-file-browser-search__row-content {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-block: 20px;
-  border-bottom: 1px solid
-    var(--ov-ui-color-border-1, var(--ov-ui-file-search-divider-default));
-}
-
-.ov-file-browser-search__item:nth-child(n + 3)
-  .ov-file-browser-search__row-content {
-  padding-block: 17px;
-}
-
-.ov-file-browser-search__result[aria-selected='true'] {
-  background: var(--ov-ui-color-bg-3, var(--ov-ui-file-search-active-default));
-}
-
-.ov-file-browser-search__result[aria-selected='true']
-  .ov-file-browser-search__name {
-  font-weight: 500;
-}
-
+.ov-file-browser-search__result:hover,
+.ov-file-browser-search__result[aria-selected='true'],
 .ov-file-browser-search__result:focus-visible {
-  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
-  outline-offset: -2px;
+  border-bottom-color: transparent;
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+  outline: none;
 }
 
 .ov-file-browser-search__icon {
   display: inline-flex;
-  box-sizing: border-box;
   flex: none;
   align-items: center;
   justify-content: center;
   width: 24px;
   height: 24px;
-  border: 0.5px solid
-    var(--ov-ui-color-border-2, var(--ov-ui-file-search-outline-default));
+  border: 0.5px solid var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
   border-radius: 6px;
-  background: var(--ov-ui-color-bg-4, var(--ov-ui-file-search-icon-default));
-  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+  background: var(--ov-ui-color-bg-4, var(--ov-ui-bg-4-default));
+}
+
+.ov-file-browser-search__icon svg {
+  width: 12px;
+  height: 12px;
 }
 
 .ov-file-browser-search__body {
@@ -356,19 +347,20 @@
   gap: 12px;
 }
 
-.ov-file-browser-search--advanced .ov-file-browser-search__line {
-  column-gap: 4px;
-}
-
 .ov-file-browser-search__name {
-  min-width: 0;
   overflow: hidden;
-  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
   font-size: 14px;
-  font-weight: 400;
   line-height: 22px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 悬停或选中的行把名称加重一档，与设计稿的列表行一致。 */
+.ov-file-browser-search__result:hover .ov-file-browser-search__name,
+.ov-file-browser-search__result[aria-selected='true']
+  .ov-file-browser-search__name {
+  font-weight: 500;
 }
 
 .ov-file-browser-search__name mark {
@@ -380,7 +372,7 @@
   flex: none;
   overflow: hidden;
   max-width: 50%;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-file-search-muted-default));
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
   font-size: 12px;
   line-height: 20px;
   text-overflow: ellipsis;
@@ -389,7 +381,7 @@
 
 .ov-file-browser-search__abstract {
   overflow: hidden;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-file-search-muted-default));
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
   font-size: 13px;
   line-height: 22px;
   text-overflow: ellipsis;
@@ -398,47 +390,66 @@
 
 /* ── 空态、加载、失败 ─────────────────────────────────────────────── */
 
+/* 空态从内容区顶部往下 120，插画与两行文案间距 24。 */
 .ov-file-browser-search__empty {
   display: flex;
   flex: 1;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 4px;
+  gap: 24px;
+  padding-top: 120px;
   text-align: center;
+}
+
+.ov-file-browser-search__empty-art {
+  display: block;
+  flex: none;
+  width: 258px;
+  max-width: 100%;
+  height: auto;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+}
+
+.ov-file-browser-search__empty-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .ov-file-browser-search__empty-title {
   margin: 0;
-  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
-  font-size: 13px;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  font-size: 14px;
   font-weight: 500;
   line-height: 22px;
 }
 
 .ov-file-browser-search__empty-hint {
   margin: 0;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
   font-size: 13px;
   line-height: 22px;
 }
 
+/* 骨架：八条 55 高的行，每条一个 15 的圆点加一根 15 高的圆头横条。 */
 .ov-file-browser-search__skeletons {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  padding-top: 4px;
+  gap: 2px;
 }
 
 .ov-file-browser-search__skeleton {
   display: flex;
   align-items: center;
   gap: 10px;
+  box-sizing: border-box;
+  height: 55px;
+  padding: 12px;
 }
 
 .ov-file-browser-search__skeleton-dot,
 .ov-file-browser-search__skeleton-bar {
-  background: var(--ov-ui-color-bg-4, var(--ov-ui-bg-4-default, #f6f7fa));
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
   animation: ov-file-browser-search-pulse 1.4s ease-in-out infinite;
 }
 
@@ -452,7 +463,7 @@
 .ov-file-browser-search__skeleton-bar {
   max-width: 100%;
   height: 15px;
-  border-radius: 7.5px;
+  border-radius: 14px;
 }
 
 @keyframes ov-file-browser-search-pulse {
@@ -464,8 +475,9 @@
 .ov-file-browser-search__error {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 4px;
-  color: var(--ov-ui-color-error, var(--ov-ui-error-default, #d92d20));
+  color: var(--ov-ui-color-error, var(--ov-ui-error-default));
   font-size: 13px;
   line-height: 22px;
 }
@@ -476,7 +488,7 @@
 
 .ov-file-browser-search__no-results {
   margin: 0;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
   font-size: 13px;
   line-height: 22px;
 }
@@ -772,36 +784,5 @@
 
   .ov-file-browser-search__advanced {
     width: 100%;
-  }
-}
-
-@media (max-width: 480px) {
-  .ov-file-browser-search__summary {
-    position: relative;
-  }
-
-  .ov-file-browser-search__switch-wrap {
-    position: static;
-  }
-
-  .ov-file-browser-search__menu {
-    left: 12px;
-    max-width: calc(100% - 24px);
-  }
-
-  .ov-file-browser-search__row-content,
-  .ov-file-browser-search__item:nth-child(n + 3)
-    .ov-file-browser-search__row-content {
-    padding-block: 16px;
-  }
-
-  .ov-file-browser-search__line {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0;
-  }
-
-  .ov-file-browser-search__uri {
-    max-width: 100%;
   }
 }

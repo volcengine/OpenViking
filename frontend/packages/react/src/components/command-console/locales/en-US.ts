@@ -38,3 +38,8 @@ const messages = {
 } satisfies ResolvedCommandConsoleLabels;
 
 export default messages;
+
+export const renderErrors = {
+  console: 'Command console could not be displayed.',
+  result: 'Command result could not be displayed.',
+};

@@ -1,3 +1,4 @@
+import { Button, Checkbox } from '#demo-controls';
 import { useState } from 'react';
 import { useLang } from '@rspress/core/runtime';
 import {
@@ -65,26 +66,25 @@ export default function AuthFormsDemo() {
       <nav className="ov-auth__actions" aria-label="Authentication demos">
         {['methods', 'email', 'api-key', 'forgot', 'setup', 'invitation'].map(
           (id) => (
-            <button
+            <Button
               key={id}
-              type="button"
+              htmlType="button"
               disabled={loading}
               onClick={() => switchView(id)}
             >
               {id}
-            </button>
+            </Button>
           ),
         )}
       </nav>
       <p>
-        <label>
-          <input
-            type="checkbox"
-            checked={withAgreements}
-            onChange={(event) => setWithAgreements(event.target.checked)}
-          />{' '}
+        <Checkbox
+          checked={withAgreements}
+          onChange={(next) => setWithAgreements(next)}
+        >
+          {' '}
           Configure agreements
-        </label>
+        </Checkbox>
       </p>
       <div key={`${view}-${withAgreements}`}>
         {view === 'methods' && (
@@ -180,18 +180,18 @@ export default function AuthFormsDemo() {
       {result && <p role="status">{result}</p>}
       {loading && (
         <div>
-          <button type="button" onClick={finish}>
+          <Button htmlType="button" onClick={finish}>
             Complete simulation
-          </button>{' '}
-          <button
-            type="button"
+          </Button>{' '}
+          <Button
+            htmlType="button"
             onClick={() => {
               setLoading(false);
               setError('Simulated service failure. Please try again.');
             }}
           >
             Fail simulation
-          </button>
+          </Button>
         </div>
       )}
     </div>

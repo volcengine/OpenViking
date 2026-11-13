@@ -33,7 +33,11 @@ const load = (name) => import(pathToFileURL(join(output, `${name}.js`)));
 const groups = new Map();
 for (const [index, file] of files.entries()) {
   const languages = groups.get(dirname(file)) ?? {};
-  languages[basename(file, '.ts')] = (await load(`locale-${index}`)).default;
+  const resource = await load(`locale-${index}`);
+  languages[basename(file, '.ts')] = {
+    ...resource.default,
+    ...(resource.renderErrors ? { renderErrors: resource.renderErrors } : {}),
+  };
   groups.set(dirname(file), languages);
 }
 

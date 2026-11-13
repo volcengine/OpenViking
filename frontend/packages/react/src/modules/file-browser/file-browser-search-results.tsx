@@ -1,3 +1,5 @@
+import type { RefObject } from 'react';
+import SearchEmptyArt from '../../../../icons/svg/file-browser/search-empty.svg?react';
 import { Button } from '../../shared/primitives/button/button.js';
 import { FileBrowserSearchRow } from './file-browser-search-row.js';
 import { FileBrowserSearchModeRow } from './file-browser-search-mode-row.js';
@@ -29,6 +31,8 @@ export interface FileBrowserSearchResultsProps {
   /** 是否已经搜过；`false` 时显示空态。Whether a search has run; `false` shows the empty state. */
   searched: boolean;
   text: ResolvedLabels;
+  /** 「切换」不在时的焦点去处，通常是搜索输入框。 Where focus goes when the switch is gone. */
+  fallbackFocusRef?: RefObject<HTMLElement | null>;
   onSelectMode: (mode: SearchMode) => void;
   onOpen: (uri: string) => void;
 }
@@ -48,9 +52,16 @@ export function FileBrowserSearchResults({
   error,
   searched,
   text,
+  fallbackFocusRef,
   onSelectMode,
   onOpen,
 }: FileBrowserSearchResultsProps) {
+  // 模式行只在真有结果时出现：设计稿的空态、加载态与失败态都没有这一行，它上面
+  // 的数字也只在有东西可数时才说得通。
+  //
+  // The mode row appears only when there are results: the design draws neither the
+  // empty, loading nor failure state with it, and its number only means something
+  // when there is something to count.
   if (loading) {
     return (
       <div className="ov-file-browser-search__skeletons" aria-busy="true">
@@ -90,10 +101,18 @@ export function FileBrowserSearchResults({
   if (!searched) {
     return (
       <div className="ov-file-browser-search__empty">
-        <p className="ov-file-browser-search__empty-title">
-          {text.searchEmptyTitle}
-        </p>
-        <p className="ov-file-browser-search__empty-hint">{text.searchHint}</p>
+        <SearchEmptyArt
+          className="ov-file-browser-search__empty-art"
+          aria-hidden="true"
+        />
+        <div className="ov-file-browser-search__empty-text">
+          <p className="ov-file-browser-search__empty-title">
+            {text.searchEmptyTitle}
+          </p>
+          <p className="ov-file-browser-search__empty-hint">
+            {text.searchHint}
+          </p>
+        </div>
       </div>
     );
   }
@@ -112,6 +131,7 @@ export function FileBrowserSearchResults({
         mode={mode}
         count={hits.length}
         text={text}
+        fallbackFocusRef={fallbackFocusRef}
         onSelectMode={onSelectMode}
       />
       <ul

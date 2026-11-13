@@ -94,6 +94,7 @@ import '@openviking/react/modules/file-browser/style.css';
 | previewSlots             | 追加、替换或隐藏预览操作区，看板页签不受影响，类型见下方 `FileBrowserPreviewSlots`                                 | `FileBrowserPreviewSlots`                                               | -                        |
 | dashboardKinds           | 启用的看板类型，空数组关闭看板；例如 `['experience']` 只保留经验看板，并且不再读取编译配置                         | `readonly ('wiki' \| 'experience')[]`                                   | `['wiki', 'experience']` |
 | renderDashboard          | 自定义看板页签的内容，返回 `null` 或 `undefined` 时使用内置看板，类型见下方 `FileBrowserDashboard`                 | `(dashboard: FileBrowserDashboard) => ReactNode`                        | -                        |
+| slots                    | 替换渲染异常的展示内容，见[错误展示插槽](../guide/getting-started#自定义错误展示)                                  | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }`   | -                        |
 | labels                   | 覆盖界面文案，类型见下方 `FileBrowserLabels`                                                                       | `FileBrowserLabels`                                                     | -                        |
 | locale                   | 界面语言，规则见[国际化](../guide/i18n)                                                                            | `'zh-CN' \| 'en-US'`                                                    | 继承上级，默认 `'en-US'` |
 | requestOptions           | 覆盖请求配置，规则见[区块概览](./)                                                                                 | `OvRequestOptions`                                                      | -                        |
@@ -241,7 +242,7 @@ import '@openviking/react/modules/file-browser/style.css';
 | searchIgnoreCase        | 忽略大小写                                                                                    | `string`                             | `'忽略大小写'`                           |
 | searchFilterUnsupported | 某个筛选在当前检索方式下不可用的原因                                                          | `string`                             | `'当前检索方式不支持此筛选'`             |
 | searchResultCount       | 检索结果数量，参数为条数                                                                      | `(count: number) => string`          | `'检索到 N 条结果'`                      |
-| searchVia               | 模式标签旁的说明                                                                              | `string`                             | `'向量检索方式'`                         |
+| searchVia               | 模式 chip 之后的检索方式说明                                                                  | `string`                             | `'向量检索方式'`                         |
 | searchSwitchMode        | 切换检索方式的入口                                                                            | `string`                             | `'切换'`                                 |
 | searchAdvancedLabel     | 高级筛选按钮的无障碍名称                                                                      | `string`                             | `'高级筛选'`                             |
 | previewMode             | 「预览 / 源码」切换里的「预览」                                                               | `string`                             | `'预览'`                                 |
@@ -408,6 +409,8 @@ const browserRef = useRef<FileBrowserHandle>(null);
 await browserRef.current?.openResource(resultUri, { reveal: true });
 ```
 
+传入以 `/.abstract.md` 或 `/.overview.md` 结尾的链接时，模块打开父目录并分别切换到 L0 摘要或 L1 总览；树定位与 `onUriChange` 使用父目录 URI。同一目录内重复打开链接也会切换到指定层级，之后仍可手动切换。
+
 `reveal` 默认 `true`；传 `{ reveal: false }` 只发出打开预览的请求，发出后返回 `true`。普通 `uri` 属性变化不会展开或滚动目录树。受控模式需要宿主在 `onUriChange` 中更新 `uri` 接受打开意图。目标行选中并滚动后 Promise 返回 `true`；目标不存在、不可访问、不在 `rootUri` 下、被后续操作替代或组件卸载时返回 `false`。根目录本身没有树行，打开其预览后返回 `false`。目录列表请求或必要的当前用户别名解析失败会 reject，宿主可捕获并展示提示。服务端明确不支持别名解析时，按原 URI 写法匹配。调用方主动取消时返回 `false`。Promise 不等待预览正文加载完成。内置搜索复用同一导航入口。
 
 ### 搜索
@@ -425,8 +428,9 @@ await browserRef.current?.openResource(resultUri, { reveal: true });
 
 - 结果按 URI 去重；`grep` 例外——同一文件的多行命中是不同结果，各带自己的行号。
 - `glob` 的模式不含 `/` 时自动补 `**/` 前缀；目录命中去掉尾斜杠后再参与导航，目录这一事实记在 `isDir` 上。
-- 高级选项可勾选常用目录，或通过「选择目录」继续浏览子目录。可选范围由 `rootUri` 决定，用户根使用 `~` 别名。选择创建时间或更新时间后显示日期范围；忽略大小写只在 `grep` 中显示。
-- 结果占满列表宽度。按 **↑ / ↓** 切换当前结果，点击结果或按 **Enter** 关闭弹窗、打开资源并在树中定位。
+- 高级面板的筛选项按当前方式启用或禁用，禁用的分区保留可见并置灰，标题旁说明原因。目录候选从 `rootUri` 派生，用户根用 `~` 别名；切换根时失效的已选目录会被丢弃。
+- 高级选项可勾选常用目录，或通过「选择目录」继续浏览子目录。选择创建时间或更新时间后显示日期范围；忽略大小写只在 `grep` 中显示。
+- 按 **↑ / ↓** 切换当前结果，点击或按 **Enter** 关闭弹窗、打开资源并在树中定位。
 
 ### 预览操作区
 

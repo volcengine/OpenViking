@@ -56,7 +56,7 @@ test('preview footer shows real modification time, text count and a resource-onl
 
     await view.render(page(directory));
     assert.equal(time().dateTime, folderTime);
-    assert.doesNotMatch(footer().textContent, /字符/);
+    assert.match(footer().textContent, /0 字符数/);
     assert.ok(model());
 
     await view.render(page(memory));

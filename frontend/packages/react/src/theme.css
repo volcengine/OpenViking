@@ -39,6 +39,7 @@
 .ov-notification-stack,
 .ov-button,
 .ov-input,
+.ov-select,
 .ov-textarea,
 .ov-directory-tour,
 .ov-wiki-dashboard,
@@ -52,6 +53,7 @@
 .ov-modal,
 .ov-file-browser,
 .ov-file-preview,
+.ov-error-boundary,
 .ov-file-tree,
 .ov-module-placeholder,
 .ov-popover,
@@ -93,6 +95,15 @@
   --ov-ui-text-description-default: rgb(0 0 0 / 40%);
   --ov-ui-text-disabled-default: #a5a7bb;
 
+  /* Chromium's native macOS non-overlay scrollbar palette. */
+  --ov-ui-scrollbar-thumb-default: #0000003a;
+  --ov-ui-scrollbar-thumb-hover-default: #00000080;
+  --ov-ui-scrollbar-track-hover-default: #fafafa;
+  --ov-ui-scrollbar-track-hover-horizontal-default: var(
+    --ov-ui-scrollbar-track-hover-default
+  );
+  --ov-ui-scrollbar-border-default: #e8e8e8;
+
   /* 边框：分隔线、控件描边、强调描边。 */
   --ov-ui-border-1-default: #f0f2fa;
   --ov-ui-border-2-default: #e1e4f2;
@@ -100,6 +111,7 @@
 
   /* 底色：面板、次级面板、选中、悬停。 */
   --ov-ui-bg-1-default: #ffffff;
+  --ov-ui-bg-2-default: #fbfbfc;
   --ov-ui-bg-3-default: #f7f8fd;
   --ov-ui-bg-4-default: #f6f7fa;
   --ov-ui-bg-5-default: #f1f2f9;
@@ -182,6 +194,7 @@
 html.dark .ov-notification-stack,
 html.dark .ov-button,
 html.dark .ov-input,
+html.dark .ov-select,
 html.dark .ov-textarea,
 .dark .ov-directory-tour,
 html.dark .ov-wiki-dashboard,
@@ -199,6 +212,7 @@ html.dark .ov-experience-dashboard,
 .dark .ov-date-picker__popup,
 .dark .ov-file-browser,
 .dark .ov-file-preview,
+html.dark .ov-error-boundary,
 .dark .ov-file-tree,
 .dark .ov-module-placeholder,
 .dark .ov-popover,
@@ -224,11 +238,22 @@ html.dark .ov-experience-dashboard,
   --ov-ui-text-description-default: rgb(255 255 255 / 40%);
   --ov-ui-text-disabled-default: #42464e;
 
+  --ov-ui-scrollbar-thumb-default: #6b6b6b;
+  --ov-ui-scrollbar-thumb-hover-default: #939393;
+  --ov-ui-scrollbar-track-hover-default: linear-gradient(#2d2d2d, #2b2b2b);
+  --ov-ui-scrollbar-track-hover-horizontal-default: linear-gradient(
+    90deg,
+    #2d2d2d,
+    #2b2b2b
+  );
+  --ov-ui-scrollbar-border-default: #3d3d3d;
+
   --ov-ui-border-1-default: #23252a;
   --ov-ui-border-2-default: #2e3138;
   --ov-ui-border-3-default: #3a3d45;
 
   --ov-ui-bg-1-default: #131416;
+  --ov-ui-bg-2-default: #18191c;
   --ov-ui-bg-3-default: #1b1d21;
   --ov-ui-bg-4-default: #202227;
   --ov-ui-bg-5-default: #23252a;
@@ -255,6 +280,7 @@ html.dark .ov-experience-dashboard,
  * Public --ov-ui-color-* values always take precedence in component styles. */
 .ov-button,
 .ov-input,
+.ov-select,
 .ov-textarea {
   --ov-ui-bg-white-default: var(--ov-ui-bg-1-default);
   --ov-ui-bg-2-default: #fafbfd;
@@ -279,6 +305,7 @@ html.dark .ov-experience-dashboard,
 }
 html.dark .ov-button,
 html.dark .ov-input,
+html.dark .ov-select,
 html.dark .ov-textarea {
   --ov-ui-bg-white-default: rgb(255 255 255 / 0.1%);
   --ov-ui-bg-2-default: rgb(252 253 254 / 1%);
@@ -365,12 +392,14 @@ html.dark .ov-file-preview {
 }
 
 .ov-file-preview,
+.ov-error-boundary,
 .ov-file-browser-search {
   --ov-ui-preview-backdrop-default: #f8f8f8;
   --ov-ui-preview-dot-default: rgb(0 0 0 / 8%);
 }
 
 html.dark .ov-file-preview,
+html.dark .ov-error-boundary,
 html.dark .ov-file-browser-search {
   --ov-ui-preview-backdrop-default: var(--ov-ui-bg-4-default);
   --ov-ui-preview-dot-default: rgb(255 255 255 / 12%);

@@ -20,10 +20,29 @@ try {
           dts: false,
           source: {
             entry: {
+              'error-boundary':
+                './src/shared/error-boundary/error-boundary.tsx',
+              'lazy-content': './src/shared/lazy-content.tsx',
+              'browser-tree-pane':
+                './src/modules/file-browser/file-browser-tree-pane.tsx',
+              'browser-preview-pane':
+                './src/modules/file-browser/file-browser-preview-pane.tsx',
+              'browser-search':
+                './src/modules/file-browser/file-browser-search.tsx',
+              'browser-labels':
+                './src/modules/file-browser/file-browser-labels.ts',
               button: './src/shared/primitives/button/button.tsx',
               input: './src/shared/primitives/input/input.tsx',
+              'overlay-position':
+                './src/shared/primitives/overlay/use-overlay-position.ts',
               modal: './src/shared/primitives/modal/modal.tsx',
               notification: './src/shared/primitives/notification/index.ts',
+              select: './src/shared/primitives/select/index.ts',
+
+              dropdown: './src/shared/primitives/dropdown/index.ts',
+              tooltip: './src/shared/primitives/tooltip/index.ts',
+              'breadcrumb-menu':
+                './src/components/file-preview/file-preview-breadcrumb-menu.tsx',
               'browser-entries':
                 './src/components/file-browser-action-bar/index.ts',
               'file-browser': './src/modules/file-browser/use-file-browser.ts',
@@ -87,6 +106,7 @@ try {
         '--test',
         'scripts/package.test.mjs',
         'scripts/react-release*.test.mjs',
+        'scripts/release-notes*.test.mjs',
         'packages/react/test/*.test.mjs',
       ],
       {

@@ -1,0 +1,269 @@
+.ov-select {
+  position: relative;
+  display: inline-flex;
+  width: 240px;
+  max-width: 100%;
+  min-width: 0;
+  vertical-align: middle;
+}
+/* Input can be loaded again by another consumer stylesheet. */
+.ov-select.ov-input {
+  width: 240px;
+}
+.ov-select__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  outline: none;
+}
+.ov-select__value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-select__arrow {
+  flex: none;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  transition: transform 100ms ease-out;
+}
+.ov-select__trigger[aria-expanded='true'] .ov-select__arrow {
+  transform: rotate(180deg);
+}
+.ov-select.ov-input[data-open='true']:not(.ov-input--disabled) {
+  border-color: var(--ov-ui-input-focus);
+  box-shadow: 0 0 0 2px
+    var(--ov-ui-color-focus-ring, var(--ov-ui-input-focus-ring-default));
+}
+.ov-select.ov-input[data-open='true']:has([aria-invalid='true']) {
+  border-color: var(--ov-ui-color-error, var(--ov-ui-error-default));
+  background: var(--ov-ui-input-bg);
+  box-shadow: 0 0 0 2px
+    color-mix(
+      in srgb,
+      var(--ov-ui-color-error, var(--ov-ui-error-default)) 30%,
+      transparent
+    );
+}
+.ov-select.ov-input.ov-input--disabled:has([aria-invalid='true']) {
+  border-color: var(--ov-ui-input-border);
+  background: var(--ov-ui-color-bg-2, var(--ov-ui-bg-2-default));
+  box-shadow: none;
+}
+.ov-select__placeholder {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+}
+.ov-select--simple {
+  width: auto;
+  min-height: 28px;
+  border-radius: 4px;
+  font: inherit;
+}
+.ov-select--simple:hover:not(:disabled) {
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+}
+.ov-select--simple:focus-visible {
+  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
+  outline-offset: 2px;
+}
+.ov-select--simple[aria-invalid='true'] {
+  color: var(--ov-ui-color-error, var(--ov-ui-error-default));
+}
+.ov-select__trigger:disabled {
+  color: var(--ov-ui-color-text-disabled, var(--ov-ui-text-disabled-default));
+  cursor: not-allowed;
+}
+.ov-select.ov-select--tags {
+  padding-block: 3px;
+}
+.ov-select__tags {
+  --ov-ui-select-tag-min-width: 64px;
+  --ov-ui-select-tag-max-width: 120px;
+  display: flex;
+  flex: 1;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding-inline-end: 22px;
+}
+.ov-select__tag {
+  box-sizing: border-box;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 1 auto;
+  min-width: var(--ov-ui-select-tag-min-width);
+  max-width: var(--ov-ui-select-tag-max-width);
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+}
+.ov-select__tag > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-select__tag-count {
+  flex: none;
+  min-width: 0;
+  max-width: none;
+}
+.ov-input--disabled .ov-select__tag {
+  color: var(--ov-ui-input-muted);
+}
+.ov-select__tag button {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.ov-select__tag button:disabled {
+  cursor: not-allowed;
+  color: var(--ov-ui-color-text-disabled, var(--ov-ui-text-disabled-default));
+}
+.ov-select__tag button:focus-visible {
+  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
+}
+.ov-select__trigger--tags {
+  position: absolute;
+  inset: 0;
+  justify-content: flex-end;
+  padding-inline: 12px;
+}
+.ov-select__accessible-value {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.ov-dropdown.ov-popover.ov-select__popover {
+  box-sizing: border-box;
+  width: max-content;
+}
+.ov-select__listbox {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: min(256px, calc(100dvh - 100px));
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ov-ui-color-border-3, var(--ov-ui-border-3-default))
+    transparent;
+  outline: none;
+}
+.ov-select__search {
+  position: relative;
+  display: block;
+  padding: 4px 4px 8px;
+}
+.ov-select__search-input.ov-input {
+  padding-inline-end: 32px;
+}
+.ov-select__search-input input::-webkit-search-cancel-button {
+  appearance: none;
+}
+.ov-select__clear {
+  position: absolute;
+  inset-block-start: 8px;
+  inset-inline-end: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  cursor: pointer;
+}
+.ov-select__clear:hover {
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+}
+.ov-select__clear:active {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+}
+.ov-select__clear:focus-visible {
+  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
+  outline-offset: 1px;
+}
+.ov-select__empty {
+  padding: 12px 10px;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  font: inherit;
+}
+.ov-select__empty:empty {
+  display: none;
+}
+.ov-select__option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: none;
+  gap: 10px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.ov-select__option-content {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ov-select__check {
+  flex: none;
+}
+.ov-select__option[aria-selected='true'] {
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  background: var(
+    --ov-ui-color-primary-light,
+    var(--ov-ui-primary-light-default)
+  );
+}
+.ov-select__option:hover:not(:disabled) {
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+}
+.ov-select__option:focus-visible {
+  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
+  outline-offset: -2px;
+}
+.ov-select__option:disabled {
+  color: var(--ov-ui-color-text-disabled, var(--ov-ui-text-disabled-default));
+  cursor: not-allowed;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ov-select__arrow {
+    transition: none;
+  }
+}

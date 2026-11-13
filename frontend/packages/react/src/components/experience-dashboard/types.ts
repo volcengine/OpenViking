@@ -1,3 +1,4 @@
+import type { ErrorFallback } from '../../shared/error-boundary/types.js';
 import type { HTMLAttributes } from 'react';
 import type { DashboardStatus } from '../../shared/dashboard/dashboard-state.js';
 
@@ -147,6 +148,8 @@ export interface ExperienceDashboardProps extends Omit<
    */
   onLoadMore?: () => void;
   onOpenUri?: (uri: string) => void;
+  /** 渲染异常时的替代内容，省略时继承外层或使用内置展示。Render-failure content; inherits or uses the default when omitted. */
+  slots?: { errorFallback?: ErrorFallback };
   labels?: Partial<ExperienceDashboardLabels>;
 }
 

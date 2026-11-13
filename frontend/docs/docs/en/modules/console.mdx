@@ -177,11 +177,12 @@ Adapt other backends through a stable `taskService`; `chatOptions.taskService` c
 
 ### ConsoleSlots
 
-| Property            | Description                                                                                  | Type        | Default |
-| ------------------- | -------------------------------------------------------------------------------------------- | ----------- | ------- |
-| toolbar             | Content between the mode switch and the action buttons in the toolbar, shown in both modes   | `ReactNode` | -       |
-| conversationContext | Content above the composer in conversation mode; takes precedence over `conversation.footer` | `ReactNode` | -       |
-| commandHelp         | Content above the command console in command mode                                            | `ReactNode` | -       |
+| Property            | Description                                                                                  | Type                                              | Default |
+| ------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------- | ------- |
+| errorFallback       | Replaces rendering-error content in this block and its nested regions                        | `ReactNode \| ((reset: () => void) => ReactNode)` | -       |
+| toolbar             | Content between the mode switch and the action buttons in the toolbar, shown in both modes   | `ReactNode`                                       | -       |
+| conversationContext | Content above the composer in conversation mode; takes precedence over `conversation.footer` | `ReactNode`                                       | -       |
+| commandHelp         | Content above the command console in command mode                                            | `ReactNode`                                       | -       |
 
 ### ConsoleLabels
 
@@ -236,6 +237,8 @@ Command mode runs only the built-in native API commands. Type `/` or run `ov hel
 - The command set covers only native APIs that a browser can call; local configuration, login, local file upload or download and session management commands are not included.
 
 ## Notes
+
+Failed questions and client-only errors stay in the message list. If no session was created, the next send creates one and carries undelivered user inputs as context in a single chat request, while saving the original user messages separately. Errors are excluded from persistence and model input. The native gateway accepts one `message`; writing session records alone does not restore model context. Undelivered inputs stay queued until the first stream event acknowledges delivery. A failure before that event preserves them for the next send; once generation starts, subsequent sends do not replay those inputs.
 
 - Console sends native VikingBot chat requests by default. Providing `conversation.messages` or `conversation.onSend` gives the host ownership of chat; attachment uploads remain with the host.
 - Set `conversation.isAvailable` and `conversation.unavailableMessage` from the Bot status your app queries; when the Bot is unavailable, the composer is disabled and shows the message.

@@ -1,3 +1,4 @@
+import type { ErrorFallback } from '../../shared/error-boundary/types.js';
 import type { Locale } from '../../shared/locale.js';
 import type { HTMLAttributes, ReactNode, RefObject } from 'react';
 
@@ -36,6 +37,8 @@ export interface VikingBotMessageListProps {
   onMessageAction?: (messageId: string, actionKey: string) => void;
   /** 消息正文的替换渲染，用于宿主自带 Markdown 渲染器。Replaces message bodies. */
   renderMessage?: (message: VikingBotMessage) => ReactNode;
+  /** 渲染异常时的替代内容，省略时继承外层或使用内置展示。Render-failure content; inherits or uses the default when omitted. */
+  slots?: { errorFallback?: ErrorFallback };
   /** 可替换文案，未提供的项使用当前 locale 的内置文案。Replaceable copy; omitted fields follow locale. */
   labels?: VikingBotLabels;
 }
@@ -96,6 +99,8 @@ export interface VikingBotComposerProps extends VikingBotInputFeatures {
   onSend?: (draft: VikingBotDraft) => void;
   /** 停止正在进行的回复。省略时不展示停止动作。Stops the streaming reply. */
   onCancel?: () => void;
+  /** 渲染异常时的替代内容，省略时继承外层或使用内置展示。Render-failure content; inherits or uses the default when omitted. */
+  slots?: { errorFallback?: ErrorFallback };
   /** 可替换文案，未提供的项使用当前 locale 的内置文案。Replaceable copy; omitted fields follow locale. */
   labels?: VikingBotLabels;
 }
@@ -173,6 +178,8 @@ export interface VikingBotProps
   onCopy?: (text: string) => void;
   /** 触发一条消息声明的动作。Fires a message action. */
   onMessageAction?: (messageId: string, actionKey: string) => void;
+  /** 渲染异常时的替代内容，省略时继承外层或使用内置展示。Render-failure content; inherits or uses the default when omitted. */
+  slots?: { errorFallback?: ErrorFallback };
   /** 可替换文案，未提供的项使用当前 locale 的内置文案。Replaceable copy; omitted fields follow locale. */
   labels?: VikingBotLabels;
 }

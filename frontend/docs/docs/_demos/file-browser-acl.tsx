@@ -1,12 +1,8 @@
-import { useLang } from '@rspress/core/runtime';
-import { useState, type CSSProperties } from 'react';
+import { Checkbox, Select, SelectOption } from '#demo-controls';
 
-const checkboxStyle: CSSProperties = {
-  display: 'inline-block',
-  appearance: 'auto',
-  width: 16,
-  height: 16,
-};
+import { useLang } from '@rspress/core/runtime';
+import { useState } from 'react';
+
 import { OpenVikingProvider } from '@openviking/react/client';
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import '@openviking/react/modules/file-browser/style.css';
@@ -27,35 +23,34 @@ export default function FileBrowserAclDemo() {
       <div
         style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginBottom: 16 }}
       >
-        <label>
-          <input
-            type="checkbox"
-            style={checkboxStyle}
-            onChange={(event) => demo.setFailSave(event.target.checked)}
-          />{' '}
+        <Checkbox onChange={(next) => demo.setFailSave(next)}>
+          {' '}
           {zh ? '模拟保存失败' : 'Simulate save failure'}
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            style={checkboxStyle}
-            onChange={(event) => demo.setFailDirectory(event.target.checked)}
-          />{' '}
+        </Checkbox>
+        <Checkbox onChange={(next) => demo.setFailDirectory(next)}>
+          {' '}
           {zh ? '模拟成员加载失败' : 'Simulate directory failure'}
-        </label>
+        </Checkbox>
         <label>
           {zh ? '当前权限 ' : 'Current permission '}
-          <select
-            defaultValue="manage"
-            onChange={(event) => {
-              demo.setLevel(event.target.value as 'read' | 'write' | 'manage');
+          <Select<'read' | 'write' | 'manage'>
+            defaultValue={['manage']}
+            onChange={([value]) => {
+              if (value === undefined) return;
+              demo.setLevel(value);
               setRevision((value) => value + 1);
             }}
           >
-            <option value="manage">{zh ? '可管理' : 'Can manage'}</option>
-            <option value="write">{zh ? '可编辑' : 'Can edit'}</option>
-            <option value="read">{zh ? '可阅读' : 'Can read'}</option>
-          </select>
+            <SelectOption value="manage">
+              {zh ? '可管理' : 'Can manage'}
+            </SelectOption>
+            <SelectOption value="write">
+              {zh ? '可编辑' : 'Can edit'}
+            </SelectOption>
+            <SelectOption value="read">
+              {zh ? '可阅读' : 'Can read'}
+            </SelectOption>
+          </Select>
         </label>
       </div>
       <div style={{ height: 580, minWidth: 620 }}>

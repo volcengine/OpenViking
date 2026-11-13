@@ -1,7 +1,6 @@
 import type { SearchHit } from './search-types.js';
-import SearchFileIcon from '../../../../icons/svg/file-browser/file-04.svg?react';
 import { nameFromUri } from './fs-model.js';
-import { directoryIcon } from './fs-icon.js';
+import { fileTypeIcon } from './fs-icon.js';
 
 /**
  * 用最近一级父目录区分同名文件，URI 保留根和末段。
@@ -68,33 +67,31 @@ export function FileBrowserSearchRow({
         className="ov-file-browser-search__result"
         onClick={() => onOpen(hit.uri)}
       >
-        <span className="ov-file-browser-search__row-content">
-          <span className="ov-file-browser-search__icon" aria-hidden="true">
-            {hit.isDir ? directoryIcon() : <SearchFileIcon />}
-          </span>
-          <span className="ov-file-browser-search__body">
-            <span className="ov-file-browser-search__line">
-              <span className="ov-file-browser-search__name" title={name}>
-                {index < 0 ? (
-                  name
-                ) : (
-                  <>
-                    {name.slice(0, index)}
-                    <mark>{name.slice(index, index + query.length)}</mark>
-                    {name.slice(index + query.length)}
-                  </>
-                )}
-              </span>
-              <span className="ov-file-browser-search__uri" title={hit.uri}>
-                {uri}
-              </span>
+        <span className="ov-file-browser-search__icon" aria-hidden="true">
+          {fileTypeIcon(nameFromUri(hit.uri))}
+        </span>
+        <span className="ov-file-browser-search__body">
+          <span className="ov-file-browser-search__line">
+            <span className="ov-file-browser-search__name" title={name}>
+              {index < 0 ? (
+                name
+              ) : (
+                <>
+                  {name.slice(0, index)}
+                  <mark>{name.slice(index, index + query.length)}</mark>
+                  {name.slice(index + query.length)}
+                </>
+              )}
             </span>
-            {hit.abstract ? (
-              <span className="ov-file-browser-search__abstract">
-                {hit.abstract}
-              </span>
-            ) : null}
+            <span className="ov-file-browser-search__uri" title={hit.uri}>
+              {uri}
+            </span>
           </span>
+          {hit.abstract ? (
+            <span className="ov-file-browser-search__abstract">
+              {hit.abstract}
+            </span>
+          ) : null}
         </span>
       </button>
     </li>

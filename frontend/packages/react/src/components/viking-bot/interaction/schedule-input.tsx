@@ -1,3 +1,4 @@
+import { Input } from '../../../shared/primitives/input/input.js';
 import { useState } from 'react';
 
 import type { InteractionLabels } from './labels.js';
@@ -56,7 +57,7 @@ export function ScheduleInput({
         <option value="weekly">{labels.scheduleWeekly}</option>
       </select>
       {value.mode !== 'none' ? (
-        <input
+        <Input
           type="time"
           className="ov-viking-bot__interaction-input"
           value={time}

@@ -1,6 +1,7 @@
 import { useLocale } from '../../shared/locale-context.js';
 import { resolveLabels, resolveSummaryLabels } from './file-browser-labels.js';
 import { useMemo, useRef, useState } from 'react';
+import { useDirectoryPreviewLevels } from './use-directory-preview-levels.js';
 
 import type {
   FileTreeEntryRow,
@@ -88,6 +89,7 @@ export function useFileBrowser({
   // preview stuck on the initial resource. `pendingUri` is seeded from `currentUri`
   // anyway, so using it alone is correct.
   const activeUri = controlled ? currentUri : pendingUri;
+  const { requestUri, previewLevel } = useDirectoryPreviewLevels(activeUri);
   const { identifyUri } = tree;
   const blocked = tree.accessOf(activeUri);
   // 三态而不是布尔：不在已知目录集合里既可能是文件，也可能是还没加载过的目录，
@@ -130,7 +132,8 @@ export function useFileBrowser({
 
   const { rows, openPath, reveal, cancelReveal } = tree;
   const openResource = useMemo(
-    () => async (uri: string) => {
+    () => async (resource: string) => {
+      const uri = requestUri(resource);
       setPendingUri(uri);
       notifyUriChange.current(uri);
       const directory = tree.directoryUris.has(identifyUri(uri))
@@ -138,7 +141,7 @@ export function useFileBrowser({
         : uri.slice(0, uri.lastIndexOf('/'));
       await openPath(directory);
     },
-    [openPath, tree.directoryUris, identifyUri],
+    [openPath, tree.directoryUris, identifyUri, requestUri],
   );
 
   const boards = useBrowserDashboards({
@@ -155,7 +158,7 @@ export function useFileBrowser({
     dashboardLabels,
   });
 
-  const preview = useFsPreview({
+  const { setActiveKey, ...preview } = useFsPreview({
     client,
     // 非受控模式下 currentUri 是 null，真正选中的是 pendingUri；预览要跟着
     // 实际选中的资源走，否则内部维护的选中永远不会加载预览。
@@ -165,6 +168,7 @@ export function useFileBrowser({
     // the module owns would never load anything.
     uri: blocked ? null : activeUri,
     resourceType,
+    ...previewLevel,
     labels: summaryLabels ?? resolveSummaryLabels(locale),
     formatCharacterCount: formatCharacterCount ?? text.formatCharacterCount,
     openParent,
@@ -187,16 +191,16 @@ export function useFileBrowser({
   const { open, toggleExpand, loadMore, retry, refresh } = tree;
 
   const { open: openDashboard, close: closeDashboard } = boards;
-  const setActiveKey = preview.setActiveKey;
   const navigateResource = useMemo<FileBrowserActions['openResource']>(
-    () => async (uri, options) => {
+    () => async (resource, options) => {
+      const uri = requestUri(resource);
       cancelReveal();
       closeDashboard();
       setPendingUri(uri);
       notifyUriChange.current(uri);
       return options?.reveal === false ? true : reveal(uri);
     },
-    [cancelReveal, closeDashboard, reveal],
+    [cancelReveal, closeDashboard, reveal, requestUri],
   );
   const actions = useMemo<FileBrowserActions>(
     () => ({
@@ -244,7 +248,7 @@ export function useFileBrowser({
       },
       openUri: openResource,
       openResource: navigateResource,
-      openDashboard: openDashboard,
+      openDashboard,
       setPreviewKey: (key: string) => {
         if (activeUri && key === dashboardKey(activeUri))
           openDashboard(activeUri);

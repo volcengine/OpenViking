@@ -1,3 +1,4 @@
+import { Input } from '../../shared/primitives/input/input.js';
 import { useId } from 'react';
 import type {
   CompileConfig,
@@ -49,7 +50,7 @@ export function PreviewCompileSchedule({
       {value ? (
         <>
           <label htmlFor={`${id}-time`}>{text.time}</label>
-          <input
+          <Input
             id={`${id}-time`}
             type="time"
             required

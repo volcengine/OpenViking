@@ -36,3 +36,9 @@ const messages = {
 } satisfies Required<FilePreviewLabels>;
 
 export default messages;
+
+export const renderErrors = {
+  preview: 'File preview failed.',
+  content: 'Tab content could not be displayed.',
+  editor: 'File editor could not be displayed.',
+};

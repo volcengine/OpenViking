@@ -1,12 +1,15 @@
-import { useState } from 'react';
+import type { RefObject } from 'react';
 import { FileBrowserSearchModeMenu } from './file-browser-search-mode-menu.js';
 import type { SearchMode } from './search-types.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
 
+/** Result count, current retrieval mode and its shared selection control. */
 export interface FileBrowserSearchModeRowProps {
   mode: SearchMode;
   count: number;
   text: ResolvedLabels;
+  /** Search input keeps focus when selecting a mode unmounts the results row. */
+  fallbackFocusRef?: RefObject<HTMLElement | null>;
   onSelectMode: (mode: SearchMode) => void;
 }
 
@@ -14,36 +17,21 @@ export function FileBrowserSearchModeRow({
   mode,
   count,
   text,
+  fallbackFocusRef,
   onSelectMode,
 }: FileBrowserSearchModeRowProps) {
-  const [menuOpen, setMenuOpen] = useState(false);
   return (
     <div className="ov-file-browser-search__summary">
       <span>{text.searchResultCount?.(count)}</span>
-      <span aria-hidden="true">·</span>
-      <span className="ov-file-browser-search__mode">
-        <span className="ov-file-browser-search__mode-chip">{mode}</span>
-        <span>{text.searchVia}</span>
-      </span>
-      <span className="ov-file-browser-search__switch-wrap">
-        <button
-          type="button"
-          className="ov-file-browser-search__switch"
-          onClick={() => setMenuOpen((value) => !value)}
-        >
-          {text.searchSwitchMode}
-        </button>
-        <FileBrowserSearchModeMenu
-          open={menuOpen}
-          value={mode}
-          text={text}
-          onSelect={(next) => {
-            setMenuOpen(false);
-            onSelectMode(next);
-          }}
-          onClose={() => setMenuOpen(false)}
-        />
-      </span>
+      <span aria-hidden="true">・</span>
+      <span className="ov-file-browser-search__mode-chip">{mode}</span>
+      <span>{text.searchVia}</span>
+      <FileBrowserSearchModeMenu
+        value={mode}
+        text={text}
+        fallbackFocusRef={fallbackFocusRef}
+        onSelect={onSelectMode}
+      />
     </div>
   );
 }
