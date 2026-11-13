@@ -3,14 +3,12 @@
 
 // Declarative DSH extensions for one instance.
 //
-// The `sdk` profile already discovers project skills and the instance's own
-// agent skills. Two things it cannot see are the host user's skill directories,
-// which the isolated `DSH_HOME`/`DSH_AGENTS_HOME` hide, and user MCP servers,
-// which in DSH are Cordis rows rather than a settings document. This module
-// reads a small JSON document from the instance and from the workspace,
-// validates it, and hands the runtime the values it needs to add those rows to
-// its own `--patch` overlay. It never writes DSH's files and never installs a
-// plugin.
+// Setup selects the standard skill roots and the runtime writes that selection
+// to the patch. This module adds operator-authored custom skill directories and
+// user MCP servers, which in DSH are Cordis rows rather than a settings
+// document. It reads a small JSON document from the instance and workspace,
+// validates it, and hands the runtime the values for its own `--patch` overlay.
+// It never writes DSH's files and never installs a plugin.
 //
 // Global:  <dataDir>/dsh/extensions.json
 // Project: <workspace>/.agents/dsh.json
@@ -24,8 +22,9 @@
 //     }
 //   }
 //
-// Project values win per MCP server name; skill roots are concatenated after the
-// host defaults; either file may turn the host defaults off.
+// Project values win per MCP server name; custom skill roots are concatenated
+// after setup's selected standard roots. The retired hostSkills flag no longer
+// widens that selection.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -221,7 +220,7 @@ export function normalizeMcpServer(name, value, warn = () => {}) {
 function mergeDocuments(documents, home, warn) {
   const mcpServers = new Map();
   const configured = [];
-  let hostSkills = true;
+  let hostSkills = false;
   for (const { file, base, document } of documents) {
     if (!document) continue;
     const localWarn = message => warn(`${file}: ${message}`);
@@ -239,11 +238,8 @@ function mergeDocuments(documents, home, warn) {
         }
       }
     }
-    if (document.hostSkills !== undefined) {
-      if (typeof document.hostSkills !== 'boolean') localWarn('hostSkills must be a boolean');
-      // Either document may isolate the instance: a project that does not want
-      // the host's skills must not be overridden by the global document.
-      else if (!document.hostSkills) hostSkills = false;
+    if (document.hostSkills !== undefined && typeof document.hostSkills !== 'boolean') {
+      localWarn('hostSkills must be a boolean');
     }
   }
   return { mcpServers: [...mcpServers.values()], configuredSkillDirs: configured, hostSkills };
@@ -261,7 +257,7 @@ function mergeDocuments(documents, home, warn) {
  * @param {string} [options.home] - host home for the default skill roots.
  * @param {Function} [options.warn] - receives one human-readable line per problem.
  * @returns {{mcpServers: object[], skillDirs: string[], hostSkills: boolean}}
- *   `skillDirs` is the final list: host defaults first, then configured roots.
+ *   `skillDirs` contains only custom roots from the two documents.
  */
 export function readDshExtensions({
   dataDir, workspace, home = os.homedir(), warn = () => {},
@@ -271,9 +267,5 @@ export function readDshExtensions({
     { file: paths.global, base: path.join(dataDir, 'dsh'), document: readDocument(paths.global, warn) },
     { file: paths.project, base: workspace, document: readDocument(paths.project, warn) },
   ], home, warn);
-  const skillDirs = merged.hostSkills ? defaultHostSkillDirs({ home }) : [];
-  for (const directory of merged.configuredSkillDirs) {
-    if (!skillDirs.includes(directory)) skillDirs.push(directory);
-  }
-  return { mcpServers: merged.mcpServers, skillDirs, hostSkills: merged.hostSkills };
+  return { mcpServers: merged.mcpServers, skillDirs: merged.configuredSkillDirs, hostSkills: merged.hostSkills };
 }

@@ -40,19 +40,19 @@ test('host skill roots are ~/.agents/skills and ~/.dsh/skills', () => {
   assert.throws(() => defaultHostSkillDirs({ home: '' }), /home/);
 });
 
-test('missing documents still give the host skill roots', t => {
+test('missing documents add no skill roots beyond setup’s selection', t => {
   const root = temp(t);
   const home = path.join(root, 'home');
   assert.deepEqual(readDshExtensions({
     dataDir: path.join(root, 'data'), workspace: path.join(root, 'work'), home,
   }), {
     mcpServers: [],
-    skillDirs: defaultHostSkillDirs({ home }),
-    hostSkills: true,
+    skillDirs: [],
+    hostSkills: false,
   });
 });
 
-test('workspace values win per server and configured roots follow the host roots', t => {
+test('workspace values win per server and configured roots stay custom', t => {
   const root = temp(t);
   const home = path.join(root, 'home');
   const dataDir = path.join(root, 'data');
@@ -76,14 +76,13 @@ test('workspace values win per server and configured roots follow the host roots
   });
   const extensions = readDshExtensions({ dataDir, workspace, home });
   assert.deepEqual(extensions.skillDirs, [
-    path.join(home, '.agents', 'skills'),
-    path.join(home, '.dsh', 'skills'),
     path.join(dataDir, 'dsh', 'skills'),
     sharedSkillDir,
     path.join(root, 'project-skills'),
     path.join(workspace, 'skills'),
+    path.join(home, '.agents', 'skills'),
   ]);
-  assert.equal(extensions.hostSkills, true);
+  assert.equal(extensions.hostSkills, false);
   assert.deepEqual(extensions.mcpServers, [
     { transport: 'stdio', serverName: 'github', command: 'new-github', args: ['--new'], failOnStartupError: true },
     { transport: 'stdio', serverName: 'files', command: 'files-server', args: [], env: { TOKEN: 'x' } },
@@ -91,7 +90,7 @@ test('workspace values win per server and configured roots follow the host roots
   ]);
 });
 
-test('either document can keep the host skill roots out', t => {
+test('the retired hostSkills flag cannot widen setup’s selection', t => {
   const root = temp(t);
   const home = path.join(root, 'home');
   const dataDir = path.join(root, 'data');
@@ -102,7 +101,7 @@ test('either document can keep the host skill roots out', t => {
   assert.deepEqual(readDshExtensions({ dataDir, workspace, home }).skillDirs, []);
 
   write(paths.project, { hostSkills: true });
-  // A project cannot widen the global isolation back on.
+  // A project cannot widen the selection back on.
   assert.deepEqual(readDshExtensions({ dataDir, workspace, home }).skillDirs, []);
 });
 
@@ -126,11 +125,11 @@ test('invalid values are skipped one at a time and never throw', t => {
   });
   const warnings = [];
   const extensions = readDshExtensions({ dataDir, workspace, home, warn: message => warnings.push(message) });
-  assert.deepEqual(extensions.skillDirs, [...defaultHostSkillDirs({ home }), path.join(workspace, 'ok')]);
+  assert.deepEqual(extensions.skillDirs, [path.join(workspace, 'ok')]);
   assert.deepEqual(extensions.mcpServers, [
     { transport: 'stdio', serverName: 'good', command: 'server', args: ['--flag'], env: { A: 'b' } },
   ]);
-  assert.equal(extensions.hostSkills, true);
+  assert.equal(extensions.hostSkills, false);
   assert.ok(warnings.some(line => line.includes(paths.global)));
   assert.ok(warnings.some(line => line.includes('personal_agent')));
   assert.ok(warnings.some(line => line.includes('bad name')));

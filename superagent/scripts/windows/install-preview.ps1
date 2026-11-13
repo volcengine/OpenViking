@@ -527,7 +527,8 @@ function Write-Launcher([string]$nodeRelative, [string]$mjsRelative) {
         'popd',
         'set "RELEASE=%OV_SUPERAGENT_HOME%\current"',
         'if not exist "%RELEASE%\" if exist "%OV_SUPERAGENT_HOME%\current" set /p RELEASE=<"%OV_SUPERAGENT_HOME%\current"',
-        '"%RELEASE%\__NODE__" "%RELEASE%\__MJS__" %*'
+        '"%RELEASE%\__NODE__" "%RELEASE%\__MJS__" %*',
+        'exit /b %ERRORLEVEL%'
     ) -join "`r`n"
     $text = $text.Replace('__NODE__', $nodeRelative).Replace('__MJS__', $mjsRelative)
     [IO.File]::WriteAllText((Join-Path $binDir 'ov-superagent.cmd'), $text + "`r`n")
