@@ -554,8 +554,13 @@ async def test_concurrent_submission_retry_and_restart(monkeypatch):
     agfs = _FakeAgfs()
     store = PersistentTaskStore(agfs)
     tracker = TaskTracker(store)
+    # Recovery must not depend on a global tracker left by another test.
+    monkeypatch.setattr("openviking.service.task_tracker._instance", None)
     monkeypatch.setattr(module, "get_task_tracker", lambda: tracker)
     monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.external_task_processor.get_task_tracker", lambda: tracker
+    )
     transport = ragfs_python.RAGFSBindingClient()
     transport.mount("queuefs", "/queue", {"backend": "memory"})
     manager = QueueManager(transport)
