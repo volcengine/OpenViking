@@ -62,6 +62,7 @@ export function FilePreviewBody({
     return (
       <FilePreviewEditor
         draft={editing.draft}
+        source={fileTab.source}
         text={text}
         loading={editing.loadingEdit}
         failed={editing.editFailed}

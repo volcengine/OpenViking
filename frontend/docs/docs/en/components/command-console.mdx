@@ -29,7 +29,7 @@ The example uses fixed simulated data: submitting appends a pending record that 
 
 ### Empty state and quick commands
 
-Quick commands appear while there are no records. Clicking one only fills the input; press Enter to submit, and the first submission replaces the empty state with records.
+Quick commands appear while there are no records. Clicking one only fills the input; press Enter to submit, and the first submission replaces the empty state with records. Each row shows its `summary`, falling back to `description`; hovering the row shows the full `description` when a `summary` is provided or when the description is truncated by the single-line ellipsis.
 
 ```tsx file="../../_demos/command-console-empty.tsx" preview
 
@@ -60,14 +60,17 @@ Every quick command in the example fills a complete command except `compile`, wh
 
 ### CommandConsoleRecord
 
-| Property    | Description                                                                                                                                      | Type                                | Default  |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- | -------- |
-| id          | Unique identifier of the record                                                                                                                  | `string`                            | Required |
-| command     | Submitted command text, shown above the result; when it matches a command in `commands`, the command name is shown as that command's `inputText` | `string`                            | Required |
-| status      | Execution state of this record only; `'pending'` shows a loading skeleton, other states show the result                                          | `'pending' \| 'success' \| 'error'` | Required |
-| content     | Execution result, not shown while `'pending'`; a successful or failed record without it shows `labels.noResult` or `labels.error`                | `CommandConsoleRecordContent`       | -        |
-| createdAtMs | Submission time as a Unix timestamp in milliseconds, shown below the command                                                                     | `number`                            | -        |
-| createdAt   | Text shown when there is no valid `createdAtMs`, also used for server rendering; it is never parsed as a date                                    | `string`                            | -        |
+| Property    | Description                                                                                                                                      | Type                                               | Default  |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------- | -------- |
+| id          | Unique identifier of the record                                                                                                                  | `string`                                           | Required |
+| command     | Submitted command text, shown above the result; when it matches a command in `commands`, the command name is shown as that command's `inputText` | `string`                                           | Required |
+| status      | State of this record; pending submissions show a skeleton, while background tasks can retain their submission result                             | `'pending' \| 'success' \| 'error' \| 'cancelled'` | Required |
+| tasks       | Background task snapshots supplied by the host                                                                                                   | `readonly CommandConsoleTask[]`                    | -        |
+| content     | Execution result; records with background tasks can show it while pending, otherwise pending records show a skeleton                             | `CommandConsoleRecordContent`                      | -        |
+| createdAtMs | Submission time as a Unix timestamp in milliseconds, shown below the command                                                                     | `number`                                           | -        |
+| createdAt   | Text shown when there is no valid `createdAtMs`, also used for server rendering; it is never parsed as a date                                    | `string`                                           | -        |
+
+`CommandConsoleTask` uses the [ConsoleTaskSnapshot](../modules/console#consoletasksnapshot) fields.
 
 ### CommandConsoleRecordContent
 
@@ -265,6 +268,7 @@ Defaults are the copy used when `locale` is `'en-US'`.
 | historyCommands    | Label for `↑` in the shortcut hints                                                        | `string`                      | `History`                                         |
 | suggestions        | Accessible name of the suggestion list                                                     | `string`                      | `Command suggestions`                             |
 | noSuggestions      | Message when no command matches                                                            | `string`                      | `No matching commands`                            |
+| cancelled          | Accessible name of the cancelled status icon                                               | `string`                      | `Cancelled`                                       |
 | pending            | Accessible name of the pending status icon                                                 | `string`                      | `Running`                                         |
 | success            | Accessible name of the success status icon                                                 | `string`                      | `Succeeded`                                       |
 | error              | Accessible name of the error status icon; also shown for a failed record without `content` | `string`                      | `Failed`                                          |

@@ -13,12 +13,8 @@
 | 区块                                     | 说明                                                                                                                                           | 导入路径                                  | 请求配置                                           |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- | -------------------------------------------------- |
 | [FileBrowser 文件浏览](./file-browser)   | 目录树、搜索和文件预览组成的文件浏览区块：读取 OpenViking 的目录和内容，支持预览、编辑、导入导出、历史版本和权限管理，并内置 Wiki 与经验看板。 | `@openviking/react/modules/file-browser`  | 需要 `OpenVikingProvider`，支持 `requestOptions`   |
-| [Console 交互面板](./console)            | 在一块面板里提供对话和命令两种模式：对话模式通过 VikingBot 无头模块接通原生对话；命令模式把 `ov` 命令发送到 OpenViking 原生 API 并展示结果。   | `@openviking/react/modules/console`       | 需要 `OpenVikingProvider`，支持 `requestOptions`   |
+| [Console 交互面板](./console)            | 在一块面板里提供对话和命令两种模式：对话模式接通原生 VikingBot 对话；命令模式把 `ov` 命令发送到 OpenViking 原生 API 并展示结果。               | `@openviking/react/modules/console`       | 需要 `OpenVikingProvider`，支持 `requestOptions`   |
 | [ScopeCascade 级联选择](./scope-cascade) | 依次选择知识库、数据空间和用户的三级选择器：上级变化时，下级清空并重新加载，三级都选中后通过 `onChange` 返回完整身份。                         | `@openviking/react/modules/scope-cascade` | 不需要 `OpenVikingProvider`，没有 `requestOptions` |
-
-## 无头模块
-
-[VikingBot](./viking-bot) 提供 `useVikingBotChat`、`useVikingBotSessions` 及契约，从 `@openviking/react/modules/viking-bot` 引入。Console 内部复用同一模块；独立宿主可以把状态接入 VikingBot 或自己的视图。此入口不导出组件或 CSS，Hook 不从包根或 Console 转导出。
 
 ## 引入
 

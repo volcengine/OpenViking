@@ -1,3 +1,5 @@
+import { readTaskReferences } from '../../shared/task-tracking/read-references.js';
+import type { TaskReference } from '../../shared/task-tracking/types.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type {
   CommandConsoleCommandDefinition,
@@ -147,6 +149,7 @@ export async function executeCommand(
   client: OvClient,
   options: OvRequestOptions,
   locale: Locale,
+  onTasks?: (tasks: readonly TaskReference[]) => void,
 ): Promise<CommandConsoleRecordContent> {
   const tokens = tokenize(input);
   const spec = [...COMMAND_SPECS]
@@ -179,5 +182,6 @@ export async function executeCommand(
         return client.request({ ...request, options });
       })
     : await client.request({ ...spec.request!(values), options });
+  onTasks?.(readTaskReferences(spec.name, data));
   return formatResult(spec.name, data, values);
 }

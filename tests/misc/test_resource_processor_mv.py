@@ -207,21 +207,18 @@ async def test_resource_processor_rejects_directory_when_every_file_failed(monke
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("build_index", [True, False])
-async def test_resource_processor_rejects_partial_directory_before_semantic_plan_diff(
-    monkeypatch, build_index
-):
+@pytest.mark.parametrize("strict", [False, True])
+async def test_resource_processor_partial_directory_respects_strict(monkeypatch, strict):
     from openviking.parse.output import ParseArtifactRef
     from openviking.utils.resource_processor import ResourceProcessor
 
-    fake_fs = _FakeVikingFS(exists_result=True)
+    fake_fs = _FakeVikingFS()
     monkeypatch.setattr(
-        "openviking.utils.resource_processor.get_current_telemetry",
-        lambda: _DummyTelemetry(),
+        "openviking.utils.resource_processor.get_current_telemetry", lambda: _DummyTelemetry()
     )
     _patch_viking_fs(monkeypatch, fake_fs)
-
-    ref = ParseArtifactRef(backend="agfs", root="viking://temp/partial")
+    ref = ParseArtifactRef(backend="agfs", root="viking://temp/tmpdir", resource_rel="root")
+    failures = [{"path": "missing.py", "parser": "native", "error": "parser failed"}]
     parse_result = SimpleNamespace(
         temp_dir_path=ref.root,
         source_path="repo",
@@ -229,14 +226,8 @@ async def test_resource_processor_rejects_partial_directory_before_semantic_plan
         meta={
             "file_count": 1,
             "total_processable": 2,
-            "processed_files": [{"path": "kept.py"}],
-            "failed_files": [
-                {
-                    "path": "missing.py",
-                    "parser": "native",
-                    "error": "parser failed",
-                }
-            ],
+            "processed_files": [{"path": "kept.py", "parser": "native"}],
+            "failed_files": failures,
         },
         warnings=[],
         artifact_ref=ref,
@@ -246,25 +237,34 @@ async def test_resource_processor_rejects_partial_directory_before_semantic_plan
     rp._get_media_processor = MagicMock()
     rp._get_media_processor.return_value.process = AsyncMock(return_value=parse_result)
     rp.tree_builder.finalize_from_temp = AsyncMock(
-        side_effect=AssertionError("partial artifact must not reach finalize/diff")
+        return_value=SimpleNamespace(
+            root=SimpleNamespace(uri="viking://resources/root", temp_uri=ref.root)
+        )
     )
     rp._commit_directory_artifact_with_plan = AsyncMock(
         return_value=_directory_plan("viking://resources/root")
     )
+    rp._summarizer = SimpleNamespace(summarize=AsyncMock(return_value={"status": "success"}))
 
-    result = await rp.process_resource(path="repo", ctx=object(), build_index=build_index)
+    result = await rp.process_resource(path="repo", ctx=object(), strict=strict)
 
-    assert result["status"] == "error"
-    assert result["errors"] == [
-        "Directory import incomplete: 1 file(s) failed to parse; "
-        "failed files: missing.py: parser failed"
-    ]
     assert fake_fs.delete_temp_calls == [(ref.root, None)]
-    rp.tree_builder.finalize_from_temp.assert_not_awaited()
+    if strict:
+        assert result["status"] == "error"
+        assert "missing.py: parser failed" in result["errors"][0]
+        rp._commit_directory_artifact_with_plan.assert_not_awaited()
+        rp._summarizer.summarize.assert_not_awaited()
+    else:
+        assert result["status"] == "partial"
+        assert result["root_uri"] == "viking://resources/root"
+        assert result["import_complete"] is False
+        assert result["failed_files"] == failures
+        assert rp._commit_directory_artifact_with_plan.await_args.kwargs["source_complete"] is False
+        assert rp._summarizer.summarize.await_args.kwargs["temp_uris"] == [result["root_uri"]]
 
 
 @pytest.mark.asyncio
-async def test_partial_directory_rejection_cleans_local_parse_artifact(monkeypatch, tmp_path):
+async def test_authentication_failure_cleans_local_parse_artifact(monkeypatch, tmp_path):
     from openviking.parse.output import LocalParseOutputStore
     from openviking.utils.resource_processor import ResourceProcessor
 
@@ -286,7 +286,13 @@ async def test_partial_directory_rejection_cleans_local_parse_artifact(monkeypat
             "file_count": 1,
             "total_processable": 2,
             "processed_files": [{"path": "kept.py"}],
-            "failed_files": [{"path": "missing.py", "error": "failed"}],
+            "failed_files": [
+                {
+                    "path": "missing.py",
+                    "error": "expired credentials",
+                    "error_code": "UNAUTHENTICATED",
+                }
+            ],
         },
         warnings=[],
         artifact_ref=ref,
@@ -306,29 +312,311 @@ async def test_partial_directory_rejection_cleans_local_parse_artifact(monkeypat
     rp.tree_builder.finalize_from_temp.assert_not_awaited()
 
 
-def test_directory_parse_failures_include_failed_source_access_items():
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "state",
+    [
+        "fresh",
+        "reserved",
+        "old",
+        "empty_old",
+        "metadata",
+        "orphan",
+        "deleted",
+        "denied",
+        "collision",
+    ],
+)
+@pytest.mark.parametrize("vectorize", [False, True])
+async def test_partial_import_only_commits_fresh_targets_and_preserves_acl(
+    monkeypatch, watch_vfs, watch_tracker, tmp_path, state, vectorize
+):
+    from copy import deepcopy
+
+    from openviking.parse.output import LocalParseOutputStore
+    from openviking.server.identity import RequestContext, Role
+    from openviking.storage.acl import AclAction, acl_allows
+    from openviking.utils.ingest_options import IngestOptions
     from openviking.utils.resource_processor import ResourceProcessor
-
-    failures = ResourceProcessor._directory_parse_failures(
-        {
-            "failed_files": [
-                {"path": "broken.pdf", "error": "invalid PDF"},
-                {"path": "denied.docx", "status": "failed", "reason": "HTTP 403"},
-                {"path": "binary.bin", "status": "unsupported", "reason": "binary"},
-                {
-                    "path": "unsupported.csv",
-                    "status": "unsupported",
-                    "error": "unsupported type",
-                },
-                {"path": "ignored.tmp", "status": "skipped", "error": "ignored"},
-            ]
-        }
+    from openviking_cli.exceptions import (
+        FailedPreconditionError,
+        PermissionDeniedError,
     )
+    from openviking_cli.session.user_id import UserIdentifier
+    from tests.storage.test_vector_transfer import _RealAclMemoryTransferBackend
 
-    assert failures == [
-        {"path": "broken.pdf", "error": "invalid PDF"},
-        {"path": "denied.docx", "status": "failed", "reason": "HTTP 403"},
-    ]
+    root, parent = "viking://resources/team/docs", "viking://resources/team"
+    fs = watch_vfs
+    ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.ADMIN)
+    reader = RequestContext(user=UserIdentifier("acct", "bob"), role=Role.USER)
+    private = {
+        "acl_mode": "restricted",
+        "acl_direct_grants": ["7:user:alice"],
+        "acl_inherited_grants": ["none"],
+    }
+    records = [{"id": "parent", "uri": parent, "account_id": "acct", "level": 0, **private}]
+    if state in {"old", "empty_old", "metadata", "orphan", "deleted"}:
+        records.extend(
+            [
+                {"id": "root", "uri": root, "account_id": "acct", "level": 0, **private},
+                {
+                    "id": "body",
+                    "uri": root + "/A.md",
+                    "account_id": "acct",
+                    "level": 2,
+                    "search_tags": ["topic=private"],
+                    **private,
+                },
+            ]
+        )
+    backend = _RealAclMemoryTransferBackend(records)
+    fs.vector_store, fs.acl_manager = backend, backend.acl_manager
+    _patch_viking_fs(monkeypatch, fs)
+    await fs.mkdir(parent, exist_ok=True, ctx=ctx)
+    await fs.write_file(parent + "/.abstract.md", "private parent summary", ctx=ctx)
+    if state in {"old", "empty_old", "metadata", "collision", "deleted"}:
+        await fs.mkdir(root, exist_ok=True, ctx=ctx)
+    if state in {"old", "collision", "deleted"}:
+        await fs.write_file(root + "/A.md", "old A body", ctx=ctx)
+    if state == "deleted":
+        await watch_tracker.create(
+            "add_resource",
+            task_id="previous",
+            resource_id=root,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
+        await watch_tracker.complete(
+            "previous",
+            {"status": "success", "root_uri": root},
+            resource_id=root,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
+        await fs.rm(root, recursive=True, ctx=ctx)
+        assert not await fs.exists(root, ctx=ctx)
+        assert not any(record["uri"].startswith(root) for record in backend.records.values())
+    if state == "metadata":
+        await fs.write_file(root + "/.overview.md", "old overview", ctx=ctx)
+    record_snapshot = deepcopy(backend.records)
+    before_acl = await backend.acl_manager.resolve(root + "/A.md", reader)
+    assert not acl_allows(before_acl, reader, AclAction.READ)
+
+    store = LocalParseOutputStore(local_root=str(tmp_path / "partial-artifacts"))
+    artifact = await store.create_artifact()
+    await store.write_bytes(artifact, "A.md", b"new A body")
+    rp = ResourceProcessor(vikingdb=backend, media_storage=None)
+    if state == "denied":
+        backend.get_incremental_inventory_under_uri = AsyncMock(
+            side_effect=RuntimeError("inventory down")
+        )
+    new_target = state not in {"old", "empty_old", "metadata"}
+    lease = await rp.acquire_resource_lock(fs._uri_to_path(root, ctx=ctx), uri=root)
+    try:
+        kwargs = {
+            "output_store": store,
+            "artifact_ref": artifact,
+            "doc_rel": "",
+            "root_uri": root,
+            "target_preexisting": not new_target,
+            "target_was_reserved": new_target,
+            "ctx": ctx,
+            "lease_ref": lease,
+            "vectorize": vectorize,
+            "summarize": False,
+            "processing_mode": "vectors_only",
+            "is_code_repo": False,
+            "ingest_options": IngestOptions(),
+            "source_metadata": None,
+            "source_complete": False,
+        }
+        if state in {"fresh", "reserved", "deleted"}:
+            plan = await rp._commit_directory_artifact_with_plan(**kwargs)
+            assert await fs.read_file(root + "/A.md", ctx=ctx) == "new A body"
+            assert (
+                any(action.operation.value == "upsert" for action in plan.content_tree_actions)
+                is False
+            )
+        else:
+            with pytest.raises((FailedPreconditionError, RuntimeError)):
+                await rp._commit_directory_artifact_with_plan(**kwargs)
+            if state in {"old", "collision"}:
+                assert await fs.read_file(root + "/A.md", ctx=ctx) == "old A body"
+            elif state == "metadata":
+                assert await fs.read_file(root + "/.overview.md", ctx=ctx) == "old overview"
+            else:
+                assert not await fs.exists(root + "/A.md", ctx=ctx)
+    finally:
+        await fs._async_agfs.pathlock_release(lease)
+    assert backend.records == record_snapshot
+    assert await fs.read_file(parent + "/.abstract.md", ctx=ctx) == "private parent summary"
+    after_acl = await backend.acl_manager.resolve(root + "/A.md", reader)
+    assert after_acl == before_acl
+    assert not acl_allows(after_acl, reader, AclAction.READ)
+    if state == "old":
+        with pytest.raises(PermissionDeniedError):
+            await fs.read_file(root + "/A.md", ctx=reader)
+
+
+@pytest.mark.asyncio
+async def test_update_source_permission_failure_leaves_private_data_untouched(
+    monkeypatch, watch_vfs
+):
+    from openviking.server.identity import RequestContext, Role
+    from openviking.utils.resource_processor import ResourceProcessor
+    from openviking_cli.exceptions import OpenVikingError
+    from openviking_cli.session.user_id import UserIdentifier
+
+    fs = watch_vfs
+    ctx = RequestContext(user=UserIdentifier("test", "alice"), role=Role.ADMIN)
+    root = "viking://resources/team/docs"
+    _patch_viking_fs(monkeypatch, fs)
+    await fs.mkdir(root, exist_ok=True, ctx=ctx)
+    await fs.write_file(root + "/A.md", "old body", ctx=ctx)
+    await fs.write_file(root + "/.overview.md", "old summary", ctx=ctx)
+    await fs.write_file("viking://resources/team/.abstract.md", "old ancestor", ctx=ctx)
+    rp = ResourceProcessor(vikingdb=object(), media_storage=None)
+    rp._feishu_source_config_kwargs = AsyncMock(return_value={})
+    rp._get_media_processor = MagicMock()
+    rp._get_media_processor.return_value.process = AsyncMock(
+        side_effect=OpenVikingError("source denied", code="PERMISSION_DENIED")
+    )
+    with pytest.raises(OpenVikingError, match="source denied"):
+        await rp.process_resource(path="https://example.feishu.cn/wiki/source", to=root, ctx=ctx)
+    assert await fs.read_file(root + "/A.md", ctx=ctx) == "old body"
+    assert await fs.read_file(root + "/.overview.md", ctx=ctx) == "old summary"
+    assert await fs.read_file("viking://resources/team/.abstract.md", ctx=ctx) == "old ancestor"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "existing,partial,task_count",
+    [
+        (False, False, 0),
+        (False, True, 0),
+        (False, True, 100),
+        (True, False, 0),
+        (True, True, 0),
+    ],
+)
+@pytest.mark.parametrize("error_code", ["PERMISSION_DENIED", "UNAVAILABLE"])
+async def test_partial_pipeline_rejects_updates_before_writing_old_data(
+    monkeypatch, watch_vfs, watch_tracker, tmp_path, existing, error_code, partial, task_count
+):
+    from copy import deepcopy
+    from pathlib import Path
+
+    from openviking.parse.output import LocalParseOutputStore
+    from openviking.server.identity import RequestContext, Role
+    from openviking.service.resource_service import ResourceService
+    from openviking.utils.resource_processor import ResourceProcessor
+    from openviking_cli.exceptions import FailedPreconditionError
+    from openviking_cli.session.user_id import UserIdentifier
+    from tests.storage.test_vector_transfer import _RealAclMemoryTransferBackend
+
+    fs = watch_vfs
+    ctx = RequestContext(user=UserIdentifier("acct", "alice"), role=Role.ADMIN)
+    root = "viking://resources/docs"
+    for i in range(task_count):
+        await watch_tracker.create(
+            "add_resource",
+            task_id=f"unrelated-{i}",
+            resource_id=f"viking://resources/unrelated-{i}",
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
+        await watch_tracker.complete(
+            f"unrelated-{i}",
+            {"status": "success"},
+            resource_id=f"viking://resources/unrelated-{i}",
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
+    # Exercise the service-to-commit path, not just the commit helper. A limit on
+    # returned Tasks never bounded reads, so this path must not list them at all.
+    task_listing = AsyncMock(side_effect=AssertionError("must not scan Task history"))
+    monkeypatch.setattr(watch_tracker, "list_tasks", task_listing)
+    records = (
+        [
+            {
+                "id": "old",
+                "uri": root + "/A.md",
+                "level": 2,
+                "account_id": "acct",
+                "search_tags": ["topic=private"],
+                "acl_mode": "restricted",
+                "acl_direct_grants": ["7:user:alice"],
+                "acl_inherited_grants": ["none"],
+            }
+        ]
+        if existing
+        else []
+    )
+    backend = _RealAclMemoryTransferBackend(records)
+    fs.vector_store, fs.acl_manager = backend, backend.acl_manager
+    _patch_viking_fs(monkeypatch, fs)
+    if existing:
+        await fs.mkdir(root, exist_ok=True, ctx=ctx)
+        await fs.write_file(root + "/A.md", "old A", ctx=ctx)
+        await fs.write_file(root + "/.overview.md", "private overview", ctx=ctx)
+    before = deepcopy(backend.records)
+    store = LocalParseOutputStore(local_root=str(tmp_path / "pipeline"))
+    artifact = await store.create_artifact()
+    await store.write_bytes(artifact, "A.md", b"new A")
+    failures = (
+        [{"path": "B.md", "error": "cannot read B", "error_code": error_code}] if partial else []
+    )
+    parsed = SimpleNamespace(
+        temp_dir_path=artifact.root,
+        source_path="repo",
+        source_format="directory",
+        meta={
+            "file_count": 1,
+            "total_processable": 2,
+            "processed_files": [{"path": "A.md"}],
+            "failed_files": failures,
+        },
+        warnings=[],
+        artifact_ref=artifact,
+        ensure_artifact_ref=lambda: artifact,
+    )
+    processor = ResourceProcessor(vikingdb=backend, media_storage=None)
+    processor._build_parse_output_store = MagicMock(return_value=store)
+    processor._get_media_processor = MagicMock()
+    processor._get_media_processor.return_value.process = AsyncMock(return_value=parsed)
+    processor.tree_builder.finalize_from_temp = AsyncMock(
+        return_value=SimpleNamespace(
+            root=SimpleNamespace(uri=root, temp_uri=artifact.root),
+        )
+    )
+    processor.finish_prepared_resource = AsyncMock(return_value={"status": "success"})
+    service = ResourceService(viking_fs=fs, resource_processor=processor, skill_processor=object())
+
+    async def ingest():
+        return await service._execute_resource_ingestion(
+            path="repo",
+            to=root,
+            ctx=ctx,
+            build_index=False,
+            defer_post_processing=False,
+            manage_watch=False,
+        )
+
+    if existing and partial:
+        with pytest.raises(FailedPreconditionError, match="only first imports"):
+            await ingest()
+        assert await fs.read_file(root + "/A.md", ctx=ctx) == "old A"
+        assert await fs.read_file(root + "/.overview.md", ctx=ctx) == "private overview"
+        processor.finish_prepared_resource.assert_not_awaited()
+    else:
+        result = await ingest()
+        assert result["status"] == ("partial" if partial else "success")
+        if partial:
+            assert result["failed_files"] == failures
+        assert await fs.read_file(root + "/A.md", ctx=ctx) == "new A"
+    assert backend.records == before
+    assert not Path(artifact.root).exists()
+    task_listing.assert_not_awaited()
 
 
 @pytest.mark.parametrize("length", [119, 120, 121, 240])

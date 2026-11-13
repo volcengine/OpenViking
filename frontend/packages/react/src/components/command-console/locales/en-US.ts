@@ -8,6 +8,7 @@ const messages = {
   historyCommands: 'History',
   suggestions: 'Command suggestions',
   noSuggestions: 'No matching commands',
+  cancelled: 'Cancelled',
   pending: 'Running',
   success: 'Succeeded',
   error: 'Failed',

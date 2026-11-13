@@ -8,6 +8,7 @@ const messages = {
   historyCommands: '历史指令',
   suggestions: '命令建议',
   noSuggestions: '没有匹配的命令',
+  cancelled: '已取消',
   pending: '执行中',
   success: '执行成功',
   error: '执行失败',

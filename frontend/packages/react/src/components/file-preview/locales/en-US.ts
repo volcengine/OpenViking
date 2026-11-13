@@ -16,6 +16,8 @@ const messages = {
   editFile: 'Edit file',
   save: 'Save',
   editor: 'Edit content',
+  editorLoadFailed: 'Failed to load the editor',
+  highlightFailed: 'Failed to load syntax highlighting',
   leaveEditing: 'Cancel',
   retry: 'Retry',
   loadFailed: 'Failed to load the file',

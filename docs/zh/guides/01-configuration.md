@@ -1368,7 +1368,7 @@ Grep 引擎配置，用于内容模式搜索。这些设置为服务端配置，
 | `engine` | str | 搜索引擎模式：`"auto"` 在可用时使用 VikingDB BM25 召回，不可用时回退到本地文件系统搜索；`"fs"` 强制仅使用本地文件系统搜索。 | `"auto"` |
 | `switch_to_remote_threshold` | int | 切换到 VikingDB BM25 召回的 L2 记录数阈值。当搜索范围内的 L2 文件数达到此阈值时，使用 VikingDB BM25 进行第一阶段召回；否则使用本地文件系统搜索。设为 `0` 表示始终使用 VikingDB BM25。必须 ≥ 0。 | `10000` |
 
-对于 VikingDB / Volcengine FullText grep，OpenViking 会写入 `content` text 字段用于 BM25 召回。源上下文中保留完整内容，仅在最终写入向量库 adapter payload 时将该字段截断到 **1 MB**，以满足后端 payload 限制。只有 VikingDB 系后端使用 `content`；其它后端（`local`、`cuvs`、`http`）不写入该字段。
+对于 VikingDB / Volcengine FullText grep，OpenViking 会写入 `content` text 字段用于 BM25 召回。源上下文中保留完整内容，仅在最终写入向量库 adapter payload 时将该字段截断到 **1 MB**，以满足后端 payload 限制。SQL 后端（`opengauss`、`pgvector`）也存储 `content`，其中 pgvector 的 grep 使用文件系统回退；`local`、`cuvs`、`http` 不写入该字段。
 
 ### glob
 
@@ -1645,8 +1645,9 @@ Redis 命名空间。
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `provider` | str | `filesystem`、`memory`、`sqlite` 或 `cache`；`cache` 复用 Redis CacheRuntime | `filesystem` |
+| `provider` | str | `filesystem`、`memory`、`sqlite`、`postgres` 或 `cache`；`postgres` 直连 PostgreSQL，`cache` 复用 Redis CacheRuntime | `filesystem` |
 | `sqlite_path` | str / null | 可显式覆盖本地共享锁数据库的绝对路径。见 [SQLite 配置](../configuration/01-server.md#storage) | 使用 `sqlite` 时为 `{storage.workspace}/_system/pathlock/pathlock.db` |
+| `postgres_dsn_env` | str / null | `postgres` 必填；保存 PostgreSQL DSN 的环境变量名。见 [PostgreSQL 配置](../configuration/01-server.md#postgresql-pathlock) | `null` |
 | `lock_expire_secs` | float | 未刷新的锁进入 stale 状态前的秒数；不得小于 `1.0` | `30.0` |
 | `lock_timeout_secs` | float | 已废弃且忽略；运行时等待超时固定为 `0.0` | `0.0` |
 
@@ -1655,7 +1656,35 @@ SQLite PathLock 仅适用于同一主机上的进程共享同一个本地磁盘�
 workspace 位于 EFS 时，默认 `sqlite_path` 也会落在 EFS。
 详见 [SQLite 部署限制](../configuration/01-server.md#storage)。
 
-多个容器或主机共享 EFS 时，使用下面的共享 Redis PathLock 配置。
+不使用 Redis 的多进程或多主机 PathLock 协调，可将下面片段合入 `ov.conf`，
+并在每个服务和 worker 启动前设置对应环境变量：
+
+```json
+{
+  "service_name": "production",
+  "storage": {
+    "agfs": {
+      "pathlock": {
+        "provider": "postgres",
+        "postgres_dsn_env": "OV_POSTGRES_DSN",
+        "lock_expire_secs": 30.0
+      }
+    }
+  }
+}
+```
+
+```sh
+export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=openviking password=YOUR_PASSWORD sslmode=require'
+```
+
+所有参与者必须连接同一可写 PostgreSQL 主库，使用相同的顶层 `service_name`
+和过期时长。PostgreSQL PathLock 独立于 `cache.provider/cache.params`，
+不会启用 CacheFS，也不会改变 QueueFS、业务文件存储或向量后端的并发限制。
+特别是默认 SQLite 队列不适合在 EFS 上跨主机共享。
+配置和验证步骤见 [PostgreSQL PathLock 配置](../configuration/01-server.md#postgresql-pathlock)。
+
+多个容器或主机共享 EFS 时，也可使用下面的共享 Redis PathLock 配置。
 所有副本必须连接同一个 Redis 部署，并使用相同的顶层 `service_name` 和锁过期配置。
 示例同时使用 Redis QueueFS 和 coordination，避免 SQLite 状态落在 EFS。
 
@@ -1696,7 +1725,7 @@ workspace 位于 EFS 时，默认 `sqlite_path` 也会落在 EFS。
 }
 ```
 
-标准配置没有全局 `cache.enabled`，也没有各模块自己的 Redis namespace 字段。当 CacheFS 或 QueueFS 选择 `backend=cache`、PathLock 或 coordination 选择 `provider=cache`，或多写选择 `backups.provider=cache` 时初始化 CacheRuntime。Cache PathLock 当前只支持 `cache.provider=redis`，不支持 DynamicProvider。全部模块使用本地 Provider 时不解析 `cache.params`，也不连接 Provider。
+标准配置没有全局 `cache.enabled`，也没有各模块自己的 Redis namespace 字段。当 CacheFS 或 QueueFS 选择 `backend=cache`、PathLock 或 coordination 选择 `provider=cache`，或多写选择 `backups.provider=cache` 时初始化 CacheRuntime。Cache PathLock 当前只支持 `cache.provider=redis`，不支持 DynamicProvider。只要这些模块都没有选择 cache Provider，就不解析 `cache.params`，也不连接 CacheRuntime；PathLock 使用 PostgreSQL 时同样如此。
 
 请把 Provider 参数迁移到顶层 `cache.provider/cache.params`，用顶层 `service_name` 生成共享 Redis 名称，业务模块改为 `cachefs.backend="cache"`、`queuefs.backend="cache"` 或 `backups.provider="cache"`；Redis 的 `singleton` 改为 `standalone`，`tls_enabled` 改为使用 `rediss://` endpoint。
 
@@ -1891,7 +1920,7 @@ workspace 位于 EFS 时，默认 `sqlite_path` 也会落在 EFS。
 
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `backend` | str | VectorDB 后端类型: 'local'（基于文件）, 'http'（远程服务）, 'volcengine'（云上 VikingDB）, 'vikingdb'（私有部署）或 'cuvs'（本地存储 + GPU dense search） | "local" |
+| `backend` | str | VectorDB 后端：`local`、`http`、`volcengine`、`vikingdb`、`cuvs`、`opengauss`、`pgvector`（PostgreSQL） | "local" |
 | `name` | str | VectorDB 的集合名称 | "context" |
 | `url` | str | 'http' 类型的远程服务 URL（例如 `http://localhost:5000`） | null |
 | `project_name` | str | 项目名称（别名 project） | "default" |
@@ -1901,6 +1930,7 @@ workspace 位于 EFS 时，默认 `sqlite_path` 也会落在 EFS。
 | `volcengine` | object | 'volcengine' 类型的 VikingDB 配置 | - |
 | `vikingdb` | object | 'vikingdb' 类型的私有部署配置 | - |
 | `cuvs` | object | NVIDIA cuVS 配置，也用于在 'local' 下显式开启显存感知自动模式，参见 [cuVS 使用指南](./16-cuvs.md) | - |
+| `pgvector` | object | PostgreSQL 连接池和 flat/HNSW 参数，参见 [pgvector 使用指南](./25-pgvector.md) | - |
 
 默认使用本地模式
 ```
@@ -2673,7 +2703,7 @@ Task 记录文件位于所属账号的系统目录：
       }
     },
     "vectordb": {
-      "backend": "local|cuvs|http|volcengine|vikingdb",
+      "backend": "local|cuvs|http|volcengine|vikingdb|opengauss|pgvector",
       "url": "string",
       "project": "string"
     }

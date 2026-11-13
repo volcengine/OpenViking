@@ -200,12 +200,27 @@ HTTP 响应中的 `result` 保持为条目数组。`has_more=true` 表示在应�
       "modTime": "2024-01-01T00:00:00Z",
       "isDir": true,
       "uri": "viking://resources/docs/",
+      "access": "read",
       "tags": ["team=search"]
     }
   ],
   "has_more": true
 }
 ```
+
+`ls`、递归列表、`tree` 和 `stat` 的条目均返回 `access`，表示当前请求身份对该 URI 的有效权限。`original` 和 `agent` 输出都包含该字段；`simple=true` 的纯路径列表保持不变。
+
+| access | 含义 |
+|------------|------|
+| `denied` | 无权访问；列表只保留名称占位，不能展开；直接请求 `stat` 仍返回 403 |
+| `container` | 仅可展开目录以访问获授权的子项，不能读取目录自身的内容或修改它 |
+| `read` | 可读 |
+| `write` | 可读、可写 |
+| `manage` | 可读、可写、可管理 |
+
+共享资源合并直接授权、继承授权、用户组和管理员隐式权限。ACL 字段缺失或直接授权为空不会自动变成 `denied`：仍按祖先 ACL 及默认共享规则解析；`restricted` 且无匹配授权时才拒绝普通用户。关闭 ACL 时、或 URI 不属于共享资源时，使用原有身份及目录权限规则，包括系统文件的只读限制，不以是否存在向量记录决定权限。
+
+客户端可以复用列表中的 `access` 控制编辑入口，无需逐项请求 `stat` 或管理员专用的 ACL 接口。`access` 不代表格式可编辑、目录可删除或所有后代均已授权；具体操作仍执行其路径限制与当时的权限检查。底层文件模式 `mode` 不是当前身份的权限。
 
 ---
 
@@ -421,6 +436,7 @@ ov stat viking://resources/my-project/docs
     "modTime": "2024-01-01T00:00:00Z",
     "isDir": false,
     "isLocked": false,
+    "access": "write",
     "id": "a1b2c3d4e5f678901234567890abcdef",
     "uri": "viking://resources/docs/api.md"
   }
@@ -439,6 +455,7 @@ ov stat viking://resources/my-project/docs
     "modTime": "2024-01-01T00:00:00Z",
     "isDir": true,
     "isLocked": false,
+    "access": "manage",
     "uri": "viking://resources/docs",
     "count": 42
   }

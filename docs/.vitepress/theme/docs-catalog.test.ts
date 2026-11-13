@@ -53,8 +53,8 @@ for (const locale of ['en', 'zh'] as Locale[]) {
     assert.ok(Array.isArray(sidebar))
     const links = sidebar.flatMap(group => group.items ?? [])
     const owned = data[locale].find(section => section.id === start.id)!.pages
-    assert.deepEqual(start.groups.map(group => group.pages.length), [5, 1, 5, 4, 3, 6])
-    assert.equal(owned.length, 22)
+    assert.deepEqual(start.groups.map(group => group.pages.length), [5, 1, 6, 4, 3, 6])
+    assert.equal(owned.length, 23)
     assert.equal(links.length, owned.length + 2)
     assert.deepEqual(start.groups.map(group => group.zh), ['开始', 'Studio', '功能', '集成', '数据管理', '团队管理'])
     assert.deepEqual(start.groups[1].pages.map(page => page.path), ['getting-started/23-studio'])

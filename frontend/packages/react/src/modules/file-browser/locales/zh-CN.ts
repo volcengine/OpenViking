@@ -16,7 +16,7 @@ const messages = {
   searchEmpty: '没有匹配的资源',
   searchFailed: '搜索失败',
   searchModePlaceholders: {
-    find: '输入语义检索内容',
+    find: '搜索文件或目录',
     search: '输入需要结合会话理解的问题',
     grep: '输入正则表达式或精确文本',
     glob: '输入文件模式，例如 **/*.md',
@@ -46,6 +46,10 @@ const messages = {
   searchSwitchMode: '切换',
   searchAdvancedLabel: '高级筛选',
   loading: '加载中…',
+  searchDismiss: 'Esc 退出',
+  searchPreview: '搜索结果预览',
+  searchPreviewEmpty: '暂无可预览内容',
+  searchPreviewFailed: '预览加载失败',
   searchLoading: '搜索中…',
   previewMode: '预览',
   sourceMode: '源码',
@@ -71,3 +75,5 @@ const messages = {
 } satisfies Required<ShellLabels>;
 
 export default messages;
+
+export const stackedEmpty = '从上方选中一个文件预览';

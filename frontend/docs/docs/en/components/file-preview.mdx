@@ -55,6 +55,14 @@ Inject your own commands with `actions`: one command is an icon button, and seve
 
 Demo commands wait 2 seconds; switch tabs or tick "Custom toolbar" while one runs, and the commands of that resource stay locked.
 
+### Code editing
+
+Choose a code file to try 44 grammars in CodeMirror 6, with line numbers, undo and Prism syntax highlighting.
+
+```tsx file="../../_demos/file-preview-editing.tsx" preview
+
+```
+
 ### State fallbacks
 
 Switch the file type and the read state to compare the built-in states with the custom ones in `slots`.
@@ -268,32 +276,34 @@ The context the component passes to an `actions` function and a `slots.actions` 
 
 Every field is an optional `string`; omitted fields use the default text of the current language.
 
-| Property       | Description                                                                                                          | Type     | Default                                      |
-| -------------- | -------------------------------------------------------------------------------------------------------------------- | -------- | -------------------------------------------- |
-| previewImage   | Accessible name of the enlarge-image button, followed by the file name                                               | `string` | `'Enlarge image'`                            |
-| closePreview   | Text of the close button in the enlarged-image dialog                                                                | `string` | `'Close preview'`                            |
-| showHiddenPath | Accessible name of the "…" button that holds the collapsed breadcrumb levels                                         | `string` | `'Show hidden path levels'`                  |
-| copyPath       | Hint and accessible name of the copy-path button                                                                     | `string` | `'Copy path'`                                |
-| copied         | Feedback after the path is copied                                                                                    | `string` | `'Copied'`                                   |
-| copyFailed     | Feedback when copying the path fails                                                                                 | `string` | `'Could not copy'`                           |
-| moreActions    | Hint and accessible name of the "…" button that holds collapsed commands                                             | `string` | `'More actions'`                             |
-| actionFailed   | Message when an injected command fails, followed by the error message                                                | `string` | `'The action failed'`                        |
-| previewMode    | Text of "Preview" in the view switch                                                                                 | `string` | `'Preview'`                                  |
-| sourceMode     | Text of "Source" in the view switch                                                                                  | `string` | `'Source'`                                   |
-| viewSwitch     | Accessible name of the view switch group                                                                             | `string` | `'View mode'`                                |
-| edit           | Hint and accessible name of the edit button                                                                          | `string` | `'Edit'`                                     |
-| editFile       | The component never renders this text, so setting it has no effect                                                   | `string` | `'Edit file'`                                |
-| save           | Text of the Save button while editing                                                                                | `string` | `'Save'`                                     |
-| editor         | Accessible name of the editing text box                                                                              | `string` | `'Edit content'`                             |
-| leaveEditing   | Text of the Cancel button while editing; also used by the button that leaves editing after a failed read             | `string` | `'Cancel'`                                   |
-| retry          | Text of the Retry button                                                                                             | `string` | `'Retry'`                                    |
-| loadFailed     | Message when reading the file fails; also used when reading for edit fails                                           | `string` | `'Failed to load the file'`                  |
-| saveFailed     | Message when saving fails                                                                                            | `string` | `'Failed to save'`                           |
-| unsupported    | Message when there is no usable source; the unsupported-format message comes from FileViewer in the current `locale` | `string` | `'Preview is not supported for this format'` |
-| loading        | Loading message                                                                                                      | `string` | `'Loading…'`                                 |
-| fileEmpty      | Message when `content` is an empty string                                                                            | `string` | `'This file is empty'`                       |
-| noContent      | The component never renders this text, so setting it has no effect                                                   | `string` | `'No content to show'`                       |
-| truncated      | Message when `source.truncated` is `true`                                                                            | `string` | `'Only part of the content is shown'`        |
+| Property         | Description                                                                                                          | Type     | Default                                      |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------- | -------- | -------------------------------------------- |
+| previewImage     | Accessible name of the enlarge-image button, followed by the file name                                               | `string` | `'Enlarge image'`                            |
+| closePreview     | Text of the close button in the enlarged-image dialog                                                                | `string` | `'Close preview'`                            |
+| showHiddenPath   | Accessible name of the "…" button that holds the collapsed breadcrumb levels                                         | `string` | `'Show hidden path levels'`                  |
+| copyPath         | Hint and accessible name of the copy-path button                                                                     | `string` | `'Copy path'`                                |
+| copied           | Feedback after the path is copied                                                                                    | `string` | `'Copied'`                                   |
+| copyFailed       | Feedback when copying the path fails                                                                                 | `string` | `'Could not copy'`                           |
+| moreActions      | Hint and accessible name of the "…" button that holds collapsed commands                                             | `string` | `'More actions'`                             |
+| actionFailed     | Message when an injected command fails, followed by the error message                                                | `string` | `'The action failed'`                        |
+| previewMode      | Text of "Preview" in the view switch                                                                                 | `string` | `'Preview'`                                  |
+| sourceMode       | Text of "Source" in the view switch                                                                                  | `string` | `'Source'`                                   |
+| viewSwitch       | Accessible name of the view switch group                                                                             | `string` | `'View mode'`                                |
+| edit             | Hint and accessible name of the edit button                                                                          | `string` | `'Edit'`                                     |
+| editFile         | The component never renders this text, so setting it has no effect                                                   | `string` | `'Edit file'`                                |
+| save             | Text of the Save button while editing                                                                                | `string` | `'Save'`                                     |
+| editorLoadFailed | Message shown when the editor fails to load                                                                          | `string` | `'Failed to load the editor'`                |
+| highlightFailed  | Message shown when syntax highlighting fails to load                                                                 | `string` | `'Failed to load syntax highlighting'`       |
+| editor           | Accessible name of the editing text box                                                                              | `string` | `'Edit content'`                             |
+| leaveEditing     | Text of the Cancel button while editing; also used by the button that leaves editing after a failed read             | `string` | `'Cancel'`                                   |
+| retry            | Text of the Retry button                                                                                             | `string` | `'Retry'`                                    |
+| loadFailed       | Message when reading the file fails; also used when reading for edit fails                                           | `string` | `'Failed to load the file'`                  |
+| saveFailed       | Message when saving fails                                                                                            | `string` | `'Failed to save'`                           |
+| unsupported      | Message when there is no usable source; the unsupported-format message comes from FileViewer in the current `locale` | `string` | `'Preview is not supported for this format'` |
+| loading          | Loading message                                                                                                      | `string` | `'Loading…'`                                 |
+| fileEmpty        | Message when `content` is an empty string                                                                            | `string` | `'This file is empty'`                       |
+| noContent        | The component never renders this text, so setting it has no effect                                                   | `string` | `'No content to show'`                       |
+| truncated        | Message when `source.truncated` is `true`                                                                            | `string` | `'Only part of the content is shown'`        |
 
 ### FilePreviewHandle
 
@@ -353,6 +363,10 @@ Obtained through `ref`, to switch tabs and reach FileViewer imperatively.
 
 ### Actions and editing
 
+- Editor loading: CodeMirror 6 loads on first edit. Prism grammars load on demand based on `source.fileType`, the file extension or the filename; unknown formats remain editable as plain text.
+- Shared highlighting: the editor and FileViewer use `prismjs`. When the consumer resolves them to the same version, they share the core and language modules; no CodeMirror language grammars are loaded.
+- Highlight updates: full-document highlighting runs after a 100 ms typing debounce. If highlighting fails, editing and saving remain available and highlighting can be retried.
+
 - Presentation: no commands show no entry, one command is an icon button, and two or more collapse into a "…" menu.
 - Groups: consecutive single commands form one group, each nonempty array is its own group, and empty arrays are ignored without splitting their neighbors; dividers separate groups.
 - Function form: `actions` and `slots.actions` may be functions called during rendering, so return content from the context only, and do not send requests or update state inside them.
@@ -370,6 +384,27 @@ Obtained through `ref`, to switch tabs and reach FileViewer imperatively.
 - Unsupported formats: passing `unsupportedFallback` takes over the whole unsupported state, so the download entry FileViewer would offer no longer appears.
 - Download entry: `downloadFallback` receives `onDownload` and `onRetry`, and wins over `unsupportedFallback` when both are given.
 
+### Editor highlighting formats
+
+`source.fileType` accepts a language name, extension or MIME type; the generic `code` type uses the filename. SVG renders as an image by default; pass `fileType: 'xml'` to edit its source.
+
+| Grammar                             | Extensions or filenames                                                |
+| ----------------------------------- | ---------------------------------------------------------------------- |
+| JavaScript / JSX / TypeScript / TSX | `js`, `mjs`, `cjs`, `jsx`, `ts`, `tsx`                                 |
+| Python / Go / Rust / Java           | `py`, `pyw`, `go`, `rs`, `java`                                        |
+| C / C++ / C# / Objective-C          | `c`, `h`, `cpp`, `cc`, `cxx`, `hpp`, `hxx`, `cs`, `m`, `mm`            |
+| Kotlin / Swift / Dart / Scala       | `kt`, `kts`, `swift`, `dart`, `scala`                                  |
+| PHP / Ruby / Perl / Lua / R         | `php`, `rb`, `rake`, `gemspec`, `pl`, `pm`, `lua`, `r`, `rmd`          |
+| Elixir / Erlang / Haskell           | `ex`, `exs`, `erl`, `hrl`, `hs`, `lhs`                                 |
+| JSON / YAML / TOML / INI            | `json`, `jsonl`, `ndjson`, `yaml`, `yml`, `toml`, `ini`, `cfg`, `conf` |
+| HTML / XML / CSS / SCSS / Less      | `html`, `htm`, `xhtml`, `xml`, `svg`, `css`, `scss`, `less`            |
+| Markdown / LaTeX                    | `md`, `markdown`, `mdx`, `tex`, `latex`                                |
+| SQL / GraphQL / Protobuf            | `sql`, `graphql`, `gql`, `proto`                                       |
+| Bash / Fish                         | `sh`, `bash`, `zsh`, `fish`, `.bashrc`, `.zshrc`, `.bash_profile`      |
+| Docker / Makefile / Nginx           | `dockerfile`, `Dockerfile.*`, `makefile`, `GNUmakefile`, `nginx`       |
+| WebAssembly text                    | `wat`, `wasm`                                                          |
+| Diff                                | `diff`, `patch`                                                        |
+
 ## Theme variables
 
 The shell takes its colors from `--ov-ui-color-*`: set them on your app root or any ancestor to re-skin, and the defaults below apply when they are unset; see [Getting started](../guide/getting-started). Dark mode reads the `.dark` class on `<html>` and ignores `prefers-color-scheme`.
@@ -383,6 +418,7 @@ The shell takes its colors from `--ov-ui-color-*`: set them on your app root or 
 | `--ov-ui-color-border-2`         | `#e1e4f2`         | `#2e3138`                | Separators and borders                   |
 | `--ov-ui-color-bg-1`             | `#ffffff`         | `#131416`                | Panel surface                            |
 | `--ov-ui-color-bg-5`             | `#f1f2f9`         | `#23252a`                | Hover background                         |
+| `--ov-ui-color-syntax-number`    | `#722ed1`         | `#b37feb`                | Numbers and booleans in the editor       |
 | `--ov-ui-color-preview-backdrop` | `#f8f8f8`         | `#202227`                | Dotted backdrop color around the preview |
 | `--ov-ui-color-preview-dot`      | `rgb(0 0 0 / 8%)` | `rgb(255 255 255 / 12%)` | Dot color of the backdrop                |
 
@@ -394,18 +430,18 @@ To adjust only this component, override `--ov-ui-file-preview-*` on its root:
 }
 ```
 
-| Variable                            | Description                                           | Default                       |
-| ----------------------------------- | ----------------------------------------------------- | ----------------------------- |
-| `--ov-ui-file-preview-accent`       | Accent color, for example the selected level label    | `--ov-ui-color-primary`       |
-| `--ov-ui-file-preview-accent-hover` | Hover color of path levels and the "…" button         | `--ov-ui-color-primary-hover` |
-| `--ov-ui-file-preview-border`       | Separators and borders                                | `--ov-ui-color-border-2`      |
-| `--ov-ui-file-preview-focus-ring`   | Keyboard focus ring                                   | `--ov-ui-color-primary`       |
-| `--ov-ui-file-preview-row-hover`    | Hover background                                      | `--ov-ui-color-bg-5`          |
-| `--ov-ui-file-preview-surface`      | Surface of tabs, menus and panels                     | `--ov-ui-color-bg-1`          |
-| `--ov-ui-file-preview-text`         | Body text and the selected tab's text                 | `--ov-ui-color-text-1`        |
-| `--ov-ui-file-preview-text-muted`   | Secondary text and icons                              | `--ov-ui-color-text-3`        |
-| `--ov-ui-file-preview-text-path`    | Text of the path breadcrumb                           | `--ov-ui-color-text-3`        |
-| `--ov-ui-radius`                    | Corner radius of the editor and breadcrumb menu items | `6px`                         |
-| `--ov-ui-font-mono`                 | Font of the path and the editor                       | `ui-monospace, monospace`     |
+| Variable                            | Description                                        | Default                       |
+| ----------------------------------- | -------------------------------------------------- | ----------------------------- |
+| `--ov-ui-file-preview-accent`       | Accent color, for example the selected level label | `--ov-ui-color-primary`       |
+| `--ov-ui-file-preview-accent-hover` | Hover color of path levels and the "…" button      | `--ov-ui-color-primary-hover` |
+| `--ov-ui-file-preview-border`       | Separators and borders                             | `--ov-ui-color-border-2`      |
+| `--ov-ui-file-preview-focus-ring`   | Keyboard focus ring                                | `--ov-ui-color-primary`       |
+| `--ov-ui-file-preview-row-hover`    | Hover background                                   | `--ov-ui-color-bg-5`          |
+| `--ov-ui-file-preview-surface`      | Surface of tabs, menus and panels                  | `--ov-ui-color-bg-1`          |
+| `--ov-ui-file-preview-text`         | Body text and the selected tab's text              | `--ov-ui-color-text-1`        |
+| `--ov-ui-file-preview-text-muted`   | Secondary text and icons                           | `--ov-ui-color-text-3`        |
+| `--ov-ui-file-preview-text-path`    | Text of the path breadcrumb                        | `--ov-ui-color-text-3`        |
+| `--ov-ui-radius`                    | Corner radius of breadcrumb menu items             | `6px`                         |
+| `--ov-ui-font-mono`                 | Font of the path and the editor                    | `ui-monospace, monospace`     |
 
 The body is rendered by `@ark-design/ui`, and its colors mostly come from Arco's `--color-*` and `--primary-*` variables. Load an Arco color theme at your app entry, such as `@ark-design/ui/styles/aml-theme.css` or `@arco-design/web-react/dist/css/arco.css`; without one the variables have no value and the body's color styles do not apply. In dark mode also set `arco-theme="dark"` on `<body>`, together with `.dark` on `<html>`.

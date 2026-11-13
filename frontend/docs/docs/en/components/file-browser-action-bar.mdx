@@ -27,6 +27,14 @@ The three bars show both actions, only "Import resources", and only "Connect age
 
 The import callbacks in the example are empty functions, and the `apiKey` is for demonstration only.
 
+### Open from another entry
+
+Quick start and the action bar open the same drawer. Close the drawer after opening it from Quick start to mark the connection guide as viewed.
+
+```tsx file="../../_demos/file-browser-action-bar-controlled.tsx" preview
+
+```
+
 ### Custom import action
 
 Wrap the default import button with `renderImportResources`. Click "Import resources" and the status line below the bar updates, which shows that `onImportResources` still fires after wrapping.
@@ -41,15 +49,17 @@ The example uses a `span` to stand in for a host component; in your app you can 
 
 ### FileBrowserActionBar
 
-| Property              | Description                                                                                                                                                  | Type                                                                    | Default                        |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- | ------------------------------ |
-| agentConnect          | Shows "Connect agent"; a click opens [AgentConnect](./agent-connect) in a right-side drawer, with props passed through and `locale` following the bar        | `AgentConnectProps`                                                     | -                              |
-| onConnectAgent        | Called when "Connect agent" is clicked; without `agentConnect`, passing it alone shows the action and your app handles the rest                              | `() => void`                                                            | -                              |
-| onImportResources     | Shows "Import resources" and is called when it is clicked                                                                                                    | `() => void`                                                            | -                              |
-| renderImportResources | Shows "Import resources"; `trigger` is the default button (already bound to `onImportResources`), which you can wrap or replace, or return `null` to hide it | `(trigger: ReactElement<ComponentPropsWithRef<'button'>>) => ReactNode` | -                              |
-| labels                | Overrides interface text                                                                                                                                     | `FileBrowserActionBarLabels`                                            | -                              |
-| locale                | Interface language, see [Internationalization](../guide/i18n)                                                                                                | `'zh-CN' \| 'en-US'`                                                    | Inherited, otherwise `'en-US'` |
-| className, style      | Appearance and layout; other HTML attributes are passed to the root element                                                                                  | HTML attributes                                                         | -                              |
+| Property                 | Description                                                                                                                                                  | Type                                                                    | Default                        |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- | ------------------------------ |
+| agentConnect             | Shows "Connect agent"; a click opens [AgentConnect](./agent-connect) in a right-side drawer, with props passed through and `locale` following the bar        | `AgentConnectProps`                                                     | -                              |
+| agentConnectOpen         | Controls the built-in connection drawer when `agentConnect` is provided; omit it to let the bar manage visibility                                            | `boolean`                                                               | -                              |
+| onAgentConnectOpenChange | Reports user open and close requests, including close by button, backdrop, or Escape; changing the prop directly does not call it                            | `(open: boolean) => void`                                               | -                              |
+| onConnectAgent           | Called when "Connect agent" is clicked; without `agentConnect`, passing it alone shows the action and your app handles the rest                              | `() => void`                                                            | -                              |
+| onImportResources        | Shows "Import resources" and is called when it is clicked                                                                                                    | `() => void`                                                            | -                              |
+| renderImportResources    | Shows "Import resources"; `trigger` is the default button (already bound to `onImportResources`), which you can wrap or replace, or return `null` to hide it | `(trigger: ReactElement<ComponentPropsWithRef<'button'>>) => ReactNode` | -                              |
+| labels                   | Overrides interface text                                                                                                                                     | `FileBrowserActionBarLabels`                                            | -                              |
+| locale                   | Interface language, see [Internationalization](../guide/i18n)                                                                                                | `'zh-CN' \| 'en-US'`                                                    | Inherited, otherwise `'en-US'` |
+| className, style         | Appearance and layout; other HTML attributes are passed to the root element                                                                                  | HTML attributes                                                         | -                              |
 
 ### FileBrowserActionBarLabels
 
@@ -67,7 +77,7 @@ The example uses a `span` to stand in for a host component; in your app you can 
 - When `renderImportResources` returns `null`, `undefined` or a boolean, "Import resources" is hidden. When it returns a replacement node that does not contain `trigger`, `onImportResources` no longer applies and your app handles the click.
 - `trigger` is a `button` element that forwards its ref, so it can be the direct child of your `Popover` or a similar component.
 - The drawer renders under `document.body` and slides in from the right. It is at most 1000px wide and never wider than the viewport; its content is at least 720px wide, so a narrower viewport scrolls horizontally inside the drawer.
-- Click the close button, click the backdrop or press Esc to close the drawer. While it is open, focus stays inside the drawer and the page cannot scroll; when it closes, focus returns to the "Connect agent" button.
+- Click the close button, click the backdrop or press Esc to close the drawer. While it is open, focus stays inside the drawer and the page cannot scroll; when it closes, focus returns to the previously focused element.
 - The drawer uses the `--ov-ui-color-*` theme variables that apply at the trigger button, so overriding them on a local container needs no extra work for the drawer.
 - The bar is 32px high and as wide as its parent. The two actions share the width equally, and text that is too long is truncated with an ellipsis.
 - The background uses `--ov-ui-color-primary-light`, and the text and divider use `--ov-ui-color-primary`. Override these two variables to change the colors; see [Getting started](../guide/getting-started) for theming.

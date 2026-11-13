@@ -77,13 +77,13 @@ export function createAclDemo() {
     if (path.endsWith('/compile/configs')) return ok({ targets: [] });
     if (path.endsWith('/fs/attrs')) return ok({ uri, attrs: {} });
     if (path.endsWith('/fs/stat'))
-      return ok({ uri, isDir: !uri.endsWith('.md'), permission: level });
+      return ok({ uri, isDir: !uri.endsWith('.md'), access: level });
     if (path.endsWith('/fs/ls'))
       return ok(
         uri === 'viking://resources'
           ? [
-              { uri: ACL_URI, isDir: true },
-              { uri: 'viking://resources/public-notes.md', permission: 'read' },
+              { uri: ACL_URI, isDir: true, access: level },
+              { uri: 'viking://resources/public-notes.md', access: 'read' },
               {
                 uri: 'viking://resources/restricted',
                 isDir: true,
@@ -96,7 +96,7 @@ export function createAclDemo() {
               },
             ]
           : uri.endsWith('shared-container')
-            ? [{ uri: `${uri}/accessible.md`, permission: 'read' }]
+            ? [{ uri: `${uri}/accessible.md`, access: 'read' }]
             : [],
       );
     if (path.endsWith('/content/abstract'))

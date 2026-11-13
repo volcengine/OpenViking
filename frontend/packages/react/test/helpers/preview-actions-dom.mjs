@@ -17,7 +17,7 @@ function fixture(remove, permission = 'manage') {
   return recordingFetch((call) => {
     if (call.path === '/api/v1/fs') return remove(call);
     if (call.path.endsWith('/fs/stat'))
-      return ok({ isDir: call.uri !== uri, permission });
+      return ok({ isDir: call.uri !== uri, access: permission });
     if (call.path.endsWith('/fs/ls')) return ok([{ uri, isDir: false }]);
     if (/\/content\/(read|abstract|overview)$/.test(call.path)) return ok('');
     return ok([]);

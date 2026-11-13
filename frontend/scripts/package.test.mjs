@@ -58,12 +58,13 @@ test('business entries expose components without headless Hooks', async () => {
   }
 });
 
-test('VikingBot headless hooks have one explicit subpath without exposing controllers', async () => {
-  const hooks = await import('@openviking/react/modules/viking-bot');
-  assert.deepEqual(Object.keys(hooks).sort(), [
-    'useVikingBotChat',
-    'useVikingBotSessions',
-  ]);
+test('VikingBot chat hooks remain internal to Console', () => {
+  assert.throws(
+    () => import.meta.resolve('@openviking/react/modules/viking-bot'),
+    {
+      code: 'ERR_PACKAGE_PATH_NOT_EXPORTED',
+    },
+  );
   assert.equal('./hooks/viking-bot' in manifest.exports, false);
   assert.equal('./modules/viking-bot/style.css' in manifest.exports, false);
 });

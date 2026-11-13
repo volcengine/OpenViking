@@ -189,6 +189,10 @@ def validate_config_input(
 class UserConfigDefaults(UserConfig):
     """Deployment defaults for users without persisted overrides."""
 
+    preset_global_policy: bool = Field(
+        default=False,
+        description="Create the packaged GLOBAL_POLICY.md during user initialization.",
+    )
     auto_commit_policy: Optional[Dict[str, Any]] = None
 
     @field_validator("auto_commit_policy", mode="before")
@@ -321,14 +325,11 @@ class TraceDumpBodyConfig(BaseModel):
 
 
 class EventReportingConfig(BaseModel):
-    """Optional remote business-event exporter. Endpoint settings remain external."""
+    """Optional business-event exporter configured in ov.conf."""
 
     enabled: bool = False
-    config_file: Optional[str] = None
-    nacos_server: Optional[str] = None
-    nacos_namespace: Optional[str] = None
-    nacos_data_id: Optional[str] = None
-    nacos_group: Optional[str] = None
+    kafka: Dict[str, Any] = Field(default_factory=dict)
+    telemetry: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ObservabilityConfig(BaseModel):

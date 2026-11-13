@@ -15,7 +15,6 @@ export default defineConfig({
             './src/components/directory-tour/index.ts',
           icons: './src/icons/index.tsx',
           client: './src/client/index.ts',
-          'modules/viking-bot': './src/modules/viking-bot/index.ts',
           'components/auth/invitation-confirmation':
             './src/components/auth/invitation-confirmation/index.ts',
           'components/auth/login-method-selector':
@@ -77,6 +76,8 @@ export default defineConfig({
         entry: {
           'shared/primitives/button/button':
             './src/shared/primitives/button/button.tsx',
+          'shared/primitives/notification/index':
+            './src/shared/primitives/notification/index.ts',
         },
       },
       output: { distPath: { root: './dist/docs' }, emitCss: false },
@@ -84,6 +85,8 @@ export default defineConfig({
     // Build each stylesheet independently so every public CSS entry is complete.
     ...Object.entries({
       style: './src/style.css',
+      'docs/notification/style':
+        './src/shared/primitives/notification/style.css',
       'components/directory-tour/style':
         './src/components/directory-tour/style.css',
 

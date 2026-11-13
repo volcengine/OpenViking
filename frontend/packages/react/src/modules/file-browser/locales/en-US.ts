@@ -18,7 +18,7 @@ const messages = {
   searchEmpty: 'No matching resources',
   searchFailed: 'Failed to run the search',
   searchModePlaceholders: {
-    find: 'Enter a semantic query',
+    find: 'Search files or directories',
     search: 'Enter a question that needs conversation context',
     grep: 'Enter a regular expression or exact text',
     glob: 'Enter a file pattern, e.g. **/*.md',
@@ -49,6 +49,10 @@ const messages = {
   searchSwitchMode: 'Switch',
   searchAdvancedLabel: 'Advanced filters',
   loading: 'Loading…',
+  searchDismiss: 'Esc to close',
+  searchPreview: 'Search result preview',
+  searchPreviewEmpty: 'No content to preview',
+  searchPreviewFailed: 'Could not load the preview',
   searchLoading: 'Searching…',
   previewMode: 'Preview',
   sourceMode: 'Source',
@@ -74,3 +78,5 @@ const messages = {
 } satisfies Required<ShellLabels>;
 
 export default messages;
+
+export const stackedEmpty = 'Select a file above to preview it';

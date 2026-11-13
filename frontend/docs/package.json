@@ -9,7 +9,7 @@
     "preview": "rspress preview --host 0.0.0.0"
   },
   "dependencies": {
-    "@openviking/react": "0.1.8",
+    "@openviking/react": "0.1.10",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
@@ -41,6 +41,9 @@
     "#file-browser-search-data": "./docs/_demos/file-browser-search-data.ts",
     "#file-preview-actions-data": "./docs/_demos/file-preview-actions-data.tsx",
     "#file-preview-actions.css": "./docs/_demos/file-preview-actions.css",
-    "#file-browser-native-demo": "./docs/_demos/file-browser-native-demo.ts"
+    "#file-browser-native-demo": "./docs/_demos/file-browser-native-demo.ts",
+    "#file-preview-code-data": "./docs/_demos/file-preview-code-data.ts",
+    "#notification-style.css": "./notification-preview.css",
+    "#console-tasks-service": "./docs/_demos/console-tasks-service.ts"
   }
 }

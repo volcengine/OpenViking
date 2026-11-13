@@ -1,4 +1,10 @@
 import type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
+import type { FileBrowserOpenResourceOptions } from './resource-navigation-types.js';
+export type {
+  FileBrowserComponent,
+  FileBrowserHandle,
+  FileBrowserOpenResourceOptions,
+} from './resource-navigation-types.js';
 export type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
 import type {
   FileBrowserPreviewActions,
@@ -123,6 +129,10 @@ export interface FileBrowserLabels {
   searchAdvancedLabel?: string;
   /** 搜索进行中的提示。Message shown while a search runs. */
   searchLoading?: string;
+  searchDismiss?: string;
+  searchPreview?: string;
+  searchPreviewEmpty?: string;
+  searchPreviewFailed?: string;
   /** 预览读取正文时的提示。Message shown while the preview reads a resource. */
   loading?: string;
   /** 分段器里的「预览」。The "preview" segment label. */
@@ -248,8 +258,16 @@ export interface FileBrowserProps extends Omit<
    * Configuration of the built-in connection drawer; enables its entry when provided.
    */
   agentConnect?: AgentConnectProps;
+  /** 控制内置接入抽屉是否打开。Controls whether the built-in connection drawer is open. */
+  agentConnectOpen?: boolean;
   /** Host capability filter. Omitted enables both; an empty array disables discovery. */
   dashboardKinds?: readonly FileBrowserDashboard['kind'][];
+  /**
+   * 用户请求打开或关闭内置接入抽屉时触发；宿主改变属性时不触发。
+   * Called when the user requests to open or close the built-in connection drawer.
+   * Host-driven prop changes do not trigger it.
+   */
+  onAgentConnectOpenChange?: (open: boolean) => void;
   /**
    * 当前资源变化后触发，参数为新的 URI。
    *
@@ -311,6 +329,7 @@ export interface FileBrowserProps extends Omit<
  * own view from these without the composite one.
  */
 export interface FileBrowserApi {
+  identifyUri: (uri: string) => string;
   dashboards: ReadonlyMap<string, FileBrowserDashboard>;
   previewDashboard?: FileBrowserDashboard;
   dashboardError: Error | null;
@@ -355,6 +374,10 @@ export interface FileBrowserApi {
 
 /** 模块 Hook 暴露的操作。Operations the module Hook exposes. */
 export interface FileBrowserActions {
+  openResource: (
+    uri: string,
+    options?: FileBrowserOpenResourceOptions,
+  ) => Promise<boolean>;
   openUri: (uri: string) => Promise<void>;
   openDashboard: (uri: string) => void;
   /** 选中条目。Selects an entry. */
@@ -369,12 +392,6 @@ export interface FileBrowserActions {
   refresh: () => Promise<void>;
   /** 切换预览页签。Switches the preview tab. */
   setPreviewKey: (key: string) => void;
-  /**
-   * 打开任意资源：选中它、逐级展开祖先，让预览跟上。搜索结果点击后走这条路径。
-   * Opens any resource: selects it, expands its ancestors level by level and lets the
-   * preview follow. A search result click goes through this.
-   */
-  openResource: (uri: string) => Promise<void>;
 }
 
 /** Internal options for the composed FileBrowser loader. */

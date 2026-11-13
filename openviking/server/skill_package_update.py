@@ -1,47 +1,16 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Skill update transfers that never remove the directory holding the package lock."""
+"""Clear an updated Skill without removing the directory holding its package lock."""
 
 from typing import Any, Dict
 
 from openviking.server.identity import RequestContext
+from openviking.server.skill_source_metadata import SOURCE_METADATA_FILENAME
 from openviking.storage.internal_names import (
     MULTIWRITE_EXACT_LOCK_FILE_PREFIX,
     MULTIWRITE_INTERNAL_FILE_NAMES,
 )
 from openviking.storage.viking_fs import VikingFS
-
-
-async def transfer_skill_package(
-    viking_fs: VikingFS,
-    source_uri: str,
-    target_uri: str,
-    *,
-    ctx: RequestContext,
-    lease_ref: Dict[str, Any],
-) -> None:
-    """Copy files and move existing vectors, leaving both locked roots intact.
-
-    The caller owns both tree locks and decides when the source can be cleared.
-    Do not use cp/mv here: their failure cleanup can delete the target root,
-    which during rollback is the directory holding the live package lock.
-    """
-    source_uris = await viking_fs._prepare_transfer_entries(
-        source_uri, target_uri, is_dir=True, move=True, ctx=ctx
-    )
-    await viking_fs._copy_directory_under_tree_locks(
-        viking_fs._uri_to_path(source_uri, ctx=ctx),
-        viking_fs._uri_to_path(target_uri, ctx=ctx),
-        old_uri=source_uri,
-        new_uri=target_uri,
-        ctx=ctx,
-        lease_ref=lease_ref,
-    )
-    # Move preserves the existing vector payloads and compensates on failure.
-    # Keep the source files available even if index transfer/restoration fails.
-    await viking_fs._update_vector_store_uris(
-        source_uri, target_uri, recursive=True, ctx=ctx, source_uris=source_uris
-    )
 
 
 async def clear_skill_package_contents(
@@ -51,7 +20,7 @@ async def clear_skill_package_contents(
     ctx: RequestContext,
     lease_ref: Dict[str, Any],
 ) -> None:
-    """Remove package entries and root vectors, keeping the root and its lock."""
+    """Clear old assets and vectors, keeping definition/source files for update retries."""
     root_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
     # Storage listing includes user-hidden files that the public Skill listing
     # omits. Runtime control entries must remain owned by the storage layer.
@@ -63,6 +32,8 @@ async def clear_skill_package_contents(
         if (
             not name
             or name in {".", ".."}
+            # Replace these in place so failed writes can be retried without restoring old files.
+            or name in {"SKILL.md", SOURCE_METADATA_FILENAME}
             or name in MULTIWRITE_INTERNAL_FILE_NAMES
             or name.startswith(MULTIWRITE_EXACT_LOCK_FILE_PREFIX)
         ):
@@ -73,4 +44,4 @@ async def clear_skill_package_contents(
             ctx=ctx,
             lease_ref=lease_ref,
         )
-    await viking_fs._delete_from_vector_store([root_uri], ctx=ctx)
+    await viking_fs._delete_from_vector_store([root_uri, f"{root_uri}/SKILL.md"], ctx=ctx)

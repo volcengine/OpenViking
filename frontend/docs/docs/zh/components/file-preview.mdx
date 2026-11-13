@@ -55,6 +55,14 @@ import '@openviking/react/components/file-preview/style.css';
 
 模拟操作等待 2 秒；执行期间切换页签或勾选「自定义工具栏」，同一资源的操作仍保持锁定。
 
+### 代码编辑
+
+选择代码文件，使用 CodeMirror 6 编辑 44 种语法，支持行号、撤销和 Prism 语法高亮。
+
+```tsx file="../../_demos/file-preview-editing.tsx" preview
+
+```
+
 ### 状态兜底
 
 切换文件类型和读取状态，对比内置状态与 `slots` 里的自定义状态。
@@ -268,32 +276,34 @@ import '@openviking/react/components/file-preview/style.css';
 
 所有字段都是可选的 `string`，省略的字段使用当前语言的默认文案。
 
-| 参数           | 说明                                                                   | 类型     | 默认值                 |
-| -------------- | ---------------------------------------------------------------------- | -------- | ---------------------- |
-| previewImage   | 放大图片按钮的无障碍名称，后接文件名                                   | `string` | `'放大图片'`           |
-| closePreview   | 放大图片弹窗里关闭按钮的文字                                           | `string` | `'关闭预览'`           |
-| showHiddenPath | 面包屑里折叠层级的「…」按钮的无障碍名称                                | `string` | `'显示隐藏的路径层级'` |
-| copyPath       | 复制路径按钮的提示与无障碍名称                                         | `string` | `'复制路径'`           |
-| copied         | 路径复制成功的反馈                                                     | `string` | `'已复制'`             |
-| copyFailed     | 路径复制失败的反馈                                                     | `string` | `'复制失败'`           |
-| moreActions    | 多个操作收起后的「…」按钮的提示与无障碍名称                            | `string` | `'更多操作'`           |
-| actionFailed   | 注入的操作失败时的提示，后接错误信息                                   | `string` | `'操作失败'`           |
-| previewMode    | 视图切换里「预览」的文字                                               | `string` | `'预览'`               |
-| sourceMode     | 视图切换里「源码」的文字                                               | `string` | `'源码'`               |
-| viewSwitch     | 视图切换按钮组的无障碍名称                                             | `string` | `'显示模式'`           |
-| edit           | 编辑按钮的提示与无障碍名称                                             | `string` | `'编辑'`               |
-| editFile       | 组件不渲染这条文案，设置它没有效果                                     | `string` | `'编辑文件'`           |
-| save           | 编辑时保存按钮的文字                                                   | `string` | `'保存编辑'`           |
-| editor         | 编辑区文本框的无障碍名称                                               | `string` | `'编辑正文'`           |
-| leaveEditing   | 编辑时取消按钮的文字，读取失败后退出编辑的按钮也使用它                 | `string` | `'取消编辑'`           |
-| retry          | 重试按钮的文字                                                         | `string` | `'重试'`               |
-| loadFailed     | 读取文件失败的提示，进入编辑时读取失败也使用它                         | `string` | `'文件加载失败'`       |
-| saveFailed     | 保存失败的提示                                                         | `string` | `'保存失败'`           |
-| unsupported    | 没有可用来源时的提示，格式不受支持的提示由 FileViewer 按 `locale` 显示 | `string` | `'不支持预览此格式'`   |
-| loading        | 加载提示                                                               | `string` | `'加载中…'`            |
-| fileEmpty      | `content` 为空字符串时的提示                                           | `string` | `'该文件为空'`         |
-| noContent      | 组件不渲染这条文案，设置它没有效果                                     | `string` | `'暂无可显示内容'`     |
-| truncated      | `source.truncated` 为 `true` 时的提示                                  | `string` | `'仅显示部分内容'`     |
+| 参数             | 说明                                                                   | 类型     | 默认值                 |
+| ---------------- | ---------------------------------------------------------------------- | -------- | ---------------------- |
+| previewImage     | 放大图片按钮的无障碍名称，后接文件名                                   | `string` | `'放大图片'`           |
+| closePreview     | 放大图片弹窗里关闭按钮的文字                                           | `string` | `'关闭预览'`           |
+| showHiddenPath   | 面包屑里折叠层级的「…」按钮的无障碍名称                                | `string` | `'显示隐藏的路径层级'` |
+| copyPath         | 复制路径按钮的提示与无障碍名称                                         | `string` | `'复制路径'`           |
+| copied           | 路径复制成功的反馈                                                     | `string` | `'已复制'`             |
+| copyFailed       | 路径复制失败的反馈                                                     | `string` | `'复制失败'`           |
+| moreActions      | 多个操作收起后的「…」按钮的提示与无障碍名称                            | `string` | `'更多操作'`           |
+| actionFailed     | 注入的操作失败时的提示，后接错误信息                                   | `string` | `'操作失败'`           |
+| previewMode      | 视图切换里「预览」的文字                                               | `string` | `'预览'`               |
+| sourceMode       | 视图切换里「源码」的文字                                               | `string` | `'源码'`               |
+| viewSwitch       | 视图切换按钮组的无障碍名称                                             | `string` | `'显示模式'`           |
+| edit             | 编辑按钮的提示与无障碍名称                                             | `string` | `'编辑'`               |
+| editFile         | 组件不渲染这条文案，设置它没有效果                                     | `string` | `'编辑文件'`           |
+| save             | 编辑时保存按钮的文字                                                   | `string` | `'保存编辑'`           |
+| editorLoadFailed | 编辑器加载失败时的提示                                                 | `string` | `'编辑器加载失败'`     |
+| highlightFailed  | 语法高亮加载失败时的提示                                               | `string` | `'语法高亮加载失败'`   |
+| editor           | 编辑区文本框的无障碍名称                                               | `string` | `'编辑正文'`           |
+| leaveEditing     | 编辑时取消按钮的文字，读取失败后退出编辑的按钮也使用它                 | `string` | `'取消编辑'`           |
+| retry            | 重试按钮的文字                                                         | `string` | `'重试'`               |
+| loadFailed       | 读取文件失败的提示，进入编辑时读取失败也使用它                         | `string` | `'文件加载失败'`       |
+| saveFailed       | 保存失败的提示                                                         | `string` | `'保存失败'`           |
+| unsupported      | 没有可用来源时的提示，格式不受支持的提示由 FileViewer 按 `locale` 显示 | `string` | `'不支持预览此格式'`   |
+| loading          | 加载提示                                                               | `string` | `'加载中…'`            |
+| fileEmpty        | `content` 为空字符串时的提示                                           | `string` | `'该文件为空'`         |
+| noContent        | 组件不渲染这条文案，设置它没有效果                                     | `string` | `'暂无可显示内容'`     |
+| truncated        | `source.truncated` 为 `true` 时的提示                                  | `string` | `'仅显示部分内容'`     |
 
 ### FilePreviewHandle
 
@@ -353,6 +363,10 @@ import '@openviking/react/components/file-preview/style.css';
 
 ### 操作与编辑
 
+- 编辑器：首次进入编辑时加载 CodeMirror 6；Prism 语言包按 `source.fileType`、文件扩展名或文件名识别后加载，未知格式保持纯文本编辑。
+- 高亮依赖：编辑器与 FileViewer 使用同一个 `prismjs` 包；消费端解析到同一版本时可共用核心和语言模块，不额外加载 CodeMirror 的语言语法包。
+- 高亮更新：输入后延迟 100 毫秒重新计算全文高亮；高亮失败不影响草稿编辑和保存，可点击重试。
+
 - 操作的呈现：没有操作时不显示入口，一个操作显示为图标按钮，两个及以上收进「…」菜单。
 - 分组：连续的单个操作合并成一组，每个非空数组单独成组，空数组被忽略且不打断相邻的单个操作，组之间显示分隔线。
 - 函数形式：`actions` 和 `slots.actions` 可以是函数，在渲染时调用，只根据上下文返回内容，不要在里面发请求或更新状态。
@@ -370,21 +384,43 @@ import '@openviking/react/components/file-preview/style.css';
 - 不支持的格式：传入 `unsupportedFallback` 后接管整个不支持态，FileViewer 原本提供的下载入口随之不再显示。
 - 下载入口：`downloadFallback` 收到 `onDownload` 和 `onRetry`，与 `unsupportedFallback` 同时传入时优先使用它。
 
+### 编辑器高亮格式
+
+`source.fileType` 支持语言名、扩展名或 MIME 类型；通用 `code` 按文件名识别。SVG 默认显示为图片，以源码编辑时传入 `fileType: 'xml'`。
+
+| 语法                                | 扩展名或文件名                                                         |
+| ----------------------------------- | ---------------------------------------------------------------------- |
+| JavaScript / JSX / TypeScript / TSX | `js`, `mjs`, `cjs`, `jsx`, `ts`, `tsx`                                 |
+| Python / Go / Rust / Java           | `py`, `pyw`, `go`, `rs`, `java`                                        |
+| C / C++ / C# / Objective-C          | `c`, `h`, `cpp`, `cc`, `cxx`, `hpp`, `hxx`, `cs`, `m`, `mm`            |
+| Kotlin / Swift / Dart / Scala       | `kt`, `kts`, `swift`, `dart`, `scala`                                  |
+| PHP / Ruby / Perl / Lua / R         | `php`, `rb`, `rake`, `gemspec`, `pl`, `pm`, `lua`, `r`, `rmd`          |
+| Elixir / Erlang / Haskell           | `ex`, `exs`, `erl`, `hrl`, `hs`, `lhs`                                 |
+| JSON / YAML / TOML / INI            | `json`, `jsonl`, `ndjson`, `yaml`, `yml`, `toml`, `ini`, `cfg`, `conf` |
+| HTML / XML / CSS / SCSS / Less      | `html`, `htm`, `xhtml`, `xml`, `svg`, `css`, `scss`, `less`            |
+| Markdown / LaTeX                    | `md`, `markdown`, `mdx`, `tex`, `latex`                                |
+| SQL / GraphQL / Protobuf            | `sql`, `graphql`, `gql`, `proto`                                       |
+| Bash / Fish                         | `sh`, `bash`, `zsh`, `fish`, `.bashrc`, `.zshrc`, `.bash_profile`      |
+| Docker / Makefile / Nginx           | `dockerfile`, `Dockerfile.*`, `makefile`, `GNUmakefile`, `nginx`       |
+| WebAssembly 文本                    | `wat`, `wasm`                                                          |
+| Diff                                | `diff`, `patch`                                                        |
+
 ## 主题变量
 
 外壳的颜色取自 `--ov-ui-color-*`：在应用根节点或任意祖先上设置它们即可换肤，未设置时使用下表的默认值，规则见[快速开始](../guide/getting-started)。暗色读取 `<html>` 上的 `.dark` 类，不读取 `prefers-color-scheme`。
 
-| 变量                             | 亮色              | 暗色                     | 用途               |
-| -------------------------------- | ----------------- | ------------------------ | ------------------ |
-| `--ov-ui-color-primary`          | `#5252ff`         | `#5f5fff`                | 主色，焦点环       |
-| `--ov-ui-color-primary-hover`    | `#7075ff`         | `#7075ff`                | 主色悬停           |
-| `--ov-ui-color-text-1`           | `#0b0b0f`         | `#c7ccd6`                | 正文               |
-| `--ov-ui-color-text-3`           | `#6e718c`         | `#737a87`                | 次要文字           |
-| `--ov-ui-color-border-2`         | `#e1e4f2`         | `#2e3138`                | 分隔线与边框       |
-| `--ov-ui-color-bg-1`             | `#ffffff`         | `#131416`                | 面板底色           |
-| `--ov-ui-color-bg-5`             | `#f1f2f9`         | `#23252a`                | 悬停背景           |
-| `--ov-ui-color-preview-backdrop` | `#f8f8f8`         | `#202227`                | 预览外围的点阵底色 |
-| `--ov-ui-color-preview-dot`      | `rgb(0 0 0 / 8%)` | `rgb(255 255 255 / 12%)` | 点阵的点色         |
+| 变量                             | 亮色              | 暗色                     | 用途                   |
+| -------------------------------- | ----------------- | ------------------------ | ---------------------- |
+| `--ov-ui-color-primary`          | `#5252ff`         | `#5f5fff`                | 主色，焦点环           |
+| `--ov-ui-color-primary-hover`    | `#7075ff`         | `#7075ff`                | 主色悬停               |
+| `--ov-ui-color-text-1`           | `#0b0b0f`         | `#c7ccd6`                | 正文                   |
+| `--ov-ui-color-text-3`           | `#6e718c`         | `#737a87`                | 次要文字               |
+| `--ov-ui-color-border-2`         | `#e1e4f2`         | `#2e3138`                | 分隔线与边框           |
+| `--ov-ui-color-bg-1`             | `#ffffff`         | `#131416`                | 面板底色               |
+| `--ov-ui-color-bg-5`             | `#f1f2f9`         | `#23252a`                | 悬停背景               |
+| `--ov-ui-color-syntax-number`    | `#722ed1`         | `#b37feb`                | 编辑器中的数字与布尔值 |
+| `--ov-ui-color-preview-backdrop` | `#f8f8f8`         | `#202227`                | 预览外围的点阵底色     |
+| `--ov-ui-color-preview-dot`      | `rgb(0 0 0 / 8%)` | `rgb(255 255 255 / 12%)` | 点阵的点色             |
 
 只调整本组件时，在组件根节点上覆盖 `--ov-ui-file-preview-*`：
 
@@ -394,18 +430,18 @@ import '@openviking/react/components/file-preview/style.css';
 }
 ```
 
-| 变量                                | 说明                           | 默认值                        |
-| ----------------------------------- | ------------------------------ | ----------------------------- |
-| `--ov-ui-file-preview-accent`       | 强调色，例如选中的分级标签     | `--ov-ui-color-primary`       |
-| `--ov-ui-file-preview-accent-hover` | 路径层级与「…」按钮的悬停色    | `--ov-ui-color-primary-hover` |
-| `--ov-ui-file-preview-border`       | 分隔线与边框                   | `--ov-ui-color-border-2`      |
-| `--ov-ui-file-preview-focus-ring`   | 键盘焦点环                     | `--ov-ui-color-primary`       |
-| `--ov-ui-file-preview-row-hover`    | 悬停背景                       | `--ov-ui-color-bg-5`          |
-| `--ov-ui-file-preview-surface`      | 页签、菜单和面板的底色         | `--ov-ui-color-bg-1`          |
-| `--ov-ui-file-preview-text`         | 正文与选中页签的文字           | `--ov-ui-color-text-1`        |
-| `--ov-ui-file-preview-text-muted`   | 次要文字与图标                 | `--ov-ui-color-text-3`        |
-| `--ov-ui-file-preview-text-path`    | 路径面包屑的文字               | `--ov-ui-color-text-3`        |
-| `--ov-ui-radius`                    | 圆角，用于编辑区和面包屑菜单项 | `6px`                         |
-| `--ov-ui-font-mono`                 | 路径与编辑区的字体             | `ui-monospace, monospace`     |
+| 变量                                | 说明                        | 默认值                        |
+| ----------------------------------- | --------------------------- | ----------------------------- |
+| `--ov-ui-file-preview-accent`       | 强调色，例如选中的分级标签  | `--ov-ui-color-primary`       |
+| `--ov-ui-file-preview-accent-hover` | 路径层级与「…」按钮的悬停色 | `--ov-ui-color-primary-hover` |
+| `--ov-ui-file-preview-border`       | 分隔线与边框                | `--ov-ui-color-border-2`      |
+| `--ov-ui-file-preview-focus-ring`   | 键盘焦点环                  | `--ov-ui-color-primary`       |
+| `--ov-ui-file-preview-row-hover`    | 悬停背景                    | `--ov-ui-color-bg-5`          |
+| `--ov-ui-file-preview-surface`      | 页签、菜单和面板的底色      | `--ov-ui-color-bg-1`          |
+| `--ov-ui-file-preview-text`         | 正文与选中页签的文字        | `--ov-ui-color-text-1`        |
+| `--ov-ui-file-preview-text-muted`   | 次要文字与图标              | `--ov-ui-color-text-3`        |
+| `--ov-ui-file-preview-text-path`    | 路径面包屑的文字            | `--ov-ui-color-text-3`        |
+| `--ov-ui-radius`                    | 面包屑菜单项的圆角          | `6px`                         |
+| `--ov-ui-font-mono`                 | 路径与编辑区的字体          | `ui-monospace, monospace`     |
 
 正文由 `@ark-design/ui` 渲染，颜色主要取自 Arco 的 `--color-*`、`--primary-*` 变量。在应用入口加载一份 Arco 颜色主题，例如 `@ark-design/ui/styles/aml-theme.css` 或 `@arco-design/web-react/dist/css/arco.css`；未加载时这些变量没有值，正文的颜色样式不会生效。暗色下还要在 `<body>` 上设置 `arco-theme="dark"`，与 `<html>` 上的 `.dark` 同时生效。

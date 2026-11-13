@@ -1,3 +1,4 @@
+import { TaskStatusList } from '../../shared/task-status/task-status.js';
 import {
   getCommandConsoleCommandInputText,
   matchCommandConsoleCommandInput,
@@ -13,6 +14,7 @@ const STATUS_TEXT = {
   pending: 'pending',
   success: 'success',
   error: 'error',
+  cancelled: 'cancelled',
 } as const;
 
 /** 一条执行记录：命令回显、状态与结果。 */
@@ -62,6 +64,7 @@ export function CommandConsoleRecordItem(props: CommandConsoleRecordProps) {
           label={statusLabel}
         />
         <div className="ov-command-console__result-body">
+          <TaskStatusList tasks={record.tasks} locale={props.locale} />
           <CommandConsoleRecordBody {...props} />
         </div>
       </article>

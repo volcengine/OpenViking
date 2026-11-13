@@ -1363,7 +1363,7 @@ Grep engine configuration for content pattern search. These settings are server-
 | `engine` | str | Search engine mode: `"auto"` uses VikingDB BM25 recall when available and falls back to local filesystem search; `"fs"` forces local filesystem search only. | `"auto"` |
 | `switch_to_remote_threshold` | int | L2 record count threshold to switch to VikingDB BM25 recall. When the number of L2 files under the search scope reaches this threshold, VikingDB BM25 is used for phase-1 recall; otherwise local filesystem search is used. Set to `0` to always use VikingDB BM25. Must be ≥ 0. | `10000` |
 
-For VikingDB / Volcengine FullText grep, OpenViking writes a `content` text field for BM25 recall. The source context keeps the full content, while the vector-store write payload truncates this field to **1 MB** at the final adapter boundary to stay within backend payload limits. Only VikingDB-backed backends use `content`; on all other backends (`local`, `cuvs`, `http`) the field is not written.
+For VikingDB / Volcengine FullText grep, OpenViking writes a `content` text field for BM25 recall. The source context keeps the full content, while the vector-store write payload truncates this field to **1 MB** at the final adapter boundary to stay within backend payload limits. The SQL backends (`opengauss`, `pgvector`) also store `content`; pgvector grep uses the filesystem fallback. The field is not written on `local`, `cuvs` or `http`.
 
 ### glob
 
@@ -1663,8 +1663,9 @@ The top-level `cache` section is a sibling of `storage`. Its public shape is Pro
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `provider` | str | `filesystem`, `memory`, `sqlite`, or `cache`; `cache` uses the shared Redis CacheRuntime | `filesystem` |
+| `provider` | str | `filesystem`, `memory`, `sqlite`, `postgres`, or `cache`; `postgres` connects directly to PostgreSQL, `cache` uses the shared Redis CacheRuntime | `filesystem` |
 | `sqlite_path` | str / null | Optional absolute local shared lock database path. See [local SQLite setup](../configuration/01-server.md#storage) | `{storage.workspace}/_system/pathlock/pathlock.db` for `sqlite` |
+| `postgres_dsn_env` | str / null | Required for `postgres`; environment variable name containing the PostgreSQL DSN. See [PostgreSQL setup](../configuration/01-server.md#postgresql-pathlock) | `null` |
 | `lock_expire_secs` | float | Seconds before an unrefreshed lock becomes stale; must be at least `1.0` | `30.0` |
 | `lock_timeout_secs` | float | Deprecated and ignored; runtime wait timeout remains `0.0` | `0.0` |
 
@@ -1673,7 +1674,37 @@ same machine's local disk. Do not put it on EFS/NFS/SMB or give each replica its
 own container-local database. A workspace on EFS also puts the default
 `sqlite_path` on EFS. See [SQLite deployment limits](../configuration/01-server.md#storage).
 
-For multiple containers or hosts sharing EFS, use shared Redis PathLock as in
+For multi-process or multi-host PathLock coordination without Redis, merge this
+fragment into `ov.conf` and set the named environment variable in each server and
+worker before startup:
+
+```json
+{
+  "service_name": "production",
+  "storage": {
+    "agfs": {
+      "pathlock": {
+        "provider": "postgres",
+        "postgres_dsn_env": "OV_POSTGRES_DSN",
+        "lock_expire_secs": 30.0
+      }
+    }
+  }
+}
+```
+
+```sh
+export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=openviking password=YOUR_PASSWORD sslmode=require'
+```
+
+All participants must use the same writable PostgreSQL primary, top-level
+`service_name`, and expiry duration. PostgreSQL PathLock is independent of
+`cache.provider/cache.params`; it does not enable CacheFS or change QueueFS,
+business file storage, or the vector backend's concurrency limits. In particular,
+the default SQLite queue is not suitable for cross-host sharing on EFS.
+See [PostgreSQL PathLock configuration](../configuration/01-server.md#postgresql-pathlock) for setup and verification.
+
+For multiple containers or hosts sharing EFS, shared Redis PathLock is another option, as in
 the example below. All replicas must use the same Redis deployment, top-level
 `service_name`, and lock expiry setting. The example uses Redis for QueueFS and
 coordination, keeping SQLite state off EFS.
@@ -1715,7 +1746,7 @@ coordination, keeping SQLite state off EFS.
 }
 ```
 
-The canonical configuration has no global `cache.enabled` and no per-module Redis namespace field. CacheRuntime is initialized when CacheFS or QueueFS selects `backend=cache`, PathLock or coordination selects `provider=cache`, or multi-write selects `backups.provider=cache`. Cache-backed PathLock currently requires `cache.provider=redis`; DynamicProvider is not supported for PathLock. When all modules use local providers, `cache.params` is not parsed and no Provider connection is opened.
+The canonical configuration has no global `cache.enabled` and no per-module Redis namespace field. CacheRuntime is initialized when CacheFS or QueueFS selects `backend=cache`, PathLock or coordination selects `provider=cache`, or multi-write selects `backups.provider=cache`. Cache-backed PathLock currently requires `cache.provider=redis`; DynamicProvider is not supported for PathLock. When none of these modules selects a cache provider, `cache.params` is not parsed and no CacheRuntime connection is opened, including when PathLock uses PostgreSQL.
 
 Move Provider settings to top-level `cache.provider/cache.params`, set top-level `service_name` for shared Redis names, select `cachefs.backend="cache"`, `queuefs.backend="cache"`, or `backups.provider="cache"`, use Redis `mode="standalone"` instead of `singleton`, and use `rediss://` instead of `tls_enabled`.
 
@@ -1910,7 +1941,7 @@ Vector database storage configuration
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), 'vikingdb' (private deployment), or 'cuvs' (local storage + GPU dense search) | "local" |
+| `backend` | str | VectorDB backend: `local`, `http`, `volcengine`, `vikingdb`, `cuvs`, `opengauss`, or `pgvector` (PostgreSQL) | "local" |
 | `name` | str | VectorDB collection name | "context" |
 | `url` | str | Remote service URL for 'http' type (e.g., `http://localhost:5000`) | null |
 | `project_name` | str | Project name (alias project) | "default" |
@@ -1920,6 +1951,7 @@ Vector database storage configuration
 | `volcengine` | object | 'volcengine' type VikingDB configuration | - |
 | `vikingdb` | object | 'vikingdb' type private deployment configuration | - |
 | `cuvs` | object | NVIDIA cuVS configuration for the 'cuvs' backend and the opt-in memory-aware auto mode on 'local'; see the [cuVS guide](./16-cuvs.md) | - |
+| `pgvector` | object | PostgreSQL connection pool and flat/HNSW settings; see the [pgvector guide](./25-pgvector.md) | - |
 
 Default local mode
 ```
@@ -2712,7 +2744,7 @@ This illustrates the main sections, not a complete runnable configuration or JSO
       }
     },
     "vectordb": {
-      "backend": "local|cuvs|http|volcengine|vikingdb",
+      "backend": "local|cuvs|http|volcengine|vikingdb|opengauss|pgvector",
       "url": "string",
       "project": "string"
     }

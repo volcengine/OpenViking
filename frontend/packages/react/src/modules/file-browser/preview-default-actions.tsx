@@ -38,6 +38,7 @@ export function defaultPreviewActions({
   if (policy.history && options?.history !== false)
     contentActions.push({
       key: 'history',
+      pinned: policy.fileHistory,
       label: text.history,
       icon: <HistoryIcon width={16} height={16} />,
       onClick: () => show('history'),

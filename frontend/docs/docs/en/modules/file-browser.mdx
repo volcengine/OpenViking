@@ -76,26 +76,28 @@ The example is an offline simulation and changes no real grants.
 
 ### FileBrowser
 
-| Property              | Description                                                                                                                                           | Type                                                                    | Default                        |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------ |
-| uri                   | Controlled current resource URI: setting it (even to an empty string) hands the selection to your app, and an empty string selects nothing            | `string`                                                                | -                              |
-| defaultUri            | Initial resource URI when uncontrolled; nothing is selected when omitted                                                                              | `string`                                                                | -                              |
-| onUriChange           | Called after the selected resource changes, with the new URI; there is no way to deselect, so it never receives `null`                                | `(uri: string \| null) => void`                                         | -                              |
-| rootUri               | Root of the tree; limits browsing and search to this subtree                                                                                          | `string`                                                                | `'viking://'`                  |
-| defaultExpandedUri    | Path to expand to after the first load, loading each level; only the root is expanded when omitted                                                    | `string`                                                                | -                              |
-| readOnly              | Disables editing, import and deletion and makes the compile configuration view-only; the permission dialog is unaffected, so use `acl.readOnly` there | `boolean`                                                               | `false`                        |
-| acl                   | Turns on permission display and grant management for shared resources, see `FileBrowserAclOptions` below                                              | `boolean \| FileBrowserAclOptions`                                      | `false`                        |
-| agentConnect          | Shows the Connect agent button that opens the connection drawer, see [AgentConnect](../components/agent-connect); hidden when omitted                 | `AgentConnectProps`                                                     | -                              |
-| onImportResources     | Called when the Import resources button is clicked; setting it shows the button                                                                       | `() => void`                                                            | -                              |
-| renderImportResources | Wraps or replaces the Import resources button, return `null` to hide it; see [FileBrowserActionBar](../components/file-browser-action-bar)            | `(trigger: ReactElement<ComponentPropsWithRef<'button'>>) => ReactNode` | -                              |
-| previewActions        | Shows or hides the built-in preview actions, see `FileBrowserPreviewActions` below                                                                    | `FileBrowserPreviewActions`                                             | -                              |
-| previewSlots          | Appends, replaces or hides the preview action area; dashboard tabs are unaffected, see `FileBrowserPreviewSlots` below                                | `FileBrowserPreviewSlots`                                               | -                              |
-| dashboardKinds        | Enabled dashboard kinds; an empty array turns dashboards off, and `['experience']` also stops reading the compile configuration                       | `readonly ('wiki' \| 'experience')[]`                                   | `['wiki', 'experience']`       |
-| renderDashboard       | Customizes the content of the dashboard tab; return `null` or `undefined` to keep the built-in dashboard, see `FileBrowserDashboard` below            | `(dashboard: FileBrowserDashboard) => ReactNode`                        | -                              |
-| labels                | Overrides interface text, see `FileBrowserLabels` below                                                                                               | `FileBrowserLabels`                                                     | -                              |
-| locale                | Interface language, see [Internationalization](../guide/i18n)                                                                                         | `'zh-CN' \| 'en-US'`                                                    | Inherited, otherwise `'en-US'` |
-| requestOptions        | Overrides the request configuration, see the [blocks overview](./)                                                                                    | `OvRequestOptions`                                                      | -                              |
-| className, style      | Appearance and layout; other HTML attributes are passed to the root element                                                                           | HTML attributes                                                         | -                              |
+| Property                 | Description                                                                                                                                                                                 | Type                                                                    | Default                        |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------ |
+| uri                      | Controlled current resource URI: setting it (even to an empty string) hands the selection to your app, and an empty string selects nothing                                                  | `string`                                                                | -                              |
+| defaultUri               | Initial resource URI when uncontrolled; nothing is selected when omitted                                                                                                                    | `string`                                                                | -                              |
+| onUriChange              | Called after the selected resource changes, with the new URI; there is no way to deselect, so it never receives `null`                                                                      | `(uri: string \| null) => void`                                         | -                              |
+| rootUri                  | Root of the tree; limits browsing and search to this subtree                                                                                                                                | `string`                                                                | `'viking://'`                  |
+| defaultExpandedUri       | Path to expand to after the first load, loading each level; only the root is expanded when omitted                                                                                          | `string`                                                                | -                              |
+| readOnly                 | Disables editing, import and deletion and makes the compile configuration view-only; the permission dialog is unaffected, so use `acl.readOnly` there                                       | `boolean`                                                               | `false`                        |
+| acl                      | Turns on permission display and grant management for shared resources, see `FileBrowserAclOptions` below                                                                                    | `boolean \| FileBrowserAclOptions`                                      | `false`                        |
+| agentConnect             | Shows the Connect agent button that opens the connection drawer, see [AgentConnect](../components/agent-connect); hidden when omitted                                                       | `AgentConnectProps`                                                     | -                              |
+| agentConnectOpen         | Controls the built-in drawer when `agentConnect` is provided, so an external entry can open it; see the [controlled example](../components/file-browser-action-bar#open-from-another-entry) | `boolean`                                                               | -                              |
+| onAgentConnectOpenChange | Reports user open and close requests from the built-in drawer and its trigger; changing the prop directly does not call it                                                                  | `(open: boolean) => void`                                               | -                              |
+| onImportResources        | Called when the Import resources button is clicked; setting it shows the button                                                                                                             | `() => void`                                                            | -                              |
+| renderImportResources    | Wraps or replaces the Import resources button, return `null` to hide it; see [FileBrowserActionBar](../components/file-browser-action-bar)                                                  | `(trigger: ReactElement<ComponentPropsWithRef<'button'>>) => ReactNode` | -                              |
+| previewActions           | Shows or hides the built-in preview actions, see `FileBrowserPreviewActions` below                                                                                                          | `FileBrowserPreviewActions`                                             | -                              |
+| previewSlots             | Appends, replaces or hides the preview action area; dashboard tabs are unaffected, see `FileBrowserPreviewSlots` below                                                                      | `FileBrowserPreviewSlots`                                               | -                              |
+| dashboardKinds           | Enabled dashboard kinds; an empty array turns dashboards off, and `['experience']` also stops reading the compile configuration                                                             | `readonly ('wiki' \| 'experience')[]`                                   | `['wiki', 'experience']`       |
+| renderDashboard          | Customizes the content of the dashboard tab; return `null` or `undefined` to keep the built-in dashboard, see `FileBrowserDashboard` below                                                  | `(dashboard: FileBrowserDashboard) => ReactNode`                        | -                              |
+| labels                   | Overrides interface text, see `FileBrowserLabels` below                                                                                                                                     | `FileBrowserLabels`                                                     | -                              |
+| locale                   | Interface language, see [Internationalization](../guide/i18n)                                                                                                                               | `'zh-CN' \| 'en-US'`                                                    | Inherited, otherwise `'en-US'` |
+| requestOptions           | Overrides the request configuration, see the [blocks overview](./)                                                                                                                          | `OvRequestOptions`                                                      | -                              |
+| className, style         | Appearance and layout; other HTML attributes are passed to the root element                                                                                                                 | HTML attributes                                                         | -                              |
 
 ### FileBrowserPreviewActions
 
@@ -108,7 +110,7 @@ Each flag defaults to showing the action when the current resource supports it. 
 | edit        | The edit button; only for writable files in an editable format, never for experience files, `viking://system` resources or L0/L1 summaries                                                 | `boolean` | `true`  |
 | copyContent | The Copy content action, which copies the previewed text or directory summary (only the displayed part if truncated); hidden for binary media and `viking://system` directories            | `boolean` | `true`  |
 | download    | The Download action, which saves the original content of a file; shown for files only                                                                                                      | `boolean` | `true`  |
-| history     | The Version history action; shown for direct experience files under a user's `memories/experiences` and for files and directories in a Wiki                                                | `boolean` | `true`  |
+| history     | The Version history action; shown for supported text files and Wiki directories                                                                                                            | `boolean` | `true`  |
 | configure   | The Compile configuration action; shown only on the root directory of a Wiki compile target, and still viewable when read-only                                                             | `boolean` | `true`  |
 | importPack  | The Import .ovpack action; shown only for writable directories under `viking://user` (including `viking://~`) or `viking://resources`                                                      | `boolean` | `true`  |
 | exportPack  | The Export .ovpack action; shown for files and directories under `viking://user` (including `viking://~`) or `viking://resources`, except internal control files such as `.relations.json` | `boolean` | `true`  |
@@ -140,12 +142,12 @@ The context received by `previewSlots.actions` and by the function form of `prev
 
 Options when `acl` is an object. All are optional, and `true` is the same as setting none.
 
-| Property          | Description                                                                                                                                                         | Type                                                                                                                                          | Default  |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| readOnly          | Prevents changing grants while keeping them viewable                                                                                                                | `boolean`                                                                                                                                     | `false`  |
-| resolvePermission | Returns the current user's effective permission on a resource, `undefined` when unknown; by default it reads `permission` from `fs/stat`, then probes manage access | `(uri: string, context: FileBrowserAclContext) => Promise<FileBrowserAclLevel \| undefined>`                                                  | Built-in |
-| listPrincipals    | Returns the Users or Groups that can be added, with `page` starting at 1; by default it calls the account's user and group endpoints without reading credentials    | `(query: { type: 'user' \| 'group'; keyword: string; page: number }, context: FileBrowserAclContext) => Promise<FileBrowserAclPrincipalPage>` | Built-in |
-| onChange          | Called after grants are saved successfully, and not when saving fails; an error it throws does not affect the saved result                                          | `(report: FileBrowserAclReport) => void`                                                                                                      | -        |
+| Property          | Description                                                                                                                                                      | Type                                                                                                                                          | Default  |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| readOnly          | Prevents changing grants while keeping them viewable                                                                                                             | `boolean`                                                                                                                                     | `false`  |
+| resolvePermission | Returns the current user's effective permission on a resource, `undefined` when unknown; by default it reads `access` from `fs/stat`, then probes manage access  | `(uri: string, context: FileBrowserAclContext) => Promise<FileBrowserAclLevel \| undefined>`                                                  | Built-in |
+| listPrincipals    | Returns the Users or Groups that can be added, with `page` starting at 1; by default it calls the account's user and group endpoints without reading credentials | `(query: { type: 'user' \| 'group'; keyword: string; page: number }, context: FileBrowserAclContext) => Promise<FileBrowserAclPrincipalPage>` | Built-in |
+| onChange          | Called after grants are saved successfully, and not when saving fails; an error it throws does not affect the saved result                                       | `(report: FileBrowserAclReport) => void`                                                                                                      | -        |
 
 ### FileBrowserAclContext
 
@@ -388,11 +390,29 @@ All fields are optional, and omitted fields follow `locale`.
 - All YAML frontmatter, ordinary HTML comments and fenced Markdown examples survive. In a Markdown file with confirmed scope, an unclosed reserved trailer starting on its own line is hidden through the end of the file; markers quoted in YAML frontmatter, code fences or inline examples survive.
 - The refresh button reloads the expanded directories and the current preview.
 
+### Open and reveal a resource
+
+`FileBrowser` accepts a React 18/19 ref. Call `openResource` for import results, search results, or file links; the module opens the preview, expands ancestors, loads additional pages until the target is found, selects the row and scrolls it into view. It preserves other expanded branches. Repeating a call for the same URI scrolls again.
+
+```tsx
+import { useRef } from 'react';
+import { FileBrowser } from '@openviking/react/modules/file-browser';
+import type { FileBrowserHandle } from '@openviking/react/modules/file-browser';
+
+const browserRef = useRef<FileBrowserHandle>(null);
+
+<FileBrowser ref={browserRef} />;
+
+await browserRef.current?.openResource(resultUri, { reveal: true });
+```
+
+Reveal defaults to `true`; `{ reveal: false }` only requests a preview and resolves to `true` once the request is issued. Ordinary `uri` prop changes do not expand or scroll the tree. In controlled mode, update `uri` in `onUriChange` to accept the command. The promise resolves to `true` after the selected row has scrolled, or `false` when the target is missing, inaccessible, outside `rootUri`, superseded, or the component unmounts. The root itself has no tree row and returns `false` while its preview still opens. Directory listing or required home alias lookup failures reject; catch them to display host feedback. An explicitly unsupported alias lookup falls back to matching the original URI spelling. Caller cancellation resolves to `false`. The promise does not wait for preview content to finish loading. Built-in search uses the same navigation entry.
+
 ### Search
 
 - The search box at the top of the left column opens the module's search dialog; `⌘K` is a real shortcut, and when a page mounts several instances only the one interacted with last responds.
 - Typing pauses for 400 ms before the request fires; there is no submit button. Closing the dialog cancels the in-flight request and clears the input and filters.
-- Four retrieval modes share one input and one result list, switchable from the result header:
+- Four retrieval modes share one input and one result list. The result header offers “Switch” when the search returns matches:
 
 | Mode     | Endpoint                | Input              | Filters                                |
 | -------- | ----------------------- | ------------------ | -------------------------------------- |
@@ -401,10 +421,10 @@ All fields are optional, and omitted fields follow `locale`.
 | `grep`   | `/api/v1/search/grep`   | Regular expression | Directory (single), ignore case        |
 | `glob`   | `/api/v1/search/glob`   | File pattern       | Directory (single)                     |
 
-- Results deduplicate by URI, except `grep` — several matches in one file are distinct results, each with its own line number.
+- Semantic results rank by score and deduplicate by URI. `grep` keeps each match and its line number, even when several matches share a file.
 - A `glob` pattern without `/` gains a `**/` prefix; a directory match drops its trailing slash before navigation and records the directory fact on `isDir`.
 - Filter groups enable or disable with the mode. A disabled group stays visible but dimmed, with the reason beside its title. Directory candidates derive from `rootUri` with the `~` alias; selections invalidated by a root change are dropped.
-- Clicking a result closes the dialog, locates the resource in the tree and opens its preview.
+- Hover a result or use **↑ / ↓** to preview it. Click or press **Enter** to close the dialog, open the resource and reveal its tree row. The preview moves below the list on narrow screens.
 
 ### Preview actions
 
@@ -413,7 +433,7 @@ All fields are optional, and omitted fields follow `locale`.
 - `readOnly` disables all writes, including saving the compile configuration. With `acl` on, editing, import and saving the compile configuration require `write` or `manage`, and deletion requires `manage`.
 - Copy content, download, export, version history and viewing the compile configuration are not restricted by `readOnly` or ACL.
 - Without `acl`, or for resources outside `viking://resources/`, the block does not probe permissions and the server enforces access.
-- Version history: `GET /api/v1/snapshot/log` reads up to 500 recent snapshots of the resource; compile output files in a Wiki use `GET /api/v1/snapshot/versions` instead, with up to 100 retained versions. Clicking a text version shows its content through `GET /api/v1/snapshot/show`; versions cannot be restored.
+- Version history reads up to 500 snapshots with `GET /api/v1/snapshot/log`, or up to 100 retained versions with `GET /api/v1/snapshot/versions` for a Wiki compile output file. You can preview or copy historical text and compare it with the current file. The history dialog is read-only.
 - Compile configuration: `GET /api/v1/compile/config` reads it, and `POST /api/v1/compile/config/update` saves the source directories, skill, instructions, automatic updates and daily or weekly schedule.
 - Import .ovpack: the file is first uploaded through `POST /api/v1/resources/temp_upload`, then `POST /api/v1/pack/import` imports it into the current directory. On failure the chosen file is kept, and a retry uploads it again.
 - Export .ovpack: `POST /api/v1/pack/export` returns the content, which is saved as `<name>.ovpack`; downloads use `GET /api/v1/content/download`.
@@ -423,7 +443,7 @@ All fields are optional, and omitted fields follow `locale`.
 ### Permissions (ACL)
 
 - `acl` only applies to non-root nodes under `viking://resources/`; elsewhere no permission tag appears and ACL imposes no limits.
-- The effective permission is read from `permission` in `GET /api/v1/fs/stat`. If it is missing, `GET /api/v1/acl` is probed: success counts as `manage` and a 403 counts as unknown.
+- The effective permission is read from `access` in `GET /api/v1/fs/stat`. If it is missing, `GET /api/v1/acl` is probed: success counts as `manage` and a 403 counts as unknown.
 - While the permission is unknown, no permission tag shows and editing and deletion are unavailable; if reading it fails, a Retry button appears beside the title.
 - The permission tag shows the effective permission, and for `manage` its details include a Manage permissions button that opens the grants dialog.
 - `read` cannot edit, `write` can edit and import, and `manage` can also delete and manage grants.
@@ -433,7 +453,7 @@ All fields are optional, and omitted fields follow `locale`.
 - While saving, the dialog cannot be submitted again or closed. If saving fails, the last saved grants stay and the server's reason is shown.
 - After a successful save the tree and preview refresh; the server's index update may finish later, and the server's authorization result is authoritative.
 - In the directory listing (`fs/ls`), nodes with `access: 'denied'` cannot be selected or expanded, and nodes with `access: 'container'` can only be expanded to reach accessible children and cannot be previewed themselves.
-- Nodes with `permission: 'read'` show a read-only marker.
+- Nodes with `access: 'read'` show a read-only marker.
 - These node markers come from the directory listing and do not depend on `acl`.
 - Grants use `GET`, `PUT` and `DELETE /api/v1/acl`. The member directory calls the account's user and group endpoints (20 users per page, `include_credentials=false`) and needs an `accountId` from the Provider or `requestOptions`.
 - The group directory needs account administration access. When a resource manager cannot read it, the dialog shows a failure with Retry; supply your own directory through `acl.listPrincipals`.
@@ -445,7 +465,7 @@ All fields are optional, and omitted fields follow `locale`.
 - The Wiki dashboard shows for directories with the `compile_target=true` tag or listed in the compile configuration, and the files and subdirectories below them get their own Wiki dashboards.
 - The tag takes precedence over the compile configuration: a dashboard still shows when the configuration lacks the target.
 - The compile configuration (`GET /api/v1/compile/configs`) is read on demand: when a Wiki dashboard opens, or when a reserved Wiki trailer in the body needs an ownership check; ordinary browsing does not request it.
-- When `dashboardKinds` omits `'wiki'`, Wiki is no longer detected and the compile configuration is not read, so Wiki resources lose their version history and compile configuration actions.
+- When `dashboardKinds` omits `'wiki'`, Wiki is no longer detected and the compile configuration is not read, so Wiki resources lose their Compile configuration and the Compile-specific history index.
 - Rows that have a dashboard show a dashboard icon in the tree; click it to open the dashboard. The icon differs when a Wiki has pending conflicts.
 - The tabs in the preview switch between the content and the dashboard.
 - Ordinary resources have no Wiki tab, and a detected Wiki keeps its dashboard even with no conflicts.
@@ -461,6 +481,8 @@ All fields are optional, and omitted fields follow `locale`.
 - When a search fails, the dialog keeps the endpoint's reason, and you can submit the same query again to retry.
 
 ### Tree width
+
+- When the container is narrower than 521px, the tree and preview stack and the horizontal resizer is hidden.
 
 - A draggable divider sits between the tree and the preview: drag it, or focus it and press the left and right arrow keys (16px each). Its accessible name comes from `labels.resizeTree`.
 - The tree is 352px wide by default and at least 200px. Its maximum is the smaller of 520px and the container width minus 321px (the preview keeps at least 320px, plus a 1px divider), so in a narrow column the tree shrinks instead of crowding out the preview.

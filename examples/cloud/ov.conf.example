@@ -32,6 +32,33 @@
       }
     }
   },
+  "git": {
+    "enabled": true,
+    "backend": "s3",
+    "default_branch": "main",
+    "author_name": "viking-bot",
+    "author_email": "bot@viking.local",
+    "s3": {
+      "bucket": "<your-tos-bucket>",
+      "region": "cn-beijing",
+      "endpoint": "https://tos-s3-cn-beijing.volces.com",
+      "access_key": "<your-volcengine-ak>",
+      "secret_key": "<your-volcengine-sk>",
+      "prefix": ".ovgit",
+      "use_path_style": false,
+      "cas_mode": "native"
+    },
+    "snapshot": {
+      "log": {
+        "provider": "mysql",
+        "mysql": {
+          "dsn_env": "OPENVIKING_SNAPSHOT_LOG_DSN",
+          "max_connections": 16,
+          "connect_timeout_ms": 3000
+        }
+      }
+    }
+  },
   "embedding": {
     "dense": {
       "model": "doubao-embedding-vision-251215",

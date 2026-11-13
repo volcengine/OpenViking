@@ -34,26 +34,54 @@ function hitName(hit: SearchHit): string {
  */
 export interface FileBrowserSearchRowProps {
   hit: SearchHit;
+  id: string;
+  active: boolean;
+  query: string;
+  onHighlight: () => void;
   onOpen: (uri: string) => void;
 }
 
 export function FileBrowserSearchRow({
   hit,
+  id,
+  active,
+  query,
+  onHighlight,
   onOpen,
 }: FileBrowserSearchRowProps) {
+  const name = hitName(hit);
+  const index = query ? name.toLowerCase().indexOf(query.toLowerCase()) : -1;
   return (
-    <li className="ov-file-browser-search__item">
+    <li className="ov-file-browser-search__item" role="presentation">
       <button
+        id={id}
         type="button"
+        role="option"
+        aria-selected={active}
+        tabIndex={-1}
+        onPointerEnter={(event) => {
+          if (event.pointerType !== 'touch') onHighlight();
+        }}
+        onMouseDown={(event) => event.preventDefault()}
         className="ov-file-browser-search__result"
         onClick={() => onOpen(hit.uri)}
       >
         <span className="ov-file-browser-search__icon" aria-hidden="true">
-          {fileTypeIcon(hitName(hit))}
+          {fileTypeIcon(nameFromUri(hit.uri))}
         </span>
         <span className="ov-file-browser-search__body">
           <span className="ov-file-browser-search__line">
-            <span className="ov-file-browser-search__name">{hitName(hit)}</span>
+            <span className="ov-file-browser-search__name">
+              {index < 0 ? (
+                name
+              ) : (
+                <>
+                  {name.slice(0, index)}
+                  <mark>{name.slice(index, index + query.length)}</mark>
+                  {name.slice(index + query.length)}
+                </>
+              )}
+            </span>
             <span className="ov-file-browser-search__uri">{hit.uri}</span>
           </span>
           {hit.abstract ? (

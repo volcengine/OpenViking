@@ -157,13 +157,19 @@
   flex: none;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  box-sizing: border-box;
+  width: 30px;
+  height: 28px;
   padding: 0;
   border: 0;
   border-radius: 6px;
-  background: transparent;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  box-shadow: inset 0 0 0 0.5px
+    var(
+      --ov-ui-color-file-browser-refresh-border,
+      var(--ov-ui-file-browser-refresh-border-default)
+    );
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
   cursor: pointer;
 }
 
@@ -177,7 +183,11 @@
   opacity: 0.5;
 }
 
-.ov-file-browser__refresh-spin {
+.ov-file-browser__refresh-icon path {
+  stroke: currentColor;
+}
+
+.ov-file-browser__refresh[aria-busy='true'] .ov-file-browser__refresh-icon {
   animation: ov-file-browser-refresh-spin 0.9s linear infinite;
 }
 
@@ -226,33 +236,41 @@
   gap: 24px;
   box-sizing: border-box;
   padding: 16px 32px 50px 16px;
+  border: 1px solid var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
+  border-inline-start: 0;
+  border-start-end-radius: 16px;
+  border-end-end-radius: 16px;
   overflow: auto;
   background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
-  color: var(--ov-ui-color-text-3, var(--ov-ui-empty-description-default));
+  color: var(
+    --ov-ui-color-empty-description,
+    var(--ov-ui-empty-description-default)
+  );
   font: inherit;
   text-align: center;
 }
 
-/*
- * 插画：位图只提供形状，白底已经转成 alpha，因此浅色与暗色都不会出现白板。暗色
- * 下原色偏深，提亮一档与周围文字同层次——只改亮度，不动色相，灰蓝的冷暖关系保留。
- *
- * The artwork: the bitmap only supplies the shape, its white background already
- * turned into alpha, so neither theme shows a white slab. The strokes read too dark
- * on a dark background and are lifted by brightness alone — hue is untouched, so the
- * cool cast survives.
- */
+/* Show the 516 × 280 artwork at (84, 64) within the 712 × 552 Figma bitmap.
+   Its baked-in caption stays outside this crop; the component renders the text. */
 .ov-file-browser__empty-art {
-  display: block;
   flex: none;
   width: 290px;
   max-width: 100%;
-  height: auto;
+  aspect-ratio: 516 / 280;
+  background-image: url('../../../../icons/file-browser-empty-figma.png');
+  background-repeat: no-repeat;
+  background-size: calc(712 / 516 * 100%) auto;
+  background-position: calc(84 / (712 - 516) * 100%)
+    calc(64 / (552 - 280) * 100%);
+  mix-blend-mode: multiply;
 }
 
-/* 暗色只认宿主放在 <html> 上的 .dark，与包内其他组件一致。 */
-/* Dark mode follows the host's `.dark` on <html>, like every other component here. */
-.dark .ov-file-browser__empty-art {
+/* The transparent artwork keeps the dark surface visible behind the grid. */
+html.dark .ov-file-browser__empty-art {
+  background-image: url('../../../../icons/empty-state.png');
+  background-position: center;
+  background-size: contain;
+  mix-blend-mode: normal;
   filter: brightness(2.2);
 }
 
@@ -260,6 +278,27 @@
   margin: 0;
   font-size: 16px;
   line-height: 24px;
+}
+
+/* Keep the preview visible when the tree and detail cannot fit side by side. */
+.ov-file-browser--stacked {
+  flex-direction: column;
+}
+
+.ov-file-browser--stacked > .ov-file-browser__tree {
+  flex: 0 1 40%;
+  width: 100%;
+  border-block-end: 1px solid
+    var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+}
+
+.ov-file-browser--stacked .ov-file-browser__empty {
+  gap: 12px;
+  padding: 12px;
+  border-block-start: 0;
+  border-inline-start-width: 1px;
+  border-start-end-radius: 0;
+  border-end-start-radius: 16px;
 }
 
 .ov-file-browser__hint {
@@ -426,7 +465,6 @@
   flex: none;
   width: 24px;
   height: 24px;
-  margin-inline-start: auto;
   padding: 0;
   border: 0;
   border-radius: 4px;
