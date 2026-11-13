@@ -163,13 +163,6 @@
   line-height: 20px;
 }
 
-/* 下拉挂在「切换」按钮上，位置由按钮决定：计数行文案随语言变长时按钮会移动，
-   写死坐标会立刻错位。 */
-.ov-file-browser-search__switch-wrap {
-  position: relative;
-  display: inline-flex;
-}
-
 .ov-file-browser-search__switch {
   padding: 0;
   border: 0;
@@ -192,24 +185,35 @@
 
 /* ── 模式下拉 ─────────────────────────────────────────────────────── */
 
-/* 浮层：0.5 描边、6 圆角、卡片悬浮投影，与设计稿的 Popover 一致。 */
-.ov-file-browser-search__menu {
-  position: absolute;
-  z-index: 2;
-  /* 按钮下方左对齐；宽度固定，右边界可能超出内容列，靠 max-width 兜住。 */
-  top: calc(100% + 4px);
-  left: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+/*
+ * 浮层由 `Popover` 渲染到 `document.body` 并用视口坐标定位，因此这里不能再给
+ * 绝对定位——那会把 `Popover` 写好的 `top`/`left` 顶掉。只把外观改成设计稿的
+ * Popover：0.5 描边、6 圆角、4 内边距、卡片悬浮投影；宽度 259 由内容决定，
+ * 窄屏时 `max-width` 收住。
+ *
+ * The surface is rendered by `Popover` into `document.body` with viewport
+ * coordinates, so this must not set absolute positioning — that would override the
+ * `top`/`left` the popover writes. It only re-skins the surface to the design's
+ * popover: a 0.5px border, 6px radius, 4px padding and the card shadow. The 259px
+ * width comes from the content; `max-width` caps it on narrow viewports.
+ */
+.ov-popover.ov-file-browser-search__menu-surface {
+  /* 菜单从弹窗里弹出，必须压在弹窗之上：`Popover` 默认 1000，弹窗是 1001，
+     不改这一条时菜单会渲染在弹窗背后。 */
+  z-index: calc(var(--ov-ui-modal-z-index, 1001) + 1);
   width: 259px;
-  max-width: min(259px, 70vw);
-  box-sizing: border-box;
+  max-width: min(259px, calc(100vw - 16px));
   padding: 4px;
   border: 0.5px solid var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
   border-radius: 6px;
-  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
   box-shadow: var(--ov-ui-tour-shadow-default);
+}
+
+.ov-file-browser-search__menu {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-sizing: border-box;
 }
 
 .ov-file-browser-search__menu-item {
