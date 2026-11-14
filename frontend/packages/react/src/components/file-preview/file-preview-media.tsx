@@ -1,3 +1,4 @@
+import { useExposure } from '../../shared/analytics/use-exposure.js';
 import { Button } from '../../shared/primitives/button/button.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
@@ -69,6 +70,13 @@ export function FilePreviewMedia({
     setStatus(undefined);
     setAttempt((value) => value + 1);
   };
+  const loaded = status?.owner === owner && status.loaded;
+  const exposure = useExposure(
+    'file_preview_content_show',
+    owner,
+    undefined,
+    Boolean(loaded && !failed),
+  );
   if (failed)
     return typeof slots?.errorFallback === 'function'
       ? slots.errorFallback(retry)
@@ -77,12 +85,15 @@ export function FilePreviewMedia({
         ));
   if (!blob && !url)
     return slots?.unsupportedFallback ?? <UnsupportedState text={text} />;
-  const loaded = status?.owner === owner && status.loaded;
   const fail = () => setStatus({ owner, failed: true });
   const ready = () => setStatus({ owner, loaded: true });
   return (
     <FilePreviewImageFrame>
-      <div className="ov-file-preview__media" aria-busy={!loaded}>
+      <div
+        ref={exposure}
+        className="ov-file-preview__media"
+        aria-busy={!loaded}
+      >
         {!loaded
           ? (slots?.loadingFallback ?? <LoadingState text={text} />)
           : null}

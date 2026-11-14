@@ -71,3 +71,7 @@ import '@openviking/react/components/agent-connect/style.css';
 - Hermes 使用自定义 `baseUrl`（不同于默认地址）时，说明改用 Custom 连接步骤。
 - 「境外」标签显示在详情标签行的末尾，按 Agent 产品的归属标记，不根据它使用的模型推断部署地区。`showOverseasTag` 为 `true` 时，除 Codex 和 Claude Code 外，还标记 Cursor、OpenClaw、Hermes Agent、OpenCode 和 pi。
 - 类型从 `@openviking/react/components/agent-connect` 导出，包根入口只导出组件和 `AgentConnectProps`。
+
+## 埋点
+
+通过 Provider 统一接入，支持的事件和触发条件见[埋点指南与事件目录](../guide/analytics)。

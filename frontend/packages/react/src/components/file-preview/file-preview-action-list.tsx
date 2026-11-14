@@ -1,3 +1,4 @@
+import { usePreviewActionExposure } from '../../shared/analytics/preview-actions.js';
 import { Button } from '../../shared/primitives/button/button.js';
 import { Tooltip } from '../../shared/primitives/tooltip/tooltip.js';
 import { FilePreviewMenu } from './file-preview-menu.js';
@@ -23,6 +24,7 @@ export function FilePreviewActionList({
   failure?: { reason: unknown };
   execute: (action: FilePreviewAction) => Promise<void>;
 }) {
+  const exposure = usePreviewActionExposure(items);
   const groups = normalizeFilePreviewActions(items);
   const count = groups.reduce((total, group) => total + group.length, 0);
   const action = groups[0]?.[0];
@@ -32,6 +34,7 @@ export function FilePreviewActionList({
       {count === 1 ? (
         <Tooltip content={action.label}>
           <Button
+            ref={exposure}
             size="small"
             type="default"
             iconOnly

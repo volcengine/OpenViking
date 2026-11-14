@@ -1,3 +1,4 @@
+import { useAnalyticsRef } from '../../../shared/analytics/context.js';
 import { useTaskTracking } from '../../../shared/task-tracking/context.js';
 import { projectBotTasks, submittedBotTasks } from './task-messages.js';
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
@@ -11,6 +12,7 @@ import type { UseVikingBotChatOptions, VikingBotChatResult } from './types.js';
 export function useVikingBotChat(
   options: UseVikingBotChatOptions = {},
 ): VikingBotChatResult {
+  const analytics = useAnalyticsRef();
   const { service: native, signal } = useBotService(options);
   const locale = useLocale(options.locale);
   const { track, tasks, source } = useTaskTracking(options);
@@ -34,6 +36,7 @@ export function useVikingBotChat(
         scopeKey,
       },
       signal,
+      analytics,
     );
   }, [
     native,
@@ -44,6 +47,7 @@ export function useVikingBotChat(
     persist,
     signal,
     scopeKey,
+    analytics,
   ]);
   // Effect necessity: history requests and live Bot streams belong to this
   // session/identity. Events cannot observe navigation or unmount; cleanup aborts

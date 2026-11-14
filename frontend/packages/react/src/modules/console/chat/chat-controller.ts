@@ -18,6 +18,10 @@ export function createChatController(
   service: VikingBotChatService,
   options: UseVikingBotChatOptions,
   parentSignal?: AbortSignal,
+  analytics?: import('react').RefObject<
+    | import('../../../shared/analytics/reporter.js').AnalyticsReporter
+    | undefined
+  >,
 ) {
   let state: VikingBotChatState = {
     sessionId: options.sessionId,
@@ -120,6 +124,7 @@ export function createChatController(
     try {
       return await runChat({
         service,
+        analytics,
         state,
         draft,
         undelivered,

@@ -1,3 +1,4 @@
+import { Exposure } from '../../shared/analytics/exposure.js';
 import type { ReactNode } from 'react';
 import { Button } from '../../shared/primitives/button/button.js';
 import EditIcon from '../../../../icons/svg/file-preview/edit.svg?react';
@@ -65,21 +66,23 @@ export function FilePreviewToolbar({
           >
             {text.leaveEditing}
           </Button>
-          <Button
-            size="small"
-            type="primary"
-            className="ov-file-preview__edit-action"
-            icon={
-              <span
-                aria-hidden="true"
-                className="ov-file-preview__edit-icon ov-file-preview__edit-icon--save"
-              />
-            }
-            loading={actions.busy}
-            onClick={() => void actions.saveEditing()}
-          >
-            {text.save}
-          </Button>
+          <Exposure name="file_preview_save_show">
+            <Button
+              size="small"
+              type="primary"
+              className="ov-file-preview__edit-action"
+              icon={
+                <span
+                  aria-hidden="true"
+                  className="ov-file-preview__edit-icon ov-file-preview__edit-icon--save"
+                />
+              }
+              loading={actions.busy}
+              onClick={() => void actions.saveEditing()}
+            >
+              {text.save}
+            </Button>
+          </Exposure>
         </div>
       ) : null}
 

@@ -118,3 +118,7 @@ import '@openviking/react/components/experience-dashboard/style.css';
 - 复制使用 `navigator.clipboard.writeText`，只在 HTTPS 或 localhost 下可用；不可用或浏览器拒绝时按钮显示「复制失败」。
 - 组件高度为 `100%` 且内容区自己滚动，父元素需要给出高度。
 - 类型从 `@openviking/react/components/experience-dashboard` 导出，包括 `ExperienceDashboardTab` 和 `ExperienceOutcome`；包根入口只导出组件和 `ExperienceDashboardProps`。
+
+## 埋点
+
+通过 Provider 统一接入，支持的事件和触发条件见[埋点指南与事件目录](../guide/analytics)。

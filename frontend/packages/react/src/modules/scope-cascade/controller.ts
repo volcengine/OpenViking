@@ -23,6 +23,7 @@ const empty = (
 /** Instance-owned channels. Creating a controller does not start requests. */
 export function createScopeController(
   onChange?: (selection: ScopeCascadeSelection | null) => void,
+  onUserSelection?: () => void,
 ) {
   const snapshots = [empty(true), empty(false), empty(false)];
   const listeners = indices.map(() => new Set<() => void>());
@@ -128,6 +129,7 @@ export function createScopeController(
       (item) => item.id === candidate.id && !item.disabled,
     );
     if (!option || option.id === state.selected?.id) return;
+    onUserSelection?.();
     update(index, { selected: option });
     resetDescendants(index);
     for (let next = index; next < 3; next++) notify(next);

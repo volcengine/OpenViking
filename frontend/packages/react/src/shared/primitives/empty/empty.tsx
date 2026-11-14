@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { forwardRef, type ReactNode } from 'react';
 
 import Chart from '../../../../../icons/svg/empty/chart.svg?react';
 import Conversation from '../../../../../icons/svg/empty/conversation.svg?react';
@@ -26,22 +26,23 @@ export type EmptyIllustration = keyof typeof illustrations;
  * search empty state's 258 × 140 dashed-grid line style and theme colours.
  * `compact` fits popovers, trees and cards.
  */
-export function Empty({
-  illustration,
-  title,
-  description,
-  size = 'default',
-  className,
-}: {
-  illustration: EmptyIllustration;
-  title: ReactNode;
-  description?: ReactNode;
-  size?: 'default' | 'compact';
-  className?: string;
-}) {
+export const Empty = forwardRef<
+  HTMLDivElement,
+  {
+    illustration: EmptyIllustration;
+    title: ReactNode;
+    description?: ReactNode;
+    size?: 'default' | 'compact';
+    className?: string;
+  }
+>(function Empty(
+  { illustration, title, description, size = 'default', className },
+  ref,
+) {
   const Art = illustrations[illustration];
   return (
     <div
+      ref={ref}
       className={['ov-empty', `ov-empty--${size}`, className]
         .filter(Boolean)
         .join(' ')}
@@ -56,4 +57,4 @@ export function Empty({
       </div>
     </div>
   );
-}
+});

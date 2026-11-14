@@ -1,3 +1,5 @@
+import { useExposure } from '../../shared/analytics/use-exposure.js';
+import { useState } from 'react';
 import { useRenderErrors } from './file-preview-labels.js';
 import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import type { Locale } from '../../shared/locale.js';
@@ -71,6 +73,15 @@ function FilePreviewBodyContent({
   reports = true,
   onLoadingChange,
 }: FilePreviewBodyProps) {
+  const [ready, setReady] = useState(false);
+  const exposure = useExposure(
+    viewMode === 'source'
+      ? 'file_preview_source_show'
+      : 'file_preview_content_show',
+    fileTab.key + ':' + viewMode,
+    undefined,
+    ready && reports,
+  );
   // `editFailed` 也要走编辑器分支：读取失败时 `editing` 与 `loadingEdit` 都是
   // false，只检查这两项会直接落回普通预览，用户看不到读取失败的提示。
   //
@@ -113,6 +124,7 @@ function FilePreviewBodyContent({
 
   return (
     <FilePreviewImageFrame
+      elementRef={exposure}
       key={JSON.stringify([
         fileTab.source.path,
         fileTab.source.fileName,
@@ -128,7 +140,10 @@ function FilePreviewBodyContent({
         onHandleChange={onHandleChange}
         onViewModesChange={onViewModesChange}
         onLinkClick={onLinkClick}
-        onStateChange={onStateChange}
+        onStateChange={(state) => {
+          setReady(state === 'ready');
+          onStateChange?.(state);
+        }}
         reports={reports}
         onLoadingChange={onLoadingChange}
       />

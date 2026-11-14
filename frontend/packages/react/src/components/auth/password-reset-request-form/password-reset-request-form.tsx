@@ -1,3 +1,5 @@
+import { useTrack } from '../../../shared/analytics/use-track.js';
+import { useExposure } from '../../../shared/analytics/use-exposure.js';
 import { useId } from 'react';
 import { Field } from '../../../shared/auth/fields.js';
 import { FormFrame } from '../../../shared/auth/form-frame.js';
@@ -14,6 +16,8 @@ export function PasswordResetRequestForm({
   labels: overrides,
   ...options
 }: PasswordResetRequestFormProps) {
+  const track = useTrack();
+  const exposure = useExposure('password_reset_request_form_show');
   const id = useId();
   const labels = useAuthLabels(locale, overrides);
   const form = useForm({ email: defaultEmail }, ({ email }) => ({
@@ -27,11 +31,15 @@ export function PasswordResetRequestForm({
   return (
     <FormFrame
       {...options}
+      formRef={exposure}
       disabled={options.disabled || remaining > 0}
       labels={labels}
       submitLabel={`${sent ? labels.resend : labels.send}${remaining > 0 ? ` (${remaining}s)` : ''}`}
       validate={form.validate}
-      onSubmit={() => onSubmit?.({ email: form.values.email.trim() })}
+      onSubmit={() => {
+        track('password_reset_request_form_submit');
+        onSubmit?.({ email: form.values.email.trim() });
+      }}
     >
       <Field
         id={`${id}-email`}

@@ -24,6 +24,7 @@ const guide: Group[] = [
     en: 'Guide',
     pages: [
       { slug: 'getting-started', zh: '快速开始', en: 'Getting started' },
+      { slug: 'analytics', zh: '埋点', en: 'Analytics' },
       { slug: 'i18n', zh: '国际化', en: 'Internationalization' },
       { slug: 'changelog', zh: '发布日志', en: 'Release notes' },
     ],

@@ -1,3 +1,4 @@
+import { useExposure } from '../../../shared/analytics/use-exposure.js';
 import { Button } from '../../../shared/primitives/button/button.js';
 import { useEffect, useId, useRef, type RefObject } from 'react';
 import { Modal } from '../../../shared/primitives/modal/modal.js';
@@ -39,6 +40,12 @@ export function AclModal({
   onClose: () => void;
   onUpdated: (report: FileBrowserAclReport) => void;
 }) {
+  const exposure = useExposure(
+    'file_browser_acl_dialog_show',
+    open,
+    undefined,
+    open,
+  );
   const id = useId();
   const heading = useRef<HTMLHeadingElement>(null);
   const model = useAclReport({
@@ -77,7 +84,14 @@ export function AclModal({
         else onClose();
       }}
     >
-      <h2 ref={heading} tabIndex={-1} className="ov-file-browser-acl__title">
+      <h2
+        ref={(node) => {
+          heading.current = node;
+          exposure?.(node);
+        }}
+        tabIndex={-1}
+        className="ov-file-browser-acl__title"
+      >
         {text.title}
       </h2>
       {model.error ? (

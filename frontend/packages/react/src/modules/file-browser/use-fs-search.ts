@@ -1,3 +1,5 @@
+import { useAnalyticsRef } from '../../shared/analytics/context.js';
+import { startOperation, errorKind } from '../../shared/analytics/reporter.js';
 import { useEffect, useMemo, useState } from 'react';
 
 import { OV_PATHS } from '../../client/paths.js';
@@ -10,6 +12,7 @@ import type {
 } from './search-types.js';
 import {
   buildSearchBody,
+  isSemantic,
   normalizeFindResult,
   normalizeGlobResult,
   normalizeGrepResult,
@@ -80,6 +83,7 @@ export function useFsSearch({
   generation = 0,
   requestOptions,
 }: UseFsSearchOptions): SearchState {
+  const analytics = useAnalyticsRef();
   // 请求体按筛选的具体字段缓存，而不是依赖 `filters` 对象本身：调用方可能每次
   // 渲染都新建一个等价对象，把它当依赖会让 effect 反复重跑并取消上一次请求。
   //
@@ -102,12 +106,18 @@ export function useFsSearch({
     ],
   );
 
+  const hasFilters = Boolean(
+    filters.scopes.length ||
+    (isSemantic(mode) &&
+      (filters.levels.length || filters.since || filters.until)) ||
+    (mode === 'grep' && filters.caseInsensitive),
+  );
   const request = useMemo(
     () =>
       client && query.trim()
-        ? { client, mode, body, generation, requestOptions }
+        ? { client, mode, body, generation, requestOptions, hasFilters }
         : null,
-    [client, mode, body, generation, query, requestOptions],
+    [client, mode, body, generation, query, requestOptions, hasFilters],
   );
   const [response, setResponse] = useState<{
     request: NonNullable<typeof request>;
@@ -120,6 +130,14 @@ export function useFsSearch({
   useEffect(() => {
     if (!request) return;
     const controller = new AbortController();
+    const operation = analytics.current && startOperation();
+    const eventParams = () => ({
+      operation_id: operation!.operation_id,
+      mode: request.mode,
+      has_filters: request.hasFilters,
+    });
+    if (operation)
+      analytics.current?.emit('file_browser_search_submit', eventParams);
     void request.client
       .request<unknown>({
         method: 'POST',
@@ -129,20 +147,31 @@ export function useFsSearch({
       })
       .then(
         (raw) => {
-          if (!controller.signal.aborted)
-            setResponse({
-              request,
-              result: normalize(request.mode, raw),
-              error: null,
-            });
+          if (!controller.signal.aborted) {
+            const result = normalize(request.mode, raw);
+            if (operation)
+              analytics.current?.emit('file_browser_search_success', () => ({
+                ...eventParams(),
+                ...operation.finish(),
+                result_count: result.total,
+              }));
+            setResponse({ request, result, error: null });
+          }
         },
         (cause: unknown) => {
-          if (!controller.signal.aborted && !isAbort(cause))
+          if (!controller.signal.aborted && !isAbort(cause)) {
+            if (operation)
+              analytics.current?.emit('file_browser_search_fail', () => ({
+                ...eventParams(),
+                ...operation.finish(),
+                error_kind: errorKind(cause),
+              }));
             setResponse({ request, result: null, error: toError(cause) });
+          }
         },
       );
     return () => controller.abort();
-  }, [request]);
+  }, [request, analytics]);
 
   const current = request && response?.request === request ? response : null;
   return {

@@ -461,3 +461,7 @@ To adjust only this component, override `--ov-ui-file-preview-*` on its root:
 | `--ov-ui-font-mono`                 | Font of the path and the editor                    | `ui-monospace, monospace`     |
 
 The body is rendered by `@ark-design/ui`, and its colors mostly come from Arco's `--color-*` and `--primary-*` variables. Load an Arco color theme at your app entry, such as `@ark-design/ui/styles/aml-theme.css` or `@arco-design/web-react/dist/css/arco.css`; without one the variables have no value and the body's color styles do not apply. In dark mode also set `arco-theme="dark"` on `<body>`, together with `.dark` on `<html>`.
+
+## Analytics
+
+Configure analytics through the Provider. See the [integration guide and event catalogue](../guide/analytics) for supported events and their semantics.

@@ -1,3 +1,4 @@
+import { useExposure } from '../../shared/analytics/use-exposure.js';
 import { useEffect, useState, type ComponentType } from 'react';
 import { Button } from '../../shared/primitives/button/button.js';
 import type { FilePreviewLabels, FilePreviewSource } from './types.js';
@@ -52,6 +53,12 @@ export function FilePreviewEditor({
     };
   }, [loading, failed, attempt]);
 
+  const exposure = useExposure(
+    'file_preview_source_show',
+    source.path ?? source.fileName,
+    undefined,
+    !loading && !failed && Boolean(Editor || editorFailed),
+  );
   if (loading) {
     return (
       <div className="ov-file-preview__state" role="status">
@@ -84,6 +91,7 @@ export function FilePreviewEditor({
 
   return (
     <div
+      ref={exposure}
       className="ov-file-preview__editor"
       data-pointer-focus={pointerFocus || undefined}
       onPointerDownCapture={() => setPointerFocus(true)}

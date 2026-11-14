@@ -1,6 +1,12 @@
+import { useTrack } from '../../shared/analytics/use-track.js';
+import {
+  useExposure,
+  useOpenExposure,
+} from '../../shared/analytics/use-exposure.js';
 import { Button } from '../../shared/primitives/button/button.js';
 import { useLocale } from '../../shared/locale-context.js';
 import { useId, useRef, useState } from 'react';
+import { ImportResourcesButton } from './import-resources-button.js';
 import { resolveFileBrowserActionBarLabels } from './labels.js';
 
 import { Divider } from '../../shared/primitives/divider/index.js';
@@ -40,11 +46,17 @@ export function FileBrowserActionBar({
   className,
   ...rest
 }: FileBrowserActionBarProps) {
+  const track = useTrack();
   const locale = useLocale(localeProp);
+  const connectExposure = useExposure('file_browser_connect_agent_show');
   const triggerRef = useRef<HTMLButtonElement>(null);
   const drawerId = useId();
   const [internalDrawerOpen, setInternalDrawerOpen] = useState(false);
   const drawerOpen = agentConnectOpen ?? internalDrawerOpen;
+  const drawerExposure = useOpenExposure(
+    'file_browser_agent_connect_drawer_show',
+    drawerOpen,
+  );
   const requestDrawerOpen = (open: boolean) => {
     if (open === drawerOpen) return;
     if (agentConnectOpen === undefined) setInternalDrawerOpen(open);
@@ -53,10 +65,13 @@ export function FileBrowserActionBar({
   const text = resolveFileBrowserActionBarLabels(locale, labels);
   const showConnect = Boolean(agentConnect || onConnectAgent);
   const importButton = (
-    <Button
+    <ImportResourcesButton
       htmlType="button"
       className="ov-file-browser-action-bar__action"
-      onClick={onImportResources}
+      onClick={() => {
+        track('file_browser_import_resources_click');
+        onImportResources?.();
+      }}
     >
       <span className="ov-file-browser-action-bar__icon" aria-hidden="true">
         <ImportResourcesIcon />
@@ -64,7 +79,7 @@ export function FileBrowserActionBar({
       <span className="ov-file-browser-action-bar__label">
         {text.importResources}
       </span>
-    </Button>
+    </ImportResourcesButton>
   );
   const importEntry = renderImportResources
     ? renderImportResources(importButton)
@@ -83,13 +98,17 @@ export function FileBrowserActionBar({
     >
       {showConnect ? (
         <Button
-          ref={triggerRef}
+          ref={(node) => {
+            triggerRef.current = node;
+            connectExposure?.(node);
+          }}
           htmlType="button"
           className="ov-file-browser-action-bar__action"
           aria-haspopup={agentConnect ? 'dialog' : undefined}
           aria-controls={agentConnect ? drawerId : undefined}
           aria-expanded={agentConnect ? drawerOpen : undefined}
           onClick={() => {
+            track('file_browser_connect_agent_click');
             if (agentConnect) requestDrawerOpen(true);
             onConnectAgent?.();
           }}
@@ -131,10 +150,12 @@ export function FileBrowserActionBar({
           lang={agentConnect.locale ?? locale}
           onClose={() => requestDrawerOpen(false)}
         >
-          <AgentConnect
-            {...agentConnect}
-            locale={agentConnect.locale ?? locale}
-          />
+          <div ref={drawerExposure}>
+            <AgentConnect
+              {...agentConnect}
+              locale={agentConnect.locale ?? locale}
+            />
+          </div>
         </Drawer>
       ) : null}
       {showImport ? (

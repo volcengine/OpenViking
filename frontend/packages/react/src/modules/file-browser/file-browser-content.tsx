@@ -1,3 +1,4 @@
+import { useExposureRef } from '../../shared/analytics/use-exposure.js';
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
 import { forwardRef, useCallback, useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
@@ -162,11 +163,12 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     ? 'ov-file-browser ov-file-browser--stacked'
     : 'ov-file-browser';
 
+  const exposure = useExposureRef('file_browser_show', layoutRef);
   return (
     <LocaleProvider locale={locale}>
       <div
         {...rest}
-        ref={layoutRef}
+        ref={exposure}
         className={className ? `${baseClass} ${className}` : baseClass}
         {...search.shortcut}
         style={

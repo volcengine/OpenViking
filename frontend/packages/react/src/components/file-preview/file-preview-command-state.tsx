@@ -1,3 +1,5 @@
+import { useAnalyticsRef } from '../../shared/analytics/context.js';
+import { previewActionTarget } from '../../shared/analytics/preview-actions.js';
 import { createContext, useContext, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FilePreviewAction } from './action-types.js';
@@ -21,6 +23,7 @@ export function FilePreviewCommandProvider({
   tab: FilePreviewTab;
   children: ReactNode;
 }) {
+  const analytics = useAnalyticsRef();
   const source =
     tab.kind === 'file'
       ? tab.source
@@ -38,11 +41,21 @@ export function FilePreviewCommandProvider({
     setStates((current) =>
       new Map(current).set(scope, { pending: action.key }),
     );
+    const target = previewActionTarget(action);
+    if (target === 'copyContent')
+      analytics.current?.emit('file_preview_copy_content_click', () => ({}));
     let failure: CommandState['failure'];
     try {
       await action.onClick();
+      if (target === 'copyContent')
+        analytics.current?.emit(
+          'file_preview_copy_content_success',
+          () => ({}),
+        );
     } catch (reason) {
       failure = { reason };
+      if (target === 'copyContent')
+        analytics.current?.emit('file_preview_copy_content_fail', () => ({}));
     } finally {
       running.current.delete(scope);
       setStates((current) => {
