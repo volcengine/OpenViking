@@ -345,6 +345,42 @@ async def test_file_user_creation_is_atomic_when_credential_write_fails():
     assert (await manager.resolve_identity(admin_key)).user_id == "alice"
 
 
+async def test_file_role_change_is_atomic_when_credential_write_fails():
+    class FailingAGFS(InMemoryAGFS):
+        fail_user_write = False
+
+        def write(self, path, content, ctx=None):
+            if self.fail_user_write and path == "/local/acme/_system/users.json":
+                raise OSError("credential store unavailable")
+            return super().write(path, content, ctx)
+
+    agfs = FailingAGFS()
+    store = FileStore(SimpleNamespace(agfs=agfs))
+    manager = APIKeyManager("root", store)
+    await manager.load()
+    await manager.create_account("acme", "alice")
+    await manager.register_user("acme", "bob")
+    agfs.fail_user_write = True
+
+    try:
+        with pytest.raises(OSError, match="credential store unavailable"):
+            await manager.set_role("acme", "bob", "admin")
+
+        # The failed write must roll the in-memory role back too, so this
+        # process does not authorize with a role that was never persisted.
+        assert await manager.get_registered_user_role("acme", "bob") == Role.USER
+
+        agfs.fail_user_write = False
+        reopened = APIKeyManager("root", FileStore(SimpleNamespace(agfs=agfs)))
+        await reopened.load()
+        try:
+            assert await reopened.get_registered_user_role("acme", "bob") == Role.USER
+        finally:
+            await reopened.close()
+    finally:
+        await manager.close()
+
+
 async def test_regenerate_key_preserves_management_not_found_errors():
     manager = build_api_key_manager("root", SimpleNamespace(agfs=InMemoryAGFS()))
     await manager.load()
