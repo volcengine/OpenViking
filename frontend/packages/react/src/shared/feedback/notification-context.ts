@@ -7,6 +7,7 @@ import type { Locale } from '../locale.js';
 import type { useModalFocusShard } from '../primitives/modal/focus-shards.js';
 
 type Scope = {
+  active: boolean;
   container: HTMLElement | null;
   locale: Locale;
   modal: ReturnType<typeof useModalFocusShard>;

@@ -24,6 +24,7 @@
 }
 .ov-notification-stack__contribution {
   display: contents;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
 }
 .ov-notification {
   display: flex;

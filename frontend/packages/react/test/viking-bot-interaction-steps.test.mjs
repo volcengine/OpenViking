@@ -129,6 +129,7 @@ test('a final rejection preserves every answer and releases navigation for retry
     assert.match(notificationContent().textContent, /Retry this sequence/);
     assert.equal(active(view).querySelector('input').value, 'Draft');
     await click(button(view, 'Previous'));
+    assert.equal(Boolean(notificationContent()), false);
     assert.ok(active(view).querySelector('input[value=wiki]').checked);
     await click(button(view, 'Next'));
     await click(button(view, 'Submit'));

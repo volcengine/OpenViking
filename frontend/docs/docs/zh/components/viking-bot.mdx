@@ -68,7 +68,7 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 
 ### 多步骤确认
 
-通过 `kind: 'steps'` 传入问题列表。组件管理进度、上一步和下一步，保留各步草稿，最后一步才调用 `onSubmit` 汇总提交。未完成当前题时禁用下一步或提交；失败后保留所有答案，可以返回修改或重试。
+通过 `kind: 'steps'` 传入问题列表。组件管理进度、上一步和下一步，保留各步草稿，最后一步才调用 `onSubmit` 汇总提交。未完成当前题时禁用下一步或提交；失败后保留所有答案，可以返回修改或重试，错误通知只在当前步骤展示。
 
 ```tsx file="../../_demos/viking-bot-interaction-steps.tsx" preview
 

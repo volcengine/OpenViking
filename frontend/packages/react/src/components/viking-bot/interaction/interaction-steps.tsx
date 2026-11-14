@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { NotificationScope } from '../../../shared/feedback/notification-scope.js';
 import { VikingBotInteractionView } from './viking-bot-interaction.js';
 import type { InteractionLabels } from './labels.js';
 import type {
@@ -51,60 +52,62 @@ export function InteractionSteps({
           hidden={stepIndex !== index}
           data-active-step={stepIndex === index ? '' : undefined}
         >
-          <VikingBotInteractionView
-            {...props}
-            className={undefined}
-            request={step}
-            index={stepIndex}
-            total={request.steps.length}
-            disabled={blocked || stepIndex !== index}
-            submitting={props.submitting || pending}
-            labels={{
-              ...labels,
-              submit:
-                stepIndex === request.steps.length - 1
-                  ? labels.submit
-                  : labels.next,
-            }}
-            onPrevious={
-              stepIndex > 0
-                ? () => {
-                    if (!blocked) setIndex(stepIndex - 1);
-                  }
-                : undefined
-            }
-            onCancel={
-              onCancel
-                ? () => {
-                    if (blocked) return;
-                    setIndex(0);
-                    setVisited(1);
-                    setAnswers([]);
-                    setGeneration((value) => value + 1);
-                    onCancel();
-                  }
-                : undefined
-            }
-            onSubmit={async (answer) => {
-              if (blocked || inFlight.current || answer.kind === 'steps')
-                return;
-              const value = [...answers.slice(0, stepIndex), answer];
-              setAnswers(value);
-              if (stepIndex < request.steps.length - 1) {
-                setVisited((count) => Math.max(count, stepIndex + 2));
-                setIndex(stepIndex + 1);
-                return;
+          <NotificationScope active={stepIndex === index}>
+            <VikingBotInteractionView
+              {...props}
+              className={undefined}
+              request={step}
+              index={stepIndex}
+              total={request.steps.length}
+              disabled={blocked || stepIndex !== index}
+              submitting={props.submitting || pending}
+              labels={{
+                ...labels,
+                submit:
+                  stepIndex === request.steps.length - 1
+                    ? labels.submit
+                    : labels.next,
+              }}
+              onPrevious={
+                stepIndex > 0
+                  ? () => {
+                      if (!blocked) setIndex(stepIndex - 1);
+                    }
+                  : undefined
               }
-              inFlight.current = true;
-              setPending(true);
-              try {
-                await onSubmit?.({ kind: 'steps', value });
-              } finally {
-                inFlight.current = false;
-                setPending(false);
+              onCancel={
+                onCancel
+                  ? () => {
+                      if (blocked) return;
+                      setIndex(0);
+                      setVisited(1);
+                      setAnswers([]);
+                      setGeneration((value) => value + 1);
+                      onCancel();
+                    }
+                  : undefined
               }
-            }}
-          />
+              onSubmit={async (answer) => {
+                if (blocked || inFlight.current || answer.kind === 'steps')
+                  return;
+                const value = [...answers.slice(0, stepIndex), answer];
+                setAnswers(value);
+                if (stepIndex < request.steps.length - 1) {
+                  setVisited((count) => Math.max(count, stepIndex + 2));
+                  setIndex(stepIndex + 1);
+                  return;
+                }
+                inFlight.current = true;
+                setPending(true);
+                try {
+                  await onSubmit?.({ kind: 'steps', value });
+                } finally {
+                  inFlight.current = false;
+                  setPending(false);
+                }
+              }}
+            />
+          </NotificationScope>
         </div>
       ))}
     </div>

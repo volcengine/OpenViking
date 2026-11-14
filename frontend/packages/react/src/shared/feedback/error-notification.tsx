@@ -69,6 +69,7 @@ export function ErrorNotification({
         },
       ];
   const modal = useModalFocusShard();
+  if (owner?.active === false) return null;
   const container =
     owner?.locale === locale && owner.modal === modal
       ? owner.container

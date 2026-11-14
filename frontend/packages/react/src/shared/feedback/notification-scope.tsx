@@ -19,14 +19,20 @@ export function NotificationScope({
   children,
   locale: localeProp,
   isolateRequests = false,
+  active = true,
 }: {
   children: ReactNode;
   locale?: Locale;
   isolateRequests?: boolean;
+  active?: boolean;
 }) {
   const locale = useLocale(localeProp);
   return (
-    <ScopeOwner locale={locale} isolateRequests={isolateRequests}>
+    <ScopeOwner
+      locale={locale}
+      isolateRequests={isolateRequests}
+      active={active}
+    >
       {children}
     </ScopeOwner>
   );
@@ -36,14 +42,17 @@ function ScopeOwner({
   children,
   locale,
   isolateRequests,
+  active: activeProp,
 }: {
   children: ReactNode;
   locale: Locale;
   isolateRequests: boolean;
+  active: boolean;
 }) {
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
   const modal = useModalFocusShard();
   const parent = useContext(NotificationScopeContext);
+  const active = activeProp && (parent?.active ?? true);
   const [errors] = useState(() =>
     createRequestErrors(isolateRequests ? undefined : parent?.errors.reported),
   );
@@ -80,6 +89,7 @@ function ScopeOwner({
   const activeContainer = inherit ? parent.container : container;
   const value = useMemo(
     () => ({
+      active,
       container: activeContainer,
       locale,
       modal,
@@ -88,7 +98,7 @@ function ScopeOwner({
       publish,
       dismiss,
     }),
-    [activeContainer, locale, modal, errors, modals, publish, dismiss],
+    [active, activeContainer, locale, modal, errors, modals, publish, dismiss],
   );
   return (
     <LocaleProvider locale={locale}>

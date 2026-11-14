@@ -68,7 +68,7 @@ Demonstrates output-directory, text, schedule and repair forms. The directory fl
 
 ### Multi-step confirmation
 
-Pass questions with `kind: 'steps'`. The component manages progress, Previous and Next, and preserves drafts across steps. Only the final step calls `onSubmit` with all answers. Next and Submit stay disabled while the current answer is incomplete. Failed submissions preserve every draft for editing and retry.
+Pass questions with `kind: 'steps'`. The component manages progress, Previous and Next, and preserves drafts across steps. Only the final step calls `onSubmit` with all answers. Next and Submit stay disabled while the current answer is incomplete. Failed submissions preserve every draft for editing and retry; error notifications appear only for the active step.
 
 ```tsx file="../../_demos/viking-bot-interaction-steps.tsx" preview
 
