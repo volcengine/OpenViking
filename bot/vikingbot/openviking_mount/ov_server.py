@@ -719,9 +719,18 @@ class VikingClient:
             wait=wait,
         )
 
-    async def write(self, uri: str, content: str, mode: str = "replace") -> Dict[str, Any]:
+    async def write(
+        self,
+        uri: str,
+        content: str,
+        mode: str = "replace",
+        *,
+        edit_source: Literal["manual", "agent", "compile"] = "manual",
+    ) -> Dict[str, Any]:
         """Write one text file with the task identity and return the OV content receipt."""
-        return await self.client.write(uri, content, mode=mode)
+        return await self.client.write(
+            uri, content, mode=mode, options={"edit_source": edit_source}
+        )
 
     async def batch_write(
         self,

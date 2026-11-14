@@ -83,7 +83,9 @@ class CompileWriteTool(Tool):
                 self.unconfirmed.add(uri)
                 await self.save_progress(self)
                 try:
-                    receipt = await self.client.write(uri, content, mode=mode)
+                    receipt = await self.client.write(
+                        uri, content, mode=mode, edit_source="compile"
+                    )
                 except OpenVikingError as exc:
                     if exc.code in {"INVALID_ARGUMENT", "UNAUTHENTICATED", "PERMISSION_DENIED"}:
                         self.unconfirmed.discard(uri)
