@@ -2739,7 +2739,8 @@ class CompileVersions:
                 if await self._running(ctx.account_id, record):
                     raise ConflictError("Compile is running", resource="COMPILE_RUNNING")
                 index = await self.load(ctx.account_id, target_to, uri) or {"versions": []}
-                current = index["versions"][-1]["version_id"] if index["versions"] else None
+                latest = index["versions"][-1] if index["versions"] else None
+                current = latest["version_id"] if latest else None
                 await check_current_commit()
                 written = await self.record_write(
                     uris, ctx, "restore", write=write, record_version=False
@@ -2751,7 +2752,7 @@ class CompileVersions:
                 result.update(
                     uri=uri,
                     version_id=current,
-                    version_number=index["versions"][-1]["version_number"],
+                    version_number=latest["version_number"] if latest else None,
                     meta=dict(_VERSION_META_DEFAULTS),
                     result="noop",
                 )
