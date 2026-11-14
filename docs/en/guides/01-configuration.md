@@ -920,6 +920,8 @@ Common use cases:
 
 Use `extra_request_body` for provider-specific JSON body fields. OpenAI-compatible routes use SDK `extra_body`. LiteLLM Anthropic routes pass native options such as `thinking` and `output_config` directly to LiteLLM, so they reach the top-level request body. LiteLLM still validates model support for these options. On Anthropic routes, LiteLLM control names (including `api_key`, `api_base`, `metadata`, and `mock_response`) and call-owned fields (`model`, `messages`, `tools`, `tool_choice`, `stream`, `timeout`, and headers) are rejected instead of overriding the call. Configure credentials and routing through their dedicated settings.
 
+For `openai`, `azure`, `kimi`, and `glm`, set `"extra_request_body": {"stream": false}` when a Chat Completions gateway defaults to SSE if `stream` is omitted. This also works in provider and credential entries. Omitting the setting preserves existing requests. Only the boolean `false` is accepted for this body field; `vlm.stream` and streaming responses remain unsupported.
+
 For example, to disable thinking on Ollama:
 
 ```json
