@@ -254,6 +254,8 @@ class CompileChildTool(Tool):
     merge_only confines file access to the child's fresh output directory. Skills,
     originals, shared drafts and tool results are not readable; assigned fragments,
     checkpoints and task-specific output requirements are supplied in the prompt.
+    readonly_paths maps explicit input aliases to task-owned files outside that
+    output directory. Only read_file can access them; inputs/ is reserved for aliases.
     """
 
     def __init__(
@@ -262,12 +264,14 @@ class CompileChildTool(Tool):
         draft_root: str,
         *,
         merge_only: bool = False,
+        readonly_paths: Mapping[str, str] | None = None,
     ):
         if merge_only and tool.name not in {"read_file", "write_file", "edit_file"}:
             raise ValueError("Merge children accept only bound file tools")
         self.tool = tool
         self.draft_root = draft_root
         self.merge_only = merge_only
+        self.readonly_paths = dict(readonly_paths or {})
 
     @property
     def name(self) -> str:
@@ -283,6 +287,13 @@ class CompileChildTool(Tool):
         parameters = deepcopy(self.tool.parameters)
         field = "working_dir" if self.name == "exec" else "path"
         if self.merge_only:
+            if self.readonly_paths:
+                parameters["properties"][field]["description"] = (
+                    "Output path relative to the publication destination. Use the same path "
+                    "to write, read and edit an output. assignment.json and the assigned "
+                    "inputs/ paths are read-only inputs; other workspace paths are unavailable."
+                )
+                return parameters
             parameters["properties"][field]["description"] = (
                 "File path relative to the current working directory; use a relative path within this directory."
             )
@@ -325,6 +336,15 @@ class CompileChildTool(Tool):
             return await self.tool.execute(tool_context, **kwargs)
         if COMPILE_STAGING_ROOT.casefold() in relative.casefold().split("/"):
             raise ValueError("Use paths relative to your draft root, without staging directories")
+        if self.readonly_paths:
+            if relative in self.readonly_paths:
+                if self.name != "read_file":
+                    raise ValueError(f"Assigned input is read-only: {relative}")
+                return await self.tool.execute(
+                    tool_context, **{**kwargs, field: self.readonly_paths[relative]}
+                )
+            if relative == "inputs" or relative.startswith("inputs/"):
+                raise ValueError(f"Input path is not assigned: {relative}")
         kwargs[field] = posixpath.join(self.draft_root, relative)
         result = await self.tool.execute(tool_context, **kwargs)
         if (

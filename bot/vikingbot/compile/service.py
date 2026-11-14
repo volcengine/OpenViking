@@ -61,7 +61,6 @@ from vikingbot.compile.models import (
     has_directory_plan,
     utc_now,
 )
-from vikingbot.compile.ops import finalize as finalize_op
 from vikingbot.compile.pipeline import Pipeline
 from vikingbot.compile.pipeline_agent import agent_runner as pipeline_agent_runner
 from vikingbot.compile.renderer import (
@@ -1126,7 +1125,6 @@ class BotCompileService:
         usage,
         agent_runner=None,
         tool_context=None,
-        resume=False,
     ) -> bool:
         """Run the shared collection pipeline and publish through the target namespace API.
 
@@ -1134,7 +1132,6 @@ class BotCompileService:
         the surrounding lifecycle. Acknowledged partial output completes with diagnostic errors.
         Return whether the workspace must remain available for audit and replay.
         The surrounding lifecycle also preserves shards on failure/cancellation.
-        Local recovery sets resume to use a stopped task's copied Reduce checkpoint.
         """
         pipeline = Pipeline(
             client=client,
@@ -1174,8 +1171,7 @@ class BotCompileService:
             if source_files is not None
             else await self._list_pipeline_source_files(client, request)
         )
-        if not resume:
-            await pipeline.files.put("inputs", dict.fromkeys(ordered, "pending"))
+        await pipeline.files.put("inputs", dict.fromkeys(ordered, "pending"))
 
         source_limits = self.limits.model_copy(
             update={"source_batch_chars": min(self.limits.source_batch_chars, 10_000)}
@@ -1204,23 +1200,7 @@ class BotCompileService:
                     yield batch
 
         try:
-            try:
-                if resume:
-                    from vikingbot.compile.resume import run as resume_pipeline
-
-                    rendered = await resume_pipeline(pipeline)
-                else:
-                    rendered = await pipeline.run(source_batches())
-            except (CompileFailure, TimeoutError) as exc:
-                if not pipeline.artifacts or getattr(exc, "code", None) == "SKILL_REPAIR_FAILED":
-                    raise
-                pipeline.warnings.append(
-                    f"Partial output; Compile did not finish: {str(exc)[:500]}"
-                )
-                async with asyncio.timeout(self.limits.salvage_grace_seconds):
-                    rendered = await finalize_op.run(
-                        pipeline, list(dict.fromkeys(pipeline.artifacts))
-                    )
+            rendered = await pipeline.run(source_batches())
             # Cancellation must stop recovery before any write, including a queued cancel.
             current = await self.store.get(task_id)
             if current.status in TERMINAL_STATUSES or current.status == "cancelling":

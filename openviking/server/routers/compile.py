@@ -164,10 +164,10 @@ class CompileEmbeddingRequest(BaseModel):
     expected_model: str | None = None
 
     @model_validator(mode="after")
-    def bound_text(self):
-        """Bound each routing description and the total before contacting the provider."""
-        if any(not text.strip() or len(text) > 1024 for text in self.texts):
-            raise ValueError("Compile embedding texts require 1..1024 characters")
+    def validate_texts(self):
+        """Reject blank texts; the embedder applies the configured input token budget."""
+        if any(not text.strip() for text in self.texts):
+            raise ValueError("Compile embedding texts must not be blank")
         return self
 
 
