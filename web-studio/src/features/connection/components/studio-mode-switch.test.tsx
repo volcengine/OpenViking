@@ -86,13 +86,14 @@ function profile(userId: string, accountId = 'team'): ConnectionProfile {
     },
   }
 }
-it('always calls the entry Enter Workbench and routes a Root-only connection with no saved User to contextual key setup', () => {
-  render(<StudioModeSwitch managementMode />)
+it('labels the sidebar entry as key setup when no workbench user is saved', () => {
+  render(<StudioModeSwitch managementMode navigation />)
   expect(
     screen
-      .getByRole('link', { name: 'modes.enterWorkbench' })
+      .getByRole('link', { name: 'accountSwitcher:scope.addUserKey' })
       .getAttribute('href'),
   ).toBe('/connections/user-key?returnTo=%2Fhome')
+  expect(screen.getByText('accountSwitcher:scope.addUserKey')).toBeTruthy()
   expect(screen.queryByText('modes.selectUser')).toBeNull()
 })
 it('enters directly when a User key is already active', () => {

@@ -15,6 +15,7 @@ import {
 import { Link, useNavigate } from '@tanstack/react-router'
 import {
   ArrowLeftIcon,
+  KeyRoundIcon,
   PanelsTopLeftIcon,
   UserRoundIcon,
   UsersRoundIcon,
@@ -55,12 +56,15 @@ export function StudioModeSwitch({
         identities.findIndex((other) => other.userId === identity.userId) ===
         index,
     )
-  const label = t(
-    managementMode ? 'modes.enterWorkbench' : 'modes.returnManagement',
-  )
+  const needsUserKey = managementMode && !hasDataIdentity && users.length === 0
+  const label = needsUserKey
+    ? t('accountSwitcher:scope.addUserKey')
+    : t(managementMode ? 'modes.enterWorkbench' : 'modes.returnManagement')
   const content = (
     <>
-      {navigation ? (
+      {needsUserKey ? (
+        <KeyRoundIcon className="size-4" />
+      ) : navigation ? (
         <ArrowLeftIcon className="size-4" />
       ) : managementMode ? (
         <PanelsTopLeftIcon className="size-4" />
@@ -70,7 +74,7 @@ export function StudioModeSwitch({
       <span
         className={navigation ? '' : compact ? 'sr-only' : 'hidden md:inline'}
       >
-        {navigation ? t('modes.back') : label}
+        {navigation && !needsUserKey ? t('modes.back') : label}
       </span>
     </>
   )
@@ -107,7 +111,7 @@ export function StudioModeSwitch({
   }
   if (!managementMode && !canManage)
     return <ManagementKeyDialog className={buttonClass} />
-  if (!managementMode || hasDataIdentity || users.length === 0) {
+  if (!managementMode || hasDataIdentity || needsUserKey) {
     return (
       <Button
         nativeButton={false}
@@ -117,17 +121,13 @@ export function StudioModeSwitch({
         className={buttonClass}
         render={
           <Link
-            search={
-              managementMode && !hasDataIdentity
-                ? { returnTo: '/home' }
-                : undefined
-            }
+            search={needsUserKey ? { returnTo: '/home' } : undefined}
             to={
-              !managementMode
-                ? '/admin'
-                : hasDataIdentity
+              needsUserKey
+                ? '/connections/user-key'
+                : managementMode
                   ? '/home'
-                  : '/connections/user-key'
+                  : '/admin'
             }
           />
         }
