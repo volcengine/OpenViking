@@ -882,6 +882,7 @@ class TestMemoryUpdater:
 
     @pytest.mark.asyncio
     async def test_apply_operations_skips_link_updates_for_deleted_uris(self, monkeypatch):
+        """Allow old-link reads before deletion, but never write links to a deleted URI."""
         deleted_uri = "viking://user/user_sample_3/memories/experiences/old.md"
         written_uri = "viking://user/user_sample_3/memories/experiences/new.md"
 
@@ -903,8 +904,6 @@ class TestMemoryUpdater:
         mock_viking_fs = MagicMock()
 
         async def mock_read_file(uri, **kwargs):
-            if uri == deleted_uri:
-                raise AssertionError("deleted URI should not be read")
             return MemoryFileUtils.write(MemoryFile(uri=uri, content="new content"))
 
         mock_viking_fs.read_file = AsyncMock(side_effect=mock_read_file)
@@ -946,8 +945,9 @@ class TestMemoryUpdater:
 
         assert result.written_uris == [written_uri]
         assert result.deleted_uris == [deleted_uri]
+        assert result.errors == []
         assert deleted_uri not in [
-            call.args[0] for call in mock_viking_fs.read_file.await_args_list
+            call.args[0] for call in mock_viking_fs.write_file.await_args_list
         ]
 
     @pytest.mark.asyncio
