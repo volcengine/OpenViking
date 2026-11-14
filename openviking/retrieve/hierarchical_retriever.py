@@ -242,14 +242,17 @@ class HierarchicalRetriever:
         )
         scores = [candidate["_score"] for candidate in candidates]
         reranked = [False] * len(candidates)
-        rerank_used = use_rerank and bool(candidates)
-        if rerank_used:
+        rerank_used = False
+        rerank_fallback = False
+        if use_rerank and candidates:
             rerank = await self._rerank_scores(
                 query.query,
                 [str(candidate.get("abstract", "")) for candidate in candidates],
                 scores,
             )
             scores, reranked = rerank.scores, rerank.reranked
+            rerank_used = rerank.model_used
+            rerank_fallback = not all(reranked)
 
         # A low vector score can still rerank highly, so filter only after reranking.
         candidates = [
@@ -270,6 +273,7 @@ class HierarchicalRetriever:
             scores=[m.score for m in final],
             latency_ms=elapsed_ms,
             rerank_used=rerank_used,
+            rerank_fallback=rerank_fallback,
         )
 
         return QueryResult(
