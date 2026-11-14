@@ -25,7 +25,7 @@ from openviking_cli.session.user_id import UserIdentifier
 @pytest.fixture(autouse=True)
 def _semantic_config(monkeypatch):
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
+        "openviking.storage.semantic_planning.get_openviking_config",
         lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
     )
 
@@ -1217,7 +1217,7 @@ async def test_content_copy_loads_only_sampled_existing_summaries(monkeypatch):
         transfer_summaries={path: f"summary-{path.rsplit('/', 1)[-1]}" for path in file_paths},
     )
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
+        "openviking.storage.semantic_planning.get_openviking_config",
         lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=2)),
     )
     executor = SemanticTreeExecutor(
@@ -1389,5 +1389,271 @@ async def test_content_copy_propagates_vector_summary_read_failure(monkeypatch):
         await executor.run(root_uri)
 
 
+@pytest.mark.asyncio
+async def test_runtime_file_only_plan_does_not_read_structural_parent_inputs(monkeypatch):
+    from openviking.storage.context_update_plan import (
+        IndexSlot,
+        NodeInputBinding,
+        SemanticExecutionPlan,
+        SemanticRefreshIntent,
+    )
+
+    root = "viking://resources/repo"
+    file_uri = f"{root}/changed.py"
+    sibling = f"{root}/no-summary.py"
+    fs = _FakeVikingFS({}, {file_uri: b"changed"})
+    fs.ls = AsyncMock(side_effect=AssertionError("fixed closure must not list"))
+    fs.read_file = AsyncMock(side_effect=AssertionError("file-only must not read sidecars"))
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
+    processor = _FakeProcessor(fs)
+    execution = SemanticExecutionPlan(
+        root,
+        "resource",
+        SemanticRefreshIntent(root, "resource", aggregate_directory=False),
+        (root,),
+        bindings={
+            root: NodeInputBinding(root, "directory", "reuse"),
+            file_uri: NodeInputBinding(
+                file_uri, "file", "generate", (IndexSlot(2, "stored-file-id", action="merge"),)
+            ),
+            sibling: NodeInputBinding(sibling, "file", "reuse"),
+        },
+        children={root: ([], [file_uri, sibling])},
+        active_directories=frozenset({root}),
+        fixed_actions=True,
+    )
+    executor = SemanticTreeExecutor(
+        processor,
+        "resource",
+        1,
+        RequestContext(UserIdentifier("acc1", "user1"), Role.USER),
+        execution_plan=execution,
+    )
+    await executor.run(root)
+    assert processor.summarized_files == [file_uri]
+    assert processor.vectorized_files == [file_uri]
+    assert processor.generated_overviews == []
+    assert processor.vectorized_dirs == []
+    assert fs.writes == []
+    assert executor.scheduled_vector_record_ids == {"stored-file-id"}
+
+
+@pytest.mark.asyncio
+async def test_runtime_reuse_directory_publishes_explicit_slots_without_generation(monkeypatch):
+    from openviking.storage.context_update_plan import (
+        IndexSlot,
+        NodeInputBinding,
+        SemanticExecutionPlan,
+        SemanticRefreshIntent,
+    )
+
+    root = "viking://resources/repo"
+    fs = _FakeVikingFS({}, {})
+    fs.read_file = AsyncMock(side_effect=AssertionError("reuse input is already bound"))
+    fs.ls = AsyncMock(side_effect=AssertionError("reuse closure is already bound"))
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
+    processor = _FakeProcessor(fs)
+    execution = SemanticExecutionPlan(
+        root,
+        "resource",
+        SemanticRefreshIntent(root, "resource"),
+        (root,),
+        bindings={
+            root: NodeInputBinding(
+                root,
+                "directory",
+                "reuse",
+                (IndexSlot(0, "real-l0", {"abstract": "root summary"}, action="merge"),),
+                abstract="root summary",
+                overview="root overview",
+            )
+        },
+        fixed_actions=True,
+        index_changed_body_only=True,
+    )
+    executor = SemanticTreeExecutor(
+        processor,
+        "resource",
+        1,
+        RequestContext(UserIdentifier("acc1", "user1"), Role.USER),
+        execution_plan=execution,
+    )
+    await executor.run(root)
+    assert processor.summarized_files == []
+    assert processor.generated_overviews == []
+    assert processor.vectorized_dirs == [root]
+    assert fs.writes == []
+    assert executor.scheduled_vector_record_ids == {"real-l0"}
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+@pytest.mark.asyncio
+async def test_parent_only_missing_summary_is_generated_without_publishing_l2(monkeypatch):
+    root = "viking://resources/repo"
+    file_uri = f"{root}/a.py"
+    fs = _FakeVikingFS({root: [{"name": "a.py", "isDir": False}]}, {file_uri: b"body"})
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
+    processor = _FakeProcessor(fs)
+    executor = SemanticTreeExecutor(
+        processor,
+        "resource",
+        1,
+        RequestContext(UserIdentifier("acc1", "user1"), Role.USER),
+        incremental_update=True,
+        target_uri=root,
+        recursive=False,
+        generation_trigger="parent_refresh",
+        changes={"modified": [file_uri]},
+    )
+    await executor.run(root)
+    assert processor.summarized_files == [file_uri]
+    assert processor.vectorized_files == []
+    assert processor.vectorized_dirs == [root]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["initial", "definition", "attachment"])
+async def test_skill_root_uses_definition_independently_of_attachment_summaries(monkeypatch, state):
+    root = "viking://user/alice/skills/demo"
+    definition, attachment = f"{root}/SKILL.md", f"{root}/notes.txt"
+    fs = _FakeVikingFS(
+        {root: [{"name": "SKILL.md"}, {"name": "notes.txt"}]},
+        {definition: b"definition", attachment: b"attachment"},
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
+    processor = _FakeProcessor(fs)
+    processor._skill_root_semantics = AsyncMock(
+        return_value=("definition overview", "definition abstract")
+    )
+    changed = definition if state == "definition" else attachment
+    executor = SemanticTreeExecutor(
+        processor,
+        "skill",
+        1,
+        RequestContext(UserIdentifier("acc1", "alice"), Role.USER),
+        incremental_update=state != "initial",
+        target_uri=root,
+        recursive=True,
+        changes=None if state == "initial" else {"modified": [changed]},
+        generation_trigger="skill_ingest" if state == "initial" else "content_write",
+    )
+    await executor.run(root)
+    processor._skill_root_semantics.assert_awaited_once()
+    assert processor._skill_root_semantics.await_args.kwargs["regenerate"] is (
+        state == "definition"
+    )
+    assert processor.generated_overviews == []
+    assert processor.vectorized_dirs == ([] if state == "attachment" else [root])
+    assert fs.writes == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("committed_plan", [False, True])
+async def test_file_summary_failure_keeps_entrypoint_publication_policy(
+    monkeypatch, committed_plan
+):
+    from openviking.storage.context_update_plan import (
+        IndexSlot,
+        SemanticPlan,
+        SemanticTreeEntry,
+        SemanticTreeSnapshot,
+    )
+
+    root = "viking://resources/repo"
+    file_uri = f"{root}/a.py"
+    fs = _FakeVikingFS({root: [{"name": "a.py"}]}, {file_uri: b"body"})
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
+    processor = _FakeProcessor(fs)
+    processor._generate_single_file_summary = AsyncMock(
+        side_effect=RuntimeError("model unavailable")
+    )
+    plan = (
+        SemanticPlan(
+            file_uri,
+            "resource",
+            SemanticTreeSnapshot(
+                (
+                    SemanticTreeEntry(
+                        "",
+                        "file",
+                        "modified",
+                        "generate",
+                        index_slots=(IndexSlot(2, "file-id", action="upsert"),),
+                    ),
+                )
+            ),
+        )
+        if committed_plan
+        else None
+    )
+    executor = SemanticTreeExecutor(
+        processor,
+        "resource",
+        1,
+        RequestContext(UserIdentifier("acc1", "user1"), Role.USER),
+        target_uri=root,
+        changes={"modified": [file_uri]},
+        incremental_update=True,
+        recursive=False,
+        aggregate_directory=False,
+        semantic_plan=plan,
+    )
+    await executor.run(file_uri if committed_plan else root)
+    assert processor.vectorized_files == ([] if committed_plan else [file_uri])
+    assert processor.vectorized_dirs == []
+
+
+@pytest.mark.asyncio
+async def test_deep_plan_read_failure_retains_earlier_file_side_effects(monkeypatch):
+    from openviking.storage.context_update_plan import (
+        IndexSlot,
+        SemanticPlan,
+        SemanticTreeEntry,
+        SemanticTreeSnapshot,
+    )
+
+    root = "viking://resources/repo"
+    file_uri, deep = f"{root}/a.py", f"{root}/deep"
+    fs = _FakeVikingFS({}, {file_uri: b"body"})
+    original_read = fs.read_file
+
+    async def read(path, ctx=None):
+        if path.startswith(deep + "/"):
+            raise OSError("deep storage unavailable")
+        return await original_read(path, ctx=ctx)
+
+    fs.read_file = read
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
+    processor = _FakeProcessor(fs)
+    plan = SemanticPlan(
+        root,
+        "resource",
+        SemanticTreeSnapshot(
+            (
+                SemanticTreeEntry("", "directory", "unchanged", "aggregate"),
+                SemanticTreeEntry(
+                    "a.py",
+                    "file",
+                    "modified",
+                    "generate",
+                    index_slots=(IndexSlot(2, "a-l2", action="merge"),),
+                ),
+                SemanticTreeEntry("deep", "directory", "modified", "aggregate"),
+            )
+        ),
+    )
+    executor = SemanticTreeExecutor(
+        processor,
+        "resource",
+        1,
+        RequestContext(UserIdentifier("acc1", "user1"), Role.USER),
+        semantic_plan=plan,
+    )
+    with pytest.raises(OSError, match="deep storage unavailable"):
+        await executor.run(root)
+    assert processor.vectorized_files == [file_uri]
+    assert processor.generated_overviews == []
+    assert executor.scheduled_vector_record_ids == {"a-l2"}

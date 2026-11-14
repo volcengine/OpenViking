@@ -47,6 +47,9 @@ class _FakeVikingFS:
         del node_limit
         return self._tree.get(uri, [])
 
+    async def read_file(self, path, ctx=None):
+        raise FileNotFoundError(path)
+
     async def write_file(self, path, content, ctx=None, lease_ref=None):
         self.writes.append((path, content))
 
@@ -112,6 +115,7 @@ class _FakeProcessor:
         use_summary=False,
         ingest_options=None,
         file_md5=None,
+        action="merge",
     ):
         if self.verify_streaming:
             assert summary_dict["content"]
@@ -163,7 +167,7 @@ class _ScheduledExecutor:
 
 def _patch_semantic_config(monkeypatch, *, overview_sample_limit=32):
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_executor.get_openviking_config",
+        "openviking.storage.semantic_planning.get_openviking_config",
         lambda: SimpleNamespace(
             semantic=SimpleNamespace(overview_sample_limit=overview_sample_limit)
         ),
