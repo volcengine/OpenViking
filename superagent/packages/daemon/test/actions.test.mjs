@@ -523,16 +523,20 @@ describe('agent tools', () => {
     // The bot's own earlier message is not someone else's newer one.
     store.db.prepare(`INSERT INTO cognition_journal (epoch, kind, at_ms, chat_id, message_id, actor, text, detail_json)
       VALUES (0, 'outbound', 0, 'oc_chat12345678', 'om_mine1234567890', 'me', '1', '{"connectorInstance":"lark"}')`).run();
-    // Nor is a system notice (no event ever brings it), a message the daemon
-    // already holds, or one too old to still be on its way.
+    // Nor is a system notice (no event ever brings it) or a message the daemon
+    // already holds.
     store.ingest(chatEvent({ chatType: 'group', messageId: 'om_filtered123456', chatId: 'oc_chat12345678',
       createTimeMs: recent }), 'ignored_sender');
     onServer = [{ message_id: 'om_mine1234567890', create_time_ms: recent, type: 'text' },
       { message_id: 'om_system12345678', create_time_ms: recent, type: 'system' },
-      { message_id: 'om_filtered123456', create_time_ms: recent, type: 'text' },
-      { message_id: 'om_ancient12345678', create_time_ms: outsideFence, type: 'text' }];
+      { message_id: 'om_filtered123456', create_time_ms: recent, type: 'text' }];
     await send();
     assert.equal(connectors.calls.at(-1).action, 'message.send');
+
+    // Age does not make a server-only message safe: the conversation changed
+    // after the decision even when the event stream failed to deliver it.
+    onServer = [{ message_id: 'om_ancient12345678', create_time_ms: outsideFence, type: 'text' }];
+    await assert.rejects(send(), (error) => error.code === 'stale_decision');
 
     // A failed lookup leaves the local fence in charge.
     onServer = 'down';
