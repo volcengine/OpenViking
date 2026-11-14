@@ -4,7 +4,6 @@
 
 import asyncio
 import json
-import os
 from datetime import timedelta
 from typing import Any, Awaitable, Callable
 
@@ -38,19 +37,12 @@ class GitHubCollector:
     REQUEST_LIMIT = 32
     REQUEST_TIMEOUT = 30
 
-    def __init__(self, token: str | None) -> None:
-        # Explicit credentials override gh's existing login when provided.
-        self.token = token or os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
-
     async def search(self, repository: str, span: QueryRange, cursor: str | None) -> dict[str, Any]:
         query = (
             f"repo:{repository} is:pr is:merged "
             f"merged:{span.start.isoformat()}..{span.end.isoformat()} sort:updated-asc"
         )
         payload = json.dumps({"query": QUERY, "variables": {"query": query, "cursor": cursor}})
-        env = dict(os.environ, GH_PROMPT_DISABLED="1")
-        if self.token:
-            env["GH_TOKEN"] = self.token
         process = await asyncio.create_subprocess_exec(
             "gh",
             "api",
@@ -62,7 +54,6 @@ class GitHubCollector:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=env,
         )
         try:
             stdout, _stderr = await asyncio.wait_for(

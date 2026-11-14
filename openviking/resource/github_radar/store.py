@@ -9,6 +9,7 @@ from openviking.resource.github_radar.models import PullRequest, RadarConfig, Ra
 from openviking.resource.watch_types import WatchTask
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.acl import AclAction
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -64,13 +65,22 @@ class RadarStore:
             raise
 
     async def write_state(self, state: RadarState) -> None:
-        await self.fs.write_file(
-            f"{self.root}/.radar-state.json", state.model_dump_json(), ctx=self.ctx
-        )
+        await self._write_control(".radar-state.json", state.model_dump_json().encode("utf-8"))
 
     async def write_queue(self, queue: list[PullRequest]) -> None:
         data = "".join(pr.model_dump_json() + "\n" for pr in queue)
-        await self.fs.write_file(f"{self.root}/.radar-signals.jsonl", data, ctx=self.ctx)
+        await self._write_control(".radar-signals.jsonl", data.encode("utf-8"))
+
+    async def _write_control(self, name: str, data: bytes) -> None:
+        uri = f"{self.root}/{name}"
+        await self.fs._ensure_access(uri, self.ctx, action=AclAction.WRITE)
+        tmp_uri = f"{uri}.tmp"
+        await self.fs.write_file(tmp_uri, data, ctx=self.ctx)
+        await self.fs._async_agfs.mv(
+            self.fs._uri_to_path(tmp_uri, ctx=self.ctx),
+            self.fs._uri_to_path(uri, ctx=self.ctx),
+            fs_ctx={"account_id": self.ctx.account_id},
+        )
 
     async def save_collection(self, state: RadarState, queue: list[PullRequest]) -> None:
         await self.write_queue(queue)

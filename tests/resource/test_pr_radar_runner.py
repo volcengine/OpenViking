@@ -24,7 +24,7 @@ def freeze_now(monkeypatch):
 
 
 def processor():
-    return SimpleNamespace(github_token_for=AsyncMock(return_value=None), vlm_resolver=None)
+    return SimpleNamespace(vlm_resolver=None)
 
 
 async def test_run_radar_merged_time_windows_are_disjoint(monkeypatch, freeze_now):
@@ -61,7 +61,6 @@ async def test_run_radar_merged_time_windows_are_disjoint(monkeypatch, freeze_no
     progress, queue = await store.load(REPO, config())
     assert progress.reported_until == ANCHOR + timedelta(minutes=30)
     assert [item.number for item in queue] == [5]
-    source.github_token_for.assert_awaited()
 
 
 async def test_run_radar_empty_window_keeps_latest(monkeypatch, freeze_now):
@@ -99,7 +98,6 @@ async def test_run_radar_restores_pending_without_recollection_or_model(monkeypa
     pending = progress.pending_publish
     assert pending is not None
     before = search.await_count
-    source.github_token_for.reset_mock()
     source.vlm_resolver = SimpleNamespace(
         get_vlm=AsyncMock(side_effect=AssertionError("must not summarize"))
     )
@@ -111,5 +109,4 @@ async def test_run_radar_restores_pending_without_recollection_or_model(monkeypa
     assert restored.last_report_id == pending.report_id
     assert fs.files[f"{store.root}/latest.md"].decode() == pending.content
     assert search.await_count == before
-    source.github_token_for.assert_not_awaited()
     source.vlm_resolver.get_vlm.assert_not_awaited()

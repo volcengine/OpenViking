@@ -93,7 +93,7 @@ Radar 的失败需记录可核查原因，由后续触发重试；失败不改�
 - https://docs.github.com/en/graphql/reference/search#query-search
 - https://docs.github.com/en/search-github/searching-on-github/searching-issues-and-pull-requests#search-by-when-a-pull-request-was-merged
 
-鉴权优先使用账号配置解析出的 GitHub token，或进程环境中的 `GH_TOKEN` / `GITHUB_TOKEN`；没有显式 token 时沿用 `gh` 已有登录，由 `gh` 解析凭证。显式 token 只传给子进程环境，不进入 Watch、队列或日志；保留 `GH_PROMPT_DISABLED=1`，禁用 CLI 交互提示。
+Radar 直接调用 `gh api graphql`，凭证完全由 `gh` 管理。
 
 当前旧实现已有水位：查询使用 `since=state.issues_since`；首次没有水位时才使用回溯起点。每轮从第 1 页读的是该时间范围内的结果，不是仓库全部历史。但旧水位按 `updated_at`，不能直接当作新设计的合并时间水位。
 
@@ -156,6 +156,8 @@ Radar 的失败需记录可核查原因，由后续触发重试；失败不改�
 ### 4.4 发布与失败恢复
 
 发布涉及历史文件、`latest.md`、队列和进度，不能假设这些文件能一次同时写成功。
+
+状态 JSON 和队列 JSONL 以 UTF-8 bytes 写入同目录 `.tmp` 文件，写入成功后通过现有 AGFS `mv` 替换正式文件。失败直接报错，读取时只使用正式文件。
 
 已确认保留待发布记录，保存逻辑限定在 Radar 内部，复用 Radar 的状态读写函数和现有 VikingFS，不改造公共存储接口。执行顺序：
 
@@ -248,7 +250,7 @@ HTTP 导入时配置放在现有 `args` 中；下面是参数结构，不是已�
 3. 已确认 HEAD 不变也采集、只关注 merged PR；增量查询不拉取全部历史。
 4. 已确认保留原始 PR 队列和待发布记录，支持跨 Watch 积累及发布失败恢复；取消部分报告和续篇。
 
-初版新增 46 个单元测试全部通过；扩展单测共 84 通过、1 失败。失败用例为 `test_leader_loop_dispatches_due_watches`，原因是当时本地原生绑定缺少 `leader_validate_async`；原 `main` HEAD 使用同一绑定也复现相同失败。用户随后重新编译原生绑定并启动服务。恢复 `gh` 已有登录后，采集器单测 9 个通过，Radar 单测共 49 个通过。
+Radar 与 Watch 单测共 89 个通过；Ruff 检查、格式检查和 `git diff --check` 通过。
 
 2026-11-14 本地 Radar 验收结果：
 

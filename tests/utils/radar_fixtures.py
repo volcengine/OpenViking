@@ -82,6 +82,16 @@ class MemoryFS:
         self.fail_at = None
         self.fail_after_write = False
         self.writes = 0
+        self._async_agfs = self
+
+    async def _ensure_access(self, uri, ctx, *, action):
+        self.contexts.append(ctx)
+
+    def _uri_to_path(self, uri, *, ctx):
+        return uri
+
+    async def mv(self, old_path, new_path, *, fs_ctx):
+        self.files[new_path] = self.files.pop(old_path)
 
     async def read(self, uri, *, ctx):
         self.contexts.append(ctx)

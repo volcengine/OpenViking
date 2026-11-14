@@ -65,3 +65,51 @@ async def test_load_refuses_corrupt_state():
     with pytest.raises(ValueError):
         await store.load(REPO, config())
     assert fs.writes == 0
+
+
+@pytest.mark.parametrize("document", ["state", "queue"])
+@pytest.mark.parametrize("failure", ["short_write", "rename"])
+async def test_control_write_failure_preserves_previous_file(monkeypatch, document, failure):
+    fs, watch = MemoryFS(), task()
+    store = RadarStore(fs, watch)
+    progress, _ = await store.load(REPO, config())
+    await store.write_queue([pr()])
+    name = ".radar-state.json" if document == "state" else ".radar-signals.jsonl"
+    uri = f"{store.root}/{name}"
+    previous = fs.files[uri]
+    original_write, original_move = fs.write_file, fs.mv
+
+    async def short_write(uri, content, *, ctx):
+        assert isinstance(content, bytes)
+        fs.files[uri] = content[:9]
+        raise OSError("short write")
+
+    async def failed_move(old_path, new_path, *, fs_ctx):
+        assert fs_ctx == {"account_id": "tenant"}
+        assert new_path == uri and old_path == f"{uri}.tmp"
+        raise OSError("rename failed")
+
+    if failure == "short_write":
+        monkeypatch.setattr(fs, "write_file", short_write)
+    else:
+        monkeypatch.setattr(fs, "mv", failed_move)
+    progress.last_report_id = "a-b"
+    with pytest.raises(OSError, match="short write|rename failed"):
+        if document == "state":
+            await store.write_state(progress)
+        else:
+            await store.write_queue([pr(), pr(2)])
+    assert fs.files[uri] == previous
+    restored, queue = await store.load(REPO, config())
+    assert restored.last_report_id is None
+    assert [item.number for item in queue] == [1]
+    monkeypatch.setattr(fs, "write_file", original_write)
+    monkeypatch.setattr(fs, "mv", original_move)
+    if document == "state":
+        await store.write_state(progress)
+    else:
+        await store.write_queue([pr(), pr(2)])
+    restored, queue = await store.load(REPO, config())
+    assert restored.last_report_id == ("a-b" if document == "state" else None)
+    assert [item.number for item in queue] == ([1] if document == "state" else [1, 2])
+    assert f"{uri}.tmp" not in fs.files

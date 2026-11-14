@@ -38,10 +38,7 @@ async def run_radar(task: WatchTask, fs: Any, processor: Any) -> None:
             await store.publish(state)
             logger.info("Radar %s resumed publication at %s/latest.md", task.task_id, store.root)
             return
-        token = None
-        if processor is not None:
-            token = await processor.github_token_for(task.path, store.ctx)
-        collector = GitHubCollector(token)
+        collector = GitHubCollector()
         now = utc(datetime.now(timezone.utc))
         complete = await collector.collect(state, queue, config, now, store.save_collection)
         if not complete:
