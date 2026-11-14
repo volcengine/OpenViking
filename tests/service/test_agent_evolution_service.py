@@ -22,7 +22,9 @@ def _ctx() -> RequestContext:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("filename", ["exchange.md", "vikingdb_fe_repo_workflows.md"])
+@pytest.mark.parametrize(
+    "filename", ["exchange.md", "vikingdb_fe_repo_workflows.md", "order#24.md"]
+)
 async def test_list_trajectories_by_experience_uses_exact_scalar_filter_and_pagination(filename):
     experience_uri = f"viking://user/alice/memories/experiences/{filename}"
     viking_fs = Mock()
@@ -80,6 +82,7 @@ async def test_list_trajectories_by_experience_uses_exact_scalar_filter_and_pagi
     assert vikingdb.filter.await_args.kwargs["order_by"] == "updated_at"
     assert vikingdb.filter.await_args.kwargs["order_desc"] is True
     assert vikingdb.count.await_args.kwargs["filter"] == expected_filter
+    viking_fs.stat.assert_awaited_once_with(experience_uri, ctx=_ctx(), skip_count=True)
 
 
 @pytest.mark.asyncio
