@@ -111,6 +111,7 @@ When host content fails to render, the block shows the default fallback: an illu
 | previewActions           | Shows or hides the built-in preview actions, see `FileBrowserPreviewActions` below                                                                                                          | `FileBrowserPreviewActions`                                             | -                              |
 | previewSlots             | Appends, replaces or hides the preview action area; dashboard tabs are unaffected, see `FileBrowserPreviewSlots` below                                                                      | `FileBrowserPreviewSlots`                                               | -                              |
 | dashboardKinds           | Enabled dashboard kinds; an empty array turns dashboards off, and `['experience']` also stops reading the compile configuration                                                             | `readonly ('wiki' \| 'experience')[]`                                   | `['wiki', 'experience']`       |
+| experienceDataSource     | Overrides individual requests for the built-in experience dashboard and keeps its UI, paging, and retry behavior                                                                            | `FileBrowserExperienceDataSource`                                       | -                              |
 | renderDashboard          | Customizes the content of the dashboard tab; return `null` or `undefined` to keep the built-in dashboard, see `FileBrowserDashboard` below                                                  | `(dashboard: FileBrowserDashboard) => ReactNode`                        | -                              |
 | slots                    | Replaces rendering-error content; see [error display slots](../guide/getting-started#custom-error-display)                                                                                  | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }`   | -                              |
 | labels                   | Overrides interface text, see `FileBrowserLabels` below                                                                                                                                     | `FileBrowserLabels`                                                     | -                              |
@@ -521,6 +522,16 @@ Directory listings needed to locate the target, or required home alias lookups, 
 - Ordinary resources have no Wiki tab, and a detected Wiki keeps its dashboard even with no conflicts.
 - A `viking://~/...` alias and the canonical URI of the same resource are detected the same way, and the `uri` passed to `renderDashboard` keeps the spelling it came with.
 - Both dashboards can also be used without FileBrowser, see [WikiDashboard](../components/wiki-dashboard) and [ExperienceDashboard](../components/experience-dashboard).
+
+### Experience dashboard data source
+
+Pass host request functions through `experienceDataSource`. Omitted functions use the default OpenViking endpoints. Keep each callback reference stable and pass its `signal` to the underlying request. Reject on failure so the built-in dashboard can display the error and retry.
+
+- `list({ uri, offset, limit, signal })` returns `{ items, hasMore, total? }`, with one page of experience files in `items`. Resolve to `undefined` to use the default listing for that URI.
+- `outcomes({ uri, startDate, endDate, signal })` returns an array of `{ outcome, count }` entries.
+- `trajectories({ uri, offset, limit, startDate, endDate, signal })` returns `{ items, hasMore, total }`, with one page of injection trajectories in `items`.
+- `sources({ uri, signal })` returns an array of source trajectories.
+- The page `offset` starts at 0 and `limit` is 20. Dates use UTC `YYYY-MM-DD` and are omitted for the all-time range.
 
 ### Failure states
 
