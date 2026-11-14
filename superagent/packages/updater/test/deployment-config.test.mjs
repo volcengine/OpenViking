@@ -111,7 +111,7 @@ test('passes timer storage selection from the manifest into the daemon environme
 test('defaults the manifest path under HOME and accepts an explicit absolute override', () => {
   assert.equal(
     resolveDeploymentManifestPath({ HOME: '/Users/test' }),
-    '/Users/test/.ov-superagent/config.json',
+    path.join('/Users/test', '.ov-superagent', 'config.json'),
   );
   assert.equal(resolveDeploymentManifestPath({
     HOME: '/Users/test',
@@ -465,12 +465,13 @@ test('OV memory is the daemon\'s; per-line search is opt-in; any OV plugin that 
     assert.equal(env.OPENVIKING_WORKSPACE_PEER, '0');
     assert.equal(env.OPENVIKING_RECALL_PEER_SCOPE, 'all');
     // Plugin state and queued writes stay inside this instance.
-    assert.equal(env.OPENVIKING_HOME, '/srv/superagent/data/alpha/openviking');
-    assert.equal(env.OPENVIKING_STATE_DIR, '/srv/superagent/data/alpha/openviking/state');
-    assert.equal(env.OPENVIKING_HOOK_STATE_DIR, '/srv/superagent/data/alpha/openviking/hook-state');
-    assert.equal(env.OPENVIKING_CODEX_STATE_DIR, '/srv/superagent/data/alpha/openviking/codex-plugin-state');
-    assert.equal(env.OPENVIKING_PENDING_DIR, '/srv/superagent/data/alpha/openviking/pending');
-    assert.equal(env.OPENVIKING_RECALL_LEDGER_DIR, '/srv/superagent/data/alpha/openviking/recall-ledger');
+    const alphaState = path.join('/srv/superagent/data/alpha', 'openviking');
+    assert.equal(env.OPENVIKING_HOME, alphaState);
+    assert.equal(env.OPENVIKING_STATE_DIR, path.join(alphaState, 'state'));
+    assert.equal(env.OPENVIKING_HOOK_STATE_DIR, path.join(alphaState, 'hook-state'));
+    assert.equal(env.OPENVIKING_CODEX_STATE_DIR, path.join(alphaState, 'codex-plugin-state'));
+    assert.equal(env.OPENVIKING_PENDING_DIR, path.join(alphaState, 'pending'));
+    assert.equal(env.OPENVIKING_RECALL_LEDGER_DIR, path.join(alphaState, 'recall-ledger'));
     applyDeploymentAgentEnv(env, deployment, 'beta');
     assert.equal(env.OPENVIKING_CLI_CONFIG_FILE, '/srv/superagent/ov/beta.json');
     assert.equal(env.OPENVIKING_MEMORY_ENABLED, '0');
@@ -478,7 +479,7 @@ test('OV memory is the daemon\'s; per-line search is opt-in; any OV plugin that 
     assert.equal(env.OPENVIKING_AUTO_RECALL, '0');
     assert.equal(env.OV_SUPERAGENT_OV_AUTO_RECALL, 'true');
     assert.equal(selectDeploymentAgent(deployment, 'beta').ovRecallScope, undefined);
-    assert.equal(env.OPENVIKING_PENDING_DIR, '/srv/superagent/data/beta/openviking/pending');
+    assert.equal(env.OPENVIKING_PENDING_DIR, path.join('/srv/superagent/data/beta', 'openviking', 'pending'));
     assert.equal(env.LARKSUITE_CLI_PROFILE, 'cli_beta');
     applyDeploymentAgentEnv(env, deployment, 'gamma');
     assert.equal(selectDeploymentAgent(deployment, 'gamma').profile, null);
