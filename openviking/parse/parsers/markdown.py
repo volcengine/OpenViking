@@ -24,7 +24,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Tuple, Union
 
 import yaml
 
@@ -217,7 +217,6 @@ class MarkdownParser(BaseParser):
         self._code_block_pattern = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
         self._inline_code_pattern = re.compile(r"`([^`]+)`")
         self._link_pattern = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
-        self._image_pattern = re.compile(r"!\[([^\]]*)\]\(((?:[^()]|\([^()]*\))+)\)")
         self._list_pattern = re.compile(r"^(\s*)[-*+]\s+(.+)$", re.MULTILINE)
         self._numbered_list_pattern = re.compile(r"^(\s*)\d+\.\s+(.+)$", re.MULTILINE)
         # Optional CR so LF and Windows CRLF documents share the same delimiters.
@@ -532,30 +531,49 @@ class MarkdownParser(BaseParser):
     # ========== Helper Methods ==========
 
     def _layout_has_local_image_refs(self, write_ops: List[_LayoutOp]) -> bool:
-        """Return True when planned markdown content references local images.
-
-        This mirrors the image patterns consumed by _ingest_local_images, but runs
-        against in-memory layout content so pure-text imports avoid a VFS glob/read
-        pass over every generated markdown chunk.
-        """
-        try:
-            from openviking.parse.image_rewrite import HTML_IMG_PATTERN
-        except ImportError:
-            HTML_IMG_PATTERN = re.compile(
-                r"""(<img\s[^>]*?src=["'])([^"']+)(["'][^>]*>)""", re.IGNORECASE
-            )
-
+        """Use ingestion's image references to skip image-free write plans."""
         for op in write_ops:
-            content = op.content or ""
-            if "![" in content:
-                for match in self._image_pattern.finditer(content):
-                    if not self._is_remote_uri(match.group(2)):
-                        return True
-            if "<img" in content.lower():
-                for match in HTML_IMG_PATTERN.finditer(content):
-                    if not self._is_remote_uri(match.group(2)):
-                        return True
+            for _raw, destination in self._image_references(op.content or ""):
+                if not self._is_remote_uri(destination):
+                    return True
         return False
+
+    @staticmethod
+    def _image_references(content: str) -> Iterator[Tuple[str, str]]:
+        """Yield raw references and destinations with the shared syntax ownership."""
+        if "![" not in content and "<img" not in content.lower():
+            return
+
+        from openviking.parse.image_rewrite import (
+            _owned_image_matches,
+            _protected_ranges,
+            _split_markdown_image_target,
+        )
+
+        markdown, html = _owned_image_matches(content, _protected_ranges(content))
+        for match in markdown:
+            raw = content[match.payload_start : match.payload_end]
+            destination, _title = _split_markdown_image_target(raw)
+            yield raw, destination
+        for html_match in html:
+            yield html_match.group(2), html_match.group(2)
+
+    def _resolve_image_reference(
+        self,
+        raw: str,
+        destination: str,
+        base_dir: Optional[Path],
+        allowed_media_dirs: Optional[List[Path]],
+    ) -> Tuple[str, Optional[Path]]:
+        """Prefer existing literal filenames before splitting off optional titles."""
+        if raw != destination:
+            # An existing literal filename still wins over a title interpretation.
+            literal = self._resolve_image_path(
+                raw, base_dir, allowed_media_dirs, strip_suffix=False
+            )
+            if literal is not None:
+                return raw, literal
+        return destination, self._resolve_image_path(destination, base_dir, allowed_media_dirs)
 
     async def _has_ingestable_local_image(
         self,
@@ -565,15 +583,13 @@ class MarkdownParser(BaseParser):
         allowed_media_dirs: Optional[List[Path]],
     ) -> bool:
         """Return whether parsing will materialize at least one local image."""
-        from openviking.parse.image_rewrite import HTML_IMG_PATTERN
-
-        image_refs = [match.group(2) for match in self._image_pattern.finditer(content)]
-        image_refs.extend(match.group(2) for match in HTML_IMG_PATTERN.finditer(content))
         seen: set[Path] = set()
-        for image_ref in image_refs:
-            if self._is_remote_uri(image_ref):
+        for raw, destination in self._image_references(content):
+            if self._is_remote_uri(destination):
                 continue
-            resolved = self._resolve_image_path(image_ref, base_dir, allowed_media_dirs)
+            _path, resolved = self._resolve_image_reference(
+                raw, destination, base_dir, allowed_media_dirs
+            )
             if resolved is None or resolved in seen:
                 continue
             seen.add(resolved)
@@ -823,35 +839,27 @@ class MarkdownParser(BaseParser):
         mappings: Dict[str, Dict[str, str]] = {}
 
         for md_uri, content in markdown_files:
-            # Collect all image references in this markdown file: markdown
-            # embeds (![...]) and HTML <img src="..."> tags alike.
-            from openviking.parse.image_rewrite import HTML_IMG_PATTERN
-
-            image_refs = [m.group(2) for m in self._image_pattern.finditer(content)]
-            image_refs += [m.group(2) for m in HTML_IMG_PATTERN.finditer(content)]
-            if not image_refs:
-                continue
-
             # Resolve local image paths, skipping remote URIs and duplicates
             local_images = []
-            origin_images_links = []
+            origin_links_by_path: Dict[Path, list[str]] = {}
             seen_paths = set()
 
-            for path_str in image_refs:
-                # Skip remote URIs
-                if self._is_remote_uri(path_str):
+            for raw, destination in self._image_references(content):
+                if self._is_remote_uri(destination):
                     continue
-
-                resolved_path = self._resolve_image_path(path_str, base_dir, allowed_media_dirs)
+                path_str, resolved_path = self._resolve_image_reference(
+                    raw, destination, base_dir, allowed_media_dirs
+                )
                 if resolved_path is None:
                     logger.warning(f"[MarkdownParser] Image file not found: {path_str}")
                     continue
 
                 # Skip duplicates within the same markdown file
                 if resolved_path in seen_paths:
+                    origin_links_by_path[resolved_path].append(path_str)
                     continue
                 seen_paths.add(resolved_path)
-                origin_images_links.append(path_str)
+                origin_links_by_path[resolved_path] = [path_str]
                 local_images.append(resolved_path)
 
             if not local_images:
@@ -863,7 +871,7 @@ class MarkdownParser(BaseParser):
             # Copy each local image next to the markdown file, deduplicating names
             used_names: set[str] = set()
             file_mappings: Dict[str, str] = {}  # original_path_str -> unique_filename
-            for origin_link, resolved_path in zip(origin_images_links, local_images, strict=False):
+            for resolved_path in local_images:
                 try:
                     if not await asyncio.to_thread(resolved_path.exists):
                         logger.warning(f"[MarkdownParser] Image file not found: {resolved_path}")
@@ -887,8 +895,10 @@ class MarkdownParser(BaseParser):
                     viking_path = f"{md_dir}/{unique_filename}"
                     await writer.write_bytes(viking_path, image_bytes)
 
-                    # Record mapping for post-commit rewrite
-                    file_mappings[origin_link] = unique_filename
+                    # One physical file may have multiple query/fragment-bearing
+                    # source references; all of them must retain provenance.
+                    for origin_link in origin_links_by_path[resolved_path]:
+                        file_mappings[origin_link] = unique_filename
 
                 except Exception as e:
                     logger.warning(f"[MarkdownParser] Failed to ingest image {resolved_path}: {e}")
@@ -915,6 +925,8 @@ class MarkdownParser(BaseParser):
         path_str: str,
         base_dir: Optional[Path],
         allowed_media_dirs: Optional[List[Path]] = None,
+        *,
+        strip_suffix: bool = True,
     ) -> Optional[Path]:
         """
         Resolve a local image reference to an existing filesystem path.
@@ -931,7 +943,10 @@ class MarkdownParser(BaseParser):
             allowed root, otherwise None
         """
         try:
-            path = Path(self._unwrap_link_destination(path_str))
+            path_str = self._unwrap_link_destination(path_str)
+            if strip_suffix:
+                path_str = re.split(r"[?#]", path_str, maxsplit=1)[0]
+            path = Path(path_str)
 
             # Reject absolute paths: they can point anywhere on the host
             if path.is_absolute():
