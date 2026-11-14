@@ -32,6 +32,16 @@ variables:
     description: "JSON object containing the mounted MCP Tool arguments"
     required: true
 
+  - name: "argument_names"
+    type: "string"
+    description: "Comma-separated names of the mounted MCP Tool arguments"
+    required: true
+
+  - name: "arguments_total_chars"
+    type: "string"
+    description: "Total serialized size of the mounted MCP Tool arguments, in characters"
+    required: true
+
   - name: "output_language"
     type: "string"
     description: "Language code for output"
@@ -47,13 +57,14 @@ template: |
   Title: {{ title }}
   Description: {{ description }}
   MCP Tool URI: {{ tool_uri }}
-  Mounted arguments: {{ arguments }}
+  Mounted argument names: {{ argument_names }}
+  Mounted argument size: {{ arguments_total_chars }} characters total; values are not shown.
 
   Output requirements:
   - Write 80-180 words in {{ output_language }} as plain text.
   - State the title and description so the node's purpose is immediately clear.
   - Preserve the exact MCP Tool URI `{{ tool_uri }}` without translating, shortening, or rewriting it.
-  - Preserve every mounted argument name and value from `{{ arguments }}`.
+  - Name the mounted arguments (list their names). Do not copy their values into the summary: argument values can carry kilobytes of code or data that belongs to the node file, not to a recall abstract.
   - Explain that the mounted arguments describe this node's default live-context call.
   - Explicitly state that a complete read of this Live Context node executes the bound MCP Tool with the mounted arguments and returns the latest result, rather than cached content.
   - Explicitly state that after a successful complete read, an agent must use that returned result and must not invoke the MCP Tool again with the same arguments.

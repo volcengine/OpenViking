@@ -416,6 +416,7 @@ class TestGenerateTextSummaryOutputLanguage:
         mock_config.output_language_override = ""
         mock_config.language_fallback = "en"
         mock_config.semantic.max_file_content_chars = 10000
+        mock_config.semantic.abstract_max_chars = 256
         return mock_config
 
     @pytest.mark.asyncio
