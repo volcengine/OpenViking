@@ -396,8 +396,15 @@ class ArchiveStore:
         """Read archive overview text."""
         try:
             overview = await self._viking_fs.read_file(f"{archive_uri}/.overview.md", ctx=self._ctx)
-        except Exception:
-            return ""
+        except Exception as exc:
+            # A durably missing overview means "empty": ``scan_states`` has a
+            # dedicated terminal state for an archive that required one but
+            # does not have it. A transient read failure must not take that
+            # branch, or a completed archive is reported as failed and drops
+            # out of the completed chain (Working Memory and checkpoints).
+            if is_storage_not_found(exc):
+                return ""
+            raise
         return body_for_preview(overview or "")
 
     async def read_abstract(self, archive_uri: str, overview: str = "") -> str:
