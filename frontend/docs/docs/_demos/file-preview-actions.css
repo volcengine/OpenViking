@@ -8,6 +8,9 @@
 .ov-demo-preview-actions__controls label {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
   gap: 6px;
 }
 .ov-demo-preview-actions__controls .ov-select {

@@ -72,12 +72,12 @@
   --ov-ui-scope-switcher-option-icon-radius: 12px;
 
   display: inline-flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   max-width: 100%;
   box-sizing: border-box;
-  height: 32px;
+  min-height: 32px;
   color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
   font-family: var(
     --ov-ui-font-family,
@@ -107,7 +107,7 @@
 .ov-scope-switcher__level {
   position: relative;
   display: inline-flex;
-  flex-shrink: 1;
+  flex-shrink: 0;
   align-items: center;
   gap: 4px;
   min-width: 0;
