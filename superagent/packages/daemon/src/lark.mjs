@@ -517,7 +517,7 @@ export class LarkClient {
     const data = await this.cli(['api', 'GET', '/open-apis/im/v1/messages', '--as', 'bot',
       '--params', JSON.stringify(params), '--format', 'json'], 'list newer messages', { timeoutMs: 5_000 });
     return { messages: (Array.isArray(data?.items) ? data.items : [])
-      .filter((item) => Number(item.create_time) > afterMs && !item.deleted && (threadId || !item.thread_id))
+      .filter((item) => Number(item.create_time) > afterMs && !item.deleted && (threadId || !item.root_id))
       .map((item) => ({ message_id: item.message_id, create_time_ms: Number(item.create_time),
         sender_type: item.sender?.sender_type ?? null, type: item.msg_type ?? null })) };
   }

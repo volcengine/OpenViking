@@ -123,7 +123,7 @@ function morePages(data) {
 }
 
 // How long a message Lark already holds may still be on its way to the daemon.
-const SERVER_FENCE_WINDOW_MS = 30_000;
+const SERVER_FENCE_WINDOW_MS = 5_000;
 
 // The single outbound path. Agent tool calls (through the MCP adapter and the
 // local socket) and daemon notices all end in deliver(): reserve in the

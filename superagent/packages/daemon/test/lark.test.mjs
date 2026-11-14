@@ -202,6 +202,24 @@ describe('Lark IM operations', () => {
     assert.ok(calls[1].args.includes('p2'));
   });
 
+  it('keeps thread roots but excludes thread replies from main-chat freshness', async () => {
+    const { lark, calls } = client(() => ({ items: [
+      { message_id: 'om_root123456789', create_time: '4000', thread_id: 'omt_thread123456',
+        root_id: null, deleted: false, msg_type: 'text', sender: { sender_type: 'user' } },
+      { message_id: 'om_reply12345678', create_time: '3000', thread_id: 'omt_thread123456',
+        root_id: 'om_root123456789', deleted: false, msg_type: 'text', sender: { sender_type: 'user' } },
+      { message_id: 'om_plain12345678', create_time: '2500', deleted: false,
+        msg_type: 'text', sender: { sender_type: 'user' } },
+      { message_id: 'om_old1234567890', create_time: '1000', deleted: false,
+        msg_type: 'text', sender: { sender_type: 'user' } },
+    ] }));
+    const result = await lark.newerMessages({ chat_id: 'oc_chat12345678', after_ms: 2000 });
+    assert.deepEqual(result.messages.map(({ message_id }) => message_id), ['om_root123456789', 'om_plain12345678']);
+    const params = JSON.parse(calls[0].args[calls[0].args.indexOf('--params') + 1]);
+    assert.deepEqual(params, { container_id_type: 'chat', container_id: 'oc_chat12345678',
+      sort_type: 'ByCreateTimeDesc', page_size: '20' });
+  });
+
   it('downloads a message resource into the private media directory', async () => {
     const { lark, calls, tempDir } = client((args, options) => {
       fs.writeFileSync(path.join(options.cwd, `${args[args.indexOf('--output') + 1]}.png`), 'png');

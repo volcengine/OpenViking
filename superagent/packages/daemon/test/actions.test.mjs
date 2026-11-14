@@ -509,6 +509,7 @@ describe('agent tools', () => {
     } });
     const base = Date.now() - 60_000;
     const recent = Date.now() - 1_000;
+    const outsideFence = Date.now() - 6_000;
     store.ingest(chatEvent({ chatType: 'group', messageId: 'om_decision123456', chatId: 'oc_chat12345678', createTimeMs: base }));
     const send = () => call('send_message', { chat_id: 'oc_chat12345678', markdown: '2', decision_id: 'message:om_decision123456' });
 
@@ -529,7 +530,7 @@ describe('agent tools', () => {
     onServer = [{ message_id: 'om_mine1234567890', create_time_ms: recent, type: 'text' },
       { message_id: 'om_system12345678', create_time_ms: recent, type: 'system' },
       { message_id: 'om_filtered123456', create_time_ms: recent, type: 'text' },
-      { message_id: 'om_ancient12345678', create_time_ms: base + 1_000, type: 'text' }];
+      { message_id: 'om_ancient12345678', create_time_ms: outsideFence, type: 'text' }];
     await send();
     assert.equal(connectors.calls.at(-1).action, 'message.send');
 
