@@ -234,6 +234,7 @@ async def test_trajectory_rollout_analyzer_extracts_and_persists_trajectory(monk
     assert FakeExtractLoop.created
     created_loop = FakeExtractLoop.created[0]
     assert created_loop._transaction_handle is None
+    assert created_loop.kwargs.get("thinking") is None
     provider = created_loop.kwargs["context_provider"]
     assert provider.get_extract_context().source_archive_uri == context.source_archive_uri
     assert provider._transaction_handle is None
