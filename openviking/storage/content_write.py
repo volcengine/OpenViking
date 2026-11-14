@@ -59,6 +59,7 @@ from openviking.storage.abstract_overview import (
     is_abstract_overview_uri,
     plan_abstract_overview_refresh,
     prepare_abstract_overview_write,
+    sanitize_abstract_overview_body,
 )
 from openviking.storage.acl import AclAction, AclSpec
 from openviking.storage.context_update_execution import (
@@ -294,6 +295,19 @@ class ContentWriteCoordinator:
             )
         return result.content
 
+    async def _sanitize_sidecar_text(
+        self,
+        content: str,
+        *,
+        uri: str,
+        ctx: RequestContext,
+    ) -> str:
+        if self._privacy_sanitizer is None:
+            return content
+        return await sanitize_abstract_overview_body(
+            content, partial(self._sanitize_text, uri=uri, ctx=ctx)
+        )
+
     async def _sanitize_batch_operations(
         self,
         operations: list[dict[str, Any]],
@@ -306,7 +320,12 @@ class ContentWriteCoordinator:
             content = operation.get("content")
             uri = operation.get("uri")
             if isinstance(content, str) and isinstance(uri, str):
-                operation["content"] = await self._sanitize_text(content, uri=uri, ctx=ctx)
+                sanitize = (
+                    self._sanitize_sidecar_text
+                    if is_abstract_overview_uri(uri)
+                    else self._sanitize_text
+                )
+                operation["content"] = await sanitize(content, uri=uri, ctx=ctx)
 
     async def write(
         self,
@@ -545,7 +564,10 @@ class ContentWriteCoordinator:
         if acl is not None and not namespace_policy.supports_acl:
             raise InvalidArgumentError(f"ACL is not supported for namespace: {normalized_uri}")
         if isinstance(content, str):
-            content = await self._sanitize_text(content, uri=normalized_uri, ctx=ctx)
+            if is_abstract_overview_uri(normalized_uri):
+                content = await self._sanitize_sidecar_text(content, uri=normalized_uri, ctx=ctx)
+            else:
+                content = await self._sanitize_text(content, uri=normalized_uri, ctx=ctx)
         content = normalize_account_memory_template_write(normalized_uri, content, mode)
         ingest_options = IngestOptions.from_search_tags(tags, mode=tag_mode)
         if acl is not None:

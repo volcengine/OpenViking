@@ -28,7 +28,9 @@ from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import AccessDecision, RequestContext, Role
 from openviking.storage.abstract_overview import (
     ABSTRACT_OVERVIEW_FILENAMES,
+    is_abstract_overview_uri,
     rewrite_abstract_overview_for_transfer,
+    sanitize_abstract_overview_body,
 )
 from openviking.storage.acl import AclAction, is_acl_uri
 from openviking.storage.expr import And, Eq, PathScope, RawDSL
@@ -2069,19 +2071,27 @@ class _OpsMixin:
         if isinstance(content, str):
             sanitizer = getattr(self, "_privacy_sanitizer", None)
             if sanitizer is not None and ctx is not None:
-                result = await sanitizer.sanitize(content, ctx=ctx, uri=uri)
-                if result.ambiguous_references:
-                    raise InvalidArgumentError(
-                        "Content contains a Privacy value mapped to multiple fields; "
-                        "insert the intended owner-bound reference explicitly",
-                        details={
-                            "uri": uri,
-                            "candidate_references": [
-                                list(candidates) for candidates in result.ambiguous_references
-                            ],
-                        },
-                    )
-                content = result.content
+
+                async def sanitize_text(text: str) -> str:
+                    result = await sanitizer.sanitize(text, ctx=ctx, uri=uri)
+                    if result.ambiguous_references:
+                        raise InvalidArgumentError(
+                            "Content contains a Privacy value mapped to multiple fields; "
+                            "insert the intended owner-bound reference explicitly",
+                            details={
+                                "uri": uri,
+                                "candidate_references": [
+                                    list(candidates) for candidates in result.ambiguous_references
+                                ],
+                            },
+                        )
+                    return result.content
+
+                content = (
+                    await sanitize_abstract_overview_body(content, sanitize_text)
+                    if is_abstract_overview_uri(uri)
+                    else await sanitize_text(content)
+                )
             content = content.encode("utf-8")
 
         path = self._uri_to_path(uri, ctx=ctx)

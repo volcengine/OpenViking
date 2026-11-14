@@ -265,6 +265,15 @@ def render_abstract_overview(
     return f"---\n{frontmatter}\n---\n\n{body.strip()}\n"
 
 
+async def sanitize_abstract_overview_body(
+    content: str, sanitize: Callable[[str], Awaitable[str]]
+) -> str:
+    document = parse_abstract_overview(content)
+    sanitized_body = await sanitize(document.body)
+    # 使用解析器返回的正文边界，保留元数据原文及换行格式。
+    return content.removesuffix(document.body) + sanitized_body
+
+
 def markdown_safe_viking_uri(uri: str) -> str:
     """Encode ASCII-only URI syntax hazards while preserving Unicode path text."""
 
