@@ -1,4 +1,5 @@
 import { Button } from '../../shared/primitives/button/button.js';
+import { Empty } from '../../shared/primitives/empty/empty.js';
 import type { Locale } from '../../shared/locale.js';
 import {
   useEffect,
@@ -158,12 +159,12 @@ export function ConsoleHistory({
                   ))}
                 </ul>
               ) : (
-                <div className="ov-console__history-empty">
-                  <span className="ov-console__history-illustration">
-                    <ConsoleIcon name="historyEmpty" />
-                  </span>
-                  <span>{labels.emptyHistory}</span>
-                </div>
+                <Empty
+                  size="compact"
+                  illustration="tray"
+                  title={labels.emptyHistory}
+                  className="ov-console__history-empty"
+                />
               )}
             </div>,
             document.body,

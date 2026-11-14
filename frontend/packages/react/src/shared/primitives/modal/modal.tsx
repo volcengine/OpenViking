@@ -43,6 +43,7 @@ export function Modal({
   className,
   locale: localeProp,
   onClose,
+  afterClose,
   children,
   closeLabel,
   closeIcon,
@@ -134,7 +135,10 @@ export function Modal({
         mountOnEnter
         unmountOnExit
         onEnter={() => setPresent(true)}
-        onExited={() => setPresent(false)}
+        onExited={() => {
+          setPresent(false);
+          afterClose?.();
+        }}
       >
         <div
           ref={panelRef}
