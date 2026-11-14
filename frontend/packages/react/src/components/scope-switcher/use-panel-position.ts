@@ -25,10 +25,14 @@ export function usePanelPosition(panel: HTMLDivElement | null) {
     };
     update();
     const observer = new ResizeObserver(update);
+    const switcher = panel.closest('.ov-scope-switcher');
+    // A preceding level can resize and move this one while the row count and
+    // both this level's and the switcher's dimensions remain unchanged.
     for (const node of [
       panel,
       panel.parentElement,
-      panel.closest('.ov-scope-switcher'),
+      switcher,
+      ...(switcher?.querySelectorAll('.ov-scope-switcher__level') ?? []),
     ]) {
       if (node) observer.observe(node);
     }

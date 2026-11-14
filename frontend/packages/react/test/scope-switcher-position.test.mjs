@@ -25,12 +25,13 @@ test('wrapped scope panels stay inside desktop viewport edges and preserve the m
       return new window.DOMRect(left + shift, 180, width, 120);
     },
   );
-  const resizes = [];
+  const observed = new Map();
   let disconnects = 0;
   t.mock.method(globalThis, 'ResizeObserver', function (update) {
-    resizes.push(update);
     return {
-      observe() {},
+      observe(node) {
+        observed.set(node, update);
+      },
       disconnect() {
         disconnects++;
       },
@@ -44,6 +45,11 @@ test('wrapped scope panels stay inside desktop viewport edges and preserve the m
       ScopeSwitcher,
       null,
       h(ScopeSelector, {
+        kind: 'fixed',
+        identity: { key: 'library' },
+        trigger: { label: 'Research library title' },
+      }),
+      h(ScopeSelector, {
         kind: 'selectable',
         identity: { key: 'user', ariaLabel: 'Switch user' },
         data: {
@@ -56,6 +62,11 @@ test('wrapped scope panels stay inside desktop viewport edges and preserve the m
   );
   try {
     const panel = view.container.querySelector('[role="dialog"]');
+    const preceding = view.container.querySelector('.ov-scope-switcher__level');
+    assert.ok(
+      observed.has(preceding),
+      'preceding levels are observed when they resize without changing row count',
+    );
     assert.ok(
       panel.getBoundingClientRect().left >= 8,
       'wrapped final level is visible near the left edge',
@@ -67,11 +78,11 @@ test('wrapped scope panels stay inside desktop viewport edges and preserve the m
       'right-edge collision is corrected',
     );
     left = -20;
-    resizes[0]();
+    observed.get(preceding)();
     assert.equal(
       panel.getBoundingClientRect().left,
       8,
-      'content and container resizing recompute the correction',
+      'a preceding label resize recomputes the correction even at the same row count',
     );
     left = 100;
     window.dispatchEvent(new window.Event('scroll'));
