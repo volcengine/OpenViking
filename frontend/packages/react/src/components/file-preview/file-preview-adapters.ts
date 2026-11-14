@@ -29,7 +29,7 @@ import {
  * CAD 与 3D 需要额外的引擎与伴随资源，不放进公共组件。
  *
  * 本模块会静态引入底座，因此只能被懒加载的正文模块引用，不能进入包的顶层
- * 导入链——底座会静态引入浏览器专用组件，顶层导入会破坏服务端渲染。
+ * 导入链，减少控制台首屏加载体积。
  *
  * The formats the component ships: text, documents, images and media. The image
  * adapter reads content while the media adapter reads a reference; the base

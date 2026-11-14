@@ -1,15 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from 'react';
-
-// 服务端渲染没有布局，useLayoutEffect 在那里只会告警；测量只在浏览器有意义。
-// A server render has no layout, so a layout effect would only warn there.
-const useMeasureEffect =
-  typeof window === 'undefined' ? useEffect : useLayoutEffect;
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 
 const DESC_SELECTOR = '.ov-command-console__empty-desc';
 
@@ -104,7 +93,7 @@ export function useCommandConsoleQuickOverflow() {
   // 每次渲染后补测一次，覆盖文案变长这类不改变盒尺寸的变化。
   // Re-measure after every render to cover changes that resize no box, such as
   // longer copy.
-  useMeasureEffect(measure);
+  useLayoutEffect(measure);
 
   // 订阅的建立与释放全部交给 callback ref：它在节点挂载时收到列表、卸载时收到
   // null。不要再加一个「卸载时断开」的 effect——StrictMode 会重放 effect 的

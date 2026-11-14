@@ -28,6 +28,7 @@ try {
           dts: false,
           source: {
             entry: {
+              monitoring: './test/fixtures/monitoring.tsx',
               'error-boundary':
                 './src/shared/error-boundary/error-boundary.tsx',
               'lazy-content': './src/shared/lazy-content.tsx',

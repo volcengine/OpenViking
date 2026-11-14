@@ -1,4 +1,3 @@
-import { useSyncExternalStore } from 'react';
 import type { ResolvedCommandConsoleLabels } from './command-console-labels.js';
 import type { CommandConsoleRecord } from './types.js';
 
@@ -25,11 +24,7 @@ export function formatCommandConsoleRecordTime(
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-const subscribe = () => () => {};
-const clientSnapshot = () => true;
-const serverSnapshot = () => false;
-
-/** 客户端渲染时读取时钟，SSR 与 hydration 首屏使用相同的兜底文案。 */
+/** 在当前渲染中格式化记录时间。 */
 export function CommandConsoleRecordTime({
   record,
   labels,
@@ -37,14 +32,7 @@ export function CommandConsoleRecordTime({
   record: RecordTime;
   labels: ResolvedCommandConsoleLabels;
 }) {
-  const client = useSyncExternalStore(
-    subscribe,
-    clientSnapshot,
-    serverSnapshot,
-  );
-  const text = client
-    ? formatCommandConsoleRecordTime(record, labels)
-    : record.createdAt;
+  const text = formatCommandConsoleRecordTime(record, labels);
   return text ? (
     <span className="ov-command-console__bubble-time">{text}</span>
   ) : null;

@@ -1,0 +1,129 @@
+# 前端监控
+
+通过 `OpenVikingProvider.monitoring` 接收组件异常、前端请求质量和区块加载结果，并从失败事件还原库内前端链路。
+
+请求采集覆盖库内业务组件和区块绑定到当前 Provider 的调用。独立使用 `createOvClient` 和宿主自己的网络请求由宿主监控。
+
+## 何时使用
+
+- 定位哪个业务组件或区块的哪个区域发生异常。
+- 观察目录、预览、搜索、会话、级联选择、流式回复和后台轮询的前端结果。
+- 将类型化事件接入宿主已有的监控平台。操作和曝光统计使用独立的[埋点](./analytics)。
+
+## 接入
+
+```tsx
+import { OpenVikingProvider } from '@openviking/react/client';
+import type { OpenVikingMonitoringOptions } from '@openviking/react/client';
+
+const monitoring: OpenVikingMonitoringOptions = {
+  onEvent(event) {
+    if (event.name === 'file_browser_directory_load_fail') {
+      console.log(event.source.component, event.params.traceSnapshot);
+    }
+    // 在此调用宿主的监控 SDK。
+  },
+};
+
+<OpenVikingProvider monitoring={monitoring}>{children}</OpenVikingProvider>;
+```
+
+业务组件和区块的 Props 保持原有交互语义，监控只从 Provider 接入。独立使用的业务组件也可以包在 Provider 内。
+
+## 代码演示
+
+### 接收结果与异常
+
+示例使用模拟的级联选择数据，事件只显示在当前页面，不发送到外部平台。开启监控后点击重新加载；模拟失败可观察失败快照和重试结果。
+
+```tsx file="../../_demos/monitoring.tsx" preview
+
+```
+
+## 开关和继承
+
+| `monitoring`                 | 行为                                             |
+| ---------------------------- | ------------------------------------------------ |
+| 根 Provider 省略             | 默认关闭                                         |
+| 内层 Provider 省略           | 继承最近的外层配置                               |
+| `false`                      | 关闭当前子树；更深层可显式配置重新开启           |
+| `{ onEvent }`                | 接收全部内置监控事件                             |
+| `{ onEvent, events: [...] }` | 只接收指定事件，内部仍记录这些失败所需的前序阶段 |
+| `{ onEvent, events: [] }`    | 完全关闭                                         |
+
+关闭时不创建监控 ID、阶段、计时器或链路缓存，不调用接收器和诊断转换。关闭会清理当前采集上下文；重新开启只观察之后开始的工作，不补发历史结果，也不重启业务请求、会话或编辑器。修改接收器或订阅列表不重启正在进行的工作。
+
+嵌套 Provider 显式配置对象时替换监控配置，事件只交给最近的接收器，不向外层重复投递。`analytics` 和 `monitoring` 的开关、订阅和接收器相互独立。
+
+## API
+
+### OpenVikingMonitoringOptions
+
+| 参数        | 说明                                        | 类型                                                          | 默认值     |
+| ----------- | ------------------------------------------- | ------------------------------------------------------------- | ---------- |
+| onEvent     | 接收事件，抛错或 Promise 拒绝不改变业务结果 | `(event: OpenVikingMonitoringEvent) => void \| Promise<void>` | 必填       |
+| events      | 允许投递的事件名                            | `readonly OpenVikingMonitoringEventName[]`                    | 全部事件   |
+| diagnostics | 显式启用宿主脱敏转换                        | `{ transform(input): SanitizedDiagnostics \| undefined }`     | 不采集原文 |
+
+`OpenVikingMonitoringOptions`、`OpenVikingMonitoringEvent`、`OpenVikingMonitoringEventName` 和 `OpenVikingMonitoringEventMap` 从 `@openviking/react/client` 导出。事件名决定 `source` 和 `params` 类型；事件表是封闭类型，不接受任意字符串或追加事件定义。
+
+```ts
+import type { OpenVikingMonitoringEventMap } from '@openviking/react/client';
+
+type DirectoryFailure =
+  OpenVikingMonitoringEventMap['file_browser_directory_load_fail']['params'];
+```
+
+### 事件信封
+
+| 字段                           | 含义                                                            |
+| ------------------------------ | --------------------------------------------------------------- |
+| schemaVersion / libraryVersion | 事件协议版本 `1` 与实际组件库版本                               |
+| eventId / occurredAtUnixMs     | 本次事件 ID 与发生时间戳，单位毫秒                              |
+| name                           | 唯一的目标与事件，完整列表见[监控事件目录](./monitoring-events) |
+| source                         | 所属组件、区块、区域和组件路径                                  |
+| trace                          | 当前阶段的链路标识与尝试序号                                    |
+| params                         | 当前事件专属字段                                                |
+| diagnostics                    | 宿主显式返回并通过预算校验的脱敏诊断                            |
+
+## 定位组件与还原链路
+
+`source.component` 包含组件的 `name`、`instanceId` 和 `region`。`module` 是最近的 `FileBrowser`、`Console` 或 `ScopeCascade`，独立业务组件为 `null`。`componentPath` 按外到内排列库内组件；`affectedComponents` 表示同一故障向外传播时已知的受影响组件。
+
+组件名称表示捕获区域的归属，不等于根因一定是组件库代码。宿主插槽、Adapter 或第三方依赖也可能在该区域抛错。SDK 不解析 React 私有字段来猜具体源码行；需要源码位置时，由宿主配置 source map，并显式接入脱敏诊断。
+
+失败事件自带 `params.traceSnapshot`，即使只订阅失败事件，也能看到已观察到的成功前序：
+
+1. 用 `source.component`、`source.module` 和 `region` 定位异常区域。
+2. 按 `incidentId` 聚合同一故障，沿 `causeEventId` 查看传播关系。`faultRole: 'origin'` 是首次观察，`'propagation'` 是同一故障向上层传播。
+3. 按 `traceId` 串联工作，按 `spanId`、`parentSpanId` 和 `rootSpanId` 还原阶段。`sequence` 是链路内事件顺序；`attempt` 是同组件实例同阶段的采集尝试序号，不是 HTTP 自动重试次数。
+4. 从 `causalPath` 定位实际失败路径，结合 `spans` 的阶段、状态、耗时和安全请求摘要排查。渲染异常无法可靠确定起点，因此其 `elapsedMs` 和 `startOffsetMs` 为 `null`。
+5. 查看 `links` 中的代码加载重试、后台任务来源和实际视图输入链路；不同工作各自使用独立 trace，不把最近一次请求当成当前视图的数据来源。
+
+主快照最多保留 64 个阶段，优先保留根阶段和真实失败路径。`omittedSpanCount` 与 `omittedByStage` 统计主链路省略的阶段；最多保留 8 条关联，每条关联最多 8 个阶段摘要。超出容量时 `coverage: 'partial'`、`gaps` 包含 `capacity`。
+
+`coverage: 'complete'` 仅表示当前库内工作已观察完整，不表示整个页面或服务端链路完整。中途开启监控、经过关闭的作用域、自定义宿主 Service 无法观察内部请求时，快照通过 `started-before-enabled`、`disabled-scope` 或 `opaque-host-service` 标记缺口。后台任务用独立 trace 关联提交来源，轮询失败不会把已受理的任务改判为失败。
+
+订阅过滤只影响投递。`causeEventId` 可能指向未订阅的事件，此时使用当前失败的 `traceSnapshot` 查看前序阶段。
+
+## 触发口径
+
+- 渲染异常：在客户端已提交的库内错误边界捕获时记录。普通事件回调和任意异步任务由宿主处理。
+- 资源：观察真实动态导入、图片加载和视频元数据加载；同次尝试只结算一次。视频元数据成功不代表视频已经可播放。
+- 请求：JSON 在完整读体和原生业务信封检查后才成功；Blob 按原有下载契约结算，不额外解析文件正文。请求只附带方法、静态 `routeKey`、状态码、请求尝试 ID 和可用的服务端 request ID。
+- SSE：连接成功、流读取完成和业务回复完成是三个独立目标。主动取消、消费者提前结束和卸载不伪装为成功或失败；正常 EOF 才是读取完成。
+- 区块加载：数据提交到当前状态后结算；预览正文就绪还要求对应目标已切到前台且加载遮罩退出。空数据是有效成功，取消、旧目标和后台预加载不能替当前目标报就绪。
+- 任务轮询：一次故障周期内，请求失败和协议失败各首次报告一次；第一份有效响应报告一次恢复。后端任务自身的 `failed` 状态不属于前端监控异常。
+- 回复：第一段非空正文、推理或工具内容记录首内容；收到合法终态并完成前端提交才记录回复完成。历史保存失败单独报告，不把成功回复改判为失败。
+
+就绪事件不代表用户看见了内容，曝光口径见[埋点指南](./analytics)。
+
+## 诊断与宿主平台
+
+默认不上传 URL、URI、查询词、命令、正文、账号凭证、错误原文或堆栈。不安装全局 `window.onerror`、`unhandledrejection`、fetch 补丁，也不注入服务端追踪请求头。
+
+需要原始诊断时，显式提供同步 `diagnostics.transform`。输入包括 `error`、`message`、`stack`、`componentStack`、`requestBody`、`responseBody`；仅在当前捕获点实际具备时提供，SDK 不为诊断重复读体或额外发请求。宿主返回同名的可选字段，其中 body 必须是 JSON 值，其他字段为字符串；`error` 本身不会被转发。
+
+转换后单个 body 的 UTF-8 JSON 最大 4 KiB，`message`、`stack`、`componentStack` 合计最大 16 KiB；不合规、超预算或转换失败的字段会被忽略。异步转换不生效。返回 `undefined` 表示放弃本次原文诊断，安全事件仍正常投递。
+
+SDK 不持久化、缓存重发或自动重试事件。采样、批量发送、告警、平台鉴权和 source map 上传由宿主监控平台负责。只需要排障失败时可通过 `events` 订阅目录中的失败事件，前序阶段摘要仍在失败快照中。

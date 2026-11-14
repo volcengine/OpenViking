@@ -1,3 +1,5 @@
+import { MonitoringFlow } from '../../shared/monitoring/flow-context.js';
+import { useContentMonitoring } from './use-content-monitoring.js';
 import { useExposure } from '../../shared/analytics/use-exposure.js';
 import { useState } from 'react';
 import { useRenderErrors } from './file-preview-labels.js';
@@ -24,6 +26,7 @@ import type {
 } from './types.js';
 
 export interface FilePreviewBodyProps {
+  monitoringTargetKey?: string;
   fileTab: FilePreviewFileTab;
   text: Required<FilePreviewLabels>;
   locale?: Locale;
@@ -38,7 +41,11 @@ export interface FilePreviewBodyProps {
   onCancelEditing: () => void;
   /** 底座加载状态变化时调用；过渡层用它判断新内容何时就绪。 */
   /** Called when the base's load state changes; the transition uses it as the ready signal. */
-  onStateChange?: (state: FileViewerState) => void;
+  onStateChange?: (
+    state: FileViewerState,
+    error?: unknown,
+    reason?: 'retry',
+  ) => void;
   /**
    * 是否向外上报句柄与视图模式。过渡期间后台那一层传 `false`，避免它覆盖屏幕上
    * 那一层的句柄。
@@ -119,6 +126,8 @@ function FilePreviewBodyContent({
         kind={media}
         text={text}
         slots={fileTab.slots}
+        reports={reports}
+        onStateChange={onStateChange}
       />
     );
 
@@ -153,37 +162,53 @@ function FilePreviewBodyContent({
 
 export function FilePreviewBody(props: FilePreviewBodyProps) {
   const { source } = props.fileTab;
+  const monitoring = useContentMonitoring(props);
   return (
-    <ErrorBoundary
-      message={
-        useRenderErrors(props.locale)[
-          props.editing.editing ||
-          props.editing.loadingEdit ||
-          props.editing.editFailed
-            ? 'editor'
-            : 'preview'
-        ]
-      }
-      locale={props.locale}
-      fallback={props.fileTab.slots?.errorFallback}
-      onError={() => {
-        // Promote failed background bodies so their fallback and retry are reachable.
-        props.onLoadingChange?.(false);
-        props.onStateChange?.('error');
-      }}
-      resetKeys={[
-        props.fileTab.key,
-        props.fileTab.loading,
-        source.path,
-        source.fileName,
-        source.fileType,
-        source.content,
-        source.url,
-        source.file,
-        props.viewMode,
-      ]}
-    >
-      <FilePreviewBodyContent {...props} />
-    </ErrorBoundary>
+    <MonitoringFlow operation={monitoring.operation}>
+      <ErrorBoundary
+        monitoringRegion={props.viewMode === 'source' ? 'source' : 'content'}
+        message={
+          useRenderErrors(props.locale)[
+            props.editing.editing ||
+            props.editing.loadingEdit ||
+            props.editing.editFailed
+              ? 'editor'
+              : 'preview'
+          ]
+        }
+        locale={props.locale}
+        fallback={props.fileTab.slots?.errorFallback}
+        onReset={monitoring.reset}
+        onError={(error) => {
+          monitoring.caught(error);
+          // Promote failed background bodies so their fallback and retry are reachable.
+          props.onLoadingChange?.(false);
+          props.onStateChange?.('error');
+        }}
+        resetKeys={[
+          props.fileTab.key,
+          props.fileTab.loading,
+          source.path,
+          source.fileName,
+          source.fileType,
+          source.content,
+          source.url,
+          source.file,
+          props.viewMode,
+        ]}
+      >
+        <FilePreviewBodyContent
+          {...props}
+          onLoadingChange={(loading) => {
+            monitoring.loading(loading);
+            props.onLoadingChange?.(loading);
+          }}
+          onStateChange={(state, error, reason) => {
+            monitoring.observe(state, error, reason);
+            props.onStateChange?.(state, error, reason);
+          }}
+        />
+      </ErrorBoundary>
+    </MonitoringFlow>
   );
 }

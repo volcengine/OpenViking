@@ -77,7 +77,7 @@ When host content fails to render, the component shows the default fallback: an 
 | tasks       | Background task snapshots supplied by the host                                                                                                   | `readonly CommandConsoleTask[]`                    | -        |
 | content     | Execution result; records with background tasks can show it while pending, otherwise pending records show a skeleton                             | `CommandConsoleRecordContent`                      | -        |
 | createdAtMs | Submission time as a Unix timestamp in milliseconds, shown below the command                                                                     | `number`                                           | -        |
-| createdAt   | Text shown when there is no valid `createdAtMs`, also used for server rendering; it is never parsed as a date                                    | `string`                                           | -        |
+| createdAt   | Text shown when there is no valid `createdAtMs`; it is never parsed as a date                                                                    | `string`                                           | -        |
 
 `CommandConsoleTask` uses the [ConsoleTaskSnapshot](../modules/console#consoletasksnapshot) fields.
 
@@ -321,7 +321,7 @@ Defaults are the copy used when `locale` is `'en-US'`.
 - In Markdown text, `http(s)` links and addresses open in a new tab and do not call `onOpenUri`; `viking://` ones do.
 - JSON and Markdown code blocks have a copy button, and a successful copy calls `onCopy`. If the browser refuses the clipboard write, no success feedback is shown and `onCopy` is not called.
 - `createdAtMs` shows "Just now" under one minute, whole minutes under one hour, whole hours under 24 hours, then the local `YYYY-MM-DD HH:mm`; a future timestamp shows "Just now". Override the text with `labels.justNow`, `labels.formatMinutesAgo` and `labels.formatHoursAgo`.
-- Server rendering and the hydration pass use `createdAt` and show no time without it; the client switches to `createdAtMs` afterwards. The time is recalculated when the component renders and does not refresh on a timer.
+- Each render formats a valid `createdAtMs`, falling back to `createdAt` when missing or invalid. Time is recalculated on render without a refresh timer.
 - Colors come from the `--ov-ui-color-*` theme variables, and dark mode follows the `.dark` class on `<html>`; see [Getting started](../guide/getting-started).
 - Types are exported from `@openviking/react/components/command-console`; the package root exports only the component and `CommandConsoleProps`.
 

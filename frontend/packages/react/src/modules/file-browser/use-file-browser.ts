@@ -226,12 +226,10 @@ export function useFileBrowser({
       },
       toggleExpand,
       loadMore: async (row: FileTreeRow) => {
-        const parentId = 'parentId' in row ? row.parentId : undefined;
-        if (parentId) await loadMore(parentId);
+        if ('parentId' in row && row.parentId) await loadMore(row.parentId);
       },
       retry: async (row: FileTreeRow) => {
-        const parentId = 'parentId' in row ? row.parentId : undefined;
-        if (parentId) await retry(parentId);
+        if ('parentId' in row && row.parentId) await retry(row.parentId);
       },
       // Refresh the directory and preview together after external changes.
       refresh: async () => {
@@ -293,6 +291,8 @@ export function useFileBrowser({
     // selection, so a custom view or action reading `currentUri` would target a
     // different resource than the preview shows.
     currentUri: activeUri,
+    treeMonitoring: tree.monitoring,
+    previewMonitoring: preview.monitoring,
     isReady: tree.isReady,
     error: tree.error ?? previewError,
     treeError: tree.error,

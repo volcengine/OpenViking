@@ -1,3 +1,4 @@
+import { useMonitoringBinding } from '../../shared/monitoring/context.js';
 import { useTrack } from '../../shared/analytics/use-track.js';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createScopeController } from './controller.js';
@@ -12,6 +13,7 @@ export function useScopeCascade(
   { loadLibraries, loadSpaces, loadUsers }: ScopeCascadeApi,
   onChange?: ScopeCascadeProps['onChange'],
 ) {
+  const monitoring = useMonitoringBinding();
   const track = useTrack();
   const userSelected = useRef(false);
   const notify = useRef(onChange);
@@ -28,6 +30,7 @@ export function useScopeCascade(
       () => {
         userSelected.current = true;
       },
+      monitoring,
     ),
   );
   // Synchronize this instance with its host API adapters. Requests must run after
@@ -42,9 +45,5 @@ export function useScopeCascade(
 
 /** Call in a leaf, never aggregate all three subscriptions in the root. */
 export function useScopeCascadeLevel(level: ScopeCascadeLevel) {
-  return useSyncExternalStore(
-    level.subscribe,
-    level.getSnapshot,
-    level.getSnapshot,
-  );
+  return useSyncExternalStore(level.subscribe, level.getSnapshot);
 }

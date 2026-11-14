@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { act, createElement as h, Fragment } from 'react';
-import { renderToString } from 'react-dom/server';
+import { renderMarkup } from './helpers/csr-render.mjs';
 import { mount } from './helpers/module-dom.mjs';
 
 const entry = (name) =>
@@ -103,7 +103,7 @@ test('multiple selection toggles values, keeps the list open, and removes the la
   }
 });
 
-test('controlled values, empty renderValue and rich labels render before the popup mounts and on SSR', async () => {
+test('controlled values, empty renderValue and rich labels render before the popup mounts', async () => {
   const valuesSeen = [];
   const child = h(
     Tooltip,
@@ -134,7 +134,7 @@ test('controlled values, empty renderValue and rich labels render before the pop
       },
       child,
     );
-  assert.match(renderToString(render(['rich'], false)), /Short label/);
+  assert.match(renderMarkup(render(['rich'], false)), /Short label/);
   const view = await mount(render([]));
   try {
     assert.equal(field(view).textContent, 'Nothing chosen');

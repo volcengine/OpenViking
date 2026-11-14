@@ -1,3 +1,10 @@
+import { beginWorkflow } from '../../shared/monitoring/workflow.js';
+import { now } from '../../shared/monitoring/clock.js';
+import { bindClient, bindingOf } from '../../shared/monitoring/client.js';
+import {
+  rawClient,
+  type BoundClient,
+} from '../../shared/monitoring/binding.js';
 import {
   useCallback,
   useEffect,
@@ -11,12 +18,27 @@ import { useOvQueryClient } from '../../client/query-client.js';
 import { schedulerFor } from '../../client/request-scheduler.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { useOvSignal } from '../../client/provider.js';
-import { toError } from './fs-model.js';
+import { toError } from './fs-errors.js';
 
-type Prepared = Awaited<ReturnType<typeof resolveQueryRequest>>;
+async function resolveMonitoredRequest(
+  ...[client, options, scheduler]: Parameters<typeof resolveQueryRequest>
+) {
+  const binding = bindingOf(client);
+  const prepared = await resolveQueryRequest(
+    (client as OvClient & BoundClient)[rawClient] ?? client,
+    options,
+    scheduler,
+  );
+  return {
+    ...prepared,
+    client: binding ? bindClient(prepared.client, binding) : prepared.client,
+  };
+}
+type Prepared = Awaited<ReturnType<typeof resolveMonitoredRequest>>;
 export function useQueryScope(
   client: OvClient | null,
   options?: OvRequestOptions,
+  target?: Parameters<typeof beginWorkflow>[1],
 ) {
   const queryClient = useOvQueryClient();
   const inheritedSignal = useOvSignal();
@@ -31,7 +53,6 @@ export function useQueryScope(
   const aborted = useSyncExternalStore(
     subscribeSignal,
     () => callerSignal?.aborted ?? false,
-    () => false,
   );
   const scheduler = schedulerFor(queryClient);
   const input = useMemo(
@@ -82,12 +103,31 @@ export function useQueryScope(
     retryScope.current = () => {};
     if (!client) return;
     let active = true;
-    const resolve = () => {
-      void resolveQueryRequest(client, input.options, scheduler).then(
+    const resolve = (retry = false) => {
+      const binding = bindingOf(client);
+      const epoch = binding?.controller.epoch;
+      const started = binding?.controller.options ? now() : undefined;
+      void resolveMonitoredRequest(client, input.options, scheduler).then(
         (prepared) => {
           if (active) accept(prepared);
         },
         (error) => {
+          const cause = toError(error);
+          if (
+            active &&
+            target &&
+            started !== undefined &&
+            binding?.controller.epoch === epoch &&
+            (retry ||
+              state?.input !== input ||
+              state.error?.message !== cause.message)
+          ) {
+            const operation = beginWorkflow(client, target, callerSignal, {
+              retryError: retry ? state?.error : undefined,
+            });
+            operation?.span.timing(started, now(), Date.now());
+            operation?.fail(cause, 'configuration', callerSignal);
+          }
           if (active)
             setState((previous) =>
               previous?.input === input &&
@@ -98,7 +138,7 @@ export function useQueryScope(
         },
       );
     };
-    retryScope.current = resolve;
+    retryScope.current = () => resolve(true);
     resolve();
     return () => {
       active = false;
@@ -112,7 +152,7 @@ export function useQueryScope(
         ...prepared,
         queryClient,
         async current(signal: AbortSignal) {
-          const latest = await resolveQueryRequest(
+          const latest = await resolveMonitoredRequest(
             input.client!,
             input.options,
             scheduler,

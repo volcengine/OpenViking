@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { act, createElement as h, StrictMode } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
 import { OpenVikingProvider } from '@openviking/react/client';
 import { FileTree } from '@openviking/react/components/file-tree';
 import { mount } from './helpers/module-dom.mjs';
@@ -21,7 +20,7 @@ const view = (
 const click = async (container) =>
   act(async () => container.querySelector('[role="treeitem"]').click());
 
-test('default-off and explicit false do not initialize observers or operation IDs, including SSR', async () => {
+test('default-off and explicit false do not initialize observers or operation IDs', async () => {
   let observers = 0,
     identifiers = 0;
   const originalId = Object.getOwnPropertyDescriptor(crypto, 'randomUUID');
@@ -48,7 +47,6 @@ test('default-off and explicit false do not initialize observers or operation ID
   };
   let calls = 0;
   const onEvent = () => calls++;
-  assert.match(renderToStaticMarkup(view({ onEvent })), /secret-name/);
   const mounted = await mount(view(undefined));
   try {
     await click(mounted.container);

@@ -1,5 +1,5 @@
 /** Arco Design Notification top-right stack (MIT); see LICENSE.arco-design. */
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { TransitionGroup, CSSTransition } from 'react-transition-group';
 import { useLocale } from '../../locale-context.js';
@@ -9,12 +9,6 @@ import { Notice } from './notice.js';
 import type { NotificationItem, NotificationOptions } from './types.js';
 import enUS from './locales/en-US.js';
 import zhCN from './locales/zh-CN.js';
-
-// React's server/hydration snapshot keeps portals out of server rendering,
-// including server renderers that run with browser globals present.
-const subscribeToClient = () => () => {};
-const clientSnapshot = () => true;
-const serverSnapshot = () => false;
 
 interface Props extends NotificationOptions {
   notices: NotificationItem[];
@@ -29,11 +23,6 @@ export function Notification({
 }: Props) {
   const locale = useLocale(localeProp);
   const text = resolveLocale({ 'en-US': enUS, 'zh-CN': zhCN }, locale, labels);
-  const isClient = useSyncExternalStore(
-    subscribeToClient,
-    clientSnapshot,
-    serverSnapshot,
-  );
   const anchor = useRef<HTMLSpanElement>(null);
   const [surface, setSurface] = useState<HTMLDivElement | null>(null);
   usePortalTheme(Boolean(surface), anchor, surface);
@@ -50,36 +39,34 @@ export function Notification({
   return (
     <>
       <span ref={anchor} hidden />
-      {!isClient || typeof document === 'undefined'
-        ? null
-        : createPortal(
-            <div
-              ref={setSurface}
-              className="ov-notification-stack"
-              popover="manual"
-              role="region"
-              aria-label={text.region}
-              lang={locale}
-            >
-              <div
-                className="ov-notification-stack__list"
-                aria-live="polite"
-                aria-relevant="additions text"
-              >
-                <TransitionGroup component={null}>
-                  {notices.map((notice) => (
-                    <NotificationTransition
-                      key={notice.id}
-                      notice={notice}
-                      closeLabel={text.close}
-                      onRemove={onRemove}
-                    />
-                  ))}
-                </TransitionGroup>
-              </div>
-            </div>,
-            document.body,
-          )}
+      {createPortal(
+        <div
+          ref={setSurface}
+          className="ov-notification-stack"
+          popover="manual"
+          role="region"
+          aria-label={text.region}
+          lang={locale}
+        >
+          <div
+            className="ov-notification-stack__list"
+            aria-live="polite"
+            aria-relevant="additions text"
+          >
+            <TransitionGroup component={null}>
+              {notices.map((notice) => (
+                <NotificationTransition
+                  key={notice.id}
+                  notice={notice}
+                  closeLabel={text.close}
+                  onRemove={onRemove}
+                />
+              ))}
+            </TransitionGroup>
+          </div>
+        </div>,
+        document.body,
+      )}
     </>
   );
 }

@@ -1,6 +1,8 @@
+import { bindingOf } from '../../shared/monitoring/client.js';
+import { workflowsForData } from '../../shared/monitoring/workflow.js';
 import { InfiniteQueryObserver, type InfiniteData } from '@tanstack/query-core';
 import type { DirState } from './fs-model.js';
-import { toError } from './fs-model.js';
+import { toError } from './fs-errors.js';
 import { directoryOptions, type DirectoryPage } from './directory-query.js';
 import type { QueryRequest } from './use-query-scope.js';
 
@@ -16,7 +18,12 @@ type Observer = InfiniteQueryObserver<
 export class DirectoryQueries {
   private observers = new Map<
     string,
-    { observer: Observer; unsubscribe?: () => void; paused?: boolean }
+    {
+      observer: Observer;
+      unsubscribe?: () => void;
+      paused?: boolean;
+      retryCause?: WeakRef<Error>;
+    }
   >();
   private listeners = new Set<() => void>();
   private snapshot: Record<string, DirState> = {};
@@ -40,6 +47,11 @@ export class DirectoryQueries {
         return [
           uri,
           {
+            monitoring: workflowsForData(
+              this.request.client,
+              pages,
+              'file_browser_directory_load',
+            ),
             ready: result.isFetched,
             entries: [...entries.values()],
             hasMore: result.hasNextPage,
@@ -58,7 +70,11 @@ export class DirectoryQueries {
       item = {
         observer: new InfiniteQueryObserver(
           this.request.queryClient,
-          directoryOptions(this.request, uri),
+          directoryOptions(this.request, uri, () => {
+            const error = item?.retryCause?.deref();
+            if (item) item.retryCause = undefined;
+            return error;
+          }),
         ),
       };
       this.observers.set(uri, item);
@@ -99,6 +115,12 @@ export class DirectoryQueries {
     signal?.throwIfAborted();
     const observer = this.observe(uri);
     const item = this.observers.get(uri)!;
+    const binding = bindingOf(this.request.client);
+    const error = observer.getCurrentResult().error;
+    item.retryCause =
+      error && binding?.controller.options && binding.active()
+        ? new WeakRef(error)
+        : undefined;
     let rejectAbort: ((reason: unknown) => void) | undefined;
     const aborted = new Promise<never>((_, reject) => {
       rejectAbort = reject;

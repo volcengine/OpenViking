@@ -16,8 +16,6 @@ export function getCommandConsoleSafeHref(
 
 /** 复制文本到剪贴板；不可用时返回 `false`，不抛出。 */
 export async function copyCommandConsoleText(text: string): Promise<boolean> {
-  if (typeof navigator === 'undefined') return false;
-
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text);

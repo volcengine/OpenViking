@@ -1,3 +1,5 @@
+import { tagData } from '../../shared/monitoring/data.js';
+import { useDirectoryMonitoring } from './use-directory-monitoring.js';
 import {
   useEffect,
   useMemo,
@@ -32,7 +34,7 @@ export function useFsTree({
     aborted,
     error: identityError,
     retry: retryScope,
-  } = useQueryScope(client, requestOptions);
+  } = useQueryScope(client, requestOptions, 'file_browser_directory_load');
   const session = useMemo(
     () => (request ? new DirectoryQueries(request, rootUri) : undefined),
     [request, rootUri],
@@ -40,7 +42,6 @@ export function useFsTree({
   const dirs = useSyncExternalStore(
     aborted ? subscribeEmpty : (session?.subscribe ?? subscribeEmpty),
     session?.getSnapshot ?? emptySnapshot,
-    emptySnapshot,
   );
   const activeSession = useRef(session);
   // Publish committed query subscriptions for stable event callbacks. Abandoned
@@ -178,7 +179,17 @@ export function useFsTree({
     () => flattenTree(rootUri, 0, dirs, expanded),
     [rootUri, dirs, expanded],
   );
+  const monitoring = useDirectoryMonitoring(
+    dirs,
+    dirs[rootUri]?.ready ?? false,
+  );
+  tagData(
+    monitoring[0]?.span.binding,
+    rows,
+    monitoring.map((operation) => operation.span),
+  );
   return {
+    monitoring,
     rows,
     ...useTreeMetadata(rootUri, dirs, identity.identifyUri),
     isReady: dirs[rootUri]?.ready ?? false,

@@ -1,3 +1,4 @@
+import { withMonitoring } from '../../shared/monitoring/with-monitoring.js';
 import { useTrack } from '../../shared/analytics/use-track.js';
 import {
   useExposure,
@@ -34,7 +35,7 @@ export type {
  * agentConnect enables the right-side drawer; callbacks also support host-owned flows.
  * Nothing renders without visible actions; hosts can wrap the default import button.
  */
-export function FileBrowserActionBar({
+function FileBrowserActionBarView({
   locale: localeProp,
   agentConnect,
   agentConnectOpen,
@@ -166,3 +167,8 @@ export function FileBrowserActionBar({
     </div>
   );
 }
+
+export const FileBrowserActionBar = withMonitoring(
+  FileBrowserActionBarView,
+  'FileBrowserActionBar',
+);

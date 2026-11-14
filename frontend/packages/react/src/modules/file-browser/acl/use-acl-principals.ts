@@ -1,4 +1,4 @@
-import { toError } from '../fs-model.js';
+import { toError } from '../fs-errors.js';
 import { useEffect, useState } from 'react';
 import type { OvIdentityValue } from '../../../client/types.js';
 import type {

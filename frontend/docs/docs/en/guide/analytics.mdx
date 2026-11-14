@@ -72,7 +72,7 @@ Collection starts disabled. Enable it to inspect file-tree exposure, file select
 
 `*_show` and `directory_tour_start` fire when the target intersects the viewport with a positive width and height while the document is visible. Hidden elements, loading content placeholders, and background preview layers do not count. Each target reports once per display cycle. Rerenders, scrolling out and back in, or returning to the tab do not repeat an exposure. Reopening a dialog, advancing a tour step, or switching preview targets begins a new cycle.
 
-Exposure uses `IntersectionObserver` and does not detect occlusion by other elements. Environments without this API skip automatic exposure. Server rendering emits no events. Re-enabling analytics does not replay previous interactions; a currently visible target that has never reported may emit its first exposure.
+Exposure uses `IntersectionObserver` and does not detect occlusion by other elements. Environments without this API skip automatic exposure. Re-enabling analytics does not replay previous interactions; a currently visible target that has never reported may emit its first exposure.
 
 ### Common fields and collected data
 

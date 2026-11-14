@@ -21,10 +21,7 @@ export interface FilePreviewBreadcrumbProps {
 
 /** 判断是否应跳过动画：用户要求减少动效时不做位移。 */
 function prefersReducedMotion() {
-  return (
-    typeof window !== 'undefined' &&
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  );
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
 /**

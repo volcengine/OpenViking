@@ -1,9 +1,10 @@
+import { withMonitoring } from '../../shared/monitoring/with-monitoring.js';
 import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import { useRenderErrors } from './labels.js';
 import { ExperienceDashboardContent } from './experience-dashboard-content.js';
 import type { ExperienceDashboardProps } from './types.js';
 
-export function ExperienceDashboard(props: ExperienceDashboardProps) {
+function ExperienceDashboardView(props: ExperienceDashboardProps) {
   const { slots, ...contentProps } = props;
   return (
     <ErrorBoundary
@@ -16,3 +17,8 @@ export function ExperienceDashboard(props: ExperienceDashboardProps) {
     </ErrorBoundary>
   );
 }
+
+export const ExperienceDashboard = withMonitoring(
+  ExperienceDashboardView,
+  'ExperienceDashboard',
+);

@@ -1,3 +1,4 @@
+import type { Workflow } from '../../shared/monitoring/workflow.js';
 import type {
   FileTreeEntryRow,
   FileTreeRow,
@@ -6,6 +7,7 @@ import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type { useTreeMetadata } from './fs-directories.js';
 
 export interface FsTreeState extends ReturnType<typeof useTreeMetadata> {
+  monitoring: readonly Workflow<'file_browser_directory_load'>[];
   rows: readonly FileTreeRow[];
   isReady: boolean;
   error: Error | null;

@@ -1,3 +1,4 @@
+import '../packages/react/test/helpers/browser-env.mjs';
 import assert from 'node:assert/strict';
 import { access, readFile } from 'node:fs/promises';
 import test from 'node:test';
@@ -20,7 +21,7 @@ test('all public package targets exist in the build', async () => {
   }
 });
 
-test('JavaScript entries resolve and import without browser globals', async () => {
+test('JavaScript entries expose their API in the browser environment', async () => {
   for (const [entry, target] of Object.entries(manifest.exports)) {
     if (typeof target === 'string') continue;
     const specifier = entry.replace(/^\./, manifest.name);

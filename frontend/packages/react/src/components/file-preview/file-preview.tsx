@@ -1,3 +1,4 @@
+import { withMonitoring } from '../../shared/monitoring/with-monitoring.js';
 import { useRenderErrors } from './file-preview-labels.js';
 import { forwardRef } from 'react';
 import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
@@ -8,7 +9,7 @@ import type {
   FilePreviewProps,
 } from './types.js';
 
-export const FilePreview: FilePreviewComponent = forwardRef<
+const FilePreviewView: FilePreviewComponent = forwardRef<
   FilePreviewHandle,
   FilePreviewProps
 >(function FilePreview(props, ref) {
@@ -24,3 +25,5 @@ export const FilePreview: FilePreviewComponent = forwardRef<
     </ErrorBoundary>
   );
 });
+
+export const FilePreview = withMonitoring(FilePreviewView, 'FilePreview');

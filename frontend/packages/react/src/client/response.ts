@@ -99,8 +99,14 @@ export function toClientError(
  * The native API reports business failures as `status: 'error'` inside HTTP 200;
  * throw when that happens.
  */
-export function throwIfErrorEnvelope(response: Response, body: unknown): void {
+export function throwIfErrorEnvelope(
+  response: Response,
+  body: unknown,
+  observe?: (error: OvClientError) => void,
+): void {
   const envelope = readEnvelope(body);
   if (envelope.status !== 'error') return;
-  throw toClientError(response, body, 'UNKNOWN');
+  const error = toClientError(response, body, 'UNKNOWN');
+  observe?.(error);
+  throw error;
 }

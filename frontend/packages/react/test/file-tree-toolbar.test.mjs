@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { renderMarkup } from './helpers/csr-render.mjs';
 import { FileTree } from '@openviking/react/components/file-tree';
 
 const render = (props = {}) =>
-  renderToStaticMarkup(
+  renderMarkup(
     createElement(FileTree, { rows: [], locale: 'en-US', ...props }),
   );
 const operations = { search: async () => {}, refresh: async () => {} };

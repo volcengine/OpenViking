@@ -1,3 +1,4 @@
+import { levelToFileTab } from './file-preview-source.js';
 import type { Locale } from '../../shared/locale.js';
 import { useState } from 'react';
 
@@ -19,7 +20,6 @@ import type { useFilePreviewEditing } from './use-file-preview-editing.js';
 import { useLevelIndicator } from './use-level-indicator.js';
 import type {
   FilePreviewDirectoryTab,
-  FilePreviewFileTab,
   FilePreviewLabels,
   FilePreviewViewMode,
   FilePreviewToolbarOptions,
@@ -57,22 +57,6 @@ export interface FilePreviewDirectoryBodyProps {
  * 把某一级摘要包装成文件页签的形状，正文渲染因此只有一条路径。
  * Wraps one level as a file tab so the body has exactly one rendering path.
  */
-function levelToFileTab(
-  tab: FilePreviewDirectoryTab,
-  key: string,
-): FilePreviewFileTab | undefined {
-  const level = tab.levels.find((candidate) => candidate.key === key);
-  if (!level) return undefined;
-  return {
-    kind: 'file',
-    key: `${tab.key}::${level.key}`,
-    source: level.source,
-    resources: level.resources ?? tab.resources,
-    resolveImage: tab.resolveImage,
-    operations: tab.operations,
-    slots: tab.slots,
-  };
-}
 
 export function FilePreviewDirectoryBody({
   toolbar,
@@ -216,13 +200,15 @@ export function FilePreviewDirectoryBody({
         <FilePreviewTransition
           identity={fileTab.key}
           tab={fileTab}
+          targetKey={tab.key}
           needsLoad={needsAsyncLoad(fileTab.source)}
           text={text}
         >
-          {({ tab: layerTab, onProbeStatus, reports, onLoadingChange }) => (
+          {(layer) => (
             <FilePreviewBody
-              fileTab={layerTab}
-              onLoadingChange={onLoadingChange}
+              fileTab={layer.tab}
+              monitoringTargetKey={layer.targetKey}
+              onLoadingChange={layer.onLoadingChange}
               text={text}
               locale={locale}
               viewMode={viewMode}
@@ -231,8 +217,10 @@ export function FilePreviewDirectoryBody({
               onHandleChange={onHandleChange}
               onViewModesChange={onViewModesChange}
               onCancelEditing={onCancelEditing}
-              onStateChange={(state) => onProbeStatus(probeStatusOf(state))}
-              reports={reports}
+              onStateChange={(state) =>
+                layer.onProbeStatus(probeStatusOf(state))
+              }
+              reports={layer.reports}
             />
           )}
         </FilePreviewTransition>

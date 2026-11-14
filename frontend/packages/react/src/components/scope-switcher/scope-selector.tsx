@@ -1,3 +1,4 @@
+import { withMonitoring } from '../../shared/monitoring/with-monitoring.js';
 import { useTrack } from '../../shared/analytics/use-track.js';
 import { useLocale } from '../../shared/locale-context.js';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
@@ -7,7 +8,7 @@ import { ScopePanel } from './scope-panel.js';
 import { usePanelPosition } from './use-panel-position.js';
 import type { ScopeSelectorProps } from './types.js';
 
-export function ScopeSelector(props: ScopeSelectorProps) {
+function ScopeSelectorView(props: ScopeSelectorProps) {
   const track = useTrack();
   const { identity, trigger: triggerContent } = props;
   const locale = useLocale(props.locale);
@@ -187,3 +188,5 @@ export function ScopeSelector(props: ScopeSelectorProps) {
     </div>
   );
 }
+
+export const ScopeSelector = withMonitoring(ScopeSelectorView, 'ScopeSelector');

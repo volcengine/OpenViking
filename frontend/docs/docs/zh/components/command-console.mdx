@@ -77,7 +77,7 @@ import '@openviking/react/components/command-console/style.css';
 | tasks       | 后台任务快照，组件仅展示传入的状态                                                              | `readonly CommandConsoleTask[]`                    | -      |
 | content     | 执行结果；带后台任务的记录在运行中也显示它，省略时按状态显示骨架或空结果                        | `CommandConsoleRecordContent`                      | -      |
 | createdAtMs | 提交时间，Unix 毫秒时间戳，显示在命令下方                                                       | `number`                                           | -      |
-| createdAt   | 没有有效 `createdAtMs` 时显示的文本，也用于服务端渲染；不会被解析为日期                         | `string`                                           | -      |
+| createdAt   | 没有有效 `createdAtMs` 时显示的文本；不会被解析为日期                                           | `string`                                           | -      |
 
 `CommandConsoleTask` 的字段与 [ConsoleTaskSnapshot](../modules/console#consoletasksnapshot) 一致。
 
@@ -321,7 +321,7 @@ import '@openviking/react/components/command-console/style.css';
 - Markdown 文本里的 `http(s)` 链接和地址在新标签页打开，不触发 `onOpenUri`；`viking://` 的会触发。
 - JSON 和 Markdown 代码块带复制按钮，复制成功后触发 `onCopy`；浏览器拒绝写入剪贴板时不显示成功提示，也不触发 `onCopy`。
 - `createdAtMs` 不足 1 分钟显示「刚刚」，不足 1 小时显示整分钟数，不足 24 小时显示整小时数，之后显示本地时区的 `YYYY-MM-DD HH:mm`；晚于当前时间的时间戳显示「刚刚」。文案可用 `labels.justNow`、`labels.formatMinutesAgo`、`labels.formatHoursAgo` 覆盖。
-- 服务端渲染和 hydration 首屏使用 `createdAt`，没有则不显示时间；客户端接管后改用 `createdAtMs`。时间只在渲染时重新计算，不会定时刷新。
+- 渲染时优先按有效的 `createdAtMs` 格式化时间，缺失或无效时使用 `createdAt`。时间只在渲染时重新计算，不会定时刷新。
 - 颜色取自 `--ov-ui-color-*` 主题变量，暗色模式跟随 `<html>` 上的 `.dark` 类，详见[快速开始](../guide/getting-started)。
 - 类型从 `@openviking/react/components/command-console` 导出，包根入口只导出组件和 `CommandConsoleProps`。
 

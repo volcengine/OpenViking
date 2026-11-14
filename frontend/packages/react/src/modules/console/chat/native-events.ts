@@ -1,3 +1,4 @@
+import { markFault } from '../../../shared/monitoring/fault.js';
 import { readTaskReferences } from '../../../shared/task-tracking/read-references.js';
 import type { OvStreamEvent } from '../../../client/types.js';
 import { OvClientError } from '../../../client/errors.js';
@@ -42,10 +43,10 @@ export async function* nativeChatEvents(
       typeof data === 'object' &&
       'error' in data
     ) {
-      throw new Error(textOf(data.error));
+      throw markFault(new Error(textOf(data.error)), 'business');
     }
     const text = textOf(data);
-    if (event.event === 'error') throw new Error(text);
+    if (event.event === 'error') throw markFault(new Error(text), 'business');
     if (event.event === 'reasoning_delta' || event.event === 'reasoning') {
       if (event.event === 'reasoning' && reasoningHadDelta) continue;
       if (event.event === 'reasoning_delta') reasoningHadDelta = true;

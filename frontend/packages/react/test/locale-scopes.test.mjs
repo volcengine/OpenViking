@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { renderMarkup } from './helpers/csr-render.mjs';
 import { OpenVikingProvider } from '@openviking/react/client';
 import { FileTree } from '@openviking/react';
 import {
@@ -16,7 +16,7 @@ import { Console } from '@openviking/react/modules/console';
 import { ScopeCascade } from '@openviking/react/modules/scope-cascade';
 
 const tree = (locale) => h(FileTree, { rows: [], locale });
-const render = (node) => renderToStaticMarkup(node);
+const render = (node) => renderMarkup(node);
 
 test('nested Providers inherit omitted locale and isolate explicit overrides', () => {
   const html = render(

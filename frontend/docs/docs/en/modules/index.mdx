@@ -49,7 +49,7 @@ import '@openviking/react/modules/style.css';
 
 Without a Provider, FileBrowser sends no requests and its tree stays in the loading state, while Console uses a same-origin default client that carries no identity.
 
-ScopeCascade does not use the shared client, has no `requestOptions` and does not need a Provider; inside a Provider it can inherit language and use [analytics](../guide/analytics).
+ScopeCascade does not use the shared client, has no `requestOptions` and does not need a Provider; inside a Provider it can inherit language and use [analytics](../guide/analytics) and [frontend monitoring](../guide/monitoring).
 
 ### OpenVikingProvider
 
@@ -67,6 +67,7 @@ An omitted field inherits from the outer Provider; in the outermost Provider it 
 | fetch              | Replaces the global `fetch`, for tests, tracing or environments without a global `fetch`                                                                                       | `typeof fetch`                                | Global `fetch`                   |
 | locale             | Interface language of the subtree, see [Internationalization](../guide/i18n)                                                                                                   | `'zh-CN' \| 'en-US'`                          | Inherited, otherwise `'en-US'`   |
 | analytics          | Interaction and exposure configuration; see [Analytics](../guide/analytics)                                                                                                    | `OpenVikingAnalyticsOptions \| false`         | Inherited, disabled at the root  |
+| monitoring         | Frontend quality and failure configuration; see [monitoring](../guide/monitoring)                                                                                              | `OpenVikingMonitoringOptions \| false`        | Inherited; disabled at root      |
 | queryClient        | Reuses a host TanStack Query v5 client; inherits or creates an internal client when omitted                                                                                    | `QueryClient`                                 | Stable for the Provider lifetime |
 | requestConcurrency | Positive integer limits per API path; merges with inherited settings                                                                                                           | `Partial<Record<OvPath, number>>`             | `{ [OV_PATHS.fsLs]: 3 }`         |
 | children           | The subtree that uses this request configuration                                                                                                                               | `ReactNode`                                   | -                                |

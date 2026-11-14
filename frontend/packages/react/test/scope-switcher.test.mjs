@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { renderMarkup } from './helpers/csr-render.mjs';
 import {
   ScopeSwitcher,
   ScopeSelector,
@@ -19,7 +19,7 @@ const data = {
 const state = { visible: true };
 /** Renders one selectable level, with any group overridden per test. */
 const render = ({ data: d, state: st, actions, slots } = {}) =>
-  renderToStaticMarkup(
+  renderMarkup(
     createElement(
       ScopeSwitcher,
       null,
@@ -35,7 +35,7 @@ const render = ({ data: d, state: st, actions, slots } = {}) =>
     ),
   );
 
-test('renders selected and disabled options without browser globals or API dependencies', () => {
+test('renders selected and disabled options without API dependencies', () => {
   const html = render();
   assert.match(html, /role="option" aria-selected="true"/);
   assert.match(html, /aria-disabled="true"[^>]*>.*Two/);
@@ -139,7 +139,7 @@ test('busy disables all options; disabled and fixed levels have no panel', () =>
     2,
   );
   assert.doesNotMatch(render({ state: { disabled: true } }), /role="dialog"/);
-  const html = renderToStaticMarkup(
+  const html = renderMarkup(
     createElement(
       ScopeSwitcher,
       null,

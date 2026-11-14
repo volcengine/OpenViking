@@ -1,3 +1,5 @@
+import { useMonitoringBinding } from '../monitoring/context.js';
+import type { MonitoringSpan } from '../monitoring/trace/span.js';
 import {
   createContext,
   useContext,
@@ -51,6 +53,7 @@ export function useTaskTracking({
   taskService?: TaskService;
 }) {
   const inherited = useContext(Context);
+  const monitoring = useMonitoringBinding();
   const inheritedClient = useOvClient();
   const inheritedSignal = useOvSignal();
   const [fallbackClient] = useState(() => createOvClient());
@@ -81,6 +84,7 @@ export function useTaskTracking({
         service,
       ],
       service ?? createNativeTaskService(client, options),
+      monitoring,
     );
   }, [
     tracker,
@@ -93,6 +97,7 @@ export function useTaskTracking({
     signal,
     scopeKey,
     service,
+    monitoring,
   ]);
   // Effect necessity: standalone hooks own scheduler timers/queries; Console
   // supplies their owner otherwise. Rendering cannot start this external work.
@@ -121,16 +126,12 @@ export function useTaskTracking({
       stop();
     };
   }, [tracker, source, signal]);
-  const tasks = useSyncExternalStore(
-    tracker.subscribe,
-    tracker.getSnapshot,
-    tracker.getSnapshot,
-  );
+  const tasks = useSyncExternalStore(tracker.subscribe, tracker.getSnapshot);
   const track = useMemo(
-    () => (reference: TaskReference) =>
+    () => (reference: TaskReference, origin?: MonitoringSpan) =>
       signal?.aborted
         ? `${source.key}:${reference.id}`
-        : tracker.track(reference, source),
+        : tracker.track(reference, source, origin),
     [tracker, source, signal],
   );
   return { tracker, source, tasks, track };

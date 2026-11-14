@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { renderMarkup } from './helpers/csr-render.mjs';
 import { OpenVikingProvider } from '@openviking/react/client';
 import { FileTree } from '@openviking/react/components/file-tree';
 import { FileBrowser } from '@openviking/react/modules/file-browser';
@@ -38,9 +38,9 @@ test('FileTree can reorder context root branches without reordering children or 
   ]);
   const renderIds = (props) =>
     Array.from(
-      renderToStaticMarkup(
-        createElement(FileTree, { rows, ...props }),
-      ).matchAll(/data-file-tree-row-id="([^"]+)"/g),
+      renderMarkup(createElement(FileTree, { rows, ...props })).matchAll(
+        /data-file-tree-row-id="([^"]+)"/g,
+      ),
       (match) => match[1],
     );
 

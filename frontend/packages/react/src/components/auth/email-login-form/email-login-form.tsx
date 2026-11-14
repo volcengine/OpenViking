@@ -1,3 +1,4 @@
+import { withMonitoring } from '../../../shared/monitoring/with-monitoring.js';
 import { useTrack } from '../../../shared/analytics/use-track.js';
 import { useExposure } from '../../../shared/analytics/use-exposure.js';
 import { useId } from 'react';
@@ -7,7 +8,7 @@ import { useAuthLabels } from '../../../shared/auth/use-auth-labels.js';
 import { useForm, validEmail } from '../../../shared/auth/use-form.js';
 import type { EmailLoginFormProps } from './types.js';
 
-export function EmailLoginForm({
+function EmailLoginFormView({
   defaultEmail = '',
   readOnlyEmail,
   forgotPassword,
@@ -63,3 +64,8 @@ export function EmailLoginForm({
     </FormFrame>
   );
 }
+
+export const EmailLoginForm = withMonitoring(
+  EmailLoginFormView,
+  'EmailLoginForm',
+);

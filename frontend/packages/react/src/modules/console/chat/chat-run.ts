@@ -1,3 +1,4 @@
+import type { ReplyObservation } from './reply-monitoring.js';
 import {
   startOperation,
   errorKind,
@@ -15,6 +16,7 @@ import type { VikingBotChatService, VikingBotChatState } from './types.js';
 export async function runChat({
   service,
   analytics,
+  monitoring,
   state,
   draft,
   undelivered,
@@ -25,6 +27,7 @@ export async function runChat({
   attach,
 }: {
   service: VikingBotChatService;
+  monitoring?: ReplyObservation;
   analytics?: import('react').RefObject<
     | import('../../../shared/analytics/reporter.js').AnalyticsReporter
     | undefined
@@ -61,6 +64,10 @@ export async function runChat({
   let complete = false;
   let interrupted = false;
   let delivered = false;
+  let renderer = false;
+  let stage:
+    | import('../../../shared/monitoring/trace/span.js').MonitoringSpan
+    | undefined;
   try {
     signal.throwIfAborted();
     if (!sessionId) {
@@ -86,15 +93,21 @@ export async function runChat({
           event.type === 'tool')
       ) {
         started = true;
+        monitoring?.first(event);
         if (operation)
           analytics?.current?.emit('viking_bot_reply_start', operation.finish);
       }
       if (!started && event.type === 'complete' && event.text) {
         started = true;
+        monitoring?.first(event);
         if (operation)
           analytics?.current?.emit('viking_bot_reply_start', operation.finish);
       }
+      renderer = true;
+      stage = monitoring?.span.child('normalize-response');
       await timeline.apply(event);
+      stage?.finish();
+      renderer = false;
       signal.throwIfAborted();
       if (event.type === 'complete' || event.type === 'interrupted') {
         complete = true;
@@ -109,6 +122,8 @@ export async function runChat({
         code: 'BOT_STREAM_TRUNCATED',
         message: 'VikingBot stream ended before a terminal event',
       });
+    renderer = true;
+    stage = monitoring?.span.child('view-commit');
     const finished = await timeline.finish();
     if (!current()) return false;
     update({
@@ -117,6 +132,8 @@ export async function runChat({
       status: 'idle',
       isSubmitting: false,
     });
+    stage?.finish();
+    monitoring?.finish(interrupted);
     if (operation)
       analytics?.current?.emit(
         interrupted ? 'viking_bot_reply_cancel' : 'viking_bot_reply_success',
@@ -125,6 +142,8 @@ export async function runChat({
     save(sessionId, finished.added);
     return !interrupted;
   } catch (error) {
+    stage?.finish(signal.aborted ? 'cancelled' : 'failed');
+    monitoring?.fail(error, renderer);
     if (!current()) return false;
     if (operation) {
       if (signal.aborted)

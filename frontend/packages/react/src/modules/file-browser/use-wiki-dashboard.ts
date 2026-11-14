@@ -82,5 +82,15 @@ export function useWikiDashboard({
       readWikiDashboard(client, uri, options),
     [uri],
   );
-  return useDashboardQuery(load, requestOptions, enabled, refreshGeneration);
+  return useDashboardQuery(
+    load,
+    requestOptions,
+    enabled,
+    refreshGeneration,
+    'file_browser_wiki_dashboard_load',
+    (value) =>
+      value.kind === 'directory'
+        ? value.data.files.length === 0
+        : value.data.conflicts.length === 0,
+  );
 }

@@ -1,5 +1,13 @@
+import {
+  beginWorkflow,
+  workflowsForData,
+  type Workflow,
+} from '../../shared/monitoring/workflow.js';
+import { tagModel } from '../../shared/monitoring/data.js';
+import { bindingOf } from '../../shared/monitoring/client.js';
+import { useWorkflowCommit } from '../../shared/monitoring/use-workflow-commit.js';
 import { QueryObserver } from '@tanstack/query-core';
-import { useMemo, useSyncExternalStore } from 'react';
+import { useMemo, useRef, useSyncExternalStore } from 'react';
 import { useAnalyticsRef } from '../../shared/analytics/context.js';
 import { startOperation, errorKind } from '../../shared/analytics/reporter.js';
 import { OV_PATHS, type OvPath } from '../../client/paths.js';
@@ -26,7 +34,13 @@ const SEARCH_PATHS: Record<SearchMode, OvPath> = {
   grep: OV_PATHS.searchGrep,
   glob: OV_PATHS.searchGlob,
 };
+type SearchTarget =
+  | 'file_browser_search_find'
+  | 'file_browser_search_query'
+  | 'file_browser_search_grep'
+  | 'file_browser_search_glob';
 export interface SearchState {
+  monitoring?: Workflow<SearchTarget>;
   result: SearchResult | null;
   loading: boolean;
   error: Error | null;
@@ -61,12 +75,17 @@ export function useFsSearch({
   requestOptions,
 }: UseFsSearchOptions): SearchState {
   const analytics = useAnalyticsRef();
+  const retryCause = useRef<WeakRef<Error> | undefined>(undefined);
   const {
     request,
     error,
     aborted,
     retry: retryScope,
-  } = useQueryScope(client, requestOptions);
+  } = useQueryScope(
+    client,
+    requestOptions,
+    `file_browser_search_${mode === 'search' ? 'query' : mode}` as SearchTarget,
+  );
   const bodyKey = JSON.stringify(
     buildSearchBody(mode, query, filters, rootUri),
   );
@@ -87,6 +106,14 @@ export function useFsSearch({
             ),
             queryFn: async ({ signal }) => {
               const current = await request.current(signal);
+              const retryError = retryCause.current?.deref();
+              retryCause.current = undefined;
+              const monitoring = beginWorkflow(
+                current.client,
+                `file_browser_search_${mode === 'search' ? 'query' : mode}` as SearchTarget,
+                signal,
+                { retryError, trigger: retryError ? 'retry' : undefined },
+              );
               const operation = analytics.current && startOperation();
               const params = () => ({
                 operation_id: operation!.operation_id,
@@ -96,7 +123,9 @@ export function useFsSearch({
               if (operation)
                 analytics.current?.emit('file_browser_search_submit', params);
               try {
-                const raw = await current.client.request({
+                const raw = await (
+                  monitoring?.client(current.client) ?? current.client
+                ).request({
                   method: 'POST',
                   path: SEARCH_PATHS[mode],
                   body: JSON.parse(bodyKey),
@@ -113,8 +142,10 @@ export function useFsSearch({
                       result_count: result.total,
                     }),
                   );
+                tagModel(bindingOf(current.client), result, monitoring?.span);
                 return result;
               } catch (cause) {
+                monitoring?.fail(cause, 'protocol', signal);
                 if (!signal.aborted && operation)
                   analytics.current?.emit('file_browser_search_fail', () => ({
                     ...params(),
@@ -139,16 +170,33 @@ export function useFsSearch({
     () => (observer ? () => observer.getCurrentResult() : emptySnapshot),
     [observer],
   );
-  const result = useSyncExternalStore(subscribe, getSnapshot, emptySnapshot);
+  const result = useSyncExternalStore(subscribe, getSnapshot);
+  const monitoring = workflowsForData(
+    request?.client ?? null,
+    [result?.data],
+    `file_browser_search_${mode === 'search' ? 'query' : mode}` as SearchTarget,
+  )[0];
+  useWorkflowCommit(
+    monitoring,
+    !!result?.data && !result.isFetching && !result.error,
+    () => ({ resultCount: result!.data!.total, hasMore: null }),
+  );
   return {
+    monitoring,
     result: result?.data ?? null,
     loading:
       !!client && !!query.trim() && !error && (!result || result.isFetching),
     error: error ?? result?.error ?? null,
     retry: () => {
       if (aborted) return;
-      if (observer) void observer.refetch({ cancelRefetch: false });
-      else retryScope();
+      if (observer) {
+        const binding = bindingOf(client);
+        retryCause.current =
+          result?.error && binding?.controller.options && binding.active()
+            ? new WeakRef(result.error)
+            : undefined;
+        void observer.refetch({ cancelRefetch: false });
+      } else retryScope();
     },
   };
 }

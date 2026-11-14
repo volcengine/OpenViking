@@ -1,8 +1,5 @@
-import { useEffect, useLayoutEffect } from 'react';
+import { useLayoutEffect } from 'react';
 import type { RefObject } from 'react';
-
-const useThemeEffect =
-  typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
 /** Keep a body portal in sync with the host's scoped public theme overrides. */
 export function usePortalTheme(
@@ -10,7 +7,7 @@ export function usePortalTheme(
   triggerRef: RefObject<HTMLElement | null>,
   surface: HTMLElement | null,
 ) {
-  useThemeEffect(() => {
+  useLayoutEffect(() => {
     const trigger = triggerRef.current;
     if (!open || !trigger || !surface) return;
     const written = new Set<string>();

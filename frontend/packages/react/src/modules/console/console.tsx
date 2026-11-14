@@ -1,3 +1,4 @@
+import { withMonitoring } from '../../shared/monitoring/with-monitoring.js';
 import { useRenderErrors } from './labels.js';
 import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import { TaskTrackingProvider } from '../../shared/task-tracking/context.js';
@@ -139,6 +140,7 @@ function ConsoleView({
             hidden={state.mode !== 'command'}
           >
             <ErrorBoundary
+              monitoringRegion="commands"
               message={renderErrors.command}
               resetKeys={[scopeKey]}
             >
@@ -164,7 +166,7 @@ function ConsoleView({
   );
 }
 
-export function Console(props: ConsoleProps) {
+function ConsoleMonitoredView(props: ConsoleProps) {
   return (
     <ErrorBoundary
       fallback={props.slots?.errorFallback}
@@ -178,3 +180,5 @@ export function Console(props: ConsoleProps) {
     </ErrorBoundary>
   );
 }
+
+export const Console = withMonitoring(ConsoleMonitoredView, 'Console');
