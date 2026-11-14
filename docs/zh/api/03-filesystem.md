@@ -27,6 +27,7 @@ API 不允许写入、追加、删除、移动或覆盖复制，也不能通过�
 | uri | str | 是 | - | Viking URI |
 | simple | bool | 否 | False | 仅返回相对路径 |
 | recursive | bool | 否 | False | 递归列出所有子目录 |
+| level_limit | int | 否 | 3 | 仅 HTTP：`recursive=true` 时的最大遍历深度 |
 | output | str | 否 | HTTP：`agent`；SDK：`original` | 输出格式：`agent` 或 `original` |
 | abs_limit | int | 否 | 256 | 返回的摘要最大长度 |
 | include_abstract | bool | 否 | 未设置 | 是否返回目录 L0 摘要。未设置时沿用旧 `output` 语义（`agent` 返回，`original` 不返回） |
@@ -140,6 +141,8 @@ fmt.Println("是否还有更多节点：", page.HasMore)
 GET /api/v1/fs/ls?uri={uri}&offset={int}&limit={int}
 ```
 
+HTTP 递归列表默认遍历三层。列出记忆根目录下的 `events/YYYY/MM/DD/<file>.md` 等更深层级时，请显式设置 `level_limit`。`has_more` 只表示指定深度内的节点分页情况，不表示超出 `level_limit` 的更深条目。
+
 ```bash
 # 基本列表
 curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/" \
@@ -149,8 +152,8 @@ curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/" \
 curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&simple=true" \
   -H "X-API-Key: your-key"
 
-# 递归列表
-curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&recursive=true" \
+# 递归列出最多十层
+curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&recursive=true&level_limit=10" \
   -H "X-API-Key: your-key"
 
 # 按全部 tags 过滤（重复 query 参数）
