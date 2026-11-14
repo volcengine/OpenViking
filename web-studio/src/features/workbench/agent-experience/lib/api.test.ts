@@ -22,15 +22,18 @@ vi.mock('#/shared/api/ov-client/index', () => ({
 
 const experiencesUri = 'viking://user/default/memories/experiences'
 const file = (name: string) => ({ name, uri: `${experiencesUri}/${name}` })
+const directory = (name: string) => ({ ...file(name), isDir: true })
 
 describe('experience listing server pagination', () => {
-  beforeEach(() => get.mockReset())
+  beforeEach(() => {
+    get.mockReset()
+  })
 
   it('requests a page beyond the old 1000 limit with one lookahead entry', async () => {
     get.mockResolvedValue([file('a.md'), file('b.md'), file('c.md')])
     const result = await fetchExperiences({
       experiencesUri,
-      page: 502,
+      offset: 1002,
       pageSize: 2,
     })
     expect(get).toHaveBeenCalledWith(
@@ -44,47 +47,82 @@ describe('experience listing server pagination', () => {
       }),
     )
     expect(result.items.map((item) => item.name)).toEqual(['a.md', 'b.md'])
-    expect(result.hasMore).toBe(true)
+    expect(result.nextOffset).toBe(1004)
     expect(result).not.toHaveProperty('total')
   })
 
   it('does not skip lookahead records between pages', async () => {
     get.mockResolvedValueOnce([file('a.md'), file('b.md'), file('c.md')])
     get.mockResolvedValueOnce([file('c.md'), file('d.md')])
-    await fetchExperiences({ experiencesUri, page: 1, pageSize: 2 })
+    const first = await fetchExperiences({
+      experiencesUri,
+      offset: 0,
+      pageSize: 2,
+    })
+    expect(first.nextOffset).toBe(2)
     const last = await fetchExperiences({
       experiencesUri,
-      page: 2,
+      offset: first.nextOffset!,
       pageSize: 2,
     })
     expect(get.mock.calls[1][0].query.offset).toBe(2)
     expect(last.items.map((item) => item.name)).toEqual(['c.md', 'd.md'])
-    expect(last.hasMore).toBe(false)
+    expect(last.nextOffset).toBeUndefined()
   })
 
-  it('applies pagination to raw entries before filtering out directories', async () => {
-    get.mockResolvedValue([
-      { ...file('folder'), isDir: true },
-      file('a.md'),
-      file('b.md'),
+  it('fills an initially empty page and resumes at the next undisplayed file', async () => {
+    const listing = [
+      ...Array.from({ length: 41 }, (_, i) => directory(`legacy-${i}.md`)),
+      ...Array.from({ length: 11 }, (_, i) => file(`experience-${i}.md`)),
+    ]
+    get.mockImplementation(({ query }) =>
+      Promise.resolve(listing.slice(query.offset, query.offset + query.limit)),
+    )
+
+    const first = await fetchExperiences({
+      experiencesUri,
+      offset: 0,
+      pageSize: 10,
+    })
+    expect(first.items.map((item) => item.name)).toEqual(
+      Array.from({ length: 10 }, (_, i) => `experience-${i}.md`),
+    )
+    expect(first.nextOffset).toBe(51)
+
+    const last = await fetchExperiences({
+      experiencesUri,
+      offset: first.nextOffset!,
+      pageSize: 10,
+    })
+    expect(last.items.map((item) => item.name)).toEqual(['experience-10.md'])
+    expect(last.nextOffset).toBeUndefined()
+    expect(get.mock.calls.map(([request]) => request.query.offset)).toEqual([
+      0, 11, 22, 33, 44, 51,
     ])
+  })
+
+  it('ends a full page when the remaining entries contain no displayable files', async () => {
+    get.mockResolvedValueOnce([file('a.md'), file('b.md'), directory('folder')])
+    get.mockResolvedValueOnce([{ name: 'missing-uri.md' }])
+
     const result = await fetchExperiences({
       experiencesUri,
-      page: 1,
+      offset: 0,
       pageSize: 2,
     })
-    expect(result.items.map((item) => item.name)).toEqual(['a.md'])
-    expect(result.hasMore).toBe(true)
+    expect(result.items.map((item) => item.name)).toEqual(['a.md', 'b.md'])
+    expect(result.nextOffset).toBeUndefined()
+    expect(get).toHaveBeenCalledTimes(2)
   })
 
   it('allows an empty later page without inventing a total', async () => {
     get.mockResolvedValue([])
     const result = await fetchExperiences({
       experiencesUri,
-      page: 3,
+      offset: 100,
       pageSize: 50,
     })
-    expect(result).toEqual({ items: [], hasMore: false, page: 3, pageSize: 50 })
+    expect(result).toEqual({ items: [] })
   })
 })
 
@@ -118,9 +156,6 @@ describe('experience search', () => {
     })
     expect(result).toEqual({
       items: [file('matching.md')],
-      hasMore: false,
-      page: 1,
-      pageSize: 1,
     })
   })
 })
