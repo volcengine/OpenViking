@@ -55,6 +55,11 @@ class MemoryConfig(BaseModel):
         default="",
         description="Custom memory templates directory. If set, templates from this directory will be loaded in addition to built-in templates",
     )
+    event_chatlog_max_chars: int = Field(
+        default=0,
+        ge=0,
+        description="Maximum characters in rendered event ChatLogs; 0 keeps the full content.",
+    )
     experimental_memory_switch: bool = Field(
         default=False,
         description=(
