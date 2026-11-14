@@ -68,6 +68,12 @@ _MD_FRAGMENT_RE = re.compile(r"^([^#?]*)([#?].*)?$")
 # Extensions whose targets become directories on ingest (see _rewrite_single_link).
 _MD_DIR_EXTS = {".md", ".markdown", ".mdown", ".mkd"}
 
+# Sentence-final punctuation for the oversized-paragraph splitter. ASCII
+# endings require trailing whitespace (so "3.14" is not a boundary); CJK
+# endings may be followed directly by the next sentence. Closing
+# quotes/brackets stay attached to the preceding sentence.
+_SENTENCE_END_RE = re.compile(r"""[.!?…]['")\]]*\s+|[。！？…]['")\]]*(?=\S)""")
+
 
 def _smart_stem(path_or_name: str | Path) -> str:
     """Get the stem of a filename, but only strip known valid extensions.
@@ -681,9 +687,7 @@ class MarkdownParser(BaseParser):
                 if table_parts:
                     parts.extend(table_parts)
                 else:
-                    parts.extend(
-                        para[i : i + max_chars].strip() for i in range(0, len(para), max_chars)
-                    )
+                    parts.extend(self._split_oversized_paragraph(para, max_chars=max_chars))
             elif current and len(current) + len(para) + 2 > max_chars:
                 parts.append(current.strip())
                 current = para
@@ -698,6 +702,65 @@ class MarkdownParser(BaseParser):
                 parts.append(tail)
 
         return parts if parts else [content]
+
+    def _split_oversized_paragraph(self, para: str, *, max_chars: int) -> List[str]:
+        """Split one oversized paragraph, preferring sentence boundaries.
+
+        Falls back to whitespace and then to fixed character offsets, so text
+        without recognizable endings (symbol runs, overlong sentences) keeps
+        the previous behavior. Sentence detection ignores punctuation inside
+        inline-code spans. Chunks are source spans: concatenating them
+        reproduces ``para`` exactly, and every chunk fits ``max_chars``.
+        """
+        code_spans = [match.span() for match in self._inline_code_pattern.finditer(para)]
+        chunks: List[str] = []
+        start = 0
+        while len(para) - start > max_chars:
+            cut = self._find_sentence_cut(para, code_spans, start, max_chars)
+            if cut is None:
+                cut = self._find_whitespace_cut(para, code_spans, start, max_chars)
+            if cut is None:
+                cut = start + max_chars
+            chunks.append(para[start:cut])
+            start = cut
+        chunks.append(para[start:])
+        return chunks
+
+    def _find_sentence_cut(
+        self,
+        para: str,
+        code_spans: List[Tuple[int, int]],
+        start: int,
+        max_chars: int,
+    ) -> Optional[int]:
+        """Return the last sentence ending that fits within the budget."""
+        cut = None
+        for match in _SENTENCE_END_RE.finditer(para, start, start + max_chars):
+            if not self._pos_in_code(match.start(), code_spans):
+                cut = match.end()
+        return cut
+
+    def _find_whitespace_cut(
+        self,
+        para: str,
+        code_spans: List[Tuple[int, int]],
+        start: int,
+        max_chars: int,
+    ) -> Optional[int]:
+        """Return the last whitespace boundary within the budget, if any."""
+        limit = start + max_chars
+        while True:
+            best = max(para.rfind(sep, start + 1, limit) for sep in (" ", "\n", "\t"))
+            if best == -1:
+                return None
+            span = next((span for span in code_spans if span[0] <= best < span[1]), None)
+            if span is None:
+                return best + 1
+            limit = span[0]
+
+    @staticmethod
+    def _pos_in_code(pos: int, code_spans: List[Tuple[int, int]]) -> bool:
+        return any(span_start <= pos < span_end for span_start, span_end in code_spans)
 
     @staticmethod
     def _is_markdown_table_row(line: str) -> bool:
