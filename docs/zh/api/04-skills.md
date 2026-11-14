@@ -101,7 +101,10 @@ OpenViking 会自动检测并将 MCP Tool 定义转换为技能格式。
 2. 描述保持不变
 3. 从 `inputSchema.properties` 中提取参数
 4. 从 `inputSchema.required` 中标记必填字段
-5. 生成 Markdown 内容
+5. 将常用的数值、字符串和数组约束添加到参数文本
+6. 生成 Markdown 内容
+
+转换结果包含 `minimum`、`maximum`、`default`、`minLength`、`maxLength`、`pattern`、`minItems`、`maxItems` 和 `uniqueItems` 约束。
 
 **转换示例**：
 
@@ -119,7 +122,10 @@ OpenViking 会自动检测并将 MCP Tool 定义转换为技能格式。
             },
             "limit": {
                 "type": "integer",
-                "description": "Max results"
+                "description": "Max results",
+                "minimum": 1,
+                "maximum": 20,
+                "default": 10
             }
         },
         "required": ["query"]
@@ -144,7 +150,7 @@ Search the web
 ## Parameters
 
 - **query** (string) (required): Search query
-- **limit** (integer) (optional): Max results
+- **limit** (integer) (optional): Max results Constraints: minimum: 1; maximum: 20; default: 10.
 
 ## Usage
 
