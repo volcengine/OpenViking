@@ -11,20 +11,35 @@ Changes in stable releases of `@openviking/react`.
 
 **Patch Changes**
 
-- Connect Console HITL question parsing, ordered answers and conversation continuation. Display and copy readable answer summaries while preserving protocol payloads for transport and storage. Support per-question field validators, control renderers and custom cards; preserve input and allow retry after failed submissions, and discard obsolete interactions when reloading or switching sessions.
-
-- Unify HITL labels, help text, error tips and invalid-control icons. Clear local errors on change, preserve drafts across Previous/Next navigation and schedule-frequency changes, and submit all steps once. Provide themed, keyboard-accessible time selection with scrolling and wheel input.
-- Export ContextPicker for controlled file and directory selection, search, single or independent multiple selection, asynchronous selection restoration and custom footer actions. Built-in directory interactions support ancestor expansion, pagination, child-directory creation, host-provided permissions and validation; custom answers can delegate selection to the host.
-- Reuse TanStack Query v5 clients through OpenVikingProvider, with per-endpoint concurrency and identity-scoped directory and search caches. Preserve rows after background refresh failures and invalidate caches after writes. The SDK supplies its default query runtime.
+- Connect Console HITL question parsing, ordered answers and conversation continuation. Display and copy readable answer summaries while preserving protocol payloads for transport and storage.
+- Support per-question field validators, control renderers and custom cards. Preserve input for retry after failed submissions and discard obsolete interactions when reloading or switching sessions.
+- Unify HITL labels, help text, error tips and invalid-control icons. Clear local errors when input values change.
+- Preserve drafts across HITL Previous/Next navigation and schedule-frequency changes, and submit all steps once.
+- Provide themed, keyboard-accessible time selection with scrolling and wheel input, preserving HH:mm values, validation and disabled states. Prevent overlapping hour and minute updates from reverting one another.
+- Standalone VikingBotInteraction no longer requires Ark Design. Import its dedicated stylesheet from `@openviking/react/components/viking-bot/interaction/style.css`.
+- HITL text requests honor single-line and multiline modes.
+- Export ContextPicker for controlled file and directory selection, search, single or independent multiple selection, asynchronous selection restoration and custom footer actions.
+- Built-in directory interactions support ancestor expansion, pagination, child-directory creation, host-provided permissions and validation. Custom answers can delegate selection to the host.
+- Reuse TanStack Query v5 clients through OpenVikingProvider, with per-endpoint concurrency and identity-scoped directory and search caches supplied by the default SDK runtime. Preserve rows after background refresh failures and invalidate caches after writes.
 - Add optional, strongly typed analytics and frontend monitoring through OpenVikingProvider, both disabled by default. Cover interactions, outcomes, viewport exposure, component and request failures, resources, streams and tasks, with instance identification, bounded traces and bilingual integration guides and event catalogues.
 - Make FileBrowser directory navigation expand and refresh its target, support root navigation and preserve pagination, expanded branches and cached children during refresh failures. Keep preview-only navigation available through `reveal: false`, and restore the initially loaded L0/L1 tab indicator.
-- Keep FileTree trailing actions visible during horizontal scrolling, add independent dashboard tooltips and row-name titles, and remove row permission badges while retaining preview ACL indicators and permission controls.
-- Let FileBrowser hosts override individual experience-dashboard requests. Show preview character counts, modification times and localized model notices. Save ordinary edits directly; create annotated snapshots from Version history.
-- Align the FileBrowser ACL picker, allow host-selected principal types and restore inheritance through supported gateway updates. Correct effective-grant attribution when inherited permissions exceed direct permissions, and preserve danger colors on delete actions.
+- Keep FileTree trailing actions visible during horizontal scrolling.
+- Add independent FileTree dashboard tooltips and row-name titles.
+- Remove FileTree row permission badges while retaining preview ACL indicators and permission controls.
+- Let FileBrowser hosts override individual experience-dashboard requests.
+- Show preview character counts, modification times and localized model notices.
+- Save ordinary file edits directly; create annotated snapshots from Version history.
+- Align the FileBrowser ACL picker, allow host-selected principal types and restore inheritance through supported gateway updates. Correct effective-grant attribution when inherited permissions exceed direct permissions.
+- Preserve theme danger colors on FileBrowser delete actions.
 - Improve advanced search with directory scopes and date ranges, retain results until the close animation ends, and preserve selected preview-tab colors on hover.
-- Support resource uploads in Console conversations, wait for completion before sending, and clear managed attachments when the chat identity or explicit session changes while preserving them when the host echoes a newly created session ID. Keep quick inputs above the composer and focus the editor when its blank area is clicked.
-- Refine conversation timelines, code blocks and session actions, improve narrow command panels, and adapt AgentConnect and ScopeSwitcher to narrow containers. Unify themed Checkbox, Radio and focus states, preserve forced-color focus visibility, and share illustrated empty and render-error states.
-- Unify operation and request errors with dismissible Notifications and local feedback with Toast. Preserve server reasons, drafts, cancellation and retries without duplicate notices. Copy full diagnostics, including available error codes, HTTP status and request IDs, and support loading feedback and notice updates.
+- Support resource uploads when the Console service provides attachment uploads, and wait for completion before sending. Cancel uploads and clear managed attachments when the chat identity, explicit session or request lifetime changes, while preserving them when the host echoes a newly created session ID.
+- Keep quick inputs above the VikingBot composer and focus the editor when its blank area is clicked.
+- Refine conversation timelines, code blocks and session actions, and improve narrow command panels.
+- Adapt AgentConnect and ScopeSwitcher to narrow containers.
+- Unify themed Checkbox, Radio and focus states, and preserve forced-color focus visibility.
+- Share illustrated empty and render-error states.
+- Unify operation and request errors with dismissible Notifications and local feedback with Toast. Preserve server reasons, drafts, cancellation and retries without duplicate notices.
+- Copy full diagnostics, including available error codes, HTTP status and request IDs, and support loading feedback and notice updates.
 
 Migration: mount components in the browser; SSR and hydration paths are no longer supported. HITL text questions now require non-blank input by default; set `required: false` for optional text. Single-question answer shapes are unchanged; multi-step answers use `steps`.
 
