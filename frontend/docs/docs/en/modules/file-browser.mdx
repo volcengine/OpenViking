@@ -34,6 +34,16 @@ Shows how the directory tree, search and preview work together, plus the Wiki an
 
 The example uses fixed data and sends no network requests. Enter `profile` in the search box for results or `error` for a failed search, and click Import resources to see the `onImportResources` event your app receives below the example.
 
+### Directory navigation
+
+Calling `openResource` automatically expands and refreshes a directory target. Page two contains an expandable directory with an extensionless file. Reveal that directory, then refresh its parent to check paging and expansion; clear the simulated failure before retrying in the tree.
+
+```tsx file="../../_demos/file-browser-navigation.tsx" preview
+
+```
+
+This is an offline simulation. The root has no tree row; revealing it scrolls its child list to the top.
+
 ### ACL permission management
 
 With `acl` on, nodes under `viking://resources/` show the current user's effective permission, and a user who can manage the node opens the grants dialog from the details of the permission tag. Switch "Current permission" to see each level, and tick "Simulate save failure" or "Simulate directory failure" to see the error states.
@@ -72,6 +82,14 @@ The example is an offline simulation and changes no real grants.
 />
 ```
 
+### Rendering failure
+
+When host content fails to render, the block shows the default fallback: an illustration, a message and a Retry display button. Pass `slots.errorFallback` to replace it.
+
+```tsx file="../../_demos/file-browser-crash.tsx" preview
+
+```
+
 ## API
 
 ### FileBrowser
@@ -100,6 +118,14 @@ The example is an offline simulation and changes no real grants.
 | locale                   | Interface language, see [Internationalization](../guide/i18n)                                                                                                                               | `'zh-CN' \| 'en-US'`                                                    | Inherited, otherwise `'en-US'` |
 | requestOptions           | Overrides the request configuration, see the [blocks overview](./)                                                                                                                          | `OvRequestOptions`                                                      | -                              |
 | className, style         | Appearance and layout; other HTML attributes are passed to the root element                                                                                                                 | HTML attributes                                                         | -                              |
+
+### FileBrowserOpenResourceOptions
+
+Navigation options passed to `FileBrowserHandle.openResource(uri, options)`.
+
+| Property | Description                                                                               | Type      | Default |
+| -------- | ----------------------------------------------------------------------------------------- | --------- | ------- |
+| reveal   | Expands ancestors and directory targets, refreshes target children and scrolls to the row | `boolean` | `true`  |
 
 ### FileBrowserPreviewActions
 
@@ -416,11 +442,20 @@ const browserRef = useRef<FileBrowserHandle>(null);
 <FileBrowser ref={browserRef} />;
 
 await browserRef.current?.openResource(resultUri, { reveal: true });
+
+// Expand the imported directory and refresh its children.
+await browserRef.current?.openResource(directoryUri);
 ```
 
 Links ending in `/.abstract.md` or `/.overview.md` open the parent directory at L0 Summary or L1 Overview, respectively. Tree navigation and `onUriChange` use the parent URI. Opening another summary link in the same directory selects its requested level; manual level switching remains available.
 
-Reveal defaults to `true`; `{ reveal: false }` only requests a preview and resolves to `true` once the request is issued. Ordinary `uri` prop changes do not expand or scroll the tree. In controlled mode, update `uri` in `onUriChange` to accept the command. The promise resolves to `true` after the selected row has scrolled, or `false` when the target is missing, inaccessible, outside `rootUri`, superseded, or the component unmounts. The root itself has no tree row and returns `false` while its preview still opens. Directory listing or required home alias lookup failures reject; catch them to display host feedback. An explicitly unsupported alias lookup falls back to matching the original URI spelling. Caller cancellation resolves to `false`. The promise does not wait for preview content to finish loading. Built-in search uses the same navigation entry.
+Reveal defaults to `true`; `{ reveal: false }` only requests a preview and resolves to `true` once the request is issued. Ordinary `uri` prop changes do not expand or scroll the tree. In controlled mode, update `uri` in `onUriChange` to accept the command. The promise resolves to `true` after the selected row has scrolled, or `false` when the target is missing, inaccessible, outside `rootUri`, superseded, or the component unmounts.
+
+Directory targets automatically expand and refresh their children; file targets only expand their ancestors and never request children. Refresh keeps the old list visible and replaces it atomically after reloading the loaded range. A previously exhausted listing is reloaded through its new last page. If expanded child directories move beyond the loaded range, loading continues until they are found or the listing ends. Other directories keep their cached data and expansion state. Entries confirmed deleted by the refreshed listing are removed. A failed child refresh retains the old list and selection, with the existing directory error row and retry action; it does not turn successful navigation into failure.
+
+The root has no tree row. Revealing it refreshes its children and, once the host accepts selection, scrolls its tree container to the top and returns `true`. No child is selected on its behalf and no synthetic root row is added.
+
+Directory listings needed to locate the target, or required home alias lookups, reject on failure; catch them to display host feedback. An explicitly unsupported alias lookup falls back to matching the original URI spelling. Caller cancellation resolves to `false`. The promise waits for navigation and the requested child refresh, but not for preview content to finish loading. Built-in search uses the same navigation entry, so directory results also expand automatically. Your app supplies the URI; task display names are never appended to file paths.
 
 ### Search
 

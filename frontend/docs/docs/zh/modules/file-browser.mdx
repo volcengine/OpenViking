@@ -34,6 +34,16 @@ import '@openviking/react/modules/file-browser/style.css';
 
 示例使用固定数据，不访问网络。在搜索框输入 `profile` 查看搜索结果，输入 `error` 查看搜索失败；点击「导入资源」，底部会显示宿主收到的 `onImportResources` 事件。
 
+### 目录定位
+
+调用 `openResource` 定位时自动展开并刷新目标目录；第二页包含一个可展开目录和无扩展名文件。先定位跨页目录，再刷新其父目录，可检查分页与展开状态；模拟失败后取消勾选，使用树内重试。
+
+```tsx file="../../_demos/file-browser-navigation.tsx" preview
+
+```
+
+示例为离线模拟，不访问真实服务。根目录没有树行，定位后滚动到子项列表顶部。
+
 ### ACL 权限管理
 
 开启 `acl` 后，`viking://resources/` 下的节点显示当前用户的有效权限，权限为「可管理」时可以在权限标签的详情里打开授权弹窗。切换「当前权限」查看不同权限下的界面，勾选「模拟保存失败」或「模拟成员加载失败」查看失败状态。
@@ -72,6 +82,14 @@ import '@openviking/react/modules/file-browser/style.css';
 />
 ```
 
+### 渲染失败
+
+宿主传入的内容渲染出错时，区块显示默认兜底：插画、提示和「重试显示」按钮。需要替换展示时传入 `slots.errorFallback`。
+
+```tsx file="../../_demos/file-browser-crash.tsx" preview
+
+```
+
 ## API
 
 ### FileBrowser
@@ -100,6 +118,14 @@ import '@openviking/react/modules/file-browser/style.css';
 | locale                   | 界面语言，规则见[国际化](../guide/i18n)                                                                            | `'zh-CN' \| 'en-US'`                                                    | 继承上级，默认 `'en-US'` |
 | requestOptions           | 覆盖请求配置，规则见[区块概览](./)                                                                                 | `OvRequestOptions`                                                      | -                        |
 | className、style         | 外观与布局，其余 HTML 属性透传到根元素                                                                             | HTML 属性                                                               | -                        |
+
+### FileBrowserOpenResourceOptions
+
+传给 `FileBrowserHandle.openResource(uri, options)` 的定位选项。
+
+| 参数   | 说明                                       | 类型      | 默认值 |
+| ------ | ------------------------------------------ | --------- | ------ |
+| reveal | 展开祖先和目标目录、刷新目标子项并滚动定位 | `boolean` | `true` |
 
 ### FileBrowserPreviewActions
 
@@ -416,11 +442,20 @@ const browserRef = useRef<FileBrowserHandle>(null);
 <FileBrowser ref={browserRef} />;
 
 await browserRef.current?.openResource(resultUri, { reveal: true });
+
+// 导入完成后展开目标目录，并刷新其子项。
+await browserRef.current?.openResource(directoryUri);
 ```
 
 传入以 `/.abstract.md` 或 `/.overview.md` 结尾的链接时，模块打开父目录并分别切换到 L0 摘要或 L1 总览；树定位与 `onUriChange` 使用父目录 URI。同一目录内重复打开链接也会切换到指定层级，之后仍可手动切换。
 
-`reveal` 默认 `true`；传 `{ reveal: false }` 只发出打开预览的请求，发出后返回 `true`。普通 `uri` 属性变化不会展开或滚动目录树。受控模式需要宿主在 `onUriChange` 中更新 `uri` 接受打开意图。目标行选中并滚动后 Promise 返回 `true`；目标不存在、不可访问、不在 `rootUri` 下、被后续操作替代或组件卸载时返回 `false`。根目录本身没有树行，打开其预览后返回 `false`。目录列表请求或必要的当前用户别名解析失败会 reject，宿主可捕获并展示提示。服务端明确不支持别名解析时，按原 URI 写法匹配。调用方主动取消时返回 `false`。Promise 不等待预览正文加载完成。内置搜索复用同一导航入口。
+`reveal` 默认 `true`；传 `{ reveal: false }` 只发出打开预览的请求，发出后返回 `true`。普通 `uri` 属性变化不会展开或滚动目录树。受控模式需要宿主在 `onUriChange` 中更新 `uri` 接受打开意图。目标行选中并滚动后 Promise 返回 `true`；目标不存在、不可访问、不在 `rootUri` 下、被后续操作替代或组件卸载时返回 `false`。
+
+定位目录时，自动展开目标目录并刷新子项，文件目标仍只展开祖先，不请求文件的子项。刷新期间保留原列表，重新读取已加载范围后一次替换；原列表已读完时，新列表也读取到末页；已展开的子目录移到后续页时，继续读取到找到这些目录或列表结束。其他目录的缓存和展开状态保留；接口确认已删除的条目从新列表移除。刷新失败保留原列表与当前选择，使用目录错误行和重试；导航成功不会因子项刷新失败改为失败。
+
+根目录本身没有树行。定位时刷新根目录子项，宿主接受选择后将树的滚动容器移到顶部并返回 `true`，不选中第一个子项，也不添加虚拟树行。
+
+定位目标所需的目录列表请求或必要的当前用户别名解析失败会 reject，宿主可捕获并展示提示。服务端明确不支持别名解析时，按原 URI 写法匹配。调用方主动取消时返回 `false`。Promise 等待定位与请求的目标子项刷新结束，不等待预览正文加载完成。内置搜索复用同一导航入口，目录结果也会自动展开。URI 由宿主提供；任务展示名称不参与文件路径拼接。
 
 ### 搜索
 

@@ -19,8 +19,10 @@ interface ScrollRequest {
 export function useFileBrowserHandle(
   browser: FileBrowserApi,
   ref: ForwardedRef<FileBrowserHandle>,
+  rootUri: string,
 ) {
   const treeRef = useRef<FileTreeHandle>(null);
+  const treeScrollRef = useRef<HTMLDivElement>(null);
   const active = useRef<ScrollRequest | null>(null);
   const [scroll, setScroll] = useState<ScrollRequest | null>(null);
   const open = browser.actions.openResource;
@@ -63,13 +65,21 @@ export function useFileBrowserHandle(
     );
     const selected = currentUri ? identifyUri(currentUri) : null;
     active.current = null;
+    if (selected === target && target === identifyUri(rootUri)) {
+      // FileTree scrolls inside its tree body; the surrounding pane only clips.
+      const tree =
+        treeScrollRef.current?.querySelector<HTMLElement>('[role="tree"]');
+      if (tree) tree.scrollTop = 0;
+      scroll.resolve(!!tree);
+      return;
+    }
     scroll.resolve(
       selected === target &&
         row?.id === selectedId &&
         !!row &&
         !!treeRef.current?.scrollToRow(row.id),
     );
-  }, [scroll, rows, currentUri, selectedId, identifyUri]);
+  }, [scroll, rows, currentUri, selectedId, identifyUri, rootUri]);
   // The public command is tied to a mounted network scope. On scope change or
   // unmount, settle its pending result; the tree loader aborts network requests.
   useEffect(
@@ -79,5 +89,5 @@ export function useFileBrowserHandle(
     },
     [open],
   );
-  return { treeRef, openResource };
+  return { treeRef, treeScrollRef, openResource };
 }

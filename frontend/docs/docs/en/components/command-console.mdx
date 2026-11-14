@@ -37,6 +37,14 @@ Quick commands appear while there are no records. Clicking one only fills the in
 
 Every quick command in the example fills a complete command except `compile`, which fills only `ov compile `, so you still need to add `--compile-name <name>`.
 
+### Rendering failure
+
+When host content fails to render, the component shows the default fallback: an illustration, a message and a Retry display button. Pass `slots.errorFallback` to replace it.
+
+```tsx file="../../_demos/command-console-crash.tsx" preview
+
+```
+
 ## API
 
 ### CommandConsole

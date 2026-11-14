@@ -26,7 +26,8 @@ React imports these SVG files directly during its build. This file records where
   the style of `svg/file-browser/search-empty.svg`: the same 258 × 140 dashed
   grid, a `--ov-ui-color-border-3` shape behind and a `currentColor` shape in
   front. `folder.svg` is an empty folder, `chart.svg` a chart card,
-  `people.svg` two people and `conversation.svg` two message bubbles. They
+  `people.svg` two people, `conversation.svg` two message bubbles and
+  `crash.svg` a card split by a jagged crack. They
   follow the repository license and are bundled inline by the internal `Empty`
   primitive.
 - `svg/arrow-right.svg` — the static artwork of `IconRightArrow`, which

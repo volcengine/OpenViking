@@ -64,6 +64,14 @@ Use `modes={['command']}` for TUI only or `modes={['conversation']}` for VikingB
 
 ```
 
+### Rendering failure
+
+When host content fails to render, the block shows the default fallback: an illustration, a message and a Retry display button. Pass `slots.errorFallback` to replace it.
+
+```tsx file="../../_demos/console-crash.tsx" preview
+
+```
+
 ## API
 
 ### Console

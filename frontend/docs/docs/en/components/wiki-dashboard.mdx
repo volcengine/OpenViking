@@ -27,6 +27,14 @@ Switch between the directory, file and no-conflict samples. Click a conflict tit
 
 The example uses fixed data. Its action icons and click feedback come from the example itself; check "Hide host actions" to remove them.
 
+### Rendering failure
+
+When host content fails to render, the component shows the default fallback: an illustration, a message and a Retry display button. Pass `slots.errorFallback` to replace it.
+
+```tsx file="../../_demos/wiki-dashboard-crash.tsx" preview
+
+```
+
 ## API
 
 ### WikiDashboard

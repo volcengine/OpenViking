@@ -37,6 +37,14 @@ import '@openviking/react/components/command-console/style.css';
 
 示例的快捷入口都填入完整命令，只有 `compile` 例外：它只填入 `ov compile `，需要继续输入 `--compile-name <name>`。
 
+### 渲染失败
+
+宿主传入的内容渲染出错时，组件显示默认兜底：插画、提示和「重试显示」按钮。需要替换展示时传入 `slots.errorFallback`。
+
+```tsx file="../../_demos/command-console-crash.tsx" preview
+
+```
+
 ## API
 
 ### CommandConsole
