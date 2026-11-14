@@ -1,7 +1,9 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import asyncio
 import json
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -379,6 +381,87 @@ async def test_context_mode_dedup_ledger_round_trips_through_agfs(
     second = await client.post("/api/v1/search/search", json=payload)
     assert second.json()["result"]["entries"] == []
     assert second.json()["result"]["stats"]["dedup"]["cooled"] == 1
+
+
+@pytest.mark.parametrize("clock_change", ["same-turn", "next-turn", "legacy-archive"])
+async def test_context_mode_concurrent_recalls_preserve_both_cooldowns(
+    client: httpx.AsyncClient,
+    service,
+    monkeypatch,
+    clock_change,
+):
+    first_uri = "viking://user/default/memories/events/first.md"
+    second_uri = "viking://user/default/memories/events/second.md"
+    ctx = RequestContext(user=UserIdentifier.the_default_user("default"), role=Role.ROOT)
+    for uri in (first_uri, second_uri):
+        await service.viking_fs.write_file(uri, f"# Summary\nRecalled content from {uri}", ctx=ctx)
+
+    first_retrieving = asyncio.Event()
+    finish_first = asyncio.Event()
+
+    async def fake_find(**kwargs):
+        query = kwargs["query"]
+        if query == "first":
+            first_retrieving.set()
+            await finish_first.wait()
+        uris = {"first": [first_uri], "second": [second_uri]}.get(query, [first_uri, second_uri])
+        return _FakeFindResult([_memory(uri, abstract=uri) for uri in uris])
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+    create = await client.post("/api/v1/sessions", json={})
+    session_id = create.json()["result"]["session_id"]
+    session_uri = f"viking://user/default/sessions/{session_id}"
+    if clock_change == "legacy-archive":
+        monkeypatch.setattr(
+            service.sessions._session_compressor,
+            "extract_long_term_memories",
+            AsyncMock(return_value=[]),
+        )
+        added = await client.post(
+            f"/api/v1/sessions/{session_id}/messages",
+            json={"role": "user", "content": "message before archival"},
+        )
+        assert added.status_code == 200
+        meta_uri = f"{session_uri}/.meta.json"
+        meta = json.loads(await service.viking_fs.read_file(meta_uri, ctx=ctx))
+        del meta["total_message_count"]
+        await service.viking_fs.write_file(meta_uri, json.dumps(meta).encode(), ctx=ctx)
+
+    payload = {
+        "mode": "context",
+        "session_id": session_id,
+        "dedup_turns": 3,
+        "query_expansion": "off",
+        "quotas": {"events": 2},
+    }
+    first_request = asyncio.create_task(
+        client.post("/api/v1/search/search", json={**payload, "query": "first"})
+    )
+    try:
+        await asyncio.wait_for(first_retrieving.wait(), timeout=10)
+        if clock_change == "next-turn":
+            added = await client.post(
+                f"/api/v1/sessions/{session_id}/messages",
+                json={"role": "user", "content": "next turn"},
+            )
+            assert added.status_code == 200
+        if clock_change == "legacy-archive":
+            commit = await client.post(f"/api/v1/sessions/{session_id}/commit")
+            assert commit.status_code == 200
+            assert commit.json()["result"]["archived"] is True
+        second = await client.post("/api/v1/search/search", json={**payload, "query": "second"})
+        assert [entry["uri"] for entry in second.json()["result"]["entries"]] == [second_uri]
+    finally:
+        finish_first.set()
+        first = await first_request
+    assert [entry["uri"] for entry in first.json()["result"]["entries"]] == [first_uri]
+
+    next_recall = await client.post("/api/v1/search/search", json={**payload, "query": "both"})
+    assert next_recall.status_code == 200
+    result = next_recall.json()["result"]
+    expected_uris = [first_uri] if clock_change == "legacy-archive" else []
+    assert [entry["uri"] for entry in result["entries"]] == expected_uris
+    assert result["stats"]["dedup"]["cooled"] == 2 - len(expected_uris)
 
 
 async def test_context_mode_first_recall_materializes_session_and_records_ledger(
