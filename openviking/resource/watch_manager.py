@@ -616,14 +616,22 @@ class WatchManager:
         except Exception as exc:
             if actual_run.run_id is not None:
                 owner = {"account_id": task.account_id, "user_id": task.user_id}
-                record = await self.tracker.get(actual_run.run_id, **owner)
-                if record is not None and not record.is_terminal():
-                    await self.tracker.fail(actual_run.run_id, str(exc), **owner)
+                try:
                     record = await self.tracker.get(actual_run.run_id, **owner)
-                await self.settle_record(actual_run, record)
+                    if record is not None and not record.is_terminal():
+                        await self.tracker.fail(actual_run.run_id, str(exc), **owner)
+                        record = await self.tracker.get(actual_run.run_id, **owner)
+                    await self.settle_record(actual_run, record)
+                except Exception:
+                    # The fallback below still releases the Watch row; a
+                    # tracker failure must not leave the run attached.
+                    logger.exception(
+                        "Failed to settle watch run %s after a submission error",
+                        actual_run.run_id,
+                    )
             await self.finish_run(
                 task_id,
-                None,
+                actual_run.run_id,
                 WatchRunResult(
                     status="failed",
                     error=str(exc),
