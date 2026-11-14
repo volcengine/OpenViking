@@ -26,6 +26,7 @@ def _ctx() -> RequestContext:
 def test_collect_read_experience_uris_supports_generic_openviking_reads():
     uri = "viking://user/alice/memories/experiences/order-exchange.md"
     opencode_uri = "viking://user/alice/memories/experiences/opencode.md"
+    missing_uri = "viking://~/memories/experiences/example.md#section"
     messages = [
         Message(
             id="call",
@@ -96,16 +97,42 @@ def test_collect_read_experience_uris_supports_generic_openviking_reads():
                             "viking://~/memories/experiences/.abstract.md",
                             "viking://~/memories/experiences/../other.md",
                             "viking://~/memories/experiences/example.md?offset=1",
-                            "viking://~/memories/experiences/example.md#section",
+                            missing_uri,
                         ]
                     },
                     tool_status="completed",
+                    tool_output=f"(nothing found at {missing_uri})",
                 ),
             ],
         ),
     ]
 
     assert collect_read_experience_uris(messages, ctx=_ctx()) == [uri, opencode_uri]
+
+
+@pytest.mark.parametrize("filename", ["order#24.md", "order.md#section"])
+def test_collect_read_experience_uris_preserves_literal_hash_in_storage_path(filename):
+    alias = f"viking://~/memories/experiences/{filename}"
+    canonical_uri = f"viking://user/alice/memories/experiences/{filename}"
+    messages = [
+        Message(
+            id="read-result",
+            role="user",
+            parts=[
+                ToolPart(
+                    tool_id=f"read-{index}",
+                    tool_name="mcp__openviking__read",
+                    tool_input={"uri": uri},
+                    tool_status="completed",
+                    tool_output="Experience body",
+                )
+                for index, uri in enumerate([alias, canonical_uri])
+            ],
+        ),
+    ]
+
+    assert collect_read_experience_uris(messages, ctx=_ctx()) == [canonical_uri]
+    assert experience_source_tag(canonical_uri) == f"{canonical_uri}=1"
 
 
 @pytest.mark.parametrize(
