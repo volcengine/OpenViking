@@ -91,8 +91,10 @@ describe('independent activity web server', { concurrency: false }, () => {
     const page = await request(port, '/');
     assert.equal(page.status, 200);
     assert.match(page.headers['content-type'], /^text\/html/);
-    assert.match(page.body, /instance-select/);
-    assert.equal((await request(port, '/activity')).status, 200);
+    assert.match(page.body, /id="root"/);
+    const legacyPage = await request(port, '/activity');
+    assert.equal(legacyPage.status, 200);
+    assert.match(legacyPage.body, /instance-select/);
     assert.equal((await request(port, '/?instance=alpha')).status, 200);
     assert.equal((await request(port, '/?instance=alpha&epoch=2')).status, 200);
     assert.equal((await request(port, '/?epoch=current')).status, 200);
@@ -160,6 +162,30 @@ describe('independent activity web server', { concurrency: false }, () => {
     assert.equal((await request(port, '/health')).status, 200);
     assert.equal((await request(port, '/ready?probe=1')).status, 404);
     assert.equal((await request(port, '/api/private')).status, 404);
+  });
+
+  it('proxies RFC read routes with instance isolation and rejects mutations and unknown queries', async () => {
+    daemon = await startHttpServer((incoming, response) => {
+      response.setHeader('content-type', 'application/json');
+      response.end(JSON.stringify({ path: incoming.url, method: incoming.method }));
+    });
+    web = new ActivityWebServer(config(daemon.address().port));
+    await web.start();
+    const port = web.address().port;
+
+    const instances = await request(port, '/api/v1/instances');
+    assert.equal(instances.status, 200);
+    assert.deepEqual(JSON.parse(instances.body).items, [{ id: 'alpha', label: 'Alpha', default: true, ready: null }]);
+    const capabilities = await request(port, '/api/v1/capabilities?instance=alpha');
+    assert.deepEqual(JSON.parse(capabilities.body), { path: '/api/v1/capabilities', method: 'GET' });
+    const tasks = await request(port, '/api/v1/instances/alpha/tasks?instance=alpha&status=running&before=42&limit=20');
+    assert.deepEqual(JSON.parse(tasks.body), { path: '/api/v1/instances/alpha/tasks?status=running&before=42&limit=20', method: 'GET' });
+    assert.equal((await request(port, '/api/v1/instances/alpha/tasks?instance=alpha&shell=true')).status, 400);
+    assert.equal((await request(port, '/api/v1/instances/alpha/__proto__?instance=alpha')).status, 404);
+    assert.equal((await request(port, '/api/v1/instances/alpha/constructor?instance=alpha')).status, 404);
+    assert.equal((await request(port, '/api/v1/instances/missing/overview?instance=missing')).status, 404);
+    assert.equal((await request(port, '/api/v1/instances/alpha/tasks/t1/actions/cancel?instance=alpha')).status, 404);
+    assert.equal((await request(port, '/api/v1/instances/alpha/tasks?instance=alpha', { method: 'POST' })).status, 405);
   });
 
   it('routes only allowlisted instance ids and never accepts a caller-supplied upstream', async () => {

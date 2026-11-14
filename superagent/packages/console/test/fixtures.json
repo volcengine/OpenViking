@@ -1,0 +1,150 @@
+{
+  "instances": {
+    "defaultInstance": "primary",
+    "items": [
+      { "id": "primary", "label": "Primary Agent", "default": true, "ready": true },
+      { "id": "research", "label": "Research Agent", "default": false, "ready": true }
+    ],
+    "generatedAt": "2026-11-14T15:05:00Z"
+  },
+  "capabilities": {
+    "instanceId": "primary",
+    "apiVersion": "v1",
+    "generatedAt": "2026-11-14T15:05:00Z",
+    "modules": {
+      "instances.read": { "enabled": true, "available": true, "effective": true, "reasonCode": null },
+      "capabilities.read": { "enabled": true, "available": true, "effective": true, "reasonCode": null },
+      "runtime.read": { "enabled": true, "available": true, "effective": true, "reasonCode": null },
+      "sessions.read": { "enabled": true, "available": true, "effective": true, "reasonCode": null },
+      "activity.read": { "enabled": true, "available": true, "effective": true, "reasonCode": null },
+      "tasks.read": { "enabled": true, "available": true, "effective": true, "reasonCode": null },
+      "metrics.read": { "enabled": true, "available": true, "effective": true, "reasonCode": null },
+      "audit.read": { "enabled": true, "available": false, "effective": false, "reasonCode": "audit_store_unavailable" },
+      "tasks.control": { "enabled": false, "available": true, "effective": false, "reasonCode": "disabled_by_owner" },
+      "runtime.control": { "enabled": false, "available": true, "effective": false, "reasonCode": "disabled_by_owner" },
+      "sessions.control": { "enabled": false, "available": true, "effective": false, "reasonCode": "disabled_by_owner" },
+      "configuration.read": { "enabled": false, "available": false, "effective": false, "reasonCode": "control_broker_unavailable" },
+      "configuration.write": { "enabled": false, "available": false, "effective": false, "reasonCode": "control_broker_unavailable" },
+      "instances.setup": { "enabled": false, "available": false, "effective": false, "reasonCode": "control_broker_unavailable" },
+      "instances.process": { "enabled": false, "available": false, "effective": false, "reasonCode": "control_broker_unavailable" },
+      "providers.read": { "enabled": true, "available": false, "effective": false, "reasonCode": "dependency_disabled" },
+      "providers.write": { "enabled": false, "available": false, "effective": false, "reasonCode": "disabled_by_owner" },
+      "runtimePackages.install": { "enabled": true, "available": false, "effective": false, "reasonCode": "platform_unsupported", "message": "Runtime package installation is not supported on this platform." },
+      "logs.read": { "enabled": false, "available": false, "effective": false, "reasonCode": "disabled_by_owner" },
+      "diagnostics.bundle": { "enabled": false, "available": false, "effective": false, "reasonCode": "disabled_by_owner" },
+      "events.stream": { "enabled": false, "available": true, "effective": false, "reasonCode": "disabled_by_owner" },
+      "tasks.retry": { "enabled": false, "available": true, "effective": false, "reasonCode": "disabled_by_owner" },
+      "tasks.pause": { "enabled": false, "available": false, "effective": false, "reasonCode": "not_provided" }
+    }
+  },
+  "overview": {
+    "instanceId": "primary",
+    "health": "degraded",
+    "ready": true,
+    "connectors": [
+      { "id": "lark", "kind": "Feishu / Lark", "state": "connected", "ready": true },
+      { "id": "email", "kind": "Email", "state": "stopped", "ready": false, "message": "Authentication expired", "repairHint": "Reconnect the mailbox from the CLI. The instance remains ready through Lark." }
+    ],
+    "runtime": { "runtime": "pi", "model": "volcengine/deepseek-v3.2", "effort": "medium", "revision": 12, "epoch": 42, "work": { "state": "running", "activeTurns": 2 }, "capabilities": { "workerMode": true } },
+    "tasks": { "queued": 3, "running": 2, "waiting": 1, "done": 148, "failed": 2, "stopped": 4 },
+    "workers": { "active": 2, "limit": 4, "queued": 3, "oldestWaitMs": 94000 },
+    "outbox": { "pending": 1, "uncertain": 1 },
+    "alerts": [
+      { "severity": "warning", "code": "connector_degraded", "message": "Email connector needs attention", "repairHint": "Lark is healthy, so the instance is ready but degraded." }
+    ],
+    "generatedAt": "2026-11-14T15:05:00Z"
+  },
+  "tasks": [
+    {
+      "id": "t203", "revision": 4, "title": "Implement the OVSA console frontend", "status": "running", "runtime": "pi", "turns": 1, "recovering": false,
+      "origin": { "source": "lark", "sourceRef": "ref_lark_203" },
+      "worker": { "state": "running", "turn": 1, "startedAt": "2026-11-14T15:01:00Z", "sessionRef": "nsr_pi_203", "canCancel": true },
+      "usage": { "inputTokens": 18420, "cachedInputTokens": 6200, "outputTokens": 2140 },
+      "createdAt": "2026-11-14T14:58:00Z", "updatedAt": "2026-11-14T15:04:00Z"
+    },
+    {
+      "id": "t202", "revision": 7, "title": "Investigate context retrieval latency", "summary": "Compare retrieval traces and identify the slowest stage.", "status": "waiting", "runtime": "dsh", "turns": 2,
+      "origin": { "source": "slack", "sourceRef": "ref_slack_202" },
+      "worker": { "state": "waiting", "turn": 2, "startedAt": "2026-11-14T14:52:00Z", "sessionRef": "nsr_dsh_202" },
+      "usage": { "inputTokens": 9200, "outputTokens": 830 },
+      "createdAt": "2026-11-14T14:44:00Z", "updatedAt": "2026-11-14T15:02:00Z"
+    },
+    {
+      "id": "t201", "revision": 8, "title": "Design the console read API", "summary": "Define capability discovery and delivery semantics.", "status": "done", "runtime": "pi", "turns": 2,
+      "origin": { "source": "lark", "sourceRef": "ref_lark_201" },
+      "worker": { "state": "done", "turn": 2, "startedAt": "2026-11-14T14:50:00Z", "sessionRef": "nsr_pi_201", "termination": "confirmed" },
+      "usage": { "inputTokens": 12000, "cachedInputTokens": 3000, "outputTokens": 900 },
+      "createdAt": "2026-11-14T14:40:00Z", "updatedAt": "2026-11-14T14:58:00Z"
+    },
+    {
+      "id": "t198", "revision": 5, "title": "Publish the weekly project summary", "status": "done", "runtime": "claude", "turns": 1,
+      "origin": { "source": "email", "sourceRef": "ref_email_198" },
+      "worker": { "state": "done", "turn": 1, "startedAt": "2026-11-14T14:20:00Z", "sessionRef": "nsr_claude_198", "termination": "confirmed" },
+      "usage": { "inputTokens": 7400, "outputTokens": 1120 },
+      "createdAt": "2026-11-14T14:15:00Z", "updatedAt": "2026-11-14T14:25:00Z"
+    },
+    {
+      "id": "t197", "revision": 3, "title": "Synchronize connection settings", "status": "recovering", "runtime": "codex", "turns": 2, "recovering": true,
+      "origin": { "source": "lark", "sourceRef": "ref_lark_197" },
+      "worker": { "state": "queued", "turn": 2, "startedAt": "2026-11-14T13:55:00Z", "sessionRef": "nsr_codex_197" },
+      "usage": { "inputTokens": 5100, "outputTokens": 440 },
+      "createdAt": "2026-11-14T13:48:00Z", "updatedAt": "2026-11-14T14:03:00Z"
+    }
+  ],
+  "metrics": {
+    "window": "1h",
+    "tasks": { "queued": 3, "running": 2, "waiting": 1, "done": 18, "failed": 1 },
+    "queue": { "oldestWaitMs": 94000, "averageWaitMs": 32000 },
+    "turns": { "succeeded": 21, "retried": 2, "recovered": 1, "failed": 1 },
+    "usage": { "inputTokens": 84300, "cachedInputTokens": 22100, "outputTokens": 9640, "costCoverage": "tokens_only" },
+    "inbox": { "pending": 1 },
+    "outbox": { "uncertain": 1 },
+    "generatedAt": "2026-11-14T15:05:00Z"
+  },
+  "inputs": {
+    "items": [
+      { "id": "in_1", "text": "完成控制台的前端实现，参考 OV Web Studio。", "state": "delivered", "claimedAt": "2026-11-14T14:40:10Z", "deliveredAt": "2026-11-14T14:40:12Z", "createdAt": "2026-11-14T14:40:00Z" }
+    ],
+    "nextCursor": null
+  },
+  "reports": {
+    "items": [
+      {
+        "id": "r_2", "state": "done", "summary": "RFC published with separate relay and final delivery states.", "createdAt": "2026-11-14T14:58:00Z",
+        "relay": { "state": "relayed_to_inbox", "inboxId": "inbox_928", "at": "2026-11-14T14:58:01Z" },
+        "finalDelivery": { "outboxId": "out_1821", "status": "SENT" },
+        "artifacts": [{ "label": "RFC discussion", "url": "https://github.com/volcengine/OpenViking/discussions/7700" }]
+      },
+      {
+        "id": "r_1", "state": "done", "summary": "Draft completed; the first IM result was not confirmed.", "createdAt": "2026-11-14T14:49:00Z",
+        "relay": { "state": "relayed_to_inbox", "inboxId": "inbox_913", "at": "2026-11-14T14:49:01Z" },
+        "finalDelivery": { "outboxId": "out_1804", "status": "UNCERTAIN" }
+      }
+    ],
+    "nextCursor": null
+  },
+  "events": {
+    "items": [
+      { "id": "981", "kind": "task.reported", "category": "task", "severity": "info", "summary": "Worker submitted report r_2", "taskId": "t201", "turn": 2, "createdAt": "2026-11-14T14:58:00Z" },
+      { "id": "970", "kind": "task.turn_started", "category": "task", "severity": "info", "summary": "Worker turn 2 started", "taskId": "t201", "turn": 2, "createdAt": "2026-11-14T14:50:00Z" },
+      { "id": "952", "kind": "task.turn_completed", "category": "task", "severity": "info", "summary": "Worker turn 1 completed", "taskId": "t201", "turn": 1, "createdAt": "2026-11-14T14:48:00Z" }
+    ],
+    "nextCursor": null
+  },
+  "activities": {
+    "items": [
+      { "id": "1004", "kind": "delivery.uncertain", "category": "delivery", "severity": "warn", "summary": "Final IM delivery could not be confirmed", "taskId": "t198", "turn": 1, "createdAt": "2026-11-14T15:04:40Z" },
+      { "id": "1003", "kind": "task.reported", "category": "task", "severity": "info", "summary": "Worker submitted a task report", "taskId": "t201", "turn": 2, "createdAt": "2026-11-14T15:04:20Z" },
+      { "id": "1002", "kind": "system.connector_failed", "category": "system", "severity": "error", "summary": "Email connector authentication expired", "createdAt": "2026-11-14T15:04:00Z" },
+      { "id": "1001", "kind": "task.turn_started", "category": "task", "severity": "info", "summary": "Worker turn started", "taskId": "t203", "turn": 1, "createdAt": "2026-11-14T15:03:30Z" }
+    ],
+    "nextCursor": "1000"
+  },
+  "sessions": {
+    "items": [
+      { "epoch": 41, "startedAt": "2026-11-13T09:00:00Z", "endedAt": "2026-11-14T08:30:00Z", "journalCount": 184, "activityCount": 420, "current": false },
+      { "epoch": 42, "startedAt": "2026-11-14T08:30:00Z", "endedAt": null, "journalCount": 86, "activityCount": 214, "current": true }
+    ],
+    "nextCursor": null
+  }
+}
