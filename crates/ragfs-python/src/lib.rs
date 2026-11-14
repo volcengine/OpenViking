@@ -514,6 +514,7 @@ fn pathlock_config_from_value(
     const FIELDS: &[&str] = &[
         "provider",
         "sqlite_path",
+        "postgres_dsn_env",
         "lock_timeout_secs",
         "lock_expire_secs",
     ];
@@ -527,14 +528,22 @@ fn pathlock_config_from_value(
     let provider = string_field(pathlock, "provider", "filesystem")?;
     if !matches!(
         provider.as_str(),
-        "filesystem" | "memory" | "sqlite" | "cache"
+        "filesystem" | "memory" | "sqlite" | "cache" | "postgres"
     ) {
         return Err(format!(
-            "unsupported pathlock.provider: {provider}; expected filesystem, memory, sqlite, or cache"
+            "unsupported pathlock.provider: {provider}; expected filesystem, memory, sqlite, postgres, or cache"
         ));
     }
-    let pathlock_service_name =
-        matches!(provider.as_str(), "cache" | "sqlite").then(|| service_name.to_string());
+    let pathlock_service_name = matches!(provider.as_str(), "cache" | "sqlite" | "postgres")
+        .then(|| service_name.to_string());
+    let postgres_dsn_env = match pathlock.get("postgres_dsn_env") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(name)) if !name.trim().is_empty() => Some(name.clone()),
+        _ => return Err("pathlock.postgres_dsn_env must be a nonempty string".into()),
+    };
+    if provider == "postgres" && postgres_dsn_env.is_none() {
+        return Err("pathlock.postgres_dsn_env is required for PostgreSQL PathLock".into());
+    }
     let sqlite_path = match pathlock.get("sqlite_path") {
         None | Some(serde_json::Value::Null) => None,
         Some(serde_json::Value::String(path)) => Some(path.clone()),
@@ -561,6 +570,7 @@ fn pathlock_config_from_value(
         provider,
         service_name: pathlock_service_name,
         sqlite_path,
+        postgres_dsn_env,
         lock_timeout_secs,
         lock_expire_secs,
     })
@@ -2794,6 +2804,14 @@ impl RAGFSBindingClient {
 
     // ── PathLock API ──
 
+    /// Return the actual provider's handle mode without performing storage I/O.
+    fn pathlock_handle_mode(&self) -> &'static str {
+        match self.pathlock_manager.handle_mode() {
+            PathLockHandleMode::LockPath => "lock_path",
+            PathLockHandleMode::LogicalPath => "logical_path",
+        }
+    }
+
     /// Acquire an exact lock on a single path.
     #[pyo3(signature = (ctx, path, timeout_secs=0.0, owner_lease_ref=None))]
     fn pathlock_acquire_exact(
@@ -3933,6 +3951,27 @@ mod tests {
             serde_json::json!({"provider": "sqlite", "sqlite_path": 42}),
         ] {
             assert!(pathlock_config_from_value(&value, "local-a").is_err());
+        }
+    }
+
+    #[test]
+    fn postgres_pathlock_config_parses_environment_and_namespace() {
+        let config = pathlock_config_from_value(
+            &serde_json::json!({
+                "provider": "postgres", "postgres_dsn_env": "OV_POSTGRES_DSN"
+            }),
+            "community",
+        )
+        .unwrap();
+        assert_eq!(config.postgres_dsn_env.as_deref(), Some("OV_POSTGRES_DSN"));
+        assert_eq!(config.service_name.as_deref(), Some("community"));
+        for value in [
+            serde_json::json!({"provider": "postgres"}),
+            serde_json::json!({"provider": "postgres", "postgres_dsn_env": ""}),
+            serde_json::json!({"provider": "postgres", "postgres_dsn_env": 42}),
+            serde_json::json!({"provider": "postgres", "dsn": "must-not-store-credentials"}),
+        ] {
+            assert!(pathlock_config_from_value(&value, "community").is_err());
         }
     }
 

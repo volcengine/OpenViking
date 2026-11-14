@@ -41,6 +41,7 @@ The example uses fixed data. Its action icons and click feedback come from the e
 | onOpenUri        | Directory view: called when a file is clicked, with its URI. File view: called when the path is clicked          | `(uri: string) => void` (directory), `() => void` (file)                                                                           | -                              |
 | onOpenDashboard  | Directory view: called to open that file's dashboard; falls back to `onOpenUri` when omitted                     | `(uri: string) => void`                                                                                                            | -                              |
 | defineActions    | Defines the action buttons of each row; the action area is hidden when omitted or when it returns an empty array | `(uri: string) => readonly WikiDashboardAction[]` (directory), `(conflict: WikiConflict) => readonly WikiDashboardAction[]` (file) | -                              |
+| slots            | Replaces rendering-error content; see [error display slots](../guide/getting-started#custom-error-display)       | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }`                                                              | -                              |
 | labels           | Overrides interface text                                                                                         | `Partial<WikiDashboardLabels>`                                                                                                     | -                              |
 | locale           | Interface language, see [Internationalization](../guide/i18n)                                                    | `'zh-CN' \| 'en-US'`                                                                                                               | Inherited, otherwise `'en-US'` |
 | className, style | Appearance and layout; other HTML attributes are passed to the root element                                      | HTML attributes                                                                                                                    | -                              |
@@ -121,3 +122,7 @@ The example uses fixed data. Its action icons and click feedback come from the e
 - There is no top-level `uri` prop. Capture the URIs you need for requests and navigation in the closures of `onOpenUri` and `defineActions`.
 - To reset the filter and expanded details when the document changes, set `key={documentId}` on the component in the parent.
 - Types are exported from `@openviking/react/components/wiki-dashboard`; the package root exports only the component and `WikiDashboardProps`.
+
+## Analytics
+
+Configure analytics through the Provider. See the [integration guide and event catalogue](../guide/analytics) for supported events and their semantics.

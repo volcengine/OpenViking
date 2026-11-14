@@ -94,6 +94,7 @@ The example is an offline simulation and changes no real grants.
 | previewSlots             | Appends, replaces or hides the preview action area; dashboard tabs are unaffected, see `FileBrowserPreviewSlots` below                                                                      | `FileBrowserPreviewSlots`                                               | -                              |
 | dashboardKinds           | Enabled dashboard kinds; an empty array turns dashboards off, and `['experience']` also stops reading the compile configuration                                                             | `readonly ('wiki' \| 'experience')[]`                                   | `['wiki', 'experience']`       |
 | renderDashboard          | Customizes the content of the dashboard tab; return `null` or `undefined` to keep the built-in dashboard, see `FileBrowserDashboard` below                                                  | `(dashboard: FileBrowserDashboard) => ReactNode`                        | -                              |
+| slots                    | Replaces rendering-error content; see [error display slots](../guide/getting-started#custom-error-display)                                                                                  | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }`   | -                              |
 | labels                   | Overrides interface text, see `FileBrowserLabels` below                                                                                                                                     | `FileBrowserLabels`                                                     | -                              |
 | locale                   | Interface language, see [Internationalization](../guide/i18n)                                                                                                                               | `'zh-CN' \| 'en-US'`                                                    | Inherited, otherwise `'en-US'` |
 | requestOptions           | Overrides the request configuration, see the [blocks overview](./)                                                                                                                          | `OvRequestOptions`                                                      | -                              |
@@ -142,12 +143,12 @@ The context received by `previewSlots.actions` and by the function form of `prev
 
 Options when `acl` is an object. All are optional, and `true` is the same as setting none.
 
-| Property          | Description                                                                                                                                                         | Type                                                                                                                                          | Default  |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| readOnly          | Prevents changing grants while keeping them viewable                                                                                                                | `boolean`                                                                                                                                     | `false`  |
-| resolvePermission | Returns the current user's effective permission on a resource, `undefined` when unknown; by default it reads `permission` from `fs/stat`, then probes manage access | `(uri: string, context: FileBrowserAclContext) => Promise<FileBrowserAclLevel \| undefined>`                                                  | Built-in |
-| listPrincipals    | Returns the Users or Groups that can be added, with `page` starting at 1; by default it calls the account's user and group endpoints without reading credentials    | `(query: { type: 'user' \| 'group'; keyword: string; page: number }, context: FileBrowserAclContext) => Promise<FileBrowserAclPrincipalPage>` | Built-in |
-| onChange          | Called after grants are saved successfully, and not when saving fails; an error it throws does not affect the saved result                                          | `(report: FileBrowserAclReport) => void`                                                                                                      | -        |
+| Property          | Description                                                                                                                                                      | Type                                                                                                                                          | Default  |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| readOnly          | Prevents changing grants while keeping them viewable                                                                                                             | `boolean`                                                                                                                                     | `false`  |
+| resolvePermission | Returns the current user's effective permission on a resource, `undefined` when unknown; by default it reads `access` from `fs/stat`, then probes manage access  | `(uri: string, context: FileBrowserAclContext) => Promise<FileBrowserAclLevel \| undefined>`                                                  | Built-in |
+| listPrincipals    | Returns the Users or Groups that can be added, with `page` starting at 1; by default it calls the account's user and group endpoints without reading credentials | `(query: { type: 'user' \| 'group'; keyword: string; page: number }, context: FileBrowserAclContext) => Promise<FileBrowserAclPrincipalPage>` | Built-in |
+| onChange          | Called after grants are saved successfully, and not when saving fails; an error it throws does not affect the saved result                                       | `(report: FileBrowserAclReport) => void`                                                                                                      | -        |
 
 ### FileBrowserAclContext
 
@@ -241,7 +242,7 @@ All fields are optional, and omitted fields follow `locale`.
 | searchIgnoreCase        | Case-insensitive matching                                                                                                    | `string`                             | `'Ignore case'`                                                       |
 | searchFilterUnsupported | Why a filter is unavailable in the current mode                                                                              | `string`                             | `'This filter is unavailable for the current mode'`                   |
 | searchResultCount       | Result count; receives the number                                                                                            | `(count: number) => string`          | `'N results'`                                                         |
-| searchVia               | Copy between the count and the mode chip                                                                                     | `string`                             | `'Vector retrieval'`                                                  |
+| searchVia               | Copy that follows the mode chip                                                                                              | `string`                             | `'Vector retrieval'`                                                  |
 | searchSwitchMode        | Entry that switches the retrieval mode                                                                                       | `string`                             | `'Switch'`                                                            |
 | searchAdvancedLabel     | Accessible name of the advanced-filter button                                                                                | `string`                             | `'Advanced filters'`                                                  |
 | previewMode             | Preview in the Preview / Source switch                                                                                       | `string`                             | `'Preview'`                                                           |
@@ -264,6 +265,8 @@ All fields are optional, and omitted fields follow `locale`.
 | summaryEmpty            | Message for a summary level not generated yet; the preview does not show it, so overriding it has no effect                  | `string`                             | `'No summary generated yet'`                                          |
 | summaryFailed           | Message when a summary level fails to load and the server gives no message                                                   | `string`                             | `'The summary could not be loaded.'`                                  |
 | formatCharacterCount    | Character count text in the preview footer                                                                                   | `(count: number) => string`          | Formatted per `locale`, for example `'1,234 characters'`              |
+| formatPreviewUpdatedAt  | Update time text in the preview footer                                                                                       | `(time: string) => string`           | `'Updated on {time}'`                                                 |
+| previewModelNotice      | Model notice in resource previews; pass an empty string to hide it                                                           | `string`                             | `'Content parsing provided by the Content Understanding Model'`       |
 | actionBar               | Text passed to the [FileBrowserActionBar](../components/file-browser-action-bar) action bar, including its connection drawer | `FileBrowserActionBarLabels`         | -                                                                     |
 | tree                    | Text passed to the [FileTree](../components/file-tree) file tree                                                             | `FileTreeLabels`                     | -                                                                     |
 | preview                 | Text passed to the [FilePreview](../components/file-preview) file preview; takes precedence over same-named fields above     | `FilePreviewLabels`                  | -                                                                     |
@@ -406,13 +409,15 @@ const browserRef = useRef<FileBrowserHandle>(null);
 await browserRef.current?.openResource(resultUri, { reveal: true });
 ```
 
+Links ending in `/.abstract.md` or `/.overview.md` open the parent directory at L0 Summary or L1 Overview, respectively. Tree navigation and `onUriChange` use the parent URI. Opening another summary link in the same directory selects its requested level; manual level switching remains available.
+
 Reveal defaults to `true`; `{ reveal: false }` only requests a preview and resolves to `true` once the request is issued. Ordinary `uri` prop changes do not expand or scroll the tree. In controlled mode, update `uri` in `onUriChange` to accept the command. The promise resolves to `true` after the selected row has scrolled, or `false` when the target is missing, inaccessible, outside `rootUri`, superseded, or the component unmounts. The root itself has no tree row and returns `false` while its preview still opens. Directory listing or required home alias lookup failures reject; catch them to display host feedback. An explicitly unsupported alias lookup falls back to matching the original URI spelling. Caller cancellation resolves to `false`. The promise does not wait for preview content to finish loading. Built-in search uses the same navigation entry.
 
 ### Search
 
 - The search box at the top of the left column opens the module's search dialog; `⌘K` is a real shortcut, and when a page mounts several instances only the one interacted with last responds.
 - Typing pauses for 400 ms before the request fires; there is no submit button. Closing the dialog cancels the in-flight request and clears the input and filters.
-- Four retrieval modes share one input and one result list, switchable from the result header:
+- Four retrieval modes share one input and one result list. The result header offers “Switch” when the search returns matches:
 
 | Mode     | Endpoint                | Input              | Filters                                |
 | -------- | ----------------------- | ------------------ | -------------------------------------- |
@@ -424,7 +429,8 @@ Reveal defaults to `true`; `{ reveal: false }` only requests a preview and resol
 - Semantic results rank by score and deduplicate by URI. `grep` keeps each match and its line number, even when several matches share a file.
 - A `glob` pattern without `/` gains a `**/` prefix; a directory match drops its trailing slash before navigation and records the directory fact on `isDir`.
 - Filter groups enable or disable with the mode. A disabled group stays visible but dimmed, with the reason beside its title. Directory candidates derive from `rootUri` with the `~` alias; selections invalidated by a root change are dropped.
-- Hover a result or use **↑ / ↓** to preview it. Click or press **Enter** to close the dialog, open the resource and reveal its tree row. The preview moves below the list on narrow screens.
+- In Advanced, select a suggested directory or use “Choose a directory” to browse its subdirectories. Choose a time field to show the date range. Ignore case is shown in `grep` mode.
+- Use **↑ / ↓** to move the current result. Click or press **Enter** to close the dialog, open the resource and reveal its tree row.
 
 ### Preview actions
 
@@ -433,6 +439,7 @@ Reveal defaults to `true`; `{ reveal: false }` only requests a preview and resol
 - `readOnly` disables all writes, including saving the compile configuration. With `acl` on, editing, import and saving the compile configuration require `write` or `manage`, and deletion requires `manage`.
 - Copy content, download, export, version history and viewing the compile configuration are not restricted by `readOnly` or ACL.
 - Without `acl`, or for resources outside `viking://resources/`, the block does not probe permissions and the server enforces access.
+- Saving an ordinary file prompts for a version note. After confirmation, FileBrowser writes the file and then creates a snapshot for that file. If the snapshot is not created, the file stays saved and the preview shows a warning. Wiki files save directly.
 - Version history reads up to 500 snapshots with `GET /api/v1/snapshot/log`, or up to 100 retained versions with `GET /api/v1/snapshot/versions` for a Wiki compile output file. You can preview or copy historical text and compare it with the current file. The history dialog is read-only.
 - Compile configuration: `GET /api/v1/compile/config` reads it, and `POST /api/v1/compile/config/update` saves the source directories, skill, instructions, automatic updates and daily or weekly schedule.
 - Import .ovpack: the file is first uploaded through `POST /api/v1/resources/temp_upload`, then `POST /api/v1/pack/import` imports it into the current directory. On failure the chosen file is kept, and a retry uploads it again.
@@ -443,7 +450,7 @@ Reveal defaults to `true`; `{ reveal: false }` only requests a preview and resol
 ### Permissions (ACL)
 
 - `acl` only applies to non-root nodes under `viking://resources/`; elsewhere no permission tag appears and ACL imposes no limits.
-- The effective permission is read from `permission` in `GET /api/v1/fs/stat`. If it is missing, `GET /api/v1/acl` is probed: success counts as `manage` and a 403 counts as unknown.
+- The effective permission is read from `access` in `GET /api/v1/fs/stat`. If it is missing, `GET /api/v1/acl` is probed: success counts as `manage` and a 403 counts as unknown.
 - While the permission is unknown, no permission tag shows and editing and deletion are unavailable; if reading it fails, a Retry button appears beside the title.
 - The permission tag shows the effective permission, and for `manage` its details include a Manage permissions button that opens the grants dialog.
 - `read` cannot edit, `write` can edit and import, and `manage` can also delete and manage grants.
@@ -453,7 +460,7 @@ Reveal defaults to `true`; `{ reveal: false }` only requests a preview and resol
 - While saving, the dialog cannot be submitted again or closed. If saving fails, the last saved grants stay and the server's reason is shown.
 - After a successful save the tree and preview refresh; the server's index update may finish later, and the server's authorization result is authoritative.
 - In the directory listing (`fs/ls`), nodes with `access: 'denied'` cannot be selected or expanded, and nodes with `access: 'container'` can only be expanded to reach accessible children and cannot be previewed themselves.
-- Nodes with `permission: 'read'` show a read-only marker.
+- Nodes with `access: 'read'` show a read-only marker.
 - These node markers come from the directory listing and do not depend on `acl`.
 - Grants use `GET`, `PUT` and `DELETE /api/v1/acl`. The member directory calls the account's user and group endpoints (20 users per page, `include_credentials=false`) and needs an `accountId` from the Provider or `requestOptions`.
 - The group directory needs account administration access. When a resource manager cannot read it, the dialog shows a failure with Retry; supply your own directory through `acl.listPrincipals`.
@@ -488,3 +495,7 @@ Reveal defaults to `true`; `{ reveal: false }` only requests a preview and resol
 - The tree is 352px wide by default and at least 200px. Its maximum is the smaller of 520px and the container width minus 321px (the preview keeps at least 320px, plus a 1px divider), so in a narrow column the tree shrinks instead of crowding out the preview.
 - The width applies to the current instance only and is not written to `localStorage`; whether to remember it is up to your app.
 - The current width is written as the CSS variable `--ov-file-browser-tree-width` in the root element's inline style. You can read it, but overriding it has no effect.
+
+## Analytics
+
+Configure analytics through the Provider. See the [integration guide and event catalogue](../guide/analytics) for supported events and their semantics.

@@ -73,21 +73,30 @@ import '@openviking/react/components/file-preview/style.css';
 
 示例故意使用无效的图片和视频数据触发错误态；选择「不支持的格式」可以下载示例的原始内容。
 
+### 自定义错误展示
+
+通过组件级 `slots.errorFallback` 提供宿主的内容和样式，页签级配置仍优先。示例按钮先解除模拟异常，再调用当前区域的 `reset`。
+
+```tsx file="../../_demos/file-preview-error-fallback.tsx" preview
+
+```
+
 ## API
 
 ### FilePreview
 
-| 参数              | 说明                                                                  | 类型                                             | 默认值                   |
-| ----------------- | --------------------------------------------------------------------- | ------------------------------------------------ | ------------------------ |
-| tabs              | 页签列表，至少一个，用 `kind` 区分文件、目录和内容页签                | `readonly [FilePreviewTab, ...FilePreviewTab[]]` | 必填                     |
-| activeKey         | 受控的当前页签，找不到对应页签时显示第一个                            | `string`                                         | -                        |
-| defaultActiveKey  | 非受控时的初始页签                                                    | `string`                                         | 第一个页签               |
-| toolbar           | 统一设置所有页签的内置入口，顶层设为 `false` 的入口，页签无法重新打开 | `FilePreviewToolbarOptions`                      | -                        |
-| onActiveKeyChange | 切换页签时触发，参数为新页签的 `key`，受控时由宿主更新 `activeKey`    | `(key: string) => void`                          | -                        |
-| labels            | 覆盖界面文案，页签的 `labels` 优先                                    | `FilePreviewLabels`                              | -                        |
-| locale            | 界面语言，规则见[国际化](../guide/i18n)                               | `'zh-CN' \| 'en-US'`                             | 继承上级，默认 `'en-US'` |
-| ref               | 取得命令式句柄，切换页签或访问 FileViewer                             | `Ref<FilePreviewHandle>`                         | -                        |
-| className、style  | 外观与布局，其余 HTML 属性透传到根元素                                | HTML 属性                                        | -                        |
+| 参数              | 说明                                                                              | 类型                                                                  | 默认值                   |
+| ----------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------ |
+| tabs              | 页签列表，至少一个，用 `kind` 区分文件、目录和内容页签                            | `readonly [FilePreviewTab, ...FilePreviewTab[]]`                      | 必填                     |
+| activeKey         | 受控的当前页签，找不到对应页签时显示第一个                                        | `string`                                                              | -                        |
+| defaultActiveKey  | 非受控时的初始页签                                                                | `string`                                                              | 第一个页签               |
+| toolbar           | 统一设置所有页签的内置入口，顶层设为 `false` 的入口，页签无法重新打开             | `FilePreviewToolbarOptions`                                           | -                        |
+| onActiveKeyChange | 切换页签时触发，参数为新页签的 `key`，受控时由宿主更新 `activeKey`                | `(key: string) => void`                                               | -                        |
+| slots             | 替换渲染异常的展示内容，见[错误展示插槽](../guide/getting-started#自定义错误展示) | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }` | -                        |
+| labels            | 覆盖界面文案，页签的 `labels` 优先                                                | `FilePreviewLabels`                                                   | -                        |
+| locale            | 界面语言，规则见[国际化](../guide/i18n)                                           | `'zh-CN' \| 'en-US'`                                                  | 继承上级，默认 `'en-US'` |
+| ref               | 取得命令式句柄，切换页签或访问 FileViewer                                         | `Ref<FilePreviewHandle>`                                              | -                        |
+| className、style  | 外观与布局，其余 HTML 属性透传到根元素                                            | HTML 属性                                                             | -                        |
 
 ### FilePreviewTabBase
 
@@ -201,12 +210,13 @@ import '@openviking/react/components/file-preview/style.css';
 
 ### FilePreviewEditing
 
-| 参数        | 说明                                                                                                                  | 类型                                                          | 默认值 |
-| ----------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- | ------ |
-| save        | 保存草稿，抛错或 reject 时保留草稿并显示保存失败的提示                                                                | `(value: string) => Promise<void>`                            | 必填   |
-| loadContent | 进入编辑时读取完整文本，返回 `undefined` 放弃本次编辑；省略时使用 `content` 或 `file` 的文本，只提供 `url` 时必须提供 | `(source: FilePreviewSource) => Promise<string \| undefined>` | -      |
-| onSave      | 保存成功后触发，参数为已保存的文本                                                                                    | `(value: string) => void`                                     | -      |
-| onCancel    | 取消编辑，或切换页签、层级而丢弃草稿后触发，参数为丢弃的文本；保存成功时不触发                                        | `(value: string) => void`                                     | -      |
+| 参数                 | 说明                                                                                                                  | 类型                                                                                           | 默认值  |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------- |
+| save                 | 保存草稿及可选备注。拒绝时保留草稿；返回 `{ warning: 'version-not-created' }` 时显示提示并照常触发 `onSave`。         | `(value: string, versionNote?: string) => Promise<void \| { warning: 'version-not-created' }>` | 必填    |
+| promptForVersionNote | 调用 `save` 前弹出版本备注；取消时保留草稿。                                                                          | `boolean`                                                                                      | `false` |
+| loadContent          | 进入编辑时读取完整文本，返回 `undefined` 放弃本次编辑；省略时使用 `content` 或 `file` 的文本，只提供 `url` 时必须提供 | `(source: FilePreviewSource) => Promise<string \| undefined>`                                  | -       |
+| onSave               | 保存成功后触发，参数为已保存的文本                                                                                    | `(value: string) => void`                                                                      | -       |
+| onCancel             | 取消编辑，或切换页签、层级而丢弃草稿后触发，参数为丢弃的文本；保存成功时不触发                                        | `(value: string) => void`                                                                      | -       |
 
 ### FilePreviewAction
 
@@ -242,15 +252,15 @@ import '@openviking/react/components/file-preview/style.css';
 
 ### FilePreviewFileTabSlots
 
-包含 `FilePreviewHeaderSlots` 的全部字段，另有加载、失败和格式不支持时的替代内容，不传时使用内置状态。
+包含 `FilePreviewHeaderSlots` 的全部字段，另有加载、失败和格式不支持时的替代内容，不传时使用内置状态。 函数接收当前正文的重试方法，读取失败时重试读取，渲染异常时重试渲染。
 
-| 参数                | 说明                                                                                | 类型                               | 默认值 |
-| ------------------- | ----------------------------------------------------------------------------------- | ---------------------------------- | ------ |
-| loadingFallback     | 读取中的替代内容，`loading` 为 `true` 时也使用                                      | `ReactNode`                        | -      |
-| errorFallback       | 读取失败时的替代内容，替换内置的失败提示和重试按钮                                  | `ReactNode`                        | -      |
-| unsupportedFallback | 格式无法预览时的替代内容，传入后接管整个不支持态，FileViewer 的下载入口随之不再显示 | `ReactNode`                        | -      |
-| confirmFallback     | 大文件确认态的替代组件，收到 `onConfirm`、`onCancel` 等属性                         | `ComponentType<ConfirmSlotProps>`  | -      |
-| downloadFallback    | 无法内联预览时的替代组件，收到 `onDownload`、`onRetry` 等属性                       | `ComponentType<DownloadSlotProps>` | -      |
+| 参数                | 说明                                                                                | 类型                                              | 默认值 |
+| ------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------- | ------ |
+| loadingFallback     | 读取中的替代内容，`loading` 为 `true` 时也使用                                      | `ReactNode`                                       | -      |
+| errorFallback       | 读取或渲染失败时的替代内容，覆盖组件级错误插槽                                      | `ReactNode \| ((reset: () => void) => ReactNode)` | -      |
+| unsupportedFallback | 格式无法预览时的替代内容，传入后接管整个不支持态，FileViewer 的下载入口随之不再显示 | `ReactNode`                                       | -      |
+| confirmFallback     | 大文件确认态的替代组件，收到 `onConfirm`、`onCancel` 等属性                         | `ComponentType<ConfirmSlotProps>`                 | -      |
+| downloadFallback    | 无法内联预览时的替代组件，收到 `onDownload`、`onRetry` 等属性                       | `ComponentType<DownloadSlotProps>`                | -      |
 
 ### FilePreviewActions
 
@@ -276,34 +286,40 @@ import '@openviking/react/components/file-preview/style.css';
 
 所有字段都是可选的 `string`，省略的字段使用当前语言的默认文案。
 
-| 参数             | 说明                                                                   | 类型     | 默认值                 |
-| ---------------- | ---------------------------------------------------------------------- | -------- | ---------------------- |
-| previewImage     | 放大图片按钮的无障碍名称，后接文件名                                   | `string` | `'放大图片'`           |
-| closePreview     | 放大图片弹窗里关闭按钮的文字                                           | `string` | `'关闭预览'`           |
-| showHiddenPath   | 面包屑里折叠层级的「…」按钮的无障碍名称                                | `string` | `'显示隐藏的路径层级'` |
-| copyPath         | 复制路径按钮的提示与无障碍名称                                         | `string` | `'复制路径'`           |
-| copied           | 路径复制成功的反馈                                                     | `string` | `'已复制'`             |
-| copyFailed       | 路径复制失败的反馈                                                     | `string` | `'复制失败'`           |
-| moreActions      | 多个操作收起后的「…」按钮的提示与无障碍名称                            | `string` | `'更多操作'`           |
-| actionFailed     | 注入的操作失败时的提示，后接错误信息                                   | `string` | `'操作失败'`           |
-| previewMode      | 视图切换里「预览」的文字                                               | `string` | `'预览'`               |
-| sourceMode       | 视图切换里「源码」的文字                                               | `string` | `'源码'`               |
-| viewSwitch       | 视图切换按钮组的无障碍名称                                             | `string` | `'显示模式'`           |
-| edit             | 编辑按钮的提示与无障碍名称                                             | `string` | `'编辑'`               |
-| editFile         | 组件不渲染这条文案，设置它没有效果                                     | `string` | `'编辑文件'`           |
-| save             | 编辑时保存按钮的文字                                                   | `string` | `'保存编辑'`           |
-| editorLoadFailed | 编辑器加载失败时的提示                                                 | `string` | `'编辑器加载失败'`     |
-| highlightFailed  | 语法高亮加载失败时的提示                                               | `string` | `'语法高亮加载失败'`   |
-| editor           | 编辑区文本框的无障碍名称                                               | `string` | `'编辑正文'`           |
-| leaveEditing     | 编辑时取消按钮的文字，读取失败后退出编辑的按钮也使用它                 | `string` | `'取消编辑'`           |
-| retry            | 重试按钮的文字                                                         | `string` | `'重试'`               |
-| loadFailed       | 读取文件失败的提示，进入编辑时读取失败也使用它                         | `string` | `'文件加载失败'`       |
-| saveFailed       | 保存失败的提示                                                         | `string` | `'保存失败'`           |
-| unsupported      | 没有可用来源时的提示，格式不受支持的提示由 FileViewer 按 `locale` 显示 | `string` | `'不支持预览此格式'`   |
-| loading          | 加载提示                                                               | `string` | `'加载中…'`            |
-| fileEmpty        | `content` 为空字符串时的提示                                           | `string` | `'该文件为空'`         |
-| noContent        | 组件不渲染这条文案，设置它没有效果                                     | `string` | `'暂无可显示内容'`     |
-| truncated        | `source.truncated` 为 `true` 时的提示                                  | `string` | `'仅显示部分内容'`     |
+| 参数                   | 说明                                                                   | 类型     | 默认值                         |
+| ---------------------- | ---------------------------------------------------------------------- | -------- | ------------------------------ |
+| previewImage           | 放大图片按钮的无障碍名称，后接文件名                                   | `string` | `'放大图片'`                   |
+| closePreview           | 放大图片弹窗里关闭按钮的文字                                           | `string` | `'关闭预览'`                   |
+| showHiddenPath         | 面包屑里折叠层级的「…」按钮的无障碍名称                                | `string` | `'显示隐藏的路径层级'`         |
+| copyPath               | 复制路径按钮的提示与无障碍名称                                         | `string` | `'复制路径'`                   |
+| copied                 | 路径复制成功的反馈                                                     | `string` | `'已复制'`                     |
+| copyFailed             | 路径复制失败的反馈                                                     | `string` | `'复制失败'`                   |
+| moreActions            | 多个操作收起后的「…」按钮的提示与无障碍名称                            | `string` | `'更多操作'`                   |
+| actionFailed           | 注入的操作失败时的提示，后接错误信息                                   | `string` | `'操作失败'`                   |
+| previewMode            | 视图切换里「预览」的文字                                               | `string` | `'预览'`                       |
+| sourceMode             | 视图切换里「源码」的文字                                               | `string` | `'源码'`                       |
+| viewSwitch             | 视图切换按钮组的无障碍名称                                             | `string` | `'显示模式'`                   |
+| edit                   | 编辑按钮的提示与无障碍名称                                             | `string` | `'编辑'`                       |
+| editFile               | 组件不渲染这条文案，设置它没有效果                                     | `string` | `'编辑文件'`                   |
+| save                   | 编辑时保存按钮的文字                                                   | `string` | `'保存编辑'`                   |
+| editorLoadFailed       | 编辑器加载失败时的提示                                                 | `string` | `'编辑器加载失败'`             |
+| highlightFailed        | 语法高亮加载失败时的提示                                               | `string` | `'语法高亮加载失败'`           |
+| editor                 | 编辑区文本框的无障碍名称                                               | `string` | `'编辑正文'`                   |
+| leaveEditing           | 编辑时取消按钮的文字，读取失败后退出编辑的按钮也使用它                 | `string` | `'取消编辑'`                   |
+| retry                  | 重试按钮的文字                                                         | `string` | `'重试'`                       |
+| loadFailed             | 读取文件失败的提示，进入编辑时读取失败也使用它                         | `string` | `'文件加载失败'`               |
+| saveFailed             | 保存失败的提示                                                         | `string` | `'保存失败'`                   |
+| versionNoteTitle       | 版本备注弹窗标题                                                       | `string` | `'填写版本备注'`               |
+| versionNoteLabel       | 版本备注输入框标签                                                     | `string` | `'描述'`                       |
+| versionNotePlaceholder | 版本备注输入框占位文案                                                 | `string` | `'给当前版本写句说明'`         |
+| versionNoteCancel      | 关闭备注弹窗并保留草稿                                                 | `string` | `'取消'`                       |
+| versionNoteConfirm     | 确认版本备注                                                           | `string` | `'确定'`                       |
+| versionNotCreated      | 正文已保存但未创建版本时的提示                                         | `string` | `'正文已保存，未创建新版本。'` |
+| unsupported            | 没有可用来源时的提示，格式不受支持的提示由 FileViewer 按 `locale` 显示 | `string` | `'不支持预览此格式'`           |
+| loading                | 加载提示                                                               | `string` | `'加载中…'`                    |
+| fileEmpty              | `content` 为空字符串时的提示                                           | `string` | `'该文件为空'`                 |
+| noContent              | 组件不渲染这条文案，设置它没有效果                                     | `string` | `'暂无可显示内容'`             |
+| truncated              | `source.truncated` 为 `true` 时的提示                                  | `string` | `'仅显示部分内容'`             |
 
 ### FilePreviewHandle
 
@@ -445,3 +461,7 @@ import '@openviking/react/components/file-preview/style.css';
 | `--ov-ui-font-mono`                 | 路径与编辑区的字体          | `ui-monospace, monospace`     |
 
 正文由 `@ark-design/ui` 渲染，颜色主要取自 Arco 的 `--color-*`、`--primary-*` 变量。在应用入口加载一份 Arco 颜色主题，例如 `@ark-design/ui/styles/aml-theme.css` 或 `@arco-design/web-react/dist/css/arco.css`；未加载时这些变量没有值，正文的颜色样式不会生效。暗色下还要在 `<body>` 上设置 `arco-theme="dark"`，与 `<html>` 上的 `.dark` 同时生效。
+
+## 埋点
+
+通过 Provider 统一接入，支持的事件和触发条件见[埋点指南与事件目录](../guide/analytics)。

@@ -1,5 +1,11 @@
+import { usePreviewActionExposure } from '../../shared/analytics/preview-actions.js';
 import { Button } from '../../shared/primitives/button/button.js';
-import { Dropdown } from './dropdown/index.js';
+import { Fragment } from 'react';
+import {
+  Dropdown,
+  DropdownItem,
+  DropdownSeparator,
+} from '../../shared/primitives/dropdown/index.js';
 import MoreIcon from '../../../../icons/svg/file-preview/more.svg?react';
 import type { FilePreviewAction } from './action-types.js';
 import type { FilePreviewLabels } from './types.js';
@@ -18,34 +24,70 @@ export function FilePreviewMenu({
   text: Required<FilePreviewLabels>;
   onSelect: (action: FilePreviewAction) => void;
 }) {
+  const visibleGroups = groups.filter((group) => group.length > 0);
+  if (visibleGroups.length === 0) return null;
   return (
     <Dropdown
       disabled={disabled}
+      triggerMode="hover"
       className="ov-file-preview__menu-surface"
       menuClassName="ov-file-preview__menu"
-      groups={groups.map((group) =>
-        group.map((action) => ({
-          ...action,
-          className: ['ov-file-preview__menu-item', action.className]
-            .filter(Boolean)
-            .join(' '),
-          disabled: disabled || pending || action.disabled,
-          onClick: () => onSelect(action),
-        })),
-      )}
+      trigger={
+        <Button
+          size="small"
+          type="default"
+          iconOnly
+          className="ov-file-preview__toolbar-button"
+          aria-label={text.moreActions}
+          title={text.moreActions}
+          disabled={disabled}
+          aria-busy={pending}
+        >
+          <MoreIcon width={16} height={16} aria-hidden="true" />
+        </Button>
+      }
     >
-      <Button
-        size="small"
-        type="default"
-        iconOnly
-        className="ov-file-preview__toolbar-button"
-        aria-label={text.moreActions}
-        title={text.moreActions}
-        disabled={disabled}
-        aria-busy={pending}
-      >
-        <MoreIcon width={16} height={16} aria-hidden="true" />
-      </Button>
+      {visibleGroups.map((group, index) => (
+        <Fragment key={index}>
+          {index > 0 ? <DropdownSeparator /> : null}
+          {group.map((action) => (
+            <PreviewMenuItem
+              key={action.key}
+              className={['ov-file-preview__menu-item', action.className]
+                .filter(Boolean)
+                .join(' ')}
+              action={action}
+              disabled={disabled || pending || action.disabled}
+              onClick={() => onSelect(action)}
+            >
+              <span className="ov-file-preview__action-icon" aria-hidden="true">
+                {action.icon}
+              </span>
+              {action.label}
+            </PreviewMenuItem>
+          ))}
+        </Fragment>
+      ))}
     </Dropdown>
+  );
+}
+
+function PreviewMenuItem({
+  action,
+  children,
+  ...props
+}: {
+  action: FilePreviewAction;
+  children: import('react').ReactNode;
+  key?: string;
+  className?: string;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  const ref = usePreviewActionExposure([action]);
+  return (
+    <DropdownItem {...props} ref={ref}>
+      {children}
+    </DropdownItem>
   );
 }

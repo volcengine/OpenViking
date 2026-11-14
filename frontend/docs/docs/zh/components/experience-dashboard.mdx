@@ -31,27 +31,28 @@ import '@openviking/react/components/experience-dashboard/style.css';
 
 ### ExperienceDashboard
 
-| 参数             | 说明                                                                                                                  | 类型                                                                                                        | 默认值                   |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------ |
-| uri              | 当前资源的 URI，变化时重置页签、时间范围等内部状态                                                                    | `string`                                                                                                    | 必填                     |
-| kind             | 展示模式，不根据 `uri` 推断：`directory` 列出经验文件，`file` 展示单个经验的看板                                      | `'directory' \| 'file'`                                                                                     | 必填                     |
-| data             | 展示数据，没有数据的区域显示 `states` 对应的状态                                                                      | `ExperienceDashboardData`                                                                                   | `{}`                     |
-| tab              | 文件视图的当前页签：`impact` 应用效果、`source` 来源追溯、`test` 测试。传入后受控，需要在 `onTabChange` 里更新        | `'impact' \| 'source' \| 'test'`                                                                            | `'impact'`               |
-| days             | 「应用效果」的统计时间范围，单位为天，可选 `3`、`7`、`30`，`0` 表示全部时间。传入后受控，需要在 `onDaysChange` 里更新 | `number`                                                                                                    | `7`                      |
-| page             | 当前页码，从 0 开始                                                                                                   | `number`                                                                                                    | `0`                      |
-| pageSize         | 每页条数，用于把 `data.total` 换算成页数                                                                              | `number`                                                                                                    | `20`                     |
-| hasMore          | 是否还有下一页；没有 `data.total` 时用它决定翻页按钮是否可用                                                          | `boolean`                                                                                                   | `false`                  |
-| loadingMore      | 追加下一页的轨迹是否正在进行，为真时「加载更多」显示加载中                                                            | `boolean`                                                                                                   | `false`                  |
-| startIndex       | 当前页之前已有的条数，目录视图的序号与「测试」的标题从这里接着数                                                      | `number`                                                                                                    | `0`                      |
-| states           | 各区域的加载与错误状态，键的含义见「注意」                                                                            | `Partial<Record<'list' \| 'outcomes' \| 'trajectories' \| 'sources' \| 'tests', ExperienceDashboardState>>` | `{}`                     |
-| onTabChange      | 切换页签时触发，参数为目标页签                                                                                        | `(tab: 'impact' \| 'source' \| 'test') => void`                                                             | -                        |
-| onDaysChange     | 切换统计时间范围时触发，参数为所选天数；组件不按范围过滤 `data`，请在回调里重新加载数据                               | `(days: number) => void`                                                                                    | -                        |
-| onPageChange     | 点击翻页时触发，参数为目标页码；未提供 `onLoadMore` 时「加载更多」也调用它；两者都省略时这些按钮禁用                  | `(page: number) => void`                                                                                    | -                        |
-| onLoadMore       | 点击「加载更多」时触发，由宿主追加下一页；优先于 `onPageChange`，省略时回退到 `onPageChange(page + 1)`                | `() => void`                                                                                                | -                        |
-| onOpenUri        | 点击经验、轨迹名称或轨迹的打开按钮时触发，参数为对应的 URI；省略时这些按钮禁用                                        | `(uri: string) => void`                                                                                     | -                        |
-| labels           | 覆盖界面文案                                                                                                          | `Partial<ExperienceDashboardLabels>`                                                                        | -                        |
-| locale           | 界面语言，规则见[国际化](../guide/i18n)                                                                               | `'zh-CN' \| 'en-US'`                                                                                        | 继承上级，默认 `'en-US'` |
-| className、style | 外观与布局，其余 HTML 属性透传到根元素                                                                                | HTML 属性                                                                                                   | -                        |
+| 参数             | 说明                                                                                                                  | 类型                                                                                                                    | 默认值                   |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| uri              | 当前资源的 URI，变化时重置页签、时间范围等内部状态                                                                    | `string`                                                                                                                | 必填                     |
+| kind             | 展示模式，不根据 `uri` 推断：`directory` 列出经验文件，`file` 展示单个经验的看板                                      | `'directory' \| 'file'`                                                                                                 | 必填                     |
+| data             | 展示数据，没有数据的区域显示 `states` 对应的状态                                                                      | `ExperienceDashboardData`                                                                                               | `{}`                     |
+| tab              | 文件视图的当前页签：`impact` 应用效果、`source` 来源追溯、`test` 测试。传入后受控，需要在 `onTabChange` 里更新        | `'impact' \| 'source' \| 'test'`                                                                                        | `'impact'`               |
+| days             | 「应用效果」的统计时间范围，单位为天，可选 `3`、`7`、`30`，`0` 表示全部时间。传入后受控，需要在 `onDaysChange` 里更新 | `number`                                                                                                                | `7`                      |
+| page             | 当前页码，从 0 开始                                                                                                   | `number`                                                                                                                | `0`                      |
+| pageSize         | 每页条数，用于把 `data.total` 换算成页数                                                                              | `number`                                                                                                                | `20`                     |
+| hasMore          | 是否还有下一页；没有 `data.total` 时用它决定翻页按钮是否可用                                                          | `boolean`                                                                                                               | `false`                  |
+| loadingMore      | 追加下一页的轨迹是否正在进行，为真时「加载更多」显示加载中                                                            | `boolean`                                                                                                               | `false`                  |
+| startIndex       | 当前页之前已有的条数，目录视图的序号与「测试」的标题从这里接着数                                                      | `number`                                                                                                                | `0`                      |
+| states           | 各区域的加载与错误状态，键的含义见「注意」                                                                            | `Partial<Record<'list' \| 'effect' \| 'outcomes' \| 'trajectories' \| 'sources' \| 'tests', ExperienceDashboardState>>` | `{}`                     |
+| onTabChange      | 切换页签时触发，参数为目标页签                                                                                        | `(tab: 'impact' \| 'source' \| 'test') => void`                                                                         | -                        |
+| onDaysChange     | 切换统计时间范围时触发，参数为所选天数；组件不按范围过滤 `data`，请在回调里重新加载数据                               | `(days: number) => void`                                                                                                | -                        |
+| onPageChange     | 点击翻页时触发，参数为目标页码；未提供 `onLoadMore` 时「加载更多」也调用它；两者都省略时这些按钮禁用                  | `(page: number) => void`                                                                                                | -                        |
+| onLoadMore       | 点击「加载更多」时触发，由宿主追加下一页；优先于 `onPageChange`，省略时回退到 `onPageChange(page + 1)`                | `() => void`                                                                                                            | -                        |
+| onOpenUri        | 点击经验名称或轨迹的打开按钮时触发，参数为对应的 URI；省略时这些按钮禁用                                              | `(uri: string) => void`                                                                                                 | -                        |
+| labels           | 覆盖界面文案                                                                                                          | `Partial<ExperienceDashboardLabels>`                                                                                    | -                        |
+| slots            | 替换渲染异常的展示内容，见[错误展示插槽](../guide/getting-started#自定义错误展示)                                     | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }`                                                   | -                        |
+| locale           | 界面语言，规则见[国际化](../guide/i18n)                                                                               | `'zh-CN' \| 'en-US'`                                                                                                    | 继承上级，默认 `'en-US'` |
+| className、style | 外观与布局，其余 HTML 属性透传到根元素                                                                                | HTML 属性                                                                                                               | -                        |
 
 ### ExperienceDashboardData
 
@@ -68,22 +69,23 @@ import '@openviking/react/components/experience-dashboard/style.css';
 
 ### ExperienceItem
 
-| 参数            | 说明                                                                                                        | 类型     | 默认值 |
-| --------------- | ----------------------------------------------------------------------------------------------------------- | -------- | ------ |
-| uri             | 经验文件的 URI，同时作为列表项的 key，需要唯一                                                              | `string` | 必填   |
-| name            | 经验名称，决定类型图标，点击时触发 `onOpenUri`                                                              | `string` | 必填   |
-| modTime         | 最近修改时间，可被 `Date.parse` 解析的字符串；不足 3 天显示相对时间，更早显示日期与时刻，无法解析时原样显示 | `string` | -      |
-| injectionCount  | 被注入上下文的次数，省略时显示「—」                                                                         | `number` | -      |
-| recallCount     | 被召回的次数，省略时显示「—」                                                                               | `number` | -      |
-| description     | 经验描述，列表不显示                                                                                        | `string` | -      |
-| trajectoryCount | 关联的轨迹数，列表不显示                                                                                    | `number` | -      |
+| 参数            | 说明                                                                                                        | 类型      | 默认值 |
+| --------------- | ----------------------------------------------------------------------------------------------------------- | --------- | ------ |
+| uri             | 经验文件的 URI，同时作为列表项的 key，需要唯一                                                              | `string`  | 必填   |
+| name            | 经验名称，决定类型图标，点击时触发 `onOpenUri`                                                              | `string`  | 必填   |
+| modTime         | 最近修改时间，可被 `Date.parse` 解析的字符串；不足 3 天显示相对时间，更早显示日期与时刻，无法解析时原样显示 | `string`  | -      |
+| isUpdated       | 是否在用户上次查看后有更新，为真时名称右侧显示「更新」标记；由宿主判定，组件不比较时间                      | `boolean` | -      |
+| injectionCount  | 被注入上下文的次数，省略时显示「—」                                                                         | `number`  | -      |
+| recallCount     | 被召回的次数，省略时显示「—」                                                                               | `number`  | -      |
+| description     | 经验描述，列表不显示                                                                                        | `string`  | -      |
+| trajectoryCount | 关联的轨迹数，列表不显示                                                                                    | `number`  | -      |
 
 ### ExperienceTrajectory
 
 | 参数        | 说明                                                                                         | 类型                                                               | 默认值 |
 | ----------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ------ |
 | uri         | 轨迹的 URI，同时作为列表项的 key，需要唯一；复制与打开按钮都作用于它                         | `string`                                                           | 必填   |
-| name        | 轨迹名称，点击时触发 `onOpenUri`                                                             | `string`                                                           | 必填   |
+| name        | 轨迹名称，只作展示；打开轨迹用行内右侧的打开按钮                                             | `string`                                                           | 必填   |
 | outcome     | 轨迹结果，提供后在标题右侧显示彩色状态点：`success` 绿、`failure` 红、`partial` 橙，其余中性 | `'success' \| 'partial' \| 'unfinished' \| 'failure' \| 'unknown'` | -      |
 | created_at  | 轨迹时间，显示在标题上方                                                                     | `string`                                                           | -      |
 | updated_at  | 更新时间，暂不显示                                                                           | `string`                                                           | -      |
@@ -103,16 +105,20 @@ import '@openviking/react/components/experience-dashboard/style.css';
 
 | 参数    | 说明                                                                           | 类型            | 默认值 |
 | ------- | ------------------------------------------------------------------------------ | --------------- | ------ |
-| loading | 是否正在加载，对应区域显示「加载中…」                                          | `boolean`       | -      |
+| loading | 是否正在加载，对应区域显示骨架占位条，加载状态另以视觉隐藏的文本给出           | `boolean`       | -      |
 | error   | 加载失败的错误，对应区域显示失败与重试；追加轨迹页失败时例外，已加载的记录保留 | `Error \| null` | -      |
 | onRetry | 点击重试时触发                                                                 | `() => void`    | -      |
 
 ## 注意
 
-- `states` 的键与区域对应，且只在对应区域没有数据时显示；例外是追加轨迹页失败——已加载的记录保留，错误与重试显示在列表下方：`list` 目录视图的列表，`outcomes` 任务结果分布，`trajectories` 注入轨迹，`sources` 来源追溯，`tests` 测试材料。
+- `states` 的键与区域对应，通常只在对应区域没有数据时显示：`list` 目录视图的列表，`effect` 应用效果的三个指标，`outcomes` 任务结果分布，`trajectories` 注入轨迹，`sources` 来源追溯，`tests` 测试材料。有两处例外：追加轨迹页失败时，已加载的记录保留，错误与重试显示在列表下方；`effect` 的 `loading` 或 `error` 一旦给出，即使 `data.effect` 仍有值也整块替换为骨架或错误，因为指标是独立取数的，旧值不能与刷新失败同时显示。
 - 分页在超过一页时出现：`data.total` 与 `pageSize` 决定页数，没有 `data.total` 时由 `hasMore` 界定。对应区域的 `loading` 为 `true` 时翻页按钮禁用。
-- 「应用效果」页签在 `hasMore` 为 `true` 时提供「向下滚动加载更多」：优先调用 `onLoadMore`，只提供 `onPageChange` 时以 `page + 1` 调用它；`loadingMore` 为 `true` 期间显示加载中。
+- 「应用效果」页签在 `hasMore` 为 `true` 时提供「向下滚动加载更多」：滚到距底部 240px 内自动追加，也可点击按钮；优先调用 `onLoadMore`，只提供 `onPageChange` 时以 `page + 1` 调用它。停在同一位置不会连续请求，往回滚或离开触发区后再次回到末尾才会再请求一次——请求失败时内容不会变高，重试同一页靠的就是这条；`loadingMore` 为 `true` 期间显示加载中。
 - 更新测试材料会保留已选页签与时间范围；`testMaterials` 变回 `undefined` 时，已选中的「测试」页签回到「应用效果」。
 - 复制使用 `navigator.clipboard.writeText`，只在 HTTPS 或 localhost 下可用；不可用或浏览器拒绝时按钮显示「复制失败」。
 - 组件高度为 `100%` 且内容区自己滚动，父元素需要给出高度。
 - 类型从 `@openviking/react/components/experience-dashboard` 导出，包括 `ExperienceDashboardTab` 和 `ExperienceOutcome`；包根入口只导出组件和 `ExperienceDashboardProps`。
+
+## 埋点
+
+通过 Provider 统一接入，支持的事件和触发条件见[埋点指南与事件目录](../guide/analytics)。

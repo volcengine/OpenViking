@@ -1,3 +1,4 @@
+import type { renderErrors as EnglishRenderErrors } from './en-US.js';
 import type { ConsoleLabels } from '../types.js';
 import type enUS from './en-US.js';
 
@@ -128,3 +129,9 @@ const messages: typeof enUS = {
   },
 };
 export default messages;
+
+export const renderErrors = {
+  console: '控制台显示失败',
+  toolbar: '工具栏显示失败',
+  command: '命令面板显示失败',
+} satisfies Record<keyof typeof EnglishRenderErrors, string>;

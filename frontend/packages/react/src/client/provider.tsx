@@ -2,6 +2,8 @@ import { createContext, useContext, useMemo } from 'react';
 import type { ReactNode } from 'react';
 import { LocaleProvider } from '../shared/locale-context.js';
 import type { Locale } from '../shared/locale.js';
+import { AnalyticsProvider } from '../shared/analytics/context.js';
+import type { OpenVikingAnalyticsOptions } from './analytics/types.js';
 
 import { createOvClient } from './client.js';
 import { mergeProviderConfig, type OvProviderBase } from './options.js';
@@ -24,6 +26,8 @@ const OvClientContext = createContext<OvClientScope | null>(null);
  * as fields.
  */
 export interface OpenVikingProviderProps extends OvClientOptions {
+  /** Optional product analytics receiver. Omitted at the root disables collection. */
+  analytics?: OpenVikingAnalyticsOptions | false;
   /** 界面语言；省略时继承上层，无配置时默认英文。Subtree locale; inherits or defaults to en-US. */
   locale?: Locale;
   children?: ReactNode;
@@ -68,6 +72,7 @@ export function OpenVikingProvider({
   credentials,
   signal,
   fetch,
+  analytics,
   locale,
   children,
 }: OpenVikingProviderProps) {
@@ -110,7 +115,9 @@ export function OpenVikingProvider({
 
   return (
     <OvClientContext.Provider value={value}>
-      <LocaleProvider locale={locale}>{children}</LocaleProvider>
+      <AnalyticsProvider analytics={analytics}>
+        <LocaleProvider locale={locale}>{children}</LocaleProvider>
+      </AnalyticsProvider>
     </OvClientContext.Provider>
   );
 }

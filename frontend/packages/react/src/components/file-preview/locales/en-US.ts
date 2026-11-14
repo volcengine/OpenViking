@@ -22,6 +22,12 @@ const messages = {
   retry: 'Retry',
   loadFailed: 'Failed to load the file',
   saveFailed: 'Failed to save',
+  versionNoteTitle: 'Add a version note',
+  versionNoteLabel: 'Description',
+  versionNotePlaceholder: 'Describe this version',
+  versionNoteCancel: 'Cancel',
+  versionNoteConfirm: 'Confirm',
+  versionNotCreated: 'The file was saved, but a new version was not created.',
   unsupported: 'Preview is not supported for this format',
   loading: 'Loading…',
   fileEmpty: 'This file is empty',
@@ -30,3 +36,9 @@ const messages = {
 } satisfies Required<FilePreviewLabels>;
 
 export default messages;
+
+export const renderErrors = {
+  preview: 'File preview failed.',
+  content: 'Tab content could not be displayed.',
+  editor: 'File editor could not be displayed.',
+};

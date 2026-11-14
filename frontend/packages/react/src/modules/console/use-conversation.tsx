@@ -1,16 +1,26 @@
 import type { SetStateAction } from 'react';
 import { useEffect, useMemo, useRef } from 'react';
-import { useVikingBotChat, useVikingBotSessions } from '../viking-bot/index.js';
+import { useVikingBotChat } from './chat/use-viking-bot-chat.js';
+import { useVikingBotSessions } from './chat/use-viking-bot-sessions.js';
 import type { VikingBotProps } from '../../components/viking-bot/types.js';
 import type { ConsoleProps } from './types.js';
 
-/** Both Console and standalone hosts consume the same public headless hooks. */
+/** Console owns chat requests and sessions. */
 export function useConversation(
-  { conversation, chatOptions, scopeKey, requestOptions, locale }: ConsoleProps,
+  {
+    conversation,
+    chatOptions,
+    scopeKey,
+    requestOptions,
+    locale,
+    modes,
+  }: ConsoleProps,
   setDraft: (value: SetStateAction<string>) => void,
 ): Partial<VikingBotProps> {
   const enabled =
-    conversation?.messages === undefined && conversation?.onSend === undefined;
+    (modes === undefined || modes.includes('conversation')) &&
+    conversation?.messages === undefined &&
+    conversation?.onSend === undefined;
   const options = {
     ...chatOptions,
     locale: chatOptions?.locale ?? locale,
@@ -68,7 +78,11 @@ export function useConversation(
     if (sessionId && sessionId !== selectedId) onSelect?.(sessionId);
   }, [enabled, selection, selectedId, sessionId, onSelect]);
   if (!enabled) return conversation ?? {};
-  const error = chat.error ?? chat.persistenceError;
+  const error = chat.messages.some(
+    (message) => message.clientError === chat.error,
+  )
+    ? chat.persistenceError
+    : (chat.error ?? chat.persistenceError);
   return {
     ...conversation,
     messages: chat.messages,
@@ -81,21 +95,16 @@ export function useConversation(
     onSend: (draft) => {
       const token = ++submission.current;
       const followingUp = chat.status === 'streaming';
-      if (chat.canSteer)
-        setDraft((current) =>
-          current.trim() === draft.text.trim() ? '' : current,
-        );
+      setDraft((current) =>
+        current.trim() === draft.text.trim() ? '' : current,
+      );
       void owner.send(draft).then((success) => {
         if (!owner.active) return;
         if (!success) {
-          if (chat.canSteer && token === submission.current)
+          if (followingUp && token === submission.current)
             setDraft((current) => (current === '' ? draft.text : current));
           return;
         }
-        if (!chat.canSteer)
-          setDraft((current) =>
-            current.trim() === draft.text.trim() ? '' : current,
-          );
         if (!followingUp) void sessions.refresh();
       });
     },

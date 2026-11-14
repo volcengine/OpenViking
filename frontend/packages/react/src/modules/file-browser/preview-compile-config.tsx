@@ -1,3 +1,5 @@
+import { TextArea, Input } from '../../shared/primitives/input/input.js';
+import { Checkbox } from '../../shared/primitives/checkbox/checkbox.js';
 import { useCallback, useId, useState } from 'react';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { OV_PATHS } from '../../client/paths.js';
@@ -85,12 +87,13 @@ function CompileConfigForm({
               options,
             }),
           onUpdated,
+          'file_browser_compile_config_save',
         );
       }}
     >
       <fieldset disabled={!canWrite || mutation.pending}>
         <label htmlFor={`${id}-sources`}>{text.sources}</label>
-        <textarea
+        <TextArea
           id={`${id}-sources`}
           required
           value={sources}
@@ -100,27 +103,25 @@ function CompileConfigForm({
           }}
         />
         <label htmlFor={`${id}-skill`}>{text.skill}</label>
-        <input
+        <Input
           id={`${id}-skill`}
           required
           value={draft.skill}
           onChange={(event) => change({ skill: event.target.value })}
         />
         <label htmlFor={`${id}-instruction`}>{text.instruction}</label>
-        <textarea
+        <TextArea
           id={`${id}-instruction`}
           value={draft.instruction ?? ''}
           onChange={(event) => change({ instruction: event.target.value })}
         />
-        <label htmlFor={`${id}-automatic`}>
-          <input
-            id={`${id}-automatic`}
-            type="checkbox"
-            checked={draft.auto_update}
-            onChange={(event) => change({ auto_update: event.target.checked })}
-          />
+        <Checkbox
+          id={`${id}-automatic`}
+          checked={draft.auto_update}
+          onChange={(next) => change({ auto_update: next })}
+        >
           {text.automatic}
-        </label>
+        </Checkbox>
         <PreviewCompileSchedule
           value={draft.update_schedule}
           text={text}

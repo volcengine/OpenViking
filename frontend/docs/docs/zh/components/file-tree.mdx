@@ -323,6 +323,7 @@ treeRef.current?.scrollToRow('resources', { block: 'center' });
 - 树的根元素高度为 `100%`，内容在树内部滚动，需要给外层容器设置高度。
 - 行宽按内容撑开，名称完整显示，容器横向滚动。层级很深时缩进同样靠横向滚动获得空间。
 - 说明文字最宽 200px，超出省略，避免长说明撑宽整行。
+- Chromium 浏览器在各平台使用统一的滚动条样式：内容溢出时占用 12px 空间，滑块宽 8px，颜色采用 macOS 原生滚动条的浅色与暗色配色。悬停滚动条时显示轨道和边线，滑块在浅色下悬停加深、暗色下悬停变亮。
 - `renderRowTrailing` 返回的内容显示在行右端；行内还有层级、权限等行尾标记时，它紧跟在这些标记之后。
 
 ## 主题变量
@@ -344,3 +345,7 @@ treeRef.current?.scrollToRow('resources', { block: 'center' });
 | `--ov-ui-file-tree-row-height`    | `32px`                           | 行高                             |
 | `--ov-ui-file-tree-row-radius`    | `4px`                            | 行圆角                           |
 | `--ov-ui-file-tree-indent`        | `20px`                           | 每级缩进                         |
+
+## 埋点
+
+通过 Provider 统一接入，支持的事件和触发条件见[埋点指南与事件目录](../guide/analytics)。

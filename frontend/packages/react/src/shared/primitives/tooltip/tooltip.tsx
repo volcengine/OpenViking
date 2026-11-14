@@ -5,6 +5,7 @@ import {
   useId,
   useRef,
   useState,
+  version,
 } from 'react';
 import { createPortal } from 'react-dom';
 
@@ -35,7 +36,7 @@ function useMergedRef(
   ref: React.Ref<HTMLElement> | undefined,
   target: React.RefObject<HTMLElement | null>,
 ) {
-  const merged = useCallback(
+  return useCallback(
     (node: HTMLElement | null) => {
       target.current = node;
       if (typeof ref === 'function') ref(node);
@@ -43,7 +44,6 @@ function useMergedRef(
     },
     [ref, target],
   );
-  return merged;
 }
 
 /**
@@ -87,6 +87,18 @@ export function Tooltip({
   // 用 state 而不是 ref 持有浮层节点：定位 effect 要在节点挂载后重跑，
   // ref 变化不会触发重渲染，effect 便看不到它。
   const [surfaceNode, setSurfaceNode] = useState<HTMLDivElement | null>(null);
+  const surfaceRef = useCallback((node: HTMLDivElement | null) => {
+    setSurfaceNode(node);
+    // A tooltip decorating a top-layer menu item must appear above that menu.
+    // Its portal is removed with the tooltip, releasing the browser layer.
+    if (
+      node?.showPopover &&
+      triggerRef.current?.closest('.ov-dropdown[popover]')
+    ) {
+      node.setAttribute('popover', 'manual');
+      node.showPopover();
+    }
+  }, []);
   const id = useId();
   const position = useOverlayPosition(open, triggerRef, surfaceNode, placement);
 
@@ -175,7 +187,11 @@ export function Tooltip({
 
   const child = children as React.ReactElement<Record<string, unknown>>;
   const childProps = child.props;
-  const childRef = (child as unknown as { ref?: React.Ref<HTMLElement> }).ref;
+  const childRef = (
+    Number.parseInt(version, 10) >= 19
+      ? childProps.ref
+      : (child as unknown as { ref?: React.Ref<HTMLElement> }).ref
+  ) as React.Ref<HTMLElement> | undefined;
   const mergedRef = useMergedRef(childRef, triggerRef);
 
   const triggerElement = cloneElement(child, {
@@ -230,7 +246,7 @@ export function Tooltip({
   const surface = open
     ? createPortal(
         <div
-          ref={setSurfaceNode}
+          ref={surfaceRef}
           id={id}
           role={trigger === 'hover' ? 'tooltip' : 'dialog'}
           aria-label={trigger === 'click' ? text.close : undefined}

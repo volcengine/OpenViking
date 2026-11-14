@@ -1,3 +1,4 @@
+import type { ErrorFallback } from '../../shared/error-boundary/types.js';
 import type { FilePreviewActionSource } from './action-types.js';
 export type {
   FilePreviewAction,
@@ -397,11 +398,21 @@ export interface FilePreviewEditing {
    */
   loadContent?: (source: FilePreviewSource) => Promise<string | undefined>;
   /**
-   * 保存草稿时调用。抛错或 reject 时组件展示失败提示并保留草稿。
-   * Invoked when the draft is saved. A thrown error or rejection keeps the draft
-   * and shows a failure message.
+   * 为 true 时，保存前弹出版本备注，确认后将备注传给 save。
+   * When true, prompt for a version note before saving and pass it to save.
    */
-  save: (value: string) => Promise<void>;
+  promptForVersionNote?: boolean;
+  /**
+   * 保存草稿。抛错或 reject 时保留草稿并显示失败提示；正文已保存但未创建版本时，
+   * 可返回 warning 让组件退出编辑并显示提示。
+   * Saves the draft. A thrown error or rejection keeps the draft and displays
+   * a failure message. Return a warning to leave editing and show that the
+   * file was saved without a new version.
+   */
+  save: (
+    value: string,
+    versionNote?: string,
+  ) => Promise<void | { warning: 'version-not-created' }>;
   /**
    * 保存成功后触发，参数为已保存的文本；失败时不触发。
    * Called after saving succeeds, with the saved text; not called on failure.
@@ -497,11 +508,14 @@ export interface FilePreviewFileTabSlots extends FilePreviewHeaderSlots {
    */
   loadingFallback?: ReactNode;
   /**
-   * 读取失败时的兜底内容。不传时使用内置错误态与重试入口。
-   * Fallback when reading failed. A built-in error state with a retry entry is
-   * used when omitted.
+   * 替换读取失败或当前正文的渲染错误；渲染错误时优先于组件级配置。
+   * Replaces read failures or body-rendering errors; overrides the component
+   * slot for rendering errors.
+   * 渲染函数接收当前正文的重试方法：读取失败时重试读取，渲染异常时重试渲染。
+   * Render functions receive the current body's retry action: retry loading
+   * after a read failure, or retry rendering after a rendering failure.
    */
-  errorFallback?: ReactNode;
+  errorFallback?: ErrorFallback;
   /**
    * 格式不支持时的兜底内容。格式是否可预览由底座判定，因此这个节点会交给
    * 底座，而不是在组件这边提前判断。传了就由它接管整个不支持态（含底座原本
@@ -567,6 +581,12 @@ export interface FilePreviewLabels {
   loadFailed?: string;
   /** 保存失败时的提示。Message shown when saving failed. */
   saveFailed?: string;
+  versionNoteTitle?: string;
+  versionNoteLabel?: string;
+  versionNotePlaceholder?: string;
+  versionNoteCancel?: string;
+  versionNoteConfirm?: string;
+  versionNotCreated?: string;
   /** 无法预览该格式时的提示。Message shown when the format cannot be previewed. */
   unsupported?: string;
   /** 取回正文时的加载提示。Message shown while the text is being fetched. */
@@ -642,6 +662,8 @@ export interface FilePreviewProps extends Omit<
    * Called after the active tab changes, with the new tab key.
    */
   onActiveKeyChange?: (key: string) => void;
+  /** 渲染异常时的替代内容，省略时继承外层或使用内置展示。Render-failure content; inherits or uses the default when omitted. */
+  slots?: { errorFallback?: ErrorFallback };
   /**
    * 所有页签的默认文案，跟随 locale。页签可以逐项覆盖。
    * Default copy for every tab, following locale. A tab can override it field

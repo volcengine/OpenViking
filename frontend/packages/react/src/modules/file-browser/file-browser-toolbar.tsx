@@ -1,5 +1,6 @@
 import SearchIcon from '../../../../icons/svg/scope-switcher/search.svg?react';
-import FilterIcon from '../../../../icons/svg/dashboards/severity-filter.svg?react';
+import FilterIcon from '../../../../icons/svg/file-browser/search-filter.svg?react';
+import RefreshIcon from '../../../../icons/svg/file-browser/refresh-cw-01.svg?react';
 
 /**
  * 左栏的搜索行：一个搜索框形态的入口、内嵌的高级筛选按钮，以及独立的刷新。
@@ -77,22 +78,10 @@ export function FileBrowserToolbar({
         disabled={!canRefresh || refreshing}
         onClick={onRefresh}
       >
-        <svg
+        <RefreshIcon
           aria-hidden="true"
-          width={14}
-          height={14}
-          viewBox="0 0 16 16"
-          fill="none"
-          className={refreshing ? 'ov-file-browser__refresh-spin' : undefined}
-        >
-          <path
-            d="M13 6a5.2 5.2 0 1 0 .15 3.5M13 2.5V6H9.5"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
+          className="ov-file-browser__refresh-icon"
+        />
       </button>
     </div>
   );

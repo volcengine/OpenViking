@@ -31,19 +31,20 @@ import '@openviking/react/components/wiki-dashboard/style.css';
 
 ### WikiDashboard
 
-| 参数             | 说明                                                                   | 类型                                                                                                                            | 默认值                   |
-| ---------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
-| kind             | 展示模式，数据加载中也能确定                                           | `'directory' \| 'file'`                                                                                                         | 必填                     |
-| data             | 与 `kind` 对应的展示数据，未提供时显示加载或错误状态                   | `WikiDirectoryData`（目录）、`WikiFileData`（文件）                                                                             | -                        |
-| loading          | 列表为空时显示加载状态                                                 | `boolean`                                                                                                                       | `false`                  |
-| error            | 列表为空时显示错误状态                                                 | `Error \| null`                                                                                                                 | -                        |
-| onRetry          | 点击重试时触发，组件不自行发起请求                                     | `() => void`                                                                                                                    | -                        |
-| onOpenUri        | 目录视图：点击文件时触发，参数为该文件的 URI；文件视图：点击路径时触发 | `(uri: string) => void`（目录）、`() => void`（文件）                                                                           | -                        |
-| onOpenDashboard  | 目录视图：打开该文件的看板时触发，未提供时回退到 `onOpenUri`           | `(uri: string) => void`                                                                                                         | -                        |
-| defineActions    | 为每一行定义操作按钮，省略或返回空数组时不显示操作区                   | `(uri: string) => readonly WikiDashboardAction[]`（目录）、`(conflict: WikiConflict) => readonly WikiDashboardAction[]`（文件） | -                        |
-| labels           | 覆盖界面文案                                                           | `Partial<WikiDashboardLabels>`                                                                                                  | -                        |
-| locale           | 界面语言，规则见[国际化](../guide/i18n)                                | `'zh-CN' \| 'en-US'`                                                                                                            | 继承上级，默认 `'en-US'` |
-| className、style | 外观与布局，其余 HTML 属性透传到根元素                                 | HTML 属性                                                                                                                       | -                        |
+| 参数             | 说明                                                                              | 类型                                                                                                                            | 默认值                   |
+| ---------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| kind             | 展示模式，数据加载中也能确定                                                      | `'directory' \| 'file'`                                                                                                         | 必填                     |
+| data             | 与 `kind` 对应的展示数据，未提供时显示加载或错误状态                              | `WikiDirectoryData`（目录）、`WikiFileData`（文件）                                                                             | -                        |
+| loading          | 列表为空时显示加载状态                                                            | `boolean`                                                                                                                       | `false`                  |
+| error            | 列表为空时显示错误状态                                                            | `Error \| null`                                                                                                                 | -                        |
+| onRetry          | 点击重试时触发，组件不自行发起请求                                                | `() => void`                                                                                                                    | -                        |
+| onOpenUri        | 目录视图：点击文件时触发，参数为该文件的 URI；文件视图：点击路径时触发            | `(uri: string) => void`（目录）、`() => void`（文件）                                                                           | -                        |
+| onOpenDashboard  | 目录视图：打开该文件的看板时触发，未提供时回退到 `onOpenUri`                      | `(uri: string) => void`                                                                                                         | -                        |
+| defineActions    | 为每一行定义操作按钮，省略或返回空数组时不显示操作区                              | `(uri: string) => readonly WikiDashboardAction[]`（目录）、`(conflict: WikiConflict) => readonly WikiDashboardAction[]`（文件） | -                        |
+| slots            | 替换渲染异常的展示内容，见[错误展示插槽](../guide/getting-started#自定义错误展示) | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }`                                                           | -                        |
+| labels           | 覆盖界面文案                                                                      | `Partial<WikiDashboardLabels>`                                                                                                  | -                        |
+| locale           | 界面语言，规则见[国际化](../guide/i18n)                                           | `'zh-CN' \| 'en-US'`                                                                                                            | 继承上级，默认 `'en-US'` |
+| className、style | 外观与布局，其余 HTML 属性透传到根元素                                            | HTML 属性                                                                                                                       | -                        |
 
 ### WikiDirectoryData
 
@@ -121,3 +122,7 @@ import '@openviking/react/components/wiki-dashboard/style.css';
 - 组件没有顶层 `uri` 属性。请求和定位需要的 URI 通过 `onOpenUri`、`defineActions` 的闭包传入。
 - 切换文档时要重置筛选和展开状态，在外层给组件设置 `key={documentId}`。
 - 类型从 `@openviking/react/components/wiki-dashboard` 导出，包根入口只导出组件和 `WikiDashboardProps`。
+
+## 埋点
+
+通过 Provider 统一接入，支持的事件和触发条件见[埋点指南与事件目录](../guide/analytics)。

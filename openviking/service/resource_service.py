@@ -134,6 +134,7 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "enforce_public_remote_targets",
         "resource_lock",
         "stage_callback",
+        "target_was_reserved",
         "args",
         "strict",
         "source_name",
@@ -353,6 +354,7 @@ class ResourceService:
                 "temp_file_id",
                 "git_head_sha_hint",
                 "resource_lock",
+                "target_was_reserved",
             }:
                 continue
             try:
@@ -728,6 +730,7 @@ class ResourceService:
             await self._viking_fs.rm(
                 root_uri,
                 recursive=True,
+                no_vector=True,
                 ctx=ctx,
                 lease_ref=resource_lock,
             )
@@ -952,6 +955,9 @@ class ResourceService:
                         viking_fs=self._viking_fs,
                         ctx=ctx,
                     )
+            internal_kwargs["target_was_reserved"] = (
+                msg.cleanup_empty_target_on_failure and not msg.defer_target_resolution
+            )
             if msg.defer_target_resolution:
                 from openviking_cli.utils.uri import VikingURI
 

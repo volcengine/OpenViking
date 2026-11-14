@@ -1,3 +1,5 @@
+import { useRenderErrors } from './file-browser-labels.js';
+import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import type { FilePreviewActions } from '../../components/file-preview/index.js';
 import { useRef } from 'react';
 import { previewActionContext } from './file-browser-preview-action-source.js';
@@ -6,6 +8,10 @@ import type { Locale } from '../../shared/locale.js';
 import type { OvRequestOptions } from '../../client/types.js';
 import { FileBrowserDetail } from './file-browser-detail.js';
 import { FileBrowserEmpty } from './file-browser-empty.js';
+import {
+  FileBrowserPreviewFooter,
+  previewModelNotice,
+} from './file-browser-preview-footer.js';
 import { FileBrowserFailure } from './file-browser-failure.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
 import type { useFileBrowserAcl } from './use-file-browser-acl.js';
@@ -17,7 +23,7 @@ import type {
   FileBrowserPreviewSlots,
 } from './types.js';
 
-export function FileBrowserPreviewPane({
+function FileBrowserPreviewPaneContent({
   browser,
   permissions,
   rootUri,
@@ -46,6 +52,24 @@ export function FileBrowserPreviewPane({
       (candidate) => candidate.key === browser.previewKey,
     ) ?? browser.previewTabs?.[0];
   const systemDirectory = tab?.kind === 'directory' && isSystemUri(tab.key);
+  const modelNotice = previewModelNotice(
+    browser.currentUri,
+    text.previewModelNotice,
+  );
+  const previewFooter =
+    tab &&
+    tab.kind !== 'content' &&
+    !tab.loading &&
+    tab.key === browser.currentUri &&
+    (browser.previewFooter || browser.previewUpdatedAt || modelNotice) ? (
+      <FileBrowserPreviewFooter
+        count={browser.previewFooter}
+        updatedAt={browser.previewUpdatedAt}
+        modelNotice={modelNotice}
+        locale={locale}
+        text={text}
+      />
+    ) : undefined;
   const controls = useFileBrowserPreviewActions({
     uri: browser.currentUri,
     rootUri,
@@ -108,7 +132,7 @@ export function FileBrowserPreviewPane({
               ? { ...previewLabels, fileEmpty: text.systemDirectory }
               : previewLabels
           }
-          footer={browser.previewFooter}
+          footer={previewFooter}
           titleExtra={permissions.titleExtra}
           readOnly={readOnly || !permissions.canEdit || !controls.policy.edit}
           toolbar={{
@@ -144,5 +168,19 @@ export function FileBrowserPreviewPane({
       )}
       {controls.dialog}
     </div>
+  );
+}
+
+export function FileBrowserPreviewPane(
+  props: Parameters<typeof FileBrowserPreviewPaneContent>[0],
+) {
+  return (
+    <ErrorBoundary
+      message={useRenderErrors(props.locale).preview}
+      locale={props.locale}
+      resetKeys={[props.browser.currentUri]}
+    >
+      <FileBrowserPreviewPaneContent {...props} />
+    </ErrorBoundary>
   );
 }

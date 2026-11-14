@@ -15,7 +15,6 @@ export default defineConfig({
             './src/components/directory-tour/index.ts',
           icons: './src/icons/index.tsx',
           client: './src/client/index.ts',
-          'modules/viking-bot': './src/modules/viking-bot/index.ts',
           'components/auth/invitation-confirmation':
             './src/components/auth/invitation-confirmation/index.ts',
           'components/auth/login-method-selector':
@@ -75,15 +74,30 @@ export default defineConfig({
       dts: { distPath: './dist/docs' },
       source: {
         entry: {
+          'shared/primitives/select/index':
+            './src/shared/primitives/select/index.ts',
           'shared/primitives/button/button':
             './src/shared/primitives/button/button.tsx',
+          'shared/primitives/notification/index':
+            './src/shared/primitives/notification/index.ts',
+          'shared/primitives/input/input':
+            './src/shared/primitives/input/input.tsx',
+          'shared/primitives/checkbox/checkbox':
+            './src/shared/primitives/checkbox/checkbox.tsx',
+          'client/analytics/events': './src/client/analytics/events.ts',
+          style: './src/shared/docs-controls.css',
         },
       },
-      output: { distPath: { root: './dist/docs' }, emitCss: false },
+      output: { distPath: { root: './dist/docs' }, emitCss: true },
     },
     // Build each stylesheet independently so every public CSS entry is complete.
     ...Object.entries({
       style: './src/style.css',
+      'docs/notification/style':
+        './src/shared/primitives/notification/style.css',
+      'docs/shared/primitives/select/style':
+        './src/shared/primitives/select/style.css',
+
       'components/directory-tour/style':
         './src/components/directory-tour/style.css',
 

@@ -9,6 +9,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 
+import { useModalFocusShard } from '../modal/focus-shards.js';
 import { useOverlayPosition } from '../overlay/use-overlay-position.js';
 import type { PopoverProps } from './types.js';
 
@@ -86,6 +87,20 @@ export function Popover({
   // ref 变化不会触发重渲染，effect 便看不到它。
   const [surfaceNode, setSurfaceNode] = useState<HTMLDivElement | null>(null);
   const id = useId();
+  const registerFocusShard = useModalFocusShard();
+  // 同一个 ref 要同时给定位逻辑（state）与焦点 shard（ref）。写成内联回调会让
+  // React 每次渲染先 `ref(null)` 再 `ref(node)`，`setSurfaceNode` 因此反复拿到新
+  // 值，渲染永不收敛。用 `useCallback` 固定下来。
+  //
+  // One ref serves both the positioning state and the focus shard. An inline callback
+  // would make React call `ref(null)` then `ref(node)` every render, so
+  // `setSurfaceNode` keeps receiving a fresh value and rendering never settles; a
+  // memoised callback keeps it stable.
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const attachSurface = useCallback((node: HTMLDivElement | null) => {
+    surfaceRef.current = node;
+    setSurfaceNode(node);
+  }, []);
   const position = useOverlayPosition(
     open,
     anchorRef ?? triggerRef,
@@ -111,6 +126,17 @@ export function Popover({
 
   // 卸载时清掉未触发的定时器。 Clear a pending timer on unmount.
   useEffect(() => clearTimer, [clearTimer]);
+
+  // 浮层 portal 到 body 后不在所属 Modal 的 DOM 子树里，`FocusLock` 的 Tab 序列
+  // 看不到它。打开时登记成 shard，Tab 才能进入；关闭或卸载时注销。
+  //
+  // The surface portals into `body`, outside the owning Modal's DOM subtree, so
+  // `FocusLock`'s tab sequence cannot reach it. Registering it while open makes Tab
+  // enter; closing or unmounting unregisters it.
+  useEffect(() => {
+    if (!open || !registerFocusShard) return;
+    return registerFocusShard(surfaceRef);
+  }, [open, registerFocusShard]);
 
   // `disabled` 变真时立即收起，避免浮层留在屏幕上。
   // Collapse as soon as `disabled` turns true.
@@ -226,7 +252,7 @@ export function Popover({
   const surface = open
     ? createPortal(
         <div
-          ref={setSurfaceNode}
+          ref={attachSurface}
           id={id}
           role={role ?? (trigger === 'click' ? 'dialog' : 'note')}
           className={['ov-popover', className].filter(Boolean).join(' ')}

@@ -329,6 +329,7 @@ treeRef.current?.scrollToRow('resources', { block: 'center' });
 - The root element is `100%` tall and scrolls its content internally, so give its container a height.
 - Rows size to their content: names render in full, the container scrolls sideways, and deep indentation gets its space the same way.
 - Descriptions are at most 200px wide and truncate beyond that, so a long description does not stretch the row.
+- Chromium browsers use the same scrollbar styling on every platform. Overflow reserves 12px of space for an 8px rounded thumb, with native macOS light and dark colors. Hovering the scrollbar reveals its track and border; hovering the thumb darkens it in light mode and lightens it in dark mode.
 - Content returned by `renderRowTrailing` sits at the right edge of the row; when the row also shows trailing markers such as the level or access, it follows them directly.
 
 ## Theme variables
@@ -350,3 +351,7 @@ The root element has the class `ov-file-tree` and inner elements use `ov-file-tr
 | `--ov-ui-file-tree-row-height`    | `32px`                                | Row height                                      |
 | `--ov-ui-file-tree-row-radius`    | `4px`                                 | Row radius                                      |
 | `--ov-ui-file-tree-indent`        | `20px`                                | Indent per level                                |
+
+## Analytics
+
+Configure analytics through the Provider. See the [integration guide and event catalogue](../guide/analytics) for supported events and their semantics.

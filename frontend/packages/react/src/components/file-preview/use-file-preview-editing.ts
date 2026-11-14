@@ -1,4 +1,6 @@
-import { useRef, useState } from 'react';
+import { useAnalyticsRef } from '../../shared/analytics/context.js';
+import { startOperation, errorKind } from '../../shared/analytics/reporter.js';
+import { useEffect, useRef, useState } from 'react';
 
 import type { FilePreviewFileTab, FilePreviewTab } from './types.js';
 
@@ -22,11 +24,18 @@ import type { FilePreviewFileTab, FilePreviewTab } from './types.js';
  * the new one.
  */
 export function useFilePreviewEditing(activeTabKey: string) {
+  const analytics = useAnalyticsRef();
   const [editing, setEditing] = useState(false);
   const [loadingEdit, setLoadingEdit] = useState(false);
   const [editFailed, setEditFailed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
+  const [versionNotCreated, setVersionNotCreated] = useState(false);
+  const [versionNoteKey, setVersionNoteKey] = useState<string>();
+  const noteRequest = useRef<{
+    key: string;
+    resolve: (note: string | undefined) => void;
+  }>(undefined);
   const [draft, setDraft] = useState('');
   const requestId = useRef(0);
   const loading = useRef(false);
@@ -43,10 +52,28 @@ export function useFilePreviewEditing(activeTabKey: string) {
     if (loadingEdit) setLoadingEdit(false);
     if (editFailed) setEditFailed(false);
     if (saveFailed) setSaveFailed(false);
+    if (versionNotCreated) setVersionNotCreated(false);
     if (draft) setDraft('');
   }
 
+  // Resolve a pending save confirmation when its tab goes away or unmounts.
+  useEffect(
+    () => () => {
+      if (noteRequest.current?.key !== activeTabKey) return;
+      noteRequest.current.resolve(undefined);
+      noteRequest.current = undefined;
+    },
+    [activeTabKey],
+  );
+
+  function finishVersionNote(note?: string) {
+    noteRequest.current?.resolve(note);
+    noteRequest.current = undefined;
+    setVersionNoteKey(undefined);
+  }
+
   function discard(tab: FilePreviewTab) {
+    finishVersionNote();
     requestId.current += 1;
     loading.current = false;
     const wasEditing = editing;
@@ -55,7 +82,10 @@ export function useFilePreviewEditing(activeTabKey: string) {
     setLoadingEdit(false);
     setEditFailed(false);
     setSaveFailed(false);
+    setVersionNotCreated(false);
     setDraft('');
+    if (wasEditing)
+      analytics.current?.emit('file_preview_edit_cancel', () => ({}));
     if (wasEditing && tab.kind === 'file') tab.editing?.onCancel?.(discarded);
   }
 
@@ -66,6 +96,7 @@ export function useFilePreviewEditing(activeTabKey: string) {
     setLoadingEdit(true);
     setEditFailed(false);
     setSaveFailed(false);
+    setVersionNotCreated(false);
     let content: string | undefined;
     try {
       content = tab.editing?.loadContent
@@ -80,29 +111,69 @@ export function useFilePreviewEditing(activeTabKey: string) {
     if (content !== undefined) {
       setDraft(content);
       setEditing(true);
+      analytics.current?.emit('file_preview_edit_start', () => ({}));
     }
   }
 
   /** 保存草稿，成功返回 `true`，失败保留草稿并返回 `false`。 */
   async function save(tab: FilePreviewFileTab): Promise<boolean> {
-    if (!editing || !tab.editing || pendingSave.current) return false;
+    if (!editing || !tab.editing || pendingSave.current || noteRequest.current)
+      return false;
+    const capability = tab.editing;
+    const promptForVersionNote = capability.promptForVersionNote;
+    const id = requestId.current;
+    const note = promptForVersionNote
+      ? await new Promise<string | undefined>((resolve) => {
+          noteRequest.current = { key: activeTabKey, resolve };
+          setVersionNoteKey(activeTabKey);
+        })
+      : undefined;
+    if (
+      (promptForVersionNote && note === undefined) ||
+      id !== requestId.current
+    )
+      return false;
     pendingSave.current = true;
     setSaving(true);
     setSaveFailed(false);
+    const operation = analytics.current && startOperation();
+    if (operation)
+      analytics.current?.emit('file_preview_save_submit', () => ({
+        operation_id: operation.operation_id,
+      }));
     const value = draft;
+    let result: Awaited<ReturnType<typeof capability.save>>;
     try {
-      await tab.editing.save(value);
-    } catch {
-      setSaveFailed(true);
+      result =
+        note === undefined
+          ? await capability.save(value)
+          : await capability.save(value, note);
+    } catch (error) {
+      if (operation && id === requestId.current)
+        analytics.current?.emit('file_preview_save_fail', () => ({
+          ...operation.finish(),
+          error_kind: errorKind(error),
+        }));
+      if (id === requestId.current) setSaveFailed(true);
       return false;
     } finally {
       pendingSave.current = false;
       setSaving(false);
     }
-    setEditing(false);
-    setDraft('');
-    tab.editing.onSave?.(value);
-    return true;
+    const current = id === requestId.current;
+    if (operation && current)
+      analytics.current?.emit('file_preview_save_success', () => ({
+        ...operation.finish(),
+        version_status:
+          result?.warning === 'version-not-created' ? 'not-created' : 'unknown',
+      }));
+    if (current) {
+      setEditing(false);
+      setDraft('');
+      setVersionNotCreated(result?.warning === 'version-not-created');
+    }
+    capability.onSave?.(value);
+    return current;
   }
 
   return {
@@ -111,6 +182,9 @@ export function useFilePreviewEditing(activeTabKey: string) {
     editFailed,
     saving,
     saveFailed,
+    versionNotCreated,
+    versionNoteOpen: versionNoteKey === activeTabKey && editing,
+    finishVersionNote,
     draft,
     discard,
     start,

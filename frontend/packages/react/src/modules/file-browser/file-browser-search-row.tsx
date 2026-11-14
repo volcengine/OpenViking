@@ -3,19 +3,20 @@ import { nameFromUri } from './fs-model.js';
 import { fileTypeIcon } from './fs-icon.js';
 
 /**
- * 结果行的显示名：文件名，grep 命中再带上行号。
- *
- * 文件名复用 `fs-model` 的 `nameFromUri`，与树行、预览页签取同一份规则——各写
- * 一份在 `viking://` 这类边界上会给出不同结果。
- *
- * Display name of a result row: the file name, with a grep hit's line number appended.
- *
- * The name comes from `fs-model`'s `nameFromUri`, the same rule the tree row and the
- * preview tab use; separate copies disagree at boundaries such as `viking://`.
+ * 用最近一级父目录区分同名文件，URI 保留根和末段。
+ * Keep the nearest parent for same-name files and retain the URI root and leaf.
  */
-function hitName(hit: SearchHit): string {
+function resultLocation(hit: SearchHit) {
   const name = nameFromUri(hit.uri);
-  return hit.line === undefined ? name : `${name}:${hit.line}`;
+  const path = hit.uri.startsWith('viking://')
+    ? hit.uri.slice('viking://'.length).split('/').filter(Boolean)
+    : [];
+  const parent = path.length > 2 ? path.at(-2) : undefined;
+  const label = parent ? `${parent}/${name}` : name;
+  return {
+    name: hit.line === undefined ? label : `${label}:${hit.line}`,
+    uri: parent ? `viking://${path[0]}/.../${name}` : hit.uri,
+  };
 }
 
 /**
@@ -49,7 +50,7 @@ export function FileBrowserSearchRow({
   onHighlight,
   onOpen,
 }: FileBrowserSearchRowProps) {
-  const name = hitName(hit);
+  const { name, uri } = resultLocation(hit);
   const index = query ? name.toLowerCase().indexOf(query.toLowerCase()) : -1;
   return (
     <li className="ov-file-browser-search__item" role="presentation">
@@ -71,7 +72,7 @@ export function FileBrowserSearchRow({
         </span>
         <span className="ov-file-browser-search__body">
           <span className="ov-file-browser-search__line">
-            <span className="ov-file-browser-search__name">
+            <span className="ov-file-browser-search__name" title={name}>
               {index < 0 ? (
                 name
               ) : (
@@ -82,7 +83,9 @@ export function FileBrowserSearchRow({
                 </>
               )}
             </span>
-            <span className="ov-file-browser-search__uri">{hit.uri}</span>
+            <span className="ov-file-browser-search__uri" title={hit.uri}>
+              {uri}
+            </span>
           </span>
           {hit.abstract ? (
             <span className="ov-file-browser-search__abstract">

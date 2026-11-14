@@ -14,6 +14,9 @@ export interface ModalProps {
   locale?: Locale;
   /** Overrides the localized close button name, including an explicit empty string. */
   closeLabel?: string;
+  closeIcon?: ReactNode;
   /** Close intent from the mask, close button or Escape. The host controls open. */
   onClose?: () => void;
+  /** Runs once the exit transition has finished and the panel is gone. */
+  afterClose?: () => void;
 }

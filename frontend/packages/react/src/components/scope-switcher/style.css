@@ -1,4 +1,5 @@
 @import '../../shared/primitives/input/input.css';
 @import '../../shared/primitives/button/button.css';
 @import '../../theme.css';
+@import '../../shared/primitives/empty/empty.css';
 @import './scope-switcher.css';

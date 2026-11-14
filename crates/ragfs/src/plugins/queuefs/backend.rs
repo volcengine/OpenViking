@@ -7,7 +7,8 @@ use crate::core::errors::{Error, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::{params, types::ValueRef, Connection, Row};
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Mutex;
 use std::time::SystemTime;
 use std::time::{Duration, UNIX_EPOCH};
@@ -24,6 +25,12 @@ pub struct Message {
     pub timestamp: SystemTime,
     /// Whether `timestamp` came from a real persisted enqueue time.
     pub timestamp_valid: bool,
+    /// Scheduling metadata, separate from the opaque payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_key: Option<String>,
+    /// At most one unacknowledged delivery for this key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serial_key: Option<String>,
 }
 
 impl Message {
@@ -34,7 +41,25 @@ impl Message {
             data,
             timestamp: SystemTime::now(),
             timestamp_valid: true,
+            group_key: None,
+            serial_key: None,
         }
+    }
+
+    pub(super) fn validate_keys(&self) -> Result<()> {
+        if (self.group_key.is_some() && self.serial_key.is_some())
+            || self
+                .group_key
+                .iter()
+                .chain(self.serial_key.iter())
+                .any(|key| !(1..=4096).contains(&key.len()))
+        {
+            return Err(Error::InvalidOperation(
+                "group_key and serial_key are mutually exclusive and must contain 1..=4096 UTF-8 bytes"
+                    .to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -54,6 +79,10 @@ pub(super) struct StoredMessage {
     data: Vec<u8>,
     #[serde(default)]
     timestamp: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    group_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    serial_key: Option<String>,
 }
 
 impl StoredMessage {
@@ -61,10 +90,11 @@ impl StoredMessage {
         Self {
             id: msg.id.clone(),
             data: msg.data.clone(),
+            group_key: msg.group_key.clone(),
+            serial_key: msg.serial_key.clone(),
             // Older readers already accept RFC3339 strings; nanoseconds preserve latency accuracy.
             timestamp: Some(serde_json::Value::String(
-                DateTime::<Utc>::from(msg.timestamp)
-                    .to_rfc3339_opts(SecondsFormat::Nanos, true),
+                DateTime::<Utc>::from(msg.timestamp).to_rfc3339_opts(SecondsFormat::Nanos, true),
             )),
         }
     }
@@ -76,6 +106,8 @@ impl StoredMessage {
             data: self.data,
             timestamp,
             timestamp_valid,
+            group_key: self.group_key,
+            serial_key: self.serial_key,
         }
     }
 }
@@ -194,6 +226,9 @@ pub trait QueueBackend: Send + Sync {
 
     /// Acknowledge (delete) a message by ID
     fn ack(&mut self, queue_name: &str, msg_id: &str) -> Result<bool>;
+
+    /// Return a processing message to pending, retaining its identity and serial priority.
+    fn retry(&mut self, queue_name: &str, msg_id: &str) -> Result<bool>;
 }
 
 /// Options for SQLite queue backend.
@@ -216,6 +251,9 @@ impl Default for SQLiteQueueOptions {
 struct Queue {
     messages: VecDeque<Message>,
     processing: VecDeque<Message>,
+    /// IDs stay reserved across dequeue/retry until final ACK or clear.
+    unacked_ids: HashSet<String>,
+    retry_serial: HashMap<String, String>,
     last_enqueue_time: SystemTime,
 }
 
@@ -224,6 +262,8 @@ impl Queue {
         Self {
             messages: VecDeque::new(),
             processing: VecDeque::new(),
+            unacked_ids: HashSet::new(),
+            retry_serial: HashMap::new(),
             last_enqueue_time: SystemTime::UNIX_EPOCH,
         }
     }
@@ -284,6 +324,13 @@ impl QueueBackend for MemoryBackend {
             .get_mut(queue_name)
             .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
 
+        msg.validate_keys()?;
+        if !queue.unacked_ids.insert(msg.id.clone()) {
+            return Err(Error::AlreadyExists(format!(
+                "message '{}' already exists",
+                msg.id
+            )));
+        }
         queue.last_enqueue_time = SystemTime::now();
         queue.messages.push_back(msg);
         Ok(())
@@ -295,7 +342,21 @@ impl QueueBackend for MemoryBackend {
             .get_mut(queue_name)
             .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
 
-        let message = queue.messages.pop_front();
+        // MemoryBackend itself is the sole consumer instance. Node affinity is
+        // therefore implicit; serial_key additionally excludes active keys.
+        let position = queue.messages.iter().position(|message| {
+            message.serial_key.as_ref().is_none_or(|key| {
+                queue
+                    .retry_serial
+                    .get(key)
+                    .is_none_or(|id| id == &message.id)
+                    && !queue
+                        .processing
+                        .iter()
+                        .any(|active| active.serial_key == message.serial_key)
+            })
+        });
+        let message = position.and_then(|position| queue.messages.remove(position));
         if let Some(message) = &message {
             queue.processing.push_back(message.clone());
         }
@@ -352,6 +413,8 @@ impl QueueBackend for MemoryBackend {
 
         queue.messages.clear();
         queue.processing.clear();
+        queue.unacked_ids.clear();
+        queue.retry_serial.clear();
         Ok(())
     }
 
@@ -370,15 +433,40 @@ impl QueueBackend for MemoryBackend {
             .get_mut(queue_name)
             .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
 
-        let original_len = queue.processing.len();
-        queue.processing.retain(|msg| msg.id != msg_id);
-        Ok(queue.processing.len() != original_len)
+        let Some(position) = queue.processing.iter().position(|msg| msg.id == msg_id) else {
+            return Ok(false);
+        };
+        let message = queue.processing.remove(position).unwrap();
+        queue.unacked_ids.remove(&message.id);
+        if let Some(key) = message.serial_key {
+            if queue.retry_serial.get(&key).is_some_and(|id| id == msg_id) {
+                queue.retry_serial.remove(&key);
+            }
+        }
+        Ok(true)
+    }
+
+    fn retry(&mut self, queue_name: &str, msg_id: &str) -> Result<bool> {
+        let queue = self
+            .queues
+            .get_mut(queue_name)
+            .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
+        let Some(position) = queue.processing.iter().position(|msg| msg.id == msg_id) else {
+            return Ok(false);
+        };
+        let message = queue.processing.remove(position).unwrap();
+        if let Some(key) = &message.serial_key {
+            queue.retry_serial.insert(key.clone(), message.id.clone());
+        }
+        queue.messages.push_back(message);
+        Ok(true)
     }
 }
 
 /// SQLite queue backend with at-least-once delivery semantics.
 pub struct SQLiteQueueBackend {
     conn: Mutex<Connection>,
+    next_schedule_seq: AtomicI64,
 }
 
 impl SQLiteQueueBackend {
@@ -434,8 +522,20 @@ impl SQLiteQueueBackend {
 
         let backend = Self {
             conn: Mutex::new(conn),
+            next_schedule_seq: AtomicI64::new(1),
         };
         backend.run_migrations()?;
+        let next = backend
+            .conn
+            .lock()
+            .map_err(|e| Error::internal(e.to_string()))?
+            .query_row(
+                "SELECT COALESCE(MAX(schedule_seq), 0) + 1 FROM queue_messages",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|e| Error::internal(format!("sqlite sequence init error: {e}")))?;
+        backend.next_schedule_seq.store(next, Ordering::Relaxed);
         backend.recover_stale(options.recover_stale_sec)?;
         Ok(backend)
     }
@@ -460,8 +560,10 @@ impl SQLiteQueueBackend {
         for stmt in [
             "ALTER TABLE queue_messages ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'",
             "ALTER TABLE queue_messages ADD COLUMN processing_started_at INTEGER",
-            "CREATE INDEX IF NOT EXISTS idx_queue_status ON queue_messages(queue_name, status, id)",
+            "ALTER TABLE queue_messages ADD COLUMN serial_key TEXT",
+            "ALTER TABLE queue_messages ADD COLUMN schedule_seq INTEGER",
             "CREATE INDEX IF NOT EXISTS idx_queue_message_id ON queue_messages(queue_name, message_id)",
+            "CREATE INDEX IF NOT EXISTS idx_queue_serial ON queue_messages(queue_name, serial_key, id)",
         ] {
             if let Err(err) = conn.execute(stmt, []) {
                 let text = err.to_string();
@@ -472,6 +574,27 @@ impl SQLiteQueueBackend {
                     )));
                 }
             }
+        }
+
+        // Keep row IDs immutable for same-key ordering. Only scheduling moves to
+        // the tail on retry; replace the existing status index rather than adding one.
+        conn.execute(
+            "UPDATE queue_messages SET schedule_seq = id WHERE schedule_seq IS NULL",
+            [],
+        )
+        .map_err(|e| Error::internal(format!("sqlite sequence migration error: {e}")))?;
+        let columns = conn
+            .prepare("PRAGMA index_info(idx_queue_status)")
+            .and_then(|mut stmt| {
+                stmt.query_map([], |row| row.get::<_, String>(2))?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .map_err(|e| Error::internal(format!("sqlite index probe error: {e}")))?;
+        if columns != ["queue_name", "status", "schedule_seq"] {
+            conn.execute_batch(
+                "DROP INDEX IF EXISTS idx_queue_status;
+                 CREATE INDEX idx_queue_status ON queue_messages(queue_name, status, schedule_seq);"
+            ).map_err(|e| Error::internal(format!("sqlite schedule index migration error: {e}")))?;
         }
 
         // Backfill queue metadata for legacy databases that only persisted queue_messages.
@@ -640,6 +763,7 @@ impl QueueBackend for SQLiteQueueBackend {
     }
 
     fn enqueue(&mut self, queue_name: &str, msg: Message) -> Result<()> {
+        msg.validate_keys()?;
         let conn = self
             .conn
             .lock()
@@ -647,12 +771,23 @@ impl QueueBackend for SQLiteQueueBackend {
 
         Self::require_queue_exists(&conn, queue_name)?;
         let stored = serde_json::to_string(&StoredMessage::from_message(&msg))?;
-        conn.execute(
-            "INSERT INTO queue_messages (queue_name, message_id, data, timestamp, status)
-             VALUES (?1, ?2, ?3, ?4, 'pending')",
-            params![queue_name, msg.id, stored, unix_secs(msg.timestamp)],
-        )
-        .map_err(|e| Error::internal(format!("sqlite enqueue error: {}", e)))?;
+        let changed = conn
+            .execute(
+                "INSERT INTO queue_messages (queue_name, message_id, data, timestamp, serial_key, schedule_seq, status)
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, 'pending'
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM queue_messages WHERE queue_name = ?1 AND message_id = ?2
+             )",
+                params![queue_name, msg.id, stored, unix_secs(msg.timestamp), msg.serial_key,
+                    self.next_schedule_seq.fetch_add(1, Ordering::Relaxed)],
+            )
+            .map_err(|e| Error::internal(format!("sqlite enqueue error: {}", e)))?;
+        if changed == 0 {
+            return Err(Error::AlreadyExists(format!(
+                "message '{}' already exists",
+                msg.id
+            )));
+        }
         Ok(())
     }
 
@@ -669,9 +804,15 @@ impl QueueBackend for SQLiteQueueBackend {
             .map_err(|e| Error::internal(format!("sqlite transaction begin error: {}", e)))?;
 
         let row = tx.query_row(
-            "SELECT id, data FROM queue_messages
-             WHERE queue_name = ?1 AND status = 'pending'
-             ORDER BY id LIMIT 1",
+            "SELECT candidate.id, candidate.data FROM queue_messages AS candidate
+             WHERE candidate.queue_name = ?1 AND candidate.status = 'pending'
+               AND (candidate.serial_key IS NULL OR NOT EXISTS (
+                   SELECT 1 FROM queue_messages AS earlier
+                   WHERE earlier.queue_name = candidate.queue_name
+                     AND earlier.serial_key = candidate.serial_key
+                     AND earlier.id < candidate.id
+               ))
+             ORDER BY candidate.schedule_seq LIMIT 1",
             params![queue_name],
             |row| Ok((row.get::<_, i64>(0)?, read_sqlite_text(row, 1)?)),
         );
@@ -714,7 +855,7 @@ impl QueueBackend for SQLiteQueueBackend {
         let raw_data = match conn.query_row(
             "SELECT data FROM queue_messages
              WHERE queue_name = ?1 AND status = 'pending'
-             ORDER BY id LIMIT 1",
+             ORDER BY schedule_seq LIMIT 1",
             params![queue_name],
             |row| read_sqlite_text(row, 0),
         ) {
@@ -856,6 +997,27 @@ impl QueueBackend for SQLiteQueueBackend {
             .map_err(|e| Error::internal(format!("sqlite ack error: {}", e)))?;
         Ok(changed > 0)
     }
+
+    fn retry(&mut self, queue_name: &str, msg_id: &str) -> Result<bool> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| Error::internal(format!("sqlite mutex poisoned: {e}")))?;
+        Self::require_queue_exists(&conn, queue_name)?;
+        let changed = conn
+            .execute(
+                "UPDATE queue_messages SET status = 'pending', processing_started_at = NULL,
+                 schedule_seq = ?3
+             WHERE queue_name = ?1 AND message_id = ?2 AND status = 'processing'",
+                params![
+                    queue_name,
+                    msg_id,
+                    self.next_schedule_seq.fetch_add(1, Ordering::Relaxed)
+                ],
+            )
+            .map_err(|e| Error::internal(format!("sqlite retry error: {e}")))?;
+        Ok(changed > 0)
+    }
 }
 
 #[cfg(test)]
@@ -863,6 +1025,196 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
     use tempfile::TempDir;
+
+    fn keyed_message(id: &str, serial: bool, key: &str) -> Message {
+        let mut message = Message::new(id.as_bytes().to_vec());
+        message.id = id.to_string();
+        if serial {
+            message.serial_key = Some(key.to_string());
+        } else {
+            message.group_key = Some(key.to_string());
+        }
+        message
+    }
+
+    #[test]
+    fn test_memory_duplicate_ids_follow_ack_retry_and_clear() {
+        for message in [
+            Message::new(b"plain".to_vec()),
+            keyed_message("group", false, "A"),
+            keyed_message("serial", true, "A"),
+        ] {
+            let mut backend = memory_backend_with_queue("test");
+            backend.create_queue("other").unwrap();
+            backend.enqueue("test", message.clone()).unwrap();
+            backend.enqueue("other", message.clone()).unwrap();
+
+            assert!(matches!(
+                backend.enqueue("test", message.clone()),
+                Err(Error::AlreadyExists(_))
+            ));
+            assert!(!backend.ack("test", &message.id).unwrap());
+            assert!(backend.enqueue("test", message.clone()).is_err());
+
+            let delivery = backend.dequeue("test").unwrap().unwrap();
+            assert_eq!(delivery.id, message.id);
+            assert!(backend.enqueue("test", message.clone()).is_err());
+            assert!(backend.retry("test", &message.id).unwrap());
+            assert!(!backend.retry("test", &message.id).unwrap());
+            assert!(!backend.ack("test", &message.id).unwrap());
+            assert!(backend.enqueue("test", message.clone()).is_err());
+
+            let retried = backend.dequeue("test").unwrap().unwrap();
+            assert_eq!(retried.id, message.id);
+            assert_eq!(retried.data, message.data);
+            assert_eq!(retried.timestamp, message.timestamp);
+            assert!(backend.ack("test", &message.id).unwrap());
+            backend.enqueue("test", message.clone()).unwrap();
+            assert!(!backend.ack("test", &message.id).unwrap());
+            assert!(backend.enqueue("test", message.clone()).is_err());
+
+            backend.dequeue("test").unwrap().unwrap();
+            backend
+                .enqueue("test", Message::new(b"pending".to_vec()))
+                .unwrap();
+            backend.clear("test").unwrap();
+            assert!(backend.list_unacked("test").unwrap().is_empty());
+            backend.enqueue("test", message.clone()).unwrap();
+            backend.dequeue("test").unwrap().unwrap();
+            backend.remove_queue("test").unwrap();
+            backend.create_queue("test").unwrap();
+            backend.enqueue("test", message.clone()).unwrap();
+            assert!(backend.enqueue("other", message).is_err());
+        }
+    }
+
+    #[test]
+    fn test_memory_invalid_enqueue_does_not_reserve_message_id() {
+        let mut backend = memory_backend_with_queue("test");
+        let message = Message::new(b"valid".to_vec());
+        for (group_key, serial_key) in [
+            (Some("A".to_string()), Some("A".to_string())),
+            (None, Some(String::new())),
+            (Some("A".repeat(4097)), None),
+        ] {
+            let mut invalid = message.clone();
+            invalid.group_key = group_key;
+            invalid.serial_key = serial_key;
+            assert!(backend.enqueue("test", invalid).is_err());
+        }
+        backend.enqueue("test", message.clone()).unwrap();
+        assert_eq!(backend.dequeue("test").unwrap().unwrap().id, message.id);
+    }
+
+    #[test]
+    fn test_backends_mix_message_keys_and_release_only_on_ack() {
+        let (_directory, _path, sqlite) = sqlite_backend();
+        for mut backend in [
+            Box::new(MemoryBackend::new()) as Box<dyn QueueBackend>,
+            Box::new(sqlite),
+        ] {
+            backend.create_queue("mixed").unwrap();
+            backend.create_queue("other").unwrap();
+            for message in [
+                keyed_message("s1", true, "用户:A"),
+                keyed_message("s2", true, "用户:A"),
+                keyed_message("g1", false, "用户:A"),
+                keyed_message("g2", false, "用户:A"),
+                Message::new(b"plain".to_vec()),
+                keyed_message("different", true, "B"),
+            ] {
+                backend.enqueue("mixed", message).unwrap();
+            }
+            backend
+                .enqueue("other", keyed_message("s1", true, "用户:A"))
+                .unwrap();
+            assert_eq!(backend.dequeue("other").unwrap().unwrap().id, "s1");
+            for (expected, group, serial) in [
+                ("s1", None, Some("用户:A")),
+                ("g1", Some("用户:A"), None),
+                ("g2", Some("用户:A"), None),
+                ("plain", None, None),
+                ("different", None, Some("B")),
+            ] {
+                let message = backend.dequeue("mixed").unwrap().unwrap();
+                assert_eq!(message.data, expected.as_bytes());
+                assert_eq!(message.group_key.as_deref(), group);
+                assert_eq!(message.serial_key.as_deref(), serial);
+            }
+            assert_eq!(
+                backend.status("mixed").unwrap(),
+                QueueState {
+                    pending: 1,
+                    processing: 5
+                }
+            );
+            assert_eq!(backend.peek("mixed").unwrap().unwrap().id, "s2");
+            assert_eq!(backend.list_unacked("mixed").unwrap().len(), 6);
+            assert!(backend.dequeue("mixed").unwrap().is_none());
+            assert!(!backend.ack("mixed", "s2").unwrap());
+            assert!(backend.ack("mixed", "g1").unwrap());
+            assert!(backend.dequeue("mixed").unwrap().is_none());
+            assert!(backend.ack("mixed", "s1").unwrap());
+            let second = backend.dequeue("mixed").unwrap().unwrap();
+            assert_eq!(second.id, "s2");
+            backend
+                .enqueue("mixed", keyed_message("s3", true, "用户:A"))
+                .unwrap();
+            assert!(!backend.ack("mixed", "s1").unwrap());
+            assert!(backend.dequeue("mixed").unwrap().is_none());
+            for message in [
+                keyed_message("s2", true, "用户:A"),
+                keyed_message("empty", false, ""),
+                keyed_message("long", true, &"a".repeat(4097)),
+            ] {
+                assert!(backend.enqueue("mixed", message).is_err());
+            }
+            let mut both = keyed_message("both", true, "A");
+            both.group_key = Some("A".to_string());
+            assert!(backend.enqueue("mixed", both).is_err());
+            backend.clear("mixed").unwrap();
+            assert_eq!(
+                backend.status("mixed").unwrap(),
+                QueueState {
+                    pending: 0,
+                    processing: 0
+                }
+            );
+            backend
+                .enqueue("mixed", keyed_message("s1", true, "用户:A"))
+                .unwrap();
+            assert_eq!(backend.dequeue("mixed").unwrap().unwrap().id, "s1");
+            backend.remove_queue("mixed").unwrap();
+            backend.create_queue("mixed").unwrap();
+            assert!(backend.list_unacked("mixed").unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn test_sqlite_serial_restart_replays_original_before_later_messages() {
+        let (_directory, path, mut backend) = sqlite_backend();
+        backend.create_queue("mixed").unwrap();
+        for message in [
+            keyed_message("original", true, "A"),
+            keyed_message("later", true, "A"),
+            keyed_message("group", false, "A"),
+        ] {
+            backend.enqueue("mixed", message).unwrap();
+        }
+        assert_eq!(backend.dequeue("mixed").unwrap().unwrap().id, "original");
+        assert_eq!(backend.dequeue("mixed").unwrap().unwrap().id, "group");
+        assert!(backend.dequeue("mixed").unwrap().is_none());
+        drop(backend);
+        let mut backend = SQLiteQueueBackend::open(&path, SQLiteQueueOptions::default()).unwrap();
+        let original = backend.dequeue("mixed").unwrap().unwrap();
+        assert_eq!(original.id, "original");
+        assert_eq!(original.serial_key.as_deref(), Some("A"));
+        assert_eq!(backend.dequeue("mixed").unwrap().unwrap().id, "group");
+        assert!(backend.dequeue("mixed").unwrap().is_none());
+        backend.ack("mixed", "original").unwrap();
+        assert_eq!(backend.dequeue("mixed").unwrap().unwrap().id, "later");
+        assert!(!backend.ack("mixed", "original").unwrap());
+    }
 
     /// Create an in-memory backend with a test queue.
     fn memory_backend_with_queue(queue: &str) -> MemoryBackend {
@@ -1097,6 +1449,8 @@ mod tests {
             id: "missing".to_string(),
             data: b"payload".to_vec(),
             timestamp: None,
+            group_key: None,
+            serial_key: None,
         }
         .into_message();
         assert!(!missing.timestamp_valid);
@@ -1105,6 +1459,8 @@ mod tests {
             id: "invalid".to_string(),
             data: b"payload".to_vec(),
             timestamp: Some(serde_json::Value::String("not-a-time".to_string())),
+            group_key: None,
+            serial_key: None,
         }
         .into_message();
         assert!(!invalid.timestamp_valid);
@@ -1113,6 +1469,8 @@ mod tests {
             id: "valid".to_string(),
             data: b"payload".to_vec(),
             timestamp: Some(serde_json::Value::Number(1234.into())),
+            group_key: None,
+            serial_key: None,
         }
         .into_message();
         assert!(valid.timestamp_valid);
@@ -1124,6 +1482,8 @@ mod tests {
             data: b"payload".to_vec(),
             timestamp: precise_timestamp,
             timestamp_valid: true,
+            group_key: None,
+            serial_key: None,
         })
         .into_message();
         assert!(precise.timestamp_valid);
@@ -1144,6 +1504,8 @@ mod tests {
                     data: b"payload".to_vec(),
                     timestamp,
                     timestamp_valid: true,
+                    group_key: None,
+                    serial_key: None,
                 },
             )
             .unwrap();
@@ -1264,7 +1626,9 @@ mod tests {
         let (_dir, db_path, _backend) = sqlite_backend();
 
         let conn = Connection::open(db_path).unwrap();
-        let auto_vacuum: i64 = conn.query_row("PRAGMA auto_vacuum", [], |row| row.get(0)).unwrap();
+        let auto_vacuum: i64 = conn
+            .query_row("PRAGMA auto_vacuum", [], |row| row.get(0))
+            .unwrap();
         assert_eq!(auto_vacuum, 1);
     }
 
@@ -1295,10 +1659,13 @@ mod tests {
         .unwrap();
         drop(conn);
 
-        let _backend = SQLiteQueueBackend::open(&db_path_str, SQLiteQueueOptions::default()).unwrap();
+        let _backend =
+            SQLiteQueueBackend::open(&db_path_str, SQLiteQueueOptions::default()).unwrap();
 
         let conn = Connection::open(&db_path_str).unwrap();
-        let auto_vacuum: i64 = conn.query_row("PRAGMA auto_vacuum", [], |row| row.get(0)).unwrap();
+        let auto_vacuum: i64 = conn
+            .query_row("PRAGMA auto_vacuum", [], |row| row.get(0))
+            .unwrap();
         assert_eq!(auto_vacuum, 0);
     }
 

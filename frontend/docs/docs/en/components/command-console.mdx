@@ -29,7 +29,7 @@ The example uses fixed simulated data: submitting appends a pending record that 
 
 ### Empty state and quick commands
 
-Quick commands appear while there are no records. Clicking one only fills the input; press Enter to submit, and the first submission replaces the empty state with records.
+Quick commands appear while there are no records. Clicking one only fills the input; press Enter to submit, and the first submission replaces the empty state with records. Each row shows its `summary`, falling back to `description`; hovering the row shows the full `description` when a `summary` is provided or when the description is truncated by the single-line ellipsis.
 
 ```tsx file="../../_demos/command-console-empty.tsx" preview
 
@@ -41,33 +41,37 @@ Every quick command in the example fills a complete command except `compile`, wh
 
 ### CommandConsole
 
-| Property         | Description                                                                                                                                                      | Type                                         | Default                        |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ------------------------------ |
-| records          | Command records to display, in submission order                                                                                                                  | `readonly CommandConsoleRecord[]`            | Required                       |
-| value            | Text in the input area (controlled)                                                                                                                              | `string`                                     | Required                       |
-| disabled         | Disables input and submission, and shows `labels.unavailableMessage` below the input area                                                                        | `boolean`                                    | `false`                        |
-| emptyState       | Content shown when there are no records; replaces the built-in empty state, and `null` shows no empty state                                                      | `ReactNode`                                  | -                              |
-| quickCommands    | Shortcuts in the built-in empty state; the empty state shows nothing when none of them resolves to a command                                                     | `readonly CommandConsoleQuickCommand[]`      | -                              |
-| commands         | Command catalogue used for suggestions, parameter help and pending skeletons; without it you can still type and submit, but get no suggestions or parameter help | `readonly CommandConsoleCommandDefinition[]` | `[]`                           |
-| commandGroups    | Group names and order in the suggestion list; undeclared groups follow in order of appearance                                                                    | `readonly CommandConsoleCommandGroup[]`      | `[]`                           |
-| onValueChange    | Called when the input changes, including accepted suggestions and examples; the input is read-only when omitted                                                  | `(value: string) => void`                    | -                              |
-| onSubmit         | Called on Enter with the trimmed command text; submission is disabled when omitted                                                                               | `(command: string) => void`                  | -                              |
-| onOpenUri        | Called when a resource link is clicked, with the link target; links navigate natively through `href` when omitted                                                | `(uri: string) => void`                      | -                              |
-| onCopy           | Called after a successful copy, with the copied text                                                                                                             | `(text: string) => void`                     | -                              |
-| labels           | Overrides interface text, see [CommandConsoleLabels](#commandconsolelabels)                                                                                      | `CommandConsoleLabels`                       | -                              |
-| locale           | Interface language, see [Internationalization](../guide/i18n)                                                                                                    | `'zh-CN' \| 'en-US'`                         | Inherited, otherwise `'en-US'` |
-| className, style | Appearance and layout; other HTML attributes are passed to the root element                                                                                      | HTML attributes                              | -                              |
+| Property         | Description                                                                                                                                                      | Type                                                                  | Default                        |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------------ |
+| records          | Command records to display, in submission order                                                                                                                  | `readonly CommandConsoleRecord[]`                                     | Required                       |
+| value            | Text in the input area (controlled)                                                                                                                              | `string`                                                              | Required                       |
+| disabled         | Disables input and submission, and shows `labels.unavailableMessage` below the input area                                                                        | `boolean`                                                             | `false`                        |
+| emptyState       | Content shown when there are no records; replaces the built-in empty state, and `null` shows no empty state                                                      | `ReactNode`                                                           | -                              |
+| quickCommands    | Shortcuts in the built-in empty state; the empty state shows nothing when none of them resolves to a command                                                     | `readonly CommandConsoleQuickCommand[]`                               | -                              |
+| commands         | Command catalogue used for suggestions, parameter help and pending skeletons; without it you can still type and submit, but get no suggestions or parameter help | `readonly CommandConsoleCommandDefinition[]`                          | `[]`                           |
+| commandGroups    | Group names and order in the suggestion list; undeclared groups follow in order of appearance                                                                    | `readonly CommandConsoleCommandGroup[]`                               | `[]`                           |
+| onValueChange    | Called when the input changes, including accepted suggestions and examples; the input is read-only when omitted                                                  | `(value: string) => void`                                             | -                              |
+| onSubmit         | Called on Enter with the trimmed command text; submission is disabled when omitted                                                                               | `(command: string) => void`                                           | -                              |
+| onOpenUri        | Called when a resource link is clicked, with the link target; links navigate natively through `href` when omitted                                                | `(uri: string) => void`                                               | -                              |
+| onCopy           | Called after a successful copy, with the copied text                                                                                                             | `(text: string) => void`                                              | -                              |
+| slots            | Replaces rendering-error content; see [error display slots](../guide/getting-started#custom-error-display)                                                       | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }` | -                              |
+| labels           | Overrides interface text, see [CommandConsoleLabels](#commandconsolelabels)                                                                                      | `CommandConsoleLabels`                                                | -                              |
+| locale           | Interface language, see [Internationalization](../guide/i18n)                                                                                                    | `'zh-CN' \| 'en-US'`                                                  | Inherited, otherwise `'en-US'` |
+| className, style | Appearance and layout; other HTML attributes are passed to the root element                                                                                      | HTML attributes                                                       | -                              |
 
 ### CommandConsoleRecord
 
-| Property    | Description                                                                                                                                      | Type                                | Default  |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- | -------- |
-| id          | Unique identifier of the record                                                                                                                  | `string`                            | Required |
-| command     | Submitted command text, shown above the result; when it matches a command in `commands`, the command name is shown as that command's `inputText` | `string`                            | Required |
-| status      | Execution state of this record only; `'pending'` shows a loading skeleton, other states show the result                                          | `'pending' \| 'success' \| 'error'` | Required |
-| content     | Execution result, not shown while `'pending'`; a successful or failed record without it shows `labels.noResult` or `labels.error`                | `CommandConsoleRecordContent`       | -        |
-| createdAtMs | Submission time as a Unix timestamp in milliseconds, shown below the command                                                                     | `number`                            | -        |
-| createdAt   | Text shown when there is no valid `createdAtMs`, also used for server rendering; it is never parsed as a date                                    | `string`                            | -        |
+| Property    | Description                                                                                                                                      | Type                                               | Default  |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------- | -------- |
+| id          | Unique identifier of the record                                                                                                                  | `string`                                           | Required |
+| command     | Submitted command text, shown above the result; when it matches a command in `commands`, the command name is shown as that command's `inputText` | `string`                                           | Required |
+| status      | State of this record; pending submissions show a skeleton, while background tasks can retain their submission result                             | `'pending' \| 'success' \| 'error' \| 'cancelled'` | Required |
+| tasks       | Background task snapshots supplied by the host                                                                                                   | `readonly CommandConsoleTask[]`                    | -        |
+| content     | Execution result; records with background tasks can show it while pending, otherwise pending records show a skeleton                             | `CommandConsoleRecordContent`                      | -        |
+| createdAtMs | Submission time as a Unix timestamp in milliseconds, shown below the command                                                                     | `number`                                           | -        |
+| createdAt   | Text shown when there is no valid `createdAtMs`, also used for server rendering; it is never parsed as a date                                    | `string`                                           | -        |
+
+`CommandConsoleTask` uses the [ConsoleTaskSnapshot](../modules/console#consoletasksnapshot) fields.
 
 ### CommandConsoleRecordContent
 
@@ -265,6 +269,7 @@ Defaults are the copy used when `locale` is `'en-US'`.
 | historyCommands    | Label for `↑` in the shortcut hints                                                        | `string`                      | `History`                                         |
 | suggestions        | Accessible name of the suggestion list                                                     | `string`                      | `Command suggestions`                             |
 | noSuggestions      | Message when no command matches                                                            | `string`                      | `No matching commands`                            |
+| cancelled          | Accessible name of the cancelled status icon                                               | `string`                      | `Cancelled`                                       |
 | pending            | Accessible name of the pending status icon                                                 | `string`                      | `Running`                                         |
 | success            | Accessible name of the success status icon                                                 | `string`                      | `Succeeded`                                       |
 | error              | Accessible name of the error status icon; also shown for a failed record without `content` | `string`                      | `Failed`                                          |
@@ -311,3 +316,7 @@ Defaults are the copy used when `locale` is `'en-US'`.
 - Server rendering and the hydration pass use `createdAt` and show no time without it; the client switches to `createdAtMs` afterwards. The time is recalculated when the component renders and does not refresh on a timer.
 - Colors come from the `--ov-ui-color-*` theme variables, and dark mode follows the `.dark` class on `<html>`; see [Getting started](../guide/getting-started).
 - Types are exported from `@openviking/react/components/command-console`; the package root exports only the component and `CommandConsoleProps`.
+
+## Analytics
+
+Configure analytics through the Provider. See the [integration guide and event catalogue](../guide/analytics) for supported events and their semantics.

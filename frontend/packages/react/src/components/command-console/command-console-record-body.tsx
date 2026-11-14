@@ -1,3 +1,4 @@
+import type { Locale } from '../../shared/locale.js';
 import { resolveCommandConsoleSkeleton } from './command-catalog.js';
 import type { CommandConsoleCommandDefinition } from './command-catalog.js';
 import { CommandConsoleCommandHelp } from './command-console-command-help.js';
@@ -21,6 +22,7 @@ import { CommandConsoleWriteResult } from './command-console-write-result.js';
 
 export interface CommandConsoleRecordProps {
   record: CommandConsoleRecord;
+  locale?: Locale;
   command?: CommandConsoleCommandDefinition;
   labels: ResolvedCommandConsoleLabels;
   onOpenUri?: (uri: string) => void;
@@ -38,7 +40,7 @@ export function CommandConsoleRecordBody({
 }: CommandConsoleRecordProps) {
   const { content } = record;
 
-  if (record.status === 'pending') {
+  if (record.status === 'pending' && (!record.tasks?.length || !content)) {
     return (
       <CommandConsoleSkeleton kind={resolveCommandConsoleSkeleton(command)} />
     );

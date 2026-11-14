@@ -28,13 +28,11 @@
 }
 
 /*
- * 面板有了固定高度，内层还得一路撑满，否则空态的 `flex: 1` 拿不到可分配的空间，
- * 两行文案会贴在顶部。`focus-lock` 基线只声明了 `max-height: inherit`，没有
- * `height`，因此这里补上。
+ * 面板有了固定高度，内层还得一路撑满，否则空态的 `flex: 1` 拿不到可分配的空间。
+ * `focus-lock` 基线只声明了 `max-height: inherit`，没有 `height`，因此这里补上。
  *
- * With the panel at a fixed height the inner layers have to fill it, or the empty
- * state's `flex: 1` has nothing to distribute and its two lines sit at the top. The
- * base `focus-lock` declares `max-height: inherit` but no height, so add one here.
+ * With the panel at a fixed height the inner layers have to fill it. The base
+ * `focus-lock` declares `max-height: inherit` but no height, so add one here.
  */
 .ov-file-browser-search .ov-modal__focus-lock {
   height: 100%;
@@ -68,7 +66,7 @@
   height: 64px;
   padding: 0 24px;
   border-bottom: 0.5px solid
-    var(--ov-ui-color-border-2, var(--ov-ui-border-2-default, #e1e4f2));
+    var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
 }
 
 .ov-file-browser-search__input {
@@ -77,20 +75,21 @@
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
   font: inherit;
   font-size: 16px;
   line-height: 24px;
 }
 
 .ov-file-browser-search__input::placeholder {
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
 }
 
 .ov-file-browser-search__input:focus {
   outline: none;
 }
 
+/* 漏斗与 Modal 的关闭按钮同尺寸，两者相距 8；关闭按钮宽 28，所以右侧留 36。 */
 .ov-file-browser-search__advanced-toggle {
   display: inline-flex;
   flex: none;
@@ -103,13 +102,18 @@
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
   cursor: pointer;
 }
 
 .ov-file-browser-search__advanced-toggle:hover,
 .ov-file-browser-search__advanced-toggle[aria-expanded='true'] {
-  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default, #f7f8fd));
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+}
+
+.ov-file-browser-search__advanced-toggle:focus-visible {
+  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
+  outline-offset: -2px;
 }
 
 /* ── 内容区 ───────────────────────────────────────────────────────── */
@@ -124,22 +128,24 @@
   display: flex;
   flex: 1;
   min-width: 0;
+  min-height: 0;
   flex-direction: column;
   gap: 12px;
   box-sizing: border-box;
   padding: 16px 16px 16px 12px;
-  overflow: auto;
-  overscroll-behavior: contain;
+  overflow: hidden;
 }
 
 /* ── 计数行与模式切换 ─────────────────────────────────────────────── */
 
+/* 计数行比结果行再缩进 12，与行内文字左对齐（行自身左右各留 12）。 */
 .ov-file-browser-search__summary {
   display: flex;
   flex: none;
   align-items: center;
   gap: 8px;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+  padding-left: 12px;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
   font-size: 13px;
   line-height: 22px;
 }
@@ -149,28 +155,22 @@
   align-items: center;
   justify-content: center;
   padding: 0 4px;
-  border: 0.5px solid
-    var(--ov-ui-color-border-2, var(--ov-ui-border-2-default, #e1e4f2));
+  border: 0.5px solid var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
   border-radius: 4px;
-  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
   font-size: 12px;
+  font-weight: 500;
   line-height: 20px;
-}
-
-/* 下拉挂在「切换」按钮上，位置由按钮决定：计数行文案随语言变长时按钮会移动，
-   写死坐标会立刻错位。 */
-.ov-file-browser-search__switch-wrap {
-  position: relative;
-  display: inline-flex;
 }
 
 .ov-file-browser-search__switch {
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
   font: inherit;
   font-size: 13px;
+  line-height: 22px;
   cursor: pointer;
 }
 
@@ -178,53 +178,84 @@
   text-decoration: underline;
 }
 
-/* ── 模式下拉 ─────────────────────────────────────────────────────── */
-
-.ov-file-browser-search__menu {
-  position: absolute;
-  z-index: 2;
-  /* 按钮下方左对齐；宽度固定，右边界可能超出内容列，靠 max-width 兜住。 */
-  top: calc(100% + 4px);
-  left: 0;
-  display: flex;
-  flex-direction: column;
-  width: 251px;
-  max-width: min(251px, 70vw);
-  padding: 4px;
-  border: 1px solid
-    var(--ov-ui-color-border-2, var(--ov-ui-border-2-default, #e1e4f2));
-  border-radius: 8px;
-  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #fff));
-  box-shadow: 0 4px 16px rgb(0 0 0 / 8%);
+.ov-file-browser-search__switch:focus-visible {
+  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
+  outline-offset: 2px;
 }
 
-.ov-file-browser-search__menu-item {
+/* ── 模式下拉 ─────────────────────────────────────────────────────── */
+
+/*
+ * 浮层由 `Popover` 渲染到 `document.body` 并用视口坐标定位，因此这里不能再给
+ * 绝对定位——那会把 `Popover` 写好的 `top`/`left` 顶掉。只把外观改成设计稿的
+ * Popover：0.5 描边、6 圆角、4 内边距、卡片悬浮投影；宽度 259 由内容决定，
+ * 窄屏时 `max-width` 收住。
+ *
+ * The surface is rendered by `Popover` into `document.body` with viewport
+ * coordinates, so this must not set absolute positioning — that would override the
+ * `top`/`left` the popover writes. It only re-skins the surface to the design's
+ * popover: a 0.5px border, 6px radius, 4px padding and the card shadow. The 259px
+ * width comes from the content; `max-width` caps it on narrow viewports.
+ */
+.ov-dropdown.ov-popover.ov-select__popover.ov-file-browser-search__menu {
+  /* 菜单从弹窗里弹出，必须压在弹窗之上：`Popover` 默认 1000，弹窗是 1001，
+     不改这一条时菜单会渲染在弹窗背后。 */
+  z-index: calc(var(--ov-ui-modal-z-index, 1001) + 1);
+  width: 259px;
+  max-width: min(259px, calc(100vw - 16px));
+  padding: 4px;
+  border: 0.5px solid var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
+  border-radius: 6px;
+  box-shadow: var(--ov-ui-tour-shadow-default);
+}
+
+.ov-file-browser-search__menu {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-sizing: border-box;
+}
+
+.ov-file-browser-search__menu .ov-file-browser-search__menu-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 10px;
+  padding: 4px 4px 4px 8px;
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
 
-.ov-file-browser-search__menu-item:hover,
-.ov-file-browser-search__menu-item[aria-pressed='true'] {
-  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default, #f7f8fd));
+.ov-file-browser-search__menu .ov-file-browser-search__menu-item:hover {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
 }
 
-.ov-file-browser-search__menu-item[aria-pressed='true'] {
-  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+.ov-file-browser-search__menu
+  .ov-file-browser-search__menu-item[aria-selected='true'] {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+}
+
+.ov-file-browser-search__menu
+  .ov-file-browser-search__menu-item[aria-selected='true']
+  .ov-file-browser-search__menu-name {
+  font-weight: 500;
+}
+
+.ov-file-browser-search__menu .ov-file-browser-search__menu-item:focus-visible {
+  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
+  outline-offset: -2px;
 }
 
 .ov-file-browser-search__menu-text {
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
 
 .ov-file-browser-search__menu-name {
@@ -233,234 +264,23 @@
 }
 
 .ov-file-browser-search__menu-hint {
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
   font-size: 12px;
   line-height: 20px;
 }
 
 /* ── 结果行 ───────────────────────────────────────────────────────── */
 
-.ov-file-browser-search__result-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-  align-items: start;
-  gap: 12px;
-}
-
-.ov-file-browser-search__name mark {
-  background: transparent;
-  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
-}
-
-.ov-file-browser-search__preview {
-  min-width: 0;
-  border: 1px solid var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
-  border-radius: 12px;
-  background: var(--ov-ui-file-search-surface);
-  box-shadow: var(--ov-ui-file-search-shadow);
-  pointer-events: auto;
-}
-
-.ov-file-browser-search__panel {
-  display: flex;
-  min-height: 0;
-  min-width: 0;
-  border: 1px solid var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
-  border-radius: 8px;
-  flex-direction: column;
-  padding: 14px;
-}
-
-.ov-file-browser-search__input {
-  min-height: 36px;
-}
-
-.ov-file-browser-search__input input::-webkit-search-cancel-button {
-  display: none;
-}
-
-.ov-file-browser-search__dismiss {
-  padding: 3px 6px;
-  border: 0;
-  border-radius: 4px;
-  background: var(--ov-ui-file-search-active);
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
-  cursor: pointer;
-}
-
-.ov-file-browser-search__dismiss kbd {
-  font: inherit;
-  font-size: 12px;
-  line-height: 1.4;
-  white-space: nowrap;
-}
-
-.ov-file-browser-search__dismiss:focus-visible {
-  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
-}
-
-.ov-file-browser-search__results {
-  display: flex;
-  min-height: 0;
-  flex-direction: column;
-  margin-top: 10px;
-}
-
-.ov-file-browser-search__count,
-.ov-file-browser-search__status,
-.ov-file-browser-search__preview-body > p {
-  margin: 0;
-}
-
-.ov-file-browser-search__count {
-  padding: 2px 8px 4px;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
-  font-size: 12px;
-}
-
-.ov-file-browser-search__status {
-  display: grid;
-  justify-items: start;
-  gap: 8px;
-  padding: 8px;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
-  overflow-wrap: anywhere;
-}
-
-.ov-file-browser-search__error {
-  color: var(--ov-ui-color-error, var(--ov-ui-error-default));
-}
-
-.ov-file-browser-search__error p {
-  margin: 0;
-}
-
-.ov-file-browser-search__list {
-  min-height: 0;
-  max-height: min(324px, 50dvh);
-  margin: 0;
-  padding: 0;
-  overflow: auto;
-  overscroll-behavior: contain;
-  list-style: none;
-}
-
-.ov-file-browser-search__result {
-  display: flex;
-  width: 100%;
-  min-height: 34px;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  font: inherit;
-  text-align: start;
-}
-
-.ov-file-browser-search__result[aria-selected='true'] {
-  background: var(--ov-ui-file-search-active);
-}
-
-.ov-file-browser-search__result > svg {
-  flex: none;
-  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
-}
-
-.ov-file-browser-search__name,
-.ov-file-browser-search__path,
-.ov-file-browser-search__preview-title > * {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ov-file-browser-search__name {
-  flex: 0 1 auto;
-  max-width: 72%;
-}
-
-.ov-file-browser-search__name mark {
-  background: none;
-  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
-}
-
-.ov-file-browser-search__path {
-  flex: 0 1 auto;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
-  font-size: 12px;
-}
-
-.ov-file-browser-search__preview {
-  display: flex;
-  min-width: 0;
-  border: 1px solid var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
-  border-radius: 8px;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.ov-file-browser-search__preview-title {
-  display: flex;
-  min-width: 0;
-  flex: none;
-  gap: 4px;
-  padding: 11px 14px;
-  border-bottom: 1px solid
-    var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
-  font-size: 12px;
-}
-
-.ov-file-browser-search__preview-title > span {
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
-}
-
-.ov-file-browser-search__preview-title > strong {
-  flex: 0 0 auto;
-  max-width: 60%;
-  font-weight: 600;
-}
-
-.ov-file-browser-search__preview-body {
-  min-height: 88px;
-  max-height: min(250px, 42dvh);
-  padding: 14px 18px;
-  overflow: auto;
-  overscroll-behavior: contain;
-  background:
-    radial-gradient(
-        circle,
-        var(--ov-ui-color-preview-dot, var(--ov-ui-preview-dot-default)) 0.5px,
-        transparent 0.6px
-      )
-      0 0 / 10px 10px,
-    var(--ov-ui-preview-backdrop-default);
-  overflow-wrap: anywhere;
-}
-
-.ov-file-browser-search__excerpt {
-  white-space: pre-wrap;
-}
-
-.ov-file-browser-search__preview-title > * {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.ov-file-browser-search__preview-body > p {
-  margin: 0;
-}
 .ov-file-browser-search__list {
   display: flex;
+  flex: 1;
+  min-height: 0;
   flex-direction: column;
   gap: 2px;
   margin: 0;
   padding: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
   list-style: none;
 }
 
@@ -468,15 +288,17 @@
   margin: 0;
 }
 
+/* 整行是按钮：图标、名称与 URI、摘要三段。分隔线落在行内，左右各留 12。 */
 .ov-file-browser-search__result {
   display: flex;
   width: 100%;
   align-items: center;
   gap: 8px;
+  box-sizing: border-box;
   padding: 20px 12px;
   border: 0;
   border-bottom: 1px solid
-    var(--ov-ui-color-border-1, var(--ov-ui-border-1-default, #f0f2fa));
+    var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
   border-radius: 6px;
   background: transparent;
   color: inherit;
@@ -485,10 +307,11 @@
   cursor: pointer;
 }
 
-.ov-file-browser-search__result[aria-selected='true'],
 .ov-file-browser-search__result:hover,
+.ov-file-browser-search__result[aria-selected='true'],
 .ov-file-browser-search__result:focus-visible {
-  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default, #f7f8fd));
+  border-bottom-color: transparent;
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
   outline: none;
 }
 
@@ -499,10 +322,14 @@
   justify-content: center;
   width: 24px;
   height: 24px;
-  border: 0.5px solid
-    var(--ov-ui-color-border-2, var(--ov-ui-border-2-default, #e1e4f2));
+  border: 0.5px solid var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
   border-radius: 6px;
-  background: var(--ov-ui-color-bg-4, var(--ov-ui-bg-4-default, #f6f7fa));
+  background: var(--ov-ui-color-bg-4, var(--ov-ui-bg-4-default));
+}
+
+.ov-file-browser-search__icon svg {
+  width: 12px;
+  height: 12px;
 }
 
 .ov-file-browser-search__body {
@@ -522,19 +349,30 @@
 
 .ov-file-browser-search__name {
   overflow: hidden;
-  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
   font-size: 14px;
-  font-weight: 500;
   line-height: 22px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 悬停或选中的行把名称加重一档，与设计稿的列表行一致。 */
+.ov-file-browser-search__result:hover .ov-file-browser-search__name,
+.ov-file-browser-search__result[aria-selected='true']
+  .ov-file-browser-search__name {
+  font-weight: 500;
+}
+
+.ov-file-browser-search__name mark {
+  background: transparent;
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
 }
 
 .ov-file-browser-search__uri {
   flex: none;
   overflow: hidden;
   max-width: 50%;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
   font-size: 12px;
   line-height: 20px;
   text-overflow: ellipsis;
@@ -543,7 +381,7 @@
 
 .ov-file-browser-search__abstract {
   overflow: hidden;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
   font-size: 13px;
   line-height: 22px;
   text-overflow: ellipsis;
@@ -552,47 +390,66 @@
 
 /* ── 空态、加载、失败 ─────────────────────────────────────────────── */
 
+/* 空态从内容区顶部往下 120，插画与两行文案间距 24。 */
 .ov-file-browser-search__empty {
   display: flex;
   flex: 1;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 4px;
+  gap: 24px;
+  padding-top: 120px;
   text-align: center;
+}
+
+.ov-file-browser-search__empty-art {
+  display: block;
+  flex: none;
+  width: 258px;
+  max-width: 100%;
+  height: auto;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+}
+
+.ov-file-browser-search__empty-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .ov-file-browser-search__empty-title {
   margin: 0;
-  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
-  font-size: 13px;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  font-size: 14px;
   font-weight: 500;
   line-height: 22px;
 }
 
 .ov-file-browser-search__empty-hint {
   margin: 0;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
   font-size: 13px;
   line-height: 22px;
 }
 
+/* 骨架：八条 55 高的行，每条一个 15 的圆点加一根 15 高的圆头横条。 */
 .ov-file-browser-search__skeletons {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  padding-top: 4px;
+  gap: 2px;
 }
 
 .ov-file-browser-search__skeleton {
   display: flex;
   align-items: center;
   gap: 10px;
+  box-sizing: border-box;
+  height: 55px;
+  padding: 12px;
 }
 
 .ov-file-browser-search__skeleton-dot,
 .ov-file-browser-search__skeleton-bar {
-  background: var(--ov-ui-color-bg-4, var(--ov-ui-bg-4-default, #f6f7fa));
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
   animation: ov-file-browser-search-pulse 1.4s ease-in-out infinite;
 }
 
@@ -606,7 +463,7 @@
 .ov-file-browser-search__skeleton-bar {
   max-width: 100%;
   height: 15px;
-  border-radius: 7.5px;
+  border-radius: 14px;
 }
 
 @keyframes ov-file-browser-search-pulse {
@@ -618,8 +475,9 @@
 .ov-file-browser-search__error {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 4px;
-  color: var(--ov-ui-color-error, var(--ov-ui-error-default, #d92d20));
+  color: var(--ov-ui-color-error, var(--ov-ui-error-default));
   font-size: 13px;
   line-height: 22px;
 }
@@ -628,11 +486,10 @@
   margin: 0;
 }
 
+/* 无结果空态在结果区内垂直居中。 */
 .ov-file-browser-search__no-results {
-  margin: 0;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
-  font-size: 13px;
-  line-height: 22px;
+  flex: 1;
+  justify-content: center;
 }
 
 .ov-file-browser-search__sr-only {
@@ -653,14 +510,15 @@
   flex: none;
   width: 320px;
   flex-direction: column;
-  gap: 20px;
+  gap: 4px;
   box-sizing: border-box;
   padding: 0 20px 16px;
   overflow: auto;
   overscroll-behavior: contain;
-  /* 用 bg-3 而不是 bg-2：暗色基线只覆盖 bg-3，bg-2 会停在浅色值上，面板在暗色
-     页面上会突兀地发白。 */
-  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default, #f7f8fd));
+  background: var(
+    --ov-ui-color-bg-2,
+    var(--ov-ui-file-search-advanced-default)
+  );
 }
 
 .ov-file-browser-search__advanced-head {
@@ -674,7 +532,7 @@
 .ov-file-browser-search__advanced-title {
   flex: 1;
   margin: 0;
-  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
   font-size: 14px;
   font-weight: 500;
   line-height: 22px;
@@ -684,9 +542,10 @@
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
   font: inherit;
   font-size: 13px;
+  line-height: 22px;
   cursor: pointer;
 }
 
@@ -700,12 +559,12 @@
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
   cursor: pointer;
 }
 
 .ov-file-browser-search__advanced-close:hover {
-  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default, #f7f8fd));
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
 }
 
 .ov-file-browser-search__advanced-body {
@@ -725,21 +584,21 @@
   flex-wrap: wrap;
   gap: 6px;
   margin: 0;
-  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
   font-size: 13px;
   font-weight: 500;
   line-height: 22px;
 }
 
 .ov-file-browser-search__group-note {
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
   font-size: 12px;
   font-weight: 400;
 }
 
 .ov-file-browser-search__group-empty {
   margin: 0;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
   font-size: 13px;
   line-height: 22px;
 }
@@ -759,18 +618,149 @@
 }
 
 /* 复选框与单选框的行高由共享控件给出，这里只把它们的行撑到设计稿的 32。 */
-.ov-file-browser-search__row .ov-checkbox,
-.ov-file-browser-search__options .ov-checkbox,
-.ov-file-browser-search__options .ov-radio {
+.ov-file-browser-search__advanced :is(.ov-checkbox, .ov-radio) {
   min-height: 32px;
-  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
+  max-width: 100%;
+}
+
+.ov-file-browser-search__advanced
+  :is(
+    .ov-checkbox:not(.ov-checkbox--disabled),
+    .ov-radio:not(.ov-radio--disabled)
+  ) {
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+}
+
+.ov-file-browser-search__advanced :is(.ov-checkbox__mask, .ov-radio__mask) {
+  border-width: 1px;
+}
+
+.ov-file-browser-search__advanced
+  .ov-checkbox:not(.ov-checkbox--checked, .ov-checkbox--disabled, :hover)
+  .ov-checkbox__mask {
+  border-color: transparent;
+  box-shadow: 0 0 0 1px
+    var(--ov-ui-color-border-2, var(--ov-ui-file-search-outline-default));
+}
+
+.ov-file-browser-search__advanced
+  .ov-radio:not(.ov-radio--checked, .ov-radio--disabled)
+  .ov-radio__mask {
+  border-color: var(
+    --ov-ui-color-border-2,
+    var(--ov-ui-file-search-radio-default)
+  );
 }
 
 .ov-file-browser-search__option-uri {
+  min-width: 0;
   overflow: hidden;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ov-file-browser-search__scope-trigger {
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  height: 32px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-file-search-muted-default));
+  font: inherit;
+  font-size: 13px;
+  line-height: 22px;
+  text-align: start;
+  box-shadow: 0 0 0 1px
+    var(--ov-ui-color-border-2, var(--ov-ui-file-search-outline-default));
+  cursor: pointer;
+}
+
+.ov-file-browser-search__scope-trigger:hover,
+.ov-file-browser-search__scope-trigger[aria-expanded='true'] {
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-file-search-active-default));
+}
+
+.ov-file-browser-search__scope-trigger > svg {
+  flex: none;
+}
+
+.ov-file-browser-search__scope-trigger[aria-expanded='true'] > svg:last-child {
+  transform: rotate(180deg);
+}
+
+.ov-file-browser-search__scope-trigger-label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-file-browser-search__scope-menu {
+  max-height: 188px;
+  margin-top: 4px;
+  padding: 4px;
+  overflow: auto;
+  border: 1px solid
+    var(--ov-ui-color-border-2, var(--ov-ui-file-search-outline-default));
+  border-radius: 6px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  font-size: 13px;
+  line-height: 22px;
+}
+
+.ov-file-browser-search__scope-current {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ov-file-browser-search__scope-current > :first-child {
+  width: auto;
+  flex: none;
+}
+
+.ov-file-browser-search__scope-choice {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  text-align: start;
+  cursor: pointer;
+}
+
+.ov-file-browser-search__scope-choice > span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-file-browser-search__scope-choice > svg {
+  flex: none;
+}
+
+.ov-file-browser-search__scope-choice > svg:last-child {
+  transform: rotate(-90deg);
+}
+
+.ov-file-browser-search__scope-choice:hover,
+.ov-file-browser-search__scope-choice[aria-pressed='true'] {
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-file-search-active-default));
 }
 
 .ov-file-browser-search__dates {
@@ -787,19 +777,6 @@
 /* ── 窄屏：高级面板独占内容区 ─────────────────────────────────────── */
 
 @media (max-width: 720px) {
-  .ov-file-browser-search__result-layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .ov-file-browser-search__result-layout .ov-file-browser-search__list {
-    max-height: 36dvh;
-    overflow: auto;
-  }
-
-  .ov-file-browser-search__preview-body {
-    max-height: 25dvh;
-  }
-
   .ov-file-browser-search--advanced .ov-file-browser-search__results {
     display: none;
   }

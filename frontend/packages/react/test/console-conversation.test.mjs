@@ -10,60 +10,94 @@ const { useConversation } = await import(
 );
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-test('Console delegates native ownership to the headless hook, preserves failed draft and omits unsupported stop', async () => {
-  let view;
-  let draft = 'question';
-  let fail = true;
-  let lists = 0;
-  const service = {
-    createSession: async () => ({ id: 'session', title: 'session' }),
-    loadMessages: async () => [],
-    listSessions: async () => {
-      lists++;
-      return [];
-    },
-    removeSession: async () => {},
-    async *stream() {
-      if (fail) throw new Error('backend failure');
-      yield { type: 'complete', text: 'answer' };
-    },
-  };
-  const root = createRoot(document.createElement('div'));
-  function Host({ controlled }) {
-    view = useConversation(
-      {
-        chatOptions: { service },
-        conversation: controlled ? { messages: [] } : undefined,
+for (const failure of ['session', 'stream']) {
+  test(`Console keeps ${failure} failures in the message list and clears accepted drafts`, async () => {
+    let view;
+    let draft = 'question';
+    let fail = true;
+    let lists = 0;
+    const requests = [];
+    const saved = [];
+    const service = {
+      createSession: async () => {
+        if (fail && failure === 'session')
+          throw new Error('session creation failed');
+        return { id: 'session', title: 'session' };
       },
-      (value) => {
-        draft = typeof value === 'function' ? value(draft) : value;
+      loadMessages: async () => [],
+      listSessions: async () => {
+        lists++;
+        return [];
       },
-    );
-    return null;
-  }
-  try {
-    await act(() => root.render(createElement(Host, { controlled: true })));
-    assert.equal(lists, 0);
-    await act(() => root.render(createElement(Host, { controlled: false })));
-    assert.equal(view.onCancel, undefined);
-    await act(async () => {
-      view.onSend({ text: 'question', attachments: [] });
-      await tick();
-    });
-    assert.equal(draft, 'question');
-    assert.equal(view.isSending, false);
-    assert.equal(view.messages[0].parts[0].text, 'question');
-    fail = false;
-    await act(async () => {
-      view.onSend({ text: 'question', attachments: [] });
-      await tick();
-    });
-    assert.equal(draft, '');
-    assert.equal(view.messages.at(-1).parts[0].text, 'answer');
-  } finally {
-    await act(() => root.unmount());
-  }
-});
+      removeSession: async () => {},
+      saveMessage: async (_id, message) => saved.push(message),
+      async *stream(input) {
+        requests.push(input);
+        if (fail) throw new Error('stream failed');
+        yield { type: 'complete', text: 'answer' };
+      },
+    };
+    const root = createRoot(document.createElement('div'));
+    function Host({ controlled }) {
+      view = useConversation(
+        {
+          chatOptions: { service },
+          conversation: controlled ? { messages: [] } : undefined,
+        },
+        (value) => {
+          draft = typeof value === 'function' ? value(draft) : value;
+        },
+      );
+      return null;
+    }
+    try {
+      await act(() => root.render(createElement(Host, { controlled: true })));
+      assert.equal(lists, 0);
+      await act(() => root.render(createElement(Host, { controlled: false })));
+      assert.equal(view.onCancel, undefined);
+      await act(async () => {
+        view.onSend({ text: 'question', attachments: [] });
+        await tick();
+      });
+      assert.equal(draft, '');
+      assert.equal(view.isSending, false);
+      assert.deepEqual(
+        view.messages.map((message) => message.role),
+        ['user', 'system'],
+      );
+      assert.match(view.messages[1].parts[0].text, /failed/);
+      assert.equal(view.messages[1].tone, 'error');
+      assert.equal(view.footer, undefined);
+      draft = 'follow-up';
+      fail = false;
+      await act(async () => {
+        view.onSend({ text: 'follow-up', attachments: [] });
+        await tick();
+      });
+      assert.equal(draft, '');
+      assert.deepEqual(
+        view.messages.map((message) => message.role),
+        ['user', 'system', 'user', 'assistant'],
+      );
+      assert.equal(view.messages[0].parts[0].text, 'question');
+      assert.equal(view.messages.at(-1).parts[0].text, 'answer');
+      assert.equal(requests.length, failure === 'session' ? 1 : 2);
+      assert.match(requests.at(-1).text, /follow-up/);
+      assert.equal(requests.at(-1).text.includes('question'), true);
+      assert.doesNotMatch(requests.at(-1).text, /failed/);
+      assert.deepEqual(
+        saved.map((message) => message.role),
+        ['user', 'user', 'assistant'],
+      );
+      assert.deepEqual(
+        saved.slice(0, 2).map((message) => message.parts[0].text),
+        ['question', 'follow-up'],
+      );
+    } finally {
+      await act(() => root.unmount());
+    }
+  });
+}
 
 test('native Console accepts follow-ups while streaming and preserves newer drafts across acceptance and completion', async () => {
   let view;

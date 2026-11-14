@@ -195,3 +195,7 @@ Defaults are the built-in `en-US` texts.
 - The six components share one stylesheet: every `style.css` entry has the same content, so import any one of them when a page uses several.
 - Colors come from the `--ov-ui-color-*` theme variables, and dark mode follows the `.dark` class on `<html>`; see [Getting started](../guide/getting-started).
 - Types are exported from each component's subpath: `AuthAction`, `AuthAgreements` and `AuthLabels` from the four form subpaths, and `AuthAction` also from `invitation-confirmation`. The package root exports only the six components and their Props types.
+
+## Analytics
+
+Configure analytics through the Provider. See the [integration guide and event catalogue](../guide/analytics) for supported events and their semantics.

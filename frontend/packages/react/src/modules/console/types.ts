@@ -1,3 +1,7 @@
+import type { TaskService } from '../../shared/task-tracking/types.js';
+export type ConsoleTaskService = TaskService;
+export type { TaskSnapshot as ConsoleTaskSnapshot } from '../../shared/task-tracking/types.js';
+import type { ErrorFallback } from '../../shared/error-boundary/types.js';
 import type { Locale } from '../../shared/locale.js';
 import type { HTMLAttributes, ReactNode, SetStateAction } from 'react';
 import type { OvRequestOptions } from '../../client/types.js';
@@ -5,7 +9,7 @@ import type {
   UseVikingBotChatOptions,
   VikingBotChatService,
   VikingBotSessionService,
-} from '../viking-bot/index.js';
+} from './chat/types.js';
 import type {
   CommandConsoleCommandDefinition,
   CommandConsoleLabels,
@@ -25,6 +29,8 @@ export interface ConsoleCommandGuide {
 }
 
 export interface ConsoleSlots {
+  /** 渲染异常时替换失败区域。Replaces a section after a rendering failure. */
+  errorFallback?: ErrorFallback;
   toolbar?: ReactNode;
   conversationContext?: ReactNode;
   commandHelp?: ReactNode;
@@ -49,9 +55,29 @@ export interface ConsoleLabels {
   vikingBot?: VikingBotLabels;
 }
 
+/** Request and persistence options for Console's built-in conversation. */
+export type ConsoleChatOptions = Omit<
+  UseVikingBotChatOptions,
+  'enabled' | 'sessionId' | 'initialMessages'
+> & { service?: VikingBotChatService & VikingBotSessionService };
+
+/**
+ * 命令模式的宿主覆盖项；记录、输入、提交和命令目录由 Console 管理。
+ * Command-mode host overrides; Console owns records, input, submission and the
+ * command catalogue.
+ */
+export interface ConsoleCommandProps {
+  /** 点击资源链接时触发；省略时使用 Console 的 `onOpenUri`。 */
+  onOpenUri?: (uri: string) => void;
+}
+
 /** Options shared by Console and useConsole. */
 export interface ConsoleOptions {
+  /** Task queries use native HTTP by default; hosts can adapt another backend. */
+  taskService?: ConsoleTaskService;
   locale?: Locale;
+  /** Enabled modes, in toolbar order. Omitted enables both; an empty list renders no panels. */
+  modes?: readonly ConsoleMode[];
   mode?: ConsoleMode;
   /** Initial uncontrolled mode. Defaults to VikingBot ('conversation'). */
   defaultMode?: ConsoleMode;
@@ -79,15 +105,12 @@ export interface ConsoleProps
    */
   quickCommands?: readonly CommandConsoleQuickCommand[];
   /** Native chat by default. Supply a stable service to adapt a non-native backend. */
-  chatOptions?: Omit<
-    UseVikingBotChatOptions,
-    'enabled' | 'sessionId' | 'initialMessages'
-  > & {
-    service?: VikingBotChatService & VikingBotSessionService;
-  };
+  chatOptions?: ConsoleChatOptions;
   /** Host-owned conversation state/capabilities. Omit draft callbacks to use Console's local draft. */
   conversation?: Partial<VikingBotProps>;
-  /** Reports navigation intent; the host opens the resource. */
+  /** 命令模式的覆盖项；省略时命令模式使用 Console 的 `onOpenUri`。 */
+  command?: ConsoleCommandProps;
+  /** 上报导航意图，由宿主打开资源；对话和命令模式各自可用 `conversation.onOpenUri`、`command.onOpenUri` 覆盖。 */
   onOpenUri?: (uri: string) => void;
   slots?: ConsoleSlots;
   labels?: ConsoleLabels;
@@ -105,7 +128,7 @@ export interface ConsoleState {
 
 /** Data and operations available independently of Console's view. */
 export interface ConsoleResult extends ConsoleState {
-  mode: ConsoleMode;
+  mode: ConsoleMode | undefined;
   commands: readonly CommandConsoleCommandDefinition[];
   setMode: (mode: ConsoleMode) => void;
   setCommand: (command: string) => void;

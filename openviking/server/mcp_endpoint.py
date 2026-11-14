@@ -1766,6 +1766,9 @@ async def add_resource(
 ) -> str:
     """Add a resource to OpenViking. Asynchronous — processing happens in the background.
 
+    Native non-strict imports can finish partially; inspect the Task result for
+    failed_files. Missing items in a partial snapshot are not inferred deletions.
+
     For an agent skill, use add_skill instead: a skill added here is stored as an ordinary
     resource and never becomes an installed skill. Copying a source's text into a file with
     write instead skips parsing and stores a plain file.
@@ -1907,6 +1910,8 @@ async def add_resource(
         if error is not None:
             return error
         root_uri = result.get("root_uri", "") if isinstance(result, dict) else ""
+        if result.get("status") == "partial":
+            return f"Resource partially imported: {root_uri}; failed_files={result.get('failed_files', [])}"
         return (
             f"Resource added: {root_uri}"
             if root_uri
@@ -1963,7 +1968,12 @@ async def add_resource(
             watch_suffix = f" (watch enabled, refresh every {watch_interval:g} minute(s))"
         else:
             watch_suffix = ""
-        if root_uri:
+        if result.get("status") == "partial":
+            message = (
+                f"Resource partially imported: {root_uri}{watch_suffix}; "
+                f"failed_files={result.get('failed_files', [])}"
+            )
+        elif root_uri:
             message = f"Resource added: {root_uri}{watch_suffix}"
         elif task_id:
             message = (

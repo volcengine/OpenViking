@@ -28,13 +28,19 @@ USER / ADMIN 必须给 `commit` 和 `log` 传入 `paths`，给 `restore` 传入 
 
 非 ROOT 的显式路径提交先按当前状态选锁，再检查范围权限并生成快照：
 
-| 目标状态 | Filesystem PathLock | Cache（Redis）PathLock |
+| 目标状态 | Filesystem PathLock | 逻辑路径 PathLock（Redis / SQLite / PostgreSQL / memory） |
 | --- | --- | --- |
-| 现存文件 | Exact | Exact |
-| 现存目录 | Tree | Tree |
+| 现有文件 | Exact | Exact |
+| 现有目录 | Tree | Tree |
 | 缺失路径 | 跳过该目标的锁 | Tree |
 
 Filesystem 对缺失目标跳过锁，避免锁文件创建目标目录或缺失的父目录链；该目标仍参与快照删除处理。此时并发重建同一路径可能被漏记或读到尚未写完的内容，后续提交才能记录最终状态。ROOT 不经过这段显式路径加锁流程。
+
+快照通过 native binding 查询实际运行的 Provider 的 handle mode。
+逻辑路径 Provider 会为缺失目标申请 Tree 锁，无需创建业务目录；
+memory 仅协调同一个客户端内的操作。租约有效期间，共享同一锁状态的参与者
+无法取得与它冲突的锁。初始状态检查与取得锁之间，路径仍可能变化。
+共享数据库协调配置见 [PostgreSQL PathLock 配置](../configuration/01-server.md#postgresql-pathlock)。
 
 快照不能视为任意并发 I/O 的全局原子视图。需要确定的业务检查点时，应先结束该范围内的写入，再提交；锁只协调参与 [PathLock 协议](../concepts/09-transaction.md) 的操作。
 
@@ -63,6 +69,14 @@ Filesystem 对缺失目标跳过锁，避免锁文件创建目标目录或缺失
     "author_email": "bot@viking.local",
     "local": {
       "base_dir": ""
+    },
+    "snapshot": {
+      "log": {
+        "provider": "sqlite",
+        "sqlite": {
+          "path": "/data/openviking/_system/snapshot/log/snapshot_log.db"
+        }
+      }
     }
   }
 }
@@ -78,6 +92,8 @@ Filesystem 对缺失目标跳过锁，避免锁文件创建目标目录或缺失
 | `git.author_name` | `viking-bot` | 调用方未传 `author_name` 时使用的默认提交者名字 |
 | `git.author_email` | `bot@viking.local` | 默认提交者邮箱 |
 | `git.local.base_dir` | `""` | Git 对象/引用的存放目录。**留空时默认使用 `{storage.workspace}/.ovgit`** |
+| `git.snapshot.log.provider` | `sqlite` | `snapshot/log?paths=...` 的路径历史索引 provider：`sqlite`、`mysql` 或 `none` |
+| `git.snapshot.log.sqlite.path` | `{storage.workspace}/_system/snapshot/log/snapshot_log.db` | 可选 SQLite 数据库绝对路径。留空时每个 workspace 使用自己的索引库 |
 
 > 通常把 `git.local.base_dir` 留空即可，让快照数据自动落在工作区下的 `.ovgit` 目录，便于和资源数据一起备份与迁移。
 
@@ -107,6 +123,16 @@ Filesystem 对缺失目标跳过锁，避免锁文件创建目标目录或缺失
       "prefix": ".ovgit",
       "use_path_style": false,
       "cas_mode": "native"
+    },
+    "snapshot": {
+      "log": {
+        "provider": "mysql",
+        "mysql": {
+          "dsn_env": "OPENVIKING_SNAPSHOT_LOG_DSN",
+          "max_connections": 16,
+          "connect_timeout_ms": 3000
+        }
+      }
     }
   }
 }
@@ -123,6 +149,30 @@ Filesystem 对缺失目标跳过锁，避免锁文件创建目标目录或缺失
 | `git.s3.access_key` / `git.s3.secret_key` | 继承 `storage.agfs.s3` 对应字段，否则 `null` | 直接读取的凭据；留空则走 SDK 默认凭据链 |
 | `git.s3.use_path_style` | `true` | `true` 用 path-style 寻址（MinIO 等）；`false` 用 virtual-host 寻址（TOS 等） |
 | `git.s3.cas_mode` | `native` | 引用 CAS 模式。`native` 使用 S3 条件写（If-Match） |
+| `git.snapshot.log.provider` | `sqlite` | `snapshot/log?paths=...` 的路径历史索引 provider。多实例部署建议使用 `mysql` |
+| `git.snapshot.log.mysql.dsn_env` | `OPENVIKING_SNAPSHOT_LOG_DSN` | 保存 MySQL DSN 的环境变量名 |
+| `git.snapshot.log.mysql.max_connections` | `16` | MySQL 连接池最大连接数 |
+| `git.snapshot.log.mysql.connect_timeout_ms` | `3000` | MySQL 连接超时时间，单位毫秒 |
+
+### 按路径查询的日志索引
+
+`git.snapshot.log` 控制 `snapshot/log` 在传入 `paths` 时使用的派生索引。
+它不改变快照提交、文件内容存储或 API 响应格式，只减少查找某个文件或
+目录相关提交时的存储读取。
+
+provider 取值：
+
+| Provider | 适用场景 |
+| --- | --- |
+| `sqlite` | 单机部署。默认数据库位于 `{storage.workspace}/_system/snapshot/log/snapshot_log.db`；如需覆盖，设置绝对路径 `git.snapshot.log.sqlite.path` |
+| `mysql` | 多实例部署。DSN 从 `git.snapshot.log.mysql.dsn_env` 指定的环境变量读取 |
+| `none` | 关闭索引，保留原有历史扫描逻辑 |
+
+MySQL 示例：
+
+```bash
+export OPENVIKING_SNAPSHOT_LOG_DSN='mysql://user:password@host:3306/openviking'
+```
 
 修改服务端配置后，重启 OpenViking 服务。重新初始化 HTTP SDK 客户端不会重新加载服务端配置。
 
@@ -349,6 +399,7 @@ curl -X DELETE "http://localhost:1933/api/v1/snapshot/ignore" \
 
 - 修改服务端 `git` 配置后，重启服务使其生效。
 - 启用 `s3` 后端时，`git.s3.bucket` 与 `git.s3.region` 为必填项，缺失会导致初始化失败。
+- `git.snapshot.log.sqlite.path` 必须是绝对路径。将 `provider` 设为 `"none"` 可关闭路径索引。
 - 恢复操作如涉及向量副作用（写入/删除文件），响应会返回一个 `task_id`，可通过 `GET /api/v1/tasks/{task_id}` 轮询后台向量重建进度（参见 [系统指南](05-observability.md) 与 [API 概览](../api/01-overview.md)）。
 - `.ovgitignore` 内容过大（超过 64 KiB）或包含 `!` 取反、反斜杠转义等不支持语法时，`commit` 会失败并报 `invalid operation` 错误；写入时（`set_gitignore`）会预先校验大小。
 - 不要手动用外部 `git` 工具去操作 `.ovgit` 目录，它由 OpenViking 维护。

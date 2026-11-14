@@ -29,7 +29,7 @@ import '@openviking/react/components/command-console/style.css';
 
 ### 空态与快捷命令
 
-没有记录时显示快捷入口，点击只把命令填入输入区，按 Enter 才提交，提交后空态被记录取代。
+没有记录时显示快捷入口，点击只把命令填入输入区，按 Enter 才提交，提交后空态被记录取代。每行显示 `summary`，省略时回退到 `description`；提供了 `summary`，或说明被单行省略截断时，悬停该行显示完整的 `description`。
 
 ```tsx file="../../_demos/command-console-empty.tsx" preview
 
@@ -41,33 +41,37 @@ import '@openviking/react/components/command-console/style.css';
 
 ### CommandConsole
 
-| 参数             | 说明                                                                                       | 类型                                         | 默认值                   |
-| ---------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------- | ------------------------ |
-| records          | 要展示的命令记录，按提交顺序排列                                                           | `readonly CommandConsoleRecord[]`            | 必填                     |
-| value            | 输入区的文本，受控                                                                         | `string`                                     | 必填                     |
-| disabled         | 禁用输入和提交，并在输入区下方显示 `labels.unavailableMessage`                             | `boolean`                                    | `false`                  |
-| emptyState       | 没有记录时显示的内容，替换内置空态；传 `null` 时不显示空态                                 | `ReactNode`                                  | -                        |
-| quickCommands    | 内置空态里的快捷入口，没有可用入口时内置空态不显示内容                                     | `readonly CommandConsoleQuickCommand[]`      | -                        |
-| commands         | 命令目录，用于补全、参数帮助和执行中记录的骨架；省略时仍可输入和提交，但没有候选和参数帮助 | `readonly CommandConsoleCommandDefinition[]` | `[]`                     |
-| commandGroups    | 候选列表的分组名称和顺序，没有声明的分组按出现顺序排在后面                                 | `readonly CommandConsoleCommandGroup[]`      | `[]`                     |
-| onValueChange    | 输入变化时触发，包括接受补全和示例；省略时输入区只读                                       | `(value: string) => void`                    | -                        |
-| onSubmit         | 按 Enter 提交时触发，参数是去掉首尾空白的命令文本；省略时不能提交                          | `(command: string) => void`                  | -                        |
-| onOpenUri        | 点击资源链接时触发，参数是链接地址；省略时链接按 `href` 原生跳转                           | `(uri: string) => void`                      | -                        |
-| onCopy           | 复制成功后触发，参数是已复制的文本                                                         | `(text: string) => void`                     | -                        |
-| labels           | 覆盖界面文案，字段见 [CommandConsoleLabels](#commandconsolelabels)                         | `CommandConsoleLabels`                       | -                        |
-| locale           | 界面语言，规则见[国际化](../guide/i18n)                                                    | `'zh-CN' \| 'en-US'`                         | 继承上级，默认 `'en-US'` |
-| className、style | 外观与布局，其余 HTML 属性透传到根元素                                                     | HTML 属性                                    | -                        |
+| 参数             | 说明                                                                                       | 类型                                                                  | 默认值                   |
+| ---------------- | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- | ------------------------ |
+| records          | 要展示的命令记录，按提交顺序排列                                                           | `readonly CommandConsoleRecord[]`                                     | 必填                     |
+| value            | 输入区的文本，受控                                                                         | `string`                                                              | 必填                     |
+| disabled         | 禁用输入和提交，并在输入区下方显示 `labels.unavailableMessage`                             | `boolean`                                                             | `false`                  |
+| emptyState       | 没有记录时显示的内容，替换内置空态；传 `null` 时不显示空态                                 | `ReactNode`                                                           | -                        |
+| quickCommands    | 内置空态里的快捷入口，没有可用入口时内置空态不显示内容                                     | `readonly CommandConsoleQuickCommand[]`                               | -                        |
+| commands         | 命令目录，用于补全、参数帮助和执行中记录的骨架；省略时仍可输入和提交，但没有候选和参数帮助 | `readonly CommandConsoleCommandDefinition[]`                          | `[]`                     |
+| commandGroups    | 候选列表的分组名称和顺序，没有声明的分组按出现顺序排在后面                                 | `readonly CommandConsoleCommandGroup[]`                               | `[]`                     |
+| onValueChange    | 输入变化时触发，包括接受补全和示例；省略时输入区只读                                       | `(value: string) => void`                                             | -                        |
+| onSubmit         | 按 Enter 提交时触发，参数是去掉首尾空白的命令文本；省略时不能提交                          | `(command: string) => void`                                           | -                        |
+| onOpenUri        | 点击资源链接时触发，参数是链接地址；省略时链接按 `href` 原生跳转                           | `(uri: string) => void`                                               | -                        |
+| onCopy           | 复制成功后触发，参数是已复制的文本                                                         | `(text: string) => void`                                              | -                        |
+| slots            | 替换渲染异常的展示内容，见[错误展示插槽](../guide/getting-started#自定义错误展示)          | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }` | -                        |
+| labels           | 覆盖界面文案，字段见 [CommandConsoleLabels](#commandconsolelabels)                         | `CommandConsoleLabels`                                                | -                        |
+| locale           | 界面语言，规则见[国际化](../guide/i18n)                                                    | `'zh-CN' \| 'en-US'`                                                  | 继承上级，默认 `'en-US'` |
+| className、style | 外观与布局，其余 HTML 属性透传到根元素                                                     | HTML 属性                                                             | -                        |
 
 ### CommandConsoleRecord
 
-| 参数        | 说明                                                                                                       | 类型                                | 默认值 |
-| ----------- | ---------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------ |
-| id          | 记录的唯一标识                                                                                             | `string`                            | 必填   |
-| command     | 提交的命令文本，显示在结果上方；匹配到 `commands` 中的命令时，命令名部分按它的 `inputText` 显示            | `string`                            | 必填   |
-| status      | 执行状态，只影响这一条记录；`'pending'` 时显示加载骨架，其余状态显示结果                                   | `'pending' \| 'success' \| 'error'` | 必填   |
-| content     | 执行结果；`'pending'` 的记录不显示它，成功或失败的记录省略它时，分别显示 `labels.noResult`、`labels.error` | `CommandConsoleRecordContent`       | -      |
-| createdAtMs | 提交时间，Unix 毫秒时间戳，显示在命令下方                                                                  | `number`                            | -      |
-| createdAt   | 没有有效 `createdAtMs` 时显示的文本，也用于服务端渲染；不会被解析为日期                                    | `string`                            | -      |
+| 参数        | 说明                                                                                            | 类型                                               | 默认值 |
+| ----------- | ----------------------------------------------------------------------------------------------- | -------------------------------------------------- | ------ |
+| id          | 记录的唯一标识                                                                                  | `string`                                           | 必填   |
+| command     | 提交的命令文本，显示在结果上方；匹配到 `commands` 中的命令时，命令名部分按它的 `inputText` 显示 | `string`                                           | 必填   |
+| status      | 执行状态，只影响这一条记录；`'pending'` 且尚无后台任务结果时显示加载骨架，其余状态显示结果      | `'pending' \| 'success' \| 'error' \| 'cancelled'` | 必填   |
+| tasks       | 后台任务快照，组件仅展示传入的状态                                                              | `readonly CommandConsoleTask[]`                    | -      |
+| content     | 执行结果；带后台任务的记录在运行中也显示它，省略时按状态显示骨架或空结果                        | `CommandConsoleRecordContent`                      | -      |
+| createdAtMs | 提交时间，Unix 毫秒时间戳，显示在命令下方                                                       | `number`                                           | -      |
+| createdAt   | 没有有效 `createdAtMs` 时显示的文本，也用于服务端渲染；不会被解析为日期                         | `string`                                           | -      |
+
+`CommandConsoleTask` 的字段与 [ConsoleTaskSnapshot](../modules/console#consoletasksnapshot) 一致。
 
 ### CommandConsoleRecordContent
 
@@ -265,6 +269,7 @@ import '@openviking/react/components/command-console/style.css';
 | historyCommands    | 快捷键提示里 `↑` 的说明                                         | `string`                      | `历史指令`                                |
 | suggestions        | 候选列表的无障碍名称                                            | `string`                      | `命令建议`                                |
 | noSuggestions      | 没有匹配的命令时的提示                                          | `string`                      | `没有匹配的命令`                          |
+| cancelled          | 已取消状态图标的无障碍名称                                      | `string`                      | `已取消`                                  |
 | pending            | 执行中状态图标的无障碍名称                                      | `string`                      | `执行中`                                  |
 | success            | 执行成功状态图标的无障碍名称                                    | `string`                      | `执行成功`                                |
 | error              | 执行失败状态图标的无障碍名称，失败的记录没有 `content` 时也显示 | `string`                      | `执行失败`                                |
@@ -311,3 +316,7 @@ import '@openviking/react/components/command-console/style.css';
 - 服务端渲染和 hydration 首屏使用 `createdAt`，没有则不显示时间；客户端接管后改用 `createdAtMs`。时间只在渲染时重新计算，不会定时刷新。
 - 颜色取自 `--ov-ui-color-*` 主题变量，暗色模式跟随 `<html>` 上的 `.dark` 类，详见[快速开始](../guide/getting-started)。
 - 类型从 `@openviking/react/components/command-console` 导出，包根入口只导出组件和 `CommandConsoleProps`。
+
+## 埋点
+
+通过 Provider 统一接入，支持的事件和触发条件见[埋点指南与事件目录](../guide/analytics)。

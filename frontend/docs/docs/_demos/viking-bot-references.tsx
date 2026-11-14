@@ -1,3 +1,4 @@
+import { Button } from '#demo-controls';
 import { useLang } from '@rspress/core/runtime';
 import { useState } from 'react';
 import { VikingBot } from '@openviking/react/components/viking-bot';
@@ -56,9 +57,9 @@ export default function VikingBotReferences() {
   const [result, setResult] = useState('');
   return (
     <>
-      <button type="button" onClick={() => setSelected(INITIAL)}>
+      <Button htmlType="button" onClick={() => setSelected(INITIAL)}>
         {text.reset}
-      </button>
+      </Button>
       <div style={{ height: 390 }}>
         <VikingBot
           locale={lang === 'zh' ? 'zh-CN' : 'en-US'}

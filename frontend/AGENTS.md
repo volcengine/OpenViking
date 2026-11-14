@@ -32,6 +32,10 @@
 - 一词一义：`entry` 只指文件和目录条目；按钮和入口称 `action`，例如 `FileBrowserActionBar`。
 - 私有文件按职责命名：新增文件写 `labels.ts`、`types.ts`，不重复目录名；单个目录超过 20 个文件时，按职责拆子目录。
 
+## 代码写法
+
+- 优先用语法糖代替手写分支，同一件事写得越短越好，比如优先推荐 `??`、`?.`、`??=`、`||=`。
+
 ## 样式与交互
 
 - 库样式局部化，类名使用 `ov-` 前缀加 BEM 命名（块 `.ov-file-tree`，元素 `.ov-file-tree__row`，修饰 `.ov-file-preview__button--primary`），主题变量使用 `--ov-ui-` 前缀。消费者无需额外扫描库源码生成 Tailwind CSS，也不承担库的全局 reset；库样式不修改应用的 `html`、`body`、`:root` 或 `.dark`。
@@ -61,6 +65,7 @@
 - 简体中文为默认语言，使用 `/ui/` 下的地址；英文使用 `/ui/en/`。新增或修改文档时同步维护两种语言的页面，并在 `docs/sidebar.ts` 登记，中英文侧边栏由它统一生成；保持对应页面路径一致，以支持原位语言切换。可运行示例共用 `docs/docs/_demos/`，不要为翻译复制实现；示例将站点语言映射为组件 `locale`，业务示例内容与文案覆盖由调用者提供。
 - 区块分类入口指向该分类的 `index.mdx` 概览，而不是首个区块；侧边栏按路由前缀隔离，仅列出当前分类的概览与详情，并按职责分组。新增分类时同时提供真实内容、概览和导航，不创建空栏目或占位页面。
 - 示例从 `@openviking/react` 的公开导出及样式入口导入，不通过相对路径绕过接口。外部 TSX 示例是可运行代码与源码展示的同一事实源。
+- 示例的按钮、输入框和复选框通过 `#demo-controls` 复用构建后的内部基础件，样式随 docs 加载，不新增 SDK 公开入口。
 - 开发与正式文档均通过包导出消费实际库产物。开发模式由官方 workspace 插件启动 Rslib watch；不使用源码 alias 或 TypeScript paths 绕过产物解析，以发现缺失导出、CSS 和打包资源等问题。
 - 新增或修改公开能力时，同步检查导出、示例、属性表和导航。手写属性表中的默认值、异步语义和错误行为必须与实际实现一致。
 - 示例使用固定、公开的数据和可独立运行的 Adapter；模拟结果应明确标识，截图与输出中不包含真实密钥、内部地址或个人数据。
@@ -114,6 +119,14 @@
 - TOS 需要先上传页面依赖的资源，再上传 HTML；无扩展名页面需对应实际 HTML 对象。保留产品文档路径，避免创建遮蔽 `/ui/` 目录的 `/ui` 对象。
 - 部署入口与产物合并规则见 [Pages 工作流](../.github/workflows/_docs-deploy.yml)、[TOS 工作流](../.github/workflows/docs-tos.yml)。分支检查通过、正式站发布和 npm 发包是不同结果，交付时分别说明。
 
+## 发布日志
+
+- 文档站发布日志只展示当前包版本所属的 major，按 minor 分组，组内版本倒序。仅 minor 分组支持折叠，默认展开最新分组，同级一次展开一项且可全部收起；组内各版本内容直接垂直展开；完整历史保留在包 CHANGELOG 中。
+
+- npm 变更通过 Changesets 记录，每个 changeset 在同一文件内提供 `## en-US` 和 `## zh-CN` 两段非空文案，共用包名和版本升级类型；两种语言包含相同的变更、破坏性影响和迁移说明。
+- 提交前运行 `npm run check:release-notes`，CI 同时校验双语文案结构和文档站生成结果；具体格式与发布命令见 [React releases](./.changeset/README.md)。
+- `npm run version:react` 生成版本号、双语 CHANGELOG 和对应语言的文档站发布日志，发布前将这些物料一起提交审核。待发布文案修改 changeset，已归档文案修改 CHANGELOG 后重新生成，不直接编辑文档站生成页。
+
 ## 验证与交付
 
 - JS/TS 文件（含 JSX、TSX）每个文件最多 200 行，不计空行和纯注释行，由 lint 的 `max-lines` 规则检查。
@@ -123,5 +136,3 @@
 - 修改包导出、peer dependencies、资源或打包策略时，从真实打包产物验证消费者，包括声明支持的 React 版本，并检查声明、CSS 与 SVG 能在 workspace 外解析；文档开发模式不能代替独立消费验证。
 - 修改部署时，验证合并后主站页面仍存在，并检查 UI 深链及静态资源。线上尚未发布或外部检查尚未结束时，报告实际状态。
 - 交付前检查最终 diff、`git diff --check` 和工作区状态。`frontend/AGENTS.md` 应由 Git 跟踪；构建产物和临时验证文件保持忽略。
-
-VikingBot 对话是公开无头模块的明确例外：`modules/viking-bot` 导出 `useVikingBotChat`、`useVikingBotSessions` 及必要契约，供 Console 与独立 VikingBot 宿主共同使用；不导出组合组件，不提供 CSS 入口，不从根入口或 Console 入口转导出 Hook。其他模块 Hook 仍按上述内部边界执行。

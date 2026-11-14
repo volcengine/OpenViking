@@ -164,6 +164,7 @@ export const experienceViewData: ExperienceDashboardData = {
       uri: DEMO_EXPERIENCE,
       name: 'release-check.md',
       modTime: '2026-11-09 12:03',
+      isUpdated: true,
     },
   ],
   outcomes: [

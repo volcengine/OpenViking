@@ -3,7 +3,10 @@ import { Compartment, EditorState, Transaction } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { Button } from '../../shared/primitives/button/button.js';
-import { loadPrismLanguage, prismLanguage } from './prism-language.js';
+import {
+  loadPrismLanguage,
+  prismLanguage,
+} from '../../shared/prism-language.js';
 import { prismHighlight } from './prism-highlight.js';
 import type { FilePreviewLabels, FilePreviewSource } from './types.js';
 

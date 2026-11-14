@@ -45,6 +45,7 @@ import '@openviking/react/modules/scope-cascade/style.css';
 | levelNames       | 三级的名称，依次为知识库、数据空间、用户；未选中时显示在触发器上，同时是触发器的无障碍名称                         | `readonly [string, string, string]`                                                                    | `zh-CN`：`['知识库', '数据空间', '用户']`；`en-US`：`['Library', 'Space', 'User']` |
 | onChange         | 选择变化时触发，三级都选中时参数为 `ScopeCascadeSelection`，身份不完整时为 `null`；同一身份不重复触发              | `(selection: ScopeCascadeSelection \| null) => void`                                                   | -                                                                                  |
 | retryLabel       | 加载失败后重试按钮的文案                                                                                           | `string`                                                                                               | `zh-CN`：`'重试'`；`en-US`：`'Retry'`                                              |
+| slots            | 替换渲染异常的展示内容，见[错误展示插槽](../guide/getting-started#自定义错误展示)                                  | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }`                                  | -                                                                                  |
 | labels           | 覆盖界面文案：加载中 `loading`、搜索框占位 `searchPlaceholder`、无选项 `empty`、无匹配 `noMatch`、加载失败 `error` | `ScopeSwitcherLabels`                                                                                  | -                                                                                  |
 | locale           | 界面语言，规则见[国际化](../guide/i18n)                                                                            | `'zh-CN' \| 'en-US'`                                                                                   | 继承上级，默认 `'en-US'`                                                           |
 | className、style | 外观与布局，其余 HTML 属性透传到根元素                                                                             | HTML 属性                                                                                              | -                                                                                  |
@@ -79,3 +80,7 @@ import '@openviking/react/modules/scope-cascade/style.css';
 - 每一级一次返回完整列表，不支持服务端搜索和分页。超过 10 项时显示搜索框，在本地按选项文字过滤。
 - 选项没有 `icon` 时，知识库显示 [LibraryIcon](../components/icons)（按 `id` 取色的圆形渐变色块），数据空间和用户分别显示 `SpaceIcon`、`UserIcon`；加载函数返回了 `icon` 就使用它。
 - 类型从 `@openviking/react/modules/scope-cascade` 导出：`ScopeCascadeProps`、`ScopeCascadeSelection`，以及三个加载函数合在一起的 `ScopeCascadeApi`；`ScopeSwitcherOption` 和 `ScopeSwitcherLabels` 从 `@openviking/react/components/scope-switcher` 导出。包根入口只导出组件和 `ScopeCascadeProps`。
+
+## 埋点
+
+通过 Provider 统一接入，支持的事件和触发条件见[埋点指南与事件目录](../guide/analytics)。

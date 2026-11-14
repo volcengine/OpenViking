@@ -22,12 +22,26 @@ React imports these SVG files directly during its build. This file records where
 - `svg/console/history-empty.svg` is an original geometric tray illustration
   based on a supplied screenshot of the console. It follows this repository's license;
   its outline and background follow theme colors.
+- `svg/empty/` — original empty-state illustrations drawn for this workspace in
+  the style of `svg/file-browser/search-empty.svg`: the same 258 × 140 dashed
+  grid, a `--ov-ui-color-border-3` shape behind and a `currentColor` shape in
+  front. `folder.svg` is an empty folder, `chart.svg` a chart card,
+  `people.svg` two people and `conversation.svg` two message bubbles. They
+  follow the repository license and are bundled inline by the internal `Empty`
+  primitive.
 - `svg/arrow-right.svg` — the static artwork of `IconRightArrow`, which
   CommandConsole's quick commands render as `ArrowRightIcon`. Extracted from
   `@arco-design/iconbox-react-viking` 0.0.121, whose package metadata declares
   ISC; the same artwork is present in 0.0.134. The 14 × 14 viewBox, path and
   1.2-unit `currentColor` stroke are unchanged. Only the runtime wrapper is
   removed; the React package bundles the local SVG through SVGR.
+- `svg/file-browser/` — the search dialog's filter glyph, the toolbar's refresh
+  glyph and the empty search state's artwork. `search-filter.svg` and
+  `refresh-cw-01.svg` keep the design's geometry with `currentColor` paint;
+  `search-empty.svg` redraws the design's 258 × 140 dashed grid, document outline
+  and magnifier in the style of `svg/console/history-empty.svg`, with its colours
+  mapped to theme variables. See that directory's README.
+
 - `svg/scope-switcher/` — the chevron and check assets were supplied by the
   designer. Chevron is 14 × 14 and check is 16 × 16. Their paint was changed from
   the design's fixed colours to `currentColor` so a host theme can recolour them;
@@ -48,9 +62,13 @@ React imports these SVG files directly during its build. This file records where
   React fallbacks import it directly and the CSS block is generated from it by
   `npm run sync:swatches`, so the two never drift. A host can still pass its own
   icons through `icon`; the examples reuse these built-in ones.
+- `svg/file-browser/refresh-cw-01.svg` — the 14 × 14 refresh icon exported
+  from the OpenViking Console design (Figma node `10674:69790`). The module
+  uses the original artwork and applies the active theme's stroke color.
 - `svg/file-type/` — the file-type icon set vendored from `@pierre/trees`
   (Apache-2.0, see that directory's `LICENSE.md`). One SVG per icon.
-- `empty-state.png` — the empty-state illustration for the file browser
+- `file-browser-empty-figma.png` — source artwork for the file browser's light empty state
+- `empty-state.png` — transparent illustration for the file browser's dark empty state
   (258 × 140 at 2×). Supplied by the designer; the module imports it and the build
   inlines it as a data URI, so no separate asset file ships. It is a bitmap rather
   than an SVG because the original carries gradients and anti-aliased edges that a
@@ -62,9 +80,14 @@ React imports these SVG files directly during its build. This file records where
 
 - The VikingBot welcome (lightbulb/book/video), report and session controls are
   original SVG artwork from `@arco-design/iconbox-react-viking` 0.0.134 (ISC).
-  Paths remain unchanged; React wrappers are removed. The new-session viewBox is
-  cropped to match the history icon's visual size. Both Console modes share these
-  session-control assets. No IconBox runtime is required.
+  The history, new-session, session copy, copy success and locate glyphs use the
+  original geometry. `new-session.svg` crops its 16 × 16 viewBox to the 13 × 13
+  area around the glyph, so it fills its box like the tightly cropped
+  `history.svg` and the two draw at the same size. React wrappers are removed and paint follows the host
+  theme. No IconBox runtime is required.
+- `svg/viking-bot/copy.svg` and `check.svg` — the reference OpenViking console's
+  14px code and message action icons, from ConnectAgent's `connectAgentUi`.
+  They follow this repository's license.
 
 `svg/viking-bot/remove.svg` is an OpenViking-authored close glyph under the repository license.
 

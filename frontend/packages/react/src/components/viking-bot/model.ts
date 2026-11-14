@@ -1,3 +1,5 @@
+import type { TaskSnapshot } from '../../shared/task-tracking/types.js';
+export type VikingBotTask = TaskSnapshot;
 import type { ReactNode } from 'react';
 import type { VikingBotReference } from './capabilities.js';
 
@@ -84,6 +86,8 @@ export interface VikingBotToolPart {
   output?: string;
   /** Normalized result cards; the host adapts its search response. */
   results?: readonly VikingBotToolResultLink[];
+  /** Background task snapshots supplied by the module or host. */
+  tasks?: readonly VikingBotTask[];
   /** 调用耗时，单位毫秒。Call duration in milliseconds. */
   durationMs?: number;
   /** Execution timestamps for the activity duration. */
@@ -109,6 +113,8 @@ export interface VikingBotToolResultPart {
   output: string;
   /** Normalized result cards, replacing the raw output presentation. */
   results?: readonly VikingBotToolResultLink[];
+  /** Background task snapshots supplied by the module or host. */
+  tasks?: readonly VikingBotTask[];
   /** 该结果是否为错误。Whether the result is an error. */
   isError?: boolean;
   /** 所属执行块标识。Owning activity block. */
@@ -174,6 +180,8 @@ export interface VikingBotMessage {
    * Tone of a system message, `info` by default; `error` for failures.
    */
   tone?: 'info' | 'error';
+  /** 客户端失败提示，不进入会话存储或模型输入。Client-only failure notice. */
+  clientError?: Error;
   /**
    * 合并后的消息携带的原始动作清单；合并时保留每条消息自己的 messageId，
    * 渲染时按原始消息回传，避免把动作挂到错误的消息上。

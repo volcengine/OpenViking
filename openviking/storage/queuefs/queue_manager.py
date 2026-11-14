@@ -410,11 +410,9 @@ class QueueManager:
 
         async def process_one(data: Dict[str, Any]) -> None:
             async with sem:
-                msg_id = data.get("id", "") if isinstance(data, dict) else ""
                 try:
-                    await queue.process_dequeued(data)
-                    # Ack after successful processing (delete from persistent storage).
-                    await queue.ack(msg_id, data)
+                    result = await queue.process_dequeued(data)
+                    await queue.settle_dequeued(data, result)
                 except Exception as e:
                     # The message remains in processing and will be recovered.
                     logger.error(f"[QueueManager] Concurrent worker error for {queue.name}: {e}")
@@ -538,9 +536,20 @@ class QueueManager:
 
     # ========== Compatibility convenience methods ==========
 
-    async def enqueue(self, queue_name: str, data: Union[str, Dict[str, Any]]) -> str:
+    async def enqueue(
+        self,
+        queue_name: str,
+        data: Union[str, Dict[str, Any]],
+        *,
+        group_key: Optional[str] = None,
+        serial_key: Optional[str] = None,
+    ) -> str:
         """Send message to queue (enqueue)."""
-        return await self.get_queue(queue_name).enqueue(data)
+        if group_key is None and serial_key is None:
+            return await self.get_queue(queue_name).enqueue(data)
+        return await self.get_queue(queue_name).enqueue(
+            data, group_key=group_key, serial_key=serial_key
+        )
 
     async def dequeue(self, queue_name: str) -> Optional[Dict[str, Any]]:
         """Get message from specified queue."""

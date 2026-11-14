@@ -1,5 +1,8 @@
+import { useRenderErrors } from './labels.js';
+import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
+import { Empty } from '../../shared/primitives/empty/empty.js';
 import { useLocale } from '../../shared/locale-context.js';
-import { lazy, Suspense } from 'react';
+import { LazyContent } from '../../shared/lazy-content.js';
 
 import { resolveVikingBotLabels } from './labels.js';
 import { toRenderItems } from './ark-adapter.js';
@@ -17,11 +20,11 @@ import type { VikingBotMessageListProps } from './types.js';
  * top-level import chain, breaking server rendering and module resolution without
  * `window` — the same boundary FilePreview uses for its body.
  */
-const List = lazy(async () => {
+const load = async () => {
   const { VikingBotMessageListView } =
     await import('./ark-message-list-view.js');
   return { default: VikingBotMessageListView };
-});
+};
 
 /** 加载态的占位高度，避免列表出现时页面跳动。 */
 function ListSkeleton() {
@@ -29,18 +32,38 @@ function ListSkeleton() {
 }
 
 /** 消息列表。The message list. */
-export function VikingBotMessageList(props: VikingBotMessageListProps) {
+function VikingBotMessageListContent(props: VikingBotMessageListProps) {
   const locale = useLocale(props.locale);
   const labels = resolveVikingBotLabels(locale, props.labels);
   const items = toRenderItems(props.messages, props.streaming);
 
   if (items.length === 0) {
-    return <div className="ov-viking-bot__empty">{labels.empty}</div>;
+    return (
+      <div className="ov-viking-bot__empty">
+        <Empty illustration="conversation" title={labels.empty} />
+      </div>
+    );
   }
 
   return (
-    <Suspense fallback={<ListSkeleton />}>
-      <List {...props} locale={locale} />
-    </Suspense>
+    <LazyContent
+      load={load}
+      contentProps={{ ...props, locale }}
+      fallback={<ListSkeleton />}
+    />
+  );
+}
+
+export function VikingBotMessageList(props: VikingBotMessageListProps) {
+  const { slots, ...contentProps } = props;
+  return (
+    <ErrorBoundary
+      fallback={slots?.errorFallback}
+      message={useRenderErrors(props.locale).list}
+      locale={props.locale}
+      resetKeys={[props.listKey]}
+    >
+      <VikingBotMessageListContent {...contentProps} />
+    </ErrorBoundary>
   );
 }

@@ -1,0 +1,30 @@
+@import '../../theme.css';
+
+.ov-error-boundary {
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 16px;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.ov-error-boundary__message {
+  margin: 0 0 8px;
+}
+
+.ov-error-boundary__reset {
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  font: inherit;
+  cursor: pointer;
+}
+
+.ov-error-boundary__reset:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  outline-offset: 2px;
+}

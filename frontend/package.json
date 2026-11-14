@@ -13,11 +13,11 @@
   "scripts": {
     "dev": "npm run build:lib && concurrently -n lib,docs -c cyan,magenta \"npm run dev --workspace @openviking/react\" \"npm run dev --workspace @openviking/ui-docs --\"",
     "check": "npm run lint",
-    "lint": "npm run build:lib && node scripts/lint.mjs",
+    "lint": "npm run check:release-notes && npm run build:lib && node scripts/lint.mjs",
     "lint:fix": "npm run build:lib && node scripts/lint.mjs --fix",
     "typecheck": "npm run build:lib && tsc --noEmit -p packages/react/tsconfig.json && tsc --noEmit -p packages/react/tsconfig.config.json && tsc --noEmit -p docs/tsconfig.json",
     "test": "npm run check:swatches && npm run build:lib && node scripts/test.mjs",
-    "build:lib": "npm run build --workspace @openviking/react",
+    "build:lib": "npm run build --workspace @openviking/react && node scripts/analytics-docs.mjs --check",
     "clean:lib": "node -e \"require('node:fs').rmSync('packages/react/dist',{recursive:true,force:true})\"",
     "build:docs": "npm run build --workspace @openviking/ui-docs",
     "build": "npm run build:lib && npm run build:docs",
@@ -27,7 +27,10 @@
     "sync:swatches": "node scripts/sync-library-swatches.mjs",
     "check:swatches": "node scripts/sync-library-swatches.mjs --check",
     "changeset": "changeset",
-    "version:react": "changeset version && npm install --package-lock-only --ignore-scripts --no-audit --no-fund"
+    "check:release-notes": "node scripts/release-notes.mjs --check",
+    "sync:release-notes": "node scripts/release-notes.mjs",
+    "version:react": "node scripts/release-notes.mjs --changesets-only && changeset version && npm install --package-lock-only --ignore-scripts --no-audit --no-fund && npm run sync:release-notes",
+    "sync:analytics-docs": "npm run build --workspace @openviking/react && node scripts/analytics-docs.mjs"
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.1",
