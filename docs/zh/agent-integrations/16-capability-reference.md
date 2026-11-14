@@ -294,7 +294,7 @@ OpenClaw 和 Hermes 把注入的召回内容限制在 4,000 字符，放不下�
 
 召回摘要让模型先把召回结果改写成一份带引用的简短要点，再交给 Agent。
 
-**服务端**。context 检索接受 `rewrite`（`false`、`true` 或 `"auto"`，默认 `false`）和 `rewrite_max_bullets`（默认 6，范围 1–20）。服务端使用 `query_planner` 模型；`rewrite=true` 且未配置 `query_planner` 时回退到主 `vlm`，`"auto"` 只在配置了 `query_planner` 时执行。摘要以 `OpenViking memory digest:` 开头，每个要点一行 `- `。每个要点最多 500 字符，必须引用结果中的一个 `viking://` URI；没有有效引用的要点会被丢弃。模型判断没有相关内容时，服务端返回 `stats.rewrite="no_relevant"` 和空块，这一轮不记入去重台账。超过 30 秒时，服务端返回未改写的块。
+**服务端**。context 检索接受 `rewrite`（`false`、`true` 或 `"auto"`，默认 `false`）和 `rewrite_max_bullets`（默认 6，范围 1–20）。服务端使用主 `vlm` 模型进行摘要重写。`rewrite=true` 时始终执行重写；`"auto"` 只在配置了专用 `query_planner` 时执行，以其作为启用信号。摘要以 `OpenViking memory digest:` 开头，每个要点一行 `- `。每个要点最多 500 字符，必须引用结果中的一个 `viking://` URI；没有有效引用的要点会被丢弃。模型判断没有相关内容时，服务端返回 `stats.rewrite="no_relevant"` 和空块，这一轮不记入去重台账。超过 30 秒时，服务端返回未改写的块。
 
 **插件**。`OPENVIKING_RECALL_COMPRESS` 或共享配置中的 `recallCompress` 选择模式，`recallRewrite` 仍可作为别名使用。
 
