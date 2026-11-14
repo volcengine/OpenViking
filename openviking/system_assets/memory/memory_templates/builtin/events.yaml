@@ -3,6 +3,7 @@ description: |
   # Guidelines
   - Each event must be atomic: capture exactly one real-world occurrence, decision, commitment, arrangement, proposal, progress update, or result.
   - Prefer precise, small events over comprehensive narratives. Do not merge independent sub-events just because they appear in the same chat.
+  - Keep the summary concise and focused on that one event. A single event may need several messages of ChatLog evidence to be understood correctly.
   - The summary must include the key fact that makes the event worth remembering, especially commitments, agreements, proposals, confirmations, schedule changes, ownership assignments, and outcomes that may be referenced later.
   - If there is a time expression (such as "yesterday"), convert it to a specific year-month-day date based on when the event occurred.
   - Convert dialogue into indirect speech and preserve the concrete facts, who said/did what, and the outcome.
@@ -19,6 +20,16 @@ description: |
   - It is allowed and encouraged to extract multiple events from one continuous block of messages when that block contains multiple independent decisions, commitments, plans, or results.
   - Do NOT name events after who was chatting. Name them after what specifically happened.
   - Avoid broad umbrella events such as "team arrangement", "project discussion", "weekend plan", or "meeting chat" when the conversation actually contains multiple smaller actionable sub-events.
+
+  # ChatLog Evidence
+  - Select ranges that preserve the complete evidence needed to understand this event, including relevant questions, concrete answers, reasons, confirmations, corrections, and factual follow-ups. A concise summary is not a coverage limit for ChatLog.
+  - Distinguish the actual participants from protocol roles. Use explicit participant information and the conversation context; user and assistant labels alone do not establish whether a speaker is human or AI. A name prefix or first-person wording alone is not sufficient either.
+  - Preserve relevant exchanges between human participants even when a human speaker's messages use the assistant role.
+  - When a question supplies an answer's subject, time frame, or condition, include both in that event's ranges. A supporting message may be cited by multiple events; do not leave a necessary framing question only in another event's ChatLog.
+  - In human-AI exchanges, exclude AI-generated answers, recommendations, drafts, generic explanations, and repeated summaries from supplementary ChatLog evidence. Retain only the minimal AI question or clarification needed to understand a human statement. A human's explicit adoption or correction can support an event; an AI suggestion alone cannot.
+  - When a speaker's identity is uncertain, do not discard a message solely because of its role; retain only the context necessary to understand the supported event.
+  - Follow relevant replies and continuation fragments. Use non-contiguous ranges to skip unrelated topics rather than including a fixed number of neighboring messages or the whole conversation.
+  - Supporting context must not change the event's supported date, subject, participants, or status. Do not promote AI suggestions or illustrative drafts into a participant's experiences, treat a question as a confirmed fact, or turn a plan into a completed action. An explicit participant confirmation or correction is evidence of the event's actual status.
 
   # Granularity Examples
   ## Bad Example
@@ -137,6 +148,7 @@ fields:
     type: string
     description: |
       Based on the content of the above fields, compile a description to outline the complete Fact content.
+      Keep it concise and limited to this one event; supporting ChatLog context must not introduce a different event's date, subject, participants, or status.
       Use specific year-month-day dates instead of vague terms such as yesterday, last week, and tomorrow.
 
   - name: ranges
@@ -146,7 +158,6 @@ fields:
       - Range: "start-end" (e.g., "0-3" means messages 0 to 3)
       - Single index: "N" (e.g., "7" means only message 7)
       - Mixed: "0-3,7,15-20" (ranges and single indices combined)
-      For events, ranges MUST include at least one user-role message that states or supports the event.
-      If an assistant message confirms, normalizes, or completes the event, include both the originating user message and the assistant message.
-      Never output assistant-only ranges for events.
+      Apply the ChatLog Evidence guidelines: include the event's supporting statements and necessary context, while skipping unrelated messages.
+      Ground the event in statements from human participants, regardless of their protocol role. AI-generated text alone does not establish a participant's real-world event; retain necessary questions or clarifications without treating them as factual claims.
     merge_op: immutable
