@@ -155,7 +155,7 @@ pub async fn update(
     parent: Option<&str>,
 ) -> Result<()> {
     let update_all = skill_names.is_empty();
-    let names = resolve_installed_skill_names(client, skill_names).await?;
+    let names = resolve_installed_skill_names(client, skill_names, parent).await?;
     if names.is_empty() {
         output_message_result(
             serde_json::json!({ "updated": [], "total": 0 }),
@@ -239,7 +239,7 @@ pub async fn remove(
     }
     let requested_names = normalize_skill_names(skill_names)?;
     let names = if all {
-        resolve_installed_skill_names(client, Vec::new()).await?
+        resolve_installed_skill_names(client, Vec::new(), parent).await?
     } else if !requested_names.is_empty() {
         requested_names
     } else {
@@ -248,7 +248,7 @@ pub async fn remove(
                 "Specify at least one skill name, or pass --all.".to_string(),
             ));
         }
-        match prompt_remove_skill_selection(client).await? {
+        match prompt_remove_skill_selection(client, parent).await? {
             Some(selected) => selected,
             None => {
                 output_message_result(
@@ -676,21 +676,25 @@ fn normalize_skill_names(names: Vec<String>) -> Result<Vec<String>> {
 async fn resolve_installed_skill_names(
     client: &HttpClient,
     requested: Vec<String>,
+    parent: Option<&str>,
 ) -> Result<Vec<String>> {
     let requested = normalize_skill_names(requested)?;
     if !requested.is_empty() {
         return Ok(requested);
     }
 
-    Ok(list_installed_skills(client)
+    Ok(list_installed_skills(client, parent)
         .await?
         .into_iter()
         .map(|skill| skill.name)
         .collect())
 }
 
-async fn list_installed_skills(client: &HttpClient) -> Result<Vec<InstalledSkillSummary>> {
-    let result = client.skills_list(10000, None).await?;
+async fn list_installed_skills(
+    client: &HttpClient,
+    parent: Option<&str>,
+) -> Result<Vec<InstalledSkillSummary>> {
+    let result = client.skills_list(10000, parent).await?;
     let skills = result
         .get("skills")
         .and_then(Value::as_array)
@@ -710,8 +714,11 @@ async fn list_installed_skills(client: &HttpClient) -> Result<Vec<InstalledSkill
     Ok(skills)
 }
 
-async fn prompt_remove_skill_selection(client: &HttpClient) -> Result<Option<Vec<String>>> {
-    let skills = list_installed_skills(client).await?;
+async fn prompt_remove_skill_selection(
+    client: &HttpClient,
+    parent: Option<&str>,
+) -> Result<Option<Vec<String>>> {
+    let skills = list_installed_skills(client, parent).await?;
     if skills.is_empty() {
         return Ok(Some(Vec::new()));
     }
