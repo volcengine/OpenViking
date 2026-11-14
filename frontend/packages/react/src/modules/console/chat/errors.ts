@@ -14,3 +14,6 @@ export function localizeBotError(error: Error | undefined, locale: Locale) {
     cause: error,
   });
 }
+
+export const asBotError = (value: unknown) =>
+  value instanceof Error ? value : new Error(String(value));

@@ -1,8 +1,14 @@
+import { readFileSync } from 'node:fs';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { pluginSvgr } from '@rsbuild/plugin-svgr';
 import { defineConfig } from '@rslib/core';
 
+const { version } = JSON.parse(
+  readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
+) as { version: string };
+
 export default defineConfig({
+  source: { define: { __OV_UI_VERSION__: JSON.stringify(version) } },
   lib: [
     {
       id: 'javascript',
@@ -50,16 +56,11 @@ export default defineConfig({
           'modules/console': './src/modules/console/index.ts',
         },
       },
-      // 位图内联成 data URI，产物不落独立的资源文件：库的 JS 入口要能在没有
-      // 打包器的环境（Node、SSR）直接 import，外部 .png 在那里解析不了。
-      //
-      // Inline bitmaps as data URIs instead of emitting separate asset files: the
-      // package's JS entries must stay importable without a bundler (Node, SSR),
-      // where an external .png cannot be resolved.
+      // Small shared bitmaps travel with each public entry; consumers need no extra asset setup.
       output: {
         emitCss: false,
         dataUriLimit: { image: 64 * 1024 },
-        // Normalize this CommonJS default during bundling for direct Node/SSR use.
+        // Normalize the CommonJS default once for consistent consumer interop.
         // React and ReactDOM remain external peer dependencies.
         autoExternal: { exclude: ['react-focus-lock'] },
       },

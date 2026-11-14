@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { renderMarkup } from './helpers/csr-render.mjs';
 import {
   EmailLoginForm,
   ApiKeyLoginForm,
@@ -12,7 +12,7 @@ import {
 } from '@openviking/react';
 
 const render = (Component, props = {}) =>
-  renderToStaticMarkup(createElement(Component, props));
+  renderMarkup(createElement(Component, props));
 test('auth entries render on the server without a provider or browser globals', () => {
   for (const Component of [
     EmailLoginForm,
@@ -50,7 +50,7 @@ test('empty agreement arrays and unconfigured navigation actions stay hidden', (
   );
 });
 test('multiple forms generate separate labels and error identifiers', () => {
-  const html = renderToStaticMarkup(
+  const html = renderMarkup(
     createElement(
       'div',
       null,

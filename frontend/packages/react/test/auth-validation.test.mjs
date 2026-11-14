@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mount } from './helpers/module-dom.mjs';
 import { act, createElement as h } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { renderMarkup } from './helpers/csr-render.mjs';
 
 const {
   ApiKeyLoginForm,
@@ -97,7 +97,7 @@ test('hidden format and mismatch messages still reject invalid form values', asy
 
 test('auth copy inherits Provider locale and honors local overrides', () => {
   const render = (Component, props = {}) =>
-    renderToStaticMarkup(
+    renderMarkup(
       h(OpenVikingProvider, { locale: 'zh-CN' }, h(Component, props)),
     );
   assert.match(render(EmailLoginForm), /邮箱.*密码.*登录/);

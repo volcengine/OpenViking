@@ -1,3 +1,4 @@
+import { isOvClientError } from '../../client/errors.js';
 import type { CommandConsoleRecord } from '../../components/command-console/index.js';
 import type { Locale } from '../../shared/locale.js';
 import { resolveConsoleLocale } from './labels.js';
@@ -29,4 +30,12 @@ export class ConsoleCommandError extends Error implements ConsoleMessage {
   ) {
     super(formatConsoleMessage({ code, value, usage }, locale));
   }
+}
+
+export function commandErrorText(error: unknown) {
+  return isOvClientError(error)
+    ? `${error.code}: ${error.message}`
+    : error instanceof Error
+      ? error.message
+      : String(error);
 }

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { renderMarkup } from './helpers/csr-render.mjs';
 import { CommandConsole } from '@openviking/react/components/command-console';
 
 const value = 'ov cp "viking://resources/a.md" viking://resources/b.md';
@@ -13,13 +13,13 @@ const props = {
 };
 
 test('input and command echoes render URI anchors without changing the native value', () => {
-  const html = renderToStaticMarkup(createElement(CommandConsole, props));
+  const html = renderMarkup(createElement(CommandConsole, props));
   for (const uri of ['viking://resources/a.md', 'viking://resources/b.md']) {
     assert.equal(html.split(`href="${uri}"`).length - 1, 2);
   }
   assert.match(
     html,
-    /<textarea[^>]*>ov cp &quot;viking:\/\/resources\/a.md&quot; viking:\/\/resources\/b.md<\/textarea>/,
+    /<textarea[^>]*>ov cp "viking:\/\/resources\/a.md" viking:\/\/resources\/b.md<\/textarea>/,
   );
   assert.doesNotMatch(
     html,
@@ -30,7 +30,7 @@ test('input and command echoes render URI anchors without changing the native va
 
 test('literal URI links preserve punctuation and native targets while ignoring non-resource text', () => {
   const text = 'VIKING://resources/a.md, error: denied; javascript:alert(1)';
-  const html = renderToStaticMarkup(
+  const html = renderMarkup(
     createElement(CommandConsole, {
       value: text,
       records: [],
@@ -58,7 +58,7 @@ test('status fields and write-result lines use the same URI links', () => {
       content: { variant: 'write-result', lines: [`Written: ${uri}`] },
     },
   ];
-  const html = renderToStaticMarkup(
+  const html = renderMarkup(
     createElement(CommandConsole, { ...props, value: '', records }),
   );
   assert.equal(html.split(`href="${uri}"`).length - 1, 2);
@@ -93,7 +93,7 @@ test('result headings, summaries and embedded tree values also link URIs', () =>
     status: 'success',
     content,
   }));
-  const html = renderToStaticMarkup(
+  const html = renderMarkup(
     createElement(CommandConsole, { ...props, value: '', records }),
   );
   assert.equal(html.split(`href="${uri}"`).length - 1, 9);
@@ -105,7 +105,7 @@ test('result headings, summaries and embedded tree values also link URIs', () =>
 test('Markdown links URI text and aliases while retaining the default URL filter', () => {
   const uri = 'viking://resources/a.md';
   const text = `# ${uri}\n\nPlain ${uri}, **${uri}**\n\n- ${uri}\n\n[Resource](${uri})\n\n| URI |\n| --- |\n| ${uri} |\n\n[unsafe](javascript:alert%281%29)`;
-  const html = renderToStaticMarkup(
+  const html = renderMarkup(
     createElement(CommandConsole, {
       ...props,
       value: '',

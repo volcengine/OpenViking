@@ -8,18 +8,7 @@ import { resolveVikingBotLabels } from './labels.js';
 import { toRenderItems } from './ark-adapter.js';
 import type { VikingBotMessageListProps } from './types.js';
 
-/**
- * 懒加载的消息列表：Ark 只在真正渲染消息时下载。
- *
- * 直接静态导入会把 Ark 及其浏览器专用依赖拉进包的顶层导入链，破坏服务端
- * 渲染与无 `window` 环境下的模块解析，因此这里用动态导入隔开——与
- * FilePreview 的正文入口同一做法。
- *
- * Lazy message list: Ark downloads only when messages actually render. A static
- * import would pull Ark and its browser-only dependencies into the package's
- * top-level import chain, breaking server rendering and module resolution without
- * `window` — the same boundary FilePreview uses for its body.
- */
+/** 重型视图按需加载，减少控制台首屏下载与解析开销。 */
 const load = async () => {
   const { VikingBotMessageListView } =
     await import('./ark-message-list-view.js');
@@ -47,6 +36,7 @@ function VikingBotMessageListContent(props: VikingBotMessageListProps) {
 
   return (
     <LazyContent
+      monitoringTarget="viking_bot_message_list_load"
       load={load}
       contentProps={{ ...props, locale }}
       fallback={<ListSkeleton />}
@@ -58,6 +48,7 @@ export function VikingBotMessageList(props: VikingBotMessageListProps) {
   const { slots, ...contentProps } = props;
   return (
     <ErrorBoundary
+      monitoringRegion="message-list"
       fallback={slots?.errorFallback}
       message={useRenderErrors(props.locale).list}
       locale={props.locale}

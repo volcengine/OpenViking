@@ -1,3 +1,4 @@
+import { MonitoringFlow } from '../../shared/monitoring/flow-context.js';
 import { useRenderErrors } from './file-browser-labels.js';
 import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import { Button } from '../../shared/primitives/button/button.js';
@@ -156,12 +157,15 @@ function FileBrowserTreePaneContent({
 
 export function FileBrowserTreePane(props: FileBrowserTreePaneProps) {
   return (
-    <ErrorBoundary
-      message={useRenderErrors(props.locale).tree}
-      locale={props.locale}
-      resetKeys={[props.rootUri]}
-    >
-      <FileBrowserTreePaneContent {...props} />
-    </ErrorBoundary>
+    <MonitoringFlow operation={props.browser.treeMonitoring}>
+      <ErrorBoundary
+        monitoringRegion="directory"
+        message={useRenderErrors(props.locale).tree}
+        locale={props.locale}
+        resetKeys={[props.rootUri]}
+      >
+        <FileBrowserTreePaneContent {...props} />
+      </ErrorBoundary>
+    </MonitoringFlow>
   );
 }

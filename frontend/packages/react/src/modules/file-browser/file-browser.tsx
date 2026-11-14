@@ -1,3 +1,4 @@
+import { withMonitoring } from '../../shared/monitoring/with-monitoring.js';
 import { useRenderErrors } from './file-browser-labels.js';
 import { forwardRef } from 'react';
 import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
@@ -8,7 +9,7 @@ import type {
   FileBrowserProps,
 } from './types.js';
 
-export const FileBrowser: FileBrowserComponent = forwardRef<
+const FileBrowserView: FileBrowserComponent = forwardRef<
   FileBrowserHandle,
   FileBrowserProps
 >(function FileBrowser(props, ref) {
@@ -24,3 +25,5 @@ export const FileBrowser: FileBrowserComponent = forwardRef<
     </ErrorBoundary>
   );
 });
+
+export const FileBrowser = withMonitoring(FileBrowserView, 'FileBrowser');

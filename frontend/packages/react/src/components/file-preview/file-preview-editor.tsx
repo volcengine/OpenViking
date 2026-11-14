@@ -1,3 +1,5 @@
+import { markFault } from '../../shared/monitoring/fault.js';
+import { useCodeLoad } from '../../shared/monitoring/use-code-load.js';
 import { useExposure } from '../../shared/analytics/use-exposure.js';
 import { useEffect, useState, type ComponentType } from 'react';
 import { Button } from '../../shared/primitives/button/button.js';
@@ -16,6 +18,17 @@ export interface FilePreviewEditorProps {
   onCancel: () => void;
 }
 
+const loadCodeEditor = async () => {
+  const result = await import('./file-preview-code-editor.js');
+  if (!result.FilePreviewCodeEditor)
+    throw markFault(
+      new Error('Required editor export is missing'),
+      'configuration',
+      'RESOURCE_EXPORT_INVALID',
+    );
+  return result;
+};
+
 /** Load CodeMirror only when editing; retain the draft if loading fails. */
 export function FilePreviewEditor({
   draft,
@@ -28,6 +41,10 @@ export function FilePreviewEditor({
   onChange,
   onCancel,
 }: FilePreviewEditorProps) {
+  const { load: loadEditor } = useCodeLoad(
+    loadCodeEditor,
+    'file_preview_editor_load',
+  );
   const [Editor, setEditor] =
     useState<ComponentType<FilePreviewCodeEditorProps>>();
   const [editorFailed, setEditorFailed] = useState(false);
@@ -41,7 +58,7 @@ export function FilePreviewEditor({
     if (loading || failed) return;
     let active = true;
     setEditorFailed(false);
-    void import('./file-preview-code-editor.js')
+    void loadEditor()
       .then((module) => {
         if (active) setEditor(() => module.FilePreviewCodeEditor);
       })
@@ -51,7 +68,7 @@ export function FilePreviewEditor({
     return () => {
       active = false;
     };
-  }, [loading, failed, attempt]);
+  }, [loading, failed, attempt, loadEditor]);
 
   const exposure = useExposure(
     'file_preview_source_show',

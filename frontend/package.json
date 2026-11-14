@@ -17,7 +17,7 @@
     "lint:fix": "npm run build:lib && node scripts/lint.mjs --fix",
     "typecheck": "npm run build:lib && tsc --noEmit -p packages/react/tsconfig.json && tsc --noEmit -p packages/react/tsconfig.config.json && tsc --noEmit -p docs/tsconfig.json",
     "test": "npm run check:swatches && npm run build:lib && node scripts/test.mjs",
-    "build:lib": "npm run build --workspace @openviking/react && node scripts/analytics-docs.mjs --check",
+    "build:lib": "npm run build --workspace @openviking/react && node scripts/analytics-docs.mjs --check && node scripts/monitoring-docs.mjs --check",
     "clean:lib": "node -e \"require('node:fs').rmSync('packages/react/dist',{recursive:true,force:true})\"",
     "build:docs": "npm run build --workspace @openviking/ui-docs",
     "build": "npm run build:lib && npm run build:docs",
@@ -30,7 +30,8 @@
     "check:release-notes": "node scripts/release-notes.mjs --check",
     "sync:release-notes": "node scripts/release-notes.mjs",
     "version:react": "node scripts/release-notes.mjs --changesets-only && changeset version && npm install --package-lock-only --ignore-scripts --no-audit --no-fund && npm run sync:release-notes",
-    "sync:analytics-docs": "npm run build --workspace @openviking/react && node scripts/analytics-docs.mjs"
+    "sync:analytics-docs": "npm run build --workspace @openviking/react && node scripts/analytics-docs.mjs",
+    "sync:monitoring-docs": "node scripts/monitoring-docs.mjs"
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.1",

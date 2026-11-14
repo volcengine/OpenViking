@@ -159,7 +159,6 @@ A six-step preset with English text; each step's `target` takes one of the value
 - The position follows scrolling, window resizing and row size changes, and the card stays inside the visual viewport, including the effect of zoom and the soft keyboard. When the row scrolls out of view, the card and highlight hide together.
 - The card is a non-modal `dialog`: it takes focus once shown, calls `onClose` on Escape, and gives focus back to the previous element on close if that element is still in the document. An Escape already handled with `preventDefault()` by your own controls does not reach the tour.
 - The card renders in the browser's top layer through the Popover API, so you need no `z-index` and it creates no full-screen mask or SVG. It requires a browser that supports the API.
-- Server rendering creates no overlay. An initially open tour creates it only after hydration completes.
 - The preset text is English, so provide your own `title` and `description` for other languages. The illustrations of the six preset targets are bundled with the JavaScript and need no image hosting.
 - The package root exports only `DirectoryTour` and `DirectoryTourProps`. Import `DirectoryTourIntro`, `openVikingDirectoryTourSteps` and the other types from `@openviking/react/components/directory-tour`.
 

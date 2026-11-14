@@ -3,7 +3,7 @@ import test from 'node:test';
 import { act, createElement as h } from 'react';
 import { WikiDashboard } from '@openviking/react/components/wiki-dashboard';
 import { getFileTypeIcon } from '@openviking/react/icons';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { renderMarkup } from './helpers/csr-render.mjs';
 import { mount } from './helpers/module-dom.mjs';
 
 const conflict = {
@@ -131,7 +131,7 @@ test('Wiki file icons follow the shared filename mapping in lists and conflict p
     [...svg.querySelectorAll('path')].map((path) => path.getAttribute('d'));
   const expected = (name) => {
     const container = document.createElement('div');
-    container.innerHTML = renderToStaticMarkup(h(getFileTypeIcon(name)));
+    container.innerHTML = renderMarkup(h(getFileTypeIcon(name)));
     return shape(container);
   };
   assert.deepEqual(

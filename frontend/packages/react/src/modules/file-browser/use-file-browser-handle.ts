@@ -8,7 +8,8 @@ import {
 import type { ForwardedRef } from 'react';
 import type { FileTreeHandle } from '../../components/file-tree/index.js';
 import type { FileBrowserApi, FileBrowserHandle } from './types.js';
-import { toError } from './fs-model.js';
+import { toError } from './fs-errors.js';
+
 import { resolveResourceNavigation } from './resource-navigation.js';
 
 interface ScrollRequest {

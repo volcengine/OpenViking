@@ -1,0 +1,131 @@
+# Frontend monitoring
+
+Use `OpenVikingProvider.monitoring` to receive component failures, frontend request outcomes and block loading results, with a frontend trace attached to failures.
+
+Request collection covers calls made by library components and blocks through their Provider binding. Your host monitors standalone `createOvClient` calls and its own network requests.
+
+## When to use
+
+- Identify the component, block and region that observed a failure.
+- Inspect directory, preview, search, session, cascading selection, streaming reply and polling outcomes.
+- Connect typed events to your monitoring platform. Use [analytics](./analytics) for interactions and exposure.
+
+## Integration
+
+```tsx
+import { OpenVikingProvider } from '@openviking/react/client';
+import type { OpenVikingMonitoringOptions } from '@openviking/react/client';
+
+const monitoring: OpenVikingMonitoringOptions = {
+  onEvent(event) {
+    if (event.name === 'file_browser_directory_load_fail') {
+      console.log(event.source.component, event.params.traceSnapshot);
+    }
+    // Call your monitoring SDK here.
+  },
+};
+
+<OpenVikingProvider monitoring={monitoring}>{children}</OpenVikingProvider>;
+```
+
+Monitoring belongs to the Provider. Business component and block Props keep their existing interaction semantics. Standalone business components can also be wrapped in a Provider.
+
+## Examples
+
+### Outcomes and failures
+
+This example uses simulated cascading selection data. Events stay on this page. Enable monitoring and reload; simulated failures demonstrate failure snapshots and retry outcomes.
+
+```tsx file="../../_demos/monitoring.tsx" preview
+
+```
+
+## Enabling and inheritance
+
+| `monitoring`                 | Behavior                                                                               |
+| ---------------------------- | -------------------------------------------------------------------------------------- |
+| Omitted on the root Provider | Disabled                                                                               |
+| Omitted on a nested Provider | Inherits the nearest configuration                                                     |
+| `false`                      | Disables this subtree; a deeper explicit configuration can enable it                   |
+| `{ onEvent }`                | Receives all built-in monitoring events                                                |
+| `{ onEvent, events: [...] }` | Delivers selected events while retaining preceding stages needed for failure snapshots |
+| `{ onEvent, events: [] }`    | Fully disabled                                                                         |
+
+While disabled, monitoring creates no monitoring IDs, stages, timers or trace caches, and invokes no receiver or diagnostic transform. Disabling clears the collection context. Enabling observes subsequent work without replaying old outcomes or restarting requests, sessions or editors. Changing the receiver or event selection does not restart ongoing work.
+
+An explicit nested configuration replaces the monitoring configuration. Only the nearest receiver receives events. `analytics` and `monitoring` have independent switches, subscriptions and receivers.
+
+## API
+
+### OpenVikingMonitoringOptions
+
+| Property    | Description                                                                       | Type                                                          | Default            |
+| ----------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------- | ------------------ |
+| onEvent     | Receives events; exceptions and rejected promises do not affect business outcomes | `(event: OpenVikingMonitoringEvent) => void \| Promise<void>` | Required           |
+| events      | Event names allowed for delivery                                                  | `readonly OpenVikingMonitoringEventName[]`                    | All events         |
+| diagnostics | Explicit host sanitization callback                                               | `{ transform(input): SanitizedDiagnostics \| undefined }`     | No raw diagnostics |
+
+Import `OpenVikingMonitoringOptions`, `OpenVikingMonitoringEvent`, `OpenVikingMonitoringEventName` and `OpenVikingMonitoringEventMap` from `@openviking/react/client`. The event name narrows both `source` and `params`. The event map is closed to arbitrary names and declaration augmentation.
+
+```ts
+import type { OpenVikingMonitoringEventMap } from '@openviking/react/client';
+
+type DirectoryFailure =
+  OpenVikingMonitoringEventMap['file_browser_directory_load_fail']['params'];
+```
+
+### Event envelope
+
+| Field                          | Meaning                                                                  |
+| ------------------------------ | ------------------------------------------------------------------------ |
+| schemaVersion / libraryVersion | Protocol version `1` and the installed library version                   |
+| eventId / occurredAtUnixMs     | Event ID and occurrence timestamp in milliseconds                        |
+| name                           | One target and one event; see the [event catalogue](./monitoring-events) |
+| source                         | Component, block, region and component path                              |
+| trace                          | Current stage identifiers and attempt ordinal                            |
+| params                         | Event-specific fields                                                    |
+| diagnostics                    | Explicitly sanitized diagnostics that pass size limits                   |
+
+## Identifying components and tracing failures
+
+`source.component` contains `name`, `instanceId` and `region`. `module` identifies the nearest `FileBrowser`, `Console` or `ScopeCascade`, or is `null` for a standalone business component. `componentPath` lists library components from outermost to innermost. `affectedComponents` identifies known affected components as a fault propagates outward.
+
+The component name identifies the observing region, not necessarily the code responsible for the bug. Host slots, Adapters and dependencies can throw within that region. The SDK does not inspect React internals to infer source lines. Configure source maps in your platform and explicitly sanitize diagnostics when source locations are needed.
+
+Failures include `params.traceSnapshot`. Successful preceding stages remain available even with failure-only subscriptions:
+
+1. Locate the region using `source.component`, `source.module` and `region`.
+2. Group by `incidentId` and follow `causeEventId`. `faultRole: 'origin'` identifies the first observation; `'propagation'` identifies a subsequent observation of the same fault.
+3. Use `traceId`, `spanId`, `parentSpanId` and `rootSpanId` to reconstruct stages. `sequence` orders events within a trace. `attempt` counts observed attempts for the same component instance and stage; it is not an HTTP retry count.
+4. Follow `causalPath` and inspect stage status, timings and safe request summaries in `spans`. Render failures have no reliable start point, so their `elapsedMs` and `startOffsetMs` are `null`.
+5. Inspect `links` for code-loading retries, background task origins and actual view input traces. Independent work has independent traces; the most recent request is never assumed to have produced the current view.
+
+The main snapshot holds at most 64 stages, prioritizing the root and actual failure path. `omittedSpanCount` and `omittedByStage` count omitted stages in the main trace. Up to eight links each contain at most eight summary stages. Capacity loss sets `coverage: 'partial'` and adds `capacity` to `gaps`.
+
+`coverage: 'complete'` describes the observed library workflow, not the whole page or backend. Enabling collection mid-work, crossing a disabled scope or using an opaque custom Service produces `started-before-enabled`, `disabled-scope` or `opaque-host-service` gaps. Background tasks use independent traces linked to their submission. Polling failures do not turn accepted tasks into failed submissions.
+
+Subscriptions filter delivery only. `causeEventId` can refer to an event outside your subscription; inspect the current failure snapshot for its preceding stages.
+
+Shared queries emit request events for actual requests and do not replay history on cache hits. When another component owns the fetch, including an initiator that has unmounted, results still identify the current subscriber; `shared-query-input` marks unobserved request stages. Switching to cached results without an observed input also marks subsequent render failures with `shared-query-input` instead of reusing the previous query trace. Disabling monitoring preserves the host query cache.
+
+## Occurrence rules
+
+- Rendering: reported when a committed client-side library boundary catches a failure. The host handles ordinary event handlers and arbitrary async work.
+- Resources: actual dynamic imports, image loads and video metadata loads settle once per attempt. Metadata readiness does not imply that a video is playable.
+- Requests: JSON succeeds after full body reading and native business-envelope validation. Blob downloads follow the existing binary contract without parsing file contents. Summaries include only method, static `routeKey`, status, request-attempt ID and an available server request ID.
+- SSE: connection, stream reading and business reply completion are separate targets. Cancellation, early consumer completion and unmount do not produce false success or failure. Only normal EOF completes reading.
+- Blocks: results settle after committing current state. Preview readiness additionally requires the matching target to be in the foreground with its loading overlay removed. Empty data is successful; cancelled, stale and background targets cannot complete the current target.
+- Polling: request and protocol failures each report once per outage; the first valid response reports recovery once. A backend task with status `failed` is not a frontend monitoring failure.
+- Replies: the first nonempty text, reasoning or tool content produces first-content readiness. Completion requires a valid terminal event and a frontend commit. History persistence failure is separate and does not reverse a successful reply.
+
+Readiness is not exposure. See [analytics](./analytics) for visibility rules.
+
+## Diagnostics and platform responsibilities
+
+By default, events exclude URLs, URIs, queries, commands, content, credentials, raw error messages and stacks. Monitoring does not install global error handlers, patch fetch or inject backend tracing headers.
+
+For raw diagnostics, explicitly provide synchronous `diagnostics.transform`. Available inputs are `error`, `message`, `stack`, `componentStack`, `requestBody` and `responseBody`; fields appear only when available at the capture point. Diagnostics never reread response bodies or issue extra requests. Return optional fields with the same names: bodies must be JSON values, other fields strings. The raw `error` object is never forwarded.
+
+Each body is limited to 4 KiB of UTF-8 JSON. `message`, `stack` and `componentStack` share a 16 KiB limit. Invalid, oversized or unsuccessfully transformed fields are omitted. Async transforms are ignored. Returning `undefined` omits raw diagnostics while preserving the safe event.
+
+The SDK does not persist, queue, resend or retry events. Your platform owns sampling, batching, alerts, authentication and source map uploads. Select failure names in `events` for failure-only delivery; preceding stage summaries remain in failure snapshots.

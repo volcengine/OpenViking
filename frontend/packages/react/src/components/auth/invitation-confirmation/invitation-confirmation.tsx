@@ -1,9 +1,10 @@
+import { withMonitoring } from '../../../shared/monitoring/with-monitoring.js';
 import { useTrack } from '../../../shared/analytics/use-track.js';
 import { useExposure } from '../../../shared/analytics/use-exposure.js';
 import { useAuthLabels } from '../../../shared/auth/use-auth-labels.js';
 import { Action } from '../../../shared/auth/fields.js';
 import type { InvitationConfirmationProps } from './types.js';
-export function InvitationConfirmation({
+function InvitationConfirmationView({
   details,
   loading,
   disabled,
@@ -59,3 +60,8 @@ export function InvitationConfirmation({
     </section>
   );
 }
+
+export const InvitationConfirmation = withMonitoring(
+  InvitationConfirmationView,
+  'InvitationConfirmation',
+);

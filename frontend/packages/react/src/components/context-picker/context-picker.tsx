@@ -1,3 +1,4 @@
+import { withMonitoring } from '../../shared/monitoring/with-monitoring.js';
 import { useRef } from 'react';
 import { useLocale } from '../../shared/locale-context.js';
 import { resolveLocale } from '../../shared/locale.js';
@@ -168,6 +169,8 @@ function Picker(props: ContextPickerProps) {
 }
 
 /** Closing unmounts presentation state; the host retains all selection and query data. */
-export function ContextPicker(props: ContextPickerProps) {
+function ContextPickerView(props: ContextPickerProps) {
   return props.open ? <Picker {...props} /> : null;
 }
+
+export const ContextPicker = withMonitoring(ContextPickerView, 'ContextPicker');

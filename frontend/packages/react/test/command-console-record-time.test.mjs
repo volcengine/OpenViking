@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRslib } from '@rslib/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { renderMarkup } from './helpers/csr-render.mjs';
 import { CommandConsole } from '@openviking/react/components/command-console';
 
 const output = await mkdtemp(join(tmpdir(), 'ov-command-console-record-time-'));
@@ -149,27 +149,4 @@ test('hosts can replace dynamic time copy while keeping other locale defaults', 
       ),
       expected,
     );
-});
-
-test('server rendering uses stable fallback copy before the client reads its clock', () => {
-  const render = (time) =>
-    renderToStaticMarkup(
-      createElement(CommandConsole, {
-        value: '',
-        locale: 'zh-CN',
-        records: [{ id: 'time', command: 'demo', status: 'success', ...time }],
-      }),
-    );
-  assert.match(
-    render({ createdAtMs: now, createdAt: '10:24' }),
-    /ov-command-console__bubble-time">10:24<\/span>/,
-  );
-  assert.doesNotMatch(
-    render({ createdAtMs: now }),
-    /ov-command-console__bubble-time/,
-  );
-  assert.match(
-    render({ createdAt: 'host label' }),
-    /ov-command-console__bubble-time">host label<\/span>/,
-  );
 });

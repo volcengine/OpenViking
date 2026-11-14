@@ -1,3 +1,4 @@
+import { withMonitoring } from '../../shared/monitoring/with-monitoring.js';
 import { useExposure } from '../../shared/analytics/use-exposure.js';
 import { useLocale } from '../../shared/locale-context.js';
 import { forwardRef, useImperativeHandle, useMemo, useRef } from 'react';
@@ -63,7 +64,7 @@ function findRow(root: HTMLElement | null, id: string) {
  * component renders it, handles keyboard interaction and reports successful
  * operations.
  */
-export const FileTree: FileTreeComponent = forwardRef<
+const FileTreeView: FileTreeComponent = forwardRef<
   FileTreeHandle,
   FileTreeProps
 >(function FileTree(
@@ -196,3 +197,5 @@ export const FileTree: FileTreeComponent = forwardRef<
     </div>
   );
 });
+
+export const FileTree = withMonitoring(FileTreeView, 'FileTree');

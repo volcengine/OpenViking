@@ -50,3 +50,22 @@ export function mediaKind(
 export function needsAsyncLoad(source: FilePreviewSource): boolean {
   return source.content !== '' && !mediaKind(source);
 }
+
+export function previewContentKind(source: FilePreviewSource) {
+  const media = mediaKind(source);
+  if (media) return media;
+  const type = (
+    source.fileType ||
+    source.file?.type ||
+    source.fileName.split('.').pop() ||
+    ''
+  ).toLowerCase();
+  if (
+    /^(?:pdf|docx?|pptx?|xlsx?|odt|epub)$/.test(type) ||
+    /(?:pdf|officedocument|msword|opendocument|epub)/.test(type)
+  )
+    return 'document' as const;
+  return typeof source.content === 'string' || type.startsWith('text/')
+    ? ('text' as const)
+    : ('other' as const);
+}

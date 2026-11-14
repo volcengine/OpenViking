@@ -1,14 +1,12 @@
-import { useEffect, useLayoutEffect } from 'react';
+import { useLayoutEffect } from 'react';
 
-const usePositionEffect =
-  typeof window === 'undefined' ? useEffect : useLayoutEffect;
 const SHIFT = '--ov-ui-scope-switcher-panel-shift';
 
 export function usePanelPosition(panel: HTMLDivElement | null) {
   // Sync the committed panel with viewport edges before paint. Wrapping, async
   // content, scrolling and resizing can move its box without a user action.
   // Disconnect observers/listeners and remove the correction on close/unmount.
-  usePositionEffect(() => {
+  useLayoutEffect(() => {
     if (!panel) return;
     const update = () => {
       panel.style.removeProperty(SHIFT);

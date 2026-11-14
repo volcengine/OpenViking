@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h } from 'react';
 import { OpenVikingProvider } from '@openviking/react/client';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { renderMarkup } from './helpers/csr-render.mjs';
 import { AgentConnect } from '@openviking/react/components/agent-connect';
 import { FileTree } from '@openviking/react/components/file-tree';
 import { FilePreview } from '@openviking/react/components/file-preview';
@@ -19,7 +19,7 @@ import { Console } from '@openviking/react/modules/console';
 import { ScopeCascade } from '@openviking/react/modules/scope-cascade';
 import { mount } from './helpers/module-dom.mjs';
 
-const render = (Component, props) => renderToStaticMarkup(h(Component, props));
+const render = (Component, props) => renderMarkup(h(Component, props));
 const previewTabs = [
   { kind: 'file', key: 'file', source: { content: '', fileName: 'empty.txt' } },
 ];
@@ -86,11 +86,11 @@ for (const [Component, props, zh, en] of cases) {
     assert.ok(!chinese.includes(en), chinese);
     const defaultEnglish = render(Component, props);
     assert.ok(defaultEnglish.includes(en), defaultEnglish);
-    const inherited = renderToStaticMarkup(
+    const inherited = renderMarkup(
       h(OpenVikingProvider, { locale: 'zh-CN' }, h(Component, props)),
     );
     assert.ok(inherited.includes(zh), inherited);
-    const overridden = renderToStaticMarkup(
+    const overridden = renderMarkup(
       h(
         OpenVikingProvider,
         { locale: 'zh-CN' },

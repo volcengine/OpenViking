@@ -1,3 +1,6 @@
+import type { PollState } from './monitoring.js';
+import type { TraceSnapshot } from '../../client/monitoring/trace.js';
+import type { MonitoringBinding } from '../monitoring/binding.js';
 export type TaskStatus =
   'pending' | 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled';
 
@@ -22,6 +25,7 @@ export interface TaskService {
 }
 
 export interface TaskSource {
+  monitoring?: MonitoringBinding;
   key: string;
   service: TaskService;
   identity: readonly unknown[];
@@ -43,3 +47,15 @@ export const taskStatuses: readonly string[] = [
   'failed',
   'cancelled',
 ];
+
+export interface TaskTrackerEntry {
+  monitoring?: PollState;
+  origin?: TraceSnapshot['links'][number];
+  monitoringRelease?: () => void;
+  observedAtStart?: boolean;
+  source: TaskSource;
+  snapshot: TrackedTask;
+  due: number;
+  failures: number;
+  request?: AbortController;
+}

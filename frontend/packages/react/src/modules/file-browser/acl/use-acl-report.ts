@@ -1,6 +1,6 @@
 import { useAnalyticsRef } from '../../../shared/analytics/context.js';
 import { beginMutation } from '../../../shared/analytics/mutation.js';
-import { toError } from '../fs-model.js';
+import { toError } from '../fs-errors.js';
 import { useEffect, useRef, useState } from 'react';
 import type {
   FileBrowserAclContext,

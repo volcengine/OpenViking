@@ -1,3 +1,9 @@
+import {
+  useMonitoringBinding,
+  MonitoringProvider,
+} from '../shared/monitoring/context.js';
+import { bindClient } from '../shared/monitoring/client.js';
+import type { OpenVikingMonitoringOptions } from './monitoring/types.js';
 import { createContext, useContext, useMemo, useState } from 'react';
 import type { QueryClient } from '@tanstack/query-core';
 import type { QueryClientInput } from './query-client-input.js';
@@ -40,6 +46,8 @@ const OvClientContext = createContext<OvClientScope | null>(null);
  * as fields.
  */
 export interface OpenVikingProviderProps extends OvClientOptions {
+  /** Optional runtime monitoring receiver. Omitted at the root disables collection. */
+  monitoring?: OpenVikingMonitoringOptions | false;
   /** Optional product analytics receiver. Omitted at the root disables collection. */
   analytics?: OpenVikingAnalyticsOptions | false;
   /** 界面语言；省略时继承上层，无配置时默认英文。Subtree locale; inherits or defaults to en-US. */
@@ -89,6 +97,7 @@ export function OpenVikingProvider({
   signal,
   fetch,
   analytics,
+  monitoring,
   locale,
   children,
   queryClient,
@@ -150,9 +159,11 @@ export function OpenVikingProvider({
   return (
     <QueryRuntime client={query}>
       <OvClientContext.Provider value={value}>
-        <AnalyticsProvider analytics={analytics}>
-          <LocaleProvider locale={locale}>{children}</LocaleProvider>
-        </AnalyticsProvider>
+        <MonitoringProvider monitoring={monitoring}>
+          <AnalyticsProvider analytics={analytics}>
+            <LocaleProvider locale={locale}>{children}</LocaleProvider>
+          </AnalyticsProvider>
+        </MonitoringProvider>
       </OvClientContext.Provider>
     </QueryRuntime>
   );
@@ -167,7 +178,12 @@ export function OpenVikingProvider({
  * send, so it has no reason to use this directly.
  */
 export function useOvClient(): OvClient | null {
-  return useContext(OvClientContext)?.client ?? null;
+  const client = useContext(OvClientContext)?.client ?? null;
+  const binding = useMonitoringBinding();
+  return useMemo(
+    () => (client && binding ? bindClient(client, binding) : client),
+    [client, binding],
+  );
 }
 
 /** Internal: modules compose their request lifetime with the inherited signal. */

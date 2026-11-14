@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { renderMarkup } from './helpers/csr-render.mjs';
 import { CommandConsole } from '@openviking/react/components/command-console';
 
 const command = {
@@ -12,7 +12,7 @@ const command = {
   skeleton: 'status',
 };
 const render = (content, extra = {}) =>
-  renderToStaticMarkup(
+  renderMarkup(
     createElement(CommandConsole, {
       value: '',
       commands: [command],

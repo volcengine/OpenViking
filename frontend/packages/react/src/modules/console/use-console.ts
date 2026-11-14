@@ -1,3 +1,5 @@
+import { bindingOf } from '../../shared/monitoring/client.js';
+import { readData, tagData } from '../../shared/monitoring/data.js';
 import { useCommandAnalytics } from './use-command-analytics.js';
 import { useTrack } from '../../shared/analytics/use-track.js';
 import { useTaskTracking } from '../../shared/task-tracking/context.js';
@@ -78,7 +80,6 @@ export function useConsole({
   const state = useSyncExternalStore(
     controller.subscribe,
     controller.getSnapshot,
-    controller.getSnapshot,
   );
   const [internalMode, setInternalMode] = useState<ConsoleMode>(defaultMode);
   const requestedMode = controlledMode ?? internalMode;
@@ -103,6 +104,11 @@ export function useConsole({
           )
         : state.error,
     [state.error, locale],
+  );
+  tagData(
+    bindingOf(client),
+    records,
+    readData(bindingOf(client), [state.records]),
   );
   return {
     ...state,

@@ -1,6 +1,8 @@
+import { bindingOf } from '../../shared/monitoring/client.js';
+import { QueryObservation } from './query-observation.js';
 import { InfiniteQueryObserver, type InfiniteData } from '@tanstack/query-core';
 import type { DirState } from './fs-model.js';
-import { toError } from './fs-model.js';
+import { toError } from './fs-errors.js';
 import { directoryOptions, type DirectoryPage } from './directory-query.js';
 import type { QueryRequest } from './use-query-scope.js';
 
@@ -16,7 +18,13 @@ type Observer = InfiniteQueryObserver<
 export class DirectoryQueries {
   private observers = new Map<
     string,
-    { observer: Observer; unsubscribe?: () => void; paused?: boolean }
+    {
+      observer: Observer;
+      unsubscribe?: () => void;
+      paused?: boolean;
+      retryCause?: WeakRef<Error>;
+      monitoring: QueryObservation<'file_browser_directory_load'>;
+    }
   >();
   private listeners = new Set<() => void>();
   private snapshot: Record<string, DirState> = {};
@@ -29,8 +37,10 @@ export class DirectoryQueries {
   }
   private publish = () => {
     this.snapshot = Object.fromEntries(
-      [...this.observers].map(([uri, { observer }]) => {
+      [...this.observers].map(([uri, { observer, monitoring, paused }]) => {
         const result = observer.getCurrentResult();
+        if (paused || !this.listeners.size) monitoring.cancel();
+        else monitoring.observe(result, observer.getCurrentQuery());
         const pages = result.data?.pages ?? [];
         const entries = new Map(
           pages
@@ -40,6 +50,7 @@ export class DirectoryQueries {
         return [
           uri,
           {
+            monitoring: monitoring.operations(observer.getCurrentQuery()),
             ready: result.isFetched,
             entries: [...entries.values()],
             hasMore: result.hasNextPage,
@@ -56,9 +67,17 @@ export class DirectoryQueries {
     let item = this.observers.get(uri);
     if (!item) {
       item = {
+        monitoring: new QueryObservation(
+          this.request.client,
+          'file_browser_directory_load',
+        ),
         observer: new InfiniteQueryObserver(
           this.request.queryClient,
-          directoryOptions(this.request, uri),
+          directoryOptions(this.request, uri, () => {
+            const error = item?.retryCause?.deref();
+            if (item) item.retryCause = undefined;
+            return error;
+          }),
         ),
       };
       this.observers.set(uri, item);
@@ -99,6 +118,12 @@ export class DirectoryQueries {
     signal?.throwIfAborted();
     const observer = this.observe(uri);
     const item = this.observers.get(uri)!;
+    const binding = bindingOf(this.request.client);
+    const error = observer.getCurrentResult().error;
+    item.retryCause =
+      error && binding?.controller.options && binding.active()
+        ? new WeakRef(error)
+        : undefined;
     let rejectAbort: ((reason: unknown) => void) | undefined;
     const aborted = new Promise<never>((_, reject) => {
       rejectAbort = reject;

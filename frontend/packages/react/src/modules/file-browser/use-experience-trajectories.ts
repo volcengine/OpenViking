@@ -1,3 +1,5 @@
+import { beginWorkflow } from '../../shared/monitoring/workflow.js';
+import { useWorkflowCommit } from '../../shared/monitoring/use-workflow-commit.js';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useOvClient, useOvSignal } from '../../client/provider.js';
 import type { FileBrowserExperienceDataSource } from './experience-data-source.js';
@@ -119,6 +121,12 @@ export function useExperienceTrajectories({
         resourceId,
         signal: AbortSignal.any(signals),
       };
+      const monitoring = beginWorkflow(
+        client,
+        'file_browser_experience_trajectory_load',
+        options.signal,
+      );
+      if (loadPage) monitoring?.span.gap('opaque-host-service');
       try {
         const result = loadPage
           ? await loadPage({
@@ -133,18 +141,21 @@ export function useExperienceTrajectories({
               has_more: hasMore,
             }))
           : await readExperienceTrajectoryPage(
-              client!,
+              monitoring?.client(client!) ?? client!,
               uri,
               days,
               page,
               options,
             );
         if (options.signal?.aborted || ticket !== requestId.current) return;
-        setState((previous) =>
-          appendTrajectoryPage(previous, owner, result, mode),
-        );
+        setState((previous) => ({
+          ...appendTrajectoryPage(previous, owner, result, mode),
+          monitoring,
+          pageItemCount: result.items.length,
+        }));
       } catch (cause) {
         if (options.signal?.aborted || ticket !== requestId.current) return;
+        monitoring?.fail(cause, 'protocol', options.signal);
         setState((previous) => failTrajectoryPage(previous, owner, cause));
       }
     },
@@ -194,6 +205,12 @@ export function useExperienceTrajectories({
     };
   }, [client, enabled, load, owner]);
 
+  useWorkflowCommit(
+    state.monitoring,
+    current && !state.loading && !state.loadingMore && !state.error,
+    () => ({ itemCount: state.pageItemCount ?? 0 }),
+  );
+
   const loadMore = useCallback(() => {
     if (state.loadingMore || !state.hasMore) return;
     // 页数由 `loadedPages` 决定，不从条数反推——服务端返回的条数与页大小未必一致。
@@ -214,6 +231,7 @@ export function useExperienceTrajectories({
   }, [load, state.loadedPages]);
 
   return {
+    monitoring: current ? state.monitoring : undefined,
     data: current
       ? {
           items: state.items,

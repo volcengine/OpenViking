@@ -15,6 +15,7 @@ export function useSearchScopePage(
   const { request, error, aborted } = useQueryScope(
     useOvClient(),
     requestOptions,
+    'file_browser_directory_load',
   );
   const [target, setTarget] = useState<string>();
   const session = useMemo(
@@ -25,7 +26,6 @@ export function useSearchScopePage(
   const dirs = useSyncExternalStore(
     aborted ? noSubscribe : (session?.subscribe ?? noSubscribe),
     session?.getSnapshot ?? noSnapshot,
-    noSnapshot,
   );
   const current = target ? dirs?.[target] : undefined;
   const page =

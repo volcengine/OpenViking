@@ -1,3 +1,9 @@
+import type { MonitoringBinding } from '../../shared/monitoring/binding.js';
+import {
+  workflowForBinding,
+  type Workflow,
+} from '../../shared/monitoring/workflow.js';
+import { scopeMonitoring } from './monitoring.js';
 import type { ScopeSwitcherOption } from '../../components/scope-switcher/index.js';
 import type {
   ScopeCascadeApi,
@@ -24,7 +30,16 @@ const empty = (
 export function createScopeController(
   onChange?: (selection: ScopeCascadeSelection | null) => void,
   onUserSelection?: () => void,
+  monitoring?: MonitoringBinding,
 ) {
+  const operations: (
+    | Workflow<
+        | 'scope_cascade_libraries_load'
+        | 'scope_cascade_spaces_load'
+        | 'scope_cascade_users_load'
+      >
+    | undefined
+  )[] = [];
   const snapshots = [empty(true), empty(false), empty(false)];
   const listeners = indices.map(() => new Set<() => void>());
   const requests: (AbortController | undefined)[] = [];
@@ -72,6 +87,21 @@ export function createScopeController(
     abort(index);
     const request = new AbortController();
     requests[index] = request;
+    const retryError = snapshots[index]!.error;
+    const operation = workflowForBinding(
+      monitoring,
+      (
+        [
+          'scope_cascade_libraries_load',
+          'scope_cascade_spaces_load',
+          'scope_cascade_users_load',
+        ] as const
+      )[index],
+      request.signal,
+      { retryError },
+    );
+    operations[index] = operation;
+    operation?.span.gap('opaque-host-service');
     update(index, { loading: true, error: null });
     notify(index);
     try {
@@ -111,10 +141,12 @@ export function createScopeController(
       notify(index);
       if (revoked || changed)
         for (let next = index + 1; next < 3; next++) notify(next);
+      operation?.ready({ optionCount: options.length });
       if (changed && index < 2) void load((index + 1) as ScopeCascadeIndex);
     } catch (error) {
       if (!active || request.signal.aborted || requests[index] !== request)
         return;
+      operation?.fail(error, 'host-service', request.signal);
       update(index, {
         loading: false,
         error: error instanceof Error ? error : new Error(String(error)),
@@ -136,6 +168,7 @@ export function createScopeController(
     if (index < 2) void load((index + 1) as ScopeCascadeIndex);
   };
   const channel = (index: ScopeCascadeIndex) => ({
+    [scopeMonitoring]: () => operations[index],
     getSnapshot: () => snapshots[index]!,
     subscribe: (listener: () => void) => {
       listeners[index]!.add(listener);

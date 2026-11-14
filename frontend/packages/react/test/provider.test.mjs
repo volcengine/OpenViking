@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { renderMarkup } from './helpers/csr-render.mjs';
 
 import { OpenVikingProvider } from '@openviking/react/client';
 import { mergeProviderConfig } from '../src/client/options.ts';
 
 test('the Provider renders its children', () => {
-  const html = renderToStaticMarkup(
+  const html = renderMarkup(
     createElement(
       OpenVikingProvider,
       { baseURL: 'https://ov.test' },
@@ -24,7 +24,7 @@ test('mounting the Provider sends no request', () => {
     called = true;
     throw new Error('should not be called');
   };
-  renderToStaticMarkup(
+  renderMarkup(
     createElement(
       OpenVikingProvider,
       { baseURL: 'https://ov.test', fetch },

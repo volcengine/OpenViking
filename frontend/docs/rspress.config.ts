@@ -7,6 +7,9 @@ import { createSidebar } from './sidebar';
 export default defineConfig({
   root: fileURLToPath(new URL('./docs', import.meta.url)),
   base: '/ui/',
+  // The SDK targets CSR; documentation previews run in the same browser runtime.
+  ssg: false,
+  llms: false,
   // 默认语言是中文：开发时看到的就是中文页面，地址不带语言前缀；英文移到
   // `/ui/en/` 下。
   //
