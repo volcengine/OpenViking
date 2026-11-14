@@ -3,6 +3,7 @@
 """Queue consumer for restart-safe Session Phase 2 work."""
 
 import json
+from asyncio import sleep
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from openviking.observability.context import (
@@ -79,6 +80,11 @@ class SessionCommitProcessor(DequeueHandlerBase):
             if not processed:
                 from openviking.storage.queuefs import QueueManager, get_queue_manager
 
+                # Keep the original delivery unacknowledged until the replacement
+                # is durable. Cancellation during the wait remains restart-safe.
+                attempt = min(max(msg.predecessor_wait_count, 0), 5)
+                await sleep(min(2**attempt, 30))
+                msg.predecessor_wait_count = min(attempt + 1, 5)
                 await get_queue_manager().enqueue(
                     QueueManager.SESSION_COMMIT,
                     msg.to_dict(),
