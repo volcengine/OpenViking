@@ -1032,6 +1032,34 @@ describe("OpenVikingClient", () => {
     },
   );
 
+  it.each([
+    "http://example.com/resource?signature=",
+    "https://example.com/resource?signature=",
+    "git@example.com:team/",
+    "ssh://git@example.com/team/",
+    "git://example.com/team/",
+  ])("forwards long remote resource sources: %s", async (prefix) => {
+    const source = prefix + "x".repeat(5000);
+    const result = { root_uri: "viking://resources/remote" };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok(result));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await expect(client.addResource(source, { wait: true })).resolves.toEqual(
+      result,
+    );
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const [url, init] = fetcher.mock.calls[0]!;
+    expect(String(url)).toBe("https://example.com/api/v1/resources");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      path: source,
+      wait: true,
+    });
+  });
+
   it.each(["addResource", "importOVPack", "restoreOVPack"] as const)(
     "%s preserves local path errors before sending a request",
     async (method) => {
