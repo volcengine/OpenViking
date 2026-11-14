@@ -1,70 +1,130 @@
 # Icons
 
-Action, file-type and scope-level icons are available from the public `@openviking/react/icons` entry. They share the workspace's SVG sources and ship with the React package.
+The icons built into the library: arrow, file-type, scope-level and dashboard icons as React components that render inline SVG, plus functions that pick a file-type icon from a file name.
 
-## Live example
+## When to use
 
-Use the size controls to resize the decorative icons. The separate PDF icon demonstrates a meaningful `aria-label` at 24 × 24 pixels. The row below shows the three scope-level icons.
+- You want icons that match the library's own UI, for example for the options of [ScopeSwitcher](./scope-switcher) or the rows of [FileTree](./file-tree).
+- You want the icon for a file's type from its name: use `getFileTypeIcon`.
+
+## Import
+
+```tsx
+import { PdfIcon, getFileTypeIcon } from '@openviking/react/icons';
+```
+
+Icons are bundled into the JavaScript as inline SVG: there is no separate asset request and no stylesheet to import.
+
+## Examples
+
+### Basic usage
+
+Switch between 16, 24 and 32 px to resize the first row; the second row shows the three scope-level icons, and the PDF icon at the end has an `aria-label`.
 
 ```tsx file="../../_demos/icons-basic.tsx" preview
 
 ```
 
-## Available icons
+## API
 
-| Export                    | Purpose                                               |
-| ------------------------- | ----------------------------------------------------- |
-| `ArrowRightIcon`          | Right arrow used by the Volcengine CLI quick commands |
-| `ArrowUpRightIcon`        | Up-right arrow used by the team guide                 |
-| `DirectoryTourFolderIcon` | Open folder used by the team guide                    |
-| `AudioIcon`               | Audio                                                 |
-| `PdfIcon`                 | PDF                                                   |
-| `PptIcon`                 | Presentation                                          |
-| `VideoIcon`               | Video                                                 |
-| `WordIcon`                | Word-processing file                                  |
-| `LibraryIcon`             | Library (round swatch picked by name)                 |
-| `SpaceIcon`               | Data space                                            |
-| `UserIcon`                | Account / user                                        |
+### Common icon props
 
-`LibraryIcon` has no fixed glyph: it picks a round gradient swatch by `name`, always the same one for the same name, and renders a `span` colour block rather than an SVG. `SpaceIcon` and `UserIcon` are 14 × 14 outline shapes in `currentColor`, so they follow the text colour.
+The icon components in the list (except `LibraryIcon`) render an inline `svg` and accept `IconProps`.
 
-`ScopeCascade`'s default view already applies these three level icons: when an adapter returns options without `icon`, the level's default icon is filled in; a host-supplied `icon` always wins. With `ScopeSelector` alone, icons come entirely from the caller.
+| Property         | Description                                                                                                                         | Type                      | Default                                |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------- | -------------------------------------- |
+| width            | Icon width                                                                                                                          | `number \| string`        | The icon's own size, see the icon list |
+| height           | Icon height                                                                                                                         | `number \| string`        | The icon's own size, see the icon list |
+| aria-label       | Accessible name; without it the SVG gets `aria-hidden` and counts as decoration, with it the icon stays in the accessibility tree   | `string`                  | -                                      |
+| className, style | Class name and inline style for the SVG element; use `color` to recolor icons that follow the text color                            | `string`, `CSSProperties` | -                                      |
+| Other props      | Standard SVG attributes, including `aria-*` and `role`; `children` is not accepted. An explicit `aria-hidden` overrides the default | SVG attributes            | -                                      |
 
-## Props
+### Icon list
 
-File-type icons, `ArrowUpRightIcon`, `DirectoryTourFolderIcon`, `ArrowRightIcon`, `SpaceIcon` and `UserIcon` render an inline `svg` and accept standard SVG props, except `children`. `LibraryIcon` only takes `name`.
+Default sizes are in pixels; the Color column shows whether the icon follows the CSS `color`.
 
-| Property     | Type               | Default                                                                                   | Description                                             |
-| ------------ | ------------------ | ----------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| `width`      | `number \| string` | `16`; `ArrowRightIcon`: `14`; `ArrowUpRightIcon`: `12`; `DirectoryTourFolderIcon`: `11.2` | Icon width.                                             |
-| `height`     | `number \| string` | `16`; `ArrowRightIcon`: `14`; `ArrowUpRightIcon`: `12`; `DirectoryTourFolderIcon`: `11.2` | Icon height.                                            |
-| `aria-label` | `string`           | —                                                                                         | Accessible description; omit for decoration.            |
-| `className`  | `string`           | —                                                                                         | Adds a class to the SVG element.                        |
-| Other props  | SVG attributes     | —                                                                                         | Standard SVG attributes, including `aria-*` and `role`. |
+| Export                    | Description                                             | Default size | Color                                                                        |
+| ------------------------- | ------------------------------------------------------- | ------------ | ---------------------------------------------------------------------------- |
+| `ArrowRightIcon`          | Right arrow                                             | 14           | Follows `color`                                                              |
+| `ArrowUpRightIcon`        | Up-right arrow                                          | 12           | Fixed colors                                                                 |
+| `ChevronRightIcon`        | Right-pointing chevron, used as an expand indicator     | 16           | Follows `color`                                                              |
+| `FolderIcon`              | Folder                                                  | 16           | Follows `color`                                                              |
+| `FolderOpenIcon`          | Open folder                                             | 16           | Follows `color`                                                              |
+| `DirectoryTourFolderIcon` | Open folder                                             | 11.2         | Fixed colors                                                                 |
+| `DocumentIcon`            | Generic file                                            | 16           | Follows `color`                                                              |
+| `AudioIcon`               | Audio file                                              | 16           | Fixed colors                                                                 |
+| `PdfIcon`                 | PDF file                                                | 16           | Fixed colors                                                                 |
+| `PptIcon`                 | Presentation                                            | 16           | Fixed colors                                                                 |
+| `VideoIcon`               | Video file                                              | 16           | Fixed colors                                                                 |
+| `WordIcon`                | Word document                                           | 16           | Fixed colors                                                                 |
+| `LibraryIcon`             | Library, a round gradient swatch picked by name         | 14           | Five gradients, see Theme variables                                          |
+| `SpaceIcon`               | Data space                                              | 14           | Follows `color`                                                              |
+| `UserIcon`                | User                                                    | 14           | Follows `color`                                                              |
+| `ExperienceBoardIcon`     | Experience dashboard, a dashboard layout glyph          | 14           | Follows `color`                                                              |
+| `WikiBoardIcon`           | Wiki dashboard, the same glyph as `ExperienceBoardIcon` | 14           | Follows `color`                                                              |
+| `WikiConflictBoardIcon`   | Wiki conflict dashboard, with a warning badge           | 12           | Follows `color`; the badge background uses `--ov-ui-color-dashboard-surface` |
+| `WikiBookIcon`            | Open book                                               | 16           | Follows `color`                                                              |
+| `WikiWarningIcon`         | Warning                                                 | 14           | Follows `color`                                                              |
+| `WikiSuccessIcon`         | Success                                                 | 14           | Follows `color`                                                              |
+| `WikiEditIcon`            | Edit                                                    | 14           | Follows `color`                                                              |
+| `WikiHistoryIcon`         | History                                                 | 12           | Follows `color`                                                              |
+| `WikiDiscussIcon`         | Discussion                                              | 14           | Follows `color`                                                              |
+| `FileInputIcon`           | File input                                              | 14           | Follows `color`                                                              |
+| `ScanSearchIcon`          | Scan search                                             | 14           | Follows `color`                                                              |
+| `ActivityIcon`            | Activity pulse                                          | 14           | Follows `color`                                                              |
 
-`LibraryIcon`'s `name` selects the gradient; it defaults to an empty string, which is the first gradient.
+### LibraryIcon
+
+A round gradient swatch fixed at 14 × 14. It renders a `span`, accepts no SVG props and stays out of the accessibility tree.
+
+| Property | Description                                                                                             | Type     | Default |
+| -------- | ------------------------------------------------------------------------------------------------------- | -------- | ------- |
+| name     | Picks one of the five gradients, always the same one for the same name; the first gradient when omitted | `string` | `''`    |
+
+### VikingBotIcon
+
+Icons for conversations, picked with `name`. Other props work like the common icon props.
+
+| Property      | Description                                                                                                                     | Type                                                                                                                              | Default  |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| name          | Icon name: light bulb, book, video, report, history, new session, remove, tool, context folder and close context, in that order | `'bulb' \| 'book' \| 'video' \| 'report' \| 'history' \| 'newSession' \| 'remove' \| 'tool' \| 'contextFolder' \| 'contextClose'` | Required |
+| width, height | Icon size                                                                                                                       | `number \| string`                                                                                                                | `16`     |
+
+### File-type icon functions
+
+| Function                 | Description                                                                                                                           | Type                                                  |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `getFileTypeIcon`        | Returns the icon component for a file name, or the generic file icon when nothing matches                                             | `(name: string) => FileTypeIconComponent`             |
+| `resolveFileTypeIconKey` | Returns the icon key for a file name, or `'default'` when nothing matches                                                             | `(name: string) => string`                            |
+| `getFileTypeColor`       | Returns the brand color of an icon key; `scheme` defaults to `'light'`, and a key without a registered color returns `'currentColor'` | `(key: string, scheme?: 'light' \| 'dark') => string` |
+
+`name` can be a file name or a path; only the last segment counts, and case is ignored. A full file name is matched first, then extensions from longest to shortest (`tar.gz` before `gz`), and the generic file icon is used when none matches.
+
+The returned file-type icons use `currentColor`, except the PDF, PPT, Word, audio and video icons, which have fixed colors. Set `color` from `getFileTypeColor` to apply the brand color:
 
 ```tsx
-import { PdfIcon } from '@openviking/react/icons';
+import {
+  getFileTypeColor,
+  getFileTypeIcon,
+  resolveFileTypeIconKey,
+} from '@openviking/react/icons';
 
-export default function Example() {
+function FileTypeIcon({ name }: { name: string }) {
+  const Icon = getFileTypeIcon(name);
   return (
-    <PdfIcon width={24} height={24} className="file-icon" aria-label="PDF" />
+    <Icon
+      aria-hidden="true"
+      width={16}
+      height={16}
+      style={{ color: getFileTypeColor(resolveFileTypeIconKey(name)) }}
+    />
   );
 }
 ```
 
-## Accessibility
+## Theme variables
 
-Omit `aria-label` when adjacent text already identifies the file type; the SVG stays `aria-hidden` so it is not announced twice. For an icon that conveys information on its own, supply a descriptive `aria-label` in the application's language. Icons are non-interactive; applications own button semantics, keyboard interaction, and focus styles when placing an icon inside a control.
-
-## Assets and styling
-
-Icons ship as inline SVG elements inside the built JavaScript. There is no separate asset request, no stylesheet import, and no Content Security Policy entry to add.
-
-Use `width`, `height`, `className`, or `style` to size and position the icon. File-type and team guide icons keep their fixed artwork colors. `ArrowRightIcon`, `SpaceIcon` and `UserIcon` inherit CSS `color` through `currentColor`. `LibraryIcon` has its size fixed inside the component — wrap it in a container to change the rendered size.
-
-`LibraryIcon`'s five gradients come from the theme baseline, so a host can re-swatch any of them through the public variables instead of editing the component:
+`LibraryIcon` has five gradients, shared by the light and dark themes. Override them one by one with `--ov-ui-color-library-swatch-1` to `--ov-ui-color-library-swatch-5`; without the library stylesheet, the component uses the same built-in gradients.
 
 ```css
 :root {
@@ -72,4 +132,9 @@ Use `width`, `height`, `className`, or `style` to size and position the icon. Fi
 }
 ```
 
-The baseline's `--ov-ui-library-swatch-1-default` … `-5-default` are the private defaults, shared by both themes — they are the design's identity colours and do not follow the theme. With no library stylesheet loaded the component still paints the same palette: colours live only in `packages/icons/library-swatches.json`, and the CSS side is generated from it by `npm run sync:swatches`, so the two paths cannot drift.
+## Notes
+
+- The icons in the list get `aria-hidden` by default and count as decoration. When an icon conveys information on its own, pass an `aria-label` in your app's language; omit it when the adjacent text already says what the icon means, so it is not announced twice.
+- When you use a component returned by `getFileTypeIcon` as decoration, pass `aria-hidden` explicitly.
+- Icons have no interactive behavior: when you put one inside a button, your app provides the button semantics, keyboard interaction and focus styles.
+- The types `IconProps`, `IconComponent`, `FileTypeIconComponent` and `VikingBotIconName` are exported from `@openviking/react/icons` as well; the package root does not export icons.

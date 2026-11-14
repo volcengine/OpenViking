@@ -1,5 +1,5 @@
 import type { Locale } from '../../shared/locale.js';
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 
 import type {
   ViewerHandle,
@@ -9,13 +9,20 @@ import type {
 import type { FilePreviewActions } from './types.js';
 import { FilePreviewBody } from './file-preview-body.js';
 import { FilePreviewHeader } from './file-preview-header.js';
+import {
+  FilePreviewTransition,
+  needsAsyncLoad,
+  probeStatusOf,
+} from './file-preview-transition.js';
 import { LoadingState } from './file-preview-state.js';
 import type { useFilePreviewEditing } from './use-file-preview-editing.js';
+import { useLevelIndicator } from './use-level-indicator.js';
 import type {
   FilePreviewDirectoryTab,
   FilePreviewFileTab,
   FilePreviewLabels,
   FilePreviewViewMode,
+  FilePreviewToolbarOptions,
 } from './types.js';
 
 /**
@@ -33,6 +40,7 @@ import type {
  * switch, so giving it the same slot would only leave a permanently empty space.
  */
 export interface FilePreviewDirectoryBodyProps {
+  toolbar?: FilePreviewToolbarOptions;
   tab: FilePreviewDirectoryTab;
   text: Required<FilePreviewLabels>;
   locale?: Locale;
@@ -42,7 +50,6 @@ export interface FilePreviewDirectoryBodyProps {
   onViewModeChange: (mode: FilePreviewViewMode) => void;
   onHandleChange: (handle: ViewerHandle | null) => void;
   onViewModesChange: (modes: readonly ViewerViewModeOption[]) => void;
-  onDownload: () => void;
   onCancelEditing: () => void;
 }
 
@@ -68,6 +75,7 @@ function levelToFileTab(
 }
 
 export function FilePreviewDirectoryBody({
+  toolbar,
   tab,
   text,
   locale,
@@ -77,7 +85,6 @@ export function FilePreviewDirectoryBody({
   onViewModeChange,
   onHandleChange,
   onViewModesChange,
-  onDownload,
   onCancelEditing,
 }: FilePreviewDirectoryBodyProps) {
   // 层级由外层持有（复制正文要跟着当前层级），这里只补一个非受控时的初值。
@@ -89,33 +96,11 @@ export function FilePreviewDirectoryBody({
   const activeKey = tab.activeLevelKey ?? internalKey;
   const fileTab =
     levelToFileTab(tab, activeKey) ?? levelToFileTab(tab, tab.levels[0].key);
-  const tabsRef = useRef<HTMLDivElement>(null);
-  const [indicator, setIndicator] = useState({ left: 0, width: 0 });
-
-  // useLayoutEffect 必要性：指示条的位置来自页签按钮的实际布局盒，只有提交后
-  // 才可测量；字体加载、容器缩放与层级变化都会改变它，无法在渲染时算出。用
-  // 位移动画让它在两级之间滑动，而不是各画一条静止的下划线。
-  //
-  // A layout effect is required: the indicator's position comes from the tab
-  // buttons' layout boxes, measurable only after commit, and font loading,
-  // container resizing or a level change all move them. The offset animation makes
-  // it slide between levels instead of drawing a static underline on each.
-  useLayoutEffect(() => {
-    const root = tabsRef.current;
-    if (!root) return;
-    const measure = () => {
-      const active = root.querySelector<HTMLElement>('[aria-selected="true"]');
-      if (!active) return;
-      setIndicator({
-        left: active.offsetLeft + (active.offsetWidth - 14) / 2,
-        width: 14,
-      });
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(root);
-    return () => observer.disconnect();
-  }, [activeKey, tab.levels]);
+  const { ref: tabsRef, indicator } = useLevelIndicator(
+    '[aria-selected="true"]',
+    activeKey,
+    tab.levels.length,
+  );
 
   const changeLevel = (key: string) => {
     if (tab.activeLevelKey === undefined) setInternalKey(key);
@@ -162,22 +147,27 @@ export function FilePreviewDirectoryBody({
   // body rather than rendering from a tab that does not exist.
   if (!fileTab) return null;
   // 摘要还在读取：只渲染外壳与加载态，层级切换与正文都等数据到了再说。
+  const header = (
+    <FilePreviewHeader
+      path={fileTab.source.path}
+      fileName={fileTab.source.fileName}
+      canOpenParent={Boolean(tab.operations?.openParent)}
+      titleExtra={tab.slots?.titleExtra}
+      slotActions={tab.slots?.actions}
+      extraActions={tab.slots?.extraActions}
+      toolbar={toolbar}
+      actionItems={tab.actions}
+      actions={actions}
+      text={text}
+      onOpenParent={(uri) => void tab.operations?.openParent?.(uri)}
+    />
+  );
   // Still reading the summary: render the shell and the loading state only; the
   // level switch and the body wait for the data.
   if (tab.loading) {
     return (
       <>
-        <FilePreviewHeader
-          path={fileTab.source.path}
-          fileName={fileTab.source.fileName}
-          canOpenParent={Boolean(tab.operations?.openParent)}
-          titleExtra={tab.slots?.titleExtra}
-          slotActions={tab.slots?.actions}
-          extraActions={tab.slots?.extraActions}
-          actions={actions}
-          text={text}
-          onOpenParent={(uri) => void tab.operations?.openParent?.(uri)}
-        />
+        {header}
         <div className="ov-file-preview__body">
           <LoadingState text={text} />
         </div>
@@ -187,17 +177,7 @@ export function FilePreviewDirectoryBody({
 
   return (
     <>
-      <FilePreviewHeader
-        path={fileTab.source.path}
-        fileName={fileTab.source.fileName}
-        canOpenParent={Boolean(tab.operations?.openParent)}
-        titleExtra={tab.slots?.titleExtra}
-        slotActions={tab.slots?.actions}
-        extraActions={tab.slots?.extraActions}
-        actions={actions}
-        text={text}
-        onOpenParent={(uri) => void tab.operations?.openParent?.(uri)}
-      />
+      {header}
       {/* 同级视图切换：下划线页签，位于标题行与正文之间。 */}
       {/* Sibling switching: underlined tabs between the header and the body. */}
       {tab.levels.length > 1 ? (
@@ -233,19 +213,29 @@ export function FilePreviewDirectoryBody({
         </div>
       ) : null}
       <div className="ov-file-preview__body">
-        <FilePreviewBody
-          key={fileTab.key}
-          fileTab={fileTab}
+        <FilePreviewTransition
+          identity={fileTab.key}
+          tab={fileTab}
+          needsLoad={needsAsyncLoad(fileTab.source)}
           text={text}
-          locale={locale}
-          viewMode={viewMode}
-          editing={editing}
-          onViewModeChange={onViewModeChange}
-          onHandleChange={onHandleChange}
-          onViewModesChange={onViewModesChange}
-          onDownload={onDownload}
-          onCancelEditing={onCancelEditing}
-        />
+        >
+          {({ tab: layerTab, onProbeStatus, reports, onLoadingChange }) => (
+            <FilePreviewBody
+              fileTab={layerTab}
+              onLoadingChange={onLoadingChange}
+              text={text}
+              locale={locale}
+              viewMode={viewMode}
+              editing={editing}
+              onViewModeChange={onViewModeChange}
+              onHandleChange={onHandleChange}
+              onViewModesChange={onViewModesChange}
+              onCancelEditing={onCancelEditing}
+              onStateChange={(state) => onProbeStatus(probeStatusOf(state))}
+              reports={reports}
+            />
+          )}
+        </FilePreviewTransition>
       </div>
       {tab.slots?.footer ? (
         <div className="ov-file-preview__footer">{tab.slots.footer}</div>

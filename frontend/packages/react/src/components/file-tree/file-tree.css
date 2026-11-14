@@ -91,6 +91,66 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+  /* Non-auto standard properties override Chromium's scrollbar pseudo-elements. */
+  color-scheme: light;
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+}
+
+html.dark .ov-file-tree__body {
+  color-scheme: dark;
+}
+
+.ov-file-tree__body::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+  background: transparent;
+}
+
+.ov-file-tree__body::-webkit-scrollbar:hover {
+  background: var(
+    --ov-ui-color-scrollbar-track-hover,
+    var(--ov-ui-scrollbar-track-hover-default)
+  );
+}
+
+.ov-file-tree__body::-webkit-scrollbar:vertical:hover {
+  box-shadow: inset 1px 0 0
+    var(--ov-ui-color-scrollbar-border, var(--ov-ui-scrollbar-border-default));
+}
+
+.ov-file-tree__body::-webkit-scrollbar:horizontal:hover {
+  background: var(
+    --ov-ui-color-scrollbar-track-hover,
+    var(--ov-ui-scrollbar-track-hover-horizontal-default)
+  );
+  box-shadow: inset 0 1px 0
+    var(--ov-ui-color-scrollbar-border, var(--ov-ui-scrollbar-border-default));
+}
+
+.ov-file-tree__body::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(
+    --ov-ui-color-scrollbar-thumb,
+    var(--ov-ui-scrollbar-thumb-default)
+  );
+  background-clip: padding-box;
+}
+
+.ov-file-tree__body::-webkit-scrollbar-thumb:hover {
+  background-color: var(
+    --ov-ui-color-scrollbar-thumb-hover,
+    var(--ov-ui-scrollbar-thumb-hover-default)
+  );
+}
+
+.ov-file-tree__body::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.ov-file-tree__body::-webkit-scrollbar-button {
+  display: none;
 }
 
 .ov-file-tree__rows {
@@ -325,10 +385,24 @@
   cursor: pointer;
 }
 
-.ov-file-tree__dashboard {
+/*
+ * 行尾标记槽位：行内剩余空间都留在它前面，因此它靠行右端对齐，而不是紧挨名称。
+ * 行里还有层级、权限等其他行尾标记时，由排在前面的标记吸收空间，它紧跟在后面。
+ *
+ * The trailing-marker slot: the row's spare space is left before it, so it sits at
+ * the right edge rather than next to the name. When the row also carries other
+ * trailing markers such as the level or access, that earlier marker absorbs the
+ * space and the slot follows it directly.
+ */
+.ov-file-tree__trailing {
   display: inline-flex;
   flex: none;
   align-items: center;
+  margin-left: auto;
+}
+
+.ov-file-tree__level ~ .ov-file-tree__trailing {
+  margin-left: 0;
 }
 
 /*

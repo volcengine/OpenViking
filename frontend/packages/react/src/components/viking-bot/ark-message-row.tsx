@@ -1,4 +1,4 @@
-import { Button } from '../../shared/components/button/button.js';
+import { Button } from '../../shared/primitives/button/button.js';
 import { Bubble } from '@ark-design/ui/bubble';
 import { ErrorCard } from '@ark-design/ui/error-card';
 

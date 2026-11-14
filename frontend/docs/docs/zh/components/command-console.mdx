@@ -1,0 +1,318 @@
+# CommandConsole 命令控制台
+
+终端风格的命令记录与输入视图：展示命令记录及其结果，输入区提供命令补全和参数帮助。
+
+## 何时使用
+
+- 需要命令行式的输入和结果展示，并自己决定有哪些命令、如何执行时：组件不发起请求，也不读写本地存储，不需要 `OpenVikingProvider`。
+- 需要用同一套视图展示文本、检索结果、资源预览、状态和写入结果等不同类型的命令输出时。
+- 使用 [Console](../modules/console) 时，命令模式已经内置 CommandConsole，不需要单独接入。
+
+## 引入
+
+```tsx
+import { CommandConsole } from '@openviking/react/components/command-console';
+import '@openviking/react/components/command-console/style.css';
+```
+
+## 代码演示
+
+### 基础用法
+
+演示带多种结果类型的命令记录和带补全的输入区。输入 `/` 查看候选，提交 `ov compile --compile-name demo-wiki`、`ov task list`、`ov session get session_demo` 或 `ov help`，分别得到写入结果、表格、状态和命令帮助。
+
+```tsx file="../../_demos/command-console-basic.tsx" preview
+
+```
+
+示例使用固定的模拟数据：提交后先追加一条执行中的记录，稍后替换为结果，不发送请求；点击资源链接只弹出提示。
+
+### 空态与快捷命令
+
+没有记录时显示快捷入口，点击只把命令填入输入区，按 Enter 才提交，提交后空态被记录取代。每行显示 `summary`，省略时回退到 `description`；提供了 `summary`，或说明被单行省略截断时，悬停该行显示完整的 `description`。
+
+```tsx file="../../_demos/command-console-empty.tsx" preview
+
+```
+
+示例的快捷入口都填入完整命令，只有 `compile` 例外：它只填入 `ov compile `，需要继续输入 `--compile-name <name>`。
+
+## API
+
+### CommandConsole
+
+| 参数             | 说明                                                                                       | 类型                                                                  | 默认值                   |
+| ---------------- | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- | ------------------------ |
+| records          | 要展示的命令记录，按提交顺序排列                                                           | `readonly CommandConsoleRecord[]`                                     | 必填                     |
+| value            | 输入区的文本，受控                                                                         | `string`                                                              | 必填                     |
+| disabled         | 禁用输入和提交，并在输入区下方显示 `labels.unavailableMessage`                             | `boolean`                                                             | `false`                  |
+| emptyState       | 没有记录时显示的内容，替换内置空态；传 `null` 时不显示空态                                 | `ReactNode`                                                           | -                        |
+| quickCommands    | 内置空态里的快捷入口，没有可用入口时内置空态不显示内容                                     | `readonly CommandConsoleQuickCommand[]`                               | -                        |
+| commands         | 命令目录，用于补全、参数帮助和执行中记录的骨架；省略时仍可输入和提交，但没有候选和参数帮助 | `readonly CommandConsoleCommandDefinition[]`                          | `[]`                     |
+| commandGroups    | 候选列表的分组名称和顺序，没有声明的分组按出现顺序排在后面                                 | `readonly CommandConsoleCommandGroup[]`                               | `[]`                     |
+| onValueChange    | 输入变化时触发，包括接受补全和示例；省略时输入区只读                                       | `(value: string) => void`                                             | -                        |
+| onSubmit         | 按 Enter 提交时触发，参数是去掉首尾空白的命令文本；省略时不能提交                          | `(command: string) => void`                                           | -                        |
+| onOpenUri        | 点击资源链接时触发，参数是链接地址；省略时链接按 `href` 原生跳转                           | `(uri: string) => void`                                               | -                        |
+| onCopy           | 复制成功后触发，参数是已复制的文本                                                         | `(text: string) => void`                                              | -                        |
+| slots            | 替换渲染异常的展示内容，见[错误展示插槽](../guide/getting-started#自定义错误展示)          | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }` | -                        |
+| labels           | 覆盖界面文案，字段见 [CommandConsoleLabels](#commandconsolelabels)                         | `CommandConsoleLabels`                                                | -                        |
+| locale           | 界面语言，规则见[国际化](../guide/i18n)                                                    | `'zh-CN' \| 'en-US'`                                                  | 继承上级，默认 `'en-US'` |
+| className、style | 外观与布局，其余 HTML 属性透传到根元素                                                     | HTML 属性                                                             | -                        |
+
+### CommandConsoleRecord
+
+| 参数        | 说明                                                                                            | 类型                                               | 默认值 |
+| ----------- | ----------------------------------------------------------------------------------------------- | -------------------------------------------------- | ------ |
+| id          | 记录的唯一标识                                                                                  | `string`                                           | 必填   |
+| command     | 提交的命令文本，显示在结果上方；匹配到 `commands` 中的命令时，命令名部分按它的 `inputText` 显示 | `string`                                           | 必填   |
+| status      | 执行状态，只影响这一条记录；`'pending'` 且尚无后台任务结果时显示加载骨架，其余状态显示结果      | `'pending' \| 'success' \| 'error' \| 'cancelled'` | 必填   |
+| tasks       | 后台任务快照，组件仅展示传入的状态                                                              | `readonly CommandConsoleTask[]`                    | -      |
+| content     | 执行结果；带后台任务的记录在运行中也显示它，省略时按状态显示骨架或空结果                        | `CommandConsoleRecordContent`                      | -      |
+| createdAtMs | 提交时间，Unix 毫秒时间戳，显示在命令下方                                                       | `number`                                           | -      |
+| createdAt   | 没有有效 `createdAtMs` 时显示的文本，也用于服务端渲染；不会被解析为日期                         | `string`                                           | -      |
+
+`CommandConsoleTask` 的字段与 [ConsoleTaskSnapshot](../modules/console#consoletasksnapshot) 一致。
+
+### CommandConsoleRecordContent
+
+执行结果的联合类型，通过 `variant` 区分。
+
+| variant              | 说明                                          | 类型                                   |
+| -------------------- | --------------------------------------------- | -------------------------------------- |
+| `'text'`             | 纯文本或 Markdown，也用来显示 JSON 和错误信息 | `CommandConsoleTextContent`            |
+| `'search-list'`      | 检索结果列表                                  | `CommandConsoleSearchListContent`      |
+| `'resource-preview'` | 单个资源的正文预览                            | `CommandConsoleResourcePreviewContent` |
+| `'resource-tree'`    | 资源条目列表，带明细时显示为表格              | `CommandConsoleResourceTreeContent`    |
+| `'status'`           | 键值状态行                                    | `CommandConsoleStatusContent`          |
+| `'write-result'`     | 写入类命令的结果行                            | `CommandConsoleWriteResultContent`     |
+| `'command-help'`     | 按分组列出的可用命令                          | `CommandConsoleCommandHelpContent`     |
+
+### CommandConsoleTextContent
+
+| 参数    | 说明                                                                                               | 类型                    | 默认值    |
+| ------- | -------------------------------------------------------------------------------------------------- | ----------------------- | --------- |
+| variant | 结果类型，固定为 `'text'`                                                                          | `'text'`                | 必填      |
+| text    | 文本内容；`format` 为 `'plain'` 且整段是合法 JSON 时，缩进后显示为可复制的代码块，原始内容保持不变 | `string`                | 必填      |
+| format  | 文本格式：`'plain'` 按原文显示，`'markdown'` 渲染为 Markdown（支持 GFM）                           | `'plain' \| 'markdown'` | `'plain'` |
+
+### CommandConsoleSearchListContent
+
+| 参数    | 说明                                               | 类型                                        | 默认值 |
+| ------- | -------------------------------------------------- | ------------------------------------------- | ------ |
+| variant | 结果类型，固定为 `'search-list'`                   | `'search-list'`                             | 必填   |
+| items   | 检索结果，为空时显示 `labels.noResult`             | `readonly CommandConsoleSearchResultItem[]` | 必填   |
+| summary | 列表上方的汇总信息，字符串中的资源地址自动成为链接 | `ReactNode`                                 | -      |
+
+### CommandConsoleSearchResultItem
+
+| 参数         | 说明                                                            | 类型        | 默认值 |
+| ------------ | --------------------------------------------------------------- | ----------- | ------ |
+| id           | 结果的唯一标识                                                  | `string`    | 必填   |
+| title        | 结果标题；提供 `uri` 时改为显示 `uri`                           | `string`    | 必填   |
+| metaLabel    | 摘录下方的补充信息，例如路径或文件类型                          | `string`    | -      |
+| levelLabel   | 标题旁的内容层级标签                                            | `string`    | -      |
+| typeLabel    | 分数旁的结果类型标签                                            | `string`    | -      |
+| scoreLabel   | 分数文案，由宿主格式化后显示                                    | `string`    | -      |
+| scoreDetails | 分数详情，悬停、聚焦或点击分数时显示；需要同时提供 `scoreLabel` | `ReactNode` | -      |
+| preview      | 标题下方的内容摘录                                              | `string`    | -      |
+| uri          | 资源 URI，显示为链接，点击时触发 `onOpenUri`                    | `string`    | -      |
+
+### CommandConsoleResourcePreviewContent
+
+| 参数          | 说明                                                             | 类型                 | 默认值 |
+| ------------- | ---------------------------------------------------------------- | -------------------- | ------ |
+| variant       | 结果类型，固定为 `'resource-preview'`                            | `'resource-preview'` | 必填   |
+| title         | 资源标题，与命令名相同时不显示                                   | `string`             | 必填   |
+| content       | 资源正文，通常是文件内容；整段是合法 JSON 时显示为可复制的代码块 | `string`             | 必填   |
+| meta          | 标题上方的元信息，例如类型和大小，用 `·` 连接                    | `readonly string[]`  | -      |
+| description   | 没有 `meta` 时显示的一行说明                                     | `string`             | -      |
+| uri           | 资源自身的 URI，显示在正文上方并作为链接                         | `string`             | -      |
+| navigationUri | 点击 `uri` 时传给 `onOpenUri` 的地址，省略时使用 `uri`           | `string`             | -      |
+
+### CommandConsoleResourceTreeContent
+
+| 参数    | 说明                                                                                 | 类型                                        | 默认值 |
+| ------- | ------------------------------------------------------------------------------------ | ------------------------------------------- | ------ |
+| variant | 结果类型，固定为 `'resource-tree'`                                                   | `'resource-tree'`                           | 必填   |
+| items   | 资源条目；超过 20 条时分页，点击「加载更多」显示下一页，为空时显示 `labels.noResult` | `readonly CommandConsoleResourceTreeItem[]` | 必填   |
+| title   | 标题，与命令名相同时不显示                                                           | `string`                                    | -      |
+
+### CommandConsoleResourceTreeItem
+
+| 参数       | 说明                                                                          | 类型                                             | 默认值 |
+| ---------- | ----------------------------------------------------------------------------- | ------------------------------------------------ | ------ |
+| id         | 条目的唯一标识                                                                | `string`                                         | 必填   |
+| title      | 条目标题；提供 `uri` 时显示为链接                                             | `string`                                         | 必填   |
+| metaLabel  | 标题旁的补充信息                                                              | `string`                                         | -      |
+| detailRows | 键值明细；任一条目带明细时，整个结果显示为表格，各条目明细的 `label` 合并为列 | `readonly CommandConsoleResourceTreeDetailRow[]` | -      |
+| uri        | 条目的资源 URI，点击标题时触发 `onOpenUri`                                    | `string`                                         | -      |
+
+### CommandConsoleResourceTreeDetailRow
+
+| 参数  | 说明                               | 类型     | 默认值 |
+| ----- | ---------------------------------- | -------- | ------ |
+| label | 明细名称，同名明细对齐到同一列     | `string` | 必填   |
+| value | 明细值，其中的资源地址自动成为链接 | `string` | 必填   |
+
+### CommandConsoleStatusContent
+
+| 参数    | 说明                        | 类型                                 | 默认值 |
+| ------- | --------------------------- | ------------------------------------ | ------ |
+| variant | 结果类型，固定为 `'status'` | `'status'`                           | 必填   |
+| rows    | 键值行                      | `readonly CommandConsoleStatusRow[]` | 必填   |
+| title   | 标题，与命令名相同时不显示  | `string`                             | -      |
+
+### CommandConsoleStatusRow
+
+| 参数    | 说明                                                                                  | 类型                               | 默认值     |
+| ------- | ------------------------------------------------------------------------------------- | ---------------------------------- | ---------- |
+| label   | 行标签，同一结果内唯一                                                                | `string`                           | 必填       |
+| value   | 行内容，字符串中的资源地址自动成为链接                                                | `ReactNode`                        | 必填       |
+| variant | 展示形态：`'inline'` 单行，`'long-text'` 自动换行的长文本，`'pre'` 保留换行的等宽文本 | `'inline' \| 'long-text' \| 'pre'` | `'inline'` |
+
+### CommandConsoleWriteResultContent
+
+| 参数    | 说明                                                     | 类型                   | 默认值 |
+| ------- | -------------------------------------------------------- | ---------------------- | ------ |
+| variant | 结果类型，固定为 `'write-result'`                        | `'write-result'`       | 必填   |
+| lines   | 结果行，每行单独一块显示；字符串中的资源地址自动成为链接 | `readonly ReactNode[]` | 必填   |
+| title   | 标题，与命令名相同时不显示                               | `string`               | -      |
+
+### CommandConsoleCommandHelpContent
+
+| 参数     | 说明                                           | 类型                                          | 默认值 |
+| -------- | ---------------------------------------------- | --------------------------------------------- | ------ |
+| variant  | 结果类型，固定为 `'command-help'`              | `'command-help'`                              | 必填   |
+| sections | 按分组列出的命令，点击命令会填入输入区，不提交 | `readonly CommandConsoleCommandHelpSection[]` | 必填   |
+
+### CommandConsoleCommandHelpSection
+
+| 参数  | 说明           | 类型                                       | 默认值 |
+| ----- | -------------- | ------------------------------------------ | ------ |
+| key   | 分组的唯一标识 | `string`                                   | 必填   |
+| label | 分组标题       | `string`                                   | 必填   |
+| items | 该分组下的命令 | `readonly CommandConsoleCommandHelpItem[]` | 必填   |
+
+### CommandConsoleCommandHelpItem
+
+| 参数        | 说明                             | 类型     | 默认值 |
+| ----------- | -------------------------------- | -------- | ------ |
+| key         | 命令的唯一标识                   | `string` | 必填   |
+| name        | 显示的命令文本，点击时填入输入区 | `string` | 必填   |
+| description | 命令说明                         | `string` | -      |
+
+### CommandConsoleQuickCommand
+
+| 参数  | 说明                                                                                                       | 类型     | 默认值 |
+| ----- | ---------------------------------------------------------------------------------------------------------- | -------- | ------ |
+| name  | 对应 `commands` 里的命令名，空态里显示该命令的名称和说明；找不到命令的名称会被跳过，重复的名称只保留第一个 | `string` | 必填   |
+| value | 点击后原样填入输入区的文本，不补前缀，也不提交；空字符串会清空输入                                         | `string` | 必填   |
+
+### CommandConsoleCommandDefinition
+
+| 参数        | 说明                                                                                             | 类型                                                                   | 默认值           |
+| ----------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- | ---------------- |
+| name        | 命令名，目录内唯一，可由多个词组成，如 `session get`；在候选列表和快捷入口里显示，也用于匹配命令 | `string`                                                               | 必填             |
+| inputText   | 接受补全后填入输入区的命令前缀，记录里也按它显示；例如 `name` 为 `find` 时可设为 `ov find`       | `string`                                                               | 同 `name`        |
+| aliases     | 别名，与 `name` 一样用于 `/` 输入的补全和命令匹配                                                | `readonly string[]`                                                    | -                |
+| group       | 所属分组的 `key`，对应 `commandGroups`                                                           | `string`                                                               | -                |
+| description | 命令说明，显示在参数帮助顶部                                                                     | `string`                                                               | 必填             |
+| usage       | 用法，显示在参数表上方                                                                           | `string`                                                               | 必填             |
+| summary     | 简短说明，候选列表和快捷入口优先显示它                                                           | `string`                                                               | 同 `description` |
+| params      | 参数说明，显示在参数表里                                                                         | `readonly CommandConsoleCommandParam[]`                                | -                |
+| options     | 选项说明，显示在参数表里                                                                         | `readonly CommandConsoleCommandOption[]`                               | -                |
+| examples    | 示例命令，显示在参数帮助里，点击后填入输入区，不提交                                             | `readonly (string \| CommandConsoleCommandExample)[]`                  | -                |
+| skeleton    | 命令执行中显示的加载骨架，分别对应检索、资源预览、资源树、状态、写入结果和通用形态               | `'search' \| 'resource' \| 'tree' \| 'status' \| 'write' \| 'generic'` | `'generic'`      |
+
+### CommandConsoleCommandParam
+
+| 参数         | 说明                                                              | 类型      | 默认值  |
+| ------------ | ----------------------------------------------------------------- | --------- | ------- |
+| label        | 参数名，按原样显示；不以 `-` 开头的视为位置参数，输入命令后会提示 | `string`  | 必填    |
+| description  | 参数说明                                                          | `string`  | 必填    |
+| required     | 是否必填，参数表里显示为「是」或「否」                            | `boolean` | `false` |
+| defaultValue | 默认值，省略时参数表显示 `—`                                      | `string`  | -       |
+
+### CommandConsoleCommandOption
+
+| 参数         | 说明                                                     | 类型      | 默认值  |
+| ------------ | -------------------------------------------------------- | --------- | ------- |
+| token        | 选项写法，按原样显示，如 `-n, --node-limit <n>`          | `string`  | 必填    |
+| description  | 选项说明                                                 | `string`  | 必填    |
+| required     | 是否必填；没有位置参数时，必填选项会在输入命令后作为提示 | `boolean` | `false` |
+| defaultValue | 默认值，省略时参数表显示 `—`                             | `string`  | -       |
+
+### CommandConsoleCommandExample
+
+| 参数  | 说明                           | 类型     | 默认值 |
+| ----- | ------------------------------ | -------- | ------ |
+| value | 点击后填入输入区的命令         | `string` | 必填   |
+| label | 显示的文字，省略时显示 `value` | `string` | -      |
+
+### CommandConsoleCommandGroup
+
+| 参数  | 说明                         | 类型     | 默认值 |
+| ----- | ---------------------------- | -------- | ------ |
+| key   | 分组标识，对应命令的 `group` | `string` | 必填   |
+| label | 候选列表里的分组标题         | `string` | 必填   |
+
+### CommandConsoleLabels
+
+默认值是 `locale` 为 `'zh-CN'` 时的文案。
+
+| 参数               | 说明                                                            | 类型                          | 默认值                                    |
+| ------------------ | --------------------------------------------------------------- | ----------------------------- | ----------------------------------------- |
+| placeholder        | 输入区的占位文本，同时作为输入框的无障碍名称                    | `string`                      | `>_ 输入 CLI 命令，如 ov find OpenViking` |
+| unavailableMessage | `disabled` 时显示的提示，只改文案不会禁用组件                   | `string`                      | `当前无法执行命令。`                      |
+| send               | 输入区下方快捷键提示里 `↵` 的说明                               | `string`                      | `发送`                                    |
+| allCommands        | 快捷键提示里 `/` 的说明                                         | `string`                      | `全部指令`                                |
+| historyCommands    | 快捷键提示里 `↑` 的说明                                         | `string`                      | `历史指令`                                |
+| suggestions        | 候选列表的无障碍名称                                            | `string`                      | `命令建议`                                |
+| noSuggestions      | 没有匹配的命令时的提示                                          | `string`                      | `没有匹配的命令`                          |
+| cancelled          | 已取消状态图标的无障碍名称                                      | `string`                      | `已取消`                                  |
+| pending            | 执行中状态图标的无障碍名称                                      | `string`                      | `执行中`                                  |
+| success            | 执行成功状态图标的无障碍名称                                    | `string`                      | `执行成功`                                |
+| error              | 执行失败状态图标的无障碍名称，失败的记录没有 `content` 时也显示 | `string`                      | `执行失败`                                |
+| copy               | 复制按钮的提示                                                  | `string`                      | `复制`                                    |
+| copied             | 复制成功后的提示                                                | `string`                      | `复制成功`                                |
+| emptyTitle         | 内置空态的标题                                                  | `string`                      | `OpenViking CLI`                          |
+| emptyDescription   | 内置空态的说明                                                  | `string`                      | `CLI 直接操作上下文`                      |
+| quickStart         | 快捷入口上方的引导文案                                          | `string`                      | `快速体验：`                              |
+| noResult           | 结果为空时的提示                                                | `string`                      | `暂无返回结果`                            |
+| justNow            | 不足 1 分钟的记录时间                                           | `string`                      | `刚刚`                                    |
+| availableCommands  | 命令帮助结果的标题                                              | `string`                      | `可用命令`                                |
+| helpHint           | 命令帮助结果底部的提示                                          | `string`                      | `输入 / 可打开命令面板。`                 |
+| parameters         | 参数帮助里参数表的标题                                          | `string`                      | `参数详情`                                |
+| examples           | 参数帮助里示例列表的标题                                        | `string`                      | `快速体验`                                |
+| noParameters       | 命令没有参数和选项时的提示                                      | `string`                      | `此命令不需要参数`                        |
+| parameter          | 参数表「参数」列的标题                                          | `string`                      | `参数`                                    |
+| required           | 参数表「必填」列的标题                                          | `string`                      | `必填`                                    |
+| description        | 参数表「说明」列的标题                                          | `string`                      | `说明`                                    |
+| defaultValue       | 参数表「默认值」列的标题                                        | `string`                      | `默认值`                                  |
+| yes                | 参数表里必填项的值                                              | `string`                      | `是`                                      |
+| no                 | 参数表里非必填项的值                                            | `string`                      | `否`                                      |
+| loadMore           | 资源表格分页按钮的文案                                          | `string`                      | `加载更多`                                |
+| resource           | 资源表格名称列的标题                                            | `string`                      | `资源`                                    |
+| formatMinutesAgo   | 格式化已过去的整分钟数                                          | `(minutes: number) => string` | `N 分钟前`                                |
+| formatHoursAgo     | 格式化已过去的整小时数                                          | `(hours: number) => string`   | `N 小时前`                                |
+
+## 注意
+
+- `onSubmit` 只上报命令文本，由宿主执行：追加一条 `status: 'pending'` 的记录，完成后更新为 `'success'` 或 `'error'`。执行中的记录不阻止继续提交，需要限制时传 `disabled`。
+- 失败时把 `status` 设为 `'error'`，错误信息使用 `text` 结果。组件不解析命令输出，宿主需要把执行结果转换成 `CommandConsoleRecordContent`。
+- `'success'` 只表示命令本身执行成功，不代表它启动的任务已经完成。
+- 新建会话、历史记录面板和外层工具栏由宿主自行组合，组件没有对应的插槽。宿主切换会话或历史后，更新 `records` 和 `value`。
+- Enter 提交，Shift+Enter 换行，组件不提供发送按钮。
+- ↑、↓ 回填 `records` 里的命令，候选列表展开时改为选择候选。Tab 始终留在输入区，Shift+Tab 移出。
+- 输入命令名时，剩余部分以灰字提示，按 Tab 接受，灰字不会写入 `value`，也不会被提交。输入 `/`，或在命令前缀后按 Tab，展开候选列表，用 ↑、↓ 选择，Tab 或 Enter 填入，Esc 关闭。
+- 悬停或选中候选命令时，列表旁显示它的用法、示例和参数表；接受命令后，输入区在命令名后以浅色提示位置参数，开始输入参数后提示消失。
+- 记录更新时，只有读者接近底部才会自动滚到最新；向上滚动会保留阅读位置，提交命令后恢复跟随。
+- 根元素高度为 `100%`，记录区在内部滚动，输入区固定在底部，需要给父容器设置确定的高度。
+- 输入区、命令记录和结果文本里的 `viking://`、`http://`、`https://` 地址会自动成为链接，点击链接不会提交命令；`onOpenUri` 收到的是链接地址。
+- 说明文字里的链接不含句末标点，命令、代码块和资源值里的链接保留文件名中的标点。结构化结果的 `uri` 只接受这三种协议，其他显示为纯文本。
+- Markdown 文本里的 `http(s)` 链接和地址在新标签页打开，不触发 `onOpenUri`；`viking://` 的会触发。
+- JSON 和 Markdown 代码块带复制按钮，复制成功后触发 `onCopy`；浏览器拒绝写入剪贴板时不显示成功提示，也不触发 `onCopy`。
+- `createdAtMs` 不足 1 分钟显示「刚刚」，不足 1 小时显示整分钟数，不足 24 小时显示整小时数，之后显示本地时区的 `YYYY-MM-DD HH:mm`；晚于当前时间的时间戳显示「刚刚」。文案可用 `labels.justNow`、`labels.formatMinutesAgo`、`labels.formatHoursAgo` 覆盖。
+- 服务端渲染和 hydration 首屏使用 `createdAt`，没有则不显示时间；客户端接管后改用 `createdAtMs`。时间只在渲染时重新计算，不会定时刷新。
+- 颜色取自 `--ov-ui-color-*` 主题变量，暗色模式跟随 `<html>` 上的 `.dark` 类，详见[快速开始](../guide/getting-started)。
+- 类型从 `@openviking/react/components/command-console` 导出，包根入口只导出组件和 `CommandConsoleProps`。

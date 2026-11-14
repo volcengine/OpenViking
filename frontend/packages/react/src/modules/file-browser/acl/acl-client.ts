@@ -32,16 +32,18 @@ export async function readPermission(
   uri: string,
   options: OvRequestOptions,
 ) {
-  const stat = await client.request<{ permission?: unknown }>({
+  const stat = await client.request<{ access?: unknown }>({
     method: 'GET',
     path: OV_PATHS.fsStat,
     query: { uri },
     options,
   });
-  if (stat.permission !== undefined) {
-    if (!isLevel(stat.permission))
+  if (stat.access !== undefined) {
+    if (stat.access === 'denied' || stat.access === 'container')
+      return undefined;
+    if (!isLevel(stat.access))
       throw new TypeError('Unknown resource permission');
-    return stat.permission;
+    return stat.access;
   }
   // A successful manager-only endpoint proves manage. 403 does not distinguish
   // read from write, so retain an unknown level instead of guessing either one.

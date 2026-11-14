@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import re
 import threading
+from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Hashable
@@ -41,6 +42,7 @@ from openviking.session.memory.memory_updater import (
     ExtractContext,
     MemoryUpdater,
     MemoryUpdateResult,
+    detect_split_replacements,
     remap_stored_links,
     write_stored_links,
 )
@@ -538,125 +540,86 @@ class StreamingMemoryUpdater:
                     await viking_fs._async_agfs.pathlock_release(lease)
 
     async def _merge_requests(self, requests: list[MemoryUpdateRequest]) -> ResolvedOperations:
-        all_ops = _combine_resolved_operations(request.operations for request in requests)
-        if all_ops.has_errors():
-            return all_ops
+        """Plan cross-session proposals together within one peer, type and template batch."""
+        operations = _combine_resolved_operations(request.operations for request in requests)
+        if operations.has_errors():
+            return operations
 
-        requests_by_kind: dict[str, list[MemoryUpdateRequest]] = {
-            "add": [],
-            "update": [],
-            "delete": [],
-        }
+        replacements: dict[str, set[str | None]] = {}
         for request in requests:
-            adds = [
-                op
-                for op in request.operations.upsert_operations
-                if op.old_memory_file_content is None
-            ]
-            updates = [
-                op
-                for op in request.operations.upsert_operations
-                if op.old_memory_file_content is not None
-            ]
-            for kind, upserts, deletes in (
-                ("add", adds, []),
-                ("update", updates, []),
-                ("delete", [], list(request.operations.delete_file_contents or [])),
-            ):
-                if not upserts and not deletes:
-                    continue
-                requests_by_kind[kind].append(
-                    clone_memory_update_request(
-                        request,
-                        operations=ResolvedOperations(
-                            upsert_operations=upserts,
-                            delete_file_contents=deletes,
-                            errors=[],
-                            resolved_links=[],
-                            delete_replacements={
-                                file.uri: replacement_uri
-                                for file in deletes
-                                if file.uri
-                                if (
-                                    replacement_uri := request.operations.delete_replacements.get(
-                                        file.uri
-                                    )
-                                )
-                            },
-                        ),
+            for file in request.operations.delete_file_contents:
+                if file.uri:
+                    replacements.setdefault(file.uri, set()).add(
+                        request.operations.delete_replacements.get(file.uri)
                     )
-                )
-
-        output_language_override = (
-            await get_output_language_override(
-                self.runtime_config_manager, requests[0].ctx.account_id
+        disputed = {uri for uri, targets in replacements.items() if len(targets) > 1}
+        new_targets = {
+            uri for op in operations.upsert_operations if not op.is_edit() for uri in op.uris
+        }
+        edit_targets = {
+            uri for op in operations.upsert_operations if op.is_edit() for uri in op.uris
+        }
+        contested = replacements.keys() & (new_targets | edit_targets)
+        cross_session = _requests_span_sessions(requests)
+        if cross_session:
+            # A dict can only express agreed replacements. Pass every alternative to the planner.
+            for uri in disputed:
+                operations.delete_replacements.pop(uri, None)
+            request = requests[0]
+            operations = await merge_memory_operations(
+                operations=operations,
+                replacement_options=replacements,
+                messages=_combined_request_messages(requests),
+                ctx=request.ctx,
+                registry=request.memory_registry or self.registry or get_default_registry(),
+                strict_extract_errors=bool(disputed or contested or (new_targets and edit_targets))
+                or any(r.strict_extract_errors for r in requests),
+                trace_console=self.config.trace_console,
+                force_merge=True,
+                vlm_resolver=self.vlm_resolver,
+                output_language_override=await get_output_language_override(
+                    self.runtime_config_manager, request.ctx.account_id
+                ),
             )
-            if any(_requests_span_sessions(batch) for batch in requests_by_kind.values())
-            else None
-        )
 
-        async def merge_kind(kind_requests: list[MemoryUpdateRequest]) -> ResolvedOperations:
-            operations = _combine_resolved_operations(
-                request.operations for request in kind_requests
-            )
-            if not _requests_span_sessions(kind_requests):
+            if operations.has_errors():
                 return operations
-            from openviking.observability.reporting.facts import bind_memory_batch
 
-            # Add/update/delete groups can have different submitters. A shared
-            # model call belongs only to the requests participating in this group.
-            with bind_memory_batch(
-                kind_requests[0].ctx,
-                [request.metadata.get("task_id") for request in kind_requests],
+        # Independent patches on the same old file require a single final write.
+        # Same-session sequential updates retain their existing order.
+        writes = Counter(uri for op in operations.upsert_operations for uri in op.uris)
+        conflicts = set(writes).intersection(file.uri for file in operations.delete_file_contents)
+        if not cross_session:
+            conflicts.update(new_targets & edit_targets)
+        elif not operations.upsert_operations and not operations.delete_file_contents:
+            conflicts.update(contested | disputed)
+        if cross_session:
+            conflicts.update(uri for uri, count in writes.items() if count > 1)
+        splits = detect_split_replacements(operations)
+        for file in operations.delete_file_contents:
+            if (
+                cross_session
+                and not operations.delete_replacements.get(file.uri)
+                and file.uri not in splits
+                and (file.uri in contested or file.uri not in replacements)
             ):
-                return await merge_memory_operations(
-                    operations=operations,
-                    messages=_combined_request_messages(kind_requests),
-                    ctx=kind_requests[0].ctx,
-                    registry=kind_requests[0].memory_registry
-                    or self.registry
-                    or get_default_registry(),
-                    strict_extract_errors=any(
-                        request.strict_extract_errors for request in kind_requests
-                    ),
-                    trace_console=self.config.trace_console,
-                    force_merge=True,
-                    vlm_resolver=self.vlm_resolver,
-                    output_language_override=output_language_override,
-                )
-
-        kind_batches = [
-            (kind, kind_requests)
-            for kind, kind_requests in requests_by_kind.items()
-            if kind_requests
-        ]
-        kind_results = await asyncio.gather(
-            *(merge_kind(kind_requests) for _, kind_requests in kind_batches)
-        )
-        uri_kinds: dict[str, str] = {}
-        conflicting_uris: set[str] = set()
-        for (kind, _), operations in zip(kind_batches, kind_results, strict=True):
-            for uri in _operation_uri_set(operations):
-                previous_kind = uri_kinds.setdefault(uri, kind)
-                if previous_kind != kind:
-                    conflicting_uris.add(uri)
-        if conflicting_uris:
+                conflicts.add(file.uri)
+            if file.uri in disputed and (
+                not cross_session
+                or not operations.delete_replacements.get(file.uri)
+                or operations.delete_replacements[file.uri] not in replacements[file.uri]
+            ):
+                conflicts.add(file.uri)
+        if conflicts:
             return ResolvedOperations(
                 upsert_operations=[],
                 delete_file_contents=[],
                 errors=[
                     "Conflicting add/update/delete results for URIs: "
-                    + ", ".join(sorted(conflicting_uris))
+                    + ", ".join(sorted(conflicts))
                 ],
-                resolved_links=[],
-                delete_replacements={},
             )
-        merged = _combine_resolved_operations(kind_results)
-        merged.resolved_links = merge_link_lists(
-            list(all_ops.resolved_links or []),
-            list(merged.resolved_links or []),
-        )
-        return merged
+        return operations
 
 
 def _check_template_batch_conflicts(
@@ -789,6 +752,7 @@ async def merge_memory_operations(
     messages: list[Message],
     ctx: RequestContext,
     registry: MemoryTypeRegistry | None = None,
+    replacement_options: dict[str, set[str | None]] | None = None,
     strict_extract_errors: bool = False,
     trace_console: bool = False,
     force_merge: bool = False,
@@ -851,6 +815,7 @@ async def merge_memory_operations(
                 memory_type=memory_type,
                 operations=upsert_groups.get((peer_id, memory_type), []),
                 delete_files=delete_groups.get((peer_id, memory_type), []),
+                replacement_options=replacement_options,
                 messages=messages,
                 ctx=ctx,
                 registry=registry,
@@ -871,6 +836,10 @@ async def merge_memory_operations(
         ops_list = upsert_groups.get(group_key, [])
         if not isinstance(merge_result, Exception):
             merged = merge_result
+            if merged.has_errors():
+                return ResolvedOperations(
+                    upsert_operations=[], delete_file_contents=[], errors=merged.errors
+                )
             enforce_merge_group_peer_id(
                 merged.upsert_operations,
                 peer_id=peer_id,
@@ -945,6 +914,7 @@ async def merge_one_memory_type_operations(
     memory_type: str,
     operations: list[ResolvedOperation],
     delete_files: list[MemoryFile] | None = None,
+    replacement_options: dict[str, set[str | None]] | None = None,
     messages: list[Message],
     ctx: RequestContext,
     registry: MemoryTypeRegistry | None = None,
@@ -1059,10 +1029,13 @@ async def merge_one_memory_type_operations(
         )
         for op in operations
     ]
-    patches.extend(
-        memory_file_to_delete_patch(df, schema=schema, extract_context=extract_context)
-        for df in delete_files
-    )
+    for file in delete_files:
+        patch = memory_file_to_delete_patch(file, schema=schema, extract_context=extract_context)
+        patch.metadata["delete_uri"] = file.uri
+        targets = (replacement_options or {}).get(file.uri, set())
+        if targets:
+            patch.metadata["proposed_replacements"] = sorted(targets, key=lambda uri: uri or "")
+        patches.append(patch)
     if vlm_resolver is None:
         raise RuntimeError(
             "merge_one_memory_type_operations requires a VLM resolver for account-owned work"
@@ -1107,6 +1080,16 @@ async def merge_one_memory_type_operations(
         if df.uri:
             provider.read_file_contents[df.uri] = df
     prefetch_messages = await provider.prefetch()
+    if any(
+        f.uri in target_uris or len((replacement_options or {}).get(f.uri, ())) > 1
+        for f in delete_files
+    ):
+        # Resolve deletion intent using only the user messages for this peer.
+        evidence = [m for m in messages if m.role == "user" and m.peer_id == peer_id]
+        if evidence:
+            prefetch_messages.append(
+                {"role": "user", "content": provider._assemble_conversation(evidence)}
+            )
 
     async def _prefetch():
         return list(prefetch_messages)
@@ -1379,7 +1362,13 @@ def _inherit_source_metadata_to_merged_operations(
         else:
             for uri in list(getattr(merged_op, "uris", []) or []):
                 matched_inputs.extend(input_by_uri.get(uri, []))
-        candidates = matched_inputs or input_operations
+        # A single survivor can incorporate alias proposals whose input URI never
+        # appears in the output. Preserve their trusted submitters as shared sources.
+        candidates = (
+            input_operations
+            if len(merged_operations) == 1 and not existing_ids
+            else matched_inputs or input_operations
+        )
         matched_ids = {
             source_id
             for input_op in candidates
@@ -1838,10 +1827,12 @@ def _scope_operations_to_submitter(
         for op in list(getattr(operations, "upsert_operations", []) or [])
         if _operation_matches_scope(op, scope=scope)
     ]
+    upsert_uris = {uri for op in upserts for uri in op.uris}
     deletes = [
         file
         for file in list(getattr(operations, "delete_file_contents", []) or [])
         if _memory_file_matches_scope(file, scope=scope)
+        or operations.delete_replacements.get(file.uri) in upsert_uris
     ]
     kept_uris = _operation_uri_set(
         ResolvedOperations(upsert_operations=upserts, delete_file_contents=deletes, errors=[])

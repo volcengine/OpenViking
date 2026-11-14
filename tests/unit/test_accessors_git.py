@@ -21,7 +21,7 @@ from openviking.utils.git_auth import (
     is_git_https_url,
     parse_git_http_auth_config,
 )
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 
 _GENERIC_CODE_HOSTING_DOMAINS = [
     "github.com",
@@ -512,44 +512,14 @@ class TestGitAccessor:
         assert resource.original_source == source
         assert token not in str(resource.meta)
 
-    async def test_github_token_is_preserved_for_archive_fallback_clone(
-        self,
-        accessor: GitAccessor,
-        tmp_path: Path,
-    ) -> None:
-        source = "https://github.com/org/private.git"
-        token = "account-token"
-        with (
-            patch(
-                "openviking.parse.accessors.git_accessor.tempfile.mkdtemp",
-                return_value=str(tmp_path),
-            ),
-            patch.object(
-                accessor,
-                "_github_zip_download",
-                new_callable=AsyncMock,
-                side_effect=RuntimeError("archive unavailable"),
-            ) as zip_download,
-            patch.object(
-                accessor,
-                "_git_clone",
-                new_callable=AsyncMock,
-                return_value="org/private",
-            ) as git_clone,
-        ):
-            await accessor.access(source, github_token=token)
+    async def test_archive_policy_denial_stops_import(self, accessor: GitAccessor) -> None:
+        def reject(_url):
+            raise PermissionDeniedError("blocked")
 
-        zip_download.assert_awaited_once_with(
-            source,
-            None,
-            str(tmp_path),
-            github_token=token,
-        )
-        clone_env = git_clone.await_args.kwargs["env"]
-        assert _git_config_entries(clone_env)[f"http.{source}.extraHeader"] == (
-            "Authorization: Basic "
-            + base64.b64encode(f"oauth2:{token}".encode()).decode("ascii")
-        )
+        with patch.object(accessor, "_git_clone", new_callable=AsyncMock) as clone:
+            with pytest.raises(PermissionDeniedError, match="blocked"):
+                await accessor.access("https://github.com/org/repo", request_validator=reject)
+        clone.assert_not_awaited()
 
     async def test_archive_fallback_uses_commit_only_and_records_pin(
         self,
@@ -590,6 +560,7 @@ class TestGitAccessor:
             commit,
             str(tmp_path),
             github_token=None,
+            request_validator=None,
         )
         git_clone.assert_awaited_once_with(
             source,
@@ -597,6 +568,7 @@ class TestGitAccessor:
             branch=None,
             commit=commit,
             env=None,
+            request_validator=None,
         )
         resolve_local_head.assert_not_awaited()
         assert resource.meta["resolved_head_sha"] == commit
@@ -638,6 +610,7 @@ class TestGitAccessor:
             probed_sha,
             str(tmp_path),
             github_token=None,
+            request_validator=None,
         )
         resolve_local_head.assert_not_awaited()
         assert resource.path == extracted
@@ -681,6 +654,7 @@ class TestGitAccessor:
             probed_sha,
             str(tmp_path),
             github_token="account-token",
+            request_validator=None,
         )
 
     async def test_commit_pin_records_supplied_commit_without_remote_probe(
@@ -720,6 +694,7 @@ class TestGitAccessor:
             commit,
             str(tmp_path),
             github_token=None,
+            request_validator=None,
         )
         resolve_local_head.assert_not_awaited()
         assert resource.meta["resolved_head_sha"] == commit
@@ -775,6 +750,7 @@ class TestGitAccessor:
             None,
             str(tmp_path),
             github_token=token,
+            request_validator=None,
         )
         git_clone.assert_awaited_once_with(
             source,
@@ -782,6 +758,7 @@ class TestGitAccessor:
             branch=None,
             commit=None,
             env=None,
+            request_validator=None,
         )
 
     async def test_embedded_http_credentials_are_passed_through_unchanged(
@@ -1028,30 +1005,35 @@ class TestGitAccessor:
         killpg.assert_called_once_with(43210, signal.SIGKILL)
         assert elapsed < 1.0
 
-    @pytest.mark.parametrize(
-        ("source", "repo_name"),
-        [
-            ("https://gitcode.com/org/repo.git", "org/repo"),
-            ("https://gitee.com/org/repo.git", "org/repo"),
-            ("https://bitbucket.org/org/repo.git", "org/repo"),
-            ("https://codeberg.org/org/repo.git", "org/repo"),
-            ("https://gitea.com/org/repo.git", "org/repo"),
-            ("https://atomgit.com/org/repo.git", "org/repo"),
-            ("https://git.sr.ht/~user/repo", "_user/repo"),
-        ],
-    )
-    async def test_generic_code_hosts_are_marked_for_code_repository_parser(
+    @pytest.mark.parametrize("marker_kind", ["missing", "file", "symlink", "dangling_symlink"])
+    async def test_git_clone_writes_marker_without_changing_external_files(
         self,
         accessor: GitAccessor,
         tmp_path: Path,
-        source: str,
-        repo_name: str,
+        marker_kind: str,
     ) -> None:
-        with patch.object(accessor, "_run_git", new_callable=AsyncMock):
-            assert await accessor._git_clone(source, str(tmp_path)) == repo_name
+        source = "https://gitee.com/org/repo.git"
+        checkout = tmp_path / "checkout"
+        checkout.mkdir()
+        marker = checkout / ".git_source_repo"
+        external = tmp_path / "external"
+        if marker_kind != "dangling_symlink":
+            external.write_text("unchanged", encoding="utf-8")
+        if marker_kind == "file":
+            marker.write_text("repository-provided content", encoding="utf-8")
+        elif marker_kind in {"symlink", "dangling_symlink"}:
+            marker.symlink_to(external)
 
-        assert (tmp_path / ".git_source_repo").read_text(encoding="utf-8") == source
-        assert await DirectoryParser._is_git_repository(tmp_path) is True
+        with patch.object(accessor, "_run_git", new_callable=AsyncMock):
+            assert await accessor._git_clone(source, str(checkout)) == "org/repo"
+
+        assert not marker.is_symlink()
+        assert marker.read_text(encoding="utf-8") == source
+        assert await DirectoryParser._is_git_repository(checkout) is True
+        if marker_kind == "dangling_symlink":
+            assert not external.exists()
+        else:
+            assert external.read_text(encoding="utf-8") == "unchanged"
 
     async def test_github_archive_encodes_fragment_in_ref(
         self, accessor: GitAccessor, tmp_path: Path

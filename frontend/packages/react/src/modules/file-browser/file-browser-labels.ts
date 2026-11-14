@@ -1,8 +1,15 @@
+import { useLocale } from '../../shared/locale-context.js';
+import { renderErrors as renderEn } from './locales/en-US.js';
+import { renderErrors as renderZh } from './locales/zh-CN.js';
+import workflowEn from './locales/preview-workflow.en-US.js';
+import workflowZh from './locales/preview-workflow.zh-CN.js';
+import type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
 import { resolveLocale, type Locale } from '../../shared/locale.js';
-import enUS from './locales/en-US.js';
-import zhCN from './locales/zh-CN.js';
+import enUS, { stackedEmpty as stackedEmptyEn } from './locales/en-US.js';
+import zhCN, { stackedEmpty as stackedEmptyZh } from './locales/zh-CN.js';
 
 const LOCALES = { 'en-US': enUS, 'zh-CN': zhCN };
+const STACKED_EMPTY = { 'en-US': stackedEmptyEn, 'zh-CN': stackedEmptyZh };
 
 import type { FilePreviewLabels } from '../../components/file-preview/index.js';
 import type { FileTreeLabels } from '../../components/file-tree/index.js';
@@ -11,7 +18,7 @@ import type { FileBrowserLabels } from './types.js';
 /** 模块外壳自己渲染的文案，其余透传给树与预览。 */
 export type ShellLabels = Omit<
   FileBrowserLabels,
-  'tree' | 'preview' | 'entries' | 'dashboard' | 'acl'
+  'tree' | 'preview' | 'actionBar' | 'dashboard' | 'acl' | 'workflows'
 >;
 
 /**
@@ -22,6 +29,7 @@ export type ShellLabels = Omit<
 
 /** 解析后的外壳文案，外加透传给两个组件的文案。 */
 export interface ResolvedLabels extends Required<ShellLabels> {
+  workflow: FileBrowserWorkflowLabels;
   tree: FileTreeLabels | undefined;
   previewLabels: FileBrowserLabels['preview'];
 }
@@ -30,9 +38,17 @@ export interface ResolvedLabels extends Required<ShellLabels> {
 export function resolveLabels(
   labels: FileBrowserLabels | undefined,
   locale: Locale,
+  stacked = false,
 ): ResolvedLabels {
+  const text = resolveLocale(LOCALES, locale, labels);
   return {
-    ...resolveLocale(LOCALES, locale, labels),
+    ...text,
+    empty: stacked ? (labels?.empty ?? STACKED_EMPTY[locale]) : text.empty,
+    workflow: resolveLocale(
+      { 'en-US': workflowEn, 'zh-CN': workflowZh },
+      locale,
+      labels?.workflows,
+    ),
     tree: labels?.tree,
     previewLabels: labels?.preview,
   };
@@ -45,9 +61,7 @@ export function resolvePreviewLabels(text: ResolvedLabels): FilePreviewLabels {
     copyPath: text.copyPath,
     previewMode: text.previewMode,
     sourceMode: text.sourceMode,
-    copyContent: text.copyContent,
     viewSwitch: text.viewSwitch,
-    download: text.download,
     ...text.previewLabels,
   };
 }
@@ -65,4 +79,9 @@ export function resolveSummaryLabels(
     l1: text.l1Overview,
     failure: text.summaryFailed,
   };
+}
+
+/** Private render-failure copy; independent of request errors and public label overrides. */
+export function useRenderErrors(locale?: Parameters<typeof useLocale>[0]) {
+  return useLocale(locale) === 'zh-CN' ? renderZh : renderEn;
 }

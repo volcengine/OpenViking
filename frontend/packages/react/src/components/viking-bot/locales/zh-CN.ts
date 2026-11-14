@@ -1,3 +1,4 @@
+import type { renderErrors as EnglishRenderErrors } from './en-US.js';
 import type { VikingBotLabels } from '../model.js';
 
 const messages = {
@@ -6,6 +7,8 @@ const messages = {
   toolInput: '输入',
   toolOutput: '输出',
   similarity: '相似度',
+  session: '会话',
+  locateSession: '在文件目录定位会话',
   sessionHistory: '历史会话',
   newSession: '新建会话',
   emptySessions: '暂无历史会话',
@@ -43,3 +46,13 @@ const messages = {
 } satisfies Required<VikingBotLabels>;
 
 export default messages;
+
+export const renderErrors = {
+  bot: '对话区域显示失败',
+  list: '消息列表显示失败',
+  message: '消息显示失败',
+  composer: '输入区域显示失败',
+  interaction: '交互表单显示失败',
+  header: '会话工具栏显示失败',
+  footer: '对话附加内容显示失败',
+} satisfies Record<keyof typeof EnglishRenderErrors, string>;

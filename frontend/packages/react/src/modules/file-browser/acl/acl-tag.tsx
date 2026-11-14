@@ -1,5 +1,5 @@
-import { Button } from '../../../shared/components/button/button.js';
-import { useId, useState } from 'react';
+import { Button } from '../../../shared/primitives/button/button.js';
+import { useId, useState, type RefObject } from 'react';
 import type { FileBrowserAclLevel } from '../acl-types.js';
 import { levelLabel, type AclText } from './acl-labels.js';
 
@@ -7,10 +7,12 @@ export function AclTag({
   level,
   text,
   onManage,
+  triggerRef,
 }: {
   level: FileBrowserAclLevel;
   text: AclText;
   onManage: () => void;
+  triggerRef: RefObject<HTMLButtonElement | null>;
 }) {
   const [open, setOpen] = useState(false);
   const id = useId();
@@ -28,6 +30,7 @@ export function AclTag({
       }}
     >
       <button
+        ref={triggerRef}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.preventDefault();
@@ -50,6 +53,7 @@ export function AclTag({
           </p>
           {level === 'manage' ? (
             <Button
+              className="ov-file-browser-acl__manage"
               size="small"
               type="default"
               htmlType="button"

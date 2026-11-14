@@ -1,7 +1,13 @@
 import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type { FilePreviewEditing } from '../../components/file-preview/index.js';
-import { isMemoryUri, stripMemoryFieldsTrailer } from './fs-memory-fields.js';
+import { isExperienceFile } from './experience-data.js';
+import {
+  isSummaryUri,
+  isSystemUri,
+  supportsFileHistory,
+} from './preview-policy.js';
+import { readFileContent } from './fs-read-content.js';
 
 const EDITABLE_TEXT = /\.(?:md|json|jsonl|txt|yaml|yml)$/i;
 
@@ -12,34 +18,54 @@ export function createFileEditing(
   name: string,
   options: OvRequestOptions,
   onSave?: () => void,
+  isWiki = false,
 ): FilePreviewEditing | undefined {
   if (
     !EDITABLE_TEXT.test(name) ||
-    /(?:^viking:\/\/system(?:\/|$)|\/(?:experiences|\.abstract\.md|\.overview\.md)(?:\/|$))/i.test(
-      uri,
-    )
+    isSystemUri(uri) ||
+    isSummaryUri(uri) ||
+    isExperienceFile(uri)
   )
     return undefined;
+  let wiki = isWiki;
+  const canSnapshot = supportsFileHistory(uri);
   return {
-    loadContent: async () => {
-      const content = await client.request<string>({
-        method: 'GET',
-        path: OV_PATHS.contentRead,
-        query: { uri, limit: -1 },
-        options,
-      });
-      if (typeof content !== 'string')
-        throw new TypeError('Invalid file content');
-      // The server replaces only the body of memory files and preserves their metadata.
-      return isMemoryUri(uri) ? stripMemoryFieldsTrailer(content) : content;
+    get promptForVersionNote() {
+      return !wiki && canSnapshot;
     },
-    save: async (content) => {
+    loadContent: async () => {
+      const result = await readFileContent(client, uri, options, -1, wiki);
+      wiki = result.wiki;
+      return result.content;
+    },
+    save: async (content, note) => {
+      const shouldCreateVersion = !wiki && canSnapshot && note !== undefined;
       await client.request({
         method: 'POST',
         path: OV_PATHS.contentWrite,
-        body: { uri, content, mode: 'replace' },
+        body: {
+          uri,
+          content,
+          mode: 'replace',
+          edit_source: 'manual',
+          // The native write contract preserves and updates Wiki conflict history.
+          ...(wiki ? { resolve_conflicts: true } : {}),
+        },
         options,
       });
+      if (!shouldCreateVersion) return;
+      try {
+        const result = await client.request<{ result: 'created' | 'noop' }>({
+          method: 'POST',
+          path: OV_PATHS.snapshotCommit,
+          body: { message: note || `Update ${name}`, paths: [uri] },
+          options,
+        });
+        if (result?.result === 'created') return;
+      } catch {
+        // The body write already succeeded; report only the missing snapshot.
+      }
+      return { warning: 'version-not-created' };
     },
     onSave,
   };

@@ -560,11 +560,19 @@ def test_summary_text_returns_text_only(protocol):
     assert tool_protocol(protocol).summary_text(response) == "Summary text"
 
 
-async def test_new_openviking_sessions_turn_off_working_memory():
+@pytest.mark.parametrize("version", ["0.4.23", "0.5.0", "0.5.4"])
+async def test_gateway_disables_working_memory_without_replacing_user_policy(version):
     client = VikingClient(None, "http://unused", "0.4.16")
     bodies = []
 
     async def request(method, path, key, body=None, timeout=30):
+        if path == "/health":
+            return {
+                "version": version,
+                "role": "user",
+                "account_id": "tenant",
+                "user_id": "alice",
+            }
         bodies.append(body)
         return {}
 
@@ -572,11 +580,17 @@ async def test_new_openviking_sessions_turn_off_working_memory():
     await client.create_session("key", "session")
     await client.create_session("key", "session", ["events"])
     await client.create_session("key", "session", [])
-    assert bodies[0]["memory_policy"] == {"working_memory": {"enabled": False}}
-    assert bodies[1]["memory_policy"] == {
-        "working_memory": {"enabled": False},
-        "memory_types": ["events"],
-    }
+    await client.commit("key", "session", keep=2)
+    if version == "0.4.23":
+        assert bodies[0]["memory_policy"] == {"working_memory": {"enabled": False}}
+        assert bodies[1]["memory_policy"]["working_memory"] == {"enabled": False}
+        assert bodies[3] == {"keep_recent_count": 2}
+    else:
+        # An absent session policy lets OpenViking resolve the user's policy.
+        assert "memory_policy" not in bodies[0]
+        assert bodies[1]["memory_policy"] == {"memory_types": ["events"]}
+        assert bodies[3] == {"keep_recent_count": 2, "enable_working_memory": False}
+    assert bodies[1]["memory_policy"]["memory_types"] == ["events"]
     assert bodies[2]["memory_policy"]["memory_types"] == []
 
 

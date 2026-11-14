@@ -1,0 +1,68 @@
+.ov-dropdown.ov-popover {
+  inset: auto;
+  margin: 0;
+  z-index: calc(var(--ov-ui-modal-z-index, 1001) + 1);
+  width: 200px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 16px);
+  padding: 6px;
+  border-color: var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
+  border-radius: 12px;
+  overflow: auto;
+  box-shadow:
+    0 8px 12px
+      color-mix(
+        in srgb,
+        var(--ov-ui-color-shadow, var(--ov-ui-shadow-default)) 10%,
+        transparent
+      ),
+    0 2px 3px
+      color-mix(
+        in srgb,
+        var(--ov-ui-color-shadow, var(--ov-ui-shadow-default)) 6%,
+        transparent
+      );
+}
+.ov-dropdown__menu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ov-dropdown__item {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  line-height: 22px;
+  text-align: start;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.ov-dropdown__item:hover:not(:disabled),
+.ov-dropdown__item:focus-visible {
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+}
+.ov-dropdown__item:focus-visible {
+  outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  outline-offset: -2px;
+}
+.ov-dropdown__item:disabled {
+  color: var(--ov-ui-color-text-disabled, var(--ov-ui-text-disabled-default));
+  cursor: not-allowed;
+}
+.ov-dropdown__separator {
+  width: 100%;
+  margin: 0;
+  border: 0;
+  border-top: 1px solid
+    var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+}

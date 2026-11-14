@@ -211,6 +211,15 @@ function isMissingSessionState(error) {
 // Main
 // ---------------------------------------------------------------------------
 
+// last_assistant_message is the text of the turn's final message, which
+// follows its last tool result; the transcript writes each block as a line.
+function holdsAnswer(turns, answer) {
+  const start = turns.findLastIndex((turn) => turn.role === "user") + 1;
+  const text = turns.slice(start).flatMap((turn) => turn.parts)
+    .filter((part) => part.type === "text").map((part) => part.text).join("");
+  return text.replace(/\s+/g, "") === answer.replace(/\s+/g, "");
+}
+
 async function main({ cfg, input, cwd }) {
   const transcriptPath = input.transcript_path;
   const sessionId = input.session_id || "unknown";
@@ -247,6 +256,16 @@ async function main({ cfg, input, cwd }) {
   const state = await loadState(sessionId);
   await reconcileKnownFailedCapture(cfg, sessionId, ovSessionId, state);
   const newTurns = allTurns.slice(state.capturedTurnCount);
+  // Claude Code writes the transcript asynchronously, so at Stop it may not
+  // hold the final answer yet. Taking it from the payload is left out of the
+  // cursor: should the transcript catch up later, the answer goes out twice
+  // rather than not at all.
+  const finalAnswer = cfg.captureLastAssistantOnStop
+    ? String(input.last_assistant_message || "").trim()
+    : "";
+  if (finalAnswer && !holdsAnswer(allTurns, finalAnswer)) {
+    newTurns.push({ role: "assistant", text: finalAnswer, parts: [{ type: "text", text: finalAnswer }] });
+  }
   const captureTurns = cfg.captureAssistantTurns
     ? newTurns
     : newTurns.filter(turn => turn.role === "user");

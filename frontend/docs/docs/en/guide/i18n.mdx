@@ -1,0 +1,39 @@
+# Internationalization
+
+Business components and blocks ship with Simplified Chinese and English text, switched through `locale`. No translation library such as i18next is required.
+
+## Setting the language
+
+`locale` accepts `'zh-CN' | 'en-US'`. The first value found in this order is used:
+
+1. The component's own `locale`
+2. The `locale` of the block it belongs to
+3. The `locale` of the nearest `OpenVikingProvider`; a nested Provider that omits it inherits from the outer one
+4. The default, `'en-US'`
+
+Set `locale` once on the `OpenVikingProvider` at the root of your app and omit it elsewhere. A block's language applies to its built-in views and to the slots you pass in.
+
+## Overriding text
+
+The `labels` prop of every business component and block changes individual strings:
+
+- A field you pass takes priority over the default text of the current language.
+- An omitted or `undefined` field uses the default text of the current language and follows language changes.
+- An empty string is kept as an explicit override, so that text renders empty.
+- Nested objects are merged key by key, so overriding one field keeps the other defaults.
+
+Business content, slots and callback messages are supplied by you and are not translated by `locale`.
+
+## Switching language
+
+Switching language only updates interface text. It does not resend requests or clear records, sessions or input drafts. Server content, original error messages, AI replies and user input are kept as they are and are never translated.
+
+## Examples
+
+### Language inheritance
+
+Change the three selects, then submit `ov read` to compare the language of the error message. Requests, records, drafts and server text stay unchanged across the switch.
+
+```tsx file="../../_demos/locale-inheritance.tsx" preview
+
+```

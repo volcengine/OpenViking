@@ -43,6 +43,8 @@ from openviking.utils.git_auth import (
     parse_git_http_auth_config,
     raise_git_auth_error,
 )
+from openviking.utils.network_guard import RequestValidator
+from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.utils.logger import get_logger
 
 from .base import DataAccessor, LocalResource, SourceType
@@ -124,6 +126,7 @@ class GitAccessor(DataAccessor):
             branch = None
         auth_config = parse_git_http_auth_config(kwargs.get("auth_config"), source_str)
         git_env = None
+        request_validator = kwargs.get("request_validator")
         used_git_clone = False
         # Exact immutable revision fetched. Branch tracking resolves this from
         # the remote/local HEAD; commit-only imports use the supplied commit.
@@ -150,6 +153,7 @@ class GitAccessor(DataAccessor):
                     branch=branch,
                     commit=commit,
                     env=git_env,
+                    request_validator=request_validator,
                 )
                 used_git_clone = True
             elif source_str.startswith(("http://", "https://", "git://", "ssh://")):
@@ -186,7 +190,10 @@ class GitAccessor(DataAccessor):
                             download_ref,
                             temp_local_dir,
                             github_token=github_token,
+                            request_validator=request_validator,
                         )
+                    except PermissionDeniedError:
+                        raise
                     except Exception as zip_exc:
                         logger.warning(
                             f"[GitAccessor] GitHub ZIP download failed, falling back to git clone: {zip_exc}"
@@ -207,14 +214,20 @@ class GitAccessor(DataAccessor):
                             branch=branch,
                             commit=commit,
                             env=git_env,
+                            request_validator=request_validator,
                         )
                         used_git_clone = True
                 elif self._can_use_gitlab_zip(repo_url) and auth_config is None:
                     # Try GitLab ZIP API first, fall back to git clone
                     try:
                         local_dir, repo_name = await self._gitlab_zip_download(
-                            repo_url, download_ref, temp_local_dir
+                            repo_url,
+                            download_ref,
+                            temp_local_dir,
+                            request_validator=request_validator,
                         )
+                    except PermissionDeniedError:
+                        raise
                     except Exception as zip_exc:
                         logger.warning(
                             f"[GitAccessor] GitLab ZIP download failed, falling back to git clone: {zip_exc}"
@@ -235,6 +248,7 @@ class GitAccessor(DataAccessor):
                             branch=branch,
                             commit=commit,
                             env=git_env,
+                            request_validator=request_validator,
                         )
                         used_git_clone = True
                 else:
@@ -245,6 +259,7 @@ class GitAccessor(DataAccessor):
                         branch=branch,
                         commit=commit,
                         env=git_env,
+                        request_validator=request_validator,
                     )
                     used_git_clone = True
             else:
@@ -366,6 +381,7 @@ class GitAccessor(DataAccessor):
         env = overlay_parser_subprocess_env(
             ParserNetworkContext(ParserNetworkOperation.GIT_COMMAND, repo_url),
             env,
+            request_validator=kwargs.get("request_validator"),
         )
         return await self._git_ls_remote_head(repo_url, branch, env)
 
@@ -514,6 +530,15 @@ class GitAccessor(DataAccessor):
         path_parts = [p for p in urlparse(url).path.split("/") if p]
         return len(path_parts) == 2
 
+    @staticmethod
+    def _write_source_marker(directory: Path, url: str) -> None:
+        """Replace repository-provided metadata without following links."""
+        marker = directory / ".git_source_repo"
+        marker.unlink(missing_ok=True)
+        # Exclusive creation also rejects a symlink inserted after unlink.
+        with marker.open("x", encoding="utf-8") as file:
+            file.write(url)
+
     async def _git_clone(
         self,
         url: str,
@@ -521,6 +546,7 @@ class GitAccessor(DataAccessor):
         branch: Optional[str] = None,
         commit: Optional[str] = None,
         env: Optional[dict[str, str]] = None,
+        request_validator: Optional[RequestValidator] = None,
     ) -> str:
         """Clone a git repository into target_dir; return the repo name."""
         name = self._get_repo_name(url)
@@ -530,6 +556,7 @@ class GitAccessor(DataAccessor):
         network_env = overlay_parser_subprocess_env(
             ParserNetworkContext(ParserNetworkOperation.GIT_COMMAND, url),
             env,
+            request_validator=request_validator,
         )
 
         clone_args = [
@@ -588,12 +615,7 @@ class GitAccessor(DataAccessor):
                 env=env,
             )
 
-        # Add .git_source_repo marker file with original URL (for consistency)
-        def _write_marker():
-            marker_file = Path(target_dir) / ".git_source_repo"
-            marker_file.write_text(url, encoding="utf-8")
-
-        await asyncio.to_thread(_write_marker)
+        await asyncio.to_thread(self._write_source_marker, Path(target_dir), url)
 
         return name
 
@@ -649,6 +671,7 @@ class GitAccessor(DataAccessor):
         target_dir: str,
         *,
         github_token: Optional[str] = None,
+        request_validator: Optional[RequestValidator] = None,
     ) -> Tuple[Path, str]:
         """Download a GitHub repo as a ZIP archive and extract it."""
         repo_name = self._get_repo_name(repo_url)
@@ -680,11 +703,18 @@ class GitAccessor(DataAccessor):
 
             req = urllib.request.Request(zip_url, headers=headers)
             context = ParserNetworkContext(ParserNetworkOperation.GIT_ARCHIVE, zip_url)
-            with open_parser_url(context, req, timeout=1800) as resp, open(zip_path, "wb") as f:
+            with (
+                open_parser_url(
+                    context, req, timeout=1800, request_validator=request_validator
+                ) as resp,
+                open(zip_path, "wb") as f,
+            ):
                 shutil.copyfileobj(resp, f)
 
         try:
             await asyncio.to_thread(_download)
+        except PermissionDeniedError:
+            raise
         except Exception as exc:
             raise RuntimeError(f"Failed to download GitHub ZIP {zip_url}: {exc}")
 
@@ -730,12 +760,7 @@ class GitAccessor(DataAccessor):
 
         content_dir = await asyncio.to_thread(_find_content_dir)
 
-        # Add .git_source_repo marker file with original URL
-        def _write_marker():
-            marker_file = content_dir / ".git_source_repo"
-            marker_file.write_text(repo_url, encoding="utf-8")
-
-        await asyncio.to_thread(_write_marker)
+        await asyncio.to_thread(self._write_source_marker, content_dir, repo_url)
 
         logger.info(f"[GitAccessor] GitHub ZIP extracted to {content_dir} ({repo_name})")
         return content_dir, repo_name
@@ -745,6 +770,8 @@ class GitAccessor(DataAccessor):
         repo_url: str,
         branch: Optional[str],
         target_dir: str,
+        *,
+        request_validator: Optional[RequestValidator] = None,
     ) -> Tuple[Path, str]:
         """Download a GitLab repo as a ZIP archive and extract it."""
         repo_name = self._get_repo_name(repo_url)
@@ -774,11 +801,18 @@ class GitAccessor(DataAccessor):
 
             req = urllib.request.Request(zip_url, headers=headers)
             context = ParserNetworkContext(ParserNetworkOperation.GIT_ARCHIVE, zip_url)
-            with open_parser_url(context, req, timeout=1800) as resp, open(zip_path, "wb") as f:
+            with (
+                open_parser_url(
+                    context, req, timeout=1800, request_validator=request_validator
+                ) as resp,
+                open(zip_path, "wb") as f,
+            ):
                 shutil.copyfileobj(resp, f)
 
         try:
             await asyncio.to_thread(_download)
+        except PermissionDeniedError:
+            raise
         except Exception as exc:
             raise RuntimeError(f"Failed to download GitLab ZIP {zip_url}: {exc}")
 
@@ -824,12 +858,7 @@ class GitAccessor(DataAccessor):
 
         content_dir = await asyncio.to_thread(_find_content_dir)
 
-        # Add .git_source_repo marker file with original URL
-        def _write_marker():
-            marker_file = content_dir / ".git_source_repo"
-            marker_file.write_text(repo_url, encoding="utf-8")
-
-        await asyncio.to_thread(_write_marker)
+        await asyncio.to_thread(self._write_source_marker, content_dir, repo_url)
 
         logger.info(f"[GitAccessor] GitLab ZIP extracted to {content_dir} ({repo_name})")
         return content_dir, repo_name

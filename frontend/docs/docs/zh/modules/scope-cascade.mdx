@@ -1,35 +1,82 @@
 # ScopeCascade 级联选择
 
-可选 `locale: 'zh-CN' | 'en-US'` 覆盖最近的模块或 Provider；均未配置时默认 `en-US`。已有 `labels` 可逐项覆盖。业务内容仍由宿主提供。
+依次选择知识库、数据空间和用户的三级选择器：上级变化时，下级清空并重新加载，三级都选中后通过 `onChange` 返回完整身份。
 
-直接向 `ScopeCascade` 传入三个 API 适配函数。请求、级联、取消、重试和各级订阅均内置，不需要创建控制器或调用 Hook。
+## 何时使用
 
-## 基础用法
+- 需要依次选择知识库、数据空间和用户，再按选中的身份加载业务数据时。
+- 数据来自宿主自己的接口时：组件通过三个加载函数取数，请求、级联、取消和重试都由组件管理。它不请求 OpenViking 原生 API，因此没有 `requestOptions`，也不需要 `OpenVikingProvider`；其他区块的请求配置见[区块概览](../modules/)。
+- 需要自己管理各级数据、自定义面板或固定某一级时，改用 [ScopeSwitcher](../components/scope-switcher)。
+
+## 引入
+
+```tsx
+import { ScopeCascade } from '@openviking/react/modules/scope-cascade';
+import '@openviking/react/modules/scope-cascade/style.css';
+```
+
+## 代码演示
+
+### 基础用法
+
+切换知识库，数据空间和用户会清空并重新加载。示例使用延迟 450 ms 的模拟接口，挂载后每一级自动选中第一个选项。
 
 ```tsx file="../../_demos/scope-cascade-basic.tsx" preview
 
 ```
 
-三个接口返回 `Promise<readonly ScopeSwitcherOption[]>`，选项为 `{ id, label, icon?, description?, disabled? }`。鉴权、接口地址和响应映射由适配函数负责。保持函数引用稳定；适配函数变化会取消旧请求并重置全部选择。账号切换可用组件 `key` 隔离。
+### 选择结果
 
-默认视图内置三个层级图标：库用 `LibraryIcon`（按 id 取色的圆形渐变块），空间与用户用 `SpaceIcon`、`UserIcon`。适配函数返回的选项没有 `icon` 时自动补上本级默认图标，返回了 `icon` 就照用宿主的。
-
-| 接口            | 参数                                                      |
-| --------------- | --------------------------------------------------------- |
-| `loadLibraries` | `signal: AbortSignal`                                     |
-| `loadSpaces`    | `libraryId: string, signal: AbortSignal`                  |
-| `loadUsers`     | `libraryId: string, spaceId: string, signal: AbortSignal` |
-
-挂载后加载库列表，每级默认选择第一个可用项并继续加载下一级。切换上级时先清空下游，旧请求即使忽略 signal 也不能覆盖新结果。各级内部独立订阅，错误只影响本级；默认视图封装本地搜索、加载、空态、错误与重试。当前加载完整列表，不提供服务端搜索或分页。
-
-## 接收身份变化
+三级都选中时 `onChange` 返回完整身份，身份不完整时返回 `null`；示例把收到的结果显示在下方，宿主在结果非空时再加载业务数据。
 
 ```tsx file="../../_demos/scope-cascade-selection.tsx" preview
 
 ```
 
-`onChange(selection)` 返回完整的 `{ libraryId, spaceId, userId }`。初始化、上级切换或接口重置导致身份不完整时返回 `null`；同一身份的刷新不重复上报。宿主在非空时加载对应业务数据，不需要订阅内部状态。
+## API
 
-## 属性
+### ScopeCascade
 
-三个 `load*` 接口必填。`onChange` 可选，`levelNames` 按库、空间、用户顺序指定名称；`labels` 设置加载、搜索、空态和错误文案，`retryLabel` 设置重试按钮文案。`className`、`style` 等 HTML 属性透传给布局容器。引入 `@openviking/react/modules/scope-cascade/style.css` 使用默认样式。
+| 参数             | 说明                                                                                                               | 类型                                                                                                   | 默认值                                                                             |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
+| loadLibraries    | 加载知识库列表，挂载时调用；`signal` 在请求过期时中止                                                              | `(signal: AbortSignal) => Promise<readonly ScopeSwitcherOption[]>`                                     | 必填                                                                               |
+| loadSpaces       | 加载知识库下的数据空间，选中知识库后调用                                                                           | `(libraryId: string, signal: AbortSignal) => Promise<readonly ScopeSwitcherOption[]>`                  | 必填                                                                               |
+| loadUsers        | 加载数据空间下的用户，选中数据空间后调用                                                                           | `(libraryId: string, spaceId: string, signal: AbortSignal) => Promise<readonly ScopeSwitcherOption[]>` | 必填                                                                               |
+| levelNames       | 三级的名称，依次为知识库、数据空间、用户；未选中时显示在触发器上，同时是触发器的无障碍名称                         | `readonly [string, string, string]`                                                                    | `zh-CN`：`['知识库', '数据空间', '用户']`；`en-US`：`['Library', 'Space', 'User']` |
+| onChange         | 选择变化时触发，三级都选中时参数为 `ScopeCascadeSelection`，身份不完整时为 `null`；同一身份不重复触发              | `(selection: ScopeCascadeSelection \| null) => void`                                                   | -                                                                                  |
+| retryLabel       | 加载失败后重试按钮的文案                                                                                           | `string`                                                                                               | `zh-CN`：`'重试'`；`en-US`：`'Retry'`                                              |
+| slots            | 替换渲染异常的展示内容，见[错误展示插槽](../guide/getting-started#自定义错误展示)                                  | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }`                                  | -                                                                                  |
+| labels           | 覆盖界面文案：加载中 `loading`、搜索框占位 `searchPlaceholder`、无选项 `empty`、无匹配 `noMatch`、加载失败 `error` | `ScopeSwitcherLabels`                                                                                  | -                                                                                  |
+| locale           | 界面语言，规则见[国际化](../guide/i18n)                                                                            | `'zh-CN' \| 'en-US'`                                                                                   | 继承上级，默认 `'en-US'`                                                           |
+| className、style | 外观与布局，其余 HTML 属性透传到根元素                                                                             | HTML 属性                                                                                              | -                                                                                  |
+
+### ScopeSwitcherOption
+
+加载函数返回的选项。
+
+| 参数        | 说明                                                                                       | 类型        | 默认值  |
+| ----------- | ------------------------------------------------------------------------------------------ | ----------- | ------- |
+| id          | 选项的唯一标识；上级的 `id` 会传给下一级的加载函数，三级的 `id` 组成 `onChange` 返回的身份 | `string`    | 必填    |
+| label       | 显示文本，搜索时按它过滤并高亮匹配的片段                                                   | `string`    | 必填    |
+| icon        | 选项行首的图标，省略时使用本级默认图标                                                     | `ReactNode` | -       |
+| description | 显示在标签下方的次要说明                                                                   | `string`    | -       |
+| disabled    | 禁用该选项：置灰、不可点击，也不会被自动选中                                               | `boolean`   | `false` |
+
+### ScopeCascadeSelection
+
+| 参数      | 说明              | 类型     | 默认值 |
+| --------- | ----------------- | -------- | ------ |
+| libraryId | 选中的知识库 id   | `string` | 必填   |
+| spaceId   | 选中的数据空间 id | `string` | 必填   |
+| userId    | 选中的用户 id     | `string` | 必填   |
+
+## 注意
+
+- 加载函数需要保持引用稳定，例如定义在组件外，或用 `useCallback` 包裹。任一函数的引用变化，都会取消进行中的请求、清空全部选择并从知识库重新加载。
+- 切换账号时，给组件设置 `key={accountId}`，让选择状态一起重置。
+- 挂载后先加载知识库，每一级自动选中第一个未禁用的选项，再加载下一级。上级没有选中项时，下级保持禁用；某一级没有可选项时，下级保持禁用，`onChange` 返回 `null`。
+- 上级变化时，下级先清空再重新加载。迟到的旧响应即使加载函数忽略了 `signal`，也会被丢弃。
+- 某一级加载失败时，只有该级显示错误和重试按钮，下级保持禁用；点击重试只重新加载该级。
+- 每一级一次返回完整列表，不支持服务端搜索和分页。超过 10 项时显示搜索框，在本地按选项文字过滤。
+- 选项没有 `icon` 时，知识库显示 [LibraryIcon](../components/icons)（按 `id` 取色的圆形渐变色块），数据空间和用户分别显示 `SpaceIcon`、`UserIcon`；加载函数返回了 `icon` 就使用它。
+- 类型从 `@openviking/react/modules/scope-cascade` 导出：`ScopeCascadeProps`、`ScopeCascadeSelection`，以及三个加载函数合在一起的 `ScopeCascadeApi`；`ScopeSwitcherOption` 和 `ScopeSwitcherLabels` 从 `@openviking/react/components/scope-switcher` 导出。包根入口只导出组件和 `ScopeCascadeProps`。

@@ -1,127 +1,177 @@
 # Getting started
 
-Public UI components, composed modules accept optional `locale: 'zh-CN' | 'en-US'`. Local Props override the nearest module or Provider; without a configured language, they use `en-US`. Existing `labels` override individual fields; omitted fields follow the current locale and update when it changes. Hosts still provide business content, slots and callback messages.
+`@openviking/react` is the React component library for OpenViking. It provides [business components](../components/) such as a file tree, file preview, command console, conversation, login forms and dashboards, plus [blocks](../modules/) that load their own data.
 
-OpenViking UI provides React foundations for building AI application interfaces on OpenViking, the context database for AI agents. The workspace includes Rslib builds, bilingual documentation, layered directory conventions, and scoped styles. Applications provide business UI, data, authentication, and workflow orchestration.
-
-The package provides FileTree, FilePreview, Tui, ScopeSwitcher and AgentConnect views, five file-type icons, and two business module placeholders. FileTree, FilePreview and Tui are implemented against their contracts, ScopeSwitcher is a stateless layout, and AgentConnect still renders a fixed-size shell. See the [component overview](../components/) and [module overview](../modules/) for their current scope. Public business Hooks are not implemented yet.
-
-## Run locally
-
-Use Node.js 22.12 or newer. From the repository root:
+## Install
 
 ```bash
-cd frontend
-npm ci
-npm run dev
+npm install @openviking/react
 ```
 
-Open the `/ui/` address printed by Rspress. Simplified Chinese uses `/ui/`; English uses `/ui/en/`. The navigation language menu switches between corresponding pages.
+`react` and `react-dom` are peer dependencies, at `^18.2.0 || ^19.0.0`. The package ships ESM entries only.
 
-The workspace development plugin starts Rslib watch before the documentation server. Documentation examples consume built public exports, rather than source aliases. React and ReactDOM are peer dependencies, supporting React 18.2 and React 19; the documentation application uses React 19.
+FilePreview and VikingBot render with the optional peer dependency `@ark-design/ui`, and so do FileBrowser and Console, which contain them. For the versions and companion packages, see the Import section of the [FilePreview](../components/file-preview) and [VikingBot](../components/viking-bot) pages.
 
-## Organize application code
+## Import styles
 
-- `packages/react/src/components/`: reusable views that receive prepared data through props and report intent through callbacks.
-- `packages/react/src/modules/`: two importable placeholder components; business Hooks and composed interactions will follow.
-- `packages/react/src/hooks/` and `utils/`: internal shared logic, without public subpaths.
-- `docs/docs/en/` and `docs/docs/zh/`: corresponding documentation pages; shared runnable examples belong in `docs/docs/_demos/`.
+JavaScript imports do not load CSS automatically, so import the stylesheet you need:
 
-Keep application-specific workflows and authentication in the application layer. Module Hooks load data through the shared Client; components do not fetch business data or depend on application routing.
+```ts
+// The whole library: all business components, blocks and the theme
+import '@openviking/react/style.css';
 
-## Public entries
+// All business components, or all blocks
+import '@openviking/react/components/style.css';
+import '@openviking/react/modules/style.css';
 
-The root `@openviking/react` entry currently exports `FileTree`, `Tui`, `ScopeSwitcher`, `AgentConnect`, and the two business module placeholders with their main Props types. `FilePreview` is available from the `components/file-preview` subpath only, because its types depend on the optional `@ark-design/ui`. Subtypes — row types, option types, handles and label bags — always come from the subpaths. `@openviking/react/icons` provides five file-type icons.
+// One business component or block
+import '@openviking/react/components/file-tree/style.css';
+import '@openviking/react/modules/file-browser/style.css';
+```
 
-There are no aggregate `components` or `modules` JavaScript entries. Business placeholders use individual `modules/<module>` entries:
+Each entry works on its own and already includes the styles of the components it uses. Icons (`@openviking/react/icons`) need no stylesheet.
+
+## Use a business component
+
+A business component is a plain view: you pass in the data, user actions come back through callbacks, and the component sends no requests. This FileTree renders the rows you give it as a file tree:
 
 ```tsx
+import { useState } from 'react';
+import {
+  FileTree,
+  type FileTreeRow,
+} from '@openviking/react/components/file-tree';
+import '@openviking/react/components/file-tree/style.css';
+
+const rows: FileTreeRow[] = [
+  {
+    kind: 'entry',
+    id: 'viking://resources',
+    uri: 'viking://resources',
+    name: 'resources',
+    type: 'directory',
+    depth: 0,
+    expanded: true,
+  },
+  {
+    kind: 'entry',
+    id: 'viking://resources/intro.md',
+    uri: 'viking://resources/intro.md',
+    name: 'intro.md',
+    type: 'file',
+    depth: 1,
+  },
+];
+
+export function Tree() {
+  const [selectedId, setSelectedId] = useState<string>();
+  return (
+    <div style={{ height: 320 }}>
+      <FileTree
+        rows={rows}
+        selectedId={selectedId}
+        search={false}
+        refresh={false}
+        operations={{ select: async (row) => setSelectedId(row.id) }}
+      />
+    </div>
+  );
+}
+```
+
+FileTree is as tall as its parent, so give the wrapper a height. The example provides no search or refresh implementation, so `search={false}` and `refresh={false}` hide those two entries.
+
+Import rules:
+
+- Import a component and its types from `@openviking/react/components/<name>`, for example `file-tree`; the Import section of each component page gives its exact path.
+- The root entry `@openviking/react` also exports the component and its main Props type, such as `FileTree` and `FileTreeProps`; all other types come from the subpath only.
+- FilePreview is the exception: it depends on the optional peer `@ark-design/ui`, so it is exported only from the `@openviking/react/components/file-preview` subpath and not from the root entry.
+
+## Use a block
+
+FileBrowser and Console read the OpenViking native API themselves, so place them inside `OpenVikingProvider`, which supplies the service address and credentials. This example uses FileBrowser:
+
+```tsx
+import { OpenVikingProvider } from '@openviking/react/client';
 import { FileBrowser } from '@openviking/react/modules/file-browser';
 import '@openviking/react/modules/file-browser/style.css';
 
-<FileBrowser locale="en-US" />;
-```
-
-Each module's props are settled — request options, controlled state, callbacks, slots and copy — though the placeholder component itself still consumes only `className`, `style` and one label. None of them requires a Provider yet. See [Modules](../modules/) for runnable examples and the full props tables.
-
-Business modules will combine data-loading Hooks with composed views around focused capabilities. Module entries export components and necessary types; data and state Hooks remain internal. Authentication, account scope, routing, permissions, and complete page flows remain with the host. The package exposes no headless business Hooks.
-
-The planned capabilities focus on the personal terminal: `file-browser` combines the directory, search, and preview into one module that coordinates resource selection, result navigation, content loading, and refreshes. Hosts can optionally control the current resource. `console` combines the conversation view and TUI in one panel, coordinating mode switching, the toolbar, and shared context while preserving each mode's session and command state. Agent connection remains a separate capability. Hosts coordinate layout, navigation, and interactions between modules. Product onboarding, resource and Skill import flows, and synchronization settings remain with the host. Experience dashboards and session content attach through the file browser's preview extensions; administration is outside this scope. These interactions are planned; the current module components render placeholders only.
-
-Request configuration is provided through `OpenVikingProvider` from `@openviking/react/client`: `baseURL` plus identity fields (`apiKey`, `accountId`, `userId`, `resourceId`), with the Client assembling the headers. The request client already ships as the `@openviking/react/client` subpath: `createOvClient` over `fetch`, plus `OvRequestOptions`, `OvClient` and `OvClientError`. Module views can override individual fields through `requestOptions`; precedence is local options, then the nearest Provider, then library defaults. An empty `baseURL` means same-origin requests. A standard API needs no per-module Adapter. Hosts adapt nonstandard gateways at the shared request boundary. Data and state Hooks are internal, with no headless public API.
-
-## Styling
-
-Styles use stable class names prefixed with `ov-` and the `--ov-ui-` variable prefix. They do not apply a global reset. JavaScript imports do not load CSS automatically; choose the full, category, or individual stylesheet as needed:
-
-```ts
-import '@openviking/react/style.css';
-// Or choose @openviking/react/components/style.css
-// or @openviking/react/modules/style.css.
-// Individual entries: @openviking/react/<category>/<module>/style.css.
-```
-
-Rslib emits ESM JavaScript, TypeScript declarations, and CSS into `packages/react/dist/`. Each public stylesheet works independently. Module styles currently cover their placeholders; as composed views land, they must include their component dependencies.
-
-### Theming
-
-Colours come from the package-level baseline `--ov-ui-color-*` (declared in `packages/react/src/theme.css`), aligned with the OpenViking console design system. Every component variable derives from the baseline, so overriding it re-skins everything:
-
-```css
-.my-workbench {
-  --ov-ui-color-primary: #5252ff;
-  --ov-ui-color-bg-5: #f1f2f9;
-  --ov-ui-color-border-2: #e1e4f2;
+export function Browser({ apiKey }: { apiKey: string }) {
+  return (
+    <OpenVikingProvider baseURL="https://ov.example.com" apiKey={apiKey}>
+      <div style={{ height: 600 }}>
+        <FileBrowser />
+      </div>
+    </OpenVikingProvider>
+  );
 }
 ```
 
-Dark mode keys off the `.dark` class a host puts on `<html>`, never `prefers-color-scheme` — the system preference can disagree with the theme the host renders. The baseline ships a dark set, so switching `.dark` is enough; override the whole set for exact colours.
+- `baseURL` is the service address without `/api/v1`.
+- FileBrowser is as tall as its parent, so give its wrapper a height.
+- FileBrowser previews file content with the optional peer dependency `@ark-design/ui`, so install it first; see Install above.
+- Your app handles sign-in, account scope and routing.
+- For the other identity fields, `requestOptions` and the rules of each block, see [Blocks](../modules/).
 
-To adjust a single component, override its `--ov-ui-<component>-*` variables or target a class directly:
+## Custom error display
+
+FilePreview, CommandConsole, VikingBot and its message list, composer and interaction form, both dashboards, and the FileBrowser, Console and ScopeCascade blocks support an optional `slots.errorFallback: ReactNode | ((reset: () => void) => ReactNode)`. It replaces the entire rendering-error display, so the host can supply its own `className`, `style` and interactions.
+
+```tsx
+<FileBrowser
+  slots={{
+    errorFallback: (reset) => (
+      <div className="my-error" role="alert">
+        Files are unavailable
+        <button type="button" onClick={reset}>
+          Retry display
+        </button>
+      </div>
+    ),
+  }}
+/>
+```
+
+- Omitted or `undefined`: inherits the enclosing component or block's setting; without one, the built-in regional message and “Retry display” are shown.
+- Nested regions: inherit by default; an explicit child setting takes priority. FilePreview tab `slots.errorFallback` overrides the component-level setting.
+- `null`: hides the rendering-error display. Custom content replaces the built-in message and retry button.
+
+A render function receives the failed region’s `reset` action. Calling it clears that region’s error state and renders it again, preserving state outside the boundary without explicitly reissuing business requests. If the cause persists, the fallback appears again. Inherited functions receive the reset action of the nested region that failed.
+
+Changing the slot updates failed displays without retrying or clearing state outside the boundary. The slot applies only to rendering exceptions; ordinary request failures retain each component's existing error-state options. The error boundary itself remains internal.
+
+## Theming
+
+Components read their colors from the `--ov-ui-color-*` variables. The library does not define these variables itself: set them on your app root or any ancestor element and the components use your values; when they are unset, the components use built-in default colors.
 
 ```css
 .my-workbench {
-  --ov-ui-radius: 4px;
+  --ov-ui-color-primary: #0f766e;
+  --ov-ui-color-bg-5: #eef5f4;
+  --ov-ui-color-border-2: #d4e4e1;
 }
+```
 
+Set them on `:root` to apply them to the whole app. Component pages that have a Theme variables section list the variables that component reads.
+
+Dark mode keys off the `.dark` class on `<html>` and never reads `prefers-color-scheme`, because the system preference can disagree with the theme your app actually renders. Once `.dark` is present, the components switch to their built-in dark defaults. The variables you set apply in both light and dark mode, so redeclare them under `.dark` when you need dark-specific values:
+
+```css
+.dark .my-workbench {
+  --ov-ui-color-primary: #5eead4;
+}
+```
+
+To adjust a single component, override its `--ov-ui-<component>-*` variables. They are declared on the component's root element, so setting them on an ancestor has no effect; write the override on the component's own selector instead:
+
+```css
 .my-workbench .ov-file-tree {
   --ov-ui-file-tree-row-height: 28px;
-  width: 320px;
 }
 ```
 
-## Build and check
+## Next steps
 
-From `frontend/`:
-
-```bash
-npm run lint
-npm run typecheck
-npm test
-npm run build
-npm run preview
-```
-
-`lint` builds the library, runs Rslint's code-quality and type checks, and checks formatting with Prettier. `typecheck` checks the library, build configuration, and documentation TypeScript projects. `test` builds the library and verifies its public package entries. `build` generates the library and static site; the site output is `docs/doc_build/`.
-
-Pass files or quoted globs after `npm run lint --` to limit formatting and lint targets. Type checking still covers the configured projects. JavaScript and TypeScript files are limited to 200 lines, excluding blank and comment-only lines.
-
-## Deployment
-
-Changes under `frontend/` run the UI checks. On `main`, the existing product documentation deployment includes the UI site under `/ui/` in the same complete site artifact or storage bucket. Package publication uses a separate tag-triggered workflow; local builds and tests do not publish to npm.
-
-## Built-in copy and language changes
-
-Components and modules use local, typed English and Chinese resources with shared lightweight resolution. Translations live with their owners and do not depend on the host’s i18next instance or a translation platform. Undefined entries in existing `labels` inherit the selected language; empty strings remain explicit overrides.
-
-Standalone `useConsole` and `useFileBrowser` accept an optional `locale`, inheriting the nearest Provider and otherwise using `en-US`. Changing it updates library notices, command help and summary titles without restarting requests or clearing sessions and drafts. Server content, original error messages and AI replies keep their original text.
-
-### Language inheritance
-
-Set `locale` once on `OpenVikingProvider`; components, composed modules inherit it. A module's `locale` overrides the Provider for its built-in views and host-supplied slots. A component's explicit `locale` wins over that scope. Nested Providers inherit when omitted and override when specified. With no configured locale, the fallback is `en-US`; `labels` still override individual messages.
-
-The example uses a fixed offline service. Change the three selectors and submit `ov read` to compare generated errors. Language changes preserve requests, records, drafts and server content.
-
-```tsx file="../../_demos/locale-inheritance.tsx" preview
-
-```
+- [Business components](../components/): a summary and usage of every business component.
+- [Blocks](../modules/): `OpenVikingProvider`, `requestOptions` and each block.
+- [Internationalization](./i18n): switch languages with `locale` and override text with `labels`.

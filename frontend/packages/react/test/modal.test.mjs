@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement as h, useRef, useState, act } from 'react';
-import { Modal, FileBrowserEntries } from './helpers/internal-hooks.mjs';
+import { Modal, FileBrowserActionBar } from './helpers/internal-hooks.mjs';
 import { mount, settle } from './helpers/module-dom.mjs';
 for (const name of ['MutationObserver', 'HTMLIFrameElement', 'SVGElement'])
   globalThis[name] = window[name];
@@ -150,7 +150,7 @@ for (const removedFirst of ['Modal', 'Drawer']) {
         'div',
         null,
         showDrawer
-          ? h(FileBrowserEntries, {
+          ? h(FileBrowserActionBar, {
               key: 'entry',
               agentConnect: { apiKey: 'demo-key' },
             })

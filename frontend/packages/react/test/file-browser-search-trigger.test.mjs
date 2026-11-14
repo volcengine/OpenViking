@@ -14,7 +14,7 @@ import {
 for (const name of ['HTMLIFrameElement', 'SVGElement'])
   globalThis[name] = window[name];
 globalThis.getComputedStyle = window.getComputedStyle.bind(window);
-const path = '/api/v1/search/find';
+const find = '/api/v1/search/find';
 const scope = 'viking://resources';
 const uri = `${scope}/profile.md`;
 const requestOptions = { userId: 'search-user' };
@@ -25,10 +25,12 @@ const render = (fetch, locale = 'en-US') =>
     h(FileBrowser, { locale, rootUri: scope, requestOptions }),
   );
 const trigger = () =>
-  document.querySelector('.ov-file-browser__toolbar .ov-file-tree__search');
+  document.querySelector('.ov-file-browser__search-trigger');
 const dialog = () => document.querySelector('.ov-file-browser-search');
-const input = () => dialog().querySelector('input[name="query"]');
-const calls = (fetch) => fetch.calls.filter((call) => call.path === path);
+const input = () => dialog().querySelector('.ov-file-browser-search__input');
+const modeSwitch = () =>
+  dialog().querySelector('.ov-file-browser-search__switch');
+const calls = (fetch) => fetch.calls.filter((call) => call.path === find);
 async function open() {
   await act(async () => {
     trigger().focus();
@@ -45,20 +47,15 @@ async function type(value) {
     input().dispatchEvent(new window.Event('input', { bubbles: true }));
   });
 }
-async function submit() {
-  await act(async () =>
-    dialog()
-      .querySelector('form')
-      .dispatchEvent(
-        new window.Event('submit', { bubbles: true, cancelable: true }),
-      ),
-  );
+/** 输入之后等过防抖窗口。Waits past the debounce window after typing. */
+async function waitForDebounce() {
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 450)));
   await settle();
 }
 
-test('built-in search submits scoped queries and preserves the tree and draft across locale changes', async () => {
+test('search runs as you type, keeps the scope, and survives a locale change', async () => {
   const fetch = recordingFetch((call) =>
-    call.path === path
+    call.path === find
       ? ok({ resources: [{ uri, abstract: 'Profile result' }] })
       : ok([]),
   );
@@ -71,12 +68,15 @@ test('built-in search submits scoped queries and preserves the tree and draft ac
     await open();
     assert.equal(
       dialog().querySelector('[role="dialog"]').getAttribute('aria-label'),
-      'Search files',
+      'Search files and content',
     );
     assert.equal(document.activeElement, input());
+    assert.equal(modeSwitch(), null);
+
     await type('  profile  ');
     assert.equal(calls(fetch).length, 0);
-    await submit();
+    await waitForDebounce();
+
     assert.equal(calls(fetch).length, 1);
     assert.equal(calls(fetch)[0].init.method, 'POST');
     assert.deepEqual(calls(fetch)[0].body, {
@@ -88,24 +88,59 @@ test('built-in search submits scoped queries and preserves the tree and draft ac
       new Headers(calls(fetch)[0].init.headers).get('X-OpenViking-User'),
       'search-user',
     );
-    assert.match(dialog().querySelector('ul').textContent, /profile\.md/);
+    assert.match(
+      dialog().querySelector('.ov-file-browser-search__list').textContent,
+      /profile\.md/,
+    );
+    await act(async () => modeSwitch().click());
+    // 菜单挂在 document.body 上，不在弹窗里：弹窗为固定头部裁掉溢出，菜单若留在
+    // 里面会被裁掉大半。
+    //
+    // The menu lives on document.body, not inside the dialog: the dialog clips its
+    // overflow so the header stays put, and a menu left inside would be cut off.
+    assert.equal(
+      document.querySelectorAll('.ov-file-browser-search__menu-item').length,
+      4,
+    );
+    assert.equal(
+      dialog().querySelector('.ov-file-browser-search__menu-item'),
+      null,
+    );
+    await act(async () => modeSwitch().click());
+    assert.equal(
+      document.querySelectorAll('.ov-file-browser-search__menu-item').length,
+      0,
+    );
     assert.equal(
       view.container.querySelector('.ov-file-browser__tree-scroll').textContent,
       treeText,
     );
+
     await view.render(render(fetch, 'zh-CN'));
     assert.equal(input().value, '  profile  ');
-    assert.equal(dialog().querySelector('[type="submit"]').textContent, '搜索');
     assert.equal(calls(fetch).length, 1);
   } finally {
     await view.unmount();
   }
 });
 
-test('failed searches expose the reason and allow the same query to be submitted again', async () => {
+test('an empty input never issues a request', async () => {
+  const fetch = recordingFetch(() => ok([]));
+  const view = await mount(render(fetch));
+  try {
+    await open();
+    await type('   ');
+    await waitForDebounce();
+    assert.equal(calls(fetch).length, 0);
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('failed searches expose the reason and can retry the same query', async () => {
   let available = false;
   const fetch = recordingFetch((call) => {
-    if (call.path !== path) return ok([]);
+    if (call.path !== find) return ok([]);
     return available
       ? ok({ resources: [] })
       : new Response(
@@ -119,44 +154,55 @@ test('failed searches expose the reason and allow the same query to be submitted
   const view = await mount(render(fetch));
   try {
     await open();
-    await submit();
-    assert.equal(calls(fetch).length, 0);
     await type('profile');
-    await submit();
+    await waitForDebounce();
     assert.match(
       dialog().querySelector('[role="alert"]').textContent,
       /demo search failed/,
     );
+    assert.equal(modeSwitch(), null);
+
     available = true;
-    await submit();
+    await act(async () =>
+      [...dialog().querySelectorAll('button')]
+        .find((button) => button.textContent === 'Retry')
+        .click(),
+    );
+    await settle();
     assert.equal(calls(fetch).length, 2);
+    assert.equal(calls(fetch)[1].body.query, 'profile');
     assert.match(dialog().textContent, /No matching resources/);
+    assert.equal(modeSwitch(), null);
   } finally {
     await view.unmount();
   }
 });
 
-test('closing cancels pending search, clears the draft and ignores late results', async () => {
+test('closing cancels the pending search, clears the draft and restores focus', async () => {
   const pending = deferred();
   const fetch = recordingFetch((call) =>
-    call.path === path ? pending.promise : ok([]),
+    call.path === find ? pending.promise : ok([]),
   );
   const view = await mount(render(fetch));
   try {
     await open();
     await type('profile');
-    await submit();
+    await waitForDebounce();
     const signal = calls(fetch)[0].init.signal;
-    assert.equal(dialog().querySelector('[type="submit"]').disabled, true);
+    assert.ok(dialog().querySelector('[aria-busy="true"]'));
+    assert.equal(modeSwitch(), null);
+
     await act(async () => dialog().querySelector('.ov-modal__close').click());
     await settle();
     assert.equal(signal.aborted, true);
+
     await act(async () => pending.resolve(await ok({ resources: [{ uri }] })));
     await act(async () => new Promise((resolve) => setTimeout(resolve, 330)));
     assert.equal(document.activeElement, trigger());
+
     await open();
     assert.equal(input().value, '');
-    assert.equal(dialog().querySelector('ul'), null);
+    assert.equal(dialog().querySelector('.ov-file-browser-search__list'), null);
     assert.equal(calls(fetch).length, 1);
   } finally {
     await view.unmount();

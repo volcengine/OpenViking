@@ -1,7 +1,7 @@
 //! PathLock subsystem — native file-system-level locking protocol.
 //!
 //! This module provides exact-path and tree-path locks backed by lock files,
-//! process memory, SQLite, or Redis.
+//! process memory, SQLite, PostgreSQL, or Redis.
 //!
 //! # Architecture
 //!
@@ -18,6 +18,8 @@ mod cache_provder;
 pub mod manager;
 pub mod metrics;
 mod path;
+#[cfg(feature = "postgres")]
+pub mod postgres_provider;
 pub mod provider;
 pub mod resolver;
 pub mod sqlite_provider;
@@ -29,6 +31,8 @@ pub use codec::LockTokenCodec;
 pub use cache_provder::RedisPathLockProvider;
 pub use manager::{AutoPathLockAction, PathLockConfig, PathLockManager};
 pub use metrics::LockMetrics;
+#[cfg(feature = "postgres")]
+pub use postgres_provider::PostgresPathLockProvider;
 pub use provider::{
     AcquisitionChange, AtomicAcquisition, AtomicAcquisitionResult, FilesystemPathLockProvider,
     MemoryPathLockProvider, PathLockHandleMode, PathLockProvider,

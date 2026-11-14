@@ -2,33 +2,60 @@
 
 [English](README.md) / 中文
 
-供本包组件复用的内部代码，**没有公开入口**。这里的内容不出现在包根入口、子路径或 `package.json` 的 `exports` 中——宿主无法导入，也不承担兼容性承诺。
+供多个组件或区块复用的内部代码，**没有公开入口**。这里的内容不出现在包根入口、子路径或 `package.json` 的 `exports` 中：宿主无法导入，也不承担兼容性承诺。
 
-只有出现第二个真实消费者时才提升到这里；单个组件用到的东西留在该组件目录内。
+出现第二个真实消费者时，代码才提升到这里；单个组件用到的东西留在该组件目录内。共享代码不依赖 `components/`、`modules/` 或任何宿主契约：依赖是单向的，从它们指向本目录。需要业务数据、路由或宿主服务的代码属于 `modules/`。放置规则见 [Frontend Agent Guide](../../../../AGENTS.md)。
 
-内部 `components/drawer` 与 `components/modal` 是已明确确认的目录例外。Drawer 由 `FileBrowserEntries` 使用，Modal 由节点权限管理使用；其他内部代码仍遵循第二个真实消费者的门槛，详见 [Frontend Agent Guide](../../../../AGENTS.md)。
-
-这里的样式由使用它的组件自己的样式表引入，而不是 `components/style.css`：没有公开入口指向本目录，用它的组件负责按需引入。
+这里的样式由使用它的组件自己的 `style.css` 引入，而不是 `components/style.css`：没有公开入口指向本目录。
 
 ## 内容
 
-- `components/button`：Arco 精简按钮，保留类型、尺寸、图标、加载态及原生事件和 ref，普通按钮默认不提交表单。组件、模块与文档共用，移除链接、按钮组和 Provider 耦合。
-- `components/input`：Arco 精简输入框与文本域，保留原生输入事件、表单属性、ref、尺寸及装饰性前后缀；不包含密码显隐、计数、清空或自动尺寸。
-- `components/modal`：提供过渡动画、焦点锁和共享滚动锁的 Arco 精简居中弹窗，不设 SDK 导出。内部测试使用私有构建入口，JS 入口文件不随 npm 包发布。
-- `components/drawer`：提供过渡动画、焦点锁与滚动锁的右侧抽屉。通过 `children` 接收内容，由 `file-browser-entries` 提供业务内容与专属样式。
-- `components/tooltip`：渲染到 `document.body` 的定位浮层，被 `file-preview` 用于复制路径提示与折叠层级菜单。它存在的理由是祖先容器的 `overflow: hidden` 会裁掉常规浮层。
-- `components/popover`：白底卡片的浮层，同样 portal 到 `document.body`，被文件树的节点信息与文件预览使用。
-- `components/divider`：一条分隔线，尺寸与颜色由调用方内联给出。
-- `components/resizable`：可拖拽的分隔条 `ResizableHandle`，用指针捕获处理拖动、支持方向键改宽，宽度由调用方受控持有。`file-browser` 用它调整目录树宽度。
+有哪些目录以实际目录为准，下面只说明每个目录的用途。
 
-## 边界
+### `primitives/`
 
-输入框与按钮只复用 Arco 的交互逻辑。视觉规则来自火山 OpenViking 当前使用的 `@arco-design/theme-ve-o-aml-design@0.0.36`（包声明为 MIT），以该包的 `css/arco.css`、`theme.css` 和必要的 `components/Input/index.less` 覆盖为准。不是 Arco 官方默认皮肤。来源由 `vikingdb-fe` master `190844896665bc3229e03423114803d24b4faa82` 的 OpenViking 依赖及 `assets/styles/aml-design.less` 核验。
+内部通用基础件。业务内容与专属样式由调用方通过 `children` 或 props 提供。
 
-主题包默认控件为 6px 圆角、13px 字号；按钮字重 500，输入框白底带描边、聚焦时有 2px 光晕。尺寸保留 24/28/32/36px。文件树工具栏及作用域搜索等业务覆盖留在各自组件中。颜色映射位于 `src/theme.css`，宿主仍通过 `--ov-ui-color-*` 覆盖；不引入整包 CSS、全局 reset、私有图标或字体资源。
+- `button`：Arco 精简按钮，提供类型、尺寸、图标、加载态、原生事件和 ref。只有 `htmlType="submit"` 时才提交表单。不含链接、按钮组和 `ConfigProvider` 耦合。
+- `input`：Arco 精简 `Input`，提供原生事件、表单属性、ref、尺寸以及装饰性前后缀，另有带样式的 `TextArea`。不含密码显隐、计数、清空和自动尺寸。
+- `select`：通过 children 组合选项，单选和多选统一使用数组值，提供 Input 外壳、无边框 Simple 模式及自定义回显和触发器。见 [Select](./primitives/select/README.md)。
+- `modal`：改编自 Arco 的受控居中弹窗，提供过渡动画、焦点锁和共享的 body 滚动锁。关闭按钮文案放在它自己的 `locales/` 中。
+- `drawer`：右侧抽屉，提供过渡动画、焦点锁和共享的 body 滚动锁，内容通过 `children` 传入。
+- `tooltip`：渲染到 `document.body` 的定位浮层，悬停或聚焦时显示，也可以点击切换。渲染到 body 是因为祖先容器的 `overflow: hidden` 会裁掉常规浮层。
+- `popover`：`tooltip` 的白底卡片版本，用于结构化或可交互的内容，同样渲染到 `document.body`，触发方式与方位选项和 `tooltip` 一致。
+- `divider`：一条 `role="separator"` 的分隔线，长度、粗细和颜色由调用方给出。
+- `resizable`：`ResizableHandle`，可拖拽的 `role="separator"` 分隔条，用指针拖动或方向键调整相邻面板的宽度。宽度由调用方持有，每个夹取后的值通过 `onResize` 回传。
+- `overlay`：`tooltip`、`popover`、`modal`、`drawer` 这类浮层共用的定位与滚动工具。`useOverlayPosition` 在空间不足时把浮层翻到对侧并夹在视口内，`lockBodyScroll` 记录各个持有者，最后一个释放时恢复宿主的内联样式，`OverlayPlacement` 是共用的方位类型。
+- `notification`：右上角通知栈，展示任务状态与结果反馈，见 [Notification](#notification)。
 
-共享代码不得依赖 `components/`、`modules/` 或任何宿主契约——依赖方向是单向的，从公开组件指向本目录。需要业务数据、路由或宿主服务的能力属于 `modules/`。
+### `auth/`
 
-文档通过 `docs/internal-controls.ts` 消费独立的私有构建产物，相关入口不随 npm 包发布。示例中的 `#demo-controls` 仅供本站使用，宿主接入时替换为自己的按钮。
+`components/auth/` 下六个表单共用的部分：带标题、说明、错误提示、提交按钮和协议确认的 `<form>` 外框（`form-frame.tsx`），带可选密码显隐的输入项（`fields.tsx`），协议链接与确认弹窗（`agreements.tsx`），管理取值与校验的 `useForm`，提供本地化文案的 `useAuthLabels`，以及 `auth.css`。
 
-开发与构建入口见 [UI workspace README](../../../../README.md)，组件约定见[组件指南](../components/AGENTS.md)。
+### `dashboard/`
+
+`DashboardState`（加载中、出错并带重试按钮、为空三种状态块），以及 `dashboard.css`，其中是 WikiDashboard 与 ExperienceDashboard 共用的状态块、页签栏和主体样式。
+
+### 语言
+
+- `locale.ts`：`Locale` 类型（`'en-US' | 'zh-CN'`）、`resolveLocale` 与 `mergeLabels`。显式的 `labels` 项优先于语言的默认值，`undefined` 继承默认值，空字符串保留为显式覆盖。文件里没有业务文案。
+- `locale-context.tsx`：`useLocale` 与 `LocaleProvider`，各公开入口共用的语言作用域。它与请求 Client 的 Context 分离，因此切换语言不影响请求和状态。
+
+译文放在各自所属目录的 `locales/en-US.ts` 与 `locales/zh-CN.ts`；`auth/` 和 `primitives/modal/` 采用同样的布局。
+
+### Notification
+
+- `useNotification` 返回实例隔离的操作 API 与上下文占位，占位放在调用方的语言与主题作用域内。
+- API 提供 `loading`、`info`、`success`、`warning`、`error`、`normal`、`remove` 和 `clear`，同一 `id` 原位更新通知，`btn` 提供操作内容。
+- `loading` 使用与 Button 共用的内置 `LoadingIcon`，默认持续显示；其他通知默认 3000 ms 后关闭，`duration: 0` 禁用自动关闭，悬停和键盘焦点暂停计时。
+- 关闭按钮与自动关闭计时器在开始移除前调用 `onDismiss`；移除与清空在退出动画结束后调用各通知的 `onClose`，任务轮询、取消任务和终态操作由调用方负责。
+- 仅提供右上角，不提供全局 API。
+- [内部任务演示](../../../../docs/docs/_demos/notification-tasks.tsx) 消费私有文档构建，手动模拟运行、成功和失败状态。
+
+## 说明
+
+- Button 与 Input 只复用 Arco 的交互逻辑。视觉规则改编自 `@arco-design/theme-ve-o-aml-design@0.0.36`（MIT），不使用 Arco 默认皮肤，颜色映射到 `src/theme.css` 的 `--ov-ui-color-*`，宿主可以覆盖。不引入全局 reset、私有图标或字体资源。Arco 的声明见 [`LICENSE.arco-design`](../../LICENSE.arco-design)。
+- 文档站通过 `docs/internal-controls.ts` 使用内部控件的构建产物（`rslib.config.ts` 中的 `docs-controls` 入口），这些文档专用产物不进入 npm 包。示例里的 `#demo-controls` 仅供文档站使用，宿主接入时换成自己的控件。
+- 测试通过 `scripts/test.mjs` 里的私有构建访问内部基础件，不经过包导出。
+
+开发命令见[前端工作区 README](../../../../README.md)，组件约定见[组件指南](../components/AGENTS.md)。

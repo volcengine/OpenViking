@@ -1,3 +1,4 @@
+import type { ErrorFallback } from '../../../shared/error-boundary/types.js';
 import type { Locale } from '../../../shared/locale.js';
 import type { ReactNode } from 'react';
 
@@ -192,6 +193,8 @@ export interface VikingBotInteractionProps {
   onSubmit?: (answer: VikingBotInteractionAnswer) => void | Promise<void>;
   /** 放弃本次交互。Abandons this interaction. */
   onCancel?: () => void;
+  /** 渲染异常时的替代内容，省略时继承外层或使用内置展示。Render-failure content; inherits or uses the default when omitted. */
+  slots?: { errorFallback?: ErrorFallback };
   /** 可替换文案，未提供的项使用当前 locale 的内置文案。Replaceable copy; omitted fields follow locale. */
   labels?: VikingBotInteractionLabels;
 }

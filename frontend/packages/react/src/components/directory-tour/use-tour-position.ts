@@ -1,5 +1,52 @@
 import { useEffect, useState } from 'react';
 
+type Edges = Pick<DOMRectReadOnly, 'left' | 'right' | 'top' | 'bottom'>;
+
+function intersect(a: Edges, b: Edges): Edges {
+  return {
+    left: Math.max(a.left, b.left),
+    right: Math.min(a.right, b.right),
+    top: Math.max(a.top, b.top),
+    bottom: Math.min(a.bottom, b.bottom),
+  };
+}
+
+function hasArea(rect: Edges) {
+  return rect.right > rect.left && rect.bottom > rect.top;
+}
+
+const clippingOverflow = /^(?:auto|scroll|hidden|clip|overlay)$/;
+
+function getClip(anchor: HTMLElement, viewport: Edges): Edges {
+  const clip = { ...viewport };
+  for (
+    let parent = anchor.parentElement;
+    parent;
+    parent = parent.parentElement
+  ) {
+    const { overflowX, overflowY } = window.getComputedStyle(parent);
+    const clipX = clippingOverflow.test(overflowX);
+    const clipY = clippingOverflow.test(overflowY);
+    if (!clipX && !clipY) continue;
+    const rect = parent.getBoundingClientRect();
+    // Client dimensions exclude borders and scrollbars. Convert to viewport
+    // coordinates so a scaled scroll container clips in the same space as its rows.
+    if (clipX) {
+      const scale = parent.offsetWidth ? rect.width / parent.offsetWidth : 1;
+      const left = rect.left + parent.clientLeft * scale;
+      clip.left = Math.max(clip.left, left);
+      clip.right = Math.min(clip.right, left + parent.clientWidth * scale);
+    }
+    if (clipY) {
+      const scale = parent.offsetHeight ? rect.height / parent.offsetHeight : 1;
+      const top = rect.top + parent.clientTop * scale;
+      clip.top = Math.max(clip.top, top);
+      clip.bottom = Math.min(clip.bottom, top + parent.clientHeight * scale);
+    }
+  }
+  return clip;
+}
+
 interface Position {
   top: number;
   left: number;
@@ -51,57 +98,44 @@ export function useTourPosition(
       const margin = 8;
       let left = x + (width - box.width) / 2;
       let top = y + (height - box.height) / 2;
-      const missing = Boolean(anchor && !anchor.isConnected);
-      let visible = !anchor || missing;
+      const missing = Boolean(
+        anchor && (!anchor.isConnected || !a?.width || !a.height),
+      );
+      let visible = false;
       if (anchor && a && !missing) {
-        // A row clipped by a scrolling panel must not leave a detached callout.
-        let clip = { left: x, top: y, right: x + width, bottom: y + height };
-        for (
-          let parent = anchor.parentElement;
-          parent;
-          parent = parent.parentElement
-        ) {
-          const css = window.getComputedStyle(parent);
-          const rect = parent.getBoundingClientRect();
-          if (/(auto|scroll|hidden|clip)/.test(css.overflowX))
-            clip = {
-              ...clip,
-              left: Math.max(clip.left, rect.left),
-              right: Math.min(clip.right, rect.right),
-            };
-          if (/(auto|scroll|hidden|clip)/.test(css.overflowY))
-            clip = {
-              ...clip,
-              top: Math.max(clip.top, rect.top),
-              bottom: Math.min(clip.bottom, rect.bottom),
-            };
-        }
-        const target = group ?? a;
-        visible =
-          target.right > target.left &&
-          target.bottom > target.top &&
-          target.top < clip.bottom &&
-          target.bottom > clip.top &&
-          target.left < clip.right &&
-          target.right > clip.left;
-        if (group)
-          highlight = {
-            top: Math.max(group.top, clip.top),
-            left: Math.max(group.left, clip.left),
-            right: Math.min(group.right, clip.right),
-            bottom: Math.min(group.bottom, clip.bottom),
-          };
-        const right = a.right + 6;
-        const leftSide = a.left - box.width - 6;
-        left =
-          placement === 'right'
-            ? right + box.width <= x + width - margin || leftSide < x + margin
+        const clip = getClip(anchor, {
+          left: x,
+          top: y,
+          right: x + width,
+          bottom: y + height,
+        });
+        highlight = intersect(group ?? a, clip);
+        visible = hasArea(highlight);
+        const firstRow = intersect(a, clip);
+        // Keep grouped tours anchored to the first row while it is visible.
+        const reference = hasArea(firstRow) ? firstRow : highlight;
+        const right = reference.right + 6;
+        const leftSide = reference.left - box.width - 6;
+        const fitsRight = right + box.width <= x + width - margin;
+        const fitsLeft = leftSide >= x + margin;
+        if (fitsRight || fitsLeft) {
+          left =
+            fitsRight && (placement === 'right' || !fitsLeft)
               ? right
-              : leftSide
-            : leftSide >= x + margin || right + box.width > x + width - margin
-              ? leftSide
-              : right;
-        top = a.top - 16;
+              : leftSide;
+          top = reference.top - 16;
+        } else {
+          // On narrow screens, keep the visible highlight clear when possible.
+          const row = highlight;
+          const below = row.bottom + 6;
+          const above = row.top - box.height - 6;
+          left = row.left + (row.right - row.left - box.width) / 2;
+          top =
+            below + box.height <= y + height - margin ||
+            row.top - y < y + height - row.bottom
+              ? below
+              : above;
+        }
       }
       const next = {
         left: Math.max(

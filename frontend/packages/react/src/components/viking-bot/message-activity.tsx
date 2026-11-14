@@ -1,3 +1,4 @@
+import type { TaskSnapshot } from '../../shared/task-tracking/types.js';
 import { useEffect, useMemo, useState } from 'react';
 import { ActivityTimeline } from '@ark-design/ui/activity-timeline';
 import type {
@@ -41,11 +42,21 @@ export function MessageActivity({
     }
     return links;
   }, [parts]);
+  const taskSnapshots = useMemo(() => {
+    const snapshots = new Map<string, readonly TaskSnapshot[]>();
+    for (const part of parts) {
+      if ((part.type === 'tool' || part.type === 'tool_result') && part.tasks)
+        snapshots.set(part.id, part.tasks);
+    }
+    return snapshots;
+  }, [parts]);
   const items = order.flatMap((id) => groups.get(id)?.items ?? []);
   const running = items.some(
     (item) => item.status === 'running' || item.status === 'queued',
   );
   const [now, setNow] = useState(() => Date.now());
+  // Effect necessity: the wall clock advances while a streamed activity is
+  // running, without user events; unsubscribe when complete or unmounted.
   useEffect(() => {
     if (!running) return;
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -75,10 +86,11 @@ export function MessageActivity({
           labels={labels}
           onOpenUri={onOpenUri}
           results={resultLinks.get(context.item.id)}
+          tasks={taskSnapshots.get(context.item.id)}
         />
       ),
     }),
-    [labels, onOpenUri, resultLinks],
+    [labels, onOpenUri, resultLinks, taskSnapshots],
   );
   return (
     <ActivityTimeline
@@ -91,7 +103,6 @@ export function MessageActivity({
             : undefined,
       }))}
       defaultCollapseCompleted
-      defaultExpanded
       density="compact"
       durationMs={
         elapsed >= 1000 ? Math.floor(elapsed / 1000) * 1000 : undefined

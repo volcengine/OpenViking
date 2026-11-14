@@ -41,22 +41,28 @@
   min-height: 0;
   padding: 0 16px;
 }
+.ov-console__panel--conversation {
+  padding: 0;
+}
 .ov-console__panel[hidden] {
   display: none;
 }
-.ov-console__panel > .ov-tui,
+.ov-console__panel > .ov-command-console,
 .ov-console__panel > .ov-viking-bot {
   flex: 1;
   min-height: 0;
 }
-.ov-console__panel .ov-tui__body {
+.ov-console__panel .ov-command-console__body {
   gap: 24px;
   padding-bottom: 12px;
 }
-.ov-console__panel .ov-tui__empty {
+.ov-console__panel .ov-command-console__empty {
   padding: 0;
 }
-.ov-console__panel .ov-tui__composer {
+.ov-console__panel .ov-command-console__composer {
   width: calc(100% + 32px);
   margin-inline: -16px;
+}
+.ov-console__error {
+  color: var(--ov-ui-color-status-error, var(--ov-ui-status-error-default));
 }

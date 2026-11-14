@@ -1,58 +1,124 @@
 # WikiDashboard Wiki 看板
 
-`WikiDashboard` 是纯 UI 组件，只接收展示数据、加载/错误状态和回调，不感知接口，不需要 Provider。布局、间距、图标和纹理参考火山版 `release/openviking/2026-11-12`。
+展示 Wiki 目录或文件里的冲突：目录视图列出有冲突的文件，文件视图列出每条冲突的详情和修复记录。
 
-## 示例
+## 何时使用
+
+- 需要在文件浏览中查看 Wiki 的冲突概览，并跳转到具体文件或冲突时。
+- 需要自己决定数据来源、操作按钮和页面布局时：组件只负责展示，不发起请求，也不需要 `OpenVikingProvider`。
+- 使用 [FileBrowser](../modules/file-browser) 时，看板已经内置，不需要单独接入。
+
+## 引入
+
+```tsx
+import { WikiDashboard } from '@openviking/react/components/wiki-dashboard';
+import '@openviking/react/components/wiki-dashboard/style.css';
+```
+
+## 代码演示
+
+### 基础用法
+
+切换「Wiki 目录」「Wiki 文件」「无冲突示例」查看三种状态。点击冲突标题展开原因、时间、方案和依据，严重程度筛选支持方向键、Home/End 和 Esc。
 
 ```tsx file="../../_demos/wiki-dashboard-basic.tsx" preview
 
 ```
 
-示例使用固定展示数据。目录展示有冲突的文件；文件展示冲突详情和修复记录。严重程度筛选复用内部 Popover，支持方向键、Home/End、Esc 和点击外部关闭。筛选与详情展开属于组件本地交互，不发送请求。路径点击在示例中显示模拟打开反馈，FileBrowser 则定位到正文。已识别的零冲突 Wiki 仍显示空看板。示例中的操作图标、Tooltip 和点击反馈均由示例提供，可通过「隐藏宿主操作」移除；不会连接 VikingBot。
+示例使用固定数据。操作图标和点击反馈由示例提供，勾选「隐藏宿主操作」可以移除。
 
-## 接入
+## API
 
-```tsx
-import { WikiDashboard } from '@openviking/react/components/wiki-dashboard';
-import '@openviking/react/components/wiki-dashboard/style.css';
+### WikiDashboard
 
-<WikiDashboard kind="file" data={{ conflicts: [] }} />;
-```
+| 参数             | 说明                                                                              | 类型                                                                                                                            | 默认值                   |
+| ---------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| kind             | 展示模式，数据加载中也能确定                                                      | `'directory' \| 'file'`                                                                                                         | 必填                     |
+| data             | 与 `kind` 对应的展示数据，未提供时显示加载或错误状态                              | `WikiDirectoryData`（目录）、`WikiFileData`（文件）                                                                             | -                        |
+| loading          | 列表为空时显示加载状态                                                            | `boolean`                                                                                                                       | `false`                  |
+| error            | 列表为空时显示错误状态                                                            | `Error \| null`                                                                                                                 | -                        |
+| onRetry          | 点击重试时触发，组件不自行发起请求                                                | `() => void`                                                                                                                    | -                        |
+| onOpenUri        | 目录视图：点击文件时触发，参数为该文件的 URI；文件视图：点击路径时触发            | `(uri: string) => void`（目录）、`() => void`（文件）                                                                           | -                        |
+| onOpenDashboard  | 目录视图：打开该文件的看板时触发，未提供时回退到 `onOpenUri`                      | `(uri: string) => void`                                                                                                         | -                        |
+| defineActions    | 为每一行定义操作按钮，省略或返回空数组时不显示操作区                              | `(uri: string) => readonly WikiDashboardAction[]`（目录）、`(conflict: WikiConflict) => readonly WikiDashboardAction[]`（文件） | -                        |
+| slots            | 替换渲染异常的展示内容，见[错误展示插槽](../guide/getting-started#自定义错误展示) | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }`                                                           | -                        |
+| labels           | 覆盖界面文案                                                                      | `Partial<WikiDashboardLabels>`                                                                                                  | -                        |
+| locale           | 界面语言，规则见[国际化](../guide/i18n)                                           | `'zh-CN' \| 'en-US'`                                                                                                            | 继承上级，默认 `'en-US'` |
+| className、style | 外观与布局，其余 HTML 属性透传到根元素                                            | HTML 属性                                                                                                                       | -                        |
 
-[FileBrowser](../modules/file-browser) 在模块内部取数、解析冲突并组合这个组件，自动处理入口识别和资源定位。单独使用组件时由调用方提供展示模型。
+### WikiDirectoryData
 
-## 属性
+| 参数              | 说明                                                      | 类型                | 默认值 |
+| ----------------- | --------------------------------------------------------- | ------------------- | ------ |
+| files             | 有冲突的文件 URI                                          | `readonly string[]` | 必填   |
+| conflictFileCount | 冲突文件数                                                | `number`            | -      |
+| limited           | 文件列表是否被截断，为 `true` 时数量后显示 `+` 并提示上限 | `boolean`           | -      |
 
-| 属性                 | 类型 / 默认值                                                                                                               | 说明                                                   |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `kind`               | `directory` / `file`，必填                                                                                                  | 判别联合的顶层字段；加载时也能确定展示模式             |
-| `data`               | `WikiDirectoryData` / `WikiFileData`                                                                                        | 与 `kind` 对应的展示数据，未提供时可显示加载或错误状态 |
-| `loading`            | `boolean`，默认 `false`                                                                                                     | 空列表的加载状态                                       |
-| `error`              | `Error \| null`                                                                                                             | 空列表的错误状态                                       |
-| `locale`             | `en-US` / `zh-CN`，省略时继承语言作用域，最终默认 `en-US`                                                                   | 默认文案                                               |
-| `onRetry`            | `() => void`                                                                                                                | 重试意图；不在组件内执行请求                           |
-| `onOpenUri`          | 目录：`(uri: string) => void`；文件：`() => void`                                                                           | 目录返回点击项的标识；文件表达打开当前文档的意图       |
-| `onOpenDashboard`    | 目录：`(uri: string) => void`                                                                                               | 打开文件看板意图；未提供时回退到 `onOpenUri`           |
-| `defineActions`      | 目录：`(uri: string) => readonly WikiDashboardAction[]`；文件：`(conflict: WikiConflict) => readonly WikiDashboardAction[]` | 按行提供操作；省略或返回空数组时不渲染操作区域         |
-| `labels`             | `Partial<WikiDashboardLabels>`                                                                                              | 覆盖文案                                               |
-| `className`、`style` | HTML 属性                                                                                                                   | 外观与布局，其余 HTML 属性透传                         |
+### WikiFileData
 
-目录数据只包含 `files`、可选的 `conflictFileCount` 和截断标记 `limited`；文件数据只包含 `conflicts` 和可选展示路径 `path`。未传 `path` 时不渲染路径区域；路径不参与操作定位。组件没有顶层 `uri` 入参。
+| 参数      | 说明                                   | 类型                      | 默认值 |
+| --------- | -------------------------------------- | ------------------------- | ------ |
+| conflicts | 文件里的冲突                           | `readonly WikiConflict[]` | 必填   |
+| path      | 要展示的文档路径，省略时不显示路径区域 | `string`                  | -      |
 
-请求和操作定位所需的 URI 由模块或宿主通过闭包绑定。切换文档需要重置筛选和展开状态时，在外层为组件设置 `key={documentId}`；demo 和 FileBrowser 均如此处理。
+### WikiConflict
 
-点击冲突标题可展开调用方提供的原因、时间、方案与依据。组件不读取正文、不解析服务端协议、不写入资源。类型从组件子路径导出，根入口只导出组件及主 Props 类型。
+| 参数             | 说明                                                         | 类型                                                                                                     | 默认值 |
+| ---------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- | ------ |
+| id               | 冲突的唯一标识                                               | `string`                                                                                                 | 必填   |
+| matchText        | 冲突在正文中的原文片段                                       | `string`                                                                                                 | 必填   |
+| description      | 冲突标题，点击后展开详情                                     | `string`                                                                                                 | 必填   |
+| reason           | 冲突原因                                                     | `string`                                                                                                 | 必填   |
+| severity         | 严重程度                                                     | `'high' \| 'medium' \| 'low'`                                                                            | 必填   |
+| state            | 修复状态                                                     | `'unfixed' \| 'fixed'`                                                                                   | 必填   |
+| beginTime        | 发现时间，Unix 秒级时间戳                                    | `number`                                                                                                 | 必填   |
+| fixTime          | 修复时间，Unix 秒级时间戳，未修复为 `null`                   | `number \| null`                                                                                         | 必填   |
+| fixPlan          | 修复方案                                                     | `string`                                                                                                 | 必填   |
+| resolutionBasis  | 修复依据                                                     | `string`                                                                                                 | 必填   |
+| resolutionSource | 修复方式                                                     | `'manual' \| 'automatic'`                                                                                | -      |
+| location         | 原文片段在正文中的位置；`unique` 时带 `start`、`end`、`line` | `{ status: 'unique'; start: number; end: number; line: number } \| { status: 'missing' \| 'ambiguous' }` | 必填   |
 
-### 操作配置
+### WikiDashboardAction
 
-组件没有默认操作。`defineActions` 在渲染时调用，应只根据当前行返回配置，不在其中执行请求或更新状态；可按冲突状态返回不同操作。每行的 `key` 应唯一且稳定。
+| 参数     | 说明                                                                 | 类型         | 默认值  |
+| -------- | -------------------------------------------------------------------- | ------------ | ------- |
+| key      | 操作的稳定标识，同一行内唯一                                         | `string`     | 必填    |
+| icon     | 图标，按钮负责无障碍名称，图标作为装饰隐藏                           | `ReactNode`  | 必填    |
+| tooltip  | 悬停和聚焦时的提示，同时是按钮的无障碍名称，由宿主提供当前语言的文案 | `string`     | 必填    |
+| disabled | 禁止点击，仍可聚焦查看提示                                           | `boolean`    | `false` |
+| onClick  | 点击、Enter 或空格激活时触发，省略时按钮不可操作                     | `() => void` | -       |
 
-| 字段       | 类型                    | 说明                                                             |
-| ---------- | ----------------------- | ---------------------------------------------------------------- |
-| `key`      | `string`                | 操作的稳定标识                                                   |
-| `icon`     | `ReactNode`             | 外部提供的图标；按钮负责可访问名称，图标作为装饰隐藏             |
-| `tooltip`  | `string`                | 悬停、聚焦提示，同时作为按钮的可访问名称；由宿主提供当前语言文案 |
-| `disabled` | `boolean`，默认 `false` | 禁止点击执行，仍可聚焦查看提示                                   |
-| `onClick`  | `() => void`            | 点击、Enter 或空格激活时执行；省略时不可操作                     |
+### WikiDashboardLabels
 
-事件通过闭包捕获当前冲突或文件 URI，组件不注入编辑、对话或回溯行为。原 `onEdit`、`onDiscuss`、`editDisabledReason` 和 `discussDisabledReason` 已移除，统一改为 `defineActions`；原操作专属的 `labels` 字段也已移除。FileBrowser 内置看板默认没有操作，宿主可通过已有的 `renderDashboard` 接入自定义看板。
+| 参数          | 说明                           | 类型     | 默认值                                |
+| ------------- | ------------------------------ | -------- | ------------------------------------- |
+| title         | 看板标题                       | `string` | `生成效果`                            |
+| conflicts     | 冲突列表的标题                 | `string` | `全部冲突`                            |
+| pending       | 文件视图中未修复冲突数量的标签 | `string` | `待确认冲突`                          |
+| conflictFiles | 目录视图中冲突文件数量的标签   | `string` | `冲突文件数`                          |
+| pendingLabel  | 未修复冲突的状态标签           | `string` | `待确认`                              |
+| fixed         | 已修复冲突的状态标签           | `string` | `已修复`                              |
+| severity      | 严重程度筛选的标题             | `string` | `严重程度`                            |
+| all           | 筛选项「全部」                 | `string` | `全部`                                |
+| high          | 严重程度「高」的名称           | `string` | `严重`                                |
+| medium        | 严重程度「中」的名称           | `string` | `中等`                                |
+| low           | 严重程度「低」的名称           | `string` | `普通`                                |
+| reason        | 展开详情中原因的标题           | `string` | `原因`                                |
+| solution      | 修复方案的标题                 | `string` | `修复方案`                            |
+| occurred      | 检测时间的标题                 | `string` | `检测时间`                            |
+| fixedAt       | 修复时间的标题                 | `string` | `修复时间`                            |
+| evidence      | 修复依据的标题                 | `string` | `修复依据`                            |
+| empty         | 没有符合筛选条件的冲突时的提示 | `string` | `暂无符合条件的冲突`                  |
+| loading       | 加载中的提示                   | `string` | `加载中…`                             |
+| failed        | 加载失败的提示                 | `string` | `冲突加载失败`                        |
+| retry         | 重试按钮                       | `string` | `重试`                                |
+| limited       | 目录文件列表被截断时的提示     | `string` | `最多展示 100 个存在待确认冲突的文件` |
+| file          | 当前版本未使用                 | `string` | `文件`                                |
+| open          | 当前版本未使用                 | `string` | `打开`                                |
+
+## 注意
+
+- 组件没有默认操作。`defineActions` 在渲染时调用，只根据当前行返回配置，不要在里面发请求或更新状态；可以按冲突状态返回不同的操作。
+- 组件没有顶层 `uri` 属性。请求和定位需要的 URI 通过 `onOpenUri`、`defineActions` 的闭包传入。
+- 切换文档时要重置筛选和展开状态，在外层给组件设置 `key={documentId}`。
+- 类型从 `@openviking/react/components/wiki-dashboard` 导出，包根入口只导出组件和 `WikiDashboardProps`。

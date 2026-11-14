@@ -1,8 +1,15 @@
 export { FileBrowser } from './file-browser.js';
 export type {
   FileBrowserLabels,
+  FileBrowserWorkflowLabels,
   FileBrowserDashboardLabels,
   FileBrowserProps,
+  FileBrowserComponent,
+  FileBrowserHandle,
+  FileBrowserOpenResourceOptions,
+  FileBrowserPreviewSlots,
+  FileBrowserPreviewActions,
+  FileBrowserPreviewActionContext,
 } from './types.js';
 
 export type { FileBrowserDashboard } from './dashboard-model.js';

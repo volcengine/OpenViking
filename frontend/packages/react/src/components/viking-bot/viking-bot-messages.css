@@ -1,4 +1,3 @@
-/* Geometry from vikingdb-fe release/openviking/2026-11-12, 40b89239f. */
 .ov-viking-bot__list {
   width: 100%;
   min-width: 0;
@@ -60,8 +59,10 @@
 }
 .ov-viking-bot__user-bubble .ov-viking-bot__text {
   font-family: 'PingFang SC', 'Noto Sans SC', sans-serif;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
   font-size: 14px;
   letter-spacing: 0.3px;
+  line-height: 22px;
 }
 .ov-viking-bot__text.ov-viking-bot__text--markdown {
   width: 100%;
@@ -106,6 +107,18 @@
 }
 .ov-viking-bot__message-footer time {
   white-space: nowrap;
+}
+.ov-viking-bot__message-footer .ov-viking-bot__copy.ov-button {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 4px;
+  color: inherit;
+}
+.ov-viking-bot__copy > svg,
+.ov-viking-bot__code-copy > svg {
+  width: 14px;
+  height: 14px;
 }
 .ov-viking-bot__message-actions {
   margin-top: 10px;
@@ -229,26 +242,26 @@
   border-radius: 8px;
   background: var(--ov-ui-color-code-bg, var(--ov-ui-code-bg-default));
 }
-.ov-viking-bot__code .ark-agentic-markdown__code-block {
-  margin: 0;
-  border: 0;
-  background: transparent;
-}
-.ov-viking-bot__code .ov-viking-bot__code-copy {
+.ov-viking-bot__code .ov-viking-bot__code-copy.ov-button {
   position: absolute;
-  top: 12px;
-  right: 12px;
-  z-index: 1;
-}
-.ov-viking-bot__code-copy .ark-agentic-bubble-tools__button {
+  inset-block-start: 12px;
+  inset-inline-end: 12px;
   width: 32px;
   height: 32px;
-  padding: 10px;
+  padding: 0;
   border-radius: 6px;
   background: var(--ov-ui-color-bg-4, var(--ov-ui-bg-4-default));
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+}
+.ov-viking-bot__code .ov-viking-bot__code-copy.ov-button:hover,
+.ov-viking-bot__code .ov-viking-bot__code-copy.ov-button:focus-visible {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
 }
 .ov-viking-bot__code pre {
-  margin: 0 56px 0 0;
+  margin: 0;
+  margin-inline-end: 56px;
+  border: 0;
+  background: transparent;
   padding: 16px 8px 16px 20px;
   overflow-x: auto;
   color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
@@ -256,10 +269,38 @@
   font-size: 13px;
   line-height: 1.5;
 }
+.ov-viking-bot__code pre > code {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  white-space: inherit;
+}
 .ov-viking-bot__code--wrap pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.ov-viking-bot__code
+  :is(.ov-viking-bot__token--comment, .ov-viking-bot__token--prolog) {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+}
+.ov-viking-bot__code
+  :is(.ov-viking-bot__token--number, .ov-viking-bot__token--boolean) {
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+}
+.ov-viking-bot__code
+  :is(
+    .ov-viking-bot__token--string,
+    .ov-viking-bot__token--char,
+    .ov-viking-bot__token--attr-value,
+    .ov-viking-bot__token--inserted,
+    .ov-viking-bot__token--regex
+  ) {
+  color: var(--ov-ui-color-status-success, var(--ov-ui-status-success-default));
+}
+.ov-viking-bot__code
+  :is(.ov-viking-bot__token--keyword, .ov-viking-bot__token--important),
 .ov-viking-bot__code a {
   color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
 }

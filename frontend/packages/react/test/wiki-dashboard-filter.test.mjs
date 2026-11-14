@@ -35,7 +35,13 @@ test('Wiki severity picker supports selection, arrows, Escape, trigger toggle an
   );
   assert.match(trigger.textContent, /Low/);
   await act(async () => trigger.click());
+  await key(trigger, 'ArrowDown');
   assert.equal(document.activeElement.textContent, 'Low');
+  assert.equal(
+    document.querySelector('[aria-selected="true"]').textContent,
+    'Low',
+  );
+  await key(document.activeElement, 'End');
   await key(document.activeElement, 'ArrowUp');
   assert.equal(document.activeElement.textContent, 'Medium');
   await key(document.activeElement, 'Escape');

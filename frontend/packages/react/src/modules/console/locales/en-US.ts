@@ -1,4 +1,35 @@
-import type { ConsoleLabels } from '../types.js';
+import type { ConsoleCommandGuide, ConsoleLabels } from '../types.js';
+
+const commands = {
+  'add-resource': 'Add a resource from a URL',
+  'add-skill': 'Install a Skill',
+  'add-memory': 'Add memory directly',
+  compile: 'Compile material with a Skill',
+  'compile create': 'Create a compile configuration',
+
+  grep: 'Match text in resources',
+  glob: 'Match resource paths',
+  help: 'Show available commands',
+  clear: 'Clear local records',
+  health: 'Check server health',
+  status: 'Show system status',
+  ls: 'List directory entries',
+  tree: 'List a resource tree',
+  stat: 'Inspect a resource',
+  read: 'Read file content',
+  abstract: 'Read an L0 abstract',
+  overview: 'Read an L1 overview',
+  find: 'Find relevant context',
+  search: 'Search with query planning',
+  mkdir: 'Create a directory',
+  cp: 'Copy a resource',
+  mv: 'Move a resource',
+  rm: 'Remove a resource',
+  write: 'Write text content',
+  'task list': 'List background tasks',
+  'task status': 'Inspect a background task',
+  'task cancel': 'Request task cancellation',
+};
 
 const messages = {
   labels: {
@@ -13,34 +44,81 @@ const messages = {
   } satisfies Required<
     Omit<
       ConsoleLabels,
-      'tui' | 'vikingBot' | 'commandTitle' | 'commandDescription' | 'quickStart'
+      | 'commandConsole'
+      | 'vikingBot'
+      | 'commandTitle'
+      | 'commandDescription'
+      | 'quickStart'
     >
   >,
-  commands: {
-    grep: 'Match text in resources',
-    glob: 'Match resource paths',
-    help: 'Show available commands',
-    clear: 'Clear local records',
-    health: 'Check server health',
-    status: 'Show system status',
-    ls: 'List directory entries',
-    tree: 'List a resource tree',
-    stat: 'Inspect a resource',
-    read: 'Read file content',
-    abstract: 'Read an L0 abstract',
-    overview: 'Read an L1 overview',
-    find: 'Find matching context',
-    search: 'Search with query planning',
-    mkdir: 'Create a directory',
-    cp: 'Copy a resource',
-    mv: 'Move a resource',
-    rm: 'Remove a resource',
-    write: 'Write text content',
-    'task list': 'List background tasks',
-    'task status': 'Inspect a background task',
-    'task cancel': 'Request task cancellation',
+  commands,
+  commandGuides: {
+    'add-resource': {
+      description:
+        'Import a web or repository URL into Resources. The browser terminal does not accept local file paths.',
+      examples: [
+        'ov add-resource https://github.com/volcengine/OpenViking/blob/main/README.md',
+      ],
+    },
+    'add-skill': {
+      description:
+        'Install a Skill from a remote source. Use -p to select the destination skills directory.',
+      examples: [
+        'ov add-skill https://github.com/volcengine/OpenViking/tree/skills/llm-wiki -p viking://agent/skills',
+      ],
+    },
+    'add-memory': {
+      description:
+        'Add a fact, preference, or convention to a session, then commit the session to extract memory.',
+      examples: [
+        'ov add-memory "Prefer tables for comparing options in reviews" --session-id ov-command-console-demo',
+      ],
+    },
+    find: {
+      description:
+        'Search for relevant resources, memories, and skills in the current context.',
+      examples: ['ov find "What is the value of OpenViking?"'],
+    },
+    'compile create': {
+      description:
+        'Save sources, destination, and Skill without starting compilation.',
+      examples: [
+        'ov compile create --from viking://resources/source --to viking://resources/wiki',
+      ],
+    },
+    compile: {
+      description:
+        'Compile source material into a Wiki using the built-in llm-wiki Skill. Use --skill to choose another Skill.',
+      examples: [
+        'ov compile --from viking://resources/source --to viking://resources/wiki',
+      ],
+    },
+  } satisfies Partial<Record<keyof typeof commands, ConsoleCommandGuide>>,
+  parameters: {
+    path: 'Remote path or URL to import',
+    to: 'Destination URI',
+    parent: 'Existing parent directory URI',
+    'parent-auto-create': 'Create the parent directory if missing',
+    reason: 'Reason for importing',
+    args: 'Parser options as a JSON object',
+    wait: 'Wait for processing to complete',
+    'target-uri': 'Destination skills root',
+    content: 'Plain text to remember',
+    'session-id': 'Session to append and commit',
+    query: 'Semantic search query',
+    target_uri: 'Limit retrieval to this URI',
+    limit: 'Maximum number of results',
+    level: 'Filter content levels, e.g. 0,1,2',
+    from: 'Source URI to compile',
+    skill: 'Compiler Skill URI',
+    instruction: 'Additional compilation instructions',
   },
-  availableCommands: 'Available commands',
+  commandGroups: {
+    core: 'Core workflow',
+    filesystem: 'Filesystem',
+    search: 'Search & context',
+    status: 'Config & status',
+  },
   messages: {
     cancelled: () =>
       'Request cancelled; the server may still process an accepted operation.',
@@ -57,3 +135,9 @@ const messages = {
   },
 };
 export default messages;
+
+export const renderErrors = {
+  console: 'Console could not be displayed.',
+  toolbar: 'Toolbar could not be displayed.',
+  command: 'Command panel could not be displayed.',
+};

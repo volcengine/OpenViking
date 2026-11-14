@@ -4,3 +4,7 @@ const messages = {
   retry: 'Retry',
 };
 export default messages;
+
+export const renderErrors = {
+  selector: 'Scope selector could not be displayed.',
+};

@@ -2,6 +2,9 @@ import type { Locale } from '../../shared/locale.js';
 import {
   FilePreview,
   type FilePreviewTab,
+  type FilePreviewActionSource,
+  type FilePreviewToolbarOptions,
+  type FilePreviewHeaderSlots,
 } from '../../components/file-preview/index.js';
 import type { ReactNode } from 'react';
 
@@ -12,10 +15,12 @@ export interface FileBrowserDetailProps {
   activeKey: string | null;
   locale: Locale;
   labels?: FileBrowserLabels['preview'];
-  footer?: string;
+  footer?: ReactNode;
   titleExtra?: ReactNode;
-  extraActions?: ReactNode;
   readOnly?: boolean;
+  previewSlots?: FilePreviewHeaderSlots;
+  toolbar?: FilePreviewToolbarOptions;
+  actions?: FilePreviewActionSource;
   onActiveKeyChange: (key: string) => void;
 }
 
@@ -26,19 +31,26 @@ export function FileBrowserDetail({
   labels,
   footer,
   titleExtra,
-  extraActions,
   readOnly,
+  previewSlots,
+  toolbar,
+  actions,
   onActiveKeyChange,
 }: FileBrowserDetailProps) {
   return (
     <div className="ov-file-browser__detail">
       <FilePreview
         tabs={
-          decorateTabs(tabs, footer, titleExtra, extraActions, readOnly) as [
-            FilePreviewTab,
-            ...FilePreviewTab[],
-          ]
+          decorateTabs(
+            tabs,
+            footer,
+            titleExtra,
+            readOnly,
+            previewSlots,
+            actions,
+          ) as [FilePreviewTab, ...FilePreviewTab[]]
         }
+        toolbar={toolbar}
         activeKey={activeKey ?? undefined}
         locale={locale}
         labels={labels}
@@ -52,8 +64,9 @@ function decorateTabs(
   tabs: readonly FilePreviewTab[],
   footer: ReactNode,
   titleExtra: ReactNode,
-  extraActions: ReactNode,
   readOnly?: boolean,
+  previewSlots?: FilePreviewHeaderSlots,
+  actions?: FilePreviewActionSource,
 ): readonly FilePreviewTab[] {
   return tabs.map((tab) => {
     if (tab.kind === 'content') return tab;
@@ -70,8 +83,13 @@ function decorateTabs(
         : tab;
     return {
       ...editableTab,
+      actions: actions ?? tab.actions,
       slots: {
         ...tab.slots,
+        actions:
+          previewSlots?.actions === undefined
+            ? tab.slots?.actions
+            : previewSlots.actions,
         footer: tab.slots?.footer ?? footer,
         titleExtra: (
           <>
@@ -79,10 +97,10 @@ function decorateTabs(
             {titleExtra}
           </>
         ),
-        extraActions: extraActions ? (
+        extraActions: previewSlots?.extraActions ? (
           <>
             {tab.slots?.extraActions}
-            {extraActions}
+            {previewSlots?.extraActions}
           </>
         ) : (
           tab.slots?.extraActions

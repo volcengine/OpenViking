@@ -52,6 +52,9 @@ export interface Argument {
   name: string;
   kind?: 'uri' | 'integer' | 'boolean';
   optional?: boolean;
+  required?: boolean;
+  alias?: string;
+  defaultValue?: string;
   choices?: readonly string[];
   min?: number;
 }
@@ -71,9 +74,12 @@ export function parseArguments(
       options = false;
       continue;
     }
-    const flag = options && !current.literal && token.startsWith('--');
+    const flag =
+      options &&
+      !current.literal &&
+      (token.startsWith('--') || flags.some((item) => token === item.alias));
     const argument = flag
-      ? flags.find((item) => token === `--${item.name}`)
+      ? flags.find((item) => token === `--${item.name}` || token === item.alias)
       : positional[index++];
     if (!argument) throw new ConsoleCommandError('unexpectedArgument', token);
     if (Object.hasOwn(result, argument.name))
@@ -85,7 +91,8 @@ export function parseArguments(
       (flag &&
         argument.kind !== 'boolean' &&
         !next.literal &&
-        next.value.startsWith('--'))
+        (next.value.startsWith('--') ||
+          flags.some((item) => next.value === item.alias)))
     )
       throw new ConsoleCommandError('missingValue', token);
     const value = flag && argument.kind === 'boolean' ? 'true' : next.value;
@@ -113,6 +120,10 @@ export function parseArguments(
   for (const argument of positional) {
     if (!argument.optional && result[argument.name] === undefined)
       throw new ConsoleCommandError('missingArgument', argument.name);
+  }
+  for (const flag of flags) {
+    if (flag.required && result[flag.name] === undefined)
+      throw new ConsoleCommandError('missingArgument', `--${flag.name}`);
   }
   return result;
 }

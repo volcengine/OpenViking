@@ -50,7 +50,6 @@ export function UserMessageGroup({
           placement="end"
           variant="filled"
           maxHeight="9999px"
-          footer={footer}
         >
           <div className="ov-viking-bot__user-message-content">
             <MessageBody
@@ -60,9 +59,8 @@ export function UserMessageGroup({
             />
           </div>
         </Bubble>
-      ) : (
-        footer
-      )}
+      ) : null}
+      {footer}
     </div>
   );
 }

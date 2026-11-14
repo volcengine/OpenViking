@@ -46,6 +46,7 @@ from openviking.service.task_tracker import get_task_tracker
 from openviking.service.task_tracker_concurrency import KeyedAsyncLockPool, run_to_completion
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.utils.git_auth import GIT_AUTH_FAILED
+from openviking.utils.network_guard import ensure_public_remote_target
 from openviking_cli.exceptions import ConflictError, FailedPreconditionError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.logger import get_logger
@@ -595,7 +596,13 @@ class WatchManager:
             if actual_run.run_id is None:
                 if isinstance(result, WatchRunResult):
                     outcome = result
-                elif (result or {}).get("status") in {"completed", "failed", "error", "cancelled"}:
+                elif (result or {}).get("status") in {
+                    "completed",
+                    "partial",
+                    "failed",
+                    "error",
+                    "cancelled",
+                }:
                     outcome = self.result(run.task, result["status"], result, None)
                 else:
                     raise RuntimeError("Resource submission did not create a Task")
@@ -742,6 +749,7 @@ class WatchManager:
             return None
         try:
             probe_kwargs = dict(kwargs)
+            probe_kwargs["request_validator"] = ensure_public_remote_target
             if probe_kwargs.get("auth_config") is None:
                 processor = getattr(self._resource_service, "_resource_processor", None)
                 if processor is not None:
@@ -788,6 +796,8 @@ class WatchManager:
         instruction: str,
     ) -> WatchRunResult:
         result = result or {}
+        if status == "completed" and result.get("import_complete") is False:
+            status = "partial"
         states = result.get("connector_states")
         has_states = connector and status == "completed" and "connector_states" in result
         if has_states and not isinstance(states, dict):
@@ -797,7 +807,11 @@ class WatchManager:
             error = "; ".join(str(item) for item in errors) if errors else "watch ingestion failed"
         # A successful source import may later fail in semantic/embedding Work.
         # Its explicit checkpoint still describes the revision actually imported.
-        checkpoint = result.get("source_checkpoint") if status != "cancelled" else None
+        checkpoint = (
+            result.get("source_checkpoint")
+            if status != "cancelled" and result.get("import_complete") is not False
+            else None
+        )
         if status == "completed":
             from openviking.service.resource_service import ResourceService
 

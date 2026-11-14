@@ -51,7 +51,7 @@ test('read and write show effective levels without a management action', async (
   let permission = 'read';
   const fetch = fixture((call) =>
     call.path.endsWith('/fs/stat')
-      ? ok({ isDir: true, permission })
+      ? ok({ isDir: true, access: permission })
       : undefined,
   );
   const view = await mount(tree(fetch));
@@ -93,7 +93,7 @@ test('denied rows cannot open; container rows expand but cannot select or previe
             access: 'container',
             tags: ['compile_target=true'],
           },
-          { uri: `${URI}/readme.md`, permission: 'read' },
+          { uri: `${URI}/readme.md`, access: 'read' },
         ])
       : undefined,
   );
@@ -172,7 +172,9 @@ test('permission lookup failures remain retryable instead of silently hiding ACL
         document.querySelector('.ov-file-browser-acl__lookup-error'),
       ),
     );
-    assert.ok(document.querySelector('.ov-file-browser-acl__manage'));
+    assert.ok(document.querySelector('.ov-file-browser-acl__tag'));
+    await open();
+    assert.ok(document.querySelector('.ov-file-browser-acl [role="dialog"]'));
   } finally {
     await view.unmount();
   }

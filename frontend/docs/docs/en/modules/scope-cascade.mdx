@@ -1,35 +1,82 @@
 # ScopeCascade
 
-Optional `locale: 'zh-CN' | 'en-US'` overrides the nearest module or Provider; without either, copy defaults to `en-US`. Existing `labels` override individual fields. Hosts provide business content.
+A three-level selector for library, space and user: when a parent changes, its descendants are cleared and reloaded, and `onChange` reports the complete identity once all three levels are selected.
 
-Pass three API adapters directly to `ScopeCascade`. Requests, cascading, cancellation, retries and per-level subscriptions are internal; hosts do not create a controller or call Hooks.
+## When to use
 
-## Basic usage
+- You need to pick a library, a space and a user in turn, then load business data for the selected identity.
+- Your data comes from your own APIs: the component fetches through three load functions and manages requests, cascading, cancellation and retries itself. It does not call the OpenViking native API, so it has no `requestOptions` and does not need `OpenVikingProvider`; for how the other blocks send requests, see the [blocks overview](../modules/).
+- You want to manage each level's data yourself, customize the panel or fix a level: use [ScopeSwitcher](../components/scope-switcher) instead.
+
+## Import
+
+```tsx
+import { ScopeCascade } from '@openviking/react/modules/scope-cascade';
+import '@openviking/react/modules/scope-cascade/style.css';
+```
+
+## Examples
+
+### Basic usage
+
+Switch the library to see the space and user levels clear and reload. The example uses mock APIs with a 450 ms delay, and after mounting each level selects its first option.
 
 ```tsx file="../../_demos/scope-cascade-basic.tsx" preview
 
 ```
 
-The adapters return `Promise<readonly ScopeSwitcherOption[]>`, with `{ id, label, icon?, description?, disabled? }` options. Adapters own authentication, addresses and response mapping. Keep function references stable: changing an adapter cancels requests and resets all selections. Use a component `key` to isolate accounts.
+### Selection result
 
-The default view ships three level icons: `LibraryIcon` for libraries (a round gradient swatch picked by id), and `SpaceIcon` / `UserIcon` for spaces and users. When an adapter returns an option without `icon`, the level's default is filled in; a host-supplied `icon` always wins.
-
-| Adapter         | Parameters                                                |
-| --------------- | --------------------------------------------------------- |
-| `loadLibraries` | `signal: AbortSignal`                                     |
-| `loadSpaces`    | `libraryId: string, signal: AbortSignal`                  |
-| `loadUsers`     | `libraryId: string, spaceId: string, signal: AbortSignal` |
-
-Mounting loads libraries. Each level selects the first enabled option and continues to the next level. Parent changes clear descendants before notification; stale responses are ignored even when an adapter ignores its signal. Internal leaf subscriptions stay independent. Each level handles local search, loading, empty, error and retry states. The current version loads complete lists without server search or pagination.
-
-## Selection changes
+`onChange` returns the complete identity when all three levels are selected and `null` while it is incomplete; the example prints what it receives, and your app loads business data once the value is non-null.
 
 ```tsx file="../../_demos/scope-cascade-selection.tsx" preview
 
 ```
 
-`onChange(selection)` reports a complete `{ libraryId, spaceId, userId }` identity. It reports `null` while initialization, parent changes or adapter resets leave the identity incomplete. Refreshing the same identity does not repeat the callback. Load scoped business data when the value is non-null, without subscribing to internal state.
+## API
 
-## Props
+### ScopeCascade
 
-The three `load*` adapters are required. `onChange` is optional. `levelNames` names library, space and user in order; `labels` customizes loading, search, empty and error copy, and `retryLabel` names retry buttons. Standard HTML attributes such as `className` and `style` reach the layout container. Import `@openviking/react/modules/scope-cascade/style.css` for default styling.
+| Property         | Description                                                                                                                                                                    | Type                                                                                                   | Default                                                                            |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
+| loadLibraries    | Loads the library list, called on mount; `signal` aborts when the request becomes stale                                                                                        | `(signal: AbortSignal) => Promise<readonly ScopeSwitcherOption[]>`                                     | Required                                                                           |
+| loadSpaces       | Loads the spaces of a library, called after a library is selected                                                                                                              | `(libraryId: string, signal: AbortSignal) => Promise<readonly ScopeSwitcherOption[]>`                  | Required                                                                           |
+| loadUsers        | Loads the users of a space, called after a space is selected                                                                                                                   | `(libraryId: string, spaceId: string, signal: AbortSignal) => Promise<readonly ScopeSwitcherOption[]>` | Required                                                                           |
+| levelNames       | Names of the three levels: library, space, user. Shown on a trigger that has no selection, and used as the trigger's accessible name                                           | `readonly [string, string, string]`                                                                    | `en-US`: `['Library', 'Space', 'User']`; `zh-CN`: `['知识库', '数据空间', '用户']` |
+| onChange         | Called when the selection changes: a `ScopeCascadeSelection` when all three levels are selected, `null` while the identity is incomplete; never repeated for the same identity | `(selection: ScopeCascadeSelection \| null) => void`                                                   | -                                                                                  |
+| retryLabel       | Text of the retry button shown after a load failure                                                                                                                            | `string`                                                                                               | `en-US`: `'Retry'`; `zh-CN`: `'重试'`                                              |
+| slots            | Replaces rendering-error content; see [error display slots](../guide/getting-started#custom-error-display)                                                                     | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }`                                  | -                                                                                  |
+| labels           | Overrides interface text: `loading`, `searchPlaceholder`, `empty`, `noMatch` (no search results) and `error` (load failure)                                                    | `ScopeSwitcherLabels`                                                                                  | -                                                                                  |
+| locale           | Interface language, see [Internationalization](../guide/i18n)                                                                                                                  | `'zh-CN' \| 'en-US'`                                                                                   | Inherited, otherwise `'en-US'`                                                     |
+| className, style | Appearance and layout; other HTML attributes are passed to the root element                                                                                                    | HTML attributes                                                                                        | -                                                                                  |
+
+### ScopeSwitcherOption
+
+An option returned by the load functions.
+
+| Property    | Description                                                                                                                                         | Type        | Default  |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- | -------- |
+| id          | Unique identifier of the option; a parent's `id` is passed to the next level's loader, and the three `id`s form the identity returned by `onChange` | `string`    | Required |
+| label       | Display text; search filters by it and highlights the matching part                                                                                 | `string`    | Required |
+| icon        | Icon at the start of the option row; the level's default icon is used when omitted                                                                  | `ReactNode` | -        |
+| description | Secondary text below the label                                                                                                                      | `string`    | -        |
+| disabled    | Disables the option: it is dimmed, cannot be clicked and is never selected automatically                                                            | `boolean`   | `false`  |
+
+### ScopeCascadeSelection
+
+| Property  | Description                | Type     | Default  |
+| --------- | -------------------------- | -------- | -------- |
+| libraryId | Id of the selected library | `string` | Required |
+| spaceId   | Id of the selected space   | `string` | Required |
+| userId    | Id of the selected user    | `string` | Required |
+
+## Notes
+
+- Keep the load functions referentially stable, for example by defining them outside the component or wrapping them in `useCallback`. A new reference for any of them cancels in-flight requests, clears every selection and reloads from the library level.
+- When the account changes, set `key={accountId}` on the component so the selection state resets with it.
+- After mounting, libraries load first; each level selects its first enabled option and then loads the next level. A level stays disabled until its parent has a selection, and when a level has no options the levels below stay disabled and `onChange` receives `null`.
+- When a parent changes, its descendants are cleared before they reload. A late response is discarded even if your load function ignores `signal`.
+- When a level fails to load, only that level shows the error and a retry button, the levels below stay disabled, and retrying reloads just that level.
+- Each level loads its complete list in one call; server-side search and pagination are not supported. With more than 10 options, a search box filters them locally by label.
+- An option without `icon` gets the level's default icon: [LibraryIcon](../components/icons) (a round gradient swatch picked by `id`) for libraries, and `SpaceIcon` and `UserIcon` for spaces and users. An `icon` returned by your load function is used as is.
+- Types are exported from `@openviking/react/modules/scope-cascade`: `ScopeCascadeProps`, `ScopeCascadeSelection` and `ScopeCascadeApi` (the three load functions together). `ScopeSwitcherOption` and `ScopeSwitcherLabels` come from `@openviking/react/components/scope-switcher`. The package root exports only the component and `ScopeCascadeProps`.

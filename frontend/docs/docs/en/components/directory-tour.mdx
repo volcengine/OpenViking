@@ -1,57 +1,177 @@
 # DirectoryTour
 
-A non-modal directory walkthrough, separate from FileTree. The six-step preset follows memories → sessions → personal resources → shared resources → experiences → peers, without changing the selected file.
+A non-modal, step-by-step tour of the directories in your app: it highlights each directory row you locate and shows an explanation card beside it, without changing the selected file.
+
+## When to use
+
+- You want to introduce directories such as memories, sessions and resources the first time a user opens the file browser.
+- A new directory appears and you want to explain it once with a custom card.
+- You decide how directories load and expand, and when a user counts as having seen the tour: the component only locates, highlights and shows the card, without sending requests, storing completion state or needing `OpenVikingProvider`. It adds no mask, so it does not suit a modal tour that blocks the page.
+
+## Import
+
+```tsx
+import {
+  DirectoryTour,
+  DirectoryTourIntro,
+  openVikingDirectoryTourSteps,
+} from '@openviking/react/components/directory-tour';
+import '@openviking/react/components/directory-tour/style.css';
+```
+
+## Examples
+
+### Basic usage
+
+Click "Explore OV directories" to start the six-step tour. To see the fallback at step 5, first check "Simulate missing experiences", then advance to that step and click "Next" to continue.
 
 ```tsx file="../../_demos/directory-tour-basic.tsx" preview
 
 ```
 
-## Integration
+The example locates rows with the `getRowElement` method of [FileTree](./file-tree). When the tour ends, `onComplete` returns the skipped steps in `skippedStepIds`.
 
-Import `DirectoryTour` and `openVikingDirectoryTourSteps` from `@openviking/react/components/directory-tour`, and load `@openviking/react/components/directory-tour/style.css`. Root exports contain the component and its main Props type only.
+### Custom content
 
-The host supplies `locateTarget(target, signal)`: load the directory, expand ancestors, wait for the row to commit, and resolve its HTMLElement (for example with FileTree's `getRowElement`). Respect cancellation before changing the host tree. Use a stable callback. The component scrolls to the row, draws an independent highlight and positions the card beside it using the native Popover top layer. No business APIs, account state, persistence, full-screen mask or SVG are included.
-
-| Prop                          | Contract                                                                                                          |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `locale`                      | Inherited / en-US: `zh-CN` or `en-US`. Built-in controls follow this language; labels override individual fields. |
-| `open`, `steps`               | Required. Empty steps render nothing.                                                                             |
-| `locateTarget`                | Optional async anchor resolver; null/rejection/timeout presents recovery UI.                                      |
-| `currentStep`, `onStepChange` | Optional controlled zero-based index and change callback.                                                         |
-| `defaultStep`                 | Uncontrolled starting index, defaults to 0; closing resets the session.                                           |
-| `placement`                   | Preferred right or left, defaults to right; flips and clamps to the viewport.                                     |
-| `locateTimeout`               | Anchor deadline in milliseconds, defaults to 10000.                                                               |
-| `onClose`                     | Close button/Escape. The host sets open=false.                                                                    |
-| `onComplete`                  | Receives skippedStepIds on the last step. The host closes and decides whether to persist completion.              |
-| `labels`                      | Replace next/done/close/loading/error/retry/skip and the progress formatter.                                      |
-| `className`, `style`          | Surface root overrides, including inherited --ov-ui-color-\* theme variables.                                     |
-
-Steps contain id, semantic target, title, description, optional illustration ReactNode and optional nextLabel. Personal and shared resources have different targets; the preset never assumes an account-specific URI. Illustrations are supplied by the host, without a private CDN dependency.
-
-## Accessibility and lifecycle
-
-The non-modal dialog supports keyboard controls and Escape, restores a still-connected previous focus target, and disables progression while locating. Retry, step changes and unmount cancel old anchor resolutions. Layout tracking keeps the card and highlight attached during scrolling, resizing and position-only changes, and bounds the card to the visual viewport during zoom or keyboard changes; scrolling its row out of view hides it. Missing targets offer retry or skip, never automatic completion. Close or remount on account/scope changes. Import and server rendering are browser-global safe.
-
-Host controls that prevent the default Escape action retain ownership. Without `onClose`, the tour does not consume Escape. Anchor theme tokens are inherited; explicit surface class or inline tokens take precedence. An initially open tour creates its portal only after hydration.
-
-## First appearance of team experiences (single step)
+Check "Simulate team directory appearing": a single-step tour highlights the whole directory group and renders its card with `renderContent`.
 
 ```tsx file="../../_demos/directory-tour-team.tsx" preview
 
 ```
 
-A single step reuses `DirectoryTour` and hides the counter. `renderContent(context)` replaces ready-state content: `context.complete()` triggers completion, while `context.close()` only dismisses. Loading and failed-anchor recovery stay built in. `DirectoryTourIntro` provides media, title, description, feature items and acknowledgement; playback and editing remain host callbacks.
+The example builds the card with `DirectoryTourIntro`. The video and Edit actions only call back into the example, and the seen state lives in memory, so persist it in your app.
 
-`locateTarget` accepts one HTMLElement or a list of contiguous directory rows. The first row positions the card; all connected rows form its highlight. Expand and commit the directory before returning current rows. Removed children leave the highlight; newly loaded rows require the host to locate again (update the resolver or reopen the tour). No private FileTree DOM structure is queried.
+### Size constraints
 
-`step.cardWidth` controls width per step (default 270px, viewport constrained). Content must wrap on narrow screens. The cover comes from Figma `10168:334213`; video and edit actions are demo callbacks. First appearance, read state and persistence per user/scope belong to the host; this demo remembers acknowledgement in memory only.
-
-Inherited theme tokens refresh for ancestor `class`, `style`, `data-theme` and viewport-driven media-query changes. Component-specific `--ov-ui-directory-tour-*` tokens are supported; explicit surface class/inline overrides win. Length/percentage limits in `style.maxWidth` and `style.maxHeight` are combined with the visual viewport cap so stricter host limits remain effective.
-
-### Size overrides and long content
-
-Inline and `className` size constraints retain their CSS semantics while the card stays within the visual viewport. Percentage heights resolve against the layout viewport; long content scrolls inside the card.
+Pick a size constraint in the dropdown and click "Test sizing" to see the card with long content.
 
 ```tsx file="../../_demos/directory-tour-sizing.tsx" preview
 
 ```
+
+Size constraints in `className` and `style` keep their CSS semantics. The card always stays inside the visual viewport, long content scrolls inside it, and percentage heights resolve against the layout viewport.
+
+## API
+
+### DirectoryTour
+
+| Property         | Description                                                                                                                                                                                                                                                                        | Type                                                                            | Default                        |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------ |
+| open             | Whether the tour is shown                                                                                                                                                                                                                                                          | `boolean`                                                                       | Required                       |
+| steps            | The steps; nothing renders when the array is empty, and a single step hides the progress                                                                                                                                                                                           | `readonly DirectoryTourStep[]`                                                  | Required                       |
+| currentStep      | Zero-based index of the current step; setting it makes the tour controlled, so update it in `onStepChange`                                                                                                                                                                         | `number`                                                                        | -                              |
+| defaultStep      | Starting index when uncontrolled; reopening the tour starts from it again                                                                                                                                                                                                          | `number`                                                                        | `0`                            |
+| placement        | Preferred side of the row for the card; it moves to the other side when there is no room, then above or below                                                                                                                                                                      | `'right' \| 'left'`                                                             | `'right'`                      |
+| locateTimeout    | How long to wait for `locateTarget`, in milliseconds, before showing the fallback card                                                                                                                                                                                             | `number`                                                                        | `10000`                        |
+| locateTarget     | Returns the directory row element of a step: load and expand the directory, then return the row once it has rendered, or `null` if it cannot be found. `signal` aborts when the step changes, the tour unmounts or the timeout hits; each step uses the fallback card when omitted | `(target: string, signal: AbortSignal) => Promise<DirectoryTourAnchor \| null>` | -                              |
+| onStepChange     | Called with the new index when the user advances from the current step                                                                                                                                                                                                             | `(index: number) => void`                                                       | -                              |
+| onClose          | Called when the close button is clicked or Escape is pressed; without it no close button is shown and Escape is ignored                                                                                                                                                            | `() => void`                                                                    | -                              |
+| onComplete       | Called when the last step ends (the user confirms the card or calls `context.complete()`), with the skipped step ids; the tour stops rendering afterwards, and you close it and decide what to persist                                                                             | `(result: DirectoryTourResult) => void`                                         | -                              |
+| renderContent    | Replaces the card content once the row is located; `title` then only names the dialog for assistive technology and `description` is not shown                                                                                                                                      | `(context: DirectoryTourContentContext) => ReactNode`                           | -                              |
+| labels           | Overrides interface text                                                                                                                                                                                                                                                           | `DirectoryTourLabels`                                                           | -                              |
+| locale           | Interface language, see [Internationalization](../guide/i18n)                                                                                                                                                                                                                      | `'zh-CN' \| 'en-US'`                                                            | Inherited, otherwise `'en-US'` |
+| className, style | Class name and style of the card root, for sizing and theme variables                                                                                                                                                                                                              | `string`, `CSSProperties`                                                       | -                              |
+
+### DirectoryTourStep
+
+| Property     | Description                                                                                            | Type        | Default                                          |
+| ------------ | ------------------------------------------------------------------------------------------------------ | ----------- | ------------------------------------------------ |
+| id           | Unique identifier of the step, used by `onComplete` to report skipped steps                            | `string`    | Required                                         |
+| target       | Semantic name of the directory, passed unchanged to `locateTarget`; the preset values are listed below | `string`    | Required                                         |
+| title        | Card title                                                                                             | `ReactNode` | Required                                         |
+| description  | Text under the title                                                                                   | `ReactNode` | Required                                         |
+| illustration | Illustration at the top of the card; the six preset targets have built-in ones, pass `null` to hide it | `ReactNode` | Built-in illustration of the preset targets      |
+| cardWidth    | Card width in CSS pixels, never wider than the visual viewport                                         | `number`    | `270`                                            |
+| nextLabel    | Text of the primary button for this step                                                               | `string`    | `labels.next`, or `labels.done` on the last step |
+
+### DirectoryTourAnchor
+
+The type `locateTarget` resolves to: one `HTMLElement`, or a list of contiguous directory rows (`readonly HTMLElement[]`). The first element positions the card, and the elements still attached to the document together form the highlight.
+
+### DirectoryTourContentContext
+
+The argument of `renderContent`.
+
+| Property | Description                                                                  | Type                | Default |
+| -------- | ---------------------------------------------------------------------------- | ------------------- | ------- |
+| step     | The current step                                                             | `DirectoryTourStep` | -       |
+| index    | Zero-based index of the current step                                         | `number`            | -       |
+| total    | Number of steps                                                              | `number`            | -       |
+| complete | Confirms the step: moves to the next one, and calls `onComplete` on the last | `() => void`        | -       |
+| close    | Closes the tour like the close button, by calling `onClose`                  | `() => void`        | -       |
+
+### DirectoryTourResult
+
+The argument of `onComplete`.
+
+| Property       | Description                                                                     | Type                | Default |
+| -------------- | ------------------------------------------------------------------------------- | ------------------- | ------- |
+| skippedStepIds | Ids of unavailable steps the user advanced past, in order; empty when none were | `readonly string[]` | -       |
+
+### DirectoryTourLabels
+
+Defaults are the built-in `en-US` and `zh-CN` text, in that order.
+
+| Property              | Description                                                                          | Type                                         | Default                                |
+| --------------------- | ------------------------------------------------------------------------------------ | -------------------------------------------- | -------------------------------------- |
+| close                 | Accessible name of the close button                                                  | `string`                                     | `'Close guide'` / `'关闭引导'`         |
+| next                  | Primary button text on every step except the last                                    | `string`                                     | `'Next'` / `'下一步'`                  |
+| done                  | Primary button text on the last step, and the confirm button of `DirectoryTourIntro` | `string`                                     | `'Got it'` / `'知道了'`                |
+| progress              | Progress text, with `current` starting at 1; not shown for a single step             | `(current: number, total: number) => string` | "current/total", such as `1/6`         |
+| unavailable           | Status shown when a directory row cannot be located                                  | `string`                                     | `'This directory could not be found.'` |
+| locating, retry, skip | Never displayed                                                                      | `string`                                     | -                                      |
+
+### DirectoryTourIntro
+
+A presentational card body, usually rendered inside `renderContent`. Put actions such as video playback or editing in `media` and `features`; your app handles them.
+
+| Property    | Description                                                                                                                                                                                  | Type                                | Default                        |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ------------------------------ |
+| title       | Heading                                                                                                                                                                                      | `ReactNode`                         | Required                       |
+| description | Text under the heading                                                                                                                                                                       | `ReactNode`                         | Required                       |
+| features    | Highlights listed under the description, one per line                                                                                                                                        | `readonly ReactNode[]`              | -                              |
+| media       | Media above the heading, such as a cover image                                                                                                                                               | `ReactNode`                         | -                              |
+| onDone      | Called when the confirm button is clicked, usually `context.complete`                                                                                                                        | `() => void`                        | -                              |
+| labels      | Overrides the confirm button text; only `done` applies                                                                                                                                       | `Pick<DirectoryTourLabels, 'done'>` | -                              |
+| locale      | Interface language, see [Internationalization](../guide/i18n); inside `renderContent` it does not inherit the `locale` of `DirectoryTour`, so pass it here or set it on `OpenVikingProvider` | `'zh-CN' \| 'en-US'`                | Inherited, otherwise `'en-US'` |
+
+### openVikingDirectoryTourSteps
+
+A six-step preset with English text; each step's `target` takes one of the values below. The component knows no account paths, so map each `target` to a directory row in `locateTarget`: `userResources` is the user's private resources directory, and `sharedResources` is the root-level resources directory shared by the team.
+
+| Step id              | `target`          | Directory introduced            |
+| -------------------- | ----------------- | ------------------------------- |
+| `memories`           | `userMemories`    | User memories (memories)        |
+| `sessions`           | `userSessions`    | Conversations (sessions)        |
+| `personal-resources` | `userResources`   | Personal resources (resources)  |
+| `shared-resources`   | `sharedResources` | Team resources (resources)      |
+| `experiences`        | `userExperiences` | Agent experiences (experiences) |
+| `peers`              | `userPeers`       | Object memories (peers)         |
+
+## Notes
+
+- You implement `locateTarget`: load and expand the directory, wait for the row to render, then return its element, for example with `getRowElement(id)` of [FileTree](./file-tree). The component then scrolls it into view and shows the highlight and card beside it.
+- Keep `locateTarget` stable with `useCallback`, because a new reference locates the current step again. Once `signal` aborts, stop expanding directories of the old scope.
+- The card stays hidden while locating. If `locateTarget` returns `null` or throws, the lookup times out, or the row is removed, the built-in card shows the current step with an unavailable message and no highlight. Click Next to advance, or Got it to finish on the last step.
+- After `onClose` or `onComplete`, set `open` to `false` yourself; whether a user has seen the tour, and persisting that per user or space, is also up to you. Close the tour or change its `key` when the account or space changes.
+- In controlled mode, update `currentStep` in `onStepChange`. Unavailable steps retain their original progress number until the user advances.
+- `locateTarget` can return a list of contiguous directory rows: the first row positions the card, and the rows still attached to the document form the highlight. Rows removed by collapsing leave the highlight; newly loaded rows need another locate, so update `locateTarget` or reopen the tour.
+- The position follows scrolling, window resizing and row size changes, and the card stays inside the visual viewport, including the effect of zoom and the soft keyboard. When the row scrolls out of view, the card and highlight hide together.
+- The card is a non-modal `dialog`: it takes focus once shown, calls `onClose` on Escape, and gives focus back to the previous element on close if that element is still in the document. An Escape already handled with `preventDefault()` by your own controls does not reach the tour.
+- The card renders in the browser's top layer through the Popover API, so you need no `z-index` and it creates no full-screen mask or SVG. It requires a browser that supports the API.
+- Server rendering creates no overlay. An initially open tour creates it only after hydration completes.
+- The preset text is English, so provide your own `title` and `description` for other languages. The illustrations of the six preset targets are bundled with the JavaScript and need no image hosting.
+- The package root exports only `DirectoryTour` and `DirectoryTourProps`. Import `DirectoryTourIntro`, `openVikingDirectoryTourSteps` and the other types from `@openviking/react/components/directory-tour`.
+
+## Theme variables
+
+The card renders under `document.body` and inherits the `--ov-ui-*` variables in effect on the directory row; changes to `class`, `style` or `data-theme` on its ancestors sync to the card. Set the variables below through `className` or `style` to override the inherited values.
+
+| Variable                            | Description                                        | Default                  |
+| ----------------------------------- | -------------------------------------------------- | ------------------------ |
+| `--ov-ui-directory-tour-primary`    | Highlight outline, focus ring and primary button   | `--ov-ui-color-primary`  |
+| `--ov-ui-directory-tour-background` | Card background                                    | `--ov-ui-color-bg-1`     |
+| `--ov-ui-directory-tour-text`       | Card text                                          | `--ov-ui-color-text-1`   |
+| `--ov-ui-directory-tour-secondary`  | Text of `description` and `features`               | `--ov-ui-color-text-2`   |
+| `--ov-ui-directory-tour-muted`      | Progress and `DirectoryTourIntro` description text | `--ov-ui-color-text-3`   |
+| `--ov-ui-directory-tour-border`     | Card outline                                       | `--ov-ui-color-border-3` |

@@ -29,8 +29,8 @@ export interface FileTreeRowContext {
   /** 当前展示浮层的行 id。Row whose tooltip is showing. */
   /** 为行追加属性。Extra attributes for a row. */
   getRowAttributes?: (row: FileTreeRow) => HTMLAttributes<HTMLDivElement>;
-  /** 行尾指示器。Row-end indicator. */
-  renderDashboard?: (row: FileTreeEntryRow) => ReactNode;
+  /** 行尾标记。Row-end marker. */
+  renderRowTrailing?: (row: FileTreeEntryRow) => ReactNode;
   /** 悬停浮层内容。Hover content. */
   renderRowTooltip?: (row: FileTreeEntryRow) => ReactNode;
   /** 行首文件图标。Leading icon for a file row. */

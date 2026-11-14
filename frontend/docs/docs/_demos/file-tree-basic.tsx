@@ -1,3 +1,5 @@
+import { Checkbox, Select, SelectOption } from '#demo-controls';
+
 import { useState } from 'react';
 import { useLang } from '@rspress/core/runtime';
 import { FileTree } from '@openviking/react/components/file-tree';
@@ -82,25 +84,23 @@ export default function FileTreeBasic() {
       >
         <label>
           {t.caseLabel}{' '}
-          <select
-            value={failRefresh ? 'failure' : 'success'}
-            onChange={(event) =>
-              setFailRefresh(event.target.value === 'failure')
-            }
+          <Select
+            value={[failRefresh ? 'failure' : 'success']}
+            onChange={([value]) => {
+              if (value !== undefined) setFailRefresh(value === 'failure');
+            }}
           >
-            <option value="success">{t.successCase}</option>
-            <option value="failure">{t.failureCase}</option>
-          </select>
+            <SelectOption value="success">{t.successCase}</SelectOption>
+            <SelectOption value="failure">{t.failureCase}</SelectOption>
+          </Select>
         </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={externalLoading}
-            onChange={(event) => setExternalLoading(event.target.checked)}
-            style={{ display: 'inline-block', appearance: 'auto' }}
-          />{' '}
+        <Checkbox
+          checked={externalLoading}
+          onChange={(next) => setExternalLoading(next)}
+        >
+          {' '}
           {t.externalLoading}
-        </label>
+        </Checkbox>
       </div>
       <div style={{ height: 420 }}>
         <FileTree
@@ -137,7 +137,7 @@ export default function FileTreeBasic() {
             },
           }}
           renderRowIcon={(row) => <FileTypeIcon name={row.name} />}
-          renderDashboard={(row) => {
+          renderRowTrailing={(row) => {
             const indicator = INDICATORS[row.uri];
             return indicator ? (
               <Indicator indicator={indicator} text={t} />

@@ -1,6 +1,13 @@
+import { waitForEditor, setEditor } from './helpers/preview-editor-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mount, ok, recordingFetch, settle } from './helpers/module-dom.mjs';
+import {
+  deferred,
+  mount,
+  ok,
+  recordingFetch,
+  settle,
+} from './helpers/module-dom.mjs';
 import { act, createElement } from 'react';
 
 const { FilePreview } =
@@ -55,30 +62,44 @@ test('standalone preview offers editing only on the active editable level', asyn
     assert.equal(button(view, 'Edit'), undefined);
     await click(view, 'Body');
     await click(view, 'Edit');
-    assert.equal(view.container.querySelector('textarea')?.value, 'full text');
+    await waitForEditor(view.container);
+    assert.equal(
+      view.container.querySelector('.cm-content')?.textContent,
+      'full text',
+    );
+    assert.ok(button(view, 'Cancel')?.closest('.ov-file-preview__header'));
+    assert.ok(button(view, 'Save')?.closest('.ov-file-preview__header'));
     await click(view, 'Cancel');
     assert.deepEqual(saved, []);
     await click(view, 'Edit');
+    await waitForEditor(view.container);
     await click(view, 'Save');
     assert.deepEqual(saved, ['full text']);
-    assert.equal(view.container.querySelector('textarea'), null);
+    assert.equal(view.container.querySelector('.cm-content'), null);
   } finally {
     await view.unmount();
   }
 });
 
-test('FileBrowser loads the full file, writes it, and reloads the displayed body', async () => {
+test('FileBrowser confirms a version note before writing and snapshots only the edited file', async () => {
   const uri = 'viking://resources/guide.md';
   let fullReads = 0;
+  const write = deferred();
   const requests = recordingFetch(({ path, body: request }) => {
     if (path.endsWith('/fs/ls')) return ok([{ uri, isDir: false }]);
     if (path.endsWith('/fs/stat')) return ok({ uri, isDir: false });
     if (path.endsWith('/content/read')) return ok('');
+    if (path.endsWith('/snapshot/commit')) {
+      assert.deepEqual(request, { message: 'Update guide', paths: [uri] });
+      return ok({ result: 'created', commit_oid: 'commit-1' });
+    }
     if (path.endsWith('/content/write')) {
       assert.equal(request.uri, uri);
       assert.equal(request.mode, 'replace');
-      assert.equal(request.content, '# Initial');
-      return ok({});
+      assert.equal(request.content, '# Updated');
+      assert.equal(request.version_message, undefined);
+      assert.equal(request.expected_content_sha256, undefined);
+      return write.promise;
     }
     return ok([]);
   });
@@ -103,10 +124,50 @@ test('FileBrowser loads the full file, writes it, and reloads the displayed body
   try {
     const reads = requests.countOf('/api/v1/content/read');
     await click(view, 'Edit');
-    assert.equal(view.container.querySelector('textarea')?.value, '# Initial');
+    await waitForEditor(view.container);
+    assert.equal(
+      view.container.querySelector('.cm-content')?.textContent,
+      '# Initial',
+    );
     assert.equal(fullReads, 1);
+    await setEditor(view.container.querySelector('.cm-content'), '# Updated');
     await click(view, 'Save');
+    const dialog = () =>
+      document.querySelector('.ov-file-preview-version-note [role="dialog"]');
+    assert.ok(dialog());
+    assert.equal(requests.countOf('/api/v1/content/write'), 0);
+    await act(async () =>
+      [...dialog().querySelectorAll('button')]
+        .find((node) => node.textContent === 'Cancel')
+        .click(),
+    );
+    assert.equal(dialog(), null);
+    assert.equal(
+      view.container.querySelector('.cm-content')?.textContent,
+      '# Updated',
+    );
+
+    await click(view, 'Save');
+    const note = dialog().querySelector('textarea');
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        window.HTMLTextAreaElement.prototype,
+        'value',
+      ).set.call(note, ' Update guide ');
+      note.dispatchEvent(new window.Event('input', { bubbles: true }));
+    });
+    await act(async () => dialog().querySelector('[type="submit"]').click());
     assert.equal(requests.countOf('/api/v1/content/write'), 1);
+    assert.equal(requests.countOf('/api/v1/snapshot/commit'), 0);
+    await act(async () => write.resolve(await ok({})));
+    await settle();
+    assert.equal(dialog(), null);
+    assert.deepEqual(
+      requests.calls
+        .filter(({ path }) => /\/(write|commit)$/.test(path))
+        .map(({ path }) => path),
+      ['/api/v1/content/write', '/api/v1/snapshot/commit'],
+    );
     assert.equal(requests.countOf('/api/v1/content/read'), reads + 1);
     await view.render(render(true));
     assert.equal(button(view, 'Edit'), undefined);
