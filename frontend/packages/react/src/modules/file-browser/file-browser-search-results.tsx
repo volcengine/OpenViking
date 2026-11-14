@@ -74,7 +74,7 @@ export function FileBrowserSearchResults({
   // The mode row appears only when there are results: the design draws neither the
   // empty, loading nor failure state with it, and its number only means something
   // when there is something to count.
-  if (loading) {
+  if (loading && !hits.length) {
     return (
       <div className="ov-file-browser-search__skeletons" aria-busy="true">
         <p role="status" className="ov-file-browser-search__sr-only">
@@ -96,19 +96,18 @@ export function FileBrowserSearchResults({
     );
   }
 
-  if (error) {
-    return (
-      <>
-        <div role="alert" className="ov-file-browser-search__error">
-          <p>{text.searchFailed}</p>
-          <p>{error.message}</p>
-        </div>
-        <Button size="small" onClick={onRetry}>
-          {text.retry}
-        </Button>
-      </>
-    );
-  }
+  const failure = error ? (
+    <>
+      <div role="alert" className="ov-file-browser-search__error">
+        <p>{text.searchFailed}</p>
+        <p>{error.message}</p>
+      </div>
+      <Button size="small" disabled={loading} onClick={onRetry}>
+        {text.retry}
+      </Button>
+    </>
+  ) : null;
+  if (failure && !hits.length) return failure;
 
   if (!searched) {
     return (
@@ -142,6 +141,8 @@ export function FileBrowserSearchResults({
 
   return (
     <>
+      {failure}
+      {loading ? <p role="status">{text.searchLoading}</p> : null}
       <FileBrowserSearchModeRow
         mode={mode}
         count={hits.length}

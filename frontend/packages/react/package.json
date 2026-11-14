@@ -164,6 +164,7 @@
     "@codemirror/commands": "^6.11.1",
     "@codemirror/state": "^6.7.6",
     "@codemirror/view": "^6.43.15",
+    "@tanstack/query-core": "5.90.20",
     "dayjs": "^1.11.23",
     "prismjs": "^1.30.0",
     "react-focus-lock": "^2.13.7",

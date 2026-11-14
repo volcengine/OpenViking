@@ -159,7 +159,7 @@ export function useFileBrowser({
   });
 
   const { setActiveKey, ...preview } = useFsPreview({
-    client,
+    client: tree.isReady ? client : null,
     // 非受控模式下 currentUri 是 null，真正选中的是 pendingUri；预览要跟着
     // 实际选中的资源走，否则内部维护的选中永远不会加载预览。
     //
