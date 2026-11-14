@@ -108,3 +108,70 @@ def test_client_preserves_unavailable_service_and_reason():
         "service": "storage backend",
         "reason": "failed to read lock token (os error 33)",
     }
+
+
+def _json_transport(body: str, status_code: int) -> httpx.MockTransport:
+    return httpx.MockTransport(lambda _request: httpx.Response(status_code, text=body))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True])
+@pytest.mark.parametrize("body", ["<html>Please sign in</html>", '{"status":'])
+@pytest.mark.parametrize("operation", ["rm", "add_message"])
+async def test_non_json_2xx_raises_instead_of_silent_success(sync, operation, body):
+    """A successful status with a non-empty, non-JSON body means the response never
+    reached OpenViking (auth gateway login page, truncated envelope), so the call
+    must fail loudly instead of reporting success."""
+    client = (SyncHTTPClient if sync else AsyncHTTPClient)(url="http://localhost:1933")
+    async_client = client._async_client if sync else client
+    async_client._http = httpx.AsyncClient(
+        base_url="http://localhost:1933",
+        transport=_json_transport(body, 200),
+    )
+
+    def invoke(client):
+        if operation == "rm":
+            return client.rm("viking://resources/demo")
+        return client.add_message("demo", "user", "hello")
+
+    try:
+        with pytest.raises(OpenVikingError) as raised:
+            if sync:
+                invoke(client)
+            else:
+                await invoke(client)
+        assert raised.value.code == "INTERNAL"
+        assert str(raised.value).startswith("HTTP 200:")
+    finally:
+        await async_client.close()
+
+
+@pytest.mark.asyncio
+async def test_empty_204_body_still_returns_empty():
+    """Empty successful bodies (HTTP 204) keep their existing no-op handling."""
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._http = httpx.AsyncClient(
+        base_url="http://localhost:1933",
+        transport=_json_transport("", 204),
+    )
+    try:
+        assert await client.rm("viking://resources/demo") is None
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_non_json_error_status_still_raises_with_status():
+    """The pre-existing handling of unsuccessful statuses is unchanged."""
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._http = httpx.AsyncClient(
+        base_url="http://localhost:1933",
+        transport=_json_transport("<html>bad gateway</html>", 502),
+    )
+    try:
+        with pytest.raises(OpenVikingError) as raised:
+            await client.rm("viking://resources/demo")
+        assert raised.value.code == "INTERNAL"
+        assert "502" in str(raised.value)
+    finally:
+        await client.close()
