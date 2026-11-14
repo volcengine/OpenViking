@@ -2063,9 +2063,27 @@ For memory-related settings, add a `memory` section in `ov.conf`:
 | `version` | Deprecated and ignored. OpenViking always uses the v3 memory extraction pipeline; existing configs that set this field still load without error. | `"v3"` |
 | `custom_templates_dir` | Custom memory schema directory. Later definitions replace the same `memory_type`; new types are added. See the [Prompt Guide](10-prompt-guide.md). | `""` |
 | `extraction_enabled` | Whether session commit runs long-term memory extraction. | `true` |
+| `extraction_output_format` | Model output protocol: `"python"` for the restricted memory SDK DSL, or `"json"` for structured JSON. | `"python"` |
 | `session_skill_extraction_enabled` | Whether session commit also extracts reusable skills into the current user's skill directory. | `false` |
 | `link_enabled` | Whether memory extraction writes and resolves memory links. | `false` |
 | `session_auto_commit` | Server-wide automatic session commit controls. This belongs under `memory`, not under `server`; see [Session Auto Commit Configuration](#session-auto-commit-configuration). | See section below |
+
+#### Memory extraction output format
+
+To select structured JSON output instead of the restricted Python memory SDK DSL, set:
+
+```json
+{
+  "memory": {
+    "extraction_output_format": "json"
+  }
+}
+```
+
+Both formats require valid, correctly escaped model output. In Python triple-quoted strings,
+escape literal triple quotes and backslashes; in JSON strings, use JSON escaping.
+Once the configuration takes effect, it applies to subsequent extraction runs; it does not retry
+or repair archives whose extraction has already failed.
 
 #### Memory links (`memory.link_enabled`)
 

@@ -2039,9 +2039,25 @@ openviking-server --config /path/to/ov.conf
 | `version` | 已废弃且会被忽略。OpenViking 始终使用 v3 记忆抽取链路；已有配置中保留该字段仍可正常加载，不会报错。 | `"v3"` |
 | `custom_templates_dir` | 自定义 memory schema 目录。后加载的同名 `memory_type` 会覆盖内置定义，新类型会追加；详见 [Prompt 指南](10-prompt-guide.md)。 | `""` |
 | `extraction_enabled` | session commit 时是否执行长期记忆抽取。 | `true` |
+| `extraction_output_format` | 模型输出协议：`"python"` 使用受限的记忆 SDK DSL，`"json"` 使用结构化 JSON。 | `"python"` |
 | `session_skill_extraction_enabled` | session commit 时是否同时抽取可复用 skill 到当前用户的 skill 目录。 | `false` |
 | `link_enabled` | 记忆抽取是否写入和解析 memory links。 | `false` |
 | `session_auto_commit` | 服务端 session 自动 commit 的全局控制项。该配置属于 `memory` 段，不属于 `server` 段；详见 [Session Auto Commit 配置](#session-auto-commit-配置)。 | 见下文 |
+
+#### 记忆抽取输出格式
+
+如需使用结构化 JSON 输出代替受限的 Python 记忆 SDK DSL，可配置：
+
+```json
+{
+  "memory": {
+    "extraction_output_format": "json"
+  }
+}
+```
+
+两种格式都要求模型输出合法且正确转义。Python 三引号字符串中的字面三引号和反斜杠需要转义，
+JSON 字符串则使用 JSON 转义规则。配置生效后用于后续抽取，不会重试或修复抽取已经失败的归档。
 
 #### 记忆链接（`memory.link_enabled`）
 
