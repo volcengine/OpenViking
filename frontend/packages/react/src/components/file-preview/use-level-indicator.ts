@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
 
 /**
  * 选中指示条的位置：一条 14×2 的横线，宽度与位置跟随选中项，切换时滑动过去。
@@ -23,28 +23,27 @@ const INDICATOR_WIDTH = 14;
  *
  * useLayoutEffect 必要性：位置来自页签按钮的实际布局盒，只有提交后才可测量；
  * 字体加载、容器缩放与层级变化都会改变它，无法在渲染时算出。ResizeObserver
- * 覆盖前两者，`activeKey` 与 `levelCount` 覆盖切换与层级增减；观察对象随组件
- * 卸载断开，避免旧订阅继续回调。
+ * 覆盖前两者，`activeKey` 与 `levelCount` 覆盖切换与层级增减。回调 ref 让加载后
+ * 才挂载的页签也能建立测量；节点更换或卸载时断开旧订阅。
  *
  * A layout effect is required: the position comes from the tab buttons' layout
  * boxes, measurable only after commit, and font loading, container resizing or a
  * level change all move them. The ResizeObserver covers the first two, `activeKey`
- * and `levelCount` the last two; the subscription is disconnected on unmount so a
- * stale one cannot keep calling back.
+ * and `levelCount` the last two. A callback ref also measures tabs mounted after
+ * loading; replacing or unmounting the node disconnects the old subscription.
  */
 export function useLevelIndicator(
   activeSelector: string,
   activeKey: string | undefined,
   levelCount: number,
 ) {
-  const ref = useRef<HTMLDivElement>(null);
+  const [root, setRoot] = useState<HTMLDivElement | null>(null);
   const [indicator, setIndicator] = useState<LevelIndicatorState>({
     left: 0,
     width: 0,
   });
 
   useLayoutEffect(() => {
-    const root = ref.current;
     if (!root) return;
     const measure = () => {
       const active = root.querySelector<HTMLElement>(activeSelector);
@@ -64,7 +63,7 @@ export function useLevelIndicator(
     const observer = new ResizeObserver(measure);
     observer.observe(root);
     return () => observer.disconnect();
-  }, [activeSelector, activeKey, levelCount]);
+  }, [root, activeSelector, activeKey, levelCount]);
 
-  return { ref, indicator };
+  return { ref: setRoot, indicator };
 }

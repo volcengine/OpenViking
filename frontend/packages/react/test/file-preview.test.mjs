@@ -55,6 +55,50 @@ test('legacy tabs and all-disabled levels retain the base source', () => {
   assert.match(html, /This file is empty/);
   assert.doesNotMatch(html, /aria-pressed="true"/);
 });
+
+for (const defaultLevelKey of ['l0', 'l1']) {
+  test(`directory indicator appears after loading with default ${defaultLevelKey}`, async () => {
+    const { mount } = await import('./helpers/module-dom.mjs');
+    const tab = {
+      kind: 'directory',
+      key: 'directory',
+      defaultLevelKey,
+      levels: ['l0', 'l1'].map((key) => ({
+        key,
+        label: key,
+        source: source(''),
+      })),
+    };
+    const render = (loading) =>
+      createElement(FilePreview, { tabs: [{ ...tab, loading }] });
+    const view = await mount(render(true));
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        assert.equal(
+          view.container.querySelector('.ov-file-preview__levels'),
+          null,
+        );
+        await view.render(render(false));
+        assert.equal(
+          view.container.querySelector(
+            '[role="tab"][aria-selected="true"].ov-file-preview__level',
+          )?.textContent,
+          defaultLevelKey,
+        );
+        assert.equal(
+          view.container.querySelector('.ov-file-preview__level-indicator')
+            ?.style.width,
+          '14px',
+          'the selected level must have an indicator without a click or resize',
+        );
+        await view.render(render(true));
+      }
+    } finally {
+      await view.unmount();
+    }
+  });
+}
+
 test('Blob conversion retains MIME and binary bytes; URL and empty/whitespace precedence stay explicit', async () => {
   const blob = new Blob([new Uint8Array([0, 255, 128])], { type: 'image/png' });
   const result = toFileSource({
