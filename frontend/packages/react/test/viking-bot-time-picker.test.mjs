@@ -11,8 +11,8 @@ const { TimePicker } = await import(
   pathToFileURL(join(process.env.OV_UI_TEST_HOOKS, 'time-picker.js'))
 );
 
-function TimeInput() {
-  const [value, onChange] = useState('23:59');
+function TimeInput({ initialValue = '23:59' }) {
+  const [value, onChange] = useState(initialValue);
   return h(TimePicker, {
     value,
     onChange,
@@ -148,6 +148,40 @@ test('time selection inside a focus-locked Modal keeps the input focused and clo
     await act(async () => input.focus());
     await key(input, 'Escape');
     assert.equal(modalCloses, 1, 'Escape without a popup reaches the Modal');
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('overlapping wheel selections preserve updates to both time columns', async () => {
+  const view = await mount(h(TimeInput, { initialValue: '09:00' }));
+  try {
+    const input = view.container.querySelector('[name=schedule-time]');
+    await click(input);
+    const columns = [...popup().querySelectorAll('.ov-time-picker__list')];
+    for (const column of columns) {
+      Object.defineProperty(column, 'clientHeight', { value: 224 });
+      Object.defineProperty(column.firstElementChild, 'clientHeight', {
+        value: 224 + 28 * (column.querySelectorAll('[role=option]').length - 1),
+      });
+    }
+    const wheel = (column, value) => {
+      column.scrollTop = value * 28;
+      column.dispatchEvent(new window.WheelEvent('wheel', { bubbles: true }));
+    };
+    const flushWheel = () =>
+      act(() => new Promise((resolve) => setTimeout(resolve, 140)));
+    await act(async () => wheel(columns[1], 1));
+    await click(columns[0].querySelectorAll('[role=option]')[10]);
+    assert.equal(input.value, '10:00');
+    await flushWheel();
+    assert.equal(input.value, '10:01');
+    await act(async () => {
+      wheel(columns[0], 11);
+      wheel(columns[1], 2);
+    });
+    await flushWheel();
+    assert.equal(input.value, '11:02');
   } finally {
     await view.unmount();
   }

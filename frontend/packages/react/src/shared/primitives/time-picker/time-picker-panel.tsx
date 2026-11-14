@@ -5,7 +5,7 @@
  * Omits seconds, AM/PM, ranges, disabled-time rules and footer actions.
  * https://github.com/arco-design/arco-design/blob/4e087a0fe7d5ae2f222fbce4a9518ba047b01772/components/TimePicker/time-picker.tsx
  */
-import type { RefObject } from 'react';
+import { useRef, type RefObject } from 'react';
 import dayjs from 'dayjs';
 import { TimeColumn } from './time-column.js';
 
@@ -35,6 +35,8 @@ export function TimePickerPanel({
   const selected = dayjs(
     `2000-01-01T${/^([01]\d|2[0-3]):[0-5]\d$/.test(value) ? value : '00:00'}`,
   );
+  // 滚轮回调可能在同一次提交前交错执行，先合并选择，再在 DOM 提交时对齐受控值。
+  const selection = useRef({ value: selected, onChange });
   return (
     <div
       id={id}
@@ -43,6 +45,7 @@ export function TimePickerPanel({
       className="ov-time-picker__panel"
       ref={(node) => {
         panel.current = node;
+        if (node) selection.current = { value: selected, onChange };
         if (node && focusPanel.current) {
           node.querySelector<HTMLElement>('[aria-selected="true"]')?.focus();
           focusPanel.current = false;
@@ -78,9 +81,10 @@ export function TimePickerPanel({
               selected: selected.get(unit) === value,
             }),
           )}
-          onSelect={(next) =>
-            onChange(selected.set(unit, next).format('HH:mm'))
-          }
+          onSelect={(next) => {
+            selection.current.value = selection.current.value.set(unit, next);
+            selection.current.onChange(selection.current.value.format('HH:mm'));
+          }}
         />
       ))}
     </div>
