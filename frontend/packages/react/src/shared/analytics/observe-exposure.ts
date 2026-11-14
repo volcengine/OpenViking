@@ -21,18 +21,16 @@ export function observeExposure(element: HTMLElement, show: () => void) {
     )
       return;
     if (!element.getClientRects().length) return;
+    // Visibility is inherited but descendants can override it. Display and opacity
+    // still constrain the entire descendant subtree.
+    if (window.getComputedStyle(element).visibility !== 'visible') return;
     for (
       let node: HTMLElement | null = element;
       node;
       node = node.parentElement
     ) {
       const style = window.getComputedStyle(node);
-      if (
-        node.hidden ||
-        style.display === 'none' ||
-        style.visibility !== 'visible' ||
-        style.opacity === '0'
-      )
+      if (node.hidden || style.display === 'none' || style.opacity === '0')
         return;
     }
     stop();

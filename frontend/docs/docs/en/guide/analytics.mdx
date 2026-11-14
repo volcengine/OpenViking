@@ -84,6 +84,8 @@ Exposure uses `IntersectionObserver` and does not detect occlusion by other elem
 
 `operation_id` connects submission and outcome for one operation. `duration_ms` measures milliseconds from its start to the current stage. `step_index` starts at zero. `error_kind` is a fixed classification and never contains an error message.
 
+`has_filters` indicates whether an explicit filter supported by the current search mode is active. The default root scope and a time field without dates do not count.
+
 Built-in events omit full URIs, paths, file names, queries, command text, message and file content, email addresses, passwords, and API keys. Add page, source, user identity, and platform-specific fields in your host's `onEvent` adapter.
 
 ## API

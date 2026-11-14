@@ -12,6 +12,7 @@ import type {
 } from './search-types.js';
 import {
   buildSearchBody,
+  isSemantic,
   normalizeFindResult,
   normalizeGlobResult,
   normalizeGrepResult,
@@ -105,12 +106,18 @@ export function useFsSearch({
     ],
   );
 
+  const hasFilters = Boolean(
+    filters.scopes.length ||
+    (isSemantic(mode) &&
+      (filters.levels.length || filters.since || filters.until)) ||
+    (mode === 'grep' && filters.caseInsensitive),
+  );
   const request = useMemo(
     () =>
       client && query.trim()
-        ? { client, mode, body, generation, requestOptions }
+        ? { client, mode, body, generation, requestOptions, hasFilters }
         : null,
-    [client, mode, body, generation, query, requestOptions],
+    [client, mode, body, generation, query, requestOptions, hasFilters],
   );
   const [response, setResponse] = useState<{
     request: NonNullable<typeof request>;
@@ -127,9 +134,7 @@ export function useFsSearch({
     const eventParams = () => ({
       operation_id: operation!.operation_id,
       mode: request.mode,
-      has_filters:
-        request.body.target_uri !== undefined ||
-        request.body.filter !== undefined,
+      has_filters: request.hasFilters,
     });
     if (operation)
       analytics.current?.emit('file_browser_search_submit', eventParams);

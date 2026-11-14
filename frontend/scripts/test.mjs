@@ -31,6 +31,7 @@ try {
                 './src/modules/file-browser/file-browser-search.tsx',
               'browser-search-results':
                 './src/modules/file-browser/file-browser-search-results.tsx',
+              'fs-search': './src/modules/file-browser/use-fs-search.ts',
               'browser-labels':
                 './src/modules/file-browser/file-browser-labels.ts',
               button: './src/shared/primitives/button/button.tsx',

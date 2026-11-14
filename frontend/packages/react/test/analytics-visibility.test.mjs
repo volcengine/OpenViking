@@ -6,10 +6,18 @@ import { FileTree } from '@openviking/react/components/file-tree';
 import { mount, settle } from './helpers/module-dom.mjs';
 import { exposureObserver } from './helpers/exposure-observer.mjs';
 
-async function setup(style) {
+async function setup(style, targetStyle) {
   const observer = exposureObserver();
   const events = [];
-  const content = h('div', { style }, h(FileTree, { rows: [], onSelect() {} }));
+  const content = h(
+    'div',
+    { style },
+    h(FileTree, {
+      style: targetStyle,
+      rows: [],
+      onSelect() {},
+    }),
+  );
   const mounted = await mount(
     h(
       OpenVikingProvider,
@@ -30,6 +38,26 @@ async function setup(style) {
     },
   };
 }
+
+test('explicitly visible target under a hidden ancestor exposes once', async () => {
+  const mounted = await setup(
+    { visibility: 'hidden' },
+    { visibility: 'visible' },
+  );
+  try {
+    assert.equal(window.getComputedStyle(mounted.owner).visibility, 'hidden');
+    assert.equal(
+      window.getComputedStyle(mounted.owner.firstElementChild).visibility,
+      'visible',
+    );
+    await act(async () => mounted.observer.expose());
+    assert.deepEqual(mounted.events, ['openviking_file_tree_show']);
+    await act(async () => mounted.observer.expose());
+    assert.equal(mounted.events.length, 1);
+  } finally {
+    await mounted.cleanup();
+  }
+});
 
 test('zero-area edge contact followed by positive intersection exposes once', async () => {
   const mounted = await setup();

@@ -5,7 +5,8 @@ import {
 } from '../../shared/analytics/use-exposure.js';
 import { Button } from '../../shared/primitives/button/button.js';
 import { useLocale } from '../../shared/locale-context.js';
-import { useCallback, useId, useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
+import { ImportResourcesButton } from './import-resources-button.js';
 import { resolveFileBrowserActionBarLabels } from './labels.js';
 
 import { Divider } from '../../shared/primitives/divider/index.js';
@@ -47,15 +48,6 @@ export function FileBrowserActionBar({
 }: FileBrowserActionBarProps) {
   const track = useTrack();
   const locale = useLocale(localeProp);
-  const importExposure = useExposure('file_browser_import_resources_show');
-  const observeImport = useCallback(
-    (node: HTMLSpanElement | null) =>
-      importExposure?.(
-        node?.querySelector<HTMLButtonElement>('[data-ov-import-action]') ??
-          null,
-      ),
-    [importExposure],
-  );
   const connectExposure = useExposure('file_browser_connect_agent_show');
   const triggerRef = useRef<HTMLButtonElement>(null);
   const drawerId = useId();
@@ -73,8 +65,7 @@ export function FileBrowserActionBar({
   const text = resolveFileBrowserActionBarLabels(locale, labels);
   const showConnect = Boolean(agentConnect || onConnectAgent);
   const importButton = (
-    <Button
-      data-ov-import-action
+    <ImportResourcesButton
       htmlType="button"
       className="ov-file-browser-action-bar__action"
       onClick={() => {
@@ -88,7 +79,7 @@ export function FileBrowserActionBar({
       <span className="ov-file-browser-action-bar__label">
         {text.importResources}
       </span>
-    </Button>
+    </ImportResourcesButton>
   );
   const importEntry = renderImportResources
     ? renderImportResources(importButton)
@@ -168,10 +159,7 @@ export function FileBrowserActionBar({
         </Drawer>
       ) : null}
       {showImport ? (
-        <span
-          ref={observeImport}
-          className="ov-file-browser-action-bar__import-slot"
-        >
+        <span className="ov-file-browser-action-bar__import-slot">
           {importEntry}
         </span>
       ) : null}
