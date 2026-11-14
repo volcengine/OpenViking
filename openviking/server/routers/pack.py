@@ -173,13 +173,15 @@ async def import_ovpack(
     """Import .ovpack file."""
     service = get_service()
     store = TempUploadStore.build(request.app.state.config)
-    resolved = await store.resolve_for_consume(body.temp_file_id, ctx)
 
-    # Resolve path variables
+    # Validate the target before materializing the upload. A shared upload is
+    # copied into the server's temp directory by resolve_for_consume(); if the
+    # parent URI is rejected afterwards, that copy would never be cleaned up.
     parent = validate_request_viking_uri(
         resolve_path_variables(body.parent), ctx, field_name="parent"
     )
 
+    resolved = await store.resolve_for_consume(body.temp_file_id, ctx)
     try:
         result = await service.pack.import_ovpack(
             resolved.local_path,
@@ -188,8 +190,6 @@ async def import_ovpack(
             on_conflict=body.on_conflict,
             vector_mode=body.vector_mode,
         )
-    except Exception:
-        raise
     finally:
         await resolved.cleanup()
 
