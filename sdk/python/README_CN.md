@@ -420,6 +420,9 @@ root_client.admin_regenerate_key(
 
 ## 错误处理
 
+快照文件读取（`git_show(..., path=...)` 和 `snapshot.show(..., path=...)`）在 HTTP
+响应失败时抛出异常，包括错误正文为二进制的情况。
+
 SDK 会把服务端错误码映射为 Python 异常。
 
 ```python

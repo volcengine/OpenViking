@@ -2,7 +2,11 @@
 
 from typing import Any, Dict, List
 
+import httpx
 import pytest
+from openviking_sdk import AsyncHTTPClient as SDKAsyncHTTPClient
+from openviking_sdk import OpenVikingError
+from openviking_sdk import SyncHTTPClient as SDKSyncHTTPClient
 
 from openviking_cli.client.http import AsyncHTTPClient
 
@@ -29,7 +33,11 @@ def _client_with_fake() -> tuple[AsyncHTTPClient, _FakeHTTPClient]:
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake = _FakeHTTPClient()
     client._http = fake
-    client._handle_response = lambda response: {"commit_oid": "a" * 40, "result": "created", "changed": 1}
+    client._handle_response = lambda response: {
+        "commit_oid": "a" * 40,
+        "result": "created",
+        "changed": 1,
+    }
     return client, fake
 
 
@@ -109,19 +117,6 @@ async def test_git_restore_includes_project_dir_when_provided():
     }
 
 
-class _FakeBinaryResponse:
-    """Mimics enough of httpx.Response for the show-blob branch."""
-
-    def __init__(self, content: bytes, oid: str, size: int):
-        self.content = content
-        self.status_code = 200
-        self.headers = {
-            "content-type": "application/octet-stream",
-            "x-snapshot-oid": oid,
-            "x-snapshot-size": str(size),
-        }
-
-
 async def test_git_show_metadata_uses_handle_response():
     client, fake = _client_with_fake()
     client._handle_response = lambda resp: {"oid": "c" * 40, "tree": "t" * 40, "message": "m"}
@@ -136,68 +131,54 @@ async def test_git_show_metadata_uses_handle_response():
     assert call["params"] == {"target_ref": "c" * 40}
 
 
-async def test_git_show_blob_returns_envelope_from_headers():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake = _FakeHTTPClient()
-    client._http = fake
+@pytest.mark.parametrize("client_type", [SDKAsyncHTTPClient, SDKSyncHTTPClient])
+@pytest.mark.parametrize("entrypoint", ["git_show", "snapshot.show"])
+@pytest.mark.parametrize("status", [200, 404, 503])
+@pytest.mark.parametrize("with_headers", [True, False])
+async def test_git_show_blob_preserves_binary_and_error_contract(
+    client_type, entrypoint, status, with_headers
+):
+    headers = {"Content-Type": "application/octet-stream"}
+    if with_headers:
+        headers.update({"X-Snapshot-Oid": "b" * 40, "X-Snapshot-Size": "6"})
+    payload = b"hello\n"
+    if status == 503:
+        payload = b"upstream unavailable"
+        headers["X-Snapshot-Size"] = "invalid"
+    elif status == 404:
+        payload = b'{"status":"error","error":{"code":"NOT_FOUND","message":"missing"}}'
 
-    fake.next_response = _FakeBinaryResponse(b"hello\n", oid="b" * 40, size=6)
+    def handle(request):
+        assert request.url.path == "/api/v1/snapshot/show"
+        assert dict(request.url.params) == {"target_ref": "HEAD", "path": "viking://resources/x"}
+        return httpx.Response(status, content=payload, headers=headers)
 
-    result = await client.git_show(target_ref="c" * 40, path="viking://resources/x.txt")
+    client = client_type(url="http://localhost:1933")
+    owner = client if client_type is SDKAsyncHTTPClient else client._async_client
+    owner._http = httpx.AsyncClient(
+        base_url="http://localhost:1933", transport=httpx.MockTransport(handle)
+    )
+    method = client.git_show if entrypoint == "git_show" else client.snapshot.show
+    try:
 
-    assert result == {"oid": "b" * 40, "size": 6, "bytes": b"hello\n"}
-    call = fake.calls[-1]
-    assert call["params"] == {"target_ref": "c" * 40, "path": "viking://resources/x.txt"}
+        async def invoke():
+            result = method("HEAD", path="viking://resources/x")
+            return await result if client_type is SDKAsyncHTTPClient else result
 
-
-async def test_git_show_blob_handles_case_insensitive_headers():
-    """A real httpx.Response uses case-insensitive headers (httpx.Headers).
-    Confirm the client reads x-snapshot-* correctly even when the server
-    capitalises them (FastAPI may send X-Snapshot-Oid as-is).
-    """
-    import httpx
-
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake = _FakeHTTPClient()
-    client._http = fake
-
-    class _CaseyResponse:
-        def __init__(self, content: bytes, oid: str, size: int):
-            self.content = content
-            self.status_code = 200
-            self.headers = httpx.Headers(
-                {
-                    "Content-Type": "application/octet-stream",
-                    "X-Snapshot-Oid": oid,
-                    "X-Snapshot-Size": str(size),
-                }
-            )
-
-    fake.next_response = _CaseyResponse(b"\x00\x01\x02", oid="e" * 40, size=3)
-    result = await client.git_show(target_ref="ref", path="viking://resources/bin.dat")
-    assert result == {"oid": "e" * 40, "size": 3, "bytes": b"\x00\x01\x02"}
-
-
-async def test_git_show_blob_missing_headers_degrades_gracefully():
-    """Server bug / proxy strip: headers absent but content-type still binary.
-    Client must not crash — empty oid and size=0 are acceptable fallbacks
-    (the byte payload is what matters for the caller).
-    """
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake = _FakeHTTPClient()
-    client._http = fake
-
-    class _NoHeadersResponse:
-        def __init__(self, content: bytes):
-            self.content = content
-            self.status_code = 200
-            self.headers = {"content-type": "application/octet-stream"}
-
-    fake.next_response = _NoHeadersResponse(b"payload")
-    result = await client.git_show(target_ref="r", path="viking://resources/x")
-    assert result["bytes"] == b"payload"
-    assert result["oid"] == ""
-    assert result["size"] == 0
+        if status == 200:
+            assert await invoke() == {
+                "oid": "b" * 40 if with_headers else "",
+                "size": 6 if with_headers else 0,
+                "bytes": payload,
+            }
+        else:
+            with pytest.raises(OpenVikingError) as error:
+                await invoke()
+            assert error.value.code == ("NOT_FOUND" if status == 404 else "INTERNAL")
+            if status == 503:
+                assert "HTTP 503: upstream unavailable" in str(error.value)
+    finally:
+        await owner.close()
 
 
 async def test_git_log_gets_with_params():
