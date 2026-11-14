@@ -39,13 +39,14 @@ export function TargetInteraction({
     cause: unknown;
   }>();
   const blocked = Boolean(disabled || submitting || pending);
+  const missingUri = !uri.trim();
   const permission = resolveDirectoryPermission(
     uri,
     request.directoryPicker.permission,
   );
   const submit = async () => {
     if (blocked || busy.current) return;
-    if (!uri) {
+    if (missingUri) {
       setError({
         code: 'submitFailed',
         cause: new DirectoryFlowError('directoryUnavailable'),
@@ -168,7 +169,7 @@ export function TargetInteraction({
             type="primary"
             htmlType="submit"
             loading={pending || submitting}
-            disabled={blocked || !uri.trim()}
+            disabled={blocked || missingUri}
           >
             {labels.submit}
           </Button>

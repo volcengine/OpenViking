@@ -66,3 +66,44 @@ test('invalid schedules and absent targets disable submission; valid schedules c
     await view.unmount();
   }
 });
+
+test('blank targets cannot submit programmatically or advance a sequence', async () => {
+  for (const sequence of [false, true]) {
+    const answers = [];
+    const target = {
+      kind: 'target',
+      initialUri: '   ',
+      directoryPicker: { rows: [] },
+    };
+    const view = await mount(
+      h(VikingBotInteraction, {
+        request: sequence
+          ? { kind: 'steps', steps: [target, { kind: 'text' }] }
+          : target,
+        onSubmit: (answer) => answers.push(answer),
+      }),
+    );
+    try {
+      assert.equal(
+        view.container.querySelector('button[type=submit]').disabled,
+        true,
+      );
+      await act(async () =>
+        view.container
+          .querySelector('form')
+          .dispatchEvent(
+            new window.Event('submit', { bubbles: true, cancelable: true }),
+          ),
+      );
+      assert.equal(answers.length, 0);
+      assert.ok(view.container.querySelector('[role=alert]'));
+      if (sequence)
+        assert.match(
+          view.container.querySelector('[data-active-step]').textContent,
+          /1 \/ 2/,
+        );
+    } finally {
+      await view.unmount();
+    }
+  }
+});
