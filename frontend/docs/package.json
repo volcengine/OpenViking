@@ -9,7 +9,7 @@
     "preview": "rspress preview --host 0.0.0.0"
   },
   "dependencies": {
-    "@openviking/react": "0.1.11",
+    "@openviking/react": "0.1.12",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
