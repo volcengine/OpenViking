@@ -1,13 +1,11 @@
 import {
   compileCommand,
   compileHistory,
-  isValidCompileName,
   parseArgs,
   parseCompile,
   tokenize,
 } from '#/features/workbench/compile/lib/commands'
 import { describe, expect, it } from 'vitest'
-import type { CompileRequest } from '#/features/workbench/compile/lib/api'
 
 import {
   clearCompileHandoff,
@@ -28,12 +26,10 @@ describe('Compile command grammar', () => {
   })
   it('accepts repeated sources and quoted JSON', () => {
     expect(
-      (
-        parseCompile(
-          tokenize(
-            `compile --from viking://resources/a --from viking://resources/b --to viking://resources/c --skill viking://agent/skills/wiki --args '{"model_name":"hello world"}'`,
-          ),
-        ) as CompileRequest
+      parseCompile(
+        tokenize(
+          `compile --from viking://resources/a --from viking://resources/b --to viking://resources/c --skill viking://agent/skills/wiki --args '{"model_name":"hello world"}'`,
+        ),
       ).args,
     ).toEqual({ model_name: 'hello world' })
   })
@@ -76,7 +72,7 @@ it.each(['--args', "'--args'", '"--args"', String.raw`--ar\gs`])(
   'omits private args from history for %s',
   (flag) => {
     const command = `compile --from viking://resources/a --to viking://resources/b --skill viking://agent/skills/s ${flag} '{"api_key":"synthetic-secret"}'`
-    expect((parseCompile(tokenize(command)) as CompileRequest).args).toEqual({
+    expect(parseCompile(tokenize(command)).args).toEqual({
       api_key: 'synthetic-secret',
     })
     const history = compileHistory(command)
@@ -89,38 +85,3 @@ it('does not persist malformed commands containing private args', () => {
     compileHistory(`compile --args '{"api_key":"synthetic-secret"}`),
   ).toEqual({ title: 'compile / task', remember: false })
 })
-
-it('round trips name-only runs and rejects overrides', () => {
-  const request = { compile_name: 'research-summary' }
-  expect(parseCompile(tokenize(compileCommand(request)))).toEqual(request)
-  expect(() =>
-    parseCompile(['compile', '--compile-name', '../state']),
-  ).toThrow()
-  expect(() =>
-    parseCompile(
-      tokenize(compileCommand(request) + ' --to viking://resources/other'),
-    ),
-  ).toThrow()
-})
-
-it('round trips a named configuration and preserves its name in form handoff', () => {
-  const request = {
-    compile_name: 'Research-summary_1',
-    from: ['viking://resources/a'],
-    to: 'viking://resources/b',
-    skill: 'viking://agent/skills/wiki',
-  }
-  const command = compileCommand(request, true)
-  expect(parseCompile(tokenize(command))).toEqual(request)
-  expect(() =>
-    parseCompile(tokenize(command.replace(request.compile_name, '../state'))),
-  ).toThrow()
-  prepareCompileHandoff('alice', command)
-  expect(readCompileHandoff('alice')).toEqual(request)
-  clearCompileHandoff()
-})
-
-it.each(['', '../state', 'a'.repeat(65), 'name\n', 'name\r', 'name\u2028'])(
-  'rejects an invalid configuration name: %s',
-  (name) => expect(isValidCompileName(name)).toBe(false),
-)

@@ -1,7 +1,7 @@
+import i18n from '#/i18n/core'
 import {
   cancelCompile,
   createCompile,
-  createCompileTask,
   fetchCompileTask,
   fetchCompileTasks,
   lookupSubmission,
@@ -23,14 +23,11 @@ export async function runCompileCommand(
 ): Promise<{ body: string; taskId?: string }> {
   const tokens = tokenize(input)
   if (tokens[0] === 'compile') {
-    const request = parseCompile(tokens)
-    if (tokens[1] === 'create') {
-      if (!('compile_name' in request) || !('from' in request))
-        throw new CompileCommandError('invalidArgument')
-      const config = await createCompileTask(request)
-      return { body: config.compile_name }
-    }
-    const task = await createCompile(request, key)
+    const task = await createCompile(parseCompile(tokens), key)
+    if (!('task_id' in task))
+      return {
+        body: `${i18n.t('compile:schedule.saved')}\n${task.to}\n${task.next_run_at || ''}`,
+      }
     return {
       body: `${task.task_id}\n${localizeStatus(task.status || 'unknown')}\n${task.meta?.request?.to || ''}`,
       taskId: task.task_id,
@@ -86,9 +83,9 @@ export async function runCompileSubmission(
   localizeStage: (stage: string) => string = (stage) => stage,
 ) {
   const tokens = tokenize(input)
-  if (tokens[0] !== 'compile' || tokens[1] === 'create')
+  if (tokens[0] !== 'compile')
     return runCompileCommand(input, '', localizeStatus, localizeStage)
-  parseCompile(tokens)
+  const request = parseCompile(tokens)
   // A remounted terminal has no private request in memory. Resolve the saved
   // submission before interpreting the command as a new creation.
   const restoredKey = pending.current ? null : readKey()
@@ -109,6 +106,19 @@ export async function runCompileSubmission(
   }
   if (pending.current && pending.current.raw !== input)
     throw new CompileCommandError('pendingSubmission')
+  if (
+    !pending.current &&
+    !restoredKey &&
+    request.args &&
+    ('auto_update' in request.args || 'update_schedule' in request.args)
+  ) {
+    return runCompileCommand(
+      input,
+      `${Date.now()}:${createRandomUuid()}`,
+      localizeStatus,
+      localizeStage,
+    )
+  }
   const submission = pending.current ?? {
     raw: input,
     key: restoredKey || `${Date.now()}:${createRandomUuid()}`,

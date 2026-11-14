@@ -1,33 +1,26 @@
-import type { CompileCreateRequest } from '#/features/workbench/compile/lib/api'
+import type { CompileRequest } from '#/features/workbench/compile/lib/api'
 import { parseArgs, tokenize } from '#/features/workbench/compile/lib/commands'
 
-let handoff:
-  | { scope: string; request: Partial<CompileCreateRequest> }
-  | undefined
+let handoff: { scope: string; request: Partial<CompileRequest> } | undefined
 export const readCompileHandoff = (scope: string) =>
   handoff?.scope === scope ? handoff.request : undefined
 export const clearCompileHandoff = () => {
   handoff = undefined
 }
 export function prepareCompileHandoff(scope: string, input: string) {
-  const request: Partial<CompileCreateRequest> = { from: [] }
+  const request: Partial<CompileRequest> = { from: [] }
   try {
     const tokens = tokenize(input)
     if (tokens[0] !== 'compile') {
       handoff = undefined
       return
     }
-    for (
-      let i = tokens[1] === 'create' ? 2 : 1;
-      i + 1 < tokens.length;
-      i += 2
-    ) {
+    for (let i = 1; i + 1 < tokens.length; i += 2) {
       const key = tokens[i],
         value = tokens[i + 1]
       if (key === '--from')
         request.from?.push(...value.split(',').filter(Boolean))
       if (key === '--to') request.to = value
-      if (key === '--compile-name') request.compile_name = value
       if (key === '--skill') request.skill = value
       if (key === '--instruction') request.instruction = value
       if (key === '--args') request.args = parseArgs(value)

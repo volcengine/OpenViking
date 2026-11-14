@@ -11,7 +11,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const api = vi.hoisted(() => ({
   createCompile: vi.fn(),
-  createCompileTask: vi.fn(),
   lookupSubmission: vi.fn(),
   fetchCompileTasks: vi.fn(),
   fetchCompileTask: vi.fn(),
@@ -22,25 +21,14 @@ beforeEach(() => vi.resetAllMocks())
 afterEach(() => vi.unstubAllGlobals())
 
 describe('Compile terminal regressions', () => {
-  it('rejects create without a name before sending a request', async () => {
-    for (const command of [
-      'ov compile create',
-      'ov compile create --from viking://resources/a --to viking://resources/b --skill viking://agent/skills/s',
-    ]) {
-      await expect(runCompileCommand(command, 'unused')).rejects.toThrow(
-        'required',
-      )
-    }
-    expect(api.createCompileTask).not.toHaveBeenCalled()
-    expect(api.createCompile).not.toHaveBeenCalled()
-  })
   it('handles a saved plan without a task ID or a persistent recovery key', async () => {
-    api.createCompileTask.mockResolvedValue({
-      compile_name: 'research-summary',
+    api.createCompile.mockResolvedValue({
+      to: 'viking://resources/b',
+      next_run_at: '2026-11-03T09:00:00+08:00',
     })
     const saveKey = vi.fn()
     const pending = { current: null }
-    const command = `compile create --compile-name research-summary --from viking://resources/a --to viking://resources/b --skill viking://agent/skills/s --args '{"auto_update":true,"update_schedule":{"frequency":"daily"}}'`
+    const command = `compile --from viking://resources/a --to viking://resources/b --skill viking://agent/skills/s --args '{"auto_update":true,"update_schedule":{"frequency":"daily"}}'`
     const result = await runCompileSubmission(
       command,
       pending,
@@ -48,7 +36,7 @@ describe('Compile terminal regressions', () => {
       saveKey,
     )
     expect(result.taskId).toBeUndefined()
-    expect(result.body).toBe('research-summary')
+    expect(result.body).toContain('2026-11-03T09:00:00+08:00')
     expect(result.body).not.toContain('undefined')
     expect(pending.current).toBeNull()
     expect(saveKey).not.toHaveBeenCalled()

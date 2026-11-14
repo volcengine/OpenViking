@@ -4,32 +4,19 @@ import type * as CompileApi from '#/features/workbench/compile/lib/api'
 import { Route } from '#/routes/compile/tasks/$taskId'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type * as TanStackRouter from '@tanstack/react-router'
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import type { ComponentType, ReactNode } from 'react'
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest'
 
-const api = vi.hoisted(() => ({
-  fetchCompileTask: vi.fn(),
-  createCompile: vi.fn(),
-  navigate: vi.fn(),
-}))
+const api = vi.hoisted(() => ({ fetchCompileTask: vi.fn() }))
 vi.mock('#/features/workbench/compile/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof CompileApi>()),
   fetchCompileTask: api.fetchCompileTask,
-  createCompile: api.createCompile,
 }))
 vi.mock('@tanstack/react-router', async (importOriginal) => ({
   ...(await importOriginal<typeof TanStackRouter>()),
   getRouteApi: () => ({ useParams: () => ({ taskId: 'cmp-1' }) }),
   useLocation: () => ({ state: {} }),
-  useNavigate: () => api.navigate,
   useRouter: () => ({ history: { back: vi.fn() } }),
   Link: ({
     to,
@@ -169,20 +156,4 @@ it('refreshes output caches only once when a running task completes', async () =
   })
   for (const key of outputKeys)
     expect(client.getQueryState(key)?.isInvalidated).toBe(false)
-})
-
-it('reruns a persistent task using only its configuration name', async () => {
-  const compileName = 'research-summary'
-  const saved = task('completed')
-  saved.meta!.request!.compile = { compile_name: compileName }
-  api.fetchCompileTask.mockResolvedValue(saved)
-  api.createCompile.mockResolvedValue({ task_id: 'cmp_next' })
-  const { page } = mount()
-  fireEvent.click(await page.findByRole('button', { name: 'runAgain' }))
-  await waitFor(() =>
-    expect(api.createCompile).toHaveBeenCalledWith(
-      { compile_name: compileName },
-      expect.any(String),
-    ),
-  )
 })

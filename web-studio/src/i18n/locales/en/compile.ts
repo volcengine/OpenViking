@@ -1,11 +1,6 @@
 export default {
-  saveConfiguration: 'Save configuration',
-  runAgain: 'Run again',
-  task_first_create_time: 'First execution accepted',
-  last_run_time: 'Latest execution accepted',
-  neverRun: 'Never run',
-
   schedule: {
+    lastRunFailed: 'The last Compile run failed. Review the technical details.',
     listDescription:
       'Turn automatic updates on or off, or adjust the schedule here. Schedules use Beijing time (Asia/Shanghai).',
     autoUpdate: 'Automatic updates',
@@ -17,21 +12,24 @@ export default {
     disableHint:
       'Turning off clears the schedule and keeps compiled content and execution history. Any running compilation continues.',
     filter: 'Automatic update status',
-    allTargets: 'All configurations',
+    allTargets: 'All targets',
     active: 'Enabled',
     disabled: 'Disabled',
-    empty: 'No compilation configurations yet',
-    emptyFiltered: 'No matching configurations',
+    empty: 'No compilation targets yet',
+    emptyFiltered: 'No matching targets',
     emptyLoaded:
-      'No matches on loaded pages. Load more to check the remaining configurations.',
+      'No matches on loaded pages. Load more to check the remaining targets.',
     timing: 'Schedule',
     dailyAt: 'Daily at {{time}}',
     weeklyAt: 'Every {{weekday}} at {{time}}',
     noSchedule: 'No schedule configured',
     nextRun: 'Next run',
     notScheduled: 'Not scheduled',
+    execution: 'Execution',
+    running: 'Running',
+    idle: 'Idle',
     tasksTab: 'Execution history',
-    plansTab: 'Configurations',
+    plansTab: 'Scheduled plans',
     enabled: 'Scheduled automatic updates',
     frequency: 'Frequency',
     daily: 'Every day',
@@ -56,7 +54,7 @@ export default {
     saveHint:
       'Save the plan to run at the next scheduled time. No compilation starts now.',
     manualHint:
-      'Start runs a full compilation now. Save configuration stores reusable inputs without running.',
+      'Automatic updates are off. A new compilation runs immediately; editing settings only saves the configuration.',
     reservedArgs:
       'Use the automatic update controls above to configure auto_update and update_schedule.',
     schedulerDisabled:
@@ -186,8 +184,7 @@ export default {
     invalidArgument:
       'Invalid argument. Use a supported flag followed by its value, separated by a space.',
     duplicateArgument: 'Only --from may be specified more than once.',
-    required:
-      'Required arguments: --from, --to, --skill; create also requires --compile-name.',
+    required: 'Required arguments: --from, --to, --skill.',
     argsObject: '--args must contain a valid JSON object.',
     unknownCommand: 'Unknown command. Use compile or task.',
     taskUsage: 'Use task status <id>, task cancel <id>, or task list.',
@@ -221,19 +218,13 @@ export default {
   detailTitle: 'Compile task details',
   copyTaskId: 'Copy task ID',
   stages: {
-    running: 'Compiling',
     queued: 'Queued',
     loading_skill: 'Loading Skill',
+    running: 'Compiling',
     completed: 'Completed',
     processing: 'Processing sources',
   },
   sourcePlaceholder: 'viking://resources/…',
-  compileName: 'Configuration name',
-  nameRequired: 'Enter a configuration name before saving.',
-  nameInvalid: 'Use 1–64 ASCII letters, digits, underscores, or hyphens. The first character cannot be a hyphen.',
-  nameHint:
-    'Required when saving configuration; optional for one-off execution. Names are case-sensitive and unique to the current user within this account.',
-  nameFixed: 'This name identifies the configuration and cannot be changed.',
   formIntro:
     'Choose a Skill, add source directories, and choose where to save the result. * indicates a required field.',
   optional: 'Optional',
@@ -324,7 +315,7 @@ export default {
   terminalHint: 'Compile materials with a Skill',
   openForm: 'Open compilation form',
   terminalHelp:
-    'compile create --compile-name <name> --from <directory> --to <directory> --skill <Skill URI>\ncompile --compile-name <name>\ncompile --from <directory> --to <directory> --skill <Skill URI> [--instruction "..."] [--args \'{}\']\ntask status <id> | task cancel <id> | task list --task-type compile',
+    'compile --from <directory> --to <directory> --skill <Skill URI> [--instruction "..."] [--args \'{}\']\ntask status <id> | task cancel <id> | task list --task-type compile',
   argsOmitted: 'Advanced parameters omitted from history and copied commands.',
   storageFailed: 'Draft could not be saved.',
   newTasks: 'Refresh to see new tasks',
@@ -350,8 +341,8 @@ export default {
   status: 'Status',
   invalidTask: 'Task not found or not a compilation.',
   statuses: {
-    running: 'Running',
     pending: 'Queued',
+    running: 'Running',
     cancelling: 'Stopping',
     completed: 'Completed',
     failed: 'Failed',

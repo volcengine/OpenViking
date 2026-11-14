@@ -1,11 +1,6 @@
 export default {
-  saveConfiguration: '保存编译配置',
-  runAgain: '再次运行',
-  task_first_create_time: '首次执行受理时间',
-  last_run_time: '最近执行受理时间',
-  neverRun: '尚未运行',
-
   schedule: {
+    lastRunFailed: '上次编译失败，请查看技术详情。',
     listDescription:
       '直接开启、关闭自动更新，或调整执行时间。计划统一使用北京时间（Asia/Shanghai）。',
     autoUpdate: '自动更新',
@@ -17,20 +12,23 @@ export default {
     disableHint:
       '关闭自动更新会清除计划时间，保留编译产物和执行记录；正在运行的编译会继续。',
     filter: '自动更新状态',
-    allTargets: '全部配置',
+    allTargets: '全部目标',
     active: '已开启',
     disabled: '已关闭',
-    empty: '暂无编译配置',
-    emptyFiltered: '没有符合条件的配置',
-    emptyLoaded: '已加载的页面中没有匹配项，请加载更多以查看其余配置。',
+    empty: '暂无编译目标',
+    emptyFiltered: '没有符合条件的目标',
+    emptyLoaded: '已加载的页面中没有匹配项，请加载更多以查看其余目标。',
     timing: '执行计划',
     dailyAt: '每天 {{time}}',
     weeklyAt: '每{{weekday}} {{time}}',
     noSchedule: '未配置定时计划',
     nextRun: '下次执行',
     notScheduled: '暂无计划',
+    execution: '执行状态',
+    running: '运行中',
+    idle: '空闲',
     tasksTab: '执行记录',
-    plansTab: '编译配置',
+    plansTab: '定时计划',
     enabled: '定时自动更新',
     frequency: '执行频率',
     daily: '每天',
@@ -54,7 +52,7 @@ export default {
     saved: '更新设置已保存',
     saveHint: '保存后将在下次计划时间执行，不会立即开始编译。',
     manualHint:
-      '开始编译会立即执行全量编译；保存编译配置只存储可复用的输入，不执行任务。',
+      '自动更新已关闭。新建编译将立即执行；编辑已有目标时只保存配置。',
     reservedArgs:
       '请通过上方的自动更新选项配置 auto_update 和 update_schedule。',
     schedulerDisabled:
@@ -162,8 +160,7 @@ export default {
     unclosedQuote: '请补全引号或转义字符后再执行命令。',
     invalidArgument: '参数无效。请使用支持的参数名，并以空格分隔参数名和值。',
     duplicateArgument: '只有 --from 可以重复指定。',
-    required:
-      '请填写必填参数：--from、--to、--skill；create 还必须提供 --compile-name。',
+    required: '请填写必填参数：--from、--to、--skill。',
     argsObject: '--args 必须是合法的 JSON 对象。',
     unknownCommand: '未知命令，请使用 compile 或 task。',
     taskUsage: '请使用 task status <id>、task cancel <id> 或 task list。',
@@ -192,19 +189,13 @@ export default {
   detailTitle: '编译任务详情',
   copyTaskId: '复制任务 ID',
   stages: {
-    running: '编译处理中',
     queued: '等待执行',
     loading_skill: '读取 Skill',
+    running: '编译处理中',
     completed: '执行完成',
     processing: '处理素材',
   },
   sourcePlaceholder: 'viking://resources/…',
-  compileName: '配置名称',
-  nameRequired: '保存配置前请填写配置名称。',
-  nameInvalid: '请输入 1–64 位 ASCII 字母、数字、下划线或连字符。首字符不能是连字符。',
-  nameHint:
-    '保存配置时必填，一次性执行可留空。名称区分大小写，在同一 account 的同一用户内唯一。',
-  nameFixed: '该名称用于引用配置，不能修改。',
   formIntro:
     '选择编译规则、添加素材，并设置结果的保存位置。标有 * 的为必填项。',
   optional: '可选',
@@ -287,7 +278,7 @@ export default {
   terminalHint: '使用 Skill 编译素材',
   openForm: '打开编译表单',
   terminalHelp:
-    'compile create --compile-name <名称> --from <素材目录> --to <输出目录> --skill <Skill URI>\ncompile --compile-name <名称>\ncompile --from <素材目录> --to <输出目录> --skill <Skill URI> [--instruction "..."] [--args \'{}\']\ntask status <id> | task cancel <id> | task list --task-type compile',
+    'compile --from <素材目录> --to <输出目录> --skill <Skill URI> [--instruction "..."] [--args \'{}\']\ntask status <id> | task cancel <id> | task list --task-type compile',
   argsOmitted: '高级参数不写入历史记录或复制的命令。',
   storageFailed: '草稿保存失败。',
   newTasks: '刷新查看新任务',
@@ -313,8 +304,8 @@ export default {
   status: '状态',
   invalidTask: '任务不存在或不是编译任务。',
   statuses: {
-    running: '运行中',
     pending: '排队中',
+    running: '运行中',
     cancelling: '取消中',
     completed: '已完成',
     failed: '失败',

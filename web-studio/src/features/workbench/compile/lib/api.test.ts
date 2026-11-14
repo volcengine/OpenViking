@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   BUILTIN_SKILLS_ROOT,
   createCompile,
-  createCompileTask,
   fetchCompileConfig,
   fetchCompileConfigs,
   fetchCompileSkills,
@@ -44,37 +43,24 @@ describe('Compile scheduling APIs', () => {
     const config = {
       to: 'viking://resources/wiki',
       auto_update: true,
-      compile_name: 'research-summary',
+      next_run_at: '2026-11-03T09:00:00+08:00',
     }
     clientMocks.post.mockResolvedValueOnce(config)
-    const result = await createCompileTask({
-      compile_name: config.compile_name,
-      from: ['viking://resources/source'],
-      to: config.to,
-      skill: 'viking://agent/skills/wiki',
-      args: { auto_update: true },
-    })
+    const result = await createCompile(
+      {
+        from: ['viking://resources/source'],
+        to: config.to,
+        skill: 'viking://agent/skills/wiki',
+        args: { auto_update: true },
+      },
+      'schedule-save-key',
+    )
     expect(result).toEqual(config)
     expect(result).not.toHaveProperty('task_id')
-    expect(clientMocks.post.mock.calls[0][0].url).toBe('/api/v1/compile/create')
-  })
-
-  it('sends only the configuration name for persistent executions', async () => {
-    const compileName = 'research-summary'
-    clientMocks.post.mockResolvedValueOnce({
-      task_id: 'cmp_1',
-      status: 'pending',
-    })
-    await createCompile({ compile_name: compileName }, 'run-key')
-    expect(clientMocks.post).toHaveBeenCalledWith({
-      url: '/api/v1/compile',
-      body: { compile_name: compileName },
-      headers: { 'Idempotency-Key': 'run-key' },
-    })
   })
 
   it('passes target cursors and URI query values without changing them', async () => {
-    const cursor = 'research-summary'
+    const cursor = 'viking://resources/a folder?value=1'
     await fetchCompileConfigs(cursor)
     expect(clientMocks.get).toHaveBeenLastCalledWith({
       url: '/api/v1/compile/configs',
@@ -85,11 +71,10 @@ describe('Compile scheduling APIs', () => {
     expect(clientMocks.get).toHaveBeenLastCalledWith({
       url: '/api/v1/compile/config',
       signal: undefined,
-      query: { compile_name: cursor },
+      query: { to: cursor },
     })
     const body = {
-      compile_name: cursor,
-      to: 'viking://resources/output',
+      to: cursor,
       from: ['viking://resources/source'],
       skill: 'viking://agent/skills/wiki',
       auto_update: false,
