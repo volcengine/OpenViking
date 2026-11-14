@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import tempfile
 import uuid
 import zipfile
@@ -19,16 +20,21 @@ def zip_directory(dir_path: str) -> str:
     root = path.resolve()
     zip_path = Path(tempfile.gettempdir()) / f"temp_upload_{uuid.uuid4().hex}.zip"
 
+    def raise_scan_error(error: OSError) -> None:
+        raise error
+
     try:
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-            for file_path in path.rglob("*"):
-                if file_path.is_symlink():
-                    continue
-                if file_path.is_file():
-                    if not _path_is_relative_to(file_path.resolve(), root):
+            for directory, _, filenames in os.walk(path, onerror=raise_scan_error):
+                for filename in filenames:
+                    file_path = Path(directory) / filename
+                    if file_path.is_symlink():
                         continue
-                    arcname = str(file_path.relative_to(path)).replace("\\", "/")
-                    zipf.write(file_path, arcname=arcname)
+                    if file_path.is_file():
+                        if not _path_is_relative_to(file_path.resolve(), root):
+                            continue
+                        arcname = str(file_path.relative_to(path)).replace("\\", "/")
+                        zipf.write(file_path, arcname=arcname)
     except BaseException:
         zip_path.unlink(missing_ok=True)
         raise
