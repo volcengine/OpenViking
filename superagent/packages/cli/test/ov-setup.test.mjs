@@ -27,7 +27,7 @@ function fixture(t, answers) {
 }
 
 const remote = 'https://ov.example:9443';
-function fetchOV({ local = false, key = 'test-secret', calls = [] } = {}) {
+function fetchOV({ local = false, key = 'test-secret', calls = [], version } = {}) {
   return async (url, init) => {
     calls.push({ url, headers: init.headers });
     if (url.startsWith(LOCAL_OV_URL)) {
@@ -35,7 +35,7 @@ function fetchOV({ local = false, key = 'test-secret', calls = [] } = {}) {
       return Response.json({ status: 'ok', auth_mode: 'dev', result: [] });
     }
     assert.ok(url.startsWith(remote));
-    if (url.endsWith('/health')) return Response.json({ status: 'ok', auth_mode: 'api_key' });
+    if (url.endsWith('/health')) return Response.json({ status: 'ok', auth_mode: 'api_key', ...(version === undefined ? {} : { version }) });
     return init.headers['X-API-Key'] === key
       ? Response.json({ status: 'ok', result: [] })
       : Response.json({ status: 'error', message: 'sensitive server details' }, { status: 401 });
@@ -54,6 +54,22 @@ test('manual remote URL, custom port and hidden credentials are available when n
   assert.match(h.text(), /Choose an OV configuration file/);
   assert.doesNotMatch(h.text(), /test-secret|sensitive server details/);
   assert.deepEqual(fs.readdirSync(h.home), [], 'selecting a connection does not save it');
+});
+
+test('setup warns only when the selected OV version is known to update soul through extraction', async (t) => {
+  for (const [version, warning] of [
+    ['0.5.4', true],
+    ['v0.4.18', true],
+    ['0.5.5', false],
+    ['0.6.0', false],
+    [null, false],
+    ['development', false],
+  ]) {
+    const h = fixture(t, ['3', remote, '1', 'test-secret', '', '', '']);
+    const result = await configureOpenViking({ ...h.options, fetchImpl: fetchOV({ version }) });
+    assert.equal(result.version, version);
+    assert.equal(h.text().includes('memory extraction pipeline may update the soul'), warning, `version: ${version}`);
+  }
 });
 
 // The hosted service checks the key even on /health and reports the key's user.

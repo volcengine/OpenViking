@@ -40,7 +40,7 @@ test('OpenViking: the user config wins, its credentials prove who the user is', 
   const detected = await detectOpenViking({ env: {}, homeDir: home, fetchImpl });
   assert.deepEqual(detected, {
     configPath: path.join(home, '.openviking', 'ovcli.conf'), url: 'https://ov.example', usable: true,
-    user: 'amy', account: null, role: null, authMode: 'api_key', reason: null,
+    user: 'amy', account: null, role: null, version: '0.4', authMode: 'api_key', reason: null,
   });
   assert.equal(calls[0].headers['X-API-Key'], 'key-1');
   assert.equal(calls[0].headers['X-OpenViking-Account'], 'acme');
