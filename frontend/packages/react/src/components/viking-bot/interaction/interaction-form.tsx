@@ -1,8 +1,16 @@
+import { useId, useRef, useState } from 'react';
 import { ErrorNotification } from '../../../shared/feedback/error-notification.js';
 import { useToast } from '../../../shared/primitives/toast/use-toast.js';
-import { useId, useRef, useState } from 'react';
-import { Button } from '../../../shared/primitives/button/button.js';
+import { useValidationLifetime } from './use-validation-lifetime.js';
+import { focusError } from './focus-error.js';
+import { InteractionActions } from './interaction-actions.js';
 import { interactionError } from './directory-state.js';
+import {
+  validateFields,
+  clearChangedErrors,
+  clearChangedValidation,
+  type FieldErrors,
+} from './field-validation.js';
 import { InteractionFields } from './interaction-fields.js';
 import {
   initialAnswer,
@@ -24,6 +32,7 @@ export function InteractionForm({
   disabled,
   submitting,
   error,
+  fields,
   onSubmit,
   onCancel,
   onPrevious,
@@ -36,12 +45,14 @@ export function InteractionForm({
   const id = useId();
   const [toast, toastHolder] = useToast({ locale });
   const formRef = useRef<HTMLFormElement>(null);
+  const { validationRequest, mounted } = useValidationLifetime();
   const composing = useRef(false);
   const inFlight = useRef(false);
   const [initial] = useState(() => initialAnswer(request));
   const [answer, setAnswer] = useState(initial);
   const [resetCount, setResetCount] = useState(0);
   const [pending, setPending] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [validation, setValidation] = useState<FormError>();
   const [submitError, setSubmitError] = useState<{ cause: unknown }>();
   const busy = Boolean(submitting || pending);
@@ -49,9 +60,12 @@ export function InteractionForm({
   const options = request.kind === 'choice' || request.kind === 'repair';
   const change = (value: VikingBotInteractionAnswer) => {
     if (blocked) return;
+    setFieldErrors((errors) => clearChangedErrors(errors, answer, value));
     setAnswer(value);
     toast.clear();
-    setValidation(undefined);
+    setValidation((previous) =>
+      clearChangedValidation(previous, answer, value),
+    );
     setSubmitError(undefined);
   };
   const failure =
@@ -66,12 +80,7 @@ export function InteractionForm({
     if (invalid || !answer) {
       toast.warning({
         id: 'validation',
-        content:
-          options && invalid === 'required'
-            ? labels.invalidAnswer
-            : invalid
-              ? labels[invalid]
-              : labels.required,
+        content: invalid ? labels[invalid] : labels.required,
       });
       const selector =
         invalid === 'timeInvalid'
@@ -89,12 +98,23 @@ export function InteractionForm({
     setPending(true);
     setSubmitError(undefined);
     try {
+      const errors = await validateFields(
+        fields,
+        answer,
+        validationRequest.current.signal,
+      );
+      if (!mounted.current) return;
+      setFieldErrors(errors);
+      if (Object.values(errors).some(Boolean)) {
+        window.requestAnimationFrame(() => focusError(formRef.current));
+        return;
+      }
       await onSubmit?.(answer);
     } catch (cause) {
-      setSubmitError({ cause });
+      if (mounted.current) setSubmitError({ cause });
     } finally {
       inFlight.current = false;
-      setPending(false);
+      if (mounted.current) setPending(false);
     }
   };
   return (
@@ -142,60 +162,40 @@ export function InteractionForm({
           answer={answer}
           disabled={blocked}
           validation={validation}
+          fields={fields}
+          fieldErrors={fieldErrors}
+          error={failure}
           onChange={change}
         />
-        {validation ? (
-          <p
-            id={`${id}-error`}
-            className="ov-viking-bot__interaction-error-description"
-          >
-            {labels[validation]}
-          </p>
-        ) : null}
         {failure ? (
           <ErrorNotification
             title={labels.submitFailed}
             error={submitError?.cause}
             identity={error ?? submitError}
-            locale={locale}
           >
             {failure}
           </ErrorNotification>
         ) : null}
       </div>
-      <div className="ov-viking-bot__interaction-footer">
-        {onPrevious ? (
-          <Button type="outline" disabled={blocked} onClick={onPrevious}>
-            {labels.previous}
-          </Button>
-        ) : null}
-        {onCancel ? (
-          <Button
-            type="outline"
-            className="ov-viking-bot__interaction-action"
-            disabled={blocked}
-            onClick={() => {
-              setAnswer(initial);
-              toast.clear();
-              setValidation(undefined);
-              setSubmitError(undefined);
-              setResetCount((count) => count + 1);
-              onCancel();
-            }}
-          >
-            {labels.cancel}
-          </Button>
-        ) : null}
-        <Button
-          type="primary"
-          htmlType="submit"
-          className="ov-viking-bot__interaction-action"
-          loading={busy}
-          disabled={blocked || Boolean(validateAnswer(request, answer))}
-        >
-          {labels.submit}
-        </Button>
-      </div>
+      <InteractionActions
+        labels={labels}
+        onPrevious={onPrevious}
+        submitDisabled={Boolean(validateAnswer(request, answer))}
+        disabled={blocked}
+        submitting={busy}
+        onCancel={
+          onCancel
+            ? () => {
+                setFieldErrors({});
+                setAnswer(initial);
+                setValidation(undefined);
+                setSubmitError(undefined);
+                setResetCount((count) => count + 1);
+                onCancel();
+              }
+            : undefined
+        }
+      />
     </form>
   );
 }

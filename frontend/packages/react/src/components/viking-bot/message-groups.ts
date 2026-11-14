@@ -65,6 +65,10 @@ export function groupMessages(
 
 /** 取消息的纯文本，用于复制。Plain text of a message, used for copying. */
 export function messageText(message: VikingBotMessage): string {
+  if (message.answerSummary)
+    return message.answerSummary
+      .map((row) => `${row.label}: ${row.value}`)
+      .join('\n');
   return message.parts
     .filter((part) => part.type === 'text')
     .map((part) => part.text)

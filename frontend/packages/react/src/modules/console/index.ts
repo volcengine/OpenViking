@@ -16,3 +16,9 @@ export type {
   VikingBotChatService,
   VikingBotSessionService,
 } from './chat/types.js';
+
+export type {
+  ConsoleHitlOptions,
+  ConsoleHitlCard,
+  ConsoleHitlCardOptions,
+} from './hitl/types.js';

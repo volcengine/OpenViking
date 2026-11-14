@@ -50,6 +50,7 @@
     "#viking-bot-directory": "./docs/_demos/use-viking-bot-directory.ts",
     "#context-picker-demo": "./docs/_demos/use-context-picker-demo.ts",
     "#context-picker-data": "./docs/_demos/context-picker-data.ts",
-    "#viking-bot-directory-data": "./docs/_demos/viking-bot-directory-data.ts"
+    "#viking-bot-directory-data": "./docs/_demos/viking-bot-directory-data.ts",
+    "#console-hitl-service": "./docs/_demos/console-hitl-service.ts"
   }
 }

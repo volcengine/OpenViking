@@ -3,6 +3,7 @@
 @import '../../shared/error-boundary/error-boundary.css';
 @import '../../theme.css';
 @import '../../shared/primitives/input/input.css';
+@import '../../shared/primitives/form-field/form-field.css';
 @import '../../shared/primitives/button/button.css';
 @import '../../shared/primitives/radio/radio.css';
 @import '../../shared/primitives/select/style.css';
@@ -110,25 +111,6 @@
   line-height: 20px;
   overflow-wrap: anywhere;
 }
-.ov-viking-bot__interaction-error {
-  margin: 0;
-  color: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
-  font-size: 12px;
-  line-height: 20px;
-  overflow-wrap: anywhere;
-}
-.ov-viking-bot__interaction-label {
-  padding: 0;
-  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
-  font-size: 13px;
-  line-height: 22px;
-}
-.ov-viking-bot__interaction-field {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 8px;
-}
 .ov-viking-bot__interaction-sr {
   position: absolute;
   width: 1px;
@@ -139,4 +121,27 @@
   clip-path: inset(50%);
   border: 0;
   white-space: nowrap;
+}
+
+.ov-viking-bot__answer-summary {
+  display: grid;
+  grid-template-columns: fit-content(40%) minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 0;
+}
+.ov-viking-bot__answer-summary dt {
+  overflow-wrap: anywhere;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+}
+.ov-viking-bot__answer-summary dd {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ov-viking-bot__message--answers {
+  padding-left: 0;
+}
+.ov-viking-bot__user-message-group--answers {
+  width: 100%;
 }

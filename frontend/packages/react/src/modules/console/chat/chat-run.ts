@@ -50,6 +50,7 @@ export async function runChat({
   attach(timeline.append);
   update({
     status: 'streaming',
+    responseComplete: false,
     error: undefined,
     persistenceError: undefined,
     isSubmitting: false,
@@ -130,6 +131,7 @@ export async function runChat({
       messages: finished.messages,
       streaming: undefined,
       status: 'idle',
+      responseComplete: !interrupted,
       isSubmitting: false,
     });
     stage?.finish();
