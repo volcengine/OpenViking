@@ -33,6 +33,8 @@ const messages = {
   submit: '提交',
   cancel: '取消',
   other: '其他',
+  submitFailed: '提交失败，请重试',
+  invalidAnswer: '请选择有效选项后提交',
   submitted: '已提交',
   cancelled: '已取消',
   progress: (index, total) => `${index + 1} / ${total}`,
@@ -47,7 +49,6 @@ const messages = {
   required: '请完成当前问题',
   timeInvalid: '请输入有效时间，格式为 HH:mm（00:00–23:59）',
   weekdayRequired: '请选择每周更新的日期',
-  submitFailed: '提交失败，请重试',
   weekdays: ['周一', '周二', '周三', '周四', '周五', '周六', '周日'],
 } satisfies InteractionLabels;
 

@@ -3,6 +3,7 @@ import test from 'node:test';
 import { act, createElement as h } from 'react';
 import { VikingBotInteraction } from '@openviking/react/components/viking-bot/interaction';
 import { mount } from './helpers/module-dom.mjs';
+import { notificationContent } from './helpers/feedback-dom.mjs';
 
 const active = (view) => view.container.querySelector('[data-active-step]');
 const click = (node) => act(async () => node.click());
@@ -125,12 +126,10 @@ test('a final rejection preserves every answer and releases navigation for retry
     );
     assert.equal(attempts, 1);
     await act(async () => reject(new Error('Retry this sequence')));
-    assert.match(
-      active(view).querySelector('[role=alert]').textContent,
-      /Retry this sequence/,
-    );
+    assert.match(notificationContent().textContent, /Retry this sequence/);
     assert.equal(active(view).querySelector('input').value, 'Draft');
     await click(button(view, 'Previous'));
+    assert.equal(Boolean(notificationContent()), false);
     assert.ok(active(view).querySelector('input[value=wiki]').checked);
     await click(button(view, 'Next'));
     await click(button(view, 'Submit'));

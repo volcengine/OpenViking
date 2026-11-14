@@ -30,6 +30,16 @@ interface Configuration {
 }
 const configurations = new WeakMap<OvClient, Configuration>();
 
+/** Transport decorators retain the same identity, scheduler and cache scope. */
+export function inheritClientConfiguration(
+  client: OvClient,
+  decorated: OvClient,
+): OvClient {
+  const configuration = configurations.get(client);
+  if (configuration) configurations.set(decorated, configuration);
+  return decorated;
+}
+
 function serviceURL(baseURL = '') {
   return new URL(
     baseURL.replace(/\/+$/, '') || '/',

@@ -251,8 +251,9 @@
   border-radius: 6px;
 }
 
-.ov-file-preview__toolbar-button.ov-button:hover:not(:disabled) {
-  border-color: var(--ov-ui-file-preview-text-muted);
+.ov-file-preview__toolbar-button.ov-button:hover:not(:disabled),
+.ov-file-preview__toolbar-button.ov-button:focus-visible {
+  border-color: var(--ov-ui-file-preview-focus-ring);
 }
 
 .ov-file-preview .ark-agentic-file-viewer-code__lines {

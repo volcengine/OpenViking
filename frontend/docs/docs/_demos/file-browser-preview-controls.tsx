@@ -75,7 +75,13 @@ export function usePreviewControls(locale: 'zh-CN' | 'en-US') {
                 message: 'Demo deletion unavailable',
               },
             }),
-            { status: 503, headers: { 'content-type': 'application/json' } },
+            {
+              status: 503,
+              headers: {
+                'content-type': 'application/json',
+                'x-request-id': 'demo-delete-request',
+              },
+            },
           ),
         );
       return offlineFetch(input, init);

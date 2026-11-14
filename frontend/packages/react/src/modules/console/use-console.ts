@@ -29,7 +29,7 @@ export function useConsole({
   const locale = useLocale(localeProp);
   const tracking = useTaskTracking({ requestOptions, scopeKey, taskService });
   const analytics = useCommandAnalytics(tracking.tasks, tracking.source.key);
-  const inherited = useOvClient();
+  const inherited = useOvClient('local');
   const inheritedSignal = useOvSignal();
   const [fallback] = useState(() => createOvClient());
   const client = inherited ?? fallback;

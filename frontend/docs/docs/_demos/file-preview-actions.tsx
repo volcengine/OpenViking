@@ -1,3 +1,4 @@
+import { OvClientError } from '@openviking/react/client';
 import { Checkbox, Select, SelectOption } from '#demo-controls';
 
 import { useState } from 'react';
@@ -46,7 +47,12 @@ export default function FilePreviewActionsDemo() {
     className,
     onClick: async () => {
       await new Promise((resolve) => setTimeout(resolve, 2000));
-      if (fail) throw new Error(text.failure);
+      if (fail)
+        throw new OvClientError({
+          code: 'DEMO_ERROR',
+          message: text.failure,
+          requestId: 'demo-preview-request',
+        });
       setNotice(`${text.done}: ${label}`);
       return { key, simulated: true }; // Non-void results are valid and ignored.
     },

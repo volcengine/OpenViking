@@ -37,11 +37,7 @@
   line-height: 22px;
   overflow-wrap: anywhere;
 }
-.ov-file-browser-delete__error {
-  color: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
-  font-size: 13px;
-  overflow-wrap: anywhere;
-}
+
 .ov-file-browser-delete__actions {
   display: flex;
   justify-content: flex-end;

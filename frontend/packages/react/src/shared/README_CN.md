@@ -27,6 +27,7 @@
 - `empty`：空态，内置线稿插画在上，标题、可选说明和可选操作在下。`default` 用于内容区，`compact` 用于浮层、树和卡片。失败场景传 `role="alert"`，`ErrorBoundary` 的默认兜底即用它配 `crash` 插画。
 - `resizable`：`ResizableHandle`，可拖拽的 `role="separator"` 分隔条，用指针拖动或方向键调整相邻面板的宽度。宽度由调用方持有，每个夹取后的值通过 `onResize` 回传。
 - `overlay`：`tooltip`、`popover`、`modal`、`drawer` 这类浮层共用的定位与滚动工具。`useOverlayPosition` 在空间不足时把浮层翻到对侧并夹在视口内，`lockBodyScroll` 记录各个持有者，最后一个释放时恢复宿主的内联样式，`OverlayPlacement` 是共用的方位类型。
+- `toast`：顶部居中的轻量提示，见 [Toast](#toast)。
 - `notification`：右上角通知栈，展示任务状态与结果反馈，见 [Notification](#notification)。
 
 ### `auth/`
@@ -43,6 +44,15 @@
 - `locale-context.tsx`：`useLocale` 与 `LocaleProvider`，各公开入口共用的语言作用域。它与请求 Client 的 Context 分离，因此切换语言不影响请求和状态。
 
 译文放在各自所属目录的 `locales/en-US.ts` 与 `locales/zh-CN.ts`；`auth/` 和 `primitives/modal/` 采用同样的布局。
+
+### Toast
+
+- `useToast` 返回 `[toast, holder]`，把 holder 放在调用方语言与主题作用域内；从内部 `primitives/toast/index` 导入，样式由调用方的 `style.css` 引入 `primitives/toast/style.css`。
+- API 与 Notification 一致，提供 `loading`、`info`、`success`、`warning`、`error`、`normal`、`remove` 和 `clear`；每个方法接收含 `content` 的配置并返回 `id`，同一 `id` 原位更新。Toast 只有正文，不提供 Notification 的 `title` 和 `btn`。
+- `loading` 复用内置 LoadingIcon，默认持续显示；其他类型默认 3000 ms 自动关闭，显式 `duration` 优先，`duration: 0` 禁用自动关闭。悬停或焦点位于提示内时暂停计时，默认可手动关闭。
+- `onDismiss` 在手动关闭或自动关闭开始时调用，`onClose` 在退出动画结束后调用；`remove` 与 `clear` 只触发 `onClose`。卸载清理当前实例，不提供全局 API。
+- 内置文案支持 `locale` 与逐项 `labels` 覆盖，切换语言不清空提示；调用方提供的正文按原样保留。Toast 和 Notification 共用内部 `notice` 的状态、计时、图标和浮层实现，各自维护实例与外观。
+- [内部反馈演示](../../../../docs/docs/_demos/toast-feedback.tsx) 对比前端校验提示与模拟接口错误，并演示 loading 更新结果；错误来源与文案规则见 [区块约定](../modules/AGENTS.md#错误反馈)。
 
 ### Notification
 

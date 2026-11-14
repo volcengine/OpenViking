@@ -1,3 +1,4 @@
+import { ErrorNotification } from '../../../shared/feedback/error-notification.js';
 import { useTrack } from '../../../shared/analytics/use-track.js';
 import { useLocale } from '../../../shared/locale-context.js';
 import { TargetInteraction } from './target-interaction.js';
@@ -63,9 +64,14 @@ export function VikingBotInteractionView({
       {request.kind === 'custom' ? (
         <>
           {props.error ? (
-            <p role="alert" className="ov-viking-bot__interaction-error">
+            <ErrorNotification
+              key={JSON.stringify([requestKey, request.kind, index])}
+              title={labels.submitFailed}
+              identity={props.error}
+              locale={locale}
+            >
               {props.error}
-            </p>
+            </ErrorNotification>
           ) : null}
           {request.render({
             disabled: blocked,

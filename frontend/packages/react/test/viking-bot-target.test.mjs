@@ -1,3 +1,4 @@
+import { notificationContent } from './helpers/feedback-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { act, createElement as h } from 'react';
@@ -120,10 +121,7 @@ test('target delegates validation to the host, preserves the URI on rejection, a
     writable = false;
     await submit(view);
     assert.equal(answers.length, 0);
-    assert.match(
-      view.container.querySelector('[role=alert]').textContent,
-      /read-only/,
-    );
+    assert.match(notificationContent().textContent, /read-only/);
     assert.match(trigger(view).textContent, /resources\/wiki/);
     writable = true;
     checking = true;
@@ -192,7 +190,7 @@ test('child creation validates names, preserves input after failure, and accepts
     await settle();
     assert.equal(modal(), null);
     assert.match(trigger(view).textContent, /wiki\/notes/);
-    assert.equal(view.container.querySelector('[role=alert]'), null);
+    assert.equal(Boolean(notificationContent()), false);
   } finally {
     await view.unmount();
   }

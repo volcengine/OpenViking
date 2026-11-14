@@ -70,7 +70,7 @@ export function FileBrowserSearch({
 }: FileBrowserSearchProps) {
   const track = useTrack();
   const exposure = useOpenExposure('file_browser_search_dialog_show', open);
-  const client = useOvClient();
+  const client = useOvClient('local');
   const inputRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState('');
   const [query, setQuery] = useState('');

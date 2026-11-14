@@ -35,3 +35,6 @@ const notification = await import(
   pathToFileURL(join(output, 'notification.js'))
 );
 export const useNotification = notification.useNotification;
+
+const toast = await import(pathToFileURL(join(output, 'toast.js')));
+export const useToast = toast.useToast;

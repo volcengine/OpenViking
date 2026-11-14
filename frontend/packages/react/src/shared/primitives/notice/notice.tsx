@@ -3,7 +3,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import CloseIcon from '../../../../../icons/svg/viking-bot/remove.svg?react';
-import type { NotificationItem } from './types.js';
+import type { NoticeItem } from './types.js';
 import { StatusIcon } from './status-icon.js';
 
 export function Notice({
@@ -11,9 +11,11 @@ export function Notice({
   closeLabel,
   onRemove,
   active,
+  kind,
 }: {
   active: boolean;
-  notice: NotificationItem;
+  kind: 'notification' | 'toast';
+  notice: NoticeItem;
   closeLabel: string;
   onRemove: (id: string) => void;
 }) {
@@ -56,8 +58,8 @@ export function Notice({
     const element = root.current;
     if (element?.contains(document.activeElement)) {
       const buttons = element
-        .closest('.ov-notification-stack')
-        ?.querySelectorAll<HTMLButtonElement>('.ov-notification__close');
+        .closest(`.ov-${kind}-stack`)
+        ?.querySelectorAll<HTMLButtonElement>(`.ov-${kind}__close`);
       const next = Array.from(buttons ?? []).find(
         (button) => !element.contains(button),
       );
@@ -74,9 +76,9 @@ export function Notice({
     <div
       ref={setRoot}
       className={[
-        'ov-notification',
-        `ov-notification--${type}`,
-        closable && 'ov-notification--closable',
+        `ov-${kind}`,
+        `ov-${kind}--${type}`,
+        closable && `ov-${kind}--closable`,
         className,
       ]
         .filter(Boolean)
@@ -92,23 +94,23 @@ export function Notice({
       }}
     >
       {showIcon && (icon != null || type !== 'normal') ? (
-        <span className="ov-notification__icon" aria-hidden="true">
+        <span className={`ov-${kind}__icon`} aria-hidden="true">
           {icon ?? <StatusIcon type={type} />}
         </span>
       ) : null}
-      <div className="ov-notification__body">
+      <div className={`ov-${kind}__body`}>
         {title != null ? (
-          <div className="ov-notification__title">{title}</div>
+          <div className={`ov-${kind}__title`}>{title}</div>
         ) : null}
-        <div className="ov-notification__content">{content}</div>
+        <div className={`ov-${kind}__content`}>{content}</div>
         {btn != null ? (
-          <div className="ov-notification__actions">{btn}</div>
+          <div className={`ov-${kind}__actions`}>{btn}</div>
         ) : null}
       </div>
       {closable ? (
         <button
           type="button"
-          className="ov-notification__close"
+          className={`ov-${kind}__close`}
           aria-label={closeLabel}
           onClick={close}
         >

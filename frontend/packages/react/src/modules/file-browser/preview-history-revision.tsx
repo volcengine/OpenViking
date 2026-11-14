@@ -2,10 +2,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import CopyIcon from '../../../../icons/svg/file-preview/copy.svg?react';
 import { Button } from '../../shared/primitives/button/button.js';
-import {
-  PreviewMutationError,
-  PreviewQueryState,
-} from './preview-query-state.js';
+import { PreviewQueryState } from './preview-query-state.js';
 import type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
 import type { DashboardQuery } from './use-dashboard-query.js';
 import type { DiffLine } from './preview-diff.js';
@@ -75,7 +72,7 @@ export function PreviewHistoryRevision({
             </Button>
           </div>
         </div>
-        <PreviewMutationError error={copy.error} text={text} />
+
         <div className="ov-file-history__content">
           <PreviewQueryState query={content} text={statusText} />
           {compare ? (

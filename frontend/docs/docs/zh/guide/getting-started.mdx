@@ -177,3 +177,9 @@ FilePreview、CommandConsole、VikingBot 及其消息列表、输入区和交互
 - [国际化](./i18n)：用 `locale` 切换语言，用 `labels` 覆盖文案。
 
 操作与曝光埋点的接入方式见[埋点指南](./analytics)。
+
+## 复制错误信息
+
+通过 `OpenVikingProvider` 发起的区块请求默认由共享请求适配层发布错误，视图层统一订阅并展示 Notification，无需逐个调用点配置提示。通知使用「请求失败」标题，保留后端错误原文；已有区域加载状态、任务状态和聊天消息错误继续在所属区域展示。
+
+操作失败的 Notification 提供「复制错误信息」，一键复制操作名称、完整错误信息及已有的错误码、HTTP 状态码和 Request ID，方便提交 Oncall。复制成功后显示「已复制」；剪贴板访问失败时用 Toast 提示，可再次点击复制。

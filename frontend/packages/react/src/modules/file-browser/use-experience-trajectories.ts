@@ -42,7 +42,7 @@ export function useExperienceTrajectories({
   dataSource?: FileBrowserExperienceDataSource;
   refreshGeneration?: number;
 }) {
-  const client = useOvClient();
+  const client = useOvClient('local');
   const loadPage = dataSource?.trajectories;
   const inheritedSignal = useOvSignal();
   const { baseURL, apiKey, accountId, userId, resourceId, signal } =

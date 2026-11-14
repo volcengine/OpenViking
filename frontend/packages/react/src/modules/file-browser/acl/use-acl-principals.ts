@@ -1,4 +1,5 @@
 import { toError } from '../fs-errors.js';
+import { localRequestErrors } from '../../../client/observe-errors.js';
 import { useEffect, useState } from 'react';
 import type { OvIdentityValue } from '../../../client/types.js';
 import type {
@@ -52,6 +53,7 @@ export function useAclPrincipals({
         : controller.signal;
       const request = {
         ...context,
+        client: localRequestErrors(context.client),
         requestOptions: { ...context.requestOptions, signal },
       };
       const query = { type, keyword, page };

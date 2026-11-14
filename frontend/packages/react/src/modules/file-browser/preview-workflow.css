@@ -52,10 +52,7 @@
   gap: 8px;
   margin-block-start: 24px;
 }
-.ov-file-browser-workflow__error {
-  color: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
-  overflow-wrap: anywhere;
-}
+
 .ov-file-browser-workflow__versions {
   display: grid;
   gap: 12px;

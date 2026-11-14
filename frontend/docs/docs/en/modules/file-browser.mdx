@@ -320,34 +320,38 @@ All fields are optional, and omitted fields follow `locale`. Text inside a dashb
 
 `labels.workflows` accepts any subset of these fields, and omitted fields follow `locale`.
 
-| Property          | Description                                                      | Type     | Default                                                      |
-| ----------------- | ---------------------------------------------------------------- | -------- | ------------------------------------------------------------ |
-| configure         | Label of the compile configuration action, also the dialog title | `string` | `'Compile configuration'`                                    |
-| historyEmpty      | Message shown when there is no version history                   | `string` | `'No version history yet'`                                   |
-| historyLimit      | Message shown when the history reaches the 500-entry limit       | `string` | `'Showing up to 500 recent snapshots.'`                      |
-| snapshotNote      | Label for the snapshot note field                                | `string` | `'Describe this snapshot'`                                   |
-| saveSnapshot      | Button that saves a snapshot                                     | `string` | `'Save snapshot'`                                            |
-| snapshotSaved     | Message shown after a snapshot is saved                          | `string` | `'Snapshot saved.'`                                          |
-| snapshotUnchanged | Message shown when the file has no changes to snapshot           | `string` | `'The file has no changes to snapshot.'`                     |
-| version           | Text before the version number of a Wiki file                    | `string` | `'Version'`                                                  |
-| importFile        | Label of the file field in the import dialog                     | `string` | `'Package file'`                                             |
-| importHint        | Hint in the import dialog                                        | `string` | `'Choose an .ovpack package to import into this directory.'` |
-| importSubmit      | Import button                                                    | `string` | `'Import'`                                                   |
-| imported          | Message shown after a successful import                          | `string` | `'Package imported.'`                                        |
-| saved             | Message shown after the compile configuration is saved           | `string` | `'Configuration saved.'`                                     |
-| cancel            | Cancel button                                                    | `string` | `'Cancel'`                                                   |
-| save              | Save button                                                      | `string` | `'Save'`                                                     |
-| failed            | Prefix of the message shown when an operation fails              | `string` | `'The operation failed.'`                                    |
-| sources           | Label of the source directories field                            | `string` | `'Source directories (one per line)'`                        |
-| skill             | Label of the skill field                                         | `string` | `'Skill URI'`                                                |
-| instruction       | Label of the instructions field                                  | `string` | `'Instructions'`                                             |
-| automatic         | Label of the automatic updates checkbox                          | `string` | `'Automatic updates'`                                        |
-| schedule          | Label of the scheduled update select                             | `string` | `'Schedule'`                                                 |
-| noSchedule        | The "no scheduled update" option                                 | `string` | `'No scheduled update'`                                      |
-| daily             | The "daily" option                                               | `string` | `'Daily'`                                                    |
-| weekly            | The "weekly" option                                              | `string` | `'Weekly'`                                                   |
-| time              | Label of the run time field                                      | `string` | `'Run time (Beijing time)'`                                  |
-| weekday           | Label of the day of week select                                  | `string` | `'Day of week'`                                              |
+| Property          | Description                                                      | Type                         | Default                                                        |
+| ----------------- | ---------------------------------------------------------------- | ---------------------------- | -------------------------------------------------------------- |
+| configure         | Label of the compile configuration action, also the dialog title | `string`                     | `'Compile configuration'`                                      |
+| historyEmpty      | Message shown when there is no version history                   | `string`                     | `'No version history yet'`                                     |
+| historyLimit      | Message shown when the history reaches the 500-entry limit       | `string`                     | `'Showing up to 500 recent snapshots.'`                        |
+| snapshotNote      | Label for the snapshot note field                                | `string`                     | `'Describe this snapshot'`                                     |
+| saveSnapshot      | Button that saves a snapshot                                     | `string`                     | `'Save snapshot'`                                              |
+| snapshotSaved     | Message shown after a snapshot is saved                          | `string`                     | `'Snapshot saved.'`                                            |
+| snapshotUnchanged | Message shown when the file has no changes to snapshot           | `string`                     | `'The file has no changes to snapshot.'`                       |
+| version           | Text before the version number of a Wiki file                    | `string`                     | `'Version'`                                                    |
+| importFile        | Label of the file field in the import dialog                     | `string`                     | `'Package file'`                                               |
+| importHint        | Hint in the import dialog                                        | `string`                     | `'Choose an .ovpack package to import into this directory.'`   |
+| importSubmit      | Import button                                                    | `string`                     | `'Import'`                                                     |
+| imported          | Message shown after a successful import                          | `string`                     | `'Package imported.'`                                          |
+| saved             | Message shown after the compile configuration is saved           | `string`                     | `'Configuration saved.'`                                       |
+| cancel            | Cancel button                                                    | `string`                     | `'Cancel'`                                                     |
+| save              | Save button                                                      | `string`                     | `'Save'`                                                       |
+| failed            | Prefix of the message shown when an operation fails              | `string`                     | `'The operation failed.'`                                      |
+| sources           | Label of the source directories field                            | `string`                     | `'Source directories (one per line)'`                          |
+| skill             | Label of the skill field                                         | `string`                     | `'Skill URI'`                                                  |
+| instruction       | Label of the instructions field                                  | `string`                     | `'Instructions'`                                               |
+| automatic         | Label of the automatic updates checkbox                          | `string`                     | `'Automatic updates'`                                          |
+| schedule          | Label of the scheduled update select                             | `string`                     | `'Schedule'`                                                   |
+| noSchedule        | The "no scheduled update" option                                 | `string`                     | `'No scheduled update'`                                        |
+| daily             | The "daily" option                                               | `string`                     | `'Daily'`                                                      |
+| weekly            | The "weekly" option                                              | `string`                     | `'Weekly'`                                                     |
+| time              | Label of the run time field                                      | `string`                     | `'Run time (Beijing time)'`                                    |
+| weekday           | Label of the day of week select                                  | `string`                     | `'Day of week'`                                                |
+| failureTitle      | Formats an operation failure notification title                  | `(action: string) => string` | `` action => `${action} failed` ``                             |
+| copyFailed        | Toast text when clipboard copying fails                          | `string`                     | `'Could not copy. Check clipboard permissions and try again.'` |
+| sourcesRequired   | Toast text when no source directory is entered                   | `string`                     | `'Enter at least one source directory.'`                       |
+| skillRequired     | Toast text when the skill URI is empty                           | `string`                     | `'Enter the skill URI.'`                                       |
 
 ### FileBrowserAclLabels
 
@@ -532,6 +536,8 @@ Pass host request functions through `experienceDataSource`. Omitted functions us
 - The page `offset` starts at 0 and `limit` is 20. Dates use UTC `YYYY-MM-DD` and are omitted for the all-time range.
 
 ### Failure states
+
+- Operation failures use floating feedback: Toast for local validation and clipboard failures, and a dismissible Notification for request failures. The title identifies the operation, the body preserves the server reason, and failed forms retain their inputs for retry.
 
 - When a directory listing fails, the tree shows a failure row with Retry; the root is no exception and is never shown as "no files". Retry on the row reloads only that directory.
 - When the preview fails, the detail pane shows a failure state: `labels.error` is the conclusion, the server's own message is the reason, and `labels.retry` is the button, which reloads the tree and the current preview together.

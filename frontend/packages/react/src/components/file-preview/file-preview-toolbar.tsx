@@ -135,7 +135,6 @@ export function FilePreviewToolbar({
           <FilePreviewActionList
             items={items}
             pending={commands.pending}
-            failure={commands.failure}
             execute={(action) => commands.execute(action, actions.busy)}
             disabled={actions.busy}
             text={text}

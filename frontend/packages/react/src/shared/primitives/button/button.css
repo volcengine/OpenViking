@@ -79,6 +79,11 @@
   outline: none;
   box-shadow: 0 0 0 2px var(--ov-ui-button-focus-ring);
 }
+@media (forced-colors: active) {
+  .ov-button:focus-visible {
+    outline: 2px solid var(--ov-ui-button-focus-ring);
+  }
+}
 .ov-button:disabled:not(.ov-button--loading),
 .ov-button.ov-button--disabled,
 .ov-button[aria-disabled='true'] {

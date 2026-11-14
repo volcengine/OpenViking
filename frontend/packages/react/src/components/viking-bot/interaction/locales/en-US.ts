@@ -38,6 +38,8 @@ const messages = {
   submit: 'Submit',
   cancel: 'Cancel',
   other: 'Other',
+  submitFailed: 'Submission failed. Please try again.',
+  invalidAnswer: 'Select a valid option before submitting.',
   submitted: 'Submitted',
   cancelled: 'Cancelled',
   progress: (index, total) => `${index + 1} / ${total}`,
@@ -52,7 +54,6 @@ const messages = {
   required: 'Please complete this question',
   timeInvalid: 'Enter a valid time in HH:mm format (00:00–23:59)',
   weekdayRequired: 'Choose a day for the weekly update',
-  submitFailed: 'Submission failed. Please try again.',
   weekdays: [
     'Monday',
     'Tuesday',

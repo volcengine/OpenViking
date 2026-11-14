@@ -1,3 +1,4 @@
+import { notificationContent } from './helpers/feedback-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { act, createElement as h } from 'react';
@@ -64,14 +65,11 @@ test('reasonless form rejections use current locale labels without losing the dr
     try {
       await submit(view.container.querySelector('form'));
       assert.equal(
-        view.container.querySelector('[role=alert]').textContent,
+        notificationContent().textContent,
         'Submission failed. Please try again.',
       );
       await view.render(render('zh-CN'));
-      assert.equal(
-        view.container.querySelector('[role=alert]').textContent,
-        '提交失败，请重试',
-      );
+      assert.equal(notificationContent().textContent, '提交失败，请重试');
       assert.equal(view.container.querySelector('textarea').value, 'draft');
       assert.equal(
         view.container.querySelector('button[type=submit]').disabled,
@@ -95,10 +93,7 @@ test('host error content remains unchanged when locale changes', async () => {
     try {
       await submit(view.container.querySelector('form'));
       await view.render(render('zh-CN'));
-      assert.equal(
-        view.container.querySelector('[role=alert]').textContent,
-        'host failure',
-      );
+      assert.equal(notificationContent().textContent, 'host failure');
     } finally {
       await view.unmount();
     }

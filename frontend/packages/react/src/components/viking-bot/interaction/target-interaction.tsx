@@ -1,10 +1,11 @@
+import { ErrorNotification } from '../../../shared/feedback/error-notification.js';
+import { useToast } from '../../../shared/primitives/toast/use-toast.js';
 import { useId, useRef, useState } from 'react';
 import { Button } from '../../../shared/primitives/button/button.js';
 import { ChevronRightIcon, FolderIcon } from '../../../icons/index.js';
 import { DirectoryPickerTrigger } from './directory-picker.js';
 import { DirectoryPermission } from './directory-permission.js';
 import {
-  DirectoryFlowError,
   interactionError,
   resolveDirectoryPermission,
 } from './directory-state.js';
@@ -30,6 +31,7 @@ export function TargetInteraction({
   onPrevious?: () => void;
 }) {
   const id = useId();
+  const [toast, toastHolder] = useToast({ locale });
   const trigger = useRef<HTMLButtonElement>(null);
   const busy = useRef(false);
   const [uri, setUri] = useState(request.initialUri ?? '');
@@ -47,9 +49,9 @@ export function TargetInteraction({
   const submit = async () => {
     if (blocked || busy.current) return;
     if (missingUri) {
-      setError({
-        code: 'submitFailed',
-        cause: new DirectoryFlowError('directoryUnavailable'),
+      toast.error({
+        id: 'target-directory-required',
+        content: labels.directoryUnavailable,
       });
       trigger.current?.focus();
       return;
@@ -71,6 +73,7 @@ export function TargetInteraction({
     (error ? interactionError(error.cause, labels, error.code) : undefined);
   return (
     <>
+      {toastHolder}
       <form
         noValidate
         aria-labelledby={`${id}-title`}
@@ -120,7 +123,7 @@ export function TargetInteraction({
                 aria-haspopup="dialog"
                 aria-expanded={open}
                 aria-invalid={Boolean(failure)}
-                aria-describedby={`${id}-status${failure ? ` ${id}-error` : ''}`}
+                aria-describedby={`${id}-status`}
                 disabled={blocked}
                 onClick={show}
               >
@@ -134,13 +137,14 @@ export function TargetInteraction({
             <DirectoryPermission permission={permission} labels={labels} />
           </div>
           {failure ? (
-            <p
-              id={`${id}-error`}
-              role="alert"
-              className="ov-viking-bot__interaction-error"
+            <ErrorNotification
+              title={labels.submitFailed}
+              error={error?.cause}
+              identity={hostError ?? error}
+              locale={locale}
             >
               {failure}
-            </p>
+            </ErrorNotification>
           ) : null}
         </div>
         <div className="ov-viking-bot__interaction-footer">

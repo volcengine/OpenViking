@@ -36,6 +36,7 @@
  * `var(--ov-ui-color-primary, privateFallback)` — the host's value wins when set,
  * the fallback applies otherwise.
  */
+.ov-toast-stack,
 .ov-notification-stack,
 .ov-time-picker,
 .ov-date-picker,
@@ -201,6 +202,7 @@
   /* @generated library-swatches:end */
 }
 
+html.dark .ov-toast-stack,
 html.dark .ov-notification-stack,
 html.dark .ov-time-picker,
 html.dark .ov-pagination,
@@ -518,4 +520,8 @@ html.dark .ov-directory-tour {
 }
 html.dark .ov-notification-stack {
   --ov-ui-notification-bg-default: var(--ov-ui-bg-3-default);
+}
+
+.ov-toast-stack {
+  --ov-ui-toast-shadow-default: var(--ov-ui-overlay-shadow-default);
 }

@@ -1,4 +1,5 @@
 import { useExposure } from '../../shared/analytics/use-exposure.js';
+import { useToast } from '../../shared/primitives/toast/use-toast.js';
 import { useEffect, useRef, useState } from 'react';
 import { Tooltip } from '../../shared/primitives/tooltip/index.js';
 
@@ -23,6 +24,7 @@ export function FilePreviewCopyPath({
   onClick: () => Promise<boolean>;
 }) {
   const exposure = useExposure('file_preview_copy_path_show');
+  const [toast, toastHolder] = useToast();
   const [feedback, setFeedback] = useState<{ ok: boolean; message: string }>();
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const lastMessage = useRef('');
@@ -36,7 +38,13 @@ export function FilePreviewCopyPath({
     } catch {
       /* Report clipboard failure below. */
     }
-    let message = ok ? successLabel : failureLabel;
+    if (!ok) {
+      setFeedback(undefined);
+      toast.error({ id: 'copy-path', content: failureLabel });
+      return;
+    }
+    toast.clear();
+    let message = successLabel;
     if (message === lastMessage.current) message += '\u00a0';
     lastMessage.current = message;
     setFeedback({ ok, message });
@@ -44,6 +52,7 @@ export function FilePreviewCopyPath({
   };
   return (
     <span className="ov-file-preview__copy-path">
+      {toastHolder}
       <Tooltip content={label}>
         <button
           ref={exposure}

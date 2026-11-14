@@ -25,6 +25,9 @@ import type { Locale } from '../shared/locale.js';
 import { AnalyticsProvider } from '../shared/analytics/context.js';
 import type { OpenVikingAnalyticsOptions } from './analytics/types.js';
 
+import { observeRequestErrors } from './observe-errors.js';
+import { NotificationScope } from '../shared/feedback/notification-scope.js';
+import { NotificationScopeContext } from '../shared/feedback/notification-context.js';
 import { mergeProviderConfig, type OvProviderBase } from './options.js';
 import type { OvClient, OvClientOptions, OvRequestOptions } from './types.js';
 
@@ -161,7 +164,9 @@ export function OpenVikingProvider({
       <OvClientContext.Provider value={value}>
         <MonitoringProvider monitoring={monitoring}>
           <AnalyticsProvider analytics={analytics}>
-            <LocaleProvider locale={locale}>{children}</LocaleProvider>
+            <LocaleProvider locale={locale}>
+              <NotificationScope isolateRequests>{children}</NotificationScope>
+            </LocaleProvider>
           </AnalyticsProvider>
         </MonitoringProvider>
       </OvClientContext.Provider>
@@ -177,13 +182,22 @@ export function OpenVikingProvider({
  * exported from the package: a caller does not need to know which requests to
  * send, so it has no reason to use this directly.
  */
-export function useOvClient(): OvClient | null {
-  const client = useContext(OvClientContext)?.client ?? null;
+export function useOvClient(
+  feedback: 'default' | 'local' = 'default',
+): OvClient | null {
+  const scope = useContext(OvClientContext);
+  const owner = useContext(NotificationScopeContext);
   const binding = useMonitoringBinding();
-  return useMemo(
-    () => (client && binding ? bindClient(client, binding) : client),
-    [client, binding],
-  );
+  const client = scope?.client;
+  const signal = scope?.base.signal;
+  const publish = owner?.publish;
+  return useMemo(() => {
+    const observed =
+      client && feedback !== 'local' && publish
+        ? observeRequestErrors(client, publish, signal)
+        : (client ?? null);
+    return observed && binding ? bindClient(observed, binding) : observed;
+  }, [client, feedback, publish, signal, binding]);
 }
 
 /** Internal: modules compose their request lifetime with the inherited signal. */

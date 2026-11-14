@@ -68,7 +68,7 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 
 ### 多步骤确认
 
-通过 `kind: 'steps'` 传入问题列表。组件管理进度、上一步和下一步，保留各步草稿，最后一步才调用 `onSubmit` 汇总提交。未完成当前题时禁用下一步或提交；失败后保留所有答案，可以返回修改或重试。
+通过 `kind: 'steps'` 传入问题列表。组件管理进度、上一步和下一步，保留各步草稿，最后一步才调用 `onSubmit` 汇总提交。未完成当前题时禁用下一步或提交；失败后保留所有答案，可以返回修改或重试，错误通知只在当前步骤展示。
 
 ```tsx file="../../_demos/viking-bot-interaction-steps.tsx" preview
 
@@ -412,72 +412,73 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 
 ### VikingBotInteraction
 
-| 参数       | 说明                                                                                                                                             | 类型                                                                  | 默认值                   |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- | ------------------------ |
-| request    | 单题或内置分步问题                                                                                                                               | `VikingBotInteractionRequest`                                         | 必填                     |
-| requestKey | 问题的稳定身份，变化时重置内置表单；省略时由 `request.kind` 和 `index` 决定                                                                      | `string`                                                              | -                        |
-| index      | 当前步骤序号，从 0 开始                                                                                                                          | `number`                                                              | `0`                      |
-| total      | 步骤总数；大于 1 时显示进度                                                                                                                      | `number`                                                              | `1`                      |
-| disabled   | 是否禁用表单                                                                                                                                     | `boolean`                                                             | `false`                  |
-| submitting | 是否正在提交，提交期间禁用表单                                                                                                                   | `boolean`                                                             | `false`                  |
-| error      | 上一次提交失败的原因，显示在表单内                                                                                                               | `ReactNode`                                                           | -                        |
-| onSubmit   | 提交答案时触发；返回 Promise 时，提交按钮在其完成前保持禁用                                                                                      | `(answer: VikingBotInteractionAnswer) => void \| Promise<void>`       | -                        |
-| onCancel   | 放弃本次交互时触发；省略时不显示取消按钮                                                                                                         | `() => void`                                                          | -                        |
-| slots      | 替换渲染异常的展示内容，见[错误展示插槽](../guide/getting-started#自定义错误展示)                                                                | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }` | -                        |
-| labels     | 覆盖界面文案，全部键见 `DEFAULT_INTERACTION_LABELS`；`answer` 是文本答案的无障碍名称，`progress` 接收当前序号和总数，`weekdays` 按周一至周日排列 | `VikingBotInteractionLabels`                                          | -                        |
-| locale     | 界面语言，规则见[国际化](../guide/i18n)；在 `VikingBot` 的 `interaction` 中默认跟随 `VikingBot` 的语言                                           | `'zh-CN' \| 'en-US'`                                                  | 继承上级，默认 `'en-US'` |
-| className  | 附加到根元素的类名                                                                                                                               | `string`                                                              | -                        |
+| 参数       | 说明                                                                                                                                                                                                                         | 类型                                                                  | 默认值                   |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------ |
+| request    | 单题或内置分步问题                                                                                                                                                                                                           | `VikingBotInteractionRequest`                                         | 必填                     |
+| requestKey | 问题的稳定身份，变化时重置内置表单；省略时由 `request.kind` 和 `index` 决定                                                                                                                                                  | `string`                                                              | -                        |
+| index      | 当前步骤序号，从 0 开始                                                                                                                                                                                                      | `number`                                                              | `0`                      |
+| total      | 步骤总数；大于 1 时显示进度                                                                                                                                                                                                  | `number`                                                              | `1`                      |
+| disabled   | 是否禁用表单                                                                                                                                                                                                                 | `boolean`                                                             | `false`                  |
+| submitting | 是否正在提交，提交期间禁用表单                                                                                                                                                                                               | `boolean`                                                             | `false`                  |
+| error      | 上一次提交失败的原因，通过 Notification 展示                                                                                                                                                                                 | `ReactNode`                                                           | -                        |
+| onSubmit   | 提交答案时触发；返回 Promise 时，提交按钮在其完成前保持禁用                                                                                                                                                                  | `(answer: VikingBotInteractionAnswer) => void \| Promise<void>`       | -                        |
+| onCancel   | 放弃本次交互时触发；省略时不显示取消按钮                                                                                                                                                                                     | `() => void`                                                          | -                        |
+| slots      | 替换渲染异常的展示内容，见[错误展示插槽](../guide/getting-started#自定义错误展示)                                                                                                                                            | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }` | -                        |
+| labels     | 覆盖界面文案，全部键见 `DEFAULT_INTERACTION_LABELS`，`submitFailed` 覆盖失败通知标题，`invalidAnswer` 覆盖无效选项的 Toast 文案；`answer` 是文本答案的无障碍名称，`progress` 接收当前序号和总数，`weekdays` 按周一至周日排列 | `VikingBotInteractionLabels`                                          | -                        |
+| locale     | 界面语言，规则见[国际化](../guide/i18n)；在 `VikingBot` 的 `interaction` 中默认跟随 `VikingBot` 的语言                                                                                                                       | `'zh-CN' \| 'en-US'`                                                  | 继承上级，默认 `'en-US'` |
+| className  | 附加到根元素的类名                                                                                                                                                                                                           | `string`                                                              | -                        |
 
 待确认交互使用库内表单与基础控件，单独使用 `VikingBotInteraction` 无需安装 Ark Design。提交失败时保留草稿并显示错误，可以修改后重试；取消会恢复初始值，分步模式同时返回第一步。未选答案、空自由输入和无效定时值时，提交按钮禁用；文本题默认必填，选填题设置 `required: false`。
 
 ### VikingBotInteractionLabels
 
-| 参数                        | 说明                       | 类型                                       | 默认值                                                   |
-| --------------------------- | -------------------------- | ------------------------------------------ | -------------------------------------------------------- |
-| answer                      | 文本答案的标签             | `string`                                   | 答案                                                     |
-| title                       | 交互区域及缺省问题标题     | `string`                                   | 待确认                                                   |
-| submit                      | 提交按钮                   | `string`                                   | 提交                                                     |
-| cancel                      | 取消按钮                   | `string`                                   | 取消                                                     |
-| other                       | 自定义选项                 | `string`                                   | 其他                                                     |
-| submitted                   | 保留字段，内置表单不显示   | `string`                                   | 已提交                                                   |
-| cancelled                   | 保留字段，内置表单不显示   | `string`                                   | 已取消                                                   |
-| progress                    | 步骤进度，序号从 0 开始    | `(index: number, total: number) => string` | `${index + 1} / ${total}`                                |
-| scheduleNone                | 不更新选项                 | `string`                                   | 不更新                                                   |
-| scheduleDaily               | 每日选项                   | `string`                                   | 每日                                                     |
-| scheduleWeekly              | 每周选项                   | `string`                                   | 每周                                                     |
-| scheduleTime                | 更新时间标签               | `string`                                   | 更新时间                                                 |
-| scheduleWeekday             | 更新日期标签               | `string`                                   | 更新日期                                                 |
-| scheduleFrequency           | 更新频次标签               | `string`                                   | 更新频次                                                 |
-| scheduleHour                | 小时列表标签               | `string`                                   | 小时                                                     |
-| scheduleMinute              | 分钟列表标签               | `string`                                   | 分钟                                                     |
-| required                    | 选项未完成提示             | `string`                                   | 请完成单题或内置分步问题                                 |
-| timeInvalid                 | 时间格式错误提示           | `string`                                   | 请输入有效时间，格式为 HH:mm（00:00–23:59）              |
-| weekdayRequired             | 更新日期未选提示           | `string`                                   | 请选择每周更新的日期                                     |
-| submitFailed                | 无错误详情时的提交失败提示 | `string`                                   | 提交失败，请重试                                         |
-| weekdays                    | 周一至周日的名称           | `readonly string[]`                        | ['周一', '周二', '周三', '周四', '周五', '周六', '周日'] |
-| directoryPickerTitle        | 目录弹窗标题               | `string`                                   | 选择保存目录                                             |
-| directoryPickerConfirm      | 确认目录按钮               | `string`                                   | 选择此目录                                               |
-| directoryPickerHint         | 未选目录提示               | `string`                                   | 请选择一个目录                                           |
-| directoryTarget             | 目录流程文案               | `string`                                   | 输出目录                                                 |
-| directorySelected           | 目录流程文案               | `string`                                   | 已选目标：                                               |
-| directorySearch             | 目录流程文案               | `string`                                   | 目录名称                                                 |
-| directoryEmpty              | 目录流程文案               | `string`                                   | 暂无搜索结果                                             |
-| directoryPermissionChecking | 目录流程文案               | `string`                                   | 正在读取目录权限                                         |
-| directoryPermissionWritable | 目录流程文案               | `string`                                   | 此目录可写，提交时将再次校验                             |
-| directoryNotWritable        | 目录流程文案               | `string`                                   | 此目录不可写，请选择其他目录                             |
-| directoryUnavailable        | 目录流程文案               | `string`                                   | 请选择一个已有目录                                       |
-| directoryCheckFailed        | 目录流程文案               | `string`                                   | 无法确认目录及写入权限，请重试或选择其他目录             |
-| directoryCreate             | 目录流程文案               | `string`                                   | 新建子目录                                               |
-| directoryCreateTitle        | 目录流程文案               | `string`                                   | 子目录                                                   |
-| directoryName               | 目录流程文案               | `string`                                   | 目录名称                                                 |
-| directoryNameHint           | 目录流程文案               | `string`                                   | 在上述目录内创建一个直属目录；请填写名称，不填完整路径   |
-| directoryCreateConfirm      | 目录流程文案               | `string`                                   | 创建并选择                                               |
-| directoryCreateFailed       | 目录流程文案               | `string`                                   | 无法创建目录，请确认目录权限后重试                       |
-| directoryRetry              | 目录流程文案               | `string`                                   | 重试                                                     |
-| directoryLoadFailed         | 目录流程文案               | `string`                                   | 目录加载失败                                             |
-| directoryParent             | 父目录说明                 | `(uri: string) => string`                  | `父目录：{uri}`                                          |
-| next                        | 下一步按钮                 | `string`                                   | 下一步                                                   |
-| previous                    | 上一步按钮                 | `string`                                   | 上一步                                                   |
+| 参数                        | 说明                         | 类型                                       | 默认值                                                   |
+| --------------------------- | ---------------------------- | ------------------------------------------ | -------------------------------------------------------- |
+| answer                      | 文本答案的标签               | `string`                                   | 答案                                                     |
+| title                       | 交互区域及缺省问题标题       | `string`                                   | 待确认                                                   |
+| submit                      | 提交按钮                     | `string`                                   | 提交                                                     |
+| cancel                      | 取消按钮                     | `string`                                   | 取消                                                     |
+| other                       | 自定义选项                   | `string`                                   | 其他                                                     |
+| submitted                   | 保留字段，内置表单不显示     | `string`                                   | 已提交                                                   |
+| cancelled                   | 保留字段，内置表单不显示     | `string`                                   | 已取消                                                   |
+| progress                    | 步骤进度，序号从 0 开始      | `(index: number, total: number) => string` | `${index + 1} / ${total}`                                |
+| scheduleNone                | 不更新选项                   | `string`                                   | 不更新                                                   |
+| scheduleDaily               | 每日选项                     | `string`                                   | 每日                                                     |
+| scheduleWeekly              | 每周选项                     | `string`                                   | 每周                                                     |
+| scheduleTime                | 更新时间标签                 | `string`                                   | 更新时间                                                 |
+| scheduleWeekday             | 更新日期标签                 | `string`                                   | 更新日期                                                 |
+| scheduleFrequency           | 更新频次标签                 | `string`                                   | 更新频次                                                 |
+| scheduleHour                | 小时列表标签                 | `string`                                   | 小时                                                     |
+| scheduleMinute              | 分钟列表标签                 | `string`                                   | 分钟                                                     |
+| required                    | 选项未完成提示               | `string`                                   | 请完成单题或内置分步问题                                 |
+| timeInvalid                 | 时间格式错误提示             | `string`                                   | 请输入有效时间，格式为 HH:mm（00:00–23:59）              |
+| weekdayRequired             | 更新日期未选提示             | `string`                                   | 请选择每周更新的日期                                     |
+| submitFailed                | 提交失败的 Notification 标题 | `string`                                   | 提交失败，请重试                                         |
+| invalidAnswer               | 无效选项的 Toast 文案        | `string`                                   | `'请选择有效选项后提交'`                                 |
+| weekdays                    | 周一至周日的名称             | `readonly string[]`                        | ['周一', '周二', '周三', '周四', '周五', '周六', '周日'] |
+| directoryPickerTitle        | 目录弹窗标题                 | `string`                                   | 选择保存目录                                             |
+| directoryPickerConfirm      | 确认目录按钮                 | `string`                                   | 选择此目录                                               |
+| directoryPickerHint         | 未选目录提示                 | `string`                                   | 请选择一个目录                                           |
+| directoryTarget             | 目录流程文案                 | `string`                                   | 输出目录                                                 |
+| directorySelected           | 目录流程文案                 | `string`                                   | 已选目标：                                               |
+| directorySearch             | 目录流程文案                 | `string`                                   | 目录名称                                                 |
+| directoryEmpty              | 目录流程文案                 | `string`                                   | 暂无搜索结果                                             |
+| directoryPermissionChecking | 目录流程文案                 | `string`                                   | 正在读取目录权限                                         |
+| directoryPermissionWritable | 目录流程文案                 | `string`                                   | 此目录可写，提交时将再次校验                             |
+| directoryNotWritable        | 目录流程文案                 | `string`                                   | 此目录不可写，请选择其他目录                             |
+| directoryUnavailable        | 目录流程文案                 | `string`                                   | 请选择一个已有目录                                       |
+| directoryCheckFailed        | 目录流程文案                 | `string`                                   | 无法确认目录及写入权限，请重试或选择其他目录             |
+| directoryCreate             | 目录流程文案                 | `string`                                   | 新建子目录                                               |
+| directoryCreateTitle        | 目录流程文案                 | `string`                                   | 子目录                                                   |
+| directoryName               | 目录流程文案                 | `string`                                   | 目录名称                                                 |
+| directoryNameHint           | 目录流程文案                 | `string`                                   | 在上述目录内创建一个直属目录；请填写名称，不填完整路径   |
+| directoryCreateConfirm      | 目录流程文案                 | `string`                                   | 创建并选择                                               |
+| directoryCreateFailed       | 目录流程文案                 | `string`                                   | 无法创建目录，请确认目录权限后重试                       |
+| directoryRetry              | 目录流程文案                 | `string`                                   | 重试                                                     |
+| directoryLoadFailed         | 目录流程文案                 | `string`                                   | 目录加载失败                                             |
+| directoryParent             | 父目录说明                   | `(uri: string) => string`                  | `父目录：{uri}`                                          |
+| next                        | 下一步按钮                   | `string`                                   | 下一步                                                   |
+| previous                    | 上一步按钮                   | `string`                                   | 上一步                                                   |
 
 ### VikingBotInteractionRequest
 

@@ -103,7 +103,8 @@ function FilePreviewBodyContent({
         text={text}
         loading={editing.loadingEdit}
         failed={editing.editFailed}
-        saveFailed={editing.saveFailed}
+        saveFailure={editing.saveFailure}
+        locale={locale}
         saving={editing.saving}
         onChange={editing.updateDraft}
         onCancel={onCancelEditing}

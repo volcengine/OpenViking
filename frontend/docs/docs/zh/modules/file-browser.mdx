@@ -320,34 +320,38 @@ import '@openviking/react/modules/file-browser/style.css';
 
 `labels.workflows` 接受其中任意几项，省略的项跟随 `locale`。
 
-| 参数              | 说明                               | 类型     | 默认值                                |
-| ----------------- | ---------------------------------- | -------- | ------------------------------------- |
-| configure         | 编译配置操作的文案，也是弹窗的标题 | `string` | `'编译配置'`                          |
-| historyEmpty      | 没有历史版本时的提示               | `string` | `'暂无历史版本'`                      |
-| historyLimit      | 历史记录达到 500 条上限时的提示    | `string` | `'最多显示最近 500 条快照。'`         |
-| snapshotNote      | 快照备注输入框的标签               | `string` | `'描述这次快照'`                      |
-| saveSnapshot      | 保存快照按钮                       | `string` | `'保存快照'`                          |
-| snapshotSaved     | 快照保存成功的提示                 | `string` | `'快照已保存。'`                      |
-| snapshotUnchanged | 文件内容无变化时的提示             | `string` | `'文件内容没有变化，无需创建快照。'`  |
-| version           | Wiki 文件版本号前的文字            | `string` | `'版本'`                              |
-| importFile        | 导入弹窗里文件选择框的标签         | `string` | `'包文件'`                            |
-| importHint        | 导入弹窗里的说明                   | `string` | `'选择 .ovpack 包，导入到当前目录。'` |
-| importSubmit      | 导入按钮                           | `string` | `'导入'`                              |
-| imported          | 导入成功的提示                     | `string` | `'导入成功。'`                        |
-| saved             | 编译配置保存成功的提示             | `string` | `'配置已保存。'`                      |
-| cancel            | 取消按钮                           | `string` | `'取消'`                              |
-| save              | 保存按钮                           | `string` | `'保存'`                              |
-| failed            | 操作失败的提示前缀                 | `string` | `'操作失败。'`                        |
-| sources           | 来源目录输入框的标签               | `string` | `'来源目录（每行一个）'`              |
-| skill             | 技能输入框的标签                   | `string` | `'技能 URI'`                          |
-| instruction       | 指令输入框的标签                   | `string` | `'指令'`                              |
-| automatic         | 自动更新复选框的标签               | `string` | `'自动更新'`                          |
-| schedule          | 定时更新选择框的标签               | `string` | `'定时更新'`                          |
-| noSchedule        | 「不设置定时更新」选项             | `string` | `'不设置定时更新'`                    |
-| daily             | 「每天」选项                       | `string` | `'每天'`                              |
-| weekly            | 「每周」选项                       | `string` | `'每周'`                              |
-| time              | 执行时间输入框的标签               | `string` | `'执行时间（北京时间）'`              |
-| weekday           | 星期选择框的标签                   | `string` | `'星期'`                              |
+| 参数              | 说明                               | 类型                         | 默认值                                |
+| ----------------- | ---------------------------------- | ---------------------------- | ------------------------------------- |
+| configure         | 编译配置操作的文案，也是弹窗的标题 | `string`                     | `'编译配置'`                          |
+| historyEmpty      | 没有历史版本时的提示               | `string`                     | `'暂无历史版本'`                      |
+| historyLimit      | 历史记录达到 500 条上限时的提示    | `string`                     | `'最多显示最近 500 条快照。'`         |
+| snapshotNote      | 快照备注输入框的标签               | `string`                     | `'描述这次快照'`                      |
+| saveSnapshot      | 保存快照按钮                       | `string`                     | `'保存快照'`                          |
+| snapshotSaved     | 快照保存成功的提示                 | `string`                     | `'快照已保存。'`                      |
+| snapshotUnchanged | 文件内容无变化时的提示             | `string`                     | `'文件内容没有变化，无需创建快照。'`  |
+| version           | Wiki 文件版本号前的文字            | `string`                     | `'版本'`                              |
+| importFile        | 导入弹窗里文件选择框的标签         | `string`                     | `'包文件'`                            |
+| importHint        | 导入弹窗里的说明                   | `string`                     | `'选择 .ovpack 包，导入到当前目录。'` |
+| importSubmit      | 导入按钮                           | `string`                     | `'导入'`                              |
+| imported          | 导入成功的提示                     | `string`                     | `'导入成功。'`                        |
+| saved             | 编译配置保存成功的提示             | `string`                     | `'配置已保存。'`                      |
+| cancel            | 取消按钮                           | `string`                     | `'取消'`                              |
+| save              | 保存按钮                           | `string`                     | `'保存'`                              |
+| failed            | 操作失败的提示前缀                 | `string`                     | `'操作失败。'`                        |
+| sources           | 来源目录输入框的标签               | `string`                     | `'来源目录（每行一个）'`              |
+| skill             | 技能输入框的标签                   | `string`                     | `'技能 URI'`                          |
+| instruction       | 指令输入框的标签                   | `string`                     | `'指令'`                              |
+| automatic         | 自动更新复选框的标签               | `string`                     | `'自动更新'`                          |
+| schedule          | 定时更新选择框的标签               | `string`                     | `'定时更新'`                          |
+| noSchedule        | 「不设置定时更新」选项             | `string`                     | `'不设置定时更新'`                    |
+| daily             | 「每天」选项                       | `string`                     | `'每天'`                              |
+| weekly            | 「每周」选项                       | `string`                     | `'每周'`                              |
+| time              | 执行时间输入框的标签               | `string`                     | `'执行时间（北京时间）'`              |
+| weekday           | 星期选择框的标签                   | `string`                     | `'星期'`                              |
+| failureTitle      | 操作失败通知的标题格式化函数       | `(action: string) => string` | `` action => `${action}失败` ``       |
+| copyFailed        | 剪贴板复制失败的 Toast 文案        | `string`                     | `'复制失败，请检查剪贴板权限后重试'`  |
+| sourcesRequired   | 未填写来源目录的 Toast 文案        | `string`                     | `'请至少填写一个来源目录'`            |
+| skillRequired     | 未填写技能 URI 的 Toast 文案       | `string`                     | `'请填写技能 URI'`                    |
 
 ### FileBrowserAclLabels
 
@@ -532,6 +536,8 @@ await browserRef.current?.openResource(directoryUri);
 - 分页的 `offset` 从 0 开始，`limit` 为 20。时间参数采用 UTC `YYYY-MM-DD`，选择全部时间时省略日期。
 
 ### 失败状态
+
+- 操作失败通过浮层反馈：前端校验和剪贴板错误使用 Toast，接口错误使用可手动关闭的 Notification，标题说明失败的操作，正文保留服务端原始原因。失败时保留表单输入，允许重试。
 
 - 目录列表失败时，树里显示失败行和重试按钮，根目录失败也一样，不会显示成「没有文件」；失败行的「重试」只重新加载该目录。
 - 预览失败时，右侧显示失败状态：`labels.error` 是结论，服务端返回的原始消息是原因，`labels.retry` 是重试按钮，重试会同时重新加载目录树和当前预览。
