@@ -26,7 +26,7 @@ function Browser({
         <FileBrowser
           locale={locale}
           defaultExpandedUri={MEMORIES}
-          uri={PROFILE}
+          defaultUri={PROFILE}
           onImportResources={() => undefined}
           renderImportResources={(trigger) =>
             target === 'tree' ? <Fault>{trigger}</Fault> : trigger
