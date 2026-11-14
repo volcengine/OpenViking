@@ -89,6 +89,8 @@ class VLMBase(ABC):
         self.extra_headers = config.get("extra_headers")
         self.extra_request_body = dict(config.get("extra_request_body") or {})
         self.thinking = config.get("thinking", False)
+        self.reasoning_effort = config.get("reasoning_effort")
+        self.top_p = config.get("top_p")
 
         # Token usage tracking
         self._token_tracker = TokenUsageTracker()
