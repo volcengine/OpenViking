@@ -334,12 +334,6 @@ Python VikingBot uses `bot.compile.mode = "simple"` by default for `/runtime/v1/
 { "bot": { "compile": { "mode": "complex" } } }
 ```
 
-Individual writes use OV’s default version tracking and appear as `manual_revise` in the operation history for a managed target.
-
-Older configs that specify only `map_concurrency`, `shuffle_concurrency`, or `reduce_concurrency` also select simple. These concurrency settings apply to complex.
-
-When the iteration budget runs out, a task with confirmed creates or updates and no unresolved errors returns `completed` with a partial-compilation warning in the Runtime's `result.warnings`. Reads and unchanged files alone yield `failed`. Partial completion through the kernel advances the incremental baseline. A later incremental run can skip unread sources that have not changed since. To rescan all inputs, pass `"args": {"mode": "full"}` to `POST /api/v1/compile`.
-
 ### OpenViking Recall Settings
 
 | Setting | Default | Description |
