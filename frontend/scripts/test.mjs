@@ -29,6 +29,8 @@ try {
                 './src/modules/file-browser/file-browser-preview-pane.tsx',
               'browser-search':
                 './src/modules/file-browser/file-browser-search.tsx',
+              'browser-search-results':
+                './src/modules/file-browser/file-browser-search-results.tsx',
               'browser-labels':
                 './src/modules/file-browser/file-browser-labels.ts',
               button: './src/shared/primitives/button/button.tsx',

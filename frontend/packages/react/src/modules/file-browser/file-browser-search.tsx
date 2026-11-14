@@ -1,6 +1,6 @@
 import { useTrack } from '../../shared/analytics/use-track.js';
 import { useOpenExposure } from '../../shared/analytics/use-exposure.js';
-import { useRenderErrors } from './file-browser-labels.js';
+import { useRenderErrors, type ResolvedLabels } from './file-browser-labels.js';
 import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
@@ -14,7 +14,6 @@ import { FileBrowserSearchHeader } from './file-browser-search-header.js';
 import { useSearchHighlight } from './use-search-highlight.js';
 import type { FileBrowserHandle } from './types.js';
 import { FileBrowserSearchResults } from './file-browser-search-results.js';
-import type { ResolvedLabels } from './file-browser-labels.js';
 import {
   buildScopeOptions,
   isSearchScopeAllowed,
@@ -101,11 +100,11 @@ export function FileBrowserSearch({
       : { ...filters, scopes: scopes_ };
   }, [filters, scopes]);
 
-  const awaitingQuery = open && !composing && draft.trim() !== query.trim();
+  const awaitingQuery = !composing && draft.trim() !== query.trim();
   const search = useFsSearch({
     client,
     mode,
-    query: open && !composing && !awaitingQuery ? query : '',
+    query: !composing && !awaitingQuery ? query : '',
     generation,
     filters: effectiveFilters,
     rootUri,
@@ -130,25 +129,26 @@ export function FileBrowserSearch({
     if (open) inputRef.current?.focus();
   }, [open]);
 
-  // 只清本组件持有的状态；高级面板的开合归宿主，由 `onClose` 一并收起——两处都
-  // 写同一个状态时，日后父级改成条件关闭就会与这里的重置打架。
+  // 关闭动画结束后再清本组件持有的状态，淡出过程中保持当前结果。高级面板的开合
+  // 归宿主，由 `onClose` 一并收起——两处都写同一个状态时，日后父级改成条件关闭就会
+  // 与这里的重置打架。
   //
-  // Only the state this component owns is cleared here; the advanced panel's open state
-  // belongs to the host and collapses through `onClose`. Writing it in both places would
-  // clash the moment the parent makes closing conditional.
-  const close = () => {
+  // Clears the state this component owns once the exit transition ends, so the results
+  // stay put while the dialog fades out. The advanced panel's open state belongs to the
+  // host and collapses through `onClose`. Writing it in both places would clash the
+  // moment the parent makes closing conditional.
+  const reset = () => {
     setDraft('');
     setQuery('');
     setComposing(false);
     setMode(DEFAULT_SEARCH_MODE);
     setFilters(EMPTY_FILTERS);
-    onClose();
   };
 
   const hits = useMemo(() => flattenResult(search.result), [search.result]);
   const openResult = (uri: string) => {
     track('file_browser_search_result_select');
-    close();
+    onClose();
     void onOpenResource(uri).catch(() => {});
   };
   const retry = () => {
@@ -177,7 +177,8 @@ export function FileBrowserSearch({
       ]
         .filter(Boolean)
         .join(' ')}
-      onClose={close}
+      onClose={onClose}
+      afterClose={reset}
     >
       <FileBrowserSearchHeader
         mode={mode}
@@ -210,6 +211,7 @@ export function FileBrowserSearch({
             resetKeys={[rootUri, query, mode]}
           >
             <FileBrowserSearchResults
+              open={open}
               mode={mode}
               hits={hits}
               listId={listId}

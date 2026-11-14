@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="258" height="140" viewBox="0 0 258 140" fill="none">
+  <g
+    opacity=".36"
+    stroke="var(--ov-ui-color-border-2, var(--ov-ui-border-2-default))"
+    stroke-dasharray="2 2"
+    style="
+      mask-image: radial-gradient(
+        ellipse at center,
+        currentColor,
+        transparent 72%
+      );
+    "
+  >
+    <path
+      d="M0 28H258M0 56H258M0 84H258M0 112H258M37 0V140M75 0V140M117 0V140M159 0V140M199 0V140M235 0V140"
+    />
+  </g>
+  <path
+    d="M98 50Q98 44 104 44H120Q122.5 44 124 46L128 51H154Q160 51 160 57V98Q160 104 154 104H104Q98 104 98 98Z"
+    fill="var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default))"
+    stroke="currentColor"
+    stroke-width="1.5"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M108 74V61Q108 58 111 58H147Q150 58 150 61V74"
+    fill="var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default))"
+    stroke="var(--ov-ui-color-border-3, var(--ov-ui-border-3-default))"
+    stroke-width="1.5"
+  />
+  <path
+    d="M93 72Q92.5 68 96.5 68H161.5Q165.5 68 165 72L161 99Q160.3 104 155 104H103Q97.7 104 97 99Z"
+    fill="var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default))"
+    stroke="currentColor"
+    stroke-width="1.5"
+    stroke-linejoin="round"
+  />
+  <path d="M121 86H137" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity=".5" />
+  <g stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity=".8">
+    <path d="M136 36L140 31M144 40L150 38M131 33V27" />
+  </g>
+</svg>

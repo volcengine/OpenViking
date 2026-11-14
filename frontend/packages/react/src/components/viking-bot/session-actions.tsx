@@ -1,5 +1,6 @@
 import { useTrack } from '../../shared/analytics/use-track.js';
 import { Button } from '../../shared/primitives/button/button.js';
+import { Empty } from '../../shared/primitives/empty/empty.js';
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
 import type { Locale } from '../../shared/locale.js';
 import { useState, type ReactNode } from 'react';
@@ -65,11 +66,21 @@ export function VikingBotSessionActions({
                   }}
                   popupClassName="ov-viking-bot__popover ov-viking-bot__popover--bottom"
                   renderValue={() => <VikingBotIcon name="history" />}
+                  emptyContent={
+                    sessions.isLoading || sessions.error ? null : (
+                      <Empty
+                        size="compact"
+                        illustration="tray"
+                        title={labels.emptySessions}
+                        className="ov-viking-bot__empty-history"
+                      />
+                    )
+                  }
                   renderTrigger={({ triggerRef, triggerProps, content }) => (
                     <Button
                       {...triggerProps}
                       ref={triggerRef}
-                      size="mini"
+                      size="small"
                       type="text"
                       iconOnly
                       htmlType="button"
@@ -102,13 +113,6 @@ export function VikingBotSessionActions({
                     ) : null}
                     {sessions.error ? (
                       <p role="alert">{sessions.error}</p>
-                    ) : null}
-                    {!sessions.isLoading &&
-                    !sessions.error &&
-                    !sessions.items.length ? (
-                      <p className="ov-viking-bot__empty-history">
-                        {labels.emptySessions}
-                      </p>
                     ) : null}
                     <ul role="none">
                       {sessions.items.map((item) => {
@@ -143,7 +147,7 @@ export function VikingBotSessionActions({
             </Tooltip>
             <Tooltip content={labels.newSession}>
               <Button
-                size="mini"
+                size="small"
                 type="text"
                 iconOnly
                 htmlType="button"

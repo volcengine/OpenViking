@@ -2,6 +2,7 @@ import { useExposure } from '../../shared/analytics/use-exposure.js';
 import type { RefObject } from 'react';
 import SearchEmptyArt from '../../../../icons/svg/file-browser/search-empty.svg?react';
 import { Button } from '../../shared/primitives/button/button.js';
+import { Empty } from '../../shared/primitives/empty/empty.js';
 import { FileBrowserSearchRow } from './file-browser-search-row.js';
 import { FileBrowserSearchModeRow } from './file-browser-search-mode-row.js';
 import type { SearchHit, SearchMode } from './search-types.js';
@@ -20,6 +21,7 @@ import type { ResolvedLabels } from './file-browser-labels.js';
  * to count, and "0 results" reads as a failure.
  */
 export interface FileBrowserSearchResultsProps {
+  open: boolean;
   mode: SearchMode;
   listId: string;
   activeIndex: number;
@@ -42,6 +44,7 @@ export interface FileBrowserSearchResultsProps {
 const SKELETON_WIDTHS = [368, 348, 319, 359, 335, 316, 368, 351];
 
 export function FileBrowserSearchResults({
+  open,
   mode,
   listId,
   activeIndex,
@@ -63,7 +66,7 @@ export function FileBrowserSearchResults({
       : 'file_browser_search_empty_show',
     hits,
     undefined,
-    searched && !loading && !error,
+    open && searched && !loading && !error,
   );
   // 模式行只在真有结果时出现：设计稿的空态、加载态与失败态都没有这一行，它上面
   // 的数字也只在有东西可数时才说得通。
@@ -128,13 +131,12 @@ export function FileBrowserSearchResults({
 
   if (hits.length === 0) {
     return (
-      <p
+      <Empty
         ref={exposure}
-        role="status"
+        illustration="search"
+        title={text.searchEmpty}
         className="ov-file-browser-search__no-results"
-      >
-        {text.searchEmpty}
-      </p>
+      />
     );
   }
 

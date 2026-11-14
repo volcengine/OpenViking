@@ -1,4 +1,5 @@
 import type { RichTextValue, SenderInstance } from '@ark-design/ui/sender';
+import { useEffect, type RefObject } from 'react';
 
 /** Plain text excludes attachment/tag values, matching the controlled draft. */
 export const toPlainText = (content: RichTextValue[]): string =>
@@ -34,6 +35,23 @@ export function writeComposerText(
   } finally {
     writing.current = previous;
   }
+}
+
+// useEffect 必要性：把受控 value 的后续变化同步到 Ark 编辑器。编辑器是外部
+// 非 React 控件，只有它的 setValue 能改写内部文档，渲染计算无法做到。仅当
+// 外部文本与编辑器当前纯文本不一致时才写入，避免覆盖用户正在输入的光标。
+// useQuickInput 已按受控值更新归属；程序写入的同步回调不能再用光标认领文本。
+// 组件卸载或 value 再次变化时由下一次同步覆盖，无需额外清理。
+export function useSyncComposerValue(
+  sender: RefObject<SenderInstance | null>,
+  value: string,
+  writing: { current: boolean },
+) {
+  useEffect(() => {
+    const current = toPlainText(sender.current?.getValue() ?? []);
+    if (current === value) return;
+    writeComposerText(sender.current, value, writing);
+  }, [sender, value, writing]);
 }
 
 /** Read the real editor caret in the same text coordinate space as the draft. */

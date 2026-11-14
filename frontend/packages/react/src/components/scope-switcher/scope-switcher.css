@@ -497,7 +497,8 @@ button:not(.ov-button).ov-scope-switcher__trigger[aria-expanded='true'] {
     var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
   outline-offset: 2px;
 }
-.ov-scope-switcher__trigger:focus-visible {
+.ov-scope-switcher__trigger:focus-visible,
+.ov-scope-switcher__search-field input:focus-visible {
   outline: none;
 }
 .ov-scope-switcher__option:focus-visible {
