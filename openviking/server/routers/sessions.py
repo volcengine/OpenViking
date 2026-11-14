@@ -797,8 +797,8 @@ async def add_message(
     service = get_service()
 
     async def _add() -> dict[str, Any]:
-        session = await service.sessions.open(session_id, _ctx, auto_create=True)
         parts = _resolve_message_parts(request, _ctx)
+        session = await service.sessions.open(session_id, _ctx, auto_create=True)
 
         specs = [
             {
@@ -852,7 +852,6 @@ async def batch_add_messages(
     service = get_service()
 
     async def _batch_add() -> dict[str, Any]:
-        session = await service.sessions.open(session_id, _ctx, auto_create=True)
         specs = []
         for msg_request in request.messages:
             parts = _resolve_message_parts(msg_request, _ctx)
@@ -867,6 +866,7 @@ async def batch_add_messages(
                     "source_message_ids": msg_request.source_message_ids,
                 }
             )
+        session = await service.sessions.open(session_id, _ctx, auto_create=True)
         add_many_async = getattr(session, "add_messages_async", None)
         if callable(add_many_async):
             msgs = await add_many_async(specs)
