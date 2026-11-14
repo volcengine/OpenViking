@@ -256,3 +256,63 @@ test("builds recall queries from user input only, excluding injected context", (
     },
   ]), "Current question");
 });
+
+test("treats configured producer kinds as user input for capture and recall", () => {
+  const relay = {
+    role: "user",
+    content: [{ type: "text", text: "Reviewer: use the semantic spacing tokens." }],
+    source: { kind: "dsh-superagent", form: "relay" },
+  };
+  const config = { ...CONFIG, inputSourceKinds: ["dsh-superagent"] };
+
+  assert.equal(captureEvent({ type: "user/message", data: relay }, CONFIG), null);
+  assert.deepEqual(captureEvent({ type: "user/message", data: relay }, config), {
+    role: "user",
+    parts: [{ type: "text", text: "Reviewer: use the semantic spacing tokens." }],
+    peer_id: "workspace-a",
+  });
+
+  assert.equal(promptText([relay]), "");
+  assert.equal(promptText([relay], config), "Reviewer: use the semantic spacing tokens.");
+  assert.equal(promptText([
+    relay,
+    {
+      role: "user",
+      content: [{ type: "text", text: "Current time: 2026-10-05 21:20" }],
+      source: { kind: "time-context" },
+    },
+  ], config), "Reviewer: use the semantic spacing tokens.");
+});
+
+test("never treats the plugin's own injections as input, even when listed", () => {
+  const config = {
+    ...CONFIG,
+    inputSourceKinds: [OPENVIKING_PLUGIN_KIND, "plugin"],
+  };
+  const injected = pluginMessage("recalled context", { form: "recall" });
+  const legacy = {
+    role: "user",
+    content: [{ type: "text", text: "old recall" }],
+    source: { kind: "plugin", plugin: "openviking-memory" },
+  };
+
+  assert.equal(captureEvent({ type: "user/message", data: injected }, config), null);
+  assert.equal(captureEvent({ type: "user/message", data: legacy }, config), null);
+  assert.equal(promptText([injected, legacy], config), "");
+});
+
+test("listing tool as an input kind keeps tool results gated", () => {
+  const result = {
+    type: "tool/result",
+    data: {
+      message: {
+        role: "tool",
+        content: [{ type: "tool-result", toolCallId: "c1", output: "ls output" }],
+        source: { kind: "tool", callId: "c1" },
+      },
+    },
+  };
+  const config = { ...CONFIG, captureToolResults: false, inputSourceKinds: ["tool"] };
+  assert.equal(captureEvent(result, config), null);
+  assert.equal(promptText([result.data.message], config), "");
+});
