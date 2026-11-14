@@ -8,6 +8,8 @@ import json
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional
 
+from openviking.models.model_error import model_error_from_status
+
 
 def _convert_content_for_responses(content: Any) -> Any:
     if isinstance(content, str):
@@ -177,6 +179,8 @@ def _build_chat_completion_like_response(final_response: Any, model: str) -> Any
             prompt_tokens=getattr(usage_raw, "input_tokens", 0),
             completion_tokens=getattr(usage_raw, "output_tokens", 0),
             total_tokens=getattr(usage_raw, "total_tokens", 0),
+            prompt_tokens_details=getattr(usage_raw, "input_tokens_details", None),
+            completion_tokens_details=getattr(usage_raw, "output_tokens_details", None),
         )
     message = SimpleNamespace(
         role="assistant",
@@ -232,10 +236,12 @@ class CodexCompletionsAdapter:
         client_factory: Callable[[], Any],
         model: str,
         auth_retry_client_factory: Optional[Callable[[], Any]] = None,
+        on_failed_response: Optional[Callable[[Any], None]] = None,
     ):
         self._client_factory = client_factory
         self._model = model
         self._auth_retry_client_factory = auth_retry_client_factory
+        self._on_failed_response = on_failed_response
 
     def _create_response(self, **kwargs) -> Any:
         client = self._client_factory()
@@ -268,7 +274,7 @@ class CodexCompletionsAdapter:
         collected_output_items: List[Any] = []
         collected_text_deltas: List[str] = []
         has_function_calls = False
-        completed_response = None
+        terminal_event = None
         try:
             stream = client.responses.create(**response_kwargs, stream=True)
         except Exception as exc:
@@ -295,12 +301,39 @@ class CodexCompletionsAdapter:
                 if "function_call" in event_type:
                     has_function_calls = True
                     continue
-                if event_type == "response.completed":
-                    completed_response = getattr(event, "response", None)
+                if event_type in {
+                    "response.completed",
+                    "response.failed",
+                    "response.incomplete",
+                    "error",
+                }:
+                    terminal_event = event
+                    break
         finally:
             close = getattr(stream, "close", None)
             if callable(close):
                 close()
+        terminal_type = getattr(terminal_event, "type", "EOF")
+        completed_response = getattr(terminal_event, "response", None)
+        status = getattr(completed_response, "status", None)
+        if (
+            terminal_type != "response.completed"
+            or completed_response is None
+            or status not in {None, "completed"}
+        ):
+            if self._on_failed_response is not None:
+                self._on_failed_response(
+                    _build_chat_completion_like_response(completed_response, model)
+                )
+            provider_error = _item_get(completed_response, "error") or terminal_event
+            code = _item_get(provider_error, "code") or _item_get(
+                _item_get(completed_response, "incomplete_details"), "reason"
+            )
+            detail = _item_get(provider_error, "message") or code
+            message = f"Codex stream ended with {terminal_type}; expected response.completed"
+            if detail:
+                message += f": {detail}"
+            raise model_error_from_status(None, message, provider="openai-codex", code=code)
         final_response = _build_final_response_from_stream_events(
             completed_response,
             collected_output_items,
