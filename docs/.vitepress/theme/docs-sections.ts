@@ -195,6 +195,10 @@ export const sections: DocSection[] = [
       g('Rule validation (Beta)', '规则校验（Beta）', [
         p('workflows/02-rule-validation')
       ]),
+      g('GitHub PR Radar', 'GitHub PR Radar', [
+        p('guides/radar-usage'),
+        p('guides/radar-technical-design')
+      ]),
       g('Manage context', '组织与维护上下文', [
         p('guides/23-data-organize'),
         p('guides/18-openviking-assets'),

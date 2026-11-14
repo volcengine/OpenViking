@@ -1994,6 +1994,10 @@ class ResourceService:
                 "field and in args."
             )
         kwargs.update(normalized_args.processor_kwargs)
+        if "pr_radar" in kwargs:
+            from openviking.resource.github_radar.models import validate_radar
+
+            validate_radar(path, kwargs, watch_interval=watch_interval, add_type=add_type)
         tos_signature = kwargs.get("tos_signature")
         tos_access = kwargs.get("tos_access")
         if tos_signature is not None or tos_access is not None:
