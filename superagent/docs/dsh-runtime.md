@@ -253,6 +253,16 @@ OpenViking SuperAgent session id 就是 DSH session id。`session/working-direct
 
 assistant 文本、reasoning、工具调用、usage 和结束原因写入 OpenViking SuperAgent 活动记录；子 agent 的事件不作为根会话活动。回复始终通过 `personal_agent`，活动页中的 assistant 文本不作为聊天回复。活动行的事件键含每次进程运行的 `runId`，同一 session 重启不会把新行当成重复丢掉。
 
+## Router + Worker
+
+实例使用 `agents[].scheduler: "workers"` 时，DSH 可以作为 Router 和 Worker runtime。主 Router 与所有 Worker 共用同一个 DSH profile、DSH_HOME、模型设置和凭据，不为任务复制 home，也不在每个 turn 重启 DSH。
+
+每个任务对应一个原生 Session，由 bridge 通过 `agents.create/resume` 创建或恢复，preset 为 `ov-superagent-worker`。`worker-executor.mjs` 把 #7227 的 `start/done/stop` 映射为 `superagent/worker/ensure → submit → wait/cancel`：同一任务串行，不同任务并行，取消一个 Worker 不影响 Router 或其他 Worker。提交以 task/turn 为 request id，同 turn 重试不会重复插入消息。
+
+Worker preset 只含编码、文件、搜索、jobs 和 skills 等工作工具，不含 DSH 的提问、定时器、插件管理和 subagent 入口。bridge 在每个 Session 上注册 Core 的 `task_check`、`task_report` 和只读工具，并在 turn 结束时撤销 authority；任务状态、3+1 slot、输入认领、报告 outbox 和 Router 单出口仍由 #7227 的 TaskManager 统一管理。
+
+`npm run check:dsh` 同时用真实 DSH 检查 Worker preset 创建、重复提交去重、独立 cancel 和 wait 结算，不需要真实模型密钥。
+
 ## 怎么自检、有哪些已知限制
 
 ```sh

@@ -82,7 +82,7 @@ export class ClaudeAgent {
     this.syncedThroughSeq = options.syncedThroughSeq ?? 0;
     this.deliveredThroughSeq = this.syncedThroughSeq;
 
-    this.systemPrompt = assembleConversationPolicy(config);
+    this.systemPrompt = assembleConversationPolicy(config, 'claude');
     this.developerInstructionsText = this.systemPrompt;
     this.model = options.model
       ?? store.getSetting?.('claude_model')

@@ -143,6 +143,17 @@ describe('configuration safety', { concurrency: false }, () => {
     assert.throws(() => getConfig(), /OV_SUPERAGENT_STAGED_REPLIES must be a boolean/);
     setEnv('OV_SUPERAGENT_STAGED_REPLIES', undefined);
   });
+  it('keeps the legacy scheduler unless the instance picks the inbox', () => {
+    setEnv('OV_SUPERAGENT_SCHEDULER', undefined);
+    assert.equal(getConfig().scheduler, 'legacy');
+    setEnv('OV_SUPERAGENT_SCHEDULER', 'inbox');
+    assert.equal(getConfig().scheduler, 'inbox');
+    setEnv('OV_SUPERAGENT_SCHEDULER', 'workers');
+    assert.equal(getConfig().scheduler, 'workers');
+    setEnv('OV_SUPERAGENT_SCHEDULER', 'parallel');
+    assert.throws(() => getConfig(), /OV_SUPERAGENT_SCHEDULER must be one of: legacy, inbox, workers/);
+    setEnv('OV_SUPERAGENT_SCHEDULER', undefined);
+  });
   it('searches OV per line only on an instance that opts in; preferences need no switch', () => {
     setEnv('OV_SUPERAGENT_OV_AUTO_RECALL', undefined);
     assert.equal(getConfig().ovAutoRecall, false);

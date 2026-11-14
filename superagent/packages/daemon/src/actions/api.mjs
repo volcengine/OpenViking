@@ -44,7 +44,7 @@ export async function startActionApi({ socketPath, service, logger }) {
   }
   const server = http.createServer(async (request, response) => {
     if (request.method === 'GET' && request.url === '/v1/tools') {
-      send(response, 200, { tools: service.tools() });
+      send(response, 200, { tools: service.tools({ authority: request.headers[AUTHORITY_HEADER] }) });
       return;
     }
     if (request.method !== 'POST' || request.url !== '/v1/call') {

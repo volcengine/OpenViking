@@ -102,7 +102,7 @@ export class DshAgent {
     this.syncedThroughSeq = options.syncedThroughSeq ?? 0;
     this.deliveredThroughSeq = this.syncedThroughSeq;
 
-    this.systemPrompt = assembleConversationPolicy(config);
+    this.systemPrompt = assembleConversationPolicy(config, 'dsh');
     // There is no environment seed for the model: the persisted setting, the
     // selection this start was asked for, and the built-in default are the whole
     // chain. Routes themselves belong to DSH's settings document.
@@ -213,6 +213,12 @@ export class DshAgent {
 
   get turnInProgress() {
     return Boolean(this.turn) || this.restarting || this.inflight.size > 0;
+  }
+
+  // Task workers share this DSH process through the bridge's worker namespace.
+  // Their sessions have independent native turns; this is only the transport.
+  workerRequest(method, params, timeoutMs = 0) {
+    return this._request(method, params, timeoutMs);
   }
 
   get sessionDescriptor() {

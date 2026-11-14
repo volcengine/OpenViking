@@ -16,7 +16,10 @@ import { CONTENT_PROPERTIES } from './content.mjs';
 // with `identityInput` reads only as the bot, and `botOnlyDescription` is
 // what it says instead (see toolDefinition); `openviking` marks the
 // OpenViking memory tools, offered when the instance has an OpenViking
-// connection.
+// connection; `inbox` marks message_check, offered only with the inbox
+// scheduler (agents[].scheduler); `router` marks the task tools the main
+// session gets with the workers scheduler, and `worker` the tools only a
+// worker's authority sees (ActionService.workerTools).
 
 const ID = '^[A-Za-z0-9_.:@=+-]{1,256}$';
 const SOURCE = {
@@ -174,6 +177,95 @@ export const TOOLS = [
       reason: { type: 'string', maxLength: 120, description: 'Optional short private reason, e.g. "chatter between others", "waiting for another bot", "newsletter". Kept only in the local Activity log; never sent.' },
     }, ['decision_id']),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    // The inbox scheduler's read: offered only with agents[].scheduler inbox.
+    name: 'message_check',
+    inbox: true,
+    title: 'Read waiting inputs',
+    description: 'Deliver inputs that are waiting in your inbox, oldest first. They arrive as your next input lines, in the usual format, right after this call returns; decide on each like any other input. Call it at a checkpoint in your current work when a [daemon inbox] notice says inputs are waiting. Without chat_id it delivers the oldest waiting inputs from every chat; with chat_id (and thread_id) only that chat or thread.',
+    inputSchema: schema({
+      chat_id: { type: 'string', pattern: ID, description: 'Optional: only inputs from this chat, as in the chat= tag of the notice.' },
+      thread_id: { type: 'string', pattern: ID, description: 'Optional, with chat_id: only inputs from this thread, as in the thread= tag.' },
+      source: SOURCE,
+      limit: LIMIT(50, 20),
+    }),
+    annotations: LOCAL_WRITE,
+  },
+  {
+    // The workers scheduler: the router hands a request to a worker.
+    name: 'task_create',
+    router: true,
+    title: 'Hand a request to a worker',
+    description: 'Start a task: a worker in its own session works on the request and reports back to you as a [task report] input; you relay the result. Use it for requests that need more than a few lookups. Pass the event= of the request line(s), the request itself first. The worker reads the original messages; do not restate the request.',
+    inputSchema: schema({
+      trigger_ids: { type: 'array', minItems: 1, maxItems: 10, items: { type: 'string', pattern: REF },
+        description: 'event= values of the input lines that make up the request, oldest first; the first is the one the result answers.' },
+      title: { type: 'string', minLength: 1, maxLength: 120, description: 'A short title, in the request\'s language.' },
+      note: { type: 'string', maxLength: 400, description: 'Optional, at most 30 words: routing facts only (who asked, constraints the person stated). Never a plan.' },
+      decision_instance: DECISION_INSTANCE,
+    }, ['trigger_ids', 'title']),
+    annotations: LOCAL_WRITE,
+  },
+  {
+    name: 'task_route',
+    router: true,
+    title: 'Route input to a task',
+    description: 'Give input lines to an existing task. role owner: it adds to, changes or answers that request (an ended task resumes); role context: background the worker reads with its next input. Only for explicit links (same thread, a reply to the task\'s messages, an answer to its question); a similar topic is a new task.',
+    inputSchema: schema({
+      task_id: { type: 'string', pattern: '^t[0-9]{1,6}$', description: 'The task, as task_list or a [daemon tasks] line names it.' },
+      trigger_ids: { type: 'array', minItems: 1, maxItems: 10, items: { type: 'string', pattern: REF }, description: 'event= values of the input lines.' },
+      role: { type: 'string', enum: ['owner', 'context'] },
+      decision_instance: DECISION_INSTANCE,
+    }, ['task_id', 'trigger_ids', 'role']),
+    annotations: LOCAL_WRITE,
+  },
+  {
+    name: 'task_stop',
+    router: true,
+    title: 'Stop a task',
+    description: 'Stop a task and its worker. Only when the requester or the owner asks for it.',
+    inputSchema: schema({
+      task_id: { type: 'string', pattern: '^t[0-9]{1,6}$' },
+      reason: { type: 'string', maxLength: 200, description: 'Who asked to stop, briefly.' },
+    }, ['task_id']),
+    annotations: { ...LOCAL_WRITE, destructiveHint: true },
+  },
+  {
+    name: 'task_list',
+    router: true,
+    title: 'List tasks',
+    description: 'The open tasks and the most recently ended ones, one line each: id, status, title, requester, where. With task_id, that task in detail (latest summary, waiting question, artifacts). With query, tasks with similar titles, ended ones included. Use it to answer questions about progress without starting work.',
+    inputSchema: schema({
+      task_id: { type: 'string', pattern: '^t[0-9]{1,6}$' },
+      query: { type: 'string', maxLength: 200 },
+      include_ended: { type: 'boolean', default: false, description: 'List every task, not only the working set.' },
+    }),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    // Only a worker's authority sees these two.
+    name: 'task_check',
+    worker: true,
+    title: 'Read new inputs for this task',
+    description: 'New input lines routed to your task since you last saw any: the requester\'s follow-ups, and context lines. Call it at checkpoints in longer work.',
+    inputSchema: schema({}),
+    annotations: LOCAL_WRITE,
+  },
+  {
+    name: 'task_report',
+    worker: true,
+    title: 'Report on this task',
+    description: 'Report your task\'s outcome to the agent, which relays it to the requester. Finish every turn with it. done: draft is the reply, ready to send. needs_user: question is the one thing a person must decide. blocked, dropped, failed: why, in summary. progress: an interim note that does not end the task.',
+    inputSchema: schema({
+      state: { type: 'string', enum: ['progress', 'done', 'needs_user', 'blocked', 'dropped', 'failed'] },
+      summary: { type: 'string', maxLength: 4_000, description: 'What you did and found, with evidence. For the agent, not the requester.' },
+      draft: { type: 'string', maxLength: 20_000, description: 'The reply for the requester, in their language, ready to send as is.' },
+      question: { type: 'string', maxLength: 2_000, description: 'With needs_user: one concrete question for the requester.' },
+      artifacts: { type: 'array', maxItems: 20, items: { type: 'string', minLength: 1, maxLength: 300 },
+        description: 'What you created or changed: pull request or issue URLs, branch names, file paths, document links.' },
+    }, ['state']),
+    annotations: LOCAL_WRITE,
   },
   {
     name: 'list_chats',

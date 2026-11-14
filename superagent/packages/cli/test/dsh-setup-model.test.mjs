@@ -119,6 +119,9 @@ function harness(t, { runtimes, detectDsh, script = [], answers = [], onAsk = ()
       const detected = await detect({ ...rest, configPath: preferredConfigPath });
       return preferredConfigPath ? { ...detected, configPath: preferredConfigPath } : detected;
     },
+    // Keep setup's OV soul reads/writes inside the fixture. Without this,
+    // setup sees the host's real soul and asks an extra replacement question.
+    soul: { read: async () => '', write: async ({ uri }) => uri },
     connect: {
       qq: async ({ plan }) => { calls.push(['qq', plan.dataDir]); },
       telegram: async ({ plan }) => { calls.push(['telegram', plan.dataDir]); },

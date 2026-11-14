@@ -76,7 +76,7 @@ export class DurableAgent {
     this.syncedThroughSeq = options.syncedThroughSeq ?? 0;
     this.deliveredThroughSeq = this.syncedThroughSeq;
 
-    this.systemPrompt = assembleConversationPolicy(config);
+    this.systemPrompt = assembleConversationPolicy(config, 'durable');
     this.model = options.model
       ?? store.getSetting?.('durable_model')
       ?? options.initialModel

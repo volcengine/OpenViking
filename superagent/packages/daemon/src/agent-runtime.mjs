@@ -211,6 +211,13 @@ export class AgentRuntime {
 
   whenIdle() { return this.backend?.whenIdle() ?? Promise.resolve(); }
 
+  workerRequest(method, params, timeoutMs) {
+    if (this.runtime !== 'dsh' || !this.backend) {
+      return Promise.reject(new Error('DSH worker runtime is not active'));
+    }
+    return this.backend.workerRequest(method, params, timeoutMs);
+  }
+
   // Volc's tool executor is the remote Environment Worker, which only has the
   // Lark CLI path; it cannot reach the daemon's agent tools.
   _assertConnectorSupport(runtime) {

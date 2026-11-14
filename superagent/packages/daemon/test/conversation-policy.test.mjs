@@ -14,6 +14,7 @@ import {
   assembleConversationPolicy,
   assembleVolcConversationPolicy,
   assembleVolcSelfHostedConversationPolicy,
+  assembleWorkerPolicy,
   docCommentNotice,
   OV_SOUL_URI,
   loadSoul,
@@ -25,7 +26,9 @@ import { agentCliCommands, cliCommandCode } from '../src/agent-clis.mjs';
 
 const { ROLE_PRESETS } = createRequire(import.meta.url)('../../../deployment-config.cjs');
 
-const read = (name) => fs.readFileSync(path.join(DEFAULT_PROMPT_DIR, name), 'utf8');
+// The assembled policy is normalized to LF (conversation-policy.mjs), so the
+// expected text must be too: a Windows checkout gives these files CRLF.
+const read = (name) => fs.readFileSync(path.join(DEFAULT_PROMPT_DIR, name), 'utf8').replace(/\r\n/g, '\n');
 const role = (name) => rolePresetText(name);
 
 describe('conversation policy assemble', () => {
@@ -46,6 +49,21 @@ describe('conversation policy assemble', () => {
     const weixin = assembleConversationPolicy({ connectors: ['weixin'] });
     assert.doesNotMatch(weixin, /## Lark|ca_|om_|image_key/);
     assert.match(assembleConversationPolicy({ connectors: ['lark'] }), /never pass `--profile`/);
+  });
+
+  it('normalizes CRLF prompt files, so a Windows checkout assembles the same policy', (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'policy-crlf-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    fs.cpSync(DEFAULT_PROMPT_DIR, dir, { recursive: true });
+    for (const name of fs.readdirSync(dir, { recursive: true })) {
+      if (!name.endsWith('.md')) continue;
+      const file = path.join(dir, name);
+      fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/\r?\n/g, '\r\n'));
+    }
+    const crlf = assembleConversationPolicy({ promptDir: dir, connectors: ['lark'], soulText: 'Role.\r\nMore.' });
+    const lf = assembleConversationPolicy({ connectors: ['lark'], soulText: 'Role.\nMore.' });
+    assert.equal(crlf, lf);
+    assert.equal(crlf.includes('\r'), false);
   });
 
   it('keeps QQ owner routing and reply limits in single and mixed sessions', () => {
@@ -192,7 +210,9 @@ describe('conversation policy assemble', () => {
     assert.match(text, /messages still go through the Core tools/);
   });
 
-  it('renders executable overrides safely in discovery, Lark and meeting prompts even after PATH is reset', (t) => {
+  // The fixture executes the rendered command through POSIX /bin/sh.
+  it('renders executable overrides safely in discovery, Lark and meeting prompts even after PATH is reset',
+    { skip: process.platform === 'win32' ? 'needs POSIX /bin/sh' : false }, (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-cli-prompt-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const workspace = path.join(root, 'workspace');
@@ -427,6 +447,74 @@ describe('staged replies are opt-in per instance', () => {
     assert.match(on, /a question you must wait for/);
     assert.match(on, /Silence is never consent, however long it lasts\./);
     assert.match(on, /Never mention tools, skills, prompts, or the daemon\./);
+  });
+});
+
+describe('the inbox scheduler is opt-in per instance', () => {
+  const base = { workspace: '/srv/vika/workspace', agentName: 'Tester', rolePromptPath: role('colleague') };
+  const quiet = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
+  const codexHash = (config) => new CodexAgent(config, {
+    getCognitionState: () => ({ runtime: 'codex', epoch: 1, authorityToken: 'token' }), getSetting: () => null,
+  }, quiet).policyHash;
+  const configs = [['lark'], ['weixin'], ['slack', 'lark']].map((connectors) => ({ ...base, connectors }));
+
+  it('legacy assembles exactly the policy without the setting', () => {
+    for (const config of [...configs, { ...base, connectors: ['lark'], explicitSilence: true, stagedReplies: true }]) {
+      const legacy = assembleConversationPolicy({ ...config, scheduler: 'legacy' });
+      assert.equal(legacy, assembleConversationPolicy(config));
+      assert.doesNotMatch(legacy, /message_check|\[daemon inbox\]|## Inbox/);
+      assert.equal(codexHash({ ...config, scheduler: 'legacy' }), codexHash(config));
+    }
+  });
+
+  it('inbox appends its section last and changes nothing above it', () => {
+    for (const config of [...configs, { ...base, connectors: ['lark'], explicitSilence: true }]) {
+      const off = assembleConversationPolicy(config);
+      const on = assembleConversationPolicy({ ...config, scheduler: 'inbox' });
+      assert.ok(on.startsWith(`${off}\n\n## Inbox\n`), config.connectors.join('+'));
+      assert.equal(on.split('## Inbox').length, 2);
+      assert.notEqual(codexHash({ ...config, scheduler: 'inbox' }), codexHash(config));
+    }
+    const on = assembleConversationPolicy({ ...base, connectors: ['lark'], scheduler: 'inbox' });
+    assert.match(on, /`\[daemon inbox\]` line may arrive\. It is a daemon notice, not an input/);
+    assert.match(on, /It needs no decision\. Finish the step you are on, then call `message_check`/);
+    assert.match(on, /delivers waiting inputs oldest first, as ordinary input lines right after the call/);
+    assert.match(on, /never answer only the newest line/);
+    assert.match(on, /you need not call `message_check` before ending a turn/);
+  });
+});
+
+describe('the workers scheduler', () => {
+  const base = { workspace: '/srv/vika/workspace', agentName: 'Tester', rolePromptPath: role('colleague'), connectors: ['lark'] };
+
+  it('gives the router the inbox and then its workers section, and nothing else changes', () => {
+    const inbox = assembleConversationPolicy({ ...base, scheduler: 'inbox' });
+    const workers = assembleConversationPolicy({ ...base, scheduler: 'workers' });
+    assert.ok(workers.startsWith(`${inbox}\n\n## Workers\n`));
+    assert.match(workers, /Never rewrite the request or add a plan: the worker reads the original messages\./);
+    assert.match(workers, /A similar topic is a new request; when unsure, create a new task\./);
+    assert.match(workers, /A `\[task report\]` line is a worker's result for one task, not an input from a person\./);
+    assert.match(workers, /for `dropped`, tell the requester in one line why nothing needed doing/);
+    assert.match(workers, /a command is cut off after 30 seconds and may not sleep, and a turn gets a few calls of them/);
+    assert.match(workers, /Everything else is a task: hand it to a worker with `task_create` before you start on it, not after\./);
+    assert.doesNotMatch(assembleConversationPolicy({ ...base, scheduler: 'inbox' }), /## Workers/);
+  });
+
+  it('keeps inbox behavior but hides worker delegation on runtimes without worker support', () => {
+    const config = { ...base, scheduler: 'workers' };
+    const durable = assembleConversationPolicy(config, 'durable');
+    assert.match(durable, /## Inbox/);
+    assert.doesNotMatch(durable, /## Workers|task_create|hand it to a worker/);
+    assert.match(assembleConversationPolicy(config, 'dsh'), /## Workers/);
+  });
+
+  it('gives a worker its own policy: the task, no deliveries, a report, and the instance Role', () => {
+    const text = assembleWorkerPolicy({ ...base, scheduler: 'workers' });
+    assert.match(text, /^## Worker\n\nYou are a worker for Tester\./);
+    assert.match(text, /Finish every turn with task_report/);
+    assert.match(text, /You have no tool to send, reply, react or notify/);
+    assert.match(text, /## Role\n/);
+    assert.doesNotMatch(text, /## Decisions and delivery|stay_silent|message_check|## Inbox/);
   });
 });
 

@@ -43,6 +43,12 @@ export class RuntimeAdapter {
   start() { return this.#implementation.start(); }
   stop() { return this.#implementation.stop(); }
   whenIdle() { return this.#implementation.whenIdle?.() ?? Promise.resolve(); }
+  workerRequest(method, params, timeoutMs) {
+    if (typeof this.#implementation.workerRequest !== 'function') {
+      return Promise.reject(new Error(`${this.runtime} does not provide shared-process workers`));
+    }
+    return this.#implementation.workerRequest(method, params, timeoutMs);
+  }
   interrupt() { return this.#implementation.interruptTurn?.() ?? Promise.resolve(); }
   // Ends the live turn in place: same process, same native session, and the
   // turn then ends through the transport's own completion path (which drains

@@ -2,19 +2,19 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
-  DSH_BRIDGE_CLI_METHODS, DSH_BRIDGE_ID, DSH_BRIDGE_PATH, DSH_BRIDGE_VERSION, DSH_NOT_READY_CODE,
+  DSH_BRIDGE_CLI_METHODS, DSH_WORKER_METHODS, DSH_BRIDGE_ID, DSH_BRIDGE_PATH, DSH_BRIDGE_VERSION, DSH_NOT_READY_CODE,
   assertDshNodeVersion, assertSupportedDshVersion, bridgeHelloSupports, dshCommand, isDshNotReady,
   retryDshNotReady, sanitizeDshEnv, writeDshPatch,
 } from '../src/dsh-runtime.mjs';
 import { DshBridgeFramer } from '../src/dsh-bridge/protocol.mjs';
 import { terminateProcessTree } from '../src/process-utils.mjs';
+import { localSocketPath, spawn, spawnDetached } from '../src/platform/index.mjs';
 
 // Keyless protocol smoke. The endpoint accepts TCP requests but never answers,
 // so a steer is guaranteed to remain live until the bridge cancels it, and no
@@ -33,6 +33,7 @@ const bin = process.env.DSH_BIN || 'dsh';
 let child;
 let stderr = '';
 let server;
+let actionServer;
 // The local `dsh` is a launcher for the source tree (tsx + the TypeScript CLI),
 // so startup is far slower than a packaged install; the bound is generous on
 // purpose. Assertions are not weakened to fit it.
@@ -43,17 +44,31 @@ function finish(error = null) {
   clearTimeout(timer);
   if (child) terminateProcessTree(child, 'SIGKILL');
   server?.close();
+  actionServer?.close();
   if (server) for (const socket of sockets) socket.destroy();
   fs.rmSync(dataDir, { recursive: true, force: true });
   if (error) {
     process.stderr.write(`${error.message}\n${stderr.slice(-4000)}\n`);
     process.exitCode = 1;
   } else {
-    process.stdout.write('DSH bridge v2: hello, settings, credentials, models, select, initialize, steer (incl. U+2028/U+2029), cancel and shutdown passed.\n');
+    process.stdout.write('DSH bridge v2: hello, settings, credentials, models, select, worker preset, initialize, steer (incl. U+2028/U+2029), cancel and shutdown passed.\n');
   }
 }
 
 const sockets = new Set();
+// Worker ensure reads its tool surface from Core. These two schemas prove
+// preset/session creation and per-session tool registration without a model call.
+const actionSocket = localSocketPath(dataDir);
+actionServer = http.createServer((request, response) => {
+  response.setHeader('content-type', 'application/json');
+  const tools = [
+    { name: 'task_check', description: 'Read task inputs', inputSchema: { type: 'object', additionalProperties: false, properties: {} } },
+    { name: 'task_report', description: 'Report task state', inputSchema: { type: 'object', additionalProperties: false, properties: {} } },
+  ];
+  response.end(JSON.stringify(request.url === '/v1/tools' ? { tools } : { ok: false, error: 'not implemented' }));
+});
+await new Promise((resolve, reject) => { actionServer.once('error', reject); actionServer.listen(actionSocket, resolve); });
+
 server = http.createServer((_request, _response) => { /* Deliberately never respond. */ });
 server.on('connection', socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
 await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
@@ -94,8 +109,11 @@ try {
   const spawnedAt = Date.now();
   child = spawn(command.command, command.args, {
     cwd: workspace,
-    env: sanitizeDshEnv({ ...process.env, DEEPSEEK_API_KEY: 'keyless-bridge-smoke', DEEPSEEK_BASE_URL: baseURL }, { dataDir }),
-    shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],
+    env: sanitizeDshEnv({
+      ...process.env, PERSONAL_AGENT_SOCKET: actionSocket,
+      DEEPSEEK_API_KEY: 'keyless-bridge-smoke', DEEPSEEK_BASE_URL: baseURL,
+    }, { dataDir }),
+    shell: false, detached: spawnDetached, stdio: ['pipe', 'pipe', 'pipe'],
   });
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', chunk => { stderr = `${stderr}${chunk}`.slice(-12000); });
@@ -169,7 +187,7 @@ try {
     `superagent/hello did not expose bridge v${DSH_BRIDGE_VERSION}: ${JSON.stringify(hello)}`);
   assert.equal(hello.bridge, DSH_BRIDGE_ID);
   assert.equal(hello.version, DSH_BRIDGE_VERSION);
-  assert.deepEqual([...hello.methods].sort(), [...DSH_BRIDGE_CLI_METHODS].sort(),
+  assert.deepEqual([...hello.methods].sort(), [...DSH_BRIDGE_CLI_METHODS, ...DSH_WORKER_METHODS].sort(),
     'hello must advertise exactly the methods this release routes');
 
   const describedAtStart = await rpc('superagent/settings/describe', { ns: 'llm-pi-ai' });
@@ -227,6 +245,21 @@ try {
   assert.equal(unsupported.error?.code, -32603, JSON.stringify(unsupported.error));
   assert.equal(unsupported.error?.data?.code, 'UNSUPPORTED_REASONING_EFFORT', JSON.stringify(unsupported.error));
   assert.match(unsupported.error.message, /does not support reasoning effort "medium"/);
+
+  const workerSession = randomUUID();
+  const ensuredWorker = await rpc('superagent/worker/ensure', {
+    taskId: 'check-worker', sessionId: workerSession, cwd: workspace,
+    authority: 'keyless-worker', policy: 'worker smoke', turn: 1,
+    provider: 'check-route', model: 'deepseek-chat', effort: 'max',
+  });
+  assert.deepEqual(ensuredWorker, { sessionId: workerSession, preset: 'ov-superagent-worker' });
+  const workerInput = { sessionId: workerSession, requestId: 'check-worker:1', prompt: 'wait without a provider answer' };
+  await rpc('superagent/worker/submit', workerInput);
+  assert.equal((await rpc('superagent/worker/submit', workerInput)).reused, true);
+  const workerWait = request('superagent/worker/wait', { sessionId: workerSession });
+  await rpc('superagent/worker/cancel', { sessionId: workerSession });
+  const workerResult = await workerWait;
+  assert.equal(workerResult.result.error, 'stopped', JSON.stringify(workerResult));
 
   await rpc('superagent/credentials/set', { ref: CREDENTIAL_REF, value: CREDENTIAL_VALUE });
   const configured = (await rpc('superagent/llm/models')).providers.find(entry => entry.provider === 'check-route');

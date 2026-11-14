@@ -77,7 +77,11 @@ export function substitutePromptPlaceholders(text, config = {}) {
 }
 
 function renderPrompt(config, name) {
-  return substitutePromptPlaceholders(fs.readFileSync(path.join(promptDir(config), name), 'utf8'), config).trim();
+  // A Windows checkout (core.autocrlf) gives these files CRLF. The policy is
+  // compared and hashed as text, so normalize line endings here rather than
+  // letting a platform detail change the assembled policy or its hash.
+  const text = fs.readFileSync(path.join(promptDir(config), name), 'utf8').replace(/\r\n/g, '\n');
+  return substitutePromptPlaceholders(text, config).trim();
 }
 
 function joinSections(parts) {
@@ -98,7 +102,7 @@ function connectorSections(config) {
 // The soul as loaded, without its HTML comments (notes for whoever edits
 // it). An instance without one runs on the Core's defaults.
 export function rolePrompt(config = {}) {
-  const text = String(config.soulText ?? '').replace(/<!--[\s\S]*?-->/g, '');
+  const text = String(config.soulText ?? '').replace(/\r\n/g, '\n').replace(/<!--[\s\S]*?-->/g, '');
   return substitutePromptPlaceholders(text, config).trim();
 }
 
@@ -191,6 +195,32 @@ function explicitSilencePromptSection(config = {}) {
   return config.explicitSilence ? EXPLICIT_SILENCE_PROMPT : '';
 }
 
+// The inbox scheduler (agents[].scheduler inbox): how waiting inputs and
+// their notices work. Appended last, and only then, so the legacy scheduler
+// assembles exactly the policy (and policyHash) it had before.
+function inboxSection(config = {}) {
+  return ['inbox', 'workers'].includes(config.scheduler) ? renderPrompt(config, 'inbox.md') : '';
+}
+
+// The workers scheduler adds the router's part after the inbox's: when to
+// hand work to a task, and how to relay what a worker reports.
+function workersSection(config = {}, runtime = null) {
+  // Runtime switches reuse the instance scheduler. Do not tell a runtime
+  // without a worker adapter to delegate work it can only perform itself.
+  const supported = runtime === null || ['pi', 'codex', 'claude', 'dsh'].includes(runtime);
+  return config.scheduler === 'workers' && supported ? renderPrompt(config, 'workers.md') : '';
+}
+
+// A worker's own policy (tasks.mjs): one task, no deliveries, a report. It
+// keeps the instance's Role, for the domain and the voice of its drafts.
+export function assembleWorkerPolicy(config = {}) {
+  return joinSections([
+    renderPrompt(config, 'worker.md'),
+    roleSection(config),
+    naturalWritingSection(config),
+  ]);
+}
+
 // How a decision is delivered: one final delivery, or (agents[].stagedReplies)
 // the OnIt acknowledgement and interim findings of a longer task before it.
 // Each instance gets one of the two, in the Core's own place for it.
@@ -210,7 +240,7 @@ function bundledCliSection(config) {
 
 // Codex, TraeX, Claude, Pi, Durable, OpenCode and Antigravity: the whole policy, delivered
 // through the Core tools.
-export function assembleConversationPolicy(config = {}) {
+export function assembleConversationPolicy(config = {}, runtime = null) {
   return joinSections([
     renderPrompt(config, 'core.md').replace('{{DELIVERY_RULES}}', () => deliveryRules(config)),
     renderPrompt(config, 'events.md'),
@@ -221,6 +251,8 @@ export function assembleConversationPolicy(config = {}) {
     roleSection(config),
     naturalWritingSection(config),
     explicitSilencePromptSection(config),
+    inboxSection(config),
+    workersSection(config, runtime),
   ]);
 }
 

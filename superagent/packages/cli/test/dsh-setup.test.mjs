@@ -42,6 +42,8 @@ function harness(t, answers, { ov = { configPath: null, url: 'http://127.0.0.1:1
       const detected = await detect({ ...options, configPath: preferredConfigPath });
       return preferredConfigPath ? { ...detected, configPath: preferredConfigPath } : detected;
     },
+    // The soul belongs to this fake OV, never the host running the test.
+    soul: { read: async () => '', write: async ({ uri }) => uri },
     connect: {
       qq: async ({ plan }) => { calls.push(['qq', plan.dataDir]); },
       telegram: async ({ plan }) => { calls.push(['telegram', plan.dataDir]); },
