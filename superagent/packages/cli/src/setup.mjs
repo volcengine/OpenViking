@@ -396,13 +396,13 @@ async function seedSoul({ prompter, soul }, { role, configPath, uri }) {
   try {
     text = await soul.read({ configPath, uri });
   } catch (error) {
-    prompter.warn(t(`读不到 OpenViking 里的 soul（${uri}），没有改它：${error.message}`,
-      `Could not read the soul in OpenViking (${uri}), so it is left unchanged: ${error.message}`));
+    prompter.warn(t(`读不到 soul（${uri}），没有改它：${error.message}`,
+      `Could not read the soul (${uri}), so it is left unchanged: ${error.message}`));
     return;
   }
   if (text.trim()) {
-    prompter.info(t(`OpenViking 里的 soul（${uri}）已经有内容：\n${soulExcerpt(text)}`,
-      `The soul in OpenViking (${uri}) already has text:\n${soulExcerpt(text)}`));
+    prompter.info(t(`soul（${uri}）已经有内容：\n${soulExcerpt(text)}`,
+      `The soul (${uri}) already has text:\n${soulExcerpt(text)}`));
     const choice = await prompter.select(t(`换成「${label}」吗？`, `Replace it with ${label}?`), [
       { label: t('保持不变', 'Leave it unchanged'), value: 'keep' },
       { label: t(`换成「${label}」`, `Replace it with ${label}`), value: 'replace' },
@@ -413,7 +413,7 @@ async function seedSoul({ prompter, soul }, { role, configPath, uri }) {
     }
   }
   try {
-    await step(prompter, t(`把「${label}」写入 OpenViking 里的 soul`, `Writing ${label} into the soul in OpenViking`),
+    await step(prompter, t(`把「${label}」写入 soul`, `Writing ${label} into the soul`),
       () => soul.write({ configPath, uri, content: rolePresetText(role) }),
       () => t(`角色已写入 ${uri}`, `The role is in ${uri}`));
   } catch (error) {

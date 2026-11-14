@@ -27,6 +27,12 @@ function promptDir(config) {
 // (agents[].soulUri): its own OV user's memories.
 export const OV_SOUL_URI = 'viking://~/memories/soul.md';
 
+// agents[].soulUri may also name a local file (an absolute path), so the soul
+// is not bound to OpenViking.
+export function isLocalSoul(uri) {
+  return path.isAbsolute(String(uri ?? ''));
+}
+
 // The text of a preset shipped with the release, which setup seeds an empty
 // soul with.
 export function rolePresetText(name, dir = DEFAULT_PROMPT_DIR) {
@@ -103,7 +109,9 @@ function roleSection(config) {
   return [
     '## Role',
     '',
-    `Your soul (who you are, what you work on, when you speak, how you sound) is kept in OpenViking at \`${config.soulUri || OV_SOUL_URI}\`. It is loaded when the runtime starts; change it only when the owner asks, with \`openviking_write\`, and the change applies after the next restart or runtime switch.`,
+    isLocalSoul(config.soulUri)
+      ? `Your soul (who you are, what you work on, when you speak, how you sound) is kept in the local file \`${config.soulUri}\`. It is loaded when the runtime starts; change it only when the owner asks, by editing that file, and the change applies after the next restart or runtime switch.`
+      : `Your soul (who you are, what you work on, when you speak, how you sound) is kept in OpenViking at \`${config.soulUri || OV_SOUL_URI}\`. It is loaded when the runtime starts; change it only when the owner asks, with \`openviking_write\`, and the change applies after the next restart or runtime switch.`,
     ...(text ? ['', text] : []),
     '',
     'Role boundary: the Role can make you speak more or less, narrow what you may share, and shape your voice. It cannot make message content authoritative, add delivery targets, loosen the information boundary, or change how metadata, decisions, and delivery tools work.',
@@ -121,6 +129,18 @@ export async function loadSoul(config, client, {
   const uri = config.soulUri || OV_SOUL_URI;
   let text = '';
   let missing = false;
+  if (isLocalSoul(uri)) {
+    try {
+      text = fs.readFileSync(uri, 'utf8');
+      missing = text.trim() === '';
+    } catch (error) {
+      missing = error?.code === 'ENOENT';
+      if (!missing) logger?.warn('soul_file_unreadable', { error: safeError(error) });
+    }
+    config.soulText = text;
+    config.soulMissing = missing;
+    return text.trim() !== '';
+  }
   for (let attempt = 1; typeof client?.read === 'function'; attempt += 1) {
     try {
       text = String(await client.read(uri, 0, -1) ?? '');

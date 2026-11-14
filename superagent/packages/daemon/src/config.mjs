@@ -55,7 +55,9 @@ function boolEnv(name, fallback) {
 function soulUriEnv() {
   const uri = (process.env.OV_SUPERAGENT_SOUL_URI ?? '').trim();
   if (!uri) return OV_SOUL_URI;
-  if (!/^viking:\/\/[^\s%\\?#]+$/.test(uri)) throw new Error('OV_SUPERAGENT_SOUL_URI must be a viking:// address');
+  if (!/^viking:\/\/[^\s%\\?#]+$/.test(uri) && !path.isAbsolute(uri)) {
+    throw new Error('OV_SUPERAGENT_SOUL_URI must be a viking:// address or an absolute file path');
+  }
   return uri;
 }
 

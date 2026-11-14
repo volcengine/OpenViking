@@ -609,6 +609,7 @@ test('an instance names where its soul is kept and keeps natural writing unless 
   manifest.agents[0].role = 'assistant';
   manifest.agents[1].role = '/srv/superagent/roles/beta.md';
   manifest.agents[1].soulUri = 'viking://~/memories/beta-soul.md';
+  manifest.agents[2].soulUri = '/srv/superagent/souls/gamma.md';
   manifest.agents[1].naturalWriting = false;
   withManifest(manifest, (manifestPath) => {
     const env = { OV_SUPERAGENT_CONFIG: manifestPath, OV_SUPERAGENT_ROLE: 'qa', OV_SUPERAGENT_SOUL_URI: 'viking://~/shell.md', OV_SUPERAGENT_NATURAL_WRITING: 'false' };
@@ -623,11 +624,11 @@ test('an instance names where its soul is kept and keeps natural writing unless 
     assert.equal(env.OV_SUPERAGENT_SOUL_URI, 'viking://~/memories/beta-soul.md');
     assert.equal(env.OV_SUPERAGENT_NATURAL_WRITING, 'false');
     applyDeploymentAgentEnv(env, deployment, 'gamma');
-    assert.equal(env.OV_SUPERAGENT_SOUL_URI, undefined);
+    assert.equal(env.OV_SUPERAGENT_SOUL_URI, '/srv/superagent/souls/gamma.md');
   });
   for (const [field, value, message] of [
-    ['soulUri', '/srv/soul.md', /agents\[0\]\.soulUri must be a viking:\/\/ address/],
-    ['soulUri', 'viking://~/my soul.md', /agents\[0\]\.soulUri must be a viking:\/\/ address/],
+    ['soulUri', 'souls/mine.md', /agents\[0\]\.soulUri must be a viking:\/\/ address or an absolute file path/],
+    ['soulUri', 'viking://~/my soul.md', /agents\[0\]\.soulUri must be a viking:\/\/ address or an absolute file path/],
     ['naturalWriting', 'no', /agents\[0\]\.naturalWriting must be a boolean/],
   ]) {
     const broken = validManifest();

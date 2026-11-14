@@ -119,7 +119,8 @@ const ROLE_PRESETS = Object.freeze(['colleague', 'assistant', 'qa']);
 // agents[].larkMessageAccess: `owner` reads with the owner's visibility,
 // `bot` only in the chats the bot has joined.
 const LARK_MESSAGE_ACCESS = Object.freeze(['owner', 'bot']);
-// agents[].soulUri: where the instance's soul is kept in OpenViking, when not
+// agents[].soulUri: where the instance's soul is kept (a viking:// address or an
+// absolute local file path), when not
 // at the default viking://~/memories/soul.md.
 const SOUL_URI = /^viking:\/\/[^\s%\\?#]+$/;
 // Each mailbox is its own email Connector instance; the id is how the model
@@ -320,8 +321,9 @@ function parseAgent(value, index, ignored) {
   if (value.ovAutoRecall !== undefined && typeof value.ovAutoRecall !== 'boolean') {
     throw new Error(`${label}.ovAutoRecall must be a boolean`);
   }
-  if (value.soulUri != null && (typeof value.soulUri !== 'string' || !SOUL_URI.test(value.soulUri))) {
-    throw new Error(`${label}.soulUri must be a viking:// address`);
+  if (value.soulUri != null && (typeof value.soulUri !== 'string'
+    || !(SOUL_URI.test(value.soulUri) || path.isAbsolute(value.soulUri)))) {
+    throw new Error(`${label}.soulUri must be a viking:// address or an absolute file path`);
   }
   if (value.explicitSilence !== undefined && typeof value.explicitSilence !== 'boolean') {
     throw new Error(`${label}.explicitSilence must be a boolean`);

@@ -321,6 +321,22 @@ describe('loading the soul', () => {
 
 });
 
+describe('a soul kept in a local file', () => {
+  it('reads an absolute soulUri from disk and points the agent at that file', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'soul-'));
+    const file = path.join(dir, 'soul.md');
+    fs.writeFileSync(file, 'You are {{AGENT_NAME}}, from a local file.');
+    const config = { agentName: 'Fern', connectors: ['lark'], soulUri: file };
+    assert.equal(await loadSoul(config, { read: async () => { throw new Error('OpenViking must not be read'); } }), true);
+    const policy = assembleConversationPolicy(config);
+    assert.match(policy, /You are Fern, from a local file\./);
+    assert.ok(policy.includes(`kept in the local file \`${file}\``));
+    const absent = { connectors: ['lark'], soulUri: path.join(dir, 'missing.md') };
+    assert.equal(await loadSoul(absent, {}), false);
+    assert.equal(absent.soulMissing, true);
+  });
+});
+
 describe('natural writing', () => {
   it('follows the role unless the instance turns it off', () => {
     const config = { connectors: ['lark'], soulText: role('colleague') };

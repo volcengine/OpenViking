@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { isLocalSoul } from '../../daemon/src/conversation-policy.mjs';
 import { OVConnection, readOVConfig } from '../../daemon/src/ov-connection.mjs';
 import { availableInstanceOvConfig } from './manifest.mjs';
 import {
@@ -322,6 +323,14 @@ export function saveOVConnection(detected, { env = process.env, homeDir = env.HO
 // identity (its ovConfig). A missing soul reads as empty; a release that
 // refuses `replace` on a missing file (404) gets `create`.
 export async function readOVSoul({ configPath, uri, fetchImpl = globalThis.fetch }) {
+  if (isLocalSoul(uri)) {
+    try {
+      return fs.readFileSync(uri, 'utf8');
+    } catch (error) {
+      if (error?.code === 'ENOENT') return '';
+      throw error;
+    }
+  }
   const connection = new OVConnection(readOVConfig(configPath), { fetch: fetchImpl });
   try {
     const { result } = await connection.json(`/api/v1/content/read?uri=${encodeURIComponent(uri)}&offset=0&limit=-1&raw=true`);
@@ -333,6 +342,11 @@ export async function readOVSoul({ configPath, uri, fetchImpl = globalThis.fetch
 }
 
 export async function writeOVSoul({ configPath, uri, content, fetchImpl = globalThis.fetch }) {
+  if (isLocalSoul(uri)) {
+    fs.mkdirSync(path.dirname(uri), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(uri, content, { mode: 0o600 });
+    return uri;
+  }
   const connection = new OVConnection(readOVConfig(configPath), { fetch: fetchImpl });
   const write = (mode) => connection.json('/api/v1/content/write', { uri, content, mode, wait: true });
   try {

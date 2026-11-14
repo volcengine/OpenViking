@@ -698,7 +698,7 @@ test('a soul with text is shown and kept unless the owner replaces it; keeping t
   assert.deepEqual(kept.manifest().agents, [before]);
   assert.deepEqual(kept.souls, [['read', { configPath: before.ovConfig, uri: 'viking://~/memories/asd-soul.md' }]]);
   assert.match(kept.written(), /角色：把「答疑助手」写入 OpenViking 里的 soul（已有内容时先问你）/);
-  assert.match(kept.written(), /OpenViking 里的 soul（viking:\/\/~\/memories\/asd-soul\.md）已经有内容：\n    You are ASD, who keeps the garden club's notes\.\n[\s\S]*    line 10\n    …\n/);
+  assert.match(kept.written(), /soul（viking:\/\/~\/memories\/asd-soul\.md）已经有内容：\n    You are ASD, who keeps the garden club's notes\.\n[\s\S]*    line 10\n    …\n/);
   assert.doesNotMatch(kept.written(), /line 11/);
   assert.match(kept.written(), /1\) 保持不变\n  2\) 换成「答疑助手」/);
   assert.match(kept.written(), /soul 保持不变/);
