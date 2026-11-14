@@ -92,6 +92,7 @@ export function FileTreeRowView({
       data-selected={isSelected || undefined}
       data-disabled={row.disabled || undefined}
       data-kind={row.kind}
+      data-trailing-position={ctx.rowTrailingPosition}
       style={{ ...rowStyle(row.depth), ...extraStyle }}
       onClick={handleClick}
       onKeyDown={(event: KeyboardEvent<HTMLDivElement>) =>
