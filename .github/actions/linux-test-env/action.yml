@@ -1,0 +1,7 @@
+name: Bootstrap Linux build container
+description: Supply a job-local home before language setup and restore workspace ownership
+runs:
+  using: node24
+  main: bootstrap.mjs
+  post: cleanup.mjs
+  post-if: always()

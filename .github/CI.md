@@ -18,12 +18,65 @@ file checksum before writing it. Other test platforms build locally. Release
 wheels build independently in Ubuntu 20.04/macOS/Windows; Ubuntu 24.04 test
 binaries and musl CLI binaries are never reused in release wheels.
 
-Builds and ordinary tests use GitHub-hosted runners to measure build reuse and
-cache behavior independently of self-hosted machine capacity. There is no
-`ov-ci-runner` scheduling or manual selection in these workflows.
-The existing P0 Memory Tests remain on their original ECS environment, selected
-with `[self-hosted, Linux, X64, openviking-ecs]`. That runner must have the
-`openviking-ecs` custom label; its display name alone does not select it.
+With repository variable `CI_LINUX_BUILDS_ENABLED=true`, trusted Linux API jobs
+use `[self-hosted, Linux, X64, ci-linux-builds]`. Linux x86_64 wheel builds
+alternate between GitHub-hosted and this dedicated pool.
+Only the dedicated runner `iv-yezentk8ao3z47ge5tmm` has that custom label; runner
+display names do not select machines.
+Linux wheels use the dedicated runner on even workflow run numbers.
+API native runtime preparation and its short change-planning job always use
+the dedicated runner for eligible events, regardless of workflow run number.
+The planning job runs Git/Python on the host with a five-minute execution limit.
+Linux API/CLI, MySQL/Redis and
+cuVS tests inherit their same-run native producer's destination. This keeps the
+entire trusted Linux API dependency chain off the hosted queue.
+Wheel builds send 50% of consecutive runs to each destination, and reruns keep
+the same destination. This is not half of all Linux jobs or an equal share of
+execution time. Conditional skips can change the observed share.
+The old ECS runner does not receive these jobs.
+
+Only official repository PRs from the same repository and branch pushes are
+eligible. Release/tag events, schedules, manual builds, fork PRs and other
+repositories use GitHub-hosted. The native producer publishes its selected labels
+and container image for its consumers; no extra selector job or token is needed.
+Studio, both musl CLI targets, other tests/checks and source packaging stay hosted. Native ARM,
+macOS and Windows assignments are unchanged.
+
+Self-hosted builds and tests require Docker access and use disposable containers with
+job-local HOME/Cargo/Rustup directories and post-job ownership cleanup.
+Wheels retain Ubuntu 20.04/glibc 2.31. API native runtime preparation uses Ubuntu
+24.04 on both destinations so its artifact remains compatible with hosted tests.
+Self-hosted API, database and cuVS consumers also use Ubuntu 24.04 containers;
+hosted consumers retain their existing host execution. Database consumers use
+service-container DNS inside containers and loopback on hosted runners.
+The Linux wheel execution timeout is 60 minutes and native preparation is limited
+to 30 minutes. Timeouts start when execution begins, not while queued; there is
+no automatic queue fallback.
+
+Before enabling routing, dispatch `_build.yml` on this branch with
+`check_linux_runner=true`, `build_wheels=false` and `build_sdist=false`. Its
+five-minute diagnostic checks Docker access, HTTPS package-index downloads and
+package installation in both container images without checking out repository
+code. Enable `CI_LINUX_BUILDS_ENABLED` only after it passes. The runner user must
+be able to access Docker without interactive sudo.
+
+Package sources use HTTPS. Minimal Ubuntu images bootstrap TLS verification with
+the host's `/etc/ssl/certs/ca-certificates.crt`, mounted read-only at a temporary
+path until the container installs its own certificates. The host CA bundle must
+exist. Incomplete apt index downloads fail the job instead of continuing with
+missing package metadata.
+If official Ubuntu endpoints are unreachable from the dedicated machine, set
+`CI_UBUNTU_MIRROR` to a reachable HTTPS Ubuntu mirror, including its `/ubuntu` path.
+The override applies only to self-hosted builds/tests and the readiness diagnostic;
+hosted builds retain the official sources. The diagnostic prints host/container
+TCP reachability to help distinguish mirror access from Docker networking issues.
+
+If the dedicated runner is offline or stuck, set repository Actions variable
+`CI_DISABLE_SELF_HOSTED=true`, cancel affected runs and trigger new runs.
+New jobs use hosted runners; already queued jobs retain their original labels.
+After repairing/updating the runner, remove the disable variable to resume the
+dedicated routing. Removing `CI_LINUX_BUILDS_ENABLED` also leaves these builds/tests hosted.
+Release builds remain hosted regardless of either variable.
 
 The cuVS check now lives in the API workflow so it can consume the same artifact.
 Its check name stays `cuvs-tests / Lite Test (ubuntu-24.04, 3.11)`, matching the
@@ -54,9 +107,11 @@ select API tests, including newly introduced runtime paths.
 Local checks:
 
 ```sh
+python3 -m pip install pytest PyYAML
 python3 -m pytest --noconftest -q -o addopts='' \
   tests/misc/test_abi3_packaging_config.py \
-  tests/misc/test_release_tag_selection.py
+  tests/misc/test_release_tag_selection.py \
+  tests/misc/test_linux_runner.py
 actionlint .github/workflows/pr.yml .github/workflows/api_test.yml \
   .github/workflows/_build.yml .github/workflows/_test_lite.yml \
   .github/workflows/_test_full.yml .github/workflows/rust-cli.yml

@@ -25,6 +25,11 @@ on:
         default: true
   workflow_dispatch:
     inputs:
+      check_linux_runner:
+        description: 'Check Docker and HTTPS package downloads on the dedicated Linux build runner'
+        required: false
+        type: boolean
+        default: false
       build_sdist:
         description: 'Whether to build source distribution'
         required: false
@@ -45,6 +50,63 @@ on:
         default: '["3.10"]'
 
 jobs:
+  check-linux-runner:
+    name: Check dedicated Linux runner
+    if: github.event_name == 'workflow_dispatch' && inputs.check_linux_runner && github.repository == 'volcengine/OpenViking'
+    runs-on: [self-hosted, Linux, X64, ci-linux-builds]
+    permissions: {}
+    timeout-minutes: 5
+    env:
+      UBUNTU_MIRROR: ${{ vars.CI_UBUNTU_MIRROR }}
+    steps:
+      - name: Verify runner and disposable build containers
+        shell: bash
+        run: |
+          set -euo pipefail
+          id
+          uname -m
+          nproc
+          df -h "$RUNNER_TEMP"
+          docker version
+          test -s /etc/ssl/certs/ca-certificates.crt
+          for host in archive.ubuntu.com mirrors.aliyun.com; do
+            if timeout 5 bash -c 'exec 3<>/dev/tcp/$1/443' _ "$host"; then
+              echo "Host TCP reachable: $host:443"
+            else
+              echo "Host TCP unreachable: $host:443"
+            fi
+            if docker run --rm ubuntu:24.04 timeout 5 \
+              bash -c 'exec 3<>/dev/tcp/$1/443' _ "$host"; then
+              echo "Container TCP reachable: $host:443"
+            else
+              echo "Container TCP unreachable: $host:443"
+            fi
+          done
+          for image in ubuntu:20.04 ubuntu:24.04; do
+            docker run --rm -i \
+              --env UBUNTU_MIRROR \
+              --volume /etc/ssl/certs/ca-certificates.crt:/tmp/runner-ca-certificates.crt:ro \
+              "$image" bash -e <<'BOOTSTRAP'
+          for source in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do
+            if [ -f "$source" ]; then
+              sed -i 's|http://|https://|g' "$source"
+              if [ -n "$UBUNTU_MIRROR" ]; then
+                case "$UBUNTU_MIRROR" in https://*) ;; *) exit 1 ;; esac
+                sed -i \
+                  "s|https://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR%/}|g; s|https://security.ubuntu.com/ubuntu|${UBUNTU_MIRROR%/}|g" \
+                  "$source"
+              fi
+            fi
+          done
+          apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
+            -o Acquire::Retries=2 -o Acquire::https::Timeout=20 \
+            -o APT::Update::Error-Mode=any update
+          apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
+            -o Acquire::Retries=2 install -y ca-certificates git
+          getconf GNU_LIBC_VERSION
+          BOOTSTRAP
+          done
+
   build-studio:
     name: Build shared Studio bundle
     if: inputs.build_wheels
@@ -145,8 +207,22 @@ jobs:
         contains(inputs.os_json, '"ubuntu-24.04"') ||
         contains(inputs.os_json, 'ubuntu-24.04-arm')
       )
-    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
-    container: ubuntu:20.04
+    runs-on: >-
+      ${{ fromJSON(matrix.arch == 'aarch64' && '["ubuntu-24.04-arm"]' ||
+          github.repository == 'volcengine/OpenViking' &&
+          (github.event_name == 'pull_request' || github.event_name == 'push') &&
+          !startsWith(github.ref, 'refs/tags/') && vars.CI_DISABLE_SELF_HOSTED != 'true' &&
+          vars.CI_LINUX_BUILDS_ENABLED == 'true' &&
+          (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) &&
+          (endsWith(github.run_number, '0') || endsWith(github.run_number, '2') ||
+           endsWith(github.run_number, '4') || endsWith(github.run_number, '6') ||
+           endsWith(github.run_number, '8')) &&
+          '["self-hosted","Linux","X64","ci-linux-builds"]' || '["ubuntu-24.04"]') }}
+    container:
+      image: ubuntu:20.04
+      # Minimal Ubuntu images lack CA certificates before the first apt install.
+      options: --volume /etc/ssl/certs/ca-certificates.crt:/tmp/runner-ca-certificates.crt:ro
+    timeout-minutes: 60
     env:
       DEBIAN_FRONTEND: noninteractive
       TZ: Etc/UTC
@@ -158,13 +234,23 @@ jobs:
     
     steps:
     - name: Install system dependencies (Linux)
+      env:
+        UBUNTU_MIRROR: ${{ runner.environment == 'self-hosted' && vars.CI_UBUNTU_MIRROR || '' }}
       run: |
-        # Replace archive.ubuntu.com with azure.archive.ubuntu.com for better stability in GH Actions
-        sed -i 's/http:\/\/archive.ubuntu.com\/ubuntu\//http:\/\/azure.archive.ubuntu.com\/ubuntu\//g' /etc/apt/sources.list
-        # Retry apt-get update
-        for i in 1 2 3 4 5; do apt-get update && break || sleep 5; done
-        apt-get install -y \
+        sed -i 's|http://|https://|g' /etc/apt/sources.list
+        if [ -n "$UBUNTU_MIRROR" ]; then
+          case "$UBUNTU_MIRROR" in https://*) ;; *) exit 1 ;; esac
+          sed -i \
+            "s|https://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR%/}|g; s|https://security.ubuntu.com/ubuntu|${UBUNTU_MIRROR%/}|g" \
+            /etc/apt/sources.list
+        fi
+        apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
+          -o Acquire::Retries=2 -o Acquire::https::Timeout=20 \
+          -o APT::Update::Error-Mode=any update
+        apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
+          -o Acquire::Retries=2 install -y \
           git ca-certificates cmake build-essential clang tzdata curl \
+          pkg-config unzip xz-utils python3 libicu66 \
           libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
           libffi-dev liblzma-dev libgdbm-dev libnss3-dev libncurses5-dev \
           libncursesw5-dev tk-dev uuid-dev libexpat1-dev
@@ -183,6 +269,8 @@ jobs:
       with:
         submodules: recursive
         fetch-depth: 0  # Required for setuptools_scm to detect version from git tags
+
+    - uses: ./.github/actions/linux-test-env
 
     - name: Fetch all tags
       run: |
