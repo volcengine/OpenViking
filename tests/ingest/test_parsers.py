@@ -5,6 +5,8 @@
 import json
 import sqlite3
 
+import pytest
+
 from openviking.ingest.sources.claude_code import ClaudeCodeSource
 from openviking.ingest.sources.codex import CodexSource
 from openviking.ingest.sources.hermes import HermesSource
@@ -117,6 +119,34 @@ def test_codex(tmp_path):
     assert ref.native_session_id == "codex-sess"
     assert [(m.role, m.text) for m in msgs] == [("user", "fix the bug"), ("assistant", "done")]
     assert msgs[1].peer_id == "codex__openai"
+
+
+@pytest.mark.parametrize("bad_record", [b"{", b"[]", b'{"type":"session_meta","payload":42}'])
+def test_codex_discovery_reads_metadata_after_an_invalid_record(tmp_path, bad_record):
+    day = tmp_path / "2026" / "06" / "25"
+    bad_log = day / "rollout-a.jsonl"
+    _write_jsonl(
+        bad_log,
+        [
+            {"type": "session_meta", "payload": {"id": "recovered", "model_provider": "openai"}},
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "hello"}],
+                },
+            },
+        ],
+    )
+    bad_log.write_bytes(bad_record + b"\n" + bad_log.read_bytes())
+    _write_jsonl(day / "rollout-b.jsonl", [{"type": "session_meta", "payload": {"id": "other"}}])
+
+    source = CodexSource(_cfg(tmp_path))
+    refs = list(source.discover_sessions())
+    assert [ref.native_session_id for ref in refs] == ["recovered", "other"]
+    messages, _ = source.read_messages(refs[0], None)
+    assert [(msg.text, msg.peer_id) for msg in messages] == [("hello", "codex__openai")]
 
 
 def test_codex_forked_rollout_file_gets_its_own_session_id(tmp_path):
