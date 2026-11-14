@@ -6,6 +6,7 @@ import type {
   FileTreeInfoLabels,
   FileTreeLabels,
   FileTreeLoadMoreRow,
+  FileTreeProps,
   FileTreeRow,
 } from './types.js';
 
@@ -28,6 +29,7 @@ export interface FileTreeRowContext {
   selectedId?: string | null;
   selectedIds?: readonly string[];
   renderRowLeading?: (row: FileTreeEntryRow) => ReactNode;
+  rowTrailingPosition?: FileTreeProps['rowTrailingPosition'];
   /** 当前展示浮层的行 id。Row whose tooltip is showing. */
   /** 为行追加属性。Extra attributes for a row. */
   getRowAttributes?: (row: FileTreeRow) => HTMLAttributes<HTMLDivElement>;
