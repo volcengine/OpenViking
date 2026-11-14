@@ -167,6 +167,7 @@ class LiteLLMVLMProvider(VLMBase):
         self._provider_name = config.get("provider")
         self._extra_headers = config.get("extra_headers") or {}
         self._thinking = config.get("thinking", False)
+        self.reasoning_effort = config.get("reasoning_effort")
         self._forward_api_key = config.get("forward_api_key")
         self._detected_provider: str | None = None
 
@@ -339,8 +340,11 @@ class LiteLLMVLMProvider(VLMBase):
         effective_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
         if effective_max_tokens is not None:
             kwargs["max_tokens"] = effective_max_tokens
-        if reasoning_effort is not None:
-            kwargs["reasoning_effort"] = reasoning_effort
+        effective_reasoning_effort = (
+            self.reasoning_effort if reasoning_effort is None else reasoning_effort
+        )
+        if effective_reasoning_effort is not None:
+            kwargs["reasoning_effort"] = effective_reasoning_effort
 
         if self._should_forward_api_key(model):
             kwargs["api_key"] = self.api_key
