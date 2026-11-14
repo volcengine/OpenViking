@@ -104,6 +104,7 @@ export class PiAgent {
     this.store = store;
     this.logger = logger;
     this._spawn = options.spawn ?? nodeSpawn;
+    this._terminateProcessTree = options.terminateProcessTree ?? terminateProcessTree;
     this._isolationArgs = options.isolationArgs ?? piIsolationArgs;
     this.onTurnFailed = options.onTurnFailed ?? null;
     this.onTurnSucceeded = options.onTurnSucceeded ?? null;
@@ -126,7 +127,7 @@ export class PiAgent {
     this.syncedThroughSeq = options.syncedThroughSeq ?? 0;
     this.deliveredThroughSeq = this.syncedThroughSeq;
 
-    this.systemPrompt = assembleConversationPolicy(config);
+    this.systemPrompt = assembleConversationPolicy(config, 'pi');
     this.developerInstructionsText = this.systemPrompt;
     this.model = options.model
       ?? store.getSetting?.('pi_model')
@@ -283,7 +284,7 @@ export class PiAgent {
         else resolve(result);
       };
       const timer = setTimeout(() => {
-        terminateProcessTree(child, 'SIGKILL');
+        this._terminateProcessTree(child, 'SIGKILL');
         finish(new Error(`pi preflight timed out: ${args.join(' ')}`));
       }, this.startTimeoutMs);
       timer.unref?.();
@@ -292,13 +293,13 @@ export class PiAgent {
       child.stdout?.on('data', (chunk) => {
         try { stdout = appendBounded(stdout, chunk, 'preflight output'); } catch (error) {
           outputError = error;
-          terminateProcessTree(child, 'SIGKILL');
+          this._terminateProcessTree(child, 'SIGKILL');
         }
       });
       child.stderr?.on('data', (chunk) => {
         try { stderr = appendBounded(stderr, chunk, 'preflight error'); } catch (error) {
           outputError = error;
-          terminateProcessTree(child, 'SIGKILL');
+          this._terminateProcessTree(child, 'SIGKILL');
         }
       });
       child.once('error', (error) => finish(error));
@@ -387,7 +388,7 @@ export class PiAgent {
           this.connected = false;
           this.onMcpStartup = null;
         }
-        terminateProcessTree(child, 'SIGKILL');
+        this._terminateProcessTree(child, 'SIGKILL');
         reject(error);
       };
       const timer = setTimeout(() => failStart(new Error('Pi startup timed out; check that built-in MCP is enabled, personal_agent is not overridden in mcp.json, and no extension blocks session start')), this.startTimeoutMs);
@@ -615,7 +616,7 @@ export class PiAgent {
   _onStdout(chunk, child) {
     try { this.stdoutLines.push(chunk); } catch (error) {
       this.turnError = error;
-      terminateProcessTree(child, 'SIGKILL');
+      this._terminateProcessTree(child, 'SIGKILL');
     }
   }
 
@@ -941,7 +942,7 @@ export class PiAgent {
     this.child = null;
     this.connected = false;
     this._rejectPendingRpc(processError ?? new Error('pi connection lost'));
-    if (!this.stopping) terminateProcessTree(child, 'SIGKILL');
+    if (!this.stopping) this._terminateProcessTree(child, 'SIGKILL');
     const wasActive = this.turnActive;
     const acceptanceUnknown = wasActive && this.sessionInitialized;
     const items = this.activeItems.splice(0);
@@ -1233,17 +1234,17 @@ export class PiAgent {
       return;
     }
     if (child.exitCode !== null) {
-      terminateProcessTree(child, 'SIGKILL');
+      this._terminateProcessTree(child, 'SIGKILL');
       return;
     }
     const exited = new Promise((resolve) => child.once('exit', resolve));
-    terminateProcessTree(child, 'SIGTERM');
+    this._terminateProcessTree(child, 'SIGTERM');
     await Promise.race([
       exited,
       delay(3_000),
     ]);
     if (child.exitCode === null) {
-      terminateProcessTree(child, 'SIGKILL');
+      this._terminateProcessTree(child, 'SIGKILL');
       await Promise.race([exited, delay(1_000)]);
     }
     if (child.exitCode === null) throw new Error('pi process did not exit after SIGKILL');

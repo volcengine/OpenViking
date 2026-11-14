@@ -9,19 +9,28 @@ import path from 'node:path';
 import { WorkerExecutor } from '../src/worker-executor.mjs';
 import { PI_MCP_EXTENSION } from '../src/pi-runtime.mjs';
 
+// Execute a real Node fixture on every platform. Windows cannot spawn a
+// shebang-only file, so its entry point is a small cmd launcher instead.
+function nodeFixture(dir, name, source) {
+  const script = path.join(dir, `${name}.cjs`);
+  fs.writeFileSync(script, `#!/usr/bin/env node\n${source}`, { mode: 0o755 });
+  if (process.platform !== 'win32') return script;
+  const launcher = path.join(dir, `${name}.cmd`);
+  fs.writeFileSync(launcher, `@echo off\r\n"${process.execPath}" "%~dp0${name}.cjs" %*\r\n`);
+  return launcher;
+}
+
 // A CLI stand-in: records its argv, cwd and the agent env, then prints the
 // JSON lines the test gives it and exits with the given code.
 function fakeCli(dir, name, lines, code = 0) {
-  const file = path.join(dir, name);
-  fs.writeFileSync(file, `#!/usr/bin/env node
+  return nodeFixture(dir, name, `
 const fs = require('node:fs');
 fs.appendFileSync(${JSON.stringify(path.join(dir, `${name}.calls`))}, JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(),
   mcp: process.env.PERSONAL_AGENT_MCP_CONFIG ?? null, authority: process.env.PERSONAL_AGENT_AUTHORITY ?? null,
   shellLimit: process.env.PERSONAL_AGENT_SHELL_LIMIT_S ?? null }) + '\\n');
 for (const line of ${JSON.stringify(lines)}) process.stdout.write(JSON.stringify(line) + '\\n');
 ${code ? `process.stderr.write('upstream said HTTP 429'); process.exit(${code});` : ''}
-`, { mode: 0o755 });
-  return file;
+`);
 }
 
 const calls = (dir, name) => fs.readFileSync(path.join(dir, `${name}.calls`), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
@@ -160,9 +169,7 @@ describe('WorkerExecutor', () => {
     assert.deepEqual(['pi', 'codex', 'claude', 'dsh', 'durable', 'opencode', 'volc'].map((id) => executor.supports(id)),
       [true, true, true, true, false, false, false]);
     assert.throws(() => executor.start({ task: task({ runtime: 'durable' }), prompt: 'p', authority: 'x' }), /workers do not run on durable/);
-    const slow = path.join(dir, 'slow-pi');
-    fs.writeFileSync(slow, '#!/usr/bin/env node\nsetTimeout(() => {}, 60_000);\n', { mode: 0o755 });
-    config.piBin = slow;
+    config.piBin = nodeFixture(dir, 'slow-pi', 'setTimeout(() => {}, 60_000);');
     const handle = executor.start({ task: task(), prompt: 'p', authority: 'x' });
     setTimeout(() => handle.stop(), 300);
     assert.equal((await handle.done).error, 'stopped');

@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -15,7 +14,7 @@ import {
 } from '../src/dsh-runtime.mjs';
 import { DshBridgeFramer } from '../src/dsh-bridge/protocol.mjs';
 import { terminateProcessTree } from '../src/process-utils.mjs';
-import { localSocketPath } from '../src/platform/index.mjs';
+import { localSocketPath, spawn, spawnDetached } from '../src/platform/index.mjs';
 
 // Keyless protocol smoke. The endpoint accepts TCP requests but never answers,
 // so a steer is guaranteed to remain live until the bridge cancels it, and no
@@ -114,7 +113,7 @@ try {
       ...process.env, PERSONAL_AGENT_SOCKET: actionSocket,
       DEEPSEEK_API_KEY: 'keyless-bridge-smoke', DEEPSEEK_BASE_URL: baseURL,
     }, { dataDir }),
-    shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],
+    shell: false, detached: spawnDetached, stdio: ['pipe', 'pipe', 'pipe'],
   });
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', chunk => { stderr = `${stderr}${chunk}`.slice(-12000); });
