@@ -106,6 +106,27 @@ test("existing OpenViking sessions are reusable on DSH resume", async () => {
   assert.equal(state.initializationRetryable, false);
 });
 
+test("noAutoInject skips profile reads but still initializes the session", async () => {
+  const requestedPaths = [];
+  const runtime = new OpenVikingRuntime({
+    async healthResult() {
+      return { ok: true };
+    },
+    async ensureSessionResult() {
+      return { ok: true };
+    },
+    async fetchJSON(path) {
+      requestedPaths.push(path);
+      return { ok: true, result: [] };
+    },
+  }, { ...config(), syncTurns: false, noAutoInject: true }, { debug() {} });
+  const agent = { session: { id: "no-profile", header: { cwd: "/workspace" } } };
+
+  assert.equal((await runtime.initialize(agent)).ready, true);
+  assert.equal(await runtime.profileMessage(agent), null);
+  assert.deepEqual(requestedPaths, []);
+});
+
 test("a retryable threshold commit failure is queued", async () => {
   const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-commit-"));
   tempDirs.push(pendingDir);
