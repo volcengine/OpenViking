@@ -97,7 +97,10 @@ export async function nodePathToBlob(
     for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
       if (entry.isSymbolicLink()) continue;
       const fullPath = paths.join(directory, entry.name);
-      const archivePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+      // fflate also uses object keys internally; prefix names to keep __proto__ a path.
+      const archivePath = prefix
+        ? `${prefix}/${entry.name}`
+        : `./${entry.name}`;
       if (entry.isDirectory()) await walk(fullPath, archivePath);
       else if (entry.isFile()) files[archivePath] = await fs.readFile(fullPath);
     }

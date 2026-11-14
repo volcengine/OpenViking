@@ -3,8 +3,9 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
+import { strFromU8, unzipSync } from "fflate";
 import {
   OpenVikingClient,
   OpenVikingError,
@@ -1071,34 +1072,74 @@ describe("OpenVikingClient", () => {
     }
   });
 
-  it("uploads an existing Node.js local file instead of sending its path to the server", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "openviking-sdk-"));
-    const path = join(directory, "resource.md");
-    await writeFile(path, "local content");
-    try {
-      const fetcher = vi
-        .fn<typeof fetch>()
-        .mockResolvedValueOnce(ok({ temp_file_id: "temp-local" }))
-        .mockResolvedValueOnce(ok({}));
-      const client = new OpenVikingClient({
-        baseUrl: "https://example.com",
-        fetch: fetcher,
-        uploadMode: "shared",
-      });
-      await client.addResource(path);
-      expect(String(fetcher.mock.calls[0]![0])).toBe(
-        "https://example.com/api/v1/resources/temp_upload",
-      );
-      const form = fetcher.mock.calls[0]![1]?.body as FormData;
-      expect((form.get("file") as File).name).toBe("resource.md");
-      expect(form.get("upload_mode")).toBe("shared");
-      expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toMatchObject(
-        { temp_file_id: "temp-local", source_name: "resource.md" },
-      );
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
-  });
+  it.each(["file", "directory"])(
+    "uploads an existing Node.js local %s instead of sending its path to the server",
+    async (kind) => {
+      const directory = await mkdtemp(join(tmpdir(), "openviking-sdk-"));
+      const path = kind === "file" ? join(directory, "resource.md") : directory;
+      await writeFile(join(directory, "resource.md"), "local content");
+      if (kind === "directory") {
+        await writeFile(join(directory, "__proto__"), "prototype file content");
+        await writeFile(
+          join(directory, "constructor"),
+          "constructor file content",
+        );
+      }
+      try {
+        const fetcher = vi
+          .fn<typeof fetch>()
+          .mockResolvedValueOnce(ok({ temp_file_id: "temp-local" }))
+          .mockResolvedValueOnce(ok({}));
+        const client = new OpenVikingClient({
+          baseUrl: "https://example.com",
+          fetch: fetcher,
+          uploadMode: "shared",
+        });
+        await client.addResource(path);
+        expect(String(fetcher.mock.calls[0]![0])).toBe(
+          "https://example.com/api/v1/resources/temp_upload",
+        );
+        const form = fetcher.mock.calls[0]![1]?.body as FormData;
+        const uploaded = form.get("file") as File;
+        expect(uploaded.name).toBe(
+          kind === "file" ? "resource.md" : `${basename(directory)}.zip`,
+        );
+        if (kind === "directory") {
+          const names: string[] = [];
+          const files = unzipSync(
+            new Uint8Array(await uploaded.arrayBuffer()),
+            {
+              filter: (entry) => {
+                names.push(entry.name);
+                return true;
+              },
+            },
+          );
+          expect(names.sort()).toEqual([
+            "./__proto__",
+            "./constructor",
+            "./resource.md",
+          ]);
+          expect(strFromU8(files["./__proto__"]!)).toBe(
+            "prototype file content",
+          );
+          expect(strFromU8(files["./constructor"]!)).toBe(
+            "constructor file content",
+          );
+          expect(strFromU8(files["./resource.md"]!)).toBe("local content");
+        }
+        expect(form.get("upload_mode")).toBe("shared");
+        expect(
+          JSON.parse(String(fetcher.mock.calls[1]![1]?.body)),
+        ).toMatchObject({
+          temp_file_id: "temp-local",
+          source_name: basename(path),
+        });
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("serializes resource parse mode through args", async () => {
     const fetcher = vi
