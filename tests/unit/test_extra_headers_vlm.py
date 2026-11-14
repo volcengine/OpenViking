@@ -496,6 +496,54 @@ class TestVLMBaseExtraHeaders:
 class TestVLMExtraRequestBody:
     """Test provider-specific VLM request body passthrough."""
 
+    @pytest.mark.parametrize("effort", [None, "medium"])
+    async def test_litellm_reasoning_effort_defaults_and_override_on_the_wire(
+        self, monkeypatch, effort
+    ):
+        bodies = []
+
+        def send(client, request, **kwargs):
+            assert request.url.path == "/v1/chat/completions"
+            bodies.append(json.loads(request.content))
+            return httpx.Response(
+                200,
+                request=request,
+                json={"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]},
+            )
+
+        async def send_async(client, request, **kwargs):
+            return send(client, request, **kwargs)
+
+        monkeypatch.setattr(httpx.Client, "send", send)
+        monkeypatch.setattr(httpx.AsyncClient, "send", send_async)
+        config = VLMConfig(
+            provider="litellm",
+            model="openai/gpt-5",
+            api_key="sk-test",
+            api_base="https://provider.example.test/v1",
+            reasoning_effort=effort,
+            max_retries=0,
+        )
+        vlm = config.get_vlm_instance()
+        try:
+            assert vlm.get_completion("hello") == "ok"
+            assert await vlm.get_completion_async("hello") == "ok"
+            assert vlm.get_vision_completion("describe", images=[b"\x89PNG\r\n\x1a\n"]) == "ok"
+            assert (
+                await vlm.get_vision_completion_async("describe", images=[b"\x89PNG\r\n\x1a\n"])
+                == "ok"
+            )
+            assert await vlm.get_completion_async("hello", reasoning_effort="high") == "ok"
+            assert await vlm.get_completion_async("hello") == "ok"
+        finally:
+            config.close()
+
+        assert len(bodies) == 6
+        for body in bodies[:4] + bodies[5:]:
+            assert body.get("reasoning_effort") == effort
+            assert ("reasoning_effort" in body) == (effort is not None)
+        assert bodies[4]["reasoning_effort"] == "high"
+
     @pytest.mark.parametrize(
         ("provider", "model", "sync_client_cls", "async_client_cls", "extra_body"),
         [
