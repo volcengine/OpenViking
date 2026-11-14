@@ -94,6 +94,7 @@ export function HomePage() {
           data={summary?.context_counts}
           disabled={metricsUnavailable}
           disabledMessage={unavailableMessage}
+          errorMessage={dashboard.error?.message}
           isError={dashboard.isError}
           isLoading={isMetricsLoading}
           t={t}
@@ -102,6 +103,7 @@ export function HomePage() {
           data={summary?.today_tokens}
           disabled={metricsUnavailable}
           disabledMessage={unavailableMessage}
+          errorMessage={dashboard.error?.message}
           isError={dashboard.isError}
           isLoading={isMetricsLoading}
           t={t}
@@ -110,6 +112,7 @@ export function HomePage() {
           data={summary?.today_retrievals}
           disabled={metricsUnavailable}
           disabledMessage={unavailableMessage}
+          errorMessage={dashboard.error?.message}
           isError={dashboard.isError}
           isLoading={isMetricsLoading}
           t={t}
@@ -120,6 +123,7 @@ export function HomePage() {
         data={tokenSeries.data}
         disabled={identityUnavailable}
         disabledMessage={unavailableMessage}
+        errorMessage={tokenSeries.error?.message}
         isError={tokenSeries.isError}
         isLoading={isSeriesLoading}
         t={t}
@@ -129,6 +133,7 @@ export function HomePage() {
         data={contextCommits.data}
         disabled={identityUnavailable}
         disabledMessage={unavailableMessage}
+        errorMessage={contextCommits.error?.message}
         isError={contextCommits.isError}
         isLoading={isCommitsLoading}
         t={t}
