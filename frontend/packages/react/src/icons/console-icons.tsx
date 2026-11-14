@@ -13,5 +13,8 @@ const icons = {
 /** Private Console controls. Sources and licenses are in packages/icons/README.md. */
 export function ConsoleIcon({ name }: { name: keyof typeof icons }) {
   const Icon = icons[name];
-  return <Icon aria-hidden="true" focusable="false" />;
+  const size = name === 'history' ? 12.667 : 16;
+  return (
+    <Icon width={size} height={size} aria-hidden="true" focusable="false" />
+  );
 }
