@@ -5,7 +5,7 @@ import type {
 
 export type FormRequest = Exclude<
   VikingBotInteractionRequest,
-  { kind: 'custom' | 'target' }
+  { kind: 'custom' | 'target' | 'steps' }
 >;
 export type FormError = 'required' | 'timeInvalid' | 'weekdayRequired';
 
@@ -37,6 +37,10 @@ export function validateAnswer(
     return request.options.some((option) => option.id === answer.value)
       ? undefined
       : 'required';
+  if (request.kind === 'text' && answer.kind === 'text')
+    return request.required !== false && !answer.value.trim()
+      ? 'required'
+      : undefined;
   if (answer.kind !== 'schedule' || answer.value.mode === 'none') return;
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(answer.value.time))
     return 'timeInvalid';

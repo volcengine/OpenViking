@@ -24,10 +24,12 @@ export function InteractionForm({
   error,
   onSubmit,
   onCancel,
+  onPrevious,
 }: Omit<VikingBotInteractionProps, 'request' | 'labels' | 'locale'> & {
   request: FormRequest;
   labels: InteractionLabels;
   locale: Locale;
+  onPrevious?: () => void;
 }) {
   const id = useId();
   const formRef = useRef<HTMLFormElement>(null);
@@ -111,7 +113,11 @@ export function InteractionForm({
         void submit();
       }}
     >
-      <h3 id={`${id}-title`} className="ov-viking-bot__interaction-title">
+      <h3
+        tabIndex={-1}
+        id={`${id}-title`}
+        className="ov-viking-bot__interaction-title"
+      >
         {request.question ?? labels.title}
       </h3>
       <div className="ov-viking-bot__interaction-fields">
@@ -142,6 +148,11 @@ export function InteractionForm({
         ) : null}
       </div>
       <div className="ov-viking-bot__interaction-footer">
+        {onPrevious ? (
+          <Button type="outline" disabled={blocked} onClick={onPrevious}>
+            {labels.previous}
+          </Button>
+        ) : null}
         {onCancel ? (
           <Button
             type="outline"
@@ -163,7 +174,7 @@ export function InteractionForm({
           htmlType="submit"
           className="ov-viking-bot__interaction-action"
           loading={busy}
-          disabled={blocked}
+          disabled={blocked || Boolean(validateAnswer(request, answer))}
         >
           {labels.submit}
         </Button>

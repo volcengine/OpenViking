@@ -66,6 +66,14 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 
 ```
 
+### 多步骤确认
+
+通过 `kind: 'steps'` 传入问题列表。组件管理进度、上一步和下一步，保留各步草稿，最后一步才调用 `onSubmit` 汇总提交。未完成当前题时禁用下一步或提交；失败后保留所有答案，可以返回修改或重试。
+
+```tsx file="../../_demos/viking-bot-interaction-steps.tsx" preview
+
+```
+
 ### 外部目录选择
 
 通过 `allowCustomInput.onOpen` 接管目录选择，使用公共 [ContextPicker](./context-picker) 管理弹窗，确认后调用 `select` 写回答案。
@@ -406,7 +414,7 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 
 | 参数       | 说明                                                                                                                                             | 类型                                                                  | 默认值                   |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- | ------------------------ |
-| request    | 当前问题                                                                                                                                         | `VikingBotInteractionRequest`                                         | 必填                     |
+| request    | 单题或内置分步问题                                                                                                                               | `VikingBotInteractionRequest`                                         | 必填                     |
 | requestKey | 问题的稳定身份，变化时重置内置表单；省略时由 `request.kind` 和 `index` 决定                                                                      | `string`                                                              | -                        |
 | index      | 当前步骤序号，从 0 开始                                                                                                                          | `number`                                                              | `0`                      |
 | total      | 步骤总数；大于 1 时显示进度                                                                                                                      | `number`                                                              | `1`                      |
@@ -420,7 +428,7 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 | locale     | 界面语言，规则见[国际化](../guide/i18n)；在 `VikingBot` 的 `interaction` 中默认跟随 `VikingBot` 的语言                                           | `'zh-CN' \| 'en-US'`                                                  | 继承上级，默认 `'en-US'` |
 | className  | 附加到根元素的类名                                                                                                                               | `string`                                                              | -                        |
 
-待确认交互使用库内表单与基础控件，单独使用 `VikingBotInteraction` 无需安装 Ark Design。提交失败时保留草稿并显示错误，可以修改后重试；取消会恢复初始值。
+待确认交互使用库内表单与基础控件，单独使用 `VikingBotInteraction` 无需安装 Ark Design。提交失败时保留草稿并显示错误，可以修改后重试；取消会恢复初始值，分步模式同时返回第一步。未选答案、空自由输入和无效定时值时，提交按钮禁用；文本题默认必填，选填题设置 `required: false`。
 
 ### VikingBotInteractionLabels
 
@@ -442,7 +450,7 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 | scheduleFrequency           | 更新频次标签               | `string`                                   | 更新频次                                                 |
 | scheduleHour                | 小时列表标签               | `string`                                   | 小时                                                     |
 | scheduleMinute              | 分钟列表标签               | `string`                                   | 分钟                                                     |
-| required                    | 选项未完成提示             | `string`                                   | 请完成当前问题                                           |
+| required                    | 选项未完成提示             | `string`                                   | 请完成单题或内置分步问题                                 |
 | timeInvalid                 | 时间格式错误提示           | `string`                                   | 请输入有效时间，格式为 HH:mm（00:00–23:59）              |
 | weekdayRequired             | 更新日期未选提示           | `string`                                   | 请选择每周更新的日期                                     |
 | submitFailed                | 无错误详情时的提交失败提示 | `string`                                   | 提交失败，请重试                                         |
@@ -468,10 +476,21 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 | directoryRetry              | 目录流程文案               | `string`                                   | 重试                                                     |
 | directoryLoadFailed         | 目录流程文案               | `string`                                   | 目录加载失败                                             |
 | directoryParent             | 父目录说明                 | `(uri: string) => string`                  | `父目录：{uri}`                                          |
+| next                        | 下一步按钮                 | `string`                                   | 下一步                                                   |
+| previous                    | 上一步按钮                 | `string`                                   | 上一步                                                   |
 
 ### VikingBotInteractionRequest
 
 `kind` 决定问题类型和可用字段，下面按类型分别列出。
+
+#### steps 分步确认
+
+| 参数  | 说明                                                           | 类型                                                                                   | 默认值 |
+| ----- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ------ |
+| kind  | 问题类型                                                       | `'steps'`                                                                              | 必填   |
+| steps | 至少一个单题请求，按顺序展示，支持所有单题类型，不嵌套分步请求 | `readonly [VikingBotInteractionSingleRequest, ...VikingBotInteractionSingleRequest[]]` | 必填   |
+
+分步模式自动计算进度，忽略 `index` 和 `total`；`requestKey` 变化会重置整组草稿。自定义题通过 `render` 上下文中的 `submit` 推进，通过 `previous` 返回上一步，其内容校验由自定义表单负责。
 
 #### target 输出目录
 
@@ -487,7 +506,7 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 | 参数             | 说明                                                                              | 类型                                                                                                                                                                             | 默认值  |
 | ---------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
 | kind             | 问题类型                                                                          | `'choice'`                                                                                                                                                                       | 必填    |
-| options          | 选项；必须选中其中一项（或填写「其他」）才能提交，未完成时显示校验提示            | `readonly VikingBotInteractionOption[]`                                                                                                                                          | 必填    |
+| options          | 选项；必须选中其中一项（或填写「其他」）才能提交，未完成时禁用提交                | `readonly VikingBotInteractionOption[]`                                                                                                                                          | 必填    |
 | question         | 问题文案                                                                          | `ReactNode`                                                                                                                                                                      | -       |
 | allowCustomInput | 自定义答案；onOpen 由宿主接管选择，directoryPicker 复用内置目录弹窗，否则内联输入 | `boolean \| { placeholder?: string; open?: boolean; onOpen?: (context: VikingBotInteractionCustomInputContext) => void; directoryPicker?: VikingBotInteractionDirectoryPicker }` | `false` |
 
@@ -500,6 +519,7 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 | initialValue | 输入框的初始文本                                | `string`    | `''`   |
 | description  | 补充说明，显示在输入框上方                      | `ReactNode` | -      |
 | multiline    | 默认使用多行文本域，传 `false` 时使用单行输入框 | `boolean`   | `true` |
+| required     | 是否必填；空字符串和纯空白视为未填写            | `boolean`   | `true` |
 
 #### schedule 定时
 
@@ -514,12 +534,12 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 
 #### repair 修复候选
 
-| 参数         | 说明                                                 | 类型                               | 默认值 |
-| ------------ | ---------------------------------------------------- | ---------------------------------- | ------ |
-| kind         | 问题类型                                             | `'repair'`                         | 必填   |
-| options      | 候选；必须选中其中一项才能提交，未完成时显示校验提示 | `readonly VikingBotRepairOption[]` | 必填   |
-| question     | 问题文案                                             | `ReactNode`                        | -      |
-| initialValue | 初始选中的候选 `id`                                  | `string`                           | -      |
+| 参数         | 说明                                             | 类型                               | 默认值 |
+| ------------ | ------------------------------------------------ | ---------------------------------- | ------ |
+| kind         | 问题类型                                         | `'repair'`                         | 必填   |
+| options      | 候选；必须选中其中一项才能提交，未完成时禁用提交 | `readonly VikingBotRepairOption[]` | 必填   |
+| question     | 问题文案                                         | `ReactNode`                        | -      |
+| initialValue | 初始选中的候选 `id`                              | `string`                           | -      |
 
 #### custom 自定义
 
@@ -599,13 +619,16 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 | cancel     | 放弃本次交互，调用 `onCancel`                           | `() => void`                                | 必填   |
 | disabled   | 是否禁用提交，即 `disabled` 或 `submitting` 为真        | `boolean`                                   | -      |
 | submitting | 是否正在提交                                            | `boolean`                                   | -      |
+| previous   | 分步模式返回上一步，第一步不提供                        | `() => void`                                | -      |
 
 ### VikingBotInteractionAnswer
 
 | 参数  | 说明                                                                                                                                                        | 类型                                                                                        | 默认值 |
 | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ------ |
-| kind  | 问题类型，与 `request.kind` 一致                                                                                                                            | `'target' \| 'choice' \| 'text' \| 'schedule' \| 'repair' \| 'custom'`                      | 必填   |
+| kind  | 问题类型，与 `request.kind` 一致                                                                                                                            | `'target' \| 'choice' \| 'text' \| 'schedule' \| 'repair' \| 'custom' \| 'steps'`           | 必填   |
 | value | 答案：`choice` 是所选选项的 `value` 或「其他」输入的文本，`text` 是输入的文本，`schedule` 是定时值，`repair` 是所选候选的 `id`，`custom` 是 `submit` 的参数 | `string`（choice、text、repair）、`VikingBotScheduleValue`（schedule）、`unknown`（custom） | 必填   |
+
+分步提交返回 `{ kind: 'steps', value: VikingBotInteractionSingleAnswer[] }`，`value` 按问题顺序包含所有单题答案；单题提交的结构保持不变。
 
 ### VikingBotInteractionCustomInputContext
 

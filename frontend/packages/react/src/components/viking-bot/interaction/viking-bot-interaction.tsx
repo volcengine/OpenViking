@@ -1,6 +1,7 @@
 import { useTrack } from '../../../shared/analytics/use-track.js';
 import { useLocale } from '../../../shared/locale-context.js';
 import { TargetInteraction } from './target-interaction.js';
+import { InteractionSteps } from './interaction-steps.js';
 import { InteractionForm } from './interaction-form.js';
 import { resolveInteractionLabels } from './labels.js';
 import type {
@@ -18,7 +19,7 @@ export function VikingBotInteractionView({
   locale: localeProp,
   labels: overrides,
   ...props
-}: VikingBotInteractionProps) {
+}: VikingBotInteractionProps & { onPrevious?: () => void }) {
   const track = useTrack();
   const events = {
     onSubmit: (answer: VikingBotInteractionAnswer) => {
@@ -35,6 +36,17 @@ export function VikingBotInteractionView({
   const locale = useLocale(localeProp);
   const labels = resolveInteractionLabels(locale, overrides);
   const blocked = Boolean(props.disabled || props.submitting);
+  if (request.kind === 'steps')
+    return (
+      <InteractionSteps
+        key={JSON.stringify([request.kind, requestKey])}
+        {...props}
+        request={request}
+        className={className}
+        locale={locale}
+        labels={labels}
+      />
+    );
   return (
     <section
       className={['ov-viking-bot__interaction', className]
@@ -44,7 +56,7 @@ export function VikingBotInteractionView({
       aria-busy={props.submitting || undefined}
     >
       {total > 1 ? (
-        <p className="ov-viking-bot__interaction-progress">
+        <p className="ov-viking-bot__interaction-progress" aria-current="step">
           {labels.progress(index, total)}
         </p>
       ) : null}
@@ -58,6 +70,7 @@ export function VikingBotInteractionView({
           {request.render({
             disabled: blocked,
             submitting: props.submitting,
+            previous: props.onPrevious,
             submit: (value) => {
               if (!blocked) return events.onSubmit({ kind: 'custom', value });
             },

@@ -26,6 +26,8 @@ const messages = {
   directoryPickerTitle: '选择保存目录',
   directoryPickerConfirm: '选择此目录',
   directoryPickerHint: '请选择一个目录',
+  next: '下一步',
+  previous: '上一步',
   answer: '答案',
   title: '待确认',
   submit: '提交',
