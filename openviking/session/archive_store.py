@@ -258,8 +258,15 @@ class ArchiveStore:
             done_uri = f"{archive['archive_uri']}/.done"
             try:
                 done_exists = await self._viking_fs.exists(done_uri, ctx=self._ctx)
-            except Exception:
-                done_exists = False
+            except Exception as exc:
+                # ``exists`` answers False only for a genuinely missing marker;
+                # a transient probe failure must not read as "not done", or a
+                # completed archive is reported as pending and drops out of the
+                # completed chain.
+                if is_storage_not_found(exc):
+                    done_exists = False
+                else:
+                    raise
             done: Dict[str, Any] = {}
             if done_exists:
                 try:
@@ -324,8 +331,13 @@ class ArchiveStore:
             failed_uri = f"{archive['archive_uri']}/.failed.json"
             try:
                 failed_exists = await self._viking_fs.exists(failed_uri, ctx=self._ctx)
-            except Exception:
-                failed_exists = False
+            except Exception as exc:
+                # Same contract as the ``.done`` probe above: only not-found is
+                # a "no failed marker" answer.
+                if is_storage_not_found(exc):
+                    failed_exists = False
+                else:
+                    raise
             if failed_exists:
                 try:
                     parsed_failed = json.loads(
@@ -377,10 +389,21 @@ class ArchiveStore:
     async def read_done(self, archive_uri: str) -> Dict[str, Any]:
         """Read completion metadata without changing the terminal boundary."""
         try:
-            done = json.loads(
-                await self._viking_fs.read_file(f"{archive_uri}/.done", ctx=self._ctx)
+            raw_done = await self._viking_fs.read_file(
+                f"{archive_uri}/.done", ctx=self._ctx
             )
-        except Exception:
+        except Exception as exc:
+            # A durably missing marker means "no completion metadata"; a
+            # transient read failure must not be read as "no metadata", or a
+            # context-reset boundary is silently ignored.
+            if is_storage_not_found(exc):
+                return {}
+            raise
+        # Keep the pre-existing tolerance for an unparseable body: an
+        # interrupted write can leave the marker empty.
+        try:
+            done = json.loads(raw_done)
+        except (json.JSONDecodeError, TypeError):
             return {}
         return self.normalize_done(done) if isinstance(done, dict) else {}
 
