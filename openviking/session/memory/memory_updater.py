@@ -2223,6 +2223,10 @@ class MemoryUpdater:
                         continue
                     attempted_count += 1
                     logger.debug(f"Enqueued memory for vectorization: {uri}")
+                else:
+                    logger.warning(
+                        "Skipping memory vectorization for %s: empty embedding input", uri
+                    )
 
             except Exception as e:
                 tracer.error(f"Failed to vectorize memory {uri}: {e}")
