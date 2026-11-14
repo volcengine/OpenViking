@@ -78,6 +78,7 @@ OpenViking 拒绝 API 密钥时，返回 401 `openviking_http_401`。
 | `capture_status`、`capture_reason`、`capture_retry_at` | 保存状态（`active`、`disabled`、`retrying` 或 `paused`）、原因，以及下次重试时间（Unix 时间戳，秒），见[保存状态](../gateway/10-overview-and-requests.md#saving-status) |
 | `tool_skip_reason` | 请求没有拿到 OpenViking 工具的原因，见[什么时候不提供工具](../gateway/04-openviking-tools.md#when-tools-are-not-offered) |
 | `tool_stop_reason` | 工具 Token 预算用完、后续调用被拒绝时为 `token_budget`，见[上限](../gateway/04-openviking-tools.md#limits) |
+| `secrets_sealed`、`secrets_sealed_egress`、`secrets_unsealed` | 客户端请求中封存的凭据值数、网关补充的内容（记忆、摘要、工具结果）在发出前封存的值数，以及返回客户端的工具调用中启封的引用数，见[封存凭据](../gateway/08-context-profiles.md#seal-credentials) |
 | `compaction_failed` | 压缩失败的原因（`still_over_threshold` 时摘要已保留），见[长对话超出上下文长度](../gateway/12-troubleshooting.md#long-conversations-hit-the-context-limit) |
 | `context_tokens`、`context_window` | 估算的上下文大小，以及用来比较的上下文窗口 |
 | `input_tokens`、`output_tokens`、`cached_tokens`、`cache_write_tokens` | 本次请求所有服务商调用（含 OpenViking 工具轮次）的 token 用量合计。`input_tokens` 已包含缓存命中和缓存写入的 token。 |

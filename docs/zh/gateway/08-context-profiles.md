@@ -12,7 +12,7 @@ description: 创建上下文配置，决定 OpenViking 网关为每个网关密�
 
 嵌入式 dev 模式在启动时将 `default_profile` 一次性写入 `default` 账号；之后修改 `ov.conf` 不会改变已保存的配置，请在 Studio 中修改。
 
-除了名称和[允许客户端覆盖设置](#client-overrides)开关，一份配置分为四个部分，下表中的默认值也就是推荐设置：
+除了名称和[允许客户端覆盖设置](#client-overrides)开关，一份配置分为五个部分，下表中的默认值也就是推荐设置：
 
 | 部分 | 作用 | 主要设置和默认值 |
 | --- | --- | --- |
@@ -20,6 +20,7 @@ description: 创建上下文配置，决定 OpenViking 网关为每个网关密�
 | 保存对话 | 把完成的轮次写入 OpenViking 会话并提交，供 OpenViking 提取记忆。 | 最新回复等待时长：600 秒 · 提交阈值：20,000 token · 保留最近消息：10 |
 | 长对话 | 对话接近上下文窗口时，让同一个模型写摘要，替换之前的消息。 | 压缩：开启 · 压缩时机：窗口的 0.9 · 摘要长度上限：8,000 token · Agent 自管上下文窗口：关闭 |
 | OpenViking 工具 | 让模型在回答时使用 OpenViking 的工具。 | 开启 · 勾选全部工具，见 [OpenViking 工具](04-openviking-tools.md) |
+| 封存凭据 | 在 OpenViking Privacy 登记的凭据以引用而不是真实值发给模型。 | 关闭 · 在工具调用中填入真值：关闭，见[封存凭据](#seal-credentials) |
 
 每个部分都有自己的开关，长对话部分的压缩和 Agent 自管上下文窗口各有一个。召回和保存相互独立，只召回不保存、只保存不召回都可以。
 
@@ -34,7 +35,7 @@ description: 创建上下文配置，决定 OpenViking 网关为每个网关密�
 其他操作：
 
 - **复制一份**：在卡片上或编辑页的**更多操作**（⋯）菜单中，打开一份名为“… 副本”的拷贝。想做一份变体，这样最快。
-- **恢复推荐设置**：在同一个菜单中，把四个部分恢复为推荐设置，名称和**允许客户端覆盖设置**保持不变，保存后生效。
+- **恢复推荐设置**：在同一个菜单中，把五个部分恢复为推荐设置，名称和**允许客户端覆盖设置**保持不变，保存后生效。
 - 有密钥在用的配置不能删除。先吊销这些密钥；如果还需要它们，先签发使用其他配置的新密钥来替换。
 - Studio 处于只读状态时，卡片上显示**查看**而不是**编辑**，也不能创建、复制或删除配置，见[解锁编辑](06-manage-in-studio.md#unlock-editing)。
 
@@ -99,12 +100,25 @@ description: 创建上下文配置，决定 OpenViking 网关为每个网关密�
 
 ## 长对话和 OpenViking 工具 {#long-conversations-and-tools}
 
-编辑页的最后两个部分各有专门的页面：
+编辑页的这两个部分各有专门的页面：
 
 - **长对话**部分包括**压缩**及其**压缩时机**和**摘要长度上限**、实验性的 **Agent 自管上下文窗口**及其**软提醒时机**和**硬提醒时机**，以及**高级设置**中的**默认上下文窗口**。详见[网关中的长对话](05-long-conversations.md#long-conversations)；窗口较小的模型需要设置窗口大小，见[设置模型的上下文窗口](05-long-conversations.md#context-window)。
 - **OpenViking 工具**部分包括**工具**清单和**显示工具调用**，**高级设置**中还有**每次请求的工具轮数**、**单次调用超时**、**结果大小上限**、**总时长**和 **Token 预算**。详见[选择工具](04-openviking-tools.md#choose-tools)和[上限](04-openviking-tools.md#limits)。网关执行所选工具时不经过客户端的权限确认，决定让模型使用会修改数据的工具之前，请先阅读[风险和控制点](04-openviking-tools.md#risks-and-controls)。
 
 每项设置的 API 名称和取值范围见[配置参考](13-configuration.md#context-profile-settings)。
+
+## 封存凭据 {#seal-credentials}
+
+**封存凭据**（默认关闭）让登记在 [OpenViking Privacy](../concepts/13-privacy.md) `credential` 分类下的凭据不进入模型。任何内容发往上游之前，网关都把其中已登记的值换成对应的引用，例如 <code v-pre>{{ov_privacy:alice:viking://~/privacy/credential/github#/values/token}}</code>：客户端发来的内容、召回的记忆、OpenViking 工具的结果和摘要都是如此。之后开始的对话不再提供会返回真实值的 `privacy_resolve` 工具；之前开始的对话里，它的结果同样会被封存。
+
+**在工具调用中填入真值**（默认关闭，需要先开启封存）在客户端执行的工具调用里把引用换成真实值，于是 <code v-pre>curl -H "Authorization: Bearer {{ov_privacy:...}}"</code> 这样的命令可以正常执行，模型却始终看不到 token。只有发给客户端的那份调用会改变，也只替换与 OpenViking 渲染形式完全一致、指向用户本人字段且值不少于 6 个字符的引用：更短的值在下一次请求中不会被重新封存。回复正文、thinking、服务商自己执行的工具，以及 `local_shell_call` 等 Responses 内置工具调用保留引用。之后开始的对话里，网关会告诉模型把引用原样写进工具参数。
+
+- **何时生效。** 与其他配置项不同，这两个开关保存后立即作用于进行中的对话。只有提供给模型的工具清单和引用用法说明要等新对话才改变。
+- **匹配什么。** 每个顶层文本字段的当前值，长度不少于 6 个字符，按原文或常见 JSON 编码器写出的转义形式匹配。编码过或被拆开的值、轮换之前的旧值不会被匹配。带签名的 thinking、加密的推理内容、图片和其他 base64 数据保持不变，但工具调用和工具结果中的一律封存。
+- **失败时。** 封存需要 OpenViking Server 0.5.2 或更高版本，这是第一个提供凭据目录树的版本。网关用用户自己的 OpenViking 密钥读取凭据，最多每 30 秒一次。读取失败且上一份副本已超过 10 分钟时，带请求体的请求返回 503 `secrets_unavailable`，不会发到服务商，网关日志会写明原因。没有登记任何凭据的用户不受影响。压缩过的请求体返回 415。请求体不是 JSON 对象的模型请求，以及网关只能原样转发的 JSON 请求体（例如含重复键），返回 400。不是 JSON 的请求体（例如文件上传）不经封存直接转发。
+- **与记忆插件同时使用时。** 客户端运行着 [OpenViking 插件](../guides/15-gateway.md#when-both-are-in-use)时，网关照常封存，但不在工具调用中填入真值，这一步留给插件。
+
+这对服务商和本地数据意味着什么，见[服务商能看到什么](11-security-and-data.md#what-providers-see)。
 
 ## 允许客户端覆盖设置 {#client-overrides}
 
@@ -114,11 +128,11 @@ description: 创建上下文配置，决定 OpenViking 网关为每个网关密�
 X-OpenViking-Context: {"recall":false,"max_tokens":800,"context_types":["memory"]}
 ```
 
-- **能改什么。** 除 `name` 和 `client_overrides` 以外的所有设置。请求头没有给出的字段沿用配置中的值。工具权限只能收窄：请求头里的 `disabled_tools` 会追加到配置已取消勾选的工具上，`gateway_tools` 只能关闭 OpenViking 工具、不能重新打开，所以 `{"disabled_tools":[]}` 或 `{"gateway_tools":true}` 不会提供配置不提供的工具。
+- **能改什么。** 除 `name`、`client_overrides`、`seal_secrets` 和 `unseal_tool_calls` 以外的所有设置，所以客户端无法关闭封存。请求头没有给出的字段沿用配置中的值。工具权限只能收窄：请求头里的 `disabled_tools` 会追加到配置已取消勾选的工具上，`gateway_tools` 只能关闭 OpenViking 工具、不能重新打开，所以 `{"disabled_tools":[]}` 或 `{"gateway_tools":true}` 不会提供配置不提供的工具。
 - **何时生效。** 与保存配置的修改一样，对话会沿用开始时的设置：只有对话第一个请求里的请求头决定设置。之后的请求头仍会校验，所以无效的请求头，或开关关闭后的任何请求头，仍会报错。
 - **错误。** 开关关闭时，带这个请求头的请求一律返回 403 `context_override_not_allowed`，而不是按已保存的设置处理。开关开启时，请求头有下列情况之一会返回 400 `context_override_invalid`：
   - 不是 JSON 对象；
-  - 出现未知字段或 `name`、`client_overrides`；
+  - 出现未知字段或 `name`、`client_overrides`、`seal_secrets`、`unseal_tool_calls`；
   - 取值越界。
 - **请求日志。** [请求详情](10-overview-and-requests.md#request-details)中列出客户端在请求头里传入了哪些字段，只记名称，不记取值。
 

@@ -8,6 +8,7 @@ import time
 import async_timeout
 import orjson
 
+from .blocks import token_estimate
 from .capture import CapturePipeline
 from .compaction import cut_messages
 from .notices import tool_tail
@@ -48,8 +49,14 @@ def public_stream_error(value):
 
 
 class HiddenToolLoop:
-    def __init__(self, prepared, executor, store, capture):
+    def __init__(self, prepared, executor, store, capture, seal=None, unseal=None):
         self.prepared, self.executor, self.store, self.capture = prepared, executor, store, capture
+        # Tool results are sealed as they arrive, so neither continuations nor the receipts
+        # the gateway stores hold values.
+        self.seal = seal or (lambda value: value)
+        # Only the client's copy of its calls gets values; visible history, the final and
+        # capture keep references, which the client's next request is matched by.
+        self.unseal = unseal or (lambda value: (value, 0))
         self.protocol = prepared.protocol
         self.adapter = tool_protocol(self.protocol)(prepared.body)
         self.body = {
@@ -64,7 +71,8 @@ class HiddenToolLoop:
         self.deadline = time.monotonic() + seconds if prepared.tools_active and seconds else None
         self.adapter.lead_with(prepared.reply_lead)
         self.transcript, self.usage, self.counted = [], {}, {}
-        self.final, self.hidden, self.window = None, False, None
+        # ``reply`` is the final as the client receives it.
+        self.final, self.reply, self.hidden, self.window = None, None, False, None
         self.rounds, self.token_cost, self.refused = 0, 0, False
         self.round = ToolRound([], [], {}, False)
 
@@ -192,9 +200,12 @@ class HiddenToolLoop:
             for event in self.stream(events):
                 yield event
         if window:
-            self.reset(*window)
+            anchor, value = window
+            # The window copies the opening block, which may predate a registered value.
+            text = self.seal(value["text"])
+            self.reset(anchor, {**value, "text": text, "tokens": token_estimate(text)})
         else:
-            results = self.adapter.results(results)
+            results = self.seal(self.adapter.results(results))
             self.transcript.extend(results)
             self.body[self.adapter.field].extend([*self.round.output, *results])
         self.rounds += 1
@@ -290,12 +301,16 @@ class HiddenToolLoop:
                             raise ToolLoopError("Gateway tool call has an invalid stop reason")
                         async for event in self.execute(owned):
                             yield event
-                    for event in self.stream(self.adapter.publish_calls(client)):
+                    published, _ = self.unseal(self.adapter.publish_calls(client))
+                    for event in self.stream(published):
                         yield event
                     if client or not owned:
                         await self.persist()
+                        self.reply, unsealed = self.unseal(self.final)
+                        if unsealed:
+                            self.prepared.metrics["secrets_unsealed"] = unsealed
                         if self.body.get("stream"):
-                            for event in self.adapter.terminal(self.final):
+                            for event in self.adapter.terminal(self.reply):
                                 yield self.adapter.encode(event)
                         return
                     remaining = self.deadline and max(0.01, self.deadline - time.monotonic())

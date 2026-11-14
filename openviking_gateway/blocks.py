@@ -58,7 +58,7 @@ RECALL_PROVENANCE_NOTE = (
 
 def gateway_note(policy, tools):
     """Opening lines that tell the model what the gateway adds to this history."""
-    if not (policy.recall or tools):
+    if not (policy.recall or tools or policy.unseal_tool_calls):
         return ""
     lines = [
         "The OpenViking Gateway, a proxy between the client and the model, added this "
@@ -95,6 +95,12 @@ def gateway_note(policy, tools):
             "openviking_context_remaining. A [context-status] line after each user message "
             "shows how full the current window is, and a [context-reminder] line follows it or "
             "a tool result when the window is filling up."
+        )
+    if policy.unseal_tool_calls:
+        lines.append(
+            "- Text like {{ov_privacy:...}} is a sealed reference to one of the user's "
+            "credentials. Write it verbatim inside tool-call arguments: the gateway replaces "
+            "it with the real value when the call runs. Never ask for or print the real value."
         )
     if policy.capture:
         lines.append("- The gateway saves this conversation to the user's OpenViking memory.")
