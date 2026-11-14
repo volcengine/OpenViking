@@ -84,54 +84,60 @@ test('a transient failure beyond the old exhausted window retries without reject
   }
 });
 
-test('a successful write supersedes an older background refresh for all shared consumers', async () => {
-  const pending = deferred();
-  let reads = 0,
-    added = false,
-    background;
-  const fetch = recordingFetch(({ path }) => {
-    if (path.endsWith('/mkdir')) {
-      added = true;
-      return ok({ uri: `${ROOT}/new` });
-    }
-    if (++reads === 2) return pending.promise;
-    return ok([
-      { uri: `${ROOT}/old` },
-      ...(added ? [{ uri: `${ROOT}/new` }] : []),
-    ]);
-  });
-  const state = await fixture(fetch);
-  try {
-    await act(async () => {
-      background = state.tree.refresh();
+for (const initialLoad of [false, true]) {
+  test(`a write supersedes an older listing (initial load: ${initialLoad})`, async () => {
+    const pending = deferred();
+    let reads = 0,
+      added = false,
+      background;
+    const fetch = recordingFetch(({ path }) => {
+      if (path.endsWith('/mkdir')) {
+        added = true;
+        return ok({ uri: `${ROOT}/new` });
+      }
+      if (++reads === (initialLoad ? 1 : 2)) return pending.promise;
+      return ok([
+        { uri: `${ROOT}/old` },
+        ...(added ? [{ uri: `${ROOT}/new` }] : []),
+      ]);
     });
-    await settle();
-    await act(() =>
-      state.client.request({
-        method: 'POST',
-        path: '/api/v1/fs/mkdir',
-        body: { uri: `${ROOT}/new` },
-      }),
-    );
-    await settle();
-    assert.equal(
-      state.tree.rows.some((row) => row.uri === `${ROOT}/new`),
-      true,
-    );
-    await act(async () => pending.resolve(await ok([{ uri: `${ROOT}/old` }])));
-    await background;
-    await settle();
-    assert.equal(
-      state.tree.rows.some((row) => row.uri === `${ROOT}/new`),
-      true,
-    );
-  } finally {
-    pending.resolve(await ok([]));
-    await background;
-    await state.view.unmount();
-    state.queryClient.clear();
-  }
-});
+    const state = await fixture(fetch);
+    try {
+      if (!initialLoad)
+        await act(async () => {
+          background = state.tree.refresh();
+        });
+      await settle();
+      await act(() =>
+        state.client.request({
+          method: 'POST',
+          path: '/api/v1/fs/mkdir',
+          body: { uri: `${ROOT}/new` },
+        }),
+      );
+      await settle();
+      assert.equal(
+        state.tree.rows.some((row) => row.uri === `${ROOT}/new`),
+        true,
+      );
+      assert.equal(reads, initialLoad ? 2 : 3);
+      await act(async () =>
+        pending.resolve(await ok([{ uri: `${ROOT}/old` }])),
+      );
+      await background;
+      await settle();
+      assert.equal(
+        state.tree.rows.some((row) => row.uri === `${ROOT}/new`),
+        true,
+      );
+    } finally {
+      pending.resolve(await ok([]));
+      await background;
+      await state.view.unmount();
+      state.queryClient.clear();
+    }
+  });
+}
 
 test('refreshing a cached empty listing keeps the active preview mounted', async () => {
   const { useFileBrowser } = await import(`${hooks}/file-browser.js`);

@@ -61,7 +61,7 @@ test('failed background search refresh retains cached results alongside retry fe
       onHighlight() {},
       onSelectMode() {},
       onOpen() {},
-      onRetry: () => queryClient.invalidateQueries(),
+      onRetry: state.retry,
     });
   }
   const view = await mount(
@@ -91,3 +91,64 @@ test('failed background search refresh retains cached results alongside retry fe
     queryClient.clear();
   }
 });
+
+for (const mode of ['tree', 'search']) {
+  test(`${mode} Retry directly recovers a failed identity source without a host rerender`, async () => {
+    const { useFsTree } = await import(`${hooks}/fs-tree.js`);
+    let broken = true,
+      state;
+    const queryClient = new QueryClient();
+    const fetch = recordingFetch(({ path }) =>
+      path.endsWith('/ls')
+        ? ok([{ uri: 'viking://resources/recovered' }])
+        : ok({ resources: [{ uri: 'viking://resources/recovered' }] }),
+    );
+    function Tree() {
+      state = useFsTree({
+        client: useOvClient(),
+        rootUri: 'viking://resources',
+      });
+      return null;
+    }
+    function Search() {
+      state = useFsSearch({
+        client: useOvClient(),
+        mode: 'find',
+        query: 'recovered',
+        rootUri: 'viking://resources',
+        filters,
+      });
+      return null;
+    }
+    const view = await mount(
+      h(
+        OpenVikingProvider,
+        {
+          queryClient,
+          fetch,
+          apiKey: async () => {
+            if (broken) throw new Error('Identity unavailable');
+            return 'recovered-credential';
+          },
+        },
+        h(mode === 'tree' ? Tree : Search),
+      ),
+    );
+    try {
+      assert.match(state.error.message, /Identity unavailable/);
+      assert.equal(fetch.calls.length, 0);
+      broken = false;
+      await act(() => state.retry('viking://resources'));
+      await settle();
+      assert.equal(state.error, null);
+      assert.equal(
+        (state.rows ?? state.result.resources)[0].uri,
+        'viking://resources/recovered',
+      );
+      assert.equal(fetch.calls.length, 1);
+    } finally {
+      await view.unmount();
+      queryClient.clear();
+    }
+  });
+}

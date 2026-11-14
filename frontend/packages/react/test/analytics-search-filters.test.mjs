@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createElement as h } from 'react';
-import { mount } from './helpers/module-dom.mjs';
+import { act, createElement as h } from 'react';
+import { QueryClient } from '@tanstack/react-query';
+import { mount, settle } from './helpers/module-dom.mjs';
 
 const hooks = process.env.OV_UI_TEST_HOOKS;
 const { OpenVikingProvider } = await import(`${hooks}/provider.js`);
@@ -37,24 +38,28 @@ for (const mode of ['find', 'search', 'grep', 'glob']) {
         },
       };
       const filters = { ...defaults, ...override };
-      function Probe({ generation }) {
-        useFsSearch({
+      let search;
+      function Probe() {
+        search = useFsSearch({
           client,
           mode,
           query: 'example',
           filters,
           rootUri,
-          generation,
         });
         return null;
       }
       const analytics = { onEvent: (event) => events.push(event) };
-      const view = (generation) =>
-        h(OpenVikingProvider, { analytics }, h(Probe, { generation }));
-      const mounted = await mount(view(0));
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      const mounted = await mount(
+        h(OpenVikingProvider, { analytics, queryClient }, h(Probe)),
+      );
       try {
         fail = true;
-        await mounted.render(view(1));
+        await act(() => search.retry());
+        await settle();
         assert.deepEqual(
           events.map((event) => event.name),
           [
@@ -71,6 +76,7 @@ for (const mode of ['find', 'search', 'grep', 'glob']) {
         assert.ok(events.every((event) => event.params.mode === mode));
       } finally {
         await mounted.unmount();
+        queryClient.clear();
       }
     });
   }

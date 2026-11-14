@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { resolveQueryRequest } from '../../client/managed-client.js';
 import { useOvQueryClient } from '../../client/query-client.js';
 import { schedulerFor } from '../../client/request-scheduler.js';
@@ -66,28 +73,36 @@ export function useQueryScope(
     },
     [input],
   );
+  const retryScope = useRef<() => void>(() => {});
+  const retry = useCallback(() => retryScope.current(), []);
   // Resolve asynchronous identity sources against the current committed render.
   // Identity closures can change their values without changing reference. Ignore
   // superseded resolutions; equal scopes retain the existing query subscriptions.
   useEffect(() => {
+    retryScope.current = () => {};
     if (!client) return;
     let active = true;
-    void resolveQueryRequest(client, input.options, scheduler).then(
-      (prepared) => {
-        if (active) accept(prepared);
-      },
-      (error) => {
-        if (active)
-          setState((previous) =>
-            previous?.input === input &&
-            previous.error?.message === toError(error).message
-              ? previous
-              : { input, error: toError(error) },
-          );
-      },
-    );
+    const resolve = () => {
+      void resolveQueryRequest(client, input.options, scheduler).then(
+        (prepared) => {
+          if (active) accept(prepared);
+        },
+        (error) => {
+          if (active)
+            setState((previous) =>
+              previous?.input === input &&
+              previous.error?.message === toError(error).message
+                ? previous
+                : { input, error: toError(error) },
+            );
+        },
+      );
+    };
+    retryScope.current = resolve;
+    resolve();
     return () => {
       active = false;
+      retryScope.current = () => {};
     };
   });
   const prepared = state?.input === input ? state.prepared : undefined;
@@ -117,6 +132,7 @@ export function useQueryScope(
   return {
     request,
     aborted,
+    retry,
     error: state?.input === input ? state.error : undefined,
   };
 }

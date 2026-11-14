@@ -31,6 +31,7 @@ export function useFsTree({
     request,
     aborted,
     error: identityError,
+    retry: retryScope,
   } = useQueryScope(client, requestOptions);
   const session = useMemo(
     () => (request ? new DirectoryQueries(request, rootUri) : undefined),
@@ -153,13 +154,15 @@ export function useFsTree({
         await fetchPage(uri, 1);
       },
       retry: async (uri: string) => {
-        await fetchPage(uri, 0, undefined, true);
+        if (activeSession.current) await fetchPage(uri, 0, undefined, true);
+        else retryScope();
       },
       refresh: async () => {
-        await activeSession.current?.refresh();
+        if (activeSession.current) await activeSession.current.refresh();
+        else retryScope();
       },
     }),
-    [scope, rootUri, setExpanded, fetchPage],
+    [scope, rootUri, setExpanded, fetchPage, retryScope],
   );
   const navigation = useFsTreeReveal({
     rootUri,

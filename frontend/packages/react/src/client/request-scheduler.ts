@@ -27,8 +27,13 @@ export class RequestScheduler {
   constructor(private queryClient?: QueryClient) {}
 
   invalidate(scope: QueryScope) {
-    void this.queryClient
-      ?.invalidateQueries({ queryKey: queryKeys.scope(scope) })
+    const queryClient = this.queryClient;
+    if (!queryClient) return;
+    const filters = { queryKey: queryKeys.scope(scope) };
+    // cancelQueries also replaces an initial in-flight read with no cached data.
+    void queryClient
+      .cancelQueries(filters)
+      .then(() => queryClient.invalidateQueries(filters))
       .catch(() => undefined);
   }
 

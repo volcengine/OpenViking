@@ -1,5 +1,5 @@
 import { QueryObserver } from '@tanstack/query-core';
-import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
+import { useMemo, useSyncExternalStore } from 'react';
 import { useAnalyticsRef } from '../../shared/analytics/context.js';
 import { startOperation, errorKind } from '../../shared/analytics/reporter.js';
 import { OV_PATHS, type OvPath } from '../../client/paths.js';
@@ -30,6 +30,7 @@ export interface SearchState {
   result: SearchResult | null;
   loading: boolean;
   error: Error | null;
+  retry: () => void;
 }
 export interface UseFsSearchOptions {
   client: OvClient | null;
@@ -38,7 +39,6 @@ export interface UseFsSearchOptions {
   query: string;
   filters: SearchFilters;
   rootUri: string;
-  generation?: number;
   requestOptions?: OvRequestOptions;
 }
 function normalize(mode: SearchMode, raw: unknown): SearchResult {
@@ -58,11 +58,15 @@ export function useFsSearch({
   query,
   filters,
   rootUri,
-  generation = 0,
   requestOptions,
 }: UseFsSearchOptions): SearchState {
   const analytics = useAnalyticsRef();
-  const { request, error, aborted } = useQueryScope(client, requestOptions);
+  const {
+    request,
+    error,
+    aborted,
+    retry: retryScope,
+  } = useQueryScope(client, requestOptions);
   const bodyKey = JSON.stringify(
     buildSearchBody(mode, query, filters, rootUri),
   );
@@ -136,19 +140,15 @@ export function useFsSearch({
     [observer],
   );
   const result = useSyncExternalStore(subscribe, getSnapshot, emptySnapshot);
-  const previousGeneration = useRef(generation);
-  // A host refresh changes server data without changing search parameters.
-  // Refetch the current shared query; superseded observers unsubscribe normally.
-  useEffect(() => {
-    if (previousGeneration.current !== generation) {
-      previousGeneration.current = generation;
-      if (!aborted) void observer?.refetch({ cancelRefetch: false });
-    }
-  }, [generation, observer, aborted]);
   return {
     result: result?.data ?? null,
     loading:
       !!client && !!query.trim() && !error && (!result || result.isFetching),
     error: error ?? result?.error ?? null,
+    retry: () => {
+      if (aborted) return;
+      if (observer) void observer.refetch({ cancelRefetch: false });
+      else retryScope();
+    },
   };
 }
