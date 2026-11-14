@@ -10,13 +10,17 @@ import time
 import pytest
 
 from openviking.core.context import ContextLevel
+from openviking.models.embedder.base import EmbedResult
 from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever, RetrieverMode
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.abstract_overview import render_abstract_overview
+from openviking.storage.collection_schemas import CollectionSchemas
+from openviking.storage.expr import RawDSL
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.retrieve.types import ContextType, TypedQuery
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import RerankConfig
+from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
 
 def _result(uri, score, level=2, abstract=None, **extra):
@@ -100,6 +104,78 @@ def _config() -> RerankConfig:
     return RerankConfig(ak="ak", sk="sk", threshold=0.1)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", [Role.USER, Role.ROOT])
+async def test_retrieve_filters_historical_session_rows_before_limit(
+    vector_backend_factory, tmp_path, role
+):
+    class NativeEmbedder(DummyEmbedder):
+        def embed(self, _query, is_query=False):
+            return EmbedResult(dense_vector=[1.0, 0.0, 0.0, 0.0])
+
+    backend = vector_backend_factory(
+        VectorDBBackendConfig(
+            backend="local", name="context", dimension=4, path=str(tmp_path / "vectors")
+        )
+    )
+    rows = [
+        ("viking://user/user1/sessions/old/messages.jsonl", 2),
+        ("viking://user/user1/sessions/old", 1),
+        ("viking://user/user1/sessions/old/history/archive_1", 0),
+        ("viking://user/user1/memories/note.md", 2),
+        ("viking://user/user1/memories/project", 0),
+        ("viking://user/user1/memories/overview", 1),
+        ("viking://resources/messages.jsonl", 2),
+        ("viking://resources/sessions/guide.md", 2),
+        ("viking://user/user1/sessions-archive/guide.md", 2),
+    ]
+    try:
+        assert await backend.create_collection(
+            "context", CollectionSchemas.context_collection("context", 4)
+        )
+        await backend._upsert_many_raw(
+            [
+                {
+                    "id": str(i),
+                    "uri": uri,
+                    "account_id": "acc1",
+                    "context_type": "memory" if "/memories/" in uri else "resource",
+                    "level": level,
+                    "abstract": "curated context",
+                    "vector": [1.0, i / 10, 0.0, 0.0],
+                    "search_tags": ["topic=chosen"],
+                }
+                for i, (uri, level) in enumerate(rows)
+            ]
+            + [
+                {
+                    "id": "other-tag",
+                    "uri": "viking://resources/other.md",
+                    "account_id": "acc1",
+                    "context_type": "resource",
+                    "level": 2,
+                    "abstract": "curated context",
+                    "vector": [1.0, 0.0, 0.0, 0.0],
+                    "search_tags": ["topic=other"],
+                }
+            ],
+            ctx=_ctx(),
+        )
+        result = await HierarchicalRetriever(backend, NativeEmbedder()).retrieve(
+            TypedQuery(query="curated", context_type=None, intent=""),
+            ctx=RequestContext(user=UserIdentifier("acc1", "user1"), role=role),
+            limit=6,
+            scope_dsl={"op": "must", "field": "search_tags", "conds": ["topic=chosen"]},
+        )
+        expected_rows = rows[3:] if role == Role.USER else rows[:6]
+        assert {
+            (item.uri.removesuffix("/.abstract.md").removesuffix("/.overview.md"), item.level)
+            for item in result.matched_contexts
+        } == set(expected_rows)
+    finally:
+        await backend.close()
+
+
 def test_rerank_max_input_tokens_accepts_zero_or_at_least_128():
     assert RerankConfig(max_input_tokens=0).max_input_tokens == 0
     with pytest.raises(ValueError, match="max_input_tokens"):
@@ -157,7 +233,7 @@ async def test_retrieve_reranks_global_candidates_once(monkeypatch, mode):
     assert storage.search_calls[0]["limit"] == 4
     assert storage.search_calls[0]["level"] is None
     assert storage.search_calls[0]["target_directories"] == ["viking://resources"]
-    assert storage.search_calls[0]["extra_filter"] == scope
+    assert RawDSL(scope) in storage.search_calls[0]["extra_filter"].conds
     assert storage.search_calls[0]["ctx"] == _ctx()
     assert storage.search_calls[0]["query_vector"] == [1.0]
     assert storage.search_calls[0]["sparse_query_vector"] == {"hello": 1.0}
@@ -477,11 +553,9 @@ async def test_retrieve_pushes_explicit_level_filter_to_vector_search():
     ]
     assert len(storage.search_calls) == 1
     assert storage.search_calls[0]["limit"] == 3
-    assert storage.search_calls[0]["extra_filter"] == {
-        "op": "must",
-        "field": "category",
-        "conds": ["doc"],
-    }
+    assert RawDSL({"op": "must", "field": "category", "conds": ["doc"]}) in (
+        storage.search_calls[0]["extra_filter"].conds
+    )
     assert storage.search_calls[0]["level"] == [2]
 
 
