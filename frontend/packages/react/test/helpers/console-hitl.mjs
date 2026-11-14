@@ -59,7 +59,7 @@ export async function mountHitl(
     createSession: async () => ({ id: 'session', title: 'Session' }),
     listSessions: async () => [],
     removeSession: async () => {},
-    loadMessages: async () => [],
+    loadMessages: async () => saved.slice(),
     saveMessage: async (_, message) => saved.push(message),
     async *stream(request, signal) {
       requests.push(request);

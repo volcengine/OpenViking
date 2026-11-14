@@ -22,7 +22,12 @@ export async function loadHistory(options: {
     'console_session_history_load',
     signal,
   );
-  update({ status: 'loading', responseComplete: false, error: undefined });
+  update({
+    status: 'loading',
+    historyKey: {},
+    responseComplete: false,
+    error: undefined,
+  });
   try {
     await options.pending;
     signal.throwIfAborted();

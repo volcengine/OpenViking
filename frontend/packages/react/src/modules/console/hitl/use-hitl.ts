@@ -31,8 +31,13 @@ export function useHitl(
 ) {
   const monitoring = useMonitoringBinding();
   const owner = useMemo(
-    () => ({ active: true, send: chat.send, sessionId: chat.sessionId }),
-    [chat.send, chat.sessionId],
+    () => ({
+      active: true,
+      send: chat.send,
+      sessionId: chat.sessionId,
+      historyKey: chat.historyKey,
+    }),
+    [chat.send, chat.sessionId, chat.historyKey],
   );
   useEffect(() => {
     owner.active = true;
