@@ -1,5 +1,6 @@
 import { useId, useRef, useState } from 'react';
 import { Button } from '../../../shared/primitives/button/button.js';
+import { interactionError } from './directory-state.js';
 import { InteractionFields } from './interaction-fields.js';
 import {
   initialAnswer,
@@ -37,7 +38,10 @@ export function InteractionForm({
   const [resetCount, setResetCount] = useState(0);
   const [pending, setPending] = useState(false);
   const [validation, setValidation] = useState<FormError>();
-  const [submitError, setSubmitError] = useState<unknown>();
+  const [submitError, setSubmitError] = useState<{
+    code: 'submitFailed';
+    cause: unknown;
+  }>();
   const busy = Boolean(submitting || pending);
   const blocked = Boolean(disabled || busy);
   const options = request.kind === 'choice' || request.kind === 'repair';
@@ -49,13 +53,9 @@ export function InteractionForm({
   };
   const failure =
     error ??
-    (submitError instanceof Error
-      ? submitError.message
-      : typeof submitError === 'string'
-        ? submitError
-        : submitError
-          ? labels.submitFailed
-          : undefined);
+    (submitError
+      ? interactionError(submitError.cause, labels, submitError.code)
+      : undefined);
   const submit = async () => {
     if (blocked || inFlight.current || composing.current) return;
     const invalid = validateAnswer(request, answer);
@@ -78,7 +78,7 @@ export function InteractionForm({
     try {
       await onSubmit?.(answer);
     } catch (cause) {
-      setSubmitError(cause ?? labels.submitFailed);
+      setSubmitError({ code: 'submitFailed', cause });
     } finally {
       inFlight.current = false;
       setPending(false);

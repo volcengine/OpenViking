@@ -1,11 +1,11 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useId, useRef, useState, type ComponentProps } from 'react';
 import { Input } from '../../../shared/primitives/input/input.js';
 import { ScheduleTimePanel } from './schedule-time-panel.js';
 import { Popover } from '../../../shared/primitives/popover/popover.js';
 import ClockIcon from '../../../../../icons/svg/viking-bot/interaction-clock.svg?react';
 import type { InteractionLabels } from './labels.js';
 
-export function ScheduleTimeInput({
+function ScheduleTimeControl({
   id,
   value,
   onChange,
@@ -29,9 +29,6 @@ export function ScheduleTimeInput({
   const input = useRef<HTMLInputElement>(null);
   const focusPanel = useRef(false);
   const popupId = useId();
-  useEffect(() => {
-    if (disabled) setOpen(false);
-  }, [disabled]);
   const parts = /^([01]\d|2[0-3]):[0-5]\d$/.test(value)
     ? value.split(':')
     : ['09', '00'];
@@ -116,4 +113,10 @@ export function ScheduleTimeInput({
       ) : null}
     </>
   );
+}
+
+export function ScheduleTimeInput(
+  props: ComponentProps<typeof ScheduleTimeControl>,
+) {
+  return <ScheduleTimeControl key={String(props.disabled)} {...props} />;
 }

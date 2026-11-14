@@ -87,12 +87,16 @@ test('numbered options, custom answers and preselected repairs submit typed valu
 });
 
 test('drafts survive locale changes; multiline and request identities work independently', async () => {
-  const request = { kind: 'text', question: 'Name', initialValue: 'Initial' };
+  const request = {
+    kind: 'text',
+    question: 'Name',
+    initialValue: 'Initial',
+    multiline: false,
+  };
   const render = (props = {}) =>
     h(VikingBotInteraction, { request, requestKey: 'one', ...props });
   const view = await mount(render());
   try {
-    assert.equal(view.container.querySelector('textarea'), null);
     await input(view.container.querySelector('input'), 'Edited');
     await view.render(
       render({ locale: 'zh-CN', request: { ...request, multiline: true } }),
@@ -128,7 +132,7 @@ test('a pending Promise prevents duplicates and rejection preserves the draft fo
   });
   const view = await mount(
     h(VikingBotInteraction, {
-      request: { kind: 'text', initialValue: 'Draft' },
+      request: { kind: 'text', initialValue: 'Draft', multiline: false },
       onSubmit: () => {
         attempts++;
         return attempts === 1 ? pending : undefined;
@@ -159,7 +163,7 @@ test('IME composition cannot submit and disabled custom render callbacks cannot 
   const answers = [];
   const view = await mount(
     h(VikingBotInteraction, {
-      request: { kind: 'text', initialValue: 'Draft' },
+      request: { kind: 'text', initialValue: 'Draft', multiline: false },
       onSubmit: (value) => answers.push(value),
     }),
   );

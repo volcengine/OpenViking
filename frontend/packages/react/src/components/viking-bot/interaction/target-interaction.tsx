@@ -1,11 +1,11 @@
 import { useId, useRef, useState } from 'react';
 import { Button } from '../../../shared/primitives/button/button.js';
 import { ChevronRightIcon, FolderIcon } from '../../../icons/index.js';
-import { DirectoryPicker } from './directory-picker.js';
+import { DirectoryPickerTrigger } from './directory-picker.js';
 import { DirectoryPermission } from './directory-permission.js';
 import {
   DirectoryFlowError,
-  directoryError,
+  interactionError,
   resolveDirectoryPermission,
 } from './directory-state.js';
 import type { VikingBotInteractionTargetRequest } from './directory-picker-types.js';
@@ -31,9 +31,11 @@ export function TargetInteraction({
   const trigger = useRef<HTMLButtonElement>(null);
   const busy = useRef(false);
   const [uri, setUri] = useState(request.initialUri ?? '');
-  const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState<unknown>();
+  const [error, setError] = useState<{
+    code: 'submitFailed';
+    cause: unknown;
+  }>();
   const blocked = Boolean(disabled || submitting || pending);
   const permission = resolveDirectoryPermission(
     uri,
@@ -42,7 +44,10 @@ export function TargetInteraction({
   const submit = async () => {
     if (blocked || busy.current) return;
     if (!uri) {
-      setError(new DirectoryFlowError('directoryUnavailable'));
+      setError({
+        code: 'submitFailed',
+        cause: new DirectoryFlowError('directoryUnavailable'),
+      });
       trigger.current?.focus();
       return;
     }
@@ -52,14 +57,15 @@ export function TargetInteraction({
     try {
       await onSubmit?.({ kind: 'target', value: uri });
     } catch (cause) {
-      if (trigger.current) setError(cause);
+      if (trigger.current) setError({ code: 'submitFailed', cause });
     } finally {
       busy.current = false;
       if (trigger.current) setPending(false);
     }
   };
   const failure =
-    hostError ?? (error ? directoryError(error, labels) : undefined);
+    hostError ??
+    (error ? interactionError(error.cause, labels, error.code) : undefined);
   return (
     <>
       <form
@@ -83,26 +89,40 @@ export function TargetInteraction({
           >
             {labels.directoryTarget}
           </label>
-          <Button
-            ref={trigger}
-            id={`${id}-directory`}
-            type="outline"
-            className="ov-viking-bot__directory-trigger"
-            aria-labelledby={`${id}-label`}
-            aria-haspopup="dialog"
-            aria-expanded={open && !blocked}
-            aria-invalid={Boolean(failure)}
-            aria-describedby={`${id}-status${failure ? ` ${id}-error` : ''}`}
+          <DirectoryPickerTrigger
+            key={String(blocked)}
+            picker={request.directoryPicker}
+            value={uri}
+            labels={labels}
+            locale={locale}
+            triggerRef={trigger}
             disabled={blocked}
-            onClick={() => {
-              request.directoryPicker.onQueryChange?.('');
-              setOpen(true);
+            onConfirm={(value) => {
+              request.directoryPicker.onSelectionChange?.(value);
+              setUri(value);
+              setError(undefined);
             }}
           >
-            <FolderIcon width={14} height={14} />
-            <span title={uri}>{uri || labels.directoryPickerHint}</span>
-            <ChevronRightIcon width={18} height={18} />
-          </Button>
+            {(open, show) => (
+              <Button
+                ref={trigger}
+                id={`${id}-directory`}
+                type="outline"
+                className="ov-viking-bot__directory-trigger"
+                aria-labelledby={`${id}-label`}
+                aria-haspopup="dialog"
+                aria-expanded={open}
+                aria-invalid={Boolean(failure)}
+                aria-describedby={`${id}-status${failure ? ` ${id}-error` : ''}`}
+                disabled={blocked}
+                onClick={show}
+              >
+                <FolderIcon width={14} height={14} />
+                <span title={uri}>{uri || labels.directoryPickerHint}</span>
+                <ChevronRightIcon width={18} height={18} />
+              </Button>
+            )}
+          </DirectoryPickerTrigger>
           <div id={`${id}-status`}>
             <DirectoryPermission permission={permission} labels={labels} />
           </div>
@@ -143,22 +163,6 @@ export function TargetInteraction({
           </Button>
         </div>
       </form>
-      {open && !blocked ? (
-        <DirectoryPicker
-          picker={request.directoryPicker}
-          value={uri}
-          labels={labels}
-          locale={locale}
-          triggerRef={trigger}
-          onClose={() => setOpen(false)}
-          onConfirm={(value) => {
-            request.directoryPicker.onSelectionChange?.(value);
-            setUri(value);
-            setError(undefined);
-            setOpen(false);
-          }}
-        />
-      ) : null}
     </>
   );
 }

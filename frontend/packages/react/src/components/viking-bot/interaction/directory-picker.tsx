@@ -1,4 +1,9 @@
-import { useState, type RefObject } from 'react';
+import {
+  useState,
+  type ComponentProps,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import { ContextPicker } from '../../context-picker/index.js';
 import { Button } from '../../../shared/primitives/button/button.js';
 import type { Locale } from '../../../shared/locale.js';
@@ -101,5 +106,36 @@ export function DirectoryPicker({
         ) : null,
       }}
     />
+  );
+}
+
+/** The caller keys this boundary by availability; disabling discards only popup state. */
+export function DirectoryPickerTrigger({
+  children,
+  disabled,
+  ...props
+}: Omit<ComponentProps<typeof DirectoryPicker>, 'onClose'> & {
+  disabled: boolean;
+  children: (open: boolean, show: () => void) => ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      {children(open, () => {
+        if (disabled) return;
+        props.picker.onQueryChange?.('');
+        setOpen(true);
+      })}
+      {open && !disabled ? (
+        <DirectoryPicker
+          {...props}
+          onClose={() => setOpen(false)}
+          onConfirm={(uri) => {
+            setOpen(false);
+            props.onConfirm(uri);
+          }}
+        />
+      ) : null}
+    </>
   );
 }

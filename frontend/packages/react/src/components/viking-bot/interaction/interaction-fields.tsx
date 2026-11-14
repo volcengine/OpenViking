@@ -76,7 +76,7 @@ export function InteractionFields({
           {request.description}
         </p>
       ) : null}
-      {request.multiline ? (
+      {request.multiline !== false ? (
         <TextArea {...props} rows={3} />
       ) : (
         <Input {...props} />

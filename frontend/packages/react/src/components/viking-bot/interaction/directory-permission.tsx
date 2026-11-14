@@ -1,6 +1,6 @@
 import type { InteractionLabels } from './labels.js';
 import {
-  directoryError,
+  interactionError,
   resolveDirectoryPermission,
 } from './directory-state.js';
 
@@ -12,7 +12,7 @@ export function DirectoryPermission({
   labels: InteractionLabels;
 }) {
   const error = permission.error
-    ? directoryError(permission.error, labels)
+    ? interactionError(permission.error, labels)
     : undefined;
   return (
     <p

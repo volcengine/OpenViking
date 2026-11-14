@@ -9,7 +9,7 @@ export class DirectoryFlowError extends Error {
     super(code);
   }
 }
-export function directoryError(
+export function interactionError(
   cause: unknown,
   labels: InteractionLabels,
   fallback: keyof InteractionLabels = 'directoryCheckFailed',
@@ -17,9 +17,9 @@ export function directoryError(
   return cause instanceof DirectoryFlowError
     ? labels[cause.code]
     : cause instanceof Error
-      ? cause.message
+      ? cause.message || String(labels[fallback])
       : typeof cause === 'string'
-        ? cause
+        ? cause || String(labels[fallback])
         : String(labels[fallback]);
 }
 export function resolveDirectoryPermission(

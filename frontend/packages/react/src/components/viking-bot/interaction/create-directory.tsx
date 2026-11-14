@@ -12,7 +12,7 @@ import { Input } from '../../../shared/primitives/input/input.js';
 import type { Locale } from '../../../shared/locale.js';
 import type { InteractionLabels } from './labels.js';
 import type { VikingBotInteractionDirectoryOperations } from './directory-picker-types.js';
-import { childDirectoryUri, directoryError } from './directory-state.js';
+import { childDirectoryUri, interactionError } from './directory-state.js';
 
 export function CreateDirectory({
   parentUri,
@@ -40,7 +40,10 @@ export function CreateDirectory({
   }, []);
   const [name, setName] = useState('');
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState<unknown>();
+  const [error, setError] = useState<{
+    code: 'directoryCreateFailed';
+    cause: unknown;
+  }>();
   // Cancel the host operation on unmount; the controller belongs to the event-created operation.
   // Effect cleanup prevents a late mutation result from updating a closed form.
   useEffect(() => () => controller.current?.abort(), []);
@@ -49,7 +52,7 @@ export function CreateDirectory({
     try {
       childDirectoryUri(parentUri, name);
     } catch (cause) {
-      setError(cause);
+      setError({ code: 'directoryCreateFailed', cause });
       input.current?.focus();
       return;
     }
@@ -66,7 +69,8 @@ export function CreateDirectory({
       // A failed refresh cannot turn an acknowledged creation into a failed mutation.
       void operations.refresh?.(parentUri).catch(() => {});
     } catch (cause) {
-      if (!abort.signal.aborted) setError(cause);
+      if (!abort.signal.aborted)
+        setError({ code: 'directoryCreateFailed', cause });
     } finally {
       if (!abort.signal.aborted) {
         controller.current = null;
@@ -135,7 +139,7 @@ export function CreateDirectory({
             role="alert"
             className="ov-viking-bot__directory-status ov-viking-bot__directory-status--error"
           >
-            {directoryError(error, labels, 'directoryCreateFailed')}
+            {interactionError(error.cause, labels, error.code)}
           </p>
         ) : null}
         <div className="ov-viking-bot__create-directory-actions">
