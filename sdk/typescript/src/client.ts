@@ -130,11 +130,7 @@ export class OpenVikingClient {
       path,
       { body, ...(signal ? { signal } : {}) },
       async (response) => {
-        if (
-          !response.ok ||
-          response.headers.get("content-type")?.includes("json")
-        )
-          return this.transport.parseResponse<never>(response);
+        await this.transport.checkBinaryResponse(response);
         return writeResponseToFile(response, output);
       },
     );
@@ -809,11 +805,7 @@ export class OpenVikingClient {
       "/api/v1/content/download",
       { query: { uri: normalizeURI(uri) } },
       async (response) => {
-        if (
-          !response.ok ||
-          response.headers.get("content-type")?.includes("json")
-        )
-          return this.transport.parseResponse<never>(response);
+        await this.transport.checkBinaryResponse(response);
         return new Uint8Array(await response.arrayBuffer());
       },
     );

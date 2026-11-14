@@ -1201,26 +1201,67 @@ describe("OpenVikingClient", () => {
     },
   );
 
-  it("maps structured OVPack download failures", async () => {
-    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          status: "error",
-          error: { code: "FORBIDDEN", message: "denied" },
-        }),
-        { status: 403 },
-      ),
-    );
-    const client = new OpenVikingClient({
-      baseUrl: "https://example.com",
-      fetch: fetcher,
-    });
-
-    await expect(client.backupOVPack("backup")).rejects.toMatchObject({
-      code: "FORBIDDEN",
-      statusCode: 403,
-    });
-  });
+  it.each(["exportOVPack", "backupOVPack", "downloadBytes"] as const)(
+    "%s rejects JSON binary download responses and preserves existing files",
+    async (method) => {
+      const directory = await mkdtemp(join(tmpdir(), "openviking-sdk-pack-"));
+      const output = join(directory, "backup.ovpack");
+      await writeFile(output, "known-good-backup");
+      const error = {
+        status: "error",
+        error: {
+          code: "FORBIDDEN",
+          message: "denied",
+          details: { scope: "docs" },
+        },
+      };
+      try {
+        for (const [status, body, expected] of [
+          [
+            403,
+            JSON.stringify(error),
+            { code: "FORBIDDEN", details: { scope: "docs" } },
+          ],
+          [
+            200,
+            JSON.stringify(error),
+            { code: "FORBIDDEN", details: { scope: "docs" } },
+          ],
+          [
+            200,
+            JSON.stringify({ status: "ok", result: { path: "not-a-file" } }),
+            { code: "INTERNAL" },
+          ],
+          [200, JSON.stringify({ status: "ok" }), { code: "INTERNAL" }],
+          [200, "{", { code: "UNKNOWN" }],
+        ] as const) {
+          const client = new OpenVikingClient({
+            baseUrl: "https://example.com",
+            fetch: vi.fn<typeof fetch>().mockResolvedValue(
+              new Response(body, {
+                status,
+                headers: { "Content-Type": "application/json" },
+              }),
+            ),
+          });
+          const request =
+            method === "exportOVPack"
+              ? client.exportOVPack("resources/docs", output)
+              : method === "backupOVPack"
+                ? client.backupOVPack(output)
+                : client.downloadBytes("resources/a.bin");
+          await expect(request).rejects.toMatchObject({
+            ...expected,
+            statusCode: status,
+          });
+          expect(await readFile(output, "utf8")).toBe("known-good-backup");
+          expect(await readdir(directory)).toEqual(["backup.ovpack"]);
+        }
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("maps non-JSON OVPack download failures", async () => {
     const fetcher = vi

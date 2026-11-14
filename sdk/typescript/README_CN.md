@@ -117,6 +117,9 @@ console.log(syncResult.changes, syncResult.affected_mounts);
 
 OVPack 导出和备份与 Python、Go SDK 契约一致：内容会流式写入 Node.js 本地文件，并返回最终文件路径。
 
+二进制下载（`exportOVPack`、`backupOVPack` 和 `downloadBytes`）会拒绝 JSON 响应，包括
+JSON 成功信封。API 错误保留原有错误码和详情；包下载失败时保留已有文件。
+
 ```ts
 const packPath = await client.exportOVPack(
   "viking://resources/docs",
