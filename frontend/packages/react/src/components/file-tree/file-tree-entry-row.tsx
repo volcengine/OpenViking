@@ -174,16 +174,6 @@ export function FileTreeRowView({
       {row.levelLabel ? (
         <span className="ov-file-tree__level">{row.levelLabel}</span>
       ) : null}
-      {row.access ? (
-        <span className="ov-file-tree__level">
-          {row.access === 'read-only'
-            ? text.readOnly
-            : row.access === 'denied'
-              ? text.noAccess
-              : text.traverseOnly}
-        </span>
-      ) : null}
-
       {trailing ? (
         <span className="ov-file-tree__trailing">{trailing}</span>
       ) : null}

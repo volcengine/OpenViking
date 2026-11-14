@@ -133,7 +133,7 @@ import '@openviking/react/components/file-tree/style.css';
 | expanded    | 目录当前是否展开                                                                                          | `boolean`                                | `false` |
 | disabled    | 行可见但不能选中和展开，例如没有详情权限的节点                                                            | `boolean`                                | `false` |
 | selectable  | 为 `false` 时不能选中，目录仍可展开，例如仅可遍历的目录                                                   | `boolean`                                | `true`  |
-| access      | 在行尾显示权限标记：只读、无权限或仅可遍历，只做展示，行为由 `disabled` 和 `selectable` 控制              | `'read-only' \| 'denied' \| 'container'` | -       |
+| access      | 权限元数据，不显示标记；行为由 `disabled` 和 `selectable` 控制                                            | `'read-only' \| 'denied' \| 'container'` | -       |
 | description | 名称后的说明文字，省略时按 `uri` 使用内置目录说明，空字符串表示不显示                                     | `string`                                 | -       |
 | levelLabel  | 行尾的简短标记，例如摘要层级或上下文层级                                                                  | `string`                                 | -       |
 | busy        | 节点上有进行中的加载或写入，目录行用转圈替换展开箭头，其他行在名称后显示转圈                              | `boolean`                                | `false` |
@@ -188,21 +188,18 @@ import '@openviking/react/components/file-tree/style.css';
 
 默认文案随 `locale` 切换，下表列出中文默认值。
 
-| 参数         | 说明                                        | 类型                 | 默认值            |
-| ------------ | ------------------------------------------- | -------------------- | ----------------- |
-| readOnly     | `access` 为 `'read-only'` 时的标记文案      | `string`             | `只读`            |
-| noAccess     | `access` 为 `'denied'` 时的标记文案         | `string`             | `无权限`          |
-| traverseOnly | `access` 为 `'container'` 时的标记文案      | `string`             | `仅可遍历`        |
-| search       | 搜索入口的文案                              | `string`             | `搜索文件 ⌘+K...` |
-| refresh      | 刷新按钮的提示文案和无障碍名称              | `string`             | `刷新文件树`      |
-| empty        | 空树和空目录的提示                          | `string`             | `暂无文件`        |
-| error        | 子节点或整树加载失败时的默认提示            | `string`             | `加载失败`        |
-| retry        | 「重试」按钮文案                            | `string`             | `重试`            |
-| loadMore     | 「加载更多」按钮文案                        | `string`             | `加载更多`        |
-| loading      | 加载中的提示                                | `string`             | `加载中…`         |
-| expand       | 展开按钮的无障碍名称，`{name}` 替换为节点名 | `string`             | `展开 {name}`     |
-| collapse     | 折叠按钮的无障碍名称，`{name}` 替换为节点名 | `string`             | `收起 {name}`     |
-| info         | 目录说明文案                                | `FileTreeInfoLabels` | -                 |
+| 参数     | 说明                                        | 类型                 | 默认值            |
+| -------- | ------------------------------------------- | -------------------- | ----------------- |
+| search   | 搜索入口的文案                              | `string`             | `搜索文件 ⌘+K...` |
+| refresh  | 刷新按钮的提示文案和无障碍名称              | `string`             | `刷新文件树`      |
+| empty    | 空树和空目录的提示                          | `string`             | `暂无文件`        |
+| error    | 子节点或整树加载失败时的默认提示            | `string`             | `加载失败`        |
+| retry    | 「重试」按钮文案                            | `string`             | `重试`            |
+| loadMore | 「加载更多」按钮文案                        | `string`             | `加载更多`        |
+| loading  | 加载中的提示                                | `string`             | `加载中…`         |
+| expand   | 展开按钮的无障碍名称，`{name}` 替换为节点名 | `string`             | `展开 {name}`     |
+| collapse | 折叠按钮的无障碍名称，`{name}` 替换为节点名 | `string`             | `收起 {name}`     |
+| info     | 目录说明文案                                | `FileTreeInfoLabels` | -                 |
 
 ### FileTreeInfoLabels
 
@@ -285,7 +282,7 @@ import '@openviking/react/components/file-tree/style.css';
 - `renderRowTrailing` 返回的内容在行内，点击会冒泡到行并触发选中。需要独立的点击行为时调用 `event.stopPropagation()`，示例中的看板图标就是这样处理的。
 - 键盘：上下方向键移动焦点，右键展开目录，左键折叠目录，Enter 和空格选中。
 - 树使用 `role="tree"`，行使用 `role="treeitem"` 并输出 `aria-level`（`depth` 加 1）、`aria-selected`、`aria-expanded` 和 `aria-disabled`，用 `aria-label` 给树命名。
-- 权限状态由宿主提供，组件不发鉴权请求：`disabled` 的行不能选中和展开，`selectable: false` 的行不能选中但可以展开，`access` 只在行尾显示文字标记，不改变行为。
+- 权限状态由宿主提供，组件不发鉴权请求：`disabled` 的行不能选中和展开，`selectable: false` 的行不能选中但可以展开，`access` 仅保留权限元数据，不显示文字标记或改变行为。
 
 ### 搜索与刷新
 
@@ -335,7 +332,7 @@ treeRef.current?.scrollToRow('resources', { block: 'center' });
 - 行宽按内容撑开，名称完整显示，容器横向滚动。层级很深时缩进同样靠横向滚动获得空间。
 - 说明文字最宽 200px，超出省略，避免长说明撑宽整行。
 - Chromium 浏览器在各平台使用统一的滚动条样式：内容溢出时占用 12px 空间，滑块宽 8px，颜色采用 macOS 原生滚动条的浅色与暗色配色。悬停滚动条时显示轨道和边线，滑块在浅色下悬停加深、暗色下悬停变亮。
-- `rowTrailingPosition` 默认为 `'viewport-end'`，`renderRowTrailing` 的内容在横向滚动时吸附可视区域右侧；设置为 `'row-end'` 时，它位于完整行末尾，跟在层级、权限等标记之后并随内容滚动。
+- `rowTrailingPosition` 默认为 `'viewport-end'`，`renderRowTrailing` 的内容在横向滚动时吸附可视区域右侧；设置为 `'row-end'` 时，它位于完整行末尾，跟在层级等标记之后并随内容滚动。
 
 ## 主题变量
 

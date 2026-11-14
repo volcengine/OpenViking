@@ -104,9 +104,8 @@ test('denied rows cannot open; container rows expand but cannot select or previe
   );
   try {
     const rows = [...view.container.querySelectorAll('[role="treeitem"]')];
-    assert.match(rows[0].textContent, /No access/);
-    assert.match(rows[1].textContent, /Traverse only/);
-    assert.match(rows[2].textContent, /Read-only/);
+    for (const row of rows)
+      assert.equal(row.querySelector('.ov-file-tree__level'), null);
     assert.equal(rows[0].querySelector('.ov-file-browser__dashboard'), null);
     assert.equal(rows[1].querySelector('.ov-file-browser__dashboard'), null);
     await click(rows[0]);

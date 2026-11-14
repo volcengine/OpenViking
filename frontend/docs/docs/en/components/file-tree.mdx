@@ -133,7 +133,7 @@ A directory or file row; extends `FileTreeRowBase`.
 | expanded    | Whether the directory is currently expanded                                                                                                         | `boolean`                                | `false`  |
 | disabled    | The row is visible but can be neither selected nor expanded, for example a node without detail permission                                           | `boolean`                                | `false`  |
 | selectable  | When `false` the row cannot be selected, but a directory can still be expanded, for example a traverse-only directory                               | `boolean`                                | `true`   |
-| access      | Shows a permission badge at the row end: read-only, no access or traverse only; display only, behavior is controlled by `disabled` and `selectable` | `'read-only' \| 'denied' \| 'container'` | -        |
+| access      | Permission metadata with no badge; behavior is controlled by `disabled` and `selectable`                                                            | `'read-only' \| 'denied' \| 'container'` | -        |
 | description | Text after the name; falls back to the built-in directory description for the `uri`, and an empty string hides it                                   | `string`                                 | -        |
 | levelLabel  | Short badge at the row end, for example a summary or context level                                                                                  | `string`                                 | -        |
 | busy        | The node has a load or write in progress; directory rows swap the expand arrow for a spinner and other rows show a spinner after the name           | `boolean`                                | `false`  |
@@ -188,21 +188,18 @@ An expanded directory with no children; extends `FileTreeChildRow`.
 
 Defaults follow `locale`; the table lists the English ones.
 
-| Property     | Description                                                                     | Type                 | Default               |
-| ------------ | ------------------------------------------------------------------------------- | -------------------- | --------------------- |
-| readOnly     | Badge text when `access` is `'read-only'`                                       | `string`             | `Read-only`           |
-| noAccess     | Badge text when `access` is `'denied'`                                          | `string`             | `No access`           |
-| traverseOnly | Badge text when `access` is `'container'`                                       | `string`             | `Traverse only`       |
-| search       | Text of the search trigger                                                      | `string`             | `Search files ⌘+K...` |
-| refresh      | Hint and accessible name of the refresh button                                  | `string`             | `Refresh file tree`   |
-| empty        | Message for an empty tree or directory                                          | `string`             | `No files yet`        |
-| error        | Default message when a children load or the whole tree fails                    | `string`             | `Failed to load`      |
-| retry        | Text of the retry button                                                        | `string`             | `Retry`               |
-| loadMore     | Text of the load-more button                                                    | `string`             | `Load more`           |
-| loading      | Message while loading                                                           | `string`             | `Loading…`            |
-| expand       | Accessible name of the expand button; `{name}` is replaced with the node name   | `string`             | `Expand {name}`       |
-| collapse     | Accessible name of the collapse button; `{name}` is replaced with the node name | `string`             | `Collapse {name}`     |
-| info         | Directory description copy                                                      | `FileTreeInfoLabels` | -                     |
+| Property | Description                                                                     | Type                 | Default               |
+| -------- | ------------------------------------------------------------------------------- | -------------------- | --------------------- |
+| search   | Text of the search trigger                                                      | `string`             | `Search files ⌘+K...` |
+| refresh  | Hint and accessible name of the refresh button                                  | `string`             | `Refresh file tree`   |
+| empty    | Message for an empty tree or directory                                          | `string`             | `No files yet`        |
+| error    | Default message when a children load or the whole tree fails                    | `string`             | `Failed to load`      |
+| retry    | Text of the retry button                                                        | `string`             | `Retry`               |
+| loadMore | Text of the load-more button                                                    | `string`             | `Load more`           |
+| loading  | Message while loading                                                           | `string`             | `Loading…`            |
+| expand   | Accessible name of the expand button; `{name}` is replaced with the node name   | `string`             | `Expand {name}`       |
+| collapse | Accessible name of the collapse button; `{name}` is replaced with the node name | `string`             | `Collapse {name}`     |
+| info     | Directory description copy                                                      | `FileTreeInfoLabels` | -                     |
 
 ### FileTreeInfoLabels
 
@@ -285,7 +282,7 @@ Semantic key of a directory. The component matches it from the structure of a ro
 - Content returned by `renderRowTrailing` sits inside the row, so a click on it bubbles up and selects the row. Call `event.stopPropagation()` when it needs its own click behavior, as the board icons in the example do.
 - Keyboard: Up and Down move focus, Right expands a directory, Left collapses it, and Enter and Space select.
 - The tree uses `role="tree"` and rows use `role="treeitem"` with `aria-level` (`depth` plus 1), `aria-selected`, `aria-expanded` and `aria-disabled`. Name the tree with `aria-label`.
-- Permission state comes from your app and the component sends no authorization requests: a `disabled` row can be neither selected nor expanded, a row with `selectable: false` cannot be selected but can be expanded, and `access` only shows a text badge at the row end without changing behavior.
+- Permission state comes from your app and the component sends no authorization requests: a `disabled` row can be neither selected nor expanded, a row with `selectable: false` cannot be selected but can be expanded, and `access` only carries permission metadata without displaying a badge or changing behavior.
 
 ### Search and refresh
 
@@ -341,7 +338,7 @@ treeRef.current?.scrollToRow('resources', { block: 'center' });
 - Rows size to their content: names render in full, the container scrolls sideways, and deep indentation gets its space the same way.
 - Descriptions are at most 200px wide and truncate beyond that, so a long description does not stretch the row.
 - Chromium browsers use the same scrollbar styling on every platform. Overflow reserves 12px of space for an 8px rounded thumb, with native macOS light and dark colors. Hovering the scrollbar reveals its track and border; hovering the thumb darkens it in light mode and lightens it in dark mode.
-- `rowTrailingPosition` defaults to `'viewport-end'`, keeping `renderRowTrailing` content at the visible right edge during horizontal scrolling. Set it to `'row-end'` to place the content after level and access markers at the full row end and scroll it with the row.
+- `rowTrailingPosition` defaults to `'viewport-end'`, keeping `renderRowTrailing` content at the visible right edge during horizontal scrolling. Set it to `'row-end'` to place the content after level markers at the full row end and scroll it with the row.
 
 ## Theme variables
 

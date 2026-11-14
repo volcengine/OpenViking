@@ -504,8 +504,6 @@ Directory listings needed to locate the target, or required home alias lookups, 
 - While saving, the dialog cannot be submitted again or closed. If saving fails, the last saved grants stay and the server's reason is shown.
 - After a successful save the tree and preview refresh; the server's index update may finish later, and the server's authorization result is authoritative.
 - In the directory listing (`fs/ls`), nodes with `access: 'denied'` cannot be selected or expanded, and nodes with `access: 'container'` can only be expanded to reach accessible children and cannot be previewed themselves.
-- Nodes with `access: 'read'` show a read-only marker.
-- These node markers come from the directory listing and do not depend on `acl`.
 - Grants use `GET` and `PUT /api/v1/acl`. Restoring inheritance sends an empty direct grant list with `acl_mode: inherit`. The member directory calls the account's user and group endpoints (20 users per page, `include_credentials=false`) and needs an `accountId` from the Provider or `requestOptions`.
 - The group directory needs account administration access. When a resource manager cannot read it, the dialog shows a failure with Retry; supply your own directory through `acl.listPrincipals`.
 - `acl.readOnly` only blocks changing grants and is independent of `readOnly`.
