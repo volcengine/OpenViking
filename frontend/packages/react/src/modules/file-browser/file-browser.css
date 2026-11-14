@@ -44,6 +44,16 @@
   padding: 8px 8px 12px;
 }
 
+/*
+ * 目录树、预览区或预览内容渲染失败时，兜底占满所在面板并垂直居中。宿主传入的预览操作区
+ * 由 FilePreview 自己的错误边界接住，兜底直接挂在 .ov-file-preview 下，因此单独列出。
+ */
+.ov-file-browser > .ov-error-boundary,
+.ov-file-browser__tree > .ov-error-boundary,
+.ov-file-browser .ov-file-preview > .ov-error-boundary {
+  flex: 1;
+}
+
 /* Only the line participates in layout; the hit area overlaps each pane's inset. */
 .ov-file-browser__resizer {
   position: relative;

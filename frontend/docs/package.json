@@ -36,6 +36,7 @@
     "#file-tree-basic-data": "./docs/_demos/file-tree-basic-data.ts",
     "#file-tree-basic-icons": "./docs/_demos/file-tree-basic-icons.tsx",
     "#demo-controls": "./internal-controls.ts",
+    "#render-failure": "./docs/_demos/render-failure.tsx",
     "#file-browser-preview-controls": "./docs/_demos/file-browser-preview-controls.tsx",
     "#file-browser-basic-data": "./docs/_demos/file-browser-basic-data.ts",
     "#file-browser-search-data": "./docs/_demos/file-browser-search-data.ts",

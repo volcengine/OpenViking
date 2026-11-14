@@ -160,6 +160,10 @@
   min-height: 0;
   overflow: auto;
 }
+/* 消息区渲染失败时，兜底占满消息区并垂直居中。 */
+.ov-viking-bot__body > .ov-error-boundary {
+  flex: 1;
+}
 
 .ov-viking-bot__list {
   display: flex;

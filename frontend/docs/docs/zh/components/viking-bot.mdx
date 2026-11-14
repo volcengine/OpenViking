@@ -66,6 +66,14 @@ import '@openviking/react/components/viking-bot/style.css';
 
 ```
 
+### 渲染失败
+
+宿主传入的内容渲染出错时，组件显示默认兜底：插画、提示和「重试显示」按钮。需要替换展示时传入 `slots.errorFallback`。
+
+```tsx file="../../_demos/viking-bot-crash.tsx" preview
+
+```
+
 ## API
 
 ### VikingBot
