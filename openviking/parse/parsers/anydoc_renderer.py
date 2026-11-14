@@ -265,10 +265,7 @@ class _AnyDocMarkdownRenderer:
         if not core:
             return text
         if code:
-            flattened = core.replace("\n", " ")
-            fence = self._backtick_fence(flattened, 1)
-            pad = " " if flattened.startswith("`") or flattened.endswith("`") else ""
-            rendered = f"{fence}{pad}{flattened}{pad}{fence}"
+            rendered = self._render_code_span(core.replace("\n", " "), context=context)
         else:
             opening = ""
             closing = ""
@@ -469,9 +466,7 @@ class _AnyDocMarkdownRenderer:
             elif kind == "code_block":
                 text = (block.text or "").strip()
                 if text:
-                    fence = self._backtick_fence(text, 1)
-                    pad = " " if text.startswith("`") or text.endswith("`") else ""
-                    parts.append(f"{fence}{pad}{text}{pad}{fence}")
+                    parts.append(self._render_code_span(text, context="table_cell"))
             elif kind == "math":
                 source = self._escape_math_source(block.text or "", context="table_cell")
                 if source:
@@ -740,6 +735,14 @@ class _AnyDocMarkdownRenderer:
         return (
             f"<{escaped}>" if any(char.isspace() or char in "()" for char in escaped) else escaped
         )
+
+    def _render_code_span(self, text: str, *, context: str) -> str:
+        if context == "table_cell":
+            # The table parser removes this escape before parsing the code span.
+            text = text.replace("|", r"\|")
+        fence = self._backtick_fence(text, 1)
+        pad = " " if text.startswith("`") or text.endswith("`") else ""
+        return f"{fence}{pad}{text}{pad}{fence}"
 
     @staticmethod
     def _backtick_fence(text: str, minimum: int) -> str:
