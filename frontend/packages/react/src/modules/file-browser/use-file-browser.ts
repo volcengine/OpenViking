@@ -32,6 +32,7 @@ export function useFileBrowser({
   rootUri,
   locale: localeProp,
   dashboardKinds,
+  experienceDataSource,
   renderDashboard,
   dashboardLabels,
   controlled = false,
@@ -98,7 +99,6 @@ export function useFileBrowser({
   // Three states rather than a boolean: absent from the known directory set may mean a
   // file or a directory that has not been loaded yet, and the two read different
   // endpoints, so they cannot collapse into "not a directory".
-  const resourceType = tree.resourceTypeOf(activeUri);
 
   // 面包屑上点某一级祖先，就选中它——和点树上的那一行是同一个动作，因此共用
   // 同一条选中路径，而不是另开一个只改预览的入口。
@@ -118,7 +118,7 @@ export function useFileBrowser({
   // commit would re-run the effect and cancel the previous request, turning one
   // selection into an endless reload. A ref carries the latest notification and
   // only `openTree` remains as a dependency.
-  const openTree = tree.open;
+  const { open: openTree, toggleExpand, loadMore, retry, refresh } = tree;
   const notifyUriChange = useRef(onUriChange);
   notifyUriChange.current = onUriChange;
   const openParent = useMemo(
@@ -154,6 +154,7 @@ export function useFileBrowser({
     requestOptions,
     onOpenUri: openResource,
     dashboardKinds,
+    experienceDataSource,
     renderDashboard,
     dashboardLabels,
   });
@@ -167,7 +168,7 @@ export function useFileBrowser({
     // real selection, so the preview follows that instead — otherwise a selection
     // the module owns would never load anything.
     uri: blocked ? null : activeUri,
-    resourceType,
+    resourceType: tree.resourceTypeOf(activeUri),
     ...previewLevel,
     labels: summaryLabels ?? resolveSummaryLabels(locale),
     formatCharacterCount: formatCharacterCount ?? text.formatCharacterCount,
@@ -185,10 +186,6 @@ export function useFileBrowser({
     () => findSelectedRowId(rows, activeUri, identifyUri),
     [rows, activeUri, identifyUri],
   );
-
-  // 解构出具体操作，`select` 里因此不再碰整个 `tree` 对象。
-  // Destructure the operations so `select` never touches the whole `tree` object.
-  const { open, toggleExpand, loadMore, retry, refresh } = tree;
 
   const { open: openDashboard, close: closeDashboard } = boards;
   const navigateResource = useMemo<FileBrowserActions['openResource']>(
@@ -225,7 +222,7 @@ export function useFileBrowser({
         closeDashboard();
         setPendingUri(row.uri);
         notifyUriChange.current(row.uri);
-        if (row.type === 'directory') await open(row.uri);
+        if (row.type === 'directory') await openTree(row.uri);
       },
       toggleExpand,
       loadMore: async (row: FileTreeRow) => {
@@ -268,7 +265,7 @@ export function useFileBrowser({
       setActiveKey,
       navigateResource,
       cancelReveal,
-      open,
+      openTree,
       toggleExpand,
       loadMore,
       retry,

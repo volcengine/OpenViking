@@ -2,6 +2,7 @@ import {
   ExperienceDashboard,
   type ExperienceDashboardProps,
 } from '../../components/experience-dashboard/index.js';
+import type { FileBrowserExperienceDataSource } from './experience-data-source.js';
 import type { OvRequestOptions } from '../../client/types.js';
 import { useExperienceDashboard } from './use-experience-dashboard.js';
 import { useExperienceTrajectories } from './use-experience-trajectories.js';
@@ -12,17 +13,20 @@ import {
 
 type Props = Pick<ExperienceDashboardProps, 'uri' | 'locale' | 'onOpenUri'> & {
   requestOptions?: OvRequestOptions;
+  dataSource?: FileBrowserExperienceDataSource;
   refreshGeneration?: number;
 };
 export function ExperienceDashboardPane({
   uri,
   locale,
+  dataSource,
   requestOptions,
   refreshGeneration,
   onOpenUri,
 }: Props) {
   const browser = useExperienceDashboard({
     uri,
+    dataSource,
     requestOptions,
     refreshGeneration,
   });
@@ -35,6 +39,7 @@ export function ExperienceDashboardPane({
     uri,
     days: browser.days,
     enabled: !directory && browser.tab === 'impact',
+    dataSource,
     requestOptions,
     refreshGeneration,
   });
@@ -51,6 +56,7 @@ export function ExperienceDashboardPane({
       onOpenUri={onOpenUri}
       data={{
         experiences: browser.list.data?.items,
+        total: browser.list.data?.total,
         outcomes: browser.outcomes.data,
         trajectories: trajectories.data?.items,
         trajectoryTotal: trajectories.data?.total,
