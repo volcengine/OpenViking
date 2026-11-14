@@ -1,5 +1,5 @@
 import { bindingOf } from '../../shared/monitoring/client.js';
-import { workflowsForData } from '../../shared/monitoring/workflow.js';
+import { QueryObservation } from './query-observation.js';
 import { InfiniteQueryObserver, type InfiniteData } from '@tanstack/query-core';
 import type { DirState } from './fs-model.js';
 import { toError } from './fs-errors.js';
@@ -23,6 +23,7 @@ export class DirectoryQueries {
       unsubscribe?: () => void;
       paused?: boolean;
       retryCause?: WeakRef<Error>;
+      monitoring: QueryObservation<'file_browser_directory_load'>;
     }
   >();
   private listeners = new Set<() => void>();
@@ -36,8 +37,10 @@ export class DirectoryQueries {
   }
   private publish = () => {
     this.snapshot = Object.fromEntries(
-      [...this.observers].map(([uri, { observer }]) => {
+      [...this.observers].map(([uri, { observer, monitoring, paused }]) => {
         const result = observer.getCurrentResult();
+        if (paused || !this.listeners.size) monitoring.cancel();
+        else monitoring.observe(result, observer.getCurrentQuery());
         const pages = result.data?.pages ?? [];
         const entries = new Map(
           pages
@@ -47,11 +50,7 @@ export class DirectoryQueries {
         return [
           uri,
           {
-            monitoring: workflowsForData(
-              this.request.client,
-              pages,
-              'file_browser_directory_load',
-            ),
+            monitoring: monitoring.operations(observer.getCurrentQuery()),
             ready: result.isFetched,
             entries: [...entries.values()],
             hasMore: result.hasNextPage,
@@ -68,6 +67,10 @@ export class DirectoryQueries {
     let item = this.observers.get(uri);
     if (!item) {
       item = {
+        monitoring: new QueryObservation(
+          this.request.client,
+          'file_browser_directory_load',
+        ),
         observer: new InfiniteQueryObserver(
           this.request.queryClient,
           directoryOptions(this.request, uri, () => {

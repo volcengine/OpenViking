@@ -24,8 +24,21 @@ const groups = {
   operation: ['区块与正文处理', 'Block and content processing'],
 };
 const names = catalog.map(({ name }) => name);
-if (new Set(names).size !== names.length)
-  throw new Error('Monitoring event names must be unique');
+const eventMap = await readFile(new URL('events.ts', root), 'utf8');
+const declarations = await Promise.all(
+  [...eventMap.matchAll(/from '\.\/(events-[\w-]+)\.js'/g)].map(([, file]) =>
+    readFile(new URL(`${file}.ts`, root), 'utf8'),
+  ),
+);
+const declared = declarations.flatMap((source) =>
+  [...source.matchAll(/readonly\s+(\w+)\s*:\s*Spec</g)].map(([, name]) => name),
+);
+if (
+  new Set(names).size !== names.length ||
+  names.length !== declared.length ||
+  declared.some((name) => !names.includes(name))
+)
+  throw new Error('Monitoring catalog must match the closed event map exactly');
 const start = '{/* monitoring-events:start */}',
   end = '{/* monitoring-events:end */}';
 const code = (text) =>

@@ -64,6 +64,7 @@ export type TraceSnapshot = {
     | 'started-before-enabled'
     | 'opaque-host-service'
     | 'disabled-scope'
+    | 'shared-query-input'
     | 'capacity'
   )[];
   readonly omittedSpanCount: number;

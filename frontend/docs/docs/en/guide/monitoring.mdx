@@ -106,6 +106,8 @@ The main snapshot holds at most 64 stages, prioritizing the root and actual fail
 
 Subscriptions filter delivery only. `causeEventId` can refer to an event outside your subscription; inspect the current failure snapshot for its preceding stages.
 
+Shared queries emit request events for actual requests and do not replay history on cache hits. When another component owns the fetch, including an initiator that has unmounted, results still identify the current subscriber; `shared-query-input` marks unobserved request stages. Disabling monitoring preserves the host query cache.
+
 ## Occurrence rules
 
 - Rendering: reported when a committed client-side library boundary catches a failure. The host handles ordinary event handlers and arbitrary async work.

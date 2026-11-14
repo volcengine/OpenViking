@@ -84,6 +84,10 @@ export class MonitoringFrame implements MonitoringBinding {
   dispose() {
     this.live = false;
     this.leaveScope();
+    this.inputs = undefined;
+    this.ancestor = undefined;
+    this.parent = undefined;
+    this.related = undefined;
   }
   source = (region: RegionByComponent[ComponentName] = 'root'): Source => {
     const ancestor = this.ancestor?.source();

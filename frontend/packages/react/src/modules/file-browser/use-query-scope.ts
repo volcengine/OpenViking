@@ -113,6 +113,13 @@ export function useQueryScope(
         },
         (error) => {
           const cause = toError(error);
+          if (active)
+            setState((previous) =>
+              previous?.input === input &&
+              previous.error?.message === toError(error).message
+                ? previous
+                : { input, error: toError(error) },
+            );
           if (
             active &&
             target &&
@@ -128,13 +135,6 @@ export function useQueryScope(
             operation?.span.timing(started, now(), Date.now());
             operation?.fail(cause, 'configuration', callerSignal);
           }
-          if (active)
-            setState((previous) =>
-              previous?.input === input &&
-              previous.error?.message === toError(error).message
-                ? previous
-                : { input, error: toError(error) },
-            );
         },
       );
     };
