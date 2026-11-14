@@ -10,7 +10,8 @@ import {
   providers,
   upcomingProviders,
 } from '#/features/admin/vikingbot/providers/registry'
-import { formatDateTime } from '#/i18n/format'
+import { UserSpaceSwitcher } from '#/features/admin/users/components/user-space-switcher'
+import styles from '../management-page.module.css'
 import { Button } from '#/shared/ui/button'
 import {
   Dialog,
@@ -20,8 +21,15 @@ import {
   DialogTitle,
 } from '#/shared/ui/dialog'
 import { Input } from '#/shared/ui/input'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '#/shared/ui/dropdown-menu'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BotIcon, PlusIcon, SearchIcon } from 'lucide-react'
+import { BotIcon, EllipsisIcon, PlusIcon, SearchIcon } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -42,7 +50,7 @@ export function Channels({
     refetchInterval: 4000,
   })
   const [choosing, setChoosing] = useState(false)
-  const [channelFilter, setChannelFilter] = useState('all')
+  const [channelFilter, setChannelFilter] = useState('feishu')
   const [search, setSearch] = useState('')
   const visibleConnections = (connections.data ?? []).filter(
     (connection) =>
@@ -85,49 +93,62 @@ export function Channels({
       />
     )
   return (
-    <div className="mx-auto w-full min-w-0 max-w-7xl space-y-5 p-4 md:p-6 lg:p-8">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-semibold">{t('channels')}</h2>
-          <p className="mt-1 text-sm text-muted-foreground">{t('botsHint')}</p>
-        </div>
-        {canManage && (
-          <Button onClick={() => setChoosing(true)}>
-            <PlusIcon className="size-4" />
-            {t('addBot')}
-          </Button>
-        )}
-      </div>
+    <div className={styles.channels}>
       {canManage && (
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/20 p-3">
-          <div className="relative min-w-48 flex-1 sm:max-w-sm">
-            <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              className="pl-9"
-              aria-label={t('searchBots')}
-              placeholder={t('searchBots')}
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-            />
-          </div>
-          <label className="flex items-center gap-2 text-sm text-muted-foreground">
-            {t('channelFilter')}
-            <select
-              className="h-9 rounded-md border bg-background px-3 text-foreground"
-              value={channelFilter}
-              onChange={(event) => setChannelFilter(event.target.value)}
+        <div className={styles.toolbar}>
+          <UserSpaceSwitcher canManageAccounts />
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              aria-label={t('channelFilter')}
+              className={styles.platformFilter}
             >
-              <option value="all">{t('all')}</option>
-              {Object.entries(providers).map(([type, entry]) => (
-                <option key={type} value={type}>
-                  {t(entry.label)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <span className="ml-auto text-xs tabular-nums text-muted-foreground">
-            {t('botCount', { count: visibleConnections.length })}
-          </span>
+              <PlatformIcon
+                platform={channelFilter === 'all' ? 'feishu' : channelFilter}
+              />
+              {channelFilter === 'all'
+                ? t('all')
+                : t('platformBots', {
+                    platform: t(providers[channelFilter].label),
+                  })}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent className="min-w-40">
+              <DropdownMenuRadioGroup
+                value={channelFilter}
+                onValueChange={(value) => setChannelFilter(value)}
+              >
+                <DropdownMenuRadioItem value="all">
+                  {t('all')}
+                </DropdownMenuRadioItem>
+                {Object.entries(providers).map(([type, entry]) => (
+                  <DropdownMenuRadioItem key={type} value={type}>
+                    {t('platformBots', { platform: t(entry.label) })}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <p className={styles.platformHint}>{t('platformIntegrationHint')}</p>
+          <div className={styles.toolbarActions}>
+            <div className={styles.search}>
+              <SearchIcon aria-hidden="true" />
+              <Input
+                aria-label={t('searchBots')}
+                placeholder={t('searchBotsPlaceholder')}
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            </div>
+            <Button
+              className={styles.addBot}
+              aria-label={t('addBot')}
+              title={t('addBot')}
+              variant="ghost"
+              onClick={() => setChoosing(true)}
+            >
+              <PlusIcon className="size-4" />
+              <span className="sr-only">{t('addBot')}</span>
+            </Button>
+          </div>
         </div>
       )}
       {!canManage && (
@@ -189,142 +210,123 @@ export function Channels({
           </div>
         </DialogContent>
       </Dialog>
-      {canManage && (
-        <div className="space-y-2">
-          {connections.isPending ? (
-            <p role="status" className="text-sm text-muted-foreground">
-              {t('loading')}
-            </p>
-          ) : !connections.error && visibleConnections.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              {t(
-                search || channelFilter !== 'all'
-                  ? 'noMatchingBots'
-                  : 'noConnectedBots',
-              )}
-            </p>
-          ) : null}
-        </div>
-      )}
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,28rem),1fr))] items-start gap-4">
+      {canManage &&
+        (connections.isPending ||
+          (!connections.error && visibleConnections.length === 0)) && (
+          <div className="space-y-2">
+            {connections.isPending ? (
+              <p role="status" className="text-sm text-muted-foreground">
+                {t('loading')}
+              </p>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                {t(
+                  search || connections.data.length > 0
+                    ? 'noMatchingBots'
+                    : 'noConnectedBots',
+                )}
+              </p>
+            )}
+          </div>
+        )}
+      <div className={styles.grid}>
         {visibleConnections.map((connection) => {
           const entry = getProvider(connection.type)
           const Credentials = entry?.Credentials
           return (
-            <div
-              key={connection.id}
-              className="min-w-0 rounded-xl border bg-card p-4 transition-colors hover:border-primary/30 sm:p-5"
-            >
-              <div className="flex items-start gap-3">
-                <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                  <BotIcon className="size-5" />
+            <div key={connection.id} className={styles.card}>
+              <button
+                type="button"
+                className={styles.cardHeading}
+                onClick={() => setEditing(connection.id)}
+              >
+                <span className={styles.avatar}>
+                  <BotIcon aria-hidden="true" />
+                </span>
+                <span className={styles.identity}>
+                  <span className={styles.botName}>{connection.bot_name}</span>
+                  <span className={styles.user}>
+                    {t('associatedUser', { user: connection.identity_user })}
+                  </span>
+                </span>
+              </button>
+              <dl className={styles.stats} title={t('statisticsUnavailable')}>
+                <div>
+                  <dt>{t('groupCount')}</dt>
+                  <dd>—</dd>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="truncate font-medium">
-                      {connection.bot_name}
-                    </h3>
-                    <span
-                      className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs ${connection.enabled && connection.status.state === 'connected' ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400' : 'bg-muted text-muted-foreground'}`}
-                    >
-                      <span className="size-1.5 rounded-full bg-current" />
-                      {t(
-                        `state.${connection.enabled ? (connection.status.state as 'connected' | 'connecting') : 'paused'}`,
-                      )}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {entry ? t(entry.label) : connection.type}
-                    {entry && <> · {t(entry.summary(connection))}</>}
-                  </p>
-                  <dl className="mt-3 flex flex-wrap gap-x-6 gap-y-2 text-xs">
-                    <div className="flex min-w-0 gap-2">
-                      <dt className="text-muted-foreground">
-                        {t('runtimeUser')}
-                      </dt>
-                      <dd className="truncate">{connection.identity_user}</dd>
-                    </div>
-                    {connection.status.last_received && (
-                      <div className="flex gap-2">
-                        <dt className="text-muted-foreground">
-                          {t('lastReceived')}
-                        </dt>
-                        <dd>
-                          {formatDateTime(
-                            new Date(connection.status.last_received),
-                          )}
-                        </dd>
-                      </div>
-                    )}
-                    {connection.status.last_sent && (
-                      <div className="flex gap-2">
-                        <dt className="text-muted-foreground">
-                          {t('lastSent')}
-                        </dt>
-                        <dd>
-                          {formatDateTime(
-                            new Date(connection.status.last_sent),
-                          )}
-                        </dd>
-                      </div>
-                    )}
-                  </dl>
+                <div>
+                  <dt>{t('questionsLast7Days')}</dt>
+                  <dd>—</dd>
                 </div>
-              </div>
-              <div className="mt-4 flex flex-wrap items-center gap-1">
-                <Button
-                  variant="outline"
-                  onClick={() => setEditing(connection.id)}
+              </dl>
+              {(!connection.enabled ||
+                connection.status.state !== 'connected') && (
+                <span className={styles.connectionState}>
+                  {t(`state.${connection.enabled ? 'connecting' : 'paused'}`)}
+                </span>
+              )}
+              <details className={styles.actions}>
+                <summary
+                  aria-label={t('botActions', { name: connection.bot_name })}
                 >
-                  {t(
-                    connection.setup_mode !== 'qr' ||
-                      connection.step >= 5 ||
-                      connection.step === 4
-                      ? 'viewSetup'
-                      : 'continueSetup',
+                  <EllipsisIcon aria-hidden="true" />
+                </summary>
+                <div className={styles.actionMenu}>
+                  <Button
+                    variant="outline"
+                    onClick={() => setEditing(connection.id)}
+                  >
+                    {t(
+                      connection.setup_mode !== 'qr' ||
+                        connection.step >= 5 ||
+                        connection.step === 4
+                        ? 'viewSetup'
+                        : 'continueSetup',
+                    )}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    disabled={mutation.isPending}
+                    onClick={() =>
+                      mutation.mutate({
+                        connection,
+                        action: connection.enabled ? 'pause' : 'resume',
+                      })
+                    }
+                  >
+                    {t(connection.enabled ? 'pause' : 'resume')}
+                  </Button>
+                  {entry && (
+                    <entry.Settings
+                      connection={connection}
+                      onSaved={() => {
+                        void client.invalidateQueries({ queryKey: key })
+                      }}
+                    />
                   )}
-                </Button>
-                <Button
-                  variant="ghost"
-                  disabled={mutation.isPending}
-                  onClick={() =>
-                    mutation.mutate({
-                      connection,
-                      action: connection.enabled ? 'pause' : 'resume',
-                    })
-                  }
-                >
-                  {t(connection.enabled ? 'pause' : 'resume')}
-                </Button>
-                {entry && (
-                  <entry.Settings
+                  {Credentials && (
+                    <Credentials
+                      connection={connection}
+                      onSaved={() => {
+                        void client.invalidateQueries({ queryKey: key })
+                      }}
+                    />
+                  )}
+                  <DeleteConnection
                     connection={connection}
-                    onSaved={() => {
-                      void client.invalidateQueries({ queryKey: key })
+                    title={connection.bot_name}
+                    onDeleted={() => {
+                      client.setQueryData<Connection[]>(key, (old) =>
+                        (old ?? []).filter((item) => item.id !== connection.id),
+                      )
+                      void client.invalidateQueries({
+                        queryKey: ['vikingbot', scope],
+                      })
                     }}
                   />
-                )}
-                {Credentials && (
-                  <Credentials
-                    connection={connection}
-                    onSaved={() => {
-                      void client.invalidateQueries({ queryKey: key })
-                    }}
-                  />
-                )}
-                <DeleteConnection
-                  connection={connection}
-                  title={connection.bot_name}
-                  onDeleted={() => {
-                    client.setQueryData<Connection[]>(key, (old) =>
-                      (old ?? []).filter((item) => item.id !== connection.id),
-                    )
-                    void client.invalidateQueries({
-                      queryKey: ['vikingbot', scope],
-                    })
-                  }}
-                />
-              </div>
+                </div>
+              </details>
             </div>
           )
         })}

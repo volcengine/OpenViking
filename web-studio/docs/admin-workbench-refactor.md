@@ -36,9 +36,11 @@ Root-only 连接仍可管理 Account 级 ACL 配置，但资源目录与授权�
 
 ## 后续交付范围
 
-本轮建立管理路由、服务配置分离、入口与数据凭据防回退的基础。以下仍需独立完成，不能视为本轮已交付：
+管理路由、服务配置分离、入口与数据凭据防回退的基础已建立。管理侧已新增 `/admin/dashboard`、`/admin/tasks` 和 `/admin/request-logs`，复用现有页面并显式使用管理凭据。管理任务的列表、详情和重试保持相同的管理身份；API Key 模式下 Root 无法按所选 Account 查询任务，任务页显示范围不可用提示，避免将全局任务标为当前空间数据。
 
-- 管理监控、任务、日志页面与对应凭据范围适配。
+以下仍需独立完成：
+
+- 管理 Observer 监控页与对应凭据范围适配。
 - 抽出完整工作台版本包，并在独立站点宿主验证消费。
 - 邮箱 Session 的宿主适配与服务端接口联调。
 
@@ -50,7 +52,9 @@ Root-only 连接仍可管理 Account 级 ACL 配置，但资源目录与授权�
 
 ## 服务管理页面归属
 
-OpenViking 配置通过管理侧栏的统一入口访问，Root 和 Account Admin 可配置当前账号的功能；服务端参数编辑 `/admin/configuration/server` 作为“服务管理”分组下独立的“服务端配置”导航，仅 Root 可见和访问；Account 配置页不再展示跳转卡片。网关管理放在“服务管理”分组，页面迁至 `/admin/gateway/*`，开源服务的 Root 和 Account 管理员可进入，网关内部仍根据 `/gateway/admin/access` 和独立 Management Key 判断读写权限。用户工作台不再显示网关管理，普通 User 直达新地址时不挂载管理页面。旧 `/gateway/*` 链接会保留子路径、查询条件和锚点跳转。独立部署的 Gateway Studio 保留原有授权能力。此调整只涉及 Web Studio，不更改后端接口权限。
+普通 Studio 的管理侧栏将 OpenViking 配置、服务端配置和网关管理归入 Root 配置分组。只有管理角色已验证为 Root、角色检查已完成且已配置非空管理凭据时，才显示该分组中的配置入口；开发模式不显示 Account 功能配置入口，网关入口还需满足服务能力检查。Account Admin 不显示这些侧栏入口。
+
+导航可见性与页面及接口授权分别判断：`/admin/configuration` 的 Account 功能配置仍允许 Root 和 Account Admin 按当前账号权限直达；服务端参数编辑 `/admin/configuration/server` 仅 Root 可访问。Account 配置页不再展示跳转卡片。网关页面位于 `/admin/gateway/*`，直达时仍经过服务类型、认证模式及管理路由边界检查，网关内部再根据 `/gateway/admin/access` 和独立 Management Key 判断读写权限；侧栏隐藏不改变这些授权规则。用户工作台不显示网关管理。旧 `/gateway/*` 链接会保留子路径、查询条件和锚点跳转。独立部署的 Gateway Studio 使用自己的网关导航及授权能力，不受普通 Studio 的 Root 导航条件限制。此调整只涉及 Web Studio，不更改后端接口权限。
 
 ## 连接、Account、User 独立选择
 
@@ -73,7 +77,7 @@ API Key 模式的 User 选择器不调用 `fetchAdminUsers`，即使当前连接
 
 - `/vikingbot` 仅保留当前数据身份的 Web 对话、新建和删除会话，不调用 Bot 管理能力、渠道或平台历史接口。
 - `/admin/vikingbot` 仅 Root 可进入，集中管理飞书等渠道、应用凭据、运行用户、启停、删除、验证，以及平台会话历史。Account Admin 和普通 User 深链访问在组件挂载前被拒绝。
-- `/admin/configuration` 是统一的 OpenViking 配置页，Account 级经验提取开关作为其中一个配置项，支持 Root 和 Account Admin。Root 可通过左侧独立的“服务端配置”导航进入 `/admin/configuration/server` 管理模型、存储及服务运行参数。`/admin/agent-evolution` 只兼容跳转到统一配置页，不再有独立经验设置导航。右上角 Studio 设置仅保留默认入口、语言和主题等本地偏好；工作台不挂载经验提取配置。
+- `/admin/configuration` 是统一的 OpenViking 配置页，Account 级经验提取开关作为其中一个配置项，页面支持 Root 和 Account Admin；侧栏入口仅在满足上述 Root 凭据条件时显示，Account Admin 可通过直达链接访问。Root 可通过 Root 配置分组中的“服务端配置”导航进入 `/admin/configuration/server` 管理模型、存储及服务运行参数。`/admin/agent-evolution` 只兼容跳转到统一配置页，不再有独立经验设置导航。右上角 Studio 设置仅保留默认入口、语言和主题等本地偏好；工作台不挂载经验提取配置。
 - OAuth 公共入口只使用当前或手动提供的用户凭据；服务器身份目录只在 `/admin/oauth/verify` 和 `/admin/oauth/consent` 中启用。
 - API Key 模式的 Bot 健康检查、聊天、打断和引导请求不会回退到 Root Key；trusted 协议要求每次认证请求携带 Root，工作台使用该凭据与 Account/User 断言头；管理接口不附加数据身份断言，避免与目标用户或 Account 冲突。API Key 模式的工作台仍禁止 Root 兜底。
 - 已迁移的用户、用户组、ACL、抽取规则、服务配置和网关管理继续保留在 `/admin`。资源导入导出、快照、检索、会话、日志、任务及监控接口支持普通用户，按其数据权限使用，继续保留在工作台。

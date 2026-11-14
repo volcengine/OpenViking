@@ -1,4 +1,20 @@
 export default {
+  search: 'Search...',
+  searchLabel: 'Search memory extraction rules',
+  noResults: 'No matching extraction rules',
+  viewAndConfigure: 'View and configure',
+  overviewHints: {
+    profile:
+      'Who the user is: identity, background, and long-term context. Stored in Profile.md.',
+    preferences:
+      'Preferences, dislikes, and habits organized by topic. Stored in Preferences.md.',
+    entities:
+      'Important people, organizations, places, products, and relationships. Stored in Entities.md.',
+    events:
+      'Events, decisions, commitments, and outcomes archived by date in events.md.',
+    soul: 'The assistant’s enduring principles, boundaries, style, and continuity.',
+    identity: 'The assistant’s name, identity, style, and introduction.',
+  },
   tab: 'Extraction rules',
   title: 'Memory extraction rules',
   subtitle:

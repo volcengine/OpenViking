@@ -20,7 +20,7 @@ import {
 } from '#/shared/ui/dialog'
 import { Tooltip, TooltipContent, TooltipTrigger } from '#/shared/ui/tooltip'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { LoaderCircleIcon, PencilIcon } from 'lucide-react'
+import { LoaderCircleIcon } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -88,6 +88,7 @@ export function UserMemoryPolicyCell({
             <Button
               variant="ghost"
               size="sm"
+              className="users-policy-trigger"
               disabled={query.isFetching}
               onClick={async () => {
                 const result = await query.refetch()
@@ -100,7 +101,6 @@ export function UserMemoryPolicyCell({
           <span className="decoration-dotted underline-offset-4 underline">
             {t(`memoryPolicy.${preset}.name`)}
           </span>
-          <PencilIcon className="size-3.5 text-primary" />
         </TooltipTrigger>
         <TooltipContent className="block w-96 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border bg-popover p-0 text-sm text-popover-foreground shadow-lg [&>[aria-hidden=true]]:bg-popover">
           <p className="border-b px-4 py-3 font-semibold">

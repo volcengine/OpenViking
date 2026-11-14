@@ -22,9 +22,11 @@ export const MAX_TASKS = 200
 export async function fetchTasks(
   taskType: TaskTypeFilter,
   status: TaskStatusFilter,
+  headers?: Record<string, string>,
 ): Promise<TaskRecord[]> {
   const result = await getOvResult<unknown>(
     getTasks({
+      ...(headers ? { headers } : {}),
       query: {
         limit: MAX_TASKS,
         ...(taskType === 'all' ? {} : { task_type: taskType }),

@@ -1,3 +1,4 @@
+import { StudioUiProvider } from '#/features/connection/components/studio-ui-provider'
 import { IdentityScopedAppShell } from '#/app/layouts/connection-boundary'
 import { StudioSetup } from '#/features/connection/components/studio-setup'
 import { AppConnectionProvider } from '#/features/connection/hooks/use-app-connection'
@@ -70,7 +71,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (needsSetup) return <Navigate replace to="/onboarding" />
   return (
     <AppConnectionProvider>
-      <IdentityScopedAppShell>{children}</IdentityScopedAppShell>
+      <StudioUiProvider>
+        <IdentityScopedAppShell>{children}</IdentityScopedAppShell>
+      </StudioUiProvider>
     </AppConnectionProvider>
   )
 }

@@ -1,3 +1,4 @@
+import { FilterSelect } from '#/shared/components/filter-select'
 import { getBotUsers } from '#/features/admin/vikingbot/api'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
 import { Button } from '#/shared/ui/button'
@@ -36,30 +37,25 @@ export function RuntimeUserSelect({
   const { users, available, selectedUser, setUserId } = selection
   return (
     <div className="space-y-3">
-      <label className="grid gap-3 text-sm">
+      <div className="grid gap-3 text-sm">
         <span>{t('runtimeUser')}</span>
-        <select
-          aria-label={t('runtimeUser')}
-          className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+        <FilterSelect
+          label={t('runtimeUser')}
+          className="w-full"
           value={selectedUser}
+          onValueChange={setUserId}
           disabled={disabled || users.isPending || users.isError}
-          onChange={(event) => setUserId(event.target.value)}
-        >
-          <option value="">
-            {t(users.isPending ? 'loading' : 'selectUser')}
-          </option>
-          {users.data?.map((user) => (
-            <option
-              key={user.user_id}
-              value={user.user_id}
-              disabled={!user.available}
-            >
-              {user.user_id}
-              {user.available ? '' : ` — ${t('userUnavailable')}`}
-            </option>
-          ))}
-        </select>
-      </label>
+          options={[
+            { value: '', label: t(users.isPending ? 'loading' : 'selectUser') },
+            ...(users.data ?? []).map((user) => ({
+              value: user.user_id,
+              label: user.user_id,
+              disabled: !user.available,
+              description: user.available ? undefined : t('userUnavailable'),
+            })),
+          ]}
+        />
+      </div>
       <p className="text-xs leading-6 text-muted-foreground">
         {t('runtimeUserHint')}
       </p>

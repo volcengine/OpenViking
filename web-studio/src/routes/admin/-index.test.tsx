@@ -16,13 +16,13 @@ afterEach(() => {
   cleanup()
   state.mode = 'api_key'
 })
-it('opens the user management page directly instead of an empty landing page', async () => {
+it('opens the dashboard directly instead of an empty landing page', async () => {
   const Index = Route.options.component as ComponentType & {
     preload?: () => Promise<unknown>
   }
   await Index.preload?.()
   render(<Index />)
-  expect(screen.getByText('/admin/users')).toBeTruthy()
+  expect(screen.getByText('/admin/dashboard')).toBeTruthy()
 })
 
 it('opens server configuration in local development without unavailable membership APIs', async () => {

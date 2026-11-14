@@ -4,6 +4,8 @@ const studio = {
       'Connection changes cannot be saved in this environment and will be lost after refreshing or closing this page. Existing local records are preserved.',
     startError:
       'Cannot read encrypted local credentials. Use HTTPS or localhost, allow browser storage for this site, and reload. Existing credentials have not been cleared.',
+    conflictError:
+      'Another tab has updated the connection settings. Changes on this page have not been saved. Confirm the latest settings before reopening this page.',
     saveError:
       'Credentials have not been saved locally. Keep this page open, check browser storage permissions, and retry saving.',
   },
@@ -56,8 +58,6 @@ const studio = {
     details: 'Technical details',
 
     botHealth: 'Bot health check failed ({{status}})',
-    botSteer: 'Bot steer failed ({{status}})',
-    botInterrupt: 'Bot interrupt failed ({{status}})',
     expectedEventStream: 'Expected {{contentType}} response',
     sseFailed: 'SSE request failed ({{status}}): {{detail}}',
     imageLoadFailed: 'Image failed to load',

@@ -12,18 +12,20 @@ const FilePreview = lazy(() =>
 )
 
 export function LazyFilePreview({
+  onDirtyChange,
+  onSaved,
   readOnly,
   defaultReadLimit,
   file,
-  hideDirectoryHeader,
   onClose,
   onNavigate,
   showCloseButton,
 }: {
+  onSaved?: (uri: string) => void
+  onDirtyChange?: (dirty: boolean) => void
   readOnly?: boolean
   defaultReadLimit?: number
   file: VikingFsEntry | null
-  hideDirectoryHeader?: boolean
   onClose: () => void
   onNavigate?: (uri: string) => void
   showCloseButton?: boolean
@@ -37,10 +39,11 @@ export function LazyFilePreview({
       }
     >
       <FilePreview
+        onDirtyChange={onDirtyChange}
+        onSaved={onSaved}
         readOnly={readOnly}
         defaultReadLimit={defaultReadLimit}
         file={file}
-        hideDirectoryHeader={hideDirectoryHeader}
         onClose={onClose}
         onNavigate={onNavigate}
         showCloseButton={showCloseButton}

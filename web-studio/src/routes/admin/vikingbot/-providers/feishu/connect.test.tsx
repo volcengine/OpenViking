@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import userEvent from '@testing-library/user-event'
 import { FeishuConnect } from '#/features/admin/vikingbot/providers/feishu/connect'
 import zh from '#/i18n/locales/zh-CN/vikingbot'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -167,9 +168,10 @@ it('passes the selected group reply mode to QR onboarding', async () => {
   await waitFor(() =>
     expect((button as HTMLButtonElement).disabled).toBe(false),
   )
-  fireEvent.change(screen.getByLabelText(zh.replyMode), {
-    target: { value: 'false' },
-  })
+  await userEvent.click(screen.getByRole('combobox', { name: zh.replyMode }))
+  await userEvent.click(
+    await screen.findByRole('option', { name: zh.withoutMention }),
+  )
   fireEvent.click(button)
   await waitFor(() =>
     expect(api.start).toHaveBeenCalledWith(
@@ -195,8 +197,8 @@ it.each([
     fireEvent.click(screen.getByRole('button', { name: zh.retry }))
     await waitFor(() =>
       expect(
-        screen.getByLabelText<HTMLSelectElement>(zh.runtimeUser).value,
-      ).toBe('recovered'),
+        screen.getByRole('combobox', { name: zh.runtimeUser }).textContent,
+      ).toContain('recovered'),
     )
     expect(submit.disabled).toBe(false)
     expect(screen.queryByRole('link', { name: zh.manageUsers })).toBeNull()

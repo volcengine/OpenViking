@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { StudioLayout } from '#/app/layouts/studio-layout'
 import { IdentityScopedAppShell } from '#/app/layouts/connection-boundary'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { useState } from 'react'
@@ -30,9 +31,6 @@ vi.mock('#/features/connection/components/studio-scope-switcher', () => ({
 }))
 vi.mock('#/features/connection/components/generated-credential-dialog', () => ({
   GeneratedCredentialDialog: () => null,
-}))
-vi.mock('#/features/oauth/components/cross-device-verify-dialog', () => ({
-  CrossDeviceVerifyDialog: () => null,
 }))
 vi.mock('#/features/connection/hooks/use-studio-service', () => ({
   useStudioService: () => ({
@@ -88,6 +86,21 @@ vi.mock('@tanstack/react-router', async (original) => ({
   }) => select({ location: { pathname: state.pathname } }),
 }))
 afterEach(cleanup)
+it('keeps the workbench header when opening the standalone tasks page', () => {
+  const view = render(<StudioLayout>{null}</StudioLayout>)
+  const header = screen.getByRole('banner')
+  expect(header.parentElement?.getAttribute('data-workbench')).toBe('true')
+  expect(
+    header.querySelector('[data-slot="studio-header-actions"]'),
+  ).toBeTruthy()
+
+  state.pathname = '/tasks'
+  view.rerender(<StudioLayout>{null}</StudioLayout>)
+
+  expect(screen.getByRole('banner')).toBe(header)
+  expect(header.parentElement?.getAttribute('data-workbench')).toBe('true')
+  expect(header.querySelector('[aria-current="page"]')).toBeTruthy()
+})
 it('keeps settings reachable while a health request is pending', () => {
   state.pathname = '/filesystem'
   render(
@@ -121,7 +134,7 @@ it.each([
       screen.queryByRole('link', { name: /Connection settings/i }),
     ).toBeNull()
     if (path.startsWith('/admin'))
-      expect(screen.getByText('Administration')).toBeTruthy()
+      expect(screen.getByText('Admin console')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /Studio settings/i }))
     const link = screen.getByRole('link', { name: /Manage connections/i })
     expect(link.getAttribute('href')).toBe(destination)
@@ -250,10 +263,10 @@ it.each([
     ).toBe(destination)
     if (role === 'root') {
       expect(screen.queryByRole('link', { name: 'Home' })).toBeNull()
-      expect(screen.getByRole('link', { name: 'Users' })).toBeTruthy()
+      expect(screen.getByRole('link', { name: 'User & API Keys' })).toBeTruthy()
     } else {
       expect(screen.queryByRole('link', { name: 'Home' })).toBeNull()
-      expect(screen.queryByRole('link', { name: 'Users' })).toBeNull()
+      expect(screen.queryByRole('link', { name: 'User & API Keys' })).toBeNull()
     }
   },
 )
@@ -285,7 +298,7 @@ it('keeps management setup reachable from an ordinary User workbench without a c
       <span data-testid="settings" />
     </IdentityScopedAppShell>,
   )
-  fireEvent.click(screen.getByRole('button', { name: 'Admin console' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Manage team' }))
   expect(
     screen.getByRole('dialog', { name: 'Configure management access' }),
   ).toBeTruthy()

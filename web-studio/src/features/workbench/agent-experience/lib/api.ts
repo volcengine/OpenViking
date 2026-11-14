@@ -94,32 +94,12 @@ export async function searchExperiences(options: {
           return []
         const uri = match.uri as string
         const name = uri.startsWith(prefix) ? uri.slice(prefix.length) : ''
-        return name && !name.includes('/') && name.endsWith('.md')
+        return name && !name.includes('/') && /\.md$/i.test(name)
           ? [{ name, uri }]
           : []
       })
     : []
   return { items, hasMore: false, page: 1, pageSize: items.length }
-}
-
-export async function fetchContent(
-  uri: string,
-  signal?: AbortSignal,
-): Promise<string> {
-  const result = await getOvResult<unknown>(
-    ovClient.client.get({
-      query: { limit: -1, offset: 0, uri },
-      signal,
-      url: '/api/v1/content/read',
-    }),
-  )
-
-  if (typeof result === 'string') return result
-  if (result && typeof result === 'object') {
-    const record = result as Record<string, unknown>
-    if (typeof record.content === 'string') return record.content
-  }
-  return ''
 }
 
 export async function fetchTrajectories(options: {
@@ -194,5 +174,3 @@ export async function fetchSourceTrajectories(
   )
   return normalizeSourceTrajectoryLinks(result)
 }
-
-export const fetchTrajectoryContent = fetchContent

@@ -1,3 +1,4 @@
+import styles from './server-configuration.module.css'
 import { ModelConnectionTest } from '#/features/admin/server-configuration/components/model-connection-test'
 import type {
   EditableModelKind,
@@ -57,7 +58,6 @@ import {
   CheckIcon,
   ClockIcon,
   CopyIcon,
-  EyeIcon,
   FileTextIcon,
   GripVerticalIcon,
   LockIcon,
@@ -120,6 +120,8 @@ type RowProps = {
   dragHandle: React.ReactNode
   dropProps: React.HTMLAttributes<HTMLDivElement>
   dropTarget?: 'before' | 'after'
+  kind: EditableModelKind
+  mode?: string
 }
 function ModelRow({
   value,
@@ -134,67 +136,103 @@ function ModelRow({
   dragHandle,
   dropProps,
   dropTarget,
+  kind,
+  mode,
 }: RowProps) {
   const { t } = useTranslation('settings')
-  const ordered = count > 1
   const modelId = String(
     value.model || value.model_name || fallback.model || t('models.notSet'),
   )
+  const provider = String(value.provider || fallback.provider || '')
+  const secret = String(
+    value.api_key ||
+      value.sk ||
+      value.ak ||
+      fallback.api_key ||
+      fallback.sk ||
+      fallback.ak ||
+      '',
+  )
+  const maskedKey = secret
+    ? secret.length > 8
+      ? `${secret.startsWith('sk-') ? 'sk-' : ''}****${secret.slice(-4)}`
+      : '********'
+    : t('models.notSet')
   return (
     <div
       {...dropProps}
       data-model-row=""
       data-drop-target={dropTarget}
-      className={`grid min-w-0 items-start gap-2 border-b bg-background py-3 data-[drop-target]:bg-accent data-[drop-target=before]:shadow-[inset_0_2px_0_var(--primary)] data-[drop-target=after]:shadow-[inset_0_-2px_0_var(--primary)] text-sm md:items-center ${ordered ? 'grid-cols-[56px_minmax(0,1fr)] md:grid-cols-[56px_minmax(0,1.4fr)_100px_minmax(0,1.4fr)_80px_104px]' : 'grid-cols-[0px_minmax(0,1fr)] gap-x-0 md:grid-cols-[minmax(0,1.4fr)_100px_minmax(0,1.4fr)_80px_104px] md:gap-x-2'}`}
+      className={`${styles.modelTableRow} ${styles.modelTableGrid}`}
     >
-      <div
-        className={
-          ordered
-            ? 'flex items-center gap-1 text-xs text-muted-foreground'
-            : 'md:hidden'
-        }
-      >
-        {ordered && dragHandle}
-        {ordered ? index + 1 : null}
+      <div className={styles.modelRowPriority}>
+        {dragHandle}
+        <span>{index + 1}</span>
       </div>
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={onView}
-            className="max-w-full break-all text-left font-mono text-sm font-medium hover:underline"
-          >
-            {modelId}
-          </button>
-          <Badge
-            variant={index === 0 ? 'secondary' : 'outline'}
-            title={t('models.priorityHint')}
-          >
-            {t(index === 0 ? 'models.preferred' : 'models.backup')}
-          </Badge>
-        </div>
-        <span className="mt-1 block text-xs text-muted-foreground md:hidden">
-          {String(value.provider || '')}
+      <div className={styles.modelRowIdentity}>
+        <button
+          type="button"
+          onClick={onView}
+          aria-label={t('models.view')}
+          className={styles.modelRowId}
+          title={String(
+            value.api_base || value.host || fallback.api_base || '',
+          )}
+        >
+          {modelId}
+        </button>
+        <Badge
+          className={styles.modelPriorityBadge}
+          variant="outline"
+          title={t('models.priorityHint')}
+        >
+          {t(index === 0 ? 'models.preferred' : 'models.backup')}
+        </Badge>
+        <span className="sr-only">
+          {String(value.api_base || value.host || t('models.providerDefault'))}
         </span>
       </div>
-      <span className="hidden break-all md:block">
-        {String(value.provider || '')}
+      <span className={`${styles.modelTableCell}`}>
+        {t(`models.providerNames.${provider}`, { defaultValue: provider })}
       </span>
-      <span className="col-start-2 row-start-2 min-w-0 break-all text-xs text-muted-foreground md:col-auto md:row-auto">
-        {String(value.api_base || value.host || t('models.providerDefault'))}
+      <span className={styles.modelTableCell}>{maskedKey}</span>
+      <span className={styles.modelTableCell}>
+        {kind === 'vlm'
+          ? t(
+              value.thinking === true || fallback.thinking === true
+                ? 'models.thinkingOn'
+                : 'models.thinkingOff',
+            )
+          : '—'}
       </span>
-      <span className="col-start-2 row-start-3 font-mono text-xs text-muted-foreground md:col-auto md:row-auto">
-        {value.api_key || value.sk || value.ak
-          ? '********'
-          : t('models.notSet')}
-      </span>
-      <div className="col-start-2 row-start-4 flex justify-end [&_button]:size-10 md:col-auto md:row-auto md:[&_button]:size-8">
-        <Action label={t('models.view')} onClick={onView}>
-          <EyeIcon />
-        </Action>
-        <Action label={t('models.edit')} disabled={disabled} onClick={onEdit}>
-          <PencilIcon />
-        </Action>
+      <ModelConnectionTest
+        variant="row"
+        kind={kind}
+        mode={mode}
+        config={value}
+        fallback={fallback}
+        thinking={kind === 'vlm' ? fallback.thinking === true : undefined}
+        disabled={disabled}
+      >
+        <Button
+          type="button"
+          variant="link"
+          disabled={disabled}
+          onClick={onEdit}
+          aria-label={t('models.edit')}
+        >
+          {t('models.editAction')}
+        </Button>
+        <Button
+          type="button"
+          variant="link"
+          className={styles.modelRemoveAction}
+          disabled={disabled || count === 1}
+          onClick={onDelete}
+          aria-label={t('models.remove')}
+        >
+          {t('models.deleteAction')}
+        </Button>
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
@@ -203,6 +241,7 @@ function ModelRow({
                 variant="ghost"
                 size="icon-sm"
                 aria-label={t('models.more')}
+                className={styles.modelRowMore}
                 disabled={disabled}
               />
             }
@@ -249,12 +288,15 @@ function ModelRow({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-      </div>
+      </ModelConnectionTest>
     </div>
   )
 }
+
 function ModelList({
   group,
+  kind,
+  mode,
   values,
   fallback,
   disabled,
@@ -263,6 +305,8 @@ function ModelList({
   onDelete,
 }: {
   group: string
+  kind: EditableModelKind
+  mode?: string
   values: ModelConfig[]
   fallback: ModelConfig
   disabled: boolean
@@ -288,95 +332,103 @@ function ModelList({
       <p className="py-4 text-sm text-muted-foreground">{t('models.empty')}</p>
     )
   return (
-    <div className="min-w-0">
-      <div
-        className={`hidden gap-2 border-b pb-2 text-xs text-muted-foreground md:grid ${values.length > 1 ? 'grid-cols-[56px_minmax(0,1.4fr)_100px_minmax(0,1.4fr)_80px_104px]' : 'grid-cols-[minmax(0,1.4fr)_100px_minmax(0,1.4fr)_80px_104px]'}`}
-      >
-        {values.length > 1 && <span>{t('models.priority')}</span>}
-        <span>{t('models.listModel')}</span>
-        <span>{t('models.provider')}</span>
-        <span>{t('models.apiBase')}</span>
-        <span>{t('models.apiKey')}</span>
-        <span className="text-right">{t('models.actions')}</span>
+    <div className={styles.modelTableScroll}>
+      <div className={styles.modelTable}>
+        <div className={`${styles.modelTableHeader} ${styles.modelTableGrid}`}>
+          <span aria-hidden="true" />
+          <span>{t('models.listModel')}</span>
+          <span className={styles.modelTableCell}>{t('models.provider')}</span>
+          <span className={styles.modelTableCell}>{t('models.apiKey')}</span>
+          <span className={styles.modelTableCell}>
+            {t('models.thinkingColumn')}
+          </span>
+          <span className={styles.modelTableCell}>
+            {t('models.statusColumn')}
+          </span>
+          <span className={styles.modelTableCell}>{t('models.actions')}</span>
+        </div>
+        {values.map((value, index) => (
+          <ModelRow
+            key={ids[index]}
+            kind={kind}
+            mode={mode}
+            dropProps={{
+              draggable: !disabled && values.length > 1,
+              onDragStart: (event) => {
+                const control = (event.target as Element).closest(
+                  'button, a, input, select, textarea',
+                )
+                if (
+                  disabled ||
+                  (control && !control.hasAttribute('data-model-drag-handle'))
+                ) {
+                  event.preventDefault()
+                  return
+                }
+                const row = event.currentTarget
+                const bounds = row.getBoundingClientRect()
+                event.dataTransfer.effectAllowed = 'move'
+                event.dataTransfer.setData('text/plain', ids[index])
+                event.dataTransfer.setDragImage(
+                  row,
+                  event.clientX - bounds.left,
+                  event.clientY - bounds.top,
+                )
+                setDrag({ from: index, to: index })
+              },
+              onDragEnd: () => setDrag(null),
+              onDragOver: (event) => {
+                if (disabled || !drag) return
+                event.preventDefault()
+                event.dataTransfer.dropEffect = 'move'
+                if (drag.to !== index) setDrag({ ...drag, to: index })
+              },
+              onDrop: (event) => {
+                if (disabled || !drag) return
+                event.preventDefault()
+                move(drag.from, index)
+                setDrag(null)
+              },
+            }}
+            dropTarget={
+              !disabled && drag?.to === index && drag.from !== index
+                ? drag.from > index
+                  ? 'before'
+                  : 'after'
+                : undefined
+            }
+            dragHandle={
+              <button
+                type="button"
+                data-model-drag-handle=""
+                disabled={disabled}
+                aria-label={t('models.dragToReorder', {
+                  model: String(value.model || fallback.model || index + 1),
+                })}
+                title={t('models.dragHint')}
+                className="flex size-6 shrink-0 cursor-grab items-center justify-center rounded hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring active:cursor-grabbing disabled:cursor-default"
+                onKeyDown={(event) => {
+                  if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')
+                    return
+                  event.preventDefault()
+                  move(index, index + (event.key === 'ArrowUp' ? -1 : 1))
+                }}
+              >
+                <GripVerticalIcon className="size-4" />
+              </button>
+            }
+            value={value}
+            fallback={fallback}
+            index={index}
+            count={values.length}
+            disabled={disabled}
+            onView={() => onOpen(index, true)}
+            onEdit={() => onOpen(index, false)}
+            onDelete={() => onDelete(index)}
+            onMove={(to) => move(index, to)}
+          />
+        ))}
       </div>
-      {values.map((value, index) => (
-        <ModelRow
-          key={ids[index]}
-          dropProps={{
-            draggable: !disabled && values.length > 1,
-            onDragStart: (event) => {
-              const control = (event.target as Element).closest(
-                'button, a, input, select, textarea',
-              )
-              if (
-                disabled ||
-                (control && !control.hasAttribute('data-model-drag-handle'))
-              ) {
-                event.preventDefault()
-                return
-              }
-              const row = event.currentTarget
-              const bounds = row.getBoundingClientRect()
-              event.dataTransfer.effectAllowed = 'move'
-              event.dataTransfer.setData('text/plain', ids[index])
-              event.dataTransfer.setDragImage(
-                row,
-                event.clientX - bounds.left,
-                event.clientY - bounds.top,
-              )
-              setDrag({ from: index, to: index })
-            },
-            onDragEnd: () => setDrag(null),
-            onDragOver: (event) => {
-              if (disabled || !drag) return
-              event.preventDefault()
-              event.dataTransfer.dropEffect = 'move'
-              if (drag.to !== index) setDrag({ ...drag, to: index })
-            },
-            onDrop: (event) => {
-              if (disabled || !drag) return
-              event.preventDefault()
-              move(drag.from, index)
-              setDrag(null)
-            },
-          }}
-          dropTarget={
-            !disabled && drag?.to === index && drag.from !== index
-              ? drag.from > index
-                ? 'before'
-                : 'after'
-              : undefined
-          }
-          dragHandle={
-            <button
-              type="button"
-              data-model-drag-handle=""
-              disabled={disabled}
-              aria-label={t('models.dragToReorder', {
-                model: String(value.model || fallback.model || index + 1),
-              })}
-              title={t('models.dragHint')}
-              className="flex size-6 shrink-0 cursor-grab items-center justify-center rounded hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring active:cursor-grabbing disabled:cursor-default"
-              onKeyDown={(event) => {
-                if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
-                event.preventDefault()
-                move(index, index + (event.key === 'ArrowUp' ? -1 : 1))
-              }}
-            >
-              <GripVerticalIcon className="size-4" />
-            </button>
-          }
-          value={value}
-          fallback={fallback}
-          index={index}
-          count={values.length}
-          disabled={disabled}
-          onView={() => onOpen(index, true)}
-          onEdit={() => onOpen(index, false)}
-          onDelete={() => onDelete(index)}
-          onMove={(to) => move(index, to)}
-        />
-      ))}
     </div>
   )
 }
@@ -448,6 +500,7 @@ export function ServerConfigurationEditor() {
     index: number
   } | null>(null)
   const [saved, setSaved] = React.useState(false)
+  const [showAdvanced, setShowAdvanced] = React.useState(false)
   const restartAbort = React.useRef<AbortController | null>(null)
   React.useEffect(() => () => restartAbort.current?.abort(), [api])
   const restartMutation = useMutation({
@@ -665,6 +718,7 @@ export function ServerConfigurationEditor() {
     query.data?.overrides?.account.length,
   )
   const provider = String(editor?.value.provider || '').toLowerCase()
+  const bindingEditor = Boolean(editor && !editor.settings)
   const fields = editor?.settings
     ? editor.kind === 'embedding'
       ? policies
@@ -677,15 +731,49 @@ export function ServerConfigurationEditor() {
       ? bindingFields(editor.kind, provider).map((field) =>
           field.key === 'model' &&
           editor.kind === 'vlm' &&
-          !current(editor.kind).model
+          (editor.index === undefined || !current(editor.kind).model)
             ? { ...field, required: true }
             : field,
         )
       : []
   return (
     <TooltipProvider>
-      <div className="grid min-w-0 gap-8">
-        <div className="grid gap-3 border-b pb-5 text-sm">
+      <div
+        className={styles.modelConfigurationPage}
+        data-advanced={showAdvanced}
+      >
+        <header className={styles.modelConfigurationHeading}>
+          <div className="flex items-center gap-2">
+            <h1>{t('appShell:adminNavigation.modelConfiguration')}</h1>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className={styles.modelAdvancedToggle}
+              aria-label={t('models.advanced')}
+              aria-expanded={showAdvanced}
+              onClick={() => setShowAdvanced(!showAdvanced)}
+            >
+              <MoreHorizontalIcon />
+            </Button>
+          </div>
+          <p>{t('models.designDescription')}</p>
+        </header>
+        <div
+          hidden={
+            !showAdvanced &&
+            !query.isError &&
+            !query.data?.restart_required &&
+            !saved &&
+            !hasOverrides &&
+            query.data?.writable !== false &&
+            !restartMutation.isPending &&
+            !restartMutation.isError &&
+            !mutation.isError &&
+            !query.data?.restart?.rolled_back
+          }
+          className={`${styles.modelConfigurationFileStatus} grid gap-3 border-b pb-5 text-sm`}
+        >
           {loadError}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-3">
@@ -821,7 +909,12 @@ export function ServerConfigurationEditor() {
             }
           }}
         >
-          <TabsList variant="line" aria-label={t('models.editMode')}>
+          <TabsList
+            hidden={!showAdvanced}
+            className={!showAdvanced ? 'hidden' : undefined}
+            variant="line"
+            aria-label={t('models.editMode')}
+          >
             <TabsTrigger value="form" disabled={pending || invalidJson}>
               {t('models.formMode')}
             </TabsTrigger>
@@ -829,7 +922,7 @@ export function ServerConfigurationEditor() {
               {t('models.fileMode')}
             </TabsTrigger>
           </TabsList>
-          <p className="text-sm text-muted-foreground">
+          <p hidden={!showAdvanced} className="text-sm text-muted-foreground">
             {t('models.fileScope')}
           </p>
           {preview.isError && !editor && !confirm && (
@@ -870,7 +963,7 @@ export function ServerConfigurationEditor() {
               )}
             </div>
           </TabsContent>
-          <TabsContent value="form" className="grid min-w-0 gap-8">
+          <TabsContent value="form" className={`grid min-w-0 gap-6`}>
             {visibleModelKinds.map((kind) => {
               if (document?.form_readonly)
                 return (
@@ -894,12 +987,25 @@ export function ServerConfigurationEditor() {
                 <section
                   key={kind}
                   aria-label={t(titles[kind])}
-                  className="min-w-0 border-b pb-6 last:border-b-0"
+                  className={`min-w-0`}
                 >
-                  <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                  <div
+                    className={`${styles.modelSectionHeader} flex flex-wrap items-center justify-between gap-3`}
+                  >
                     <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="text-base font-semibold">
-                        {t(titles[kind])}
+                      <h2 className="text-[13px] font-normal">
+                        {t('models.categoryCount', {
+                          category: t(
+                            kind === 'vlm'
+                              ? 'models.vlmSection'
+                              : 'models.embeddingSection',
+                          ),
+                          count: groups.reduce(
+                            (count, group) =>
+                              count + credentials(group.config).length,
+                            0,
+                          ),
+                        })}
                       </h2>
                       {dirty && (
                         <Badge variant="secondary">{t('models.unsaved')}</Badge>
@@ -908,6 +1014,7 @@ export function ServerConfigurationEditor() {
                     <div className="flex items-center gap-1">
                       <Action
                         label={t('models.parameters')}
+                        className={styles.modelParametersControl}
                         disabled={pending}
                         onClick={() =>
                           open(kind, undefined, undefined, false, true)
@@ -945,6 +1052,7 @@ export function ServerConfigurationEditor() {
                       ) : (
                         <Action
                           label={t('models.addModel')}
+                          className={styles.modelAddAction}
                           disabled={
                             pending || (kind === 'embedding' && !groups.length)
                           }
@@ -958,6 +1066,7 @@ export function ServerConfigurationEditor() {
                           }
                         >
                           <PlusIcon />
+                          <span>{t('models.addModel')}</span>
                         </Action>
                       )}
                     </div>
@@ -965,7 +1074,13 @@ export function ServerConfigurationEditor() {
                   {groups.map((group) => (
                     <div key={group.mode || kind} className="min-w-0">
                       {group.mode && (
-                        <div className="mb-3 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                        <div
+                          className={
+                            showAdvanced || groups.length > 1
+                              ? 'mb-3 flex flex-wrap items-center gap-3 text-xs text-muted-foreground'
+                              : 'sr-only'
+                          }
+                        >
                           <Badge variant="outline">
                             {t(`models.${group.mode}`)}
                           </Badge>
@@ -986,6 +1101,8 @@ export function ServerConfigurationEditor() {
                       )}
                       <ModelList
                         group={`${kind}-${group.mode || ''}`}
+                        kind={kind}
+                        mode={group.mode}
                         values={credentials(group.config)}
                         fallback={group.config}
                         disabled={pending}
@@ -1074,18 +1191,47 @@ export function ServerConfigurationEditor() {
           if (!isOpen && !pending) dismissEditor()
         }}
       >
-        <DialogContent className="gap-0 overflow-hidden rounded-lg p-0 sm:max-w-lg">
-          <DialogHeader className="border-b px-6 py-5 pr-14">
+        <DialogContent
+          showCloseButton={!bindingEditor}
+          overlayClassName={
+            bindingEditor ? styles.modelEditorOverlay : undefined
+          }
+          className={
+            bindingEditor
+              ? styles.modelEditor
+              : 'gap-0 overflow-hidden rounded-lg p-0 sm:max-w-lg'
+          }
+        >
+          <DialogHeader
+            className={
+              bindingEditor
+                ? styles.modelEditorHeader
+                : 'border-b px-6 py-5 pr-14'
+            }
+          >
             <DialogTitle className="text-base">
-              {editor ? t(titles[editor.kind]) : ''} ·{' '}
-              {t(
-                editor?.readonly
-                  ? 'models.view'
-                  : editor?.settings
-                    ? 'models.parameters'
-                    : 'models.edit',
-              )}
+              {bindingEditor && editor
+                ? t('models.editorTitle', {
+                    action: t(
+                      editor.readonly
+                        ? 'models.view'
+                        : editor.index === undefined
+                          ? 'models.addAction'
+                          : 'models.editAction',
+                    ),
+                    kind: t(titles[editor.kind]),
+                  })
+                : `${editor ? t(titles[editor.kind]) : ''} · ${t('models.parameters')}`}
             </DialogTitle>
+            {bindingEditor && editor && (
+              <p className={styles.modelEditorDescription}>
+                {t(
+                  editor.kind === 'vlm'
+                    ? 'models.vlmDescription'
+                    : 'models.embeddingDescription',
+                )}
+              </p>
+            )}
           </DialogHeader>
           {editor && (
             <form
@@ -1095,7 +1241,13 @@ export function ServerConfigurationEditor() {
                 applyEditor()
               }}
             >
-              <div className="grid max-h-[calc(100dvh-14rem)] gap-5 overflow-y-auto px-6 py-5">
+              <div
+                className={
+                  bindingEditor
+                    ? styles.modelEditorBody
+                    : 'grid max-h-[calc(100dvh-14rem)] gap-5 overflow-y-auto px-6 py-5'
+                }
+              >
                 {preview.isError && (
                   <p
                     role="alert"
@@ -1106,15 +1258,18 @@ export function ServerConfigurationEditor() {
                 )}
                 <ModelFields
                   key={`${editor.kind}-${editor.mode}-${editor.index}-${editor.settings}`}
+                  compact={bindingEditor}
                   fields={fields}
                   value={editor.value}
                   inheritedModel={
-                    editor.settings
+                    editor.index === undefined
                       ? undefined
-                      : (editor.mode
-                          ? object(current(editor.kind)[editor.mode])
-                          : current(editor.kind)
-                        ).model
+                      : editor.settings
+                        ? undefined
+                        : (editor.mode
+                            ? object(current(editor.kind)[editor.mode])
+                            : current(editor.kind)
+                          ).model
                   }
                   readOnly={editor.readonly || pending}
                   onChange={(value) => {
@@ -1138,8 +1293,9 @@ export function ServerConfigurationEditor() {
                   }}
                 />
                 {editor.kind === 'vlm' && !editor.settings && (
-                  <div className="grid gap-2 border-t pt-4">
+                  <div className={styles.modelEditorThinking}>
                     <ModelFields
+                      compact
                       prefix="shared-vlm"
                       fields={[{ key: 'thinking', type: 'toggle' }]}
                       value={{ thinking: editor.thinking }}
@@ -1152,24 +1308,8 @@ export function ServerConfigurationEditor() {
                           })
                       }}
                     />
-                    <p className="text-xs text-muted-foreground">
-                      {t('models.thinkingHint')}
-                    </p>
+                    <p className="sr-only">{t('models.thinkingHint')}</p>
                   </div>
-                )}
-                {!editor.settings && (
-                  <ModelConnectionTest
-                    mode={editor.mode}
-                    kind={editor.kind}
-                    config={editor.value}
-                    fallback={
-                      editor.mode
-                        ? object(current(editor.kind)[editor.mode])
-                        : current(editor.kind)
-                    }
-                    thinking={editor.thinking}
-                    disabled={pending}
-                  />
                 )}
                 {editor.kind === 'embedding' && editor.settings && (
                   <>
@@ -1257,7 +1397,29 @@ export function ServerConfigurationEditor() {
                   </details>
                 )}
               </div>
-              <DialogFooter className="flex-row justify-end border-t bg-muted/20 px-6 py-4">
+              <DialogFooter
+                className={
+                  bindingEditor
+                    ? styles.modelEditorFooter
+                    : 'flex-row justify-end border-t bg-muted/20 px-6 py-4'
+                }
+              >
+                {!editor.settings && (
+                  <ModelConnectionTest
+                    variant="compact"
+                    mode={editor.mode}
+                    kind={editor.kind}
+                    config={editor.value}
+                    fallback={
+                      editor.mode
+                        ? object(current(editor.kind)[editor.mode])
+                        : current(editor.kind)
+                    }
+                    thinking={editor.thinking}
+                    disabled={pending}
+                  />
+                )}
+
                 <Button
                   type="button"
                   variant="outline"
@@ -1282,7 +1444,11 @@ export function ServerConfigurationEditor() {
                   </Button>
                 ) : (
                   <Button type="submit" disabled={pending}>
-                    {t('models.apply')}
+                    {t(
+                      bindingEditor && editor.index === undefined
+                        ? 'models.addAction'
+                        : 'models.apply',
+                    )}
                   </Button>
                 )}
               </DialogFooter>

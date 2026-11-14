@@ -1,4 +1,13 @@
 export default {
+  platformBots: '{{platform}}机器人',
+  platformIntegrationHint: 'Viking 问答能力融入团队日常沟通',
+  searchBotsPlaceholder: '搜索机器人…',
+  associatedUser: '关联 User：{{user}}',
+  groupCount: '所在群',
+  questionsLast7Days: '近 7 天提问',
+  statisticsUnavailable: '暂无统计数据',
+  botActions: '管理 {{name}}',
+
   managementTitle: 'VikingBot 管理',
   managementHint: '管理账号下的机器人渠道、应用凭据及平台会话历史。',
   workbenchUnavailable:

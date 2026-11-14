@@ -420,6 +420,7 @@ const resources = {
       },
     },
     filePreview: {
+      viewMode: 'View mode',
       editFailed: 'Unable to load the complete file for editing.',
       saveFailed: 'Unable to save the file.',
       directoryLevels: {
@@ -439,6 +440,7 @@ const resources = {
       jsonFormatFailed: 'JSON formatting failed. Showing the raw content.',
       loadFile: 'Load anyway',
       loadingContent: 'Reading content...',
+      truncated: 'The preview shows only part of this file.',
       loadingEditor: 'Loading editor...',
       markdownPreview: 'Preview',
       markdownSource: 'Source',

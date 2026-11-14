@@ -146,7 +146,7 @@ describe('AddResourceForm watch options', () => {
       </QueryClientProvider>,
     )
 
-    expect(screen.queryByRole('button', { name: 'mode.upload' })).toBeNull()
+    expect(screen.queryByRole('tab', { name: 'mode.upload' })).toBeNull()
     expect(
       screen.queryByRole('button', { name: /sourcePicker.tos/ }),
     ).toBeNull()
@@ -362,7 +362,7 @@ describe('AddResourceForm watch options', () => {
     })
     expect(screen.getByText('destination.tosHint')).toBeTruthy()
 
-    fireEvent.click(screen.getByRole('button', { name: 'mode.upload' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'mode.upload' }))
 
     expect(screen.getByText('destination.parentHint')).toBeTruthy()
     expect(screen.queryByText('destination.tosHint')).toBeNull()

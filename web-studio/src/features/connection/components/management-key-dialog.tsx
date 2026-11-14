@@ -18,7 +18,7 @@ import {
 import { Input } from '#/shared/ui/input'
 import { Label } from '#/shared/ui/label'
 import { useNavigate } from '@tanstack/react-router'
-import { LayoutDashboardIcon, LoaderCircleIcon } from 'lucide-react'
+import { LoaderCircleIcon, UsersRoundIcon } from 'lucide-react'
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -84,12 +84,11 @@ export function ManagementKeyDialog({ className }: { className?: string }) {
     <>
       <Button
         size="sm"
-        variant="outline"
         className={className}
         aria-label={t('appShell:modes.returnManagement')}
         onClick={() => changeOpen(true)}
       >
-        <LayoutDashboardIcon className="size-4" />
+        <UsersRoundIcon className="size-4" />
         <span className="hidden md:inline">
           {t('appShell:modes.returnManagement')}
         </span>

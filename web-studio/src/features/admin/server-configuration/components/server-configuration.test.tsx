@@ -176,7 +176,10 @@ const file = {
 const content = JSON.stringify(file, null, 2)
 async function apply() {
   await act(async () => {
-    fireEvent.click(screen.getByText('models.apply'))
+    fireEvent.click(
+      screen.queryByText('models.addAction') ??
+        screen.getByText('models.apply'),
+    )
   })
 }
 function mount(
@@ -627,7 +630,8 @@ it('retains server diagnostics alongside the localized load failure', async () =
   mount()
   state.get.mockRejectedValue(new Error('Startup file unavailable'))
   await screen.findByText('model-a')
-  // Trigger a public refresh to fail after the initial successful read.
+  // Refresh is available in the advanced configuration controls.
+  fireEvent.click(screen.getByRole('button', { name: 'models.advanced' }))
   fireEvent.click(screen.getByRole('button', { name: 'models.reloadFile' }))
   expect(await screen.findByText('Startup file unavailable')).toBeTruthy()
   expect(screen.getByText('models.loadFailed')).toBeTruthy()
@@ -683,6 +687,7 @@ it('uses localized validation text for invalid JSON', async () => {
 it('shares form edits and whole-file edits across modes, preserving all other sections', async () => {
   mount()
   await screen.findByText('model-a')
+  fireEvent.click(screen.getByRole('button', { name: 'models.advanced' }))
   const tabs = within(screen.getByRole('tablist', { name: 'models.editMode' }))
   expect(
     tabs
@@ -696,6 +701,12 @@ it('shares form edits and whole-file edits across modes, preserving all other se
     target: { value: 'form-draft' },
   })
   await apply()
+  if (
+    screen
+      .getByRole('button', { name: 'models.advanced' })
+      .getAttribute('aria-expanded') !== 'true'
+  )
+    fireEvent.click(screen.getByRole('button', { name: 'models.advanced' }))
   fireEvent.click(screen.getByRole('tab', { name: 'models.fileMode' }))
   expect(
     tabs
@@ -729,6 +740,12 @@ it('shares form edits and whole-file edits across modes, preserving all other se
 it('blocks invalid JSON from saving or switching, then discards the same draft', async () => {
   mount()
   await screen.findByText('model-a')
+  if (
+    screen
+      .getByRole('button', { name: 'models.advanced' })
+      .getAttribute('aria-expanded') !== 'true'
+  )
+    fireEvent.click(screen.getByRole('button', { name: 'models.advanced' }))
   fireEvent.click(screen.getByRole('tab', { name: 'models.fileMode' }))
   const input =
     await screen.findByLabelText<HTMLTextAreaElement>('models.fileContent')
@@ -752,6 +769,12 @@ it('blocks invalid JSON from saving or switching, then discards the same draft',
 it('keeps full-file text and its original revision after validation and save failures', async () => {
   const client = mount()
   await screen.findByText('model-a')
+  if (
+    screen
+      .getByRole('button', { name: 'models.advanced' })
+      .getAttribute('aria-expanded') !== 'true'
+  )
+    fireEvent.click(screen.getByRole('button', { name: 'models.advanced' }))
   fireEvent.click(screen.getByRole('tab', { name: 'models.fileMode' }))
   const text = JSON.stringify({
     ...file,
@@ -859,6 +882,12 @@ it.each(['vlmType', 'embeddingType'])(
 it('allows unquoted environment values in file drafts without resolving them in the browser', async () => {
   mount()
   await screen.findByText('model-a')
+  if (
+    screen
+      .getByRole('button', { name: 'models.advanced' })
+      .getAttribute('aria-expanded') !== 'true'
+  )
+    fireEvent.click(screen.getByRole('button', { name: 'models.advanced' }))
   fireEvent.click(screen.getByRole('tab', { name: 'models.fileMode' }))
   const text = content.replace('"port": 1933', '"port": ${STUDIO_PORT}')
   fireEvent.change(screen.getByLabelText('models.fileContent'), {
@@ -885,7 +914,7 @@ it.each([false, true])(
       section('vlmType').getByRole('button', { name: 'models.parameters' }),
     )
     const thinking = screen.getByRole('switch', {
-      name: 'models.fields.thinking',
+      name: /^models\.(fields\.thinking|thinkingColumn)$/,
     })
     expect(thinking.getAttribute('aria-checked')).toBe(String(initial))
     fireEvent.click(thinking)
@@ -1027,6 +1056,12 @@ it('keeps the entire environment-bound form read-only and offers verbatim file e
   await screen.findAllByText('models.environmentObject')
   expect(section('vlmType').queryAllByRole('button')).toHaveLength(0)
   expect(section('embeddingType').queryAllByRole('button')).toHaveLength(0)
+  if (
+    screen
+      .getByRole('button', { name: 'models.advanced' })
+      .getAttribute('aria-expanded') !== 'true'
+  )
+    fireEvent.click(screen.getByRole('button', { name: 'models.advanced' }))
   fireEvent.click(screen.getByRole('tab', { name: 'models.fileMode' }))
   const text = content.replace('"port": 1933', '"port": ${STUDIO_PORT}')
   fireEvent.change(await screen.findByLabelText('models.fileContent'), {
@@ -1163,7 +1198,9 @@ it.each(['addModel', 'edit'])(
     )
     expect(screen.getByText('models.thinkingHint')).toBeTruthy()
     fireEvent.click(
-      screen.getByRole('switch', { name: 'models.fields.thinking' }),
+      screen.getByRole('switch', {
+        name: /^models\.(fields\.thinking|thinkingColumn)$/,
+      }),
     )
     if (action === 'addModel') {
       fireEvent.change(screen.getByLabelText('models.fields.model'), {
@@ -1192,7 +1229,9 @@ it('discards thinking changes when the model dialog is cancelled', async () => {
     section('vlmType').getAllByRole('button', { name: 'models.edit' })[0],
   )
   fireEvent.click(
-    screen.getByRole('switch', { name: 'models.fields.thinking' }),
+    screen.getByRole('switch', {
+      name: /^models\.(fields\.thinking|thinkingColumn)$/,
+    }),
   )
   fireEvent.click(screen.getByRole('button', { name: 'models.dismiss' }))
   expect(state.preview).not.toHaveBeenCalled()
@@ -1318,13 +1357,37 @@ it('shows safe model authentication failures from the server', async () => {
 
 it('keeps model row controls clickable without starting a drag', async () => {
   mount()
-  const model = await screen.findByRole('button', {
-    name: 'model-a',
-    exact: true,
-  })
+  await screen.findByText('model-a')
+  const model = section('vlmType').getAllByRole('button', {
+    name: 'models.view',
+  })[0]
   const transfer = { setData: vi.fn(), setDragImage: vi.fn() }
   expect(fireEvent.dragStart(model, { dataTransfer: transfer })).toBe(false)
   expect(transfer.setDragImage).not.toHaveBeenCalled()
   fireEvent.click(model)
   expect(await screen.findByRole('dialog')).toBeTruthy()
+})
+
+it('shows real row-test status without saving or restarting configuration', async () => {
+  state.testModel.mockResolvedValue({ ok: true, ms: 12 })
+  mount()
+  await screen.findByText('model-a')
+  expect(screen.queryByText('models.rowHealthy')).toBeNull()
+  expect(screen.queryByText('secret-a')).toBeNull()
+  expect(section('vlmType').getAllByText('models.rowUntested')).toHaveLength(2)
+  fireEvent.click(
+    section('vlmType').getAllByRole('button', {
+      name: 'models.connectionTest.action',
+    })[0],
+  )
+  expect(await screen.findByText('models.rowHealthy')).toBeTruthy()
+  expect(state.testModel).toHaveBeenCalledWith(
+    expect.objectContaining({
+      kind: 'vlm',
+      config: expect.objectContaining({ model: 'model-a' }),
+    }),
+    expect.any(AbortSignal),
+  )
+  expect(state.save).not.toHaveBeenCalled()
+  expect(state.restart).not.toHaveBeenCalled()
 })

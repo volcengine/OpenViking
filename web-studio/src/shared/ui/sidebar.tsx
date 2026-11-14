@@ -76,6 +76,7 @@ function useSidebar() {
 function SidebarProvider({
   defaultOpen = true,
   open: openProp,
+  desktopToggleEnabled = true,
   onOpenChange: setOpenProp,
   className,
   style,
@@ -83,6 +84,7 @@ function SidebarProvider({
   ...props
 }: React.ComponentProps<'div'> & {
   defaultOpen?: boolean
+  desktopToggleEnabled?: boolean
   open?: boolean
   onOpenChange?: (open: boolean) => void
 }) {
@@ -117,6 +119,7 @@ function SidebarProvider({
 
   // Adds a keyboard shortcut to toggle the sidebar.
   React.useEffect(() => {
+    if (!isMobile && !desktopToggleEnabled) return
     const handleKeyDown = (event: KeyboardEvent) => {
       if (
         event.key === SIDEBAR_KEYBOARD_SHORTCUT &&
@@ -129,7 +132,7 @@ function SidebarProvider({
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [toggleSidebar])
+  }, [desktopToggleEnabled, isMobile, toggleSidebar])
 
   // We add a state so that we can do data-state="expanded" or "collapsed".
   // This makes it easier to style the sidebar with Tailwind classes.
@@ -210,7 +213,7 @@ function Sidebar({
           data-sidebar="sidebar"
           data-slot="sidebar"
           data-mobile="true"
-          className="w-(--sidebar-width) bg-sidebar p-0 text-sidebar-foreground [&>button]:hidden"
+          className="studio-mobile-sidebar w-(--sidebar-width) max-w-[calc(100%-2rem)] gap-0 bg-sidebar p-0 text-sidebar-foreground"
           style={
             {
               '--sidebar-width': SIDEBAR_WIDTH_MOBILE,
@@ -218,11 +221,13 @@ function Sidebar({
           }
           side={side}
         >
-          <SheetHeader className="sr-only">
-            <SheetTitle>{t('ui.sidebar')}</SheetTitle>
-            <SheetDescription>{t('ui.mobileSidebar')}</SheetDescription>
+          <SheetHeader className="h-14 shrink-0 justify-center border-b pr-14">
+            <SheetTitle className="text-base">{t('ui.sidebar')}</SheetTitle>
+            <SheetDescription className="sr-only">
+              {t('ui.mobileSidebar')}
+            </SheetDescription>
           </SheetHeader>
-          <div className="flex h-full w-full flex-col">{children}</div>
+          <div className="flex min-h-0 flex-1 flex-col">{children}</div>
         </SheetContent>
       </Sheet>
     )
@@ -280,7 +285,7 @@ function SidebarTrigger({
   ...props
 }: React.ComponentProps<typeof Button>) {
   const { t } = useTranslation('common')
-  const { toggleSidebar } = useSidebar()
+  const { isMobile, openMobile, toggleSidebar } = useSidebar()
 
   return (
     <Button
@@ -288,6 +293,7 @@ function SidebarTrigger({
       data-slot="sidebar-trigger"
       variant="ghost"
       size="icon-sm"
+      aria-expanded={isMobile ? openMobile : undefined}
       className={cn(className)}
       onClick={(event) => {
         onClick?.(event)

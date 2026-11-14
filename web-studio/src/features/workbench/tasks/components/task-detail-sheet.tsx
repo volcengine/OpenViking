@@ -42,15 +42,20 @@ import {
 } from '#/features/workbench/tasks/lib/task-record'
 
 type TaskDetailSheetProps = {
+  headers?: Record<string, string>
   identityScopeKey: string
   onOpenChange: (open: boolean) => void
   open: boolean
   taskId: string | null
 }
 
-async function fetchTask(taskId: string): Promise<TaskRecord> {
+async function fetchTask(
+  taskId: string,
+  headers?: Record<string, string>,
+): Promise<TaskRecord> {
   const result = await getOvResult<unknown>(
     getTaskByTaskId({
+      ...(headers ? { headers } : {}),
       path: { task_id: taskId },
       query: { include_events: true },
     }),
@@ -61,6 +66,7 @@ async function fetchTask(taskId: string): Promise<TaskRecord> {
 }
 
 export function TaskDetailSheet({
+  headers,
   identityScopeKey,
   onOpenChange,
   open,
@@ -69,7 +75,7 @@ export function TaskDetailSheet({
   const { i18n, t } = useTranslation('tasksPage')
   const detailQuery = useQuery({
     enabled: open && Boolean(taskId),
-    queryFn: () => fetchTask(taskId || ''),
+    queryFn: () => fetchTask(taskId || '', headers),
     queryKey: ['task-detail', identityScopeKey, taskId],
     refetchInterval: (query) => {
       const status = normalizeTaskStatus(query.state.data?.status)

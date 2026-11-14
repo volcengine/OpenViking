@@ -39,6 +39,7 @@ export function RequestLogFilters({
 
   return (
     <form
+      data-log-filters
       className="grid min-w-0 grid-cols-[minmax(12rem,1fr)_6.5rem_9rem_auto_auto_auto_auto] items-center gap-2"
       onSubmit={(event) => {
         event.preventDefault()
@@ -82,12 +83,16 @@ export function RequestLogFilters({
         placeholder={t('filters.apiTypePlaceholder')}
         className="w-full"
       />
-      <div className="flex rounded-md border bg-background p-0.5">
+      <div
+        data-log-types
+        className="flex rounded-md border bg-background p-0.5"
+      >
         {LOG_TYPE_FILTERS.map((item) => (
           <button
             key={item}
             type="button"
             onClick={() => onLogTypeChange(item)}
+            aria-pressed={filters.logType === item}
             className={cn(
               'h-8 whitespace-nowrap rounded-sm px-3 text-sm text-muted-foreground transition-colors hover:text-foreground',
               filters.logType === item && 'bg-muted text-foreground shadow-xs',

@@ -15,6 +15,19 @@ const KEY_STORE = 'keys'
 
 class CredentialStorageUnavailable extends Error {}
 class CredentialKeyMissing extends Error {}
+class CredentialStorageConflict extends Error {}
+
+function reportStorageError(error: unknown) {
+  window.dispatchEvent(
+    new CustomEvent('ov-credential-storage-error', {
+      detail:
+        error instanceof CredentialStorageConflict ? 'conflict' : 'unavailable',
+    }),
+  )
+}
+function reportStorageRecovery() {
+  window.dispatchEvent(new Event('ov-credential-storage-saved'))
+}
 
 function encode(bytes: Uint8Array): string {
   return btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(''))
@@ -105,7 +118,8 @@ export class CredentialStorage {
   constructor(
     private readonly storage: Pick<Storage, 'getItem' | 'setItem'>,
     private readonly getKey = browserKey,
-    private readonly onError: () => void = () => {},
+    private readonly onError: (error: unknown) => void = () => {},
+    private readonly onRecovery: () => void = () => {},
   ) {}
 
   initialize(): Promise<void> {
@@ -125,18 +139,7 @@ export class CredentialStorage {
     const decoded = await Promise.all(
       entries.map(async ([slot, raw]) => {
         if (!raw) return [slot, null] as const
-        if (!isEncrypted(raw)) return [slot, raw] as const
-        const envelope = JSON.parse(raw)
-        const bytes = await crypto.subtle.decrypt(
-          {
-            name: 'AES-GCM',
-            iv: decode(envelope.iv),
-            additionalData: new TextEncoder().encode(slot),
-          },
-          this.key!,
-          decode(envelope.ciphertext),
-        )
-        return [slot, new TextDecoder().decode(bytes)] as const
+        return [slot, await this.decrypt(slot, raw)] as const
       }),
     )
     // Decrypt everything before migrating anything. Corruption must not erase profiles.
@@ -159,11 +162,12 @@ export class CredentialStorage {
       .catch(() => {})
       .then(async () => {
         await this.encryptAndStore(slot, value)
-        this.failures.delete(slot)
+        const recovered = this.failures.delete(slot)
+        if (recovered && this.failures.size === 0) this.onRecovery()
       })
     void this.pending.catch((error: unknown) => {
       this.failures.set(slot, error)
-      this.onError()
+      this.onError(error)
     })
   }
 
@@ -176,6 +180,21 @@ export class CredentialStorage {
     if (this.failures.size) throw this.failures.values().next().value
   }
 
+  private async decrypt(slot: Slot, raw: string): Promise<string> {
+    if (!isEncrypted(raw)) return raw
+    const envelope = JSON.parse(raw)
+    const bytes = await crypto.subtle.decrypt(
+      {
+        name: 'AES-GCM',
+        iv: decode(envelope.iv),
+        additionalData: new TextEncoder().encode(slot),
+      },
+      this.key!,
+      decode(envelope.ciphertext),
+    )
+    return new TextDecoder().decode(bytes)
+  }
+
   private async encryptAndStore(slot: Slot, value: string) {
     const iv = crypto.getRandomValues(new Uint8Array(12))
     const ciphertext = await crypto.subtle.encrypt(
@@ -185,8 +204,20 @@ export class CredentialStorage {
     )
     // Another tab must not silently replace newly saved User credentials with
     // its older in-memory profile list. Keep the newer record intact.
-    if (this.storage.getItem(slot) !== (this.persisted.get(slot) ?? null))
-      throw new Error('Credentials changed in another tab')
+    const current = this.storage.getItem(slot)
+    if (current !== (this.persisted.get(slot) ?? null)) {
+      // Different IVs can represent exactly the same saved connection.
+      if (
+        current &&
+        isEncrypted(current) &&
+        (await this.decrypt(slot, current)) === value &&
+        this.storage.getItem(slot) === current
+      ) {
+        this.persisted.set(slot, current)
+        return
+      }
+      throw new CredentialStorageConflict('Credentials changed in another tab')
+    }
     const encrypted = JSON.stringify({
       format: FORMAT,
       iv: encode(iv),
@@ -224,15 +255,19 @@ class PlaintextCredentialStorage extends SessionCredentialStorage {
   override write(slot: Slot, value: string) {
     try {
       // A tab using encrypted storage or newer credentials must win.
-      if (this.disk.getItem(slot) !== this.persisted.get(slot))
-        throw new Error('Credentials changed in another tab')
+      const current = this.disk.getItem(slot)
+      if (current !== this.persisted.get(slot) && current !== value)
+        throw new CredentialStorageConflict(
+          'Credentials changed in another tab',
+        )
       this.disk.setItem(slot, value)
       this.persisted.set(slot, value)
       super.write(slot, value)
-      this.failures.delete(slot)
+      const recovered = this.failures.delete(slot)
+      if (recovered && this.failures.size === 0) reportStorageRecovery()
     } catch (error) {
       this.failures.set(slot, error)
-      window.dispatchEvent(new Event('ov-credential-storage-error'))
+      reportStorageError(error)
       throw error
     }
   }
@@ -275,9 +310,12 @@ export async function initializeCredentialStorage(): Promise<void> {
     typeof crypto.subtle === 'undefined' ||
     typeof indexedDB === 'undefined'
       ? unencryptedStorage()
-      : new CredentialStorage(window.localStorage, browserKey, () => {
-          window.dispatchEvent(new Event('ov-credential-storage-error'))
-        })
+      : new CredentialStorage(
+          window.localStorage,
+          browserKey,
+          reportStorageError,
+          reportStorageRecovery,
+        )
   try {
     await storage.initialize()
   } catch (error) {

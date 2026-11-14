@@ -6,7 +6,11 @@ import { toast } from 'sonner'
 import { afterEach, expect, it, vi } from 'vitest'
 
 import { DataManagementDialog } from '#/features/workbench/filesystem/components/data-management-dialog'
-import { importOvpack } from '#/features/workbench/filesystem/lib/data-management'
+import {
+  commitSnapshot,
+  importOvpack,
+  listSnapshots,
+} from '#/features/workbench/filesystem/lib/data-management'
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -17,6 +21,7 @@ vi.mock('sonner', () => ({
 }))
 
 vi.mock('#/features/workbench/filesystem/lib/data-management', () => ({
+  commitSnapshot: vi.fn(),
   createDataManagementClient: () => ({ client: {} }),
   exportOvpack: vi.fn(),
   importOvpack: vi.fn(),
@@ -24,6 +29,85 @@ vi.mock('#/features/workbench/filesystem/lib/data-management', () => ({
 }))
 
 afterEach(cleanup)
+
+const scanLimitError = new Error(
+  'snapshot log scan limit exceeded: scanned 1000/1000 commits, matched 0/20',
+)
+
+function renderHistory() {
+  const onChanged = vi.fn()
+  render(
+    <DataManagementDialog
+      mode="history"
+      uri="viking://resources/guide.md"
+      isDirectory={false}
+      onClose={vi.fn()}
+      onCompare={vi.fn()}
+      onChanged={onChanged}
+    />,
+  )
+  return onChanged
+}
+
+it('ends loading and reports incomplete history at the scan limit', async () => {
+  vi.mocked(listSnapshots).mockRejectedValueOnce(scanLimitError)
+  renderHistory()
+
+  expect(screen.getByRole('status').textContent).toBe('loading')
+  expect((await screen.findByRole('alert')).textContent).toBe(
+    'historyScanLimit',
+  )
+  expect(screen.queryByText('loading')).toBeNull()
+  expect(screen.queryByText('noSnapshots')).toBeNull()
+})
+
+it('reports a successful save even when refreshing history reaches the scan limit', async () => {
+  vi.mocked(listSnapshots)
+    .mockResolvedValueOnce([])
+    .mockRejectedValueOnce(scanLimitError)
+  vi.mocked(commitSnapshot).mockResolvedValueOnce({
+    result: 'ok',
+    commit_oid: 'saved',
+  })
+  const onChanged = renderHistory()
+  await screen.findByText('noSnapshots')
+
+  const user = userEvent.setup()
+  await user.type(
+    screen.getByRole('textbox', { name: 'message' }),
+    'My snapshot',
+  )
+  await user.click(screen.getByRole('button', { name: 'saveSnapshot' }))
+
+  expect((await screen.findByRole('alert')).textContent).toBe(
+    'historyScanLimit',
+  )
+  expect(toast.success).toHaveBeenCalledWith('snapshotSaved')
+  expect(onChanged).toHaveBeenCalledOnce()
+  expect(screen.getByRole('textbox', { name: 'message' })).toHaveProperty(
+    'value',
+    '',
+  )
+})
+
+it('offers only export when the directory cannot be written', () => {
+  render(
+    <DataManagementDialog
+      mode="transfer"
+      initialTransferTab="import"
+      allowImport={false}
+      uri="viking://resources/project/"
+      isDirectory
+      onClose={vi.fn()}
+      onCompare={vi.fn()}
+      onChanged={vi.fn()}
+    />,
+  )
+
+  expect(screen.getByRole('button', { name: 'exportAction' })).toBeTruthy()
+  expect(screen.queryByRole('tab', { name: 'importTab' })).toBeNull()
+  expect(screen.queryByLabelText('chooseFile')).toBeNull()
+})
 
 it('shows a loading button, then closes and refreshes after a successful import', async () => {
   let completeImport!: (value: { uri: string }) => void
@@ -141,3 +225,27 @@ it('keeps the selected OVPack file while switching between import and export', a
     expect.objectContaining({ length: 1 }),
   )
 })
+
+it.each(['import', 'export'] as const)(
+  'opens the requested %s tab',
+  (initialTransferTab) => {
+    render(
+      <DataManagementDialog
+        mode="transfer"
+        initialTransferTab={initialTransferTab}
+        uri="viking://resources/project/"
+        isDirectory
+        onClose={vi.fn()}
+        onCompare={vi.fn()}
+        onChanged={vi.fn()}
+      />,
+    )
+    expect(
+      screen
+        .getByRole('tab', {
+          name: initialTransferTab === 'import' ? 'importTab' : 'exportTab',
+        })
+        .getAttribute('aria-selected'),
+    ).toBe('true')
+  },
+)

@@ -1,448 +1,142 @@
-import { useDefaultConversationTitles } from '#/features/workbench/sessions/lib/use-default-conversation-titles'
-import {
-  CheckCircle2Icon,
-  CircleAlertIcon,
-  HistoryIcon,
-  Loader2Icon,
-  SparklesIcon,
-  SquarePenIcon,
-} from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { useCallback, useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-
+import type { VikingBotProps } from '@openviking/react/components/viking-bot'
+import { Loader2Icon, CircleAlertIcon, Trash2Icon } from 'lucide-react'
 import { useAppConnection } from '#/features/connection/hooks/use-app-connection'
-import { Composer } from '#/features/workbench/sessions/components/composer'
 import { DeleteConversation } from '#/features/workbench/sessions/components/delete-conversation'
-import { MessageList } from '#/features/workbench/sessions/components/message-list'
-import { useChat } from '#/features/workbench/sessions/lib/use-chat'
+import { useDefaultConversationTitles } from '#/features/workbench/sessions/lib/use-default-conversation-titles'
 import { useSessionTitles } from '#/features/workbench/sessions/lib/use-session-titles'
 import {
   useBotHealth,
-  useCreateSession,
   useSessionListByRecency,
-  useSessionMessages,
 } from '#/features/workbench/sessions/lib/use-sessions'
-import {
-  createVikingBotWebSessionId,
-  isVikingBotWebSession,
-} from '#/features/workbench/sessions/lib/vikingbot-sessions'
-import { cn } from '#/shared/lib/utils'
+import { isVikingBotWebSession } from '#/features/workbench/sessions/lib/vikingbot-sessions'
+import { copyTextToClipboard } from '#/shared/lib/clipboard'
 import { Button } from '#/shared/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '#/shared/ui/dialog'
-
-import type { ResourceOpenHandler } from '#/features/workbench/filesystem/lib/types'
 import {
   getErrorMessage,
   readFilesystemAgentSessionIds,
   registerFilesystemAgentSessionId,
-} from '#/features/workbench/filesystem/lib/utils'
+} from '../lib/utils'
 
+// Only host metadata and navigation live here. Console owns chat and its editor.
 export function AgentPanel({
   initialSessionId,
-  onOpenResource,
   onSessionChange,
-  toolbarContainer,
+  children,
 }: {
   initialSessionId?: string
-  onOpenResource: ResourceOpenHandler
-  onSessionChange: (sessionId: string) => void
-  toolbarContainer: HTMLDivElement | null
+  onSessionChange: (id: string) => void
+  children: (conversation: Partial<VikingBotProps>) => ReactNode
 }) {
-  const { t } = useTranslation('filesystem')
+  const { t } = useTranslation(['filesystem', 'sessions'])
   const { identityScopeKey } = useAppConnection()
-  const [sessionId, setSessionId] = useState(
-    initialSessionId ?? createVikingBotWebSessionId(),
+  const [sessionId, setSessionId] = useState(initialSessionId)
+  const [deleteSessionId, setDeleteSessionId] = useState<string>()
+  const [filesystemSessionIds, setFilesystemSessionIds] = useState(() =>
+    readFilesystemAgentSessionIds(identityScopeKey),
   )
-  const [historyOpen, setHistoryOpen] = useState(false)
-  const [sessionError, setSessionError] = useState<string | null>(null)
-  const [isCreatingSession, setIsCreatingSession] = useState(false)
-  const [historySessionId, setHistorySessionId] = useState(initialSessionId)
-  const [persistedSessionId, setPersistedSessionId] = useState(initialSessionId)
-  const creationStartedRef = useRef(false)
-  const creationGenerationRef = useRef(0)
-  useEffect(
-    () => () => {
-      creationGenerationRef.current += 1
-    },
-    [],
-  )
-  const botHealth = useBotHealth()
-  const createSession = useCreateSession()
-  const { data: sessions, isLoading: isLoadingSessions } =
-    useSessionListByRecency()
+  const health = useBotHealth()
+  const sessions = useSessionListByRecency()
   const { getTitle, removeTitle } = useSessionTitles(identityScopeKey)
-  const [filesystemSessionIds, setFilesystemSessionIds] = useState<string[]>(
-    () => readFilesystemAgentSessionIds(identityScopeKey),
+  useEffect(() => {
+    setSessionId(initialSessionId)
+  }, [initialSessionId])
+  const history = sessions.data.filter((item) =>
+    isVikingBotWebSession(item, filesystemSessionIds),
   )
   useDefaultConversationTitles(
     identityScopeKey,
-    sessions
-      .filter((session) => isVikingBotWebSession(session, filesystemSessionIds))
-      .map((session) => session.session_id),
+    history.map((item) => item.session_id),
   )
-  const { data: historyMessages } = useSessionMessages(historySessionId)
-  const chat = useChat({
-    identityScopeKey,
-    initialMessages: historyMessages,
-    persistMessages: true,
-    sessionId,
-  })
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const bottomRef = useRef<HTMLDivElement>(null)
-
-  const handleNewSession = useCallback(() => {
-    if (isCreatingSession) return
-    creationGenerationRef.current += 1
-    chat.abort({ closeLocalStream: true, discardPartial: true })
-    chat.setMessages([])
-    creationStartedRef.current = false
-    setSessionError(null)
-    setHistorySessionId(undefined)
-    setPersistedSessionId(undefined)
-    setSessionId(createVikingBotWebSessionId())
+  const select = useCallback(
+    (id: string) => {
+      setSessionId(id)
+      setFilesystemSessionIds(
+        registerFilesystemAgentSessionId(id, identityScopeKey),
+      )
+      onSessionChange(id)
+    },
+    [identityScopeKey, onSessionChange],
+  )
+  const reset = useCallback(() => {
+    setSessionId(undefined)
     onSessionChange('')
-    setHistoryOpen(false)
-  }, [chat, isCreatingSession, onSessionChange])
-
-  const handleSwitchSession = useCallback(
-    (nextSessionId: string) => {
-      creationGenerationRef.current += 1
-      chat.abort({ closeLocalStream: true, discardPartial: true })
-      creationStartedRef.current = false
-      setSessionError(null)
-      setIsCreatingSession(false)
-      setFilesystemSessionIds(
-        registerFilesystemAgentSessionId(nextSessionId, identityScopeKey),
-      )
-      setHistorySessionId(nextSessionId)
-      setPersistedSessionId(nextSessionId)
-      setSessionId(nextSessionId)
-      onSessionChange(nextSessionId)
-      setHistoryOpen(false)
+  }, [onSessionChange])
+  const error = health.isError ? getErrorMessage(health.error) : ''
+  const prompts = t('agent.empty.prompts', { returnObjects: true })
+  const conversation: Partial<VikingBotProps> = {
+    isAvailable: !error && !health.isLoading,
+    unavailableMessage: error ? t('agent.botDisabledFooter') : undefined,
+    labels: {
+      welcomeTitle: t('agent.empty.heading'),
+      welcomeDescription: t('agent.empty.body'),
+      sessionHistory: t('agent.history'),
+      newSession: t('agent.newSession'),
+      thinking: t('sessions:chat.generating'),
+      reasoning: t('sessions:chat.reasoning'),
+      copy: t('sessions:chat.copy'),
     },
-    [chat, identityScopeKey, onSessionChange],
-  )
-
-  // Only publish IDs that exist on the server; drafts must not survive in the URL.
-  useEffect(() => {
-    if (persistedSessionId) {
-      setFilesystemSessionIds(
-        registerFilesystemAgentSessionId(persistedSessionId, identityScopeKey),
-      )
-    }
-  }, [identityScopeKey, persistedSessionId])
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [
-    chat.messages.length,
-    chat.streamingContent,
-    chat.streamingReasoning,
-    chat.streamingToolCalls,
-    chat.streamingInsertIndex,
-  ])
-
-  const send = useCallback(
-    async (message: string) => {
-      if (creationStartedRef.current) return false
-      if (!persistedSessionId) {
-        const generation = ++creationGenerationRef.current
-        creationStartedRef.current = true
-        setIsCreatingSession(true)
-        setSessionError(null)
-        try {
-          const result = await createSession.mutateAsync(sessionId)
-          if (generation !== creationGenerationRef.current) return false
-          setPersistedSessionId(result.session_id)
-          onSessionChange(result.session_id)
-        } catch (error) {
-          if (generation === creationGenerationRef.current) {
-            setSessionError(getErrorMessage(error))
-          }
-          return false
-        } finally {
-          if (generation === creationGenerationRef.current) {
-            creationStartedRef.current = false
-            setIsCreatingSession(false)
-          }
-        }
-      }
-      const sending = chat.send(message)
-      if (chat.status === 'streaming') {
-        await sending
-      }
-      return true
+    quickInputs: Array.isArray(prompts)
+      ? prompts
+          .filter((item): item is string => typeof item === 'string')
+          .map((prompt) => ({ id: prompt, label: prompt, prompt }))
+      : [],
+    onCopy: (text) => void copyTextToClipboard(text),
+    sessions: {
+      items: history.map((item) => ({
+        id: item.session_id,
+        title: getTitle(item.session_id),
+      })),
+      currentId: sessionId,
+      isLoading: sessions.isLoading,
+      onSelect: select,
+      onNew: reset,
     },
-    [chat, createSession, onSessionChange, persistedSessionId, sessionId],
-  )
-
-  const isStreaming = chat.status === 'streaming'
-  const botModeError = botHealth.isError ? getErrorMessage(botHealth.error) : ''
-  const sessionTitle = getTitle(sessionId)
-  const displayedSessionTitle =
-    sessionTitle === sessionId ? t('agent.newSessionTitle') : sessionTitle
-  const reversedSessions = useMemo(() => {
-    return sessions.filter((session) =>
-      isVikingBotWebSession(session, filesystemSessionIds),
-    )
-  }, [sessions, filesystemSessionIds])
-
+    headerActions: sessionId ? (
+      <SessionDeleteAction
+        title={getTitle(sessionId)}
+        onClick={() => setDeleteSessionId(sessionId)}
+      />
+    ) : undefined,
+    messageList: health.isLoading ? (
+      <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
+        <Loader2Icon className="size-4 animate-spin" />
+        {t('agent.detectingBot')}
+      </div>
+    ) : error ? (
+      <BotModePrompt detail={error} onRetry={() => void health.refetch()} />
+    ) : undefined,
+    composer: error ? false : undefined,
+  }
   return (
     <>
-      <AgentToolbar
-        container={toolbarContainer}
-        historyLabel={t('agent.history')}
-        isCreatingSession={isCreatingSession}
-        newSessionLabel={t('agent.newSession')}
-        onNewSession={() => void handleNewSession()}
-        onOpenHistory={() => setHistoryOpen(true)}
-        sessionTitle={displayedSessionTitle}
-        showNewSession={Boolean(
-          persistedSessionId || chat.messages.length || sessionError,
-        )}
-      />
-      <div className="flex min-h-0 flex-1 flex-col">
-        <div
-          ref={scrollRef}
-          className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
-        >
-          {botHealth.isLoading ? (
-            <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
-              <Loader2Icon className="size-4 animate-spin" />
-              {t('agent.detectingBot')}
-            </div>
-          ) : botModeError ? (
-            <BotModePrompt
-              detail={botModeError}
-              onRetry={() => void botHealth.refetch()}
-            />
-          ) : sessionError ? (
-            <div className="grid gap-3 rounded-lg border border-destructive/25 bg-destructive/5 p-3 text-sm text-destructive">
-              <div>{t('agent.createFailed', { error: sessionError })}</div>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="w-fit"
-                onClick={() => {
-                  setSessionError(null)
-                  void handleNewSession()
-                }}
-              >
-                {t('agent.retry')}
-              </Button>
-            </div>
-          ) : chat.messages.length === 0 && !isStreaming ? (
-            <AgentEmptyState onSend={send} />
-          ) : (
-            <MessageList
-              layout="expanded"
-              messages={chat.messages}
-              onResourceClick={onOpenResource}
-              streaming={
-                isStreaming
-                  ? {
-                      iteration: chat.iteration,
-                      parts: chat.streamingParts,
-                      insertIndex: chat.streamingInsertIndex,
-                    }
-                  : undefined
-              }
-            />
-          )}
-          <div ref={bottomRef} />
-        </div>
-
-        {botModeError ? (
-          <div className="border-t bg-background/80 px-4 py-3 text-center text-sm text-muted-foreground">
-            {t('agent.botDisabledFooter')}
-          </div>
-        ) : (
-          <div className="border-t bg-background/80">
-            <Composer
-              key={sessionId}
-              variant="compact"
-              isStreaming={isStreaming}
-              onCancel={chat.abort}
-              onSend={send}
-            />
-          </div>
-        )}
-      </div>
-
-      <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
-        <DialogContent className="gap-4 sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{t('agent.historyTitle')}</DialogTitle>
-            <DialogDescription>
-              {t('agent.historyDescription')}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="max-h-[420px] overflow-y-auto pr-1">
-            {isLoadingSessions ? (
-              <div className="flex items-center gap-2 rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">
-                <Loader2Icon className="size-4 animate-spin" />
-                {t('agent.loadingSessions')}
-              </div>
-            ) : reversedSessions.length === 0 ? (
-              <div className="rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">
-                {t('agent.noSessions')}
-              </div>
-            ) : (
-              <div className="grid gap-2">
-                {reversedSessions.map((session) => {
-                  const active = session.session_id === sessionId
-                  const title = getTitle(session.session_id)
-
-                  return (
-                    <div
-                      key={session.session_id}
-                      className="group/conversation flex items-center gap-1"
-                    >
-                      <button
-                        type="button"
-                        className={cn(
-                          'flex min-w-0 flex-1 items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors hover:border-primary/45 hover:bg-muted/45',
-                          active
-                            ? 'border-primary/60 bg-primary/10'
-                            : 'border-border bg-background',
-                        )}
-                        onClick={() => handleSwitchSession(session.session_id)}
-                      >
-                        <HistoryIcon className="size-4 shrink-0 text-muted-foreground" />
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm font-medium text-foreground">
-                            {title}
-                          </span>
-                          <span className="block truncate font-mono text-[11px] text-muted-foreground">
-                            {session.session_id}
-                          </span>
-                        </span>
-                        {active ? (
-                          <CheckCircle2Icon className="size-4 shrink-0 text-primary" />
-                        ) : null}
-                      </button>
-                      <DeleteConversation
-                        id={session.session_id}
-                        title={title}
-                        onDeleted={() => {
-                          removeTitle(session.session_id)
-                          setFilesystemSessionIds((ids) =>
-                            ids.filter((id) => id !== session.session_id),
-                          )
-                          if (session.session_id === sessionId) {
-                            creationGenerationRef.current += 1
-                            chat.abort({
-                              closeLocalStream: true,
-                              discardPartial: true,
-                            })
-                            chat.setMessages([])
-                            creationStartedRef.current = false
-                            setIsCreatingSession(false)
-                            setSessionError(null)
-                            setHistorySessionId(undefined)
-                            setPersistedSessionId(undefined)
-                            setSessionId(createVikingBotWebSessionId())
-                            onSessionChange('')
-                            setHistoryOpen(false)
-                          }
-                        }}
-                      />
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-          <Button
-            type="button"
-            className="w-full"
-            onClick={() => void handleNewSession()}
-            disabled={isCreatingSession}
-          >
-            {isCreatingSession ? (
-              <Loader2Icon className="size-4 animate-spin" />
-            ) : (
-              <SquarePenIcon className="size-4" />
-            )}
-            {t('agent.newSession')}
-          </Button>
-        </DialogContent>
-      </Dialog>
+      {children(conversation)}
+      {deleteSessionId ? (
+        <DeleteConversation
+          defaultOpen
+          hideTrigger
+          id={deleteSessionId}
+          title={getTitle(deleteSessionId)}
+          onOpenChange={(open) => {
+            if (!open) setDeleteSessionId(undefined)
+          }}
+          onDeleted={() => {
+            setDeleteSessionId(undefined)
+            removeTitle(deleteSessionId)
+            setFilesystemSessionIds((ids) =>
+              ids.filter((id) => id !== deleteSessionId),
+            )
+            if (deleteSessionId === sessionId) reset()
+          }}
+        />
+      ) : null}
     </>
   )
 }
 
-export function AgentToolbar({
-  container,
-  historyLabel,
-  isCreatingSession,
-  newSessionLabel,
-  onNewSession,
-  onOpenHistory,
-  sessionTitle,
-  showNewSession,
-}: {
-  container: HTMLDivElement | null
-  historyLabel: string
-  isCreatingSession: boolean
-  newSessionLabel: string
-  onNewSession: () => void
-  onOpenHistory: () => void
-  sessionTitle: string
-  showNewSession: boolean
-}) {
-  if (!container) return null
-
-  return createPortal(
-    <>
-      <span
-        className="min-w-0 max-w-48 truncate px-1 text-sm font-medium text-foreground"
-        title={sessionTitle}
-      >
-        {sessionTitle}
-      </span>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        className="size-7 shrink-0"
-        title={historyLabel}
-        onClick={onOpenHistory}
-      >
-        <HistoryIcon className="size-3.5" />
-      </Button>
-      {showNewSession ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="size-7 shrink-0"
-          title={newSessionLabel}
-          aria-label={newSessionLabel}
-          disabled={isCreatingSession}
-          onClick={onNewSession}
-        >
-          {isCreatingSession ? (
-            <Loader2Icon className="size-3.5 animate-spin" />
-          ) : (
-            <SquarePenIcon className="size-3.5" />
-          )}
-        </Button>
-      ) : null}
-    </>,
-    container,
-  )
-}
-
-export function BotModePrompt({
+function BotModePrompt({
   detail,
   onRetry,
 }: {
@@ -487,38 +181,22 @@ export function BotModePrompt({
   )
 }
 
-export function AgentEmptyState({
-  onSend,
+function SessionDeleteAction({
+  title,
+  onClick,
 }: {
-  onSend: (message: string) => void
+  title: string
+  onClick: () => void
 }) {
-  const { t } = useTranslation('filesystem')
-  const prompts = t('agent.empty.prompts', {
-    returnObjects: true,
-  }) as string[]
+  const { t } = useTranslation('sessions')
   return (
-    <div className="flex h-full flex-col justify-end gap-4 pb-4">
-      <div className="rounded-xl border bg-background p-4">
-        <div className="mb-2 flex items-center gap-2 text-sm font-semibold">
-          <SparklesIcon className="size-4 text-primary" />
-          {t('agent.empty.heading')}
-        </div>
-        <p className="text-sm leading-6 text-muted-foreground">
-          {t('agent.empty.body')}
-        </p>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {prompts.map((prompt) => (
-          <button
-            key={prompt}
-            type="button"
-            className="rounded-lg border bg-background px-3 py-2 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
-            onClick={() => onSend(prompt)}
-          >
-            {prompt}
-          </button>
-        ))}
-      </div>
-    </div>
+    <Button
+      variant="ghost"
+      size="icon"
+      aria-label={t('threadList.deleteSession', { title })}
+      onClick={onClick}
+    >
+      <Trash2Icon className="size-4" />
+    </Button>
   )
 }

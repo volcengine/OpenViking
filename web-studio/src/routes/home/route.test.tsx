@@ -9,6 +9,7 @@ import {
   within,
 } from '@testing-library/react'
 import type { ComponentType } from 'react'
+import type * as ReactI18next from 'react-i18next'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { Route } from '#/routes/home/route'
@@ -37,7 +38,8 @@ vi.mock('#/features/workbench/home/lib/api', () => ({
   fetchConsoleTokenSeries: state.tokens,
   fetchConsoleContextCommits: state.commits,
 }))
-vi.mock('react-i18next', () => ({
+vi.mock('react-i18next', async (importOriginal) => ({
+  ...(await importOriginal<typeof ReactI18next>()),
   useTranslation: () => ({ t: (key: string) => key }),
 }))
 beforeEach(() => {

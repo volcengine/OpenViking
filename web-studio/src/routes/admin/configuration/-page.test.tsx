@@ -3,6 +3,10 @@ import { OpenVikingConfigurationPage } from '#/features/admin/account-configurat
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 
+vi.mock('#/features/admin/users/components/admin-scope-filters', () => ({
+  AdminScopeFilters: () => <div>scope-filter</div>,
+}))
+
 const state = vi.hoisted(() => ({ role: 'admin' }))
 vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({

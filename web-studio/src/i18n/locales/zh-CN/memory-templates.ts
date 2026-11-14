@@ -1,4 +1,20 @@
 export default {
+  search: '搜索...',
+  searchLabel: '搜索记忆抽取规则',
+  noResults: '没有匹配的记忆抽取规则',
+  viewAndConfigure: '查看和配置',
+  overviewHints: {
+    profile:
+      '记住用户是谁：身份、背景与长期状态的总览。将存储于文件系统 Profile.md 中',
+    preferences:
+      '用户喜欢、讨厌或习惯怎样做事，按主题沉淀。将存储于文件系统 Preferences.md 中',
+    entities:
+      '用户提及的重要人物、组织、地点、产品与关系卡片。将存储于文件系统 Entities.md 中',
+    events:
+      '值得未来回忆的事件、决定、承诺与结果，按时间归档将存储于文件系统 events.md 中',
+    soul: '助手持续遵循的核心价值、边界、气质与连续性原则',
+    identity: '助手的名字、身份设定、表达气质和自我介绍',
+  },
   tab: '抽取规则',
   title: '记忆抽取规则',
   subtitle:

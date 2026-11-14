@@ -1,18 +1,31 @@
+import { UserApiKeyCell } from './components/user-api-key-cell'
+import { UserSpaceSwitcher } from './components/user-space-switcher'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from '#/shared/ui/dropdown-menu'
+import { adminUsersQuery } from './lib/admin-membership-queries'
 import { ErrorMessage } from '#/shared/components/error-message'
 import { showErrorToast } from '#/shared/lib/error-toast'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, Outlet, useNavigate } from '@tanstack/react-router'
 import {
-  CheckIcon,
-  CopyIcon,
+  Link,
+  Outlet,
+  useNavigate,
+  useRouterState,
+} from '@tanstack/react-router'
+import {
   KeyRoundIcon,
   LoaderCircleIcon,
   PlusIcon,
-  RefreshCwIcon,
   RotateCwIcon,
+  CircleHelpIcon,
+  SearchIcon,
+  EllipsisIcon,
   ShieldAlertIcon,
   Trash2Icon,
-  UsersRoundIcon,
 } from 'lucide-react'
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
@@ -32,7 +45,6 @@ import type {
 } from '#/shared/api/admin'
 import {
   createAdminUser,
-  fetchAdminUsersPage,
   regenerateAdminUserKey,
   removeAdminUser,
   updateAdminUserRole,
@@ -70,30 +82,47 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '#/shared/ui/tooltip'
 
 import { AddUserDialog } from '#/features/admin/users/components/add-user-dialog'
 import { RootSetupGuide } from '#/features/admin/users/components/root-setup-guide'
-import { DeleteAccountButton } from '#/features/admin/users/components/delete-account-button'
 import { UserMemoryPolicyCell } from '#/features/admin/users/components/user-memory-policy-cell'
-import { UserRoleCell } from '#/features/admin/users/components/user-role-cell'
 import { getErrorMessage } from '#/shared/lib/error'
 
-function maskApiKey(value: string | undefined): string {
-  if (!value) {
-    return '-'
-  }
-  if (value.length <= 16) {
-    return value
-  }
-  return `${value.slice(0, 10)}...${value.slice(-6)}`
-}
-
-function resolveKeyLabel(user: AdminUser): string {
-  return user.apiKey ? maskApiKey(user.apiKey) : user.keyPrefix || '-'
-}
-
 export function UserManagementRoute() {
-  return <Outlet />
+  const { t } = useTranslation(['appShell', 'settings'])
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  })
+  const current = pathname.replace(/\/$/, '')
+  if (current !== '/admin/users' && current !== '/admin/users/groups')
+    return <Outlet />
+
+  return (
+    <section className="studio-users-page">
+      <header className="users-page-heading">
+        <h1>{t('adminNavigation.users')}</h1>
+        <Tooltip>
+          <TooltipTrigger
+            aria-label={t('userManagement.help')}
+            render={<button type="button" />}
+          >
+            <CircleHelpIcon />
+          </TooltipTrigger>
+          <TooltipContent>{t('userManagement.help')}</TooltipContent>
+        </Tooltip>
+      </header>
+      <div className="users-security-notice">
+        <ShieldAlertIcon aria-hidden="true" />
+        <div>
+          <p>{t('userManagement.keyNotice')}</p>
+          <p>{t('userManagement.agentNotice')}</p>
+        </div>
+      </div>
+      <Outlet />
+    </section>
+  )
 }
 
-export function UserManagementPanel() {
+export function UserManagementPanel({
+  navigation,
+}: { navigation?: React.ReactNode } = {}) {
   const { t } = useTranslation('settings')
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -159,22 +188,11 @@ export function UserManagementPanel() {
       canManageUsers &&
       Boolean(connection.accountId) &&
       searchQuery === userList.search,
-    queryFn: () =>
-      fetchAdminUsersPage(adminConnection, connection.accountId, {
-        page: userList.page,
-        pageSize: userList.pageSize,
-        search: searchQuery,
-      }),
-    queryKey: [
-      'managed-users',
-      adminConnection.baseUrl,
-      adminConnection.apiKey,
-      connection.accountId,
-      userList.page,
-      userList.pageSize,
-      searchQuery,
-    ],
-    retry: false,
+    ...adminUsersQuery(adminConnection, {
+      page: userList.page,
+      pageSize: userList.pageSize,
+      search: searchQuery,
+    }),
   })
   const memberships = useUserGroupMemberships(
     adminConnection,
@@ -184,7 +202,6 @@ export function UserManagementPanel() {
   const total = usersQuery.data?.total ?? 0
   const accountTotal = usersQuery.data?.accountTotal ?? 0
   const managerCount = usersQuery.data?.managerCount ?? 0
-  const visibleKeys = usersQuery.data?.keyCount ?? 0
   const pageCount = Math.max(1, Math.ceil(total / userList.pageSize))
   React.useEffect(() => {
     if (usersQuery.isSuccess && userList.page > pageCount)
@@ -200,7 +217,6 @@ export function UserManagementPanel() {
       setAddUserOpen(false)
       toast.success(t('toast.userCreated'))
       await queryClient.invalidateQueries({ queryKey: ['managed-users'] })
-      await queryClient.invalidateQueries({ queryKey: ['account-switcher'] })
     },
   })
 
@@ -256,7 +272,6 @@ export function UserManagementPanel() {
       setPendingRemoveUser(null)
       toast.success(t('toast.userRemoved', { user: user.userId }))
       await queryClient.invalidateQueries({ queryKey: ['managed-users'] })
-      await queryClient.invalidateQueries({ queryKey: ['account-switcher'] })
     },
   })
 
@@ -330,121 +345,40 @@ export function UserManagementPanel() {
   }
 
   return (
-    <div className="flex w-full min-w-0 flex-col gap-5">
-      <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div className="flex min-w-0 flex-col gap-2">
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {t('management.title')}
-          </h1>
-          <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-            {t('management.currentAccountDescription')}
-          </p>
+    <div className="users-member-panel">
+      <div className="users-toolbar">
+        <div className="users-toolbar-navigation">
+          <UserSpaceSwitcher canManageAccounts={canManageAccounts} />
+          {navigation}
         </div>
-        <div className="flex shrink-0 flex-wrap gap-2">
-          {canManageAccounts ? (
-            <DeleteAccountButton
-              accountId={connection.accountId}
-              adminConnection={adminConnection}
+        <div className="users-toolbar-actions">
+          <div className="users-search">
+            <SearchIcon aria-hidden="true" />
+            <Input
+              type="search"
+              aria-label={t('userList.search')}
+              placeholder={t('appShell:userManagement.search')}
+              value={userList.search}
+              onChange={(event) => userList.setSearch(event.target.value)}
             />
-          ) : null}
+          </div>
           <Button
             type="button"
-            variant="outline"
-            onClick={() => {
-              void usersQuery.refetch()
-              void queryClient.invalidateQueries({
-                queryKey: [
-                  'managed-groups',
-                  adminConnection.baseUrl,
-                  adminConnection.accountId,
-                  adminConnection.apiKey,
-                ],
-              })
-              void queryClient.invalidateQueries({
-                queryKey: [
-                  'managed-group-members',
-                  adminConnection.baseUrl,
-                  adminConnection.accountId,
-                  adminConnection.apiKey,
-                ],
-              })
-              void queryClient.invalidateQueries({
-                queryKey: [
-                  'user-memory-settings',
-                  adminConnection.baseUrl,
-                  adminConnection.apiKey,
-                  connection.accountId,
-                ],
-              })
-            }}
-            disabled={usersQuery.isFetching}
+            className="users-add-button"
+            onClick={() => setAddUserOpen(true)}
           >
-            <RefreshCwIcon
-              className={usersQuery.isFetching ? 'animate-spin' : undefined}
-            />
-            {t('actions.refresh')}
-          </Button>
-          <Button type="button" onClick={() => setAddUserOpen(true)}>
             <PlusIcon />
-            {t('actions.addUser')}
+            {t('appShell:userManagement.addMember')}
           </Button>
         </div>
-      </header>
+      </div>
 
       <RootSetupGuide onCreate={() => setAddUserOpen(true)} />
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Card className="bg-card/70 py-4">
-          <CardContent className="flex items-center justify-between gap-4 px-5">
-            <div>
-              <p className="text-sm text-muted-foreground">
-                {t('stats.users')}
-              </p>
-              <p className="mt-1 text-2xl font-semibold tabular-nums">
-                {usersQuery.isSuccess ? accountTotal : '-'}
-              </p>
-            </div>
-            <div className="flex size-10 items-center justify-center rounded-md border bg-background/70 text-primary">
-              <UsersRoundIcon className="size-4" />
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="bg-card/70 py-4">
-          <CardContent className="flex items-center justify-between gap-4 px-5">
-            <div>
-              <p className="text-sm text-muted-foreground">
-                {t('stats.apiKeys')}
-              </p>
-              <p className="mt-1 text-2xl font-semibold tabular-nums">
-                {usersQuery.isSuccess ? visibleKeys : '-'}
-              </p>
-            </div>
-            <div className="flex size-10 items-center justify-center rounded-md border bg-background/70 text-primary">
-              <KeyRoundIcon className="size-4" />
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card className="overflow-hidden">
-        <CardHeader className="border-b bg-muted/20">
-          <CardTitle>{t('management.memberListTitle')}</CardTitle>
-          <CardDescription>
-            {t(
-              canManageAccounts
-                ? 'management.memberListDescriptionRoot'
-                : 'management.memberListDescription',
-            )}
-          </CardDescription>
-          <Input
-            type="search"
-            className="max-w-sm"
-            aria-label={t('userList.search')}
-            placeholder={t('userList.search')}
-            value={userList.search}
-            onChange={(event) => userList.setSearch(event.target.value)}
-          />
-        </CardHeader>
+      <Card
+        className="users-member-table gap-0 overflow-hidden py-0"
+        aria-label={t('management.memberListTitle')}
+      >
         <CardContent className="p-0">
           {usersQuery.isPending || searchQuery !== userList.search ? (
             <div className="flex min-h-56 items-center justify-center gap-2 text-sm text-muted-foreground">
@@ -474,14 +408,13 @@ export function UserManagementPanel() {
               <Table>
                 <TableHeader>
                   <TableRow className="bg-muted/20 hover:bg-muted/20">
-                    <TableHead>{t('table.user')}</TableHead>
-                    <TableHead>{t('table.role')}</TableHead>
-                    <TableHead>{t('table.groups')}</TableHead>
-                    <TableHead>{t('memoryPolicy.title')}</TableHead>
-                    <TableHead>{t('table.apiKey')}</TableHead>
-                    <TableHead className="text-right">
-                      {t('table.actions')}
+                    <TableHead>{t('appShell:userManagement.userId')}</TableHead>
+                    <TableHead>
+                      {t('appShell:userManagement.apiKeys')}
                     </TableHead>
+                    <TableHead>{t('memoryPolicy.title')}</TableHead>
+                    <TableHead>{t('table.groups')}</TableHead>
+                    <TableHead>{t('table.actions')}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -496,7 +429,6 @@ export function UserManagementPanel() {
                     const canSwitchIdentity =
                       !isCurrentIdentity &&
                       (serverMode === 'trusted' || Boolean(user.apiKey))
-                    const isSwitching = switchingIdentityKey === identityKey
                     const isLastManager =
                       (user.role === 'admin' || user.role === 'root') &&
                       managerCount <= 1
@@ -515,54 +447,43 @@ export function UserManagementPanel() {
                           isCurrentIdentity ? 'bg-primary/[0.025]' : ''
                         }
                       >
-                        <TableCell className="font-medium">
-                          <div className="group/user flex items-center gap-2">
-                            <span className="truncate">{user.userId}</span>
+                        <TableCell>
+                          <div className="users-user-identity">
+                            <span
+                              aria-hidden="true"
+                              className="users-user-avatar"
+                            >
+                              {Array.from(user.userId).slice(0, 2).join('')}
+                            </span>
+                            <span className="truncate" title={user.userId}>
+                              {user.userId}
+                            </span>
                             {isCurrentIdentity ? (
-                              <Badge
-                                variant="secondary"
-                                className="gap-1 font-normal"
-                              >
-                                <CheckIcon />
+                              <span className="sr-only">
                                 {t('actions.currentIdentity')}
-                              </Badge>
+                              </span>
                             ) : null}
-                            {canSwitchIdentity ? (
-                              <Button
-                                type="button"
-                                variant="secondary"
-                                size="xs"
-                                disabled={Boolean(switchingIdentityKey)}
-                                className={
-                                  isSwitching
-                                    ? 'opacity-100'
-                                    : 'opacity-0 transition-opacity group-hover/user:opacity-100 group-focus-within/user:opacity-100 [@media(hover:none)]:opacity-100'
-                                }
-                                onClick={() => void useUserIdentity(user)}
+                            {user.role === 'admin' || user.role === 'root' ? (
+                              <Badge
+                                variant="outline"
+                                className="users-admin-badge"
                               >
-                                {isSwitching ? (
-                                  <LoaderCircleIcon className="animate-spin" />
-                                ) : (
-                                  <KeyRoundIcon />
-                                )}
-                                {t('actions.switchIdentity')}
-                              </Button>
+                                {t(`roles.${user.role}`)}
+                              </Badge>
                             ) : null}
                           </div>
                         </TableCell>
                         <TableCell>
-                          <UserRoleCell
-                            userId={user.userId}
-                            role={user.role}
-                            editable={canManageUsers}
-                            pending={updateRole.isPending}
-                            onChange={(role) =>
-                              setPendingRoleChange({
-                                accountId: user.accountId,
-                                userId: user.userId,
-                                role,
-                              })
-                            }
+                          <UserApiKeyCell
+                            key={`${adminConnection.baseUrl}:${user.apiKey ?? user.keyPrefix}`}
+                            user={user}
+                            onCopy={(value) => void copyKey(value)}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <UserMemoryPolicyCell
+                            connection={adminConnection}
+                            user={user}
                           />
                         </TableCell>
                         <TableCell>
@@ -586,9 +507,7 @@ export function UserManagementPanel() {
                               ))}
                             </details>
                           ) : userGroups.length === 0 ? (
-                            <span className="text-muted-foreground">
-                              {t('groups.notJoined')}
-                            </span>
+                            <span className="text-muted-foreground">—</span>
                           ) : (
                             <div
                               className="flex max-w-56 items-center gap-1.5"
@@ -612,107 +531,88 @@ export function UserManagementPanel() {
                           )}
                         </TableCell>
                         <TableCell>
-                          <UserMemoryPolicyCell
-                            connection={adminConnection}
-                            user={user}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex min-w-0 items-center gap-1">
-                            <code className="max-w-[20rem] truncate rounded-md border bg-muted/40 px-2 py-1 font-mono text-xs">
-                              {resolveKeyLabel(user)}
-                            </code>
-                            {user.apiKey ? (
-                              <Tooltip>
-                                <TooltipTrigger
-                                  render={
-                                    <Button
-                                      type="button"
-                                      variant="ghost"
-                                      size="icon-xs"
-                                      aria-label={t('actions.copy')}
-                                      onClick={() => void copyKey(user.apiKey)}
-                                    />
-                                  }
-                                >
-                                  <CopyIcon />
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  {t('actions.copy')}
-                                </TooltipContent>
-                              </Tooltip>
-                            ) : null}
-                            {serverMode !== 'trusted' && (
-                              <div className="ml-1 flex items-center border-l border-border/70 pl-1.5">
-                                <Tooltip>
-                                  <TooltipTrigger
-                                    render={
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="icon-xs"
-                                        aria-label={t('actions.regenerate')}
-                                        onClick={() =>
-                                          setPendingRegenerateUser(user)
-                                        }
-                                        disabled={
-                                          regenerateKey.isPending ||
-                                          Boolean(switchingIdentityKey)
-                                        }
-                                      />
-                                    }
-                                  >
-                                    <RotateCwIcon />
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    {t('actions.regenerate')}
-                                  </TooltipContent>
-                                </Tooltip>
-                              </div>
-                            )}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center justify-end gap-1">
-                            <Tooltip>
-                              <TooltipTrigger
-                                render={
-                                  <span
-                                    className="inline-flex"
-                                    title={removeDisabledReason}
-                                  />
-                                }
-                              >
+                          <DropdownMenu>
+                            <DropdownMenuTrigger
+                              render={
                                 <Button
-                                  type="button"
                                   variant="ghost"
                                   size="icon-sm"
-                                  disabled={removeDisabled}
-                                  className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                                  aria-label={t('actions.removeUser', {
-                                    user: user.userId,
-                                  })}
-                                  onClick={() => setPendingRemoveUser(user)}
+                                  aria-label={t(
+                                    'appShell:userManagement.userActions',
+                                    { user: user.userId },
+                                  )}
+                                />
+                              }
+                            >
+                              <EllipsisIcon />
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-48">
+                              {canSwitchIdentity ? (
+                                <DropdownMenuItem
+                                  disabled={Boolean(switchingIdentityKey)}
+                                  onClick={() => void useUserIdentity(user)}
                                 >
-                                  <Trash2Icon />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                {removeDisabledReason}
-                              </TooltipContent>
-                            </Tooltip>
-                          </div>
+                                  <KeyRoundIcon />
+                                  {t('actions.switchIdentity')}
+                                </DropdownMenuItem>
+                              ) : null}
+                              {user.role === 'user' || user.role === 'admin' ? (
+                                <DropdownMenuItem
+                                  disabled={updateRole.isPending}
+                                  onClick={() =>
+                                    setPendingRoleChange({
+                                      accountId: user.accountId,
+                                      userId: user.userId,
+                                      role:
+                                        user.role === 'admin'
+                                          ? 'user'
+                                          : 'admin',
+                                    })
+                                  }
+                                >
+                                  {t(
+                                    user.role === 'admin'
+                                      ? 'appShell:userManagement.makeMember'
+                                      : 'appShell:userManagement.makeAdmin',
+                                  )}
+                                </DropdownMenuItem>
+                              ) : null}
+                              {serverMode !== 'trusted' ? (
+                                <DropdownMenuItem
+                                  disabled={
+                                    regenerateKey.isPending ||
+                                    Boolean(switchingIdentityKey)
+                                  }
+                                  onClick={() => setPendingRegenerateUser(user)}
+                                >
+                                  <RotateCwIcon />
+                                  {t('actions.regenerate')}
+                                </DropdownMenuItem>
+                              ) : null}
+                              <DropdownMenuItem
+                                variant="destructive"
+                                disabled={removeDisabled}
+                                title={removeDisabledReason}
+                                onClick={() => setPendingRemoveUser(user)}
+                              >
+                                <Trash2Icon />
+                                {t('actions.removeUser', { user: user.userId })}
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </TableCell>
                       </TableRow>
                     )
                   })}
                 </TableBody>
               </Table>
-              <UserPagination
-                {...userList}
-                total={total}
-                pageCount={pageCount}
-              />
+              {total > userList.pageSize ? (
+                <UserPagination
+                  {...userList}
+                  total={total}
+                  pageCount={pageCount}
+                />
+              ) : null}
             </div>
           )}
         </CardContent>

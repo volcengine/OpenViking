@@ -1,0 +1,106 @@
+.page {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 24px;
+}
+
+.header h1 {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 28px;
+}
+
+.scope,
+.hint {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 22px;
+}
+
+.scope {
+  margin-top: 8px;
+}
+
+.directories {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.toolbar {
+  display: flex;
+  min-height: 32px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.table {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.table :global([data-slot='table']) {
+  min-width: 640px;
+  font-size: 13px;
+}
+
+.table :global([data-slot='table-head']) {
+  height: 40px;
+  padding: 0 16px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-weight: 500;
+}
+
+.table :global([data-slot='table-cell']) {
+  height: 56px;
+  padding: 12px 16px;
+  vertical-align: middle;
+}
+
+.table :global([data-slot='table-row']) {
+  border-color: var(--border);
+}
+
+.directoryLink {
+  display: flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 8px;
+  border-radius: 4px;
+  color: var(--foreground);
+  text-align: left;
+  cursor: pointer;
+}
+
+.directoryLink:hover {
+  color: var(--primary);
+}
+
+.directoryLink:focus-visible {
+  outline: 1px solid var(--primary);
+  outline-offset: 3px;
+}
+
+.grants {
+  display: grid;
+  gap: 4px;
+  line-height: 22px;
+}
+
+.manageButton {
+  height: 28px;
+  padding: 0 8px;
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 400;
+}

@@ -1,5 +1,6 @@
+import { adminGroupsQuery } from './admin-membership-queries'
 import type { AdminConnection } from '#/shared/api/admin'
-import { fetchAdminGroupMembers, fetchAdminGroups } from '#/shared/api/admin'
+import { fetchAdminGroupMembers } from '#/shared/api/admin'
 import { useQueries, useQuery } from '@tanstack/react-query'
 
 export function useUserGroupMemberships(
@@ -8,10 +9,8 @@ export function useUserGroupMemberships(
 ) {
   const scope = [connection.baseUrl, connection.accountId, connection.apiKey]
   const groups = useQuery({
-    queryKey: ['managed-groups', ...scope],
-    queryFn: () => fetchAdminGroups(connection),
+    ...adminGroupsQuery(connection),
     enabled,
-    retry: false,
   })
   const populatedGroups =
     groups.data?.filter((group) => group.member_count > 0) ?? []

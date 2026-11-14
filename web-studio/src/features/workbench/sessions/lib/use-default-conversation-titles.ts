@@ -5,6 +5,8 @@ import { useEffect } from 'react'
 
 const PLACEHOLDERS = new Set([
   '新建对话',
+  '新建会话',
+  'New Session',
   '新建工作台会话',
   '新建文件系统会话',
   'New conversation',

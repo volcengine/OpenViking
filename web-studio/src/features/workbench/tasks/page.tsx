@@ -1,3 +1,7 @@
+import {
+  AdminScopeFilters,
+  useAdminUserScope,
+} from '#/features/admin/users/components/admin-scope-filters'
 import { showErrorToast } from '#/shared/lib/error-toast'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
@@ -8,7 +12,6 @@ import {
   CircleDashedIcon,
   CircleXIcon,
   ClipboardListIcon,
-  LayersIcon,
   LoaderCircleIcon,
   RefreshCwIcon,
   RotateCcwIcon,
@@ -86,10 +89,19 @@ const TASK_STATUS_OPTIONS: Exclude<TaskStatusFilter, 'all'>[] = [
   'cancelled',
 ]
 
-export function TasksRoute() {
+export function TasksRoute({
+  management = false,
+}: { management?: boolean } = {}) {
   const navigate = useNavigate()
-  const { t } = useTranslation('tasksPage')
-  const { identityScopeKey } = useAppConnection()
+  const { t } = useTranslation(['tasksPage', 'appShell'])
+  const { identityScopeKey, connection } = useAppConnection()
+  const {
+    headers: taskHeaders,
+    scopeKey,
+    isLoading: isScopeLoading,
+    unavailableKey,
+    userFilter,
+  } = useAdminUserScope(management, 'tasks')
   const queryClient = useQueryClient()
   const [page, setPage] = React.useState(1)
   const [pageSize, setPageSize] = React.useState(DEFAULT_PAGE_SIZE)
@@ -100,22 +112,32 @@ export function TasksRoute() {
   const [selectedTaskId, setSelectedTaskId] = React.useState<string | null>(
     null,
   )
+  const taskScopeUnavailable = taskHeaders === null
+  const taskIdentityScopeKey = management
+    ? `management/${scopeKey}`
+    : `workbench/${identityScopeKey}`
   const tasksQuery = useQuery({
-    queryFn: () => fetchTasks(taskType, statusFilter),
-    queryKey: ['tasks', identityScopeKey, taskType, statusFilter],
+    enabled: !isScopeLoading && !taskScopeUnavailable,
+    meta: { adminSpaceScope: management ? scopeKey : undefined },
+    queryFn: () => fetchTasks(taskType, statusFilter, taskHeaders ?? undefined),
+    queryKey: ['tasks', taskIdentityScopeKey, taskType, statusFilter],
     refetchInterval: 10_000,
   })
+  React.useEffect(() => {
+    setPage(1)
+    setSelectedTaskId(null)
+  }, [taskIdentityScopeKey])
   const rawTasks = tasksQuery.data ?? []
   const allTasks = React.useMemo(() => {
     if (!dedupByResource) return rawTasks
     const map = new Map<string, TaskRecord>()
-    for (const t of rawTasks) {
+    for (const taskItem of rawTasks) {
       const key =
-        t.resource_id && t.task_type !== 'compile'
-          ? `res:${t.resource_id}`
-          : `task:${t.task_id}`
+        taskItem.resource_id && taskItem.task_type !== 'compile'
+          ? `res:${taskItem.resource_id}`
+          : `task:${taskItem.task_id}`
       if (!map.has(key)) {
-        map.set(key, t)
+        map.set(key, taskItem)
       }
     }
     return Array.from(map.values())
@@ -126,6 +148,7 @@ export function TasksRoute() {
   const hasNext = page < totalPages
   const hasActiveFilters = taskType !== 'all' || statusFilter !== 'all'
 
+  const canRetry = !taskScopeUnavailable
   const retryMutation = useMutation({
     mutationFn: async (task: TaskRecord) => {
       if (task.task_id?.startsWith('mock_task_')) {
@@ -137,7 +160,11 @@ export function TasksRoute() {
 
       // ── 1. task_type 精确匹配优先（不受 URI 前缀干扰）──────────────────────
       if (task.task_type === 'session_commit') {
-        const res = await commitSession(task.resource_id)
+        const res = await commitSession(
+          task.resource_id,
+          undefined,
+          taskHeaders ?? undefined,
+        )
         if (res.status === 'skipped' || res.reason === 'no_messages') {
           return { res, task, skippedReason: res.reason ?? 'skipped' }
         }
@@ -146,10 +173,11 @@ export function TasksRoute() {
       const resourceUri = task.resource_id || ''
 
       if (resourceUri.startsWith('viking://')) {
-        const resp = await ovClient.instance.post('/api/v1/content/reindex', {
-          uri: resourceUri,
-          wait: false,
-        })
+        const resp = await ovClient.instance.post(
+          '/api/v1/content/reindex',
+          { uri: resourceUri, wait: false },
+          { headers: taskHeaders ?? undefined },
+        )
         const json = resp.data
         if (json.status === 'error' || json.error) {
           throw new Error(
@@ -165,6 +193,7 @@ export function TasksRoute() {
       ) {
         const res = await getOvResult(
           postResources({
+            ...(taskHeaders ? { headers: taskHeaders } : {}),
             body: {
               path: resourceUri,
               reason: `Re-queued task: ${task.task_id}`,
@@ -174,10 +203,11 @@ export function TasksRoute() {
         return { res, task }
       }
 
-      const resp = await ovClient.instance.post('/api/v1/content/reindex', {
-        uri: resourceUri,
-        wait: false,
-      })
+      const resp = await ovClient.instance.post(
+        '/api/v1/content/reindex',
+        { uri: resourceUri, wait: false },
+        { headers: taskHeaders ?? undefined },
+      )
       const json = resp.data
       if (json.status === 'error' || json.error) {
         throw new Error(
@@ -253,11 +283,11 @@ export function TasksRoute() {
     return 45
   }
 
-  const getTaskTotalSteps = (taskType?: string): number => {
-    if (taskType === 'session_commit') return 1
-    if (taskType === 'admin_reindex' || taskType === 'snapshot_restore_reindex')
+  const getTaskTotalSteps = (type?: string): number => {
+    if (type === 'session_commit') return 1
+    if (type === 'admin_reindex' || type === 'snapshot_restore_reindex')
       return 2
-    if (taskType === 'connector_import') return 4
+    if (type === 'connector_import') return 4
     return 3
   }
 
@@ -298,24 +328,26 @@ export function TasksRoute() {
         {status === 'running' && (
           <span className="font-mono font-semibold ml-0.5">{pct}%</span>
         )}
-        {status === 'failed' && (
-          <button
-            type="button"
-            disabled={isRetrying}
-            className="ml-1 inline-flex items-center justify-center rounded p-0.5 hover:bg-white/25 active:scale-95 transition-all cursor-pointer text-destructive-foreground disabled:opacity-50"
-            title={t('actions.retrigger')}
-            onClick={(e) => {
-              e.stopPropagation()
-              retryMutation.mutate(task)
-            }}
-          >
-            {isRetrying ? (
-              <LoaderCircleIcon className="size-3 shrink-0 animate-spin" />
-            ) : (
-              <RotateCcwIcon className="size-3 shrink-0" />
-            )}
-          </button>
-        )}
+        {status === 'failed' &&
+          canRetry &&
+          (!management || task.resource_id) && (
+            <button
+              type="button"
+              disabled={isRetrying}
+              className="ml-1 inline-flex items-center justify-center rounded p-0.5 hover:bg-white/25 active:scale-95 transition-all cursor-pointer text-destructive-foreground disabled:opacity-50"
+              title={t('actions.retrigger')}
+              onClick={(e) => {
+                e.stopPropagation()
+                retryMutation.mutate(task)
+              }}
+            >
+              {isRetrying ? (
+                <LoaderCircleIcon className="size-3 shrink-0 animate-spin" />
+              ) : (
+                <RotateCcwIcon className="size-3 shrink-0" />
+              )}
+            </button>
+          )}
       </Badge>
     )
   }
@@ -536,10 +568,10 @@ export function TasksRoute() {
         const processing = matchingTasks.filter(
           (taskItem) => normalizeTaskStatus(taskItem.status) === 'running',
         ).length
-        const pending = matchingTasks.filter(
+        const pendingCount = matchingTasks.filter(
           (taskItem) => normalizeTaskStatus(taskItem.status) === 'pending',
         ).length
-        const completed = matchingTasks.filter(
+        const completedCount = matchingTasks.filter(
           (taskItem) => normalizeTaskStatus(taskItem.status) === 'completed',
         ).length
         const errors = matchingTasks.filter(
@@ -548,8 +580,8 @@ export function TasksRoute() {
         return {
           name: t(`types.${typeKey}` as any, { defaultValue: typeKey }),
           processing,
-          pending,
-          completed,
+          pending: pendingCount,
+          completed: completedCount,
           errors,
           total: count,
         }
@@ -585,12 +617,22 @@ export function TasksRoute() {
     }
   }, [allTasks, t])
 
+  if (isScopeLoading) return <LoaderCircleIcon className="animate-spin" />
+
+  if (taskScopeUnavailable)
+    return (
+      <div className="grid gap-4">
+        {management && <AdminScopeFilters userFilter={userFilter} />}
+        <p role="status">{t(unavailableKey)}</p>
+      </div>
+    )
+
   return (
     <div className="flex w-full min-w-0 flex-col gap-4">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="grid gap-1.5">
           <h1 className="text-2xl font-semibold tracking-tight">
-            {t('title')}
+            {management ? t('appShell:adminNavigation.tasks') : t('title')}
           </h1>
           <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
             {t('description')}
@@ -613,8 +655,9 @@ export function TasksRoute() {
       </header>
 
       {/* 4 大 Task 核心运行 KPI 观察行 */}
+      {management ? <AdminScopeFilters userFilter={userFilter} /> : null}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Card className="flex flex-col gap-1 p-3 shadow-none transition-colors hover:border-primary/40">
+        <Card className="flex flex-col gap-1 border-transparent bg-muted/55 p-4 shadow-none">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
             <span className="font-medium">{t('labels.successRate')}</span>
           </div>
@@ -631,7 +674,7 @@ export function TasksRoute() {
           </p>
         </Card>
 
-        <Card className="flex flex-col gap-1 p-3 shadow-none transition-colors hover:border-primary/40">
+        <Card className="flex flex-col gap-1 border-transparent bg-muted/55 p-4 shadow-none">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
             <span className="font-medium">{t('labels.avgDuration')}</span>
           </div>
@@ -653,7 +696,7 @@ export function TasksRoute() {
           </p>
         </Card>
 
-        <Card className="flex flex-col gap-1 p-3 shadow-none transition-colors hover:border-primary/40">
+        <Card className="flex flex-col gap-1 border-transparent bg-muted/55 p-4 shadow-none">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
             <span className="font-medium">{t('labels.totalTasks')}</span>
           </div>
@@ -667,7 +710,7 @@ export function TasksRoute() {
           </p>
         </Card>
 
-        <Card className="flex flex-col gap-1 p-3 shadow-none transition-colors hover:border-primary/40">
+        <Card className="flex flex-col gap-1 border-transparent bg-muted/55 p-4 shadow-none">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
             <span className="font-medium">{t('labels.activePending')}</span>
           </div>
@@ -776,20 +819,28 @@ export function TasksRoute() {
             {t('filters.clear')}
           </Button>
         ) : null}
-        <Button
-          type="button"
-          variant={dedupByResource ? 'secondary' : 'outline'}
-          size="sm"
-          className="h-8 text-xs font-normal transition-all gap-1.5"
-          onClick={() => setDedupByResource((prev) => !prev)}
-        >
-          <LayersIcon className="size-3.5 text-muted-foreground" />
-          {t(
-            dedupByResource
-              ? 'labels.latestPerResource'
-              : 'labels.individualTasks',
-          )}
-        </Button>
+        <div className="ml-auto flex rounded-lg bg-muted p-0.5">
+          {([false, true] as const).map((deduplicate) => (
+            <Button
+              key={String(deduplicate)}
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-pressed={dedupByResource === deduplicate}
+              className="aria-pressed:bg-background aria-pressed:shadow-xs"
+              onClick={() => {
+                setDedupByResource(deduplicate)
+                setPage(1)
+              }}
+            >
+              {t(
+                deduplicate
+                  ? 'labels.latestPerResource'
+                  : 'labels.individualTasks',
+              )}
+            </Button>
+          ))}
+        </div>
       </div>
 
       {tasksQuery.isLoading ? (
@@ -864,7 +915,7 @@ export function TasksRoute() {
                       )}
                       onClick={() => {
                         if (taskId) {
-                          if (task.task_type === 'compile') {
+                          if (!management && task.task_type === 'compile') {
                             void navigate({
                               to: '/compile/tasks/$taskId',
                               params: { taskId },
@@ -878,7 +929,7 @@ export function TasksRoute() {
                           (event.key === 'Enter' || event.key === ' ')
                         ) {
                           event.preventDefault()
-                          if (task.task_type === 'compile') {
+                          if (!management && task.task_type === 'compile') {
                             void navigate({
                               to: '/compile/tasks/$taskId',
                               params: { taskId },
@@ -1007,7 +1058,8 @@ export function TasksRoute() {
       )}
 
       <TaskDetailSheet
-        identityScopeKey={identityScopeKey}
+        headers={taskHeaders ?? undefined}
+        identityScopeKey={taskIdentityScopeKey}
         open={Boolean(selectedTaskId)}
         taskId={selectedTaskId}
         onOpenChange={(open) => {

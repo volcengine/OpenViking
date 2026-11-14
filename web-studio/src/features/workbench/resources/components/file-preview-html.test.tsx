@@ -1,15 +1,22 @@
 // @vitest-environment jsdom
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import type { PropsWithChildren } from 'react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { FilePreview } from '#/features/workbench/resources/components/file-preview'
 import type { VikingFsEntry } from '#/shared/types/viking-fs'
 
+vi.mock('#/features/connection/hooks/use-app-connection', () => ({
+  useAppConnection: () => ({ identityScopeKey: 'test' }),
+}))
+
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({
+    t: (key: string) => key,
+    i18n: { language: 'en' },
+  }),
 }))
 
 vi.mock('#/gen/ov-client/client.gen', () => ({
@@ -35,27 +42,11 @@ const markdown = [
 ].join('\n')
 
 vi.mock('#/features/workbench/resources/hooks/viking-fm', () => ({
-  useInvalidateVikingFs: () => ({
-    invalidateList: vi.fn(),
-    invalidatePreview: vi.fn(),
-    invalidateTree: vi.fn(),
-  }),
-  useVikingFilePreview: () => ({
-    canLoadContent: false,
-    isContentLoaded: true,
-    isFetching: false,
-    isLoading: false,
-    preview: {
-      content: markdown,
-      fileType: 'markdown',
-      shouldAutoRead: true,
-    },
-    refetch: vi.fn(),
-  }),
-  useVikingFsStat: () => ({
-    data: undefined,
-    isLoading: false,
-  }),
+  useInvalidateVikingFs: () => ({ invalidatePreview: vi.fn() }),
+}))
+
+vi.mock('#/features/workbench/resources/lib/api', () => ({
+  fetchFileContent: async () => ({ content: markdown }),
 }))
 
 const file: VikingFsEntry = {
@@ -88,9 +79,25 @@ function renderPreview() {
   )
 }
 
+beforeEach(() => {
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  )
+})
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
+
 describe('FilePreview Markdown raw HTML', () => {
-  it('renders raw HTML elements instead of escaping them', () => {
+  it('renders raw HTML elements instead of escaping them', async () => {
     const { container } = renderPreview()
+    await screen.findByText('Heading')
 
     const rendered = Array.from(container.querySelectorAll('div')).find(
       (el) => el.textContent === 'rendered',
@@ -99,8 +106,9 @@ describe('FilePreview Markdown raw HTML', () => {
     expect(container.textContent).not.toContain('<div>')
   })
 
-  it('renders raw HTML tables through the shared table components', () => {
+  it('renders raw HTML tables through the shared table components', async () => {
     const { container } = renderPreview()
+    await screen.findByText('Heading')
 
     const head = container.querySelector('table th')
     const spanned = container.querySelector('table td')
@@ -110,8 +118,9 @@ describe('FilePreview Markdown raw HTML', () => {
     expect(spanned?.getAttribute('rowspan')).toBe('2')
   })
 
-  it('strips script tags', () => {
+  it('strips script tags', async () => {
     const { container } = renderPreview()
+    await screen.findByText('Heading')
 
     expect(container.querySelector('script')).toBeNull()
   })

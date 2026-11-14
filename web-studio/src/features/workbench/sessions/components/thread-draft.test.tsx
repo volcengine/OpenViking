@@ -1,21 +1,20 @@
 // @vitest-environment jsdom
 import { Thread } from '#/features/workbench/sessions/components/thread'
-import { act, cleanup, render, screen } from '@testing-library/react'
-import { useState } from 'react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import type { ReactNode } from 'react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
-const m = vi.hoisted(() => ({
+const mocks = vi.hoisted(() => ({
   provider: 'opensource',
-  create: vi.fn(),
+  request: vi.fn<typeof fetch>(),
   history: vi.fn(),
-  send: vi.fn(),
-  onSend: undefined as undefined | ((text: string) => Promise<boolean>),
 }))
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
 }))
 vi.mock('#/features/connection/hooks/use-studio-service', () => ({
-  useStudioService: () => ({ provider: m.provider, ready: true }),
+  useStudioService: () => ({ provider: mocks.provider, ready: true }),
 }))
 vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({ identityScopeKey: 'test' }),
@@ -23,140 +22,78 @@ vi.mock('#/features/connection/hooks/use-app-connection', () => ({
 vi.mock('#/features/workbench/sessions/lib/use-session-titles', () => ({
   useSessionTitles: () => ({ getTitle: (id: string) => id }),
 }))
-vi.mock('#/features/workbench/sessions/lib/use-sessions', () => ({
-  useCreateSession: () => ({ mutateAsync: m.create }),
-  useSession: () => ({}),
-  useSessionMessages: m.history,
-}))
-vi.mock('#/features/workbench/sessions/lib/use-chat', () => ({
-  useChat: () => ({
-    messages: [],
-    status: 'idle',
-    streamingParts: [],
-    streamingInsertIndex: undefined,
-    send: m.send,
+vi.mock(
+  '#/features/workbench/sessions/lib/use-default-conversation-titles',
+  () => ({
+    useDefaultConversationTitles: () => {},
   }),
+)
+vi.mock('#/features/workbench/sessions/lib/use-sessions', () => ({
+  useSession: () => ({}),
+  useSessionMessages: mocks.history,
 }))
 vi.mock('#/features/workbench/sessions/components/memory-impact', () => ({
   MemoryImpact: () => null,
 }))
-vi.mock('#/features/workbench/sessions/components/composer', () => ({
-  Composer: ({ onSend }: { onSend: typeof m.onSend }) => {
-    m.onSend = onSend
-    return null
-  },
+vi.mock('#/shared/api/module-request', () => ({
+  requestStudioModule: mocks.request,
 }))
+vi.mock('#/shared/ui/pixel-blast', () => ({ default: () => null }))
+
+const sessionUri = 'viking://session/draft'
+const ok = (result: unknown) => Response.json({ status: 'ok', result })
+const requestPath = (input: Parameters<typeof fetch>[0]) =>
+  new URL(String(input), window.location.origin).pathname
+const callsTo = (pathname: string, method = 'GET') =>
+  mocks.request.mock.calls.filter(
+    ([input, init]) =>
+      requestPath(input) === pathname && (init?.method ?? 'GET') === method,
+  )
+
+function renderThread(thread: ReactNode) {
+  const client = new QueryClient()
+  return render(thread, {
+    wrapper: ({ children }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    ),
+  })
+}
 
 beforeEach(() => {
-  vi.clearAllMocks()
-  m.provider = 'opensource'
-  m.onSend = undefined
-  m.history.mockReturnValue({ isPending: true })
+  mocks.provider = 'opensource'
+  mocks.history.mockReset().mockReturnValue({ isPending: true })
+  mocks.request.mockReset().mockImplementation(async (input) => {
+    const pathname = requestPath(input)
+    if (pathname === '/api/v1/content/read') return ok('')
+    return ok({ session_id: 'draft', uri: sessionUri, commit_count: 0 })
+  })
   Element.prototype.scrollIntoView = vi.fn()
 })
 afterEach(cleanup)
 
-it('does not request draft history and persists only once on first send', async () => {
-  m.create.mockResolvedValue({ session_id: 'draft' })
-  render(<Thread sessionId="draft" draft />)
-  expect(m.create).not.toHaveBeenCalled()
-  expect(m.history).toHaveBeenLastCalledWith(undefined)
-  await act(async () => {
-    expect(await m.onSend!('first')).toBe(true)
-  })
-  await act(async () => {
-    await m.onSend!('second')
-  })
-  expect(m.create).toHaveBeenCalledExactlyOnceWith('draft')
-  expect(m.send).toHaveBeenCalledWith('first')
-  expect(m.history).toHaveBeenLastCalledWith(undefined)
-})
-
-it('rejects failed creation so the composer can retain input', async () => {
-  m.create.mockRejectedValue(new Error('unavailable'))
-  render(<Thread sessionId="draft" draft />)
-  await act(async () => {
-    expect(await m.onSend!('first')).toBe(false)
-  })
-  expect(m.send).not.toHaveBeenCalled()
-})
-
-it('does not send after leaving a draft during creation', async () => {
-  let resolve!: (value: unknown) => void
-  m.create.mockImplementation(
-    () =>
-      new Promise((done) => {
-        resolve = done
-      }),
-  )
-  const view = render(<Thread sessionId="draft" draft />)
-  let pending!: Promise<boolean>
-  act(() => {
-    pending = m.onSend!('first')
-  })
-  expect(await m.onSend!('duplicate')).toBe(false)
-  view.unmount()
-  resolve({ session_id: 'draft' })
-  expect(await pending).toBe(false)
-  expect(m.send).not.toHaveBeenCalled()
-  expect(m.create).toHaveBeenCalledTimes(1)
-})
-
-it('loads the correct history when switching existing sessions', () => {
-  const view = render(<Thread sessionId="first" />)
-  expect(m.history).toHaveBeenLastCalledWith('first')
+it('loads existing sessions without creating or listing sessions in Console', async () => {
+  const view = renderThread(<Thread sessionId="first" />)
+  await waitFor(() => expect(callsTo('/api/v1/sessions/first')).toHaveLength(1))
   view.rerender(<Thread sessionId="second" />)
-  expect(m.history).toHaveBeenLastCalledWith('second')
-  expect(m.create).not.toHaveBeenCalled()
+  await waitFor(() =>
+    expect(callsTo('/api/v1/sessions/second')).toHaveLength(1),
+  )
+  expect(callsTo('/api/v1/sessions')).toHaveLength(0)
+  expect(callsTo('/api/v1/sessions', 'POST')).toHaveLength(0)
 })
 
-it('loads persisted history and continues after switching tabs', async () => {
-  let showThread!: (visible: boolean) => void
-  function Workspace() {
-    const [draft, setDraft] = useState(true)
-    const [visible, setVisible] = useState(true)
-    showThread = setVisible
-    return visible ? (
-      <Thread
-        sessionId="draft"
-        draft={draft}
-        onPersisted={() => setDraft(false)}
-      />
-    ) : null
-  }
-  m.create
-    .mockResolvedValueOnce({ session_id: 'draft' })
-    .mockRejectedValue(new Error('Session already exists'))
-  render(<Workspace />)
-  await act(async () => {
-    expect(await m.onSend!('first')).toBe(true)
-  })
-  act(() => showThread(false))
-  act(() => showThread(true))
-  expect(m.history).toHaveBeenLastCalledWith('draft')
-  await act(async () => {
-    expect(await m.onSend!('second')).toBe(true)
-  })
-  expect(m.create).toHaveBeenCalledExactlyOnceWith('draft')
-  expect(m.send).toHaveBeenLastCalledWith('second')
-})
-
-it('releases the composer after starting an existing session stream', async () => {
-  m.send.mockReturnValue(new Promise<void>(() => {}))
-  render(<Thread sessionId="existing" />)
-
-  await expect(m.onSend!('first')).resolves.toBe(true)
-  expect(m.send).toHaveBeenCalledWith('first')
-})
-
-it('preserves hosted session history without exposing a Bot composer or draft send', () => {
-  m.provider = 'volcengine'
-  m.history.mockReturnValue({ isPending: false, data: [] })
-  render(<Thread sessionId="hosted-session" />)
-  expect(m.history).toHaveBeenLastCalledWith('hosted-session')
-  expect(m.onSend).toBeUndefined()
-  expect(m.send).not.toHaveBeenCalled()
-  expect(m.create).not.toHaveBeenCalled()
+it('keeps hosted session history read-only', () => {
+  mocks.provider = 'volcengine'
+  mocks.history.mockReturnValue({ isPending: false, data: [] })
+  renderThread(<Thread sessionId="hosted-session" />)
+  expect(mocks.history).toHaveBeenLastCalledWith('hosted-session')
   expect(screen.getByText('chat.emptyReadDescription')).toBeTruthy()
-  expect(screen.queryByText('chat.emptyDescription')).toBeNull()
+  expect(document.querySelector('.ov-viking-bot__composer')).toBeNull()
+  expect(mocks.request).not.toHaveBeenCalled()
+})
+
+it('does not request server history or create a session when opening a draft', () => {
+  renderThread(<Thread sessionId="draft" draft />)
+  expect(mocks.history).toHaveBeenLastCalledWith(undefined)
+  expect(mocks.request).not.toHaveBeenCalled()
 })

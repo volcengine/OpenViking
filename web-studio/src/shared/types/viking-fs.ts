@@ -17,6 +17,7 @@ export interface VikingFsEntry {
   modTimestamp: number | null
   abstract: string
   overview?: string
+  access?: 'denied' | 'container' | 'read' | 'write' | 'manage'
 }
 
 export interface VikingListQueryOptions {
@@ -58,23 +59,6 @@ export interface VikingTreeResult {
 
 export interface VikingReadResult {
   uri: string
-  content: string
-  offset: number
-  limit: number
-  truncated: boolean
-}
-
-export interface VikingPreviewPolicy {
-  maxAutoReadBytes?: number
-  defaultReadLimit?: number
-  requireKnownSize?: boolean
-}
-
-export interface VikingPreviewResult {
-  entry: VikingFsEntry
-  fileType: VikingFileType
-  shouldAutoRead: boolean
-  reason?: 'binary' | 'too-large' | 'unknown-size'
   content: string
   offset: number
   limit: number

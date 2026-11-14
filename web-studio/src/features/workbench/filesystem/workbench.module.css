@@ -1,0 +1,276 @@
+.workbench {
+  min-height: 0;
+  flex: 1;
+  padding: 0 16px 8px;
+  display: flex;
+  flex-direction: column;
+  color: #0b0b0f;
+  font-family:
+    'PingFang SC',
+    -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
+}
+.layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  gap: 8px;
+}
+.fileBrowser {
+  flex: 1;
+  min-width: 0;
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+}
+.fileBrowser
+  :global(.ov-file-preview__toolbar):has(> .previewEditAction)
+  > :global(.ov-file-preview__switch) {
+  order: -2;
+}
+.fileBrowser .previewEditAction {
+  order: -1;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
+  border-radius: 6px;
+  background: var(--ov-ui-file-preview-row-hover);
+  color: var(--ov-ui-file-preview-text);
+}
+.fileBrowser .previewEditAction:hover {
+  border-color: var(--ov-ui-file-preview-text-muted);
+}
+.fileBrowser
+  :global(
+    .ark-agentic-file-viewer-markdown__content
+      > .ark-agentic-markdown__heading:first-child
+  ) {
+  margin-block-start: 0;
+}
+.fileTypeIcon {
+  color: var(--studio-file-icon-light);
+}
+:global(.dark) .fileTypeIcon {
+  color: var(--studio-file-icon-dark);
+}
+.previewActions {
+  --studio-preview-control-bg: #f7f7f9;
+  --studio-preview-control-border: #edeef2;
+  --studio-preview-control-text: #0b0b0f;
+  --studio-preview-control-muted: #787c91;
+  --studio-preview-control-icon: #3f3f51;
+  --studio-preview-control-selected: #ffffff;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  font-family:
+    'PingFang SC',
+    -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
+  font-size: 13px;
+  letter-spacing: 0.003em;
+}
+.previewModeSwitch {
+  display: flex;
+  flex-shrink: 0;
+  height: 28px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--studio-preview-control-bg);
+}
+.previewModeSwitch .previewModeButton {
+  box-sizing: border-box;
+  height: 24px;
+  min-width: 51px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--studio-preview-control-muted);
+  background: transparent;
+  box-shadow: none;
+  font: inherit;
+  font-weight: 400;
+  line-height: 22px;
+  letter-spacing: inherit;
+}
+.previewModeSwitch .previewModeButton[data-active] {
+  color: var(--studio-preview-control-text);
+  background: var(--studio-preview-control-selected);
+  box-shadow: inset 0 0 0 1px var(--studio-preview-control-border);
+  font-weight: 500;
+}
+.previewModeSwitch .previewModeButton:focus-visible {
+  outline: 2px solid var(--studio-accent, var(--ring));
+  outline-offset: 1px;
+}
+:global(.dark) .previewActions {
+  --studio-preview-control-bg: var(--muted);
+  --studio-preview-control-border: var(--border);
+  --studio-preview-control-text: var(--foreground);
+  --studio-preview-control-muted: var(--muted-foreground);
+  --studio-preview-control-icon: var(--foreground);
+  --studio-preview-control-selected: var(--background);
+}
+.previewIconAction {
+  box-sizing: border-box;
+  border: 1px solid var(--studio-preview-control-border, var(--border));
+  color: var(--studio-preview-control-icon, var(--foreground));
+  padding: 0;
+  display: flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: var(--studio-preview-control-bg, var(--muted));
+  cursor: pointer;
+}
+.assistant {
+  display: flex;
+  width: var(--filesystem-right-width);
+  min-width: 300px;
+  flex-shrink: 0;
+  min-height: 0;
+  overflow: hidden;
+  flex-direction: column;
+  border-radius: 16px;
+  background: var(--background);
+}
+
+.console > :global(.ov-console__toolbar) > :global(.ov-console__toolbar-slot) {
+  flex: none;
+  margin-inline-start: auto;
+}
+
+.console
+  > :global(.ov-console__toolbar)
+  > :global(.ov-console__toolbar-slot):has([data-collapse-panel]) {
+  order: 1;
+  margin-inline-start: 0;
+  border-inline-start: 1px solid var(--border);
+  padding-inline-start: 8px;
+}
+
+.console :global(.ov-viking-bot__session-meta) {
+  flex: 0 1 auto;
+}
+
+.console
+  :global(.ov-viking-bot__session-actions)
+  > :not(:global(.ov-viking-bot__session-meta)) {
+  flex: none;
+}
+
+@container (max-width: 440px) {
+  .console :global(.ov-console__toolbar) {
+    gap: 8px;
+    padding-inline: 12px;
+  }
+
+  .console :global(.ov-console__mode) {
+    width: 32px;
+    padding-inline: 0;
+  }
+
+  .console :global(.ov-console__mode) > span,
+  .console :global(.ov-viking-bot__session-meta) > span {
+    display: none;
+  }
+}
+
+:global(.dark) .assistant {
+  border: 1px solid var(--border);
+}
+.directory {
+  height: 100%;
+  overflow: auto;
+  padding: 28px 32px;
+  background: var(--background);
+}
+.directoryHeading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+.directoryHeading h1 {
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 500;
+}
+.directoryList {
+  display: flex;
+  flex-direction: column;
+}
+.directoryEntry {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 8px;
+  border-bottom: 1px solid #edeef3;
+  cursor: pointer;
+  text-align: left;
+}
+.directoryEntry:hover {
+  background: #f7f7fb;
+}
+.directoryEntry > svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: #787c91;
+}
+.directoryEntry > span {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.directoryEntry strong {
+  font-weight: 500;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.directoryEntry small {
+  font-size: 12px;
+  line-height: 20px;
+  color: #787c91;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+:global(.dark) .workbench {
+  color: var(--foreground);
+}
+:global(.dark) .directoryEntry {
+  border-color: var(--border);
+}
+:global(.dark) .directoryEntry:hover {
+  background: var(--muted);
+}
+@media (max-width: 1279px) {
+  .assistant {
+    display: none;
+  }
+}
+@media (max-width: 1023px) {
+  .layout {
+    flex-direction: column;
+  }
+  .workbench {
+    padding: 0 8px 8px;
+  }
+  .directory {
+    padding: 20px;
+  }
+}
+
+.deleteAction {
+  color: var(--destructive);
+}
+.deleteAction:hover {
+  background: color-mix(in srgb, var(--destructive) 10%, transparent);
+}

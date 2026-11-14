@@ -49,9 +49,11 @@ export function fetchAuditLogs(
   filters: AuditFilters,
   page: number,
   pageSize: number,
+  headers?: Record<string, string>,
 ): Promise<ConsoleAuditResult> {
   return getOvResult<ConsoleAuditResult>(
     getConsoleAudit({
+      headers,
       query: buildAuditQuery(filters, page, pageSize),
     }),
   )

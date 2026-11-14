@@ -1,5 +1,7 @@
 /// <reference types="vitest/config" />
 
+import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import { devtools } from '@tanstack/devtools-vite'
 import tsconfigPaths from 'vite-tsconfig-paths'
@@ -10,6 +12,36 @@ import viteReact from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 const config = defineConfig({
+  resolve: {
+    // Ark's file viewer is loaded from the sibling frontend workspace.
+    // Keep its optimized dependencies on the same React runtime as Studio.
+    alias: {
+      react: fileURLToPath(new URL('./node_modules/react', import.meta.url)),
+      'react-dom': fileURLToPath(
+        new URL('./node_modules/react-dom', import.meta.url),
+      ),
+    },
+  },
+  optimizeDeps: {
+    esbuildOptions: {
+      plugins: [
+        {
+          name: 'studio-prism-grammar-order',
+          setup(build) {
+            // Prism grammars register on a shared global. CommonJS wrappers
+            // preserve Ark's registration order when esbuild splits chunks.
+            build.onLoad(
+              { filter: /[/\\]prismjs[/\\]components[/\\]prism-[^/\\]+\.js$/ },
+              async ({ path: filePath }) => ({
+                contents: `${await readFile(filePath, 'utf8')}\nmodule.exports = {}\n`,
+                loader: 'js',
+              }),
+            )
+          },
+        },
+      ],
+    },
+  },
   plugins: [
     devtools(),
     tsconfigPaths({ projects: ['./tsconfig.json'] }),
@@ -23,6 +55,18 @@ const config = defineConfig({
   ],
   test: {
     setupFiles: ['./src/test/setup.ts'],
+    server: {
+      deps: { inline: [/@ark-design\/ui/, /@arco-design\/web-react/] },
+    },
+    alias: [
+      {
+        find: /^@arco-design\/web-react$/,
+        replacement: new URL(
+          '../frontend/node_modules/@arco-design/web-react/es/index.js',
+          import.meta.url,
+        ).pathname,
+      },
+    ],
   },
 })
 

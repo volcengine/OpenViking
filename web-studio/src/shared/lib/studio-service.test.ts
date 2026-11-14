@@ -94,7 +94,7 @@ describe('service and permission boundaries', () => {
 })
 
 describe('hosted feature visibility', () => {
-  const monitoring = featureForPath('/monitoring')!
+  const monitoring = featureForPath('/watches')!
   it.each([undefined, 'unknown', 'unavailable', 'forbidden'] as const)(
     'hides an extension while its capability is %s',
     (state) => {
