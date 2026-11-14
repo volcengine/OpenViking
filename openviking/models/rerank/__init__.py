@@ -13,6 +13,7 @@ Provides rerank functionality for hierarchical retrieval with multiple provider 
 
 from openviking.models.rerank.base import RerankBase
 from openviking.models.rerank.cohere_rerank import CohereRerankClient
+from openviking.models.rerank.fallback_rerank import FallbackRerankClient
 from openviking.models.rerank.jev_rerank import JevRerankClient
 from openviking.models.rerank.litellm_rerank import LiteLLMRerankClient
 from openviking.models.rerank.openai_rerank import OpenAIRerankClient
@@ -22,6 +23,7 @@ __all__ = [
     "RerankBase",
     "RerankClient",
     "CohereRerankClient",
+    "FallbackRerankClient",
     "JevRerankClient",
     "LiteLLMRerankClient",
     "OpenAIRerankClient",
