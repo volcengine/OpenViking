@@ -203,27 +203,6 @@ html:root {
   margin-top: 20px;
 }
 
-.ov-demo-controls button:not(.ov-button) {
-  padding: 6px 12px;
-  border: 1px solid var(--rp-c-divider);
-  border-radius: 6px;
-  color: var(--rp-c-text-1);
-  background: var(--rp-c-bg);
-  font: inherit;
-  cursor: pointer;
-}
-
-.ov-demo-controls button:not(.ov-button):hover,
-.ov-demo-controls button:not(.ov-button)[aria-pressed='true'] {
-  border-color: var(--rp-c-brand);
-  color: var(--rp-c-brand);
-}
-
-.ov-demo-controls button:not(.ov-button):focus-visible {
-  outline: 2px solid var(--rp-c-brand);
-  outline-offset: 3px;
-}
-
 /*
  * 代码块补上左右内边距。Rspress 只给 `code` 设了 `padding: 1rem 0`，左右为
  * 0，代码因此紧贴卡片边缘。用与上下一致的 1rem。

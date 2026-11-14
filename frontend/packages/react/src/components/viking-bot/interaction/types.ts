@@ -1,6 +1,24 @@
+import type {
+  VikingBotInteractionDirectoryPicker,
+  VikingBotInteractionTargetRequest,
+  VikingBotInteractionDirectoryLabels,
+} from './directory-picker-types.js';
+export type {
+  VikingBotInteractionDirectoryPicker,
+  VikingBotInteractionDirectoryPermission,
+  VikingBotInteractionDirectoryInfo,
+  VikingBotInteractionDirectoryOperations,
+  VikingBotInteractionTargetRequest,
+} from './directory-picker-types.js';
 import type { ErrorFallback } from '../../../shared/error-boundary/types.js';
 import type { Locale } from '../../../shared/locale.js';
 import type { ReactNode } from 'react';
+
+/** 宿主接管自定义答案时的上下文。Host-controlled custom selection. */
+export interface VikingBotInteractionCustomInputContext {
+  value: string;
+  select: (value: string) => void;
+}
 
 /** 可选项。An option offered by a question. */
 export interface VikingBotInteractionOption {
@@ -58,13 +76,11 @@ export interface VikingBotInteractionRenderContext {
 }
 
 /**
- * 一次待确认的交互。组件内置 `choice`、`text`、`schedule`、`repair` 四种表单；
- * 需要树选择器、上传等宿主能力时用 `custom` 自行渲染。
- * One pending interaction. The component ships `choice`, `text`, `schedule` and
- * `repair`; use `custom` when the form needs host capabilities such as a tree
- * picker or an upload.
+ * 一次待确认交互，内置单选、文本、定时、修复和输出目录表单。
+ * A pending interaction with choice, text, schedule, repair and target forms.
  */
 export type VikingBotInteractionRequest =
+  | VikingBotInteractionTargetRequest
   | {
       /** 单选。Single choice. */
       kind: 'choice';
@@ -72,8 +88,18 @@ export type VikingBotInteractionRequest =
       question?: ReactNode;
       /** 选项。Options. */
       options: readonly VikingBotInteractionOption[];
-      /** 是否提供「其他」输入项。Whether an inline "other" input is offered. */
-      allowCustomInput?: boolean | { placeholder?: string };
+      /** 自定义答案；提供目录数据时打开选择弹窗，否则使用内联输入。
+       * Custom answer; directory data enables a picker, otherwise uses inline input. */
+      allowCustomInput?:
+        | boolean
+        | {
+            placeholder?: string;
+            /** 外部选择弹窗的受控展示状态。Host picker visibility. */
+            open?: boolean;
+            /** 宿主打开自己的选择界面，确认后调用 select。 */
+            onOpen?: (context: VikingBotInteractionCustomInputContext) => void;
+            directoryPicker?: VikingBotInteractionDirectoryPicker;
+          };
     }
   | {
       /** 文本输入。Free text. */
@@ -118,6 +144,7 @@ export type VikingBotInteractionRequest =
 
 /** 交互答案。An interaction answer. */
 export type VikingBotInteractionAnswer =
+  | { kind: 'target'; value: string }
   | { kind: 'choice'; value: string }
   | { kind: 'text'; value: string }
   | { kind: 'schedule'; value: VikingBotScheduleValue }
@@ -129,7 +156,7 @@ export type VikingBotInteractionAnswer =
  * Copy of the interaction area. The component ships Chinese and English defaults; a host
  * overrides any field it needs.
  */
-export interface VikingBotInteractionLabels {
+export interface VikingBotInteractionLabels extends VikingBotInteractionDirectoryLabels {
   /** 文本答案的无障碍名称。Accessible name of a text answer. */
   answer?: string;
   /** 区域标题，缺省为「待确认」。Area title, "Needs your input" by default. */
@@ -148,6 +175,26 @@ export interface VikingBotInteractionLabels {
   progress?: (index: number, total: number) => string;
   /** 不启用定时的选项文案。Label of the "no schedule" option. */
   scheduleNone?: string;
+  /** 目录选择弹窗标题。Directory picker title. */
+  directoryPickerTitle?: string;
+  /** 确认选中目录。Confirm the selected directory. */
+  directoryPickerConfirm?: string;
+  /** 未选择目录时的提示。Hint before a directory is selected. */
+  directoryPickerHint?: string;
+  /** 更新频次。Update frequency. */
+  scheduleFrequency?: string;
+  /** 小时列表。Hour list. */
+  scheduleHour?: string;
+  /** 分钟列表。Minute list. */
+  scheduleMinute?: string;
+  /** 必选字段提示。Required-field message. */
+  required?: string;
+  /** 时间格式错误。Invalid HH:mm time. */
+  timeInvalid?: string;
+  /** 星期必选提示。Required weekday. */
+  weekdayRequired?: string;
+  /** 无错误详情时的提交失败提示。Submission failure without details. */
+  submitFailed?: string;
   /** 每天的选项文案。Label of the daily option. */
   scheduleDaily?: string;
   /** 每周的选项文案。Label of the weekly option. */

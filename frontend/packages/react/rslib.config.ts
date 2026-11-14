@@ -11,6 +11,8 @@ export default defineConfig({
       source: {
         entry: {
           index: './src/index.ts',
+          'components/context-picker':
+            './src/components/context-picker/index.ts',
           'components/directory-tour':
             './src/components/directory-tour/index.ts',
           icons: './src/icons/index.tsx',
@@ -93,6 +95,8 @@ export default defineConfig({
     // Build each stylesheet independently so every public CSS entry is complete.
     ...Object.entries({
       style: './src/style.css',
+      'components/context-picker/style':
+        './src/components/context-picker/style.css',
       'docs/notification/style':
         './src/shared/primitives/notification/style.css',
       'docs/shared/primitives/select/style':

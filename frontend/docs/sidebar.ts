@@ -44,6 +44,11 @@ const components: Group[] = [
     zh: '文件与目录',
     en: 'Files and directories',
     pages: [
+      {
+        slug: 'context-picker',
+        zh: 'ContextPicker 文件与目录选择',
+        en: 'ContextPicker',
+      },
       { slug: 'file-tree', zh: 'FileTree 文件树', en: 'FileTree' },
       { slug: 'file-preview', zh: 'FilePreview 文件预览', en: 'FilePreview' },
       {

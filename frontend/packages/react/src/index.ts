@@ -1,3 +1,5 @@
+export { ContextPicker } from './components/context-picker/index.js';
+export type { ContextPickerProps } from './components/context-picker/index.js';
 export { FileBrowserActionBar } from './components/file-browser-action-bar/index.js';
 export type { FileBrowserActionBarProps } from './components/file-browser-action-bar/index.js';
 export { FileTree } from './components/file-tree/index.js';

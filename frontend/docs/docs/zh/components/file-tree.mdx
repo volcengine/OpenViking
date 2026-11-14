@@ -35,6 +35,8 @@ import '@openviking/react/components/file-tree/style.css';
 | ----------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------ | --------------------------- |
 | rows                    | 按渲染顺序排列的可见行                                                                    | `readonly FileTreeRow[]`                               | 必填                        |
 | selectedId              | 当前选中的行 `id`，由宿主持有                                                             | `string \| null`                                       | -                           |
+| selectedIds             | 受控多选行 id，优先于 selectedId                                                          | `readonly string[]`                                    | -                           |
+| renderRowLeading        | 展开箭头与图标之间的内容                                                                  | `(row: FileTreeEntryRow) => ReactNode`                 | -                           |
 | rootOrder               | 根目录顺序，`'context'` 按 `user`、`session`、`agent`、`resources` 排列，其他目录在后     | `'input' \| 'context'`                                 | `'input'`                   |
 | isReady                 | 首次加载是否完成，为 `false` 时显示 `loadingFallback` 而不是行                            | `boolean`                                              | `true`                      |
 | loadingFallback         | 首次加载期间显示的内容，省略时显示 `labels.loading`                                       | `ReactNode`                                            | -                           |

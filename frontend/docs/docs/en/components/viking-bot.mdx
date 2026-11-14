@@ -17,7 +17,7 @@ import '@openviking/react/components/viking-bot/style.css';
 
 The style entry already contains the theme baseline and the `@ark-design/ui` styles the view uses, so it can be imported on its own.
 
-The message list, composer and pending-interaction area are rendered by `@ark-design/ui`. It is an optional peer dependency that is not installed with `@openviking/react`, so install version `0.0.0-beta.7` or later in your app:
+The message list and composer are rendered by `@ark-design/ui`. It is an optional peer dependency that is not installed with `@openviking/react`, so install version `0.0.0-beta.7` or later in your app:
 
 ```bash
 npm install @ark-design/ui@0.0.0-beta.7
@@ -27,7 +27,7 @@ If you only need the pending-interaction area, import `VikingBotInteraction` fro
 
 ```tsx
 import { VikingBotInteraction } from '@openviking/react/components/viking-bot/interaction';
-import '@openviking/react/components/viking-bot/style.css';
+import '@openviking/react/components/viking-bot/interaction/style.css';
 ```
 
 ## Examples
@@ -60,9 +60,17 @@ Reference tags in the composer show the full URI, so files with the same name st
 
 ### Pending interaction
 
-The example shows the four built-in forms in turn, `choice`, `text`, `schedule` and `repair`, with the submitted answer at the bottom; the first form also demonstrates step progress, the "Other" input and the cancel button.
+Demonstrates output-directory, text, schedule and repair forms. The directory flow includes search, automatic reveal, child creation, permission status and a fresh check on submit. Data and operations are simulated offline.
 
 ```tsx file="../../_demos/viking-bot-interaction.tsx" preview
+
+```
+
+### Host-controlled directory selection
+
+Use `allowCustomInput.onOpen` to own the picker. Render [ContextPicker](./context-picker), then call `select` to return the answer.
+
+```tsx file="../../_demos/viking-bot-custom-directory.tsx" preview
 
 ```
 
@@ -404,7 +412,7 @@ Each part in `VikingBotMessage.parts` is told apart by `type`, and `VikingBotMes
 | total      | Total number of steps; progress shows when greater than 1                                                                                                                                                   | `number`                                                              | `1`                            |
 | disabled   | Whether the form is disabled                                                                                                                                                                                | `boolean`                                                             | `false`                        |
 | submitting | Whether a submission is in progress; the form is disabled meanwhile                                                                                                                                         | `boolean`                                                             | `false`                        |
-| error      | Why the last submission failed, shown above the form                                                                                                                                                        | `ReactNode`                                                           | -                              |
+| error      | Why the last submission failed, displayed inside the form                                                                                                                                                   | `ReactNode`                                                           | -                              |
 | onSubmit   | Called when an answer is submitted; when it returns a Promise, the submit button stays disabled until it settles                                                                                            | `(answer: VikingBotInteractionAnswer) => void \| Promise<void>`       | -                              |
 | onCancel   | Called when the interaction is abandoned; the cancel button is hidden when omitted                                                                                                                          | `() => void`                                                          | -                              |
 | slots      | Replaces rendering-error content; see [error display slots](../guide/getting-started#custom-error-display)                                                                                                  | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }` | -                              |
@@ -412,46 +420,100 @@ Each part in `VikingBotMessage.parts` is told apart by `type`, and `VikingBotMes
 | locale     | Interface language, see [Internationalization](../guide/i18n); inside the `interaction` of `VikingBot` it follows the language of `VikingBot` by default                                                    | `'zh-CN' \| 'en-US'`                                                  | Inherited, otherwise `'en-US'` |
 | className  | Class name applied to the root element                                                                                                                                                                      | `string`                                                              | -                              |
 
+The interaction area uses the library’s own form and controls. Standalone `VikingBotInteraction` does not require Ark Design. A failed submission preserves the draft and displays an error for retry; cancelling restores the initial values.
+
+### VikingBotInteractionLabels
+
+| Property                    | Description                                 | Type                                       | Default                                          |
+| --------------------------- | ------------------------------------------- | ------------------------------------------ | ------------------------------------------------ |
+| answer                      | Text answer label                           | `string`                                   | Answer                                           |
+| title                       | Area and fallback question title            | `string`                                   | Needs your input                                 |
+| submit                      | Submit action                               | `string`                                   | Submit                                           |
+| cancel                      | Cancel action                               | `string`                                   | Cancel                                           |
+| other                       | Custom option                               | `string`                                   | Other                                            |
+| submitted                   | Reserved; not rendered by the built-in form | `string`                                   | Submitted                                        |
+| cancelled                   | Reserved; not rendered by the built-in form | `string`                                   | Cancelled                                        |
+| progress                    | Step progress; the index starts at 0        | `(index: number, total: number) => string` | `${index + 1} / ${total}`                        |
+| scheduleNone                | No updates option                           | `string`                                   | Do not update                                    |
+| scheduleDaily               | Daily option                                | `string`                                   | Daily                                            |
+| scheduleWeekly              | Weekly option                               | `string`                                   | Weekly                                           |
+| scheduleTime                | Update time label                           | `string`                                   | Update time                                      |
+| scheduleWeekday             | Update day label                            | `string`                                   | Update day                                       |
+| scheduleFrequency           | Update frequency label                      | `string`                                   | Update frequency                                 |
+| scheduleHour                | Hours list label                            | `string`                                   | Hours                                            |
+| scheduleMinute              | Minutes list label                          | `string`                                   | Minutes                                          |
+| required                    | Incomplete selection message                | `string`                                   | Please complete this question                    |
+| timeInvalid                 | Invalid time message                        | `string`                                   | Enter a valid time in HH:mm format (00:00–23:59) |
+| weekdayRequired             | Missing weekday message                     | `string`                                   | Choose a day for the weekly update               |
+| submitFailed                | Submission failure without details          | `string`                                   | Submission failed. Please try again.             |
+| directoryPickerTitle        | Directory modal title                       | `string`                                   | Choose a save directory                          |
+| directoryPickerConfirm      | Confirm directory action                    | `string`                                   | Use this directory                               |
+| directoryPickerHint         | Hint before selection                       | `string`                                   | Choose a directory                               |
+| directoryTarget             | Directory-flow copy                         | `string`                                   | Output directory                                 |
+| directorySelected           | Directory-flow copy                         | `string`                                   | Selected target:                                 |
+| directorySearch             | Directory-flow copy                         | `string`                                   | Directory name                                   |
+| directoryEmpty              | Directory-flow copy                         | `string`                                   | No search results                                |
+| directoryPermissionChecking | Directory-flow copy                         | `string`                                   | Reading directory permissions                    |
+| directoryUnavailable        | Directory-flow copy                         | `string`                                   | Choose an existing directory                     |
+| directoryCreate             | Directory-flow copy                         | `string`                                   | New subdirectory                                 |
+| directoryCreateTitle        | Directory-flow copy                         | `string`                                   | Subdirectory                                     |
+| directoryName               | Directory-flow copy                         | `string`                                   | Directory name                                   |
+| directoryCreateConfirm      | Directory-flow copy                         | `string`                                   | Create and select                                |
+| directoryRetry              | Directory-flow copy                         | `string`                                   | Retry                                            |
+| directoryLoadFailed         | Directory-flow copy                         | `string`                                   | Could not load directories                       |
+| directoryParent             | Parent directory description                | `(uri: string) => string`                  | `Parent directory: {uri}`                        |
+
 ### VikingBotInteractionRequest
 
 `kind` decides the question type and the available fields. Each type is listed below.
 
+#### target
+
+| Property        | Description                                                                   | Type                                  | Default          |
+| --------------- | ----------------------------------------------------------------------------- | ------------------------------------- | ---------------- |
+| kind            | Output-directory form                                                         | `'target'`                            | Required         |
+| question        | Card title                                                                    | `ReactNode`                           | Output directory |
+| initialUri      | Initial URI; late tree rows restore selection and automatic reveal            | `string`                              | `''`             |
+| directoryPicker | Directory rows, actions and host-owned permission state; validate in onSubmit | `VikingBotInteractionDirectoryPicker` | Required         |
+
 #### choice
 
-| Property         | Description                                                                                                                   | Type                                    | Default  |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | -------- |
-| kind             | Question type                                                                                                                 | `'choice'`                              | Required |
-| options          | Options; one of them (or the "Other" text) must be chosen before submitting, otherwise clicking submit does nothing           | `readonly VikingBotInteractionOption[]` | Required |
-| question         | Question text                                                                                                                 | `ReactNode`                             | -        |
-| allowCustomInput | Whether an "Other" input is offered; with an object, `placeholder` is the input hint, and `labels.other` is used when omitted | `boolean \| { placeholder?: string }`   | `false`  |
+| Property         | Description                                                                                                                       | Type                                                                                                                                                                             | Default  |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| kind             | Question type                                                                                                                     | `'choice'`                                                                                                                                                                       | Required |
+| options          | Options; one of them (or the "Other" text) must be chosen before submitting, incomplete answers display a validation message      | `readonly VikingBotInteractionOption[]`                                                                                                                                          | Required |
+| question         | Question text                                                                                                                     | `ReactNode`                                                                                                                                                                      | -        |
+| allowCustomInput | Custom answer; onOpen delegates selection to the host, directoryPicker reuses the built-in dialog, otherwise uses an inline input | `boolean \| { placeholder?: string; open?: boolean; onOpen?: (context: VikingBotInteractionCustomInputContext) => void; directoryPicker?: VikingBotInteractionDirectoryPicker }` | `false`  |
 
 #### text
 
-| Property     | Description                                                                                                    | Type        | Default  |
-| ------------ | -------------------------------------------------------------------------------------------------------------- | ----------- | -------- |
-| kind         | Question type                                                                                                  | `'text'`    | Required |
-| question     | Question text                                                                                                  | `ReactNode` | -        |
-| initialValue | Initial text of the input                                                                                      | `string`    | `''`     |
-| description  | Extra description shown above the input                                                                        | `ReactNode` | -        |
-| multiline    | Whether the input is multiline; the input is always a multiline text area, so this does not change the display | `boolean`   | -        |
+| Property     | Description                                                   | Type        | Default  |
+| ------------ | ------------------------------------------------------------- | ----------- | -------- |
+| kind         | Question type                                                 | `'text'`    | Required |
+| question     | Question text                                                 | `ReactNode` | -        |
+| initialValue | Initial text of the input                                     | `string`    | `''`     |
+| description  | Extra description shown above the input                       | `ReactNode` | -        |
+| multiline    | Use a text area when `true`, or a single-line input otherwise | `boolean`   | `false`  |
 
 #### schedule
 
-| Property     | Description                                                   | Type                     | Default  |
-| ------------ | ------------------------------------------------------------- | ------------------------ | -------- |
-| kind         | Question type                                                 | `'schedule'`             | Required |
-| initialValue | Initial schedule value                                        | `VikingBotScheduleValue` | Required |
-| question     | Question text                                                 | `ReactNode`              | -        |
-| timezone     | Time zone name shown below the schedule input, as a hint only | `string`                 | -        |
+Choose the update frequency with segmented radio controls. Weekly updates include a weekday selector. Enter an `HH:mm` time or choose hours and minutes from the panel; changing frequency preserves the time and weekday being edited.
+
+| Property     | Description                                                             | Type                     | Default  |
+| ------------ | ----------------------------------------------------------------------- | ------------------------ | -------- |
+| kind         | Question type                                                           | `'schedule'`             | Required |
+| initialValue | Initial schedule value                                                  | `VikingBotScheduleValue` | Required |
+| question     | Question text                                                           | `ReactNode`              | -        |
+| timezone     | Execution timezone, included in the time input’s accessible description | `string`                 | -        |
 
 #### repair
 
-| Property     | Description                                                                                      | Type                               | Default  |
-| ------------ | ------------------------------------------------------------------------------------------------ | ---------------------------------- | -------- |
-| kind         | Question type                                                                                    | `'repair'`                         | Required |
-| options      | Candidates; one of them must be chosen before submitting, otherwise clicking submit does nothing | `readonly VikingBotRepairOption[]` | Required |
-| question     | Question text                                                                                    | `ReactNode`                        | -        |
-| initialValue | `id` of the initially selected candidate                                                         | `string`                           | -        |
+| Property     | Description                                                                                               | Type                               | Default  |
+| ------------ | --------------------------------------------------------------------------------------------------------- | ---------------------------------- | -------- |
+| kind         | Question type                                                                                             | `'repair'`                         | Required |
+| options      | Candidates; one of them must be chosen before submitting, incomplete answers display a validation message | `readonly VikingBotRepairOption[]` | Required |
+| question     | Question text                                                                                             | `ReactNode`                        | -        |
+| initialValue | `id` of the initially selected candidate                                                                  | `string`                           | -        |
 
 #### custom
 
@@ -461,14 +523,51 @@ Each part in `VikingBotMessage.parts` is told apart by `type`, and `VikingBotMes
 | render   | Render function for your own form, such as a tree picker or an uploader          | `(context: VikingBotInteractionRenderContext) => ReactNode` | Required |
 | question | Question text; `custom` draws everything in `render`, so this field is not shown | `ReactNode`                                                 | -        |
 
+### VikingBotInteractionDirectoryPicker
+
+Used by `target.directoryPicker` or `choice.allowCustomInput.directoryPicker`. Cancelling discards the modal selection and preserves the answer. Automatic reveal expands only the initial URI's ancestors and loads missing pages; user search or tree navigation stops it. The host supplies data and operation callbacks, while the component owns the interaction.
+
+| Property          | Description                                                                           | Type                                      | Default           |
+| ----------------- | ------------------------------------------------------------------------------------- | ----------------------------------------- | ----------------- |
+| rows              | Visible directory rows; files are omitted. See [FileTreeRow](./file-tree#filetreerow) | `readonly FileTreeRow[]`                  | Required          |
+| operations        | Directory capabilities, listed below                                                  | `VikingBotInteractionDirectoryOperations` | -                 |
+| query             | Controlled search query, supplied with `onQueryChange`                                | `string`                                  | `''`              |
+| onQueryChange     | Reports search edits; search is disabled when omitted                                 | `(query: string) => void`                 | -                 |
+| isReady           | Initial load has completed                                                            | `boolean`                                 | `true`            |
+| loading           | Search or refresh pending state                                                       | `boolean`                                 | `false`           |
+| error             | Load error; cached rows remain available with retry                                   | `ReactNode`                               | -                 |
+| loadingFallback   | Initial loading content                                                               | `ReactNode`                               | -                 |
+| errorFallback     | Replacement for a whole-tree error row                                                | `ReactNode`                               | -                 |
+| emptyFallback     | Content when no directories are available                                             | `ReactNode`                               | No search results |
+| permission        | Host-owned permission state for the current draft                                     | `VikingBotInteractionDirectoryPermission` | -                 |
+| onSelectionChange | Reports the draft URI so the host can load permissions                                | `(uri: string) => void`                   | -                 |
+
+### VikingBotInteractionDirectoryOperations
+
+| Property        | Description                                                                                    | Type                                                                                     | Default |
+| --------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------- |
+| toggleExpand    | Expands or collapses a directory; also used for initial reveal                                 | `FileTreeOperations['toggleExpand']`                                                     | -       |
+| loadMore        | Loads a page, including pages needed for initial reveal                                        | `FileTreeOperations['loadMore']`                                                         | -       |
+| retry           | Retries failed children                                                                        | `FileTreeOperations['retry']`                                                            | -       |
+| refresh         | Reloads a directory; failure after creation does not invalidate creation                       | `(uri?: string) => Promise<void>`                                                        | -       |
+| createDirectory | Creates one direct child and returns its URI; rejection preserves the name and shows the error | `(parentUri: string, name: string, options: { signal: AbortSignal }) => Promise<string>` | -       |
+
+### VikingBotInteractionDirectoryInfo
+
+| Property    | Description                                                         | Type      | Default  |
+| ----------- | ------------------------------------------------------------------- | --------- | -------- |
+| uri         | Canonical directory URI acknowledged by the service                 | `string`  | Required |
+| isDirectory | Whether the entry is a directory                                    | `boolean` | Required |
+| canWrite    | Current write permission; creation additionally requires a callback | `boolean` | Required |
+
 ### VikingBotInteractionOption
 
-| Property    | Description                                                           | Type        | Default  |
-| ----------- | --------------------------------------------------------------------- | ----------- | -------- |
-| value       | Option value, used as `value` in the answer                           | `string`    | Required |
-| label       | Primary text of the option                                            | `ReactNode` | Required |
-| description | Description shown under the label                                     | `ReactNode` | -        |
-| code        | Monospace snippet after the label; the built-in form does not show it | `string`    | -        |
+| Property    | Description                                     | Type        | Default  |
+| ----------- | ----------------------------------------------- | ----------- | -------- |
+| value       | Option value, used as `value` in the answer     | `string`    | Required |
+| label       | Primary text of the option                      | `ReactNode` | Required |
+| description | Description shown under the label               | `ReactNode` | -        |
+| code        | Monospace text displayed below the option label | `string`    | -        |
 
 ### VikingBotRepairOption
 
@@ -499,8 +598,24 @@ Each part in `VikingBotMessage.parts` is told apart by `type`, and `VikingBotMes
 
 | Property | Description                                                                                                                                                                                                                              | Type                                                                                     | Default  |
 | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | -------- |
-| kind     | Question type, equal to `request.kind`                                                                                                                                                                                                   | `'choice' \| 'text' \| 'schedule' \| 'repair' \| 'custom'`                               | Required |
+| kind     | Question type, equal to `request.kind`                                                                                                                                                                                                   | `'target' \| 'choice' \| 'text' \| 'schedule' \| 'repair' \| 'custom'`                   | Required |
 | value    | The answer: for `choice`, the `value` of the chosen option or the "Other" text; for `text`, the entered text; for `schedule`, the schedule value; for `repair`, the `id` of the chosen candidate; for `custom`, the argument of `submit` | `string` (choice, text, repair), `VikingBotScheduleValue` (schedule), `unknown` (custom) | Required |
+
+### VikingBotInteractionCustomInputContext
+
+| Property | Description                                                  | Type                      | Default  |
+| -------- | ------------------------------------------------------------ | ------------------------- | -------- |
+| value    | Current custom answer                                        | `string`                  | Required |
+| select   | Accepts the host selection; ignored after disable or unmount | `(value: string) => void` | Required |
+
+### VikingBotInteractionDirectoryPermission
+
+| Property | Description                          | Type                                | Default  |
+| -------- | ------------------------------------ | ----------------------------------- | -------- |
+| uri      | Directory URI identifying this state | `string`                            | Required |
+| checking | Permission read in progress          | `boolean`                           | -        |
+| info     | Host-mapped permission data          | `VikingBotInteractionDirectoryInfo` | -        |
+| error    | Permission read failure              | `unknown`                           | -        |
 
 ## Notes
 
@@ -516,7 +631,7 @@ Each part in `VikingBotMessage.parts` is told apart by `type`, and `VikingBotMes
 - Reference tags show an icon and the full URI, truncated with the full path in the title when space is short; the first 5 are shown and the rest collapse into `+N`, which expands on hover, focus or click.
 - References stay out of the draft text and are reported only in `VikingBotDraft.references`. When the account or session changes, reset both `references.selected` and `attachments`.
 - A pending interaction is state of your app, not a backend pause: derive the question from your own stream and clear `interaction` once the answer is sent. The component only renders the form and reports the answer through `onSubmit`.
-- `@ark-design/ui` is loaded when the message list, composer or interaction area first renders, and an empty container shows while it loads. Importing VikingBot does not load it, so the module can be imported in environments without `window`.
+- `@ark-design/ui` is loaded when the message list or composer first renders, and an empty container shows while it loads. Importing VikingBot does not load it, so the module can be imported in environments without `window`.
 - `VikingBotComposer`, `VikingBotMessageList` and `VikingBotSessionActions` can be used on their own, for example `VikingBotSessionActions` in your own header.
 - `groupMessages`, `groupByActivity` and `messageText` follow the same rules as the built-in list, so you can use them when you replace `messageList`.
 - `DEFAULT_LABELS` and `DEFAULT_INTERACTION_LABELS` are the built-in English text and list every key of the matching `labels`.

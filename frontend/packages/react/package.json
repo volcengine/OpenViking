@@ -66,6 +66,7 @@
       "types": "./dist/components/viking-bot/interaction/index.d.ts",
       "import": "./dist/components/viking-bot/interaction.js"
     },
+    "./components/viking-bot/interaction/style.css": "./dist/components/viking-bot/interaction/style.css",
     "./style.css": "./dist/style.css",
     "./components/style.css": "./dist/components/style.css",
     "./modules/file-browser": {
@@ -137,7 +138,12 @@
       "types": "./dist/components/auth/invitation-confirmation/index.d.ts",
       "import": "./dist/components/auth/invitation-confirmation.js"
     },
-    "./components/auth/invitation-confirmation/style.css": "./dist/components/auth/invitation-confirmation/style.css"
+    "./components/auth/invitation-confirmation/style.css": "./dist/components/auth/invitation-confirmation/style.css",
+    "./components/context-picker": {
+      "types": "./dist/components/context-picker/index.d.ts",
+      "import": "./dist/components/context-picker.js"
+    },
+    "./components/context-picker/style.css": "./dist/components/context-picker/style.css"
   },
   "scripts": {
     "dev": "rslib build --watch",

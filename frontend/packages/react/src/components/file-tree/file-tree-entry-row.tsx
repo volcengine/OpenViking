@@ -48,7 +48,7 @@ export function FileTreeRowView({
   const isDirectory = row.type === 'directory';
   const canExpand = isDirectory && row.hasChildren !== false;
   const isExpanded = Boolean(row.expanded);
-  const isSelected = selectedId === row.id;
+  const isSelected = ctx.selectedIds?.includes(row.id) ?? selectedId === row.id;
   const extra = getRowAttributes?.(row) ?? {};
   const {
     className: extraClassName,
@@ -127,6 +127,7 @@ export function FileTreeRowView({
         <span aria-hidden="true" className="ov-file-tree__toggle-spacer" />
       )}
 
+      {ctx.renderRowLeading?.(row)}
       <span className="ov-file-tree__icon-slot">
         {isDirectory ? (
           <FileTreeFolderIcon open={isExpanded} />

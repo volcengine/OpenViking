@@ -1,0 +1,50 @@
+.ov-viking-bot__directory-status {
+  margin: 0;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  font-size: 12px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+.ov-viking-bot__directory-status--error {
+  color: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
+}
+.ov-viking-bot__directory-trigger.ov-button {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  font-weight: 400;
+}
+.ov-viking-bot__directory-trigger > span {
+  flex: 1;
+  overflow: hidden;
+  text-align: start;
+  text-overflow: ellipsis;
+}
+.ov-viking-bot__directory-trigger > svg {
+  flex-shrink: 0;
+}
+.ov-viking-bot__directory-trigger > svg:last-child {
+  transform: rotate(90deg);
+}
+.ov-viking-bot__create-directory-title {
+  padding: 0;
+  margin: 0 0 24px;
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 28px;
+}
+.ov-viking-bot__create-directory .ov-viking-bot__directory-status {
+  margin-block: 8px;
+}
+.ov-viking-bot__create-directory .ov-input {
+  width: 100%;
+}
+.ov-viking-bot__create-directory-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 20px;
+}
