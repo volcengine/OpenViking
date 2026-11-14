@@ -248,6 +248,98 @@ Subprocesses default to `PYTHONHASHSEED=0` to keep option mappings stable across
 shard counts. These are OV retrieval-based evaluations, not reproductions of
 the authors' trained MemAgent implementation.
 
+## Frozen source-dialogue retrieval replay
+
+`eval/dialogue_windows.py` reproduces the auxiliary retrieval layer of the
+source-dialogue experiment. It does **not** change native OV Add/Search or the
+deployed AML adapter, send model requests, or generate new memory files.
+Install `numpy` and `tiktoken` in the benchmark environment before running it.
+
+The two routes are deliberately separate:
+
+1. Supply the existing memory route's already-reranked Top20 as frozen input.
+   In the measured experiment this was native Find Top80 followed by
+   `doubao-seed-rerank` `251028` on the full memory bodies. This replay does not
+   silently rerank or reselect those memories.
+2. Build one auxiliary window per raw source message. The embedding key uses
+   previous/current/next messages; its returned value uses
+   previous-two/current/next, within the same user and physical session.
+3. Embed only the current evaluation question on the query side. Rank source
+   windows within that user using cosine Top80 and positive sparse-dot Top80,
+   combined with equal-weight RRF (`k=60`).
+4. Keep the supplied memories in their original order. Append at most five
+   windows within 2,000 extra `o200k_base` tokens, counting two separator tokens
+   per window. Deduplicate overlapping message IDs; skip a window if all of its
+   remaining raw utterances are already literally visible. Oversized windows
+   are skipped, not truncated. This is not semantic fact deduplication.
+
+The source JSON is a mapping of user IDs to raw message arrays. For example:
+
+```json
+{
+  "example-user": [
+    {"id": "m1", "session_id": "s1", "turn": 1, "role": "user", "created_at": "2023-10-13T10:00:00+00:00", "speaker": "Pat", "text": "Pat: When did your friend adopt?"},
+    {"id": "m2", "session_id": "s1", "turn": 2, "role": "assistant", "created_at": "2023-10-13T10:00:01+00:00", "speaker": "Lee", "text": "Lee: Last year."}
+  ]
+}
+```
+
+Integer `session_number` is accepted instead of `session_id`. If `speaker` is
+absent, LoCoMo's `[D1:2] Lee:` prefix is parsed; otherwise the speaker is marked
+unresolved. Names, roles, source timestamps and raw text remain unchanged.
+Only `[Image source]` URL lines are omitted from embedding keys; the returned
+text retains them. Reference answers and evaluation questions do not enter
+window construction.
+
+The input retrieval JSONL uses the existing AML `question` and
+`retrieved_context` fields, plus `user_id` and aligned `memory_hits` proving
+the owner of every supplied memory. A one-memory example (fewer than twenty
+is valid) is:
+
+```json
+{"id":"q1","unit":"locomo_refined","user_id":"example-user","question":"When did Lee's friend adopt?","retrieved_context":["Original memory body"],"memory_hits":[{"id":"viking://user/example-user/memories/events/example.md","user_id":"example-user"}]}
+```
+
+Embedding caches are mandatory. The source and query caches may be separate
+directories. Each cache key is SHA256 of Python's
+`json.dumps(request, sort_keys=True, ensure_ascii=False).encode()` for:
+
+```json
+{"model":"doubao-embedding-vision-251215","input":[{"type":"text","text":"exact embedding key or exact question"}],"sparse_embedding":{"type":"enabled"}}
+```
+
+`<cache>/<sha256-prefix-2>/<sha256>.json` must contain the exact `request` and
+`response.data.embedding` / `response.data.sparse_embedding` from a successful
+request. Missing, mismatched, invalid or failed cache entries stop replay;
+there is no model/API fallback. Do not include credentials in cache records.
+For offline execution, prepopulate the standard `TIKTOKEN_CACHE_DIR` with
+`o200k_base` tokenizer data as well.
+
+```bash
+python -m benchmark.aml.eval.dialogue_windows \
+  --sources result/dialogue-replay/sources.json \
+  --retrieval result/dialogue-replay/reranked20.jsonl \
+  --embedding-cache result/dialogue-replay/source-embeddings \
+  --query-embedding-cache result/dialogue-replay/query-embeddings \
+  --embedding-model doubao-embedding-vision-251215 --dimension 2048 \
+  --output result/dialogue-replay/augmented.jsonl
+```
+
+The new JSONL preserves evaluation metadata, adds source bodies to
+`retrieved_context`, and saves source message IDs, focal IDs, dense/sparse/RRF
+scores and the token cost in `source_dialogue_retrieval`. It can be passed to
+the existing `eval.evaluate` entrypoint. Existing output files and rows already
+augmented by this module are rejected, preventing accidental double appends.
+
+In the frozen, exploratory 861-question LoCoMo-Refined run, original Top20
+scored 736; memory rerank alone scored 748; rerank plus these source windows
+scored 767. A separate variant that also reranked the source windows scored
+763. The variants are alternatives, not additive gains. Answer/Judge used
+GPT-4o mini with unchanged prompts/gold. Context increased from 20 to at most
+25 entries; some score flips were Judge-sensitive. These observations are
+not a new import, a held-out validation, or a native OV quality guarantee.
+Dataset files, frozen model responses and experiment runners are not shipped.
+
 ## Static checks
 
 ```bash
