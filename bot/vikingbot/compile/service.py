@@ -44,7 +44,7 @@ from vikingbot.agent.tools.compile import (
 )
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.agent.tools.spawn import WaitSubagentsTool
-from vikingbot.compile import file_ops
+from vikingbot.compile import file_ops, simple
 from vikingbot.compile.models import (
     COMPILE_DRAFT_ROOT,
     COMPILE_STAGING_ROOT,
@@ -327,6 +327,7 @@ class BotCompileService:
                 task_id=task_id,
                 principal_scope=principal_scope,
                 sanitized_request=normalized_request,
+                meta={"mode": self.config.compile.mode},
                 status="accepted",
                 stage="queued",
                 created_at=now,
@@ -792,6 +793,13 @@ class BotCompileService:
         try:
             await self._set_state(task_id, status="running", stage="collecting_context")
             client = await VikingClient.create(connection=connection, config=self.config)
+            simple_mode = (await self.store.get(task_id)).meta["mode"] == "simple"
+            if simple_mode and target_type == "skill":
+                raise CompileFailure(
+                    "INVALID_ARGUMENT",
+                    "Publishing a Skill package requires bot.compile.mode=complex.",
+                    stage="agent",
+                )
             source_files = None
             source_request = request
             execution = (request.changes or {}).get("execution") or {}
@@ -801,12 +809,12 @@ class BotCompileService:
             directory_plan = has_directory_plan(request.changes)
             if directory_plan and request.changes.get("head"):
                 pass
-            elif full_execution:
+            elif full_execution and not simple_mode:
                 source_files = await self._list_source_files(
                     client, request.from_, allow_empty=True
                 )
                 source_request = request.model_copy(update={"last_compile_time": None})
-            elif request.last_compile_time is not None:
+            elif not full_execution and request.last_compile_time is not None:
                 source_files = await self._list_source_files(
                     client, request.from_, cutoff=request.last_compile_time
                 )
@@ -842,6 +850,47 @@ class BotCompileService:
                         fail_task=lambda failure: self._fail(task_id, failure),
                     )
                 )
+            if simple_mode:
+                await self._set_state(task_id, status="running", stage="agent")
+                loop = AgentLoop(
+                    bus=self.agent_loop.bus,
+                    provider=_CompileProvider(self.agent_loop.provider, self._model_slots),
+                    workspace=workspace,
+                    model=self.agent_loop.model,
+                    temperature=self.agent_loop.temperature,
+                    max_iterations=self.limits.simple_agent_iterations,
+                    sandbox_manager=sandbox_manager,
+                    config=task_config,
+                )
+
+                async def save_progress(writer):
+                    """Persist acknowledged and in-flight target URIs across cancellation or restart."""
+
+                    def record(task):
+                        task.meta["outputs"] = dict(writer.outcomes)
+                        task.meta["unconfirmed"] = sorted(writer.unconfirmed)
+
+                    await self.store.update(task_id, record)
+
+                result = await simple.run(
+                    loop,
+                    client,
+                    request,
+                    source_request.from_,
+                    skill_text,
+                    session_key,
+                    connection,
+                    save_progress,
+                    agent_usage,
+                )
+
+                def finish(task):
+                    if task.status == "running":
+                        task.status = task.stage = "completed"
+                        task.result = result
+
+                await self.store.update(task_id, finish)
+                return
             if target_type in {"resource", "skill"} or directory_plan:
                 focused_loop = None
 

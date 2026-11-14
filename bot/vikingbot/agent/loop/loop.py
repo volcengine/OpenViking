@@ -253,6 +253,8 @@ class AgentLoop(LoopToolMixin, LoopEventMixin, LoopSessionMixin, LoopCompactionM
         active_turn: _ActiveTurn | None = None,
         agent_id: str = "main",
         max_iterations: int | None = None,
+        *,
+        require_natural_completion: bool = False,
     ) -> tuple[str | None, str | None, list[dict], dict[str, int], int]:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
@@ -285,6 +287,8 @@ class AgentLoop(LoopToolMixin, LoopEventMixin, LoopSessionMixin, LoopCompactionM
             openviking_tool_names: Optional collection of tool names allowed to receive the
                 request-scoped OpenViking connection. None preserves the legacy behavior of
                 forwarding the connection to all tools; an empty collection forwards it to none.
+            require_natural_completion: Return None for a spent tool budget; reject failed,
+                truncated or empty model replies before treating them as a completed task.
             allow_final_fallback: Whether to make a final tool-free LLM call after the
                 tool-use iteration limit is reached.
             inject_write_experience: Whether to retrieve and inject relevant agent experience
@@ -428,6 +432,20 @@ class AgentLoop(LoopToolMixin, LoopEventMixin, LoopSessionMixin, LoopCompactionM
                 iteration=iteration,
             )
             accumulate_token_usage(response)
+            if require_natural_completion:
+                if response.error_kind or response.finish_reason not in {
+                    "stop",
+                    "end_turn",
+                    "tool_calls",
+                    "tool_use",
+                    "function_call",
+                }:
+                    raise ValueError(f"Model did not complete its turn ({response.finish_reason})")
+                if not response.has_tool_calls:
+                    if response.finish_reason not in {"stop", "end_turn"}:
+                        raise ValueError("Model requested a tool call without supplying one")
+                    if not (response.content or "").strip():
+                        raise ValueError("Model returned an empty final reply")
 
             if publish_events and response.reasoning_content and not streamed_reasoning:
                 await self.bus.publish_outbound(
@@ -588,6 +606,9 @@ class AgentLoop(LoopToolMixin, LoopEventMixin, LoopSessionMixin, LoopCompactionM
                 final_content = response.content
                 final_reasoning_content = response.reasoning_content
                 break
+        else:
+            if require_natural_completion:
+                return None, final_reasoning_content, tools_used, token_usage, iteration
 
         if final_content == "" and tools_used and tools_used[-1].get("tool_name") in stop_tools:
             pass

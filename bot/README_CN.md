@@ -323,6 +323,20 @@ export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
 | `bot.heartbeat.interval_seconds` | `600` | 心跳间隔 |
 | `bot.mode` | `normal` | 可选 `normal`、`readonly`、`debug` |
 
+### 编译执行模式
+
+Python VikingBot 的 `/runtime/v1/tasks` 默认使用 `bot.compile.mode = "simple"`。每个任务启动一个 AgentLoop，按 Skill 和 instruction 分页读取源，边读边向目标目录写入单个文本文件。增量任务还可以读取源快照之间的差异。simple 支持资源和 memory 目标。发布 Skill 包或使用原有编译流程，请在 `ov.conf` 中显式配置 complex：
+
+```json
+{ "bot": { "compile": { "mode": "complex" } } }
+```
+
+单文件写入使用 OV 默认的版本记录方式，受管目标的操作历史中会出现 `manual_revise`。
+
+仅包含 `map_concurrency`、`shuffle_concurrency`、`reduce_concurrency` 的旧配置也会采用 simple。这三个并发参数用于 complex。
+
+轮数耗尽时，如果已有确认创建或更新的文件，且没有未解决的错误，任务返回 `completed`，并在 Runtime 的 `result.warnings` 中注明部分完成。仅有读取或内容未变时返回 `failed`。通过内核入口提交的部分完成会推进增量基线，下一次增量可能跳过本次未处理且之后没有变化的源。要重新扫描全部输入，请向 `POST /api/v1/compile` 传入 `"args": {"mode": "full"}`。
+
 ### OpenViking 召回配置
 
 | 配置 | 默认值 | 说明 |

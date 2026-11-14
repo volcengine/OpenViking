@@ -32,6 +32,7 @@ class CompileLimits(BaseModel):
     merge_input_chars: int = Field(default=60_000, ge=1)
     # Source text plus repeated context per range/read batch, independent of request packing.
     source_batch_chars: int = Field(default=40_000, ge=1)
+    simple_agent_iterations: int = Field(default=150, ge=1, description="Simple compile rounds.")
     agent_iterations: int = 120
     # Per-transform model/tool rounds, including draft checks and submission; parent budget is separate.
     subagent_iterations: int = Field(default=70, ge=1)
