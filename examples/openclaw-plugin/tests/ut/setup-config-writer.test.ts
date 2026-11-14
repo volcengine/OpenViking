@@ -55,6 +55,7 @@ describe("setup config writer service", () => {
         entries: {
           openviking: {
             enabled: true,
+            hooks: { allowConversationAccess: true },
             config: {
               mode: "remote",
               baseUrl: "http://127.0.0.1:1933",
@@ -63,6 +64,15 @@ describe("setup config writer service", () => {
         },
       },
     });
+  });
+
+  it("keeps an explicit conversation-access denial", () => {
+    const hooks = { allowConversationAccess: false, allowPromptInjection: true };
+    const io = createMemoryIO({ plugins: { entries: { openviking: { hooks } } } });
+
+    writeOpenVikingConfig("/tmp/openclaw.json", { mode: "remote" }, io);
+
+    expect((io.config.plugins as any).entries.openviking.hooks).toEqual(hooks);
   });
 
   it("protects an occupied contextEngine slot unless forced", () => {
