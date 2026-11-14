@@ -607,6 +607,50 @@ function stripInjectedDigestBlocks(text) {
   return out.join("\n");
 }
 
+// Markdown examples are authored content, even when they quote injected markup.
+function fencedCodeRanges(text) {
+  const ranges = [];
+  let fence = null;
+  let start = 0;
+  let offset = 0;
+  for (const line of text.split(/(?<=\n)/)) {
+    const marker = line.match(/^ {0,3}(`{3,}|~{3,})([^\r\n]*)/);
+    if (fence) {
+      if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length
+          && !marker[2].trim()) {
+        ranges.push([start, offset + line.length]);
+        fence = null;
+      }
+    } else if (marker && !(marker[1][0] === "`" && marker[2].includes("`"))) {
+      fence = marker[1];
+      start = offset;
+    }
+    offset += line.length;
+  }
+  if (fence) ranges.push([start, text.length]);
+  return ranges;
+}
+
+function stripInjectedMemoryBlocks(text) {
+  const ranges = fencedCodeRanges(text);
+  // Keep inline and blockquoted examples; injected blocks start on their own line.
+  return text.replace(
+    /^[ \t]*<(openviking-context|relevant-memor(?:y|ies))\b[^>]*>[\s\S]*?<\/\1>/gim,
+    (block, _tag, offset) => ranges.some(([start, end]) => offset >= start && offset < end)
+      ? block : " ",
+  );
+}
+
+function stripUnquotedDigestBlocks(text) {
+  let offset = 0;
+  let result = "";
+  for (const [start, end] of fencedCodeRanges(text)) {
+    result += stripInjectedDigestBlocks(text.slice(offset, start)) + text.slice(start, end);
+    offset = end;
+  }
+  return result + stripInjectedDigestBlocks(text.slice(offset));
+}
+
 /**
  * Drop everything in a turn that the conversation did not put there.
  *
@@ -616,11 +660,8 @@ function stripInjectedDigestBlocks(text) {
  * — newlines, code fences — survives.
  */
 export function sanitizeCapturedText(text) {
-  let value = String(text || "");
+  let value = stripInjectedMemoryBlocks(String(text || "").replace(/\u0000/g, ""));
   value = value
-    .replace(/\u0000/g, "")
-    .replace(/<openviking-context\b[^>]*>[\s\S]*?<\/openviking-context>/gi, " ")
-    .replace(/<relevant-memor(?:y|ies)\b[^>]*>[\s\S]*?<\/relevant-memor(?:y|ies)>/gi, " ")
     // Claude Code wraps its own out-of-band notes to the model in these two
     // shapes. They are the host talking to itself, not the conversation.
     .replace(/<system-reminder\b[^>]*>[\s\S]*?<\/system-reminder>/gi, " ")
@@ -630,7 +671,7 @@ export function sanitizeCapturedText(text) {
     .replace(/^[ \t]*\[\d{4}-\d{2}-\d{2}[T ][-+0-9:.Z]{5,35}\][ \t]*/gm, "")
     .replace(/^\s*\d{10,13}\s+/gm, "");
   value = stripMetadataFences(value);
-  value = stripInjectedDigestBlocks(value);
+  value = stripUnquotedDigestBlocks(value);
   value = value.replace(/^\s*More detail: use the OpenViking MCP .*$/gim, " ");
   return value
     .replace(/[ \t]+\n/g, "\n")
