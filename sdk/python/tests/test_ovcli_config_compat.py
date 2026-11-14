@@ -10,7 +10,10 @@ import pytest
 from openviking_sdk import AsyncHTTPClient
 
 
-def test_async_http_client_loads_connection_fields_from_ovcli_config(tmp_path, monkeypatch):
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig"])
+def test_async_http_client_loads_connection_fields_from_ovcli_config(
+    tmp_path, monkeypatch, encoding
+):
     config_path = tmp_path / "ovcli.conf"
     config_path.write_text(
         json.dumps(
@@ -22,7 +25,8 @@ def test_async_http_client_loads_connection_fields_from_ovcli_config(tmp_path, m
                 "user": "config-user",
                 "timeout": 12.5,
             }
-        )
+        ),
+        encoding=encoding,
     )
     monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(config_path))
     monkeypatch.delenv("OPENVIKING_URL", raising=False)
