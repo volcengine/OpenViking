@@ -1,10 +1,23 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
+import errno
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import List, Optional, Union
 
 from openviking.parse.base import ParseResult
+
+
+def get_existing_source_path(source: Union[str, Path]) -> Optional[Path]:
+    """Resolve a path candidate for parsers that also accept inline content."""
+    path = Path(source)
+    try:
+        return path if path.exists() else None
+    except OSError as exc:
+        # An inline string can exceed a filesystem's filename limit.
+        if not isinstance(source, str) or exc.errno != errno.ENAMETOOLONG:
+            raise
+        return None
 
 
 class BaseParser(ABC):

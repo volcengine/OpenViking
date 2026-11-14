@@ -37,7 +37,7 @@ from openviking.parse.output import (
     ParseArtifactWriter,
     create_parse_artifact_writer,
 )
-from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.parsers.base_parser import BaseParser, get_existing_source_path
 from openviking.parse.parsers.code.ast.providers import supports_code_skeleton
 from openviking.parse.parsers.constants import (
     CODE_EXTENSIONS,
@@ -245,9 +245,9 @@ class MarkdownParser(BaseParser):
         Returns:
             ParseResult with document tree (including temp_dir_path)
         """
-        path = Path(source)
+        path = get_existing_source_path(source)
 
-        if path.exists():
+        if path is not None:
             content = self._read_file(path)
             # Pass base_dir for resolving relative image paths
             return await self.parse_content(
