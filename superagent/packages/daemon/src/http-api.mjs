@@ -55,7 +55,10 @@ function send(response, status, contentType, body, extraHeaders = {}) {
 
 // serviceSnapshot: ({ includeState }) => { healthy, ready, body } — owned by
 // the daemon, which holds the subscriber/runtime state this surface reports.
-export async function startHttpApi({ config, store, logger, serviceSnapshot }) {
+// readConsole: (pathname, searchParams) => { status, body } | null — the
+// read-only RFC v1 routes the console reads tasks from, or null for a path it
+// does not serve (answered 404 here, as before).
+export async function startHttpApi({ config, store, logger, serviceSnapshot, readConsole = null }) {
   const server = http.createServer((request, response) => {
     try {
       if (!requestIsSameOrigin(request)) {
@@ -139,6 +142,14 @@ export async function startHttpApi({ config, store, logger, serviceSnapshot }) {
           hasNewer: feed.hasNewer ?? false,
         });
         return;
+      }
+
+      if (url.pathname.startsWith('/api/v1/')) {
+        const answer = readConsole ? readConsole(url.pathname, url.searchParams) : null;
+        if (answer) {
+          send(response, answer.status, 'application/json; charset=utf-8', answer.body);
+          return;
+        }
       }
 
       if (['/health', '/ready'].includes(url.pathname) && url.searchParams.size === 0) {

@@ -27,6 +27,7 @@ import { ChatNameTracker } from './chat-names.mjs';
 import { FailurePolicy } from './notices.mjs';
 import { DecisionPolicy, warnIfSilenceInert, warnIfStagedRepliesInert } from './decisions.mjs';
 import { startHttpApi } from './http-api.mjs';
+import { createConsoleRead } from './console-read.mjs';
 import { InstanceLock } from './lock.mjs';
 import { pruneLarkMedia } from './lark-media.mjs';
 import { safeChatLookupError, safeError } from './logger.mjs';
@@ -476,6 +477,11 @@ export class PersonalAgentDaemon {
           store: this.store,
           logger: this.logger,
           serviceSnapshot: (options) => this.serviceSnapshot(options),
+          readConsole: createConsoleRead({
+            db: this.store.db,
+            instanceId: this.config.instanceId,
+            tasks: this.tasks ?? null,
+          }),
         });
       }
       await this.connectors.startSubscription(

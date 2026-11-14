@@ -11,6 +11,7 @@
   "workspaces": [
     "packages/daemon",
     "packages/web",
+    "packages/console",
     "packages/updater",
     "packages/cli"
   ],
@@ -27,8 +28,10 @@
     "start": "node packages/daemon/src/main.mjs",
     "start:daemon": "node packages/daemon/src/main.mjs",
     "start:web": "node packages/web/src/main.mjs",
-    "check": "node scripts/check.mjs",
-    "test": "node --test packages/daemon/test/*.test.mjs packages/web/test/*.test.mjs packages/updater/test/*.test.mjs packages/cli/test/*.test.mjs",
+    "build:console": "npm run build --workspace @ov-superagent/console",
+    "test:console": "npm test --workspace @ov-superagent/console",
+    "check": "node scripts/check.mjs && npm run check --workspace @ov-superagent/console",
+    "test": "node --test packages/daemon/test/*.test.mjs packages/web/test/*.test.mjs packages/updater/test/*.test.mjs packages/cli/test/*.test.mjs && npm run test:console",
     "simulator:claude-runtime": "node packages/daemon/simulator/claude-runtime-simulator.mjs",
     "health": "node packages/web/scripts/healthcheck.mjs"
   },
