@@ -156,6 +156,7 @@ test('failed searches expose the reason and can retry the same query', async () 
     await open();
     await type('profile');
     await waitForDebounce();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 1100)));
     assert.match(
       dialog().querySelector('[role="alert"]').textContent,
       /demo search failed/,
@@ -169,8 +170,8 @@ test('failed searches expose the reason and can retry the same query', async () 
         .click(),
     );
     await settle();
-    assert.equal(calls(fetch).length, 2);
-    assert.equal(calls(fetch)[1].body.query, 'profile');
+    assert.equal(calls(fetch).length, 3);
+    assert.equal(calls(fetch)[2].body.query, 'profile');
     assert.match(dialog().textContent, /No matching resources/);
     assert.equal(modeSwitch(), null);
   } finally {

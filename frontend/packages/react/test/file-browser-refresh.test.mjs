@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createElement } from 'react';
+import { act, createElement } from 'react';
 
 import { OpenVikingProvider } from './helpers/internal-hooks.mjs';
 import { OpenVikingProvider as PublicOpenVikingProvider } from '@openviking/react/client';
@@ -209,6 +209,7 @@ test('a failed listing renders an error row with a retry, not an empty tree', as
     ),
   );
 
+  await act(() => new Promise((resolve) => setTimeout(resolve, 1100)));
   const html = tree.container.innerHTML;
   assert.match(html, /Permission denied|加载失败|Failed to load/);
   assert.doesNotMatch(html, /ov-file-tree__state[^]*No files/);
@@ -249,6 +250,7 @@ test('a failed read renders a failure state instead of the unselected artwork', 
     ),
   );
 
+  await act(() => new Promise((resolve) => setTimeout(resolve, 1100)));
   const html = tree.container.innerHTML;
   assert.match(html, /ov-file-browser__failure/);
   assert.match(html, /Permission denied/);

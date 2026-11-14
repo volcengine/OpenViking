@@ -74,7 +74,6 @@ export function FileBrowserSearch({
   const [draft, setDraft] = useState('');
   const [query, setQuery] = useState('');
   const [composing, setComposing] = useState(false);
-  const [generation, setGeneration] = useState(0);
   const [mode, setMode] = useState<SearchMode>(DEFAULT_SEARCH_MODE);
   const [filters, setFilters] = useState<SearchFilters>(EMPTY_FILTERS);
 
@@ -105,7 +104,6 @@ export function FileBrowserSearch({
     client,
     mode,
     query: !composing && !awaitingQuery ? query : '',
-    generation,
     filters: effectiveFilters,
     rootUri,
     requestOptions,
@@ -153,7 +151,7 @@ export function FileBrowserSearch({
   };
   const retry = () => {
     inputRef.current?.focus();
-    setGeneration((value) => value + 1);
+    search.retry();
   };
   const { active, activeIndex, listId, onHighlight, onKeyDown } =
     useSearchHighlight(
