@@ -203,13 +203,14 @@ def start_tier(candidate: Candidate, pin: Optional[Tier] = None) -> Tier:
 
 
 def abstract_substitute(candidate: Candidate) -> Tier:
-    """Tier that stands in when ``abstract`` is unavailable or too expensive.
+    """Tier that stands in when ``abstract`` is unavailable.
 
     Only the full-body-abstract categories can spend ``overview`` here: their
     abstract is the whole body, so the substitute discloses strictly less. A
-    resource or skill whose abstract is missing or oversized degrades to a bare
-    URI instead — reading its body would cross the opt-in deepening boundary
-    that keeps generated summaries, not raw content, on the default path.
+    resource or skill whose abstract is missing degrades to a bare URI instead
+    — reading its body would cross the opt-in deepening boundary that keeps
+    generated summaries, not raw content, on the default path. The budget
+    planner clips an available oversized abstract before using this fallback.
     """
     if candidate.category in FULL_BODY_ABSTRACT_CATEGORIES:
         return "overview"

@@ -4,8 +4,9 @@
 
 Scores cluster in a narrow band, so spending the whole budget on the top hit is
 a bad bet. Every candidate is placed at its category's default tier first and
-only then deepens on leftover budget, and an oversized tier falls back to the
-previous one instead of being truncated.
+only then deepens on leftover budget. An oversized tier falls back to a cheaper
+content tier; the cheapest available content is clipped before falling back to
+a bare URI.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from openviking.retrieve.context_assembler.params import (
 )
 from openviking.retrieve.context_assembler.render import fragment_tokens
 from openviking.retrieve.context_assembler.tiers import abstract_substitute, tier_text, tier_window
+from openviking.utils.token_estimation import estimate_text_tokens, truncate_text_to_token_budget
 
 SEPARATOR_TOKENS = 1
 
@@ -33,6 +35,7 @@ class _Slot:
     entry: AssembledEntry
     ceiling: Tier
     cost: int
+    truncated: bool = False
 
 
 @dataclass
@@ -69,11 +72,39 @@ def _make_entry(candidate: Candidate, tier: Tier, text: str) -> AssembledEntry:
     return entry
 
 
+def _clip_entry(
+    candidate: Candidate,
+    tier: Tier,
+    text: str,
+    token_budget: int,
+) -> Optional[AssembledEntry]:
+    """Clip non-empty text so its complete rendered fragment fits ``token_budget``."""
+    if token_budget <= 0:
+        return None
+
+    # The body-only truncator cannot account for the URI, XML envelope or body
+    # escaping. Search the largest body budget whose measured fragment fits,
+    # rather than letting those fixed costs push the entry over the cap again.
+    low = 1
+    high = estimate_text_tokens(text)
+    best: Optional[AssembledEntry] = None
+    while low <= high:
+        body_budget = (low + high) // 2
+        clipped = truncate_text_to_token_budget(text, body_budget)
+        entry = _make_entry(candidate, tier, clipped)
+        if clipped and entry.tokens <= token_budget:
+            best = entry
+            low = body_budget + 1
+        else:
+            high = body_budget - 1
+    return best
+
+
 def oversized_abstract_needs_body(candidate: Candidate, cap: int) -> bool:
     """Whether an over-cap abstract falls back to a tier that reads the body.
 
     Only the full-body-abstract categories have that fallback. A resource or
-    skill keeps its short abstract or degrades to a bare URI, so an oversized
+    skill keeps its short abstract, clipped if necessary, so an oversized
     abstract there never justifies a read.
     """
     if abstract_substitute(candidate) != "overview":
@@ -105,21 +136,46 @@ def plan_entries(
         # whole body, so exempting that tier lets one entry eat the budget.
         return tier == "uri" or tokens <= cap
 
-    for candidate in candidates:
+    for index, candidate in enumerate(candidates):
         start, ceiling = tier_window(candidate, pins.for_category(candidate.category))
         placed: Optional[_Slot] = None
+        clip_source: Optional[tuple[Tier, str]] = None
         for tier in _tiers_down_from(candidate, start):
             text = tier_text(candidate, tier, contents=contents)
             if text is None:
                 continue
+            if tier == "uri" and clip_source is not None:
+                # Clipping is the last content-bearing fallback. Share the
+                # remaining total across unplaced candidates so early hits
+                # cannot consume their 2x cap and starve all later hits.
+                remaining = max_tokens - used - (SEPARATOR_TOKENS if slots else 0)
+                fair_share = remaining // max(1, len(candidates) - index)
+                entry = _clip_entry(
+                    candidate,
+                    *clip_source,
+                    token_budget=min(cap, fair_share),
+                )
+                if entry is not None:
+                    cost = entry.tokens + (SEPARATOR_TOKENS if slots else 0)
+                    placed = _Slot(
+                        candidate=candidate,
+                        entry=entry,
+                        ceiling=ceiling,
+                        cost=cost,
+                        truncated=True,
+                    )
+                    break
+
             entry = _make_entry(candidate, tier, text)
             cost = entry.tokens + (SEPARATOR_TOKENS if slots else 0)
-            if not fits_cap(tier, entry.tokens):
-                continue
-            if used + cost > max_tokens:
-                continue
-            placed = _Slot(candidate=candidate, entry=entry, ceiling=ceiling, cost=cost)
-            break
+            if fits_cap(tier, entry.tokens) and used + cost <= max_tokens:
+                placed = _Slot(candidate=candidate, entry=entry, ceiling=ceiling, cost=cost)
+                break
+            if tier != "uri":
+                # Prefer a genuinely cheaper content tier before clipping. For
+                # resources/skills no such tier exists, so their already
+                # retrieved abstract is clipped without reading the body.
+                clip_source = (tier, text)
 
         if placed is None:
             dropped += 1
@@ -157,6 +213,7 @@ def plan_entries(
                 continue
             slot.entry = entry
             slot.cost += delta
+            slot.truncated = False
             used += delta
             upgraded += 1
         return upgraded
@@ -182,6 +239,7 @@ def plan_entries(
         "returned": len(entries),
         "dropped": dropped,
         "deduped": deduped,
+        "truncated": sum(slot.truncated for slot in slots),
         "detail": pins.as_stats(),
         "tier_counts": tier_counts,
         "fill": {
