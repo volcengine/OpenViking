@@ -97,7 +97,8 @@ def plan_entries(
     used = 0
     dropped = 0
     deduped = 0
-    seen_bodies: set[int] = set()
+    floor_slots_by_body: Dict[str, _Slot] = {}
+    deferred: List[tuple[int, Candidate, str]] = []
 
     def fits_cap(tier: Tier, tokens: int) -> bool:
         # Only the bare URI is exempt — it has no body to cap. No tier is cheap
@@ -125,13 +126,21 @@ def plan_entries(
             dropped += 1
             continue
 
-        # Dedup on what actually gets injected: two URIs sharing an abstract they
-        # are not showing (uri tier) are still two distinct pointers.
-        body_key = hash(placed.entry.text or candidate.base_uri)
-        if body_key in seen_bodies:
+        # A bare URI is a distinct pointer. For a duplicate Event overview,
+        # save any distinct full body without reserving a second floor slot.
+        body_key = placed.entry.text or candidate.base_uri
+        previous = floor_slots_by_body.get(body_key)
+        if previous is not None:
             deduped += 1
+            if start == placed.entry.detail == "overview" and ceiling == "full":
+                body = tier_text(candidate, "full", contents=contents)
+                if body and (
+                    previous.ceiling != "full"
+                    or body != tier_text(previous.candidate, "full", contents=contents)
+                ):
+                    deferred.append((len(slots), candidate, body))
             continue
-        seen_bodies.add(body_key)
+        floor_slots_by_body[body_key] = placed
 
         slots.append(placed)
         used += placed.cost
@@ -171,6 +180,24 @@ def plan_entries(
     spare_upgrades = upgrade_pass("full", respect_cap=False)
 
     entries = [slot.entry for slot in slots]
+    if deferred:
+        # Existing floor slots and their upgrades get first use of the budget.
+        # Recover deferred bodies with the remaining budget in candidate order.
+        served_bodies = {entry.text for entry in entries}
+        recovered = 0
+        for position, candidate, body in deferred:
+            if body in served_bodies:
+                continue
+            entry = _make_entry(candidate, "full", body)
+            cost = entry.tokens + SEPARATOR_TOKENS
+            if used + cost > max_tokens:
+                continue
+            entries.insert(position + recovered, entry)
+            served_bodies.add(body)
+            used += cost
+            recovered += 1
+        deduped -= recovered
+
     tier_counts: Dict[str, int] = {}
     for entry in entries:
         tier_counts[entry.detail] = tier_counts.get(entry.detail, 0) + 1
