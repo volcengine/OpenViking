@@ -49,6 +49,7 @@ export function FileTreeRowView({
   const canExpand = isDirectory && row.hasChildren !== false;
   const isExpanded = Boolean(row.expanded);
   const isSelected = selectedId === row.id;
+  const pinTrailing = ctx.rowTrailingPosition === 'viewport-end';
   const extra = getRowAttributes?.(row) ?? {};
   const {
     className: extraClassName,
@@ -93,7 +94,7 @@ export function FileTreeRowView({
       data-disabled={row.disabled || undefined}
       data-kind={row.kind}
       data-trailing-position={ctx.rowTrailingPosition}
-      style={{ ...rowStyle(row.depth), ...extraStyle }}
+      style={{ ...rowStyle(row.depth, pinTrailing), ...extraStyle }}
       onClick={handleClick}
       onKeyDown={(event: KeyboardEvent<HTMLDivElement>) =>
         onRowKeyDown(event, row)

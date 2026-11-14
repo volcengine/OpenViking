@@ -386,6 +386,11 @@ html.dark .ov-file-tree__body {
 }
 
 /* Row-end markers follow metadata; viewport-end markers stay inside the scrollport. */
+.ov-file-tree__row[data-trailing-position='viewport-end']
+  > :is(.ov-file-tree__toggle, .ov-file-tree__toggle-spacer) {
+  margin-left: var(--ov-ui-file-tree-row-indent);
+}
+
 .ov-file-tree__trailing {
   display: inline-flex;
   flex: none;

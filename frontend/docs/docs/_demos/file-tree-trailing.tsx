@@ -12,6 +12,7 @@ const rows = [
     depth: 2,
   },
   { name: 'summary.md', depth: 1 },
+  { name: 'deeply-nested-note.md', depth: 24 },
 ].map(({ name, depth }) => ({
   kind: 'entry' as const,
   type: 'file' as const,
@@ -59,7 +60,7 @@ export default function FileTreeTrailing() {
           <SelectOption value="row-end">{text.row}</SelectOption>
         </Select>
       </label>
-      <div style={{ height: 160, maxWidth: 360, marginTop: 12 }}>
+      <div style={{ height: 180, maxWidth: 360, marginTop: 12 }}>
         <FileTree
           locale={locale}
           rows={rows}
