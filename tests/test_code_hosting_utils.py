@@ -784,3 +784,85 @@ def test_parse_git_repo_url_returns_consistent_clone_metadata(
     assert parsed.branch == branch
     assert parsed.commit == commit
     assert is_git_repo_url(url) is True
+
+
+# --- host normalization (trailing dot / case), consistency with #2689 + network_guard ---
+
+
+def test_parse_code_hosting_url_https_trailing_dot():
+    assert parse_code_hosting_url("https://github.com./org/repo") == "org/repo"
+
+
+def test_parse_code_hosting_url_git_ssh_uppercase_host():
+    assert parse_code_hosting_url("git@GitHub.com:org/repo.git") == "org/repo"
+
+
+def test_is_github_url_trailing_dot():
+    assert is_github_url("https://github.com./org/repo") is True
+
+
+def test_is_code_hosting_url_trailing_dot():
+    assert is_code_hosting_url("https://github.com./org/repo") is True
+
+
+def test_is_github_url_uppercase_config_domain():
+    def upper_cfg():
+        return SimpleNamespace(
+            code=SimpleNamespace(
+                github_domains=["GITHUB.COM"],
+                gitlab_domains=[],
+                azure_devops_domains=[],
+                code_hosting_domains=["GITHUB.COM"],
+            )
+        )
+
+    with patch.object(_module, "get_openviking_config", side_effect=upper_cfg):
+        assert is_github_url("https://github.com/org/repo") is True
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://github.com./org/repo/issues/123",
+        "https://github.com./org/repo/blob/main/README.md",
+        "https://gitcode.com./org/repo/issues/123",
+        "https://github.com./settings/profile",
+    ],
+)
+def test_trailing_dot_preserves_non_repository_routes(url):
+    assert parse_git_repo_url(url) is None
+
+
+@pytest.mark.parametrize(
+    "url, repo_path, branch",
+    [
+        ("https://github.com./org/repo/tree/main", "org/repo", "main"),
+        ("https://gitlab.com./org/subgroup/repo/-/tree/main", "org/subgroup/repo", "main"),
+        ("git@SSH.DEV.AZURE.COM.:v3/org/project/repo", "org/project/repo", None),
+    ],
+)
+def test_trailing_dot_preserves_repository_identity(url, repo_path, branch):
+    parsed = parse_git_repo_url(url)
+    assert parsed is not None
+    assert parsed.repo_path == repo_path
+    assert parsed.branch == branch
+
+
+def test_configured_trailing_dot_with_port():
+    config = _mock_config()
+    config.code.code_hosting_domains = ["GIT.EXAMPLE.COM.:8443"]
+    with patch.object(_module, "get_openviking_config", return_value=config):
+        assert is_code_hosting_url("https://git.example.com.:8443/org/repo")
+        assert not is_code_hosting_url("https://git.example.com:9443/org/repo")
+        assert not is_code_hosting_url("https://git.example.com.evil:8443/org/repo")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://github.com./org/repo/blob/main/README.md",
+        "https://RAW.GITHUBUSERCONTENT.COM./org/repo/main/README.md",
+    ],
+)
+def test_trailing_dot_blob_urls_keep_file_routing(url):
+    assert _module.is_code_hosting_blob_url(url)
