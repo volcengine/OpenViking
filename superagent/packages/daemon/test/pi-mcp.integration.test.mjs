@@ -143,7 +143,8 @@ async function fixture(t, { conflict = false, dialogs = false, openviking = fals
     model.closeAllConnections();
     await new Promise((resolve) => model.close(resolve));
     store.close();
-    fs.rmSync(root, { recursive: true, force: true });
+    // Windows may briefly retain the managed child's temp files after exit.
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
   await new Promise((resolve) => model.listen(0, '127.0.0.1', resolve));
   fs.writeFileSync(path.join(agentDir, 'models.json'), JSON.stringify({ providers: { fixture: {
