@@ -153,6 +153,8 @@ export const KNOBS = [
   // tool results, so it captures them by default.
   { name: "captureToolResults", type: "bool", default: false, harness: { dsh: true }, env: "OPENVIKING_CAPTURE_TOOL_RESULTS", capability: "capture" },
   { name: "captureFilters", type: "list", default: [], env: "OPENVIKING_CAPTURE_FILTERS", capability: "capture" },
+  // dsh is the only reader: producer kinds whose user messages are genuine input, e.g. a relay of people's messages.
+  { name: "inputSourceKinds", type: "list", default: [], env: "OPENVIKING_INPUT_SOURCE_KINDS", capability: "capture" },
   // 0 means "derive from timeoutMs": a write gets a longer budget than a read.
   { name: "captureTimeoutMs", type: "int", default: 0, min: 0, max: 600000, env: "OPENVIKING_CAPTURE_TIMEOUT_MS", capability: "capture" },
   { name: "commitTokenThreshold", type: "int", default: 20000, min: 1000, max: 1000000, env: "OPENVIKING_COMMIT_TOKEN_THRESHOLD", workspace: "capture.commit_token_threshold", capability: "capture" },

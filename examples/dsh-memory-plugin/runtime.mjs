@@ -139,7 +139,7 @@ export class OpenVikingRuntime {
   async recallMessage(agent, messages, signal) {
     const state = await this.initialize(agent);
     if (!state.ready || !isRecallEnabled(state.config)) return null;
-    const query = promptText(messages);
+    const query = promptText(messages, state.config);
     if (!query || query.length < state.config.minQueryLength) return null;
     if (signal?.aborted) return null;
     const runCompressor = ["client", "auto"].includes(state.config.recallRewrite)

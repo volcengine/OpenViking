@@ -15,6 +15,7 @@ test("behavior environment overrides are applied and normalized", () => {
     OPENVIKING_RECALL_PEER_SCOPE: "actor",
     OPENVIKING_RECALL_QUERY_EXPANSION: "off",
     OPENVIKING_RECALL_LIMIT: "7",
+    OPENVIKING_INPUT_SOURCE_KINDS: "dsh-superagent, other-relay",
   }, "/workspace/project");
 
   assert.equal(config.endpoint, "http://127.0.0.1:19464");
@@ -25,6 +26,7 @@ test("behavior environment overrides are applied and normalized", () => {
   assert.equal(config.recallQueryExpansionConfigured, true);
   assert.equal(config.recallLimit, 7);
   assert.equal(config.recallLimitConfigured, true);
+  assert.deepEqual(config.inputSourceKinds, ["dsh-superagent", "other-relay"]);
 });
 
 test("explicit plugin config overrides credential files", () => {
