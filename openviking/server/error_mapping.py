@@ -7,6 +7,7 @@ from typing import Any, Iterator
 
 import httpx
 
+from openviking.models.model_error import ModelError, ModelErrorKind, model_exception_chain
 from openviking.pyagfs.exceptions import (
     AGFSAlreadyExistsError,
     AGFSClientError,
@@ -298,6 +299,7 @@ def _build_upstream_error(
     status: int | None = None,
     source: BaseException | None = None,
     vlm_context: BaseException | None = None,
+    extra_details: dict[str, Any] | None = None,
 ) -> OpenVikingError:
     labels = {
         "INVALID_ARGUMENT": "Upstream model request was rejected",
@@ -320,6 +322,8 @@ def _build_upstream_error(
         details["upstream_status_code"] = status
     if source is not None:
         details["upstream_error_type"] = type(source).__name__
+    if extra_details:
+        details.update(extra_details)
     # Search for VLM model/api_base annotations. vlm_context is the outermost
     # exception (where failover wrappers attach the annotation); source may be
     # an inner exception from the chain.
@@ -333,6 +337,52 @@ def _build_upstream_error(
         details["vlm_api_base"] = vlm_api_base
         display = f"{display}\n  API base: {vlm_api_base}"
     return OpenVikingError(display, code=code, details=details)
+
+
+_MODEL_ERROR_KIND_TO_PROTOCOL_CODE = {
+    ModelErrorKind.TRANSIENT_SERVICE_ERROR: "UNAVAILABLE",
+    ModelErrorKind.TRANSIENT_NETWORK_ERROR: "UNAVAILABLE",
+    ModelErrorKind.RATE_LIMIT_ERROR: "RESOURCE_EXHAUSTED",
+    ModelErrorKind.AUTHENTICATION_ERROR: "UNAUTHENTICATED",
+    ModelErrorKind.PERMISSION_DENIED: "PERMISSION_DENIED",
+    ModelErrorKind.QUOTA_EXHAUSTED: "RESOURCE_EXHAUSTED",
+    ModelErrorKind.MODEL_NOT_FOUND: "NOT_FOUND",
+    ModelErrorKind.UNSUPPORTED: "INVALID_ARGUMENT",
+    ModelErrorKind.INVALID_REQUEST: "INVALID_ARGUMENT",
+    ModelErrorKind.INPUT_TOO_LARGE: "INVALID_ARGUMENT",
+    ModelErrorKind.CONTENT_SAFETY: "INVALID_ARGUMENT",
+}
+
+
+def _map_structured_model_error(error: ModelError, *, context: Exception) -> OpenVikingError:
+    # Preserve transport status precision; kind is the fallback without a status.
+    code = error_code_from_http_status(
+        error.status_code,
+        default=_MODEL_ERROR_KIND_TO_PROTOCOL_CODE.get(error.kind, "INTERNAL"),
+    )
+    if (
+        error.kind is ModelErrorKind.TRANSIENT_NETWORK_ERROR
+        and error.status_code is None
+        and any(
+            isinstance(item, TimeoutError) or "timeout" in type(item).__name__.lower()
+            for item in model_exception_chain(error)
+        )
+    ):
+        code = "DEADLINE_EXCEEDED"
+
+    details: dict[str, Any] = {"model_error_kind": error.kind.value}
+    if error.provider:
+        details["provider"] = error.provider
+    if error.code:
+        details["provider_error_code"] = error.code
+    return _build_upstream_error(
+        code=code,
+        message=_upstream_detail_message(context),
+        status=error.status_code,
+        source=error,
+        vlm_context=context,
+        extra_details=details,
+    )
 
 
 def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
@@ -350,6 +400,12 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
                 source=item,
                 vlm_context=exc,
             )
+
+    # A provider boundary owns classification. Project its kind and status
+    # without classifying the message again.
+    for item in model_exception_chain(exc):
+        if isinstance(item, ModelError):
+            return _map_structured_model_error(item, context=exc)
 
     status, source = _extract_structured_http_status(exc)
     if status is None:

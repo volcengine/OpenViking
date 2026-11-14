@@ -8,7 +8,7 @@ import httpx
 import requests
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
-from openviking.models.model_error import ModelError, ModelErrorKind, model_error_boundary
+from openviking.models.model_error import ModelError, model_error_boundary, model_error_from_code
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils.logger import default_logger as logger
 
@@ -113,11 +113,10 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
             # Check for business error code
             base_resp = data.get("base_resp", {})
             if base_resp.get("status_code") != 0:
-                raise ModelError(
-                    ModelErrorKind.UNKNOWN,
+                raise model_error_from_code(
+                    base_resp.get("status_code"),
                     f"MiniMax API error: {base_resp.get('status_msg')}",
                     provider="minimax",
-                    code=str(base_resp.get("status_code")),
                 )
 
             vectors = data.get("vectors", [])
@@ -177,11 +176,10 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
 
             base_resp = data.get("base_resp", {})
             if base_resp.get("status_code") != 0:
-                raise ModelError(
-                    ModelErrorKind.UNKNOWN,
+                raise model_error_from_code(
+                    base_resp.get("status_code"),
                     f"MiniMax API error: {base_resp.get('status_msg')}",
                     provider="minimax",
-                    code=str(base_resp.get("status_code")),
                 )
 
             vectors = data.get("vectors", [])

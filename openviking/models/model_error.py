@@ -83,11 +83,30 @@ _CODE_KINDS = {
     "UNSUPPORTEDVALUE": ModelErrorKind.UNSUPPORTED,
 }
 
+# MiniMax business codes come from base_resp.status_code.
+# Keep numeric codes provider-scoped: the same number has no portable meaning
+# across model APIs.
+_PROVIDER_CODE_KINDS = {
+    "minimax": {
+        "1000": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
+        "1001": ModelErrorKind.TRANSIENT_NETWORK_ERROR,
+        "1002": ModelErrorKind.RATE_LIMIT_ERROR,
+        "1004": ModelErrorKind.AUTHENTICATION_ERROR,
+        "1008": ModelErrorKind.QUOTA_EXHAUSTED,
+        "1013": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
+        "1026": ModelErrorKind.CONTENT_SAFETY,
+        "1027": ModelErrorKind.CONTENT_SAFETY,
+        "2013": ModelErrorKind.INVALID_REQUEST,
+        "2049": ModelErrorKind.AUTHENTICATION_ERROR,
+    }
+}
+
 _TRANSIENT_SERVICE_STATUS = {409, 500, 502, 503}
 _TRANSIENT_NETWORK_STATUS = {408, 504}
 
 
-def _exception_chain(error: BaseException) -> list[BaseException]:
+def model_exception_chain(error: BaseException) -> list[BaseException]:
+    """Follow the causal chain once, preferring an explicit cause over context."""
     chain: list[BaseException] = []
     seen: set[int] = set()
     current: BaseException | None = error
@@ -319,11 +338,41 @@ def model_error_from_status(
     )
 
 
+def model_error_from_code(
+    code: str | int | None,
+    message: str,
+    *,
+    provider: str,
+) -> ModelError:
+    """Build a model error from a provider-scoped business error code."""
+    code_text = str(code) if code is not None else None
+    normalized = _normalized_code(code_text) or ""
+    provider_kinds = _PROVIDER_CODE_KINDS.get(provider.lower(), {})
+    kind = provider_kinds.get(normalized) or _CODE_KINDS.get(normalized)
+    return ModelError(
+        kind or ModelErrorKind.UNKNOWN,
+        message,
+        provider=provider,
+        code=code_text,
+    )
+
+
 def model_error_from_exception(error: BaseException) -> ModelError | None:
-    """Convert a recognized SDK/API exception at the provider boundary."""
-    for item in _exception_chain(error):
+    """Reuse the nearest classification or classify the first SDK failure."""
+    for item in model_exception_chain(error):
         if isinstance(item, ModelError):
             return item
+        carried_kind = getattr(item, "kind", None)
+        if isinstance(carried_kind, ModelErrorKind):
+            provider = getattr(item, "provider", None)
+            return ModelError(
+                carried_kind,
+                str(error),
+                provider=provider if isinstance(provider, str) else None,
+                status_code=_status_code(item),
+                code=_error_code(item),
+            )
+
         classified = _sdk_kind(item)
         if classified is None:
             continue
@@ -340,7 +389,7 @@ def model_error_from_exception(error: BaseException) -> ModelError | None:
 
 def model_error_kind(error: BaseException) -> ModelErrorKind | None:
     """Return the structured model kind carried by an exception chain."""
-    for item in _exception_chain(error):
+    for item in model_exception_chain(error):
         kind = getattr(item, "kind", None)
         if isinstance(kind, ModelErrorKind):
             return kind
@@ -366,7 +415,7 @@ def model_error_boundary(func: F) -> F:
                     raise
                 if args and isinstance(getattr(args[0], "provider", None), str):
                     converted.provider = args[0].provider
-                if any(item is converted for item in _exception_chain(error)):
+                if any(item is converted for item in model_exception_chain(error)):
                     raise converted
                 raise converted from error
 
@@ -382,7 +431,7 @@ def model_error_boundary(func: F) -> F:
                 raise
             if args and isinstance(getattr(args[0], "provider", None), str):
                 converted.provider = args[0].provider
-            if any(item is converted for item in _exception_chain(error)):
+            if any(item is converted for item in model_exception_chain(error)):
                 raise converted
             raise converted from error
 
