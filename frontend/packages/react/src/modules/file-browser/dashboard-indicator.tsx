@@ -6,6 +6,7 @@ import {
   WikiConflictBoardIcon,
 } from '../../icons/index.js';
 import type { FileBrowserDashboard } from './dashboard-model.js';
+import { Tooltip } from '../../shared/primitives/tooltip/index.js';
 
 export function DashboardIndicator({
   dashboard,
@@ -32,17 +33,18 @@ export function DashboardIndicator({
         ? WikiConflictBoardIcon
         : WikiBoardIcon;
   return (
-    <button
-      type="button"
-      className={`ov-file-browser__dashboard${dashboard.pendingConflicts ? ' ov-file-browser__dashboard--pending' : ''}`}
-      aria-label={label}
-      title={label}
-      onClick={(event) => {
-        event.stopPropagation();
-        onOpen(dashboard.uri);
-      }}
-    >
-      <Icon width={12} height={12} />
-    </button>
+    <Tooltip content={label}>
+      <button
+        type="button"
+        className={`ov-file-browser__dashboard${dashboard.pendingConflicts ? ' ov-file-browser__dashboard--pending' : ''}`}
+        aria-label={label}
+        onClick={(event) => {
+          event.stopPropagation();
+          onOpen(dashboard.uri);
+        }}
+      >
+        <Icon width={12} height={12} />
+      </button>
+    </Tooltip>
   );
 }

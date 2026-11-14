@@ -515,7 +515,7 @@ await browserRef.current?.openResource(directoryUri);
 - 标签优先于编译配置：配置里缺少该目标时仍显示看板。
 - 编译配置（`GET /api/v1/compile/configs`）按需读取：打开 Wiki 看板，或正文中的 Wiki 保留尾注需要确认归属时才请求，普通浏览不请求。
 - `dashboardKinds` 不含 `'wiki'` 时，不再识别 Wiki，也不读取编译配置，Wiki 资源不再提供编译配置和编译版本索引。
-- 文件树里带看板的行显示看板图标，点击直接打开；Wiki 有待处理冲突时图标不同。
+- 文件树里带看板的行显示看板图标，悬停或聚焦显示操作提示，点击直接打开；Wiki 有待处理冲突时图标不同。
 - 预览区的页签可以在正文和看板之间切换。
 - 普通资源没有 Wiki 页签，已识别的 Wiki 即使没有冲突也保留看板。
 - `viking://~/...` 别名和规范 URI 指向同一个资源时识别结果相同，传给 `renderDashboard` 的 `uri` 保持原来的写法。

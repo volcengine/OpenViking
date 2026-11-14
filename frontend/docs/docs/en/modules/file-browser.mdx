@@ -515,7 +515,7 @@ Directory listings needed to locate the target, or required home alias lookups, 
 - The tag takes precedence over the compile configuration: a dashboard still shows when the configuration lacks the target.
 - The compile configuration (`GET /api/v1/compile/configs`) is read on demand: when a Wiki dashboard opens, or when a reserved Wiki trailer in the body needs an ownership check; ordinary browsing does not request it.
 - When `dashboardKinds` omits `'wiki'`, Wiki is no longer detected and the compile configuration is not read, so Wiki resources lose their Compile configuration and the Compile-specific history index.
-- Rows that have a dashboard show a dashboard icon in the tree; click it to open the dashboard. The icon differs when a Wiki has pending conflicts.
+- Rows that have a dashboard show a dashboard icon in the tree; hover or focus it for an action hint, and click it to open the dashboard. The icon differs when a Wiki has pending conflicts.
 - The tabs in the preview switch between the content and the dashboard.
 - Ordinary resources have no Wiki tab, and a detected Wiki keeps its dashboard even with no conflicts.
 - A `viking://~/...` alias and the canonical URI of the same resource are detected the same way, and the `uri` passed to `renderDashboard` keeps the spelling it came with.
