@@ -1,4 +1,4 @@
-import { type MouseEvent, useRef } from 'react';
+import { type MouseEvent, useRef, useState } from 'react';
 
 import {
   FileTreeChevron,
@@ -32,6 +32,8 @@ export function FileTreeRowView({
   ctx: FileTreeRowContext;
 }) {
   const anchorRef = useRef<HTMLSpanElement>(null);
+  const [popoverOpen, setPopoverOpen] = useState(false);
+  const [trailingHovered, setTrailingHovered] = useState(false);
   const {
     text,
     selectedId,
@@ -85,6 +87,7 @@ export function FileTreeRowView({
       aria-selected={row.selectable === false ? undefined : isSelected}
       aria-expanded={canExpand ? isExpanded : undefined}
       aria-disabled={row.disabled || undefined}
+      title={row.name}
       {...extraAttributes}
       {...{ [FILE_TREE_ROW_ATTRIBUTE]: row.id }}
       className={['ov-file-tree__row', extraClassName]
@@ -140,9 +143,7 @@ export function FileTreeRowView({
         className="ov-file-tree__label-group"
         data-description={Boolean(description) || undefined}
       >
-        <span className="ov-file-tree__label" title={row.name}>
-          {row.name}
-        </span>
+        <span className="ov-file-tree__label">{row.name}</span>
         {description ? (
           <span className="ov-file-tree__description">{description}</span>
         ) : null}
@@ -175,7 +176,14 @@ export function FileTreeRowView({
         <span className="ov-file-tree__level">{row.levelLabel}</span>
       ) : null}
       {trailing ? (
-        <span className="ov-file-tree__trailing">{trailing}</span>
+        <span
+          className="ov-file-tree__trailing"
+          title=""
+          onMouseEnter={() => setTrailingHovered(true)}
+          onMouseLeave={() => setTrailingHovered(false)}
+        >
+          {trailing}
+        </span>
       ) : null}
       <span
         className="ov-file-tree__popover-anchor-container"
@@ -214,6 +222,8 @@ export function FileTreeRowView({
       placement="right"
       anchorRef={anchorRef}
       trigger="hover"
+      open={popoverOpen && !trailingHovered}
+      onOpenChange={setPopoverOpen}
     >
       {rowNode}
     </Popover>
