@@ -37,6 +37,7 @@ from openviking.core.namespace import canonical_session_uri
 from openviking.core.peer_id import normalize_peer_id, safe_peer_id
 from openviking.message import Message, Part
 from openviking.message.part import TextPart, ToolPart
+from openviking.models.vlm.context_window import resolve_prompt_token_limit
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.service import UserPrivacyConfigService
 from openviking.privacy.session_extractor import extract_and_store_session_privacy
@@ -62,6 +63,7 @@ from openviking.session.checkpoints import (
 )
 from openviking.session.extraction_batch import (
     ExtractionBatchLimits,
+    bound_oversized_extraction_messages,
     estimate_extraction_message_tokens,
     plan_extraction_batches,
     resolve_extraction_batch_limits,
@@ -561,6 +563,20 @@ class Session:
         if self._vlm_resolver is None:
             raise RuntimeError("Session requires a VLM resolver for account-owned work")
         return await self._vlm_resolver.get_vlm(self.ctx.account_id)
+
+    async def _extraction_prompt_token_limit(self) -> Optional[int]:
+        """Prompt budget of the extraction model, derived from its context window.
+
+        Returns ``None`` when the window is unknown, leaving extraction batching
+        to the session's auto-commit policy alone. Resolving the VLM is best
+        effort on purpose: a missing model must never fail a commit.
+        """
+        try:
+            vlm = await self._get_vlm_config()
+        except Exception as exc:  # noqa: BLE001 - never fail a commit over budgeting
+            logger.debug("Extraction prompt budget unavailable: %s", exc)
+            return None
+        return resolve_prompt_token_limit(vlm)
 
     async def _resolve_memory_policy(
         self, override: Optional[Dict[str, Any]] = None
@@ -2532,7 +2548,25 @@ class Session:
             Awaitable[Any],
         ],
     ) -> Any:
+        messages, trimmed = bound_oversized_extraction_messages(messages, limits)
+        if trimmed:
+            logger.warning(
+                "Trimmed %s over-ceiling message(s) to the extraction prompt budget "
+                "(%s estimated tokens) so the model receives a request it can answer",
+                trimmed,
+                limits.max_message_tokens,
+            )
         batches = plan_extraction_batches(messages, limits)
+        still_oversized = [batch for batch in batches if batch.oversized]
+        if still_oversized:
+            logger.warning(
+                "Phase 2 extraction still has %s pass(es) above the prompt budget "
+                "(%s estimated tokens, budget %s): the reducible text is not enough to "
+                "meet it",
+                len(still_oversized),
+                max(batch.estimated_tokens for batch in still_oversized),
+                limits.max_message_tokens,
+            )
         if not batches:
             return []
 
@@ -2668,7 +2702,10 @@ class Session:
                 with bind_telemetry(telemetry):
                     ov_config = get_openviking_config()
                     effective_policy = MemoryPolicy.from_dict(memory_policy)
-                    extraction_batch_limits = resolve_extraction_batch_limits(auto_commit_policy)
+                    extraction_batch_limits = resolve_extraction_batch_limits(
+                        auto_commit_policy,
+                        prompt_token_limit=await self._extraction_prompt_token_limit(),
+                    )
                     enable_working_memory = effective_policy.enable_working_memory
                     logger.info(
                         "Session commit task=%s archive=%s enable_working_memory=%s",
