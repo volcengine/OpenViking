@@ -17,6 +17,7 @@ from vikingbot.openviking_mount.session_state import (
 from vikingbot.sandbox.manager import SandboxManager
 from vikingbot.session.manager import Session, SessionManager
 from vikingbot.utils.session_paths import (
+    is_windows_safe_path_component,
     portable_path_component,
     resolve_workspace_path,
     workspace_name,
@@ -284,3 +285,14 @@ def test_legacy_workspace_lookup_requires_exact_logical_name(tmp_path):
 
     expected = tmp_path / workspace_name(upper, "per-session", portable=True)
     assert resolve_workspace_path(tmp_path, upper, "per-session") == expected
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["CONIN$", "CONOUT$", "conin$", "COM¹", "LPT³", "COM1", "NUL"],
+)
+def test_console_and_superscript_device_names_are_not_windows_safe(name: str):
+    assert is_windows_safe_path_component(name) is False
+    portable = portable_path_component(name)
+    assert portable.startswith("%")
+    assert "~" in portable

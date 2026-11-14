@@ -18,8 +18,12 @@ _WINDOWS_RESERVED_STEMS = frozenset(
         "PRN",
         "AUX",
         "NUL",
+        "CONIN$",
+        "CONOUT$",
         *(f"COM{index}" for index in range(1, 10)),
         *(f"LPT{index}" for index in range(1, 10)),
+        *(f"COM{digit}" for digit in "¹²³"),
+        *(f"LPT{digit}" for digit in "¹²³"),
     }
 )
 # Leave room for file extensions and atomic-write suffixes below NAME_MAX=255.
