@@ -275,6 +275,30 @@ describe('OpenViking tool client', () => {
     assert.equal(requests(ov, 'POST /api/v1/resources').length, 0);
   });
 
+  it('writes any plain viking:// file, waiting for it to land', async (t) => {
+    const ov = await fakeOV(t);
+    const tools = client(ov);
+    const written = await tools.write({ uri: 'viking://~/memories//soul.md', content: 'You are calm.' });
+    assert.deepEqual(written.data, { stored: true, uri: 'viking://~/memories/soul.md', mode: 'replace' });
+    await tools.write({ uri: 'viking://~/notes/todo.md', content: '- more', mode: 'append' });
+    // An older release refuses replace on a new file: create makes it then.
+    ov.state.errors.set('POST /api/v1/content/write', 404);
+    await tools.write({ uri: 'viking://~/memories/new.md', content: 'x' });
+    assert.deepEqual(requests(ov, 'POST /api/v1/content/write').map(({ body }) => body), [
+      { uri: 'viking://~/memories/soul.md', content: 'You are calm.', mode: 'replace', wait: true },
+      { uri: 'viking://~/notes/todo.md', content: '- more', mode: 'append', wait: true },
+      { uri: 'viking://~/memories/new.md', content: 'x', mode: 'replace', wait: true },
+      { uri: 'viking://~/memories/new.md', content: 'x', mode: 'create', wait: true },
+    ]);
+    ov.state.errors.delete('POST /api/v1/content/write');
+    await tools.write({ uri: 'viking://resources/team/soul.md', content: 'shared' });
+    for (const uri of ['viking://~/memories/../memories/preferences/owner/x.md', 'viking://~/./soul.md', 'viking://~/a%2e%2e/b.md']) {
+      await assert.rejects(() => tools.write({ uri, content: 'x' }), (error) => error.code === 'invalid_input', uri);
+    }
+    await assert.rejects(() => tools.write({ uri: 'viking://~/x.md', content: 'x', mode: 'create' }), (error) => error.code === 'invalid_input');
+    assert.equal(requests(ov, 'POST /api/v1/content/write').length, 5);
+  });
+
   it('keeps a preference in the directory the Core names, one file per topic, replaced on change', async (t) => {
     const ov = await fakeOV(t);
     const tools = client(ov);

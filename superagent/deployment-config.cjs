@@ -101,10 +101,10 @@ const AGENT_FIELDS = Object.freeze([
   'workspace',
   'ovConfig',
   'ovAutoRecall',
+  'soulUri',
   'explicitSilence',
   'stagedReplies',
   'scheduler',
-  'role',
   'naturalWriting',
   'model',
   'dshHomeMode',
@@ -114,12 +114,16 @@ const AGENT_FIELDS = Object.freeze([
   'meetingNotes',
   'emailAccounts',
 ]);
-// The roles shipped with the release (packages/daemon/agent/roles/<name>.md).
-// An instance names one of them, or the absolute path of its own role file.
+// The roles shipped with the release (packages/daemon/agent/roles/<name>.md),
+// which setup can seed the instance's soul in OpenViking with.
 const ROLE_PRESETS = Object.freeze(['colleague', 'assistant', 'qa']);
 // agents[].larkMessageAccess: `owner` reads with the owner's visibility,
 // `bot` only in the chats the bot has joined.
 const LARK_MESSAGE_ACCESS = Object.freeze(['owner', 'bot']);
+// agents[].soulUri: where the instance's soul is kept (a viking:// address or an
+// absolute local file path), when not
+// at the default viking://~/memories/soul.md.
+const SOUL_URI = /^viking:\/\/[^\s%\\?#]+$/;
 // How inputs reach the model (agents[].scheduler). legacy: every input goes
 // into the running turn as soon as it arrives. inbox: while the model works,
 // inputs wait and it gets a notice; it reads them, oldest first, at a
@@ -324,6 +328,10 @@ function parseAgent(value, index, ignored) {
   if (value.ovAutoRecall !== undefined && typeof value.ovAutoRecall !== 'boolean') {
     throw new Error(`${label}.ovAutoRecall must be a boolean`);
   }
+  if (value.soulUri != null && (typeof value.soulUri !== 'string'
+    || !(SOUL_URI.test(value.soulUri) || path.isAbsolute(value.soulUri)))) {
+    throw new Error(`${label}.soulUri must be a viking:// address or an absolute file path`);
+  }
   if (value.explicitSilence !== undefined && typeof value.explicitSilence !== 'boolean') {
     throw new Error(`${label}.explicitSilence must be a boolean`);
   }
@@ -374,12 +382,12 @@ function parseAgent(value, index, ignored) {
     workspace: manifestAbsolutePath(value.workspace, `${label}.workspace`),
     ovConfig: manifestAbsolutePath(value.ovConfig, `${label}.ovConfig`),
     ovAutoRecall: value.ovAutoRecall ?? false,
+    soulUri: value.soulUri ?? null,
     // On by default, except on Ark (no Core tools, so no stay_silent); an
     // explicit false opts out.
     explicitSilence: value.explicitSilence ?? model !== 'ark',
     stagedReplies: value.stagedReplies ?? false,
     scheduler: value.scheduler ?? 'legacy',
-    role: manifestRole(value.role, `${label}.role`),
     naturalWriting: value.naturalWriting ?? true,
     model,
     dshHomeMode,
@@ -391,12 +399,6 @@ function parseAgent(value, index, ignored) {
   });
 }
 
-function manifestRole(value, label) {
-  if (value === undefined || value === null) return null;
-  if (typeof value === 'string' && ROLE_PRESETS.includes(value)) return value;
-  if (typeof value === 'string' && path.isAbsolute(value.trim())) return manifestAbsolutePath(value, label);
-  throw new Error(`${label} must be ${ROLE_PRESETS.join(', ')} or an absolute path`);
-}
 
 function manifestEmailAccounts(value, label, ignored) {
   if (value === undefined || value === null) return [];
@@ -613,8 +615,9 @@ function applyDeploymentAgentEnv(env, deployment, requestedId) {
   env.OV_SUPERAGENT_MEETING_NOTES = agent.meetingNotes ? 'true' : 'false';
   env.OV_SUPERAGENT_DSH_HOME_MODE = agent.dshHomeMode;
   env.OV_SUPERAGENT_DSH_SKILL_ROOTS = JSON.stringify(agent.dshSkillRoots);
-  if (agent.role) env.OV_SUPERAGENT_ROLE = agent.role;
-  else delete env.OV_SUPERAGENT_ROLE;
+  if (agent.soulUri) env.OV_SUPERAGENT_SOUL_URI = agent.soulUri;
+  else delete env.OV_SUPERAGENT_SOUL_URI;
+  delete env.OV_SUPERAGENT_ROLE;
   env.OV_SUPERAGENT_CHANNEL = agent.channel;
   env.OV_SUPERAGENT_CONNECTORS_JSON = JSON.stringify(agent.connectors);
   if (agent.emailAccounts.length > 0) env.OV_SUPERAGENT_EMAIL_ACCOUNTS_JSON = JSON.stringify(agent.emailAccounts);

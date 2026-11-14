@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
-import { configureOpenViking, discoverOpenViking, prepareInstanceOpenViking, saveOVConnection, takenIdentities } from '../src/ov-setup.mjs';
+import { configureOpenViking, discoverOpenViking, prepareInstanceOpenViking, readOVSoul, saveOVConnection, takenIdentities, writeOVSoul } from '../src/ov-setup.mjs';
 import { detectOpenViking, HOSTED_OV_URL, LOCAL_OV_URL, savedOVConfigPath } from '../src/ov.mjs';
 import { Prompter } from '../src/prompt.mjs';
 import { setLanguage } from '../src/i18n.mjs';
@@ -360,4 +360,35 @@ test('a typed connection is kept privately for the next instance; a file new ins
   const before = fs.readFileSync(saved, 'utf8');
   assert.equal(saveOVConnection({ usable: true, configPath: cli }, h.options), null);
   assert.equal(fs.readFileSync(saved, 'utf8'), before, 'a copy of ovcli.conf would go stale when its key rotates');
+});
+
+test('setup reads and seeds the soul in OpenViking with the instance identity; a missing soul reads as empty', async (t) => {
+  const h = fixture(t, []);
+  const configPath = path.join(h.home, 'instance.json');
+  fs.writeFileSync(configPath, JSON.stringify({ url: remote, api_key: 'test-secret', user: 'bot' }));
+  const uri = 'viking://~/memories/soul.md';
+  const calls = [];
+  const answers = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    const [status, body] = answers.shift();
+    return new Response(JSON.stringify(body), { status });
+  };
+  answers.push([200, { status: 'ok', result: 'You are the bot.' }]);
+  assert.equal(await readOVSoul({ configPath, uri, fetchImpl }), 'You are the bot.');
+  assert.equal(calls[0].url, `${remote}/api/v1/content/read?uri=${encodeURIComponent(uri)}&offset=0&limit=-1&raw=true`);
+  assert.equal(calls[0].init.headers['X-API-Key'], 'test-secret');
+  assert.equal(calls[0].init.headers['X-OpenViking-User'], 'bot');
+  answers.push([404, { status: 'error' }]);
+  assert.equal(await readOVSoul({ configPath, uri, fetchImpl }), '');
+  answers.push([500, { status: 'error' }]);
+  await assert.rejects(() => readOVSoul({ configPath, uri, fetchImpl }), /HTTP 500/);
+
+  // An older release refuses replace on a missing file: create makes it then.
+  answers.push([404, { status: 'error' }], [200, { status: 'ok', result: {} }]);
+  assert.equal(await writeOVSoul({ configPath, uri, content: 'seed', fetchImpl }), uri);
+  assert.deepEqual(calls.slice(-2).map(({ url, init }) => [url, JSON.parse(init.body)]), [
+    [`${remote}/api/v1/content/write`, { uri, content: 'seed', mode: 'replace', wait: true }],
+    [`${remote}/api/v1/content/write`, { uri, content: 'seed', mode: 'create', wait: true }],
+  ]);
 });

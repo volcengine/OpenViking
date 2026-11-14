@@ -18,6 +18,7 @@ import { TelegramState } from '../../daemon/src/telegram/state.mjs';
 import { configureOpenViking } from '../src/ov-setup.mjs';
 import { detectOpenViking, savedOVConfigPath } from '../src/ov.mjs';
 import { updateManifest } from '../../daemon/src/deployment-manifest.mjs';
+import { rolePresetText } from '../../daemon/src/conversation-policy.mjs';
 
 const RUNTIMES = [
   { id: 'codex', label: 'Codex', model: 'codex:', bin: '/opt/codex/bin/codex', binEnv: 'CODEX_BIN', available: true, note: '已登录' },
@@ -25,7 +26,7 @@ const RUNTIMES = [
   { id: 'pi', label: 'Pi（内置）', model: 'pi', bin: null, binEnv: null, available: true, note: 'ok' },
 ];
 
-function harness(t, answers, { ov = { configPath: null, url: 'http://127.0.0.1:1933', usable: true }, runtimes = RUNTIMES, failStart = false } = {}) {
+function harness(t, answers, { ov = { configPath: null, url: 'http://127.0.0.1:1933', usable: true }, runtimes = RUNTIMES, failStart = false, soulText = '' } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-setup-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const input = new PassThrough();
@@ -34,6 +35,8 @@ function harness(t, answers, { ov = { configPath: null, url: 'http://127.0.0.1:1
   let written = '';
   output.on('data', (chunk) => { written += chunk; });
   const calls = [];
+  // The soul in OpenViking: what it holds, and every read and write of it.
+  const souls = [];
   const options = {
     prompter: new Prompter({ input, output }),
     // A Chinese locale settles the language; the English run and the question have tests of their own.
@@ -45,6 +48,10 @@ function harness(t, answers, { ov = { configPath: null, url: 'http://127.0.0.1:1
     configureOV: async ({ preferredConfigPath, detect, ...options }) => {
       const detected = await detect({ ...options, configPath: preferredConfigPath });
       return preferredConfigPath ? { ...detected, configPath: preferredConfigPath } : detected;
+    },
+    soul: {
+      read: async (input) => { souls.push(['read', input]); return soulText; },
+      write: async (input) => { souls.push(['write', input]); return input.uri; },
     },
     connect: {
       qq: async ({ plan }) => { calls.push(['qq', plan.dataDir]); },
@@ -66,7 +73,7 @@ function harness(t, answers, { ov = { configPath: null, url: 'http://127.0.0.1:1
     listen: async ({ port }) => { calls.push(['listen', port]); return { wait: async () => true }; },
     allocate: async () => 3738,
   };
-  return { home, options, calls, written: () => written, manifest: () => JSON.parse(fs.readFileSync(path.join(home, '.ov-superagent', 'config.json'), 'utf8')) };
+  return { home, options, calls, souls, written: () => written, manifest: () => JSON.parse(fs.readFileSync(path.join(home, '.ov-superagent', 'config.json'), 'utf8')) };
 }
 
 test('a startup failure points to the instance logs before retrying start', async (t) => {
@@ -107,11 +114,14 @@ test('a first setup: Feishu + Weixin, Codex, OpenViking; scans run only after ev
     explicitSilence: true,
     // The first AI colleague on Feishu stores the owner's meeting notes.
     meetingNotes: true,
-    role: 'colleague',
     model: 'codex:',
   }]);
   // Under an API key the key is the instance's identity; the copy names no peer.
   assert.deepEqual(JSON.parse(fs.readFileSync(manifest.agents[0].ovConfig, 'utf8')), { url: 'https://ov.example', api_key: 'k' });
+  // The empty soul in OpenViking is seeded with the role, as the instance's own OV user.
+  const soul = { configPath: manifest.agents[0].ovConfig, uri: 'viking://~/memories/soul.md' };
+  assert.deepEqual(h.souls, [['read', soul], ['write', { ...soul, content: rolePresetText('colleague') }]]);
+  assert.match(h.written(), /角色已写入 viking:\/\/~\/memories\/soul\.md/);
   assert.match(h.written(), /OpenViking 已就绪，接下来接入 IM（这个实例在 OpenViking 里是用户 amy）/);
   assert.ok(fs.statSync(manifest.agents[0].workspace).isDirectory());
   const dataDir = path.join(h.home, '.ov-superagent', 'data', 'primary');
@@ -617,7 +627,7 @@ test('changing an instance lists every setting; only the ones opened change', as
   const [after] = h.manifest().agents;
   assert.deepEqual(after, { ...before, connectors: ['lark', 'weixin'], channel: 'weixin' });
   // The list shows every value; what was changed is marked.
-  assert.match(h.written(), /1\) 机器人名字\s+ASD\n  2\) 角色\s+没有设置（只用默认规则）\n  3\) 工作目录\s+~\/ws\n  4\) Agent 运行时\s+Codex\n  5\) 接入的 IM\s+飞书\n  6\) 飞书应用\s+现在的应用\n  7\) 主渠道\s+飞书\n  8\) 邮箱\s+没有接\n  9\) OpenViking\s+~\/\.ov-superagent\/ov\/asd\.json\n  10\) 其他设置\s+开着：自然写作\n  11\) 保存\n  12\) 放弃修改/);
+  assert.match(h.written(), /1\) 机器人名字\s+ASD\n  2\) 角色\s+保持现在的 soul\n  3\) 工作目录\s+~\/ws\n  4\) Agent 运行时\s+Codex\n  5\) 接入的 IM\s+飞书\n  6\) 飞书应用\s+现在的应用\n  7\) 主渠道\s+飞书\n  8\) 邮箱\s+没有接\n  9\) OpenViking\s+~\/\.ov-superagent\/ov\/asd\.json\n  10\) 其他设置\s+开着：自然写作\n  11\) 保存\n  12\) 放弃修改/);
   assert.match(h.written(), /5\) 接入的 IM\s+飞书、微信（已改）[\s\S]*7\) 主渠道\s+微信（已改）\n[\s\S]*11\) 保存（2 项改动）/);
   assert.match(h.written(), /将修改 ASD（asd）：\n  接入微信（需要扫码）\n  主渠道：飞书 → 微信\n/);
   assert.deepEqual(h.calls.map((call) => call.slice(0, 2)), [['weixin', before.dataDir], ['restart', 'asd']]);
@@ -672,40 +682,50 @@ test('a new instance takes a shipped role by what it is for', async (t) => {
   //                   name  role:assistant  workspace  runtime IMs  confirm
   const h = harness(t, ['',  '2',            '',        '1',    '2', 'y']);
   assert.equal(await setupCommand(h.options), 0);
-  assert.equal(h.manifest().agents[0].role, 'assistant');
-  assert.match(h.written(), /1\) AI 同事  你的 AI 分身[^\n]*\n  2\) 个人助理  只为你工作[^\n]*\n  3\) 答疑助手  [^\n]*\n  4\) 自己写 prompt/);
+  assert.equal(h.manifest().agents[0].role, undefined);
+  assert.deepEqual(h.souls.map(([kind, { content }]) => [kind, content]), [['read', undefined], ['write', rolePresetText('assistant')]]);
+  assert.match(h.written(), /1\) AI 同事  你的 AI 分身[^\n]*\n  2\) 个人助理  只为你工作[^\n]*\n  3\) 答疑助手  [^\n]*\n  4\) 保持现在的  不写入预设/);
   assert.match(h.written(), /角色\s+个人助理\n/);
   assert.match(h.written(), /其他设置\s+开着：自然写作、显式不回复（以后在修改实例里调）\n/);
 });
 
-test('an instance can use its own role file, begun from a shipped role, written only when saved', async (t) => {
-  const roleFile = (h) => path.join(h.home, '.ov-superagent', 'roles', 'asd.md');
-  //                    change  role  own  default path  start from qa  save
-  const h = harness(t, ['2',    '2',  '4', '',           '3',           '11']);
-  const before = existing(h, {});
-  assert.equal(await setupCommand(h.options), 0);
-  assert.deepEqual(h.manifest().agents, [{ ...before, role: roleFile(h) }]);
-  const text = fs.readFileSync(roleFile(h), 'utf8');
-  assert.match(text, /^<!-- Started from OpenViking SuperAgent's "qa" role\. This is asd's role: edit it freely, then run ov-superagent restart asd\./);
-  assert.ok(text.endsWith(fs.readFileSync(fileURLToPath(new URL('../../daemon/agent/roles/qa.md', import.meta.url)), 'utf8')));
-  assert.equal(fs.statSync(roleFile(h)).mode & 0o777, 0o600);
-  assert.match(h.written(), /角色：没有设置（只用默认规则） → ~\/\.ov-superagent\/roles\/asd\.md（模型会开一次新的会话）/);
-  assert.deepEqual(h.calls, [['restart', 'asd']]);
-
-  // A file that is there already is used as it is; discarding writes nothing.
-  const kept = harness(t, ['2', '2', '4', '~/mine.md', '11']);
-  existing(kept, { role: 'colleague' });
-  fs.writeFileSync(path.join(kept.home, 'mine.md'), 'my own words\n');
+test('a soul with text is shown and kept unless the owner replaces it; keeping the role touches nothing', async (t) => {
+  const soulText = 'You are ASD, who keeps the garden club\'s notes.\n' + Array.from({ length: 20 }, (_, i) => `line ${i}`).join('\n');
+  //                    change  role  qa   save  replace?(default: keep)
+  const kept = harness(t, ['2', '2', '3', '11', ''], { soulText });
+  const before = existing(kept, { soulUri: 'viking://~/memories/asd-soul.md' });
   assert.equal(await setupCommand(kept.options), 0);
-  assert.equal(kept.manifest().agents[0].role, path.join(kept.home, 'mine.md'));
-  assert.equal(fs.readFileSync(path.join(kept.home, 'mine.md'), 'utf8'), 'my own words\n');
-  assert.doesNotMatch(kept.written(), /先用哪个角色的 prompt 填上/);
+  assert.deepEqual(kept.manifest().agents, [before]);
+  assert.deepEqual(kept.souls, [['read', { configPath: before.ovConfig, uri: 'viking://~/memories/asd-soul.md' }]]);
+  assert.match(kept.written(), /角色：把「答疑助手」写入 OpenViking 里的 soul（已有内容时先问你）/);
+  assert.match(kept.written(), /soul（viking:\/\/~\/memories\/asd-soul\.md）已经有内容：\n    You are ASD, who keeps the garden club's notes\.\n[\s\S]*    line 10\n    …\n/);
+  assert.doesNotMatch(kept.written(), /line 11/);
+  assert.match(kept.written(), /1\) 保持不变\n  2\) 换成「答疑助手」/);
+  assert.match(kept.written(), /soul 保持不变/);
+  assert.deepEqual(kept.calls, [['restart', 'asd']]);
 
-  const discarded = harness(t, ['2', '2', '4', '', '1', '12']);
-  const config = existing(discarded, {});
-  assert.equal(await setupCommand(discarded.options), 0);
-  assert.deepEqual(discarded.manifest().agents, [config]);
-  assert.equal(fs.existsSync(roleFile(discarded)), false);
+  const replaced = harness(t, ['2', '2', '3', '11', '2'], { soulText });
+  existing(replaced, {});
+  assert.equal(await setupCommand(replaced.options), 0);
+  assert.deepEqual(replaced.souls.map(([kind, { content }]) => [kind, content]), [['read', undefined], ['write', rolePresetText('qa')]]);
+
+  // Keep current is no change: nothing is read or written.
+  const idle = harness(t, ['2', '2', '4', '11'], { soulText });
+  const config = existing(idle, { role: 'colleague' });
+  assert.equal(await setupCommand(idle.options), 0);
+  assert.match(idle.written(), /没有改动/);
+  assert.deepEqual(idle.manifest().agents, [config]);
+  assert.deepEqual(idle.souls, []);
+});
+
+test('a role file from before the soul moved to OpenViking still loads, and is dropped on save', async (t) => {
+  //                    change  name  new name  save
+  const h = harness(t, ['2',    '1',  '新名字', '11']);
+  const before = existing(h, { role: '/srv/superagent/roles/asd.md' });
+  assert.equal(await setupCommand(h.options), 0);
+  const { role: _role, ...rest } = before;
+  assert.deepEqual(h.manifest().agents, [{ ...rest, displayName: '新名字' }]);
+  assert.deepEqual(h.souls, []);
 });
 
 test('dropping the primary IM moves the primary to what is left; a change the daemon would reject goes back to the list', async (t) => {
@@ -1690,7 +1710,7 @@ test('in English, changing an instance: the list, what a setting says, the chang
   assert.deepEqual(h.manifest().agents, [{ ...before, connectors: ['lark', 'weixin'], channel: 'weixin' }]);
   const text = h.written();
   assert.doesNotMatch(text, /[一-鿿]/);
-  assert.match(text, /1\) Bot name\s+ASD\n  2\) Role\s+none \(default rules only\)\n  3\) Workspace\s+~\/ws\n[\s\S]*  6\) Feishu\/Lark app\s+the current app\n[\s\S]*  10\) Other settings\s+on: Natural writing\n  11\) Save\n  12\) Discard changes/);
+  assert.match(text, /1\) Bot name\s+ASD\n  2\) Role\s+Keep the current soul\n  3\) Workspace\s+~\/ws\n[\s\S]*  6\) Feishu\/Lark app\s+the current app\n[\s\S]*  10\) Other settings\s+on: Natural writing\n  11\) Save\n  12\) Discard changes/);
   // What a setting says shows above the list drawn after it.
   assert.doesNotMatch(text, /No OpenViking found|Stop using it/);
   assert.match(text, /11\) Save \(2 changes\)/);

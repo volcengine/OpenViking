@@ -513,22 +513,29 @@ describe('daemon event path (mock env)', { concurrency: false }, () => {
     }
   });
 
-  it('gives codex the instance role after the Core', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-e2e-role-'));
-    const rolePromptPath = path.join(dir, 'role.md');
-    fs.writeFileSync(rolePromptPath, '<!-- editor note -->\nYou are {{AGENT_NAME}}. Role fixture marker: zircon-e2e-7742\n');
-    const env = await startMockEnv({ config: { rolePromptPath, agentName: 'Alpha' } });
+  it('gives codex the soul read from OpenViking after the Core', async () => {
+    const reads = [];
+    const env = await startMockEnv({
+      config: { agentName: 'Alpha', soulUri: 'viking://~/memories/alpha-soul.md' },
+      ovClient: {
+        async read(...args) {
+          reads.push(args);
+          return '<!-- editor note -->\nYou are {{AGENT_NAME}}. Soul fixture marker: zircon-e2e-7742\n';
+        },
+      },
+    });
     try {
+      assert.deepEqual(reads, [['viking://~/memories/alpha-soul.md', 0, -1]]);
       const instructions = process.platform === 'win32' ? env.codexThreadParams()[0].developerInstructions
         : env.codexSpawnArgs()[0].find((argument) => argument.startsWith('developer_instructions='));
       assert.ok(instructions, 'codex receives developer instructions in the platform-selected transport');
       assert.match(instructions, /## Role/);
-      assert.match(instructions, /You are Alpha\. Role fixture marker: zircon-e2e-7742/);
+      assert.match(instructions, /kept in OpenViking at `viking:\/\/~\/memories\/alpha-soul\.md`/);
+      assert.match(instructions, /You are Alpha\. Soul fixture marker: zircon-e2e-7742/);
       assert.doesNotMatch(instructions, /editor note/);
       assert.ok(instructions.indexOf('## Role') > instructions.indexOf('# Operating policy'));
     } finally {
       await env.stop();
-      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 

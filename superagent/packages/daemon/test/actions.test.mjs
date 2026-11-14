@@ -745,7 +745,7 @@ describe('agent tools', () => {
 
 describe('OpenViking tools', () => {
   const ovNames = (service) => service.tools().map((tool) => tool.name).filter((name) => name.startsWith('openviking_'));
-  const OV_TOOLS = ['openviking_find', 'openviking_search', 'openviking_read', 'openviking_list', 'openviking_add_resource', 'openviking_remember'];
+  const OV_TOOLS = ['openviking_find', 'openviking_search', 'openviking_read', 'openviking_list', 'openviking_add_resource', 'openviking_remember', 'openviking_write'];
   // A scripted tool client: every method stands for one remote OV call.
   const fakeOvTools = (over = {}) => ({
     find: over.find ?? (async () => ({ text: 'No matching context found.', data: { hits: [], total: 0 } })),
@@ -755,9 +755,10 @@ describe('OpenViking tools', () => {
     addResource: over.addResource ?? (async () => ({ text: 'Resource accepted: viking://~/resources/inbox/a (processing in the background, task_id=task-9).', data: { task_id: 'task-9', root_uri: 'viking://~/resources/inbox/a', target: 'viking://~/resources/inbox' } })),
     setPreference: over.setPreference ?? (async () => ({ text: 'Stored at viking://~/memories/preferences/x/y.md.', data: { stored: true } })),
     forgetPreference: over.forgetPreference ?? (async () => ({ text: 'Removed.', data: { removed: true } })),
+    write: over.write ?? (async ({ uri, mode }) => ({ text: `Wrote ${uri} (${mode}).`, data: { stored: true, uri, mode } })),
   });
 
-  it('offers all six tools whenever the instance has an OpenViking connection, and none without', (t) => {
+  it('offers all seven tools whenever the instance has an OpenViking connection, and none without', (t) => {
     assert.deepEqual(ovNames(setup(t, { ids: ['weixin'] }).service), []);
     assert.deepEqual(ovNames(setup(t, { ids: ['weixin'], ovTools: fakeOvTools() }).service), OV_TOOLS);
     assert.deepEqual(ovNames(setup(t, { ids: ['weixin'], ovClient: {} }).service), OV_TOOLS);
@@ -856,6 +857,21 @@ describe('OpenViking tools', () => {
       (error) => error.code === 'not_rememberable');
     assert.equal(written.length, 3);
   });
+
+  it('writes an OpenViking file, whole or appended', async (t) => {
+    const written = [];
+    const ovTools = fakeOvTools({ write: async (input) => { written.push(input); return { text: 'Wrote.', data: { stored: true } }; } });
+    const { call } = setup(t, { ids: ['lark'], ovTools });
+    await assert.rejects(() => call('openviking_write', { uri: 'https://example.com/x', content: 'x' }), /uri has an invalid format/);
+    await assert.rejects(() => call('openviking_write', { uri: 'viking://~/memories/soul.md', content: 'x', mode: 'create' }), /mode must be one of/);
+    await call('openviking_write', { uri: 'viking://~/memories/soul.md', content: 'You are calm.' });
+    await call('openviking_write', { uri: 'viking://resources/team/notes.md', content: '\nMore.', mode: 'append' });
+    assert.deepEqual(written, [
+      { uri: 'viking://~/memories/soul.md', content: 'You are calm.', mode: undefined },
+      { uri: 'viking://resources/team/notes.md', content: '\nMore.', mode: 'append' },
+    ]);
+  });
+
 
   it('counts a landed OpenViking write as progress for the loop guard, a read does not', async (t) => {
     const stops = [];
