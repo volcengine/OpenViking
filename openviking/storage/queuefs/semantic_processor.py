@@ -1932,7 +1932,63 @@ class SemanticProcessor(DequeueHandlerBase):
         # Partials already contain real URIs, but the shared generation prompt can
         # make the merge model emit placeholders again. Resolve the merged output
         # with the complete map before persisting it.
-        combined = "\n\n---\n\n".join(partial_overviews)
+        return await self._merge_partial_overviews(
+            dir_uri,
+            dir_name,
+            partial_overviews,
+            link_map,
+            output_language=output_language,
+            directory_coverage=directory_coverage,
+            budget=semantic.max_overview_prompt_chars,
+            vlm=vlm,
+        )
+
+    _PARTIAL_OVERVIEW_SEP = "\n\n---\n\n"
+
+    @staticmethod
+    def _partition_partial_overviews(partials: List[str], budget: int) -> List[List[str]]:
+        """Group consecutive partials so each join stays within *budget*.
+
+        A group always has at least one partial. If no neighbor fits, pairs are
+        forced so a later merge level still reduces the list.
+        """
+        if len(partials) <= 1:
+            return [partials] if partials else []
+
+        groups: List[List[str]] = []
+        current: List[str] = []
+        current_size = 0
+        sep_len = len(SemanticProcessor._PARTIAL_OVERVIEW_SEP)
+        for partial in partials:
+            extra = len(partial) if not current else sep_len + len(partial)
+            if current and current_size + extra > budget:
+                groups.append(current)
+                current = [partial]
+                current_size = len(partial)
+            else:
+                current.append(partial)
+                current_size += extra
+        if current:
+            groups.append(current)
+        if len(groups) == len(partials):
+            return [partials[i : i + 2] for i in range(0, len(partials), 2)]
+        return groups
+
+    async def _merge_overview_group(
+        self,
+        dir_uri: str,
+        dir_name: str,
+        group: List[str],
+        link_map: Dict[str, str],
+        output_language: str,
+        directory_coverage: str,
+        *,
+        vlm: "VLMHandle",
+    ) -> str:
+        """Merge one group of partial overviews. On failure, keep the first."""
+        if len(group) == 1:
+            return group[0]
+        combined = self._PARTIAL_OVERVIEW_SEP.join(group)
         try:
             prompt = render_prompt(
                 "semantic.overview_generation",
@@ -1953,7 +2009,53 @@ class SemanticProcessor(DequeueHandlerBase):
                 f"Failed to merge partial overviews for {dir_uri}: {e}",
                 exc_info=True,
             )
-            return partial_overviews[0]
+            return group[0]
+
+    async def _merge_partial_overviews(
+        self,
+        dir_uri: str,
+        dir_name: str,
+        partial_overviews: List[str],
+        link_map: Dict[str, str],
+        *,
+        output_language: str,
+        directory_coverage: str,
+        budget: int,
+        vlm: "VLMHandle",
+    ) -> str:
+        """Merge partial overviews, splitting when the joined payload exceeds *budget*."""
+        remaining = list(partial_overviews)
+        while len(remaining) > 1:
+            groups = self._partition_partial_overviews(remaining, budget)
+            if len(groups) == 1:
+                return await self._merge_overview_group(
+                    dir_uri,
+                    dir_name,
+                    groups[0],
+                    link_map,
+                    output_language,
+                    directory_coverage,
+                    vlm=vlm,
+                )
+            logger.info(
+                f"Merging {len(remaining)} partial overviews for {dir_uri} "
+                f"in {len(groups)} budgeted groups"
+            )
+            remaining = [
+                await self._merge_overview_group(
+                    dir_uri,
+                    dir_name,
+                    group,
+                    link_map,
+                    output_language,
+                    directory_coverage,
+                    vlm=vlm,
+                )
+                for group in groups
+            ]
+        return (
+            remaining[0] if remaining else f"# {dir_name}\n\n[Directory overview is not generated]"
+        )
 
     async def _skill_root_semantics(
         self,
