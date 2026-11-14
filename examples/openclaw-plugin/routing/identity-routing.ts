@@ -15,6 +15,12 @@ export type SessionAgentLookup = {
   ovSessionId?: string;
 };
 
+/** Hook / tool context that may carry the OpenClaw sender identity. */
+export type SessionSenderLookup = SessionAgentLookup & {
+  senderId?: string;
+  requesterSenderId?: string;
+};
+
 export type OpenVikingPeerRole = "none" | "assistant" | "sender";
 
 export function sanitizeOpenVikingPeerId(raw?: string): string | undefined {
@@ -253,6 +259,48 @@ export function createSessionAgentResolver(configAgentId: string) {
       aliases,
       fromExplicitBinding: !!(mappedResolvedAgentId || sessionScopedAgentId),
     };
+  };
+
+  return {
+    remember,
+    resolve,
+  };
+}
+
+/**
+ * Remembers a value (such as the OpenClaw sender identity) per session alias.
+ *
+ * The context-engine `assemble` path can remember the sender from its
+ * `runtimeContext`, while later tool invocations only carry the session id /
+ * key. Caching the value by the same aliases the session resolver uses lets
+ * tool routing recover the sender when `peer_role=sender` would otherwise
+ * degrade to an unscoped query.
+ */
+export function createSessionValueResolver() {
+  const values = new Map<string, string>();
+
+  const remember = (ctx: SessionSenderLookup, value?: string): void => {
+    const trimmed = typeof value === "string" ? value.trim() : "";
+    if (!trimmed) {
+      return;
+    }
+    for (const alias of collectSessionAgentAliases(ctx.sessionId, ctx.sessionKey, ctx.ovSessionId)) {
+      values.set(alias, trimmed);
+    }
+  };
+
+  const resolve = (
+    sessionId?: string,
+    sessionKey?: string,
+    ovSessionId?: string,
+  ): string | undefined => {
+    for (const alias of collectSessionAgentAliases(sessionId, sessionKey, ovSessionId)) {
+      const value = values.get(alias);
+      if (value) {
+        return value;
+      }
+    }
+    return undefined;
   };
 
   return {
