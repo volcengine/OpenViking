@@ -6,6 +6,7 @@ import json
 import httpx
 import pytest
 
+from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.retrieve import ContextType, MatchedContext
 from openviking_cli.session.user_id import UserIdentifier
@@ -242,6 +243,108 @@ async def test_context_and_list_parameter_domains_do_not_overlap(client: httpx.A
     assert "mode='context'" in list_response.text
     assert context_response.status_code == 400
     assert "target_uri" in context_response.text
+
+
+@pytest.mark.parametrize(
+    ("fields", "status", "code"),
+    [
+        (
+            {"mode": "list", "resource_uris": ["viking://resources/project"]},
+            400,
+            "INVALID_ARGUMENT",
+        ),
+        ({"resource_uris": []}, 400, "INVALID_ARGUMENT"),
+        ({"resource_uris": ["viking://resources/project"] * 51}, 400, "INVALID_ARGUMENT"),
+        ({"resource_uris": ["viking://resources/project"], "query": ""}, 400, "INVALID_ARGUMENT"),
+        ({"resource_uris": ["/local/project"]}, 400, "INVALID_URI"),
+        ({"resource_uris": ["viking://~/memories"]}, 400, "INVALID_URI"),
+        ({"resource_uris": ["viking://user/another-user/resources"]}, 403, "PERMISSION_DENIED"),
+    ],
+)
+async def test_context_resource_scope_validates_paths_and_mode(client, app, fields, status, code):
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user=UserIdentifier.the_default_user("default"), role=Role.USER
+    )
+    response = await client.post(
+        "/api/v1/search/search", json={"mode": "context", "query": "project", **fields}
+    )
+    assert response.status_code == status, response.text
+    assert response.json()["error"]["code"] == code
+
+
+async def test_context_resource_scope_filters_native_retrieval(client, service, monkeypatch):
+    ctx = RequestContext(user=UserIdentifier.the_default_user("default"), role=Role.ROOT)
+    project_root = "viking://resources/project"
+    project_file = f"{project_root}/src/project.md"
+    other_file = "viking://resources/project-other/doc.md"
+    untagged_file = f"{project_root}/untagged.md"
+    private_file = "viking://user/default/resources/private.md"
+    memory = "viking://user/default/memories/entities/project.md"
+    skill_root = "viking://agent/skills/project-helper"
+    skill = f"{skill_root}/SKILL.md"
+    await service.viking_fs.mkdir(skill_root, ctx=ctx)
+    await service.viking_fs.write_file(f"{skill_root}/.abstract.md", "Project helper", ctx=ctx)
+
+    records = [
+        (project_file, "resource", True),
+        (other_file, "resource", True),
+        (untagged_file, "resource", False),
+        (private_file, "resource", True),
+        (memory, "memory", True),
+        (skill, "skill", True),
+    ]
+    dimension = service.vikingdb_manager.vector_dim
+    for index, (uri, context_type, tagged) in enumerate(records):
+        vector = [0.1] * dimension
+        if uri == project_file:
+            vector[: dimension // 2] = [0.0] * (dimension // 2)
+        assert await service.vikingdb_manager.upsert(
+            {
+                "id": f"context-scope-{index}",
+                "uri": uri,
+                "account_id": ctx.account_id,
+                "context_type": context_type,
+                "level": 2,
+                "abstract": f"Project hit {index}",
+                "search_tags": ["fixture=context-scope", *(["team=search"] if tagged else [])],
+                "vector": vector,
+            },
+            ctx=ctx,
+        )
+
+    async def retrieve(**fields):
+        response = await client.post(
+            "/api/v1/search/search",
+            json={"mode": "context", "query": "project", "peer_scope": "actor", **fields},
+        )
+        assert response.status_code == 200, response.text
+        return {entry["uri"] for entry in response.json()["result"]["entries"]}
+
+    scoped = {"resource_uris": [project_root, "viking://~/resources/private.md"]}
+    expected = {project_file, private_file, memory, skill}
+    assert await retrieve(tags=["fixture=context-scope"]) == expected | {other_file, untagged_file}
+    assert await retrieve(**scoped, tags=["team=search"]) == expected
+    assert await retrieve(**scoped, tags=["team=search"], query="") == expected
+    assert await retrieve(context_type="resource", tags=["team=search"], limit=1) in (
+        {other_file},
+        {private_file},
+    )
+    assert await retrieve(
+        resource_uris=[project_root], context_type="resource", tags=["team=search"], limit=1
+    ) == {project_file}
+    assert (
+        await retrieve(
+            **scoped, tags=["team=search"], quotas={"resources": 2, "entities": 1, "skills": 1}
+        )
+        == expected
+    )
+
+    monkeypatch.setattr(
+        type(service.viking_fs.query_embedder), "supports_multimodal", property(lambda self: True)
+    )
+    image = {"query": "", "image_url": "data:image/png;base64,iVBORw0KGgo="}
+    assert await retrieve(**scoped, **image) == {project_file, private_file, untagged_file}
+    assert await retrieve(**scoped, **image, context_type="memory") == {memory}
 
 
 async def test_context_mode_rejects_a_request_list_mode_rejects(client: httpx.AsyncClient):

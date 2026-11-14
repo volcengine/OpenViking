@@ -62,6 +62,7 @@ from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, Process
 from openviking.retrieve.context_assembler import (
     DEFAULT_MAX_TOKENS,
     MAX_EXCLUDE_URIS,
+    MAX_RESOURCE_URIS,
     AssembleParams,
     assemble_context,
 )
@@ -84,7 +85,7 @@ from openviking.server.local_input_guard import (
     looks_like_local_path,
 )
 from openviking.server.resource_ingest import ingest_temp_upload
-from openviking.server.routers.search import context_only_fields_error
+from openviking.server.routers.search import context_only_fields_error, resolve_resource_scope_uris
 from openviking.server.skill_ingest import install_skills
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import download_token_store, upload_token_store
@@ -684,6 +685,9 @@ async def search(
     rewrite_max_bullets: Annotated[int, Field(ge=1, le=20)] = 6,
     read_content: bool = False,
     events_time_decay_protection: Optional[str] = None,
+    resource_uris: Annotated[
+        Optional[List[str]], Field(min_length=1, max_length=MAX_RESOURCE_URIS)
+    ] = None,
 ) -> str:
     """Retrieval with optional session context and intent analysis.
 
@@ -691,6 +695,7 @@ async def search(
     abstract, and score. ``mode="context"`` returns an injection-ready,
     token-budgeted context block and supports category quotas, purpose presets,
     detail tiers, cross-turn deduplication, peer scoping, and optional rewriting.
+    ``resource_uris`` limits context-mode resources to the specified URI subtrees.
     ``target_uri`` is only supported in list mode. ``read_content`` only expands
     stored content; use ``read`` explicitly to execute a Live Context node.
     """
@@ -739,6 +744,7 @@ async def search(
                 detail=detail_by_category or (None if detail == "auto" else detail),
                 dedup_turns=dedup_turns,
                 exclude_uris=resolved_exclude_uris,
+                resource_uris=resolve_resource_scope_uris(resource_uris, ctx),
                 peer_scope=peer_scope,
                 other_peer_penalty=other_peer_penalties or other_peer_penalty,
                 rewrite=rewrite == "auto",
@@ -771,6 +777,7 @@ async def search(
             "detail_by_category": (detail_by_category, None),
             "dedup_turns": (dedup_turns, 0),
             "exclude_uris": (exclude_uris, None),
+            "resource_uris": (resource_uris, None),
             "peer_scope": (peer_scope, "all"),
             "other_peer_penalty": (other_peer_penalty, None),
             "other_peer_penalties": (other_peer_penalties, None),

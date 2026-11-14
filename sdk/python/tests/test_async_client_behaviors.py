@@ -1011,6 +1011,20 @@ async def test_search_and_search_context_forward_search_type():
 
 
 @pytest.mark.asyncio
+async def test_search_context_forwards_resource_uris():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response_data = lambda _response: {"result": {}}
+    resource_uris = ["viking://resources/alpha", "viking://resources/shared/spec.md"]
+
+    await client.search_context("deployment", options={"resource_uris": resource_uris})
+
+    payload = client._request.await_args.kwargs["json"]
+    assert payload["mode"] == "context"
+    assert payload["resource_uris"] == resource_uris
+
+
+@pytest.mark.asyncio
 async def test_find_extra_forwards_unknown_fields_to_payload():
     client = AsyncHTTPClient(url="http://localhost:1933")
     client._request = AsyncMock(return_value=object())

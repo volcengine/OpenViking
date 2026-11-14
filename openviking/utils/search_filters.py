@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, time, timedelta, timezone
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Sequence, Union
 
 from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
 from openviking_cli.retrieve.types import ContextType
@@ -51,6 +51,41 @@ def merge_context_type_filter(
         return existing_filter
     context_filter = {"op": "must", "field": "context_type", "conds": context_types}
     return _and_filters(existing_filter, context_filter)
+
+
+def has_context_type_filter(scope: Any) -> bool:
+    """Recognize explicit type constraints in public DSL and internal filter ASTs."""
+    if isinstance(scope, dict):
+        return scope.get("field") == "context_type" or any(
+            has_context_type_filter(value)
+            for value in scope.values()
+            if isinstance(value, (dict, list))
+        )
+    if isinstance(scope, list):
+        return any(has_context_type_filter(value) for value in scope)
+    if hasattr(scope, "payload"):
+        return has_context_type_filter(scope.payload)
+    return getattr(scope, "field", None) == "context_type" or any(
+        has_context_type_filter(value) for value in getattr(scope, "conds", [])
+    )
+
+
+def merge_resource_scope_filter(
+    existing_filter: Optional[Dict[str, Any]],
+    resource_uris: Sequence[str],
+    *,
+    include_non_resources: bool,
+) -> Optional[Dict[str, Any]]:
+    """Require resource hits to fall within one of the requested URI subtrees."""
+    if not resource_uris:
+        return existing_filter
+    scopes = [
+        {"op": "must", "field": "uri", "conds": [uri], "para": "-d=-1"} for uri in resource_uris
+    ]
+    if include_non_resources:
+        scopes.append({"op": "must", "field": "context_type", "conds": ["memory", "skill"]})
+    scope = scopes[0] if len(scopes) == 1 else {"op": "or", "conds": scopes}
+    return _and_filters(existing_filter, scope)
 
 
 def resolve_context_types(context_type: Optional[SearchContextTypeInput]) -> List[str]:

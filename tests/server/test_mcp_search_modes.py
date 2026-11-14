@@ -39,6 +39,7 @@ CONTEXT_ONLY_ARGS = {
     "detail_by_category": {"events": "full"},
     "dedup_turns": 3,
     "exclude_uris": ["viking://user/test_user/memories/secret.md"],
+    "resource_uris": ["viking://resources/my-project"],
     "peer_scope": "actor",
     "other_peer_penalty": 0.5,
     "other_peer_penalties": {"events": 0.5},
@@ -121,6 +122,21 @@ async def test_context_mode_still_accepts_them():
 
 
 @pytest.mark.asyncio
+async def test_context_mode_forwards_canonical_resource_uris(monkeypatch):
+    async def fake_assemble_context(*, service, ctx, params):
+        assert params.resource_uris == ("viking://user/test_user/resources/my-project",)
+        return SimpleNamespace(digest="", rendered="Scoped context")
+
+    monkeypatch.setattr(mcp_endpoint, "assemble_context", fake_assemble_context)
+
+    result = await mcp_endpoint.search(
+        query="deployment", mode="context", resource_uris=["viking://~/resources/my-project/"]
+    )
+
+    assert result == "Scoped context"
+
+
+@pytest.mark.asyncio
 async def test_context_mode_still_refuses_list_only_arguments():
     with pytest.raises(InvalidArgumentError, match="only supported in mode='list'"):
         await mcp_endpoint.search(query="anything", mode="context", read_content=True)
@@ -175,11 +191,13 @@ def test_the_refusal_names_what_the_caller_typed():
     """The tool splits two router fields in two, and the caller has to hear their own name."""
     from openviking.server.routers.search import context_only_fields_error
 
-    message = context_only_fields_error({"detail": {"detail_by_category"}},
-                                        as_named_by_caller={"detail": {"detail_by_category"}})
+    message = context_only_fields_error(
+        {"detail": {"detail_by_category"}}, as_named_by_caller={"detail": {"detail_by_category"}}
+    )
     assert "detail_by_category" in message
 
-    both = context_only_fields_error({"detail": {"detail", "detail_by_category"}},
-                                     as_named_by_caller={"detail": {"detail", "detail_by_category"}})
+    both = context_only_fields_error(
+        {"detail": {"detail", "detail_by_category"}},
+        as_named_by_caller={"detail": {"detail", "detail_by_category"}},
+    )
     assert "detail_by_category" in both and "detail" in both
-
