@@ -96,7 +96,7 @@ export interface UseVikingBotChatOptions extends VikingBotHookOptions {
 }
 
 export interface VikingBotChatState {
-  /** A normal terminal event (or successfully loaded history) permits HITL. */
+  /** A normal terminal event in the current stream permits HITL. */
   responseComplete?: boolean;
   sessionId?: string;
   messages: readonly VikingBotMessage[];

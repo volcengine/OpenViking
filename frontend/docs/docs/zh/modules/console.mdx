@@ -58,6 +58,8 @@ import '@openviking/react/modules/console/style.css';
 
 Console 在 `request_user_input` 工具成功且当前轮正常结束后展示问题，按问题组顺序收集答案。中断、截断、错误结果和不支持的协议保留普通工具展示。传入 `chatOptions.hitl={false}` 关闭自动交互；显式传入 `conversation.interaction` 时使用宿主的问题与回调。
 
+历史消息不包含可确认的轮次终止状态，加载历史只恢复消息和答案摘要，不重新触发问题卡片。新一轮实时回复正常结束后仍可触发交互。
+
 最后一项提交后，Console 发送 `request_user_input_response` JSON 继续下一轮对话，包含 `schema_version: '1.0'`、`tool_call_id` 和按原顺序排列的 `answers: { card_type, title, value }[]`。用户气泡、复制和历史展示采用标签/值摘要；发送与存储保留协议原文，选项名称从对应问题中恢复。
 
 宿主通过 `chatOptions.hitl.cards[card_type]` 提供扩展。同一类型的多个问题可用 `configureCard(card)` 按 `card.id` 或 `card.payload` 分别配置。字段名与值类型见 [VikingBotInteractionFields](../components/viking-bot#vikingbotinteractionfields)。校验通过后才进入下一项，最后一项才调用对话服务。目录存在性、权限和业务规则由宿主校验器检查；自定义选择器的数据与请求由宿主提供。

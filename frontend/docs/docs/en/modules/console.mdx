@@ -58,6 +58,8 @@ Send any message to trigger simulated questions. The example injects asynchronou
 
 Console shows questions after a successful `request_user_input` tool result and a normal end to the current turn. It collects answers in card order. Interrupted or truncated streams, error results and unsupported schemas keep the ordinary tool presentation. Set `chatOptions.hitl={false}` to disable automatic interaction. An explicit `conversation.interaction` uses the host's question and callbacks.
 
+History does not establish whether a turn completed normally. Loading history restores messages and answer summaries without reopening question cards. A new live response can still activate HITL after normal completion.
+
 Submitting the last card sends a `request_user_input_response` JSON message to continue the conversation. It includes `schema_version: '1.0'`, `tool_call_id` and ordered `answers: { card_type, title, value }[]`. User bubbles, copy actions and history show readable label/value rows. Transport and persistence retain the original protocol text; option labels come from the corresponding question.
 
 Configure cards through `chatOptions.hitl.cards[card_type]`. Use `configureCard(card)` to distinguish repeated types by `card.id` or `card.payload`. See [VikingBotInteractionFields](../components/viking-bot#vikingbotinteractionfields) for field names and value types. Validation runs before advancing, and only the final card calls the chat service. Hosts check directory existence, permissions and business rules through validators, and supply data and requests for custom pickers.
