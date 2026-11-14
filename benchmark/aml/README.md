@@ -62,6 +62,11 @@ default; use `AML_RETRY_ATTEMPTS` and `AML_RETRY_DELAY_SECONDS` to adjust that
 behavior. `Token`, `Bearer`, and `X-Api-Key` authentication are accepted when
 `AML_API_KEY` is set.
 
+Add requests have no adapter-level message-count cap. Messages are appended in
+source order to the same session in native batches of at most 100, followed by
+one commit after every batch succeeds. A failed or incomplete batch stops the
+request before commit; do not blindly replay a partially written Add.
+
 `/add` accepts either a content string (Textual/Coding) or an ordered array of
 `text` and `image_url` parts in `messages[].content` (Multimodal). Strings are
 forwarded as native `content`; arrays are forwarded as native Session `parts`,
