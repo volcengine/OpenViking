@@ -94,6 +94,13 @@
   color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
 }
 
+.ov-radio--disabled.ov-radio--checked .ov-radio__mask::after {
+  background: var(
+    --ov-ui-color-radio-disabled-dot,
+    var(--ov-ui-radio-disabled-dot-default)
+  );
+}
+
 .ov-radio > input[type='radio']:focus-visible + .ov-radio__mask {
   outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
   outline-offset: 1px;

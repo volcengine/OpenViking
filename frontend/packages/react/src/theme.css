@@ -347,6 +347,16 @@ html.dark .ov-checkbox {
   --ov-ui-checkbox-disabled-icon-default: rgb(246 248 250 / 20%);
 }
 
+.ov-radio {
+  --ov-ui-radio-disabled-dot-default: var(
+    --ov-ui-color-bg-4,
+    var(--ov-ui-bg-4-default)
+  );
+}
+html.dark .ov-radio {
+  --ov-ui-radio-disabled-dot-default: rgb(246 248 250 / 20%);
+}
+
 .dark .ov-viking-bot {
   --ov-ui-code-bg-default: var(--ov-ui-bg-3-default);
 }
