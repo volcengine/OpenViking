@@ -36,6 +36,12 @@ export function sanitizeAgentChildEnv(environment, {
     if (/^(?:LARK|FEISHU|LARKSUITE|OV_SUPERAGENT)_/i.test(key)
       || (stripClaudeCode && key === 'CLAUDECODE')) delete safeEnv[key];
   }
+  // An isolated gh config must not be overridden by the operator's token or
+  // injected Git config. Workers receive the config path, never its token.
+  if (safeEnv.GH_CONFIG_DIR) {
+    for (const key of ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN',
+      'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS', 'GIT_ASKPASS']) delete safeEnv[key];
+  }
   if (profile) safeEnv.LARKSUITE_CLI_PROFILE = profile;
   if (actions) {
     safeEnv.PERSONAL_AGENT_SOCKET = actions.socketPath;
