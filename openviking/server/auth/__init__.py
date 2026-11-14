@@ -57,6 +57,16 @@ def _normalize_header_value(value: Optional[str]) -> Optional[str]:
     return None
 
 
+def _reject_legacy_agent_header(request: Request) -> None:
+    if any(
+        name.lower() == b"x-openviking-agent" and _normalize_header_value(value.decode("latin-1"))
+        for name, value in request.scope.get("headers", ())
+    ):
+        raise InvalidArgumentError(
+            "X-OpenViking-Agent is no longer supported; use X-OpenViking-Actor-Peer instead."
+        )
+
+
 def _normalize_request_value(value: object) -> Optional[str]:
     if isinstance(value, str):
         normalized = value.strip()
@@ -173,6 +183,7 @@ async def resolve_identity(
     x_openviking_user: Optional[str] = Header(None, alias="X-OpenViking-User"),
 ) -> ResolvedIdentity:
     """Resolve API key to identity via the active auth plugin."""
+    _reject_legacy_agent_header(request)
     if x_api_key is None:
         x_api_key = request.headers.get("X-API-Key")
     if authorization is None:
@@ -292,6 +303,7 @@ async def get_upload_request_context(
     Spoofed identity headers are ignored. The consumed token is stashed on
     ``request.state.signed_upload`` so the handler can finish ingestion.
     """
+    _reject_legacy_agent_header(request)
     api_key = _extract_api_key(x_api_key, authorization)
     if token and not api_key:
         try:
@@ -322,6 +334,7 @@ async def get_download_request_context(
     ``download`` tool) is single-use and bound to one resolved URI, which is stashed on
     ``request.state.signed_download_uri``; the handler serves only that URI.
     """
+    _reject_legacy_agent_header(request)
     api_key = _extract_api_key(x_api_key, authorization)
     if token and not api_key:
         try:
