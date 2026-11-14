@@ -271,6 +271,8 @@ def _prepare_unit(
                     "id": case_id,
                     "unit": unit,
                     "case_id": case_id,
+                    "user_id": user_id,
+                    "history_key": history_key,
                     "question": question,
                     "gold_answer": raw.get("gold_answer"),
                     "options": options,
@@ -364,7 +366,11 @@ async def _search(
         if not isinstance(content, str) or not content:
             raise RuntimeError(f"/search data[{index}] has no valid content")
         contexts.append(content)
-    return {**case.output, "retrieved_context": contexts}
+    return {
+        **case.output,
+        "retrieved_context": contexts,
+        "retrieved_uris": [item["id"] for item in data],
+    }
 
 
 def _write_json(path: Path, value: Any) -> None:
