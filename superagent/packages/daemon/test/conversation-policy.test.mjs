@@ -24,7 +24,9 @@ import { agentCliCommands, cliCommandCode } from '../src/agent-clis.mjs';
 
 const { ROLE_PRESETS } = createRequire(import.meta.url)('../../../deployment-config.cjs');
 
-const read = (name) => fs.readFileSync(path.join(DEFAULT_PROMPT_DIR, name), 'utf8');
+// The assembled policy is normalized to LF (conversation-policy.mjs), so the
+// expected text must be too: a Windows checkout gives these files CRLF.
+const read = (name) => fs.readFileSync(path.join(DEFAULT_PROMPT_DIR, name), 'utf8').replace(/\r\n/g, '\n');
 const role = (name) => resolveRolePromptPath(name);
 
 function withRoleFile(body, callback) {
@@ -56,6 +58,25 @@ describe('conversation policy assemble', () => {
     const weixin = assembleConversationPolicy({ connectors: ['weixin'] });
     assert.doesNotMatch(weixin, /## Lark|ca_|om_|image_key/);
     assert.match(assembleConversationPolicy({ connectors: ['lark'] }), /never pass `--profile`/);
+  });
+
+  it('normalizes CRLF prompt files, so a Windows checkout assembles the same policy', (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'policy-crlf-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    fs.cpSync(DEFAULT_PROMPT_DIR, dir, { recursive: true });
+    for (const name of fs.readdirSync(dir, { recursive: true })) {
+      if (!name.endsWith('.md')) continue;
+      const file = path.join(dir, name);
+      fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/\r?\n/g, '\r\n'));
+    }
+    const crlfRole = path.join(dir, 'crlf-role.md');
+    const lfRole = path.join(dir, 'lf-role.md');
+    fs.writeFileSync(crlfRole, 'Role.\r\nMore.\r\n');
+    fs.writeFileSync(lfRole, 'Role.\nMore.\n');
+    const crlf = assembleConversationPolicy({ promptDir: dir, connectors: ['lark'], rolePromptPath: crlfRole });
+    const lf = assembleConversationPolicy({ promptDir: dir, connectors: ['lark'], rolePromptPath: lfRole });
+    assert.equal(crlf, lf);
+    assert.equal(crlf.includes('\r'), false);
   });
 
   it('keeps QQ owner routing and reply limits in single and mixed sessions', () => {
@@ -202,7 +223,9 @@ describe('conversation policy assemble', () => {
     assert.match(text, /messages still go through the Core tools/);
   });
 
-  it('renders executable overrides safely in discovery, Lark and meeting prompts even after PATH is reset', (t) => {
+  // The fixture executes the rendered command through POSIX /bin/sh.
+  it('renders executable overrides safely in discovery, Lark and meeting prompts even after PATH is reset',
+    { skip: process.platform === 'win32' ? 'needs POSIX /bin/sh' : false }, (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-cli-prompt-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const workspace = path.join(root, 'workspace');

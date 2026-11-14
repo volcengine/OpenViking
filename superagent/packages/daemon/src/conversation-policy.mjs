@@ -65,7 +65,11 @@ export function substitutePromptPlaceholders(text, config = {}) {
 }
 
 function renderPrompt(config, name) {
-  return substitutePromptPlaceholders(fs.readFileSync(path.join(promptDir(config), name), 'utf8'), config).trim();
+  // A Windows checkout (core.autocrlf) gives these files CRLF. The policy is
+  // compared and hashed as text, so normalize line endings here rather than
+  // letting a platform detail change the assembled policy or its hash.
+  const text = fs.readFileSync(path.join(promptDir(config), name), 'utf8').replace(/\r\n/g, '\n');
+  return substitutePromptPlaceholders(text, config).trim();
 }
 
 function joinSections(parts) {
@@ -88,7 +92,7 @@ function connectorSections(config) {
 export function rolePrompt(config = {}) {
   const filePath = config.rolePromptPath;
   if (!filePath) return '';
-  const text = fs.readFileSync(filePath, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+  const text = fs.readFileSync(filePath, 'utf8').replace(/\r\n/g, '\n').replace(/<!--[\s\S]*?-->/g, '');
   return substitutePromptPlaceholders(text, config).trim();
 }
 

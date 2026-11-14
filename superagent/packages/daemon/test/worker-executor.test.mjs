@@ -16,7 +16,15 @@ function nodeFixture(dir, name, source) {
   fs.writeFileSync(script, `#!/usr/bin/env node\n${source}`, { mode: 0o755 });
   if (process.platform !== 'win32') return script;
   const launcher = path.join(dir, `${name}.cmd`);
-  fs.writeFileSync(launcher, `@echo off\r\n"${process.execPath}" "%~dp0${name}.cjs" %*\r\n`);
+  // The product resolves only the Node invocation of an npm-style shim, so the
+  // fixture keeps npm's variable layout instead of a bare `%~dp0...` call.
+  fs.writeFileSync(launcher, [
+    '@echo off',
+    'set dp0=%~dp0',
+    `set _prog=${process.execPath}`,
+    `"%_prog%" "%dp0%\\${name}.cjs" %*`,
+    '',
+  ].join('\r\n'));
   return launcher;
 }
 
