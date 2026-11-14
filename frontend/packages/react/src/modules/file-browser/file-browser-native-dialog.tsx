@@ -12,6 +12,7 @@ export function FileBrowserNativeDialog({
   text,
   triggerRef,
   canWrite,
+  canSaveSnapshot,
   versioned,
   showContent,
   ...props
@@ -20,6 +21,7 @@ export function FileBrowserNativeDialog({
   text: ResolvedLabels;
   triggerRef: RefObject<HTMLElement | null>;
   canWrite: boolean;
+  canSaveSnapshot: boolean;
   versioned: boolean;
   showContent: boolean;
 }) {
@@ -52,6 +54,7 @@ export function FileBrowserNativeDialog({
       {kind === 'history' ? (
         <PreviewHistory
           {...common}
+          canSaveSnapshot={canSaveSnapshot}
           versioned={versioned}
           showContent={showContent}
           loadingText={text.loading}

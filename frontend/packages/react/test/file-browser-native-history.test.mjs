@@ -40,6 +40,7 @@ test('compile file history uses retained versions and their snapshot paths; lang
   const view = await mount(tree(fetch, uri));
   try {
     await openAction('Version history');
+    assert.equal(button('Save snapshot', workflow()), undefined);
     const request = fetch.calls.find((call) =>
       call.path.endsWith('/snapshot/versions'),
     );
@@ -91,6 +92,7 @@ test('experience history is path-scoped, retryable and never supplies an edit ca
   try {
     assert.equal(view.container.querySelector('[aria-label="Edit"]'), null);
     await openAction('Version history');
+    assert.equal(button('Save snapshot', workflow()), undefined);
     assert.ok(workflow().querySelector('[role="alert"]'));
     await click(button('Retry', workflow()));
     assert.match(workflow().textContent, /Initial experience/);

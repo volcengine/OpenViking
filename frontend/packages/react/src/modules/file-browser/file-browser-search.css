@@ -25,6 +25,7 @@
  */
 .ov-file-browser-search .ov-modal__panel {
   height: min(640px, calc(100dvh - 48px));
+  border-radius: 20px;
 }
 
 /*
@@ -390,14 +391,15 @@
 
 /* ── 空态、加载、失败 ─────────────────────────────────────────────── */
 
-/* 空态从内容区顶部往下 120，插画与两行文案间距 24。 */
+/* 结果区已有 16px 内边距，桌面上合计 120px，矮屏让位给内容。 */
 .ov-file-browser-search__empty {
   display: flex;
   flex: 1;
   flex-direction: column;
   align-items: center;
   gap: 24px;
-  padding-top: 120px;
+  padding-block-start: clamp(12px, calc(100dvh - 416px), 104px);
+  overflow: auto;
   text-align: center;
 }
 
@@ -422,6 +424,7 @@
   font-size: 14px;
   font-weight: 500;
   line-height: 22px;
+  letter-spacing: 0.003em;
 }
 
 .ov-file-browser-search__empty-hint {
@@ -429,6 +432,7 @@
   color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
   font-size: 13px;
   line-height: 22px;
+  letter-spacing: 0.003em;
 }
 
 /* 骨架：八条 55 高的行，每条一个 15 的圆点加一根 15 高的圆头横条。 */

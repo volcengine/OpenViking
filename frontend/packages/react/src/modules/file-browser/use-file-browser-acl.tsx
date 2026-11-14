@@ -135,6 +135,7 @@ export function useFileBrowserAcl({
           triggerRef={triggerRef}
           context={context}
           accountId={identity.accountId}
+          userId={identity.userId}
           options={options}
           onClose={() => setOpened(undefined)}
           onUpdated={(report) => {

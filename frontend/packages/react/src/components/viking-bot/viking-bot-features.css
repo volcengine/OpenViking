@@ -117,21 +117,22 @@
   margin-inline-start: auto;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 12px;
 }
 
 .ov-viking-bot__quick-inputs button:not(.ov-button):hover:not(:disabled) {
   background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
 }
-/* 按钮与终端模式的 .ov-console__action 同为 small，图标同尺寸、同线宽，切换模式时不移位。 */
+.ov-viking-bot__header-action.ov-button {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
+}
 .ov-viking-bot__header-action > svg {
   display: block;
-  width: 14px;
-  height: 14px;
-}
-.ov-viking-bot__header-action svg path {
-  stroke-width: 1.25px;
-  vector-effect: non-scaling-stroke;
 }
 .ov-viking-bot__header {
   padding: 8px 16px;
@@ -327,7 +328,15 @@
   color: var(--ov-ui-color-status-success, var(--ov-ui-status-success-default));
 }
 @container (max-width: 360px) {
+  .ov-viking-bot__session-actions {
+    gap: 8px;
+  }
   .ov-viking-bot__session-meta > span {
     display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ov-viking-bot__header-action.ov-button {
+    transition: none;
   }
 }

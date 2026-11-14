@@ -92,6 +92,7 @@ export function useVikingBotChat(
   return {
     ...state,
     ...projected,
+    signal,
     messages,
     canInterrupt: Boolean(service.interrupt),
     canSteer: Boolean(service.steer),

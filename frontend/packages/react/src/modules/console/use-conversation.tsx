@@ -2,6 +2,7 @@ import type { SetStateAction } from 'react';
 import { useEffect, useMemo, useRef } from 'react';
 import { useVikingBotChat } from './chat/use-viking-bot-chat.js';
 import { useVikingBotSessions } from './chat/use-viking-bot-sessions.js';
+import { useAttachmentUpload } from './chat/use-attachment-upload.js';
 import type { VikingBotProps } from '../../components/viking-bot/types.js';
 import type { ConsoleProps } from './types.js';
 
@@ -29,6 +30,16 @@ export function useConversation(
     requestOptions: chatOptions?.requestOptions ?? requestOptions,
   };
   const chat = useVikingBotChat(options);
+  const uploads = useAttachmentUpload(
+    enabled &&
+      !conversation?.onFilesAdded &&
+      conversation?.attachments === undefined
+      ? chatOptions?.service?.attachmentUpload
+      : undefined,
+    chat.send,
+    chat.signal,
+  );
+  const clearUploads = uploads.clear;
   const { sessionId, reset, selectSession } = chat;
   const selection = useMemo(
     () => ({
@@ -64,8 +75,17 @@ export function useConversation(
     submission.current++;
     if (selectedId) selection.select(selectedId);
     else reset();
+    clearUploads();
     setDraft('');
-  }, [enabled, selection, selectedId, sessionId, reset, setDraft]);
+  }, [
+    enabled,
+    selection,
+    selectedId,
+    sessionId,
+    reset,
+    clearUploads,
+    setDraft,
+  ]);
   const onSelect = conversation?.sessions?.onSelect;
   // Report asynchronously created remote IDs to the host router while streaming,
   // before send() settles. No event handler receives that intermediate ID.
@@ -85,6 +105,7 @@ export function useConversation(
     : (chat.error ?? chat.persistenceError);
   return {
     ...conversation,
+    ...uploads.props,
     messages: chat.messages,
     streaming: chat.streaming,
     listKey: `${scopeKey ?? ''}:${chat.sessionId ?? 'new'}`,
@@ -95,6 +116,7 @@ export function useConversation(
     onSend: (draft) => {
       const token = ++submission.current;
       const followingUp = chat.status === 'streaming';
+      if (!followingUp && uploads.props) uploads.removeSent(draft.attachments);
       setDraft((current) =>
         current.trim() === draft.text.trim() ? '' : current,
       );
@@ -105,6 +127,7 @@ export function useConversation(
             setDraft((current) => (current === '' ? draft.text : current));
           return;
         }
+        if (followingUp && uploads.props) uploads.removeSent(draft.attachments);
         if (!followingUp) void sessions.refresh();
       });
     },
@@ -128,12 +151,14 @@ export function useConversation(
         submission.current++;
         selection.notified = id;
         chat.selectSession(id);
+        clearUploads();
         setDraft('');
         onSelect?.(id);
       },
       onNew: () => {
         submission.current++;
         chat.reset();
+        clearUploads();
         setDraft('');
         conversation?.sessions?.onNew?.();
       },

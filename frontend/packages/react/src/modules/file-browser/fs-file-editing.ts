@@ -2,15 +2,10 @@ import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type { FilePreviewEditing } from '../../components/file-preview/index.js';
 import { isExperienceFile } from './experience-data.js';
-import {
-  isSummaryUri,
-  isSystemUri,
-  supportsFileHistory,
-} from './preview-policy.js';
+import { isSummaryUri, isSystemUri } from './preview-policy.js';
 import { readFileContent } from './fs-read-content.js';
 
 const EDITABLE_TEXT = /\.(?:md|json|jsonl|txt|yaml|yml)$/i;
-
 /** Load the full file before editing; the preview can contain only its first page. */
 export function createFileEditing(
   client: OvClient,
@@ -28,18 +23,13 @@ export function createFileEditing(
   )
     return undefined;
   let wiki = isWiki;
-  const canSnapshot = supportsFileHistory(uri);
   return {
-    get promptForVersionNote() {
-      return !wiki && canSnapshot;
-    },
     loadContent: async () => {
       const result = await readFileContent(client, uri, options, -1, wiki);
       wiki = result.wiki;
       return result.content;
     },
-    save: async (content, note) => {
-      const shouldCreateVersion = !wiki && canSnapshot && note !== undefined;
+    save: async (content) => {
       await client.request({
         method: 'POST',
         path: OV_PATHS.contentWrite,
@@ -53,19 +43,6 @@ export function createFileEditing(
         },
         options,
       });
-      if (!shouldCreateVersion) return;
-      try {
-        const result = await client.request<{ result: 'created' | 'noop' }>({
-          method: 'POST',
-          path: OV_PATHS.snapshotCommit,
-          body: { message: note || `Update ${name}`, paths: [uri] },
-          options,
-        });
-        if (result?.result === 'created') return;
-      } catch {
-        // The body write already succeeded; report only the missing snapshot.
-      }
-      return { warning: 'version-not-created' };
     },
     onSave,
   };

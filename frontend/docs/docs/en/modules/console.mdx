@@ -114,19 +114,22 @@ Every adapter method receives an `AbortSignal`, must honor cancellation, and thr
 | ----------- | ------------------------- | -------------------------------- | -------- |
 | sessionId   | Session ID                | `string`                         | Required |
 | text        | Submitted text            | `string`                         | Required |
-| attachments | Host-uploaded attachments | `readonly VikingBotAttachment[]` | Required |
+| attachments | Attachments ready to send | `readonly VikingBotAttachment[]` | Required |
 | references  | Resource references       | `readonly VikingBotReference[]`  | -        |
 
 ### VikingBotChatService
 
-| Property      | Description                                                           | Type                                                                                    | Default  |
-| ------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | -------- |
-| stream        | Streaming request; must emit a complete or interrupted terminal event | `(input: VikingBotChatInput, signal: AbortSignal) => AsyncIterable<VikingBotChatEvent>` | Required |
-| createSession | Create a session                                                      | `(signal: AbortSignal) => Promise<VikingBotSession>`                                    | Required |
-| loadMessages  | Read complete session history                                         | `(id: string, signal: AbortSignal) => Promise<readonly VikingBotMessage[]>`             | Required |
-| saveMessage   | Save a message; omit when the backend persists automatically          | `(id: string, message: VikingBotMessage, signal: AbortSignal) => Promise<void>`         | Optional |
-| interrupt     | Interrupt backend generation; distinct from local connection cleanup  | `(id: string, signal: AbortSignal) => Promise<{ interrupted: boolean }>`                | Optional |
-| steer         | Append input to the active stream; acceptance is not completion       | `(input: VikingBotChatInput, signal: AbortSignal) => Promise<{ accepted: boolean }>`    | Optional |
+| Property         | Description                                                                                             | Type                                                                                    | Default  |
+| ---------------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | -------- |
+| stream           | Streaming request; must emit a complete or interrupted terminal event                                   | `(input: VikingBotChatInput, signal: AbortSignal) => AsyncIterable<VikingBotChatEvent>` | Required |
+| createSession    | Create a session                                                                                        | `(signal: AbortSignal) => Promise<VikingBotSession>`                                    | Required |
+| loadMessages     | Read complete session history                                                                           | `(id: string, signal: AbortSignal) => Promise<readonly VikingBotMessage[]>`             | Required |
+| attachmentUpload | Enables the add-resource button; `upload` returns the ID provided as `attachment.uploadId` when sending | `VikingBotAttachmentUpload`                                                             | Optional |
+| saveMessage      | Save a message; omit when the backend persists automatically                                            | `(id: string, message: VikingBotMessage, signal: AbortSignal) => Promise<void>`         | Optional |
+| interrupt        | Interrupt backend generation; distinct from local connection cleanup                                    | `(id: string, signal: AbortSignal) => Promise<{ interrupted: boolean }>`                | Optional |
+| steer            | Append input to the active stream; acceptance is not completion                                         | `(input: VikingBotChatInput, signal: AbortSignal) => Promise<{ accepted: boolean }>`    | Optional |
+
+`VikingBotAttachmentUpload` accepts an optional file picker filter, `accept`, and a required `upload(file, signal)` function that resolves to the uploaded file ID. Validate files in the adapter as the picker filter does not apply to dropped files. Console waits for files to upload before letting the user send. Removing a file aborts its upload; changing the account, request identity or session, or cancelling the request signal, aborts pending uploads and clears managed attachments. Echoing a newly created session ID through `conversation.sessions.currentId` preserves uploads for that conversation. If the host supplies its own draft attachments or file handler, Console uses those instead.
 
 ### VikingBotSessionService
 
@@ -248,7 +251,7 @@ Command mode runs only the built-in native API commands. Type `/` or run `ov hel
 
 Failed questions and client-only errors stay in the message list. If no session was created, the next send creates one and carries undelivered user inputs as context in a single chat request, while saving the original user messages separately. Errors are excluded from persistence and model input. The native gateway accepts one `message`; writing session records alone does not restore model context. Undelivered inputs stay queued until the first stream event acknowledges delivery. A failure before that event preserves them for the next send; once generation starts, subsequent sends do not replay those inputs.
 
-- Console sends native VikingBot chat requests by default. Providing `conversation.messages` or `conversation.onSend` gives the host ownership of chat; attachment uploads remain with the host.
+- Console sends native VikingBot chat requests by default. Providing `conversation.messages` or `conversation.onSend` gives the host ownership of chat and attachment state.
 - Set `conversation.isAvailable` and `conversation.unavailableMessage` from the Bot status your app queries; when the Bot is unavailable, the composer is disabled and shows the message.
 - Commands send requests only when the user submits them, never on mount. An instance runs one command at a time and disables the input while it runs.
 - A failed command shows its error in its own record; fix the command and submit it again. A failed write may already have been accepted by the server, so check the result before you resubmit.

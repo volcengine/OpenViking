@@ -70,12 +70,20 @@
   display: flex;
   flex-shrink: 0;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   margin-inline-start: auto;
 }
 .ov-console__action {
   box-sizing: border-box;
   list-style: none;
+}
+.ov-console__action.ov-button {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
 }
 .ov-console .ov-console__action.ov-button:not(:disabled) {
   color: var(--ov-ui-console-secondary);
@@ -87,12 +95,6 @@
 }
 .ov-console__action > svg {
   display: block;
-  width: 14px;
-  height: 14px;
-}
-.ov-console__action > svg path {
-  stroke-width: 1.25px;
-  vector-effect: non-scaling-stroke;
 }
 
 .ov-console__mode:focus-visible {
@@ -109,7 +111,8 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .ov-console__mode {
+  .ov-console__mode,
+  .ov-console__action.ov-button {
     transition: none;
   }
 }

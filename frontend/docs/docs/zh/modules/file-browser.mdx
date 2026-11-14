@@ -169,12 +169,14 @@ import '@openviking/react/modules/file-browser/style.css';
 
 `acl` 传入对象时的配置，全部可选；传入 `true` 等同于不设置任何选项。
 
-| 参数              | 说明                                                                                                         | 类型                                                                                                                                          | 默认值   |
-| ----------------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| readOnly          | 禁止修改授权，仍可查看                                                                                       | `boolean`                                                                                                                                     | `false`  |
-| resolvePermission | 返回当前用户在资源上的有效权限，未知时返回 `undefined`；省略时读取 `fs/stat` 的 `access`，缺失时探测管理权限 | `(uri: string, context: FileBrowserAclContext) => Promise<FileBrowserAclLevel \| undefined>`                                                  | 内置实现 |
-| listPrincipals    | 返回可添加的 User 或 Group，`page` 从 1 开始；省略时调用账号的用户和用户组接口，不读取凭证                   | `(query: { type: 'user' \| 'group'; keyword: string; page: number }, context: FileBrowserAclContext) => Promise<FileBrowserAclPrincipalPage>` | 内置实现 |
-| onChange          | 授权保存成功后触发，保存失败时不触发；回调抛出的错误不影响保存结果                                           | `(report: FileBrowserAclReport) => void`                                                                                                      | -        |
+| 参数                    | 说明                                                                                                         | 类型                                                                                                                                          | 默认值     |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| readOnly                | 禁止修改授权，仍可查看                                                                                       | `boolean`                                                                                                                                     | `false`    |
+| administratorUserId     | 宿主已确认的管理员 ID，在授权列表显示为固定成员                                                              | `string`                                                                                                                                      | -          |
+| supportedPrincipalTypes | 允许新增授权的主体类型；传空数组会隐藏添加入口，仍可编辑已有授权                                             | `readonly ('user' \| 'group')[]`                                                                                                              | 两种都支持 |
+| resolvePermission       | 返回当前用户在资源上的有效权限，未知时返回 `undefined`；省略时读取 `fs/stat` 的 `access`，缺失时探测管理权限 | `(uri: string, context: FileBrowserAclContext) => Promise<FileBrowserAclLevel \| undefined>`                                                  | 内置实现   |
+| listPrincipals          | 返回可添加的 User 或 Group，`page` 从 1 开始；省略时调用账号的用户和用户组接口，不读取凭证                   | `(query: { type: 'user' \| 'group'; keyword: string; page: number }, context: FileBrowserAclContext) => Promise<FileBrowserAclPrincipalPage>` | 内置实现   |
+| onChange                | 授权保存成功后触发，保存失败时不触发；回调抛出的错误不影响保存结果                                           | `(report: FileBrowserAclReport) => void`                                                                                                      | -          |
 
 ### FileBrowserAclContext
 
@@ -317,30 +319,34 @@ import '@openviking/react/modules/file-browser/style.css';
 
 `labels.workflows` 接受其中任意几项，省略的项跟随 `locale`。
 
-| 参数         | 说明                               | 类型     | 默认值                                |
-| ------------ | ---------------------------------- | -------- | ------------------------------------- |
-| configure    | 编译配置操作的文案，也是弹窗的标题 | `string` | `'编译配置'`                          |
-| historyEmpty | 没有历史版本时的提示               | `string` | `'暂无历史版本'`                      |
-| historyLimit | 历史记录达到 500 条上限时的提示    | `string` | `'最多显示最近 500 条快照。'`         |
-| version      | Wiki 文件版本号前的文字            | `string` | `'版本'`                              |
-| importFile   | 导入弹窗里文件选择框的标签         | `string` | `'包文件'`                            |
-| importHint   | 导入弹窗里的说明                   | `string` | `'选择 .ovpack 包，导入到当前目录。'` |
-| importSubmit | 导入按钮                           | `string` | `'导入'`                              |
-| imported     | 导入成功的提示                     | `string` | `'导入成功。'`                        |
-| saved        | 编译配置保存成功的提示             | `string` | `'配置已保存。'`                      |
-| cancel       | 取消按钮                           | `string` | `'取消'`                              |
-| save         | 保存按钮                           | `string` | `'保存'`                              |
-| failed       | 操作失败的提示前缀                 | `string` | `'操作失败。'`                        |
-| sources      | 来源目录输入框的标签               | `string` | `'来源目录（每行一个）'`              |
-| skill        | 技能输入框的标签                   | `string` | `'技能 URI'`                          |
-| instruction  | 指令输入框的标签                   | `string` | `'指令'`                              |
-| automatic    | 自动更新复选框的标签               | `string` | `'自动更新'`                          |
-| schedule     | 定时更新选择框的标签               | `string` | `'定时更新'`                          |
-| noSchedule   | 「不设置定时更新」选项             | `string` | `'不设置定时更新'`                    |
-| daily        | 「每天」选项                       | `string` | `'每天'`                              |
-| weekly       | 「每周」选项                       | `string` | `'每周'`                              |
-| time         | 执行时间输入框的标签               | `string` | `'执行时间（北京时间）'`              |
-| weekday      | 星期选择框的标签                   | `string` | `'星期'`                              |
+| 参数              | 说明                               | 类型     | 默认值                                |
+| ----------------- | ---------------------------------- | -------- | ------------------------------------- |
+| configure         | 编译配置操作的文案，也是弹窗的标题 | `string` | `'编译配置'`                          |
+| historyEmpty      | 没有历史版本时的提示               | `string` | `'暂无历史版本'`                      |
+| historyLimit      | 历史记录达到 500 条上限时的提示    | `string` | `'最多显示最近 500 条快照。'`         |
+| snapshotNote      | 快照备注输入框的标签               | `string` | `'描述这次快照'`                      |
+| saveSnapshot      | 保存快照按钮                       | `string` | `'保存快照'`                          |
+| snapshotSaved     | 快照保存成功的提示                 | `string` | `'快照已保存。'`                      |
+| snapshotUnchanged | 文件内容无变化时的提示             | `string` | `'文件内容没有变化，无需创建快照。'`  |
+| version           | Wiki 文件版本号前的文字            | `string` | `'版本'`                              |
+| importFile        | 导入弹窗里文件选择框的标签         | `string` | `'包文件'`                            |
+| importHint        | 导入弹窗里的说明                   | `string` | `'选择 .ovpack 包，导入到当前目录。'` |
+| importSubmit      | 导入按钮                           | `string` | `'导入'`                              |
+| imported          | 导入成功的提示                     | `string` | `'导入成功。'`                        |
+| saved             | 编译配置保存成功的提示             | `string` | `'配置已保存。'`                      |
+| cancel            | 取消按钮                           | `string` | `'取消'`                              |
+| save              | 保存按钮                           | `string` | `'保存'`                              |
+| failed            | 操作失败的提示前缀                 | `string` | `'操作失败。'`                        |
+| sources           | 来源目录输入框的标签               | `string` | `'来源目录（每行一个）'`              |
+| skill             | 技能输入框的标签                   | `string` | `'技能 URI'`                          |
+| instruction       | 指令输入框的标签                   | `string` | `'指令'`                              |
+| automatic         | 自动更新复选框的标签               | `string` | `'自动更新'`                          |
+| schedule          | 定时更新选择框的标签               | `string` | `'定时更新'`                          |
+| noSchedule        | 「不设置定时更新」选项             | `string` | `'不设置定时更新'`                    |
+| daily             | 「每天」选项                       | `string` | `'每天'`                              |
+| weekly            | 「每周」选项                       | `string` | `'每周'`                              |
+| time              | 执行时间输入框的标签               | `string` | `'执行时间（北京时间）'`              |
+| weekday           | 星期选择框的标签                   | `string` | `'星期'`                              |
 
 ### FileBrowserAclLabels
 
@@ -357,13 +363,15 @@ import '@openviking/react/modules/file-browser/style.css';
 | writeDescription         | 权限标签详情里对 `write` 的说明            | `string` | `'可查看并编辑内容，不能管理节点权限。'`                                 |
 | manageDescription        | 权限标签详情里对 `manage` 的说明           | `string` | `'可管理该节点的权限配置。'`                                             |
 | effectivePermission      | 权限标签详情里「有效权限」的标签           | `string` | `'当前 User 有效权限'`                                                   |
-| addPrincipal             | 添加成员区域的标题                         | `string` | `'添加 User 或 Group'`                                                   |
+| addPrincipal             | 成员搜索的初始占位文案及无障碍名称         | `string` | `'添加 User 或 Group'`                                                   |
 | search                   | 成员搜索框的占位文案                       | `string` | `'搜索用户或用户组'`                                                     |
 | users                    | 成员选择里 User 页签的名称                 | `string` | `'User'`                                                                 |
 | groups                   | 成员选择里 Group 页签的名称                | `string` | `'Group'`                                                                |
-| allUsers                 | 全部用户（`user:*`）的名称                 | `string` | `'全部 User'`                                                            |
+| allUsers                 | 全部用户（`user:*`）的名称                 | `string` | `'全部 user'`                                                            |
 | administrator            | 固定的管理员行的名称                       | `string` | `'数据空间管理员'`                                                       |
 | administratorDescription | 管理员行的说明                             | `string` | `'管理员始终保留隐式管理权限。'`                                         |
+| administratorBadge       | 指定管理员名称旁的标签                     | `string` | `'管理员'`                                                               |
+| currentUserBadge         | 当前用户名称旁的标签                       | `string` | `'当前 User'`                                                            |
 | direct                   | 授权来源「直接授权」的名称                 | `string` | `'直接授权'`                                                             |
 | inherited                | 授权来源「继承自上级」的名称               | `string` | `'从父级目录继承权限'`                                                   |
 | remove                   | 授权菜单里的移除项                         | `string` | `'移除权限'`                                                             |
@@ -472,10 +480,10 @@ await browserRef.current?.openResource(directoryUri);
 - 标题行右侧依次是「预览 / 源码」切换、编辑按钮和操作菜单，「复制路径」在面包屑旁，权限标签在其后。
 - 显隐开关只控制默认按钮是否显示，不改变能力：`previewSlots` 上下文里的 `canDelete`、`deleteFile()` 和编辑方法仍然可用。
 - `readOnly` 禁止所有写入，包括保存编译配置；开启 `acl` 后，编辑、导入和保存编译配置要求 `write` 或 `manage`，删除要求 `manage`。
-- 复制内容、下载、导出、历史版本和查看编译配置不受 `readOnly` 和 ACL 的限制。
+- 复制内容、下载、导出、查看历史版本和查看编译配置不受 `readOnly` 和 ACL 的限制。
 - 没有开启 `acl`，或资源不在 `viking://resources/` 下时，区块不探测权限，由服务端鉴权。
-- 保存普通文件时会弹出版本备注。确认后，FileBrowser 先保存正文，再为当前文件创建快照。若未创建快照，正文仍保留，预览会显示提示。Wiki 文件直接保存。
-- 历史版本：`GET /api/v1/snapshot/log` 读取该资源最近最多 500 条快照；Wiki 编译产物用 `GET /api/v1/snapshot/versions` 读取最多 100 个保留版本。可预览或复制历史正文，并与当前文件对比。历史弹窗为只读。
+- 保存普通文件会更新正文。要为已保存的内容创建版本，打开「历史版本」，填写备注并点击「保存快照」。此操作仅对可编辑的普通文件开放，调用 `POST /api/v1/snapshot/commit`。
+- 历史版本通过 `GET /api/v1/snapshot/log` 读取该资源最近最多 500 条快照。Wiki 编译产物用 `GET /api/v1/snapshot/versions` 读取最多 100 个保留版本。可预览或复制历史正文，并与当前文件对比。
 - 编译配置：`GET /api/v1/compile/config` 读取，`POST /api/v1/compile/config/update` 保存来源目录、技能、指令、自动更新和每天或每周的定时更新。
 - 导入 .ovpack：先通过 `POST /api/v1/resources/temp_upload` 上传文件，再调用 `POST /api/v1/pack/import` 导入到当前目录；失败时保留所选文件，重试会重新上传。
 - 导出 .ovpack：调用 `POST /api/v1/pack/export`，把返回的内容保存为 `<名称>.ovpack`；下载使用 `GET /api/v1/content/download`。
@@ -497,7 +505,7 @@ await browserRef.current?.openResource(directoryUri);
 - 目录列表（`fs/ls`）里 `access: 'denied'` 的节点不能选中或展开，`access: 'container'` 的节点只能展开以访问有权限的子节点、不能预览自身。
 - `access: 'read'` 的节点显示只读标记。
 - 以上节点标记来自目录列表，不依赖 `acl`。
-- 授权调用 `GET`、`PUT`、`DELETE /api/v1/acl`；成员目录调用账号的用户和用户组接口（用户每页 20 条，`include_credentials=false`），需要在 Provider 或 `requestOptions` 里提供 `accountId`。
+- 授权调用 `GET`、`PUT /api/v1/acl`，恢复继承时将 `acl_mode` 设为 `inherit` 并发送空的直接授权列表；成员目录调用账号的用户和用户组接口（用户每页 20 条，`include_credentials=false`），需要在 Provider 或 `requestOptions` 里提供 `accountId`。
 - 用户组目录需要账号管理权限，资源管理者无权读取时会显示失败和重试，可以用 `acl.listPrincipals` 接入自己的目录。
 - `acl.readOnly` 只禁止修改授权，与 `readOnly` 相互独立。
 
