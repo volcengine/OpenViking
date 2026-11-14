@@ -527,9 +527,17 @@ class ContentWriteCoordinator:
     ) -> Dict[str, Any]:
         self._validate_mode(mode)
         processing_mode = normalize_processing_mode(processing_mode)
-        normalized_uri = normalize_storage_target_uri(
-            self._validate_uri_path(uri, field_name="uri")
-        )
+        validated_uri = self._validate_uri_path(uri, field_name="uri")
+        normalized_uri = normalize_storage_target_uri(validated_uri)
+        if normalized_uri != validated_uri:
+            # Whitespace segments are canonicalized to ``_`` for fresh targets,
+            # but a file may still live at its literal pre-#5328 path (display
+            # names like ``Jane Doe``). Prefer the occupied literal path so a
+            # replace/append edits it in place instead of forking a sanitized
+            # sibling that extraction merge cannot re-attach (#6872).
+            literal = await self._safe_stat(validated_uri, ctx=ctx, allow_not_found=True)
+            if not literal.get("not_found") and not literal.get("isDir"):
+                normalized_uri = validated_uri
         self._ensure_content_write_policy(normalized_uri)
         await self._viking_fs._ensure_access(normalized_uri, ctx, action=AclAction.WRITE)
         namespace_policy = namespace_policy_for_uri(normalized_uri)
