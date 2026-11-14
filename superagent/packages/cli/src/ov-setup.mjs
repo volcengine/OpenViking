@@ -36,6 +36,23 @@ const canonical = (value) => (Array.isArray(value) ? value.map(canonical)
 // OV user can only be shown with the name still to come.
 const UNNAMED = () => t('<实例名称>', '<instance name>');
 
+// Older OV releases let memory extraction update soul.md. An absent or
+// unfamiliar version cannot prove that behavior, so it never blocks setup or
+// produces a speculative warning.
+function hasLegacySoulExtraction(version) {
+  if (typeof version !== 'string') return false;
+  const match = version.trim().match(/^v?(\d+)\.(\d+)(?:\.(\d+))?/);
+  if (!match) return false;
+  const parts = match.slice(1).map((part) => Number(part ?? 0));
+  return parts[0] === 0 && (parts[1] < 5 || (parts[1] === 5 && parts[2] < 5));
+}
+
+function warnAboutLegacySoulExtraction(prompter, version) {
+  if (!hasLegacySoulExtraction(version)) return;
+  prompter.warn(t(`当前 OpenViking 版本为 ${version}，低于 0.5.5；记忆抽取链路可能更新 soul，覆盖角色设定。建议升级到 0.5.5 或更高版本。`,
+    `OpenViking ${version} is older than 0.5.5; its memory extraction pipeline may update the soul and overwrite the role. Upgrade to OpenViking 0.5.5 or later.`));
+}
+
 // Everything an instance copy takes from a config: all of it but the peer the
 // copy drops. Null for a file that cannot be read.
 function connectionKey(configPath) {
@@ -289,6 +306,7 @@ export async function configureOpenViking({
         continue;
       }
       prompter.success(t(`OpenViking 连接已验证：${address(result.url || config.url)}`, `OpenViking connection verified: ${address(result.url || config.url)}`));
+      warnAboutLegacySoulExtraction(prompter, result.version);
       const identity = await chooseIdentity(prompter, { result, config, taken, instanceId });
       if (!identity) continue;
       return { ...result, configPath, config: keyIdentity(structuredClone(config), result), via, identity };
