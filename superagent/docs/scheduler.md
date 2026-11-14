@@ -292,9 +292,10 @@ directory, measured:
 
 No process runs between turns, so an idle CLI task holds nothing; DSH sessions
 stay in the shared profile and resume on the task's next turn or round.
-Durable, OpenCode and Ark have no worker mode, and `task_create` tells the
-router to handle the request itself there. A task keeps the runtime it started
-on.
+Durable, OpenCode and Ark have no worker mode. With `scheduler: "workers"` they
+keep inbox behavior, but the workers prompt and `task_*` router tools are not
+exposed; stale or direct calls are refused and the router handles the request
+itself. A task keeps the runtime it started on.
 
 Three turns run at once, plus one slot only a follow-up to an existing task may
 take. Each task works in a directory under `<workspace>/tasks/` (see Task
@@ -449,6 +450,8 @@ the reply text, so a rewritten reply is a new message).
   replying remain available. Codex's hosted web search does not pass through
   PreToolUse and is outside this limit. Pi additionally caps router bash at
   30 seconds and disallows `sleep`; those shell-specific rules remain Pi-only.
+  On DSH the call budget is policy text only, and DSH still applies its
+  configured per-command timeout.
 - **Restart.** Tasks, inputs and reports are in SQLite. A turn cut by a
   shutdown is not reported; at start its task runs again from the persisted
   request history, told to check what it already did before repeating an outside
