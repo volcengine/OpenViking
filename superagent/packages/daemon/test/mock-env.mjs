@@ -19,7 +19,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { getConfig, projectDir } from '../src/config.mjs';
 import { createLogger } from '../src/logger.mjs';
 import { PersonalAgentDaemon } from '../src/daemon.mjs';
@@ -199,7 +199,7 @@ function fakeCodexSource(dir, { behavior, failBlob }) {
   return `
     import fs from 'node:fs';
     import readline from 'node:readline';
-    import { actionEndpoint, callTool } from ${JSON.stringify(ACTION_CLIENT)};
+    import { actionEndpoint, callTool } from ${JSON.stringify(pathToFileURL(ACTION_CLIENT).href)};
     const INPUT_LOG = ${JSON.stringify(path.join(dir, 'codex-input.log'))};
     const SPAWN_LOG = ${JSON.stringify(path.join(dir, 'codex-spawns.ndjson'))};
     const BEHAVIOR = ${JSON.stringify(behavior)};
