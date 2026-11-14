@@ -55,23 +55,56 @@ ScopeCascade does not use the shared client, has no `requestOptions` and does no
 
 An omitted field inherits from the outer Provider; in the outermost Provider it takes the value in the Default column.
 
-| Property    | Description                                                                                                                                                                    | Type                                          | Default                         |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------- | ------------------------------- |
-| baseURL     | Service address with an optional gateway prefix, excluding `/api/v1`; an empty string means same-origin requests                                                               | `string`                                      | `''`                            |
-| apiKey      | Credential, sent as the `X-API-Key` header; the commercial edition authenticates with a browser cookie, so omit it there                                                       | `string \| (() => string \| Promise<string>)` | -                               |
-| accountId   | OpenViking account ID, which corresponds to the data space, sent as the `X-OpenViking-Account` header                                                                          | `string \| (() => string \| Promise<string>)` | -                               |
-| userId      | User ID within the account, sent as the `X-OpenViking-User` header                                                                                                             | `string \| (() => string \| Promise<string>)` | -                               |
-| resourceId  | Current library ID, which decides the library a request addresses, sent as the `V-Resource-Id` header                                                                          | `string \| (() => string \| Promise<string>)` | -                               |
-| credentials | The `credentials` option passed to `fetch`, which decides whether cookies are sent; cross-origin requests still follow the server's CORS rules and the browser's cookie policy | `'include' \| 'same-origin' \| 'omit'`        | `'include'`                     |
-| signal      | Aborts requests; in-flight requests are cancelled when it fires                                                                                                                | `AbortSignal`                                 | -                               |
-| fetch       | Replaces the global `fetch`, for tests, tracing or environments without a global `fetch`                                                                                       | `typeof fetch`                                | Global `fetch`                  |
-| locale      | Interface language of the subtree, see [Internationalization](../guide/i18n)                                                                                                   | `'zh-CN' \| 'en-US'`                          | Inherited, otherwise `'en-US'`  |
-| analytics   | Interaction and exposure configuration; see [Analytics](../guide/analytics)                                                                                                    | `OpenVikingAnalyticsOptions \| false`         | Inherited, disabled at the root |
-| children    | The subtree that uses this request configuration                                                                                                                               | `ReactNode`                                   | -                               |
+| Property           | Description                                                                                                                                                                    | Type                                          | Default                          |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------- | -------------------------------- |
+| baseURL            | Service address with an optional gateway prefix, excluding `/api/v1`; an empty string means same-origin requests                                                               | `string`                                      | `''`                             |
+| apiKey             | Credential, sent as the `X-API-Key` header; the commercial edition authenticates with a browser cookie, so omit it there                                                       | `string \| (() => string \| Promise<string>)` | -                                |
+| accountId          | OpenViking account ID, which corresponds to the data space, sent as the `X-OpenViking-Account` header                                                                          | `string \| (() => string \| Promise<string>)` | -                                |
+| userId             | User ID within the account, sent as the `X-OpenViking-User` header                                                                                                             | `string \| (() => string \| Promise<string>)` | -                                |
+| resourceId         | Current library ID, which decides the library a request addresses, sent as the `V-Resource-Id` header                                                                          | `string \| (() => string \| Promise<string>)` | -                                |
+| credentials        | The `credentials` option passed to `fetch`, which decides whether cookies are sent; cross-origin requests still follow the server's CORS rules and the browser's cookie policy | `'include' \| 'same-origin' \| 'omit'`        | `'include'`                      |
+| signal             | Aborts requests; in-flight requests are cancelled when it fires                                                                                                                | `AbortSignal`                                 | -                                |
+| fetch              | Replaces the global `fetch`, for tests, tracing or environments without a global `fetch`                                                                                       | `typeof fetch`                                | Global `fetch`                   |
+| locale             | Interface language of the subtree, see [Internationalization](../guide/i18n)                                                                                                   | `'zh-CN' \| 'en-US'`                          | Inherited, otherwise `'en-US'`   |
+| analytics          | Interaction and exposure configuration; see [Analytics](../guide/analytics)                                                                                                    | `OpenVikingAnalyticsOptions \| false`         | Inherited, disabled at the root  |
+| queryClient        | Reuses a host TanStack Query v5 client; inherits or creates an internal client when omitted                                                                                    | `QueryClient`                                 | Stable for the Provider lifetime |
+| requestConcurrency | Positive integer limits per API path; merges with inherited settings                                                                                                           | `Partial<Record<OvPath, number>>`             | `{ [OV_PATHS.fsLs]: 3 }`         |
+| children           | The subtree that uses this request configuration                                                                                                                               | `ReactNode`                                   | -                                |
 
 - The identity fields `apiKey`, `accountId`, `userId` and `resourceId` also accept a function that is evaluated on every request, so it can read a rotated credential.
 - `fetch`, `signal` and function-valued identity fields are compared by reference. A change creates a new client and the blocks that use it reset, so keep them referentially stable.
 - Mounting the Provider sends no request and reads no credential stored in the browser.
+
+### Query cache and concurrency
+
+The SDK includes its query runtime; installing `@tanstack/react-query` separately is unnecessary. Each internal QueryClient stays stable for its Provider lifetime, retries once after failure, uses a 5-second stale time, and retains TanStack's default window-focus refetch behavior. Directory pages and searches live in the query cache; expansion, selection, and input belong to each block instance.
+
+If your host already uses TanStack Query v5, pass its native client directly. No additional QueryClientProvider is required:
+
+```tsx
+import { QueryClient } from '@tanstack/react-query';
+import { OpenVikingProvider, OV_PATHS } from '@openviking/react/client';
+
+const queryClient = new QueryClient();
+
+<OpenVikingProvider
+  baseURL="/openviking"
+  queryClient={queryClient}
+  requestConcurrency={{ [OV_PATHS.fsLs]: 3 }}
+>
+  <App />
+</OpenVikingProvider>;
+```
+
+OpenViking entries restored into a new runtime are fetched again; unrelated host query entries remain available.
+
+External clients retain the host's query policies. The SDK neither overwrites their defaults nor clears their caches on unmount. Nested Providers inherit the parent's client unless explicitly overridden.
+
+By default, `requestConcurrency` limits only directory children requests, `GET /api/v1/fs/ls`. Other endpoints are unlimited unless configured. Settings merge per endpoint, including through nested Providers. Under one QueryClient, trees and search-scope pickers share a queue for the same service and identity scope. Endpoints count independently. Actual retries pass through the queue; retry delays hold no slot.
+
+Query keys include the resolved service, identity and resource scope, and response parameters. Credentials never appear in readable query keys. Removing one consumer does not cancel another consumer's shared request. An explicit `signal` ends that consumer's subscription; the query runtime handles cancellation when the last consumer leaves. Successful directory writes invalidate the current scope's cache. A failed background refresh retains loaded rows and offers retry, without changing a successful write into failure.
+
+Search debouncing belongs to the block, outside QueryClient configuration. FileBrowser uses 400ms.
 
 ### Overriding the request configuration
 
@@ -103,3 +136,11 @@ Places FileBrowser and Console side by side, with the styles from `modules/style
 ```
 
 The example is not wrapped in `OpenVikingProvider` and only shows the styles: FileBrowser's tree stays in the loading state and Console carries no identity. The grid belongs to the example; your app chooses its own layout.
+
+### Shared query cache
+
+Two instances share a host QueryClient against a simulated service. Enable failure simulation and refresh to check retained rows and retry feedback.
+
+```tsx file="../../_demos/query-client.tsx" preview
+
+```

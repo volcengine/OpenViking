@@ -1,11 +1,24 @@
-import { createContext, useContext, useMemo } from 'react';
+import { createContext, useContext, useMemo, useState } from 'react';
+import type { QueryClient } from '@tanstack/query-core';
+import type { QueryClientInput } from './query-client-input.js';
+import {
+  createQueryClient,
+  OvQueryContext,
+  QueryRuntime,
+} from './query-client.js';
+import {
+  defaultConcurrency,
+  mergeConcurrency,
+  schedulerFor,
+} from './request-scheduler.js';
+import type { RequestConcurrency } from './request-scheduler.js';
+import { createManagedClient } from './managed-client.js';
 import type { ReactNode } from 'react';
 import { LocaleProvider } from '../shared/locale-context.js';
 import type { Locale } from '../shared/locale.js';
 import { AnalyticsProvider } from '../shared/analytics/context.js';
 import type { OpenVikingAnalyticsOptions } from './analytics/types.js';
 
-import { createOvClient } from './client.js';
 import { mergeProviderConfig, type OvProviderBase } from './options.js';
 import type { OvClient, OvClientOptions, OvRequestOptions } from './types.js';
 
@@ -13,6 +26,7 @@ import type { OvClient, OvClientOptions, OvRequestOptions } from './types.js';
 interface OvClientScope {
   client: OvClient;
   base: OvProviderBase;
+  concurrency: RequestConcurrency;
 }
 
 const OvClientContext = createContext<OvClientScope | null>(null);
@@ -30,6 +44,8 @@ export interface OpenVikingProviderProps extends OvClientOptions {
   analytics?: OpenVikingAnalyticsOptions | false;
   /** 界面语言；省略时继承上层，无配置时默认英文。Subtree locale; inherits or defaults to en-US. */
   locale?: Locale;
+  queryClient?: QueryClient | QueryClientInput;
+  requestConcurrency?: RequestConcurrency;
   children?: ReactNode;
 }
 
@@ -75,8 +91,15 @@ export function OpenVikingProvider({
   analytics,
   locale,
   children,
+  queryClient,
+  requestConcurrency,
 }: OpenVikingProviderProps) {
   const parent = useContext(OvClientContext);
+  const inheritedQuery = useContext(OvQueryContext);
+  const [internalQuery] = useState(createQueryClient);
+  const query = (queryClient ?? inheritedQuery ?? internalQuery) as QueryClient;
+  const scheduler = schedulerFor(query);
+  const concurrencyKey = JSON.stringify(requestConcurrency);
 
   const value = useMemo<OvClientScope>(() => {
     const base = mergeProviderConfig(parent?.base, {
@@ -90,16 +113,25 @@ export function OpenVikingProvider({
       fetch,
     });
 
+    const concurrency = mergeConcurrency(
+      parent?.concurrency ?? defaultConcurrency,
+      JSON.parse(concurrencyKey ?? '{}') as RequestConcurrency,
+    );
     return {
       base,
-      client: createOvClient({
-        ...base.identity,
-        baseURL: base.baseURL,
-        credentials: base.credentials,
-        signal: base.signal,
-        // 内层没声明 fetch 时用继承来的那一份，否则内层子树会退回全局 fetch。
-        fetch: base.fetch,
-      }),
+      concurrency,
+      client: createManagedClient(
+        {
+          ...base.identity,
+          baseURL: base.baseURL,
+          credentials: base.credentials,
+          signal: base.signal,
+          // 内层没声明 fetch 时用继承来的那一份，否则内层子树会退回全局 fetch。
+          fetch: base.fetch,
+        },
+        scheduler,
+        concurrency,
+      ),
     };
   }, [
     parent,
@@ -111,14 +143,18 @@ export function OpenVikingProvider({
     credentials,
     signal,
     fetch,
+    scheduler,
+    concurrencyKey,
   ]);
 
   return (
-    <OvClientContext.Provider value={value}>
-      <AnalyticsProvider analytics={analytics}>
-        <LocaleProvider locale={locale}>{children}</LocaleProvider>
-      </AnalyticsProvider>
-    </OvClientContext.Provider>
+    <QueryRuntime client={query}>
+      <OvClientContext.Provider value={value}>
+        <AnalyticsProvider analytics={analytics}>
+          <LocaleProvider locale={locale}>{children}</LocaleProvider>
+        </AnalyticsProvider>
+      </OvClientContext.Provider>
+    </QueryRuntime>
   );
 }
 

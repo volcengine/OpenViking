@@ -114,7 +114,11 @@ test('choosing a subdirectory limits the search and clearing restores the root',
     await click(
       modal().querySelector('.ov-file-browser-search__advanced-clear'),
     );
-    assert.deepEqual(targets(), [rootUri, [child], rootUri]);
+    assert.deepEqual(
+      targets(),
+      [rootUri, [child]],
+      'restoring the root reuses its fresh cached search',
+    );
   } finally {
     await view.unmount();
   }

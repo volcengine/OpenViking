@@ -1,6 +1,14 @@
-import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { startTests } from './test-process.mjs';
 import { createRslib } from '@rslib/core';
@@ -31,6 +39,10 @@ try {
                 './src/modules/file-browser/file-browser-search.tsx',
               'browser-search-results':
                 './src/modules/file-browser/file-browser-search-results.tsx',
+              'fs-tree': './src/modules/file-browser/use-fs-tree.ts',
+              'scope-page':
+                './src/modules/file-browser/use-search-scope-page.ts',
+              'query-runtime': './src/client/query-client.tsx',
               'fs-search': './src/modules/file-browser/use-fs-search.ts',
               'browser-labels':
                 './src/modules/file-browser/file-browser-labels.ts',
@@ -97,21 +109,49 @@ try {
   });
   await builder.build();
   await writeFile(join(output, 'package.json'), '{"type":"module"}');
+  // Resolve the SDK's pinned runtime separately from the host React Query.
+  // Private orchestration must exercise the same dependency graph as the package.
+  const modules = join(output, 'node_modules');
+  await mkdir(join(modules, '@tanstack'), { recursive: true });
+  const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+  for (const entry of await readdir(join(root, 'node_modules'), {
+    withFileTypes: true,
+  })) {
+    if (
+      entry.name !== '@tanstack' &&
+      (entry.isDirectory() || entry.isSymbolicLink())
+    )
+      await symlink(
+        join(root, 'node_modules', entry.name),
+        join(modules, entry.name),
+        linkType,
+      );
+  }
+  const fromSDK = createRequire(join(root, 'packages/react/package.json'));
   await symlink(
-    join(root, 'node_modules'),
-    join(output, 'node_modules'),
-    process.platform === 'win32' ? 'junction' : 'dir',
+    dirname(fromSDK.resolve('@tanstack/query-core/package.json')),
+    join(modules, '@tanstack/query-core'),
+    linkType,
+  );
+  await symlink(
+    join(root, 'node_modules/@tanstack/react-query'),
+    join(modules, '@tanstack/react-query'),
+    linkType,
   );
   const { completed } = startTests(
-    process.argv.length > 2
-      ? process.argv.slice(2)
-      : [
-          'scripts/package.test.mjs',
-          'scripts/test-process.test.mjs',
-          'scripts/react-release*.test.mjs',
-          'scripts/release-notes*.test.mjs',
-          'packages/react/test/*.test.mjs',
-        ],
+    [
+      '--import',
+      './packages/react/test/helpers/query-timers.mjs',
+      ...(process.argv.length > 2
+        ? process.argv.slice(2)
+        : [
+            'scripts/package.test.mjs',
+            'scripts/test-process.test.mjs',
+            'scripts/react-release*.test.mjs',
+            'scripts/release-notes*.test.mjs',
+            'packages/react/test/*.test.mjs',
+          ]),
+    ],
     {
       cwd: root,
       env: { ...process.env, NODE_ENV: 'test', OV_UI_TEST_HOOKS: output },

@@ -1,4 +1,4 @@
-import { type KeyboardEvent, type MouseEvent, useRef } from 'react';
+import { type MouseEvent, useRef } from 'react';
 
 import {
   FileTreeChevron,
@@ -49,6 +49,7 @@ export function FileTreeRowView({
   const canExpand = isDirectory && row.hasChildren !== false;
   const isExpanded = Boolean(row.expanded);
   const isSelected = ctx.selectedIds?.includes(row.id) ?? selectedId === row.id;
+  const pinTrailing = ctx.rowTrailingPosition === 'viewport-end';
   const extra = getRowAttributes?.(row) ?? {};
   const {
     className: extraClassName,
@@ -92,11 +93,10 @@ export function FileTreeRowView({
       data-selected={isSelected || undefined}
       data-disabled={row.disabled || undefined}
       data-kind={row.kind}
-      style={{ ...rowStyle(row.depth), ...extraStyle }}
+      data-trailing-position={ctx.rowTrailingPosition}
+      style={{ ...rowStyle(row.depth, pinTrailing), ...extraStyle }}
       onClick={handleClick}
-      onKeyDown={(event: KeyboardEvent<HTMLDivElement>) =>
-        onRowKeyDown(event, row)
-      }
+      onKeyDown={(event) => onRowKeyDown(event, row)}
     >
       {/* 每一级祖先画一条竖线，上下各溢出 1px 让相邻行接上。 */}
       <Guides depth={row.depth} />
