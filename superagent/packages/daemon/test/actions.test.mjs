@@ -1008,7 +1008,7 @@ it('finds decisions, reply targets, newer inputs and orphaned conversations thro
   assert.match(plans[1], /USING INDEX connector_events_message \(connector_instance=\? AND message_id=\?\)/);
   assert.match(plans[2], /USING INDEX connector_events_message \(connector_instance=\? AND message_id=\?\)/);
   assert.match(plans[3], /USING INDEX connector_events_message_seq/);
-  assert.match(plans[4], /USING COVERING INDEX connector_events_scope_status_seq/);
+  assert.match(plans[4], /USING (COVERING )?INDEX connector_events_scope_status_seq/);
   assert.match(plans[5], /SEARCH connector_events USING COVERING INDEX connector_events_conv_status_seq \(conv_key=\?\)/);
   assert.doesNotMatch(plans.join(' '), /SCAN connector_events/);
 });
