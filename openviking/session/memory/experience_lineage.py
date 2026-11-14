@@ -31,7 +31,7 @@ TRAJECTORY_OUTCOMES = ("success", "failure", "partial", "unknown", "unfinished")
 
 def is_experience_uri_for_user(uri: str, user_id: str) -> bool:
     """Return whether ``uri`` identifies an Experience owned by ``user_id``."""
-    if not uri or "?" in uri or "#" in uri:
+    if not uri or "?" in uri:
         return False
     parts = uri_parts(uri)
     if len(parts) < 5 or parts[:4] != ["user", user_id, "memories", "experiences"]:
@@ -138,7 +138,7 @@ def collect_read_experience_uris(
             texts = list(_iter_text_fields(output))
             for raw_uri in candidates:
                 uri = str(raw_uri or "").strip()
-                if "?" in uri or "#" in uri:
+                if "?" in uri:
                     continue
                 try:
                     canonical_uri = canonical_experience_uri(resolve_request_uri(uri, ctx), ctx)
