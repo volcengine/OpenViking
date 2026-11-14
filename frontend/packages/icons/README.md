@@ -73,9 +73,12 @@ React imports these SVG files directly during its build. This file records where
 
 - The VikingBot welcome (lightbulb/book/video), report and session controls are
   original SVG artwork from `@arco-design/iconbox-react-viking` 0.0.134 (ISC).
-  Paths remain unchanged; React wrappers are removed. The new-session viewBox is
-  cropped to match the history icon's visual size. Both Console modes share these
-  session-control assets. No IconBox runtime is required.
+  The history, new-session, session copy, copy success and locate glyphs use the
+  original geometry. React wrappers are removed and paint follows the host
+  theme. No IconBox runtime is required.
+- `svg/viking-bot/copy.svg` and `check.svg` — the reference OpenViking console's
+  14px code and message action icons, from ConnectAgent's `connectAgentUi`.
+  They follow this repository's license.
 
 `svg/viking-bot/remove.svg` is an OpenViking-authored close glyph under the repository license.
 

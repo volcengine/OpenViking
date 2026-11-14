@@ -398,11 +398,21 @@ export interface FilePreviewEditing {
    */
   loadContent?: (source: FilePreviewSource) => Promise<string | undefined>;
   /**
-   * 保存草稿时调用。抛错或 reject 时组件展示失败提示并保留草稿。
-   * Invoked when the draft is saved. A thrown error or rejection keeps the draft
-   * and shows a failure message.
+   * 为 true 时，保存前弹出版本备注，确认后将备注传给 save。
+   * When true, prompt for a version note before saving and pass it to save.
    */
-  save: (value: string) => Promise<void>;
+  promptForVersionNote?: boolean;
+  /**
+   * 保存草稿。抛错或 reject 时保留草稿并显示失败提示；正文已保存但未创建版本时，
+   * 可返回 warning 让组件退出编辑并显示提示。
+   * Saves the draft. A thrown error or rejection keeps the draft and displays
+   * a failure message. Return a warning to leave editing and show that the
+   * file was saved without a new version.
+   */
+  save: (
+    value: string,
+    versionNote?: string,
+  ) => Promise<void | { warning: 'version-not-created' }>;
   /**
    * 保存成功后触发，参数为已保存的文本；失败时不触发。
    * Called after saving succeeds, with the saved text; not called on failure.
@@ -571,6 +581,12 @@ export interface FilePreviewLabels {
   loadFailed?: string;
   /** 保存失败时的提示。Message shown when saving failed. */
   saveFailed?: string;
+  versionNoteTitle?: string;
+  versionNoteLabel?: string;
+  versionNotePlaceholder?: string;
+  versionNoteCancel?: string;
+  versionNoteConfirm?: string;
+  versionNotCreated?: string;
   /** 无法预览该格式时的提示。Message shown when the format cannot be previewed. */
   unsupported?: string;
   /** 取回正文时的加载提示。Message shown while the text is being fetched. */

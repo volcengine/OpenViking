@@ -1,5 +1,4 @@
 import Prism from 'prismjs';
-import type { FilePreviewSource } from './types.js';
 
 const aliases: Record<string, string> = {
   'application/json': 'json',
@@ -129,9 +128,7 @@ const dependencies: Record<string, string[]> = {
 };
 
 /** Use the same Prism module and grammars as FileViewer, without private imports. */
-export function prismLanguage(
-  source: Pick<FilePreviewSource, 'fileName' | 'fileType'>,
-) {
+export function prismLanguage(source: { fileName: string; fileType?: string }) {
   const hint = source.fileType?.split(';')[0]?.trim().toLowerCase();
   if (hint) {
     const language = Object.hasOwn(aliases, hint) ? aliases[hint]! : hint;

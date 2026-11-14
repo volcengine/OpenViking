@@ -516,7 +516,10 @@
   padding: 0 20px 16px;
   overflow: auto;
   overscroll-behavior: contain;
-  background: var(--ov-ui-color-bg-2, var(--ov-ui-bg-2-default));
+  background: var(
+    --ov-ui-color-bg-2,
+    var(--ov-ui-file-search-advanced-default)
+  );
 }
 
 .ov-file-browser-search__advanced-head {
@@ -547,16 +550,6 @@
   cursor: pointer;
 }
 
-.ov-file-browser-search__advanced-clear:hover {
-  text-decoration: underline;
-}
-
-.ov-file-browser-search__advanced-clear:focus-visible,
-.ov-file-browser-search__advanced-close:focus-visible {
-  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
-  outline-offset: 2px;
-}
-
 .ov-file-browser-search__advanced-close {
   display: inline-flex;
   align-items: center;
@@ -572,7 +565,7 @@
 }
 
 .ov-file-browser-search__advanced-close:hover {
-  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
 }
 
 .ov-file-browser-search__advanced-body {
@@ -626,18 +619,149 @@
 }
 
 /* 复选框与单选框的行高由共享控件给出，这里只把它们的行撑到设计稿的 32。 */
-.ov-file-browser-search__row .ov-checkbox,
-.ov-file-browser-search__options .ov-checkbox,
-.ov-file-browser-search__options .ov-radio {
+.ov-file-browser-search__advanced :is(.ov-checkbox, .ov-radio) {
   min-height: 32px;
+  max-width: 100%;
+}
+
+.ov-file-browser-search__advanced
+  :is(
+    .ov-checkbox:not(.ov-checkbox--disabled),
+    .ov-radio:not(.ov-radio--disabled)
+  ) {
   color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
 }
 
+.ov-file-browser-search__advanced :is(.ov-checkbox__mask, .ov-radio__mask) {
+  border-width: 1px;
+}
+
+.ov-file-browser-search__advanced
+  .ov-checkbox:not(.ov-checkbox--checked, .ov-checkbox--disabled, :hover)
+  .ov-checkbox__mask {
+  border-color: transparent;
+  box-shadow: 0 0 0 1px
+    var(--ov-ui-color-border-2, var(--ov-ui-file-search-outline-default));
+}
+
+.ov-file-browser-search__advanced
+  .ov-radio:not(.ov-radio--checked, .ov-radio--disabled)
+  .ov-radio__mask {
+  border-color: var(
+    --ov-ui-color-border-2,
+    var(--ov-ui-file-search-radio-default)
+  );
+}
+
 .ov-file-browser-search__option-uri {
+  min-width: 0;
   overflow: hidden;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ov-file-browser-search__scope-trigger {
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  height: 32px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-file-search-muted-default));
+  font: inherit;
+  font-size: 13px;
+  line-height: 22px;
+  text-align: start;
+  box-shadow: 0 0 0 1px
+    var(--ov-ui-color-border-2, var(--ov-ui-file-search-outline-default));
+  cursor: pointer;
+}
+
+.ov-file-browser-search__scope-trigger:hover,
+.ov-file-browser-search__scope-trigger[aria-expanded='true'] {
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-file-search-active-default));
+}
+
+.ov-file-browser-search__scope-trigger > svg {
+  flex: none;
+}
+
+.ov-file-browser-search__scope-trigger[aria-expanded='true'] > svg:last-child {
+  transform: rotate(180deg);
+}
+
+.ov-file-browser-search__scope-trigger-label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-file-browser-search__scope-menu {
+  max-height: 188px;
+  margin-top: 4px;
+  padding: 4px;
+  overflow: auto;
+  border: 1px solid
+    var(--ov-ui-color-border-2, var(--ov-ui-file-search-outline-default));
+  border-radius: 6px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  font-size: 13px;
+  line-height: 22px;
+}
+
+.ov-file-browser-search__scope-current {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ov-file-browser-search__scope-current > :first-child {
+  width: auto;
+  flex: none;
+}
+
+.ov-file-browser-search__scope-choice {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  text-align: start;
+  cursor: pointer;
+}
+
+.ov-file-browser-search__scope-choice > span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-file-browser-search__scope-choice > svg {
+  flex: none;
+}
+
+.ov-file-browser-search__scope-choice > svg:last-child {
+  transform: rotate(-90deg);
+}
+
+.ov-file-browser-search__scope-choice:hover,
+.ov-file-browser-search__scope-choice[aria-pressed='true'] {
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-file-search-active-default));
 }
 
 .ov-file-browser-search__dates {

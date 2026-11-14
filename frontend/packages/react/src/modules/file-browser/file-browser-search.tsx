@@ -2,6 +2,7 @@ import { useRenderErrors } from './file-browser-labels.js';
 import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
+import SearchCloseIcon from '../../../../icons/svg/file-browser/search-close.svg?react';
 import { useOvClient } from '../../client/provider.js';
 import type { OvRequestOptions } from '../../client/types.js';
 import { Modal } from '../../shared/primitives/modal/modal.js';
@@ -12,7 +13,11 @@ import { useSearchHighlight } from './use-search-highlight.js';
 import type { FileBrowserHandle } from './types.js';
 import { FileBrowserSearchResults } from './file-browser-search-results.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
-import { buildScopeOptions, normalizeFilters } from './search-model.js';
+import {
+  buildScopeOptions,
+  isSearchScopeAllowed,
+  normalizeFilters,
+} from './search-model.js';
 import { flattenResult } from './search-hit-order.js';
 import type { SearchFilters, SearchMode } from './search-types.js';
 import { DEFAULT_SEARCH_MODE, EMPTY_FILTERS } from './search-types.js';
@@ -73,20 +78,21 @@ export function FileBrowserSearch({
 
   const scopes = useMemo(() => buildScopeOptions(rootUri), [rootUri]);
 
-  // 只保留仍在当前根候选项里的 scopes。`filters.scopes` 会跨 `rootUri` 变化保留，
+  // 只保留仍在当前候选目录范围内的 scopes。`filters.scopes` 会跨 `rootUri` 变化保留，
   // 若根从 project-a 换成 project-b，勾选状态还指着 project-a——面板显示未勾选，
   // 请求却仍发 `target_uri: ["viking://resources/project-a"]`，结果来自当前树之外。
   // 渲染时算一次即可，不必另存一份 state 再同步。
   //
-  // Keep only the scopes still offered by the current root. `filters.scopes` survives a
+  // Keep only scopes within the directories offered by the current root. `filters.scopes` survives a
   // `rootUri` change, so after switching from project-a to project-b the selection still
   // names project-a: the panel shows nothing checked while the request still sends
   // `target_uri: ["viking://resources/project-a"]`, returning results from outside the
   // current tree. Computing it during render needs no mirrored state.
   const effectiveFilters = useMemo(() => {
     if (filters.scopes.length === 0) return filters;
-    const allowed = new Set(scopes.map((option) => option.uri));
-    const scopes_ = filters.scopes.filter((uri) => allowed.has(uri));
+    const scopes_ = filters.scopes.filter((uri) =>
+      isSearchScopeAllowed(scopes, uri),
+    );
     return scopes_.length === filters.scopes.length
       ? filters
       : { ...filters, scopes: scopes_ };
@@ -145,7 +151,7 @@ export function FileBrowserSearch({
     inputRef.current?.focus();
     setGeneration((value) => value + 1);
   };
-  const { active, activeIndex, listId, onKeyDown, onHighlight } =
+  const { active, activeIndex, listId, onHighlight, onKeyDown } =
     useSearchHighlight(
       hits,
       composing,
@@ -159,6 +165,7 @@ export function FileBrowserSearch({
       title={text.searchTitle}
       locale={locale}
       closeLabel={text.searchDismiss}
+      closeIcon={<SearchCloseIcon aria-hidden="true" />}
       triggerRef={triggerRef}
       className={[
         'ov-file-browser-search',
@@ -227,10 +234,14 @@ export function FileBrowserSearch({
             mode={mode}
             filters={effectiveFilters}
             scopes={scopes}
+            requestOptions={requestOptions}
             locale={locale}
             text={text}
             onChange={setFilters}
-            onClose={() => onToggleAdvanced(false)}
+            onClose={() => {
+              onToggleAdvanced(false);
+              inputRef.current?.focus();
+            }}
           />
         ) : null}
       </div>

@@ -65,6 +65,7 @@ export function normalizeFilters(
     ...filters,
     scopes: a.scope === 'single' ? filters.scopes.slice(0, 1) : filters.scopes,
     levels: a.levels ? filters.levels : [],
+    timeField: a.time ? filters.timeField : '',
     since: a.time ? filters.since : '',
     until: a.time ? filters.until : '',
     caseInsensitive: a.caseInsensitive ? filters.caseInsensitive : false,
@@ -95,6 +96,13 @@ const ALL_SCOPES: readonly ScopeOption[] = [
 /** 一个根是否覆盖另一个。Whether one root covers another. */
 const covers = (root: string, uri: string): boolean =>
   uri === root || uri.startsWith(`${root}/`);
+
+export function isSearchScopeAllowed(
+  scopes: readonly ScopeOption[],
+  uri: string,
+): boolean {
+  return scopes.some((scope) => covers(scope.uri, uri));
+}
 
 /**
  * 按当前根算出可勾选的目录。
@@ -146,7 +154,7 @@ function withFilters(
       ...(filters.levels.length > 0 ? { level: filters.levels } : {}),
       ...(filters.since ? { since: filters.since } : {}),
       ...(filters.until ? { until: filters.until } : {}),
-      ...(filters.since || filters.until
+      ...(filters.timeField && (filters.since || filters.until)
         ? { time_field: filters.timeField }
         : {}),
     };

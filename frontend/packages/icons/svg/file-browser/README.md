@@ -12,3 +12,9 @@
   the dialog's own surface shows through. The design's fixed colours become theme
   variables: `--ov-ui-color-border-2` for the grid, `--ov-ui-color-border-3` for
   the sheet behind, `currentColor` for the front sheet and glyph.
+- `search-close.svg` is exported from the OpenViking Console
+  search dialog. Its original dimensions and paths are unchanged; its
+  stroke inherits the theme color. The artwork follows the repository license.
+- `search-advanced-close.svg`, `search-folder-open.svg` and
+  `search-chevron-down.svg` are exported from the advanced search panel. Their
+  original dimensions and paths are unchanged; their colors follow the theme.

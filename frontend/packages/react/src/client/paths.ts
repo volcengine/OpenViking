@@ -31,6 +31,7 @@ export const OV_PATHS = {
   compileConfig: '/api/v1/compile/config',
   compileConfigUpdate: '/api/v1/compile/config/update',
   snapshotLog: '/api/v1/snapshot/log',
+  snapshotCommit: '/api/v1/snapshot/commit',
   snapshotVersions: '/api/v1/snapshot/versions',
   snapshotShow: '/api/v1/snapshot/show',
   resourceTempUpload: '/api/v1/resources/temp_upload',

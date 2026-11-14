@@ -110,7 +110,7 @@
   min-height: 32px;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 10px;
   margin-top: 10px;
 }
 .ov-viking-bot__composer-tools {
@@ -123,6 +123,16 @@
 .ov-viking-bot__submit {
   flex-shrink: 0;
 }
+.ov-viking-bot__composer .ov-viking-bot__attach.ov-button {
+  --ov-ui-button-height: 32px;
+  border-radius: 6px;
+}
+.ov-viking-bot__composer .ov-viking-bot__attach.ov-button:not(:disabled) {
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+}
+.ov-viking-bot__composer .ov-viking-bot__attach.ov-button:not(:disabled):hover {
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+}
 .ov-viking-bot__submit > svg {
   display: block;
   width: 9px;
@@ -130,8 +140,8 @@
 }
 .ov-viking-bot__attach > svg {
   display: block;
-  width: 16px;
-  height: 16px;
+  width: 10.208px;
+  height: 10.208px;
 }
 .ov-viking-bot__stop-icon {
   width: 10px;

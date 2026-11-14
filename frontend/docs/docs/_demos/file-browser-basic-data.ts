@@ -209,7 +209,9 @@ export function offlineFetch(
       if (query?.trim().toLowerCase() === 'error')
         return Promise.resolve(searchFailure());
       return Promise.resolve(
-        ok(semanticSearch(query ?? '', Object.values(DIRS).flat(), USER)),
+        ok(
+          semanticSearch(query ?? '', Object.values(DIRS).flat(), USER, FILES),
+        ),
       );
     }
     case '/api/v1/search/grep': {
