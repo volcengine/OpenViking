@@ -6,6 +6,7 @@ import asyncio
 import os
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AsyncExitStack, asynccontextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -26,7 +27,7 @@ from openviking.server.config import (
 from openviking.server.dependencies import set_server_config, set_service
 from openviking.server.error_mapping import map_exception
 from openviking.server.gateway_host import ScopedRoute, create_embedded_gateway
-from openviking.server.identity import Role
+from openviking.server.identity import RequestContext, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.server.profile_middleware import ProfileMiddleware
 from openviking.server.request_id import REQUEST_ID_HEADER, RequestIdMiddleware
@@ -63,7 +64,7 @@ from openviking.server.routers import (
 from openviking.server.timing_middleware import RequestTimingMiddleware
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
-from openviking_cli.exceptions import OpenVikingError
+from openviking_cli.exceptions import NotFoundError, OpenVikingError, UnauthenticatedError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import (
     DEFAULT_OV_CONF,
@@ -160,6 +161,55 @@ async def _initialize_auth_plugin(
     plugin = plugin_cls()
     app.state.auth_plugin = plugin
     await plugin.initialize(app, service, config)
+    manager = getattr(app.state, "api_key_manager", None)
+    if manager is not None and service.watch_manager is not None:
+        async def resolve_radar_context(ctx: RequestContext) -> RequestContext:
+            # ROOT is issued by the server root key, never by an account
+            # membership. Dev mode has no manager and does not install this.
+            if ctx.role == Role.ROOT:
+                return ctx
+            account_id, user_id = ctx.account_id, ctx.user.user_id
+            # Membership refreshes users.json only. Account fences live in
+            # accounts.json and also need a fresh read when watchers are off.
+            account = await manager.get_account(account_id)
+            if account is not None and account.get("status") == "deleting":
+                raise UnauthenticatedError("Radar account is being deleted")
+            if account is None and effective_auth_mode == "api_key":
+                raise UnauthenticatedError("Radar account no longer exists")
+            try:
+                user = await manager.get_user_membership(account_id, user_id)
+            except NotFoundError as exc:
+                details = exc.details or {}
+                missing_identity = (details.get("type"), details.get("resource")) in {
+                    ("account", account_id), ("user", user_id),
+                }
+                if effective_auth_mode != "trusted" or not missing_identity:
+                    raise
+                user = None
+            # Check deletion after the fresh membership read so FileStore
+            # reflects deletion records refreshed from another process too.
+            if await manager.get_deletion(account_id, user_id) is not None:
+                raise UnauthenticatedError("Radar owner is being deleted")
+            if user is None and effective_auth_mode == "api_key":
+                raise UnauthenticatedError("Radar owner no longer exists")
+            # Trusted identities can be unregistered until their async
+            # registration flush. Saved asserted ADMIN authority is not a
+            # current grant; absent membership uses ordinary USER authority.
+            role = Role.parse(user["role"]) if user is not None else Role(Role.USER)
+            if role == Role.ROOT:
+                raise UnauthenticatedError("ROOT is not an account role")
+            if role.allows_token_role(ctx.role):
+                role = ctx.role
+            elif not ctx.role.allows_token_role(role):
+                raise UnauthenticatedError("Radar owner role no longer permits this watch")
+            # Cap authority by both the saved grant and current membership:
+            # demotion takes effect, promotion does not elevate an old watch.
+            return replace(
+                ctx, role=role,
+                group_ids=tuple(await manager.get_user_group_ids(account_id, user_id)),
+            )
+
+        service.watch_manager.set_pr_radar_context_resolver(resolve_radar_context)
     logger.info("Auth plugin initialized: %s", effective_auth_mode)
 
 

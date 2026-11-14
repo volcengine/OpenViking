@@ -3,6 +3,7 @@
 """Tests for file-system service coordination behavior."""
 
 import asyncio
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, call
@@ -367,7 +368,8 @@ class _FakeWatchManager:
         self.overlap_calls.append({"account_id": account_id, "uris": list(uris)})
         return self.running.pop(0) if self.running else False
 
-    async def move(self, *, account_id, from_uri, to_uri, task_ids=None):
+    async def move(self, *, account_id, from_uri, to_uri, task_ids=None, lease_ref=None):
+        assert lease_ref is not None
         self.move_calls.append(
             {
                 "account_id": account_id,
@@ -1258,6 +1260,59 @@ async def local_watch_fs_service(local_fs_service):
     service._watch_manager = manager
     yield service, viking_fs, manager
     await manager.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", [
+    "viking://user/ryoma/resources",
+    "viking://resources/source",
+])
+@pytest.mark.parametrize("filesystem_fails", [False, True])
+async def test_resource_mv_preserves_radar_ownership_under_transfer_lock(
+    request_context, local_watch_fs_service, monkeypatch, source, filesystem_fails,
+):
+    from openviking.resource.github_radar.ownership import OWNER_FILENAME, radar_identity
+
+    service, viking_fs, manager = local_watch_fs_service
+    ctx = replace(request_context, role=Role.ROOT)
+    target = "viking://resources/archive"
+    await viking_fs.write_file(source + "/repo/README.md", "content", ctx=ctx)
+    if not await viking_fs.exists("viking://resources", ctx=ctx):
+        await viking_fs.mkdir("viking://resources", ctx=ctx)
+    task = await manager.create_task(
+        "https://github.com/org/repo", to_uri=source + "/repo",
+        user_id=ctx.user.user_id, original_role="root", is_active=False,
+        processor_kwargs={"pr_radar": {"enabled": True}},
+    )
+    original_target, expected = radar_identity(task, ctx)
+    owner_uri = original_target + "/" + OWNER_FILENAME
+    assert not await viking_fs.exists(owner_uri, ctx=ctx)
+    service._refresh_move_parents = AsyncMock()
+    failure = OSError("filesystem move failed")
+    if filesystem_fails:
+        monkeypatch.setattr(viking_fs, "mv", AsyncMock(side_effect=failure))
+        with pytest.raises(OSError) as raised:
+            await service.mv(source, target, ctx=ctx)
+        assert raised.value is failure
+        expected_uri = task.to_uri
+        # Reverse migration also publishes its original ownership under the
+        # still-held source/target lease, before restoring the Watch row.
+        projected = task.model_copy(update={"to_uri": target + "/repo"})
+        reverse_target, _ = radar_identity(projected, ctx)
+        assert json.loads(await viking_fs.read_file(
+            reverse_target + "/" + OWNER_FILENAME, ctx=ctx,
+        )) == expected
+        service._refresh_move_parents.assert_not_awaited()
+    else:
+        await service.mv(source, target, ctx=ctx)
+        expected_uri = target + "/repo"
+        if owner_uri.startswith(source + "/"):
+            owner_uri = target + owner_uri[len(source):]
+        assert not await viking_fs.exists(source, ctx=ctx)
+        service._refresh_move_parents.assert_awaited_once()
+    assert (await manager.store.get_task(task.task_id)).to_uri == expected_uri
+    assert await viking_fs.read_file(expected_uri + "/README.md", ctx=ctx) == "content"
+    assert json.loads(await viking_fs.read_file(owner_uri, ctx=ctx)) == expected
 
 
 @pytest.mark.asyncio

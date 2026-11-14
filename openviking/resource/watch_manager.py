@@ -13,7 +13,7 @@ monitors and queue callbacks stop. The Manager spawns no background coroutines.
 
 import asyncio
 import inspect
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Sequence
@@ -39,6 +39,7 @@ from openviking.resource.watch_types import (
     WatchRunResult,
     WatchState,
     WatchTask,
+    uri_matches_prefix,
 )
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
@@ -47,7 +48,8 @@ from openviking.service.task_tracker_concurrency import KeyedAsyncLockPool, run_
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.utils.git_auth import GIT_AUTH_FAILED
 from openviking.utils.network_guard import ensure_public_remote_target
-from openviking_cli.exceptions import ConflictError, FailedPreconditionError
+from openviking_cli.exceptions import ConflictError, FailedPreconditionError, InvalidArgumentError
+from openviking_cli.exceptions import PermissionDeniedError as FsPermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.logger import get_logger
 
@@ -102,6 +104,7 @@ class WatchManager:
         tracker: Any = None,
         resource_service: Any = None,
         runtime_config_manager: Any = None,
+        vlm_resolver: Any = None,
     ) -> None:
         if locks is None:
             if viking_fs is None:
@@ -113,8 +116,43 @@ class WatchManager:
         self._tracker = tracker
         self._resource_service = resource_service
         self._runtime_config_manager = runtime_config_manager
+        self._vlm_resolver = vlm_resolver
+        self._pr_radar_group_resolver = None
+        self._pr_radar_context_resolver = None
         self._trigger_locks: KeyedAsyncLockPool[str] = KeyedAsyncLockPool()
         self._deletion_guard: Optional[Callable[[str, str], Any]] = None
+
+    def set_pr_radar_group_resolver(self, resolver: Any) -> None:
+        """Refresh the owner's current groups before each radar invocation."""
+        self._pr_radar_group_resolver = resolver
+
+    def set_pr_radar_context_resolver(self, resolver: Any) -> None:
+        """Resolve current radar authority without changing ingestion authority."""
+        self._pr_radar_context_resolver = resolver
+
+    async def _authorize_radar_task(self, task: WatchTask) -> None:
+        """Reject targets with no refreshable authority for background radar."""
+        if self._pr_radar_context_resolver is None:
+            return
+        from openviking.resource.pr_radar_runner import (
+            PrRadarRunner,
+            authorize_pr_radar_target,
+            radar_config_or_none,
+        )
+
+        config = radar_config_or_none(task.processor_kwargs)
+        if config is None or not config.enabled or not config.target_uri:
+            return
+        ctx = PrRadarRunner._io_context(self.context(task))
+        ctx = PrRadarRunner._io_context(await self._pr_radar_context_resolver(ctx))
+        try:
+            await authorize_pr_radar_target(self._viking_fs, task.processor_kwargs, ctx)
+        except FsPermissionDeniedError as exc:
+            raise InvalidArgumentError(
+                "pr_radar.target_uri requires persistent local WRITE permission for "
+                "scheduled reports; request-only trusted role/group assertions cannot "
+                "authorize background radar. Grant local access or use the derived target."
+            ) from exc
 
     def set_deletion_guard(self, guard: Optional[Callable[[str, str], Any]]) -> None:
         """Refuse new Watches for identities the guard reports as being deleted."""
@@ -201,14 +239,33 @@ class WatchManager:
             original_role=original_role,
         )
         task.next_execution_time = task.calculate_next_execution_time() if is_active else None
+        await self._authorize_radar_task(task)
         if await self._owner_deleting(account_id, user_id):
             raise FailedPreconditionError("Identity deletion is in progress")
         created = False
 
         async def persist() -> None:
             nonlocal created
-            await self._store.create_task(task, initial_run_id=initial_run_id)
-            created = True
+            from openviking.resource.github_radar.ownership import (
+                radar_admission_guard,
+                radar_directory_guard,
+                radar_identity,
+            )
+
+            ctx = self.context(task)
+            if radar_identity(task, ctx) is not None and self._pr_radar_context_resolver is not None:
+                ctx = await self._pr_radar_context_resolver(ctx)
+            from openviking.resource.pr_radar_runner import PrRadarRunner
+
+            ctx = PrRadarRunner._io_context(ctx)
+            async with AsyncExitStack() as stack:
+                if radar_identity(task, ctx) is not None:
+                    await stack.enter_async_context(radar_admission_guard(self._locks, account_id))
+                await stack.enter_async_context(radar_directory_guard(
+                    self._viking_fs, self._locks, self._store, task, ctx,
+                ))
+                await self._store.create_task(task, initial_run_id=initial_run_id)
+                created = True
 
         try:
             try:
@@ -428,13 +485,69 @@ class WatchManager:
         from_uri: str,
         to_uri: str,
         task_ids: Optional[Sequence[str]] = None,
+        lease_ref: Optional[Dict[str, Any]] = None,
     ) -> WatchMoveResult:
-        return await self._store.move(
-            account_id=account_id,
-            from_uri=from_uri,
-            to_uri=to_uri,
-            task_ids=task_ids,
+        from openviking.resource.github_radar.ownership import (
+            radar_admission_guard,
+            radar_directory_guard,
+            radar_identity,
         )
+        from openviking.resource.pr_radar_runner import PrRadarRunner
+
+        async def persist():
+            return await self._store.move(
+                account_id=account_id, from_uri=from_uri, to_uri=to_uri, task_ids=task_ids,
+            )
+
+        if self._viking_fs is None:
+            return await persist()
+        async with radar_admission_guard(self._locks, account_id):
+            watches = await self._store.list_tasks(
+                WatchAuthority(account_id, "default", "root"), scope_account_id=account_id,
+            )
+            selected = None if task_ids is None else set(task_ids)
+            old_prefix, new_prefix = from_uri.rstrip("/"), to_uri.rstrip("/")
+            projected, changed = [], []
+            for task in watches:
+                updated = task
+                if (
+                    task.to_uri and uri_matches_prefix(task.to_uri, old_prefix)
+                    and (selected is None or task.task_id in selected)
+                ):
+                    updated = task.model_copy(update={
+                        "to_uri": new_prefix + task.to_uri[len(old_prefix):],
+                    })
+                    ctx = self.context(task)
+                    if radar_identity(updated, ctx) != radar_identity(task, ctx):
+                        changed.append((task, updated))
+                projected.append(updated)
+            # Bind the original directory before the row leaves it. A
+            # filesystem failure may reverse this move after this account
+            # lock is released; another creation must not steal that target
+            # in the gap. The binding also preserves any original history.
+            for original, _ in changed:
+                ctx = self.context(original)
+                if self._pr_radar_context_resolver is not None:
+                    ctx = await self._pr_radar_context_resolver(ctx)
+                ctx = PrRadarRunner._io_context(ctx)
+                async with radar_directory_guard(
+                    self._viking_fs, self._locks, self._store, original, ctx, claim=True,
+                    lease_ref=lease_ref,
+                ):
+                    pass
+            async with AsyncExitStack() as stack:
+                # Check all final targets, including collisions between
+                # Watches in the same transfer, before committing any row.
+                for _, task in changed:
+                    ctx = self.context(task)
+                    if self._pr_radar_context_resolver is not None:
+                        ctx = await self._pr_radar_context_resolver(ctx)
+                    ctx = PrRadarRunner._io_context(ctx)
+                    await stack.enter_async_context(radar_directory_guard(
+                        self._viking_fs, self._locks, self._store, task, ctx,
+                        watches=projected,
+                    ))
+                return await run_to_completion(persist)
 
     async def deactivate_tasks_under_uri_internal(
         self,
@@ -715,6 +828,9 @@ class WatchManager:
             if connector_auth is not None:
                 kwargs["connector_auth_config"] = connector_auth
             kwargs["connector_states"] = task.connector_states
+        # PR radar is a watch sidecar: it must run on every trigger, including
+        # the unchanged-HEAD path below that short-circuits content ingestion.
+        await self._run_pr_radar_sidecar(task, ctx)
         if not connector:
             checkpoint = await self._probe_git_checkpoint(task, kwargs, ctx)
             if checkpoint is not None:
@@ -738,6 +854,48 @@ class WatchManager:
             on_task_created=on_task_created,
             **kwargs,
         )
+
+    async def _run_pr_radar_sidecar(self, task: WatchTask, ctx: RequestContext) -> None:
+        """Invoke the PR radar without ever affecting the watch run outcome."""
+        from openviking.resource.pr_radar_runner import PrRadarRunner
+
+        try:
+            runner = PrRadarRunner(
+                self._viking_fs, vlm_resolver=self._vlm_resolver,
+                group_resolver=self._pr_radar_group_resolver,
+                context_resolver=self._pr_radar_context_resolver,
+                watch_store=self._store,
+                path_locks=self._locks,
+            )
+            result = await runner.maybe_run(task, ctx)
+            if result.status in {"skipped", "failed"}:
+                logger.warning(
+                    "[WatchManager] PR radar %s for watch %s: %s",
+                    result.status,
+                    task.task_id,
+                    result.reason,
+                )
+            elif result.status == "accumulating":
+                logger.info(
+                    "[WatchManager] PR radar accumulating %s PR(s) for watch %s: %s",
+                    result.pr_count,
+                    task.task_id,
+                    result.reason,
+                )
+            elif result.status == "published":
+                logger.info(
+                    "[WatchManager] PR radar published %s PR(s) (%s) window %s ~ %s to %s for watch %s",
+                    result.pr_count,
+                    result.report_mode,
+                    result.window_start or "?",
+                    result.window_end or "?",
+                    result.target_uri,
+                    task.task_id,
+                )
+        except Exception:  # noqa: BLE001 -- sidecar failures must never fail the watch
+            logger.exception(
+                "[WatchManager] PR radar sidecar crashed for watch %s", task.task_id
+            )
 
     async def _probe_git_checkpoint(
         self, task: WatchTask, kwargs: Dict[str, Any], ctx: RequestContext
