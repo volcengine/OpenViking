@@ -368,3 +368,23 @@ class TestExtractionContentBoundary:
             execute.assert_awaited_once()
             assert len(vlm.calls) == 2
         assert response.content == "<think>planning</think>I will read the file."
+
+    @pytest.mark.asyncio
+    async def test_unadvertised_tool_call_rejected_without_executing(self):
+        response = VLMResponse(
+            content="",
+            tool_calls=[ToolCall(id="call-1", name="read", arguments={"uri": "viking://user/test"})],
+            finish_reason="tool_calls",
+        )
+        vlm = ScriptedVLM([response, VLMResponse(content="sdk.commit()")])
+        loop = _make_loop(vlm)
+        loop.context_provider.get_tools = lambda: []
+        execute = AsyncMock(return_value={"content": "should not run"})
+        loop.context_provider.execute_tool = execute
+
+        operations, tools_used = await _run_loop(loop)
+
+        assert operations is not None
+        execute.assert_not_awaited()
+        assert len(tools_used) == 1
+        assert "Unknown tool: read" in tools_used[0]["result"]["error"]
