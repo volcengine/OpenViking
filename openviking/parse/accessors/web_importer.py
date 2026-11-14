@@ -132,6 +132,10 @@ class WebImporter:
                 "download_count": len(downloaded_files),
                 "crawl_result": _crawl_summary(crawl_result),
                 "original_filename": _host_name(root_url),
+                # The per-host directory lives inside a mkdtemp root. Cleanup
+                # removes only ``path`` by default, which would leave one empty
+                # ``ov_web_*`` directory behind for every import.
+                "_cleanup_path": str(temp_root),
             },
         )
 
