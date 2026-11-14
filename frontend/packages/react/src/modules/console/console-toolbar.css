@@ -80,10 +80,15 @@
 .ov-console .ov-console__action.ov-button:not(:disabled) {
   color: var(--ov-ui-console-secondary);
 }
+/* 悬停与 VikingBot 的会话按钮一致：浅底，图标转为主文字色。 */
+.ov-console .ov-console__action.ov-button:not(:disabled):hover {
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+  color: var(--ov-ui-console-text);
+}
 .ov-console__action > svg {
   display: block;
-  width: 12px;
-  height: 12px;
+  width: 14px;
+  height: 14px;
 }
 .ov-console__action > svg path {
   stroke-width: 1.25px;

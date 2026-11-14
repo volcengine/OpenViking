@@ -22,6 +22,13 @@ React imports these SVG files directly during its build. This file records where
 - `svg/console/history-empty.svg` is an original geometric tray illustration
   based on a supplied screenshot of the console. It follows this repository's license;
   its outline and background follow theme colors.
+- `svg/empty/` — original empty-state illustrations drawn for this workspace in
+  the style of `svg/file-browser/search-empty.svg`: the same 258 × 140 dashed
+  grid, a `--ov-ui-color-border-3` shape behind and a `currentColor` shape in
+  front. `folder.svg` is an empty folder, `chart.svg` a chart card,
+  `people.svg` two people and `conversation.svg` two message bubbles. They
+  follow the repository license and are bundled inline by the internal `Empty`
+  primitive.
 - `svg/arrow-right.svg` — the static artwork of `IconRightArrow`, which
   CommandConsole's quick commands render as `ArrowRightIcon`. Extracted from
   `@arco-design/iconbox-react-viking` 0.0.121, whose package metadata declares
@@ -73,7 +80,9 @@ React imports these SVG files directly during its build. This file records where
 - The VikingBot welcome (lightbulb/book/video), report and session controls are
   original SVG artwork from `@arco-design/iconbox-react-viking` 0.0.134 (ISC).
   The history, new-session, session copy, copy success and locate glyphs use the
-  original geometry. React wrappers are removed and paint follows the host
+  original geometry. `new-session.svg` crops its 16 × 16 viewBox to the 13 × 13
+  area around the glyph, so it fills its box like the tightly cropped
+  `history.svg` and the two draw at the same size. React wrappers are removed and paint follows the host
   theme. No IconBox runtime is required.
 - `svg/viking-bot/copy.svg` and `check.svg` — the reference OpenViking console's
   14px code and message action icons, from ConnectAgent's `connectAgentUi`.

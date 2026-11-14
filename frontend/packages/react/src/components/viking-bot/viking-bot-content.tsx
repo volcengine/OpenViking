@@ -138,7 +138,10 @@ export function VikingBotContent({
                 {emptyState === undefined ? (
                   <VikingBotWelcome
                     labels={labels}
-                    quickInputs={quickInputs}
+                    // 内置输入区上方常驻快捷输入；只有宿主自带输入区时欢迎页才保留一份。
+                    // The built-in composer always shows the quick inputs; the welcome
+                    // keeps its own copy only when the host supplies the composer.
+                    quickInputs={hasDefaultComposer ? undefined : quickInputs}
                     onSelect={selectQuickInput}
                     disabled={
                       isSending ||
@@ -189,11 +192,7 @@ export function VikingBotContent({
                     canSendWhileStreaming={canSendWhileStreaming}
                     isSubmitting={isSubmitting}
                     references={references}
-                    quickInputs={
-                      hasMessages || streaming || emptyState !== undefined
-                        ? quickInputs
-                        : undefined
-                    }
+                    quickInputs={quickInputs}
                     onQuickInputSelect={selectQuickInput}
                     onValueChange={onDraftChange && updateDraft}
                     onFilesAdded={onFilesAdded}

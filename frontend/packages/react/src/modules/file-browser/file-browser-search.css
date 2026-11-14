@@ -490,11 +490,10 @@
   margin: 0;
 }
 
+/* 无结果空态在结果区内垂直居中。 */
 .ov-file-browser-search__no-results {
-  margin: 0;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
-  font-size: 13px;
-  line-height: 22px;
+  flex: 1;
+  justify-content: center;
 }
 
 .ov-file-browser-search__sr-only {

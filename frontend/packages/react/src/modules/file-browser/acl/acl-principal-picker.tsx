@@ -1,4 +1,5 @@
 import { Button } from '../../../shared/primitives/button/button.js';
+import { Empty } from '../../../shared/primitives/empty/empty.js';
 import type { FileBrowserAclLevel } from '../acl-types.js';
 import { AclCandidate } from './acl-candidate.js';
 import type { AclText } from './acl-labels.js';
@@ -58,9 +59,11 @@ export function AclPrincipalPicker({
           />
         ))}
         {!directory.loading && !candidates.length && !directory.error ? (
-          <p className="ov-file-browser-acl__hint">
-            {hasKeyword ? text.noMatches : text.empty}
-          </p>
+          <Empty
+            size="compact"
+            illustration={hasKeyword ? 'search' : 'people'}
+            title={hasKeyword ? text.noMatches : text.empty}
+          />
         ) : null}
       </div>
       {directory.error ? (

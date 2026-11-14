@@ -19,4 +19,6 @@ export interface ModalProps {
   maskClosable?: boolean;
   /** Close intent from the close button, Escape or the mask when enabled. */
   onClose?: () => void;
+  /** Runs once the exit transition has finished and the panel is gone. */
+  afterClose?: () => void;
 }
