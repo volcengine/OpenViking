@@ -26,3 +26,28 @@ class TestFsLs:
             assert "result" in data, "'result' field should exist"
             assert isinstance(data["result"], list), "'result' should be a list"
             assert len(data["result"]) > 0, "'result' list should not be empty"
+
+    def test_fs_ls_time_window(self, api_client):
+        """A time window narrows the listing to the entries inside it."""
+        try:
+            response = api_client.fs_ls("viking://", since="2099-01-01")
+        except requests.exceptions.ConnectionError:
+            pytest.fail("Could not connect to server service - service is not running")
+
+        assert response.status_code < 500, f"FS ls failed with status {response.status_code}"
+
+        if response.status_code == 200:
+            data = response.json()
+            assert data.get("status") == "ok", f"Expected status 'ok', got {data.get('status')}"
+            assert isinstance(data.get("result"), list), "'result' should be a list"
+            # Every entry predates the window, so none of them may come back.
+            assert data["result"] == [], "Entries outside the time window must be filtered out"
+
+    def test_fs_ls_rejects_an_inverted_time_window(self, api_client):
+        try:
+            response = api_client.fs_ls("viking://", since="2099-01-01", until="2000-01-01")
+        except requests.exceptions.ConnectionError:
+            pytest.fail("Could not connect to server service - service is not running")
+
+        assert response.status_code < 500, f"FS ls failed with status {response.status_code}"
+        assert response.status_code == 400, "An inverted time window must be rejected"

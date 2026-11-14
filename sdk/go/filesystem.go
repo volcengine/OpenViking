@@ -67,6 +67,8 @@ func (c *Client) ListPage(ctx context.Context, uri string, opts *ListOptions) (*
 	if opts.IncludeTags {
 		query.Set("include_tags", "true")
 	}
+	query.Set("since", opts.Since)
+	query.Set("until", opts.Until)
 	if opts.SortBy != "" {
 		query.Set("sort_by", opts.SortBy)
 	}

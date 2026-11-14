@@ -302,6 +302,16 @@ export interface ListOptions {
   extraFields?: Array<"locked" | "id" | "count">;
   tags?: string[];
   includeTags?: boolean;
+  since?: string;
+  until?: string;
+}
+/** Session listing options. */
+export interface ListSessionsOptions {
+  since?: string;
+  until?: string;
+  timeField?: "updated_at" | "created_at" | "last_message_at" | "mod_time";
+  limit?: number;
+  offset?: number;
 }
 /** Directory tree options. */
 export interface TreeOptions {

@@ -27,3 +27,41 @@ class TestListSessions:
             assert data.get("error") is None, f"Expected error to be null, got {data.get('error')}"
             assert "result" in data, "'result' field should exist"
             assert isinstance(data["result"], list), "'result' should be a list"
+
+    def test_list_sessions_time_window(self, api_client):
+        """A future time window leaves no session behind."""
+        try:
+            response = api_client.list_sessions(since="2099-01-01")
+        except requests.exceptions.ConnectionError:
+            pytest.fail("Could not connect to server service - service is not running")
+
+        assert response.status_code < 500, (
+            f"List sessions failed with status {response.status_code}"
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            assert data.get("status") == "ok", f"Expected status 'ok', got {data.get('status')}"
+            assert data["result"] == [], "Sessions outside the time window must be filtered out"
+
+    def test_list_sessions_pagination(self, api_client):
+        try:
+            response = api_client.list_sessions(limit=1)
+        except requests.exceptions.ConnectionError:
+            pytest.fail("Could not connect to server service - service is not running")
+
+        assert response.status_code < 500, (
+            f"List sessions failed with status {response.status_code}"
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            assert len(data["result"]) <= 1, "limit must cap the number of returned sessions"
+
+    def test_list_sessions_rejects_an_unknown_time_field(self, api_client):
+        try:
+            response = api_client.list_sessions(since="7d", time_field="published_at")
+        except requests.exceptions.ConnectionError:
+            pytest.fail("Could not connect to server service - service is not running")
+
+        assert response.status_code == 400, "An unknown time_field must be rejected"
