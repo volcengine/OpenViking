@@ -616,6 +616,21 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         self,
         tool_call,
     ) -> Any:
+        # Dispatch only tools this phase advertised. The registry is
+        # process-global, so without this check a name the extraction VLM
+        # hallucinated from in-context vocabulary (e.g. the calling agent's
+        # own ``read_file``) executes against it, and under eager_prefetch
+        # — where nothing is advertised — any registered tool was
+        # executable (#6922).
+        advertised = self.get_tools()
+        if tool_call.name not in advertised:
+            valid = ", ".join(advertised) if advertised else "none (prefetch mode: no tools are offered)"
+            return {
+                "error": (
+                    f"Protocol violation: tool '{tool_call.name}' was not offered in this phase. "
+                    f"Valid tools here: {valid}. Respond with the next action or the final memory update only."
+                )
+            }
         tool = get_tool(tool_call.name)
         if not tool:
             return {"error": f"Unknown tool: {tool_call.name}"}
