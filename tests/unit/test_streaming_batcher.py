@@ -14,6 +14,105 @@ from openviking.session.memory.utils.streaming_batcher import (
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("buffered", [False, True])
+@pytest.mark.parametrize("fail", [False, True])
+async def test_submit_cancellation_waits_for_actual_batch_completion(buffered, fail):
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+    reasons = []
+
+    async def process_batch(items, reason):
+        reasons.append(reason)
+        entered.set()
+        await release.wait()
+        finished.set()
+        if fail:
+            raise OSError("apply failed")
+        return items
+
+    batcher = StreamingBatcher(
+        name="cancellation-test",
+        process_batch=process_batch,
+        config=StreamingBatcherConfig(
+            max_items_per_batch=8 if buffered else 1,
+            max_wait_seconds=60,
+        ),
+    )
+    submit = asyncio.create_task(batcher.submit("item"))
+    close = None
+    try:
+        if buffered:
+            await asyncio.sleep(0)
+            assert await batcher.get_buffered_item_count() == 1
+        else:
+            await asyncio.wait_for(entered.wait(), 1)
+        submit.cancel()
+        await asyncio.sleep(0)
+        if buffered:
+            assert not entered.is_set()
+            assert await batcher.get_buffered_item_count() == 1
+            close = asyncio.create_task(batcher.close())
+        await asyncio.wait_for(entered.wait(), 1)
+        assert reasons == ["close" if buffered else "count"]
+        await asyncio.sleep(0)
+        submit.cancel()  # Repeated cancellation cannot release the batch early.
+        await asyncio.sleep(0)
+        assert not submit.done()
+        assert not finished.is_set()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(submit, 1)
+        assert finished.is_set()
+    finally:
+        release.set()
+        await asyncio.gather(submit, close or batcher.close(), return_exceptions=True)
+        await batcher.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("close", [False, True])
+async def test_flush_cancellation_stops_processing_and_settles_submit(close):
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    writes = []
+
+    async def process_batch(items, reason):
+        entered.set()
+        await release.wait()
+        writes.extend(items)
+        return items
+
+    batcher = StreamingBatcher(
+        name="flush-cancellation-test",
+        process_batch=process_batch,
+        config=StreamingBatcherConfig(max_wait_seconds=60),
+    )
+    submit = asyncio.create_task(batcher.submit("item"))
+    flush = None
+    try:
+        await asyncio.sleep(0)
+        assert await batcher.get_buffered_item_count() == 1
+        flush = asyncio.create_task(batcher.close() if close else batcher.flush("manual"))
+        await asyncio.wait_for(entered.wait(), 1)
+        flush.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(flush, 1)
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(submit, 1)
+        release.set()
+        await asyncio.sleep(0)
+        assert writes == []
+        assert await batcher.get_buffered_item_count() == 0
+    finally:
+        release.set()
+        await asyncio.gather(
+            submit, *([flush] if flush is not None else []), return_exceptions=True
+        )
+        await batcher.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("close", [False, True])
 @pytest.mark.parametrize("fail", [False, True])
 async def test_explicit_flush_detaches_shared_batch_context(close, fail):

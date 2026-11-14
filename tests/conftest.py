@@ -162,6 +162,8 @@ async def service(
     OpenVikingConfigSingleton.reset_instance()
     OpenVikingConfigSingleton.initialize(
         config_dict={
+            # Domain tests use a file-only fake; Watch leadership has dedicated fixtures.
+            "enable_watch_scheduler": False,
             "storage": {
                 "workspace": str(test_data_dir),
                 "agfs": {"backend": "local"},

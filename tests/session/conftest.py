@@ -41,10 +41,11 @@ async def client(
         has_work,
     )
 
-    async def enqueue_with_session_commit_fallback(queue_name, data):
+    async def enqueue_with_session_commit_fallback(queue_name, data, **keys):
         if queue_name != QueueManager.SESSION_COMMIT:
-            return await original_enqueue(queue_name, data)
+            return await original_enqueue(queue_name, data, **keys)
 
+        assert keys == {"group_key": SessionCommitMsg.from_dict(data).queue_group_key}
         queued_commit_tasks.add(data["task_id"])
 
         async def process_commit():

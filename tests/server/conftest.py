@@ -73,7 +73,7 @@ def _install_fake_embedder(monkeypatch):
 def _install_fake_vlm(monkeypatch):
     """Use a fake VLM so server tests never hit external LLM APIs."""
 
-    async def _fake_get_completion(self, prompt, thinking=False):
+    async def _fake_get_completion(self, prompt, thinking=False, **kwargs):
         if "extract user-private configuration items" in prompt:
             return '{"values": {"api_key": "secret-xyz", "base_url": "https://example.com"}}'
         return "# Test Summary\n\nFake summary for testing.\n\n## Details\nTest content."
@@ -101,10 +101,11 @@ def _install_session_commit_queue_fallback(service: OpenVikingService, monkeypat
         ),
     )
 
-    async def enqueue_with_session_commit_fallback(queue_name, data):
+    async def enqueue_with_session_commit_fallback(queue_name, data, **keys):
         if queue_name != QueueManager.SESSION_COMMIT:
-            return await original_enqueue(queue_name, data)
+            return await original_enqueue(queue_name, data, **keys)
 
+        assert keys == {"group_key": SessionCommitMsg.from_dict(data).queue_group_key}
         queued_commit_tasks.add(data["task_id"])
 
         async def process_commit() -> None:
