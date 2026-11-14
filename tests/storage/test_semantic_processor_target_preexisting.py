@@ -419,11 +419,16 @@ async def test_skill_file_failures_settle_one_package_with_all_details(monkeypat
     processor._vectorize_directory = AsyncMock(return_value=set())
     processor._enqueue_parent_refresh = AsyncMock()
     msg = SemanticMsg(
-        root, "skill", account_id="account", user_id="user", propagate_to_parent=False
+        root,
+        "skill",
+        account_id="account",
+        user_id="user",
+        propagate_to_parent=False,
+        skip_vectorization=True,
     )
     with bind_task_context("package-task", "account", "user"):
         result = await processor.on_dequeue(msg.to_dict())
-    assert result.outcome.value == "error"
+    assert result.outcome.value == "failed"
     assert len(result.errors) == 2
     assert all("model failed" in detail for detail in result.errors)
     assert any("a.py" in detail for detail in result.errors)

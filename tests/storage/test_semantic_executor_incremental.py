@@ -1441,6 +1441,7 @@ async def test_runtime_file_only_plan_does_not_read_structural_parent_inputs(mon
 @pytest.mark.asyncio
 async def test_runtime_reuse_directory_publishes_explicit_slots_without_generation(monkeypatch):
     from openviking.storage.context_update_plan import (
+        FieldPatch,
         IndexSlot,
         NodeInputBinding,
         SemanticExecutionPlan,
@@ -1456,14 +1457,24 @@ async def test_runtime_reuse_directory_publishes_explicit_slots_without_generati
     execution = SemanticExecutionPlan(
         root,
         "resource",
-        SemanticRefreshIntent(root, "resource"),
+        SemanticRefreshIntent(
+            root, "resource", ingest_options=IngestOptions(search_tags=["team=one"])
+        ),
         (root,),
         bindings={
             root: NodeInputBinding(
                 root,
                 "directory",
                 "reuse",
-                (IndexSlot(0, "real-l0", {"abstract": "root summary"}, action="merge"),),
+                (
+                    IndexSlot(
+                        0,
+                        "real-l0",
+                        {"abstract": "root summary"},
+                        action="merge",
+                        field_patch=FieldPatch({"search_tags": ["team=one"]}),
+                    ),
+                ),
                 abstract="root summary",
                 overview="root overview",
             )
@@ -1484,6 +1495,10 @@ async def test_runtime_reuse_directory_publishes_explicit_slots_without_generati
     assert processor.vectorized_dirs == [root]
     assert fs.writes == []
     assert executor.scheduled_vector_record_ids == {"real-l0"}
+    assert processor.directory_ingest_options[root].search_tags is None
+    assert processor.file_contents[("field_patches", root)][0] == FieldPatch(
+        {"search_tags": ["team=one"]}
+    )
 
 
 if __name__ == "__main__":
@@ -1603,6 +1618,33 @@ async def test_file_summary_failure_keeps_entrypoint_publication_policy(
     )
     await executor.run(file_uri if committed_plan else root)
     assert processor.vectorized_files == ([] if committed_plan else [file_uri])
+    assert processor.vectorized_dirs == []
+
+
+@pytest.mark.asyncio
+async def test_skip_vectorization_survives_file_preparation_read_failure(monkeypatch):
+    root = "viking://resources/repo"
+    file_uri = f"{root}/a.py"
+    fs = _FakeVikingFS({root: [{"name": "a.py"}]}, {file_uri: b"body"})
+    fs.read_file = AsyncMock(side_effect=OSError("storage unavailable"))
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
+    processor = _FakeProcessor(fs)
+    executor = SemanticTreeExecutor(
+        processor,
+        "resource",
+        1,
+        RequestContext(UserIdentifier("acc1", "user1"), Role.USER),
+        target_uri=root,
+        incremental_update=True,
+        changes={},
+        recursive=True,
+        aggregate_directory=False,
+        skip_vectorization=True,
+    )
+    await executor.run(root)
+    fs.read_file.assert_awaited()
+    assert processor.summarized_files == []
+    assert processor.vectorized_files == []
     assert processor.vectorized_dirs == []
 
 

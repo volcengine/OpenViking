@@ -545,7 +545,7 @@ class SemanticNodePreparation:
         binding = self.binding(uri, "file")
         resolved = ResolvedSemanticNode(
             binding,
-            vectorize=not self.plan.directory_only,
+            vectorize=not self.plan.directory_only and not self.plan.refresh.skip_vectorization,
             ingest_options=self._ingest_options_for_file(uri),
         )
         # Preserve already selected publication/options if a later input read fails.
@@ -557,7 +557,9 @@ class SemanticNodePreparation:
                 resolved.summary_source = "abstract"
             slot = binding.slot(2)
             resolved.vectorize = bool(
-                slot and slot.action in {IndexAction.UPSERT, IndexAction.MERGE}
+                not self.plan.refresh.skip_vectorization
+                and slot
+                and slot.action in {IndexAction.UPSERT, IndexAction.MERGE}
             )
             if slot:
                 resolved.index_action = slot.action.value
@@ -795,7 +797,7 @@ class SemanticNodePreparation:
         return self.plan.refresh.ingest_options
 
     def _ingest_options_for_directory(self) -> IngestOptions:
-        if self.plan.refresh.generation_trigger == "content_write":
+        if self.plan.fixed_actions or self.plan.refresh.generation_trigger == "content_write":
             return IngestOptions(acl_update=self.plan.refresh.ingest_options.acl_update)
         return self.plan.refresh.ingest_options
 
