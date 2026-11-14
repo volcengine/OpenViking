@@ -123,7 +123,7 @@ curl -X DELETE http://localhost:1933/webdav/resources/archive \
 
 | Operation | Success | Common failures |
 |-----------|---------|-----------------|
-| `GET` / `HEAD` | `200` | `404` missing; `405` target is a directory |
+| `GET` / `HEAD` | `200`; `206` for a single `Range: bytes=...` on `GET` | `404` missing; `405` target is a directory; `416` range not satisfiable |
 | `PUT` | `201` create; `204` overwrite | `409` parent missing; `415` body is not UTF-8 |
 | `MKCOL` | `201` | `405` already exists; `409` parent missing |
 | `MOVE` | `201` new target; `204` overwrite | `400` destination missing; `409` destination parent missing; `412` overwrite disabled |
