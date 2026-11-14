@@ -418,6 +418,20 @@ const workspace = {
       processingButton: 'Processing…',
       removeFile: 'Remove file {{fileName}}',
       warnings: 'Validation notes',
+      validation: {
+        yaml_format: 'Check the YAML frontmatter in SKILL.md.',
+        yaml_format_detail:
+          'Check the YAML frontmatter in SKILL.md: {{detail}}',
+        name_required: 'Add a name to the YAML frontmatter.',
+        description_required: 'Add a description to the YAML frontmatter.',
+        name_matches_directory: 'The name must match the Skill directory name.',
+        name_max_length: 'The name must be 64 characters or fewer.',
+        name_allowed_characters:
+          'The name can only contain letters, numbers, underscores, and hyphens.',
+        description_max_length:
+          'The description must be 1,024 characters or fewer.',
+        body_max_lines: 'The body of SKILL.md exceeds 500 lines.',
+      },
       failed: 'Could not add Skill',
       processingFailed: 'Background processing failed',
       processing: 'Submitted and processing in the background',

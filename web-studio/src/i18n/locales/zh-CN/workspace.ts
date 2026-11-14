@@ -407,6 +407,18 @@ const workspace = {
       processingButton: '正在处理…',
       removeFile: '移除文件 {{fileName}}',
       warnings: '校验提示',
+      validation: {
+        yaml_format: '请检查 SKILL.md 顶部的 YAML 元数据。',
+        yaml_format_detail: '请检查 SKILL.md 顶部的 YAML 元数据：{{detail}}',
+        name_required: '请在 YAML 元数据中填写 name 字段。',
+        description_required: '请在 YAML 元数据中填写 description 字段。',
+        name_matches_directory: 'name 字段必须与 Skill 目录名一致。',
+        name_max_length: 'name 字段最多可包含 64 个字符。',
+        name_allowed_characters:
+          'name 字段只能包含字母、数字、下划线和连字符。',
+        description_max_length: 'description 字段最多可包含 1,024 个字符。',
+        body_max_lines: 'SKILL.md 正文超过 500 行。',
+      },
       failed: '添加失败',
       processingFailed: '后台处理失败',
       processing: '已提交，正在后台处理',

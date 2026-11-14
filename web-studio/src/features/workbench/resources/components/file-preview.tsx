@@ -42,7 +42,7 @@ export function FilePreview({
           <Button
             variant="ghost"
             size="icon-sm"
-            aria-label={t('common:close')}
+            aria-label={t('common:ui.close')}
             onClick={onClose}
           >
             <XIcon className="size-4" />

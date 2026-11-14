@@ -1,7 +1,7 @@
 import type { SkillScope } from '#/features/workbench/skills/components/skill-scope-tabs'
 import { getOvResult, ovClient } from '#/shared/api/ov-client/index'
 
-type ValidationIssue = { message?: string; rule?: string }
+export type ValidationIssue = { message?: string; rule?: string }
 
 export type SkillValidation = {
   valid: boolean

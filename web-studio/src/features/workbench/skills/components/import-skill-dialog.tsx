@@ -24,7 +24,10 @@ import { RadioGroup, RadioGroupItem } from '#/shared/ui/radio-group'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/shared/ui/tabs'
 import { cn } from '#/shared/lib/utils'
 import { formatFileSize } from '#/features/workbench/resources/lib/upload'
-import type { SkillSource } from '#/features/workbench/skills/lib/add-skill'
+import type {
+  SkillSource,
+  ValidationIssue,
+} from '#/features/workbench/skills/lib/add-skill'
 
 import type { SkillScope } from '#/features/workbench/skills/components/skill-scope-tabs'
 import {
@@ -47,6 +50,10 @@ const SCOPES: SkillScope[] = ['user', 'agent']
 const GITHUB_EXAMPLE = 'https://github.com/volcengine/OpenViking'
 const GITHUB_LINK =
   /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+(?:\/tree\/[^\s/?#]+(?:\/[^\s?#]+)?)?\/?$/i
+
+type ImportIssue =
+  | ValidationIssue
+  | { key: 'add.invalidGithub' | 'add.noSkills' | 'add.invalidFile' }
 
 function currentConnectionIdentity(): string {
   const options = ovClient.getOptions()
@@ -81,8 +88,8 @@ export function ImportSkillDialog({
   const [scope, setScope] = React.useState<SkillScope>('user')
   const [phase, setPhase] = React.useState<Phase>('idle')
   const [taskId, setTaskId] = React.useState('')
-  const [errors, setErrors] = React.useState<string[]>([])
-  const [warnings, setWarnings] = React.useState<string[]>([])
+  const [errors, setErrors] = React.useState<ImportIssue[]>([])
+  const [warnings, setWarnings] = React.useState<ValidationIssue[]>([])
   const previousOpen = React.useRef(false)
   const operationGeneration = React.useRef(0)
 
@@ -135,18 +142,20 @@ export function ImportSkillDialog({
           setPhase('completed')
           onAdded(scope)
         } else if (task.status === 'failed' || task.status === 'cancelled') {
-          setErrors([
+          setErrors(
             typeof task.error === 'string' && task.error
-              ? task.error
-              : t('add.processingFailed'),
-          ])
+              ? [{ message: task.error }]
+              : [],
+          )
           setPhase('failed')
         } else {
           timer = setTimeout(() => void poll(), 2000)
         }
       } catch (error) {
         if (cancelled || connection !== currentConnectionIdentity()) return
-        setErrors([error instanceof Error ? error.message : String(error)])
+        setErrors([
+          { message: error instanceof Error ? error.message : String(error) },
+        ])
         setPhase('failed')
       }
     }
@@ -155,7 +164,7 @@ export function ImportSkillDialog({
       cancelled = true
       clearTimeout(timer)
     }
-  }, [phase, taskId, onAdded, scope, t])
+  }, [phase, taskId, onAdded, scope])
 
   const busy = ['reading', 'validating', 'adding', 'processing'].includes(phase)
   const data = mode === 'upload' ? content : url.trim()
@@ -180,7 +189,7 @@ export function ImportSkillDialog({
       let selectedPath = mode === 'github' ? sourcePath : ''
       if (mode === 'github') {
         if (!GITHUB_LINK.test(data)) {
-          setErrors([t('add.invalidGithub')])
+          setErrors([{ key: 'add.invalidGithub' }])
           setPhase('idle')
           return
         }
@@ -188,7 +197,7 @@ export function ImportSkillDialog({
           const matches = await listSkillSources(data)
           if (!isCurrent()) return
           if (matches.length === 0) {
-            setErrors([t('add.noSkills')])
+            setErrors([{ key: 'add.noSkills' }])
             setPhase('idle')
             return
           }
@@ -202,13 +211,9 @@ export function ImportSkillDialog({
       } else {
         const validation = await validateNewSkill(data)
         if (!isCurrent()) return
-        setWarnings(
-          validation.warnings.map((issue) => issue.message || issue.rule || ''),
-        )
+        setWarnings(validation.warnings)
         if (!validation.valid) {
-          setErrors(
-            validation.errors.map((issue) => issue.message || issue.rule || ''),
-          )
+          setErrors(validation.errors)
           setPhase('idle')
           return
         }
@@ -225,7 +230,9 @@ export function ImportSkillDialog({
       }
     } catch (error) {
       if (!isCurrent()) return
-      setErrors([error instanceof Error ? error.message : String(error)])
+      setErrors([
+        { message: error instanceof Error ? error.message : String(error) },
+      ])
       setPhase('failed')
     }
   }
@@ -236,7 +243,7 @@ export function ImportSkillDialog({
     multiple: false,
     onDrop: (accepted, rejected) => {
       if (rejected.length > 0) {
-        setErrors([t('add.invalidFile')])
+        setErrors([{ key: 'add.invalidFile' }])
         return
       }
       const selected = accepted.at(0)
@@ -255,7 +262,7 @@ export function ImportSkillDialog({
           )
             return
           if (!value.trim()) {
-            setErrors([t('add.invalidFile')])
+            setErrors([{ key: 'add.invalidFile' }])
           } else {
             setContent(value)
             setFile(selected)
@@ -268,7 +275,9 @@ export function ImportSkillDialog({
             connection !== currentConnectionIdentity()
           )
             return
-          setErrors([error instanceof Error ? error.message : String(error)])
+          setErrors([
+            { message: error instanceof Error ? error.message : String(error) },
+          ])
           setPhase('failed')
         },
       )
@@ -281,6 +290,22 @@ export function ImportSkillDialog({
   const targetUris: Record<SkillScope, string> = {
     user: `viking://user/${userId}/skills`,
     agent: 'viking://agent/skills',
+  }
+
+  function issueText(issue: ImportIssue) {
+    if ('key' in issue) return t(issue.key)
+    const { rule, message } = issue
+    if (rule === 'yaml_format') {
+      return message
+        ? t('add.validation.yaml_format_detail', { detail: message })
+        : t('add.validation.yaml_format')
+    }
+    return rule
+      ? t(`add.validation.${rule}`, {
+          defaultValue: message || rule,
+          skipInterpolation: true,
+        })
+      : message
   }
 
   return (
@@ -465,12 +490,12 @@ export function ImportSkillDialog({
               <p className="font-medium">{t('add.warnings')}</p>
               <ul className="mt-1 list-inside list-disc text-muted-foreground">
                 {warnings.map((warning, index) => (
-                  <li key={index}>{warning}</li>
+                  <li key={index}>{issueText(warning)}</li>
                 ))}
               </ul>
             </div>
           ) : null}
-          {errors.length > 0 ? (
+          {errors.length > 0 || phase === 'failed' ? (
             <div
               role="alert"
               className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
@@ -478,11 +503,13 @@ export function ImportSkillDialog({
               <p className="font-medium">
                 {t(taskId ? 'add.processingFailed' : 'add.failed')}
               </p>
-              <ul className="mt-1 list-inside list-disc">
-                {errors.map((error, index) => (
-                  <li key={index}>{error}</li>
-                ))}
-              </ul>
+              {errors.length > 0 ? (
+                <ul className="mt-1 list-inside list-disc">
+                  {errors.map((error, index) => (
+                    <li key={index}>{issueText(error)}</li>
+                  ))}
+                </ul>
+              ) : null}
             </div>
           ) : null}
           {phase === 'processing' || phase === 'completed' ? (

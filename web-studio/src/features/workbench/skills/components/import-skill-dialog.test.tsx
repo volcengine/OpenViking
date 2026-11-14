@@ -8,9 +8,10 @@ import {
   screen,
   waitFor,
 } from '@testing-library/react'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { ImportSkillDialog } from '#/features/workbench/skills/components/import-skill-dialog'
+import i18n from '#/i18n'
 
 const { addNewSkill, listSkillSources, validateNewSkill, fetchSkillTask } =
   vi.hoisted(() => ({
@@ -25,9 +26,11 @@ vi.mock('#/features/workbench/skills/lib/add-skill', () => ({
   validateNewSkill,
   fetchSkillTask,
 }))
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
-}))
+const copy = i18n.getFixedT('en', 'skillsPage')
+
+beforeEach(async () => {
+  await i18n.changeLanguage('en')
+})
 
 afterEach(() => {
   cleanup()
@@ -35,14 +38,25 @@ afterEach(() => {
 })
 
 function selectGithub(url = 'https://github.com/owner/repo') {
-  fireEvent.click(screen.getByRole('tab', { name: 'add.githubTab' }))
-  fireEvent.change(screen.getByRole('textbox', { name: 'add.githubTab' }), {
-    target: { value: url },
-  })
+  fireEvent.click(screen.getByRole('tab', { name: copy('add.githubTab') }))
+  fireEvent.change(
+    screen.getByRole('textbox', { name: copy('add.githubTab') }),
+    {
+      target: { value: url },
+    },
+  )
 }
 
 function confirm() {
-  fireEvent.click(screen.getByRole('button', { name: 'add.submit' }))
+  fireEvent.click(screen.getByRole('button', { name: copy('add.submit') }))
+}
+
+async function selectFile(name: string, value: string) {
+  const input = document.querySelector<HTMLInputElement>('input[type=file]')!
+  const file = new File([value], name, { type: 'text/markdown' })
+  file.text = vi.fn().mockResolvedValue(value)
+  await act(async () => fireEvent.change(input, { target: { files: [file] } }))
+  await screen.findByText(name)
 }
 
 it('clears the draft and resets to upload when reopened', () => {
@@ -53,31 +67,21 @@ it('clears the draft and resets to upload when reopened', () => {
   rerender(<ImportSkillDialog {...props} open />)
   expect(
     screen
-      .getByRole('tab', { name: 'add.uploadTab' })
+      .getByRole('tab', { name: copy('add.uploadTab') })
       .getAttribute('aria-selected'),
   ).toBe('true')
-  fireEvent.click(screen.getByRole('tab', { name: 'add.githubTab' }))
-  expect(screen.getByRole('textbox', { name: 'add.githubTab' })).toHaveProperty(
-    'value',
-    '',
-  )
+  fireEvent.click(screen.getByRole('tab', { name: copy('add.githubTab') }))
+  expect(
+    screen.getByRole('textbox', { name: copy('add.githubTab') }),
+  ).toHaveProperty('value', '')
 })
 
 it('replaces an uploaded file and submits the validated Markdown', async () => {
   addNewSkill.mockResolvedValue({})
   validateNewSkill.mockResolvedValue({ valid: true, errors: [], warnings: [] })
   render(<ImportSkillDialog open onOpenChange={vi.fn()} onAdded={vi.fn()} />)
-  const selectFile = async (name: string, value: string) => {
-    const input = document.querySelector<HTMLInputElement>('input[type=file]')!
-    const file = new File([value], name, { type: 'text/markdown' })
-    file.text = vi.fn().mockResolvedValue(value)
-    await act(async () =>
-      fireEvent.change(input, { target: { files: [file] } }),
-    )
-    await screen.findByText(name)
-  }
   await selectFile('first.md', 'first')
-  fireEvent.click(screen.getByRole('button', { name: 'add.removeFile' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Remove file first.md' }))
   expect(screen.queryByText('first.md')).toBeNull()
   await selectFile('second.md', 'second')
   confirm()
@@ -85,6 +89,39 @@ it('replaces an uploaded file and submits the validated Markdown', async () => {
     expect(addNewSkill).toHaveBeenCalledWith('second', 'user', undefined),
   )
   expect(validateNewSkill).toHaveBeenCalledWith('second')
+})
+
+it('retranslates known validation issues and keeps unknown diagnostics', async () => {
+  validateNewSkill.mockResolvedValue({
+    valid: false,
+    errors: [
+      { rule: 'name_required', message: 'name is required' },
+      { rule: 'future_rule', message: 'Original diagnostic: {{field}}' },
+    ],
+    warnings: [
+      {
+        rule: 'name_max_length',
+        message: 'name must not exceed 64 characters',
+      },
+    ],
+  })
+  render(<ImportSkillDialog open onOpenChange={vi.fn()} onAdded={vi.fn()} />)
+  await selectFile('SKILL.md', '---\ndescription: Example\n---')
+  confirm()
+  await screen.findByText('Add a name to the YAML frontmatter.')
+  expect(
+    screen.getByText('The name must be 64 characters or fewer.'),
+  ).toBeTruthy()
+
+  await act(async () => {
+    await i18n.changeLanguage('zh-CN')
+  })
+  expect(screen.getByText('请在 YAML 元数据中填写 name 字段。')).toBeTruthy()
+  expect(screen.getByText('name 字段最多可包含 64 个字符。')).toBeTruthy()
+  expect(screen.getByText('Original diagnostic: {{field}}')).toBeTruthy()
+  expect(screen.queryByText('name is required')).toBeNull()
+  expect(validateNewSkill).toHaveBeenCalledTimes(1)
+  expect(addNewSkill).not.toHaveBeenCalled()
 })
 
 it('imports a single GitHub skill to the selected directory and tracks the task', async () => {
@@ -100,7 +137,7 @@ it('imports a single GitHub skill to the selected directory and tracks the task'
     screen.getByRole('radio', { name: /viking:\/\/agent\/skills/ }),
   )
   confirm()
-  await screen.findByText('add.completed')
+  await screen.findByText(copy('add.completed'))
   expect(listSkillSources).toHaveBeenCalledWith(url)
   expect(addNewSkill).toHaveBeenCalledWith(url, 'agent', 'one')
   expect(fetchSkillTask).toHaveBeenCalledWith('git-task')
@@ -117,7 +154,7 @@ it('requires an explicit selection when the repository contains multiple skills'
   render(<ImportSkillDialog open onOpenChange={vi.fn()} onAdded={vi.fn()} />)
   selectGithub(url)
   confirm()
-  await screen.findByText('add.selectSkill')
+  await screen.findByText(copy('add.selectSkill'))
   expect(addNewSkill).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole('radio', { name: /Two/ }))
   confirm()
