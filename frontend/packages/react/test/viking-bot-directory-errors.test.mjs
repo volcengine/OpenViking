@@ -66,16 +66,20 @@ test('target picker stays closed after disabling or submitting and preserves the
       assert.ok(modal());
       await act(async () => new Promise((resolve) => setTimeout(resolve, 350)));
       await view.render(render(state));
-      assert.equal(modal(), null);
+      assert.equal(modal() === null, true);
       await view.render(render());
-      assert.equal(modal(), null);
+      assert.equal(modal() === null, true);
       assert.equal(trigger(view).getAttribute('aria-expanded'), 'false');
       assert.match(trigger(view).textContent, /resources\/wiki/);
     }
     await click(trigger(view));
     assert.ok(modal());
     await click(button(modal(), 'Cancel'));
-    assert.equal(document.activeElement, trigger(view));
+    assert.equal(
+      document.activeElement === trigger(view),
+      true,
+      'focus returns to the picker trigger',
+    );
   } finally {
     await view.unmount();
   }
@@ -146,8 +150,8 @@ test('reasonless directory creation reports a localized error, preserves input a
       fail = false;
       await submit(form);
       assert.equal(
-        document.querySelector('.ov-viking-bot__create-directory'),
-        null,
+        document.querySelector('.ov-viking-bot__create-directory') === null,
+        true,
       );
       assert.match(trigger(view).textContent, /wiki\/notes/);
     } finally {

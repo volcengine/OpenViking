@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { startTests } from './test-process.mjs';
 import { createRslib } from '@rslib/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { pluginSvgr } from '@rsbuild/plugin-svgr';
@@ -138,31 +138,26 @@ try {
     join(modules, '@tanstack/react-query'),
     linkType,
   );
-  process.exitCode = await new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      [
-        '--import',
-        './packages/react/test/helpers/query-timers.mjs',
-        '--test',
-        ...(process.argv.length > 2
-          ? process.argv.slice(2)
-          : [
-              'scripts/package.test.mjs',
-              'scripts/react-release*.test.mjs',
-              'scripts/release-notes*.test.mjs',
-              'packages/react/test/*.test.mjs',
-            ]),
-      ],
-      {
-        cwd: root,
-        stdio: 'inherit',
-        env: { ...process.env, NODE_ENV: 'test', OV_UI_TEST_HOOKS: output },
-      },
-    );
-    child.once('error', reject);
-    child.once('exit', (code) => resolve(code ?? 1));
-  });
+  const { completed } = startTests(
+    [
+      '--import',
+      './packages/react/test/helpers/query-timers.mjs',
+      ...(process.argv.length > 2
+        ? process.argv.slice(2)
+        : [
+            'scripts/package.test.mjs',
+            'scripts/test-process.test.mjs',
+            'scripts/react-release*.test.mjs',
+            'scripts/release-notes*.test.mjs',
+            'packages/react/test/*.test.mjs',
+          ]),
+    ],
+    {
+      cwd: root,
+      env: { ...process.env, NODE_ENV: 'test', OV_UI_TEST_HOOKS: output },
+    },
+  );
+  process.exitCode = await completed;
 } finally {
   await rm(output, { recursive: true, force: true });
 }

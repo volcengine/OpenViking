@@ -181,7 +181,7 @@ test('search, footer actions, disabled rows and keyboard selection use host call
     assert.equal(query, 'wiki');
     const clear = dialog().querySelector('[aria-label="Clear search"]');
     assert.equal(clear.getAttribute('aria-label'), 'Clear search');
-    assert.equal(clear.closest('[aria-hidden=true]'), null);
+    assert.equal(clear.closest('[aria-hidden=true]') === null, true);
     await click(clear);
     assert.equal(query, '');
     await click(button('Add skill'));
