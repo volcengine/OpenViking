@@ -2142,16 +2142,17 @@ class MemoryUpdater:
                 mf = MemoryFileUtils.read(content, uri=uri)
                 from openviking.session.memory.utils.link_renderer import LinkRenderer
 
-                abstract = LinkRenderer.strip_all_links(mf.content or "")
-                abstract = self._truncate_memory_abstract(abstract)
-                embedding_text = abstract
+                body = LinkRenderer.strip_all_links(mf.content or "")
+                body = self._truncate_memory_abstract(body)
+                abstract = self._truncate_memory_abstract(self._memory_abstract(mf, body))
+                embedding_text = body
 
                 memory_type = uri_memory_type_map.get(uri)
                 if memory_type and self._registry:
                     schema = self._registry.get(memory_type)
                     if schema and schema.embedding_template:
                         template_vars = dict(mf.extra_fields)
-                        template_vars["content"] = abstract
+                        template_vars["content"] = body
                         missing_vars = TemplateUtils.find_missing_variables(
                             schema.embedding_template,
                             template_vars,
@@ -2229,6 +2230,16 @@ class MemoryUpdater:
                 if raise_on_enqueue_failure:
                     raise
         return attempted_count
+
+    @staticmethod
+    def _memory_abstract(mf: MemoryFile, body: str) -> str:
+        """Prefer the extracted summary for the vector-store abstract, fall back to the body."""
+        summary = mf.extra_fields.get("summary")
+        if isinstance(summary, str):
+            summary = summary.strip()
+            if summary:
+                return summary
+        return body
 
     @staticmethod
     def _truncate_memory_abstract(abstract: str) -> str:
