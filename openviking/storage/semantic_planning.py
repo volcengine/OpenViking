@@ -535,9 +535,18 @@ class SemanticNodePreparation:
                 if not self.plan.directory_only:
                     missing -= self._changed_paths
                 if missing:
-                    self._file_abstracts.update(
-                        await self._load_file_summaries(sorted(missing), ctx=self._ctx)
-                    )
+                    try:
+                        self._file_abstracts.update(
+                            await self._load_file_summaries(sorted(missing), ctx=self._ctx)
+                        )
+                    except LockAcquisitionError:
+                        raise
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to load L2 abstracts for %s; falling back to old overview: %s",
+                            uri,
+                            exc,
+                        )
         self.directories[uri] = resolved
         return resolved
 

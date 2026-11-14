@@ -1022,6 +1022,58 @@ async def test_pending_refresh_reuses_summaries_without_reindexing_siblings(monk
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("trigger", ["parent_refresh", "content_write"])
+@pytest.mark.parametrize("cached_summary", ["cached summary", ""])
+async def test_pending_refresh_falls_back_when_l2_summary_read_fails(
+    monkeypatch, cached_summary, trigger
+):
+    root = "viking://resources/repo"
+    file_uri = f"{root}/a.txt"
+    metadata = {"freshness": freshness_metadata(1, 1, pending=1)}
+    fs = _FakeVikingFS(
+        {root: [{"name": "a.txt", "isDir": False}]},
+        {
+            file_uri: b"current content",
+            f"{root}/.overview.md": render_abstract_overview(
+                ContextLevel.OVERVIEW, root, f"### a.txt\n{cached_summary}\n", metadata
+            ),
+            f"{root}/.abstract.md": render_abstract_overview(
+                ContextLevel.ABSTRACT, root, "old abstract", metadata
+            ),
+        },
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
+    processor = _FakeProcessor(fs)
+    processor._parse_overview_md = parse_overview_file_summaries
+    processor._load_transfer_file_summaries = AsyncMock(
+        side_effect=RuntimeError("vector backend temporarily unavailable")
+    )
+    executor = SemanticTreeExecutor(
+        processor,
+        "resource",
+        1,
+        RequestContext(UserIdentifier("acc1", "user1"), Role.USER),
+        incremental_update=True,
+        target_uri=root,
+        recursive=False,
+        generation_trigger=trigger,
+        changes={},
+    )
+
+    await executor.run(root)
+
+    processor._load_transfer_file_summaries.assert_awaited_once()
+    assert processor.generated_overviews == [root]
+    assert {path for path, _ in fs.writes} == {f"{root}/.overview.md", f"{root}/.abstract.md"}
+    assert processor.summarized_files == ([] if cached_summary else [file_uri])
+    assert processor.vectorized_files == []
+    assert processor.vectorized_dirs == [root]
+    overview = parse_abstract_overview(fs._file_contents[f"{root}/.overview.md"])
+    assert f"- a.txt: {cached_summary or 'summary'}" in overview.body
+    assert overview.metadata["freshness"]["pending_child_changes"] == 0
+
+
+@pytest.mark.asyncio
 async def test_directory_vectorization_retries_after_matching_sidecar_write(monkeypatch):
     root_uri = "viking://resources/root"
     file_path = f"{root_uri}/a.txt"
