@@ -52,8 +52,10 @@
   background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
 }
 .ov-dropdown__item:focus-visible {
-  outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
-  outline-offset: -2px;
+  outline: none;
+  box-shadow:
+    inset 0 0 0 1px var(--ov-ui-color-focus, var(--ov-ui-focus-default)),
+    0 0 0 2px var(--ov-ui-color-focus-ring, var(--ov-ui-focus-ring-default));
 }
 .ov-dropdown__item:disabled {
   color: var(--ov-ui-color-text-disabled, var(--ov-ui-text-disabled-default));
@@ -65,4 +67,11 @@
   border: 0;
   border-top: 1px solid
     var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+}
+
+@media (forced-colors: active) {
+  .ov-dropdown__item:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
 }

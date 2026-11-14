@@ -51,6 +51,8 @@ try {
               'overlay-position':
                 './src/shared/primitives/overlay/use-overlay-position.ts',
               modal: './src/shared/primitives/modal/modal.tsx',
+              'time-picker':
+                './src/shared/primitives/time-picker/time-picker.tsx',
               notification: './src/shared/primitives/notification/index.ts',
               select: './src/shared/primitives/select/index.ts',
 

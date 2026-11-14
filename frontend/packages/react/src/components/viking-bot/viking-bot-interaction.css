@@ -5,6 +5,7 @@
 @import '../../shared/primitives/button/button.css';
 @import '../../shared/primitives/radio/radio.css';
 @import '../../shared/primitives/select/style.css';
+@import '../../shared/primitives/time-picker/style.css';
 @import '../../shared/primitives/popover/popover.css';
 @import './interaction/interaction-fields.css';
 @import '../../shared/primitives/modal/modal.css';

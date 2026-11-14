@@ -14,8 +14,8 @@
     var(--ov-ui-bg-11-default)
   );
   --ov-ui-button-focus-ring: var(
-    --ov-ui-color-neutral-4,
-    var(--ov-ui-neutral-4-default)
+    --ov-ui-color-focus-ring,
+    var(--ov-ui-focus-ring-default)
   );
   appearance: none;
   box-sizing: border-box;
@@ -75,6 +75,7 @@
   transition: none;
 }
 .ov-button:focus-visible {
+  border-color: var(--ov-ui-color-focus, var(--ov-ui-focus-default));
   outline: none;
   box-shadow: 0 0 0 2px var(--ov-ui-button-focus-ring);
 }
@@ -84,13 +85,6 @@
   background: var(--ov-ui-color-bg-4, var(--ov-ui-bg-4-default));
   cursor: not-allowed;
   color: var(--ov-ui-color-text-disabled, var(--ov-ui-text-disabled-default));
-}
-.ov-button--primary,
-.ov-button--outline {
-  --ov-ui-button-focus-ring: var(
-    --ov-ui-color-primary-disabled,
-    var(--ov-ui-primary-disabled-default)
-  );
 }
 .ov-button--primary {
   background: var(--ov-ui-button-primary);
@@ -170,5 +164,12 @@
   }
   .ov-button__spinner {
     animation: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .ov-button:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
   }
 }

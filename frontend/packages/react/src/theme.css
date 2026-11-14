@@ -37,6 +37,9 @@
  * the fallback applies otherwise.
  */
 .ov-notification-stack,
+.ov-time-picker,
+.ov-date-picker,
+.ov-pagination,
 .ov-button,
 .ov-input,
 .ov-select,
@@ -131,6 +134,11 @@
   --ov-ui-shadow-default: #0f172a;
   --ov-ui-shadow-control-default: rgb(0 0 0 / 5%);
   --ov-ui-focus-default: #5252ff;
+  --ov-ui-focus-ring-default: color-mix(
+    in srgb,
+    var(--ov-ui-color-primary, var(--ov-ui-primary-default)) 30%,
+    transparent
+  );
   --ov-ui-fill-hover-default: #f1f2f9;
   --ov-ui-status-error-default: #c43838;
   --ov-ui-danger-default: #e31b54;
@@ -194,6 +202,8 @@
 }
 
 html.dark .ov-notification-stack,
+html.dark .ov-time-picker,
+html.dark .ov-pagination,
 html.dark .ov-button,
 html.dark .ov-input,
 html.dark .ov-select,
@@ -266,6 +276,7 @@ html.dark .ov-error-boundary,
   --ov-ui-command-console-quick-hover-default: var(--ov-ui-bg-5-default);
 
   --ov-ui-focus-default: #5f5fff;
+  --ov-ui-focus-ring-default: rgb(69 131 255 / 30%);
   --ov-ui-fill-hover-default: #23252a;
   --ov-ui-status-error-default: #ff9595;
   --ov-ui-danger-default: #ff668a;
@@ -298,11 +309,7 @@ html.dark .ov-error-boundary,
   --ov-ui-link-active-default: var(--ov-ui-primary-active-default);
   --ov-ui-text-5-default: #c9c9d4;
   --ov-ui-on-primary-disabled-default: var(--ov-ui-text-on-primary-default);
-  --ov-ui-input-focus-ring-default: color-mix(
-    in srgb,
-    var(--ov-ui-color-primary, var(--ov-ui-primary-default)) 30%,
-    transparent
-  );
+  --ov-ui-input-focus-ring-default: var(--ov-ui-focus-ring-default);
   --ov-ui-error-default: #e31b54;
   --ov-ui-error-bg-default: #ffecec;
   --ov-ui-error-border-default: #ffa3a0;
@@ -331,7 +338,7 @@ html.dark .ov-radio {
   --ov-ui-text-disabled-default: #42464e;
   --ov-ui-text-5-default: #e1e3ef;
   --ov-ui-on-primary-disabled-default: rgb(255 255 255 / 30%);
-  --ov-ui-input-focus-ring-default: rgb(69 131 255 / 30%);
+  --ov-ui-input-focus-ring-default: var(--ov-ui-focus-ring-default);
   --ov-ui-error-default: #ff706d;
   --ov-ui-error-bg-default: rgb(159 33 28 / 20%);
   --ov-ui-error-border-default: rgb(255 112 109 / 30%);
