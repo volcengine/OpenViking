@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { isLocalSoul } from '../../daemon/src/conversation-policy.mjs';
 import { OVConnection, readOVConfig } from '../../daemon/src/ov-connection.mjs';
 import { availableInstanceOvConfig } from './manifest.mjs';
 import {
@@ -316,6 +317,45 @@ export function saveOVConnection(detected, { env = process.env, homeDir = env.HO
     fs.renameSync(temporary, target);
   } finally { fs.rmSync(temporary, { force: true }); }
   return target;
+}
+
+// The instance's soul in OpenViking, read and written with the instance's own
+// identity (its ovConfig). A missing soul reads as empty; a release that
+// refuses `replace` on a missing file (404) gets `create`.
+export async function readOVSoul({ configPath, uri, fetchImpl = globalThis.fetch }) {
+  if (isLocalSoul(uri)) {
+    try {
+      return fs.readFileSync(uri, 'utf8');
+    } catch (error) {
+      if (error?.code === 'ENOENT') return '';
+      throw error;
+    }
+  }
+  const connection = new OVConnection(readOVConfig(configPath), { fetch: fetchImpl });
+  try {
+    const { result } = await connection.json(`/api/v1/content/read?uri=${encodeURIComponent(uri)}&offset=0&limit=-1&raw=true`);
+    return String(result ?? '');
+  } catch (error) {
+    if (error?.httpStatus === 404) return '';
+    throw error;
+  }
+}
+
+export async function writeOVSoul({ configPath, uri, content, fetchImpl = globalThis.fetch }) {
+  if (isLocalSoul(uri)) {
+    fs.mkdirSync(path.dirname(uri), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(uri, content, { mode: 0o600 });
+    return uri;
+  }
+  const connection = new OVConnection(readOVConfig(configPath), { fetch: fetchImpl });
+  const write = (mode) => connection.json('/api/v1/content/write', { uri, content, mode, wait: true });
+  try {
+    await write('replace');
+  } catch (error) {
+    if (error?.httpStatus !== 404) throw error;
+    await write('create');
+  }
+  return uri;
 }
 
 // A changed connection gets a new private file. Existing files are left intact

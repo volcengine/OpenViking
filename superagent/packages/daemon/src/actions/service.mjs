@@ -62,6 +62,7 @@ const HANDLERS = {
   openviking_list: 'openvikingList',
   openviking_add_resource: 'openvikingAddResource',
   openviking_remember: 'openvikingRemember',
+  openviking_write: 'openvikingWrite',
 };
 
 // A refusal the model can act on; `code` is what logs and activities record.
@@ -1637,6 +1638,12 @@ export class ActionService {
     }
     this.onPreferencesChanged?.();
     return result;
+  }
+
+  // One text file in OpenViking (the soul, notes), written whole or appended to.
+  async openvikingWrite(input, caller) {
+    caller.trace.invoked = true;
+    return await this.ovToolClient().write({ uri: input.uri, content: input.content, mode: input.mode });
   }
 
   // Whether the owner sent an event, by the connector's authenticated identity.

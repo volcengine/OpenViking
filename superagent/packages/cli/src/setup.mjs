@@ -13,7 +13,7 @@ import { loginWeixin } from '../../daemon/src/weixin/auth.mjs';
 import { WeixinState } from '../../daemon/src/weixin/state.mjs';
 import { bundledLarkCli } from '../../daemon/src/lark-cli-bin.mjs';
 import { managedPiBin } from '../../daemon/src/pi-runtime.mjs';
-import { resolveRolePromptPath } from '../../daemon/src/conversation-policy.mjs';
+import { OV_SOUL_URI, rolePresetText } from '../../daemon/src/conversation-policy.mjs';
 import { LarkCli } from './lark-cli.mjs';
 import {
   COMMENT_EVENT, LarkCredentialsError, LarkPolicyError, LarkRegistrationError, MESSAGE_EVENT, grantedUserScopes, inspectApp, lacksAny, missingConfig, readApp,
@@ -24,7 +24,7 @@ import {
   superagentHome, withChangedInstance, withDefaultTempDir, withInstance, writeManifest,
 } from './manifest.mjs';
 import { OVRegistrations, detectOpenViking, instanceOvConfig, writeInstanceOvConfig } from './ov.mjs';
-import { configureOpenViking, prepareInstanceOpenViking, saveOVConnection, takenIdentities } from './ov-setup.mjs';
+import { configureOpenViking, prepareInstanceOpenViking, readOVSoul, saveOVConnection, takenIdentities, writeOVSoul } from './ov-setup.mjs';
 import { detectDsh, detectRuntimes, which } from './runtimes.mjs';
 import {
   collectDshModelDraft, dshSettingsDocument, validateDshModelDraft, writeDshModelDraft,
@@ -284,10 +284,9 @@ function initialState({ id, env, homeDir, current, runtimes, kept }) {
     id,
     dataDir: current?.dataDir ?? path.join(superagentHome(env), 'data', id),
     displayName: current?.displayName ?? 'OpenViking SuperAgent',
-    // A shipped role by name, or the absolute path of the owner's own file;
-    // roleSeed is the role a new file of theirs starts from (written on save).
-    role: current ? current.role ?? null : ROLE_PRESETS[0],
-    roleSeed: null,
+    // The shipped role to seed the soul in OpenViking with on save, or null to
+    // leave the soul as it is (what changing an instance starts from).
+    role: current ? null : ROLE_PRESETS[0],
     workspace: current?.workspace ?? path.join(homeDir, 'superagent-workspace', id),
     runtime: kept ?? runtimes.find((runtime) => runtime.available && (!current || runtime.model === current.model)),
     connectors,
@@ -360,49 +359,67 @@ const ROLE_CHOICES = () => ({
   },
 });
 
-const customRole = (role) => Boolean(role) && path.isAbsolute(role);
-
-function roleShown(state, homeDir) {
-  if (!state.role) return t('没有设置（只用默认规则）', 'none (default rules only)');
-  return customRole(state.role) ? shortenHome(state.role, homeDir) : ROLE_CHOICES()[state.role].label;
+function roleShown(state) {
+  if (!state.role) return t('保持现在的 soul', 'Keep the current soul');
+  return ROLE_CHOICES()[state.role].label;
 }
 
-async function askRole({ prompter, env, homeDir }, state) {
+// The role is the soul in OpenViking: a shipped role seeds it on save, or it
+// is left as it is.
+async function askRole({ prompter }, state) {
   const choices = ROLE_CHOICES();
   const options = [
     ...ROLE_PRESETS.map((name) => ({ ...choices[name], value: name })),
-    { label: t('自己写 prompt', 'My own prompt'), hint: t('用你指定的 Markdown 文件，可以从上面任一个角色改起', 'a Markdown file of yours, which can start from any role above'), value: 'custom' },
+    { label: t('保持现在的', 'Keep current'), hint: t('不写入预设，OpenViking 里的 soul 保持不变', 'seeds nothing; the soul in OpenViking stays as it is'), value: 'keep' },
   ];
-  const at = customRole(state.role) ? options.length - 1 : Math.max(0, ROLE_PRESETS.indexOf(state.role));
+  const at = state.role ? ROLE_PRESETS.indexOf(state.role) : options.length - 1;
   const choice = await prompter.select(t('它的角色', 'Its role'), options, { initial: at, label: t('角色', 'Role') });
-  if (choice !== 'custom') {
-    state.role = choice;
-    state.roleSeed = null;
-    return;
-  }
-  const initial = customRole(state.role) ? state.role : path.join(superagentHome(env), 'roles', `${state.id}.md`);
-  const file = path.resolve(expandHome(await prompter.text(t('角色 prompt 文件（Markdown）', 'Role prompt file (Markdown)'), {
-    label: t('角色文件', 'Role file'),
-    initial: shortenHome(initial, homeDir),
-    validate: (value) => {
-      const resolved = path.resolve(expandHome(value, homeDir));
-      return fs.existsSync(resolved) && !fs.statSync(resolved).isFile() ? t('这不是一个文件', 'That is not a file') : null;
-    },
-  }), homeDir));
-  state.role = file;
-  state.roleSeed = fs.existsSync(file) ? null : await prompter.select(
-    t('这个文件还没有。先用哪个角色的 prompt 填上？之后可以随便改', 'That file does not exist yet. Start it from which role? Change it freely afterwards'),
-    [...ROLE_PRESETS.map((name) => ({ label: choices[name].label, value: name })), { label: t('空白', 'Blank'), value: '' }],
-    { label: t('从哪个角色开始', 'Start from') },
-  );
+  state.role = choice === 'keep' ? null : choice;
 }
 
-// A role file of the owner's own, begun from a shipped role (or blank).
-function writeRoleFile({ role, roleSeed }, id) {
-  if (roleSeed === null || fs.existsSync(role)) return;
-  const note = `<!-- ${roleSeed ? `Started from OpenViking SuperAgent's "${roleSeed}" role. ` : ''}This is ${id}'s role: edit it freely, then run ov-superagent restart ${id}. Comments like this one are not sent to the model. -->\n\n`;
-  fs.mkdirSync(path.dirname(role), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(role, `${note}${roleSeed ? fs.readFileSync(resolveRolePromptPath(roleSeed), 'utf8') : ''}`, { mode: 0o600 });
+// The first lines of a soul, to show before asking to replace it.
+function soulExcerpt(text, { lines = 12, chars = 800 } = {}) {
+  const all = text.trim().split('\n');
+  let shown = all.slice(0, lines).join('\n');
+  if (shown.length > chars) shown = `${shown.slice(0, chars)}…`;
+  else if (all.length > lines) shown += '\n…';
+  return shown.split('\n').map((line) => `    ${line}`).join('\n');
+}
+
+// The chosen role goes into the soul in OpenViking, read and written as the
+// instance's own OV user. An empty or missing soul is seeded; one with text is
+// shown and replaced only when the owner says so. Nothing here stops a save.
+async function seedSoul({ prompter, soul }, { role, configPath, uri }) {
+  if (!role) return;
+  const label = ROLE_CHOICES()[role].label;
+  let text;
+  try {
+    text = await soul.read({ configPath, uri });
+  } catch (error) {
+    prompter.warn(t(`读不到 soul（${uri}），没有改它：${error.message}`,
+      `Could not read the soul (${uri}), so it is left unchanged: ${error.message}`));
+    return;
+  }
+  if (text.trim()) {
+    prompter.info(t(`soul（${uri}）已经有内容：\n${soulExcerpt(text)}`,
+      `The soul (${uri}) already has text:\n${soulExcerpt(text)}`));
+    const choice = await prompter.select(t(`换成「${label}」吗？`, `Replace it with ${label}?`), [
+      { label: t('保持不变', 'Leave it unchanged'), value: 'keep' },
+      { label: t(`换成「${label}」`, `Replace it with ${label}`), value: 'replace' },
+    ], { initial: 0, label: 'Soul', back: false });
+    if (choice !== 'replace') {
+      prompter.info(t('soul 保持不变', 'The soul is left unchanged'));
+      return;
+    }
+  }
+  try {
+    await step(prompter, t(`把「${label}」写入 soul`, `Writing ${label} into the soul`),
+      () => soul.write({ configPath, uri, content: rolePresetText(role) }),
+      () => t(`角色已写入 ${uri}`, `The role is in ${uri}`));
+  } catch (error) {
+    prompter.warn(t(`没能写入 soul：${error.message}；之后再运行 setup 选角色`,
+      `Could not write the soul: ${error.message}; run setup again and choose the role later`));
+  }
 }
 
 async function askRuntime(ctx, state) {
@@ -709,7 +726,7 @@ async function askSwitches(ctx, state) {
 
 const SETTINGS = [
   { key: 'displayName', label: () => t('机器人名字', 'Bot name'), ask: askName, shown: (state) => state.displayName },
-  { key: 'role', label: () => t('角色', 'Role'), ask: askRole, shown: (state, { homeDir }) => roleShown(state, homeDir) },
+  { key: 'role', label: () => t('角色', 'Role'), ask: askRole, shown: (state) => roleShown(state) },
   { key: 'workspace', label: () => t('工作目录', 'Workspace'), ask: askWorkspace, shown: (state, { homeDir }) => shortenHome(state.workspace, homeDir) },
   { key: 'runtime', label: () => t('Agent 运行时', 'Agent runtime'), ask: askRuntime,
     shown: (state) => `${state.runtime.kept ? state.runtime.model : state.runtime.label}${state.dshModel ? t('（保存时加 model route）', ' (adds a model route on save)') : ''}` },
@@ -1719,6 +1736,7 @@ async function setupFlow({
   detect = { runtimes: detectRuntimes, openViking: detectOpenViking, larkApps: checkLarkApps, dsh: detectDsh },
   dshModels = null,
   configureOV = configureOpenViking,
+  soul = null,
   connect = { lark: connectLark, weixin: connectWeixin, telegram: connectTelegram, slack: connectSlack, qq: connectQQ, onebot: connectOneBot, email: askEmail, greet, pi: loginPi },
   control = { start: startCommand, restart: restartCommand, autostart: autostartCommand },
   listen = larkMessageListener,
@@ -1782,6 +1800,7 @@ async function setupFlow({
   const dshTools = { validate: validateDshModelDraft, write: writeDshModelDraft, ...(dshModels ?? {}) };
   const ctx = {
     prompter, out, env, probeEnv, homeDir, fetchImpl, runtimes, current, connect, kept, detect, dshTools,
+    soul: soul ?? { read: (input) => readOVSoul({ ...input, fetchImpl }), write: (input) => writeOVSoul({ ...input, fetchImpl }) },
     menu: Boolean(current), startOver: others, notes: [],
     agents: manifest?.agents ?? [],
     larkNeeds: (memo.lacking ?? []).find((needs) => needs.agent.id === current?.id) ?? null,
@@ -1867,8 +1886,8 @@ async function setupFlow({
       delete agent.dshHomeMode;
       delete agent.dshSkillRoots;
     }
-    if (state.role) agent.role = state.role;
-    else delete agent.role;
+    // The soul lives only in OpenViking; older manifests may still carry role.
+    delete agent.role;
     if (state.connectors.includes('lark')) agent.profile = current?.profile ?? `superagent-${state.id}`;
     else delete agent.profile;
     // A new app reads as chosen for it; the app kept reads as it did.
@@ -2053,7 +2072,7 @@ async function setupFlow({
   const id = state.id;
   const mail = mailPlan(state);
   for (const { config, account } of mail.write) writeEmailAccount(config, account);
-  writeRoleFile(state, id);
+  await seedSoul(ctx, { role: state.role, configPath: agent.ovConfig, uri: agent.soulUri ?? OV_SOUL_URI });
 
   fs.mkdirSync(state.workspace, { recursive: true, mode: 0o700 });
   // The DSH route stayed in memory until here: this is where the instance is
@@ -2238,9 +2257,10 @@ function describeChanges(before, after, mailboxes, homeDir, state) {
   const was = connectorsOf(before);
   if (before.ovConfig !== after.ovConfig) changes.push(t('更新 OpenViking 连接', 'Update the OpenViking connection'));
   if (before.displayName !== after.displayName) changes.push(`${t('机器人名字：', 'Bot name: ')}${before.displayName} → ${after.displayName}`);
-  if (before.role !== after.role) {
-    const shown = (agent) => roleShown(agent, homeDir);
-    changes.push(t(`角色：${shown(before)} → ${shown(after)}（模型会开一次新的会话）`, `Role: ${shown(before)} → ${shown(after)} (the model starts a new session)`));
+  if (state?.role) {
+    const label = roleShown(state);
+    changes.push(t(`角色：把「${label}」写入 OpenViking 里的 soul（已有内容时先问你）`,
+      `Role: seed ${label} into the soul in OpenViking (asks first if it has text)`));
   }
   if (before.workspace !== after.workspace) {
     const move = `${shortenHome(before.workspace, homeDir)} → ${shortenHome(after.workspace, homeDir)}`;

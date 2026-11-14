@@ -457,6 +457,20 @@ export const TOOLS = [
     }, ['decision_id', 'topic']),
     annotations: WRITE,
   },
+  {
+    // One file in the instance's own space, such as its soul, written only
+    // when the owner asked (decision_id names the owner's input).
+    name: 'openviking_write',
+    openviking: true,
+    title: 'Write an OpenViking file',
+    description: 'Write one text file in OpenViking, such as your soul named in the Role section. replace writes the whole file; append adds to its end. A change to your soul applies after the next restart or runtime switch.',
+    inputSchema: schema({
+      uri: { type: 'string', ...VIKING_URI, description: 'The file to write.' },
+      content: { type: 'string', minLength: 1, maxLength: 100_000, description: 'The text to write.' },
+      mode: { type: 'string', enum: ['replace', 'append'], default: 'replace', description: 'replace the whole file, or append to its end.' },
+    }, ['uri', 'content']),
+    annotations: WRITE,
+  },
 ];
 
 // A tool as this instance offers it. With explicit silence on, its

@@ -330,32 +330,25 @@ describe('release-owned prompts and the instance role', () => {
   it('reads every prompt from the release and has no mutable kernel paths', () => {
     const config = getConfig();
     assert.equal(config.promptDir, path.join(projectDir, 'packages', 'daemon', 'agent'));
-    assert.equal(config.rolePromptPath, '');
+    assert.equal(config.soulUri, 'viking://~/memories/soul.md');
+    assert.equal('rolePromptPath' in config, false);
     assert.equal(config.naturalWriting, true);
     assert.equal('kernelInnerPath' in config, false);
     assert.equal('kernelOuterPath' in config, false);
     assert.equal('kernelOuterDataPath' in config, false);
   });
 
-  it('resolves OV_SUPERAGENT_ROLE to a shipped role or the owner\'s own file', () => {
-    setEnv('OV_SUPERAGENT_ROLE', 'assistant');
-    assert.equal(getConfig().rolePromptPath, path.join(projectDir, 'packages', 'daemon', 'agent', 'roles', 'assistant.md'));
-
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-role-'));
-    const own = path.join(directory, 'role.md');
-    fs.writeFileSync(own, 'You answer questions about the garden.\n');
-    try {
-      setEnv('OV_SUPERAGENT_ROLE', own);
-      assert.equal(getConfig().rolePromptPath, own);
-      setEnv('OV_SUPERAGENT_ROLE', path.join(directory, 'missing.md'));
-      assert.throws(() => getConfig(), /OV_SUPERAGENT_ROLE names a file that does not exist/);
-    } finally {
-      fs.rmSync(directory, { recursive: true, force: true });
+  it('keeps the soul at OV_SUPERAGENT_SOUL_URI (viking:// or a local file) when set, and ignores the retired role variable', () => {
+    setEnv('OV_SUPERAGENT_ROLE', '/srv/superagent/roles/beta.md');
+    assert.equal('rolePromptPath' in getConfig(), false);
+    setEnv('OV_SUPERAGENT_SOUL_URI', 'viking://~/memories/team-soul.md');
+    assert.equal(getConfig().soulUri, 'viking://~/memories/team-soul.md');
+    setEnv('OV_SUPERAGENT_SOUL_URI', '/srv/soul.md');
+    assert.equal(getConfig().soulUri, '/srv/soul.md');
+    for (const value of ['souls/mine.md', 'https://example.com/soul.md', 'viking://~/my soul.md']) {
+      setEnv('OV_SUPERAGENT_SOUL_URI', value);
+      assert.throws(() => getConfig(), /OV_SUPERAGENT_SOUL_URI must be a viking:\/\/ address or an absolute file path/);
     }
-    setEnv('OV_SUPERAGENT_ROLE', 'pirate');
-    assert.throws(() => getConfig(), /OV_SUPERAGENT_ROLE pirate is not a known role/);
-    setEnv('OV_SUPERAGENT_ROLE', '../roles/qa');
-    assert.throws(() => getConfig(), /OV_SUPERAGENT_ROLE must be a role name or an absolute path/);
   });
 
   it('turns natural writing off only when asked', () => {
