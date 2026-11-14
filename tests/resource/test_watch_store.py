@@ -749,16 +749,36 @@ class TestFileRecovery:
         assert {task["task_id"] for task in saved["tasks"]} == {"active", "paused"}
 
     @pytest.mark.asyncio
-    async def test_corrupt_primary_recovers_from_backup(self, watch_vfs, watch_store):
+    @pytest.mark.parametrize("fail_first_replace", [False, True])
+    async def test_corrupt_primary_recovers_from_backup(
+        self, watch_vfs, watch_store, monkeypatch, fail_first_replace
+    ):
         task = await create(watch_store)
         await watch_store.patch_task(task.task_id, WatchPatch({"reason": "updated"}), OWNER)
+        backup = await watch_vfs.read_file(FileWatchStore.STORAGE_BAK_URI)
         await watch_vfs.write_file(FileWatchStore.STORAGE_URI, "{not json")
         reopened = FileWatchStore(watch_vfs)
+
+        if fail_first_replace:
+            rename = reopened._rename
+
+            async def fail_restore(old_uri, new_uri):
+                if old_uri == FileWatchStore.STORAGE_TMP_URI:
+                    raise OSError("failed to install recovered snapshot")
+                await rename(old_uri, new_uri)
+
+            with monkeypatch.context() as patch:
+                patch.setattr(reopened, "_rename", fail_restore)
+                with pytest.raises(OSError, match="failed to install recovered snapshot"):
+                    await reopened.initialize()
+            assert await watch_vfs.read_file(FileWatchStore.STORAGE_BAK_URI) == backup
+
         await reopened.initialize()
         loaded = await reopened.get_task(task.task_id)
         assert loaded is not None and loaded.to_uri == task.to_uri
         saved = json.loads(await watch_vfs.read_file(FileWatchStore.STORAGE_URI))
         assert [task["task_id"] for task in saved["tasks"]] == [task.task_id]
+        assert await watch_vfs.read_file(FileWatchStore.STORAGE_BAK_URI) == backup
 
     @pytest.mark.asyncio
     async def test_occupied_deletion_is_persisted_without_runtime_occupancy(
