@@ -20,22 +20,30 @@ class LocalDict(IDict):
         super().__init__()
         self.data = copy.deepcopy(data) if data is not None else {}
 
-    def update(self, data: Dict[str, Any]):
+    def update(self, data: Dict[str, Any]) -> bool:
         """Update the dictionary with new data.
 
         Args:
             data (Dict[str, Any]): The data to merge.
+
+        Returns:
+            bool: True; in-memory dictionaries cannot fail to persist.
         """
         for key, value in data.items():
             self.data[key] = value
+        return True
 
-    def override(self, data: Dict[str, Any]):
+    def override(self, data: Dict[str, Any]) -> bool:
         """Override the dictionary content with new data.
 
         Args:
             data (Dict[str, Any]): The new data to replace existing content.
+
+        Returns:
+            bool: True; in-memory dictionaries cannot fail to persist.
         """
         self.data = data
+        return True
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get a value from the dictionary.
@@ -101,36 +109,58 @@ class PersistentDict(LocalDict):
         except json.JSONDecodeError:
             # Handle corrupted or invalid JSON gracefully
             init_data = {}
-        self.update(init_data)
+        # Load the file content first and touch the file afterwards. Loading via
+        # update() would roll the loaded state back when the write fails (for
+        # example on a read-only volume), leaving a metadata file that exists on
+        # disk but is empty in memory.
+        super().update(init_data)
+        self._persist()
 
-    def override(self, data: Dict[str, Any]):
+    def override(self, data: Dict[str, Any]) -> bool:
         """Override the dictionary content and persist to file.
 
         Args:
             data (Dict[str, Any]): The new data to replace existing content.
-        """
-        super().override(data)
-        self._persist()
 
-    def update(self, data: Dict[str, Any]):
+        Returns:
+            bool: True if the new state reached the file, False otherwise.
+        """
+        previous = self.data
+        super().override(data)
+        if not self._persist():
+            self.data = previous
+            return False
+        return True
+
+    def update(self, data: Dict[str, Any]) -> bool:
         """Update the dictionary and persist to file.
 
         Args:
             data (Dict[str, Any]): The data to merge.
-        """
-        super().update(data)
-        self._persist()
 
-    def _persist(self):
+        Returns:
+            bool: True if the new state reached the file, False otherwise.
+        """
+        previous = copy.deepcopy(self.data)
+        super().update(data)
+        if not self._persist():
+            self.data = previous
+            return False
+        return True
+
+    def _persist(self) -> bool:
         """Persist the current state to file.
 
         Note:
             This performs a full serialization and write of the dictionary.
             Suitable for metadata which is typically small and infrequently updated.
             FileStore.put ensures atomic writes.
+
+        Returns:
+            bool: True if the write succeeded, False otherwise.
         """
         bytes_data = json.dumps(self.data).encode()
-        self.storage.put(self.path, bytes_data)
+        return self.storage.put(self.path, bytes_data)
 
     def drop(self):
         """Clear the dictionary content and delete the persistence file."""

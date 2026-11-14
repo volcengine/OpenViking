@@ -143,6 +143,9 @@ class CollectionMeta:
 
         Returns:
             bool: True if update was successful, False if validation failed.
+
+        Raises:
+            RuntimeError: If the updated metadata cannot be persisted.
         """
         if not validation.is_valid_collection_meta_data_for_update(
             additional_user_meta, self.fields_dict
@@ -151,8 +154,11 @@ class CollectionMeta:
         user_meta = CollectionMeta._get_user_meta(self.inner_meta)
         user_meta = recursive_update_dict(user_meta, additional_user_meta)
         new_inner_meta = CollectionMeta._build_inner_meta(user_meta)
+        previous_inner_meta = self.inner_meta
         self.inner_meta = new_inner_meta
-        self.__idict.override(new_inner_meta)
+        if not self.__idict.override(new_inner_meta):
+            self.inner_meta = previous_inner_meta
+            raise RuntimeError("Failed to persist collection metadata")
         return True
 
     def get_raw_copy(self) -> Dict[str, Any]:
