@@ -452,6 +452,11 @@ class MarkdownParser(BaseParser):
             split_content=kwargs.get("split_content", True),
         )
 
+        # A planned path must be unique within this parse: two sibling sections
+        # with the same sanitized title would otherwise overwrite each other, and
+        # merged groups could collide on the same filename (issue #7182).
+        ops = self._deduplicate_layout_paths(ops)
+
         return _Layout(
             temp_uri=temp_uri,
             root_dir=root_dir,
@@ -1052,6 +1057,39 @@ class MarkdownParser(BaseParser):
             if new_filename not in used_names:
                 return new_filename
             counter += 1
+
+    @staticmethod
+    def _deduplicate_layout_paths(ops: List[_LayoutOp]) -> List[_LayoutOp]:
+        """Give every planned path a distinct URI within one parse (issue #7182).
+
+        Sibling sections whose sanitized titles match are planned at the same
+        ``<parent>/<name>.md`` URI, and merged groups can collide too, so the later
+        write silently replaced the earlier one. Rename duplicates with the same
+        suffix scheme :meth:`_deduplicate_filename` uses for images, and remap the
+        operations planned under a renamed directory.
+        """
+        used: set[str] = set()
+        renames: Dict[str, str] = {}
+        deduplicated: List[_LayoutOp] = []
+        for op in ops:
+            uri = op.uri
+            for old, new in renames.items():
+                if uri == old or uri.startswith(old + "/"):
+                    uri = new + uri[len(old):]
+                    break
+            if op.kind == "mkdir":
+                if uri in used:
+                    renamed = MarkdownParser._deduplicate_filename(uri, used)
+                    renames[op.uri] = renamed
+                    uri = renamed
+                used.add(uri)
+                deduplicated.append(_LayoutOp("mkdir", uri, exist_ok=op.exist_ok))
+            else:
+                if uri in used:
+                    uri = MarkdownParser._deduplicate_filename(uri, used)
+                used.add(uri)
+                deduplicated.append(_LayoutOp("write", uri, op.content, op.exist_ok))
+        return deduplicated
 
     def _sanitize_for_path(self, text: str, max_length: int = 50) -> str:
         safe = re.sub(
@@ -1658,9 +1696,14 @@ class MarkdownParser(BaseParser):
         count = len(names)
         max_len = self.MAX_MERGED_FILENAME_LENGTH
 
-        # Build a content-aware hash from ALL section names AND indices to guarantee
-        # uniqueness even when different merge groups share the same heading names.
-        full_key = "_".join(f"{n}:{i}" for n, _, i in sections)
+        # Build a content-aware hash from ALL section names, contents and sizes to
+        # guarantee uniqueness even when different merge groups share the same
+        # heading names and lengths (issue #7182: the third tuple element is the
+        # character count, so names+lengths alone were not unique).
+        full_key = "_".join(
+            f"{n}:{i}:{hashlib.sha256((content or '').encode()).hexdigest()[:8]}"
+            for n, content, i in sections
+        )
         hash_suffix = hashlib.sha256(full_key.encode()).hexdigest()[:8]
 
         if count == 1:
