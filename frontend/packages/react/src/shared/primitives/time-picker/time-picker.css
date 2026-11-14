@@ -1,0 +1,94 @@
+/* Adapted from Arco Design TimePicker/style/{index,token}.less (MIT),
+ * commit 4e087a0fe7d5ae2f222fbce4a9518ba047b01772. See LICENSE.arco-design.
+ * Retains 64px columns, 224px scrolling height, 24px cells and 4px row spacing.
+ * Colors use the package theme; focus follows the shared Input halo. */
+.ov-time-picker {
+  min-width: 0;
+}
+.ov-time-picker__clock {
+  width: 16px;
+  height: 16px;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+}
+.ov-time-picker__clock path {
+  stroke: currentColor;
+}
+.ov-time-picker__popup.ov-popover {
+  --ov-ui-time-picker-column-height: 224px;
+  --ov-ui-time-picker-cell-height: 24px;
+  --ov-ui-time-picker-cell-spacing: 4px;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  box-shadow: var(--ov-ui-overlay-shadow-default);
+}
+.ov-time-picker__panel {
+  position: relative;
+  display: flex;
+}
+.ov-time-picker__list {
+  box-sizing: border-box;
+  width: 64px;
+  height: var(--ov-ui-time-picker-column-height);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+.ov-time-picker__list::-webkit-scrollbar {
+  width: 0;
+}
+.ov-time-picker__list:not(:last-child) {
+  border-inline-end: 1px solid
+    var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+}
+.ov-time-picker__list ul {
+  position: relative;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ov-time-picker__list ul::after {
+  display: block;
+  width: 100%;
+  height: calc(
+    var(--ov-ui-time-picker-column-height) -
+      var(--ov-ui-time-picker-cell-height) -
+      var(--ov-ui-time-picker-cell-spacing)
+  );
+  content: '';
+}
+.ov-time-picker__cell {
+  padding: calc(var(--ov-ui-time-picker-cell-spacing) / 2) 4px;
+  outline: none;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  font-weight: 500;
+  text-align: center;
+  cursor: pointer;
+}
+.ov-time-picker__cell-inner {
+  height: var(--ov-ui-time-picker-cell-height);
+  border-radius: 4px;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  line-height: var(--ov-ui-time-picker-cell-height);
+}
+.ov-time-picker__cell:not(.ov-time-picker__cell--selected):hover
+  .ov-time-picker__cell-inner,
+.ov-time-picker__cell--selected .ov-time-picker__cell-inner {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+}
+.ov-time-picker__cell:focus-visible .ov-time-picker__cell-inner {
+  box-shadow:
+    inset 0 0 0 1px var(--ov-ui-color-focus, var(--ov-ui-focus-default)),
+    0 0 0 2px var(--ov-ui-color-focus-ring, var(--ov-ui-focus-ring-default));
+}
+@media (forced-colors: active) {
+  .ov-time-picker__cell:focus-visible .ov-time-picker__cell-inner {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+}

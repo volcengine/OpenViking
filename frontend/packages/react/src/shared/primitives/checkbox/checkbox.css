@@ -126,8 +126,16 @@
     var(--ov-ui-checkbox-disabled-icon-default)
   );
 }
-
 .ov-checkbox > input[type='checkbox']:focus-visible + .ov-checkbox__mask {
-  outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
-  outline-offset: 1px;
+  border-color: var(--ov-ui-color-focus, var(--ov-ui-focus-default));
+  outline: none;
+  box-shadow: 0 0 0 2px
+    var(--ov-ui-color-focus-ring, var(--ov-ui-focus-ring-default));
+}
+
+@media (forced-colors: active) {
+  .ov-checkbox > input[type='checkbox']:focus-visible + .ov-checkbox__mask {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
 }

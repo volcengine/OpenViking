@@ -80,17 +80,11 @@ test('frequency changes preserve the weekday and time; disabled fields close the
     assert.equal(weekday(view).textContent, 'Friday');
     await view.render(render());
     await click(time(view));
-    assert.ok(document.querySelector('.ov-viking-bot__schedule-popup'));
+    assert.ok(document.querySelector('.ov-time-picker__popup'));
     await view.render(render({ submitting: true }));
-    assert.equal(
-      document.querySelector('.ov-viking-bot__schedule-popup'),
-      null,
-    );
+    assert.equal(document.querySelector('.ov-time-picker__popup'), null);
     await view.render(render());
-    assert.equal(
-      document.querySelector('.ov-viking-bot__schedule-popup'),
-      null,
-    );
+    assert.equal(document.querySelector('.ov-time-picker__popup'), null);
     await submit(view);
     assert.deepEqual(answers.at(-1), {
       kind: 'schedule',
@@ -128,10 +122,7 @@ test('time validation, keyboard panel selection, no-schedule answers and cancell
     await click(document.activeElement);
     assert.equal(time(view).value, '17:45');
     await key(document.activeElement, 'Escape');
-    assert.equal(
-      document.querySelector('.ov-viking-bot__schedule-popup'),
-      null,
-    );
+    assert.equal(document.querySelector('.ov-time-picker__popup'), null);
     await submit(view);
     assert.deepEqual(answers.at(-1), {
       kind: 'schedule',

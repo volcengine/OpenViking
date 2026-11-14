@@ -114,8 +114,10 @@
   background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
 }
 .ov-notification__close:focus-visible {
-  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
-  outline-offset: 2px;
+  outline: none;
+  box-shadow:
+    inset 0 0 0 1px var(--ov-ui-color-focus, var(--ov-ui-focus-default)),
+    0 0 0 2px var(--ov-ui-color-focus-ring, var(--ov-ui-focus-ring-default));
 }
 .ov-notification-motion-enter {
   opacity: 0;
@@ -140,5 +142,12 @@
   .ov-notification-stack__item {
     transition: none;
     transform: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .ov-notification__close:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
   }
 }
