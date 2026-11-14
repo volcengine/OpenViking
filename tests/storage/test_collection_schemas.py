@@ -1329,7 +1329,10 @@ async def test_embedding_handler_honors_existing_record_id_override(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_embedding_handler_generates_id_and_reports_written_context(monkeypatch):
+@pytest.mark.parametrize("write_result", ["stored-record", "", None])
+async def test_embedding_handler_generates_id_and_reports_written_context(
+    monkeypatch, write_result
+):
     captured = {}
 
     class _CapturingVikingDB:
@@ -1338,7 +1341,7 @@ async def test_embedding_handler_generates_id_and_reports_written_context(monkey
 
         async def upsert(self, data, *, ctx, options=UpsertOptions()):
             captured["data"] = dict(data)
-            return data["id"]
+            return write_result
 
     embedder = _DummyEmbedder()
     monkeypatch.setattr(
@@ -1354,7 +1357,14 @@ async def test_embedding_handler_generates_id_and_reports_written_context(monkey
     result = await TextEmbeddingHandler(_CapturingVikingDB()).on_dequeue(payload)
 
     assert captured["data"]["id"] == vector_record_id("acct-new-id", "viking://resources/sample", 2)
-    assert result.value == {"vector_written": True}
+    if write_result:
+        assert result.outcome is ProcessOutcome.SUCCESS
+        assert result.value == {"vector_written": True}
+    else:
+        assert result.outcome is ProcessOutcome.FAILED
+        assert result.value is None
+        assert result.errors
+        assert result.error and "no record ID" in result.error
 
 
 def test_context_collection_uses_acl_mode_and_excludes_parent_uri():
