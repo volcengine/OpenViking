@@ -180,7 +180,7 @@ class PromptManager:
             ValueError: If required variables are missing or invalid
         """
         template = self.load_template(prompt_id)
-        variables = variables or {}
+        variables = dict(variables) if variables is not None else {}
 
         # Apply defaults
         for var_def in template.variables:
