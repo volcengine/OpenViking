@@ -458,7 +458,57 @@
 }
 
 .studio-management-content {
-  padding: 32px 24px;
+  padding: 20px 16px;
+}
+
+.studio-shell {
+  padding-inline: env(safe-area-inset-left) env(safe-area-inset-right);
+  padding-block: env(safe-area-inset-top) env(safe-area-inset-bottom);
+}
+
+.studio-mobile-sidebar {
+  padding-block: env(safe-area-inset-top) env(safe-area-inset-bottom);
+  padding-inline-start: env(safe-area-inset-left);
+}
+
+.studio-mobile-sidebar > [data-slot='sheet-close'] {
+  top: calc(12px + env(safe-area-inset-top));
+}
+
+@media (width < 48rem) {
+  .studio-header-scope .ov-scope-switcher__trigger {
+    gap: 4px;
+    padding-inline: 6px;
+  }
+}
+
+/* ScopeSwitcher already docks the dropdown to the bottom at <= 600px. */
+@media (width <= 600px) {
+  .studio-header-scope .ov-scope-switcher__panel,
+  .studio-header-scope
+    .ov-scope-switcher__level:last-child:not(:first-child)
+    .ov-scope-switcher__panel {
+    inset-inline: max(16px, env(safe-area-inset-left))
+      max(16px, env(safe-area-inset-right));
+    bottom: max(16px, env(safe-area-inset-bottom));
+  }
+}
+
+@media (600px < width < 48rem) {
+  .studio-header-scope {
+    position: relative;
+  }
+  .studio-header-scope .ov-scope-switcher__level {
+    position: static;
+  }
+  .studio-header-scope .ov-scope-switcher__panel,
+  .studio-header-scope
+    .ov-scope-switcher__level:last-child:not(:first-child)
+    .ov-scope-switcher__panel {
+    inset-inline: 0 auto;
+    max-width: 100%;
+    max-height: min(420px, calc(100dvh - 8rem));
+  }
 }
 
 @media (min-width: 768px) {
@@ -1152,9 +1202,11 @@ button.users-space-trigger:focus-visible {
   --studio-canvas: #f6f6fc;
   --muted-foreground: #787c91;
 }
-[data-workbench='true'] > header {
-  height: 60px;
-  padding: 0 20px;
+@media (min-width: 768px) {
+  [data-workbench='true'] > header {
+    height: 60px;
+    padding: 0 20px;
+  }
 }
 [data-workbench='true'] .filesystem-preview [data-file-toolbar] button {
   height: 28px;

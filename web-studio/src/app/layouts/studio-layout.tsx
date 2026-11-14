@@ -19,6 +19,7 @@ import {
   SidebarContent,
   SidebarInset,
   SidebarProvider,
+  useSidebar,
 } from '#/shared/ui/sidebar'
 import { useRouterState } from '@tanstack/react-router'
 import * as React from 'react'
@@ -73,6 +74,8 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
   const filesystemMode = surface === '/filesystem'
   const tasksMode = surface === '/tasks'
   const workbenchChrome = filesystemMode || tasksMode
+  const fillContent =
+    filesystemMode || surface === '/sessions' || surface === '/vikingbot'
 
   return (
     <StudioHeaderActionsContext.Provider value={headerActions}>
@@ -87,8 +90,9 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
             : undefined
         }
         open={managementMode}
-        className="flex h-svh min-h-0 flex-col overflow-hidden bg-[#f3f3fa] dark:bg-sidebar"
+        className="studio-shell flex h-dvh min-h-0 flex-col overflow-hidden bg-[#f3f3fa] dark:bg-sidebar"
       >
+        <CloseMobileNavigation pathname={pathname} />
         <StudioHeader
           actionsRef={setHeaderActions}
           managementMode={managementMode}
@@ -100,11 +104,7 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
         />
         <div className="studio-layout-body flex min-h-0 flex-1">
           {managementMode ? (
-            <Sidebar
-              variant="sidebar"
-              collapsible="none"
-              className="top-14 h-[calc(100svh-3.5rem)]"
-            >
+            <Sidebar variant="sidebar">
               <SidebarContent className="gap-0 py-1">
                 {!isGatewayHost ? (
                   <div className="px-3 pb-4">
@@ -128,17 +128,17 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
           ) : null}
 
           <SidebarInset
-            className="min-h-0 flex-1 overflow-hidden rounded-none border-0 bg-background shadow-none ring-0 data-[filesystem=true]:bg-transparent md:m-0 md:ml-0"
+            className="min-h-0 min-w-0 flex-1 overflow-hidden rounded-none border-0 bg-background shadow-none ring-0 data-[filesystem=true]:bg-transparent md:m-0 md:ml-0"
             data-filesystem={filesystemMode}
           >
             <ScrollArea className="min-h-0 flex-1">
               <div
                 className={
-                  filesystemMode
-                    ? 'flex w-full flex-col'
+                  fillContent
+                    ? 'flex h-full w-full min-w-0 flex-col'
                     : managementMode
                       ? 'studio-management-content flex w-full min-w-0 flex-col gap-10'
-                      : 'flex w-full flex-col gap-6 px-4 py-6 md:px-8 lg:px-12'
+                      : 'flex w-full min-w-0 flex-col gap-6 px-4 py-4 sm:py-6 md:px-8 lg:px-12'
                 }
               >
                 {children}
@@ -151,4 +151,12 @@ export function StudioLayout({ children }: { children: React.ReactNode }) {
       </SidebarProvider>
     </StudioHeaderActionsContext.Provider>
   )
+}
+
+function CloseMobileNavigation({ pathname }: { pathname: string }) {
+  const { isMobile, setOpenMobile } = useSidebar()
+  React.useEffect(() => {
+    setOpenMobile(false)
+  }, [isMobile, pathname, setOpenMobile])
+  return null
 }

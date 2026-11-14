@@ -48,16 +48,20 @@ export function StudioHeader({
   return (
     <header
       data-admin-header={managementMode}
-      className="z-20 flex h-14 shrink-0 items-center justify-between gap-2 bg-transparent px-3 sm:gap-4 sm:px-4"
+      className="relative z-20 grid shrink-0 grid-cols-[auto_auto_1fr] items-center gap-x-2 gap-y-1.5 bg-transparent px-3 py-2 md:flex md:h-14 md:justify-between md:gap-4 md:px-4 md:py-0"
     >
-      <div className="flex min-w-0 items-center gap-2 sm:gap-4">
+      <div className="contents md:flex md:min-w-0 md:items-center md:gap-4">
         <SidebarTrigger
-          className={managementMode ? 'shrink-0 md:hidden' : 'hidden'}
+          className={
+            managementMode
+              ? 'col-start-1 row-start-1 size-10 md:hidden'
+              : 'hidden'
+          }
         />
         <Link
           to={managementMode ? '/admin' : '/'}
           aria-label={t('studioSettings.brand')}
-          className="flex shrink-0 items-center gap-1.5 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className={`row-start-1 flex shrink-0 items-center gap-1.5 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring ${managementMode ? 'col-start-2' : 'col-start-1'}`}
         >
           <OpenVikingMark className="size-8 sm:size-9 lg:hidden" />
           <img
@@ -77,15 +81,17 @@ export function StudioHeader({
             className="hidden h-7 w-auto dark:lg:block"
           />
         </Link>
-        <StudioScopeSwitcher
-          key={`${identityScopeKey}:${managementMode}:${showAccountScope}`}
-          settingsPath={settingsPath}
-          managementMode={managementMode}
-          showAccountScope={showAccountScope && !managementMode}
-        />
+        <div className="studio-header-scope col-span-full row-start-2 flex min-w-0">
+          <StudioScopeSwitcher
+            key={`${identityScopeKey}:${managementMode}:${showAccountScope}`}
+            settingsPath={settingsPath}
+            managementMode={managementMode}
+            showAccountScope={showAccountScope && !managementMode}
+          />
+        </div>
       </div>
       <div
-        className={`flex shrink-0 items-center gap-1.5 ${managementMode ? 'sm:gap-3' : 'sm:gap-2'}`}
+        className={`col-start-3 row-start-1 flex shrink-0 items-center justify-self-end gap-1.5 ${managementMode ? 'sm:gap-3' : 'sm:gap-2'}`}
       >
         {workbenchChrome ? (
           <div className="flex h-8 min-w-8 shrink-0 items-center justify-center">

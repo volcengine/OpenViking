@@ -1004,7 +1004,7 @@ function FilesystemMobileActionScreen({
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex min-h-0 flex-col bg-background xl:hidden">
+    <div className="fixed inset-0 z-50 flex min-h-0 flex-col bg-background pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] xl:hidden">
       <FilesystemActionContent
         activePanel={activePanel}
         onOpenResource={onOpenResource}

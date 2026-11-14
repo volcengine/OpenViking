@@ -1,6 +1,6 @@
 .workbench {
-  height: calc(100svh - 60px);
   min-height: 0;
+  flex: 1;
   padding: 0 16px 8px;
   display: flex;
   flex-direction: column;
@@ -259,17 +259,6 @@
 @media (max-width: 1023px) {
   .layout {
     flex-direction: column;
-  }
-  .fileBrowser {
-    flex-direction: column;
-  }
-  .fileBrowser :global(.ov-file-browser__tree) {
-    width: 100%;
-    min-height: 144px;
-    max-height: 35%;
-  }
-  .fileBrowser :global(.ov-file-browser__resizer) {
-    display: none;
   }
   .workbench {
     padding: 0 8px 8px;
