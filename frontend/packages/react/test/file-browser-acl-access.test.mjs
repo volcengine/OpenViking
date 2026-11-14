@@ -20,9 +20,7 @@ test('native group summaries become group principals and already granted groups 
   const view = await mount(tree(fetch));
   try {
     await open();
-    await act(async () =>
-      document.querySelector('.ov-file-browser-acl__add input').focus(),
-    );
+    await click(document.querySelector('.ov-file-browser-acl__add input'));
     await click(button('Group'));
     await act(async () => new Promise((resolve) => setTimeout(resolve, 240)));
     assert.ok(

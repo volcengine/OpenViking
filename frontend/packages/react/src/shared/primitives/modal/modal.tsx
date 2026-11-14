@@ -46,6 +46,7 @@ export function Modal({
   children,
   closeLabel,
   closeIcon,
+  maskClosable = true,
 }: ModalProps) {
   const locale = useLocale(localeProp);
   const text = resolveLocale({ 'en-US': enUS, 'zh-CN': zhCN }, locale);
@@ -122,7 +123,7 @@ export function Modal({
           aria-label={label}
           aria-hidden="true"
           tabIndex={-1}
-          onClick={onClose}
+          onClick={maskClosable ? onClose : undefined}
         />
       </CSSTransition>
       <CSSTransition

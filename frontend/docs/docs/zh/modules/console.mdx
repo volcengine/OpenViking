@@ -106,19 +106,22 @@ import '@openviking/react/modules/console/style.css';
 | ----------- | ---------------- | -------------------------------- | ------ |
 | sessionId   | 会话标识         | `string`                         | 必填   |
 | text        | 提交的正文       | `string`                         | 必填   |
-| attachments | 宿主已上传的附件 | `readonly VikingBotAttachment[]` | 必填   |
+| attachments | 已准备发送的附件 | `readonly VikingBotAttachment[]` | 必填   |
 | references  | 资源引用         | `readonly VikingBotReference[]`  | -      |
 
 ### VikingBotChatService
 
-| 参数          | 说明                                                  | 类型                                                                                    | 默认值 |
-| ------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------- | ------ |
-| stream        | 流式请求；必须发出 complete 或 interrupted 终止事件   | `(input: VikingBotChatInput, signal: AbortSignal) => AsyncIterable<VikingBotChatEvent>` | 必填   |
-| createSession | 新建会话                                              | `(signal: AbortSignal) => Promise<VikingBotSession>`                                    | 必填   |
-| loadMessages  | 读取完整会话历史                                      | `(id: string, signal: AbortSignal) => Promise<readonly VikingBotMessage[]>`             | 必填   |
-| saveMessage   | 逐条保存；后端自动持久化时省略，避免重复              | `(id: string, message: VikingBotMessage, signal: AbortSignal) => Promise<void>`         | 可选   |
-| interrupt     | 实际中断后端生成；与本地断开连接不同                  | `(id: string, signal: AbortSignal) => Promise<{ interrupted: boolean }>`                | 可选   |
-| steer         | 向当前流追加输入；accepted 仅表示接受，不表示回复完成 | `(input: VikingBotChatInput, signal: AbortSignal) => Promise<{ accepted: boolean }>`    | 可选   |
+| 参数             | 说明                                                                     | 类型                                                                                    | 默认值 |
+| ---------------- | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- | ------ |
+| stream           | 流式请求；必须发出 complete 或 interrupted 终止事件                      | `(input: VikingBotChatInput, signal: AbortSignal) => AsyncIterable<VikingBotChatEvent>` | 必填   |
+| createSession    | 新建会话                                                                 | `(signal: AbortSignal) => Promise<VikingBotSession>`                                    | 必填   |
+| loadMessages     | 读取完整会话历史                                                         | `(id: string, signal: AbortSignal) => Promise<readonly VikingBotMessage[]>`             | 必填   |
+| attachmentUpload | 启用添加资源按钮；发送时将 `upload` 返回的标识传给 `attachment.uploadId` | `VikingBotAttachmentUpload`                                                             | 可选   |
+| saveMessage      | 逐条保存；后端自动持久化时省略，避免重复                                 | `(id: string, message: VikingBotMessage, signal: AbortSignal) => Promise<void>`         | 可选   |
+| interrupt        | 实际中断后端生成；与本地断开连接不同                                     | `(id: string, signal: AbortSignal) => Promise<{ interrupted: boolean }>`                | 可选   |
+| steer            | 向当前流追加输入；accepted 仅表示接受，不表示回复完成                    | `(input: VikingBotChatInput, signal: AbortSignal) => Promise<{ accepted: boolean }>`    | 可选   |
+
+`VikingBotAttachmentUpload` 接收可选的文件选择器过滤器 `accept`，以及必填的 `upload(file, signal)`，它返回已上传文件的标识。文件选择器不会过滤拖入的文件，适配器仍需验证文件。附件上传完成后才可发送；移除附件、切换会话会取消上传。如果宿主提供草稿附件或文件选择回调，则使用宿主的配置。
 
 ### VikingBotSessionService
 
@@ -240,7 +243,7 @@ Console 按适配器是否提供方法决定停止与追问能力。`steer` 返�
 
 发送失败的提问和客户端错误保留在消息列表中。会话尚未创建时，下次发送会补建会话，将未送达的用户输入作为上下文合并到同一次聊天请求，分别保存原始用户消息；错误提示不会保存或发送给模型。原生网关只接收单条 `message`，因此仅补写会话消息不能恢复模型上下文。 未送达的输入会保留到收到首个流事件；在此之前失败，下次发送仍会携带这些上下文。生成开始后不再重放旧输入。
 
-- 默认发送原生 VikingBot 对话请求。传入 `conversation.messages` 或 `conversation.onSend` 时改由宿主管理对话；附件上传仍由宿主完成。
+- 默认发送原生 VikingBot 对话请求。传入 `conversation.messages` 或 `conversation.onSend` 时改由宿主管理对话和附件状态。
 - 宿主查询 Bot 状态后设置 `conversation.isAvailable` 和 `conversation.unavailableMessage`，不可用时输入区被禁用并显示说明。
 - 命令只在用户提交时发送请求，挂载时不请求。同一实例一次只执行一条命令，执行期间输入框被禁用。
 - 命令失败时，错误显示在对应的记录里，修正后重新提交即可；写入类命令失败时服务端可能已经接收，重新提交前先核对结果。

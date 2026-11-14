@@ -112,7 +112,6 @@
 }
 
 .ov-file-preview__tab:hover:not(:disabled) {
-  background: var(--ov-ui-file-preview-row-hover);
   color: var(--ov-ui-file-preview-text);
 }
 

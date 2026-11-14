@@ -27,6 +27,7 @@ export function VikingBotContent({
   streaming,
   draft,
   attachments,
+  accept,
   isSending,
   canSendWhileStreaming,
   isSubmitting,
@@ -82,6 +83,10 @@ export function VikingBotContent({
     if (!isAvailable) return;
     shortcuts.select(item);
     inputRef.current?.focus();
+  };
+  const updateDraft = (draft: string) => {
+    shortcuts.tracker.edit(draft);
+    onDraftChange?.(draft);
   };
   const renderedHeader =
     header !== undefined ? (
@@ -177,6 +182,7 @@ export function VikingBotContent({
                     ref={inputRef}
                     value={draft}
                     attachments={attachments}
+                    accept={accept}
                     disabled={!isAvailable}
                     disabledReason={disabledReason}
                     isSending={isSending}
@@ -189,14 +195,7 @@ export function VikingBotContent({
                         : undefined
                     }
                     onQuickInputSelect={selectQuickInput}
-                    onValueChange={
-                      onDraftChange
-                        ? (next) => {
-                            shortcuts.tracker.edit(next);
-                            onDraftChange(next);
-                          }
-                        : undefined
-                    }
+                    onValueChange={onDraftChange && updateDraft}
                     onFilesAdded={onFilesAdded}
                     onAttachmentRemove={onAttachmentRemove}
                     onOpenUri={onOpenUri}

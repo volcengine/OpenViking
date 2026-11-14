@@ -10,6 +10,7 @@ export type {
   ConsoleTaskSnapshot,
 } from './types.js';
 export type {
+  VikingBotAttachmentUpload,
   VikingBotChatEvent,
   VikingBotChatInput,
   VikingBotChatService,

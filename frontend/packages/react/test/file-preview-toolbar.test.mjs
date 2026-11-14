@@ -7,6 +7,7 @@ import {
   ok,
   recordingFetch,
   settle,
+  setTextarea,
 } from './helpers/module-dom.mjs';
 import { act, createElement } from 'react';
 
@@ -81,16 +82,42 @@ test('standalone preview offers editing only on the active editable level', asyn
   }
 });
 
-test('FileBrowser confirms a version note before writing and snapshots only the edited file', async () => {
+test('FileBrowser waits before snapshotting', { timeout: 5000 }, async () => {
   const uri = 'viking://resources/guide.md';
   let fullReads = 0;
-  const write = deferred();
+  let taskReads = 0;
+  const processing = deferred();
+  const taskPolled = deferred();
+  let fileLocked = false;
   const requests = recordingFetch(({ path, body: request }) => {
     if (path.endsWith('/fs/ls')) return ok([{ uri, isDir: false }]);
     if (path.endsWith('/fs/stat')) return ok({ uri, isDir: false });
     if (path.endsWith('/content/read')) return ok('');
+    if (path.endsWith('/tasks/content-write')) {
+      if (++taskReads === 1) {
+        return ok({ task_id: 'content-write', status: 'running' });
+      }
+      taskPolled.resolve();
+      return processing.promise.then(() => {
+        fileLocked = false;
+        return ok({ task_id: 'content-write', status: 'completed' });
+      });
+    }
     if (path.endsWith('/snapshot/commit')) {
       assert.deepEqual(request, { message: 'Update guide', paths: [uri] });
+      if (fileLocked) {
+        return Response.json(
+          {
+            status: 'error',
+            error: {
+              code: 'CONFLICT',
+              message: 'A snapshot path is being processed',
+              details: { uri, conflict_type: 'path_busy', retryable: true },
+            },
+          },
+          { status: 409 },
+        );
+      }
       return ok({ result: 'created', commit_oid: 'commit-1' });
     }
     if (path.endsWith('/content/write')) {
@@ -99,7 +126,8 @@ test('FileBrowser confirms a version note before writing and snapshots only the 
       assert.equal(request.content, '# Updated');
       assert.equal(request.version_message, undefined);
       assert.equal(request.expected_content_sha256, undefined);
-      return write.promise;
+      fileLocked = true;
+      return ok({ task_id: 'content-write' });
     }
     return ok([]);
   });
@@ -136,37 +164,32 @@ test('FileBrowser confirms a version note before writing and snapshots only the 
       document.querySelector('.ov-file-preview-version-note [role="dialog"]');
     assert.ok(dialog());
     assert.equal(requests.countOf('/api/v1/content/write'), 0);
-    await act(async () =>
-      [...dialog().querySelectorAll('button')]
-        .find((node) => node.textContent === 'Cancel')
-        .click(),
-    );
-    assert.equal(dialog(), null);
-    assert.equal(
-      view.container.querySelector('.cm-content')?.textContent,
-      '# Updated',
-    );
-
-    await click(view, 'Save');
-    const note = dialog().querySelector('textarea');
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(
-        window.HTMLTextAreaElement.prototype,
-        'value',
-      ).set.call(note, ' Update guide ');
-      note.dispatchEvent(new window.Event('input', { bubbles: true }));
-    });
+    await setTextarea(dialog().querySelector('textarea'), ' Update guide ');
     await act(async () => dialog().querySelector('[type="submit"]').click());
     assert.equal(requests.countOf('/api/v1/content/write'), 1);
     assert.equal(requests.countOf('/api/v1/snapshot/commit'), 0);
-    await act(async () => write.resolve(await ok({})));
+    assert.equal(taskReads, 1);
+    await act(async () => {
+      await taskPolled.promise;
+      assert.equal(requests.countOf('/api/v1/snapshot/commit'), 0);
+      processing.resolve();
+    });
     await settle();
     assert.equal(dialog(), null);
+    assert.doesNotMatch(
+      view.container.textContent,
+      /a new version was not created/,
+    );
     assert.deepEqual(
       requests.calls
-        .filter(({ path }) => /\/(write|commit)$/.test(path))
+        .filter(({ path }) => /\/(write|commit|content-write)$/.test(path))
         .map(({ path }) => path),
-      ['/api/v1/content/write', '/api/v1/snapshot/commit'],
+      [
+        '/api/v1/content/write',
+        '/api/v1/tasks/content-write',
+        '/api/v1/tasks/content-write',
+        '/api/v1/snapshot/commit',
+      ],
     );
     assert.equal(requests.countOf('/api/v1/content/read'), reads + 1);
     await view.render(render(true));

@@ -13,6 +13,7 @@ import { resolveVikingBotLabels } from './labels.js';
 import { VikingBotSubmitActions } from './composer-controls.js';
 import { composerEvents } from './composer-events.js';
 import { ComposerHeader } from './composer-header.js';
+import { attachmentsAreReady } from './composer-attachments.js';
 import { composerMention } from './composer-references.js';
 import { ComposerFooter } from './composer-footer.js';
 import { QuickInputs } from './quick-inputs.js';
@@ -70,8 +71,10 @@ export const VikingBotComposerView = forwardRef<
     isSubmitting ||
     (isSending && !canSendWhileStreaming),
   );
-  const empty =
-    !value.trim() && !attachments.length && !references?.selected.length;
+  const canSubmit =
+    (value.trim() || attachments.length || references?.selected.length) &&
+    attachmentsAreReady(attachments);
+  const isSubmitMode = !isSending || canSendWhileStreaming;
   const remaining = Math.max(0, maxAttachments - attachments.length);
 
   const setText = useCallback(
@@ -97,9 +100,10 @@ export const VikingBotComposerView = forwardRef<
   /** 按剩余额度截断并上报文件。 */
   const reportFiles = useCallback(
     (files: readonly File[]) => {
-      if (files.length && remaining) onFilesAdded?.(files.slice(0, remaining));
+      if (!locked && files.length && remaining)
+        onFilesAdded?.(files.slice(0, remaining));
     },
-    [onFilesAdded, remaining],
+    [locked, onFilesAdded, remaining],
   );
 
   useImperativeHandle(ref, () => ({
@@ -112,7 +116,7 @@ export const VikingBotComposerView = forwardRef<
   }));
 
   const submit = () => {
-    if (!onSend || locked || empty) return;
+    if (!onSend || locked || !canSubmit) return;
     const text = toPlainText(
       senderRef.current?.getValue() ?? toRichText(value),
     ).trim();
@@ -156,13 +160,7 @@ export const VikingBotComposerView = forwardRef<
         className="ov-viking-bot__sender"
         defaultContent={toRichText(value)}
         sending={isSending && !canSendWhileStreaming}
-        sendDisabled={
-          disabled ||
-          !onValueChange ||
-          isSubmitting ||
-          (empty && (!isSending || canSendWhileStreaming)) ||
-          ((!isSending || canSendWhileStreaming) && !onSend)
-        }
+        sendDisabled={isSubmitMode ? locked || !canSubmit || !onSend : false}
         onContentChange={(content) => {
           if (!onValueChange || writing.current) return;
           const next = toPlainText(content);

@@ -76,6 +76,7 @@ import '@openviking/react/components/viking-bot/style.css';
 | streaming             | 助手仍在生成时已产生的片段，显示在 `insertIndex` 处；回复结束后由宿主并入 `messages` 并清除                                    | `VikingBotStreamingState`                                             | -                        |
 | draft                 | 输入框的草稿文本，受控；省略时不显示输入区，适用于只读会话                                                                     | `string`                                                              | -                        |
 | attachments           | 已选中的附件，显示在输入框上方                                                                                                 | `readonly VikingBotAttachment[]`                                      | -                        |
+| accept                | 文件选择器接受的类型                                                                                                           | `string`                                                              | -                        |
 | isSending             | 正在回复；停止与追加输入入口由 `onCancel` 和 `canSendWhileStreaming` 控制                                                      | `boolean`                                                             | `false`                  |
 | isSubmitting          | 追加输入正在等待后端接受，期间禁止重复发送                                                                                     | `boolean`                                                             | `false`                  |
 | canSendWhileStreaming | 生成中允许追加输入；由宿主映射服务的 `canSteer`                                                                                | `boolean`                                                             | `false`                  |
@@ -245,15 +246,16 @@ import '@openviking/react/components/viking-bot/style.css';
 
 ### VikingBotAttachment
 
-| 参数         | 说明                                                    | 类型                                             | 默认值 |
-| ------------ | ------------------------------------------------------- | ------------------------------------------------ | ------ |
-| key          | 附件的唯一标识                                          | `string`                                         | 必填   |
-| name         | 文件名                                                  | `string`                                         | 必填   |
-| status       | 上传状态；为 `'error'` 时在文件名后显示失败提示         | `'pending' \| 'uploading' \| 'ready' \| 'error'` | -      |
-| errorMessage | 上传失败时的提示，省略时显示 `labels.toolError`         | `string`                                         | -      |
-| previewUrl   | 预览地址，输入区不使用，原样回传给回调                  | `string`                                         | -      |
-| mimeType     | MIME 类型，输入区不使用，原样回传给回调                 | `string`                                         | -      |
-| sizeBytes    | 字节大小，未知时为 `null`，输入区不使用，原样回传给回调 | `number \| null`                                 | -      |
+| 参数         | 说明                                                         | 类型                                             | 默认值 |
+| ------------ | ------------------------------------------------------------ | ------------------------------------------------ | ------ |
+| key          | 附件的唯一标识                                               | `string`                                         | 必填   |
+| uploadId     | 上传服务返回的标识                                           | `string`                                         | -      |
+| name         | 文件名                                                       | `string`                                         | 必填   |
+| status       | 上传状态；上传中或失败时显示提示，并禁用发送                 | `'pending' \| 'uploading' \| 'ready' \| 'error'` | -      |
+| errorMessage | 上传失败时的提示，省略时显示 `labels.attachmentUploadFailed` | `string`                                         | -      |
+| previewUrl   | 预览地址，输入区不使用，原样回传给回调                       | `string`                                         | -      |
+| mimeType     | MIME 类型，输入区不使用，原样回传给回调                      | `string`                                         | -      |
+| sizeBytes    | 字节大小，未知时为 `null`，输入区不使用，原样回传给回调      | `number \| null`                                 | -      |
 
 ### VikingBotDraft
 

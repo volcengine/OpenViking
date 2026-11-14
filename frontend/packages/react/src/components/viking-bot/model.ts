@@ -225,6 +225,8 @@ export interface VikingBotStreamingState {
 export interface VikingBotAttachment {
   /** 附件唯一标识。Unique attachment key. */
   key: string;
+  /** 上传服务返回的标识。Identifier returned by the upload service. */
+  uploadId?: string;
   /** 文件名。File name. */
   name: string;
   /** 本地对象 URL 或宿主解析出的预览地址。Local object URL or a host-resolved preview link. */
@@ -283,6 +285,8 @@ export interface VikingBotLabels {
   attach?: string;
   /** 移除附件按钮文案。Remove-attachment button label. */
   removeAttachment?: string;
+  uploadingAttachment?: string;
+  attachmentUploadFailed?: string;
   /** 复制按钮文案。Copy button label. */
   copy?: string;
   /** 复制成功提示。Message shown after a successful copy. */

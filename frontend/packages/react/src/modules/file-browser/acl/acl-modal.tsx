@@ -10,8 +10,8 @@ import type {
 } from '../acl-types.js';
 import { AclAddPrincipal } from './acl-add-principal.js';
 import { AclConfirmation } from './acl-confirmation.js';
-import { AclEntry } from './acl-entry.js';
-import { levelLabel, type AclText } from './acl-labels.js';
+import { AclEntryList } from './acl-entry-list.js';
+import type { AclText } from './acl-labels.js';
 import { useAclReport } from './use-acl-report.js';
 
 export function AclModal({
@@ -22,6 +22,7 @@ export function AclModal({
   context,
   triggerRef,
   accountId,
+  userId,
   options,
   onClose,
   onUpdated,
@@ -33,6 +34,7 @@ export function AclModal({
   context: FileBrowserAclContext;
   triggerRef: RefObject<HTMLButtonElement | null>;
   accountId?: OvIdentityValue;
+  userId?: OvIdentityValue;
   options?: FileBrowserAclOptions;
   onClose: () => void;
   onUpdated: (report: FileBrowserAclReport) => void;
@@ -48,9 +50,10 @@ export function AclModal({
   });
   const disabled = Boolean(options?.readOnly) || model.phase !== 'ready';
   const entries = model.report?.effective_entries ?? [];
-  const direct = new Map(
-    model.report?.direct_entries.map((entry) => [entry.principal, entry.level]),
-  );
+  const administratorId = options?.administratorUserId?.trim();
+  const administrator = administratorId ? `user:${administratorId}` : undefined;
+  const currentUserId = typeof userId === 'string' ? userId.trim() : undefined;
+  const currentUser = currentUserId ? `user:${currentUserId}` : undefined;
   const wasConfirming = useRef(false);
   // useEffect 必要性：确认区卸载后将浏览器焦点放回仍存在的标题，
   // DOM 节点需提交后才可聚焦；每次确认切换重新判断，无订阅需要清理。
@@ -67,6 +70,7 @@ export function AclModal({
       triggerRef={triggerRef}
       className="ov-file-browser-acl"
       locale={locale}
+      maskClosable={false}
       onClose={() => {
         if (model.phase === 'saving') return;
         if (model.confirmation) model.cancel();
@@ -76,7 +80,6 @@ export function AclModal({
       <h2 ref={heading} tabIndex={-1} className="ov-file-browser-acl__title">
         {text.title}
       </h2>
-      <p className="ov-file-browser-acl__uri">{uri}</p>
       {model.error ? (
         <div className="ov-file-browser-acl__failure" role="alert">
           <p>{model.report ? text.saveFailed : text.loadFailed}</p>
@@ -125,6 +128,7 @@ export function AclModal({
           ) : null}
           <AclAddPrincipal
             entries={entries}
+            administratorId={administratorId}
             text={text}
             disabled={disabled}
             context={context}
@@ -132,56 +136,15 @@ export function AclModal({
             options={options}
             onAdd={(added) => model.change([...entries, ...added])}
           />
-          <ul
-            className="ov-file-browser-acl__entries"
-            aria-busy={model.phase === 'saving'}
-          >
-            <li className="ov-file-browser-acl__entry">
-              <span className="ov-file-browser-acl__avatar" aria-hidden="true">
-                A
-              </span>
-              <div className="ov-file-browser-acl__identity">
-                <span className="ov-file-browser-acl__name">
-                  {text.administrator}
-                </span>
-                <span className="ov-file-browser-acl__source">
-                  {text.administratorDescription}
-                </span>
-              </div>
-              <span className="ov-file-browser-acl__fixed">
-                {levelLabel('manage', text)}
-              </span>
-            </li>
-            {entries.map((entry) => (
-              <AclEntry
-                key={entry.principal}
-                entry={entry}
-                text={text}
-                disabled={disabled}
-                source={
-                  direct.get(entry.principal) === entry.level
-                    ? text.direct
-                    : text.inherited
-                }
-                onChange={(level) =>
-                  model.change(
-                    entries.map((item) =>
-                      item.principal === entry.principal
-                        ? { ...item, level }
-                        : item,
-                    ),
-                  )
-                }
-                onRemove={() =>
-                  model.change(
-                    entries.filter(
-                      (item) => item.principal !== entry.principal,
-                    ),
-                  )
-                }
-              />
-            ))}
-          </ul>
+          <AclEntryList
+            report={model.report}
+            administrator={administrator}
+            currentUser={currentUser}
+            disabled={disabled}
+            saving={model.phase === 'saving'}
+            text={text}
+            onChange={model.change}
+          />
         </>
       ) : null}
     </Modal>

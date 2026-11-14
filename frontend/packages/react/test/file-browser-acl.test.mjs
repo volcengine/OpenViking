@@ -56,12 +56,14 @@ test('an increase retains inheritance; a decrease requires confirmation and lang
   }
 });
 
-test('restore clears direct grants, reports removed principals, and uses native DELETE', async () => {
+test('restore clears direct grants using PUT when the gateway blocks DELETE', async () => {
   const report = { ...initial(), acl_mode: 'restricted' };
   const fetch = fixture((call) =>
     call.path.endsWith('/acl') && call.init.method === 'GET'
       ? ok(report)
-      : undefined,
+      : call.path.endsWith('/acl') && call.init.method === 'DELETE'
+        ? failure('ApiBlocked')
+        : undefined,
   );
   const view = await mount(tree(fetch));
   try {
@@ -72,9 +74,12 @@ test('restore clears direct grants, reports removed principals, and uses native 
       /user:bob/,
     );
     await click(button('Confirm'));
-    assert.equal(writes(fetch)[0].init.method, 'DELETE');
-    assert.equal(writes(fetch)[0].uri, URI);
-    assert.equal(writes(fetch)[0].body, undefined);
+    assert.equal(writes(fetch)[0].init.method, 'PUT');
+    assert.deepEqual(writes(fetch)[0].body, {
+      uri: URI,
+      acl_mode: 'inherit',
+      entries: [],
+    });
   } finally {
     await view.unmount();
   }
@@ -85,9 +90,7 @@ test('principal selection is native, paginated, and never requests credentials',
   const view = await mount(tree(fetch));
   try {
     await open();
-    await act(async () =>
-      document.querySelector('.ov-file-browser-acl__add input').focus(),
-    );
+    await click(document.querySelector('.ov-file-browser-acl__add input'));
     await act(async () => new Promise((resolve) => setTimeout(resolve, 240)));
     const request = fetch.calls.find((call) => call.path.endsWith('/users'));
     assert.equal(request.query.include_credentials, 'false');
