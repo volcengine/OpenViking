@@ -177,6 +177,47 @@ test('the real OV form accepts remote credentials before any IM questions or aut
   });
 });
 
+test('setup offers a custom soul URI on an older OV and uses it for the role seed', async (t) => {
+  const uri = 'viking://~/memories/primary-soul.md';
+  const h = harness(t, ['3', 'https://memory.example:9443', '1', 'private-key', 'team', 'owner', '',
+    'y', uri, '', '', '', '1', '2', 'y']);
+  h.options.configureOV = configureOpenViking;
+  h.options.detect.openViking = detectOpenViking;
+  h.options.fetchImpl = async (url) => {
+    if (!url.startsWith('https://memory.example:9443')) throw new Error('offline');
+    return Response.json({ status: 'ok', auth_mode: 'api_key', version: '0.5.4', result: [] });
+  };
+  assert.equal(await setupCommand(h.options), 0);
+  const [agent] = h.manifest().agents;
+  assert.equal(agent.soulUri, uri);
+  assert.match(h.written(), /低于 0\.5\.5/);
+  assert.match(h.written(), /要为这个实例设置自定义 soulUri 吗？/);
+  assert.deepEqual(h.souls, [
+    ['read', { configPath: agent.ovConfig, uri }],
+    ['write', { configPath: agent.ovConfig, uri, content: rolePresetText('colleague') }],
+  ]);
+
+  const declined = harness(t, ['n', '', '', '', '1', '2', 'y'], {
+    ov: { configPath: null, url: 'http://127.0.0.1:1933', usable: true, version: '0.5.4' },
+  });
+  assert.equal(await setupCommand(declined.options), 0);
+  assert.equal(declined.manifest().agents[0].soulUri, undefined);
+  assert.deepEqual(declined.souls.map(([kind, input]) => [kind, input.uri]), [
+    ['read', 'viking://~/memories/soul.md'], ['write', 'viking://~/memories/soul.md'],
+  ]);
+
+  // Changing an existing instance's OV settings offers the same protection,
+  // and the URI alone is enough to make Save available.
+  const edited = harness(t, ['2', '9', 'y', uri, '11'], {
+    ov: { configPath: null, url: 'http://127.0.0.1:1933', usable: true, version: '0.5.4' },
+  });
+  const before = existing(edited, {});
+  assert.equal(await setupCommand(edited.options), 0);
+  assert.deepEqual(edited.manifest().agents, [{ ...before, soulUri: uri }]);
+  assert.match(edited.written(), new RegExp(`Soul URI: viking://~/memories/soul\\.md → ${uri.replaceAll('.', '\\.')}`));
+  assert.deepEqual(edited.calls, [['restart', 'asd']]);
+});
+
 test('editing the OV connection drops the old peer and keeps the old file; Save applies it and Discard removes the pending copy', async (t) => {
   for (const save of [true, false]) {
     const h = harness(t, ['2', '9', '4', 'https://memory.example:9443', '1', 'new-key', '', '', '', save ? '11' : '12']);
