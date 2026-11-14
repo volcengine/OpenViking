@@ -473,29 +473,6 @@ export class ActionService {
     }
   }
 
-  // Lark pushes a message to the daemon two to four seconds after it exists,
-  // so the local fence cannot see what someone sent just before: two bots then
-  // both answer the same line. Asking Lark itself closes most of that gap. Only
-  // a Lark group or direct chat; anything the bot sent itself does not count.
-  // A failed lookup leaves the local fence alone in charge.
-  async assertFreshOnServer(fence, caller) {
-    if (this.isTimerReminder(fence) || !/^oc_/.test(fence.chat_id ?? '') || !fence.create_time_ms
-      || this.manifest(fence.connector_instance)?.name !== 'lark') return;
-    let data;
-    try {
-      data = await this.connectors.invoke(fence.connector_instance, 'chat.messages.newer', {
-        chat_id: fence.chat_id, thread_id: fence.thread_id ?? null, after_ms: Number(fence.create_time_ms) });
-    } catch (error) {
-      this.logger.warn('server_fence_failed', { error: safeError(error) });
-      return;
-    }
-    const newer = (data?.messages ?? []).filter((message) => message.message_id !== fence.message_id
-      && this.store.resolveMessageAuthor(message.message_id, fence.connector_instance)?.kind !== 'me');
-    if (!newer.length) return;
-    caller.trace.serverNewer = newer.length;
-    throw blocked('stale_decision', 'Delivery blocked: Lark already holds a newer message in this chat/thread that has not reached you yet. It arrives as a new input within seconds; decide on that one instead.');
-  }
-
   // A safety fuse, not a rule the agent works by: whether to answer a bot is
   // the model's call. Bots that keep answering each other would hold the one
   // runtime every chat shares, so with no person writing in a chat/thread,
@@ -696,9 +673,6 @@ export class ActionService {
   async deliver({
     caller, connector, action, input, key, summary, scope, fence = null, inboundSeq = null, metadata = {}, final = true,
   }) {
-    if (this.config.serverFence && caller.authority && fence && ['message.send', 'message.reply'].includes(action)) {
-      await this.assertFreshOnServer(fence, caller);
-    }
     // Preparing the content may have awaited (a mention lookup), and a newer
     // message or a runtime switch could have landed meanwhile. Re-check right
     // before the reservation, with no await in between.

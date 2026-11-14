@@ -34,7 +34,7 @@ const mcpPath = fileURLToPath(new URL('../src/actions/mcp.mjs', import.meta.url)
 function setup(t, { ids = ['lark'], run = null, roster = null, liveness = null, meetingEnabled = false, ovClient = null,
   ovTools = null, openVikingConfigPath = undefined,
   owners = { lark: OWNER }, channel = 'lark', profile = undefined, explicitSilence = false, stagedReplies = false,
-  larkMessageAccess = 'owner', onNoProgress = null, connectors: given = null, serverFence = false } = {}) {
+  larkMessageAccess = 'owner', onNoProgress = null, connectors: given = null } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'actions-'));
   const workspace = path.join(directory, 'workspace');
   fs.mkdirSync(workspace);
@@ -45,7 +45,7 @@ function setup(t, { ids = ['lark'], run = null, roster = null, liveness = null, 
   const record = (level) => (message, fields = {}) => logs.push({ level, message, ...fields });
   const service = new ActionService({
     config: { workspace, tempDir: path.join(directory, 'tmp'), maxReplyChars: 1_000, channel, profile, explicitSilence, stagedReplies,
-      larkMessageAccess, serverFence, ...(openVikingConfigPath !== undefined ? { openVikingConfigPath } : {}) },
+      larkMessageAccess, ...(openVikingConfigPath !== undefined ? { openVikingConfigPath } : {}) },
     store, connectors, roster, liveness, meetingEnabled, ovClient, ovTools, onNoProgress,
     logger: { debug() {}, info: record('info'), warn: record('warn'), error: record('error'), child() { return this; } },
   });
@@ -498,14 +498,8 @@ describe('agent tools', () => {
     assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM outbox').get().n, 0);
   });
 
-  it('leaves reply_message undecided when local or server freshness blocks it', async (t) => {
-    let onServer = [];
-    const { store, call, inbound } = setup(t, { serverFence: true, run: (_connector, action, input) => {
-      if (action === 'chat.messages.newer') {
-        return { messages: onServer.filter((message) => message.create_time_ms > input.after_ms) };
-      }
-      return { message_id: 'om_delivered123456' };
-    } });
+  it('leaves reply_message undecided when local freshness blocks it', async (t) => {
+    const { store, call, inbound } = setup(t);
     const older = inbound({ messageId: 'om_olderFresh1234', chatId: 'oc_chat12345678', createTimeMs: 1_000 });
     const latest = inbound({ messageId: 'om_latestFresh1234', chatId: 'oc_chat12345678', createTimeMs: 2_000 });
     const reply = (row) => call('reply_message', {
@@ -518,51 +512,7 @@ describe('agent tools', () => {
     await reply(latest);
     assert.equal(store.decisionFor(latest.connectorInstance, latest.eventId).outcome, 'delivered');
 
-    const remote = inbound({ messageId: 'om_remoteFresh1234', chatId: 'oc_remote123456', createTimeMs: 3_000 });
-    onServer = [{ message_id: 'om_notIngested123', create_time_ms: 4_000 }];
-    await assert.rejects(reply(remote), (error) => error.code === 'stale_decision' && /not reached you yet/.test(error.message));
-    assert.equal(store.decisionFor(remote.connectorInstance, remote.eventId), null,
-      'the server fence also leaves the input open for reconsideration');
-    assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM outbox WHERE inbound_seq = ?').get(remote.seq).n, 0);
-
-    onServer = [];
-    await reply(remote);
-    assert.equal(store.decisionFor(remote.connectorInstance, remote.eventId).outcome, 'delivered');
   });
-
-  it('asks Lark for newer messages the event stream has not delivered yet, ignoring its own', async (t) => {
-    let onServer = [];
-    const { store, call, connectors, logs } = setup(t, { serverFence: true, run: (_connector, action, input) => {
-      if (action === 'chat.messages.newer') {
-        if (onServer === 'down') throw new Error('lark-cli timed out');
-        return { messages: onServer.filter((message) => message.create_time_ms > input.after_ms) };
-      }
-      return { message_id: 'om_delivered123456' };
-    } });
-    store.ingest(chatEvent({ chatType: 'group', messageId: 'om_decision123456', chatId: 'oc_chat12345678', createTimeMs: 1_000 }));
-    const send = () => call('send_message', { chat_id: 'oc_chat12345678', markdown: '2', decision_id: 'message:om_decision123456' });
-
-    // Someone answered 1 s ago; the push has not reached the daemon yet.
-    onServer = [{ message_id: 'om_otherbot123456', create_time_ms: 2_000 }];
-    await assert.rejects(send(), (error) => error.code === 'stale_decision' && /not reached you yet/.test(error.message));
-    assert.deepEqual(connectors.calls.map((entry) => entry.action), ['chat.messages.newer']);
-    assert.deepEqual(connectors.calls[0].input, { chat_id: 'oc_chat12345678', thread_id: null, after_ms: 1_000 });
-    assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM outbox').get().n, 0);
-
-    // The bot's own earlier message is not someone else's newer one.
-    store.db.prepare(`INSERT INTO cognition_journal (epoch, kind, at_ms, chat_id, message_id, actor, text, detail_json)
-      VALUES (0, 'outbound', 0, 'oc_chat12345678', 'om_mine1234567890', 'me', '1', '{"connectorInstance":"lark"}')`).run();
-    onServer = [{ message_id: 'om_mine1234567890', create_time_ms: 2_000 }];
-    await send();
-    assert.equal(connectors.calls.at(-1).action, 'message.send');
-
-    // A failed lookup leaves the local fence in charge.
-    onServer = 'down';
-    await call('send_message', { chat_id: 'oc_chat12345678', markdown: '3', decision_id: 'message:om_decision123456' });
-    assert.equal(connectors.calls.at(-1).action, 'message.send');
-    assert.ok(logs.some((line) => line.message === 'server_fence_failed'));
-  });
-
   it('blocks a delivery to a Connector that is down without reserving it, so the retry goes through', async (t) => {
     const { store, call, connectors } = setup(t, { ids: ['lark', 'weixin'] });
     let weixinUp = false;

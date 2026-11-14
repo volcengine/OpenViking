@@ -508,20 +508,6 @@ export class LarkClient {
       next_cursor: data.has_more && typeof data.page_token === 'string' ? data.page_token : '' };
   }
 
-  // Messages Lark already holds in a chat (main conversation only) or a thread
-  // that are newer than `after_ms`, read from the server rather than from the
-  // event stream, which arrives a few seconds late. Newest first.
-  async newerMessages({ chat_id: chatId, thread_id: threadId = null, after_ms: afterMs, limit = 20 }) {
-    const params = { container_id_type: threadId ? 'thread' : 'chat', container_id: threadId || chatId,
-      sort_type: 'ByCreateTimeDesc', page_size: String(limit) };
-    const data = await this.cli(['api', 'GET', '/open-apis/im/v1/messages', '--as', 'bot',
-      '--params', JSON.stringify(params), '--format', 'json'], 'list newer messages', { timeoutMs: 5_000 });
-    return { messages: (Array.isArray(data?.items) ? data.items : [])
-      .filter((item) => Number(item.create_time) > afterMs && !item.deleted && (threadId || !item.thread_id))
-      .map((item) => ({ message_id: item.message_id, create_time_ms: Number(item.create_time),
-        sender_type: item.sender?.sender_type ?? null })) };
-  }
-
   // As the owner by default; as the bot, the search covers only the chats it
   // has joined (needs the app's own search:message).
   async searchMessages({ query, chat_id: chatId, start, end, limit = 20, as = 'user' }) {
