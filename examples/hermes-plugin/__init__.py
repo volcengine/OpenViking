@@ -281,6 +281,61 @@ def _derive_openviking_user_text(content: Any) -> str:
     return extract_user_instruction_from_skill_message(content) or ""
 
 
+# Host-injected scaffolding blocks that Studio re-sends on every turn. The
+# conversation did not author them; captured back unchanged, this turn's
+# injection becomes next turn's memory. Inline or backtick-fenced examples of
+# these tags are user prose and must survive, so only whole standalone blocks
+# are stripped (same rule as the JS capture sanitizer, which keeps
+# user-authored wrappers per #6858).
+_INJECTED_BLOCK_TAG_RE = re.compile(
+    r"^[ \t]*<(studio_task_plan_context|studio_session_tasks_context|memory-context)\b[^>]*>",
+    re.IGNORECASE,
+)
+_INJECTED_BLOCK_END_RE = re.compile(
+    r"^[ \t]*</(?:studio_task_plan_context|studio_session_tasks_context|memory-context)\s*>[ \t]*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_injected_system_blocks(text: str) -> str:
+    """Remove host-injected scaffolding blocks from captured turn text.
+
+    A block starts at a line whose first token is one of the known injected
+    opening tags and ends at the matching standalone closing tag on its own
+    line. An unterminated block runs to the end of the text: the host never
+    closes it mid-turn, so the tail is scaffolding too. Lines inside a
+    backtick code fence are user prose — injected blocks are never fenced —
+    so fence spans are skipped entirely, keeping examples of the tags alive
+    (the #6858 requirement the JS sanitizer follows).
+    """
+    if not text or "<" not in text:
+        return text
+    lines = text.split("\n")
+    out: List[str] = []
+    skipping = False
+    in_fence = False
+    for line in lines:
+        fence = re.match(r"^[ \t]*(```|~~~)", line)
+        if fence:
+            if not skipping:
+                in_fence = not in_fence
+            out.append(line)
+            continue
+        if not in_fence and not skipping and _INJECTED_BLOCK_TAG_RE.match(line):
+            skipping = True
+            continue
+        if not in_fence and skipping and _INJECTED_BLOCK_END_RE.match(line):
+            skipping = False
+            continue
+        if not skipping:
+            out.append(line)
+    stripped = "\n".join(out)
+    if stripped != text:
+        stripped = re.sub(r"[ \t]+\n", "\n", stripped)
+        stripped = re.sub(r"\n{3,}", "\n\n", stripped).strip()
+    return stripped
+
+
 def _preview(value: Any, limit: int = 160) -> str:
     text = ("" if value is None else str(value)).replace("\n", "\\n")
     return text[:limit] + "..." if len(text) > limit else text
@@ -2689,7 +2744,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
             if role not in {"user", "assistant"}:
                 continue
             flush_tool_parts()
-            text = _message_text(message.get("content"))
+            text = _strip_injected_system_blocks(_message_text(message.get("content")))
             parts: List[Dict[str, Any]] = [{"type": "text", "text": text}] if text else []
             if role == "assistant":
                 for tool_call in message.get("tool_calls") or []:
@@ -3438,7 +3493,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
     def _tool_remember(self, args: dict) -> str:
         """Submit content through a dedicated session so it never touches the live Hermes session."""
-        content = args.get("content", "")
+        content = _strip_injected_system_blocks(str(args.get("content", "") or ""))
         if not content:
             return tool_error("content is required")
         client = self._ensure_client()

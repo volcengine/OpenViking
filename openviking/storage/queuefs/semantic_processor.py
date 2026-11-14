@@ -1409,16 +1409,23 @@ class SemanticProcessor(DequeueHandlerBase):
             content, output_language_override=output_language_override
         )
         if live_context is not None:
+            serialized_arguments = json.dumps(
+                live_context["arguments"],
+                ensure_ascii=False,
+                sort_keys=True,
+            )
             prompt_variables = {
                 "file_name": file_name,
                 "title": live_context["title"],
                 "description": live_context["description"],
                 "tool_uri": live_context["tool_uri"],
-                "arguments": json.dumps(
-                    live_context["arguments"],
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ),
+                "arguments": serialized_arguments,
+                # The summary must name the mounted arguments without copying
+                # their values: values can carry kilobytes of code or data that
+                # busts the recall per-entry budget and turns every hit into a
+                # bare URI (#7692).
+                "argument_names": ", ".join(live_context["arguments"].keys()),
+                "arguments_total_chars": str(len(serialized_arguments)),
                 "output_language": output_language,
             }
         else:
@@ -1432,7 +1439,12 @@ class SemanticProcessor(DequeueHandlerBase):
         async with llm_sem:
             with bind_telemetry_stage("semantic_execute"):
                 summary = await vlm.get_completion_async(prompt)
-        return result(summary.strip())
+        # File-level summaries have no other length gate: abstract_max_chars
+        # only applied to directory overviews, so an oversized file summary
+        # (live context with mounted code was the extreme case) could enter
+        # storage and then be dropped at injection time.
+        summary = self._truncate_generated_text(summary.strip(), config.semantic.abstract_max_chars)
+        return result(summary)
 
     @staticmethod
     def _parse_live_context_metadata(content: str) -> Optional[Dict[str, Any]]:
