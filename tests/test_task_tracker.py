@@ -1346,7 +1346,8 @@ async def test_persistent_store_writes_task_record_json():
     assert all(call["ctx"]["disable_auto_pathlock"] == "true" for call in agfs.write_calls)
 
 
-async def test_persistent_store_survives_tracker_reset():
+@pytest.mark.parametrize("external_outcome", [None, "poll", "recovery"])
+async def test_persistent_store_survives_tracker_reset(monkeypatch, external_outcome):
     agfs = _FakeAgfs()
     tracker1 = TaskTracker(store=PersistentTaskStore(agfs))
     task = await tracker1.create(
@@ -1367,6 +1368,68 @@ async def test_persistent_store_survives_tracker_reset():
         "provider": "feishu",
         "access_token": "secret-token",
     }
+    if external_outcome is None:
+        return
+
+    from dataclasses import asdict, replace
+    from types import SimpleNamespace
+
+    import openviking.server.routers.tasks as tasks_router
+    import openviking.service.external_task_service as external_tasks
+    from openviking.service.compile_service import (
+        CompileErrorInfo,
+        CompileService,
+        CompileSessionStatus,
+    )
+
+    snapshot = CompileService._snapshot(
+        CompileSessionStatus(
+            status="failed",
+            stage="failed",
+            result={"coverage": {"completed": 1, "failed": 1}},
+            error=CompileErrorInfo(code="COMPILE_INCOMPLETE", message="Incomplete output"),
+        )
+    )
+    assert snapshot.result is not None
+    final_result = {**snapshot.result, "finalized": True}
+    provider = SimpleNamespace(
+        task_type="compile",
+        serialization_key=lambda payload: None,
+        poll_interval_seconds=0,
+        poll_max_attempts=1,
+        on_start=AsyncMock(return_value=None),
+        get=AsyncMock(return_value=snapshot),
+        on_finish=AsyncMock(return_value=replace(snapshot, result=final_result)),
+    )
+    service = external_tasks.ExternalTaskService()
+    service.register(provider)
+    monkeypatch.setattr(external_tasks, "get_task_tracker", lambda: tracker2)
+    task = await tracker2.create(
+        "compile",
+        meta={"request": {}},
+        auth={
+            "external_task_id": "runtime-task",
+            **(
+                {"external_terminal_snapshot": asdict(snapshot)}
+                if external_outcome == "recovery"
+                else {}
+            ),
+        },
+        **_owner_kwargs(),
+    )
+    assert await service.execute(task.task_id, **_owner_kwargs())
+    tracker3 = TaskTracker(store=PersistentTaskStore(agfs))
+    loaded = await tracker3.get(task.task_id, **_owner_kwargs())
+    assert loaded is not None
+    assert loaded.status == TaskStatus.FAILED
+    assert loaded.result == final_result
+    assert await tracker3.get_task_auth(task.task_id, **_owner_kwargs()) == {}
+    monkeypatch.setattr(tasks_router, "get_task_tracker", lambda: tracker3)
+    response = await tasks_router.get_task(task.task_id, include_events=False, _ctx=_make_ctx())
+    assert response.result["status"] == "failed"
+    assert response.result["error"] == "COMPILE_INCOMPLETE: Incomplete output"
+    assert response.result["result"] == final_result
+    assert provider.get.await_count == (external_outcome == "poll")
 
 
 async def test_persistent_store_ignores_existing_task_dirs():
