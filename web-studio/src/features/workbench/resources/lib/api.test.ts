@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   fetchDirectorySidecarContent,
   fetchFsList,
+  fetchFsStat,
 } from '#/features/workbench/resources/lib/api'
 
-const { getContentReadMock, getFsLsMock } = vi.hoisted(() => ({
+const { getContentReadMock, getFsLsMock, getFsStatMock } = vi.hoisted(() => ({
   getContentReadMock: vi.fn(),
   getFsLsMock: vi.fn(),
+  getFsStatMock: vi.fn(),
 }))
 
 vi.mock('#/shared/api/ov-client/index', async (importOriginal) => {
@@ -16,18 +18,37 @@ vi.mock('#/shared/api/ov-client/index', async (importOriginal) => {
     ...original,
     getContentRead: getContentReadMock,
     getFsLs: getFsLsMock,
+    getFsStat: getFsStatMock,
   }
 })
 
 beforeEach(() => {
   getContentReadMock.mockReset()
   getFsLsMock.mockReset()
+  getFsStatMock.mockReset()
   getFsLsMock.mockResolvedValue({
     data: { status: 'ok', result: [] },
     headers: {},
     status: 200,
   })
 })
+
+it.each(['read', 'write', 'manage', 'container', undefined])(
+  'preserves the stat access level %s',
+  async (access) => {
+    const uri = 'viking://resources/project/'
+    getFsStatMock.mockResolvedValue({
+      data: { status: 'ok', result: { isDir: true, access } },
+      headers: {},
+      status: 200,
+    })
+    expect(await fetchFsStat(uri, { throwOnError: true })).toMatchObject({
+      uri,
+      isDir: true,
+      access,
+    })
+  },
+)
 
 describe('fetchDirectorySidecarContent', () => {
   it.each(['abstract', 'overview'] as const)(

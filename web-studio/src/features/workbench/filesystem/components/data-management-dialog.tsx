@@ -33,6 +33,7 @@ import {
 interface Props {
   mode: 'history' | 'transfer'
   initialTransferTab?: 'import' | 'export'
+  allowImport?: boolean
   onClose: () => void
   onCompare: () => void
   onChanged: () => void
@@ -60,6 +61,7 @@ function downloadBlob(blob: Blob, uri: string): void {
 export function DataManagementDialog({
   mode,
   initialTransferTab = 'export',
+  allowImport = true,
   onClose,
   onCompare,
   onChanged,
@@ -212,9 +214,9 @@ export function DataManagementDialog({
           </div>
         ) : (
           <Tabs
-            value={transferTab}
+            value={allowImport ? transferTab : 'export'}
             onValueChange={(value) => {
-              if (busy) return
+              if (busy || (value === 'import' && !allowImport)) return
               setTransferTab(value)
               setError('')
             }}
@@ -226,12 +228,14 @@ export function DataManagementDialog({
               >
                 {t('exportTab')}
               </TabsTrigger>
-              <TabsTrigger
-                value="import"
-                disabled={busy && transferTab !== 'import'}
-              >
-                {t('importTab')}
-              </TabsTrigger>
+              {allowImport && (
+                <TabsTrigger
+                  value="import"
+                  disabled={busy && transferTab !== 'import'}
+                >
+                  {t('importTab')}
+                </TabsTrigger>
+              )}
             </TabsList>
             <TabsContent value="export" className="min-h-52 space-y-4 pt-4">
               <p className="text-xs text-muted-foreground">
@@ -259,100 +263,104 @@ export function DataManagementDialog({
                 </p>
               )}
             </TabsContent>
-            <TabsContent
-              value="import"
-              keepMounted
-              className="min-h-52 space-y-4 pt-4"
-            >
-              <p className="text-xs text-muted-foreground">
-                {t('importDescription')}
-              </p>
-              <div>
-                <input
-                  id="ovpack-file"
-                  accept=".ovpack"
-                  aria-label={t('chooseFile')}
-                  className="peer sr-only"
-                  disabled={busy || !isDirectory}
-                  onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-                  type="file"
-                />
-                <label
-                  htmlFor="ovpack-file"
-                  className="flex min-h-28 cursor-pointer flex-col items-center justify-center gap-2 rounded-md border border-dashed border-input px-4 py-5 text-center transition-colors hover:border-foreground/50 hover:bg-muted/40 peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-disabled:pointer-events-none peer-disabled:opacity-50"
-                >
-                  <UploadIcon
-                    aria-hidden="true"
-                    className="size-5 text-muted-foreground"
-                  />
-                  <span className="max-w-full truncate text-sm font-medium">
-                    {file?.name ?? t('chooseFile')}
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    {file ? t('changeFile') : t('supportedFileType')}
-                  </span>
-                </label>
-              </div>
-              <div className="space-y-1.5 text-sm">
-                <label htmlFor="ovpack-conflict">{t('conflict')}</label>
-                <Select
-                  disabled={busy}
-                  items={[
-                    { value: 'fail', label: t('conflictFail') },
-                    { value: 'skip', label: t('conflictSkip') },
-                    { value: 'overwrite', label: t('conflictOverwrite') },
-                  ]}
-                  onValueChange={(value) =>
-                    setConflict(value as typeof conflict)
-                  }
-                  value={conflict}
-                >
-                  <SelectTrigger
-                    id="ovpack-conflict"
-                    className="w-full bg-background"
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent
-                    align="start"
-                    className="w-[var(--anchor-width)]"
-                  >
-                    <SelectItem value="fail">{t('conflictFail')}</SelectItem>
-                    <SelectItem value="skip">{t('conflictSkip')}</SelectItem>
-                    <SelectItem value="overwrite">
-                      {t('conflictOverwrite')}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <Button
-                disabled={busy || !isDirectory || !file}
-                aria-busy={busy}
-                onClick={() =>
-                  void run(async (signal) => {
-                    if (!file) return
-                    await importOvpack(source, uri, file, conflict, signal)
-                    if (signal.aborted) return
-                    onClose()
-                    onChanged()
-                    toast.success(t('imported'))
-                  })
-                }
+            {allowImport && (
+              <TabsContent
+                value="import"
+                keepMounted
+                className="min-h-52 space-y-4 pt-4"
               >
-                {busy && (
-                  <Loader2Icon aria-hidden="true" className="animate-spin" />
-                )}
-                {t(busy ? 'importing' : 'importAction')}
-              </Button>
-              {error && (
-                <p
-                  role="alert"
-                  className="break-words text-sm text-destructive"
-                >
-                  {error}
+                <p className="text-xs text-muted-foreground">
+                  {t('importDescription')}
                 </p>
-              )}
-            </TabsContent>
+                <div>
+                  <input
+                    id="ovpack-file"
+                    accept=".ovpack"
+                    aria-label={t('chooseFile')}
+                    className="peer sr-only"
+                    disabled={busy || !isDirectory}
+                    onChange={(event) =>
+                      setFile(event.target.files?.[0] ?? null)
+                    }
+                    type="file"
+                  />
+                  <label
+                    htmlFor="ovpack-file"
+                    className="flex min-h-28 cursor-pointer flex-col items-center justify-center gap-2 rounded-md border border-dashed border-input px-4 py-5 text-center transition-colors hover:border-foreground/50 hover:bg-muted/40 peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-disabled:pointer-events-none peer-disabled:opacity-50"
+                  >
+                    <UploadIcon
+                      aria-hidden="true"
+                      className="size-5 text-muted-foreground"
+                    />
+                    <span className="max-w-full truncate text-sm font-medium">
+                      {file?.name ?? t('chooseFile')}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {file ? t('changeFile') : t('supportedFileType')}
+                    </span>
+                  </label>
+                </div>
+                <div className="space-y-1.5 text-sm">
+                  <label htmlFor="ovpack-conflict">{t('conflict')}</label>
+                  <Select
+                    disabled={busy}
+                    items={[
+                      { value: 'fail', label: t('conflictFail') },
+                      { value: 'skip', label: t('conflictSkip') },
+                      { value: 'overwrite', label: t('conflictOverwrite') },
+                    ]}
+                    onValueChange={(value) =>
+                      setConflict(value as typeof conflict)
+                    }
+                    value={conflict}
+                  >
+                    <SelectTrigger
+                      id="ovpack-conflict"
+                      className="w-full bg-background"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent
+                      align="start"
+                      className="w-[var(--anchor-width)]"
+                    >
+                      <SelectItem value="fail">{t('conflictFail')}</SelectItem>
+                      <SelectItem value="skip">{t('conflictSkip')}</SelectItem>
+                      <SelectItem value="overwrite">
+                        {t('conflictOverwrite')}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button
+                  disabled={busy || !isDirectory || !file}
+                  aria-busy={busy}
+                  onClick={() =>
+                    void run(async (signal) => {
+                      if (!file) return
+                      await importOvpack(source, uri, file, conflict, signal)
+                      if (signal.aborted) return
+                      onClose()
+                      onChanged()
+                      toast.success(t('imported'))
+                    })
+                  }
+                >
+                  {busy && (
+                    <Loader2Icon aria-hidden="true" className="animate-spin" />
+                  )}
+                  {t(busy ? 'importing' : 'importAction')}
+                </Button>
+                {error && (
+                  <p
+                    role="alert"
+                    className="break-words text-sm text-destructive"
+                  >
+                    {error}
+                  </p>
+                )}
+              </TabsContent>
+            )}
           </Tabs>
         )}
         {mode === 'history' && error && (

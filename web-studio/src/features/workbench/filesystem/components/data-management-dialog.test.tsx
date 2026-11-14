@@ -90,6 +90,25 @@ it('reports a successful save even when refreshing history reaches the scan limi
   )
 })
 
+it('offers only export when the directory cannot be written', () => {
+  render(
+    <DataManagementDialog
+      mode="transfer"
+      initialTransferTab="import"
+      allowImport={false}
+      uri="viking://resources/project/"
+      isDirectory
+      onClose={vi.fn()}
+      onCompare={vi.fn()}
+      onChanged={vi.fn()}
+    />,
+  )
+
+  expect(screen.getByRole('button', { name: 'exportAction' })).toBeTruthy()
+  expect(screen.queryByRole('tab', { name: 'importTab' })).toBeNull()
+  expect(screen.queryByLabelText('chooseFile')).toBeNull()
+})
+
 it('shows a loading button, then closes and refreshes after a successful import', async () => {
   let completeImport!: (value: { uri: string }) => void
   vi.mocked(importOvpack).mockReturnValueOnce(

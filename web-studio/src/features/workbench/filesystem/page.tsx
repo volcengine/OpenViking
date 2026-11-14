@@ -1,7 +1,7 @@
 import type { FilePreviewAction } from '@openviking/react/components/file-preview'
 import type { FileBrowserHandle } from '@openviking/react/modules/file-browser'
 import { StudioHeaderActions } from '#/app/layouts/studio-header-actions'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import styles from './workbench.module.css'
 import { WorkbenchDirectory } from './components/workbench-directory'
 import {
@@ -135,6 +135,10 @@ function FilesystemWorkbench() {
   const [uploadDialogOpen, setUploadDialogOpen] = useState(
     () => search.upload ?? false,
   )
+  const [uploadTarget, setUploadTarget] = useState<{
+    scope: string
+    uri: string
+  }>()
   const {
     dirtyRef,
     onDirtyChange: handleDirtyChange,
@@ -272,6 +276,7 @@ function FilesystemWorkbench() {
   const handleUploadDialogOpenChange = useCallback(
     (open: boolean) => {
       setUploadDialogOpen(open)
+      if (!open) setUploadTarget(undefined)
       if (!open && search.upload) {
         syncSearch({ upload: undefined })
       }
@@ -317,6 +322,12 @@ function FilesystemWorkbench() {
             uri: nextCurrentUri,
           })
         }
+        if (isDir) {
+          queryClient.setQueryData(
+            ['viking-fs-stat', identityScopeKey, normalized],
+            stat,
+          )
+        }
         const level = directoryLevelFromUri(cleaned)
         if (expandPath || level) {
           const resourceUri = level
@@ -329,7 +340,7 @@ function FilesystemWorkbench() {
           showErrorToast(error, t('readFailed', { uri: cleaned }))
       }
     },
-    [syncSearch, t, confirmDocumentNavigation],
+    [syncSearch, t, confirmDocumentNavigation, identityScopeKey, queryClient],
   )
 
   const openExternalResource = useCallback(
@@ -399,6 +410,28 @@ function FilesystemWorkbench() {
     setResourceDialogOpen(false)
   }, [selectedUri])
   const canTransferSelectedUri = transferUri.startsWith('viking://resources/')
+  const isLocalResourceDirectory =
+    canUseLocalTools &&
+    selectedIsDirectory &&
+    /^viking:\/\/(?:resources(?:\/|$)|user\/[^/]+\/resources(?:\/|$))/.test(
+      selectedUri,
+    )
+  const importDirectoryUri = normalizeDirUri(transferUri)
+  const directoryStat = useQuery({
+    queryKey: ['viking-fs-stat', identityScopeKey, importDirectoryUri],
+    queryFn: () => fetchFsStat(importDirectoryUri, { throwOnError: true }),
+    enabled: canTransferSelectedUri || isLocalResourceDirectory,
+    staleTime: 30_000,
+    retry: false,
+  })
+  const directoryAccess = directoryStat.data?.access
+  // Older servers omit access. Keep their existing behavior after a successful stat.
+  const canImportIntoDirectory =
+    directoryStat.isSuccess &&
+    directoryStat.data.isDir &&
+    (directoryAccess === 'write' ||
+      directoryAccess === 'manage' ||
+      directoryAccess === undefined)
   const specialDirectory =
     selectedIsDirectory && usesWorkbenchDirectoryView(selectedUri)
   const specialExperience = needsExperienceDetailTab(selectedUri)
@@ -510,15 +543,19 @@ function FilesystemWorkbench() {
 
   const transferActions: FilePreviewAction[] = canTransferSelectedUri
     ? [
-        {
-          key: 'studio-import-pack',
-          icon: <DownloadIcon size={16} />,
-          label: t('dataManagement:importMenu'),
-          onClick: () => {
-            setTransferTab('import')
-            setDataManagementMode('transfer')
-          },
-        },
+        ...(canImportIntoDirectory
+          ? [
+              {
+                key: 'studio-import-pack',
+                icon: <DownloadIcon size={16} />,
+                label: t('dataManagement:importMenu'),
+                onClick: () => {
+                  setTransferTab('import')
+                  setDataManagementMode('transfer')
+                },
+              },
+            ]
+          : []),
         {
           key: 'studio-export-pack',
           icon: <UploadIcon size={16} />,
@@ -530,26 +567,25 @@ function FilesystemWorkbench() {
         },
       ]
     : []
-  if (canUseLocalTools && selectedIsDirectory) {
+  if (isLocalResourceDirectory && canImportIntoDirectory) {
     transferActions.push({
       key: 'studio-add-resource',
       icon: <UploadIcon size={16} />,
       label: t('explorer.addResource'),
-      onClick: () => setUploadDialogOpen(true),
+      onClick: () => {
+        setUploadTarget({ scope: identityScopeKey, uri: importDirectoryUri })
+        setUploadDialogOpen(true)
+      },
     })
-    if (
-      /^viking:\/\/(?:resources(?:\/|$)|user\/[^/]+\/resources(?:\/|$))/.test(
-        selectedUri,
-      )
-    ) {
-      transferActions.push({
-        key: 'studio-compile-folder',
-        icon: <WandSparkles size={16} />,
-        label: t('compile:compileThisFolder'),
-        onClick: () =>
-          setCompileSource({ scope: identityScopeKey, uri: selectedUri }),
-      })
-    }
+  }
+  if (isLocalResourceDirectory) {
+    transferActions.push({
+      key: 'studio-compile-folder',
+      icon: <WandSparkles size={16} />,
+      label: t('compile:compileThisFolder'),
+      onClick: () =>
+        setCompileSource({ scope: identityScopeKey, uri: selectedUri }),
+    })
   }
 
   const deleteActions: FilePreviewAction[] =
@@ -637,7 +673,12 @@ function FilesystemWorkbench() {
               void revealResource(uri)
           }}
           onImportResources={
-            canUseLocalTools ? () => setUploadDialogOpen(true) : undefined
+            canUseLocalTools
+              ? () => {
+                  setUploadTarget(undefined)
+                  setUploadDialogOpen(true)
+                }
+              : undefined
           }
         />
         {canUseCliPanel && (isCompactLayout || rightCollapsed) ? (
@@ -711,6 +752,12 @@ function FilesystemWorkbench() {
               </DialogHeader>
               <div className="max-h-[calc(min(86vh,760px)-6rem)] overflow-y-auto px-6 py-5">
                 <AddResourceForm
+                  key={identityScopeKey}
+                  initialTargetUri={
+                    uploadTarget?.scope === identityScopeKey
+                      ? uploadTarget.uri
+                      : undefined
+                  }
                   onSubmitted={() => {
                     handleUploadDialogOpenChange(false)
                     refreshBrowser()
@@ -795,6 +842,7 @@ function FilesystemWorkbench() {
           key={`${identityScopeKey}:${dataManagementMode === 'transfer' ? transferUri : selectedUri}:${dataManagementMode}:${transferTab}`}
           mode={dataManagementMode}
           initialTransferTab={transferTab}
+          allowImport={canImportIntoDirectory}
           onClose={() => setDataManagementMode(null)}
           onCompare={() => setDataManagementMode('compare')}
           onChanged={() => {

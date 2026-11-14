@@ -17,6 +17,7 @@ export interface VikingFsEntry {
   modTimestamp: number | null
   abstract: string
   overview?: string
+  access?: 'denied' | 'container' | 'read' | 'write' | 'manage'
 }
 
 export interface VikingListQueryOptions {

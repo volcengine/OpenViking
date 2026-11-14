@@ -188,6 +188,7 @@ export async function fetchFsStat(
     )
     const data = result as Record<string, unknown>
     const rawModTime = data.mod_time ?? data.modTime ?? data.modified_at ?? ''
+    const access = data.access
     return {
       uri,
       name: fileNameFromUri(uri),
@@ -203,6 +204,14 @@ export async function fetchFsStat(
       modTimestamp: null,
       abstract: String(data.abstract ?? ''),
       overview: String(data.overview ?? ''),
+      access:
+        access === 'denied' ||
+        access === 'container' ||
+        access === 'read' ||
+        access === 'write' ||
+        access === 'manage'
+          ? access
+          : undefined,
     }
   } catch (error) {
     // Callers that need to surface read failures (e.g. clicking a missing or

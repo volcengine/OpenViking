@@ -44,6 +44,7 @@ const mocks = vi.hoisted(() => ({
   invalidateAll: vi.fn(),
   navigate: vi.fn(),
   dataManagement: vi.fn(),
+  addResource: vi.fn(),
   search: {} as { file?: string; panel?: 'agent' | 'terminal'; uri?: string },
 }))
 
@@ -87,6 +88,13 @@ vi.mock('#/features/workbench/resources/hooks/viking-fm', () => ({
 
 vi.mock('#/features/workbench/resources/lib/api', () => ({
   fetchFsStat: mocks.fetchFsStat,
+}))
+
+vi.mock('#/features/workbench/resources/components/add-resource-page', () => ({
+  AddResourceForm: (props: { initialTargetUri?: string }) => {
+    mocks.addResource(props)
+    return null
+  },
 }))
 
 vi.mock('#/features/workbench/resources/hooks/use-resource-upload', () => ({
@@ -260,13 +268,14 @@ describe('filesystem workbench', () => {
     mocks.agent.mockReset().mockReturnValue(null)
     mocks.console.mockReset().mockReturnValue(null)
     mocks.search = { file: firstFile, uri: parentDirectory }
-    mocks.fetchFsStat.mockReset()
+    mocks.fetchFsStat.mockReset().mockResolvedValue({ isDir: true })
     mocks.reveal.mockReset().mockResolvedValue(true)
     mocks.mountBrowser.mockClear()
     mocks.invalidateList.mockReset().mockResolvedValue(undefined)
     mocks.invalidateAll.mockReset().mockResolvedValue(undefined)
     mocks.navigate.mockReset()
     mocks.dataManagement.mockReset()
+    mocks.addResource.mockReset()
   })
 
   it.each([{ metaKey: true }, { ctrlKey: true }])(
@@ -429,6 +438,72 @@ describe('filesystem workbench', () => {
     expect(mocks.dataManagement.mock.lastCall?.[0].initialTransferTab).toBe(
       'import',
     )
+  })
+
+  it('keeps history, export and compile available on a read-only directory', async () => {
+    const uri = 'viking://resources/im/feishu/'
+    mocks.search = { uri }
+    mocks.fetchFsStat.mockResolvedValue({ isDir: true, access: 'read' })
+    renderFilesystem()
+
+    await openPreviewActions()
+    expect(mocks.fetchFsStat).toHaveBeenCalledWith(uri, { throwOnError: true })
+    expect(
+      screen.getByRole('menuitem', { name: 'dataManagement:historyMenu' }),
+    ).toBeTruthy()
+    expect(
+      screen.getByRole('menuitem', { name: 'compile:compileThisFolder' }),
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole('menuitem', { name: 'dataManagement:importMenu' }),
+    ).toBeNull()
+    expect(
+      screen.queryByRole('menuitem', { name: 'explorer.addResource' }),
+    ).toBeNull()
+
+    await userEvent.click(
+      screen.getByRole('menuitem', { name: 'dataManagement:exportMenu' }),
+    )
+    expect(mocks.dataManagement.mock.lastCall?.[0]).toMatchObject({
+      uri,
+      allowImport: false,
+    })
+  })
+
+  it('uses the writable directory as the default resource import target', async () => {
+    const uri = 'viking://resources/im/feishu/'
+    mocks.search = { uri }
+    mocks.fetchFsStat.mockResolvedValue({ isDir: true, access: 'write' })
+    renderFilesystem()
+
+    await openPreviewActions()
+    expect(
+      screen.getByRole('menuitem', { name: 'dataManagement:importMenu' }),
+    ).toBeTruthy()
+    await userEvent.click(
+      screen.getByRole('menuitem', { name: 'explorer.addResource' }),
+    )
+    expect(mocks.addResource.mock.lastCall?.[0]).toMatchObject({
+      initialTargetUri: uri,
+    })
+  })
+
+  it('checks the parent directory for OVPack import when a file is selected', async () => {
+    const uri = 'viking://resources/im/feishu/'
+    mocks.search = { file: `${uri}notes.md`, uri }
+    mocks.fetchFsStat.mockRejectedValue({ statusCode: 403 })
+    renderFilesystem()
+
+    await openPreviewActions()
+    expect(mocks.fetchFsStat).toHaveBeenCalledExactlyOnceWith(uri, {
+      throwOnError: true,
+    })
+    expect(
+      screen.queryByRole('menuitem', { name: 'dataManagement:importMenu' }),
+    ).toBeNull()
+    expect(
+      screen.getByRole('menuitem', { name: 'dataManagement:exportMenu' }),
+    ).toBeTruthy()
   })
 
   it('shows only the CLI tab for hosted reads while keeping local tools unavailable', async () => {
