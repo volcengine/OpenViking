@@ -13,6 +13,7 @@ export type {
 import type { ErrorFallback } from '../../../shared/error-boundary/types.js';
 import type { Locale } from '../../../shared/locale.js';
 import type { ReactNode } from 'react';
+import type { VikingBotInteractionFields } from './field-types.js';
 
 /** 宿主接管自定义答案时的上下文。Host-controlled custom selection. */
 export interface VikingBotInteractionCustomInputContext {
@@ -65,6 +66,8 @@ export interface VikingBotRepairOption {
 
 /** 自定义问题的渲染上下文。Render context for a custom question. */
 export interface VikingBotInteractionRenderContext {
+  /** Call when a custom input changes to dismiss its submission error. */
+  clearError: () => void;
   /** 是否禁用提交。Whether submission is disabled. */
   disabled?: boolean;
   /** 是否正在提交。Whether a submission is in flight. */
@@ -263,6 +266,8 @@ export interface VikingBotInteractionProps {
   submitting?: boolean;
   /** 提交失败的原因。Why the last submission failed. */
   error?: ReactNode;
+  /** Field labels, validators and control renderers. */
+  fields?: VikingBotInteractionFields;
   /** 上报答案。Reports an answer. */
   onSubmit?: (answer: VikingBotInteractionAnswer) => void | Promise<void>;
   /** 放弃本次交互。Abandons this interaction. */

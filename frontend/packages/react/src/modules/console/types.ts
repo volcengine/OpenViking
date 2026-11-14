@@ -59,7 +59,10 @@ export interface ConsoleLabels {
 export type ConsoleChatOptions = Omit<
   UseVikingBotChatOptions,
   'enabled' | 'sessionId' | 'initialMessages'
-> & { service?: VikingBotChatService & VikingBotSessionService };
+> & {
+  service?: VikingBotChatService & VikingBotSessionService;
+  hitl?: import('./hitl/types.js').ConsoleHitlOptions | false;
+};
 
 /**
  * 命令模式的宿主覆盖项；记录、输入、提交和命令目录由 Console 管理。

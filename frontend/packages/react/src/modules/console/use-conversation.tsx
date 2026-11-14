@@ -7,6 +7,7 @@ import type { ReactNode, SetStateAction } from 'react';
 import { useEffect, useMemo, useRef } from 'react';
 import { useVikingBotChat } from './chat/use-viking-bot-chat.js';
 import { useVikingBotSessions } from './chat/use-viking-bot-sessions.js';
+import { useHitl } from './hitl/use-hitl.js';
 import { useAttachmentUpload } from './chat/use-attachment-upload.js';
 import type { VikingBotProps } from '../../components/viking-bot/types.js';
 import type { ConsoleProps } from './types.js';
@@ -43,6 +44,12 @@ export function useConversation(
     requestOptions: chatOptions?.requestOptions ?? requestOptions,
   };
   const chat = useVikingBotChat(options);
+  const hitl = useHitl(
+    chat,
+    enabled && conversation?.interaction === undefined,
+    useLocale(options.locale),
+    chatOptions?.hitl,
+  );
   const uploads = useAttachmentUpload(
     enabled &&
       !conversation?.onFilesAdded &&
@@ -119,7 +126,8 @@ export function useConversation(
   return {
     ...conversation,
     ...uploads.props,
-    messages: chat.messages,
+    messages: hitl.messages,
+    interaction: conversation?.interaction ?? hitl.interaction,
     streaming: chat.streaming,
     listKey: `${scopeKey ?? ''}:${chat.sessionId ?? 'new'}`,
     isSending: chat.status === 'streaming' || chat.status === 'loading',

@@ -47,6 +47,7 @@
 .ov-textarea,
 .ov-checkbox,
 .ov-radio,
+.ov-form-field,
 .ov-directory-tour,
 .ov-wiki-dashboard,
 .ov-experience-dashboard,
@@ -222,6 +223,7 @@ html.dark .ov-experience-dashboard,
 .dark .ov-modal,
 .dark .ov-checkbox,
 .dark .ov-radio,
+html.dark .ov-form-field,
 .dark .ov-date-picker,
 .dark .ov-date-picker__popup,
 .dark .ov-file-browser,
@@ -298,7 +300,9 @@ html.dark .ov-error-boundary,
 .ov-select,
 .ov-textarea,
 .ov-checkbox,
-.ov-radio {
+.ov-radio,
+.ov-form-field,
+.ov-form-field__error {
   --ov-ui-bg-white-default: var(--ov-ui-bg-1-default);
   --ov-ui-bg-2-default: #fafbfd;
   --ov-ui-bg-7-default: var(--ov-ui-border-1-default);
@@ -321,7 +325,9 @@ html.dark .ov-input,
 html.dark .ov-select,
 html.dark .ov-textarea,
 html.dark .ov-checkbox,
-html.dark .ov-radio {
+html.dark .ov-radio,
+html.dark .ov-form-field,
+html.dark .ov-form-field__error {
   --ov-ui-bg-white-default: rgb(255 255 255 / 0.1%);
   --ov-ui-bg-2-default: rgb(252 253 254 / 1%);
   --ov-ui-bg-4-default: rgb(246 248 250 / 6%);

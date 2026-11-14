@@ -9,6 +9,7 @@ import {
 import { Modal } from '../../../shared/primitives/modal/modal.js';
 import { Button } from '../../../shared/primitives/button/button.js';
 import { Input } from '../../../shared/primitives/input/input.js';
+import { FormField } from '../../../shared/primitives/form-field/form-field.js';
 import type { Locale } from '../../../shared/locale.js';
 import type { InteractionLabels } from './labels.js';
 import type { VikingBotInteractionDirectoryOperations } from './directory-picker-types.js';
@@ -106,42 +107,35 @@ export function CreateDirectory({
         <p className="ov-viking-bot__directory-status">
           {labels.directoryParent(parentUri)}
         </p>
-        <label
-          className="ov-viking-bot__interaction-label"
-          htmlFor={`${id}-name`}
-        >
-          {labels.directoryName}
-        </label>
-        <Input
-          ref={focusInput}
+        <FormField
           id={`${id}-name`}
-          name="directory-name"
-          value={name}
-          required
-          disabled={pending}
-          autoComplete="off"
-          autoCorrect="off"
-          autoCapitalize="none"
-          spellCheck={false}
-          aria-invalid={Boolean(error)}
-          aria-describedby={`${id}-hint${error ? ` ${id}-error` : ''}`}
-          onChange={(event) => {
-            setName(event.target.value);
-            setError(undefined);
-          }}
-        />
-        <p id={`${id}-hint`} className="ov-viking-bot__directory-status">
-          {labels.directoryNameHint}
-        </p>
-        {error ? (
-          <p
-            id={`${id}-error`}
-            role="alert"
-            className="ov-viking-bot__directory-status ov-viking-bot__directory-status--error"
-          >
-            {interactionError(error.cause, labels, error.code)}
-          </p>
-        ) : null}
+          label={labels.directoryName}
+          description={labels.directoryNameHint}
+          error={
+            error
+              ? interactionError(error.cause, labels, error.code)
+              : undefined
+          }
+        >
+          {(field) => (
+            <Input
+              {...field}
+              ref={focusInput}
+              name="directory-name"
+              value={name}
+              required
+              disabled={pending}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              onChange={(event) => {
+                setName(event.target.value);
+                setError(undefined);
+              }}
+            />
+          )}
+        </FormField>
         <div className="ov-viking-bot__create-directory-actions">
           <Button type="outline" disabled={pending} onClick={onClose}>
             {labels.cancel}

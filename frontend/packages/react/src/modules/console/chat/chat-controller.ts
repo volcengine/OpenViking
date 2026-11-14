@@ -84,10 +84,7 @@ export function createChatController(
         update,
       });
     } finally {
-      if (current(controller)) {
-        request = undefined;
-        appendInput = undefined;
-      }
+      if (current(controller)) request = undefined;
     }
   };
   const send = async (input: string | VikingBotDraft) => {
@@ -145,6 +142,7 @@ export function createChatController(
     undelivered.length = 0;
     update({
       sessionId,
+      responseComplete: false,
       messages: [],
       streaming: undefined,
       status: 'idle',

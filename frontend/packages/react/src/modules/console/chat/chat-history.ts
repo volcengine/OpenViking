@@ -22,7 +22,12 @@ export async function loadHistory(options: {
     'console_session_history_load',
     signal,
   );
-  update({ status: 'loading', error: undefined });
+  update({
+    status: 'loading',
+    historyKey: {},
+    responseComplete: false,
+    error: undefined,
+  });
   try {
     await options.pending;
     signal.throwIfAborted();
@@ -32,7 +37,11 @@ export async function loadHistory(options: {
     );
     signal.throwIfAborted();
     if (current()) {
-      update({ messages, status: 'idle' }, operation?.span);
+      // Persisted messages do not prove that the generating stream completed normally.
+      update(
+        { messages, status: 'idle', responseComplete: false },
+        operation?.span,
+      );
       operation?.ready({ messageCount: messages.length });
     }
   } catch (error) {

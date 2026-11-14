@@ -1,0 +1,47 @@
+/* Field metrics follow theme-ve-o-aml-design@0.0.36 (MIT). */
+.ov-form-field {
+  display: block;
+  min-width: 0;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.ov-form-field__label {
+  display: block;
+  width: 100%;
+  margin: 0 0 4px;
+  padding: 0;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+.ov-form-field__control {
+  min-width: 0;
+}
+.ov-form-field--error .ov-form-field__control svg {
+  color: var(--ov-ui-color-error, var(--ov-ui-error-default));
+}
+.ov-form-field__description,
+.ov-form-field__error {
+  margin: 4px 0 0;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+.ov-form-field__description {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+}
+.ov-form-field__error {
+  min-height: 24px;
+  margin-top: 0;
+  color: var(--ov-ui-color-error, var(--ov-ui-error-default));
+  line-height: 24px;
+}
+.ov-form-field__error + .ov-form-field__description {
+  margin-top: 0;
+  margin-bottom: 4px;
+}

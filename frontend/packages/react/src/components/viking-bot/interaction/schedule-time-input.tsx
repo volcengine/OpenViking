@@ -1,5 +1,6 @@
 import { TimePicker } from '../../../shared/primitives/time-picker/time-picker.js';
 import type { InteractionLabels } from './labels.js';
+import type { VikingBotInteractionFieldContext } from './field-types.js';
 
 export function ScheduleTimeInput({
   id,
@@ -10,6 +11,7 @@ export function ScheduleTimeInput({
   timezone,
   invalid,
   errorId,
+  controlProps,
 }: {
   id: string;
   value: string;
@@ -19,10 +21,12 @@ export function ScheduleTimeInput({
   timezone?: string;
   invalid: boolean;
   errorId?: string;
+  controlProps?: VikingBotInteractionFieldContext<string>['controlProps'];
 }) {
   return (
     <>
       <TimePicker
+        {...controlProps}
         id={id}
         name="schedule-time"
         value={value}
@@ -35,7 +39,10 @@ export function ScheduleTimeInput({
         minuteLabel={labels.scheduleMinute}
         aria-invalid={invalid || undefined}
         aria-describedby={
-          [timezone ? `${id}-timezone` : '', invalid ? errorId : '']
+          [
+            timezone ? `${id}-timezone` : '',
+            controlProps?.['aria-describedby'] ?? (invalid ? errorId : ''),
+          ]
             .filter(Boolean)
             .join(' ') || undefined
         }

@@ -63,3 +63,9 @@ export type {
   VikingBotRepairOption,
   VikingBotScheduleValue,
 } from './interaction/types.js';
+
+export type {
+  VikingBotInteractionFields,
+  VikingBotInteractionField,
+  VikingBotInteractionFieldContext,
+} from './interaction/field-types.js';

@@ -32,6 +32,10 @@ export function VikingBotSessionActions({
   const [historyOpen, setHistoryOpen] = useState(false);
   const locale = useLocale(localeProp);
   const labels = resolveVikingBotLabels(locale, overrides);
+  const select = (id: string) => {
+    track('viking_bot_session_select');
+    sessions?.onSelect(id);
+  };
   return (
     <LocaleProvider locale={locale}>
       <div className="ov-viking-bot__session-actions">
@@ -54,10 +58,7 @@ export function VikingBotSessionActions({
                   alignment="end"
                   value={sessions.currentId ? [sessions.currentId] : []}
                   onChange={([id]) => {
-                    if (id) {
-                      track('viking_bot_session_select');
-                      sessions.onSelect(id);
-                    }
+                    if (id) select(id);
                   }}
                   open={historyOpen}
                   onOpenChange={(open) => {
@@ -123,6 +124,10 @@ export function VikingBotSessionActions({
                             <SelectOption
                               value={item.id}
                               label={item.title}
+                              onClick={() => {
+                                if (sessions.currentId === item.id)
+                                  select(item.id);
+                              }}
                               aria-current={
                                 sessions.currentId === item.id || undefined
                               }

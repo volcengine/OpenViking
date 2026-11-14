@@ -103,17 +103,10 @@
   flex-direction: column;
   gap: 16px;
 }
-.ov-viking-bot__schedule-frequency {
-  min-inline-size: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
 .ov-viking-bot__schedule-modes {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 8px;
 }
 .ov-viking-bot__schedule-mode {
   box-sizing: border-box;

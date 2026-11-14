@@ -18,6 +18,7 @@ export { createTaskTracker } from '../../src/shared/task-tracking/tracker.js';
 export { createNativeBotService } from '../../src/modules/console/chat/native-service.js';
 export { createChatController } from '../../src/modules/console/chat/chat-controller.js';
 export { createSessionsController } from '../../src/modules/console/chat/sessions-controller.js';
+export { useConversation } from '../../src/modules/console/use-conversation.js';
 export { FilePreviewMedia } from '../../src/components/file-preview/file-preview-media.js';
 
 export { tagData, readData } from '../../src/shared/monitoring/data.js';

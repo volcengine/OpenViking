@@ -16,7 +16,9 @@ export function DirectoryPermission({
     : undefined;
   return (
     <p
-      className={`ov-viking-bot__directory-status${error ? ' ov-viking-bot__directory-status--error' : ''}`}
+      className={
+        error ? 'ov-form-field__error' : 'ov-viking-bot__directory-status'
+      }
       role={error ? 'alert' : 'status'}
     >
       {error ??

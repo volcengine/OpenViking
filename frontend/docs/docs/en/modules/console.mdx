@@ -48,6 +48,22 @@ Console manages requests, sessions and streaming state internally. Adapt another
 
 This example uses simulated services, including native capabilities and the current commercial contract. The native adapter implements `interrupt` and `steer` for stopping and in-flight follow-ups. The current commercial adapter omits both: sending is disabled during generation and stop is hidden. Both support another question after completion.
 
+### Human input
+
+Send any message to trigger simulated questions. The example injects asynchronous name validation, supplies a directory picker and replaces the instruction card with a custom component. An external schedule rule restricts updates to 09:00–18:00. Enable “Simulate answer send failure” to check retained input, error clearing and retry.
+
+```tsx file="../../_demos/console-hitl.tsx" preview
+
+```
+
+Console shows questions after a successful `request_user_input` tool result and a normal end to the current turn. It collects answers in card order. Interrupted or truncated streams, error results and unsupported schemas keep the ordinary tool presentation. Set `chatOptions.hitl={false}` to disable automatic interaction. An explicit `conversation.interaction` uses the host's question and callbacks.
+
+History does not establish whether a turn completed normally. Loading history restores messages and answer summaries without reopening question cards. A new live response can still activate HITL after normal completion.
+
+Submitting the last card sends a `request_user_input_response` JSON message to continue the conversation. It includes `schema_version: '1.0'`, `tool_call_id` and ordered `answers: { card_type, title, value }[]`. User bubbles, copy actions and history show readable label/value rows. Transport and persistence retain the original protocol text; option labels come from the corresponding question.
+
+Configure cards through `chatOptions.hitl.cards[card_type]`. Use `configureCard(card)` to distinguish repeated types by `card.id` or `card.payload`. See [VikingBotInteractionFields](../components/viking-bot#vikingbotinteractionfields) for field names and value types. Validation runs before advancing, and only the final card calls the chat service. Hosts check directory existence, permissions and business rules through validators, and supply data and requests for custom pickers.
+
 ### Background tasks
 
 Submit `ov add-resource https://example.com/demo` in Terminal, then send a chat message to attach both records to the same simulated task. Use the completion or failure controls to update its state.
@@ -105,8 +121,50 @@ When host content fails to render, the block shows the default fallback: an illu
 | scopeKey       | Isolation key for dynamic identities                    | `string`                                         | Inherited from Console |
 | service        | Chat and session adapter; keep its reference stable     | `VikingBotChatService & VikingBotSessionService` | Native service         |
 | requestOptions | Conversation request settings                           | `OvRequestOptions`                               | Inherited from Console |
+| hitl           | Automatic questions, field validation and custom cards  | `ConsoleHitlOptions \| false`                    | Built-in cards enabled |
 
 Every adapter method receives an `AbortSignal`, must honor cancellation, and throws on failure. Omit `saveMessage` when the backend persists messages automatically.
+
+### ConsoleHitlOptions
+
+| Property      | Description                                                                | Type                                                             | Default |
+| ------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------- | ------- |
+| cards         | Configure built-in cards or register new `card_type` values                | `Record<string, ConsoleHitlCardOptions>`                         | -       |
+| configureCard | Configure a question dynamically; its result takes precedence over `cards` | `(card: ConsoleHitlCard) => ConsoleHitlCardOptions \| undefined` | -       |
+
+### ConsoleHitlCard
+
+| Property | Description                                         | Type                                | Default  |
+| -------- | --------------------------------------------------- | ----------------------------------- | -------- |
+| id       | Tool call ID, a colon and the zero-based card index | `string`                            | Required |
+| cardType | The server's `card_type`                            | `string`                            | Required |
+| title    | The server's question title                         | `string`                            | Required |
+| payload  | The server's question parameters                    | `Readonly<Record<string, unknown>>` | Required |
+
+### ConsoleHitlCardOptions
+
+| Property      | Description                                                  | Type                                                                     | Default             |
+| ------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------ | ------------------- |
+| fields        | Labels, validators and control renderers for built-in fields | `VikingBotInteractionFields`                                             | -                   |
+| createRequest | Create or replace a question; required for new types         | `(card: ConsoleHitlCard) => VikingBotInteractionRequest`                 | Built-in adapter    |
+| serialize     | Convert an answer into the card's protocol `value`           | `(answer: VikingBotInteractionAnswer, card: ConsoleHitlCard) => unknown` | Built-in conversion |
+| summarize     | Format values for bubbles and copying, including history     | `(value: unknown, card: ConsoleHitlCard) => string`                      | Built-in summary    |
+
+#### Built-in cards
+
+| card_type           | Default form fields                 | Protocol value                                                                      |
+| ------------------- | ----------------------------------- | ----------------------------------------------------------------------------------- |
+| compile_name        | `value`, text                       | `string`                                                                            |
+| compile_output_type | `value`, single choice              | The option's `value`                                                                |
+| compile_source      | `value`, one directory URI per line | A `string[]` with blank lines and duplicates removed                                |
+| compile_target      | `value`, directory URI              | `string`                                                                            |
+| compile_skill       | `value`, candidate or custom URI    | `string`                                                                            |
+| compile_instruction | `value`, multiline text             | `string`                                                                            |
+| compile_schedule    | `mode`, `time`, `weekday`           | `{ frequency: 'disabled' }` or an object with frequency, time, weekday and timezone |
+
+Tool results may be direct JSON, MCP `structuredContent` or text `content`, with `schema_version: '1.0'`. Structured content takes precedence. If any card is invalid or unregistered, the entire group remains an ordinary tool result. The native service accepts the bare tool name and `mcp_openviking-mcp_request_user_input`. Custom adapters should preserve unique tool call IDs and normalize the server to `openviking-mcp` and the name to `request_user_input`.
+
+Return `kind: 'custom'` from `createRequest` to render a component that submits an object or another value through `context.submit(value)` and owns its field validation. Use `serialize` for the server's value schema and `summarize` for readable output. New types require `createRequest` before they can activate an interaction.
 
 ### VikingBotChatInput
 
