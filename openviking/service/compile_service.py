@@ -871,10 +871,10 @@ class CompileService:
         compile_name: str,
         ctx: RequestContext,
         *,
-        action: AclAction = AclAction.READ,
+        action: AclAction | None = AclAction.READ,
         owner_user_id: str | None = None,
     ) -> dict[str, Any]:
-        """Load the selected owner's config and check the caller's output ACL."""
+        """Load the selected owner's config. An action of None checks ownership scope only."""
         validate_compile_name(compile_name)
         lifecycle = self._require_lifecycle()
         record = await lifecycle.store.get(
@@ -884,7 +884,8 @@ class CompileService:
         )
         if record is None:
             raise NotFoundError(compile_name, "compile configuration")
-        await lifecycle._fs._ensure_access(record["to"], ctx, action=action)
+        if action is not None:
+            await lifecycle._fs._ensure_access(record["to"], ctx, action=action)
         return record
 
     @staticmethod
@@ -906,7 +907,9 @@ class CompileService:
         return {"compile_name": compile_name, **{key: record[key] for key in fields}}
 
     async def get_config(self, compile_name: str, ctx: RequestContext) -> dict[str, Any]:
-        return self._config_view(compile_name, await self._configuration(compile_name, ctx))
+        return self._config_view(
+            compile_name, await self._configuration(compile_name, ctx, action=None)
+        )
 
     async def update_config(self, body: CompileConfigUpdate, ctx: RequestContext) -> dict[str, Any]:
         """Replace mutable settings under the state lock; target changes raise InvalidArgumentError."""
@@ -1060,34 +1063,21 @@ class CompileService:
     async def list_runs(
         self, compile_name: str, ctx: RequestContext, *, limit: int, cursor: str | None
     ) -> dict[str, Any]:
-        record = await self._configuration(compile_name, ctx)
-        lifecycle = self._require_lifecycle()
-        runs = []
-        for run in await lifecycle.store.list_runs(
-            ctx.account_id,
-            record["execution_context"]["owner_user_id"],
-            compile_name,
-            cursor=cursor,
-        ):
-            try:
-                await lifecycle._fs._ensure_access(run["params"]["to"], ctx)
-            except PermissionDeniedError:
-                continue
-            runs.append(run)
-            if len(runs) > limit:
-                break
+        await self._configuration(compile_name, ctx, action=None)
+        runs = await self._require_lifecycle().store.list_runs(
+            ctx.account_id, ctx.user.user_id, compile_name, cursor=cursor, limit=limit + 1
+        )
         page = runs[:limit]
         return {"runs": page, "next_cursor": page[-1]["task_id"] if len(runs) > limit else None}
 
     async def get_run(self, compile_name: str, task_id: str, ctx: RequestContext) -> dict[str, Any]:
-        """Read a frozen run under the caller's current configuration read permission."""
-        record = await self._configuration(compile_name, ctx)
+        """Return one frozen run belonging to the caller's named configuration."""
+        await self._configuration(compile_name, ctx, action=None)
         run = await self._require_lifecycle().store.get_run(
-            ctx.account_id, record["execution_context"]["owner_user_id"], compile_name, task_id
+            ctx.account_id, ctx.user.user_id, compile_name, task_id
         )
         if run is None:
             raise NotFoundError(task_id, "compile run")
-        await self._require_lifecycle()._fs._ensure_access(run["params"]["to"], ctx)
         return run
 
     async def run_outputs(
@@ -1101,15 +1091,11 @@ class CompileService:
     ) -> dict[str, Any]:
         """Page authorized run outputs with each file's latest commit, or null for no history."""
         run = await self.get_run(compile_name, task_id, ctx)
-        target = run["params"]["to"]
-        fs = self._require_lifecycle()._fs
-        await fs._ensure_access(target, ctx)
         start, finish = run["meta"]["start_snapshot"], run["meta"]["finish_snapshot"]
-        changes = (
-            await fs.diff_paths(dirs=[target], base=start, head=finish, ctx=ctx)
-            if start and finish
-            else []
-        )
+        if not start or not finish:
+            return {"outputs": [], "next_cursor": None}
+        fs = self._require_lifecycle()._fs
+        changes = await fs.diff_paths(dirs=[run["params"]["to"]], base=start, head=finish, ctx=ctx)
         outputs = [
             {"uri": item["uri"], "snapshot_id": finish, "change_type": item["change_type"]}
             for item in sorted(changes, key=lambda item: item["uri"])

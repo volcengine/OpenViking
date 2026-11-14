@@ -772,32 +772,30 @@ async def test_configuration_private_args_round_trip_and_update(
             )
 
 
-async def test_run_queries_check_frozen_target_permissions(service, app, monkeypatch):
+async def test_owned_run_metadata_and_output_permissions(service, app, client, monkeypatch):
     ctx, _ = await prepare(service, app, monkeypatch)
-    compile_name = (
-        await service.compile.create_compile_task(
-            CompileCreateRequest.model_validate(SAVED_INPUTS), ctx=ctx
+    compiler = service.compile
+    name = SAVED_INPUTS["compile_name"]
+    await client.post("/api/v1/compile/create", json=SAVED_INPUTS)
+    task = await compiler.create(CompileRequest(compile_name=name), connection={}, ctx=ctx)
+    monkeypatch.setattr(service.viking_fs, "_can_access_many", AsyncMock(return_value={}))
+
+    config = await compiler.get_config(name, ctx)
+    run = await compiler.get_run(name, task.task_id, ctx)
+    history = await compiler.list_runs(name, ctx, limit=20, cursor=None)
+    assert config["to"] == TARGET
+    assert history["runs"] == [run]
+
+    for start, finish in ((None, "head"), ("base", None), ("base", "head")):
+        run["meta"].update(start_snapshot=start, finish_snapshot=finish)
+        await compiler.lifecycle.store.put_run(ctx.account_id, ctx.user.user_id, name, run)
+        response = await client.get(
+            f"/api/v1/compile/runs/{task.task_id}/outputs", params={"compile_name": name}
         )
-    )["compile_name"]
-    task = await service.compile.create(
-        CompileRequest(compile_name=compile_name), connection={}, ctx=ctx
-    )
-    async with service.compile.lifecycle.store.edit(
-        ctx.account_id, ctx.user.user_id, compile_name
-    ) as record:
-        record["to"] = "viking://resources/another-target"
-
-    async def authorize(uri, *args, **kwargs):
-        if uri == TARGET:
-            raise PermissionDeniedError("Historical output permission revoked")
-
-    monkeypatch.setattr(service.viking_fs, "_ensure_access", authorize)
-    with pytest.raises(PermissionDeniedError):
-        await service.compile.get_run(compile_name, task.task_id, ctx)
-    assert await service.compile.list_runs(compile_name, ctx, limit=20, cursor=None) == {
-        "runs": [],
-        "next_cursor": None,
-    }
+        if start and finish:
+            assert response.status_code == 403
+        else:
+            assert response.json()["result"] == {"outputs": [], "next_cursor": None}
 
 
 @pytest.mark.parametrize(
