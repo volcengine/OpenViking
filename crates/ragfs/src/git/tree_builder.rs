@@ -547,6 +547,7 @@ pub async fn lookup(
 /// (the caller's `&mut`) so no internal locking is needed.
 pub struct TreeLookupCache {
     by_oid: HashMap<ObjectId, std::sync::Arc<TreeEntries>>,
+    previous_batch: HashMap<ObjectId, std::sync::Arc<TreeEntries>>,
 }
 
 impl TreeLookupCache {
@@ -554,7 +555,15 @@ impl TreeLookupCache {
     pub fn new() -> Self {
         Self {
             by_oid: HashMap::new(),
+            previous_batch: HashMap::new(),
         }
+    }
+
+    /// Reuse the last batch's trees, dropping trees unused in that batch.
+    /// History walks call this per comparison to avoid retaining all old roots.
+    pub(crate) fn begin_batch(&mut self) {
+        std::mem::swap(&mut self.previous_batch, &mut self.by_oid);
+        self.by_oid.clear();
     }
 
     /// Pre-seed the cache with an already-decoded tree's entries. Useful when
@@ -572,7 +581,7 @@ impl Default for TreeLookupCache {
 }
 
 /// Same as [`lookup`], but reuses an external [`TreeLookupCache`] across calls
-/// so each tree object is fetched + decoded at most once. The cache is keyed
+/// so retained tree objects are fetched + decoded at most once. The cache is keyed
 /// on the *content-addressed* tree OID, so it stays correct across calls with
 /// different starting roots.
 pub async fn lookup_cached(
@@ -595,9 +604,12 @@ pub async fn lookup_cached(
         let entries = match cache.by_oid.get(&current_oid) {
             Some(e) => e.clone(),
             None => {
-                let loaded = std::sync::Arc::new(
-                    load_tree_entries(store, account, &current_oid).await?,
-                );
+                let loaded = match cache.previous_batch.remove(&current_oid) {
+                    Some(entries) => entries,
+                    None => {
+                        std::sync::Arc::new(load_tree_entries(store, account, &current_oid).await?)
+                    }
+                };
                 cache.by_oid.insert(current_oid, loaded.clone());
                 loaded
             }
@@ -1289,6 +1301,33 @@ mod tests {
     }
 
     // --- Fast Path 2 ---
+
+    #[tokio::test]
+    async fn test_lookup_cache_reuses_recent_trees_and_releases_unused_trees() {
+        let (_dir, store) = make_store();
+        let mut editor = TreeEditor::empty();
+        editor
+            .upsert(&store, "acc", "file.md", dummy_oid())
+            .await
+            .unwrap();
+        let root = editor.write(&store, "acc").await.unwrap();
+        let mut cache = TreeLookupCache::new();
+        lookup_cached(&store, "acc", root, "file.md", &mut cache)
+            .await
+            .unwrap();
+        let entries = std::sync::Arc::downgrade(cache.by_oid.get(&root).unwrap());
+
+        for _ in 0..3 {
+            cache.begin_batch();
+            lookup_cached(&store, "acc", root, "file.md", &mut cache)
+                .await
+                .unwrap();
+            assert!(entries.upgrade().is_some(), "recent tree was reloaded");
+        }
+        cache.begin_batch();
+        cache.begin_batch();
+        assert!(entries.upgrade().is_none(), "unused tree was retained");
+    }
 
     /// ObjectStore wrapper recording every `get`/`put` oid, used to prove the
     /// lazy-loading commit path never touches untouched subtrees.

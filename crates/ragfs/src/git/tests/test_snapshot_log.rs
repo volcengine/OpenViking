@@ -87,16 +87,30 @@ async fn test_snapshot_log_file_replacing_directory_indexes_descendant_deletes()
 
 #[tokio::test]
 async fn test_snapshot_log_tail_scan_merges_when_latest_is_behind_head() {
-    let (_dir, vfs, _object_store, _ref_store, svc) = make_service("acct_snapshot_tail");
+    let dir = tempfile::tempdir().unwrap();
+    let account = "acct_snapshot_tail";
+    let object_store = Arc::new(GetSpyObjectStore {
+        inner: LocalObjectStore::new(dir.path()),
+        gets: std::sync::Mutex::new(Vec::new()),
+    });
+    let vfs = MockVfs::new(account);
+    let svc = GitService::new(
+        vfs.clone(),
+        object_store.clone(),
+        Arc::new(LocalRefStore::new(dir.path())),
+    );
     vfs.put("resources/a.md", b"v1");
-    let c1 = make_commit(&svc, "acct_snapshot_tail", "main", "first").await;
+    let c1 = make_commit(&svc, account, "main", "indexed").await;
     vfs.put("resources/a.md", b"v2");
-    let c2 = make_commit(&svc, "acct_snapshot_tail", "main", "second").await;
+    let c2 = make_commit(&svc, account, "main", "matching tail commit").await;
+    vfs.put("resources/b.md", b"unrelated");
+    make_commit(&svc, account, "main", "unrelated tail commit").await;
+    let shared_tree = commit_tree(object_store.as_ref(), account, c2).await;
 
     let store = make_snapshot_log_store().await;
     store
         .append_rows_if_latest(
-            "acct_snapshot_tail",
+            account,
             "main",
             None,
             &[
@@ -118,9 +132,15 @@ async fn test_snapshot_log_tail_scan_merges_when_latest_is_behind_head() {
         .unwrap();
 
     let svc = svc.with_snapshot_log(Some(store));
+    // Keep the index behind HEAD and exclude asynchronous backfill reads.
+    svc.snapshot_log_backfills
+        .lock()
+        .unwrap()
+        .insert((account.into(), "main".into()));
+    object_store.reset();
     let log = svc
         .log(LogRequest {
-            account: "acct_snapshot_tail".into(),
+            account: account.into(),
             branch: "main".into(),
             limit: 10,
             paths: Some(vec!["resources/a.md".into()]),
@@ -129,6 +149,7 @@ async fn test_snapshot_log_tail_scan_merges_when_latest_is_behind_head() {
         .unwrap();
     let oids: Vec<ObjectId> = log.into_iter().map(|entry| entry.oid).collect();
     assert_eq!(oids, vec![c2, c1]);
+    assert_eq!(object_store.count_gets(&shared_tree), 1);
 }
 
 #[tokio::test]
