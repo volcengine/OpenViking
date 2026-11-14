@@ -833,7 +833,10 @@ export function CompileForm({
           onClose()
         }}
       >
-        <SheetContent className="gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-3xl">
+        <SheetContent
+          data-workbench-overlay
+          className="gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-3xl"
+        >
           <SheetHeader className="shrink-0 border-b px-6 py-5 pr-14">
             <SheetTitle className="text-lg">{title}</SheetTitle>
           </SheetHeader>

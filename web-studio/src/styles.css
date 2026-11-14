@@ -1141,9 +1141,15 @@ button.users-space-trigger:focus-visible {
 }
 
 /* IDE workbench shares the console header, without a second navigation rail. */
+:is([data-workbench='true'], [data-workbench-overlay]) {
+  --primary: #5252ff;
+}
+[data-workbench-overlay] {
+  --primary-foreground: #fff;
+  --ring: #5252ff;
+}
 [data-workbench='true'] {
   --studio-canvas: #f6f6fc;
-  --primary: #5252ff;
   --muted-foreground: #787c91;
 }
 [data-workbench='true'] > header {

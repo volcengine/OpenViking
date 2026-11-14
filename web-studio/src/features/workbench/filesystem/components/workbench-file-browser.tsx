@@ -43,7 +43,7 @@ export function WorkbenchFileBrowser({
           labels={{
             actionBar: {
               connectAgent: t('ide.connectAgent'),
-              importResources: t('explorer.addResource'),
+              importResources: t('importMenu.trigger'),
             },
           }}
         />

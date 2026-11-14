@@ -10,6 +10,22 @@ export type SkillValidation = {
   warnings: ValidationIssue[]
 }
 
+export type SkillSource = {
+  name: string
+  description: string
+  path: string
+}
+
+export async function listSkillSources(url: string): Promise<SkillSource[]> {
+  const result = await getOvResult<{ skills: SkillSource[] }>(
+    ovClient.client.post({
+      url: '/api/v1/skills',
+      body: { data: url, list_only: true },
+    }),
+  )
+  return result.skills
+}
+
 export type SkillTask = {
   task_id: string
   status:
@@ -34,12 +50,14 @@ export async function validateNewSkill(data: string): Promise<SkillValidation> {
 export async function addNewSkill(
   data: string,
   scope: SkillScope | `viking://${string}`,
+  sourcePath?: string,
 ): Promise<{ task_id?: string }> {
   return getOvResult<{ task_id?: string }>(
     ovClient.client.post({
       url: '/api/v1/skills',
       body: {
         data,
+        ...(sourcePath ? { skills: [sourcePath] } : {}),
         target_uri:
           scope === 'agent'
             ? 'viking://agent/skills'

@@ -36,7 +36,7 @@ import {
   SheetTitle,
 } from '#/shared/ui/sheet'
 
-import { AddSkillSheet } from '#/features/workbench/skills/components/add-skill-sheet'
+import { ImportSkillDialog } from '#/features/workbench/skills/components/import-skill-dialog'
 import type { SkillScope } from '#/features/workbench/skills/components/skill-scope-tabs'
 import {
   SKILL_SCOPE_ICONS,
@@ -391,7 +391,7 @@ export function SkillsRoute() {
         </div>
       )}
 
-      <AddSkillSheet
+      <ImportSkillDialog
         key={identityScopeKey}
         open={addOpen}
         onOpenChange={setAddOpen}

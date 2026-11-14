@@ -1,10 +1,17 @@
 // @vitest-environment jsdom
 
 import { ovClient } from '#/shared/api/ov-client/index'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 
-import { AddSkillSheet } from '#/features/workbench/skills/components/add-skill-sheet'
+import { ImportSkillDialog } from '#/features/workbench/skills/components/import-skill-dialog'
 
 const { validateNewSkill, addNewSkill } = vi.hoisted(() => ({
   validateNewSkill: vi.fn(),
@@ -18,6 +25,15 @@ vi.mock('#/features/workbench/skills/lib/add-skill', () => ({
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }))
+
+async function submitFile(content: string) {
+  const file = new File([content], 'SKILL.md', { type: 'text/markdown' })
+  file.text = vi.fn().mockResolvedValue(content)
+  const input = document.querySelector<HTMLInputElement>('input[type=file]')!
+  await act(async () => fireEvent.change(input, { target: { files: [file] } }))
+  await waitFor(() => expect(screen.getByText('SKILL.md')).toBeTruthy())
+  fireEvent.click(screen.getByRole('button', { name: 'add.submit' }))
+}
 
 afterEach(() => {
   cleanup()
@@ -39,14 +55,12 @@ it('does not add a skill after validation resolves for an unmounted workspace', 
   )
   const onAdded = vi.fn()
   const props = { open: true, onOpenChange: vi.fn(), onAdded }
-  const view = render(<AddSkillSheet key="source" {...props} />)
-  const content = screen.getByRole('textbox', { name: 'add.content' })
-  fireEvent.change(content, { target: { value: '# Source skill' } })
-  fireEvent.submit(content.closest('form')!)
+  const view = render(<ImportSkillDialog key="source" {...props} />)
+  await submitFile('# Source skill')
   expect(validateNewSkill).toHaveBeenCalledWith('# Source skill')
 
-  // Workspace switch remounts the sheet while the old validation is pending.
-  view.rerender(<AddSkillSheet key="target" {...props} />)
+  // Workspace switch remounts the dialog while the old validation is pending.
+  view.rerender(<ImportSkillDialog key="target" {...props} />)
   await act(async () => {
     finishValidation({ valid: true, warnings: [], errors: [] })
   })
@@ -54,7 +68,7 @@ it('does not add a skill after validation resolves for an unmounted workspace', 
   expect(onAdded).not.toHaveBeenCalled()
 })
 
-it('does not add a skill from a drawer closed during validation', async () => {
+it('does not add a skill from a dialog closed during validation', async () => {
   let finishValidation!: (result: {
     valid: boolean
     warnings: []
@@ -66,18 +80,16 @@ it('does not add a skill from a drawer closed during validation', async () => {
     }),
   )
   const props = { onOpenChange: vi.fn(), onAdded: vi.fn() }
-  const view = render(<AddSkillSheet {...props} open />)
-  const content = screen.getByRole('textbox', { name: 'add.content' })
-  fireEvent.change(content, { target: { value: '# Draft' } })
-  fireEvent.submit(content.closest('form')!)
-  view.rerender(<AddSkillSheet {...props} open={false} />)
+  const view = render(<ImportSkillDialog {...props} open />)
+  await submitFile('# Draft')
+  view.rerender(<ImportSkillDialog {...props} open={false} />)
   await act(async () => {
     finishValidation({ valid: true, warnings: [], errors: [] })
   })
   expect(addNewSkill).not.toHaveBeenCalled()
 })
 
-it('does not add a skill when the runtime connection changes before React unmounts the drawer', async () => {
+it('does not add a skill when the runtime connection changes before React unmounts the dialog', async () => {
   let finishValidation!: (result: {
     valid: boolean
     warnings: []
@@ -104,12 +116,10 @@ it('does not add a skill when the runtime connection changes before React unmoun
     userId: 'alice',
   })
 
-  render(<AddSkillSheet open onOpenChange={vi.fn()} onAdded={vi.fn()} />)
-  const content = screen.getByRole('textbox', { name: 'add.content' })
-  fireEvent.change(content, { target: { value: '# Source skill' } })
-  fireEvent.submit(content.closest('form')!)
+  render(<ImportSkillDialog open onOpenChange={vi.fn()} onAdded={vi.fn()} />)
+  await submitFile('# Source skill')
 
-  // The client switches synchronously; React may commit the old sheet later.
+  // The client switches synchronously; React may commit the old dialog later.
   baseUrl = 'http://target.test'
   await act(async () => {
     finishValidation({ valid: true, warnings: [], errors: [] })

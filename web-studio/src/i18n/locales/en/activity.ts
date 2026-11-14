@@ -176,6 +176,14 @@ const activity = {
       addResource: 'Import resources',
       loading: 'loading',
     },
+    importMenu: {
+      trigger: 'Import data',
+      resources: 'Resources',
+      localUpload: 'Local upload',
+      webLink: 'Web link',
+      sync: 'Sync data source',
+      skill: 'Skill',
+    },
     agent: {
       history: 'Session history',
       newSession: 'New session',

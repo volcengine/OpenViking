@@ -168,6 +168,14 @@ const activity = {
       addResource: '导入资源',
       loading: '加载中',
     },
+    importMenu: {
+      trigger: '数据导入',
+      resources: '资源',
+      localUpload: '本地上传',
+      webLink: '网页链接',
+      sync: '数据源同步',
+      skill: 'Skill',
+    },
     agent: {
       history: '历史会话',
       newSession: '新建会话',

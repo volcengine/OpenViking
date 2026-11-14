@@ -400,20 +400,22 @@ const workspace = {
     description:
       'View Agent skills available to the current user and workspace.',
     add: {
-      title: 'Add Skill',
-      description:
-        'Import a SKILL.md for agents to find and read. Execution is controlled by the agent using it.',
-      scope: 'Add to',
-      scopeDescription: {
-        user: 'Available only to the current user',
-        agent: 'Shared with this account; requires permission',
-      },
-      content: 'SKILL.md content',
-      placeholder:
-        '---\nname: my-skill\ndescription: What this skill does\n---\n\n# My skill',
-      contentHint:
-        'Paste the complete content or select a local SKILL.md file. This imports one file only.',
-      upload: 'Choose SKILL.md',
+      title: 'Import Skill',
+      scope: 'Save to directory',
+      targets: { user: 'Personal', agent: 'Shared' },
+      upload: 'Upload file',
+      uploadTab: 'Upload file',
+      githubTab: 'GitHub link',
+      dropzone: 'Click or drag a Skill file here to upload',
+      invalidFile: 'Choose one non-empty Markdown file.',
+      invalidGithub: 'Enter a GitHub repository or Skill directory URL.',
+      noSkills: 'No Skills found at this URL.',
+      selectSkill: 'Select a Skill to import',
+      ambiguousSkill:
+        'Use a direct link to the Skill directory to distinguish duplicate folder names.',
+      cancel: 'Cancel',
+      submit: 'Confirm',
+      processingButton: 'Processing…',
       removeFile: 'Remove file {{fileName}}',
       warnings: 'Validation notes',
       failed: 'Could not add Skill',
@@ -425,7 +427,6 @@ const workspace = {
       another: 'Add another',
       validating: 'Validating…',
       adding: 'Submitting…',
-      submit: 'Add Skill',
     },
     refresh: 'Refresh',
     loading: 'Loading skills...',

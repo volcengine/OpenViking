@@ -119,7 +119,7 @@ export function UploadResourceFields({
       <div
         {...getRootProps()}
         className={cn(
-          'relative rounded-lg border-2 border-dashed p-8 text-center transition-colors',
+          'relative rounded-lg border-2 border-dashed p-8 text-center transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary',
           isDragActive
             ? 'cursor-pointer border-primary bg-primary/5'
             : 'cursor-pointer border-muted-foreground/25 hover:border-primary/50 hover:bg-muted/30',

@@ -39,6 +39,9 @@ import { useStudioService } from '#/features/connection/hooks/use-studio-service
 import { CompileForm } from '#/features/workbench/compile/components/compile-form'
 import { AddResourceForm } from '#/features/workbench/resources/components/add-resource-page'
 import { FindPalette } from '#/features/workbench/resources/components/find-palette'
+import { ImportSkillDialog } from '#/features/workbench/skills/components/import-skill-dialog'
+import { ResourceImportMenu } from './components/resource-import-menu'
+import type { ResourceImportEntry } from './components/resource-import-menu'
 import { WorkbenchFileBrowser } from './components/workbench-file-browser'
 import { SharedFilePreview } from './components/shared-file-preview'
 import {
@@ -135,6 +138,8 @@ function FilesystemWorkbench() {
   const [uploadDialogOpen, setUploadDialogOpen] = useState(
     () => search.upload ?? false,
   )
+  const [importEntry, setImportEntry] = useState<ResourceImportEntry>()
+  const [skillImportScope, setSkillImportScope] = useState<string>()
   const [uploadTarget, setUploadTarget] = useState<{
     scope: string
     uri: string
@@ -276,7 +281,10 @@ function FilesystemWorkbench() {
   const handleUploadDialogOpenChange = useCallback(
     (open: boolean) => {
       setUploadDialogOpen(open)
-      if (!open) setUploadTarget(undefined)
+      if (!open) {
+        setUploadTarget(undefined)
+        setImportEntry(undefined)
+      }
       if (!open && search.upload) {
         syncSearch({ upload: undefined })
       }
@@ -672,12 +680,19 @@ function FilesystemWorkbench() {
             )
               void revealResource(uri)
           }}
-          onImportResources={
+          renderImportResources={
             canUseLocalTools
-              ? () => {
-                  setUploadTarget(undefined)
-                  setUploadDialogOpen(true)
-                }
+              ? (trigger) => (
+                  <ResourceImportMenu
+                    trigger={trigger}
+                    onImport={(entry) => {
+                      setUploadTarget(undefined)
+                      setImportEntry(entry)
+                      setUploadDialogOpen(true)
+                    }}
+                    onImportSkill={() => setSkillImportScope(identityScopeKey)}
+                  />
+                )
               : undefined
           }
         />
@@ -741,7 +756,10 @@ function FilesystemWorkbench() {
             open={uploadDialogOpen}
             onOpenChange={handleUploadDialogOpenChange}
           >
-            <DialogContent className="max-h-[min(86vh,760px)] gap-0 overflow-hidden p-0 sm:max-w-4xl">
+            <DialogContent
+              data-workbench-overlay
+              className="max-h-[min(86dvh,760px)] gap-0 overflow-hidden p-0 sm:max-w-4xl"
+            >
               <DialogHeader className="border-b px-6 py-5">
                 <DialogTitle className="text-xl">
                   {t('addResource.title')}
@@ -750,9 +768,21 @@ function FilesystemWorkbench() {
                   {t('addResource.description')}
                 </DialogDescription>
               </DialogHeader>
-              <div className="max-h-[calc(min(86vh,760px)-6rem)] overflow-y-auto px-6 py-5">
+              <div className="min-h-0 overflow-y-auto px-6 py-5">
                 <AddResourceForm
                   key={identityScopeKey}
+                  initialMode={importEntry?.mode}
+                  initialRemoteResourceType={
+                    importEntry?.mode === 'remote'
+                      ? importEntry.source
+                      : undefined
+                  }
+                  initialWatchEnabled={
+                    importEntry?.mode === 'remote' && importEntry.sync
+                  }
+                  watchRequired={
+                    importEntry?.mode === 'remote' && importEntry.sync
+                  }
                   initialTargetUri={
                     uploadTarget?.scope === identityScopeKey
                       ? uploadTarget.uri
@@ -768,6 +798,21 @@ function FilesystemWorkbench() {
               </div>
             </DialogContent>
           </Dialog>
+          {skillImportScope === identityScopeKey ? (
+            <ImportSkillDialog
+              open
+              onOpenChange={(open) => {
+                if (!open) setSkillImportScope(undefined)
+              }}
+              onAdded={() => {
+                refreshBrowser()
+                void invalidateList()
+                void queryClient.invalidateQueries({
+                  queryKey: ['skills', identityScopeKey],
+                })
+              }}
+            />
+          ) : null}
         </>
       ) : null}
       {selectedFile && resourceDialogOpen ? (

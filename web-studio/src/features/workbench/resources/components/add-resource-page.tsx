@@ -41,6 +41,7 @@ import {
 } from '#/shared/ui/collapsible'
 import { Input } from '#/shared/ui/input'
 import { Label } from '#/shared/ui/label'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '#/shared/ui/tabs'
 import { Textarea } from '#/shared/ui/textarea'
 import { Tooltip, TooltipContent, TooltipTrigger } from '#/shared/ui/tooltip'
 
@@ -82,6 +83,7 @@ const DEFAULT_ADDITIONAL_OPTIONS: AdditionalResourceOptionsValue = {
 
 export function AddResourceForm({
   initialMode = 'upload',
+  initialRemoteResourceType = 'auto',
   initialTargetUri = 'viking://resources/',
   initialWatchEnabled = false,
   onAccepted,
@@ -91,6 +93,7 @@ export function AddResourceForm({
   watchRequired = false,
 }: {
   initialMode?: Mode
+  initialRemoteResourceType?: RemoteResourceTypeSelection
   initialTargetUri?: string
   initialWatchEnabled?: boolean
   onAccepted?: (result: RemoteStartResult) => void
@@ -105,8 +108,9 @@ export function AddResourceForm({
 
   const [mode, setMode] = useState<Mode>(watchRequired ? 'remote' : initialMode)
   const [remoteUrl, setRemoteUrl] = useState('')
-  const [remoteResourceType, setRemoteResourceType] =
-    useState<RemoteResourceTypeSelection>('auto')
+  const [remoteResourceType, setRemoteResourceType] = useState(
+    initialRemoteResourceType,
+  )
   const [selectedFiles, setSelectedFiles] = useState<SelectedUploadFile[]>([])
   const [targetUri, setTargetUri] = useState(initialTargetUri)
   const [destinationMode, setDestinationMode] =
@@ -250,7 +254,7 @@ export function AddResourceForm({
     resetRemote()
     setSelectedFiles([])
     setRemoteUrl('')
-    setRemoteResourceType('auto')
+    setRemoteResourceType(initialRemoteResourceType)
     setMode(watchRequired ? 'remote' : initialMode)
     resetRemoteSourceFields()
     setAdditionalOptions(DEFAULT_ADDITIONAL_OPTIONS)
@@ -275,90 +279,85 @@ export function AddResourceForm({
       ? selectedFiles.length > 0
       : !!remoteUrl.trim() && hasWatchInterval)
 
+  const remoteFields = (
+    <RemoteResourceFields
+      disabled={remotePhase === 'processing'}
+      onResourceTypeChange={handleRemoteResourceTypeChange}
+      onUrlChange={handleRemoteUrlChange}
+      onWatchEnabledChange={setWatchEnabled}
+      onWatchIntervalChange={setWatchInterval}
+      resourceKind={remoteResourceKind}
+      resourceType={remoteResourceType}
+      t={t}
+      url={displayRemoteUrl}
+      watchEnabled={effectiveWatchEnabled}
+      watchInterval={watchInterval}
+      watchRequired={watchRequired}
+      watchSupported={sourceCapabilities.watch}
+    >
+      {remoteResourceKind === 'feishu' ? (
+        <FeishuResourceOptions
+          disabled={remotePhase === 'processing'}
+          documentationUrl={feishuConfigurationUrl}
+          onChange={setFeishuOptions}
+          t={t}
+          value={feishuOptions}
+          watchEnabled={effectiveWatchEnabled}
+        />
+      ) : null}
+      {remoteResourceKind === 'git' ? (
+        <GitResourceOptions
+          disabled={remotePhase === 'processing'}
+          onChange={setGitOptions}
+          supportsHttpAuth={gitSupportsHttpAuth}
+          t={t}
+          value={gitOptions}
+        />
+      ) : null}
+      {remoteResourceKind === 'webPage' || remoteResourceKind === 'webFeed' ? (
+        <WebResourceOptions
+          disabled={remotePhase === 'processing'}
+          onChange={setWebOptions}
+          t={t}
+          value={webOptions}
+        />
+      ) : null}
+      {remoteResourceKind === 'tos' ? <TosResourceOptions t={t} /> : null}
+    </RemoteResourceFields>
+  )
+
   return (
     <div className="flex flex-col gap-6">
       <div className="space-y-5">
-        {!watchRequired ? (
-          <div className="flex gap-1 rounded-lg bg-muted p-1">
-            <button
-              type="button"
-              className={`flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-                activeMode === 'upload'
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-              onClick={() => setMode('upload')}
-            >
-              <Upload className="size-4" />
-              {t('mode.upload')}
-            </button>
-            <button
-              type="button"
-              className={`flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-                activeMode === 'remote'
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-              onClick={() => setMode('remote')}
-            >
-              <Globe className="size-4" />
-              {t('mode.remote')}
-            </button>
-          </div>
-        ) : null}
-
-        {activeMode === 'upload' ? (
-          <UploadResourceFields
-            files={selectedFiles}
-            onFilesChange={setSelectedFiles}
-            t={t}
-          />
+        {watchRequired ? (
+          remoteFields
         ) : (
-          <RemoteResourceFields
-            disabled={remotePhase === 'processing'}
-            onResourceTypeChange={handleRemoteResourceTypeChange}
-            onUrlChange={handleRemoteUrlChange}
-            onWatchEnabledChange={setWatchEnabled}
-            onWatchIntervalChange={setWatchInterval}
-            resourceKind={remoteResourceKind}
-            resourceType={remoteResourceType}
-            t={t}
-            url={displayRemoteUrl}
-            watchEnabled={effectiveWatchEnabled}
-            watchInterval={watchInterval}
-            watchRequired={watchRequired}
-            watchSupported={sourceCapabilities.watch}
+          <Tabs
+            value={activeMode}
+            onValueChange={(value) =>
+              setMode(value === 'remote' ? 'remote' : 'upload')
+            }
+            className="gap-4"
           >
-            {remoteResourceKind === 'feishu' ? (
-              <FeishuResourceOptions
-                disabled={remotePhase === 'processing'}
-                documentationUrl={feishuConfigurationUrl}
-                onChange={setFeishuOptions}
+            <TabsList className="w-full">
+              <TabsTrigger value="upload">
+                <Upload />
+                {t('mode.upload')}
+              </TabsTrigger>
+              <TabsTrigger value="remote">
+                <Globe />
+                {t('mode.remote')}
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="upload">
+              <UploadResourceFields
+                files={selectedFiles}
+                onFilesChange={setSelectedFiles}
                 t={t}
-                value={feishuOptions}
-                watchEnabled={effectiveWatchEnabled}
               />
-            ) : null}
-            {remoteResourceKind === 'git' ? (
-              <GitResourceOptions
-                disabled={remotePhase === 'processing'}
-                onChange={setGitOptions}
-                supportsHttpAuth={gitSupportsHttpAuth}
-                t={t}
-                value={gitOptions}
-              />
-            ) : null}
-            {remoteResourceKind === 'webPage' ||
-            remoteResourceKind === 'webFeed' ? (
-              <WebResourceOptions
-                disabled={remotePhase === 'processing'}
-                onChange={setWebOptions}
-                t={t}
-                value={webOptions}
-              />
-            ) : null}
-            {remoteResourceKind === 'tos' ? <TosResourceOptions t={t} /> : null}
-          </RemoteResourceFields>
+            </TabsContent>
+            <TabsContent value="remote">{remoteFields}</TabsContent>
+          </Tabs>
         )}
 
         {activeMode === 'remote' && remotePhase === 'processing' ? (
@@ -558,7 +557,8 @@ export function AddResourceForm({
         </Collapsible>
 
         <Button
-          className="text-primary-foreground!"
+          size="sm"
+          className="rounded-sm"
           onClick={handleSubmit}
           disabled={
             !canSubmit ||
