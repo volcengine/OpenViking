@@ -135,7 +135,7 @@ claude mcp add --transport http openviking \
 | `download` | 返回一个短时有效、只能使用一次的 URL，用 `curl` 获取单个文件的原始字节（任意类型，包括 PDF、图片、压缩包、音频和视频）；不返回文件内容。不支持目录 | `uri` |
 | `list` | 列出 `viking://` 目录下的条目 | `uri`, `recursive`(可选) |
 | `tree` | 以缩进形式展示 `viking://` URI 下的递归目录树——当需要全面了解文件树结构时使用（单层列表用 `list`，按文件名查找用 `glob`） | `uri`(可选), `level_limit`(默认 3), `node_limit`(默认 1000), `include_abstract`(可选——同时展示每个目录的摘要；skill 目录的摘要就是它的名字和描述) |
-| `remember` | 提交消息做长期记忆提取；立即返回后台任务的 `task_id`，提取结果可能什么都不保留 | `messages`（`{role, content}` 列表） |
+| `remember` | 提交消息做用户级记忆提取；立即返回后台任务的 `task_id`，提取结果可能什么都不保留 | `messages`（`{role, content}` 列表） |
 | `write` | 向 `viking://` 文件写入文本（创建/覆盖/追加）。自动创建缺失的父目录；覆盖前请先用 `read` 查看当前内容；只改文件局部时优先用 `edit`。skill 包不要用它维护：调用方自己的 `skills/` 子树会被拒绝，写 `viking://agent/skills` 则生成绕过安装流程的普通文件，请改用 `add_skill` | `uri`, `content`, `mode`(可选:默认 `replace` — 覆盖或在缺失时创建,`append` — 追加或在缺失时创建,`create` — `replace` 的兼容别名), `wait`(可选,阻塞直到重建索引完成), `acl`(可选) |
 | `edit` | 在已有 `viking://` 文件中把精确字符串替换为新文本——用于局部修改，避免整文件重写。若 `old_string` 找不到、或匹配多处且 `replace_all` 为 false，则编辑失败且文件保持不变。编辑 skill 包内的文件不会重新触发 skill 安装流程，请改用 `add_skill` | `uri`, `old_string`, `new_string`, `replace_all`(可选), `wait`(可选,阻塞直到重建索引完成) |
 | `add_resource` | 添加本地文件或 URL 作为资源(本地文件触发渐进式上传流) | `path`, `temp_file_id`(可选), `description`(可选), `watch_interval`(可选,分钟数 — 远程 URL 的自动刷新周期), `processing_mode`(可选：默认 `semantic_and_vectors`；传 `vectors_only` 时跳过 VLM 语义理解，只向量化当前文件), `to`(可选,目标 `viking://resources/...` URI；`watch_interval > 0` 时若省略 `to`,watch 将自动绑定到本次 add 创建的资源 URI), `parent`(可选,目标父目录，缺失时自动创建), `tags` / `tag_mode`(可选,检索标签), `args`(可选,特定 parser 参数，包括 `{"parse_mode":"no_split"}` 用于正常解析但每个源文档只生成一个 Markdown 正文、飞书一次性用户 token 导入使用 `{"feishu_access_token":"u-..."}`，或飞书用户 token watch 使用 access/refresh token，并可选传入 `feishu_app_id` / `feishu_app_secret`), `acl`(可选) |
@@ -155,6 +155,11 @@ claude mcp add --transport http openviking \
 | `set_acl` | 设置共享资源 ACL；按修改前的权限校验 manage | `uri`, `acl` |
 
 </div>
+
+插件或其他会话采集接入可以通过[会话 API](../api/05-sessions.md)保留消息的项目归属。
+调用 `add_message()` 时为每条消息显式传入 `peer_id`，再调用 `commit()` 提交会话。
+会话的 `memory_policy` 决定允许写入哪些记忆目标，默认策略仍允许写入用户级记忆。
+Peer 集合与用户隔离的关系详见[共享与隔离边界](../concepts/11-multi-tenant.md#共享与隔离边界)。
 
 在 MCP 工具中访问自己的工作区，请使用家目录别名 `viking://~`。它在所有控制面
 （REST API、`ov` CLI、SDK 和 MCP）上都会展开为 `viking://user/<当前用户>`，因此

@@ -139,7 +139,7 @@ The built-in MCP tools are listed below. Use the connected server's `tools/list`
 | `download` | Return a short-lived, single-use URL for fetching the original bytes of one file (any type, including PDF, images, archives, audio and video) with `curl`; it does not return the content. Directories are not supported | `uri` |
 | `list` | List entries under a `viking://` directory | `uri`, `recursive`, `offset`, `limit`, `sort_by`, `sort_order` (optional) |
 | `tree` | Show the recursive directory tree under a `viking://` URI, indented by depth — use when you need a full picture of the file tree (prefer `list` for a single level, `glob` for filename patterns) | `uri` (optional), `level_limit` (default 3), `node_limit` (default 1000), `offset`, `limit`, `include_abstract` (optional — also show each directory's summary; for a skill directory that is its name and description) |
-| `remember` | Submit messages for long-term memory extraction; returns the background extraction `task_id` right away | `messages` (list of `{role, content}`) |
+| `remember` | Submit messages for user-level memory extraction; returns the background extraction `task_id` right away | `messages` (list of `{role, content}`) |
 | `write` | Write text to a `viking://` file (create/overwrite/append). Parent directories are created automatically; use `read` first to see current content before overwriting, and prefer `edit` for changing part of an existing file. Skill packages are not maintained this way: the caller's own `skills/` subtree is refused, and a write under `viking://agent/skills` produces a plain file that skips skill installation — use `add_skill` | `uri`, `content`, `mode` (optional: `replace` default — overwrites or creates if missing; `append` — appends or creates if missing; `create` — compatibility alias for `replace`), `wait` (optional, block until re-indexed), `acl` (optional) |
 | `edit` | Replace an exact string with new text in an existing `viking://` file — for targeted changes instead of a full rewrite. The file is left unchanged if `old_string` is not found, or matches multiple times while `replace_all` is false. Editing a file inside a skill package does not re-run skill installation — use `add_skill` | `uri`, `old_string`, `new_string`, `replace_all` (optional), `wait` (optional, block until re-indexed) |
 | `add_resource` | Add a local file or URL as a resource (local files trigger a progressive upload flow) | `path`, `temp_file_id` (optional), `description` (optional), `watch_interval` (optional, minutes — auto-refresh cadence for remote URLs), `processing_mode` (optional: `semantic_and_vectors` default, or `vectors_only` to skip VLM semantic understanding and only vectorize current files), `to` (optional, target `viking://resources/...` URI; if omitted when `watch_interval > 0`, the watch auto-binds to the resource's created URI), `parent` (optional destination directory, created automatically), `tags` / `tag_mode` (optional retrieval tags), `args` (optional parser-specific options, including `{"parse_mode":"no_split"}` to parse each source document into one Markdown body, `{"feishu_access_token":"u-..."}` for one-time Feishu user-token imports, or access/refresh tokens plus an optional `feishu_app_id` / `feishu_app_secret` pair for Feishu user-token watches), `acl` (optional) |
@@ -159,6 +159,14 @@ The built-in MCP tools are listed below. Use the connected server's `tools/list`
 | `set_acl` | Update a shared resource ACL; authorize against the permissions before the change | `uri`, `acl` |
 
 </div>
+
+To preserve project attribution in a plugin or other session capture integration,
+use the [Session API](../api/05-sessions.md). Pass an explicit `peer_id` for each
+message in `add_message()`, then call `commit()`. The session's `memory_policy`
+controls which memory write targets are enabled, and the default policy still
+allows user-level writes. See
+[sharing and isolation boundaries](../concepts/11-multi-tenant.md#sharing-and-isolation-boundaries)
+for how peer collections relate to user isolation.
 
 To address your own workspace from an MCP tool, use the home alias `viking://~`. It
 expands to `viking://user/<current-user>` on every control plane (REST API, `ov` CLI,
