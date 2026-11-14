@@ -648,7 +648,17 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
       "max_records_per_table": 1000,
       "download_images": true
     },
-    "webfeed": {}
+    "webfeed": {
+      "max_pages": 200,
+      "max_concurrency": 5,
+      "request_timeout": 30.0,
+      "politeness_delay": 0.2,
+      "same_host_only": true,
+      "respect_robots": true,
+      "max_depth": 2,
+      "suggest_feed": true,
+      "suggest_timeout": 2.5
+    }
   }
 }
 ```
@@ -682,6 +692,24 @@ Parser 或 Understanding API 后端自身的限制和上传行为。
 | `webfeed` | Sitemap、RSS 和 Atom 导入 |
 
 各模型 provider、解析器、存储后端和加密后端包含较多专用字段，完整字段表和配置示例见[配置指南](../guides/01-configuration.md)。
+
+### `parsers.webfeed`
+
+整站导入将 sitemap、sitemap index、RSS 或 Atom URL 列出的页面镜像为一棵资源树。各配置项的默认值如上所示：
+
+| 字段 | 类型 | 默认值 | 作用 |
+|---|---|---|---|
+| `max_pages` | integer | `200` | 过滤后单个 feed 最多镜像的页面数 |
+| `max_concurrency` | integer | `5` | 最大并发页面抓取数 |
+| `request_timeout` | number | `30.0` | feed、robots.txt 或页面的单次请求超时时间，单位为秒 |
+| `politeness_delay` | number | `0.2` | 每个镜像页面处理前的延迟秒数；并发抓取可重叠 |
+| `same_host_only` | boolean | `true` | 跳过不属于 feed 所在 host 的条目 |
+| `respect_robots` | boolean | `true` | 镜像页面前查询 robots.txt |
+| `max_depth` | integer | `2` | sitemap index 的最大递归深度 |
+| `suggest_feed` | boolean | `true` | 在 MCP 单个首页导入响应中启用可选的 feed 发现提示 |
+| `suggest_timeout` | number | `2.5` | 该提示探测的总超时秒数；超时不影响导入结果 |
+
+数量和超时时间必须为正数，`politeness_delay` 可以为零。`add_resource` 的单次调用参数可覆盖导入配置，例如 `args={"max_pages": 50}`。`args={"site": true}` 从普通页面 URL 自动发现 feed；`args={"site": false}` 使看起来像 feed 的 URL 走单页 HTTP 导入。MCP 提示不会自动启动整站导入。feed 导入与 `watch_interval` 刷新说明见[资源管理](../api/02-resources.md)。
 
 ## 最小示例
 
