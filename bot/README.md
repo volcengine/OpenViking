@@ -326,6 +326,14 @@ Restart `vikingbot gateway` after changing the configuration.
 | `bot.heartbeat.interval_seconds` | `600` | Heartbeat interval |
 | `bot.mode` | `normal` | One of `normal`, `readonly`, or `debug` |
 
+### Compile execution mode
+
+Python VikingBot uses `bot.compile.mode = "simple"` by default for `/runtime/v1/tasks`. One AgentLoop follows the Skill and instruction, pages through the sources, and writes individual text files to the target as it reads. Incremental tasks can also inspect source snapshot differences. Simple supports resource and memory targets. To publish a Skill package or use the existing compile workflow, set the executor explicitly in `ov.conf`:
+
+```json
+{ "bot": { "compile": { "mode": "complex" } } }
+```
+
 ### OpenViking Recall Settings
 
 | Setting | Default | Description |
