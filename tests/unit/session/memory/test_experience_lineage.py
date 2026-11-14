@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import json
+
 import pytest
 
 from openviking.message import Message, ToolPart
@@ -144,9 +146,50 @@ def test_collect_read_experience_uris_supports_plugin_namespaced_reads(tool_name
         "mcp__PLUGIN_openviking-memory_OpenViking__MULTI_READ",
     ],
 )
-def test_collect_read_experience_uris_filters_failed_multi_read_results(tool_name):
+@pytest.mark.parametrize("alias_side", ["neither", "input", "output"])
+@pytest.mark.parametrize("failure_format", ["structured", "missing", "error_section"])
+def test_collect_read_experience_uris_filters_failed_multi_read_results(
+    tool_name, alias_side, failure_format
+):
     first_uri = "viking://user/alice/memories/experiences/first.md"
     failed_uri = "viking://user/alice/memories/experiences/failed.md"
+    input_first = (
+        first_uri.replace("viking://user/alice/", "viking://~/")
+        if alias_side == "input"
+        else first_uri
+    )
+    input_failed = (
+        failed_uri.replace("viking://user/alice/", "viking://~/")
+        if alias_side == "input"
+        else failed_uri
+    )
+    output_first = (
+        first_uri.replace("viking://user/alice/", "viking://~/")
+        if alias_side == "output"
+        else first_uri
+    )
+    output_failed = (
+        failed_uri.replace("viking://user/alice/", "viking://~/")
+        if alias_side == "output"
+        else failed_uri
+    )
+    if failure_format == "structured":
+        output = json.dumps(
+            {
+                "results": [
+                    {"uri": output_first, "success": True},
+                    {"uri": output_failed, "success": False},
+                    {"uri": "viking://user/bob/memories/experiences/first.md", "success": False},
+                    {"uri": f"{output_first}?offset=1", "success": False},
+                ]
+            }
+        )
+    elif failure_format == "missing":
+        output = f"First experience body.\n(nothing found at {output_failed})"
+    else:
+        output = (
+            f"--- START OF {output_failed} ---\nERROR: read failed\n--- END OF {output_failed} ---"
+        )
     messages = [
         Message(
             id="multi-read",
@@ -155,13 +198,9 @@ def test_collect_read_experience_uris_filters_failed_multi_read_results(tool_nam
                 ToolPart(
                     tool_id="multi-read-1",
                     tool_name=tool_name,
-                    tool_input={"uris": [first_uri, failed_uri]},
+                    tool_input={"uris": [input_first, input_failed]},
                     tool_status="completed",
-                    tool_output=(
-                        '{"results":['
-                        f'{{"uri":"{first_uri}","success":true}},'
-                        f'{{"uri":"{failed_uri}","success":false}}]}}'
-                    ),
+                    tool_output=output,
                 )
             ],
         )
