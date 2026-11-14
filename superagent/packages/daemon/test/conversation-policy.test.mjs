@@ -532,6 +532,14 @@ describe('the workers scheduler', () => {
     assert.doesNotMatch(assembleConversationPolicy({ ...base, scheduler: 'inbox' }), /## Workers/);
   });
 
+  it('keeps inbox behavior but hides worker delegation on runtimes without worker support', () => {
+    const config = { ...base, scheduler: 'workers' };
+    const durable = assembleConversationPolicy(config, { runtime: 'durable' });
+    assert.match(durable, /## Inbox/);
+    assert.doesNotMatch(durable, /## Workers|task_create|hand it to a worker/);
+    assert.match(assembleConversationPolicy(config, { runtime: 'dsh' }), /## Workers/);
+  });
+
   it('gives a worker its own policy: the task, no deliveries, a report, and the instance Role', () => {
     const text = assembleWorkerPolicy({ ...base, scheduler: 'workers' });
     assert.match(text, /^## Worker\n\nYou are a worker for Tester\./);
