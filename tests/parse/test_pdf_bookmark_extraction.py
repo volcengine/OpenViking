@@ -283,6 +283,30 @@ class TestConvertLocalBookmarks:
     """Test bookmark injection behavior in local PDF conversion."""
 
     @pytest.mark.asyncio
+    async def test_convert_local_keeps_multiline_cells_in_one_table_row(self):
+        parser = PDFParser()
+        page = _FakePage("Product Quantity")
+        fake_pdf = SimpleNamespace(pages=[page])
+        fake_pdfplumber = SimpleNamespace(open=lambda _path: nullcontext(fake_pdf))
+
+        with (
+            patch("openviking.parse.parsers.pdf.lazy_import", return_value=fake_pdfplumber),
+            patch.object(
+                page,
+                "extract_tables",
+                return_value=[[["Product\nname", "Quantity"], ["Widget | kit\nSecond line", "3"]]],
+            ),
+        ):
+            markdown, meta = await parser._convert_local(
+                "dummy.pdf", storage=MagicMock(), resource_name="dummy"
+            )
+
+        assert meta["tables_extracted"] == 1
+        assert (
+            "| Product<br>name | Quantity |\n| --- | --- |\n| Widget \\| kit<br>Second line | 3 |"
+        ) in markdown
+
+    @pytest.mark.asyncio
     async def test_convert_local_skips_unresolved_bookmarks(self):
         parser = PDFParser()
         fake_pdf = SimpleNamespace(pages=[_FakePage("Page one"), _FakePage("Page two")])
