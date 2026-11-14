@@ -97,7 +97,7 @@ def export_history(client: Any, session_id: str, output: Path) -> dict[str, Any]
     target = output / "history.json"
     if target.exists() and target.read_text(encoding="utf-8") != serialized:
         raise FileExistsError("Output already contains a different snapshot; use a new directory")
-    target.write_text(serialized, encoding="utf-8")
+    target.write_bytes(serialized.encode("utf-8"))
     handoff = [
         "# Conversation handoff",
         "",
