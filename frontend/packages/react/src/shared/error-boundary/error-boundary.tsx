@@ -2,6 +2,8 @@ import { Component, createContext, useContext } from 'react';
 import type { ErrorInfo, ReactNode } from 'react';
 
 import type { Locale } from '../locale.js';
+import { Button } from '../primitives/button/button.js';
+import { Empty } from '../primitives/empty/empty.js';
 import { useLocale } from '../locale-context.js';
 import { enUS } from './locales/en-US.js';
 import { zhCN } from './locales/zh-CN.js';
@@ -81,18 +83,23 @@ export function ErrorBoundary({
         fallback={
           resolvedFallback === undefined
             ? (reset) => (
-                <div className="ov-error-boundary" role="alert">
-                  <p className="ov-error-boundary__message">
-                    {message ?? labels.failed}
-                  </p>
-                  <button
-                    className="ov-error-boundary__reset"
-                    type="button"
-                    onClick={reset}
-                  >
-                    {labels.retry}
-                  </button>
-                </div>
+                <Empty
+                  size="compact"
+                  illustration="crash"
+                  role="alert"
+                  title={message ?? labels.failed}
+                  className="ov-error-boundary"
+                  action={
+                    <Button
+                      type="secondary"
+                      size="small"
+                      htmlType="button"
+                      onClick={reset}
+                    >
+                      {labels.retry}
+                    </Button>
+                  }
+                />
               )
             : resolvedFallback
         }

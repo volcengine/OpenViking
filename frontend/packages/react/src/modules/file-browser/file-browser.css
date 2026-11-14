@@ -44,6 +44,12 @@
   padding: 8px 8px 12px;
 }
 
+/* 目录树或预览区渲染失败时，兜底占满所在面板并垂直居中。 */
+.ov-file-browser > .ov-error-boundary,
+.ov-file-browser__tree > .ov-error-boundary {
+  flex: 1;
+}
+
 /* Only the line participates in layout; the hit area overlaps each pane's inset. */
 .ov-file-browser__resizer {
   position: relative;
