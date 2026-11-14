@@ -195,7 +195,7 @@ import '@openviking/react/components/scope-switcher/style.css';
 - 触发器带有 `aria-haspopup="dialog"` 和 `aria-expanded`，面板是 `dialog`，列表是 `listbox`，选项行是带 `aria-selected` 的 `option`。
 - 图标由宿主通过 `trigger.icon` 和 `option.icon` 传入，组件不内置层级图标。默认图标可以从 `@openviking/react/icons` 取 `LibraryIcon`、`SpaceIcon`、`UserIcon`；ScopeCascade 会给适配函数没有返回 `icon` 的选项自动补上这三个。
 - 每行至少 32px 高，空间不足时各层级换行；单级触发器最宽 260px，超出后文本省略。
-- 视口宽度不超过 600px 时，面板改为贴底的整宽面板；更宽时，最后一级的面板右对齐展开。
+- 视口宽度不超过 600px 时，面板改为贴底的整宽面板；更宽时，最后一级的面板默认右对齐，越出视口时自动横向调整。
 - 包根入口导出 `ScopeSwitcher`、`ScopeSelector`、`ScopeSwitcherProps` 和 `ScopeSelectorProps`；其余类型和 `SCOPE_SWITCHER_SEARCH_THRESHOLD` 从 `@openviking/react/components/scope-switcher` 导入。
 
 ## 主题变量

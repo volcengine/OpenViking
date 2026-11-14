@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import ChevronDownIcon from '../../../../icons/svg/scope-switcher/chevron-down.svg?react';
 import { resolveScopeLabels } from './labels.js';
 import { ScopePanel } from './scope-panel.js';
+import { usePanelPosition } from './use-panel-position.js';
 import type { ScopeSelectorProps } from './types.js';
 
 export function ScopeSelector(props: ScopeSelectorProps) {
@@ -18,6 +19,8 @@ export function ScopeSelector(props: ScopeSelectorProps) {
   const slots = selectable?.slots;
 
   const [localVisible, setLocalVisible] = useState(false);
+  const [panel, setPanel] = useState<HTMLDivElement | null>(null);
+  usePanelPosition(panel);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const restoreSelectionFocus = useRef(false);
@@ -155,6 +158,7 @@ export function ScopeSelector(props: ScopeSelectorProps) {
       )}
       {open && selectable !== undefined && data !== undefined && (
         <div
+          ref={setPanel}
           id={panelId}
           className={
             slots?.renderPanel

@@ -195,7 +195,7 @@ Defaults are the built-in `en-US` and `zh-CN` text, in that order.
 - The trigger has `aria-haspopup="dialog"` and `aria-expanded`; the panel is a `dialog`, the list is a `listbox`, and each row is an `option` with `aria-selected`.
 - Icons come from your app through `trigger.icon` and `option.icon`; the component ships none. Take `LibraryIcon`, `SpaceIcon` and `UserIcon` from `@openviking/react/icons`; ScopeCascade adds them to options whose adapter returned no `icon`.
 - Each row is at least 32px high, and levels wrap when space is limited. A level's trigger is at most 260px wide, with longer text truncated.
-- At a viewport width of 600px or less the panel becomes a full-width bottom sheet; on wider viewports the last level's panel opens aligned to the right.
+- At a viewport width of 600px or less the panel becomes a full-width bottom sheet. On wider viewports the last level defaults to right alignment, with horizontal adjustments to keep panels inside the viewport.
 - The package root exports `ScopeSwitcher`, `ScopeSelector`, `ScopeSwitcherProps` and `ScopeSelectorProps`. Import the other types and `SCOPE_SWITCHER_SEARCH_THRESHOLD` from `@openviking/react/components/scope-switcher`.
 
 ## Theme variables
