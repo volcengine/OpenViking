@@ -403,6 +403,9 @@ class AsyncHTTPClient:
         self._snapshot: Optional["AsyncHTTPSnapshotNamespace"] = None
 
     async def initialize(self) -> None:
+        if self._http is not None:
+            return
+
         headers: Dict[str, str] = {}
         if self._api_key:
             headers["X-API-Key"] = self._api_key
