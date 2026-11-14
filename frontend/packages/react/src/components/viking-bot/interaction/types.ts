@@ -194,6 +194,10 @@ export interface VikingBotInteractionLabels extends VikingBotInteractionDirector
   other?: string;
   /** 提交成功提示。Shown after a successful submission. */
   submitted?: string;
+  /** 提交失败的通知标题。Title of the submission failure notification. */
+  submitFailed?: string;
+  /** 无效选项的校验提示。Validation feedback for invalid options. */
+  invalidAnswer?: string;
   /** 取消提示。Shown after cancelling. */
   cancelled?: string;
   /** 步骤进度，接收当前序号与总数。Step progress, given index and total. */
@@ -218,8 +222,6 @@ export interface VikingBotInteractionLabels extends VikingBotInteractionDirector
   timeInvalid?: string;
   /** 星期必选提示。Required weekday. */
   weekdayRequired?: string;
-  /** 无错误详情时的提交失败提示。Submission failure without details. */
-  submitFailed?: string;
   /** 每天的选项文案。Label of the daily option. */
   scheduleDaily?: string;
   /** 每周的选项文案。Label of the weekly option. */

@@ -27,7 +27,7 @@ export function TaskTrackingProvider({
   children: ReactNode;
   service?: TaskService;
 }) {
-  const inheritedClient = useOvClient();
+  const inheritedClient = useOvClient('local');
   const [fallbackClient] = useState(() => createOvClient());
   const client = inheritedClient ?? fallbackClient;
   const [tracker] = useState(() => createTaskTracker());
@@ -54,7 +54,7 @@ export function useTaskTracking({
 }) {
   const inherited = useContext(Context);
   const monitoring = useMonitoringBinding();
-  const inheritedClient = useOvClient();
+  const inheritedClient = useOvClient('local');
   const inheritedSignal = useOvSignal();
   const [fallbackClient] = useState(() => createOvClient());
   const [fallbackTracker] = useState(() => createTaskTracker());

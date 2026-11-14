@@ -13,7 +13,7 @@ export function useSearchScopePage(
   requestOptions?: OvRequestOptions,
 ) {
   const { request, error, aborted } = useQueryScope(
-    useOvClient(),
+    useOvClient('local'),
     requestOptions,
     'file_browser_directory_load',
   );

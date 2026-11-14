@@ -31,7 +31,7 @@ export function usePortalTheme(
       seen.forEach((name) => written.add(name));
     };
     sync();
-    const observer = new MutationObserver(sync);
+    const observer = new window.MutationObserver(sync);
     for (let node: Element | null = trigger; node; node = node.parentElement)
       observer.observe(node, {
         attributes: true,

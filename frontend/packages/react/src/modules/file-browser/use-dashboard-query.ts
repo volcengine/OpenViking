@@ -31,7 +31,7 @@ export function useDashboardQuery<T>(
   empty?: (data: T) => boolean,
   opaque = false,
 ): DashboardQuery<T> {
-  const client = useOvClient();
+  const client = useOvClient('local');
   const inheritedSignal = useOvSignal();
   const { baseURL, apiKey, accountId, userId, resourceId, signal } =
     requestOptions ?? {};

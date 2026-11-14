@@ -381,16 +381,16 @@ Obtained through `ref`, to switch tabs and reach FileViewer imperatively.
 
 - Editor loading: CodeMirror 6 loads on first edit. Prism grammars load on demand based on `source.fileType`, the file extension or the filename; unknown formats remain editable as plain text.
 - Shared highlighting: the editor and FileViewer use `prismjs`. When the consumer resolves them to the same version, they share the core and language modules; no CodeMirror language grammars are loaded.
-- Highlight updates: full-document highlighting runs after a 100 ms typing debounce. If highlighting fails, editing and saving remain available and highlighting can be retried.
+- Highlight updates: full-document highlighting runs after a 100 ms typing debounce. If the editor or highlighting fails to load, the draft and a Retry control remain available after the notification closes.
 
 - Presentation: no commands show no entry, one command is an icon button, and two or more collapse into a "…" menu.
 - Groups: consecutive single commands form one group, each nonempty array is its own group, and empty arrays are ignored without splitting their neighbors; dividers separate groups.
 - Function form: `actions` and `slots.actions` may be functions called during rendering, so return content from the context only, and do not send requests or update state inside them.
-- Failure: the failure message appears beside the toolbar of that resource, and clicking again retries.
 - Locking: a resource's injected commands stay locked while one runs, across tab or level switches and `slots.actions` replacement; other resources and other component instances are unaffected. A resource is identified by `source.path`, or by the tab's `key` and `fileName` when there is no path.
 - While editing: injected commands and `slots.extraActions` are hidden, the toolbar shows Save and Cancel, and the view switch is disabled.
 - Replacing the toolbar: `slots.actions` replaces the default toolbar together with Save and Cancel, so render them yourself with `startEditing`, `saveEditing` and `cancelEditing` from the context.
-- Editing flow: Edit opens the source view with a text box, and saving or cancelling returns to the preview. While saving, switching tabs or levels and duplicate saves are blocked, and a failed save keeps the draft and shows `labels.saveFailed`.
+- Operation feedback: a thrown or rejected action shows its name and reason in a dismissible Notification. Notifications support [copying error details](../guide/getting-started#copying-error-details). Copy-path failures use Toast.
+- Editing flow: Edit opens the source view with a text box, and saving or cancelling returns to the preview. While saving, switching tabs or levels and duplicate saves are blocked, and a failed save keeps the draft and shows `labels.saveFailed` and the original reason in a Notification.
 
 ### Text and states
 

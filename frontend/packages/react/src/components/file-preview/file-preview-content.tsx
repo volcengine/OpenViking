@@ -222,7 +222,11 @@ export const FilePreviewContent: FilePreviewComponent = forwardRef<
         locale={locale}
         resetKeys={[identity]}
       >
-        <FilePreviewCommandProvider tab={selectedTab}>
+        <FilePreviewCommandProvider
+          tab={selectedTab}
+          locale={locale}
+          text={tabText}
+        >
           <FilePreviewPanels
             toolbar={toolbar}
             contentTab={contentTab}

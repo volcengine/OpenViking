@@ -35,7 +35,10 @@ function decorations(text: string, grammar: Prism.Grammar) {
 }
 
 /** Defer full-document Prism tokenization; map existing marks while typing. */
-export function prismHighlight(grammar: Prism.Grammar, onError: () => void) {
+export function prismHighlight(
+  grammar: Prism.Grammar,
+  onError: (reason: unknown) => void,
+) {
   return ViewPlugin.fromClass(
     class {
       decorations: DecorationSet = Decoration.none;
@@ -49,8 +52,8 @@ export function prismHighlight(grammar: Prism.Grammar, onError: () => void) {
           try {
             const result = decorations(this.view.state.doc.toString(), grammar);
             this.view.dispatch({ effects: highlighted.of(result) });
-          } catch {
-            onError();
+          } catch (reason) {
+            onError(reason);
           }
         }, 100);
       }

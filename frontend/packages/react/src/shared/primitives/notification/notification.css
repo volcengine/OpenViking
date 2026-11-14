@@ -22,6 +22,9 @@
   flex-direction: column;
   gap: 20px;
 }
+.ov-notification-stack__contribution {
+  display: contents;
+}
 .ov-notification {
   display: flex;
   position: relative;
@@ -67,12 +70,6 @@
   margin-top: 2px;
   color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
 }
-.ov-notification__icon .ov-notification__loading-icon {
-  /* Match the SVG circle's 20/24 drawing area within the same 20px slot. */
-  width: calc(20px * 20 / 24);
-  height: calc(20px * 20 / 24);
-  margin: calc(20px * 2 / 24);
-}
 .ov-notification--success .ov-notification__icon {
   color: var(--ov-ui-color-status-success, var(--ov-ui-status-success-default));
 }
@@ -81,12 +78,6 @@
 }
 .ov-notification--error .ov-notification__icon {
   color: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
-}
-.ov-notification__icon-mark {
-  stroke: var(
-    --ov-ui-color-text-on-primary,
-    var(--ov-ui-text-on-primary-default)
-  );
 }
 .ov-notification__actions {
   display: flex;

@@ -1,0 +1,113 @@
+/* Adapted from Arco Message/style (MIT); see LICENSE.arco-design. */
+.ov-toast-stack {
+  position: fixed;
+  inset: 40px 0 auto;
+  z-index: 1004;
+  box-sizing: border-box;
+  width: 100%;
+  max-height: calc(100vh - 48px);
+  max-height: calc(100dvh - 48px);
+  margin: 0;
+  padding: 8px 16px;
+  border: 0;
+  overflow: auto;
+  background: transparent;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  font-family: inherit;
+  pointer-events: none;
+  scrollbar-width: thin;
+}
+.ov-toast-stack__list {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+.ov-toast-stack__item {
+  max-width: 100%;
+}
+.ov-toast {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  gap: 8px;
+  max-width: min(560px, 100%);
+  padding: 10px 16px;
+  border: 1px solid var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+  border-radius: 6px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  box-shadow: var(
+    --ov-ui-color-toast-shadow,
+    var(--ov-ui-toast-shadow-default)
+  );
+  font-size: 14px;
+  line-height: 1.5;
+  text-align: start;
+  pointer-events: auto;
+}
+.ov-toast__body {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ov-toast__icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+}
+.ov-toast--success .ov-toast__icon {
+  color: var(--ov-ui-color-status-success, var(--ov-ui-status-success-default));
+}
+.ov-toast--warning .ov-toast__icon {
+  color: var(--ov-ui-color-warning-solid, var(--ov-ui-warning-solid-default));
+}
+.ov-toast--error .ov-toast__icon {
+  color: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
+}
+.ov-toast__close {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-inline-start: 8px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  cursor: pointer;
+}
+.ov-toast__close:hover {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+}
+.ov-toast__close:focus-visible {
+  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
+  outline-offset: 2px;
+}
+.ov-toast-motion-enter {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+.ov-toast-motion-enter-active {
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    opacity 200ms,
+    transform 200ms;
+}
+.ov-toast-motion-exit-active {
+  opacity: 0;
+  transform: translateY(-8px);
+  transition:
+    opacity 200ms,
+    transform 200ms;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ov-toast-stack__item {
+    transition: none;
+    transform: none;
+  }
+}

@@ -1,3 +1,4 @@
+import { notificationError } from './helpers/feedback-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { act, createElement as h } from 'react';
@@ -130,7 +131,7 @@ for (const variant of variants)
             true,
             'the resource keeps its running command',
           );
-        } else assert.equal(button(), null);
+        } else assert.equal(Boolean(button()), false);
         await view.render(render());
         assert.equal(button().disabled, true);
         await click(button());
@@ -139,14 +140,10 @@ for (const variant of variants)
           fails ? state.reject(new Error('Retry A')) : state.resolve(42),
         );
         assert.equal(button().disabled, false);
-        if (fails)
-          assert.match(
-            document.querySelector('[role="alert"]').textContent,
-            /Retry A/,
-          );
+        if (fails) assert.match(notificationError().textContent, /Retry A/);
         await click(button());
         assert.equal(state.calls(), 2);
-        assert.equal(document.querySelector('[role="alert"]'), null);
+        assert.equal(Boolean(notificationError()), false);
       } finally {
         state.resolve();
         await view.unmount();
@@ -165,13 +162,13 @@ for (const fails of [false, true]) {
         fails ? state.reject(new Error('Failure in A')) : state.resolve(42),
       );
       assert.equal(button().disabled, false);
-      assert.equal(document.querySelector('[role="alert"]'), null);
+      assert.equal(Boolean(notificationError()), false);
       await view.render(state.render());
       assert.equal(button().disabled, false);
-      assert.equal(Boolean(document.querySelector('[role="alert"]')), fails);
+      assert.equal(Boolean(notificationError()), fails);
       await click(button());
       assert.equal(state.calls(), 2);
-      assert.equal(document.querySelector('[role="alert"]'), null);
+      assert.equal(Boolean(notificationError()), false);
     } finally {
       state.resolve();
       await view.unmount();

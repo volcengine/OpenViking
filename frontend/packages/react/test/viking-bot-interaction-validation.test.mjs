@@ -3,6 +3,7 @@ import test from 'node:test';
 import { act, createElement as h } from 'react';
 import { VikingBotInteraction } from '@openviking/react/components/viking-bot/interaction';
 import { mount } from './helpers/module-dom.mjs';
+import { toastContent } from './helpers/feedback-dom.mjs';
 
 const input = (node, value) =>
   act(async () => {
@@ -24,7 +25,7 @@ test('text is required by default, optional text stays empty, and validation nev
   const submit = () => view.container.querySelector('button[type=submit]');
   try {
     assert.equal(submit().disabled, true);
-    assert.equal(view.container.querySelector('[role=alert]'), null);
+    assert.equal(Boolean(view.container.querySelector('[role=alert]')), false);
     await input(view.container.querySelector('input'), ' \t ');
     assert.equal(submit().disabled, true);
     await input(view.container.querySelector('input'), '  Draft  ');
@@ -96,7 +97,7 @@ test('blank targets cannot submit programmatically or advance a sequence', async
           ),
       );
       assert.equal(answers.length, 0);
-      assert.ok(view.container.querySelector('[role=alert]'));
+      assert.ok(toastContent());
       if (sequence)
         assert.match(
           view.container.querySelector('[data-active-step]').textContent,

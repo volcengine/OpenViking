@@ -1,6 +1,11 @@
 import { markFault } from '../../shared/monitoring/fault.js';
 import { useCodeLoad } from '../../shared/monitoring/use-code-load.js';
 import { useExposure } from '../../shared/analytics/use-exposure.js';
+import {
+  ErrorNotification,
+  errorMessage,
+} from '../../shared/feedback/error-notification.js';
+import type { Locale } from '../../shared/locale.js';
 import { useEffect, useState, type ComponentType } from 'react';
 import { Button } from '../../shared/primitives/button/button.js';
 import type { FilePreviewLabels, FilePreviewSource } from './types.js';
@@ -12,7 +17,8 @@ export interface FilePreviewEditorProps {
   text: Required<FilePreviewLabels>;
   loading: boolean;
   failed: boolean;
-  saveFailed: boolean;
+  saveFailure?: { reason: unknown };
+  locale?: Locale;
   saving: boolean;
   onChange: (value: string) => void;
   onCancel: () => void;
@@ -36,7 +42,8 @@ export function FilePreviewEditor({
   text,
   loading,
   failed,
-  saveFailed,
+  saveFailure,
+  locale,
   saving,
   onChange,
   onCancel,
@@ -47,7 +54,7 @@ export function FilePreviewEditor({
   );
   const [Editor, setEditor] =
     useState<ComponentType<FilePreviewCodeEditorProps>>();
-  const [editorFailed, setEditorFailed] = useState(false);
+  const [editorFailure, setEditorFailure] = useState<{ reason: unknown }>();
   const [attempt, setAttempt] = useState(0);
   // Text inputs match :focus-visible even on pointer focus; track only this editor.
   const [pointerFocus, setPointerFocus] = useState(false);
@@ -57,13 +64,13 @@ export function FilePreviewEditor({
   useEffect(() => {
     if (loading || failed) return;
     let active = true;
-    setEditorFailed(false);
+    setEditorFailure(undefined);
     void loadEditor()
       .then((module) => {
         if (active) setEditor(() => module.FilePreviewCodeEditor);
       })
-      .catch(() => {
-        if (active) setEditorFailed(true);
+      .catch((reason: unknown) => {
+        if (active) setEditorFailure({ reason });
       });
     return () => {
       active = false;
@@ -74,7 +81,7 @@ export function FilePreviewEditor({
     'file_preview_source_show',
     source.path ?? source.fileName,
     undefined,
-    !loading && !failed && Boolean(Editor || editorFailed),
+    !loading && !failed && Boolean(Editor || editorFailure),
   );
   if (loading) {
     return (
@@ -128,7 +135,7 @@ export function FilePreviewEditor({
           text={text}
           onChange={onChange}
         />
-      ) : editorFailed ? (
+      ) : editorFailure ? (
         <>
           <textarea
             className="ov-file-preview__textarea"
@@ -138,23 +145,34 @@ export function FilePreviewEditor({
             spellCheck={false}
             onChange={(event) => onChange(event.target.value)}
           />
-          <div className="ov-file-preview__notice" role="alert">
-            {text.editorLoadFailed}{' '}
-            <Button
-              size="small"
-              onClick={() => setAttempt((value) => value + 1)}
-            >
-              {text.retry}
-            </Button>
-          </div>
+          <ErrorNotification
+            title={text.editorLoadFailed}
+            identity={editorFailure}
+            error={editorFailure.reason}
+            locale={locale}
+          >
+            {errorMessage(editorFailure.reason)}
+          </ErrorNotification>
+          <Button
+            size="small"
+            title={text.editorLoadFailed}
+            onClick={() => setAttempt((value) => value + 1)}
+          >
+            {text.retry}
+          </Button>
         </>
       ) : (
         <p className="ov-file-preview__notice">{text.loading}</p>
       )}
-      {saveFailed ? (
-        <p className="ov-file-preview__notice" role="alert">
-          {text.saveFailed}
-        </p>
+      {saveFailure ? (
+        <ErrorNotification
+          title={text.saveFailed}
+          identity={saveFailure}
+          error={saveFailure.reason}
+          locale={locale}
+        >
+          {errorMessage(saveFailure.reason)}
+        </ErrorNotification>
       ) : null}
     </div>
   );

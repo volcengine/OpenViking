@@ -177,3 +177,9 @@ To adjust a single component, override its `--ov-ui-<component>-*` variables. Th
 - [Internationalization](./i18n): switch languages with `locale` and override text with `labels`.
 
 See [Analytics](./analytics) to collect interaction and exposure events.
+
+## Copying error details
+
+Block requests using `OpenVikingProvider` publish failures through a shared request adapter. The view subscribes and shows a Notification automatically, with a “Request failed” title and the original backend message. Existing load states, task states and chat message errors remain in their owning regions.
+
+Operation error notifications include a “Copy error details” button. It copies the operation title, full error message, and any existing error code, HTTP status and request ID for support reports. Successful copying shows “Copied”; clipboard failures show a Toast and the button remains available for retry.

@@ -1,10 +1,10 @@
-import type { NotificationType } from './types.js';
+import type { NoticeType } from './types.js';
 import { LoadingIcon } from '../loading-icon/loading-icon.js';
 
 /** Status symbols for the notification variants. */
-export function StatusIcon({ type }: { type: NotificationType }) {
+export function StatusIcon({ type }: { type: NoticeType }) {
   if (type === 'loading')
-    return <LoadingIcon className="ov-notification__loading-icon" />;
+    return <LoadingIcon className="ov-notice__loading-icon" />;
   return (
     <svg
       viewBox="0 0 24 24"
@@ -19,7 +19,7 @@ export function StatusIcon({ type }: { type: NotificationType }) {
         <circle cx="12" cy="12" r="10" fill="currentColor" />
       )}
       <g
-        className="ov-notification__icon-mark"
+        className="ov-notice__icon-mark"
         strokeWidth="2"
         strokeLinecap="round"
         strokeLinejoin="round"

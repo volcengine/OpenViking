@@ -1,3 +1,5 @@
+import { ErrorNotification } from '../../../shared/feedback/error-notification.js';
+import { useToast } from '../../../shared/primitives/toast/use-toast.js';
 import { useId, useRef, useState } from 'react';
 import { Button } from '../../../shared/primitives/button/button.js';
 import { interactionError } from './directory-state.js';
@@ -32,6 +34,7 @@ export function InteractionForm({
   onPrevious?: () => void;
 }) {
   const id = useId();
+  const [toast, toastHolder] = useToast({ locale });
   const formRef = useRef<HTMLFormElement>(null);
   const composing = useRef(false);
   const inFlight = useRef(false);
@@ -40,29 +43,36 @@ export function InteractionForm({
   const [resetCount, setResetCount] = useState(0);
   const [pending, setPending] = useState(false);
   const [validation, setValidation] = useState<FormError>();
-  const [submitError, setSubmitError] = useState<{
-    code: 'submitFailed';
-    cause: unknown;
-  }>();
+  const [submitError, setSubmitError] = useState<{ cause: unknown }>();
   const busy = Boolean(submitting || pending);
   const blocked = Boolean(disabled || busy);
   const options = request.kind === 'choice' || request.kind === 'repair';
   const change = (value: VikingBotInteractionAnswer) => {
     if (blocked) return;
     setAnswer(value);
+    toast.clear();
     setValidation(undefined);
     setSubmitError(undefined);
   };
   const failure =
     error ??
     (submitError
-      ? interactionError(submitError.cause, labels, submitError.code)
+      ? interactionError(submitError.cause, labels, 'submitFailed')
       : undefined);
   const submit = async () => {
     if (blocked || inFlight.current || composing.current) return;
     const invalid = validateAnswer(request, answer);
     setValidation(invalid);
     if (invalid || !answer) {
+      toast.warning({
+        id: 'validation',
+        content:
+          options && invalid === 'required'
+            ? labels.invalidAnswer
+            : invalid
+              ? labels[invalid]
+              : labels.required,
+      });
       const selector =
         invalid === 'timeInvalid'
           ? '[name="schedule-time"]'
@@ -74,13 +84,14 @@ export function InteractionForm({
       formRef.current?.querySelector<HTMLElement>(selector)?.focus();
       return;
     }
+    toast.clear();
     inFlight.current = true;
     setPending(true);
     setSubmitError(undefined);
     try {
       await onSubmit?.(answer);
     } catch (cause) {
-      setSubmitError({ code: 'submitFailed', cause });
+      setSubmitError({ cause });
     } finally {
       inFlight.current = false;
       setPending(false);
@@ -113,6 +124,7 @@ export function InteractionForm({
         void submit();
       }}
     >
+      {toastHolder}
       <h3
         tabIndex={-1}
         id={`${id}-title`}
@@ -135,16 +147,20 @@ export function InteractionForm({
         {validation ? (
           <p
             id={`${id}-error`}
-            role="alert"
-            className="ov-viking-bot__interaction-error"
+            className="ov-viking-bot__interaction-error-description"
           >
             {labels[validation]}
           </p>
         ) : null}
         {failure ? (
-          <p role="alert" className="ov-viking-bot__interaction-error">
+          <ErrorNotification
+            title={labels.submitFailed}
+            error={submitError?.cause}
+            identity={error ?? submitError}
+            locale={locale}
+          >
             {failure}
-          </p>
+          </ErrorNotification>
         ) : null}
       </div>
       <div className="ov-viking-bot__interaction-footer">
@@ -160,6 +176,7 @@ export function InteractionForm({
             disabled={blocked}
             onClick={() => {
               setAnswer(initial);
+              toast.clear();
               setValidation(undefined);
               setSubmitError(undefined);
               setResetCount((count) => count + 1);

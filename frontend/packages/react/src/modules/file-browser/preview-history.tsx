@@ -1,3 +1,4 @@
+import { useToast } from '../../shared/primitives/toast/use-toast.js';
 import { useCallback, useMemo, useState } from 'react';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { readFileContent } from './fs-read-content.js';
@@ -27,6 +28,7 @@ export function PreviewHistory({
   loadingText: string;
   retryText: string;
 }) {
+  const [toast, toastHolder] = useToast({ locale });
   const query = useDashboardQuery(
     useCallback(
       (client: OvClient, options: OvRequestOptions) =>
@@ -74,6 +76,7 @@ export function PreviewHistory({
     content.data !== undefined && content.data === current.data?.content;
   return (
     <>
+      {toastHolder}
       {canSaveSnapshot ? (
         <PreviewHistorySnapshot
           uri={uri}
@@ -121,6 +124,12 @@ export function PreviewHistory({
                 void copy.run(
                   async () => navigator.clipboard.writeText(body),
                   () => setCopiedId(selected.id),
+                  undefined,
+                  () =>
+                    toast.error({
+                      id: 'copy-history',
+                      content: text.copyFailed,
+                    }),
                 );
             }}
           />

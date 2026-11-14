@@ -264,6 +264,8 @@ Console 按适配器是否提供方法决定停止与追问能力。`steer` 返�
 - 认证、账号切换和页面布局由宿主负责。`onOpenUri` 只上报资源链接的打开意图，导航由宿主完成。
 - 类型从 `@openviking/react/modules/console` 导出，包根入口只导出 `Console` 和 `ConsoleProps`。
 
+原生 VikingBot 的附件在发送请求前校验，不符合原有图片类型或 URL 要求时通过 Toast 提示并保留草稿。自定义 `chatOptions.service` 负责自己的附件契约。
+
 ## 埋点
 
 通过 Provider 统一接入，支持的事件和触发条件见[埋点指南与事件目录](../guide/analytics)。

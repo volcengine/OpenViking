@@ -1,4 +1,5 @@
 import { withMonitoring } from '../../shared/monitoring/with-monitoring.js';
+import { NotificationScope } from '../../shared/feedback/notification-scope.js';
 import { useRenderErrors } from './file-browser-labels.js';
 import { forwardRef } from 'react';
 import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
@@ -21,7 +22,9 @@ const FileBrowserView: FileBrowserComponent = forwardRef<
       locale={props.locale}
       resetKeys={[props.rootUri, props.uri]}
     >
-      <FileBrowserContent {...contentProps} ref={ref} />
+      <NotificationScope locale={props.locale} isolateRequests>
+        <FileBrowserContent {...contentProps} ref={ref} />
+      </NotificationScope>
     </ErrorBoundary>
   );
 });

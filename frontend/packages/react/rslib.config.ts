@@ -81,6 +81,8 @@ export default defineConfig({
             './src/shared/primitives/select/index.ts',
           'shared/primitives/button/button':
             './src/shared/primitives/button/button.tsx',
+          'shared/primitives/toast/index':
+            './src/shared/primitives/toast/index.ts',
           'shared/primitives/notification/index':
             './src/shared/primitives/notification/index.ts',
           'shared/primitives/input/input':
@@ -98,6 +100,7 @@ export default defineConfig({
       style: './src/style.css',
       'components/context-picker/style':
         './src/components/context-picker/style.css',
+      'docs/toast/style': './src/shared/primitives/toast/style.css',
       'docs/notification/style':
         './src/shared/primitives/notification/style.css',
       'docs/shared/primitives/select/style':

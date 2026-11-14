@@ -18,6 +18,7 @@ import FocusLock from 'react-focus-lock';
 import { CSSTransition } from 'react-transition-group';
 import CloseIcon from '../../../../../icons/svg/viking-bot/remove.svg?react';
 import { useLocale } from '../../locale-context.js';
+import { NotificationScope } from '../../feedback/notification-scope.js';
 import { resolveLocale } from '../../locale.js';
 import { lockBodyScroll } from '../overlay/lock-body-scroll.js';
 import { usePortalTheme } from '../tooltip/use-portal-theme.js';
@@ -167,7 +168,9 @@ export function Modal({
                   <CloseIcon width={16} height={16} aria-hidden="true" />
                 )}
               </button>
-              <div className="ov-modal__body">{children}</div>
+              <NotificationScope locale={locale}>
+                <div className="ov-modal__body">{children}</div>
+              </NotificationScope>
             </ModalFocusShardContext.Provider>
           </FocusLock>
         </div>

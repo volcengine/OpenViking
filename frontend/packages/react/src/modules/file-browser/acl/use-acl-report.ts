@@ -1,6 +1,7 @@
 import { useAnalyticsRef } from '../../../shared/analytics/context.js';
 import { beginMutation } from '../../../shared/analytics/mutation.js';
 import { toError } from '../fs-errors.js';
+import { localRequestErrors } from '../../../client/observe-errors.js';
 import { useEffect, useRef, useState } from 'react';
 import type {
   FileBrowserAclContext,
@@ -51,7 +52,10 @@ export function useAclReport({
     const signal = requestOptions.signal
       ? AbortSignal.any([controller.signal, requestOptions.signal])
       : controller.signal;
-    void readAcl(client, uri, { ...requestOptions, signal }).then(
+    void readAcl(localRequestErrors(client), uri, {
+      ...requestOptions,
+      signal,
+    }).then(
       (value) => {
         if (!signal.aborted) {
           setReport(value);

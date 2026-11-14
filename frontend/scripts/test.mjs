@@ -55,6 +55,7 @@ try {
               'time-picker':
                 './src/shared/primitives/time-picker/time-picker.tsx',
               notification: './src/shared/primitives/notification/index.ts',
+              toast: './src/shared/primitives/toast/index.ts',
               select: './src/shared/primitives/select/index.ts',
 
               dropdown: './src/shared/primitives/dropdown/index.ts',
@@ -84,6 +85,11 @@ try {
               'console-conversation':
                 './src/modules/console/use-conversation.tsx',
               provider: './src/client/provider.tsx',
+              'request-errors': './src/client/error-events.ts',
+              'observe-errors': './src/client/observe-errors.ts',
+              'error-feedback': './src/shared/feedback/error-notification.tsx',
+              'notification-scope':
+                './src/shared/feedback/notification-scope.tsx',
               'reference-tags':
                 './src/components/viking-bot/composer-reference-tags.tsx',
               'wiki-pane': './src/modules/file-browser/wiki-dashboard-pane.tsx',

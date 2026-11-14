@@ -46,7 +46,7 @@ export function useFileBrowser({
 }: UseFileBrowserOptions): FileBrowserApi {
   const locale = useLocale(localeProp);
   const text = resolveLabels(accessLabels, locale);
-  const client = useOvClient();
+  const client = useOvClient('local');
   const [pendingUri, setPendingUri] = useState<string | null>(currentUri);
   const [refreshing, setRefreshing] = useState(false);
   // External edits must refresh the directory and preview even if URI and client

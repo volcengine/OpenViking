@@ -55,6 +55,10 @@ test('a deliberately missed picker focus exits with a bounded assertion failure'
     .replace(
       "'./helpers/module-dom.mjs'",
       JSON.stringify(new URL('helpers/module-dom.mjs', file).href),
+    )
+    .replace(
+      "'./helpers/feedback-dom.mjs'",
+      JSON.stringify(new URL('helpers/feedback-dom.mjs', file).href),
     );
   const directory = await mkdtemp(join(tmpdir(), 'ov-focus-failure-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
