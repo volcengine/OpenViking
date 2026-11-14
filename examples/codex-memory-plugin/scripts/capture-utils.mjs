@@ -431,13 +431,58 @@ function withoutStartupContext(entries, cfg) {
   return { entries: filtered, excludedLegacyTurnIndices };
 }
 
+// Read prose from its original structure: a tool result's content can itself be
+// text, and some legacy extractors render a single object tool as a text part.
+// Never try to identify those rendered strings by name or regex afterwards.
+const TOOL_CONTENT_TYPES = new Set([
+  "tool", "function", "tool_call", "toolcall", "tool_use", "tooluse",
+  "function_call", "functioncall", "tool_result", "toolresult", "tool_output",
+  "tooloutput", "function_call_output", "functioncalloutput",
+]);
+
+function conversationContent(content) {
+  if (typeof content === "string") return [{ type: "text", text: content }];
+  if (Array.isArray(content)) return content.flatMap(conversationContent);
+  if (!content || typeof content !== "object") return [];
+  const type = String(content.type || content.kind || content.role || "").toLowerCase().replace(/[-\s]/g, "_");
+  if (TOOL_CONTENT_TYPES.has(type) || content.function?.name) return [];
+  if (content.item) return conversationContent(content.item);
+  if (["text", "input_text", "output_text"].includes(type) || !type) {
+    const text = content.text ?? content.input_text ?? content.output_text;
+    if (typeof text === "string") return [{ type: "text", text }];
+  }
+  return content.content !== undefined ? conversationContent(content.content) : [];
+}
+
+function conversationParts(entry, cfg) {
+  const outer = entry?.payload ?? entry;
+  const payload = outer?.message ?? outer;
+  // A tool transport can use content/text too; only actual human/assistant
+  // messages supply prose. Native tool events have been normalized already.
+  const type = String(payload?.type || payload?.kind || "").toLowerCase().replace(/[-\s]/g, "_");
+  if (TOOL_CONTENT_TYPES.has(type) || payload?.function?.name) return [];
+  const role = String(payload?.role || payload?.type || payload?.kind || "").toLowerCase();
+  if (role !== "user" && role !== "assistant") return [];
+  const content = conversationContent(payload.content);
+  const [turn] = extractSharedCaptureTurns([{ payload: { type: "message", role, content } }], cfg);
+  return turn?.parts?.length ? turn.parts : turn?.text ? [{ type: "text", text: turn.text }] : [];
+}
+
 export function extractCaptureTranscript(rolloutEntries, cfg = {}) {
   const expanded = expandCodexRolloutEntries(rolloutEntries);
   const deduplicated = deduplicateCodexToolEvents(expanded);
   const normalized = normalizeCodexNativeToolEvents(deduplicated);
   const completed = normalizeCodexCompletedToolEvents(normalized);
   const { entries, excludedLegacyTurnIndices } = withoutStartupContext(completed, cfg);
-  return { turns: extractSharedCaptureTurns(entries, cfg), excludedLegacyTurnIndices };
+  const sourceTurns = extractSharedCaptureTurns(entries, cfg, {
+    includeSourceIndex: cfg.captureToolTraffic === false,
+  });
+  const turns = cfg.captureToolTraffic === false
+    ? sourceTurns.map(({ sourceIndex, ...turn }) => ({
+      ...turn, conversationParts: conversationParts(entries[sourceIndex], cfg),
+    }))
+    : sourceTurns;
+  return { turns, excludedLegacyTurnIndices };
 }
 
 export function extractCaptureTurns(rolloutEntries, cfg = {}) {
