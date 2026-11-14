@@ -1,5 +1,6 @@
 import fs from "fs"
 import path from "path"
+import { randomUUID } from "crypto"
 import {
   extractTextFromPayload,
   isCaptureEnabled,
@@ -104,7 +105,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       for (const [opencodeSessionId, state] of sessions.entries()) {
         persisted[opencodeSessionId] = serializeSessionState(state)
       }
-      const tempPath = `${statePath}.tmp`
+      const tempPath = `${statePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
       await fs.promises.writeFile(tempPath, JSON.stringify({ version: 2, sessions: persisted, lastSaved: Date.now() }, null, 2), "utf8")
       await fs.promises.rename(tempPath, statePath)
       log("DEBUG", "persistence", "Session state saved", { count: sessions.size })
