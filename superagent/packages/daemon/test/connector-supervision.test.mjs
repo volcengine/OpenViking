@@ -90,6 +90,25 @@ describe('Connector supervision', () => {
     assert.deepEqual(events.filter((event) => event.startsWith('alpha:')), ['alpha:issue-open-123']);
   });
 
+  for (const [mode, expected] of [
+    ['exit-with-error-log', /^connector beta exited 1: upstream session expired /],
+    ['exit-with-plain-error', /^connector beta exited 1: TypeError \[ERR_FIXTURE\]: worker could not initialize$/],
+    ['exit-with-info-log', /^connector beta exited 1$/],
+  ]) {
+    it(`reports an actionable Connector exit summary for ${mode}`, async (t) => {
+      const { manager, statuses, start } = setup(t, { modes: { beta: mode }, delays: [60_000] });
+      await manager.preflight();
+      await start();
+      await waitFor(() => statuses.length > 0);
+
+      const [failed] = statuses;
+      assert.equal(failed.code, 1);
+      assert.match(failed.error, expected);
+      assert.doesNotMatch(failed.error, /routine worker log/);
+      assert.ok(failed.error.length <= 300);
+    });
+  }
+
   it('starts with the Connectors that pass check and retries the rest with backoff', async (t) => {
     const { manager, statuses, setMode, spawns, start } = setup(t, { modes: { beta: 'fail-check' } });
     const info = await manager.preflight();
