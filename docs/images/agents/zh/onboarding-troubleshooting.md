@@ -1,6 +1,6 @@
 # OpenViking 接入引导：故障排查（给 Agent 看）
 
-[接入引导](https://docs.openviking.net/agents/zh/onboarding.md)里的命令失败时查这一页。找到对应现象，修好后重试一次；仍然失败，就告诉用户哪一步没成、影响什么、他可以怎么处理。
+[接入引导](https://docs.openviking.net/agents/zh/onboarding.md)（团队版是 [onboarding-team.md](https://docs.openviking.net/agents/zh/onboarding-team.md)）里的命令失败时查这一页。找到对应现象，修好后重试一次；仍然失败，就告诉用户哪一步没成、影响什么、他可以怎么处理。
 
 | 现象 | 处理 |
 |---|---|
@@ -21,3 +21,5 @@
 | 导入脚本提示 `not supported yet` | 脚本不能直接读这个宿主的历史，按[其他宿主：把会话转成 JSONL](https://docs.openviking.net/agents/zh/onboarding-other-hosts.md)转换后用 `--input` 导入。 |
 | 导入脚本提示 `--session: no session matches …` | 给的 id 不对，什么都没有上传。重新运行 `--list`，用它打印的 id。 |
 | 重启后没有召回 | 先分清是库里没有相关内容，还是 hook 没运行。Codex 和 TraeCode CLI：在 `/hooks` 里信任 OpenViking 的 hook，在 `/plugins` 里确认 `openviking-memory` 已启用。Cursor 和 TRAE：应用没有完全退出。其他情况运行诊断：Claude Code 用 `/openviking-memory:ov` 或 `ov-memory-doctor` skill；Codex 用 `$ov-memory-doctor` skill；Cursor、TRAE、TRAE CN、ZCode 运行 `node ~/.openviking/agent-integrations/<cursor\|trae\|trae-cn\|zcode>/scripts/ov-memory-doctor.mjs`；pi 用 `/viking`；DeepSeek Harness 运行 `dsh --profile <profile> --dump-config`（`<profile>` 是安装器输出的那个），输出里应包含 `openviking-memory`。命令行宿主还可以在启动前设置 `OPENVIKING_DEBUG=1`，hook 日志会写到 `~/.openviking/logs/`；从程序坞或启动器打开的桌面应用读不到 shell 里设置的环境变量。 |
+| 团队版：写 `viking://resources/…` 时返回 `PERMISSION_DENIED … write permission required` | 团队开启了权限控制，他对这个目录没有写权限。不要换别的位置写；告诉他请团队管理员给他自己的目录 `viking://resources/<user_id>/` 开写权限，内容先留在本地或他的个人空间，有权限后再贡献。 |
+| 团队版：`ov ls viking://resources` 里有的目录显示 `permission denied` | 是他没有读权限的目录，属于正常情况。跳过，不要向用户逐个列出。整个 `viking://resources` 都读不到时，请他找团队管理员。 |
