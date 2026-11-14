@@ -141,8 +141,11 @@ function inboxSection(config = {}) {
 
 // The workers scheduler adds the router's part after the inbox's: when to
 // hand work to a task, and how to relay what a worker reports.
-function workersSection(config = {}) {
-  return config.scheduler === 'workers' ? renderPrompt(config, 'workers.md') : '';
+function workersSection(config = {}, runtime = null) {
+  // Runtime switches reuse the instance scheduler. Do not tell a runtime
+  // without a worker adapter to delegate work it can only perform itself.
+  const supported = runtime === null || ['pi', 'codex', 'claude', 'dsh'].includes(runtime);
+  return config.scheduler === 'workers' && supported ? renderPrompt(config, 'workers.md') : '';
 }
 
 // A worker's own policy (tasks.mjs): one task, no deliveries, a report. It
@@ -174,7 +177,7 @@ function bundledCliSection(config) {
 
 // Codex, TraeX, Claude, Pi, Durable, OpenCode and Antigravity: the whole policy, delivered
 // through the Core tools.
-export function assembleConversationPolicy(config = {}) {
+export function assembleConversationPolicy(config = {}, runtime = null) {
   return joinSections([
     renderPrompt(config, 'core.md').replace('{{DELIVERY_RULES}}', () => deliveryRules(config)),
     renderPrompt(config, 'events.md'),
@@ -186,7 +189,7 @@ export function assembleConversationPolicy(config = {}) {
     naturalWritingSection(config),
     explicitSilencePromptSection(config),
     inboxSection(config),
-    workersSection(config),
+    workersSection(config, runtime),
   ]);
 }
 

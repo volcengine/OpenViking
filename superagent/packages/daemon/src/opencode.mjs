@@ -107,7 +107,7 @@ export class OpencodeAgent {
     this.syncedThroughSeq = options.syncedThroughSeq ?? 0;
     this.deliveredThroughSeq = this.syncedThroughSeq;
 
-    this.systemPrompt = assembleConversationPolicy(config);
+    this.systemPrompt = assembleConversationPolicy(config, 'opencode');
     this.model = options.model
       ?? store.getSetting?.(this.modelSettingKey)
       ?? options.initialModel

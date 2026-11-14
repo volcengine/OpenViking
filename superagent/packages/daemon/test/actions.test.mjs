@@ -1997,7 +1997,7 @@ describe('workers scheduler', () => {
     };
     const inbox = new MessageInbox({ db: store.db, runtime: { snapshot: () => ({ work: { turnInProgress: true } }) } });
     const tasks = new TaskManager({ db: store.db, config: { workspace }, executor, inbox, lineFor: (row) => `line ${row.seq}` });
-    service.attachTasks(tasks, { runtime: () => runtime, supports: (id) => ['pi', 'codex', 'claude'].includes(id) });
+    service.attachTasks(tasks, { runtime: () => runtime, supports: (id) => ['pi', 'codex', 'claude', 'dsh'].includes(id) });
     return { tasks, turns };
   }
 
@@ -2005,10 +2005,10 @@ describe('workers scheduler', () => {
     const legacy = setup(t).service.tools().map((tool) => tool.name);
     assert.ok(!legacy.some((name) => name.startsWith('task_')));
     const { service, store, workspace } = setup(t, { scheduler: 'workers', explicitSilence: true });
+    const { tasks, turns } = attachTasks(service, store, workspace);
     const router = service.tools().map((tool) => tool.name);
     assert.deepEqual(router.filter((name) => name.startsWith('task_') || name === 'message_check'),
       ['message_check', 'task_create', 'task_route', 'task_stop', 'task_list']);
-    const { tasks, turns } = attachTasks(service, store, workspace);
     tasks.create({ rows: [store.ingest(chatEvent({ messageId: 'om_workerTool1234', chatType: 'group' })).inbound]
       .map((inbound) => store.db.prepare('SELECT * FROM connector_events WHERE seq = ?').get(inbound.seq)), title: 'x', runtime: 'pi' });
     const worker = service.tools({ authority: turns[0].authority }).map((tool) => tool.name);
@@ -2055,8 +2055,17 @@ describe('workers scheduler', () => {
   it('refuses a task on a runtime workers do not run on', async (t) => {
     const { service, store, workspace, call } = setup(t, { scheduler: 'workers' });
     attachTasks(service, store, workspace, 'durable');
+    const offered = service.tools().map((tool) => tool.name);
+    assert.ok(offered.includes('message_check'), 'an unsupported runtime still uses the inbox scheduler');
+    assert.ok(!offered.some((name) => name.startsWith('task_')), 'unsupported runtimes do not advertise router tools');
     store.ingest(chatEvent({ messageId: 'om_durableTask123', chatType: 'group' }));
     await assert.rejects(call('task_create', { trigger_ids: ['message:om_durableTask123'], title: 'x' }),
-      (error) => error.code === 'unsupported' && /Workers run on pi, codex or claude; this runtime is durable/.test(error.message));
+      (error) => error.code === 'unknown_tool');
+    // Stale/direct adapters still get a capability error rather than creating
+    // work after the tool disappeared during a runtime switch.
+    await assert.rejects(service.taskCreate({ trigger_ids: ['message:om_durableTask123'], title: 'x' }),
+      (error) => error.code === 'unsupported' && /Workers run on pi, codex, claude or dsh; this runtime is durable/.test(error.message));
+    await assert.rejects(service.taskRoute({ task_id: 't1', trigger_ids: ['message:om_durableTask123'], role: 'owner' }),
+      (error) => error.code === 'unsupported');
   });
 });

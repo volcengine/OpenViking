@@ -179,6 +179,8 @@ export class ActionService {
     // runtime exists; null under the legacy scheduler.
     this.inbox = null;
     this.tasks = null;
+    this.taskRuntime = () => null;
+    this.taskRuntimeSupported = () => false;
   }
 
   attachInbox(inbox) {
@@ -223,12 +225,17 @@ export class ActionService {
     return this.tasks;
   }
 
-  async taskCreate(input) {
-    const tasks = this.requireTasks();
+  requireWorkerRuntime() {
     const runtime = this.taskRuntime();
     if (!this.taskRuntimeSupported(runtime)) {
-      throw blocked('unsupported', `Workers run on pi, codex or claude; this runtime is ${runtime}. Handle the request yourself. ${NO_ACTION}`);
+      throw blocked('unsupported', `Workers run on pi, codex, claude or dsh; this runtime is ${runtime}. Handle the request yourself. ${NO_ACTION}`);
     }
+    return runtime;
+  }
+
+  async taskCreate(input) {
+    const tasks = this.requireTasks();
+    const runtime = this.requireWorkerRuntime();
     const rows = this.taskInputs(input.trigger_ids, input.decision_instance);
     const requester = senderLabel(this.store.inboundBySeq(rows[0].seq));
     const task = tasks.create({ rows, title: input.title, note: input.note ?? '', requester, runtime });
@@ -241,6 +248,7 @@ export class ActionService {
 
   async taskRoute(input) {
     const tasks = this.requireTasks();
+    this.requireWorkerRuntime();
     const rows = this.taskInputs(input.trigger_ids, input.decision_instance);
     let task;
     try { task = tasks.route(input.task_id, rows, input.role); } catch (error) {
@@ -353,7 +361,9 @@ export class ActionService {
     if (tool.timer) return Boolean(this.timers);
     if (tool.explicitSilence) return Boolean(this.config.explicitSilence);
     if (tool.inbox) return ['inbox', 'workers'].includes(this.config.scheduler);
-    if (tool.router) return this.config.scheduler === 'workers';
+    if (tool.router) {
+      return this.config.scheduler === 'workers' && this.taskRuntimeSupported(this.taskRuntime());
+    }
     if (tool.worker) return false;
     return true;
   }

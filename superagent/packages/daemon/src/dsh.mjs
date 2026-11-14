@@ -102,7 +102,7 @@ export class DshAgent {
     this.syncedThroughSeq = options.syncedThroughSeq ?? 0;
     this.deliveredThroughSeq = this.syncedThroughSeq;
 
-    this.systemPrompt = assembleConversationPolicy(config);
+    this.systemPrompt = assembleConversationPolicy(config, 'dsh');
     // There is no environment seed for the model: the persisted setting, the
     // selection this start was asked for, and the built-in default are the whole
     // chain. Routes themselves belong to DSH's settings document.
