@@ -17,6 +17,7 @@ export function useFsTreePage({
   requestOptions,
   scope,
   dirsRef,
+  expandedRef,
   setDirs,
   setError,
 }: {
@@ -25,6 +26,7 @@ export function useFsTreePage({
   requestOptions?: OvRequestOptions;
   scope: RequestScopeHandle;
   dirsRef: RefObject<Record<string, DirState>>;
+  expandedRef: RefObject<ReadonlySet<string>>;
   setDirs: Dispatch<SetStateAction<Record<string, DirState>>>;
   setError: Dispatch<SetStateAction<Error | null>>;
 }) {
@@ -33,6 +35,7 @@ export function useFsTreePage({
       uri: string,
       offset: number,
       navigationSignal?: AbortSignal,
+      refresh = false,
     ) => {
       if (!client) return;
       const current = scope.current();
@@ -76,7 +79,43 @@ export function useFsTreePage({
           requestOptions,
         );
         if (signal.aborted || !ownsPage()) return;
-        const merged = mergePage(previous, page, offset);
+        let merged = mergePage(previous, page, offset);
+        const pendingBranches = new Set(
+          previous?.entries
+            .filter((entry) => expandedRef.current.has(entry.uri))
+            .map((entry) => entry.uri),
+        );
+        const visit = (entries: DirState['entries']) => {
+          for (const entry of entries) pendingBranches.delete(entry.uri);
+        };
+        visit(merged.entries);
+        // Refresh the loaded window atomically. A previously exhausted listing
+        // stays complete, including entries shifted across a page by an import.
+        // Loading or failing a later page must not discard the old visible rows.
+        while (
+          refresh &&
+          offset === 0 &&
+          previous &&
+          merged.hasMore &&
+          (!previous.hasMore ||
+            merged.entries.length < previous.entries.length ||
+            pendingBranches.size > 0)
+        ) {
+          const nextOffset = merged.entries.length;
+          if (!nextOffset) throw new Error('Directory listing did not advance');
+          const next = await loadPage(
+            client,
+            uri,
+            nextOffset,
+            signal,
+            requestOptions,
+          );
+          if (signal.aborted || !ownsPage()) return;
+          if (!next.entries.length && next.hasMore)
+            throw new Error('Directory listing did not advance');
+          merged = mergePage(merged, next, nextOffset);
+          visit(next.entries);
+        }
         save(merged);
         return merged;
       } catch (cause) {
@@ -94,5 +133,14 @@ export function useFsTreePage({
         signal.removeEventListener('abort', restore);
       }
     };
-  }, [client, rootUri, requestOptions, scope, dirsRef, setDirs, setError]);
+  }, [
+    client,
+    rootUri,
+    requestOptions,
+    scope,
+    dirsRef,
+    expandedRef,
+    setDirs,
+    setError,
+  ]);
 }

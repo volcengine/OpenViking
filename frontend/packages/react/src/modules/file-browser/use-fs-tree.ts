@@ -195,6 +195,7 @@ export function useFsTree({
     requestOptions,
     scope,
     dirsRef,
+    expandedRef,
     setDirs,
     setError,
   });
@@ -244,7 +245,7 @@ export function useFsTree({
         );
       },
       retry: async (parentId: string) => {
-        await fetchPage(parentId, 0);
+        await fetchPage(parentId, 0, undefined, true);
       },
       // 刷新是多次请求的循环，因此每一轮都要确认还在同一个作用域里：中途换了账号
       // 就该停下，而不是拿着旧客户端的循环继续往新账号的树上写。
