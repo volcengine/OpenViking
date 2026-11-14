@@ -88,7 +88,7 @@
   padding: 0;
   list-style: none;
 }
-.ov-file-history__entries p {
+.ov-file-history__entries > p {
   margin: 12px 18px;
 }
 .ov-file-history__entries li > :is(button, div) {

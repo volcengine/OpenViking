@@ -117,19 +117,21 @@
   margin-inline-start: auto;
   align-items: center;
   justify-content: flex-end;
-  gap: 12px;
+  gap: 8px;
 }
 
 .ov-viking-bot__quick-inputs button:not(.ov-button):hover:not(:disabled) {
   background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
 }
-.ov-viking-bot__header-action.ov-button {
-  width: 24px;
-  height: 24px;
-  padding: 0;
-}
+/* 按钮与终端模式的 .ov-console__action 同为 small，图标同尺寸、同线宽，切换模式时不移位。 */
 .ov-viking-bot__header-action > svg {
   display: block;
+  width: 14px;
+  height: 14px;
+}
+.ov-viking-bot__header-action svg path {
+  stroke-width: 1.25px;
+  vector-effect: non-scaling-stroke;
 }
 .ov-viking-bot__header {
   padding: 8px 16px;
@@ -214,12 +216,8 @@
   display: none;
 }
 .ov-viking-bot__empty-history {
-  display: flex;
   min-height: 160px;
-  margin: 0;
-  align-items: center;
   justify-content: center;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
 }
 .ov-viking-bot__reference-picker {
   min-width: 0;
@@ -331,8 +329,5 @@
 @container (max-width: 360px) {
   .ov-viking-bot__session-meta > span {
     display: none;
-  }
-  .ov-viking-bot__session-actions {
-    gap: 4px;
   }
 }

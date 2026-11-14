@@ -6,6 +6,7 @@
 @import '../../shared/primitives/radio/radio.css';
 @import '../../shared/primitives/date-picker/date-picker.css';
 @import '../../theme.css';
+@import '../../shared/primitives/empty/empty.css';
 @import '../../shared/primitives/popover/popover.css';
 @import '../../shared/primitives/tooltip/tooltip.css';
 @import '../../shared/primitives/resizable/resizable-handle.css';

@@ -1,6 +1,7 @@
 import type { RefObject } from 'react';
 import SearchEmptyArt from '../../../../icons/svg/file-browser/search-empty.svg?react';
 import { Button } from '../../shared/primitives/button/button.js';
+import { Empty } from '../../shared/primitives/empty/empty.js';
 import { FileBrowserSearchRow } from './file-browser-search-row.js';
 import { FileBrowserSearchModeRow } from './file-browser-search-mode-row.js';
 import type { SearchHit, SearchMode } from './search-types.js';
@@ -119,9 +120,11 @@ export function FileBrowserSearchResults({
 
   if (hits.length === 0) {
     return (
-      <p role="status" className="ov-file-browser-search__no-results">
-        {text.searchEmpty}
-      </p>
+      <Empty
+        illustration="search"
+        title={text.searchEmpty}
+        className="ov-file-browser-search__no-results"
+      />
     );
   }
 

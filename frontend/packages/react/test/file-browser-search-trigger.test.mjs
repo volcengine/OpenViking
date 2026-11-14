@@ -194,10 +194,14 @@ test('closing cancels the pending search, clears the draft and restores focus', 
 
     await act(async () => dialog().querySelector('.ov-modal__close').click());
     await settle();
+    // 退出动画期间保持当前结果，动画结束后才重置并取消请求。
+    // The current results stay during the exit transition; the reset and the
+    // cancellation follow once it ends.
+    assert.equal(signal.aborted, false);
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 330)));
     assert.equal(signal.aborted, true);
 
     await act(async () => pending.resolve(await ok({ resources: [{ uri }] })));
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 330)));
     assert.equal(document.activeElement, trigger());
 
     await open();

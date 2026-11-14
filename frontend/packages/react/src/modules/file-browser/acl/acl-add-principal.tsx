@@ -1,5 +1,6 @@
 import { AclPrincipalTabs } from './acl-principal-tabs.js';
 import { Button } from '../../../shared/primitives/button/button.js';
+import { Empty } from '../../../shared/primitives/empty/empty.js';
 import { Input } from '../../../shared/primitives/input/input.js';
 import { SearchIcon } from '../file-browser-icons.js';
 import { useId, useState } from 'react';
@@ -119,9 +120,11 @@ export function AclAddPrincipal({
               />
             ))}
             {!directory.loading && !candidates.length && !directory.error ? (
-              <p className="ov-file-browser-acl__hint">
-                {keyword.trim() ? text.noMatches : text.empty}
-              </p>
+              <Empty
+                size="compact"
+                illustration={keyword.trim() ? 'search' : 'people'}
+                title={keyword.trim() ? text.noMatches : text.empty}
+              />
             ) : null}
           </div>
           {directory.error ? (

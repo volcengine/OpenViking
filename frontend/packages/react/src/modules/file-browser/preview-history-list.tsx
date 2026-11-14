@@ -1,3 +1,4 @@
+import { Empty } from '../../shared/primitives/empty/empty.js';
 import { PreviewQueryState } from './preview-query-state.js';
 import type {
   FileBrowserWorkflowLabels,
@@ -48,7 +49,9 @@ export function PreviewHistoryList({
       ) : null}
       <div className="ov-file-history__entries">
         <PreviewQueryState query={query} text={statusText} />
-        {entries?.length === 0 ? <p>{text.historyEmpty}</p> : null}
+        {entries?.length === 0 ? (
+          <Empty size="compact" illustration="tray" title={text.historyEmpty} />
+        ) : null}
         <ol>
           {entries?.map((entry) => {
             const title = entry.numbered

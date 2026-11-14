@@ -24,6 +24,7 @@
 - `tooltip`：渲染到 `document.body` 的定位浮层，悬停或聚焦时显示，也可以点击切换。渲染到 body 是因为祖先容器的 `overflow: hidden` 会裁掉常规浮层。
 - `popover`：`tooltip` 的白底卡片版本，用于结构化或可交互的内容，同样渲染到 `document.body`，触发方式与方位选项和 `tooltip` 一致。
 - `divider`：一条 `role="separator"` 的分隔线，长度、粗细和颜色由调用方给出。
+- `empty`：空态，内置线稿插画在上，标题和可选说明在下。`default` 用于内容区，`compact` 用于浮层、树和卡片。
 - `resizable`：`ResizableHandle`，可拖拽的 `role="separator"` 分隔条，用指针拖动或方向键调整相邻面板的宽度。宽度由调用方持有，每个夹取后的值通过 `onResize` 回传。
 - `overlay`：`tooltip`、`popover`、`modal`、`drawer` 这类浮层共用的定位与滚动工具。`useOverlayPosition` 在空间不足时把浮层翻到对侧并夹在视口内，`lockBodyScroll` 记录各个持有者，最后一个释放时恢复宿主的内联样式，`OverlayPlacement` 是共用的方位类型。
 - `notification`：右上角通知栈，展示任务状态与结果反馈，见 [Notification](#notification)。

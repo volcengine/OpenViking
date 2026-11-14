@@ -1,5 +1,6 @@
 import { useRenderErrors } from './labels.js';
 import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
+import { Empty } from '../../shared/primitives/empty/empty.js';
 import { useLocale } from '../../shared/locale-context.js';
 import { LazyContent } from '../../shared/lazy-content.js';
 
@@ -37,7 +38,11 @@ function VikingBotMessageListContent(props: VikingBotMessageListProps) {
   const items = toRenderItems(props.messages, props.streaming);
 
   if (items.length === 0) {
-    return <div className="ov-viking-bot__empty">{labels.empty}</div>;
+    return (
+      <div className="ov-viking-bot__empty">
+        <Empty illustration="conversation" title={labels.empty} />
+      </div>
+    );
   }
 
   return (

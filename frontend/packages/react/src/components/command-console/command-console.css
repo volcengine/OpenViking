@@ -994,12 +994,12 @@
 
 .ov-command-console__assist[data-side='stack']:not([data-details-only])
   .ov-command-console__hint {
-  max-height: calc(var(--ov-ui-command-console-assist-height, 420px) * 0.55);
+  max-height: calc(var(--ov-ui-command-console-assist-height, 420px) * 0.45);
 }
 
 .ov-command-console__assist[data-side='stack']:not([data-details-only])
   .ov-command-console__suggestions {
-  max-height: calc(var(--ov-ui-command-console-assist-height, 420px) * 0.45);
+  max-height: calc(var(--ov-ui-command-console-assist-height, 420px) * 0.55);
 }
 
 /* 输入区与补全。 */
@@ -1218,9 +1218,6 @@
   border: 1px solid var(--ov-ui-command-console-card-border);
   border-radius: 10px;
   background: var(--ov-ui-command-console-surface);
-  padding: 8px 12px;
-  color: var(--ov-ui-command-console-muted);
-  font-size: 12px;
 }
 
 .ov-command-console__hint-empty {

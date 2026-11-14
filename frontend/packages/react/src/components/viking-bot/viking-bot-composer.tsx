@@ -1,13 +1,7 @@
 import { useLocale } from '../../shared/locale-context.js';
 import { Sender } from '@ark-design/ui/sender';
 import type { SenderInstance } from '@ark-design/ui/sender';
-import {
-  forwardRef,
-  useCallback,
-  useEffect,
-  useImperativeHandle,
-  useRef,
-} from 'react';
+import { forwardRef, useCallback, useImperativeHandle, useRef } from 'react';
 
 import { resolveVikingBotLabels } from './labels.js';
 import { VikingBotSubmitActions } from './composer-controls.js';
@@ -21,6 +15,7 @@ import {
   composerCaret,
   toPlainText,
   toRichText,
+  useSyncComposerValue,
   writeComposerText,
 } from './composer-text.js';
 import type { VikingBotComposerProps, VikingBotComposerRef } from './types.js';
@@ -83,16 +78,7 @@ export const VikingBotComposerView = forwardRef<
   );
   const shortcuts = useQuickInput(value, setText, onQuickInputSelect);
 
-  // useEffect 必要性：把受控 value 的后续变化同步到 Ark 编辑器。编辑器是外部
-  // 非 React 控件，只有它的 setValue 能改写内部文档，渲染计算无法做到。仅当
-  // 外部文本与编辑器当前纯文本不一致时才写入，避免覆盖用户正在输入的光标。
-  // useQuickInput 已按受控值更新归属；程序写入的同步回调不能再用光标认领文本。
-  // 组件卸载或 value 再次变化时由下一次同步覆盖，无需额外清理。
-  useEffect(() => {
-    const current = toPlainText(senderRef.current?.getValue() ?? []);
-    if (current === value) return;
-    writeComposerText(senderRef.current, value, writing);
-  }, [value]);
+  useSyncComposerValue(senderRef, value, writing);
 
   /** 按剩余额度截断并上报文件。 */
   const reportFiles = useCallback(
@@ -136,6 +122,7 @@ export const VikingBotComposerView = forwardRef<
         Boolean(onFilesAdded),
         !locked && remaining > 0,
         reportFiles,
+        senderRef,
       )}
     >
       {disabled && disabledReason ? (
