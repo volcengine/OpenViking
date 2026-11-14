@@ -1,5 +1,89 @@
 # @openviking/react
 
+## 0.1.12
+
+### Patch Changes
+
+<!-- release-note:en-US -->
+
+- Connect Console HITL question parsing, ordered answers and conversation continuation. Display and copy readable answer summaries while preserving protocol payloads for transport and storage.
+- Support per-question field validators, control renderers and custom cards. Preserve input for retry after failed submissions and discard obsolete interactions when reloading or switching sessions.
+- Unify HITL labels, help text, error tips and invalid-control icons. Clear local errors when input values change.
+- Preserve drafts across HITL Previous/Next navigation and schedule-frequency changes, and submit all steps once.
+- Provide themed, keyboard-accessible time selection with scrolling and wheel input, preserving HH:mm values, validation and disabled states. Prevent overlapping hour and minute updates from reverting one another.
+- Standalone VikingBotInteraction no longer requires Ark Design. Import its dedicated stylesheet from `@openviking/react/components/viking-bot/interaction/style.css`.
+- HITL text requests honor single-line and multiline modes.
+- Export ContextPicker for controlled file and directory selection, search, single or independent multiple selection, asynchronous selection restoration and custom footer actions.
+- Built-in directory interactions support ancestor expansion, pagination, child-directory creation, host-provided permissions and validation. Custom answers can delegate selection to the host.
+- Reuse TanStack Query v5 clients through OpenVikingProvider, with per-endpoint concurrency and identity-scoped directory and search caches supplied by the default SDK runtime. Preserve rows after background refresh failures and invalidate caches after writes.
+- Add optional, strongly typed analytics and frontend monitoring through OpenVikingProvider, both disabled by default. Cover interactions, outcomes, viewport exposure, component and request failures, resources, streams and tasks, with instance identification, bounded traces and bilingual integration guides and event catalogues.
+- Make FileBrowser directory navigation expand and refresh its target, support root navigation and preserve pagination, expanded branches and cached children during refresh failures. Keep preview-only navigation available through `reveal: false`, and restore the initially loaded L0/L1 tab indicator.
+- Keep FileTree trailing actions visible during horizontal scrolling.
+- Add independent FileTree dashboard tooltips and row-name titles.
+- Remove FileTree row permission badges while retaining preview ACL indicators and permission controls.
+- Let FileBrowser hosts override individual experience-dashboard requests.
+- Show preview character counts, modification times and localized model notices.
+- Save ordinary file edits directly; create annotated snapshots from Version history.
+- Align the FileBrowser ACL picker, allow host-selected principal types and restore inheritance through supported gateway updates. Correct effective-grant attribution when inherited permissions exceed direct permissions.
+- Preserve theme danger colors on FileBrowser delete actions.
+- Improve advanced search with directory scopes and date ranges, retain results until the close animation ends, and preserve selected preview-tab colors on hover.
+- Support resource uploads when the Console service provides attachment uploads, and wait for completion before sending. Cancel uploads and clear managed attachments when the chat identity, explicit session or request lifetime changes, while preserving them when the host echoes a newly created session ID.
+- Keep quick inputs above the VikingBot composer and focus the editor when its blank area is clicked.
+- Refine conversation timelines, code blocks and session actions, and improve narrow command panels.
+- Adapt AgentConnect and ScopeSwitcher to narrow containers.
+- Unify themed Checkbox, Radio and focus states, and preserve forced-color focus visibility.
+- Share illustrated empty and render-error states.
+- Unify operation and request errors with dismissible Notifications and local feedback with Toast. Preserve server reasons, drafts, cancellation and retries without duplicate notices.
+- Copy full diagnostics, including available error codes, HTTP status and request IDs, and support loading feedback and notice updates.
+
+Migration: mount components in the browser; SSR and hydration paths are no longer supported. HITL text questions now require non-blank input by default; set `required: false` for optional text. Single-question answer shapes are unchanged; multi-step answers use `steps`.
+
+Remove the obsolete `FileTreeLabels.readOnly`, `noAccess` and `traverseOnly` overrides. FileTree trailing content defaults to `rowTrailingPosition: 'viewport-end'`; set `'row-end'` to retain the previous horizontal-scrolling behavior.
+
+[Full changes](https://github.com/volcengine/OpenViking/compare/react@0.1.11...react@0.1.12)
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 接通 Console HITL 的问题解析、顺序作答、答案组装和继续对话。提交结果以可读摘要展示和复制，传输与存储保留协议原文。
+- 支持按问题注入字段校验、控件渲染及自定义卡片。提交失败保留输入并允许重试，重载或切换会话时清除失效交互。
+- 统一 HITL 标签、说明、错误 tips 和错误控件内的图标颜色，修改输入时清除本地错误。
+- HITL 上一步、下一步及切换定时频次时保留草稿，最后一次性提交所有步骤。
+- 时间选择支持主题、键盘、滚动列和滚轮操作，保留 HH:mm 值、校验及禁用状态。避免小时与分钟的交叠操作互相覆盖。
+- 独立使用 VikingBotInteraction 不再需要 Ark Design，可从 `@openviking/react/components/viking-bot/interaction/style.css` 引入独立交互样式。
+- HITL 文本请求按 multiline 配置显示单行或多行输入。
+- 导出 ContextPicker，支持受控文件与目录选择、搜索、单选与独立多选、异步选中回显及自定义底部操作。
+- 内置目录交互支持展开祖先、分页、新建子目录及宿主提供的权限和校验，自定义答案可将选择交给宿主。
+- OpenVikingProvider 支持复用 TanStack Query v5 客户端、按接口配置并发，以及由 SDK 默认查询运行时提供的身份隔离目录与搜索缓存。后台刷新失败保留行数据，写入后使缓存失效。
+- 通过 OpenVikingProvider 新增默认关闭、强类型的埋点与前端监控，覆盖操作、结果、可视曝光、组件与请求异常、资源、流和任务，提供实例标识、有容量限制的链路快照及双语接入指南和事件目录。
+- FileBrowser 定位目录时自动展开并刷新目标，支持根目录定位，刷新失败时保留分页、展开分支和缓存子项。保留 `reveal: false` 的仅预览行为，并修复 L0/L1 页签首次加载后的选中指示条。
+- FileTree 行尾操作在横向滚动时保持可见。
+- FileTree 新增独立的看板图标提示和行名称 title。
+- 移除 FileTree 行尾权限标识，保留预览 ACL 标签和权限控制。
+- FileBrowser 允许宿主替换经验看板的单项请求。
+- 预览页脚展示字符数、更新时间及本地化模型解析提示。
+- 普通文件编辑直接保存，带备注的快照在「历史版本」中创建。
+- 对齐 FileBrowser 权限选择器，允许宿主指定主体类型，并通过网关支持的更新接口恢复继承。修正继承权限高于直接权限时的有效授权来源。
+- FileBrowser 删除操作保留主题警告色。
+- 高级搜索支持目录范围与日期筛选，关闭动画结束后再清空结果，预览页签悬停时保留选中背景。
+- Console 服务支持附件上传时，对话可添加资源，发送前等待上传完成。聊天身份、显式会话或请求生命周期变化时，取消上传并清空托管附件；宿主回写新建会话 ID 时保留正常上传。
+- VikingBot 快捷输入常驻输入框上方，点击输入区空白处聚焦编辑器。
+- 调整对话执行时间线、代码块和会话操作，改进窄屏命令面板。
+- AgentConnect 和 ScopeSwitcher 适应窄容器。
+- 统一跟随主题的 Checkbox、Radio 和焦点状态，保留高对比度焦点提示。
+- 共用插画空态与渲染错误状态。
+- 操作与请求错误统一使用可关闭的 Notification，本地反馈使用 Toast。保留服务端原因、草稿、取消和重试，避免重复通知。
+- 支持复制完整诊断信息及已有的错误码、HTTP 状态码和 Request ID，并支持加载反馈和提示更新。
+
+迁移说明：请在浏览器中挂载组件，不再支持 SSR 与 hydration 路径。HITL 文本题默认要求非空输入，可设置 `required: false` 保留可选文本行为。单题答案结构保持不变，多步骤答案使用 `steps`。
+
+请删除已移除的 `FileTreeLabels.readOnly`、`noAccess` 和 `traverseOnly` 文案覆盖。FileTree 行尾内容默认采用 `rowTrailingPosition: 'viewport-end'`，如需保留原先随整行横向滚动的行为，请设置为 `'row-end'`。
+
+[完整变更](https://github.com/volcengine/OpenViking/compare/react@0.1.11...react@0.1.12)
+
+<!-- /release-note:zh-CN -->
+
 ## 0.1.11
 
 ### Patch Changes
