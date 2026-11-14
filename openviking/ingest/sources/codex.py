@@ -81,10 +81,15 @@ class CodexSource(JsonlLogSource):
                     raw = raw.strip()
                     if not raw:
                         continue
-                    obj = json.loads(raw)
-                    if obj.get("type") == "session_meta":
-                        return obj.get("payload", {}) or {}
-        except (OSError, ValueError):
+                    try:
+                        obj = json.loads(raw)
+                    except ValueError:
+                        continue
+                    if isinstance(obj, dict) and obj.get("type") == "session_meta":
+                        payload = obj.get("payload")
+                        if isinstance(payload, dict):
+                            return payload
+        except OSError:
             pass
         return {}
 
