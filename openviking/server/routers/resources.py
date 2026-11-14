@@ -184,40 +184,42 @@ async def add_skill(
             field_name="target_uri",
         )
     data = request.data
-    allow_local_path_resolution = False
-    resolved = None
-    source_metadata = request.source_metadata or {
-        "type": "api",
-        "source": "inline_content",
-        "operation": "add",
-    }
-    if request.temp_file_id:
-        store = TempUploadStore.build(http_request.app.state.config)
-        resolved = await store.resolve_for_consume(request.temp_file_id, _ctx)
-        data = resolved.local_path
-        allow_local_path_resolution = True
-        if request.source_metadata is None:
-            source_metadata = {
-                "type": "api",
-                "source": "temp_upload",
-                "operation": "add",
-                "upload_mode": resolved.mode,
-            }
-        if resolved.original_filename and request.source_metadata is None:
-            source_metadata["original_filename"] = resolved.original_filename
-
-    source_path_hint = resolved.original_filename if resolved else None
+    source_metadata = request.source_metadata
 
     async def _add() -> dict[str, Any]:
+        resolved = None
+        payload = data
+        allow_local_path_resolution = False
+        resolved_metadata = source_metadata or {
+            "type": "api",
+            "source": "inline_content",
+            "operation": "add",
+        }
+        source_path_hint = None
+        if request.temp_file_id:
+            store = TempUploadStore.build(http_request.app.state.config)
+            resolved = await store.resolve_for_consume(request.temp_file_id, _ctx)
+            payload = resolved.local_path
+            allow_local_path_resolution = True
+            if source_metadata is None:
+                resolved_metadata = {
+                    "type": "api",
+                    "source": "temp_upload",
+                    "operation": "add",
+                    "upload_mode": resolved.mode,
+                }
+                if resolved.original_filename:
+                    resolved_metadata["original_filename"] = resolved.original_filename
+            source_path_hint = resolved.original_filename
         try:
             return await install_skills(
-                data,
+                payload,
                 _ctx,
                 names=request.skills,
                 list_only=request.list_only,
                 wait=request.wait,
                 target_uri=target_uri,
-                source_metadata=source_metadata,
+                source_metadata=resolved_metadata,
                 allow_local_path_resolution=allow_local_path_resolution,
                 source_path_hint=source_path_hint,
                 telemetry=request.telemetry,
