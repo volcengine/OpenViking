@@ -4,6 +4,7 @@
 
 import asyncio
 from collections.abc import Mapping
+from dataclasses import asdict
 from typing import Annotated, Any, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, Path, Query, Request
@@ -39,6 +40,7 @@ from openviking.server.user_config import (
     read_user_config,
     resolve_add_targets,
     resolve_user_add_targets,
+    resolve_user_privacy,
     write_user_config,
 )
 from openviking.session.memory.account_templates import (
@@ -334,6 +336,7 @@ def _has_initial_user_config(user_config: UserConfig | None) -> bool:
             or user_config.add_targets.skill_uri
             or user_config.memory_policy
             or user_config.ttl is not None
+            or user_config.privacy.model_dump(exclude_none=True)
         )
     )
 
@@ -450,6 +453,9 @@ def _user_settings_result(
         "ttl": user_config.ttl.model_dump(by_alias=True, exclude_none=True)
         if user_config.ttl is not None
         else None,
+        "privacy": asdict(
+            resolve_user_privacy(user_config.privacy, server_config.user_config_defaults.privacy)
+        ),
     }
 
 
@@ -1130,7 +1136,7 @@ async def get_user_settings(
     user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Return effective add targets and memory policy, plus explicit User TTL."""
+    """Return effective User settings and explicit TTL."""
     _check_account_access(ctx, account_id)
     if ctx.role == Role.USER and user_id != ctx.user.user_id:
         raise PermissionDeniedError("USER can only access their own settings")
@@ -1164,7 +1170,7 @@ async def patch_user_settings(
     user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Patch User add targets, memory policy and TTL without restarting."""
+    """Patch User settings without restarting."""
     _check_account_access(ctx, account_id)
     if ctx.role == Role.USER and user_id != ctx.user.user_id:
         raise PermissionDeniedError("USER can only access their own settings")

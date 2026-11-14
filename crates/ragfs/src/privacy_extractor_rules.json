@@ -1,12 +1,152 @@
 {
-  "normalized_names": ["accesskey", "accesskeyid", "accesskeysecret", "accesstoken", "ak", "anthropicaccesskey", "anthropicaccesskeyid", "anthropicaccesskeysecret", "anthropicaccesstoken", "anthropicak", "anthropicapikey", "anthropicappsecret", "anthropicauthorization", "anthropicauthtoken", "anthropicbottoken", "anthropicclientsecret", "anthropiccredential", "anthropiccredentials", "anthropicpasswd", "anthropicpassword", "anthropicprivatekey", "anthropicproxyauthorization", "anthropicpwd", "anthropicrefreshtoken", "anthropicsecret", "anthropicsecretaccesskey", "anthropicsecretkey", "anthropicsecuritytoken", "anthropicsessiontoken", "anthropicsigningkey", "anthropicsigningsecret", "anthropicsk", "anthropictoken", "anthropicwebhooksecret", "anthropicxapikey", "apikey", "appsecret", "authorization", "authtoken", "awsaccesskey", "awsaccesskeyid", "awsaccesskeysecret", "awsaccesstoken", "awsak", "awsapikey", "awsappsecret", "awsauthorization", "awsauthtoken", "awsbottoken", "awsclientsecret", "awscredential", "awscredentials", "awspasswd", "awspassword", "awsprivatekey", "awsproxyauthorization", "awspwd", "awsrefreshtoken", "awssecret", "awssecretaccesskey", "awssecretkey", "awssecuritytoken", "awssessiontoken", "awssigningkey", "awssigningsecret", "awssk", "awstoken", "awswebhooksecret", "awsxapikey", "bottoken", "clientsecret", "credential", "credentials", "openaiaccesskey", "openaiaccesskeyid", "openaiaccesskeysecret", "openaiaccesstoken", "openaiak", "openaiapikey", "openaiappsecret", "openaiauthorization", "openaiauthtoken", "openaibottoken", "openaiclientsecret", "openaicredential", "openaicredentials", "openaipasswd", "openaipassword", "openaiprivatekey", "openaiproxyauthorization", "openaipwd", "openairefreshtoken", "openaisecret", "openaisecretaccesskey", "openaisecretkey", "openaisecuritytoken", "openaisessiontoken", "openaisigningkey", "openaisigningsecret", "openaisk", "openaitoken", "openaiwebhooksecret", "openaixapikey", "openvikingaccesskey", "openvikingaccesskeyid", "openvikingaccesskeysecret", "openvikingaccesstoken", "openvikingak", "openvikingapikey", "openvikingappsecret", "openvikingauthorization", "openvikingauthtoken", "openvikingbottoken", "openvikingclientsecret", "openvikingcredential", "openvikingcredentials", "openvikingpasswd", "openvikingpassword", "openvikingprivatekey", "openvikingproxyauthorization", "openvikingpwd", "openvikingrefreshtoken", "openvikingsecret", "openvikingsecretaccesskey", "openvikingsecretkey", "openvikingsecuritytoken", "openvikingsessiontoken", "openvikingsigningkey", "openvikingsigningsecret", "openvikingsk", "openvikingtoken", "openvikingwebhooksecret", "openvikingxapikey", "passwd", "password", "privatekey", "proxyauthorization", "pwd", "refreshtoken", "rootaccesskey", "rootaccesskeyid", "rootaccesskeysecret", "rootaccesstoken", "rootak", "rootapikey", "rootappsecret", "rootauthorization", "rootauthtoken", "rootbottoken", "rootclientsecret", "rootcredential", "rootcredentials", "rootpasswd", "rootpassword", "rootprivatekey", "rootproxyauthorization", "rootpwd", "rootrefreshtoken", "rootsecret", "rootsecretaccesskey", "rootsecretkey", "rootsecuritytoken", "rootsessiontoken", "rootsigningkey", "rootsigningsecret", "rootsk", "roottoken", "rootwebhooksecret", "rootxapikey", "secret", "secretaccesskey", "secretkey", "securitytoken", "sessiontoken", "signingkey", "signingsecret", "sk", "token", "volcaccesskey", "volcaccesskeyid", "volcaccesskeysecret", "volcaccesstoken", "volcak", "volcapikey", "volcappsecret", "volcauthorization", "volcauthtoken", "volcbottoken", "volcclientsecret", "volccredential", "volccredentials", "volcengineaccesskey", "volcengineaccesskeyid", "volcengineaccesskeysecret", "volcengineaccesstoken", "volcengineak", "volcengineapikey", "volcengineappsecret", "volcengineauthorization", "volcengineauthtoken", "volcenginebottoken", "volcengineclientsecret", "volcenginecredential", "volcenginecredentials", "volcenginepasswd", "volcenginepassword", "volcengineprivatekey", "volcengineproxyauthorization", "volcenginepwd", "volcenginerefreshtoken", "volcenginesecret", "volcenginesecretaccesskey", "volcenginesecretkey", "volcenginesecuritytoken", "volcenginesessiontoken", "volcenginesigningkey", "volcenginesigningsecret", "volcenginesk", "volcenginetoken", "volcenginewebhooksecret", "volcenginexapikey", "volcpasswd", "volcpassword", "volcprivatekey", "volcproxyauthorization", "volcpwd", "volcrefreshtoken", "volcsecret", "volcsecretaccesskey", "volcsecretkey", "volcsecuritytoken", "volcsessiontoken", "volcsigningkey", "volcsigningsecret", "volcsk", "volctoken", "volcwebhooksecret", "volcxapikey", "webhooksecret", "xapikey"],
-  "suffixes": ["_access_key", "_access_key_id", "_access_key_secret", "_access_token", "_api_key", "_app_secret", "_auth_token", "_bot_token", "_client_secret", "_passwd", "_password", "_private_key", "_pwd", "_refresh_token", "_secret_access_key", "_secret_key", "_security_token", "_session_token", "_signing_key", "_signing_secret", "_webhook_secret", "_x_api_key"],
-  "token_hints": ["sk-", "ak-", "ark-", "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_", "AKLT", "AKTP", "AKIA", "ASIA"],
-  "token_pattern": "(?:sk-(?:proj-|svcacct-|ant-(?:api\\d+-)?)?[A-Za-z0-9_./+=~\\-*]{16,}|(?:ak|ark)-[A-Za-z0-9_./+=~\\-*]{16,}|(?:gh[pousr]_|github_pat_)[A-Za-z0-9_./+=~\\-*]{16,}|(?:AKLT|AKTP)[A-Za-z0-9_./+=~\\-*]{12,}|(?:AKIA|ASIA)[A-Z0-9]{16})",
-  "assignment_pattern": "(?P<key>api[ ]key|secret[ ]key|[A-Za-z_][A-Za-z0-9_-]{0,127})[\\\"']?\\]?[ \\t]*[:=：][ \\t]*",
-  "cli_pattern": "(?:--(?P<key>[A-Za-z_][A-Za-z0-9_-]{0,127})(?:[ \\t]*=[ \\t]*|[ \\t]+)|-(?P<short>[uU])[ \\t]*)",
-  "auth_pattern": "(?i)Bearer[ \\t]+(?P<value>(?:\\[[^\\[\\]\\s\\\"',;]+\\]|[A-Za-z0-9_./+=~\\-*])+)",
-  "scheme_pattern": "(?i)(?:Bearer|Basic)[ \\t]+",
-  "bracket_pattern": "\\[[^\\[\\]\\s\\\"',;]+\\]",
-  "reference_pattern": "\\{\\{ov_privacy:[^{}\\r\\n]+\\}\\}"
+  "detectors": [
+    {
+      "id": "volcengine_ak",
+      "pattern": "(?:AKLT|AKAP|AKTP)[A-Za-z0-9]{20,70}",
+      "reject_repeated": true,
+      "positive": [
+        ["AKLT", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["AKAP", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["AKTP", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["AKLT", "aB3dE5gH7jK9mN2pQ4sT"],
+        ["AKLT", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rUaB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rUaB3dE5"]
+      ],
+      "negative": [
+        ["AKLT", "aB3dE5gH7jK9mN2pQ4s"],
+        ["AKLT", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rUaB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rUaB3dE5g"],
+        ["AKLT", "EXAMPLE", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["AKLT", "AAAAAA", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"]
+      ]
+    },
+    {
+      "id": "ark_api_key",
+      "pattern": "ark-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}-[A-Za-z0-9]{1,16}",
+      "positive": [
+        ["ark-", "1234abcd-5678-90ef-ab12-34567890abcd", "-a1b2c"],
+        ["ark-", "00000000-0000-0000-0000-000000000000", "-a"]
+      ],
+      "negative": [
+        ["ark-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["ark-", "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx-a1b2c"],
+        ["ark-", "1234abcd-5678-90ef-ab12-34567890abcd"],
+        ["ark-", "1234abcd-5678-90ef-ab12-34567890abcd-", "aB3dE5gH7jK9mN2pQ"]
+      ]
+    },
+    {
+      "id": "jwt",
+      "pattern": "ey[A-Za-z0-9_-]{17,}\\.ey[A-Za-z0-9_-]{17,}\\.[A-Za-z0-9_-]{10,}",
+      "positive": [
+        ["eyJhbGciOiJIUzI1NiJ9", ".", "eyJzdWIiOiJwcml2YWN5LXRlc3QtdXNlciJ9", ".", "c3ludGhldGljLXNpZ25hdHVyZQ"],
+        ["eyAiYWxnIjogIkhTMjU2IiB9", ".", "eyAic3ViIjogInByaXZhY3ktdGVzdCIgfQ", ".", "c3ludGhldGljLXNpZ25hdHVyZQ"]
+      ],
+      "negative": [
+        ["eyJhbGciOiJIUzI1NiJ9", ".", "eyJzdWIiOiJwcml2YWN5LXRlc3QtdXNlciJ9", "."],
+        ["eyJhbGciOiJIUzI1NiJ9", ".", "eyJzdWIiOiJwcml2YWN5LXRlc3QtdXNlciJ9", ".", "short"],
+        ["eyJhbGciOiJIUzI1NiJ9", ".", "********", ".", "c3ludGhldGljLXNpZ25hdHVyZQ"]
+      ]
+    },
+    {
+      "id": "pem_private_key",
+      "pattern": "-----BEGIN (?P<begin_label>(?:[A-Z0-9]+ )*PRIVATE KEY)-----\\r?\\n(?:[A-Za-z0-9+/]+={0,2}\\r?\\n)+-----END (?P<end_label>(?:[A-Z0-9]+ )*PRIVATE KEY)-----",
+      "positive": [
+        ["-----BEGIN PRIVATE KEY-----\n", "YWJjZGVmZw==\n", "-----END PRIVATE KEY-----"],
+        ["-----BEGIN RSA PRIVATE KEY-----\r\n", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\r\n", "-----END RSA PRIVATE KEY-----"],
+        ["-----BEGIN ENCRYPTED PRIVATE KEY-----\n", "YWJjZGVmZw==\n", "-----END ENCRYPTED PRIVATE KEY-----"]
+      ],
+      "negative": [
+        ["-----BEGIN PUBLIC KEY-----\n", "YWJjZGVmZw==\n", "-----END PUBLIC KEY-----"],
+        ["-----BEGIN RSA PRIVATE KEY-----\n", "YWJjZGVmZw==\n", "-----END EC PRIVATE KEY-----"],
+        ["-----BEGIN PRIVATE KEY-----\n", "${PRIVATE_KEY}\n", "-----END PRIVATE KEY-----"],
+        ["-----BEGIN PRIVATE KEY-----\\n", "YWJjZGVmZw==\\n", "-----END PRIVATE KEY-----"]
+      ]
+    },
+    {
+      "id": "github",
+      "pattern": "(?:(?:ghp|gho|ghu|ghr)_[A-Za-z0-9]{30,}|ghs_[A-Za-z0-9_.-]{29,}[A-Za-z0-9_-]|github_pat_[A-Za-z0-9_]{30,})",
+      "reject_repeated": true,
+      "positive": [
+        ["ghp_", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["gho_", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["ghu_", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["ghr_", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["ghs_", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["github_pat_", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["ghs_", "12345_", "eyJhbGciOiJIUzI1NiJ9", ".", "eyJzdWIiOiJwcml2YWN5LXRlc3QtdXNlciJ9", ".", "c3ludGhldGljLXNpZ25hdHVyZQ"]
+      ],
+      "negative": [
+        ["ghp_", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF"],
+        ["github_pat_", "EXAMPLE", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["ghp_", "aaaaaa", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"]
+      ]
+    },
+    {
+      "id": "anthropic",
+      "pattern": "sk-ant-(?:api03|admin01|api01)-[A-Za-z0-9_-]{20,}",
+      "reject_repeated": true,
+      "positive": [
+        ["sk-ant-api03-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["sk-ant-admin01-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["sk-ant-api01-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"]
+      ],
+      "negative": [
+        ["sk-ant-api03-", "aB3dE5gH7jK9mN2pQ4s"],
+        ["sk-ant-api03-", "your_", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["sk-ant-api03-", "000000", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["sk-ant-api99-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"]
+      ]
+    },
+    {
+      "id": "openai",
+      "pattern": "sk-(?:(?:proj|svcacct|admin)-[A-Za-z0-9_-]{20,}T3BlbkFJ[A-Za-z0-9_-]{20,}|[A-Za-z0-9]{20}T3BlbkFJ[A-Za-z0-9]{20})",
+      "reject_repeated": true,
+      "positive": [
+        ["sk-proj-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU", "T3BlbkFJ", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["sk-svcacct-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU", "T3BlbkFJ", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["sk-admin-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU", "T3BlbkFJ", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["sk-", "aB3dE5gH7jK9mN2pQ4sT", "T3BlbkFJ", "aB3dE5gH7jK9mN2pQ4sT"]
+      ],
+      "negative": [
+        ["sk-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["sk-proj-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["sk-other-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["sk-proj-", "aaaaaa", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU", "T3BlbkFJ", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["sk-proj-", "aB3dE5gH7jK9mN2pQ4s", "T3BlbkFJ", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"]
+      ]
+    },
+    {
+      "id": "slack",
+      "pattern": "(?:xoxb|xoxp|xapp|xwfp|xoxe\\.xapp)-[A-Za-z0-9-]{10,}",
+      "reject_repeated": true,
+      "positive": [
+        ["xoxb-", "1234567890-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["xoxp-", "1234567890-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["xapp-", "1234567890-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["xwfp-", "1234567890-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["xoxe.xapp-", "1234567890-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"]
+      ],
+      "negative": [
+        ["xoxb-", "aB3dE5gH7"],
+        ["xoxa-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["xoxr-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["xoxs-", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["xoxb-", "EXAMPLE", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
+        ["xoxb-", "000000", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"]
+      ]
+    },
+    {
+      "id": "aws_access_key_id",
+      "pattern": "(?:AKIA|ASIA)[A-Z2-7]{16}",
+      "positive": [
+        ["AKIA", "BCDEFGHJKLMN2345"],
+        ["ASIA", "BCDEFGHJKLMN2345"]
+      ],
+      "negative": [
+        ["AKIA", "BCDEFGHJKLMN234"],
+        ["AKIA", "BCDEFGHJKLMN23456"],
+        ["AKIA", "BCDEFGHIJEXAMPLE"],
+        ["AKIA", "BCDEFGHJKLMN2018"]
+      ]
+    }
+  ],
+  "reference_pattern": "\\{\\{[ \\t]*ov_privacy:[^{}\\r\\n]+\\}\\}"
 }

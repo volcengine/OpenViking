@@ -4,7 +4,9 @@
 
 import re
 from typing import Any, Literal
+from urllib.parse import unquote
 
+from openviking.privacy.content import PrivacyContent
 from openviking.privacy.models import UserPrivacyConfigVersion
 from openviking.privacy.reference import PrivacyFieldReference, parse_privacy_field_reference
 from openviking.privacy.service import UserPrivacyConfigService
@@ -23,16 +25,20 @@ class PrivacyRestorer:
         privacy: UserPrivacyConfigService,
         ctx: RequestContext,
         *,
-        category: Literal["skill", "session"],
-        target_key: str,
+        category: Literal["skill", "session"] | None = None,
+        target_key: str = "",
     ):
         self._privacy = privacy
         self._ctx = ctx
-        self._category = category
+        self._category = category or ""
         self._target_key = target_key
-        field = r"([^}:]+)" if category == "skill" else r"([A-Za-z0-9_-]{8})"
-        self._placeholder = re.compile(
-            r"\{\{ov_privacy:" + category + ":" + re.escape(target_key) + ":" + field + r"\}\}"
+        field = r"(:?[^}:]+)" if category == "skill" else r"([A-Za-z0-9_-]{8})"
+        self._placeholder = (
+            re.compile(
+                r"\{\{ov_privacy:" + category + ":" + re.escape(target_key) + ":" + field + r"\}\}"
+            )
+            if category
+            else None
         )
         self._configs: dict[tuple[str, str], UserPrivacyConfigVersion | None] = {}
         self._targets: set[tuple[str, str]] = set()
@@ -50,10 +56,11 @@ class PrivacyRestorer:
             if placeholder not in self.fields:
                 location = parse_privacy_field_reference(placeholder)
                 if location is None:
-                    own = self._placeholder.fullmatch(placeholder)
+                    own = self._placeholder.fullmatch(placeholder) if self._placeholder else None
                     if own is not None:
+                        field_name = unquote(own[1][1:]) if own[1].startswith(":") else own[1]
                         location = PrivacyFieldReference(
-                            self._ctx.user.user_id, self._category, self._target_key, own[1]
+                            self._ctx.user.user_id, self._category, self._target_key, field_name
                         )
                 if location is None or location.owner_user_id != self._ctx.user.user_id:
                     continue
@@ -86,9 +93,19 @@ class PrivacyRestorer:
                 continue
             self.values[placeholder] = value
 
+    async def restore_content(self, content: str, *, uri: str) -> str:
+        if "ov_privacy:" not in content and "\\" not in content:
+            # Escapes can encode the reference prefix inside JSON or YAML strings.
+            return content
+        document = PrivacyContent(content, uri)
+        for item in document.strings:
+            self.collect_text(item.value)
+        await self.load_values()
+        return document.render(lambda item: self.restore_text(item.value))
+
     def restore_text(self, content: str) -> str:
         """Splice values into original matches without scanning inserted content."""
-        chunks = []
+        chunks: list[str] = []
         start = 0
         for match in self._matches.get(content, ()):
             if match[0] in self.values:

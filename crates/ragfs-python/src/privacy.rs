@@ -17,16 +17,23 @@ pub(crate) struct PyPrivacyMatcher {
 impl PyPrivacyMatcher {
     /// Build one immutable matcher from `value -> candidate references`.
     #[new]
-    #[pyo3(signature = (references_by_value, ambiguous_placeholder="{{ov_privacy:ambiguous}}"))]
+    #[pyo3(signature = (references_by_value, ambiguous_placeholder="{{ov_privacy:ambiguous}}", *, preferred=None))]
     fn new(
         py: Python<'_>,
         references_by_value: HashMap<String, Vec<String>>,
         ambiguous_placeholder: &str,
+        preferred: Option<PyRef<'_, PyPrivacyMatcher>>,
     ) -> PyResult<Self> {
         let entries = references_by_value.into_iter().collect();
         let ambiguous_placeholder = ambiguous_placeholder.to_string();
+        let preferred = preferred.map(|matcher| matcher.inner.clone());
         let matcher = py
-            .detach(move || PrivacyMatcher::new(entries, ambiguous_placeholder))
+            .detach(move || {
+                PrivacyMatcher::new(entries, ambiguous_placeholder).map(|matcher| match preferred {
+                    Some(shared) => matcher.with_preferred(shared),
+                    None => matcher,
+                })
+            })
             .map_err(PyValueError::new_err)?;
         Ok(Self {
             inner: Arc::new(matcher),
@@ -74,6 +81,50 @@ impl PyPrivacyMatcher {
             result.ambiguous_references,
             limit_exceeded,
         )
+    }
+
+    /// Rewrite independent scalars with one shared budget and one GIL release.
+    /// Only changed scalars are returned, with their input indices and matches.
+    fn sanitize_many_limited(
+        &self,
+        py: Python<'_>,
+        contents: Vec<Bound<'_, PyString>>,
+        max_replacements: usize,
+    ) -> PyResult<(
+        Vec<(usize, String, Vec<(usize, usize, String)>, Vec<Vec<String>>)>,
+        bool,
+    )> {
+        let texts = contents
+            .iter()
+            .map(|content| content.to_str())
+            .collect::<PyResult<Vec<_>>>()?;
+        let matcher = self.inner.clone();
+        Ok(py.detach(move || {
+            let mut remaining = max_replacements;
+            let mut rewritten = Vec::new();
+            for (index, content) in texts.into_iter().enumerate() {
+                let (result, exceeded) = matcher.sanitize_limited(content, remaining);
+                if exceeded {
+                    return (Vec::new(), true);
+                }
+                if result.replacements.is_empty() {
+                    continue;
+                }
+                remaining -= result.replacements.len();
+                let replacements = result
+                    .replacements
+                    .into_iter()
+                    .map(|item| (item.start, item.end, item.reference))
+                    .collect();
+                rewritten.push((
+                    index,
+                    result.content,
+                    replacements,
+                    result.ambiguous_references,
+                ));
+            }
+            (rewritten, false)
+        }))
     }
 
     /// Return bounded match metadata without copying or rewriting the input.

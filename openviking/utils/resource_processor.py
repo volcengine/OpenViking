@@ -146,9 +146,11 @@ class ResourceProcessor:
         """Rewrite text in a temporary parse artifact before planning or persistence."""
         if self._privacy_sanitizer is None:
             return
+        settings = await self._privacy_sanitizer.settings_for_uri(target_root_uri, ctx)
+        if settings is None:
+            return
         from openviking.parse.output import read_artifact_manifest, write_artifact_manifest
         from openviking.utils.content_hash import content_md5
-        from openviking_cli.exceptions import InvalidArgumentError
 
         base = (doc_rel or "").strip("/")
         prefix = f"{base}/" if base else ""
@@ -167,21 +169,12 @@ class ResourceProcessor:
                 if not relative
                 else f"{target_root_uri.rstrip('/')}/{relative}"
             )
-            result = await self._privacy_sanitizer.sanitize(content, ctx=ctx, uri=uri)
-            if result.ambiguous_references:
-                raise InvalidArgumentError(
-                    "Resource content contains a Privacy value mapped to multiple fields; "
-                    "insert the intended owner-bound reference explicitly",
-                    details={
-                        "uri": uri,
-                        "candidate_references": [
-                            list(candidates) for candidates in result.ambiguous_references
-                        ],
-                    },
-                )
-            if result.content == content:
+            protected = await self._privacy_sanitizer.sanitize_for_write(
+                content, ctx=ctx, uri=uri, settings=settings
+            )
+            if protected == content:
                 return
-            final_bytes = result.content.encode("utf-8")
+            final_bytes = protected.encode("utf-8")
             await store.write_bytes(artifact_ref, artifact_path, final_bytes)
             manifest[artifact_path] = content_md5(final_bytes)
             changed = True

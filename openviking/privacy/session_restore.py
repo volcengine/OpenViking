@@ -48,9 +48,7 @@ async def restore_session_content(
         privacy, ctx, category="session", target_key=session_privacy_target(session_id)
     )
     if not jsonl:
-        restorer.collect_text(content)
-        await restorer.load_values()
-        return restorer.restore_text(content)
+        return await restorer.restore_content(content, uri="")
 
     lines = content.split("\n")
 

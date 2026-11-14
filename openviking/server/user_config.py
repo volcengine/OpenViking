@@ -6,12 +6,14 @@ from __future__ import annotations
 
 import json
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
+from dataclasses import asdict, dataclass, field
+from typing import TYPE_CHECKING, Any, AsyncIterator, Literal, Optional
 
 from openviking.core.namespace import canonical_user_root, resolve_current_user_uri
 from openviking.core.uri_validation import validate_content_target_uri
 from openviking.server.config import (
     AddTargetsConfig,
+    PrivacyConfig,
     UserConfig,
     UserSettingsPatch,
     validate_config_input,
@@ -23,6 +25,18 @@ if TYPE_CHECKING:
     from openviking.server.config import ServerConfig
     from openviking.server.identity import RequestContext
     from openviking.storage.viking_fs import VikingFS
+
+
+@dataclass(frozen=True)
+class ResolvedPrivacyConfig:
+    mode: Literal["off", "registered", "auto", "auto_strict"] = "off"
+    restore: bool = True
+    custom_rules: list[dict[str, Any]] = field(default_factory=list)
+    never_mask: list[str] = field(default_factory=list)
+
+    @property
+    def discovery_enabled(self) -> bool:
+        return self.mode in {"auto", "auto_strict"}
 
 
 def user_config_uri(ctx: RequestContext) -> str:
@@ -146,7 +160,11 @@ async def patch_user_config(
         before = current.model_dump(by_alias=True)
         payload = apply_three_state_patch(
             current.model_dump(by_alias=True, exclude_none=True),
-            {field: changes[field] for field in ("add_targets", "ttl") if field in changes},
+            {
+                field: changes[field]
+                for field in ("add_targets", "ttl", "privacy")
+                if field in changes
+            },
         )
         if "memory_policy" in changes:
             # Memory policy remains a whole-policy replacement.
@@ -233,6 +251,21 @@ async def delete_user_config(viking_fs: VikingFS, ctx: RequestContext) -> None:
     except (NotFoundError, FileNotFoundError):
         pass
     await _publish_ttl_change(ctx, UserConfig())
+
+
+async def read_user_privacy(viking_fs: VikingFS, ctx: RequestContext) -> PrivacyConfig:
+    return (await read_user_config(viking_fs, ctx)).privacy
+
+
+def resolve_user_privacy(
+    override: PrivacyConfig,
+    defaults: Optional[PrivacyConfig] = None,
+) -> ResolvedPrivacyConfig:
+    data = asdict(ResolvedPrivacyConfig())
+    if defaults is not None:
+        data.update(defaults.model_dump(exclude_none=True))
+    data.update(override.model_dump(exclude_none=True))
+    return ResolvedPrivacyConfig(**data)
 
 
 async def read_user_memory_policy(

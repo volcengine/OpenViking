@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import asyncio
+import json
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
+from openviking.privacy.models import UserPrivacyConfigVersion
 from openviking.privacy.reference import (
     PrivacyFieldReference,
     build_privacy_field_reference,
@@ -14,7 +17,9 @@ from openviking.privacy.reference import (
     parse_privacy_target_selector,
 )
 from openviking.privacy.sanitizer import PrivacySanitizer
+from openviking.pyagfs import get_privacy_matcher_class
 from openviking.server.identity import RequestContext, Role
+from openviking.server.user_config import ResolvedPrivacyConfig
 from openviking_cli.exceptions import InvalidArgumentError, ResourceExhaustedError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -23,21 +28,32 @@ class _PrivacyCatalog:
     def __init__(self, configs=None):
         self.configs = configs or {}
         self.revision = 0
+        self.credentials_revision = 0
+        self.versions = {}
         self.build_reads = 0
+        self.settings = ResolvedPrivacyConfig(mode="registered")
 
-    def catalog_revision(self, _ctx):
-        return self.revision
+    async def get_settings(self, _ctx):
+        return self.settings
 
-    async def list_categories(self, _ctx):
-        self.build_reads += 1
-        return sorted(self.configs)
+    def credential_revision(self, _ctx):
+        return self.credentials_revision
 
     async def list_targets(self, _ctx, category):
+        self.build_reads += 1
         return sorted(self.configs.get(category, {}))
 
     async def get_current(self, _ctx, category, target_key):
         values = self.configs.get(category, {}).get(target_key)
-        return None if values is None else SimpleNamespace(values=values)
+        return (
+            None
+            if values is None
+            else SimpleNamespace(
+                values=values,
+                version=self.versions.get((category, target_key), self.revision),
+                created_at="",
+            )
+        )
 
 
 def _ctx(user_id="alice"):
@@ -82,62 +98,47 @@ def test_privacy_reference_roundtrip_encodes_individual_segments():
     assert target.target_key == "prod-key"
 
 
-async def test_sanitizer_protects_registered_strings_at_least_six_chars_without_field_guessing():
+async def test_matching_requires_complete_format_or_explicit_credential():
+    secret = "AKLT" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
     catalog = _PrivacyCatalog(
         {
-            "custom": {
-                "service": {
-                    "five_chars": "abcde",
-                    "six_chars": "abcdef",
-                    "base_url": "https://private.example",
-                    "empty": "",
-                    "numeric": 42,
-                }
-            }
-        }
-    )
-    sanitizer = PrivacySanitizer(catalog)
-
-    result = await sanitizer.sanitize(
-        "short=abcde token=abcdef endpoint=https://private.example empty= numeric=42",
-        ctx=_ctx(),
-        uri="viking://user/alice/memories/preferences/item.md",
-    )
-
-    assert result.changed
-    assert "short=abcde" in result.content
-    assert "token={{ov_privacy:alice:viking://~/privacy/custom/service#/values/six_chars}}" in (
-        result.content
-    )
-    assert (
-        "endpoint={{ov_privacy:alice:viking://~/privacy/custom/service#/values/base_url}}"
-        in result.content
-    )
-    assert "numeric=42" in result.content
-
-
-async def test_sanitizer_prefers_longest_overlap_and_does_not_replace_ambiguous_values():
-    catalog = _PrivacyCatalog(
-        {
+            "session": {
+                "legacy": {"word": "ordinary", "embedded": f"key={secret}", "valid": secret}
+            },
             "credential": {
-                "short": {"value": "abc"},
-                "long": {"value": "abcdef"},
-                "duplicate-a": {"value": "same-secret"},
-                "duplicate-b": {"other": "same-secret"},
-            }
+                "manual": {
+                    "five_ascii": "aB123",
+                    "six_ascii": "aB1234",
+                    "five_unicode": "🙂a1中文",
+                    "six_unicode": "🙂a1中文测",
+                    "empty": "",
+                    "number": 42,
+                }
+            },
         }
     )
     sanitizer = PrivacySanitizer(catalog)
-
-    result = await sanitizer.sanitize("abcdef same-secret", ctx=_ctx())
-
-    assert result.content.startswith(
-        "{{ov_privacy:alice:viking://~/privacy/credential/long#/values/value}}"
+    content = f"ordinary aB123 aB1234 🙂a1中文 🙂a1中文测 {secret} 42"
+    result = await sanitizer.sanitize(
+        content,
+        ctx=_ctx(),
+        uri="viking://user/alice/sessions/legacy/messages.jsonl",
     )
-    assert result.content.endswith(" {{ov_privacy:ambiguous}}")
-    assert len(result.replacements) == 2
-    assert len(result.ambiguous_references) == 1
-    assert len(result.ambiguous_references[0]) == 2
+    ascii_reference = build_privacy_field_reference("alice", "credential", "manual", "six_ascii")
+    unicode_reference = build_privacy_field_reference(
+        "alice", "credential", "manual", "six_unicode"
+    )
+    detected = build_privacy_field_reference("alice", "session", "legacy", "valid")
+    assert (
+        result.content
+        == f"ordinary aB123 {ascii_reference} 🙂a1中文 {unicode_reference} {detected} 42"
+    )
+    query = await sanitizer.prepare_matcher(_ctx(), scope=("session", "legacy"))
+    assert [(content[m.start : m.end], m.reference) for m in query(content)] == [
+        ("aB1234", ascii_reference),
+        ("🙂a1中文测", unicode_reference),
+        (secret, detected),
+    ]
 
 
 async def test_sanitizer_bounds_dense_match_metadata_for_scans():
@@ -156,6 +157,34 @@ async def test_sanitizer_bounds_dense_match_metadata_for_scans():
     assert not result.replacements
 
 
+def test_native_batch_keeps_scalar_boundaries_offsets_and_atomic_match_budget():
+    reference = build_privacy_field_reference("alice", "credential", "service", "key")
+    matcher = get_privacy_matcher_class()({"secret": [reference]})
+    values = ["se", "cret", "密 secret🙂", reference, "secret", "secret-secret"]
+    changed, exceeded = matcher.sanitize_many_limited(values, 4)
+    assert not exceeded
+    assert [index for index, *_ in changed] == [2, 4, 5]
+    assert changed[0][1:3] == ("密 " + reference + "🙂", [(2, 8, reference)])
+    assert changed[-1][1] == reference + "-" + reference
+    assert matcher.sanitize_many_limited(values, 3) == ([], True)
+
+
+async def test_structured_match_budget_is_shared_across_values_and_isolated_between_requests():
+    catalog = _PrivacyCatalog({"credential": {"service": {"key": "secret"}}})
+    sanitizer = PrivacySanitizer(catalog, max_replacements=4)
+    allowed = json.dumps(["secret"] * 4)
+    overflow = json.dumps(["secret"] * 5)
+    uri = "viking://user/alice/sessions/current/content.json"
+    first, second, rejected = await asyncio.gather(
+        sanitizer.sanitize(allowed, ctx=_ctx(), uri=uri),
+        sanitizer.sanitize(allowed, ctx=_ctx(), uri=uri),
+        sanitizer.sanitize(overflow, ctx=_ctx(), uri=uri, fail_on_match_limit=False),
+    )
+    reference = build_privacy_field_reference("alice", "credential", "service", "key")
+    assert json.loads(first.content) == json.loads(second.content) == [reference] * 4
+    assert rejected.match_limit_exceeded and rejected.content == overflow
+
+
 async def test_sanitizer_rejects_oversized_or_excessively_dense_writes():
     catalog = _PrivacyCatalog({"credential": {"service": {"key": "secret"}}})
 
@@ -168,7 +197,27 @@ async def test_sanitizer_rejects_oversized_or_excessively_dense_writes():
         await match_limited.sanitize("secret secret secret", ctx=_ctx())
 
 
-async def test_sanitizer_cache_rebuilds_only_after_catalog_revision_changes():
+async def test_write_sanitizer_skips_content_encoding_when_matcher_is_empty():
+    class EncodeGuard(str):
+        def encode(self, *_args, **_kwargs):
+            raise AssertionError("Privacy must not encode content without values to match")
+
+    catalog = _PrivacyCatalog()
+    catalog.settings = ResolvedPrivacyConfig(mode="auto_strict")
+    sanitizer = PrivacySanitizer(catalog, max_content_bytes=1)
+    content = EncodeGuard("larger than the Privacy scan limit")
+
+    assert (
+        await sanitizer.sanitize_for_write(
+            content,
+            ctx=_ctx(),
+            uri="viking://user/alice/resources/notes.md",
+        )
+        == content
+    )
+
+
+async def test_sanitizer_cache_refreshes_after_credential_changes():
     catalog = _PrivacyCatalog({"credential": {"service": {"key": "first1"}}})
     sanitizer = PrivacySanitizer(catalog)
 
@@ -178,13 +227,149 @@ async def test_sanitizer_cache_rebuilds_only_after_catalog_revision_changes():
     assert catalog.build_reads == 1
 
     catalog.configs["credential"]["service"]["key"] = "second2"
-    catalog.revision += 1
+    catalog.credentials_revision += 1
     rebuilt = await sanitizer.sanitize("first1 second2", ctx=_ctx())
     assert rebuilt.content.startswith("first1 ")
     assert rebuilt.content.endswith(
         "{{ov_privacy:alice:viking://~/privacy/credential/service#/values/key}}"
     )
     assert catalog.build_reads == 2
+
+    catalog.configs.clear()
+    catalog.credentials_revision += 1
+    assert (await sanitizer.sanitize("second2", ctx=_ctx())).content == "second2"
+    catalog.configs["credential"] = {"service": {"key": "third3"}}
+    catalog.credentials_revision += 1
+    assert (
+        await sanitizer.sanitize("third3", ctx=_ctx())
+    ).content == build_privacy_field_reference("alice", "credential", "service", "key")
+
+
+async def test_empty_scopes_share_credential_matching_without_sharing_user_references():
+    catalog = _PrivacyCatalog({"credential": {"service": {"key": "managed-secret"}}})
+    sanitizer = PrivacySanitizer(catalog)
+    for target in ("first", "second"):
+        await sanitizer.prepare_matcher(_ctx(), scope=("session", target))
+    assert catalog.build_reads == 1
+    assert len(sanitizer._cache) == 1
+    bob = await sanitizer.prepare_matcher(_ctx("bob"), scope=("session", "first"))
+    assert bob("managed-secret")[0].reference == build_privacy_field_reference(
+        "bob", "credential", "service", "key"
+    )
+
+
+async def test_session_change_rebuilds_local_matcher_without_rereading_credentials():
+    credential = "managed-secret"
+    first = "AKLT" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
+    second = "ghp_" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
+    catalog = _PrivacyCatalog(
+        {
+            "credential": {"service": {"key": credential}},
+            "session": {"current": {"key": first}},
+        }
+    )
+    catalog.versions["session", "current"] = 1
+    sanitizer = PrivacySanitizer(catalog)
+
+    await sanitizer.prepare_matcher(_ctx(), scope=("session", "current"))
+
+    catalog.configs["session"]["current"] = {"key": second}
+    catalog.versions["session", "current"] = 2
+    refreshed = await sanitizer.prepare_matcher(_ctx(), scope=("session", "current"))
+
+    assert len(refreshed(f"{credential} {second}")) == 2
+    assert catalog.build_reads == 1
+
+
+async def test_local_matchers_reuse_credentials_and_expire_with_shared_snapshot():
+    first = "ghp_aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
+    second = "ghp_cD4fG6hJ8kM0nP2qR5sU7vW9xY1zA3bE"
+    catalog = _PrivacyCatalog(
+        {
+            "credential": {"service": {"key": "managed-secret"}},
+            "session": {"first": {"field001": first}, "second": {"field002": second}},
+        }
+    )
+    now = [0.0]
+    sanitizer = PrivacySanitizer(catalog, monotonic_clock=lambda: now[0])
+    await sanitizer.prepare_matcher(_ctx(), scope=("session", "first"))
+    now[0] = 3599
+    query = await sanitizer.prepare_matcher(_ctx(), scope=("session", "second"))
+    assert [item.reference for item in query(first + " " + second)] == [
+        build_privacy_field_reference("alice", "session", "second", "field002"),
+    ]
+    assert catalog.build_reads == 1
+    # A different worker rotates the Credential without advancing our local revision.
+    catalog.configs["credential"]["service"]["key"] = "rotated-secret"
+    now[0] = 3600
+    query = await sanitizer.prepare_matcher(_ctx(), scope=("session", "second"))
+    assert query("managed-secret") == []
+    assert len(query("rotated-secret " + second)) == 2
+
+
+async def test_waiting_matcher_reuses_the_latest_credential_revision():
+    catalog = _PrivacyCatalog({"credential": {"service": {"key": "first1"}}})
+    sanitizer = PrivacySanitizer(catalog)
+    async with sanitizer._cache_lock:
+        pending = asyncio.create_task(sanitizer.prepare_matcher(_ctx()))
+        await asyncio.sleep(0)
+        catalog.configs["credential"]["service"]["key"] = "second2"
+        catalog.credentials_revision += 1
+
+    await pending
+    find = await sanitizer.prepare_matcher(_ctx())
+    assert [m.reference for m in find("second2")] == [
+        build_privacy_field_reference("alice", "credential", "service", "key")
+    ]
+    assert catalog.build_reads == 1
+
+
+async def test_waiting_matcher_refreshes_object_snapshot():
+    first = "AKLT" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
+    second = "ghp_" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
+    catalog = _PrivacyCatalog({"session": {"current": {"key": first}}})
+    catalog.versions = {("session", "current"): 1}
+    sanitizer = PrivacySanitizer(catalog)
+    async with sanitizer._cache_lock:
+        pending = asyncio.create_task(
+            sanitizer.prepare_matcher(_ctx(), scope=("session", "current"))
+        )
+        await asyncio.sleep(0)
+        # Another worker rotates this object without changing the local revision.
+        catalog.configs["session"]["current"] = {"key": second}
+        catalog.versions["session", "current"] = 2
+    find = await pending
+    reference = build_privacy_field_reference("alice", "session", "current", "key")
+    assert not find(first) and [match.reference for match in find(second)] == [reference]
+
+
+@pytest.mark.parametrize("values", [{}, {"key": "AKLT" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"}])
+async def test_locked_snapshot_reuses_object_values_and_refreshes_credentials(values, monkeypatch):
+    catalog = _PrivacyCatalog({"credential": {"service": {"key": "first1"}}})
+    sanitizer = PrivacySanitizer(catalog)
+    snapshot = UserPrivacyConfigVersion(version=1 if values else 0, values=values)
+    get_current = catalog.get_current
+
+    async def read_current(ctx, category, target):
+        if category == "session":
+            raise AssertionError("The locked object snapshot should be reused")
+        return await get_current(ctx, category, target)
+
+    monkeypatch.setattr(catalog, "get_current", read_current)
+    async with sanitizer._cache_lock:
+        pending = asyncio.create_task(
+            sanitizer.prepare_matcher(_ctx(), scope=("session", "current"), snapshot=snapshot)
+        )
+        await asyncio.sleep(0)
+        catalog.configs["credential"]["service"]["key"] = "second2"
+        catalog.credentials_revision += 1
+    find = await pending
+    source = "first1 second2 " + " ".join(values.values())
+    assert [match.reference for match in find(source)] == [
+        build_privacy_field_reference("alice", "credential", "service", "key"),
+        *[build_privacy_field_reference("alice", "session", "current", field) for field in values],
+    ]
+    assert catalog.build_reads == 1
 
 
 async def test_sanitizer_cache_expires_after_ttl_even_without_local_revision_change():
@@ -216,17 +401,37 @@ async def test_sanitizer_cache_expires_after_ttl_even_without_local_revision_cha
     assert catalog.build_reads == 2
 
 
-async def test_sanitizer_never_rewrites_privacy_storage_itself():
+@pytest.mark.parametrize(
+    "path",
+    [
+        "privacy/credential/service/current.json",
+        "settings/user_config.json",
+        "settings/user_config.backup.json",
+    ],
+)
+async def test_sanitizer_never_rewrites_privacy_or_settings_storage(path):
     catalog = _PrivacyCatalog({"credential": {"service": {"key": "secret"}}})
     sanitizer = PrivacySanitizer(catalog)
     result = await sanitizer.sanitize(
         "secret",
         ctx=_ctx(),
-        uri="viking://user/alice/privacy/credential/service/current.json",
+        uri=f"viking://user/alice/{path}",
     )
     assert result.content == "secret"
     assert not result.changed
     assert catalog.build_reads == 0
+
+
+async def test_automatic_matching_keeps_foreign_content_and_private_config_untouched():
+    catalog = _PrivacyCatalog({"credential": {"service": {"key": "secret"}}})
+    catalog.settings = ResolvedPrivacyConfig(mode="auto_strict")
+    sanitizer = PrivacySanitizer(catalog)
+    for uri in (
+        "viking://user/bob/sessions/current/output.txt",
+        "viking://~/privacy/credential/service/current.json",
+        "viking://~/settings/user_config.json",
+    ):
+        assert await sanitizer.sanitize_for_write("secret", ctx=_ctx(), uri=uri) == "secret"
 
 
 async def test_prepared_matcher_returns_original_offsets_in_worker_thread():
@@ -252,19 +457,12 @@ async def test_prepared_matcher_enforces_utf8_byte_limit_with_empty_catalog(text
         find(text + "a")
 
 
-async def test_prepared_matcher_rejects_dense_or_ambiguous_matches():
+async def test_prepared_matcher_rejects_dense_matches():
     catalog = _PrivacyCatalog({"credential": {"service": {"key": "secret"}}})
     find = await PrivacySanitizer(catalog, max_replacements=2).prepare_matcher(_ctx())
-
     assert len(find("secret secret")) == 2
     with pytest.raises(ResourceExhaustedError, match="replacement limit"):
         find("secret secret secret")
-
-    catalog.configs["credential"]["other"] = {"key": "secret"}
-    catalog.revision += 1
-    find = await PrivacySanitizer(catalog).prepare_matcher(_ctx())
-    with pytest.raises(InvalidArgumentError, match="multiple fields"):
-        find("secret")
 
 
 async def test_prepared_matcher_rejects_unpaired_surrogates():
@@ -274,49 +472,161 @@ async def test_prepared_matcher_rejects_unpaired_surrogates():
         find("invalid \ud800")
 
 
-@pytest.mark.parametrize(
-    "credentials,ordinary,expected",
-    [
-        (1, 2, ("credential", "target-0")),
-        (2, 1, None),
-        (0, 2, None),
-    ],
-)
-async def test_credential_preference_selects_only_an_unambiguous_field(
-    credentials, ordinary, expected
+async def test_canonical_reference_is_stable_strict_and_tracks_independent_rotation(
+    monkeypatch,
 ):
-    configs = {
-        category: {f"target-{i}": {"key": "shared-secret"} for i in range(count)}
-        for category, count in [("credential", credentials), ("session", ordinary)]
-    }
-    sanitizer = PrivacySanitizer(_PrivacyCatalog(configs))
-    find = await sanitizer.prepare_matcher(_ctx(), prefer_credentials=True)
-    if expected is None:
-        with pytest.raises(InvalidArgumentError, match="multiple fields"):
-            find("shared-secret")
-    else:
-        assert [hit.reference for hit in find("shared-secret")] == [
-            build_privacy_field_reference("alice", *expected, "key")
-        ]
-
-
-async def test_matcher_cache_separates_policies_and_refreshes_both_after_rotation():
+    warning = Mock()
+    monkeypatch.setattr("openviking.privacy.sanitizer.logger.warning", warning)
+    secret = "AKLT" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
     catalog = _PrivacyCatalog(
         {
-            "credential": {"managed": {"key": "shared-secret"}},
-            "session": {"captured": {"key": "shared-secret"}},
+            "credential": {"managed": {"b": secret, "a": secret}},
         }
     )
     sanitizer = PrivacySanitizer(catalog)
-    credential = build_privacy_field_reference("alice", "credential", "managed", "key")
-    captured = build_privacy_field_reference("alice", "session", "captured", "key")
-    for preferred in [False, True] * 2:
-        result = await sanitizer.sanitize("shared-secret", ctx=_ctx(), prefer_credentials=preferred)
-        assert result.content == (credential if preferred else "{{ov_privacy:ambiguous}}")
-    catalog.configs["credential"]["managed"]["key"] = "rotated-secret"
+    chosen = build_privacy_field_reference("alice", "credential", "managed", "a")
+    other = build_privacy_field_reference("alice", "credential", "managed", "b")
+    result = await sanitizer.sanitize(f"{secret} {secret}", ctx=_ctx())
+    assert result.content == f"{chosen} {chosen}"
+    assert len(result.ambiguous_references) == 1
+    warning.assert_called()
+    assert secret not in str(warning.call_args)
+    query = await sanitizer.prepare_matcher(_ctx())
+    monkeypatch.setenv("OPENVIKING_PRIVACY_AMBIGUOUS_STRICT", "1")
+    with pytest.raises(InvalidArgumentError, match="multiple fields"):
+        await asyncio.to_thread(query, secret)
+    monkeypatch.delenv("OPENVIKING_PRIVACY_AMBIGUOUS_STRICT")
+    catalog.configs["credential"]["managed"]["a"] = "rotated-secret"
+    catalog.credentials_revision += 1
+    result = await sanitizer.sanitize(f"{secret} rotated-secret", ctx=_ctx())
+    assert result.content == f"{other} {chosen}"
+
+
+async def test_never_mask_refreshes_cached_matching():
+    catalog = _PrivacyCatalog({"credential": {"service": {"key": "managed-secret"}}})
+    sanitizer = PrivacySanitizer(catalog)
+    assert (await sanitizer.sanitize("managed-secret", ctx=_ctx())).changed
+
+    catalog.settings = ResolvedPrivacyConfig(mode="registered", never_mask=["managed-secret"])
+    result = await sanitizer.sanitize("managed-secret", ctx=_ctx())
+    assert result.content == "managed-secret"
+    catalog.settings = ResolvedPrivacyConfig(mode="registered")
+    assert (await sanitizer.sanitize("managed-secret", ctx=_ctx())).changed
+
+
+@pytest.mark.parametrize("category", ["session", "skill"])
+async def test_scope_precedes_ambiguity_and_never_rebinds_explicit_references(
+    category, monkeypatch
+):
+    secret = "AKLT" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
+    catalog = _PrivacyCatalog(
+        {
+            "credential": {"managed": {"key": secret}},
+            category: {
+                "current": {"local001": secret, "local002": secret},
+                "other": {"other001": secret},
+            },
+            "custom": {"legacy": {"key": secret}},
+        }
+    )
+    monkeypatch.setenv("OPENVIKING_PRIVACY_AMBIGUOUS_STRICT", "1")
+    sanitizer = PrivacySanitizer(catalog)
+    uri = (
+        "viking://user/alice/sessions/current/tool-results/job/output.txt"
+        if category == "session"
+        else "viking://user/alice/skills/current/assets/settings.env"
+    )
+    explicit = build_privacy_field_reference("alice", category, "other", "other001")
+    managed = build_privacy_field_reference("alice", "credential", "managed", "key")
+    result = await sanitizer.sanitize(secret + " " + explicit, ctx=_ctx(), uri=uri)
+    assert result.content == managed + " " + explicit
+    assert not result.ambiguous_references
+
+    del catalog.configs["credential"]
+    catalog.credentials_revision += 1
+    with pytest.raises(InvalidArgumentError, match="multiple fields"):
+        await sanitizer.sanitize(secret, ctx=_ctx(), uri=uri)
+    monkeypatch.delenv("OPENVIKING_PRIVACY_AMBIGUOUS_STRICT")
+    local = build_privacy_field_reference("alice", category, "current", "local001")
+    result = await sanitizer.sanitize(secret, ctx=_ctx(), uri=uri)
+    assert result.content == local
+    assert result.ambiguous_references == (
+        (local, build_privacy_field_reference("alice", category, "current", "local002")),
+    )
+    alias = uri.replace("viking://user/alice/", "viking://~/")
+    assert (await sanitizer.sanitize(secret, ctx=_ctx(), uri=alias)).content == local
+    if category == "skill":
+        shared = "viking://agent/skills/current/SKILL.md"
+        assert (await sanitizer.sanitize(secret, ctx=_ctx(), uri=shared)).content == local
+    for outside in (
+        uri.replace("/alice/", "/bob/"),
+        uri.replace("viking://user/alice/", "viking://resources/"),
+    ):
+        assert (await sanitizer.sanitize(secret, ctx=_ctx(), uri=outside)).content == secret
+
+    del catalog.configs[category]["current"]
     catalog.revision += 1
-    for preferred in [False, True]:
-        result = await sanitizer.sanitize(
-            "shared-secret rotated-secret", ctx=_ctx(), prefer_credentials=preferred
-        )
-        assert result.content == f"{captured} {credential}"
+    assert (await sanitizer.sanitize(secret, ctx=_ctx(), uri=uri)).content == secret
+
+
+async def test_word_boundaries_preserve_identifiers_and_allow_shorter_valid_overlap():
+    catalog = _PrivacyCatalog(
+        {"credential": {"service": {"short": "pass123", "long": "pass123-v2"}}}
+    )
+    sanitizer = PrivacySanitizer(catalog)
+    short = build_privacy_field_reference("alice", "credential", "service", "short")
+    long = build_privacy_field_reference("alice", "credential", "service", "long")
+    result = await sanitizer.sanitize(
+        "pass123-v2x pass123-v2 xpass123 pass123² 中pass123 pass123_", ctx=_ctx()
+    )
+    assert result.content == f"{short}-v2x {long} xpass123 pass123² 中pass123 pass123_"
+    query = await sanitizer.prepare_matcher(_ctx())
+    assert [(m.start, m.end, m.reference) for m in query("pass123-v2x")] == [(0, 7, short)]
+
+
+async def test_invalid_candidates_do_not_consume_the_replacement_budget():
+    catalog = _PrivacyCatalog({"credential": {"service": {"key": "managed-secret"}}})
+    sanitizer = PrivacySanitizer(catalog, max_replacements=1)
+    ordinary = "xmanaged-secretx " * 12000
+    reference = build_privacy_field_reference("alice", "credential", "service", "key")
+    result = await sanitizer.sanitize("managed-secret " + ordinary, ctx=_ctx())
+    assert result.content == reference + " " + ordinary
+    assert len(result.replacements) == 1
+
+
+async def test_skill_frontmatter_is_preserved_and_spans_address_original_text():
+    catalog = _PrivacyCatalog({"credential": {"managed": {"key": "managed-secret"}}})
+    sanitizer = PrivacySanitizer(catalog)
+    header = '---\nname: demo\ndescription: "标题🙂 managed-secret"\n---\n\n'
+    body = "---\nexample: managed-secret\n---\n正文🙂 managed-secret\n"
+    result = await sanitizer.sanitize(
+        header + body, ctx=_ctx(), uri="viking://user/alice/skills/demo/SKILL.md"
+    )
+    reference = build_privacy_field_reference("alice", "credential", "managed", "key")
+    assert result.content == header + body.replace("managed-secret", reference)
+    assert [(header + body)[m.start : m.end] for m in result.replacements] == [
+        "managed-secret",
+        "managed-secret",
+    ]
+    text = await sanitizer.sanitize(
+        header + body, ctx=_ctx(), uri="viking://user/alice/skills/demo/"
+    )
+    assert text.content == (header + body).replace("managed-secret", reference)
+
+
+async def test_skill_field_names_restore_without_decoding_legacy_percent_names():
+    from openviking.privacy.restore import PrivacyRestorer
+    from openviking.privacy.skill_placeholder import build_placeholder
+
+    names = ["simple", "deploy:eu", "slot{blue}", "%3A", ":", "部署:{蓝}%20", "api/key"]
+    values = {name: f"private-value-{i}" for i, name in enumerate(names)}
+    catalog = _PrivacyCatalog({"skill": {"manual-fields": values}})
+    content = " | ".join(build_placeholder("manual-fields", name) for name in names)
+    legacy_names = ["simple", "%3A", "api/key"]
+    content += " | " + " | ".join(
+        f"{{{{ov_privacy:skill:manual-fields:{name}}}}}" for name in legacy_names
+    )
+    restored = await PrivacyRestorer(
+        catalog, _ctx(), category="skill", target_key="manual-fields"
+    ).restore_content(content, uri="viking://agent/skills/manual-fields/SKILL.md")
+    assert restored == " | ".join(values[name] for name in names + legacy_names)

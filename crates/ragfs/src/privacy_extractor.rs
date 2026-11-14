@@ -1,37 +1,106 @@
-//! Fixed-rule discovery of credentials in text and named fields.
+//! Format-based discovery of credentials in text.
 //! Positions are Unicode character offsets, suitable for Python string slicing.
 
-use regex::Regex;
+use regex::{Captures, Error as RegexError, Regex, RegexBuilder};
 use serde::Deserialize;
-use std::collections::{HashMap, HashSet};
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashSet};
+
+// Keep these budgets aligned with Python's PrivacySanitizer defaults.
+const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_MATCHES: usize = 10_000;
+
+/// Resource limits for one compiled rule set, including the built-in detectors.
+pub struct PrivacyRuleLimits {
+    /// Maximum number of custom rules, excluding built-ins.
+    pub max_rules: usize,
+    /// Maximum UTF-8 bytes of custom-rule JSON.
+    pub max_source_bytes: usize,
+    /// Combined program budget, weighted by capture count to bound fallback workspaces.
+    /// Also bounds each search thread's lazy DFA caches, split across patterns.
+    pub max_compiled_bytes: usize,
+}
+
+/// Smallest program budget charged to one pattern.
+const MIN_PATTERN_PROGRAM_BYTES: usize = 4 * 1024;
+/// Forward, reverse and reverse-inner lazy DFAs may each keep a cache.
+const LAZY_DFA_CACHES_PER_PATTERN: usize = 3;
+/// Conservative reservation for NFAs and auxiliary compiled structures.
+const RETAINED_BYTES_PER_PROGRAM_BYTE: usize = 5;
+/// regex-automata 0.4's default one-pass DFA limit is independent of size_limit.
+const ONEPASS_DFA_BUDGET_BYTES: usize = 1024 * 1024;
+
+impl Default for PrivacyRuleLimits {
+    fn default() -> Self {
+        Self {
+            // Custom rules are maintained as configuration, like Privacy fields.
+            max_rules: 128,
+            max_source_bytes: 1024 * 1024,
+            // Regex's default program limit, shared by the whole rule set.
+            max_compiled_bytes: 10 * 1024 * 1024,
+        }
+    }
+}
 
 #[derive(Deserialize)]
 struct Config {
-    normalized_names: HashSet<String>,
-    suffixes: Vec<String>,
-    token_hints: Vec<String>,
-    token_pattern: String,
-    assignment_pattern: String,
-    cli_pattern: String,
-    auth_pattern: String,
-    scheme_pattern: String,
-    bracket_pattern: String,
+    detectors: Vec<DetectorConfig>,
     reference_pattern: String,
 }
 
-/// Compiled, immutable fixed rules used for Session credential discovery.
+#[derive(Deserialize)]
+struct DetectorConfig {
+    id: String,
+    pattern: String,
+    #[serde(default)]
+    reject_repeated: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CustomRule {
+    id: String,
+    prefix: Option<String>,
+    min_length: Option<usize>,
+    regex: Option<String>,
+}
+
+#[derive(Clone)]
+struct Detector {
+    id: String,
+    pattern: Regex,
+    reject_repeated: bool,
+}
+
+impl Detector {
+    fn accepts(&self, captures: &Captures<'_>, never_mask: &HashSet<String>) -> bool {
+        let value = captures.get(0).expect("whole detector match").as_str();
+        if never_mask.contains(value)
+            || ["EXAMPLE", "your_", "<", "${"]
+                .iter()
+                .any(|marker| value.contains(*marker))
+            || (self.reject_repeated
+                && has_repeated_chars(
+                    captures
+                        .name("privacy_body")
+                        .map_or(value, |body| body.as_str()),
+                ))
+        {
+            return false;
+        }
+        // Rust regex has no backreferences; PEM boundary labels must agree.
+        self.id != "pem_private_key"
+            || captures.name("begin_label").map(|m| m.as_str())
+                == captures.name("end_label").map(|m| m.as_str())
+    }
+}
+
+/// Compiled, immutable credential format detectors.
+#[derive(Clone)]
 pub struct PrivacyExtractor {
-    cfg: Config,
-    token: Regex,
-    assignment: Regex,
-    cli: Regex,
-    auth: Regex,
-    scheme: Regex,
-    bracket: Regex,
+    detectors: Vec<Detector>,
     reference: Regex,
-    bold: Regex,
-    code_delimiter: Regex,
-    unicode_alphanumeric: Regex,
+    reserved_bytes: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -42,530 +111,236 @@ struct Hit {
 }
 
 impl PrivacyExtractor {
-    /// Compile the built-in credential rules once for reuse across messages.
+    /// Compile the built-in credential detectors once for reuse across messages.
     pub fn new() -> Result<Self, String> {
+        Self::with_custom_rules("[]")
+    }
+
+    /// Compile built-in and validated user-defined detectors together.
+    pub fn with_custom_rules(custom_rules_json: &str) -> Result<Self, String> {
+        Self::with_limits(custom_rules_json, PrivacyRuleLimits::default())
+    }
+
+    /// Compile with deployment-specific resource limits.
+    pub fn with_limits(custom_rules_json: &str, limits: PrivacyRuleLimits) -> Result<Self, String> {
+        if limits.max_rules == 0 || limits.max_source_bytes == 0 || limits.max_compiled_bytes == 0 {
+            return Err("Privacy rule limits must be positive".into());
+        }
+        if custom_rules_json.len() > limits.max_source_bytes {
+            return Err(format!(
+                "Privacy rule source limit exceeded ({} bytes)",
+                limits.max_source_bytes
+            ));
+        }
+        let rules: Vec<CustomRule> =
+            serde_json::from_str(custom_rules_json).map_err(|error| error.to_string())?;
+        if rules.len() > limits.max_rules {
+            return Err(format!(
+                "Privacy rule count limit exceeded ({})",
+                limits.max_rules
+            ));
+        }
         let cfg: Config = serde_json::from_str(include_str!("privacy_extractor_rules.json"))
             .map_err(|error| error.to_string())?;
+        let pattern_count = cfg
+            .detectors
+            .len()
+            .checked_add(rules.len())
+            .and_then(|count| count.checked_add(1))
+            .ok_or_else(|| "Privacy rule count overflow".to_string())?;
+        // Each search thread keeps its own lazy DFA caches for every pattern.
+        let cache_limit = limits.max_compiled_bytes / pattern_count / LAZY_DFA_CACHES_PER_PATTERN;
+        let mut remaining = limits.max_compiled_bytes;
+        let mut program_bytes = 0;
+        let mut compile = |pattern: &str, id: &str| -> Result<Regex, String> {
+            // Grow the allowance geometrically instead of charging every pattern the full budget.
+            let mut budget = MIN_PATTERN_PROGRAM_BYTES.min(remaining);
+            loop {
+                match RegexBuilder::new(pattern)
+                    .size_limit(budget)
+                    .dfa_size_limit(cache_limit)
+                    .build()
+                {
+                    Ok(regex) => {
+                        // Capture tables scale as NFA states × capture slots, even for find().
+                        // Charge before any search can allocate these deferred workspaces.
+                        remaining = budget
+                            .checked_mul(regex.captures_len())
+                            .and_then(|charge| remaining.checked_sub(charge))
+                            .ok_or_else(|| {
+                                format!(
+                                    "Privacy rule {id} exceeds the capture workspace budget \
+                                 ({} weighted program bytes per rule set)",
+                                    limits.max_compiled_bytes
+                                )
+                            })?;
+                        program_bytes += budget;
+                        return Ok(regex);
+                    }
+                    Err(RegexError::CompiledTooBig(_)) if budget < remaining => {
+                        budget = budget.saturating_mul(2).min(remaining);
+                    }
+                    Err(RegexError::CompiledTooBig(_)) => {
+                        return Err(format!(
+                            "Privacy rule {id} exceeds the remaining compiled size budget \
+                             ({} bytes per rule set)",
+                            limits.max_compiled_bytes
+                        ));
+                    }
+                    Err(error) => return Err(format!("Invalid Privacy rule {id}: {error}")),
+                }
+            }
+        };
+        let mut detectors = cfg
+            .detectors
+            .into_iter()
+            .map(|detector| {
+                Ok(Detector {
+                    pattern: compile(&detector.pattern, &detector.id)?,
+                    id: detector.id,
+                    reject_repeated: detector.reject_repeated,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let reference = compile(&cfg.reference_pattern, "reference")?;
+        let mut ids: HashSet<_> = detectors.iter().map(|d| d.id.clone()).collect();
+        for rule in rules {
+            if rule.id.is_empty()
+                || !rule
+                    .id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+                || !ids.insert(rule.id.clone())
+            {
+                return Err("Privacy rule IDs must be nonempty unique identifiers".into());
+            }
+            let pattern = match (rule.prefix, rule.min_length, rule.regex) {
+                (Some(prefix), Some(min_length), None) if !prefix.is_empty() && min_length > 0 => {
+                    format!(
+                        "{}(?P<privacy_body>[A-Za-z0-9_-]{{{min_length},}})",
+                        regex::escape(&prefix)
+                    )
+                }
+                (None, None, Some(pattern)) if !pattern.is_empty() => pattern,
+                _ => {
+                    return Err(
+                        "Privacy rules require prefix with positive min_length, or regex".into(),
+                    );
+                }
+            };
+            let pattern = compile(&pattern, &rule.id)?;
+            if pattern.clone().is_match("") {
+                return Err("Privacy rules must not match an empty string".into());
+            }
+            detectors.push(Detector {
+                id: rule.id,
+                pattern,
+                reject_repeated: true,
+            });
+        }
+        let reserved_bytes = program_bytes * RETAINED_BYTES_PER_PROGRAM_BYTE
+            + ONEPASS_DFA_BUDGET_BYTES * pattern_count;
         Ok(Self {
-            token: Regex::new(&cfg.token_pattern).map_err(|error| error.to_string())?,
-            assignment: Regex::new(&format!("(?i){}", cfg.assignment_pattern))
-                .map_err(|error| error.to_string())?,
-            cli: Regex::new(&cfg.cli_pattern).map_err(|error| error.to_string())?,
-            auth: Regex::new(&cfg.auth_pattern).map_err(|error| error.to_string())?,
-            scheme: Regex::new(&cfg.scheme_pattern).map_err(|error| error.to_string())?,
-            bracket: Regex::new(&cfg.bracket_pattern).map_err(|error| error.to_string())?,
-            reference: Regex::new(&cfg.reference_pattern).map_err(|error| error.to_string())?,
-            bold: Regex::new(r"(?:^|[\s(>=:])\*\*(?P<text>[^\s*](?:[^\r\n]*?[^\s*])?)\*\*")
-                .map_err(|error| error.to_string())?,
-            code_delimiter: Regex::new(r"`+|~{3,}").map_err(|error| error.to_string())?,
-            unicode_alphanumeric: Regex::new(r"^[\p{L}\p{N}]$")
-                .map_err(|error| error.to_string())?,
-            cfg,
+            detectors,
+            reference,
+            reserved_bytes,
         })
     }
 
-    fn word(&self, c: char) -> bool {
-        if c.is_ascii() {
-            return c.is_ascii_alphanumeric() || c == '_';
-        }
-        // General categories Letter and Number match Python's alphanumeric
-        // definition. Rust's Alphabetic property also includes combining marks.
-        self.unicode_alphanumeric
-            .is_match(c.encode_utf8(&mut [0; 4]))
+    /// Conservative compiled-program reservation, excluding temporary search caches.
+    pub fn reserved_bytes(&self) -> usize {
+        self.reserved_bytes
     }
 
-    fn boundary(&self, s: &str, pos: usize) -> bool {
-        s[..pos]
-            .chars()
-            .next_back()
-            .map_or(true, |c| c != '-' && !self.word(c))
+    /// Return disjoint credential spans and detector IDs in character coordinates.
+    pub fn extract(&self, s: &str) -> Result<Vec<(usize, usize, String)>, String> {
+        self.extract_excluding(s, &HashSet::new())
     }
 
-    /// Whether a structured input key denotes a complete sensitive value.
-    pub fn is_sensitive_key(&self, key: &str) -> bool {
-        let lower = key.to_lowercase().replace('-', "_");
-        self.cfg
-            .suffixes
-            .iter()
-            .any(|suffix| lower.ends_with(suffix))
-            || self.cfg.normalized_names.contains(&normalize_key(&lower))
-    }
-
-    fn env_end(&self, s: &str, p: usize) -> Option<usize> {
-        let tail = &s[p..];
-        if tail.starts_with("${") {
-            let mut n = 0;
-            for (i, c) in tail[2..].char_indices() {
-                if c == '}' {
-                    return (n > 0).then_some(p + 2 + i + 1);
-                }
-                if c == '{' || space(c) {
-                    return None;
-                }
-                n += 1;
-            }
-        } else if tail.starts_with('$') {
-            let mut chars = tail[1..].char_indices();
-            let (_, first) = chars.next()?;
-            if !first.is_ascii_alphabetic() && first != '_' {
-                return None;
-            }
-            let mut end = p + 1 + first.len_utf8();
-            for (i, c) in chars {
-                if !self.word(c) {
-                    break;
-                }
-                end = p + 1 + i + c.len_utf8();
-            }
-            return Some(end);
-        } else if tail.starts_with('<') {
-            for (i, c) in tail[1..].char_indices() {
-                if c == '<' {
-                    return None;
-                }
-                if c == '>' {
-                    return (i > 0).then_some(p + 1 + i + 1);
-                }
-            }
-        }
-        None
-    }
-
-    fn full_reference(&self, s: &str) -> bool {
-        self.reference
-            .find(s)
-            .is_some_and(|m| m.start() == 0 && m.end() == s.len())
-    }
-
-    fn add(
-        &self,
-        hits: &mut Vec<Hit>,
-        s: &str,
-        start: usize,
-        end: usize,
-        key: &str,
-        structured: bool,
-    ) -> Result<(), String> {
-        let value = &s[start..end];
-        if value.is_empty()
-            || (!structured && (value == "|" || value == ">"))
-            || self.full_reference(value)
-            || self.env_end(value, 0) == Some(value.len())
-        {
-            return Ok(());
-        }
-        if hits.len() >= 100_000 {
-            return Err("Privacy extraction match limit exceeded".into());
-        }
-        let mut field = String::new();
-        let mut previous = None;
-        for c in key.chars() {
-            if previous.is_some_and(|v: char| v.is_ascii_lowercase() || v.is_ascii_digit())
-                && c.is_ascii_uppercase()
-            {
-                field.push('_');
-            }
-            if c == '-' || c == ' ' {
-                field.push('_');
-            } else {
-                field.extend(c.to_lowercase());
-            }
-            previous = Some(c);
-        }
-        hits.push(Hit { start, end, field });
-        Ok(())
-    }
-
-    fn mask_markdown_markers(&self, s: &str) -> Option<String> {
-        let delimiters: Vec<_> = self.code_delimiter.find_iter(s).collect();
-        // Index equal-length runs once so unmatched inline delimiters stay linear-time.
-        let mut next = vec![None; delimiters.len()];
-        let mut following = HashMap::new();
-        for (i, delimiter) in delimiters.iter().enumerate().rev() {
-            let key = (delimiter.as_str().as_bytes()[0], delimiter.len());
-            next[i] = following.insert(key, i);
-        }
-        let mut masked = None;
-        let mut cursor = 0;
-        let mut i = 0;
-        while i < delimiters.len() {
-            let open = delimiters[i];
-            let marker = open.as_str().as_bytes()[0];
-            let fenced = open.len() >= 3
-                && fence_line_start(s, open.start())
-                && (marker != b'`' || !s[open.end()..].split('\n').next().unwrap().contains('`'));
-            let close = if fenced {
-                (i + 1..delimiters.len()).find(|&j| {
-                    let m = delimiters[j];
-                    m.as_str().as_bytes()[0] == marker
-                        && m.len() >= open.len()
-                        && fence_line_start(s, m.start())
-                        && s[m.end()..].split('\n').next().unwrap().trim().is_empty()
-                })
-            } else if marker == b'`' {
-                next[i]
-            } else {
-                None
-            };
-            if close.is_none() && !fenced {
-                i += 1;
-                continue;
-            }
-            self.mask_bold_markers(s, cursor, open.start(), &mut masked);
-            let bytes = masked.get_or_insert_with(|| s.as_bytes().to_vec());
-            bytes[open.start()..open.end()].fill(b' ');
-            cursor = if let Some(j) = close {
-                let end = delimiters[j];
-                bytes[end.start()..end.end()].fill(b' ');
-                i = j + 1;
-                end.end()
-            } else {
-                i = delimiters.len();
-                s.len()
-            };
-        }
-        self.mask_bold_markers(s, cursor, s.len(), &mut masked);
-        masked.map(|bytes| String::from_utf8(bytes).expect("ASCII replacement preserves UTF-8"))
-    }
-
-    fn mask_bold_markers(&self, s: &str, start: usize, end: usize, masked: &mut Option<Vec<u8>>) {
-        // Emphasis inside code is literal; only scan the gaps between code regions.
-        for cap in self.bold.captures_iter(&s[start..end]) {
-            let text = cap.name("text").unwrap();
-            let bytes = masked.get_or_insert_with(|| s.as_bytes().to_vec());
-            bytes[start + text.start() - 2..start + text.start()].fill(b' ');
-            bytes[start + text.end()..start + text.end() + 2].fill(b' ');
-        }
-    }
-
-    fn value_span(&self, s: &str, mut start: usize) -> (usize, usize) {
-        if s[start..].starts_with("${") {
-            if let Some(end) = self.env_end(s, start) {
-                return (start, end);
-            }
-        }
-        let mut end = start;
-        if let Some(quote @ ('\'' | '"')) = char_at(s, start) {
-            start += 1;
-            end = start;
-            while let Some(c) = char_at(s, end) {
-                if c == '\\' {
-                    end = advance(s, end, 2);
-                } else if c == quote {
-                    break;
-                } else {
-                    end += c.len_utf8();
-                }
-            }
-        } else {
-            while let Some(c) = char_at(s, end) {
-                if space(c) || ",;，；\"'<>}{]".contains(c) {
-                    break;
-                }
-                if c == '[' {
-                    match self.bracket.find_at(s, end) {
-                        Some(m) if m.start() == end => end = m.end(),
-                        _ => break,
-                    }
-                } else {
-                    end += c.len_utf8();
-                }
-            }
-        }
-        (start, end)
-    }
-
-    fn shell_span(&self, s: &str, start: usize) -> (usize, usize) {
-        let encoded = s[start..].starts_with("\\\"");
-        let mut quote = if encoded { Some('"') } else { None };
-        let width = if encoded { 2 } else { 1 };
-        let mut end = start + if encoded { 2 } else { 0 };
-        let mut first_quote_end = None;
-        while let Some(c) = char_at(s, end) {
-            if encoded && c == '\\' && quote != Some('\'') {
-                let mut run = end + 1;
-                while char_at(s, run) == Some('\\') {
-                    run += 1;
-                }
-                if run == end + 1 && char_at(s, run) == Some('"') {
-                    if quote.is_some() {
-                        quote = None;
-                        if first_quote_end.is_none() {
-                            first_quote_end = Some(end);
-                        }
-                    } else {
-                        quote = Some('"');
-                    }
-                    end = run + 1;
-                } else {
-                    end = advance(s, run, 1);
-                }
-            } else if c == '\\' && quote != Some('\'') {
-                end = advance(s, end, 2);
-            } else if let Some(q) = quote {
-                if c == q && (!encoded || q == '\'') {
-                    quote = None;
-                    if first_quote_end.is_none() {
-                        first_quote_end = Some(end);
-                    }
-                }
-                end += c.len_utf8();
-            } else if c == '\'' || c == '"' {
-                if encoded && c == '"' {
-                    break;
-                }
-                quote = Some(c);
-                end += 1;
-            } else if space(c) || ";&|()<>".contains(c) {
-                break;
-            } else {
-                end += c.len_utf8();
-            }
-        }
-        if start < end
-            && (encoded || matches!(char_at(s, start), Some('\'' | '"')))
-            && first_quote_end == end.checked_sub(width)
-        {
-            (start + width, end - width)
-        } else {
-            (start, end)
-        }
-    }
-
-    fn scheme_end(&self, s: &str, pos: usize, end: usize) -> Option<usize> {
-        if pos > 0 && self.word(s[..pos].chars().next_back()?) {
-            return None;
-        }
-        self.scheme
-            .find_at(&s[..end], pos)
-            .filter(|m| m.start() == pos)
-            .map(|m| m.end())
-    }
-
-    /// Return disjoint credential spans in Unicode character coordinates.
-    pub fn extract(
+    /// Discover values while excluding exact user-declared literals.
+    pub fn extract_excluding(
         &self,
         s: &str,
-        field_name: Option<&str>,
+        never_mask: &HashSet<String>,
     ) -> Result<Vec<(usize, usize, String)>, String> {
-        if s.len() > 4 * 1024 * 1024 && s.chars().count() > 4 * 1024 * 1024 {
+        if s.len() > MAX_CONTENT_BYTES {
             return Err("Privacy extraction text limit exceeded".into());
         }
-        let mut hits = Vec::new();
-        if let Some(field) = field_name.filter(|v| self.is_sensitive_key(v)) {
-            let mut start = 0;
-            if matches!(
-                normalize_key(&field.to_lowercase()).as_str(),
-                "authorization" | "proxyauthorization"
-            ) {
-                start = self.scheme_end(s, 0, s.len()).unwrap_or(0);
-            }
-            self.add(&mut hits, s, start, s.len(), field, true)?;
-            return Ok(to_char_offsets(s, hits));
-        }
-        // Replace Markdown delimiters with whitespace, retaining original offsets and values.
-        let source = s;
-        let scan_text = self.mask_markdown_markers(s);
-        let s = scan_text.as_deref().unwrap_or(s);
-        if s.contains(['=', ':', '：']) {
-            let mut cursor = 0;
-            let mut covered = 0;
-            while cursor < s.len() {
-                let Some(cap) = self.assignment.captures_at(s, cursor) else {
-                    break;
-                };
-                let m = cap.get(0).unwrap();
-                if !self.boundary(s, m.start()) {
-                    cursor = advance(s, m.start(), 1);
-                    continue;
-                }
-                cursor = m.end();
-                let key = cap.name("key").unwrap().as_str();
-                if m.start() < covered || !self.is_sensitive_key(key) {
-                    continue;
-                }
-                let start = m.end();
-                let auth_start = start + usize::from(matches!(char_at(s, start), Some('\'' | '"')));
-                let start = if matches!(
-                    normalize_key(&key.to_lowercase()).as_str(),
-                    "authorization" | "proxyauthorization"
-                ) {
-                    self.scheme_end(s, auth_start, s.len()).unwrap_or(start)
-                } else {
-                    start
-                };
-                let (start, end) = self.value_span(s, start);
-                self.add(&mut hits, source, start, end, key, false)?;
-                covered = end;
-            }
-        }
-        if s.contains("--") || s.contains("-u") || s.contains("-U") {
-            let mut cursor = 0;
-            let mut covered = 0;
-            while cursor < s.len() {
-                let Some(cap) = self.cli.captures_at(s, cursor) else {
-                    break;
-                };
-                let m = cap.get(0).unwrap();
-                if !self.boundary(s, m.start()) {
-                    cursor = advance(s, m.start(), 1);
-                    continue;
-                }
-                cursor = m.end();
-                if cap.name("short").is_some() && m.end() == m.start() + 2 {
-                    if char_at(s, m.end()).map_or(true, |c| space(c) || c == '=') {
-                        continue;
-                    }
-                }
-                if m.start() < covered {
-                    continue;
-                }
-                let mut key = cap.name("key").map_or("user", |v| v.as_str());
-                let normalized = normalize_key(&key.to_lowercase());
-                let combined = normalized == "user" || normalized == "proxyuser";
-                if normalized == "oauth2bearer" {
-                    key = "access_token";
-                }
-                if !combined && !self.is_sensitive_key(key) {
-                    continue;
-                }
-                let mut start = m.end();
-                loop {
-                    let count = if s[start..].starts_with("\\\r\n") {
-                        3
-                    } else if s[start..].starts_with("\\\n") {
-                        2
-                    } else {
-                        break;
-                    };
-                    start += count;
-                    while matches!(char_at(s, start), Some(' ' | '\t')) {
-                        start += 1;
-                    }
-                }
-                if s[start..].starts_with("--") {
-                    continue;
-                }
-                let (mut start, end) = self.shell_span(s, start);
-                if end > start && (!combined || s[start..end].contains(':')) {
-                    covered = end;
-                    if normalized == "authorization" || normalized == "proxyauthorization" {
-                        start = self.scheme_end(s, start, end).unwrap_or(start);
-                    }
-                    self.add(
-                        &mut hits,
-                        source,
-                        start,
-                        end,
-                        if combined { "credential" } else { key },
-                        false,
-                    )?;
-                }
-            }
-        }
-        if self.cfg.token_hints.iter().any(|h| s.contains(h)) {
-            let mut cursor = 0;
-            while cursor < s.len() {
-                let Some(m) = self.token.find_at(s, cursor) else {
-                    break;
-                };
-                if !self.boundary(s, m.start()) {
-                    cursor = advance(s, m.start(), 1);
-                    continue;
-                }
-                cursor = m.end();
-                if (m.as_str().starts_with("AKIA") || m.as_str().starts_with("ASIA"))
-                    && char_at(s, m.end()).is_some_and(token_char)
-                {
-                    continue;
-                }
-                self.add(&mut hits, source, m.start(), m.end(), "credential", false)?;
-            }
-        }
-        if s.contains(['b', 'B']) {
-            let mut cursor = 0;
-            while cursor < s.len() {
-                let Some(cap) = self.auth.captures_at(s, cursor) else {
-                    break;
-                };
-                let m = cap.get(0).unwrap();
-                if m.start() > 0 && self.word(s[..m.start()].chars().next_back().unwrap()) {
-                    cursor = advance(s, m.start(), 1);
-                    continue;
-                }
-                cursor = m.end();
-                let value = cap.name("value").unwrap();
-                self.add(
-                    &mut hits,
-                    source,
-                    value.start(),
-                    value.end(),
-                    "authorization",
-                    false,
-                )?;
-            }
-        }
-        let refs: Vec<_> = self
+        let references: Vec<_> = self
             .reference
             .find_iter(s)
             .map(|m| (m.start(), m.end()))
             .collect();
-        let mut r = 0;
-        let mut merged: Vec<Hit> = Vec::new();
-        hits.sort_by_key(|h| h.start);
-        for h in hits {
-            while r < refs.len() && refs[r].1 <= h.start {
-                r += 1;
+        let mut streams: Vec<_> = self
+            .detectors
+            .iter()
+            .map(|detector| detector.pattern.captures_iter(s).peekable())
+            .collect();
+        // Each detector contributes only its next match. Ties retain detector order.
+        let mut pending = BinaryHeap::new();
+        for (index, stream) in streams.iter_mut().enumerate() {
+            if let Some(captures) = stream.peek() {
+                let matched = captures.get(0).expect("whole detector match");
+                pending.push(Reverse((matched.start(), Reverse(matched.end()), index)));
             }
-            if r < refs.len() && refs[r].0 <= h.start && h.end <= refs[r].1 {
-                continue;
+        }
+        let mut disjoint: Vec<Hit> = Vec::new();
+        let mut reference_index = 0;
+        let mut consumed = 0;
+        while let Some(Reverse((start, Reverse(end), index))) = pending.pop() {
+            let captures = streams[index].next().expect("pending detector match");
+            while reference_index < references.len() && references[reference_index].1 <= start {
+                reference_index += 1;
             }
-            if let Some(last) = merged.last_mut() {
-                if h.start < last.end {
-                    last.end = last.end.max(h.end);
-                    continue;
+            if start >= consumed
+                && start < end
+                && !s[..start].chars().next_back().is_some_and(token_char)
+                && !s[end..].chars().next().is_some_and(token_char)
+                && !(reference_index < references.len() && references[reference_index].0 < end)
+                && self.detectors[index].accepts(&captures, never_mask)
+            {
+                if disjoint.len() >= MAX_MATCHES {
+                    return Err("Privacy extraction match limit exceeded".into());
                 }
+                disjoint.push(Hit {
+                    start,
+                    end,
+                    field: self.detectors[index].id.clone(),
+                });
+                consumed = end;
             }
-            merged.push(h);
+            while streams[index]
+                .peek()
+                .is_some_and(|c| c.get(0).expect("whole detector match").start() < consumed)
+            {
+                streams[index].next();
+            }
+            if let Some(captures) = streams[index].peek() {
+                let matched = captures.get(0).expect("whole detector match");
+                pending.push(Reverse((matched.start(), Reverse(matched.end()), index)));
+            }
         }
-        Ok(to_char_offsets(source, merged))
+        Ok(to_char_offsets(s, disjoint))
     }
 }
 
-fn fence_line_start(s: &str, pos: usize) -> bool {
-    let mut prefix = s[..pos].bytes().rev();
-    for _ in 0..3 {
-        match prefix.next() {
-            None | Some(b'\n') => return true,
-            Some(b' ') => (),
-            _ => return false,
-        }
-    }
-    matches!(prefix.next(), None | Some(b'\n'))
-}
-
-fn normalize_key(s: &str) -> String {
-    s.chars()
-        .filter(|c| !matches!(c, '-' | '_' | ' '))
-        .collect()
-}
-fn space(c: char) -> bool {
-    c.is_whitespace() || matches!(c, '\u{1c}'..='\u{1f}')
-}
 fn token_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || "_./+=~-".contains(c)
+    c.is_alphanumeric() || matches!(c, '_' | '-')
 }
-fn char_at(s: &str, p: usize) -> Option<char> {
-    s.get(p..)?.chars().next()
-}
-fn advance(s: &str, mut p: usize, n: usize) -> usize {
-    for _ in 0..n {
-        if let Some(c) = char_at(s, p) {
-            p += c.len_utf8();
+
+fn has_repeated_chars(value: &str) -> bool {
+    let mut previous = None;
+    let mut run = 0;
+    for c in value.chars() {
+        run = if previous == Some(c) { run + 1 } else { 1 };
+        if run >= 6 {
+            return true;
         }
+        previous = Some(c);
     }
-    p
+    false
 }
+
 fn to_char_offsets(s: &str, hits: Vec<Hit>) -> Vec<(usize, usize, String)> {
     if s.is_ascii() {
         return hits
@@ -590,138 +365,255 @@ fn to_char_offsets(s: &str, hits: Vec<Hit>) -> Vec<(usize, usize, String)> {
 mod tests {
     use super::*;
 
+    #[derive(Deserialize)]
+    struct Examples {
+        detectors: Vec<DetectorExamples>,
+    }
+
+    #[derive(Deserialize)]
+    struct DetectorExamples {
+        id: String,
+        positive: Vec<Vec<String>>,
+        negative: Vec<Vec<String>>,
+    }
+
     #[test]
-    fn basic_requires_authentication_context() {
+    fn detector_examples() {
         let extractor = PrivacyExtractor::new().unwrap();
-        let text = "Basic usage; Authorization: Basic demo-secret";
+        let examples: Examples =
+            serde_json::from_str(include_str!("privacy_extractor_rules.json")).unwrap();
+        for detector in examples.detectors {
+            for fragments in detector.positive {
+                let value = fragments.concat();
+                assert_eq!(
+                    extractor.extract(&value).unwrap(),
+                    vec![(0, value.chars().count(), detector.id.clone())],
+                    "positive example for {}: {value}",
+                    detector.id,
+                );
+            }
+            for fragments in detector.negative {
+                let value = fragments.concat();
+                assert!(
+                    extractor.extract(&value).unwrap().is_empty(),
+                    "negative example for {}: {value}",
+                    detector.id,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unicode_offsets_and_references_preserve_complete_values() {
+        let extractor = PrivacyExtractor::new().unwrap();
+        let secret = ["AKLT", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"].concat();
+        let pem = [
+            "-----BEGIN PRIVATE KEY-----\n",
+            "YWJjZGVmZw==\n",
+            "-----END PRIVATE KEY-----",
+        ]
+        .concat();
+        let reference = ["{{ov_privacy:skill:", &secret, ":key}}"].concat();
+        let text = format!("标题🙂 \"{secret}\"；{reference}\n{pem}");
         let chars: Vec<_> = text.chars().collect();
         let values: Vec<String> = extractor
-            .extract(text, None)
+            .extract(&text)
             .unwrap()
             .iter()
             .map(|(start, end, _)| chars[*start..*end].iter().collect())
             .collect();
-        assert_eq!(values, ["demo-secret"]);
-        assert_eq!(
-            extractor
-                .extract("Basic demo-secret", Some("Authorization"))
-                .unwrap(),
-            vec![(6, 17, "authorization".to_owned())]
-        );
+        assert_eq!(values, [secret, pem]);
     }
 
     #[test]
-    fn unicode_offsets_and_overlaps_cover_complete_credentials() {
+    fn token_boundaries_reject_partial_credentials() {
         let extractor = PrivacyExtractor::new().unwrap();
-        let text = "前缀 password='中文密码' Authorization: Bearer sk-abcdefghijklmnopqrstuv";
-        let hits = extractor.extract(text, None).unwrap();
-        let chars: Vec<_> = text.chars().collect();
-        let values: Vec<String> = hits
-            .iter()
-            .map(|(s, e, _)| chars[*s..*e].iter().collect())
-            .collect();
-        assert_eq!(values, ["中文密码", "sk-abcdefghijklmnopqrstuv"]);
-    }
-
-    #[test]
-    fn references_and_environment_placeholders_are_not_new_credentials() {
-        let extractor = PrivacyExtractor::new().unwrap();
-        let text = "password=${PASSWORD} {{ov_privacy:alice:viking://~/privacy/session/sk-abcdefghijklmnopqrstuv#/values/pat}}";
-        assert!(extractor.extract(text, None).unwrap().is_empty());
-        for value in ["${PASSWORD}", "$PASSWORD中", "$PASSWORD²", "$PASSWORD¼"] {
-            assert!(extractor
-                .extract(value, Some("password"))
-                .unwrap()
-                .is_empty());
+        let secret = ["AKLT", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"].concat();
+        for prefix in ['a', '9', '_', '-', '中', '²'] {
+            let text = format!("{prefix}{secret}");
+            assert!(extractor.extract(&text).unwrap().is_empty(), "{text}");
         }
-        // A combining mark ends the environment name and leaves a literal value.
-        assert_eq!(
-            extractor
-                .extract("$PASSWORD\u{0345}", Some("password"))
-                .unwrap(),
-            vec![(0, 10, "password".to_owned())]
-        );
+        for suffix in ['_', '-', '中', '²'] {
+            let text = format!("{secret}{suffix}");
+            assert!(extractor.extract(&text).unwrap().is_empty(), "{text}");
+        }
     }
 
     #[test]
-    fn markdown_delimiters_preserve_value_boundaries_and_literal_symbols() {
+    fn extraction_limits_are_enforced() {
         let extractor = PrivacyExtractor::new().unwrap();
-        for (text, expected) in [
-            ("**API_KEY=secret-value**", "secret-value"),
-            ("1. **API_KEY=secret-value**.", "secret-value"),
-            ("password=**secret-value**", "secret-value"),
-            ("**Authorization: Bearer secret-value**", "secret-value"),
-            ("**sk-abcdefghijklmnopqrstuv**", "sk-abcdefghijklmnopqrstuv"),
-            ("password=secret**", "secret**"),
-            ("password=ab**cd", "ab**cd"),
-            ("password=***", "***"),
-            ("**password='secret**'**", "secret**"),
-            ("password='**secret**'", "**secret**"),
-            ("`API_KEY=secret-value`", "secret-value"),
-            ("password=`secret-value`", "secret-value"),
-            ("``API_KEY=secret-value``", "secret-value"),
-            ("**`API_KEY=secret-value`**", "secret-value"),
-            ("**API_KEY=`secret-value`**", "secret-value"),
-            ("`password=**secret**`", "**secret**"),
-            ("``password=has`tick``", "has`tick"),
-            ("````password=has```ticks````", "has```ticks"),
-            ("`Authorization: Bearer secret-value`", "secret-value"),
-            ("`--api-key secret-value`", "secret-value"),
-            ("``--password='secret`**'``", "secret`**"),
-            ("password='literal`tick`**'", "literal`tick`**"),
-            ("password=unpaired`", "unpaired`"),
-            ("`unclosed password=secret-value", "secret-value"),
-            ("`password='**secret**'`", "**secret**"),
-            ("```\npassword=**secret**\n```", "**secret**"),
-            ("```sh\npassword=**secret**\n````", "**secret**"),
-            ("~~~sh\npassword=**secret**\n~~~~", "**secret**"),
-            ("```sh\npassword=**secret**", "**secret**"),
-            ("~~~sh\npassword=**secret**", "**secret**"),
-            ("**heading** password=secret**", "secret**"),
-            ("中文 **password=密码**", "密码"),
-            ("中文 `password=密码`。", "密码"),
+        for unit in ["x", "中", "🙂"] {
+            let mut text = unit.repeat(MAX_CONTENT_BYTES / unit.len());
+            text.push_str(&" ".repeat(MAX_CONTENT_BYTES % unit.len()));
+            assert!(extractor.extract(&text).unwrap().is_empty());
+            text.push(' ');
+            assert!(extractor.extract(&text).unwrap_err().contains("text limit"));
+        }
+        let secret = ["AKLT", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU", " "].concat();
+        assert_eq!(
+            extractor
+                .extract(&secret.repeat(MAX_MATCHES))
+                .unwrap()
+                .len(),
+            MAX_MATCHES
+        );
+        assert!(extractor
+            .extract(&secret.repeat(MAX_MATCHES + 1))
+            .unwrap_err()
+            .contains("match limit"));
+    }
+    #[test]
+    fn custom_rules_share_filters_exclusions_and_reference_avoidance() {
+        let extractor = PrivacyExtractor::with_custom_rules(
+            r#"[
+            {"id":"gateway","prefix":"acme.gw_","min_length":12},
+            {"id":"ticket","regex":"acme_tk_[A-Za-z0-9]{12}"}
+        ]"#,
+        )
+        .unwrap();
+        let first = "acme.gw_aB3dE5gH7jK9";
+        let second = "acme_tk_xY7zA9bC2dE4";
+        let text = format!("🙂 {first} {second} acme.gw_AAAAAAbcdefg {{[[unused]]}} {{{{ov_privacy:skill:{first}:key}}}}");
+        let excluded = HashSet::from([first.to_string()]);
+        let matches = extractor.extract_excluding(&text, &excluded).unwrap();
+        assert_eq!(matches.len(), 1);
+        let (start, end, id) = &matches[0];
+        assert_eq!(id, "ticket");
+        assert_eq!(
+            text.chars()
+                .skip(*start)
+                .take(end - start)
+                .collect::<String>(),
+            second
+        );
+        assert!(extractor.extract(&text).unwrap().len() == 2);
+    }
+
+    #[test]
+    fn custom_rules_reject_invalid_configuration() {
+        for rules in [
+            r#"[{"id":"x","regex":"("}]"#,
+            r#"[{"id":"x","regex":"a*"}]"#,
+            r#"[{"id":"x","regex":"(?=secret)"}]"#,
+            r#"[{"id":"x","prefix":"abc","min_length":0}]"#,
+            r#"[{"id":"x","prefix":"abc","min_length":12,"regex":"secret"}]"#,
+            r#"[{"id":"x","prefix":"abc"}]"#,
+            r#"[{"id":"volcengine_ak","regex":"secret"}]"#,
+            r#"[{"id":"x","regex":"abc"},{"id":"x","regex":"def"}]"#,
         ] {
-            let chars: Vec<_> = text.chars().collect();
-            let values: Vec<String> = extractor
-                .extract(text, None)
-                .unwrap()
-                .iter()
-                .map(|(s, e, _)| chars[*s..*e].iter().collect())
-                .collect();
-            assert_eq!(values, [expected], "{text}");
-        }
-        assert_eq!(
-            extractor.extract("**secret**", Some("password")).unwrap(),
-            vec![(0, 10, "password".to_owned())]
-        );
-        let text = "`password=one` **password=two** ``password=three`tick`` password='four`**'";
-        let chars: Vec<_> = text.chars().collect();
-        let values: Vec<String> = extractor
-            .extract(text, None)
-            .unwrap()
-            .iter()
-            .map(|(s, e, _)| chars[*s..*e].iter().collect())
-            .collect();
-        assert_eq!(values, ["one", "two", "three`tick", "four`**"]);
-    }
-
-    #[test]
-    fn unicode_categories_preserve_credential_boundaries() {
-        let extractor = PrivacyExtractor::new().unwrap();
-        // Letters, numbers and underscores continue identifiers.
-        for prefix in ['A', '9', '_', '中', '²', '¼'] {
-            for suffix in ["sk-abcdefghijklmnopqrstuv", "Bearer secret-value"] {
-                let text = format!("{prefix}{suffix}");
-                assert!(extractor.extract(&text, None).unwrap().is_empty(), "{text}");
-            }
-        }
-        // Combining marks, other connectors and format characters form boundaries.
-        for prefix in ['\u{0345}', '\u{0363}', '\u{203f}', '\u{200c}', '🙂'] {
-            let text = format!("{prefix}password=secret-value");
-            assert_eq!(
-                extractor.extract(&text, None).unwrap(),
-                vec![(10, 22, "password".to_owned())]
+            assert!(
+                PrivacyExtractor::with_custom_rules(rules).is_err(),
+                "{rules}"
             );
         }
+        let oversized = serde_json::json!([{"id":"x", "regex":"[a-zA-Z0-9]{1000000000}"}]);
+        assert!(PrivacyExtractor::with_custom_rules(&oversized.to_string()).is_err());
+    }
+
+    #[test]
+    fn rule_resource_budgets_are_enforced() {
+        let limits = PrivacyRuleLimits::default();
+        let rules: Vec<_> = (0..=limits.max_rules)
+            .map(|n| serde_json::json!({"id":format!("rule{n}"),"regex":"token_[a-z0-9]{12}"}))
+            .collect();
+        assert!(
+            PrivacyExtractor::with_custom_rules(&serde_json::to_string(&rules).unwrap())
+                .err()
+                .unwrap()
+                .contains("count limit")
+        );
+
+        let source = r#"[{"id":"token","regex":"token_[a-z0-9]{12}"}]"#;
+        assert!(PrivacyExtractor::with_limits(
+            source,
+            PrivacyRuleLimits {
+                max_source_bytes: source.len() - 1,
+                ..PrivacyRuleLimits::default()
+            }
+        )
+        .err()
+        .unwrap()
+        .contains("source limit"));
+
+        // Each pattern fits regex's former per-pattern limit, but the set does not.
+        let costly =
+            r#"[{"id":"one","regex":"[a-z0-9]{100000}"},{"id":"two","regex":"[a-z0-9]{100000}"}]"#;
+        assert!(PrivacyExtractor::with_custom_rules(costly)
+            .err()
+            .unwrap()
+            .contains("Privacy rule two exceeds the remaining compiled size budget"));
+    }
+
+    #[test]
+    fn rule_budget_follows_actual_program_size() {
+        // Unicode classes compile to large programs; one such rule may use most of the budget.
+        let unicode = r#"[{"id":"unicode","regex":"tok_\\w{20}"}]"#;
+        let extractor = PrivacyExtractor::with_custom_rules(unicode).unwrap();
+        assert_eq!(
+            extractor.extract("tok_ABCDEFGHIJKLMNOPQRST").unwrap(),
+            vec![(0, 24, "unicode".to_string())]
+        );
+        let builtin = PrivacyExtractor::new().unwrap().reserved_bytes();
+        assert!(builtin < extractor.reserved_bytes());
+        // The same rules fit while their combined programs stay within the budget.
+        let small: Vec<_> = (0..PrivacyRuleLimits::default().max_rules)
+            .map(|n| serde_json::json!({"id":format!("rule{n}"),"regex":"tok_[a-z0-9]{12}"}))
+            .collect();
+        assert!(
+            PrivacyExtractor::with_custom_rules(&serde_json::to_string(&small).unwrap()).is_ok()
+        );
+    }
+
+    #[test]
+    fn capture_workspaces_are_bounded_before_search() {
+        let rules = serde_json::json!([{
+            "id": "captures", "regex": "([a-z0-9]{200})".repeat(100)
+        }]);
+        assert!(PrivacyExtractor::with_custom_rules(&rules.to_string())
+            .err()
+            .unwrap()
+            .contains("capture workspace budget"));
+
+        let rules = serde_json::json!([{
+            "id": "captures", "regex": "([a-z0-9]{20})".repeat(10)
+        }]);
+        let extractor = PrivacyExtractor::with_custom_rules(&rules.to_string()).unwrap();
+        let value = "a1b2c3d4".repeat(25);
+        assert_eq!(
+            extractor.extract(&value).unwrap(),
+            vec![(0, value.len(), "captures".into())]
+        );
+    }
+    #[test]
+    fn custom_rules_accept_long_values_and_skip_zero_width_matches() {
+        let prefix = "汉字".repeat(300);
+        let id = "gateway_".repeat(10);
+        let body = "aB3dE5gH7jK9".repeat(350);
+        let rules = serde_json::json!([
+            {"id":id, "prefix":prefix,"min_length":4097},
+            {"id":"regex", "regex":format!("{prefix}[A-Za-z0-9_-]+")},
+        ]);
+        let extractor = PrivacyExtractor::with_custom_rules(&rules.to_string()).unwrap();
+        let text = format!("{prefix}{body}");
+        assert_eq!(
+            extractor.extract(&text).unwrap(),
+            vec![(0, text.chars().count(), id)]
+        );
+        let zero_width =
+            PrivacyExtractor::with_custom_rules(r#"[{"id":"boundary","regex":"\\b"}]"#).unwrap();
+        assert!(zero_width.extract("ordinary word").unwrap().is_empty());
+    }
+
+    #[test]
+    fn overlapping_detectors_only_count_final_results() {
+        let rules: Vec<_> = (0..64)
+            .map(|n| serde_json::json!({"id":format!("rule{n}"),"prefix":"corp_","min_length":20}))
+            .collect();
+        let extractor =
+            PrivacyExtractor::with_custom_rules(&serde_json::to_string(&rules).unwrap()).unwrap();
+        let text = "corp_A7b9C2d4E6f8G0h1J3k5 ".repeat(313);
+        let hits = extractor.extract(&text).unwrap();
+        assert_eq!(hits.len(), 313);
+        assert!(hits.iter().all(|(_, _, id)| id == "rule0"));
     }
 }

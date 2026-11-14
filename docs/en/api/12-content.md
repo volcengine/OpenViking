@@ -144,14 +144,14 @@ Read the complete text of an L0, L1, or L2 file.
 | uri | str | Yes | - | Viking URI (e.g. `viking://resources/docs/api.md`) or a 32-character hex vector record `id` (returned by `stat()`) |
 | offset | int | No | 0 | Starting line number (0-indexed) |
 | limit | int | No | -1 | Number of lines to read, `-1` means read to end |
-| raw | bool | No | false | Skip default sanitization and MEMORY_FIELDS cleanup, and attempt placeholder restoration. In Python, use `client.read_raw(uri)`. |
+| raw | bool | No | false | Skip default sanitization and MEMORY_FIELDS cleanup, and restore Skill/Session placeholders according to Privacy settings. In Python, use `client.read_raw(uri)`. |
 
 **Notes**
 
 - `read()` accepts file URIs only. Passing an existing directory URI returns `INVALID_ARGUMENT` (`400`), not `NOT_FOUND`. This error carries a structured `details` payload — `details.expected` is `"file"`, `details.actual` is `"directory"`, and `details.resource` is the offending URI (present on the HTTP path) — so clients can detect a file-vs-directory mismatch programmatically (for example, fall back to `list`) instead of string-matching the message.
 - Instead of a Viking URI, you may pass the 32-character hex `id` returned by `stat()` for a file. The server looks up the URI via the vector index and applies the same permission checks. Because indexing is asynchronous, a newly returned ID might not be resolvable immediately; lookup also fails if the corresponding vector record has been deleted. In both cases, the server returns `NOT_FOUND` and indicates that the data may not have been indexed yet or may have been deleted.
 - Public URI parameters accept `resources`, `user`, and `agent` scopes. For session files, use `viking://user/{user_id}/sessions/{session_id}/messages.jsonl` or the current user's `viking://~/sessions/{session_id}/messages.jsonl` home alias. The old `viking://session/...` scope and internal scopes such as `temp` and `queue` return `INVALID_URI`.
-- Sensitive information handling: default reads (`raw=false`) preserve existing placeholders and sanitize remaining registered plaintext values; `raw=true` skips default sanitization and returns the restored content. Restoration affects only the response, not stored files; see [Privacy Configs](../concepts/13-privacy.md).
+- Sensitive information handling: normal reads (`raw=false`) preserve existing placeholders and replace matching registered values with placeholders when enabled by `privacy.mode`. For files outside Skills and Sessions, automatic replacement is enabled only in `auto_strict` mode. Use `raw=true` to skip automatic replacement; Skill and Session placeholders are then restored if `privacy.restore=true`. Restoration affects only the returned content, not the stored file; see [Privacy Configs](../concepts/13-privacy.md).
 
 **Python SDK**
 

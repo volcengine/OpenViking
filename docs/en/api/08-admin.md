@@ -1099,7 +1099,7 @@ compatibility.
 ROOT can read and update any User's settings. ADMIN can read and update non-GLOBAL
 Users in its own account. USER callers can read and update only their own settings:
 both `account_id` and `user_id` in the URL must match the authenticated identity.
-The endpoint accepts `add_targets`, `memory_policy`, and `ttl`. The shared top-level
+The endpoint accepts `add_targets`, `memory_policy`, `ttl`, and `privacy`. The shared top-level
 `memory_types` filter controls which memory schemas may be extracted.
 User memories are routed to Self or Peer according to each message's `peer_id`;
 Agent memory types remain Self-only.
@@ -1156,6 +1156,17 @@ DELETE /api/v1/user-settings/add-locations
 
 `ttl` still returns explicit User values without filling defaults from other layers.
 
+GET/PATCH responses return the effective `privacy` settings:
+
+| Field | Description | Built-in default |
+|---|---|---|
+| `privacy.mode` | `off`, `registered`, `auto`, or `auto_strict`; see [Privacy Configs](../concepts/13-privacy.md#usage) | `off` |
+| `privacy.restore` | Restore placeholders on `raw=true` reads of Skills and Sessions | `true` |
+| `privacy.custom_rules` | Custom rules; each provides a unique `id` and either `prefix` + `min_length` or `regex` | `[]` |
+| `privacy.never_mask` | Exact string values excluded from automatic discovery and matching | `[]` |
+
+For example, PATCH `{"privacy":{"mode":"auto"}}` to enable automatic discovery and protection for Skills and Sessions. `min_length` counts characters required after the prefix; `regex` uses Rust regular-expression syntax. Omitted fields remain unchanged, `null` resumes inheritance, and arrays are replaced as a whole (`[]` clears the list). `{"privacy":null}` clears all User privacy overrides.
+
 ---
 
 ### create_account
@@ -1186,7 +1197,7 @@ Create a new workspace with its first admin user.
 | account_id | str | Yes | - | Workspace ID; at most 255 UTF-8 bytes for new file-backed accounts |
 | admin_user_id | str | Yes | - | First admin user ID |
 | seed | str | No | `null` | Optional deterministic API key seed. When set, the key secret is `sha256(user_id + "\0" + seed)` |
-| user_config | object | No | `null` | Initial config for the first admin user. Supports `add_targets.resource_uri`, `add_targets.skill_uri`, and `memory_policy` |
+| user_config | object | No | `null` | Initial config for the first admin user. Supports `add_targets.resource_uri`, `add_targets.skill_uri`, `memory_policy`, and `privacy` |
 | settings | object | No | `null` | Initial Account runtime configuration. ROOT-only; supports `feishu`, `github`, `acl`, `agent_evolution`, `vlm`, `query_planner`, `embedding`, and `vectordb`. `vectordb` and Embedding create-only fields can only be set here |
 
 **Notes:**
@@ -1586,7 +1597,7 @@ Register a new user in a workspace.
 | user_id | str | Yes | - | User ID |
 | role | str | No | "user" | Role to assign. `ROOT` and same-account `ADMIN` may register `"user"` or `"admin"`; only `ROOT` may register `"global"`. ROOT identity comes only from `server.root_api_key`. |
 | seed | str | No | `null` | Optional deterministic API key seed. When set, the key secret is `sha256(user_id + "\0" + seed)` |
-| user_config | object | No | `null` | Initial config for the new user. Supports `add_targets.resource_uri`, `add_targets.skill_uri`, and `memory_policy` |
+| user_config | object | No | `null` | Initial config for the new user. Supports `add_targets.resource_uri`, `add_targets.skill_uri`, `memory_policy`, and `privacy` |
 
 **Notes:**
 - In `trusted` mode, only identity and role are created: no personal key, hash, or key index is generated. The response omits `user_key`, and `seed` is unused.

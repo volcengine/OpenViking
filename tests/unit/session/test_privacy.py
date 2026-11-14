@@ -13,9 +13,17 @@ import pytest
 
 from openviking.message.part import ContextPart, ImagePart, TextPart, ToolPart
 from openviking.privacy import session_extractor as extraction
+from openviking.privacy.sanitizer import (
+    DEFAULT_SANITIZER_MAX_CONTENT_BYTES,
+    DEFAULT_SANITIZER_MAX_REPLACEMENTS,
+)
 from openviking.privacy.session_extractor import extract_session_privacy_values
 from openviking.privacy.session_restore import get_session_id_from_uri, restore_session_content
+from openviking.server.user_config import ResolvedPrivacyConfig
 from openviking_cli.exceptions import InvalidArgumentError, ResourceExhaustedError
+
+SECRET = "AKLT" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
+SECOND_SECRET = "ghp_" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
 
 
 def message_jsonl(specs):
@@ -36,18 +44,20 @@ def privacy():
 
 
 @pytest.fixture
-def enable_session_privacy_discovery(monkeypatch):
-    """Keep coverage of the retained discovery code while production disables it."""
-    monkeypatch.setattr(extraction, "_SESSION_PRIVACY_DISCOVERY_ENABLED", True)
+def auto_privacy():
+    return ResolvedPrivacyConfig(mode="auto")
 
 
-async def test_new_privacy_discovery_is_disabled(monkeypatch, request_context):
+@pytest.mark.parametrize("mode", ["off", "registered"])
+async def test_non_auto_modes_skip_new_value_discovery(monkeypatch, request_context, mode):
     def unexpected_discovery(*args, **kwargs):
         pytest.fail("Session writes must not run new-value discovery")
 
-    monkeypatch.setattr(extraction, "find_privacy_matches", unexpected_discovery)
-    monkeypatch.setattr(extraction, "is_sensitive_key", unexpected_discovery)
-    privacy = SimpleNamespace(insert_values=AsyncMock())
+    monkeypatch.setattr(extraction, "prepare_privacy_extractor", unexpected_discovery)
+    privacy = SimpleNamespace(
+        insert_values=AsyncMock(),
+        get_settings=AsyncMock(return_value=ResolvedPrivacyConfig(mode=mode)),
+    )
     specs = [
         {
             "role": "assistant",
@@ -81,14 +91,13 @@ async def test_new_privacy_discovery_is_disabled(monkeypatch, request_context):
     assert specs == before
 
 
-@pytest.mark.usefixtures("enable_session_privacy_discovery")
-async def test_extract_and_restore_complete_messages(privacy, request_context):
+async def test_extract_and_restore_complete_messages(privacy, request_context, auto_privacy):
     specs = [
         {
             "role": "user",
             "parts": [
-                TextPart("password='中文密码'"),
-                ContextPart(uri="viking://resource/doc", abstract="api_key=abstract-secret"),
+                TextPart(f"password='中文密码' API_KEY=`{SECRET}`"),
+                ContextPart(uri="viking://resource/doc", abstract=f"api_key={SECOND_SECRET}"),
                 ImagePart(url="https://example.test/password=image-reference"),
             ],
         },
@@ -99,6 +108,7 @@ async def test_extract_and_restore_complete_messages(privacy, request_context):
                     tool_input={
                         "credentials": {
                             "password": 'quote" and\nnewline',
+                            "api_key": SECRET,
                             "nested": [1, False, None],
                         },
                         "password": [],
@@ -107,70 +117,60 @@ async def test_extract_and_restore_complete_messages(privacy, request_context):
                         "nested": {"password": "another-secret"},
                         "region": "cn",
                     },
-                    tool_output="password='hello world'",
-                    tool_output_externalization_error="api_key=error-secret",
+                    tool_output=f"password='hello world' {SECOND_SECRET}",
+                    tool_output_externalization_error=f"api_key={SECRET}",
                 ),
                 ToolPart(tool_id="pending", tool_output=None),
             ],
         },
     ]
     before = deepcopy(specs)
-    sanitized, values = extract_session_privacy_values("demo", specs)
+    sanitized, values = extract_session_privacy_values("demo", specs, settings=auto_privacy)
     assert all(re.fullmatch(r"[A-Za-z0-9_-]{8}", key) for key in values)
-    # Sensitive containers are captured whole, with no references inside them.
-    assert list(values.values()) == [
-        "中文密码",
-        "abstract-secret",
-        specs[1]["parts"][0].tool_input["credentials"],
-        [],
-        1234,
-        {},
-        "another-secret",
-        "hello world",
-        "error-secret",
-    ]
+    assert list(values.values()) == [SECRET, SECOND_SECRET]
     assert specs == before
+    tool_input = sanitized[1]["parts"][0].tool_input
+    assert tool_input["password"] == []
+    assert tool_input["token"] == 1234
+    assert tool_input["secret"] == {}
+    assert tool_input["credentials"]["password"] == 'quote" and\nnewline'
     clean = message_jsonl(sanitized)
-    for secret in ["中文密码", "abstract-secret", "another-secret", "hello world", "error-secret"]:
-        assert secret not in clean
+    assert SECRET not in clean and SECOND_SECRET not in clean
     privacy.get_current.return_value = SimpleNamespace(values=values)
     assert await restore_session_content(
         privacy, clean, request_context, session_id="demo", jsonl=True
     ) == message_jsonl(before)
-    specs[1]["parts"][0].tool_input["credentials"]["nested"].append("changed")
-    assert "changed" not in json.dumps(list(values.values()))
+    sanitized[1]["parts"][0].tool_input["credentials"]["nested"].append("changed")
+    assert specs == before
 
 
-@pytest.mark.usefixtures("enable_session_privacy_discovery")
 async def test_batch_field_id_collision_preserves_both_values(
-    monkeypatch, privacy, request_context
+    monkeypatch, privacy, request_context, auto_privacy
 ):
     ids = iter(["same0001", "same0001", "next0002"])
     monkeypatch.setattr(extraction, "token_urlsafe", lambda _: next(ids))
-    specs = [{"parts": [ToolPart(tool_input={"password": "first", "api_key": "second"})]}]
-    protected, values = extract_session_privacy_values("demo", specs)
-    assert sorted(values.values()) == ["first", "second"]
+    specs = [{"parts": [ToolPart(tool_input={"password": SECRET, "api_key": SECOND_SECRET})]}]
+    protected, values = extract_session_privacy_values("demo", specs, settings=auto_privacy)
+    assert list(values.values()) == [SECRET, SECOND_SECRET]
     privacy.get_current.return_value = SimpleNamespace(values=values)
     assert await restore_session_content(
         privacy, message_jsonl(protected), request_context, session_id="demo", jsonl=True
     ) == message_jsonl(specs)
 
 
-@pytest.mark.usefixtures("enable_session_privacy_discovery")
-def test_exhausted_field_ids_reject_without_mutating_input(monkeypatch):
+def test_exhausted_field_ids_reject_without_mutating_input(monkeypatch, auto_privacy):
     monkeypatch.setattr(extraction, "token_urlsafe", lambda _: "same0001")
-    specs = [{"parts": [ToolPart(tool_input={"password": "first", "api_key": "second"})]}]
+    specs = [{"parts": [ToolPart(tool_input={"password": SECRET, "api_key": SECOND_SECRET})]}]
     before = deepcopy(specs)
     with pytest.raises(ResourceExhaustedError, match="unique Session privacy field IDs"):
-        extract_session_privacy_values("demo", specs)
+        extract_session_privacy_values("demo", specs, settings=auto_privacy)
     assert specs == before
 
 
-@pytest.mark.usefixtures("enable_session_privacy_discovery")
-async def test_sensitive_field_names_do_not_leak_into_references(privacy, request_context):
-    key = "sk-proj-12345678901234567890_api_key"
+async def test_credential_in_object_key_round_trips(privacy, request_context, auto_privacy):
+    key = SECRET
     specs = [{"parts": [ToolPart(tool_input={key: "secret-value"})]}]
-    sanitized, values = extract_session_privacy_values("demo", specs)
+    sanitized, values = extract_session_privacy_values("demo", specs, settings=auto_privacy)
     assert key not in message_jsonl(sanitized)
     privacy.get_current.return_value = SimpleNamespace(values=values)
     assert await restore_session_content(
@@ -178,40 +178,65 @@ async def test_sensitive_field_names_do_not_leak_into_references(privacy, reques
     ) == message_jsonl(specs)
 
 
-@pytest.mark.usefixtures("enable_session_privacy_discovery")
-@pytest.mark.parametrize("sensitive", [False, True], ids=["nested-input", "sensitive-container"])
 @pytest.mark.parametrize(
     "limit,bound",
     [
-        ("MAX_TEXT_CHARS", 20),
-        ("MAX_BATCH_CHARS", 20),
+        ("DEFAULT_SANITIZER_MAX_CONTENT_BYTES", 20),
         ("MAX_NODES", 4),
-        ("MAX_MATCHES", 1),
+        ("DEFAULT_SANITIZER_MAX_REPLACEMENTS", 1),
         ("MAX_DEPTH", 1),
     ],
 )
-def test_limits_reject_batch_without_mutating_input(monkeypatch, limit, bound, sensitive):
+def test_limits_reject_batch_without_mutating_input(monkeypatch, limit, bound, auto_privacy):
     monkeypatch.setattr(extraction, limit, bound)
-    value = {"a": {"password": "secret-value" * 4}}
+    value = {"a": {"password": SECRET}}
     specs = [
         {
             "parts": [
                 ToolPart(
-                    tool_input={"credentials": value} if sensitive else value,
-                    tool_output="password=another-secret",
+                    tool_input=value,
+                    tool_output=SECOND_SECRET,
                 )
             ]
         }
     ]
     before = deepcopy(specs)
     with pytest.raises(InvalidArgumentError) as exc:
-        extract_session_privacy_values("demo", specs)
-    assert "secret-value" not in str(exc.value)
+        extract_session_privacy_values("demo", specs, settings=auto_privacy)
+    assert SECRET not in str(exc.value) and SECOND_SECRET not in str(exc.value)
+    assert specs == before
+
+
+def test_batch_byte_budget_accumulates_across_messages_and_parts(auto_privacy):
+    half = DEFAULT_SANITIZER_MAX_CONTENT_BYTES // 2
+    specs = [
+        {"parts": [TextPart("🙂" * (half // 4))]},
+        {"parts": [TextPart("x" * half)]},
+    ]
+    assert extract_session_privacy_values("demo", specs, settings=auto_privacy) == (specs, {})
+    specs[1]["parts"].append(TextPart("x"))
+    before = deepcopy(specs)
+    with pytest.raises(InvalidArgumentError, match="text limit"):
+        extract_session_privacy_values("demo", specs, settings=auto_privacy)
+    assert specs == before
+
+
+def test_batch_match_budget_counts_repeated_values_across_parts(auto_privacy):
+    half = DEFAULT_SANITIZER_MAX_REPLACEMENTS // 2
+    specs = [{"parts": [TextPart((SECRET + " ") * half), TextPart((SECRET + " ") * half)]}]
+    protected, values = extract_session_privacy_values("demo", specs, settings=auto_privacy)
+    assert list(values.values()) == [SECRET]
+    reference = extraction.build_session_placeholder("demo", next(iter(values)))
+    assert message_jsonl(protected).count(reference) == DEFAULT_SANITIZER_MAX_REPLACEMENTS
+    specs[0]["parts"].append(TextPart(SECRET))
+    before = deepcopy(specs)
+    with pytest.raises(InvalidArgumentError, match="match limit"):
+        extract_session_privacy_values("demo", specs, settings=auto_privacy)
     assert specs == before
 
 
 @pytest.mark.parametrize("kind", ["cycle", "non-string-key", "unsupported-value"])
-def test_invalid_sensitive_container_is_rejected(kind):
+def test_invalid_payload_is_rejected(kind):
     value = {"cycle": {}, "non-string-key": {1: "secret"}, "unsupported-value": {"x": object()}}[
         kind
     ]

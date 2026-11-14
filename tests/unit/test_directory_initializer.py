@@ -156,11 +156,8 @@ async def test_initialize_user_directories_ignores_actor_peer_view_for_preset_st
     deletion_guard = AsyncMock(return_value=False)
     viking_fs.set_deletion_guard(deletion_guard)
     sanitizer = SimpleNamespace(
-        sanitize=AsyncMock(
-            side_effect=lambda content, **kwargs: SimpleNamespace(
-                content=content.replace("User scope.", "Sanitized scope."),
-                ambiguous_references=(),
-            )
+        sanitize_for_write=AsyncMock(
+            side_effect=lambda content, **kwargs: content.replace("User scope.", "Sanitized scope.")
         )
     )
     viking_fs.set_privacy_sanitizer(sanitizer)

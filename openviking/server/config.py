@@ -7,7 +7,17 @@ import sys
 from collections.abc import Mapping
 from typing import Annotated, Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, BeforeValidator, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    StrictStr,
+    ValidationError,
+    field_validator,
+)
 
 # Import auth plugin registry for config validation
 from openviking.server.auth.ldap_config import LDAPConfig
@@ -124,12 +134,46 @@ class DeprecatedUserAgentEvolutionConfig(BaseModel):
     enabled: Optional[bool] = None
 
 
+class PrivacyRuleConfig(BaseModel):
+    """A credential prefix or a Rust regular expression."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: StrictStr
+    prefix: Optional[StrictStr] = None
+    min_length: Optional[StrictInt] = None
+    regex: Optional[StrictStr] = None
+
+
+class PrivacyConfig(BaseModel):
+    """Sparse privacy overrides; unset fields inherit deployment defaults."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Optional[Literal["off", "registered", "auto", "auto_strict"]] = None
+    restore: Optional[StrictBool] = None
+    custom_rules: Optional[list[PrivacyRuleConfig]] = None
+    never_mask: Optional[list[StrictStr]] = Field(default=None, max_length=1024)
+
+    @field_validator("custom_rules")
+    @classmethod
+    def validate_custom_rules(
+        cls, value: Optional[list[PrivacyRuleConfig]]
+    ) -> Optional[list[PrivacyRuleConfig]]:
+        if value is not None:
+            from openviking.privacy.rules import validate_custom_rules
+
+            validate_custom_rules([rule.model_dump(exclude_none=True) for rule in value])
+        return value
+
+
 class UserConfig(BaseModel):
     """User configuration values that can be defaulted or initialized."""
 
     add_targets: AddTargetsConfig = Field(default_factory=AddTargetsConfig)
     memory_policy: Optional[UserMemoryPolicy] = None
     ttl: Optional[TTLConfig] = None
+    privacy: PrivacyConfig = Field(default_factory=PrivacyConfig)
     agent_evolution: DeprecatedUserAgentEvolutionConfig = Field(
         default_factory=DeprecatedUserAgentEvolutionConfig,
         exclude=True,
@@ -142,6 +186,11 @@ class UserConfig(BaseModel):
         config.add_targets = AddTargetsConfig.model_construct(**payload.get("add_targets", {}))
         if config.ttl is not None:
             config.ttl = TTLConfig.model_construct(**payload["ttl"])
+        config.privacy = PrivacyConfig.model_construct(**payload.get("privacy", {}))
+        if config.privacy.custom_rules is not None:
+            config.privacy.custom_rules = [
+                PrivacyRuleConfig.model_construct(**rule) for rule in config.privacy.custom_rules
+            ]
         return config
 
 
@@ -153,6 +202,7 @@ class UserSettingsPatch(BaseModel):
     add_targets: Optional[AddTargetsConfig] = None
     memory_policy: Optional[UserMemoryPolicy] = None
     ttl: Optional[TTLConfig] = None
+    privacy: Optional[PrivacyConfig] = None
 
 
 def validate_config_input(

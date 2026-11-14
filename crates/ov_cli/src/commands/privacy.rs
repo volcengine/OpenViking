@@ -606,6 +606,16 @@ pub async fn upsert(
         client.privacy_upsert(category, target_key, &payload).await?
     };
     if matches!(output_format, OutputFormat::Table) {
+        if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
+            for warning in warnings {
+                eprintln!(
+                    "{} {}: {}",
+                    theme::warning("warning"),
+                    warning["field"].as_str().unwrap_or_default(),
+                    warning["reason"].as_str().unwrap_or_default()
+                );
+            }
+        }
         let values = result
             .get("values")
             .and_then(Value::as_object)

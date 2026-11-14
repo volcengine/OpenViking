@@ -15,6 +15,7 @@ from openviking.resource.watch_store import WatchMoveResult
 from openviking.resource.watch_store_file import FileWatchStore
 from openviking.resource.watch_types import WatchAuthority
 from openviking.server.identity import RequestContext, Role
+from openviking.server.user_config import ResolvedPrivacyConfig
 from openviking.service import fs_service as fs_module
 from openviking.service.fs_service import FSService, ListingPage
 from openviking.service.task_work_index import bind_task_context
@@ -467,6 +468,7 @@ async def test_read_visible_preserves_non_memory_content(request_context):
         viking_fs=viking_fs,
         privacy_sanitizer=SimpleNamespace(
             max_content_bytes=len(raw.encode()),
+            settings_for_uri=AsyncMock(return_value=ResolvedPrivacyConfig(mode="auto_strict")),
             sanitize=AsyncMock(return_value=SimpleNamespace(content=raw)),
         ),
     )

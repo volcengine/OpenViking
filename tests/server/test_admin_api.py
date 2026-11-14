@@ -24,7 +24,7 @@ from openviking.config.binding import manager_over_source
 from openviking.config.source import MemoryConfigSource
 from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.app import create_app
-from openviking.server.config import ServerConfig, UserConfig
+from openviking.server.config import PrivacyConfig, ServerConfig, UserConfig
 from openviking.server.dependencies import set_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
@@ -2461,6 +2461,84 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
     finally:
         set_openviking_config(previous_config)
         await engine.aclose()
+
+
+async def test_privacy_settings_follow_user_settings_permissions(
+    lightweight_admin_client, lightweight_admin_app
+):
+    client = lightweight_admin_client
+    account = _uid()
+    lightweight_admin_app.state.config.user_config_defaults.privacy = PrivacyConfig(restore=False)
+    created = await client.post(
+        "/api/v1/admin/accounts",
+        json={
+            "account_id": account,
+            "admin_user_id": "alice",
+            "user_config": {"privacy": {"mode": "registered"}},
+        },
+        headers=root_headers(),
+    )
+    assert created.status_code == 200, created.text
+    alice_url = f"/api/v1/admin/accounts/{account}/users/alice/settings"
+    response = await client.get(alice_url, headers=root_headers())
+    assert response.json()["result"]["privacy"] == {
+        "mode": "registered",
+        "restore": False,
+        "custom_rules": [],
+        "never_mask": [],
+    }
+    bob = await client.post(
+        f"/api/v1/admin/accounts/{account}/users",
+        json={"user_id": "bob", "role": "user", "user_config": {"privacy": {"mode": "auto"}}},
+        headers=root_headers(),
+    )
+    assert bob.status_code == 200, bob.text
+    headers = {"X-API-Key": bob.json()["result"]["user_key"]}
+    bob_url = f"/api/v1/admin/accounts/{account}/users/bob/settings"
+    response = await client.patch(bob_url, json={"privacy": {"restore": True}}, headers=headers)
+    assert response.status_code == 200, response.text
+    expected = {"mode": "auto", "restore": True, "custom_rules": [], "never_mask": []}
+    assert response.json()["result"]["privacy"] == expected
+    assert (await client.get(bob_url, headers=headers)).json()["result"]["privacy"] == expected
+    assert (await client.get(alice_url, headers=headers)).status_code == 403
+    rejected = await client.patch(alice_url, json={"privacy": None}, headers=headers)
+    assert rejected.status_code == 403, rejected.text
+    reset = await client.patch(bob_url, json={"privacy": None}, headers=headers)
+    assert reset.status_code == 200, reset.text
+    assert reset.json()["result"]["privacy"] == {
+        "mode": "off",
+        "restore": False,
+        "custom_rules": [],
+        "never_mask": [],
+    }
+
+
+async def test_user_memory_policy_uses_server_default_without_user_override(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app: FastAPI,
+):
+    acct = _uid()
+    lightweight_admin_app.state.config.user_config_defaults = UserConfig(
+        memory_policy={"memory_types": ["profile"]}
+    )
+    create_account = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    assert create_account.status_code == 200, create_account.text
+
+    get_settings = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users/alice/settings",
+        headers=root_headers(),
+    )
+    assert get_settings.status_code == 200, get_settings.text
+    assert get_settings.json()["result"]["memory_policy"] == {
+        "self": {"enabled": True},
+        "peer": {"enabled": True},
+        "working_memory": {"enabled": False},
+        "memory_types": ["profile"],
+    }
 
 
 async def test_create_user_paths_ignore_deprecated_agent_evolution_config(
