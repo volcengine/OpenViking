@@ -94,6 +94,7 @@ from openviking.storage.acl import AclSpec
 from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
 from openviking.utils.search_filters import (
     SearchContextTypeInput,
+    TimeField,
     merge_search_filter,
     resolve_context_types,
 )
@@ -588,12 +589,18 @@ async def invoke_mcp_tool(
 # -- find / search ---------------------------------------------------------
 
 
-def _resolve_context_type_filter(
+def _resolve_retrieval_filter(
     context_type: Optional[SearchContextTypeInput],
+    *,
+    since: Optional[str],
+    until: Optional[str],
+    time_field: Optional[TimeField],
 ) -> Optional[Dict[str, Any]]:
     try:
-        return merge_search_filter(None, context_type=context_type)
-    except ValueError as exc:
+        return merge_search_filter(
+            None, context_type=context_type, since=since, until=until, time_field=time_field
+        )
+    except (ValueError, OverflowError) as exc:
         raise InvalidArgumentError(str(exc)) from exc
 
 
@@ -608,15 +615,28 @@ async def find(
     context_type: Optional[Union[str, List[str]]] = None,
     read_content: bool = False,
     events_time_decay_protection: Optional[str] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    time_field: Optional[TimeField] = None,
 ) -> str:
-    """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score. context_type="skill" returns one hit per skill package, pointing at its SKILL.md, and without target_uri searches both the user's own and the account-shared skills.  read_content only expands stored content; use read explicitly to execute a Live Context node."""
+    """Fast semantic retrieval without session context.
+
+    Returns ranked memories, resources, and skills with URI, abstract, and score.
+    ``context_type="skill"`` returns one hit per package pointing at its SKILL.md.
+    Without ``target_uri`` it searches both the user's own and account-shared skills.
+    ``since`` and ``until`` accept ISO dates, timestamps, or durations such as ``7d``.
+    ``time_field`` defaults to ``updated_at``.
+    ``read_content`` expands stored content. Use ``read`` to execute a Live Context node.
+    """
     try:
         validate_event_time_decay_request(events_time_decay_protection)
     except ValueError as exc:
         raise InvalidArgumentError(str(exc)) from exc
     service = get_service()
     ctx = _get_ctx()
-    context_filter = _resolve_context_type_filter(context_type)
+    effective_filter = _resolve_retrieval_filter(
+        context_type, since=since, until=until, time_field=time_field
+    )
     skill_only = resolve_context_types(context_type) == [ContextType.SKILL.value]
     if target_uri:
         target_uri = _resolve_mcp_workspace_uri(target_uri, ctx)
@@ -634,6 +654,7 @@ async def find(
             limit=limit,
             score_threshold=min_score,
             level=level,
+            filter=effective_filter,
         )
     else:
         result = await service.search.find(
@@ -642,7 +663,7 @@ async def find(
             target_uri=target_uri,
             limit=limit,
             score_threshold=min_score,
-            filter=context_filter,
+            filter=effective_filter,
             level=level,
             events_time_decay_protection=events_time_decay_protection,
         )
@@ -684,6 +705,9 @@ async def search(
     rewrite_max_bullets: Annotated[int, Field(ge=1, le=20)] = 6,
     read_content: bool = False,
     events_time_decay_protection: Optional[str] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    time_field: Optional[TimeField] = None,
 ) -> str:
     """Retrieval with optional session context and intent analysis.
 
@@ -691,6 +715,8 @@ async def search(
     abstract, and score. ``mode="context"`` returns an injection-ready,
     token-budgeted context block and supports category quotas, purpose presets,
     detail tiers, cross-turn deduplication, peer scoping, and optional rewriting.
+    Both modes accept ``since`` and ``until`` as ISO dates, timestamps, or durations
+    such as ``7d``. ``time_field`` defaults to ``updated_at``.
     ``target_uri`` is only supported in list mode. ``read_content`` only expands
     stored content; use ``read`` explicitly to execute a Live Context node.
     """
@@ -702,7 +728,9 @@ async def search(
     ctx = _get_ctx()
     if search_type == "keywords" and not query.strip():
         raise InvalidArgumentError("query must not be empty when search_type='keywords'")
-    context_filter = _resolve_context_type_filter(context_type)
+    effective_filter = _resolve_retrieval_filter(
+        context_type, since=since, until=until, time_field=time_field
+    )
     if mode == "context":
         if read_content:
             raise InvalidArgumentError("read_content is only supported in mode='list'")
@@ -729,7 +757,7 @@ async def search(
                 search_type=search_type,
                 limit=limit,
                 score_threshold=min_score,
-                filter=context_filter,
+                filter=effective_filter,
                 events_time_decay_protection=events_time_decay_protection,
                 session_id=session_id,
                 query_expansion=query_expansion,
@@ -801,7 +829,7 @@ async def search(
         session=session,
         limit=limit,
         score_threshold=0.35 if min_score is None else min_score,
-        filter=context_filter,
+        filter=effective_filter,
         context_types=[ContextType(value) for value in resolve_context_types(context_type)],
         level=level,
         events_time_decay_protection=events_time_decay_protection,

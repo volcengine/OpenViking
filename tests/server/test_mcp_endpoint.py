@@ -423,13 +423,82 @@ async def test_search_respects_min_score(service):
     assert isinstance(result, str)
 
 
-async def test_search_tools_expose_only_context_type_parameter():
+async def test_search_tools_expose_retrieval_filter_shortcuts():
     tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
 
     for tool_name in ("find", "search"):
-        properties = tools[tool_name].inputSchema["properties"]
-        assert "context_type" in properties
+        schema = tools[tool_name].inputSchema
+        properties = schema["properties"]
+        assert {"context_type", "since", "until", "time_field"} <= properties.keys()
+        assert set(properties["time_field"]["enum"]) == {"updated_at", "created_at"}
+        assert set(schema.get("required", [])) == {"query"}
         assert "filter" not in properties
+
+
+async def test_mcp_time_filter_applies_before_the_candidate_limit(service):
+    older_uri = "viking://resources/time-filter/older.md"
+    newer_uri = "viking://resources/time-filter/newer.md"
+    dimension = service.vikingdb_manager.vector_dim
+    for uri, vector, created_at in (
+        (older_uri, [0.1] * dimension, "2026-03-09T12:00:00Z"),
+        (
+            newer_uri,
+            [0.0] * (dimension // 2) + [0.1] * (dimension - dimension // 2),
+            "2026-03-10T23:59:59Z",
+        ),
+    ):
+        assert await service.vikingdb_manager.upsert(
+            {
+                "id": uri.rsplit("/", 1)[-1],
+                "uri": uri,
+                "account_id": DEFAULT_CTX.account_id,
+                "context_type": "resource",
+                "level": 2,
+                "abstract": "Rollout policy",
+                "created_at": created_at,
+                "updated_at": "2026-03-11T12:00:00Z",
+                "vector": vector,
+            },
+            ctx=DEFAULT_CTX,
+        )
+
+    for tool, options in (
+        (mcp_endpoint.find, {}),
+        (search, {"mode": "list"}),
+        (search, {"mode": "context", "peer_scope": "actor"}),
+    ):
+        arguments = {"query": "rollout policy", "limit": 1, "context_type": "resource", **options}
+        # The wider date window includes both fixtures and excludes the
+        # bootstrap resource root, whose timestamp is today's date.
+        broader = await tool(
+            **arguments, since="2026-03-09", until="2026-03-10", time_field="created_at"
+        )
+        assert older_uri in broader and newer_uri not in broader
+
+        filtered = await tool(
+            **arguments, since="2026-03-10", until="2026-03-10", time_field="created_at"
+        )
+        assert newer_uri in filtered and older_uri not in filtered
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments", "message"),
+    [
+        ("find", {"since": "not-a-date"}, "not-a-date"),
+        ("find", {"since": "999999999d"}, "date value out of range"),
+        (
+            "search",
+            {"mode": "context", "since": "2026-03-11", "until": "2026-03-10"},
+            "since must be earlier than or equal to until",
+        ),
+    ],
+)
+async def test_mcp_time_filter_rejects_invalid_bounds(tool, arguments, message):
+    result = await mcp_endpoint.mcp.call_tool(tool, {"query": "rollout policy", **arguments})
+
+    assert result.isError is True
+    assert result.structuredContent["error"]["code"] == "INVALID_ARGUMENT"
+    assert message in result.structuredContent["error"]["message"]
 
 
 async def test_recall_tool_is_replaced_by_search_context_mode():
@@ -688,7 +757,12 @@ async def test_find_tool_forwards_its_bounds_to_find_skills(service, monkeypatch
     monkeypatch.setattr(service.search, "find", fail_find)
 
     await mcp_endpoint.find(
-        query="review a PR", limit=3, min_score=0.5, level=[0], context_type="skill"
+        query="review a PR",
+        limit=3,
+        min_score=0.5,
+        level=[0],
+        context_type="skill",
+        until="2026-03-10",
     )
 
     assert captured["query"] == "review a PR"
@@ -696,8 +770,13 @@ async def test_find_tool_forwards_its_bounds_to_find_skills(service, monkeypatch
     assert captured["limit"] == 3
     assert captured["score_threshold"] == 0.5
     assert captured["level"] == [0]
-    # find_skills restricts by context type itself and takes no filter.
-    assert "filter" not in captured
+    assert captured["filter"] == {
+        "op": "and",
+        "conds": [
+            {"op": "must", "field": "context_type", "conds": ["skill"]},
+            {"op": "time_range", "field": "updated_at", "lte": "2026-03-10T23:59:59.999Z"},
+        ],
+    }
 
 
 async def test_find_tool_forwards_an_explicit_skill_target_to_find_skills(service, monkeypatch):
