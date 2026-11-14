@@ -7,9 +7,20 @@ import weakref
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, PrivateAttr, ValidationInfo, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    PrivateAttr,
+    TypeAdapter,
+    ValidationError,
+    ValidationInfo,
+    model_validator,
+)
 
 from openviking_cli.utils.config.runtime_field import RuntimeField
+
+ThinkingExtraRequestBody = Dict[Literal["enabled", "disabled"], Dict[str, Any]]
+_THINKING_EXTRA_REQUEST_BODY_ADAPTER = TypeAdapter(ThinkingExtraRequestBody)
 
 
 def _load_codex_auth_module():
@@ -37,6 +48,14 @@ def _reject_stream_config(data: Any, location: str) -> None:
             f"{location}.extra_request_body.stream is not supported; "
             "OpenViking VLM calls return complete responses"
         )
+    thinking_body = data.get("thinking_extra_request_body")
+    if isinstance(thinking_body, dict):
+        for policy, fragment in thinking_body.items():
+            if isinstance(fragment, dict) and "stream" in fragment:
+                raise ValueError(
+                    f"{location}.thinking_extra_request_body.{policy}.stream is not supported; "
+                    "OpenViking VLM calls return complete responses"
+                )
 
 
 def _bind_token_usage_tracker(instance: Any, tracker: Any) -> None:
@@ -89,6 +108,10 @@ class VLMCredential(BaseModel):
     )
     extra_request_body: Optional[Dict[str, Any]] = RuntimeField(
         default=None, description="Extra JSON body fields"
+    )
+    thinking_extra_request_body: Optional[ThinkingExtraRequestBody] = RuntimeField(
+        default=None,
+        description="Request body fragments selected by the per-call thinking policy",
     )
     reasoning_effort: Optional[str] = RuntimeField(
         default=None,
@@ -232,6 +255,11 @@ class VLMConfig(BaseModel):
         ),
     )
 
+    thinking_extra_request_body: Optional[ThinkingExtraRequestBody] = Field(
+        default=None,
+        description="Request body fragments selected by the per-call thinking policy",
+    )
+
     reasoning_effort: Optional[str] = Field(
         default=None,
         description="Reasoning effort for OpenAI-compatible reasoning models",
@@ -286,6 +314,21 @@ class VLMConfig(BaseModel):
                             "Duplicate VLM provider config after normalization: "
                             f"{existing_name} and {name}"
                         )
+                    if (
+                        isinstance(config, dict)
+                        and config.get("thinking_extra_request_body") is not None
+                    ):
+                        config = dict(config)
+                        try:
+                            config["thinking_extra_request_body"] = (
+                                _THINKING_EXTRA_REQUEST_BODY_ADAPTER.validate_python(
+                                    config["thinking_extra_request_body"]
+                                )
+                            )
+                        except ValidationError as exc:
+                            raise ValueError(
+                                f"Invalid thinking_extra_request_body for VLM provider {name!r}"
+                            ) from exc
                     normalized[normalized_name] = config
                     provider_sources[normalized_name] = str(name)
                 data["providers"] = normalized
@@ -361,6 +404,7 @@ class VLMConfig(BaseModel):
             or self.api_base
             or self.extra_headers
             or self.extra_request_body
+            or self.thinking_extra_request_body
             or self.reasoning_effort
             or self.keepalive_expiry is not None
             or self.forward_api_key is not None
@@ -383,6 +427,13 @@ class VLMConfig(BaseModel):
                 and "extra_request_body" not in self.providers[self.provider]
             ):
                 self.providers[self.provider]["extra_request_body"] = self.extra_request_body
+            if (
+                self.thinking_extra_request_body
+                and "thinking_extra_request_body" not in self.providers[self.provider]
+            ):
+                self.providers[self.provider]["thinking_extra_request_body"] = (
+                    self.thinking_extra_request_body
+                )
             if self.reasoning_effort and "reasoning_effort" not in self.providers[self.provider]:
                 self.providers[self.provider]["reasoning_effort"] = self.reasoning_effort
             if (
@@ -423,6 +474,10 @@ class VLMConfig(BaseModel):
                 extra_request_body=(
                     primary_cfg.get("extra_request_body") or self.extra_request_body
                 ),
+                thinking_extra_request_body=(
+                    primary_cfg.get("thinking_extra_request_body")
+                    or self.thinking_extra_request_body
+                ),
                 reasoning_effort=(primary_cfg.get("reasoning_effort") or self.reasoning_effort),
                 keepalive_expiry=(
                     primary_cfg.get("keepalive_expiry")
@@ -452,6 +507,10 @@ class VLMConfig(BaseModel):
                 extra_headers=backup_cfg.get("extra_headers") or self.backup.extra_headers,
                 extra_request_body=(
                     backup_cfg.get("extra_request_body") or self.backup.extra_request_body
+                ),
+                thinking_extra_request_body=(
+                    backup_cfg.get("thinking_extra_request_body")
+                    or self.backup.thinking_extra_request_body
                 ),
                 reasoning_effort=(
                     backup_cfg.get("reasoning_effort") or self.backup.reasoning_effort
@@ -496,6 +555,10 @@ class VLMConfig(BaseModel):
                         extra_request_body=(
                             provider_cfg.get("extra_request_body") or self.extra_request_body
                         ),
+                        thinking_extra_request_body=(
+                            provider_cfg.get("thinking_extra_request_body")
+                            or self.thinking_extra_request_body
+                        ),
                         reasoning_effort=(
                             provider_cfg.get("reasoning_effort") or self.reasoning_effort
                         ),
@@ -532,6 +595,8 @@ class VLMConfig(BaseModel):
                 cred.extra_headers = self.extra_headers
             if not cred.extra_request_body:
                 cred.extra_request_body = self.extra_request_body
+            if not cred.thinking_extra_request_body:
+                cred.thinking_extra_request_body = self.thinking_extra_request_body
             if not cred.reasoning_effort:
                 cred.reasoning_effort = self.reasoning_effort
             if cred.keepalive_expiry is None:
@@ -587,6 +652,8 @@ class VLMConfig(BaseModel):
             config["extra_headers"] = self.extra_headers
         if self.extra_request_body and "extra_request_body" not in config:
             config["extra_request_body"] = self.extra_request_body
+        if self.thinking_extra_request_body and "thinking_extra_request_body" not in config:
+            config["thinking_extra_request_body"] = self.thinking_extra_request_body
         if self.reasoning_effort and "reasoning_effort" not in config:
             config["reasoning_effort"] = self.reasoning_effort
         if self.keepalive_expiry is not None and "keepalive_expiry" not in config:
@@ -618,6 +685,8 @@ class VLMConfig(BaseModel):
             config["extra_headers"] = cred.extra_headers
         if cred.extra_request_body:
             config["extra_request_body"] = cred.extra_request_body
+        if cred.thinking_extra_request_body:
+            config["thinking_extra_request_body"] = cred.thinking_extra_request_body
         if cred.reasoning_effort:
             config["reasoning_effort"] = cred.reasoning_effort
         if cred.keepalive_expiry is not None:
@@ -739,7 +808,7 @@ class VLMConfig(BaseModel):
 
     def _build_vlm_config_dict_for_credential(self, credential: VLMCredential) -> Dict[str, Any]:
         """Build VLM instance config dict for a specific credential."""
-        result = {
+        result: Dict[str, Any] = {
             "model": credential.model or self.model,
             "cost_bearer": credential.cost_bearer,
             "temperature": self.temperature,
@@ -765,6 +834,8 @@ class VLMConfig(BaseModel):
             result["extra_headers"] = credential.extra_headers
         if credential.extra_request_body:
             result["extra_request_body"] = credential.extra_request_body
+        if credential.thinking_extra_request_body:
+            result["thinking_extra_request_body"] = credential.thinking_extra_request_body
         if credential.reasoning_effort:
             result["reasoning_effort"] = credential.reasoning_effort
 
@@ -802,6 +873,8 @@ class VLMConfig(BaseModel):
                 result["extra_headers"] = config.get("extra_headers")
             if config.get("extra_request_body"):
                 result["extra_request_body"] = config.get("extra_request_body")
+            if config.get("thinking_extra_request_body"):
+                result["thinking_extra_request_body"] = config.get("thinking_extra_request_body")
             if config.get("reasoning_effort"):
                 result["reasoning_effort"] = config.get("reasoning_effort")
 

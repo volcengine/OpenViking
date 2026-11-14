@@ -11,6 +11,7 @@ import httpx
 import pytest
 from litellm.llms.ollama.chat.transformation import OllamaChatConfig
 from openai import AsyncOpenAI, OpenAI
+from pydantic import ValidationError
 from volcenginesdkarkruntime import Ark, AsyncArk
 from volcenginesdkarkruntime._exceptions import ArkAPIStatusError
 
@@ -953,6 +954,81 @@ class TestVLMConfigExtraRequestBody:
 
         result = config._build_vlm_config_dict()
         assert result["extra_request_body"] == {"think": False}
+
+    def test_thinking_request_body_propagates_through_supported_config_shapes(self):
+        from openviking_cli.utils.config.vlm_config import VLMConfig
+
+        policy = {"enabled": {"reasoning": {"effort": "medium"}}}
+        configs = [
+            VLMConfig(model="LocalModel", provider="litellm", thinking_extra_request_body=policy),
+            VLMConfig(
+                model="LocalModel",
+                provider="litellm",
+                providers={"litellm": {"thinking_extra_request_body": policy}},
+            ),
+            VLMConfig(
+                model="LocalModel",
+                credentials=[{"provider": "litellm", "thinking_extra_request_body": policy}],
+            ),
+        ]
+        failover = VLMConfig(
+            model="LocalModel",
+            provider="litellm",
+            thinking_extra_request_body=policy,
+            backup={
+                "model": "BackupModel",
+                "provider": "litellm",
+                "thinking_extra_request_body": policy,
+            },
+        )
+
+        assert [
+            config._build_vlm_config_dict()["thinking_extra_request_body"] for config in configs
+        ] == [policy] * 3
+        assert all(item.thinking_extra_request_body == policy for item in failover.credentials)
+
+    @pytest.mark.parametrize("creating", [False, True])
+    def test_account_credentials_accept_thinking_request_body(self, creating):
+        from openviking.config.account_config import AccountConfig
+        from openviking.config.validate import validate_patch
+
+        policy = {"disabled": {"chat_template_kwargs": {"enable_thinking": False}}}
+        patch = {
+            "vlm": {
+                "model": "LocalModel",
+                "credentials": [{"provider": "litellm", "thinking_extra_request_body": policy}],
+            }
+        }
+        validate_patch(AccountConfig, patch, creating=creating)
+        config = AccountConfig.model_validate(patch).vlm.to_vlm_config()
+        assert config.credentials[0].thinking_extra_request_body == policy
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {"thinking_extra_request_body": {"enabled": ["invalid"]}},
+            {"thinking_extra_request_body": {"enabled": {"stream": True}}},
+            {
+                "providers": {
+                    "litellm": {"thinking_extra_request_body": {"disabled": {"stream": False}}}
+                }
+            },
+            {
+                "credentials": [
+                    {
+                        "provider": "litellm",
+                        "thinking_extra_request_body": {"enabled": {"stream": True}},
+                    }
+                ]
+            },
+            {"providers": {"litellm": {"thinking_extra_request_body": {"other": {}}}}},
+        ],
+    )
+    def test_thinking_request_body_rejects_invalid_shapes(self, config):
+        from openviking_cli.utils.config.vlm_config import VLMConfig
+
+        with pytest.raises(ValidationError, match="thinking_extra_request_body"):
+            VLMConfig(model="LocalModel", provider="litellm", **config)
 
     def test_vlm_config_accepts_flat_extra_request_body(self):
         from openviking_cli.utils.config.vlm_config import VLMConfig
