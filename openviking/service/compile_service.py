@@ -952,7 +952,6 @@ class CompileService:
                 ctx.user.user_id if body.updated_by is None else body.updated_by
             )
             replacement["execution_context"]["owner_user_id"] = owner_user_id
-            replacement["conflict_num"] = record["conflict_num"]
             old_private = await self._private_args(
                 ctx.account_id, record["execution_context"].get("private_args") or {}
             )
@@ -1011,7 +1010,7 @@ class CompileService:
         scope: str = "user",
         compile_name: str | None = None,
     ) -> dict[str, Any]:
-        """Page readable configs by name, then order each page by latest accepted execution."""
+        """Page configurations by owner within the caller's account. Account scope requires ADMIN."""
         if scope not in {"user", "account"}:
             raise InvalidArgumentError("scope must be user or account")
         if scope == "account" and ctx.role != Role.ADMIN:
@@ -1031,10 +1030,6 @@ class CompileService:
             cursor=cursor,
             compile_name=compile_name,
         ):
-            try:
-                await lifecycle._fs._ensure_access(record["to"], ctx)
-            except PermissionDeniedError:
-                continue
             context = record["execution_context"]
             items.append(
                 {
@@ -1042,7 +1037,6 @@ class CompileService:
                     "owner_user_id": context["owner_user_id"],
                     "executor_user_id": (context.get("executor") or {}).get("user_id"),
                     "updated_by": record.get("updated_by"),
-                    "conflict_num": record["conflict_num"],
                 }
             )
             if len(items) > limit:

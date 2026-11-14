@@ -99,7 +99,7 @@ async def list_compile_configs(
     compile_name: str | None = Query(None, pattern=COMPILE_NAME_PATTERN),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """List readable configurations; account scope requires ADMIN."""
+    """List the caller's configurations, or all configurations in the account for ADMIN."""
     return Response(
         status="ok",
         result=await get_service().compile.list_configs(

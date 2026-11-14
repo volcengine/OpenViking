@@ -163,8 +163,6 @@ Python 示例使用 `SyncHTTPClient`；使用 `AsyncHTTPClient` 时添加 `await
 
 ### 配置与运行历史
 
-配置查询及运行历史按当前 account 和用户定位；更新和按名称执行可通过 `args.owner_user_id` 选择同一 account 内的其他配置归属用户，省略时使用当前用户。指定用户下不存在该名称时返回不存在。读取配置和 run 还需要目标读取权限，修改或执行需要当前认证用户的写权限。列表只返回当前用户的可读配置，不合并指向相同输出目录的多个配置。
-
 | HTTP API | 结果 |
 |----------|------|
 | `GET /api/v1/compile/config?compile_name={compile_name}` | 公开配置输入、调度与调用时间 |
@@ -213,9 +211,9 @@ Compile 业务文件仅有：
 
 配置按账号和用户分目录存储，公开 API 使用原始 `compile_name` 定位配置。
 
-state 的精确字段为 `from`、`to`、`skill`、`instruction`、`args`、`auto_update`、`update_schedule`、`task_first_create_time`、`last_run_time`、`last_triggered_slot`、`next_triggered_slot`、`conflict_num`、`progress`、`updated_by`、`execution_context`。`progress` 保存成功增量基线，其中 `model_name` 记录成功执行请求的模型名，未指定时为空字符串；`execution_context` 保存内部执行上下文和加密参数。
+state 的精确字段为 `from`、`to`、`skill`、`instruction`、`args`、`auto_update`、`update_schedule`、`task_first_create_time`、`last_run_time`、`last_triggered_slot`、`next_triggered_slot`、`progress`、`updated_by`、`execution_context`。`progress` 保存成功增量基线，其中 `model_name` 记录成功执行请求的模型名，未指定时为空字符串；`execution_context` 保存内部执行上下文和加密参数。
 
-`conflict_num` 是收尾时 `to` 及其后代中，执行身份可检索的 `has_conflict=true` 文件数量，不是文件内部的冲突条数。统计使用空 query、标签过滤和 `level=2`，单次调用 `find`，固定 `limit=100`，不分页；计数达到或超过 100 时统一保存为 100，可能仍有更多冲突文件。正常完成在产物快照收尾后统计，不等待目标补标；失败或取消在回滚完成后统计。字段初始为 null；尚未取得起始快照的执行不检索并保存 null，避免读取其他任务正在修改的目标。回滚索引最多等待 30 秒；索引未就绪或检索失败时记录 warning 并保存 null，不因此回滚已成功生成的产物。修改配置时，`to` 不变保留已有计数，改变 `to` 则重置为 null。
+Compile 成功收尾时发布产物快照并推进增量基线。回滚后为恢复和删除的路径调度索引重建，不等待重建完成。
 
 ### 检查 Compile 可用性
 

@@ -163,8 +163,6 @@ The Python example uses `SyncHTTPClient`; use `await` with `AsyncHTTPClient`.
 
 ### Configuration and run history
 
-Configuration lookups and run queries use the current account and user. Updates and named executions can select another configuration owner in the same account through `args.owner_user_id`; without it they use the current user. A name absent for the selected owner returns not found. Configuration and run reads also require access to the output; editing or executing requires the authenticated caller's current write permission. Lists include only the current user's readable configurations. They do not merge configurations sharing one output directory.
-
 | HTTP API | Result |
 |----------|--------|
 | `GET /api/v1/compile/config?compile_name={compile_name}` | Public saved inputs, scheduling and invocation times |
@@ -213,9 +211,9 @@ The only Compile business files are:
 
 Configurations are stored in account and user directories. Public APIs locate configurations by their original `compile_name`.
 
-State contains exactly `from`, `to`, `skill`, `instruction`, `args`, `auto_update`, `update_schedule`, `task_first_create_time`, `last_run_time`, `last_triggered_slot`, `next_triggered_slot`, `conflict_num`, `progress`, `updated_by`, and `execution_context`. `progress` stores the successful incremental baseline, including the successful request's `model_name` (an empty string when unspecified); `execution_context` stores internal execution context and encrypted arguments.
+State contains exactly `from`, `to`, `skill`, `instruction`, `args`, `auto_update`, `update_schedule`, `task_first_create_time`, `last_run_time`, `last_triggered_slot`, `next_triggered_slot`, `progress`, `updated_by`, and `execution_context`. `progress` stores the successful incremental baseline, including the successful request's `model_name` (an empty string when unspecified); `execution_context` stores internal execution context and encrypted arguments.
 
-`conflict_num` counts files tagged `has_conflict=true` that the execution identity can retrieve under `to` at finalization, including descendants. It does not count individual conflicts inside those files. One `find` call uses an empty query, the tag filter, `level=2`, and `limit=100`, without pagination. Counts at or above 100 are stored as 100; more conflicting files may exist. Successful runs count after output snapshot finalization without waiting for target tagging; failed or cancelled runs count after rollback completes. The field starts as null. Runs without a start snapshot skip retrieval and record null because another task may be modifying the target. Rollback index rebuilding is awaited for at most 30 seconds. Unavailable indexes or retrieval failures log a warning and record null without rolling back successfully generated output. Configuration updates preserve the count when `to` is unchanged and reset it to null when `to` changes.
+Successful Compile finalization publishes output snapshots and advances the incremental baseline. Rollback schedules index rebuilding for restored and deleted paths without waiting for the rebuild to finish.
 
 ### Check Compile availability
 

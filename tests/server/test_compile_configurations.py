@@ -350,12 +350,13 @@ async def test_configuration_list_metadata_and_cross_user_paging(
 ):
     ctx, _ = await prepare(service, app, monkeypatch)
     store = service.compile.lifecycle.store
+    # Alice owns a configuration whose output is in Bob's private directory.
     for owner in ("alice", "bob"):
-        await store.create(ctx.account_id, owner, new_record(INPUTS), compile_name="team_compile")
+        record = new_record({**INPUTS, "to": "viking://user/bob/resources/wiki"})
+        await store.create(ctx.account_id, owner, record, compile_name="team_compile")
     await store.create("foreign-account", "alice", new_record(INPUTS), compile_name="team_compile")
     async with store.edit(ctx.account_id, "alice", "team_compile") as record:
         record["updated_by"] = "editor"
-        record["conflict_num"] = 7
         record["execution_context"]["executor"] = {"user_id": "global-executor"}
     actor = RequestContext(user=UserIdentifier(ctx.account_id, "alice"), role=role)
     app.dependency_overrides[get_request_context] = lambda: actor
@@ -365,7 +366,7 @@ async def test_configuration_list_metadata_and_cross_user_paging(
     page = response.json()["result"]
     assert len(page["configs"]) == 1
     first = page["configs"][0]
-    assert first["conflict_num"] == 7
+    assert "conflict_num" not in first
     assert {key: first[key] for key in ("owner_user_id", "executor_user_id", "updated_by")} == {
         "owner_user_id": "alice",
         "executor_user_id": "global-executor",
@@ -437,7 +438,7 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
     assert await store.list_runs(ctx.account_id, ctx.user.user_id, compile_name) == []
     assert runtime.calls == []
     service.fs.ensure_compile_target.assert_awaited_once_with(TARGET, ctx)
-    assert state["conflict_num"] is None
+    assert "conflict_num" not in state
 
     nested = await client.post("/api/v1/compile", json={**INPUTS, "to": TARGET + "/child"})
     assert nested.status_code == 409, nested.text
@@ -468,7 +469,7 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
     assert run["meta"]["mode"] == "full"
     assert run["actor"] == ctx.user.user_id
     assert state["execution_context"]["owner_user_id"] == ctx.user.user_id
-    assert state["conflict_num"] == 0
+    assert "conflict_num" not in state
     assert state["progress"]["source_commit"] == run["meta"]["start_snapshot"]
     assert state["progress"]["model_name"] == ""
     assert runtime.calls[-1]["args"]["changes"]["execution"]["mode"] == "full"
@@ -659,7 +660,6 @@ async def test_configuration_update_preserves_times_and_retry_payload(service, a
     )
     async with store.edit(ctx.account_id, ctx.user.user_id, compile_name) as record:
         record["progress"] = {"source_commit": "old-success"}
-        record["conflict_num"] = 7
     source = SOURCE + "-updated"
     await service.viking_fs.write_file(f"{source}/source.md", "source", ctx=ctx)
     editor = RequestContext(
@@ -684,7 +684,7 @@ async def test_configuration_update_preserves_times_and_retry_payload(service, a
     assert updated["execution_context"]["executor"]["user_id"] == editor.user.user_id
     assert updated["task_first_create_time"] == updated["last_run_time"] == task.created_at
     assert updated["progress"] == {"source_commit": "old-success"}
-    assert updated["conflict_num"] == 7
+    assert "conflict_num" not in updated
     assert updated["to"] == TARGET
     assert updated["from"] == [source]
     assert updated["skill"] == "viking://system/compile/example-skills/daily-report"

@@ -4,7 +4,7 @@ import asyncio
 import json
 from copy import deepcopy
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
@@ -138,7 +138,7 @@ class SnapshotFS:
         self.output_changes = []
         self._can_access_many = AsyncMock(return_value={})
         self._schedule_restore_reindex_for_paths = AsyncMock(return_value=None)
-        self._schedule_vector_rebuild = AsyncMock()
+        self._schedule_vector_rebuild = Mock()
 
     def _uri_to_path(self, uri, **kwargs):
         return "/local/acme/" + uri.removeprefix("viking://")
@@ -168,7 +168,7 @@ def setup(monkeypatch):
     fs = SnapshotFS(files)
     store = make_store(files)
     finalize = AsyncMock(side_effect=AssertionError("Compile must not wait for target tagging"))
-    find = AsyncMock(return_value=SimpleNamespace(total=0))
+    find = AsyncMock(side_effect=AssertionError("Compile finalization must not search conflicts"))
     monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
     monkeypatch.setattr(
         "openviking.server.dependencies.get_service",
@@ -454,7 +454,6 @@ async def test_manual_and_scheduled_runs_share_progress_and_ignore_stale_complet
         first.meta["request"], "acme", first.task_id, "alice"
     )
     assert first_plan["execution"]["mode"] == "full"
-    setup.find.side_effect = [SimpleNamespace(total=7), SimpleNamespace(total=2)]
     await setup.lifecycle.on_finish(first, ExternalTaskSnapshot(status="completed"))
     state = await setup.store.get("acme", "alice", compile_name)
     assert state["progress"]["source_commit"] == first_plan["head"]
@@ -469,8 +468,7 @@ async def test_manual_and_scheduled_runs_share_progress_and_ignore_stale_complet
     await CompileLifecycle(setup.store, setup.fs).on_finish(
         first, ExternalTaskSnapshot(status="completed")
     )
-    assert (await setup.store.get("acme", "alice", compile_name))["conflict_num"] == 2
-    assert setup.find.await_count == 2
+    setup.find.assert_not_awaited()
     assert run["meta"]["trigger"] == "scheduled"
     assert run["meta"]["base_snapshot"] == first_plan["head"]
     assert run["meta"]["finish_snapshot"] == run["meta"]["start_snapshot"]
@@ -515,7 +513,6 @@ async def test_changes_new_roots_and_updated_configuration_do_not_rewrite_frozen
     assert (await setup.store.get("acme", "alice", compile_name))["progress"] == {}
     run = await setup.store.get_run("acme", "alice", compile_name, task.task_id)
     assert run["params"]["instruction"] is None
-    assert (await setup.store.get("acme", "alice", compile_name))["conflict_num"] is None
 
 
 @pytest.mark.parametrize("status", ["failed", "cancelled", "OperationConflict"])
@@ -781,51 +778,36 @@ async def test_creator_and_account_isolation_with_paging(setup):
             record["execution_context"]["owner_user_id"] = "bob"
 
 
-@pytest.mark.parametrize("total,expected", [(0, 0), (3, 3), (100, 100), (140, 100), (None, None)])
-async def test_final_conflict_count_and_search_failure(setup, total, expected):
-    record = new_record(PARAMS)
-    record["conflict_num"] = 9
-    compile_name = await setup.store.create("acme", "alice", record, compile_name="wiki")
-    task = make_task(setup, compile_name=compile_name, record=record, user_id="bob")
-    setup.lifecycle.resolve_groups = AsyncMock(return_value=["reviewers"])
-
-    async def find(**kwargs):
-        setup.finalize.assert_not_awaited()
-        assert len(setup.fs.commits) == 2
-        if total is None:
-            raise OSError("search unavailable")
-        return SimpleNamespace(total=total)
-
-    setup.find.side_effect = find
+@pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
+async def test_finalization_does_not_search_conflicts(setup, registered, status):
+    """Terminal publication and replay use snapshots without conflict retrieval or state."""
+    _, compile_name, task = registered
     await setup.lifecycle.on_start(task)
-    assert (
-        await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="completed"))
-    ).status == "completed"
-    assert (await setup.store.get("acme", "alice", compile_name))["conflict_num"] == expected
-    args = setup.find.await_args.kwargs
-    ctx = args.pop("ctx")
-    assert (ctx.user.user_id, ctx.group_ids, ctx.bypass_acl) == ("bob", ("reviewers",), False)
-    assert args == {
-        "query": "",
-        "target_uri": TARGET,
-        "level": [2],
-        "limit": 100,
-        "filter": {"op": "must", "field": "search_tags", "conds": ["has_conflict=true"]},
-    }
+    for _ in range(2):
+        result = await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status=status))
+        assert result.status == status
+    state = await setup.store.get("acme", "alice", compile_name)
+    checkpoint = setup.tracker.tasks[task.task_id].auth["compile_execution"]
+    assert "conflict_num" not in state
+    assert "conflict_num" not in checkpoint
+    assert checkpoint["phase"] == "finished"
+    setup.find.assert_not_awaited()
+    setup.finalize.assert_not_awaited()
 
 
-async def test_conflict_publication_recovers_after_state_write_failure(
+async def test_progress_publication_recovers_after_state_write_failure(
     setup, registered, monkeypatch
 ):
-    record, compile_name, task = registered
-    setup.find.return_value = SimpleNamespace(total=9)
+    """A durable finished run retries its successful baseline after a state write fails."""
+    _, compile_name, task = registered
     await setup.lifecycle.on_start(task)
     write = setup.files.write
     fail = True
 
     async def write_with_outage(path, body, **kwargs):
+        """Reject one baseline publication while preserving the durable finished run."""
         nonlocal fail
-        if fail and path.endswith("/state.json") and json.loads(body)["conflict_num"] == 9:
+        if fail and path.endswith("/state.json") and json.loads(body)["progress"]:
             fail = False
             raise OSError("state unavailable")
         await write(path, body, **kwargs)
@@ -833,58 +815,47 @@ async def test_conflict_publication_recovers_after_state_write_failure(
     monkeypatch.setattr(setup.files, "write", write_with_outage)
     with pytest.raises(OSError, match="state unavailable"):
         await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="completed"))
-    assert (await setup.store.get("acme", "alice", compile_name))["conflict_num"] is None
+    assert (await setup.store.get("acme", "alice", compile_name))["progress"] == {}
     assert setup.tracker.tasks[task.task_id].auth["compile_execution"]["phase"] != "finished"
     resumed = deepcopy(setup.tracker.tasks[task.task_id])
-    setup.find.side_effect = AssertionError("recovery must reuse the persisted statistic")
     result = await CompileLifecycle(setup.store, setup.fs).on_finish(
         resumed, ExternalTaskSnapshot(status="completed")
     )
     assert result.status == "completed"
-    assert (await setup.store.get("acme", "alice", compile_name))["conflict_num"] == 9
-    assert setup.find.await_count == 1
+    run = await setup.store.get_run("acme", "alice", compile_name, task.task_id)
+    assert (await setup.store.get("acme", "alice", compile_name))["progress"][
+        "source_commit"
+    ] == run["meta"]["start_snapshot"]
+    setup.find.assert_not_awaited()
 
 
-@pytest.mark.parametrize("reindex_status", [TaskStatus.COMPLETED, TaskStatus.FAILED, None])
-async def test_rollback_conflict_count_waits_for_tracked_reindex(setup, registered, reindex_status):
-    record, compile_name, task = registered
+@pytest.mark.parametrize("status", ["failed", "cancelled"])
+@pytest.mark.parametrize("scheduling_fails", [False, True])
+async def test_rollback_reindexes_without_waiting(setup, registered, status, scheduling_fails):
+    """Rollback schedules changed paths, falling back to vector rebuild on scheduling errors."""
+    _, _, task = registered
     await setup.lifecycle.on_start(task)
-    setup.fs.restore.return_value["written_paths"] = ["resources/output/page.md"]
+    restored = ["resources/output/page.md"]
+    deleted = ["resources/output/removed.md"]
+    setup.fs.restore.return_value.update(written_paths=restored, deleted_paths=deleted)
     setup.fs._schedule_restore_reindex_for_paths.return_value = "reindex-1"
-    setup.tracker.wait = AsyncMock(
-        return_value=SimpleNamespace(status=reindex_status),
-        side_effect=TimeoutError() if reindex_status is None else None,
-    )
+    if scheduling_fails:
+        setup.fs._schedule_restore_reindex_for_paths.side_effect = OSError("index unavailable")
+    setup.tracker.wait = AsyncMock(side_effect=AssertionError("Rollback must not wait for indexes"))
 
-    async def find(**kwargs):
-        setup.tracker.wait.assert_awaited_once_with(
-            "reindex-1", account_id="acme", user_id="alice", timeout=30.0
+    result = await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status=status))
+    assert result.status == status
+    reindex = setup.fs._schedule_restore_reindex_for_paths
+    reindex.assert_awaited_once()
+    ctx = reindex.await_args.kwargs["real_ctx"]
+    reindex.assert_awaited_once_with(
+        written_paths=restored, deleted_paths=deleted, project_dir=TARGET, real_ctx=ctx
+    )
+    if scheduling_fails:
+        setup.fs._schedule_vector_rebuild.assert_called_once_with(
+            written=restored, deleted=deleted, ctx=ctx
         )
-        return SimpleNamespace(total=4)
-
-    setup.find.side_effect = find
-    result = await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="failed"))
-    assert result.status == "failed"
-    state = await setup.store.get("acme", "alice", compile_name)
-    if reindex_status == TaskStatus.COMPLETED:
-        assert state["conflict_num"] == 4
     else:
-        assert state["conflict_num"] is None
-        setup.find.assert_not_awaited()
-    assert (
-        setup.tracker.tasks[task.task_id].auth["compile_execution"]["rollback_reindex_task_id"]
-        == "reindex-1"
-    )
-
-
-async def test_cancelled_unstarted_run_does_not_count_another_runs_live_target(setup):
-    record = new_record(PARAMS)
-    record["conflict_num"] = 4
-    compile_name = await setup.store.create("acme", "alice", record, compile_name="wiki")
-    running = make_task(setup, compile_name=compile_name, record=record)
-    queued = make_task(setup, compile_name=compile_name, record=record, created_at=200)
-    await setup.lifecycle.on_start(running)
-    result = await setup.lifecycle.on_finish(queued, ExternalTaskSnapshot(status="cancelled"))
-    assert result.status == "cancelled"
-    assert (await setup.store.get("acme", "alice", compile_name))["conflict_num"] is None
+        setup.fs._schedule_vector_rebuild.assert_not_called()
+    setup.tracker.wait.assert_not_awaited()
     setup.find.assert_not_awaited()

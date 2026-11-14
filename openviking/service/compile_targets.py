@@ -50,10 +50,9 @@ from openviking.pyagfs.exceptions import (
 )
 from openviking.server.identity import RequestContext, Role
 from openviking.service.external_task_service import ExternalTaskSnapshot
-from openviking.service.task_domain import TaskPatch, TaskStatus, sanitize_error
+from openviking.service.task_domain import TaskPatch, sanitize_error
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
-from openviking.utils.tags import build_search_tags_filter
 from openviking_cli.exceptions import (
     ConflictError,
     FailedPreconditionError,
@@ -69,7 +68,6 @@ COMPILE_NAME_PATTERN = r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$"
 HISTORY_RETENTION_SECONDS = 7 * 24 * 3600
 GIT_RETRIES = 3
 SNAPSHOT_BUSY_SECONDS = 30.0
-CONFLICT_INDEX_WAIT_SECONDS = 30.0
 TERMINAL = frozenset({"completed", "failed", "cancelled"})
 _NULL_OID = "0" * 40
 _RESULT_KEYS = {"added": "created", "modified": "updated", "deleted": "deleted"}
@@ -84,7 +82,6 @@ STATE_FIELDS = frozenset(
         "last_run_time",
         "last_triggered_slot",
         "next_triggered_slot",
-        "conflict_num",
         "progress",
         "execution_context",
     )
@@ -121,8 +118,6 @@ def new_record(payload: Mapping[str, Any], execution_context: Optional[dict] = N
         "last_run_time": None,
         "last_triggered_slot": None,
         "next_triggered_slot": None,
-        # Null means no completed count; integers count conflicting files, capped at 100.
-        "conflict_num": None,
         "progress": {},
         "execution_context": deepcopy(execution_context or {}),
     }
@@ -947,7 +942,6 @@ class CompileLifecycle:
 
         run = await self._read_run(task)
         if run["finished_at"] is not None:
-            await self._record_conflicts(task, run)
             await self._advance_progress(task, run)
             await self._save_checkpoint(task, {"phase": "finished"})
             return ExternalTaskSnapshot(
@@ -1044,7 +1038,6 @@ class CompileLifecycle:
         run["status"] = snapshot.status
         run["finished_at"] = time.time()
         await self._save_run(task, run)
-        await self._record_conflicts(task, run)
         await self._advance_progress(task, run)
         await self._save_checkpoint(task, {"phase": "finished"})
         return ExternalTaskSnapshot(
@@ -1053,58 +1046,6 @@ class CompileLifecycle:
             error_code=snapshot.error_code,
             error_message=run.get("error"),
         )
-
-    async def _record_conflicts(self, task: Any, run: dict) -> None:
-        """Publish the final target's capped file count, retaining a durable value for retries.
-
-        Search failures yield null without changing the execution outcome. State/checkpoint
-        write failures propagate, so the target claim remains held until publication finishes.
-        """
-        compile_name = self._compile_name(task)
-        checkpoint = self._checkpoint(task)
-        if not compile_name or checkpoint.get("phase") == "finished":
-            return
-        if "conflict_num" not in checkpoint and not run["meta"]["start_snapshot"]:
-            # Unstarted runs do not own the target; another Compile may be changing it.
-            await self._save_checkpoint(task, {"conflict_num": None})
-            checkpoint = self._checkpoint(task)
-        if "conflict_num" not in checkpoint:
-            from openviking.server.dependencies import get_service
-
-            conflict_num = None
-            try:
-                from openviking.service.task_tracker import get_task_tracker
-
-                if checkpoint.get("rollback_reindex_pending"):
-                    raise FailedPreconditionError("Compile rollback indexes are not ready")
-                if checkpoint.get("rollback_reindex_task_id"):
-                    terminal = await get_task_tracker().wait(
-                        checkpoint["rollback_reindex_task_id"],
-                        account_id=task.account_id,
-                        user_id=task.user_id,
-                        timeout=CONFLICT_INDEX_WAIT_SECONDS,
-                    )
-                    if terminal.status != TaskStatus.COMPLETED:
-                        raise FailedPreconditionError("Compile rollback index rebuild failed")
-                search_ctx = await self.task_ctx(task)
-                result = await get_service().search.find(
-                    query="",
-                    ctx=search_ctx,
-                    target_uri=task.meta["request"]["to"],
-                    filter=build_search_tags_filter(["has_conflict=true"]),
-                    level=[2],
-                    limit=100,
-                )
-                # shortcut: one 100-hit page is a capped count; use pagination for exact totals.
-                conflict_num = min(result.total, 100)
-            except Exception:
-                logger.warning("Compile conflict count failed for %s", task.task_id, exc_info=True)
-            await self._save_checkpoint(task, {"conflict_num": conflict_num})
-        async with self._store.edit(
-            task.account_id, self._owner_user_id(task), compile_name
-        ) as record:
-            if execution_signature(record) == task.meta["request"]["compile"]["input_signature"]:
-                record["conflict_num"] = self._checkpoint(task)["conflict_num"]
 
     async def _advance_progress(self, task: Any, run: dict) -> None:
         """Advance only the matching configuration's unchanged successful predecessor."""
@@ -1147,7 +1088,6 @@ class CompileLifecycle:
         """
         run_meta = run["meta"]
         restored, deleted = [], []
-        result = None
         try:
             async with self._locked_output(to, ctx) as lease:
                 if run_meta.get("finish_snapshot"):
@@ -1161,7 +1101,6 @@ class CompileLifecycle:
                 )
                 if not head:
                     raise FailedPreconditionError("Compile rollback snapshot is unavailable")
-                await self._save_checkpoint(task, {"rollback_reindex_pending": True})
                 try:
                     result = await retry_git(
                         lambda: self._fs.restore(
@@ -1188,22 +1127,12 @@ class CompileLifecycle:
         finally:
             if restored or deleted:
                 try:
-                    reindex_task_id = await self._fs._schedule_restore_reindex_for_paths(
+                    await self._fs._schedule_restore_reindex_for_paths(
                         written_paths=restored, deleted_paths=deleted, project_dir=to, real_ctx=ctx
                     )
                 except Exception:
                     logger.exception("Compile rollback reindex scheduling failed")
                     self._fs._schedule_vector_rebuild(written=restored, deleted=deleted, ctx=ctx)
-                else:
-                    await self._save_checkpoint(
-                        task,
-                        {
-                            "rollback_reindex_pending": False,
-                            "rollback_reindex_task_id": reindex_task_id,
-                        },
-                    )
-            elif result is not None:
-                await self._save_checkpoint(task, {"rollback_reindex_pending": False})
 
     async def _commit(
         self,
