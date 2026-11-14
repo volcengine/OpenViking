@@ -432,7 +432,7 @@ class SkillProcessor:
         if not allowed_tools:
             allowed_tools = normalized.get("allowed-tools")
         if allowed_tools is not None:
-            normalized["allowed_tools"] = SkillProcessor._normalize_list_field(allowed_tools)
+            normalized["allowed_tools"] = SkillLoader._normalize_allowed_tools(allowed_tools)
         normalized.pop("allowed-tools", None)
 
         tags = normalized.get("tags")
