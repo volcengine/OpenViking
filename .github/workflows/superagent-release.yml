@@ -79,6 +79,7 @@ jobs:
       - run: npm test
 
       - name: Build release archives
+        if: github.event_name != 'pull_request'
         env:
           PLATFORMS: ${{ github.event_name == 'pull_request' && 'linux-x64' || inputs.platforms || 'all' }}
           DIST: ${{ runner.temp }}/superagent-dist
@@ -93,6 +94,7 @@ jobs:
       # What the updater checks before it switches a machine to a release: the
       # bundled Node starts here and the bundled Pi is the pinned version.
       - name: Smoke-test the linux-x64 archive
+        if: github.event_name != 'pull_request'
         env:
           DIST: ${{ runner.temp }}/superagent-dist
         run: |
@@ -106,6 +108,7 @@ jobs:
           node/bin/node packages/cli/bin/ov-superagent.mjs --version
 
       - uses: actions/upload-artifact@v7
+        if: github.event_name != 'pull_request'
         with:
           name: superagent-dist
           path: ${{ runner.temp }}/superagent-dist
@@ -310,6 +313,8 @@ jobs:
 
   windows-preview:
     name: Windows x64 preview
+    # Packages are built only for a release (tag or manual run); a pull request only tests.
+    if: github.event_name != 'pull_request'
     runs-on: windows-2022
     timeout-minutes: 30
     defaults:
