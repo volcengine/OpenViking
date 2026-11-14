@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import json
+import logging
 
 import pytest
 
@@ -38,6 +39,32 @@ def test_load_server_config_ignores_unknown_fields(tmp_path):
     assert config.observability.metrics.exporters.prometheus.enabled is False
     assert "prt" not in config.model_dump()
     assert "queuefs_scope" not in config.model_dump()
+
+
+def test_load_server_config_redirects_top_level_memory_policy(tmp_path, monkeypatch, caplog):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "server": {
+                    "host": "0.0.0.0",
+                    "memory_policy": {"working_memory": {"enabled": True}},
+                }
+            }
+        )
+    )
+
+    logger = logging.getLogger("openviking.server.config")
+    monkeypatch.setattr(logger, "handlers", [caplog.handler])
+    monkeypatch.setattr(logger, "propagate", False)
+    caplog.set_level(logging.ERROR, logger=logger.name)
+
+    config = load_server_config(str(config_path))
+
+    assert config.host == "0.0.0.0"
+    assert "memory_policy" not in config.model_dump()
+    assert "Config field 'server.memory_policy' is not valid and is ignored" in caplog.text
+    assert "server.user_config_defaults.memory_policy" in caplog.text
 
 
 def test_load_server_config_reports_invalid_value_path(tmp_path):

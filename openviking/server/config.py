@@ -611,6 +611,17 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
         logger=logger,
     )
 
+    # ``memory_policy`` is not a top-level ``server`` field: it belongs under
+    # ``server.user_config_defaults.memory_policy``. A top-level entry is dropped
+    # by the generic unknown-field WARNING, which silently keeps Working Memory
+    # disabled for an operator who expects it on. Log the misplacement explicitly.
+    if "memory_policy" in server_data:
+        server_data.pop("memory_policy")
+        logger.error(
+            "Config field 'server.memory_policy' is not valid and is ignored; "
+            "set it under 'server.user_config_defaults.memory_policy' instead."
+        )
+
     try:
         config = ServerConfig.model_validate(server_data)
     except ValidationError as e:

@@ -648,6 +648,19 @@ class OpenVikingConfig(BaseModel):
                 logger=_get_config_logger(),
             )
 
+            # A top-level ``memory_policy`` is a common misplacement: the key
+            # belongs under ``server.user_config_defaults.memory_policy``. The
+            # generic unknown-field path only emits a WARNING, which lets a
+            # misconfigured deployment silently keep Working Memory disabled
+            # while the operator believes it is on. Surface this explicitly so
+            # the mismatch is impossible to miss.
+            if "memory_policy" in config_copy:
+                config_copy.pop("memory_policy")
+                _get_config_logger().error(
+                    "Config field 'memory_policy' is not valid at the top level and is ignored; "
+                    "set it under 'server.user_config_defaults.memory_policy' instead."
+                )
+
             # Remove sections managed by other loaders (e.g. server config)
             config_copy.pop("server", None)
             config_copy.pop("bot", None)
