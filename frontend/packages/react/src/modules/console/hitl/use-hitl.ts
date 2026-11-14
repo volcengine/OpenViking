@@ -4,6 +4,8 @@ import type {
   VikingBotInteractionProps,
 } from '../../../components/viking-bot/index.js';
 import type { Locale } from '../../../shared/locale.js';
+import { useMonitoringBinding } from '../../../shared/monitoring/context.js';
+import { readData, tagData } from '../../../shared/monitoring/data.js';
 import type { VikingBotChatResult } from '../chat/types.js';
 import type { ConsoleHitlOptions, HitlGroup } from './types.js';
 import { pendingGroup } from './protocol.js';
@@ -27,6 +29,7 @@ export function useHitl(
   locale: Locale,
   options?: ConsoleHitlOptions | false,
 ) {
+  const monitoring = useMonitoringBinding();
   const owner = useMemo(
     () => ({ active: true, send: chat.send, sessionId: chat.sessionId }),
     [chat.send, chat.sessionId],
@@ -112,8 +115,10 @@ export function useHitl(
             }
           },
         };
+  const messages = summarizeMessages(chat.messages, locale, config);
+  tagData(monitoring, messages, readData(monitoring, [chat.messages]));
   return {
     interaction,
-    messages: summarizeMessages(chat.messages, locale, config),
+    messages,
   };
 }
