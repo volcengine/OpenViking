@@ -562,6 +562,8 @@ export interface FileTreeProps extends Omit<
    * Selected row id, owned by the host.
    */
   selectedId?: string | null;
+  /** 受控多选；父子节点独立。Controlled independent multiple selection. */
+  selectedIds?: readonly string[];
   /**
    * 显示内置搜索入口；默认显示，未提供 operations.search 时禁用。
    * Shows the built-in search trigger. Visible by default; disabled without operations.search.
@@ -603,6 +605,8 @@ export interface FileTreeProps extends Omit<
    * the row element, for one-off highlights, analytics or custom `data-*`.
    */
   getRowAttributes?: (row: FileTreeRow) => HTMLAttributes<HTMLDivElement>;
+  /** 展开箭头与文件图标之间的内容。Content between the toggle and icon. */
+  renderRowLeading?: (row: FileTreeEntryRow) => ReactNode;
   /**
    * 渲染行尾标记，例如看板入口、状态角标或数量。返回 `null` 时该行不显示标记。
    * 内容与交互都由宿主决定，包括点击行为。标记显示在行右端；行内已有层级、权限

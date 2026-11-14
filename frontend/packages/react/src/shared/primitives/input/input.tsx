@@ -30,10 +30,21 @@ export interface InputProps extends Omit<
   size?: 'mini' | 'small' | 'default' | 'large';
   prefix?: ReactNode;
   suffix?: ReactNode;
+  /** Set false when the suffix contains an interactive control. */
+  suffixAriaHidden?: boolean;
 }
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
-  { size = 'default', prefix, suffix, className, style, disabled, ...rest },
+  {
+    size = 'default',
+    prefix,
+    suffix,
+    suffixAriaHidden = true,
+    className,
+    style,
+    disabled,
+    ...rest
+  },
   ref,
 ) {
   return (
@@ -65,7 +76,10 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
         className="ov-input__element"
       />
       {suffix != null ? (
-        <span className="ov-input__affix" aria-hidden="true">
+        <span
+          className="ov-input__affix"
+          aria-hidden={suffixAriaHidden || undefined}
+        >
           {suffix}
         </span>
       ) : null}

@@ -73,6 +73,8 @@ export const FileTree: FileTreeComponent = forwardRef<
     locale: localeProp,
     operations,
     selectedId,
+    selectedIds,
+    renderRowLeading,
     search = true,
     refresh = true,
     loading = false,
@@ -135,6 +137,8 @@ export const FileTree: FileTreeComponent = forwardRef<
     text,
     infoLabels: text.info,
     selectedId,
+    selectedIds,
+    renderRowLeading,
     getRowAttributes,
     renderRowTrailing,
     renderRowTooltip,
@@ -173,6 +177,7 @@ export const FileTree: FileTreeComponent = forwardRef<
       />
       <div
         role="tree"
+        aria-multiselectable={selectedIds ? true : undefined}
         aria-label={rest['aria-label']}
         className="ov-file-tree__body"
       >

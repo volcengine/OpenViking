@@ -123,9 +123,7 @@ FilePreview, CommandConsole, VikingBot and its message list, composer and intera
     errorFallback: (reset) => (
       <div className="my-error" role="alert">
         Files are unavailable
-        <button type="button" onClick={reset}>
-          Retry display
-        </button>
+        <Button onClick={reset}>Retry display</Button>
       </div>
     ),
   }}

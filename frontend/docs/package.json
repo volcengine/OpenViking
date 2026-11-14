@@ -45,6 +45,10 @@
     "#file-browser-native-demo": "./docs/_demos/file-browser-native-demo.ts",
     "#file-preview-code-data": "./docs/_demos/file-preview-code-data.ts",
     "#notification-style.css": "./notification-preview.css",
-    "#console-tasks-service": "./docs/_demos/console-tasks-service.ts"
+    "#console-tasks-service": "./docs/_demos/console-tasks-service.ts",
+    "#viking-bot-directory": "./docs/_demos/use-viking-bot-directory.ts",
+    "#context-picker-demo": "./docs/_demos/use-context-picker-demo.ts",
+    "#context-picker-data": "./docs/_demos/context-picker-data.ts",
+    "#viking-bot-directory-data": "./docs/_demos/viking-bot-directory-data.ts"
   }
 }

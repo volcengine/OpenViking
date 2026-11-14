@@ -23,6 +23,8 @@ export interface CheckboxProps extends Omit<
 > {
   /** 受控选中态。Controlled checked state. */
   checked?: boolean;
+  /** 原生输入的 Tab 顺序。Tab order of the underlying input. */
+  inputTabIndex?: number;
   /** 非受控初始选中态。Initial checked state when uncontrolled. */
   defaultChecked?: boolean;
   /** 半选态，仅影响图标，不改变 `checked`。Indeterminate state; affects the icon only. */
@@ -46,6 +48,7 @@ export interface CheckboxProps extends Omit<
  */
 export function Checkbox({
   checked,
+  inputTabIndex,
   defaultChecked,
   indeterminate = false,
   icon,
@@ -80,6 +83,7 @@ export function Checkbox({
     >
       <input
         type="checkbox"
+        tabIndex={inputTabIndex}
         disabled={disabled}
         checked={isChecked}
         onChange={handleChange}
