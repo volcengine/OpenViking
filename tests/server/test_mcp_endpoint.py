@@ -469,6 +469,8 @@ async def test_tool_schemas_are_portable():
         assert "$defs" not in node, f"{path}: $defs not portable"
         assert "type" in node, f"{path}: missing explicit type"
         assert node.get("default", "") is not None, f"{path}: null default"
+        if "items" in node:
+            assert node["type"] == "array", f"{path}: items on a non-array schema"
         for key, sub in node.get("properties", {}).items():
             assert_portable(sub, f"{path}.{key}")
         for key in ("items", "additionalProperties"):
@@ -1260,6 +1262,7 @@ async def test_read_rejects_ambiguous_or_missing_uri(arguments, message):
 def test_read_schema_offers_uri_and_uris():
     schema = mcp_endpoint.mcp._tool_manager.get_tool("read").parameters
     assert schema["properties"]["uri"]["type"] == "string"
+    assert "items" not in schema["properties"]["uri"]
     assert schema["properties"]["uris"]["type"] == "array"
     assert schema["properties"]["uris"]["items"]["type"] == "string"
     assert schema.get("required", []) == []

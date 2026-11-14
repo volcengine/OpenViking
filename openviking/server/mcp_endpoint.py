@@ -2543,6 +2543,9 @@ def _apply_portable_schemas() -> None:
         properties = tool.parameters.get("properties", {})
         for name, override in _PORTABLE_PROPERTY_OVERRIDES.get(tool.name, {}).items():
             properties[name] = {**properties[name], **override}
+            # A string override must not retain items from a collapsed array union.
+            if override.get("type") == "string":
+                properties[name].pop("items", None)
 
 
 _apply_portable_schemas()
