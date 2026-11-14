@@ -41,6 +41,8 @@
 .ov-input,
 .ov-select,
 .ov-textarea,
+.ov-checkbox,
+.ov-radio,
 .ov-directory-tour,
 .ov-wiki-dashboard,
 .ov-experience-dashboard,
@@ -281,7 +283,9 @@ html.dark .ov-error-boundary,
 .ov-button,
 .ov-input,
 .ov-select,
-.ov-textarea {
+.ov-textarea,
+.ov-checkbox,
+.ov-radio {
   --ov-ui-bg-white-default: var(--ov-ui-bg-1-default);
   --ov-ui-bg-2-default: #fafbfd;
   --ov-ui-bg-7-default: var(--ov-ui-border-1-default);
@@ -306,7 +310,9 @@ html.dark .ov-error-boundary,
 html.dark .ov-button,
 html.dark .ov-input,
 html.dark .ov-select,
-html.dark .ov-textarea {
+html.dark .ov-textarea,
+html.dark .ov-checkbox,
+html.dark .ov-radio {
   --ov-ui-bg-white-default: rgb(255 255 255 / 0.1%);
   --ov-ui-bg-2-default: rgb(252 253 254 / 1%);
   --ov-ui-bg-4-default: rgb(246 248 250 / 6%);
@@ -329,6 +335,16 @@ html.dark .ov-textarea {
   --ov-ui-error-default: #ff706d;
   --ov-ui-error-bg-default: rgb(159 33 28 / 20%);
   --ov-ui-error-border-default: rgb(255 112 109 / 30%);
+}
+
+.ov-checkbox {
+  --ov-ui-checkbox-disabled-icon-default: var(
+    --ov-ui-color-text-on-primary,
+    var(--ov-ui-text-on-primary-default)
+  );
+}
+html.dark .ov-checkbox {
+  --ov-ui-checkbox-disabled-icon-default: rgb(246 248 250 / 20%);
 }
 
 .dark .ov-viking-bot {
