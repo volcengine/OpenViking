@@ -1,0 +1,116 @@
+# ContextPicker 文件与目录选择
+
+在弹窗中搜索和选择文件或目录，支持单选、独立多选、已选条目展示和自定义操作。
+
+## 何时使用
+
+- 从文件树中选择一个输出目录或文件。
+- 选择多个源目录，并在搜索和翻页时保留已选项。
+- 在选择界面接入新建目录、添加 Skill 等宿主操作。
+
+## 引入
+
+```tsx
+import { ContextPicker } from '@openviking/react/components/context-picker';
+import '@openviking/react/components/context-picker/style.css';
+```
+
+## 代码演示
+
+### 受控选择
+
+切换源目录多选、输出目录单选和 Skill 单选，检查异步加载后的选中回显、搜索、禁用和失败重试；新建与添加操作为离线模拟。
+
+```tsx file="../../_demos/context-picker-basic.tsx" preview
+
+```
+
+### HITL 外部接管
+
+由宿主控制弹窗和目录数据，确认后通过 `select` 将目录写回自定义答案。
+
+```tsx file="../../_demos/viking-bot-custom-directory.tsx" preview
+
+```
+
+## API
+
+### ContextPicker
+
+| 参数              | 说明                                     | 类型                                                                | 默认值               |
+| ----------------- | ---------------------------------------- | ------------------------------------------------------------------- | -------------------- |
+| open              | 控制弹窗是否展示                         | `boolean`                                                           | 必填                 |
+| rows              | 当前可见的树行，由宿主处理展开和分页     | `readonly FileTreeRow[]`                                            | 必填                 |
+| value             | 当前选中条目，按 URI 匹配可见树行        | `readonly ContextPickerEntry[]`                                     | 必填                 |
+| multiple          | 使用独立多选，父子目录互不关联           | `boolean`                                                           | `false`              |
+| query             | 受控搜索词                               | `string`                                                            | `''`                 |
+| loading           | 表达搜索或刷新状态                       | `boolean`                                                           | `false`              |
+| isReady           | 首次加载是否完成                         | `boolean`                                                           | `true`               |
+| confirming        | 确认期间禁用选择、搜索和关闭             | `boolean`                                                           | `false`              |
+| disabled          | 禁用选择、搜索和关闭                     | `boolean`                                                           | `false`              |
+| confirmDisabled   | 额外禁用确认按钮                         | `boolean`                                                           | `false`              |
+| autoReveal        | 首次打开时请求展开和翻页，并定位已选行   | `boolean`                                                           | `true`               |
+| showSelection     | 显示顶部已选条目                         | `boolean`                                                           | 单选为 `true`        |
+| title             | 弹窗标题                                 | `string`                                                            | 选择文件或目录       |
+| error             | 显示错误，保留现有行和选中项             | `ReactNode`                                                         | -                    |
+| operations        | 宿主提供展开、加载更多和重试操作         | `Pick<FileTreeOperations, 'toggleExpand' \| 'loadMore' \| 'retry'>` | -                    |
+| rootOrder         | 根节点排序方式                           | `'input' \| 'context'`                                              | `'input'`            |
+| loadingFallback   | 首次加载替代内容                         | `ReactNode`                                                         | FileTree 默认加载态  |
+| errorFallback     | 首次加载错误替代内容                     | `ReactNode`                                                         | -                    |
+| emptyFallback     | 空结果替代内容                           | `ReactNode`                                                         | 没有匹配的文件或目录 |
+| triggerRef        | 主题锚点，关闭后恢复触发元素焦点         | `RefObject<HTMLElement \| null>`                                    | -                    |
+| className         | 附加到弹窗根节点的类名                   | `string`                                                            | -                    |
+| locale            | 界面语言                                 | `'zh-CN' \| 'en-US'`                                                | -                    |
+| onChange          | 点击条目后上报完整选择                   | `(value: ContextPickerEntry[]) => void`                             | -                    |
+| onQueryChange     | 输入搜索词时触发，提供后显示搜索框       | `(query: string) => void`                                           | -                    |
+| onConfirm         | 确认当前选择，由宿主完成保存和关闭       | `(value: readonly ContextPickerEntry[]) => void`                    | -                    |
+| onCancel          | 取消、关闭按钮或 Escape 触发，由宿主关闭 | `() => void`                                                        | -                    |
+| onOpenEntry       | 点击顶部已选条目时触发                   | `(entry: ContextPickerEntry) => void`                               | -                    |
+| renderRowIcon     | 自定义文件图标                           | `(row: FileTreeEntryRow) => ReactNode`                              | FileTree 默认图标    |
+| renderRowTooltip  | 自定义行浮层                             | `(row: FileTreeEntryRow) => ReactNode`                              | FileTree 默认浮层    |
+| renderRowTrailing | 自定义行尾内容                           | `(row: FileTreeEntryRow) => ReactNode`                              | -                    |
+| slots             | 替换操作和补充内容                       | `ContextPickerSlots`                                                | -                    |
+| labels            | 覆盖内置文案                             | `ContextPickerLabels`                                               | -                    |
+
+### ContextPickerEntry
+
+| 参数 | 说明                         | 类型                    | 默认值 |
+| ---- | ---------------------------- | ----------------------- | ------ |
+| uri  | 条目身份，可在异步加载前提供 | `string`                | 必填   |
+| name | 条目名称                     | `string`                | 必填   |
+| type | 条目类型                     | `'directory' \| 'file'` | 必填   |
+
+### ContextPickerSlots
+
+| 参数        | 说明                                     | 类型                                  | 默认值             |
+| ----------- | ---------------------------------------- | ------------------------------------- | ------------------ |
+| footerStart | 左下角操作或说明，`null` 隐藏默认内容    | `ReactNode`                           | 多选时显示已选数量 |
+| content     | 树下方的补充内容，例如权限状态和上传面板 | `ReactNode`                           | -                  |
+| selection   | 替换顶部已选条目，`null` 隐藏默认内容    | `ReactNode`                           | 已选条目           |
+| confirm     | 包装确认按钮                             | `(button: ReactElement) => ReactNode` | -                  |
+
+### ContextPickerLabels
+
+| 参数          | 说明               | 类型                        | 默认值               |
+| ------------- | ------------------ | --------------------------- | -------------------- |
+| title         | 默认标题           | `string`                    | 选择文件或目录       |
+| search        | 搜索框标签与占位符 | `string`                    | 搜索名称             |
+| selected      | 已选条目标签       | `string`                    | 已选：               |
+| unselected    | 尚未选择时的提示   | `string`                    | 未选择               |
+| clearSearch   | 清空搜索按钮       | `string`                    | 清空搜索             |
+| selectedCount | 多选计数           | `(count: number) => string` | `已选 ${count} 个`   |
+| cancel        | 取消按钮           | `string`                    | 取消                 |
+| confirm       | 确认按钮           | `string`                    | 确定                 |
+| empty         | 空结果提示         | `string`                    | 没有匹配的文件或目录 |
+
+## 注意
+
+- `value`、`query`、`open` 均由宿主维护。取消时由宿主恢复草稿，确认成功后由宿主关闭；异步保存期间传入 `confirming`，失败时保留草稿并提供 `error`。
+- 条目的 `selectable: false` 禁止选择但允许展开，`disabled: true` 同时禁用选择和展开。权限判断和提交前复核由宿主完成。
+- 已选项独立于当前行列表，搜索和分页不会自动清空选择。首次打开的自动定位在手动搜索、选择、展开或翻页后停止。
+- 首次定位会调用 `operations.toggleExpand` 和 `operations.loadMore`；宿主更新 `rows` 并提供错误与重试状态，组件不发起请求。
+- 上传与新建操作通过插槽接入，组件不限定文件类型、目录权限或上传协议。`FileTreeRow` 与树操作的详细定义见 [FileTree](./file-tree)。
+
+## 主题变量
+
+`--ov-ui-context-picker-tree-height` 控制树面板高度，单选默认 `416px`，多选默认 `544px`。

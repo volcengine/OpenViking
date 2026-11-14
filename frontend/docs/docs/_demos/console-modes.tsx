@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { Select, SelectOption } from '#demo-controls';
 import { useLang } from '@rspress/core/runtime';
 import { OpenVikingProvider } from '@openviking/react/client';
 import { Console } from '@openviking/react/modules/console';
@@ -22,16 +23,17 @@ export default function ConsoleModes() {
     <>
       <label>
         {zh ? '启用功能：' : 'Enabled modes: '}
-        <select
-          value={choice}
-          onChange={(event) =>
-            setChoice(event.target.value as keyof typeof choices)
-          }
+        <Select<keyof typeof choices>
+          locale={zh ? 'zh-CN' : 'en-US'}
+          value={[choice]}
+          onChange={([value]) => {
+            if (value !== undefined) setChoice(value);
+          }}
         >
-          <option value="both">{zh ? '两者' : 'Both'}</option>
-          <option value="conversation">VikingBot</option>
-          <option value="command">TUI</option>
-        </select>
+          <SelectOption value="both">{zh ? '两者' : 'Both'}</SelectOption>
+          <SelectOption value="conversation">VikingBot</SelectOption>
+          <SelectOption value="command">TUI</SelectOption>
+        </Select>
       </label>
       <OpenVikingProvider fetch={transport}>
         <div style={{ height: 640 }}>

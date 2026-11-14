@@ -453,16 +453,6 @@
   background-color: var(--ov-ui-color-primary, var(--ov-viking-bot-accent));
 }
 
-.ov-viking-bot .ark-agentic-ask-human-custom-editing,
-.ov-viking-bot__interaction .ark-agentic-ask-human-custom-editing {
-  border-color: var(--ov-ui-color-primary, var(--ov-viking-bot-accent));
-}
-
-.ov-viking-bot .ark-agentic-ask-human-step-arrow:focus-visible,
-.ov-viking-bot__interaction .ark-agentic-ask-human-step-arrow:focus-visible {
-  outline-color: var(--ov-ui-color-primary, var(--ov-viking-bot-accent));
-}
-
 .ov-viking-bot .ark-agentic-bubble__edit-btn--confirm,
 .ov-viking-bot__interaction .ark-agentic-bubble__edit-btn--confirm {
   background: var(--ov-ui-color-primary, var(--ov-viking-bot-accent));

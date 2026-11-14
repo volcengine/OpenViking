@@ -27,6 +27,8 @@ export interface FileTreeRowContext {
   infoLabels?: FileTreeInfoLabels;
   /** 当前选中的行 id。Currently selected row id. */
   selectedId?: string | null;
+  selectedIds?: readonly string[];
+  renderRowLeading?: (row: FileTreeEntryRow) => ReactNode;
   rowTrailingPosition?: FileTreeProps['rowTrailingPosition'];
   /** 当前展示浮层的行 id。Row whose tooltip is showing. */
   /** 为行追加属性。Extra attributes for a row. */

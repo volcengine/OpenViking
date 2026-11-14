@@ -1,0 +1,230 @@
+.ov-viking-bot__interaction-choices {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+.ov-viking-bot__interaction-option,
+.ov-viking-bot__interaction-custom {
+  box-sizing: border-box;
+  display: flex;
+  min-width: 0;
+  min-height: 48px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  color: inherit;
+  font-size: 14px;
+  line-height: 22px;
+}
+.ov-viking-bot__interaction-option .ov-radio__mask,
+.ov-viking-bot__interaction-custom .ov-radio__mask,
+.ov-viking-bot__schedule-mode .ov-radio__mask {
+  display: none;
+}
+.ov-viking-bot__interaction-option .ov-radio__text,
+.ov-viking-bot__interaction-custom-choice .ov-radio__text {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+.ov-viking-bot__interaction-index {
+  box-sizing: border-box;
+  display: flex;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border: 0.5px solid var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
+  border-radius: 6px;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+}
+.ov-viking-bot__interaction-option-content {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+.ov-viking-bot__interaction-option-content code {
+  white-space: pre-wrap;
+}
+.ov-viking-bot__interaction-option.ov-radio--checked,
+.ov-viking-bot__interaction-option:not(.ov-radio--disabled):hover,
+.ov-viking-bot__interaction-custom--selected {
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+}
+.ov-viking-bot__interaction-option.ov-radio--checked
+  .ov-viking-bot__interaction-index,
+.ov-viking-bot__interaction-custom--selected .ov-viking-bot__interaction-index {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+}
+.ov-viking-bot__interaction-option:focus-within,
+.ov-viking-bot__interaction-custom:focus-within {
+  outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  outline-offset: -2px;
+}
+.ov-viking-bot__interaction-custom {
+  align-items: center;
+  gap: 8px;
+}
+.ov-viking-bot__interaction-custom-choice {
+  min-width: 0;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+}
+.ov-viking-bot__interaction-custom-input.ov-input {
+  min-width: 0;
+  flex: 1;
+  padding-inline: 0;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+.ov-viking-bot__interaction-edit {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+.ov-viking-bot__interaction-edit path {
+  fill: currentColor;
+}
+.ov-viking-bot__interaction-option.ov-radio--disabled:not([aria-busy='true'] *),
+.ov-viking-bot__interaction-custom:has(.ov-radio--disabled):not(
+    [aria-busy='true'] *
+  ) {
+  opacity: 0.6;
+}
+.ov-viking-bot__schedule {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 16px;
+}
+.ov-viking-bot__schedule-frequency {
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.ov-viking-bot__schedule-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.ov-viking-bot__schedule-mode {
+  box-sizing: border-box;
+  display: flex;
+  min-width: 0;
+  min-height: 36px;
+  flex: 1 1 max-content;
+  justify-content: center;
+  padding: 6px 8px;
+  border: 0.5px solid var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
+  border-radius: 6px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+  font-size: 13px;
+  text-align: center;
+}
+.ov-viking-bot__schedule-mode.ov-radio--checked {
+  border-color: var(
+    --ov-ui-color-primary-disabled,
+    var(--ov-ui-primary-disabled-default)
+  );
+  background: var(
+    --ov-ui-color-primary-light,
+    var(--ov-ui-primary-light-default)
+  );
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  font-weight: 500;
+}
+.ov-viking-bot__schedule-mode:focus-within {
+  outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  outline-offset: 2px;
+}
+.ov-viking-bot__schedule-mode.ov-radio--disabled:not([aria-busy='true'] *) {
+  background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
+  color: var(--ov-ui-color-text-4, var(--ov-ui-text-4-default));
+}
+.ov-viking-bot__schedule .ov-select,
+.ov-viking-bot__schedule .ov-input {
+  width: 100%;
+  min-width: 0;
+}
+.ov-viking-bot__schedule-clock {
+  width: 16px;
+  height: 16px;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+}
+.ov-viking-bot__schedule-clock path {
+  stroke: currentColor;
+}
+.ov-viking-bot__schedule-time-trigger {
+  min-width: 0;
+}
+.ov-viking-bot__schedule-popup.ov-popover {
+  padding: 4px;
+}
+.ov-viking-bot__schedule-time-panel {
+  display: flex;
+}
+.ov-viking-bot__schedule-time-column {
+  display: flex;
+  width: 80px;
+  max-height: 200px;
+  flex-direction: column;
+  overflow-y: auto;
+}
+.ov-viking-bot__schedule-time-column .ov-button {
+  flex: none;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+}
+.ov-viking-bot__schedule-time-column [aria-selected='true'] {
+  background: var(
+    --ov-ui-color-primary-light,
+    var(--ov-ui-primary-light-default)
+  );
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+}
+
+/* The enclosing custom row owns the one focus ring. */
+.ov-viking-bot__interaction-custom-input.ov-input:is(
+    :hover,
+    :focus-within,
+    :has([aria-invalid='true'])
+  ) {
+  border-color: transparent;
+  outline: none;
+  box-shadow: none;
+  background: transparent;
+}
+.ov-viking-bot__interaction-custom-input .ov-input__element:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+.ov-viking-bot__interaction-picker-trigger.ov-button {
+  width: 100%;
+  height: auto;
+  justify-content: flex-start;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  white-space: normal;
+}
+.ov-viking-bot__interaction-picker-trigger.ov-button[aria-pressed='true'],
+.ov-viking-bot__interaction-picker-trigger.ov-button:not(:disabled):hover {
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+}
+.ov-viking-bot__interaction-picker-trigger.ov-button:focus-visible {
+  outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  outline-offset: -2px;
+  box-shadow: none;
+}
+.ov-viking-bot__interaction-picker-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

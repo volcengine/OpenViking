@@ -562,6 +562,8 @@ export interface FileTreeProps extends Omit<
    * Selected row id, owned by the host.
    */
   selectedId?: string | null;
+  /** 受控多选；父子节点独立。Controlled independent multiple selection. */
+  selectedIds?: readonly string[];
   /**
    * 行尾插槽的位置，默认 `viewport-end` 吸附树的可视区域右侧；
    * `row-end` 位于完整行末尾并随内容横向滚动。
@@ -610,6 +612,8 @@ export interface FileTreeProps extends Omit<
    * the row element, for one-off highlights, analytics or custom `data-*`.
    */
   getRowAttributes?: (row: FileTreeRow) => HTMLAttributes<HTMLDivElement>;
+  /** 展开箭头与文件图标之间的内容。Content between the toggle and icon. */
+  renderRowLeading?: (row: FileTreeEntryRow) => ReactNode;
   /**
    * 渲染行尾标记，例如看板入口、状态角标或数量。返回 `null` 时该行不显示标记。
    * 内容与交互都由宿主决定，包括点击行为，位置由 `rowTrailingPosition` 控制。

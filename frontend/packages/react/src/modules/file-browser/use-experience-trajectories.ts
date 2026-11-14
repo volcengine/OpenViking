@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useOvClient, useOvSignal } from '../../client/provider.js';
+import type { FileBrowserExperienceDataSource } from './experience-data-source.js';
+import {
+  experienceDateQuery,
+  EXPERIENCE_PAGE_SIZE,
+} from './experience-data.js';
 import type { OvRequestOptions } from '../../client/types.js';
 import { readExperienceTrajectoryPage } from './experience-trajectory-page.js';
 import {
@@ -25,15 +30,18 @@ export function useExperienceTrajectories({
   days,
   enabled,
   requestOptions,
+  dataSource,
   refreshGeneration = 0,
 }: {
   uri: string;
   days: number;
   enabled: boolean;
   requestOptions?: OvRequestOptions;
+  dataSource?: FileBrowserExperienceDataSource;
   refreshGeneration?: number;
 }) {
   const client = useOvClient();
+  const loadPage = dataSource?.trajectories;
   const inheritedSignal = useOvSignal();
   const { baseURL, apiKey, accountId, userId, resourceId, signal } =
     requestOptions ?? {};
@@ -45,6 +53,7 @@ export function useExperienceTrajectories({
       uri,
       days,
       client,
+      loadPage,
       baseURL,
       apiKey,
       accountId,
@@ -58,6 +67,7 @@ export function useExperienceTrajectories({
       uri,
       days,
       client,
+      loadPage,
       baseURL,
       apiKey,
       accountId,
@@ -101,7 +111,7 @@ export function useExperienceTrajectories({
       const signals = [controller.signal, signal, inheritedSignal].filter(
         (value): value is AbortSignal => Boolean(value),
       );
-      const options: OvRequestOptions = {
+      const options = {
         baseURL,
         apiKey,
         accountId,
@@ -110,13 +120,25 @@ export function useExperienceTrajectories({
         signal: AbortSignal.any(signals),
       };
       try {
-        const result = await readExperienceTrajectoryPage(
-          client!,
-          uri,
-          days,
-          page,
-          options,
-        );
+        const result = loadPage
+          ? await loadPage({
+              uri,
+              offset: page * EXPERIENCE_PAGE_SIZE,
+              limit: EXPERIENCE_PAGE_SIZE,
+              ...experienceDateQuery(days),
+              signal: options.signal,
+            }).then(({ items, total, hasMore }) => ({
+              items,
+              total,
+              has_more: hasMore,
+            }))
+          : await readExperienceTrajectoryPage(
+              client!,
+              uri,
+              days,
+              page,
+              options,
+            );
         if (options.signal?.aborted || ticket !== requestId.current) return;
         setState((previous) =>
           appendTrajectoryPage(previous, owner, result, mode),
@@ -133,6 +155,7 @@ export function useExperienceTrajectories({
       client,
       days,
       inheritedSignal,
+      loadPage,
       owner,
       resourceId,
       signal,

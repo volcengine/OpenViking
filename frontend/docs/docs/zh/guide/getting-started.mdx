@@ -123,9 +123,7 @@ FilePreview、CommandConsole、VikingBot 及其消息列表、输入区和交互
     errorFallback: (reset) => (
       <div className="my-error" role="alert">
         文件区域暂不可用
-        <button type="button" onClick={reset}>
-          重新显示
-        </button>
+        <Button onClick={reset}>重新显示</Button>
       </div>
     ),
   }}
