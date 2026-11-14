@@ -121,7 +121,7 @@ Every adapter method receives an `AbortSignal`, must honor cancellation, and thr
 | interrupt        | Interrupt backend generation; distinct from local connection cleanup                                    | `(id: string, signal: AbortSignal) => Promise<{ interrupted: boolean }>`                | Optional |
 | steer            | Append input to the active stream; acceptance is not completion                                         | `(input: VikingBotChatInput, signal: AbortSignal) => Promise<{ accepted: boolean }>`    | Optional |
 
-`VikingBotAttachmentUpload` accepts an optional file picker filter, `accept`, and a required `upload(file, signal)` function that resolves to the uploaded file ID. Validate files in the adapter as the picker filter does not apply to dropped files. Console waits for files to upload before letting the user send and aborts uploads when the user removes a file or changes sessions. If the host supplies its own draft attachments or file handler, Console uses those instead.
+`VikingBotAttachmentUpload` accepts an optional file picker filter, `accept`, and a required `upload(file, signal)` function that resolves to the uploaded file ID. Validate files in the adapter as the picker filter does not apply to dropped files. Console waits for files to upload before letting the user send. Removing a file aborts its upload; changing the account, request identity or session, or cancelling the request signal, aborts pending uploads and clears managed attachments. Echoing a newly created session ID through `conversation.sessions.currentId` preserves uploads for that conversation. If the host supplies its own draft attachments or file handler, Console uses those instead.
 
 ### VikingBotSessionService
 

@@ -17,6 +17,50 @@ import {
   failure,
 } from './helpers/acl-dom.mjs';
 
+test('effective grant sources follow permission levels when direct and inherited grants overlap', async () => {
+  const report = {
+    ...initial(),
+    direct_entries: [
+      { principal: 'user:bob', level: 'read' },
+      { principal: 'user:carol', level: 'manage' },
+      { principal: 'user:dana', level: 'manage' },
+    ],
+    inherited_entries: [
+      { principal: 'user:bob', level: 'manage' },
+      { principal: 'user:carol', level: 'manage' },
+      { principal: 'user:dana', level: 'read' },
+    ],
+    effective_entries: ['bob', 'carol', 'dana'].map((id) => ({
+      principal: `user:${id}`,
+      level: 'manage',
+    })),
+  };
+  const fetch = fixture((call) =>
+    call.path.endsWith('/acl') ? ok(report) : undefined,
+  );
+  const view = await mount(tree(fetch));
+  try {
+    await open();
+    for (const [id, source] of [
+      ['bob', 'Inherited from parent'],
+      ['carol', 'Direct grant'],
+      ['dana', 'Direct grant'],
+    ]) {
+      const entry = document
+        .querySelector(`button[aria-label="user:${id}: Can manage"]`)
+        ?.closest('.ov-file-browser-acl__entry');
+      assert.ok(entry, `Expected effective manage permission for ${id}`);
+      assert.equal(
+        entry.querySelector('.ov-file-browser-acl__source')?.textContent,
+        source,
+        `Unexpected effective permission source for ${id}`,
+      );
+    }
+  } finally {
+    await view.unmount();
+  }
+});
+
 test('an increase retains inheritance; a decrease requires confirmation and language switches preserve it', async () => {
   const fetch = fixture();
   const view = await mount(tree(fetch));

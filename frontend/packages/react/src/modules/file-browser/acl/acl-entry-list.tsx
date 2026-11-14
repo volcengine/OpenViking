@@ -23,8 +23,8 @@ export function AclEntryList({
   onChange: (entries: FileBrowserAclEntry[]) => void;
 }) {
   const entries = report.effective_entries;
-  const direct = new Set(
-    report.direct_entries.map(({ principal }) => principal),
+  const direct = new Map(
+    report.direct_entries.map(({ principal, level }) => [principal, level]),
   );
   const inherited = new Set(
     report.inherited_entries.map(({ principal }) => principal),
@@ -67,7 +67,7 @@ export function AclEntryList({
             disabled={disabled}
             currentUser={entry.principal === currentUser}
             source={
-              direct.has(entry.principal)
+              direct.get(entry.principal) === entry.level
                 ? text.direct
                 : inherited.has(entry.principal)
                   ? text.inherited

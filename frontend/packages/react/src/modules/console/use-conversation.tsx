@@ -29,16 +29,17 @@ export function useConversation(
     scopeKey: chatOptions?.scopeKey ?? scopeKey,
     requestOptions: chatOptions?.requestOptions ?? requestOptions,
   };
+  const chat = useVikingBotChat(options);
   const uploads = useAttachmentUpload(
     enabled &&
       !conversation?.onFilesAdded &&
       conversation?.attachments === undefined
       ? chatOptions?.service?.attachmentUpload
       : undefined,
-    options.scopeKey,
+    chat.send,
+    chat.signal,
   );
   const clearUploads = uploads.clear;
-  const chat = useVikingBotChat(options);
   const { sessionId, reset, selectSession } = chat;
   const selection = useMemo(
     () => ({

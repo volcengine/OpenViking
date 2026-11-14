@@ -108,6 +108,8 @@ export interface VikingBotChatState {
 }
 
 export interface VikingBotChatResult extends VikingBotChatState {
+  /** Resolved request lifetime shared with managed attachment uploads. */
+  signal?: AbortSignal;
   /** True only when this service supplies an actual interrupt operation. */
   canInterrupt: boolean;
   canSteer: boolean;

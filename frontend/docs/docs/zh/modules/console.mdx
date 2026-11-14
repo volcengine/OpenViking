@@ -121,7 +121,7 @@ import '@openviking/react/modules/console/style.css';
 | interrupt        | 实际中断后端生成；与本地断开连接不同                                     | `(id: string, signal: AbortSignal) => Promise<{ interrupted: boolean }>`                | 可选   |
 | steer            | 向当前流追加输入；accepted 仅表示接受，不表示回复完成                    | `(input: VikingBotChatInput, signal: AbortSignal) => Promise<{ accepted: boolean }>`    | 可选   |
 
-`VikingBotAttachmentUpload` 接收可选的文件选择器过滤器 `accept`，以及必填的 `upload(file, signal)`，它返回已上传文件的标识。文件选择器不会过滤拖入的文件，适配器仍需验证文件。附件上传完成后才可发送；移除附件、切换会话会取消上传。如果宿主提供草稿附件或文件选择回调，则使用宿主的配置。
+`VikingBotAttachmentUpload` 接收可选的文件选择器过滤器 `accept`，以及必填的 `upload(file, signal)`，它返回已上传文件的标识。文件选择器不会过滤拖入的文件，适配器仍需验证文件。附件上传完成后才可发送。移除附件会取消该文件的上传；切换账号、请求身份或会话，或取消请求信号时，会取消待完成的上传并清空托管附件。通过 `conversation.sessions.currentId` 回写新建会话 ID 时，会保留该会话的正常上传。如果宿主提供草稿附件或文件选择回调，则使用宿主的配置。
 
 ### VikingBotSessionService
 

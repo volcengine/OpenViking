@@ -4,7 +4,10 @@ import type { VikingBotAttachmentUpload } from './types.js';
 
 const NO_ATTACHMENTS: readonly VikingBotAttachment[] = [];
 
-function createUploadOwner(config?: VikingBotAttachmentUpload) {
+function createUploadOwner(
+  config?: VikingBotAttachmentUpload,
+  parentSignal?: AbortSignal,
+) {
   let items = NO_ATTACHMENTS;
   let sequence = 0;
   const requests = new Map<string, AbortController>();
@@ -37,9 +40,12 @@ function createUploadOwner(config?: VikingBotAttachmentUpload) {
       return () => listeners.delete(listener);
     },
     add: (files: readonly File[]) => {
-      if (!config) return;
+      if (!config || parentSignal?.aborted) return;
       for (const file of files.slice(0, Math.max(0, 10 - items.length))) {
         const request = new AbortController();
+        const signal = parentSignal
+          ? AbortSignal.any([request.signal, parentSignal])
+          : request.signal;
         const item: VikingBotAttachment = {
           key: String(++sequence),
           name: file.name,
@@ -50,7 +56,7 @@ function createUploadOwner(config?: VikingBotAttachmentUpload) {
         requests.set(item.key, request);
         update([...items, item]);
         const finish = (result: Partial<VikingBotAttachment>) => {
-          if (!requests.delete(item.key) || request.signal.aborted) return;
+          if (!requests.delete(item.key) || signal.aborted) return;
           update(
             items.map((entry) =>
               entry === item ? { ...entry, ...result } : entry,
@@ -59,8 +65,8 @@ function createUploadOwner(config?: VikingBotAttachmentUpload) {
         };
         void Promise.resolve()
           .then(() => {
-            request.signal.throwIfAborted();
-            return config.upload(file, request.signal);
+            signal.throwIfAborted();
+            return config.upload(file, signal);
           })
           .then((id) => {
             const uploadId = id?.trim();
@@ -80,16 +86,25 @@ function createUploadOwner(config?: VikingBotAttachmentUpload) {
 }
 
 export function useAttachmentUpload(
-  config?: VikingBotAttachmentUpload,
-  scopeKey?: string,
+  config: VikingBotAttachmentUpload | undefined,
+  chatOwner: unknown,
+  signal?: AbortSignal,
 ) {
   const owner = useMemo(() => {
-    void scopeKey;
-    return createUploadOwner(config);
-  }, [config, scopeKey]);
-  // Effect necessity: pending file uploads are external requests. Navigation or
-  // unmount may change their owner without a user event; abort the old requests.
-  useEffect(() => owner.clear, [owner]);
+    void chatOwner;
+    return createUploadOwner(config, signal);
+  }, [config, chatOwner, signal]);
+  // Effect necessity: uploads follow the external chat controller and its
+  // inherited/request signal, whose cancellation can happen outside UI events.
+  // Cleanup removes the abort subscription and cancels this owner's requests.
+  useEffect(() => {
+    if (signal?.aborted) owner.clear();
+    else signal?.addEventListener('abort', owner.clear, { once: true });
+    return () => {
+      signal?.removeEventListener('abort', owner.clear);
+      owner.clear();
+    };
+  }, [owner, signal]);
   const attachments = useSyncExternalStore(
     owner.subscribe,
     owner.getSnapshot,
