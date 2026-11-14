@@ -293,30 +293,34 @@ All fields are optional, and omitted fields follow `locale`. Text inside a dashb
 
 `labels.workflows` accepts any subset of these fields, and omitted fields follow `locale`.
 
-| Property     | Description                                                      | Type     | Default                                                      |
-| ------------ | ---------------------------------------------------------------- | -------- | ------------------------------------------------------------ |
-| configure    | Label of the compile configuration action, also the dialog title | `string` | `'Compile configuration'`                                    |
-| historyEmpty | Message shown when there is no version history                   | `string` | `'No version history yet'`                                   |
-| historyLimit | Message shown when the history reaches the 500-entry limit       | `string` | `'Showing up to 500 recent snapshots.'`                      |
-| version      | Text before the version number of a Wiki file                    | `string` | `'Version'`                                                  |
-| importFile   | Label of the file field in the import dialog                     | `string` | `'Package file'`                                             |
-| importHint   | Hint in the import dialog                                        | `string` | `'Choose an .ovpack package to import into this directory.'` |
-| importSubmit | Import button                                                    | `string` | `'Import'`                                                   |
-| imported     | Message shown after a successful import                          | `string` | `'Package imported.'`                                        |
-| saved        | Message shown after the compile configuration is saved           | `string` | `'Configuration saved.'`                                     |
-| cancel       | Cancel button                                                    | `string` | `'Cancel'`                                                   |
-| save         | Save button                                                      | `string` | `'Save'`                                                     |
-| failed       | Prefix of the message shown when an operation fails              | `string` | `'The operation failed.'`                                    |
-| sources      | Label of the source directories field                            | `string` | `'Source directories (one per line)'`                        |
-| skill        | Label of the skill field                                         | `string` | `'Skill URI'`                                                |
-| instruction  | Label of the instructions field                                  | `string` | `'Instructions'`                                             |
-| automatic    | Label of the automatic updates checkbox                          | `string` | `'Automatic updates'`                                        |
-| schedule     | Label of the scheduled update select                             | `string` | `'Schedule'`                                                 |
-| noSchedule   | The "no scheduled update" option                                 | `string` | `'No scheduled update'`                                      |
-| daily        | The "daily" option                                               | `string` | `'Daily'`                                                    |
-| weekly       | The "weekly" option                                              | `string` | `'Weekly'`                                                   |
-| time         | Label of the run time field                                      | `string` | `'Run time (Beijing time)'`                                  |
-| weekday      | Label of the day of week select                                  | `string` | `'Day of week'`                                              |
+| Property          | Description                                                      | Type     | Default                                                      |
+| ----------------- | ---------------------------------------------------------------- | -------- | ------------------------------------------------------------ |
+| configure         | Label of the compile configuration action, also the dialog title | `string` | `'Compile configuration'`                                    |
+| historyEmpty      | Message shown when there is no version history                   | `string` | `'No version history yet'`                                   |
+| historyLimit      | Message shown when the history reaches the 500-entry limit       | `string` | `'Showing up to 500 recent snapshots.'`                      |
+| snapshotNote      | Label for the snapshot note field                                | `string` | `'Describe this snapshot'`                                   |
+| saveSnapshot      | Button that saves a snapshot                                     | `string` | `'Save snapshot'`                                            |
+| snapshotSaved     | Message shown after a snapshot is saved                          | `string` | `'Snapshot saved.'`                                          |
+| snapshotUnchanged | Message shown when the file has no changes to snapshot           | `string` | `'The file has no changes to snapshot.'`                     |
+| version           | Text before the version number of a Wiki file                    | `string` | `'Version'`                                                  |
+| importFile        | Label of the file field in the import dialog                     | `string` | `'Package file'`                                             |
+| importHint        | Hint in the import dialog                                        | `string` | `'Choose an .ovpack package to import into this directory.'` |
+| importSubmit      | Import button                                                    | `string` | `'Import'`                                                   |
+| imported          | Message shown after a successful import                          | `string` | `'Package imported.'`                                        |
+| saved             | Message shown after the compile configuration is saved           | `string` | `'Configuration saved.'`                                     |
+| cancel            | Cancel button                                                    | `string` | `'Cancel'`                                                   |
+| save              | Save button                                                      | `string` | `'Save'`                                                     |
+| failed            | Prefix of the message shown when an operation fails              | `string` | `'The operation failed.'`                                    |
+| sources           | Label of the source directories field                            | `string` | `'Source directories (one per line)'`                        |
+| skill             | Label of the skill field                                         | `string` | `'Skill URI'`                                                |
+| instruction       | Label of the instructions field                                  | `string` | `'Instructions'`                                             |
+| automatic         | Label of the automatic updates checkbox                          | `string` | `'Automatic updates'`                                        |
+| schedule          | Label of the scheduled update select                             | `string` | `'Schedule'`                                                 |
+| noSchedule        | The "no scheduled update" option                                 | `string` | `'No scheduled update'`                                      |
+| daily             | The "daily" option                                               | `string` | `'Daily'`                                                    |
+| weekly            | The "weekly" option                                              | `string` | `'Weekly'`                                                   |
+| time              | Label of the run time field                                      | `string` | `'Run time (Beijing time)'`                                  |
+| weekday           | Label of the day of week select                                  | `string` | `'Day of week'`                                              |
 
 ### FileBrowserAclLabels
 
@@ -441,10 +445,10 @@ Reveal defaults to `true`; `{ reveal: false }` only requests a preview and resol
 - The right side of the header holds the Preview / Source switch, the edit button and the action menu. Copy path sits beside the breadcrumb, followed by the permission tag.
 - The visibility flags only control whether a default button is shown, not the capability: `canDelete`, `deleteFile()` and the editing methods in the `previewSlots` context keep working.
 - `readOnly` disables all writes, including saving the compile configuration. With `acl` on, editing, import and saving the compile configuration require `write` or `manage`, and deletion requires `manage`.
-- Copy content, download, export, version history and viewing the compile configuration are not restricted by `readOnly` or ACL.
+- Copying content, downloading, exporting, viewing version history and viewing the compile configuration remain available regardless of `readOnly` and ACL settings.
 - Without `acl`, or for resources outside `viking://resources/`, the block does not probe permissions and the server enforces access.
-- Saving an ordinary file prompts for a version note. After confirmation, FileBrowser writes the file and waits for its background write task to finish before creating a snapshot. If the snapshot is not created, the file stays saved and the preview shows a warning. Wiki files save directly.
-- Version history reads up to 500 snapshots with `GET /api/v1/snapshot/log`, or up to 100 retained versions with `GET /api/v1/snapshot/versions` for a Wiki compile output file. You can preview or copy historical text and compare it with the current file. The history dialog is read-only.
+- Saving an ordinary file updates its content. To create a version of saved content, open **Version history**, enter a note, and select **Save snapshot**. The action requires an editable ordinary file and sends `POST /api/v1/snapshot/commit`.
+- Version history reads up to 500 snapshots with `GET /api/v1/snapshot/log`, or up to 100 retained versions with `GET /api/v1/snapshot/versions` for a Wiki compile output file. You can preview or copy historical text and compare it with the current file.
 - Compile configuration: `GET /api/v1/compile/config` reads it, and `POST /api/v1/compile/config/update` saves the source directories, skill, instructions, automatic updates and daily or weekly schedule.
 - Import .ovpack: the file is first uploaded through `POST /api/v1/resources/temp_upload`, then `POST /api/v1/pack/import` imports it into the current directory. On failure the chosen file is kept, and a retry uploads it again.
 - Export .ovpack: `POST /api/v1/pack/export` returns the content, which is saved as `<name>.ovpack`; downloads use `GET /api/v1/content/download`.

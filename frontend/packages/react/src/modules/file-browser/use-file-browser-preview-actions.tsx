@@ -142,6 +142,12 @@ export function useFileBrowserPreviewActions({
             kind={kind}
             uri={opened?.uri ?? uri}
             canWrite={canWrite}
+            canSaveSnapshot={
+              enabled &&
+              policy.edit &&
+              policy.fileHistory &&
+              !policy.versionedFile
+            }
             versioned={policy.versionedFile}
             showContent={isFile && !isBinaryFile(uri)}
             text={text}

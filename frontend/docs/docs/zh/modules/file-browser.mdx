@@ -293,30 +293,34 @@ import '@openviking/react/modules/file-browser/style.css';
 
 `labels.workflows` 接受其中任意几项，省略的项跟随 `locale`。
 
-| 参数         | 说明                               | 类型     | 默认值                                |
-| ------------ | ---------------------------------- | -------- | ------------------------------------- |
-| configure    | 编译配置操作的文案，也是弹窗的标题 | `string` | `'编译配置'`                          |
-| historyEmpty | 没有历史版本时的提示               | `string` | `'暂无历史版本'`                      |
-| historyLimit | 历史记录达到 500 条上限时的提示    | `string` | `'最多显示最近 500 条快照。'`         |
-| version      | Wiki 文件版本号前的文字            | `string` | `'版本'`                              |
-| importFile   | 导入弹窗里文件选择框的标签         | `string` | `'包文件'`                            |
-| importHint   | 导入弹窗里的说明                   | `string` | `'选择 .ovpack 包，导入到当前目录。'` |
-| importSubmit | 导入按钮                           | `string` | `'导入'`                              |
-| imported     | 导入成功的提示                     | `string` | `'导入成功。'`                        |
-| saved        | 编译配置保存成功的提示             | `string` | `'配置已保存。'`                      |
-| cancel       | 取消按钮                           | `string` | `'取消'`                              |
-| save         | 保存按钮                           | `string` | `'保存'`                              |
-| failed       | 操作失败的提示前缀                 | `string` | `'操作失败。'`                        |
-| sources      | 来源目录输入框的标签               | `string` | `'来源目录（每行一个）'`              |
-| skill        | 技能输入框的标签                   | `string` | `'技能 URI'`                          |
-| instruction  | 指令输入框的标签                   | `string` | `'指令'`                              |
-| automatic    | 自动更新复选框的标签               | `string` | `'自动更新'`                          |
-| schedule     | 定时更新选择框的标签               | `string` | `'定时更新'`                          |
-| noSchedule   | 「不设置定时更新」选项             | `string` | `'不设置定时更新'`                    |
-| daily        | 「每天」选项                       | `string` | `'每天'`                              |
-| weekly       | 「每周」选项                       | `string` | `'每周'`                              |
-| time         | 执行时间输入框的标签               | `string` | `'执行时间（北京时间）'`              |
-| weekday      | 星期选择框的标签                   | `string` | `'星期'`                              |
+| 参数              | 说明                               | 类型     | 默认值                                |
+| ----------------- | ---------------------------------- | -------- | ------------------------------------- |
+| configure         | 编译配置操作的文案，也是弹窗的标题 | `string` | `'编译配置'`                          |
+| historyEmpty      | 没有历史版本时的提示               | `string` | `'暂无历史版本'`                      |
+| historyLimit      | 历史记录达到 500 条上限时的提示    | `string` | `'最多显示最近 500 条快照。'`         |
+| snapshotNote      | 快照备注输入框的标签               | `string` | `'描述这次快照'`                      |
+| saveSnapshot      | 保存快照按钮                       | `string` | `'保存快照'`                          |
+| snapshotSaved     | 快照保存成功的提示                 | `string` | `'快照已保存。'`                      |
+| snapshotUnchanged | 文件内容无变化时的提示             | `string` | `'文件内容没有变化，无需创建快照。'`  |
+| version           | Wiki 文件版本号前的文字            | `string` | `'版本'`                              |
+| importFile        | 导入弹窗里文件选择框的标签         | `string` | `'包文件'`                            |
+| importHint        | 导入弹窗里的说明                   | `string` | `'选择 .ovpack 包，导入到当前目录。'` |
+| importSubmit      | 导入按钮                           | `string` | `'导入'`                              |
+| imported          | 导入成功的提示                     | `string` | `'导入成功。'`                        |
+| saved             | 编译配置保存成功的提示             | `string` | `'配置已保存。'`                      |
+| cancel            | 取消按钮                           | `string` | `'取消'`                              |
+| save              | 保存按钮                           | `string` | `'保存'`                              |
+| failed            | 操作失败的提示前缀                 | `string` | `'操作失败。'`                        |
+| sources           | 来源目录输入框的标签               | `string` | `'来源目录（每行一个）'`              |
+| skill             | 技能输入框的标签                   | `string` | `'技能 URI'`                          |
+| instruction       | 指令输入框的标签                   | `string` | `'指令'`                              |
+| automatic         | 自动更新复选框的标签               | `string` | `'自动更新'`                          |
+| schedule          | 定时更新选择框的标签               | `string` | `'定时更新'`                          |
+| noSchedule        | 「不设置定时更新」选项             | `string` | `'不设置定时更新'`                    |
+| daily             | 「每天」选项                       | `string` | `'每天'`                              |
+| weekly            | 「每周」选项                       | `string` | `'每周'`                              |
+| time              | 执行时间输入框的标签               | `string` | `'执行时间（北京时间）'`              |
+| weekday           | 星期选择框的标签                   | `string` | `'星期'`                              |
 
 ### FileBrowserAclLabels
 
@@ -441,10 +445,10 @@ await browserRef.current?.openResource(resultUri, { reveal: true });
 - 标题行右侧依次是「预览 / 源码」切换、编辑按钮和操作菜单，「复制路径」在面包屑旁，权限标签在其后。
 - 显隐开关只控制默认按钮是否显示，不改变能力：`previewSlots` 上下文里的 `canDelete`、`deleteFile()` 和编辑方法仍然可用。
 - `readOnly` 禁止所有写入，包括保存编译配置；开启 `acl` 后，编辑、导入和保存编译配置要求 `write` 或 `manage`，删除要求 `manage`。
-- 复制内容、下载、导出、历史版本和查看编译配置不受 `readOnly` 和 ACL 的限制。
+- 复制内容、下载、导出、查看历史版本和查看编译配置不受 `readOnly` 和 ACL 的限制。
 - 没有开启 `acl`，或资源不在 `viking://resources/` 下时，区块不探测权限，由服务端鉴权。
-- 保存普通文件时会弹出版本备注。确认后，FileBrowser 保存正文，等待该文件的后台写入任务结束，再创建快照。若未创建快照，正文仍保留，预览会显示提示。Wiki 文件直接保存。
-- 历史版本：`GET /api/v1/snapshot/log` 读取该资源最近最多 500 条快照；Wiki 编译产物用 `GET /api/v1/snapshot/versions` 读取最多 100 个保留版本。可预览或复制历史正文，并与当前文件对比。历史弹窗为只读。
+- 保存普通文件会更新正文。要为已保存的内容创建版本，打开「历史版本」，填写备注并点击「保存快照」。此操作仅对可编辑的普通文件开放，调用 `POST /api/v1/snapshot/commit`。
+- 历史版本通过 `GET /api/v1/snapshot/log` 读取该资源最近最多 500 条快照。Wiki 编译产物用 `GET /api/v1/snapshot/versions` 读取最多 100 个保留版本。可预览或复制历史正文，并与当前文件对比。
 - 编译配置：`GET /api/v1/compile/config` 读取，`POST /api/v1/compile/config/update` 保存来源目录、技能、指令、自动更新和每天或每周的定时更新。
 - 导入 .ovpack：先通过 `POST /api/v1/resources/temp_upload` 上传文件，再调用 `POST /api/v1/pack/import` 导入到当前目录；失败时保留所选文件，重试会重新上传。
 - 导出 .ovpack：调用 `POST /api/v1/pack/export`，把返回的内容保存为 `<名称>.ovpack`；下载使用 `GET /api/v1/content/download`。

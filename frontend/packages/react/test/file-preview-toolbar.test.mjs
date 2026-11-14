@@ -1,14 +1,7 @@
 import { waitForEditor, setEditor } from './helpers/preview-editor-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {
-  deferred,
-  mount,
-  ok,
-  recordingFetch,
-  settle,
-  setTextarea,
-} from './helpers/module-dom.mjs';
+import { mount, ok, recordingFetch, settle } from './helpers/module-dom.mjs';
 import { act, createElement } from 'react';
 
 const { FilePreview } =
@@ -82,51 +75,20 @@ test('standalone preview offers editing only on the active editable level', asyn
   }
 });
 
-test('FileBrowser waits before snapshotting', { timeout: 5000 }, async () => {
+test('FileBrowser saves edits without waiting for background work or creating a snapshot', async () => {
   const uri = 'viking://resources/guide.md';
   let fullReads = 0;
-  let taskReads = 0;
-  const processing = deferred();
-  const taskPolled = deferred();
-  let fileLocked = false;
   const requests = recordingFetch(({ path, body: request }) => {
     if (path.endsWith('/fs/ls')) return ok([{ uri, isDir: false }]);
     if (path.endsWith('/fs/stat')) return ok({ uri, isDir: false });
     if (path.endsWith('/content/read')) return ok('');
-    if (path.endsWith('/tasks/content-write')) {
-      if (++taskReads === 1) {
-        return ok({ task_id: 'content-write', status: 'running' });
-      }
-      taskPolled.resolve();
-      return processing.promise.then(() => {
-        fileLocked = false;
-        return ok({ task_id: 'content-write', status: 'completed' });
-      });
-    }
-    if (path.endsWith('/snapshot/commit')) {
-      assert.deepEqual(request, { message: 'Update guide', paths: [uri] });
-      if (fileLocked) {
-        return Response.json(
-          {
-            status: 'error',
-            error: {
-              code: 'CONFLICT',
-              message: 'A snapshot path is being processed',
-              details: { uri, conflict_type: 'path_busy', retryable: true },
-            },
-          },
-          { status: 409 },
-        );
-      }
-      return ok({ result: 'created', commit_oid: 'commit-1' });
-    }
     if (path.endsWith('/content/write')) {
       assert.equal(request.uri, uri);
       assert.equal(request.mode, 'replace');
       assert.equal(request.content, '# Updated');
+      assert.notEqual(request.wait, true);
       assert.equal(request.version_message, undefined);
-      assert.equal(request.expected_content_sha256, undefined);
-      fileLocked = true;
+      assert.equal(request.use_snapshot, undefined);
       return ok({ task_id: 'content-write' });
     }
     return ok([]);
@@ -160,37 +122,11 @@ test('FileBrowser waits before snapshotting', { timeout: 5000 }, async () => {
     assert.equal(fullReads, 1);
     await setEditor(view.container.querySelector('.cm-content'), '# Updated');
     await click(view, 'Save');
-    const dialog = () =>
-      document.querySelector('.ov-file-preview-version-note [role="dialog"]');
-    assert.ok(dialog());
-    assert.equal(requests.countOf('/api/v1/content/write'), 0);
-    await setTextarea(dialog().querySelector('textarea'), ' Update guide ');
-    await act(async () => dialog().querySelector('[type="submit"]').click());
     assert.equal(requests.countOf('/api/v1/content/write'), 1);
     assert.equal(requests.countOf('/api/v1/snapshot/commit'), 0);
-    assert.equal(taskReads, 1);
-    await act(async () => {
-      await taskPolled.promise;
-      assert.equal(requests.countOf('/api/v1/snapshot/commit'), 0);
-      processing.resolve();
-    });
-    await settle();
-    assert.equal(dialog(), null);
-    assert.doesNotMatch(
-      view.container.textContent,
-      /a new version was not created/,
-    );
-    assert.deepEqual(
-      requests.calls
-        .filter(({ path }) => /\/(write|commit|content-write)$/.test(path))
-        .map(({ path }) => path),
-      [
-        '/api/v1/content/write',
-        '/api/v1/tasks/content-write',
-        '/api/v1/tasks/content-write',
-        '/api/v1/snapshot/commit',
-      ],
-    );
+    assert.equal(requests.countOf('/api/v1/tasks/content-write'), 0);
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.equal(view.container.querySelector('.cm-content'), null);
     assert.equal(requests.countOf('/api/v1/content/read'), reads + 1);
     await view.render(render(true));
     assert.equal(button(view, 'Edit'), undefined);
