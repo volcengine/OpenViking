@@ -60,6 +60,8 @@ export function useMediaMonitoring(
       }
     | undefined
   >(undefined);
+  // 将已提交的图片、视频或弹窗结果同步给宿主监控；浏览器事件可能发生在后台层，不能仅据事件上报。
+  // 资源身份切换取消旧 span，后台层晋升沿用已记录的时间，关闭弹窗取消该次观察；卸载清理见下方。
   useLayoutEffect(() => {
     const previous = attempt.current;
     const bound = target === 'dialog' ? active : (retry?.bound ?? active);
@@ -142,6 +144,8 @@ export function useMediaMonitoring(
     else if (span.finish())
       span.emit(definition.ready, { ...span.ready(), cacheState: 'unknown' });
   }, [binding, flow, enabled, target, identity, active, ready, error, retry]);
+  // 将媒体观察的实例寿命同步给宿主监控，卸载与 Strict Mode 重放没有对应的媒体事件。
+  // 清理取消未完成 span 并移除 attempt；后续提交重新观察当前资源，不复用已离开的 DOM 观察。
   useLayoutEffect(
     () => () => {
       attempt.current?.span?.finish('cancelled', 'unmount');

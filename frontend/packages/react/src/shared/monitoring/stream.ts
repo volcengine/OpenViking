@@ -54,12 +54,23 @@ export async function monitoredStream(
     observer.clear();
     throw error;
   }
+  const signals =
+    observer.callerSignals ??
+    (spec.options?.signal ? [spec.options.signal] : []);
+  const clear = () => {
+    for (const signal of signals) signal.removeEventListener('abort', clear);
+    observer.clear();
+  };
+  for (const signal of signals)
+    signal.addEventListener('abort', clear, { once: true });
+  // Cancellation can occur during connection or the synchronous ready receiver.
+  if (signals.some((signal) => signal.aborted)) clear();
   let stopped = false;
   const original = stream;
   return {
     abort() {
       stopped = true;
-      observer.clear();
+      clear();
       original.abort();
     },
     async *[Symbol.asyncIterator](): AsyncGenerator<OvStreamEvent> {
@@ -103,7 +114,7 @@ export async function monitoredStream(
           );
         throw error;
       } finally {
-        observer.clear();
+        clear();
         if (!complete)
           read?.finish(
             'cancelled',

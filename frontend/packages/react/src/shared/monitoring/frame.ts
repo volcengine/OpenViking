@@ -109,18 +109,28 @@ export class MonitoringFrame implements MonitoringBinding {
     error: unknown,
     componentStack?: string | null,
     region: RegionByComponent[ComponentName] = 'root',
-    flow?: { spans: readonly MonitoringSpan[]; operation?: unknown },
+    flow?: {
+      spans: readonly MonitoringSpan[];
+      operation?: unknown;
+      gap?: 'shared-query-input';
+    },
   ) {
     if (!this.active() || !this.controller.options) return;
     const data = this.inputs?.() ?? [];
-    const inputs = flow?.operation
-      ? flow.spans
-      : data.length
-        ? data
-        : (flow?.spans ?? this.related ?? []);
+    const inputs =
+      flow?.operation || flow?.gap
+        ? flow.spans
+        : data.length
+          ? data
+          : (flow?.spans ?? this.related ?? []);
     const previous = this.controller.cause(error);
-    const parent =
-      inputs.length === 1 ? inputs[0] : inputs.length ? null : this.parent;
+    const parent = flow?.gap
+      ? null
+      : inputs.length === 1
+        ? inputs[0]
+        : inputs.length
+          ? null
+          : this.parent;
     const repeated = previous?.rendered.includes(this.id ?? '');
     const retry = previous && repeated;
     const sameOwner = previous?.source.componentPath.some(
@@ -147,6 +157,7 @@ export class MonitoringFrame implements MonitoringBinding {
         : undefined,
     );
     if (!span) return;
+    if (flow?.gap) span.gap(flow.gap);
     if (
       this.lateEnabled &&
       !inputs.some((input) => input.available()) &&

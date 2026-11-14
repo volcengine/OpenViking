@@ -13,7 +13,7 @@ import type { WorkflowTarget } from '../../shared/monitoring/workflows.js';
 export class QueryObservation<T extends WorkflowTarget> {
   private fetching = false;
   private observed?: { started: number; epoch: number };
-  private workflow?: Workflow<T>;
+  private workflow?: { query: WeakRef<object>; operation: Workflow<T> };
   constructor(
     private client: OvClient | null,
     private target: T,
@@ -23,8 +23,9 @@ export class QueryObservation<T extends WorkflowTarget> {
     this.fetching = false;
   }
   operations(query: object) {
-    return this.workflow?.span.available()
-      ? [this.workflow]
+    return this.workflow?.query.deref() === query &&
+      this.workflow.operation.span.available()
+      ? [this.workflow.operation]
       : workflowsForData(this.client, [query], this.target);
   }
   observe(
@@ -71,7 +72,7 @@ export class QueryObservation<T extends WorkflowTarget> {
     operation.span.timing(observed.started, now(), Date.now());
     if (result.error) operation.fail(result.error);
     else {
-      this.workflow = operation;
+      this.workflow = { query: new WeakRef(query), operation };
       tagModel(binding, result.data, operation.span);
     }
   }

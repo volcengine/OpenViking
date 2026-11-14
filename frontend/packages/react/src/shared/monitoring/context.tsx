@@ -26,9 +26,12 @@ export function MonitoringProvider({
   const controller = monitoring === undefined && parent ? parent : own;
   // Commit the external receiver before ref callbacks and layout effects. A
   // discarded concurrent render must never publish a receiver or enable tracing.
+  // Reconfiguration replaces the receiver or disables collection; unmount cleanup is below.
   useInsertionEffect(() => {
     if (controller === own) own.configure(monitoring ?? false);
   }, [own, controller, monitoring]);
+  // End this Provider's external collection when its ownership changes or it unmounts;
+  // neither has a user event. Never disable an inherited parent's controller.
   useInsertionEffect(
     () => () => {
       if (controller === own) own.configure(false);

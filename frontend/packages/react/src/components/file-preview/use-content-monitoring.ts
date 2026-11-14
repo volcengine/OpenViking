@@ -98,6 +98,8 @@ export function useContentMonitoring(props: FilePreviewBodyProps) {
     },
     [preview],
   );
+  // 将已提交的预览身份、遮罩和渲染结果同步到宿主监控；渲染可被丢弃，单个事件也不能确认实际呈现。
+  // 身份切换或不可展示时取消旧 attempt，后台层晋升继续当前结果；卸载由下方 Effect 清理。
   useLayoutEffect(() => {
     const prior = attempt.current;
     const changed =
@@ -176,6 +178,8 @@ export function useContentMonitoring(props: FilePreviewBodyProps) {
     props.viewMode,
     source,
   ]);
+  // 宿主监控需要知道实例卸载，而卸载没有对应的用户事件。
+  // 清理取消未完成 span，保留已结束 attempt；Strict Mode 重建仅重新启动已取消的工作。
   useLayoutEffect(
     () => () => {
       // Retain settled attempts across development effect replay; only cancelled work restarts.

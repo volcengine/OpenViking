@@ -200,7 +200,10 @@ export function FileBrowserSearch({
       />
       <div ref={exposure} className="ov-file-browser-search__content">
         <div className="ov-file-browser-search__results">
-          <MonitoringFlow operation={search.monitoring}>
+          <MonitoringFlow
+            operation={search.monitoring}
+            unobservedInput={!!search.result && !search.monitoring}
+          >
             <ErrorBoundary
               monitoringRegion="search"
               message={useRenderErrors(locale).search}

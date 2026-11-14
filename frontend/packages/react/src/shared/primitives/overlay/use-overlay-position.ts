@@ -122,8 +122,9 @@ export function useOverlayPosition(
     placement,
   });
 
-  // Sync committed geometry and scoped theme; release both on close or unmount.
-  // The server uses an inert effect instead of attempting layout measurement.
+  // Sync the committed portal's geometry and theme with browser layout changes;
+  // viewport/ancestor mutations need updates beyond React renders or UI events.
+  // Close, dependency changes and unmount release observers, listeners and styles.
   useLayoutEffect(() => {
     if (!open) return;
     const trigger = triggerRef.current;

@@ -9,6 +9,8 @@ export function useWorkflowCommit<T extends WorkflowTarget>(
   payload: () => WorkflowPayload<T>,
 ) {
   // This synchronizes committed UI readiness with the host's external receiver.
+  // Render can be discarded and request completion does not prove UI readiness.
+  // The query owns cancellation; this adds no subscription and ready is idempotent.
   useLayoutEffect(() => {
     if (ready && operation) operation.ready(payload());
   }, [operation, ready, payload]);

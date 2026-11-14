@@ -7,6 +7,9 @@ export function usePortalTheme(
   triggerRef: RefObject<HTMLElement | null>,
   surface: HTMLElement | null,
 ) {
+  // Copy the committed trigger's scoped theme into its body portal; ancestor
+  // styles can change outside React, so render or UI events cannot track them.
+  // Close, node changes and unmount disconnect the observer and remove copied styles.
   useLayoutEffect(() => {
     const trigger = triggerRef.current;
     if (!open || !trigger || !surface) return;

@@ -63,6 +63,9 @@ export function withMonitoring<C extends ElementType>(
         controller === ancestor?.controller
           ? readData(ancestor, Object.values(props))
           : [];
+      // Publish this committed component/flow to the external monitoring receiver;
+      // discarded renders cannot change its source. Dependency cleanup marks the
+      // old binding inactive before callbacks can report against stale Props.
       useInsertionEffect(() => {
         frame.observeContext(enabled, controller);
         if (controller && frame.controller !== controller) {
@@ -83,6 +86,9 @@ export function withMonitoring<C extends ElementType>(
           frame.live = false;
         };
       }, [frame, controller, ancestor, flow, props, inputs, enabled]);
+      // Release this component's external trace histories and diagnostic bodies
+      // on instance removal; there is no matching UI event. A new frame owns its
+      // own lifetime, while updates above retain the current instance's history.
       useInsertionEffect(() => () => frame.dispose(), [frame]);
       return (
         <OwnerContext.Provider value={frame}>

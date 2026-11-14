@@ -21,6 +21,9 @@ export function useCodeLoad<T>(load: () => Promise<T>, target?: CodeTarget) {
   const enabled = useRenderedMonitoring();
   const flow = useMonitoringFlow();
   const current = useRef({ enabled, flow });
+  // Dynamic-import callbacks need the committed receiver scope; mutating the shared
+  // ref during a discarded render could replace the live scope. No subscription is
+  // created here; later commits replace it and the observer cleanup below cancels work.
   useInsertionEffect(() => {
     current.current = { enabled, flow };
   }, [enabled, flow]);
@@ -129,7 +132,9 @@ export function useCodeLoad<T>(load: () => Promise<T>, target?: CodeTarget) {
       },
     };
   }, [load, target, owner]);
-  // Imports may settle before Suspense commits. Discarded loaders never deliver.
+  // Imports can settle before Suspense commits, so only the committed observer
+  // may notify the external receiver. Replacement/unmount cancels pending records
+  // and disables delivery; settled records remain guarded against replay.
   useLayoutEffect(() => observer.start(), [observer]);
   return observer;
 }
