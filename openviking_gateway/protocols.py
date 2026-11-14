@@ -371,6 +371,20 @@ def auxiliary(text: str) -> bool:
     )
 
 
+def appended_request(message: dict) -> str:
+    """The text a client appended to a tool result, as Claude Code appends its compaction
+    request: the message's last block, read as conversation is, or ""."""
+    content = message.get("content")
+    if message.get("role") != "user" or not isinstance(content, list) or not content:
+        return ""
+    last = content[-1]
+    if not any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content) or not (
+        isinstance(last, dict) and string_type(last) == "text" and isinstance(last.get("text"), str)
+    ):
+        return ""
+    return clean_text(unwrap_client(last["text"]))
+
+
 def classify(body: dict, headers: dict, messages: list[dict]) -> tuple[str, int]:
     anchor = next((i for i in range(len(messages) - 1, -1, -1) if is_user(messages[i])), -1)
     request_class = headers.get("x-claude-code-request-class", "")
@@ -406,6 +420,8 @@ def classify(body: dict, headers: dict, messages: list[dict]) -> tuple[str, int]
     parts = [text_content({"content": body.get(key, "")}) for key in ("system", "instructions")]
     if anchor >= 0:
         parts.append(text_content(messages[anchor]))
+    if messages and anchor != len(messages) - 1:
+        parts.append(appended_request(messages[-1]))
     if any(auxiliary(part) for part in parts if part):
         return "auxiliary", anchor
     if anchor < 0:

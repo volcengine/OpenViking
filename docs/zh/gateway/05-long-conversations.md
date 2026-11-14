@@ -116,7 +116,7 @@ description: OpenViking 网关如何压缩长对话、要设置哪个上下文�
 
 **特别长的会话可能超出请求大小上限。** 客户端的历史越来越长，特别长的会话最终可能超出请求大小上限：请求体超过 32 MiB 会被拒绝，返回 HTTP 413（见[客户端收到网关返回的错误](12-troubleshooting.md#clients-get-an-error-from-the-gateway)）。运维人员可以用 `max_body_bytes` 调整这个上限（见[网关字段](13-configuration.md#gateway-fields)）；网关前面的反向代理允许的请求体也不能比它小（见[反向代理和 HTTPS](../guides/22-gateway-operations.md#reverse-proxy-and-https)）。
 
-**客户端自己压缩会换到新会话。** 客户端压缩或编辑历史后，网关把新历史保存到新的 OpenViking 会话。检索工具可用时，新历史开头的网关说明会告诉模型之前的会话在哪里。
+**客户端自己压缩时，带会话请求头的对话不换会话。** 客户端压缩或编辑历史后，用会话请求头标识的对话从改动之后的位置继续保存到同一个 OpenViking 会话；没有这类请求头时，网关把新历史保存到新的 OpenViking 会话。检索工具可用时，新历史开头的网关说明会告诉模型之前的会话在哪里。
 
 ## 实验性：Agent 自管上下文窗口 {#experimental-agent-managed-context-windows}
 

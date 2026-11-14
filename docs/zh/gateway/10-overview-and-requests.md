@@ -129,7 +129,7 @@ description: 读懂 Studio 中 OpenViking 网关的“概览”和“请求日�
 | OpenViking 无法访问或响应超时 | `openviking_unavailable` | OpenViking 没有运行、连不上或响应太慢。 |
 | 保存到 OpenViking 失败 | `delivery_failed` | 其他原因导致保存失败，网关按上表重试。 |
 | 保存已恢复正常 | `delivery_recovered` | 失败之后又保存成功了。 |
-| 对话历史有改动，后续内容改存到新的 OpenViking 会话 | `history_changed` | 正常现象：客户端编辑、重新生成或压缩了对话，网关用当前历史在新的 OpenViking 会话中继续保存。 |
+| 对话历史有改动，后续内容改存到新的 OpenViking 会话 | `history_changed` | 正常现象：客户端编辑、重新生成或压缩了不带会话请求头的对话，网关用当前历史在新的 OpenViking 会话中继续保存。 |
 | 保存过程中对话历史有改动，后续内容改存到新的 OpenViking 会话 | `history_changed_during_delivery` | 正常现象：同上，只是发生在保存进行中。 |
 | 已保存的一轮对话在停顿后又继续了，后续内容改存到新的 OpenViking 会话 | `continued_after_idle` | 正常现象：已在**最新回复等待时长**之后保存的一轮又继续了。 |
 | 管理员已手动重新同步 | `manual_reset` | 有人用了**重新同步对话…**（见下文）。 |

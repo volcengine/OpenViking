@@ -116,7 +116,7 @@ Each reason and its fix are listed under [Long conversations hit the context lim
 
 **Very long sessions can hit the request size limit.** Because the client's history keeps growing, a very long session can eventually exceed the request size limit: request bodies over 32 MiB are rejected with HTTP 413 (see [Clients get an error from the gateway](12-troubleshooting.md#clients-get-an-error-from-the-gateway)). Operators can change the limit with `max_body_bytes` (see [Gateway fields](13-configuration.md#gateway-fields)); a reverse proxy in front of the gateway must allow bodies at least as large (see [Reverse proxy and HTTPS](../guides/22-gateway-operations.md#reverse-proxy-and-https)).
 
-**A client's own compaction starts a new session.** When the client compacts or edits its history, the gateway saves the new history to a new OpenViking session. If the search tools are available, the opening gateway note of the new history tells the model where the earlier sessions are.
+**A client's own compaction keeps a named conversation's session.** When the client compacts or edits its history, a conversation identified by a session header keeps saving to the same OpenViking session from where the change leaves off; without such a header, the gateway saves the new history to a new OpenViking session. If the search tools are available, the opening gateway note of the new history tells the model where the earlier sessions are.
 
 ## Experimental: agent-managed context windows {#experimental-agent-managed-context-windows}
 

@@ -14,11 +14,11 @@ from openviking_gateway.storage import SQLiteKernelStore, SQLiteManagementStore
 from openviking_gateway.tool_protocols import ResponseCapture
 
 
-async def prepare(kernel, credential, policy, messages, **body):
+async def prepare(kernel, credential, policy, messages, headers=None, **body):
     return await kernel.prepare(
         {"model": "model", "messages": messages, **body},
         "chat",
-        {"x-openviking-session": "review"},
+        {"x-openviking-session": "review"} if headers is None else headers,
         credential,
         {"id": "upstream"},
         policy,
@@ -253,10 +253,14 @@ async def test_capture_retry_recovers_in_order(setup_kernel, credential, policy)
     assert delivered == ["Question 0", "Question 1"]
 
 
-async def test_idle_capture_does_not_mix_a_regenerated_branch(setup_kernel, credential, policy):
+@pytest.mark.parametrize("header", [False, True])
+async def test_idle_capture_does_not_mix_a_regenerated_branch(
+    setup_kernel, credential, policy, header
+):
     kernel, store, viking, encryption = setup_kernel
     policy.update(recall=False)
-    p = await prepare(kernel, credential, policy, history(1)[:1])
+    headers = None if header else {}
+    p = await prepare(kernel, credential, policy, history(1)[:1], headers)
     await kernel.completed(p, credential, ResponseCapture("chat", history(1)[1], complete=True))
     await make_due(store)
     worker = await worker_for(store, encryption, credential, viking)
@@ -266,10 +270,12 @@ async def test_idle_capture_does_not_mix_a_regenerated_branch(setup_kernel, cred
         {"role": "assistant", "content": "Edited answer"},
         {"role": "user", "content": "next"},
     ]
-    await prepare(kernel, credential, policy, messages)
-    await worker.once()
+    await prepare(kernel, credential, policy, messages, headers)
+    while await worker.once():
+        pass
+    # A named session saves the edit after the answer it holds.
     assert len(viking.writes) == 2
-    assert viking.write_sessions[0] != viking.write_sessions[1]
+    assert (viking.write_sessions[0] == viking.write_sessions[1]) is header
     assert "Edited answer" in str(viking.writes[1])
     assert not (await store.capture.get(p.scope, p.session)).value["error"]
 

@@ -238,7 +238,8 @@ async def group_chat(client, key):
 
 @pytest.mark.parametrize("change", ["edit_before_bob", "sliding_window"])
 async def test_a_changed_prefix_keeps_later_messages_peers(running_gateway, change):
-    """A new OpenViking session after an edit or a dropped exchange keeps every peer."""
+    """A named session keeps its OpenViking session after an edit or a dropped exchange,
+    and what it saves again keeps its peers."""
     app, client, _, key, _, writes = running_gateway
     sessions = []
 
@@ -258,10 +259,10 @@ async def test_a_changed_prefix_keeps_later_messages_peers(running_gateway, chan
     writes.clear()
     sessions.clear()
     messages = await delivered(app, writes)
-    assert sessions and first not in sessions
+    assert set(sessions) == {first}
     users = [(m["parts"][0]["text"], m.get("peer_id")) for m in messages if m["role"] == "user"]
-    expected = [("I am Alice", "alice"), ("I am Bob", "bob"), ("I am Carol", "carol")]
-    assert users == expected[2 - len(history) // 2 :]
+    # The queued turn, then what follows the last message the session knows, keep peers.
+    assert users == [("I am Carol", "carol"), ("I am Bob", "bob"), ("I am Carol", "carol")]
 
 
 async def test_repeated_text_keeps_each_senders_peer(running_gateway):
@@ -276,7 +277,7 @@ async def test_repeated_text_keeps_each_senders_peer(running_gateway):
 
 @pytest.mark.parametrize("cause", ["edit", "reset"])
 async def test_saving_again_keeps_each_messages_peer(running_gateway, cause):
-    """Saving the history to a new OpenViking session keeps each message's peer."""
+    """Saving the history again, or the queue of an edited one, keeps each message's peer."""
     app, client, admin, key, _, writes = running_gateway
     sessions = []
 
@@ -299,9 +300,10 @@ async def test_saving_again_keeps_each_messages_peer(running_gateway, cause):
     await chat(client, key["key"], [user("I am Alice"), reply, user("Carol")], "carol-bot")
     writes.clear()
     messages = await delivered(app, writes)
-    assert len(set(sessions)) == 2
+    # An edit keeps the named session, which still receives the turn it had queued.
+    assert len(set(sessions)) == (1 if cause == "edit" else 2)
     users = [(m["parts"][0]["text"], m.get("peer_id")) for m in messages if m["role"] == "user"]
-    assert users[0] == ("I am Alice", "alice-bot")
+    assert users[0] == (("I am Bob", "bob-bot") if cause == "edit" else ("I am Alice", "alice-bot"))
 
 
 async def test_anonymous_history_continues_across_peers(setup_kernel, credential, policy):

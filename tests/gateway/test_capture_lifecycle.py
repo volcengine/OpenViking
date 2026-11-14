@@ -87,12 +87,16 @@ async def test_existing_replacement_survives_capture_pause_or_plugin(
     assert messages[0] not in again.body["messages"]
 
 
+@pytest.mark.parametrize("header", [False, True])
 @pytest.mark.parametrize("change", ["edit", "compact"])
-async def test_changed_history_resyncs_to_new_session(setup_kernel, credential, policy, change):
+async def test_changed_history_resyncs_to_new_session_unless_named(
+    setup_kernel, credential, policy, change, header
+):
     kernel, store, viking, encryption = setup_kernel
     policy.update(recall=False)
+    headers = None if header else {}
     messages = [*history(2), {"role": "user", "content": "next"}]
-    first = await prepare(kernel, credential, policy, messages)
+    first = await prepare(kernel, credential, policy, messages, headers)
     worker = await worker_for(store, encryption, credential, viking)
     await worker.once()
     await worker.once()
@@ -105,10 +109,16 @@ async def test_changed_history_resyncs_to_new_session(setup_kernel, credential, 
             {"role": "assistant", "content": "continue"},
             {"role": "user", "content": "next"},
         ]
-    revised = await prepare(kernel, credential, policy, changed)
-    assert revised.capture_target != first.capture_target
+    revised = await prepare(kernel, credential, policy, changed, headers)
     assert revised.metrics["capture_status"] == "active"
     await worker.once()
+    if header:
+        # The named session receives the changed history after what it holds.
+        assert revised.capture_target == first.capture_target
+        assert set(viking.write_sessions) == {first.capture_target}
+        assert changed[1]["content"] in str(viking.writes)
+        return
+    assert revised.capture_target != first.capture_target
     assert viking.write_sessions[-1] != viking.write_sessions[0]
     assert changed[0]["content"] in str(
         [
@@ -332,13 +342,15 @@ async def test_failed_commit_is_retried_with_later_messages(setup_kernel, creden
     ]
 
 
+@pytest.mark.parametrize("header", [False, True])
 @pytest.mark.parametrize("edit", [False, True])
 async def test_concurrent_request_reconciles_inflight_delivery(
-    setup_kernel, credential, policy, edit
+    setup_kernel, credential, policy, edit, header
 ):
     kernel, store, viking, encryption = setup_kernel
     policy.update(recall=False)
-    p = await prepare(kernel, credential, policy, history(1)[:1])
+    headers = None if header else {}
+    p = await prepare(kernel, credential, policy, history(1)[:1], headers)
     await kernel.completed(p, credential, ResponseCapture("chat", history(1)[1], complete=True))
     await make_due(store)
     worker = await worker_for(store, encryption, credential, viking)
@@ -358,21 +370,24 @@ async def test_concurrent_request_reconciles_inflight_delivery(
         messages[1]["content"] = "edited reply"
     try:
         revised = await prepare(
-            kernel, credential, policy, [*messages, {"role": "user", "content": "next"}]
+            kernel, credential, policy, [*messages, {"role": "user", "content": "next"}], headers
         )
     finally:
         released.set()
         await task
-    await worker.once()
+    while await worker.once():
+        pass
     batches = [
         batch
         for batch, target in zip(viking.writes, viking.write_sessions, strict=True)
         if target == revised.capture_target
     ]
+    # A named session saves the edited history after the answer it already holds.
+    saved = [*history(1), *messages[1:]] if edit and header else messages
     assert [m["parts"][0]["text"] for batch in batches for m in batch] == [
-        m["content"] for m in messages
+        m["content"] for m in saved
     ]
-    assert (revised.capture_target != p.capture_target) is edit
+    assert (revised.capture_target != p.capture_target) is (edit and not header)
 
 
 async def test_tool_continuations_replace_pending_tail_without_reset(

@@ -1417,3 +1417,44 @@ def test_tool_input_whitespace_is_significant():
     after = copy.deepcopy(before)
     after[0]["content"][0]["input"]["content"] = "a"
     assert prefix_chain(before) != prefix_chain(after)
+
+
+def test_a_compaction_request_appended_to_a_tool_result_is_auxiliary():
+    use = {"type": "tool_use", "id": "t1", "name": "Read", "input": {}}
+    result = {"type": "tool_result", "tool_use_id": "t1", "content": "f1"}
+    loop = [
+        {"role": "user", "content": "Read f1"},
+        {"role": "assistant", "content": [use]},
+        {"role": "user", "content": [result]},
+    ]
+    assert classify({}, {}, loop) == ("continuation", 0)
+    # Claude Code appends its compaction instruction to the last tool result.
+    request = {"type": "text", "text": HARNESS_SIDE_REQUESTS["claude-code-compact"]}
+    compaction = [*loop[:2], {"role": "user", "content": [result, request]}]
+    assert classify({}, {}, compaction) == ("auxiliary", 0)
+    # A reminder beside a tool result is not the user's, even when it quotes a pattern.
+    for note in (HARNESS_SIDE_REQUESTS["claude-code-compact"], "The file f2 was modified"):
+        reminder = {"type": "text", "text": f"<system-reminder>\n{note}\n</system-reminder>"}
+        step = [*loop[:2], {"role": "user", "content": [result, reminder]}]
+        assert classify({}, {}, step) == ("continuation", 0)
+    # Nor is a noise-only user item after tool outputs in other protocols.
+    noise = {
+        "role": "user",
+        "content": "<system-reminder>\nCRITICAL: Respond with TEXT ONLY. Do NOT call any tools\n</system-reminder>",
+    }
+    chat = [
+        {"role": "user", "content": "Read f1"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "t1", "type": "function", "function": {"name": "Read", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "t1", "content": "f1"},
+        noise,
+    ]
+    assert classify({}, {}, chat) == ("continuation", 0)
+    output = {"type": "function_call_output", "call_id": "t1", "output": "f1"}
+    call = {"type": "function_call", "call_id": "t1", "name": "Read", "arguments": "{}"}
+    responses = [{"role": "user", "content": "Read f1"}, call, output, noise]
+    assert classify({}, {}, responses) == ("continuation", 0)
