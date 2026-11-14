@@ -498,6 +498,14 @@ class LoopCompactionMixin:
                     temperature=0.0,
                     session_id=session_key.safe_name(),
                 )
+                # Providers report a failed call as an error response; its text is not a summary.
+                if response.finish_reason == "error":
+                    logger.warning(
+                        "Tool-loop compaction summary attempt {}/3 failed: {}",
+                        attempt,
+                        response.content,
+                    )
+                    continue
                 summary = (response.content or "").strip()
                 if summary:
                     return summary
