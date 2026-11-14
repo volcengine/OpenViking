@@ -24,6 +24,12 @@
   overflow-y: auto;
   color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
 }
+.ov-viking-bot__interaction-steps {
+  min-width: 0;
+  min-height: 0;
+  flex: 0 1 auto;
+  overflow-y: auto;
+}
 .ov-viking-bot__interaction-card {
   box-sizing: border-box;
   width: 100%;

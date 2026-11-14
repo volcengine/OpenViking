@@ -22,10 +22,12 @@ export function TargetInteraction({
   error: hostError,
   onSubmit,
   onCancel,
+  onPrevious,
 }: Omit<VikingBotInteractionProps, 'request' | 'labels' | 'locale'> & {
   request: VikingBotInteractionTargetRequest;
   labels: InteractionLabels;
   locale: Locale;
+  onPrevious?: () => void;
 }) {
   const id = useId();
   const trigger = useRef<HTMLButtonElement>(null);
@@ -37,13 +39,14 @@ export function TargetInteraction({
     cause: unknown;
   }>();
   const blocked = Boolean(disabled || submitting || pending);
+  const missingUri = !uri.trim();
   const permission = resolveDirectoryPermission(
     uri,
     request.directoryPicker.permission,
   );
   const submit = async () => {
     if (blocked || busy.current) return;
-    if (!uri) {
+    if (missingUri) {
       setError({
         code: 'submitFailed',
         cause: new DirectoryFlowError('directoryUnavailable'),
@@ -78,7 +81,11 @@ export function TargetInteraction({
           void submit();
         }}
       >
-        <h3 id={`${id}-title`} className="ov-viking-bot__interaction-title">
+        <h3
+          tabIndex={-1}
+          id={`${id}-title`}
+          className="ov-viking-bot__interaction-title"
+        >
           {request.question ?? labels.directoryTarget}
         </h3>
         <div className="ov-viking-bot__interaction-fields">
@@ -137,6 +144,11 @@ export function TargetInteraction({
           ) : null}
         </div>
         <div className="ov-viking-bot__interaction-footer">
+          {onPrevious ? (
+            <Button type="outline" disabled={blocked} onClick={onPrevious}>
+              {labels.previous}
+            </Button>
+          ) : null}
           {onCancel ? (
             <Button
               type="outline"
@@ -157,7 +169,7 @@ export function TargetInteraction({
             type="primary"
             htmlType="submit"
             loading={pending || submitting}
-            disabled={blocked}
+            disabled={blocked || missingUri}
           >
             {labels.submit}
           </Button>

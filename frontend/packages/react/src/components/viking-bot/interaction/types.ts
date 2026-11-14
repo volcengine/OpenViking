@@ -73,13 +73,15 @@ export interface VikingBotInteractionRenderContext {
   submit: (value: unknown) => void | Promise<void>;
   /** 放弃本次交互。Abandons this interaction. */
   cancel: () => void;
+  /** 分步模式下返回上一步。Go back in a sequence. */
+  previous?: () => void;
 }
 
 /**
  * 一次待确认交互，内置单选、文本、定时、修复和输出目录表单。
  * A pending interaction with choice, text, schedule, repair and target forms.
  */
-export type VikingBotInteractionRequest =
+export type VikingBotInteractionSingleRequest =
   | VikingBotInteractionTargetRequest
   | {
       /** 单选。Single choice. */
@@ -112,6 +114,8 @@ export type VikingBotInteractionRequest =
       description?: ReactNode;
       /** 是否多行。Whether the input is multiline. */
       multiline?: boolean;
+      /** 是否必填，默认 true。Required by default; false allows an empty answer. */
+      required?: boolean;
     }
   | {
       /** 定时。Schedule. */
@@ -142,14 +146,31 @@ export type VikingBotInteractionRequest =
       render: (context: VikingBotInteractionRenderContext) => ReactNode;
     };
 
+/** 单题或由组件管理的分步问题。A question or a built-in sequence. */
+export type VikingBotInteractionRequest =
+  | VikingBotInteractionSingleRequest
+  | {
+      kind: 'steps';
+      /** 按顺序展示的问题。Questions in display order. */
+      steps: readonly [
+        VikingBotInteractionSingleRequest,
+        ...VikingBotInteractionSingleRequest[],
+      ];
+    };
+
 /** 交互答案。An interaction answer. */
-export type VikingBotInteractionAnswer =
+export type VikingBotInteractionSingleAnswer =
   | { kind: 'target'; value: string }
   | { kind: 'choice'; value: string }
   | { kind: 'text'; value: string }
   | { kind: 'schedule'; value: VikingBotScheduleValue }
   | { kind: 'repair'; value: string }
   | { kind: 'custom'; value: unknown };
+
+/** 分步答案按问题顺序返回。Sequence answers follow question order. */
+export type VikingBotInteractionAnswer =
+  | VikingBotInteractionSingleAnswer
+  | { kind: 'steps'; value: readonly VikingBotInteractionSingleAnswer[] };
 
 /**
  * 交互区文案。组件内置中英文文案，宿主可按需覆盖。
@@ -163,6 +184,10 @@ export interface VikingBotInteractionLabels extends VikingBotInteractionDirector
   title?: string;
   /** 提交按钮。Submit button. */
   submit?: string;
+  /** 下一步。Next step. */
+  next?: string;
+  /** 上一步。Previous step. */
+  previous?: string;
   /** 取消按钮。Cancel button. */
   cancel?: string;
   /** 「其他」输入项文案。Label of the "other" input. */

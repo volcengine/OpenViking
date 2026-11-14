@@ -58,7 +58,12 @@ export function InteractionFields({
     name: 'answer',
     value: answer?.kind === 'text' ? answer.value : '',
     disabled,
-    'aria-describedby': request.description ? `${id}-description` : undefined,
+    required: request.required !== false,
+    'aria-invalid': Boolean(validation),
+    'aria-describedby':
+      [request.description && `${id}-description`, validation && `${id}-error`]
+        .filter(Boolean)
+        .join(' ') || undefined,
     onChange: (
       event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
     ) => onChange({ kind: 'text', value: event.target.value }),

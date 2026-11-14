@@ -8,6 +8,8 @@ export type {
   VikingBotInteractionDirectoryInfo,
   VikingBotInteractionDirectoryOperations,
   VikingBotInteractionTargetRequest,
+  VikingBotInteractionSingleRequest,
+  VikingBotInteractionSingleAnswer,
   VikingBotInteractionAnswer,
   VikingBotInteractionLabels,
   VikingBotInteractionOption,

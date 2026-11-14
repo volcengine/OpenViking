@@ -31,6 +31,8 @@ const messages = {
   directoryPickerTitle: 'Choose a save directory',
   directoryPickerConfirm: 'Use this directory',
   directoryPickerHint: 'Choose a directory',
+  next: 'Next',
+  previous: 'Previous',
   answer: 'Answer',
   title: 'Needs your input',
   submit: 'Submit',

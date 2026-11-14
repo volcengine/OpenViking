@@ -66,6 +66,14 @@ Demonstrates output-directory, text, schedule and repair forms. The directory fl
 
 ```
 
+### Multi-step confirmation
+
+Pass questions with `kind: 'steps'`. The component manages progress, Previous and Next, and preserves drafts across steps. Only the final step calls `onSubmit` with all answers. Next and Submit stay disabled while the current answer is incomplete. Failed submissions preserve every draft for editing and retry.
+
+```tsx file="../../_demos/viking-bot-interaction-steps.tsx" preview
+
+```
+
 ### Host-controlled directory selection
 
 Use `allowCustomInput.onOpen` to own the picker. Render [ContextPicker](./context-picker), then call `select` to return the answer.
@@ -406,7 +414,7 @@ Each part in `VikingBotMessage.parts` is told apart by `type`, and `VikingBotMes
 
 | Property   | Description                                                                                                                                                                                                 | Type                                                                  | Default                        |
 | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------------ |
-| request    | The current question                                                                                                                                                                                        | `VikingBotInteractionRequest`                                         | Required                       |
+| request    | A single question or a built-in sequence                                                                                                                                                                    | `VikingBotInteractionRequest`                                         | Required                       |
 | requestKey | Stable identity of the question; changing it resets the built-in form, and it defaults to `request.kind` plus `index`                                                                                       | `string`                                                              | -                              |
 | index      | Current step index, starting at 0                                                                                                                                                                           | `number`                                                              | `0`                            |
 | total      | Total number of steps; progress shows when greater than 1                                                                                                                                                   | `number`                                                              | `1`                            |
@@ -420,7 +428,7 @@ Each part in `VikingBotMessage.parts` is told apart by `type`, and `VikingBotMes
 | locale     | Interface language, see [Internationalization](../guide/i18n); inside the `interaction` of `VikingBot` it follows the language of `VikingBot` by default                                                    | `'zh-CN' \| 'en-US'`                                                  | Inherited, otherwise `'en-US'` |
 | className  | Class name applied to the root element                                                                                                                                                                      | `string`                                                              | -                              |
 
-The interaction area uses the library’s own form and controls. Standalone `VikingBotInteraction` does not require Ark Design. A failed submission preserves the draft and displays an error for retry; cancelling restores the initial values.
+The interaction area uses the library’s own form and controls. Standalone `VikingBotInteraction` does not require Ark Design. A failed submission preserves the draft and displays an error for retry; cancelling restores the initial values and returns a sequence to its first step. Submit is disabled for missing choices, blank custom answers and invalid schedules. Text questions are required by default; use `required: false` for optional text.
 
 ### VikingBotInteractionLabels
 
@@ -462,10 +470,21 @@ The interaction area uses the library’s own form and controls. Standalone `Vik
 | directoryRetry              | Directory-flow copy                         | `string`                                   | Retry                                            |
 | directoryLoadFailed         | Directory-flow copy                         | `string`                                   | Could not load directories                       |
 | directoryParent             | Parent directory description                | `(uri: string) => string`                  | `Parent directory: {uri}`                        |
+| next                        | Next-step button                            | `string`                                   | Next                                             |
+| previous                    | Previous-step button                        | `string`                                   | Previous                                         |
 
 ### VikingBotInteractionRequest
 
 `kind` decides the question type and the available fields. Each type is listed below.
+
+#### steps
+
+| Property | Description                                                                                                          | Type                                                                                   | Default  |
+| -------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | -------- |
+| kind     | Question type                                                                                                        | `'steps'`                                                                              | Required |
+| steps    | One or more single-question requests in display order; supports every single-question kind, without nested sequences | `readonly [VikingBotInteractionSingleRequest, ...VikingBotInteractionSingleRequest[]]` | Required |
+
+Sequences calculate progress automatically and ignore `index` and `total`. Changing `requestKey` resets all drafts. Custom questions advance through the render context’s `submit` callback and go back through `previous`; the custom form owns its content validation.
 
 #### target
 
@@ -481,7 +500,7 @@ The interaction area uses the library’s own form and controls. Standalone `Vik
 | Property         | Description                                                                                                                       | Type                                                                                                                                                                             | Default  |
 | ---------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
 | kind             | Question type                                                                                                                     | `'choice'`                                                                                                                                                                       | Required |
-| options          | Options; one of them (or the "Other" text) must be chosen before submitting, incomplete answers display a validation message      | `readonly VikingBotInteractionOption[]`                                                                                                                                          | Required |
+| options          | Options; one of them (or the "Other" text) must be chosen before submitting, incomplete answers disable submission                | `readonly VikingBotInteractionOption[]`                                                                                                                                          | Required |
 | question         | Question text                                                                                                                     | `ReactNode`                                                                                                                                                                      | -        |
 | allowCustomInput | Custom answer; onOpen delegates selection to the host, directoryPicker reuses the built-in dialog, otherwise uses an inline input | `boolean \| { placeholder?: string; open?: boolean; onOpen?: (context: VikingBotInteractionCustomInputContext) => void; directoryPicker?: VikingBotInteractionDirectoryPicker }` | `false`  |
 
@@ -494,6 +513,7 @@ The interaction area uses the library’s own form and controls. Standalone `Vik
 | initialValue | Initial text of the input                                        | `string`    | `''`     |
 | description  | Extra description shown above the input                          | `ReactNode` | -        |
 | multiline    | Use a text area by default; pass `false` for a single-line input | `boolean`   | `true`   |
+| required     | Require non-blank text; whitespace-only answers are incomplete   | `boolean`   | `true`   |
 
 #### schedule
 
@@ -508,12 +528,12 @@ Choose the update frequency with segmented radio controls. Weekly updates includ
 
 #### repair
 
-| Property     | Description                                                                                               | Type                               | Default  |
-| ------------ | --------------------------------------------------------------------------------------------------------- | ---------------------------------- | -------- |
-| kind         | Question type                                                                                             | `'repair'`                         | Required |
-| options      | Candidates; one of them must be chosen before submitting, incomplete answers display a validation message | `readonly VikingBotRepairOption[]` | Required |
-| question     | Question text                                                                                             | `ReactNode`                        | -        |
-| initialValue | `id` of the initially selected candidate                                                                  | `string`                           | -        |
+| Property     | Description                                                                                     | Type                               | Default  |
+| ------------ | ----------------------------------------------------------------------------------------------- | ---------------------------------- | -------- |
+| kind         | Question type                                                                                   | `'repair'`                         | Required |
+| options      | Candidates; one of them must be chosen before submitting, incomplete answers disable submission | `readonly VikingBotRepairOption[]` | Required |
+| question     | Question text                                                                                   | `ReactNode`                        | -        |
+| initialValue | `id` of the initially selected candidate                                                        | `string`                           | -        |
 
 #### custom
 
@@ -593,13 +613,16 @@ Used by `target.directoryPicker` or `choice.allowCustomInput.directoryPicker`. C
 | cancel     | Abandons the interaction by calling `onCancel`                             | `() => void`                                | Required |
 | disabled   | Whether submitting is disabled, that is `disabled` or `submitting` is true | `boolean`                                   | -        |
 | submitting | Whether a submission is in progress                                        | `boolean`                                   | -        |
+| previous   | Go to the previous step; absent on the first step                          | `() => void`                                | -        |
 
 ### VikingBotInteractionAnswer
 
 | Property | Description                                                                                                                                                                                                                              | Type                                                                                     | Default  |
 | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | -------- |
-| kind     | Question type, equal to `request.kind`                                                                                                                                                                                                   | `'target' \| 'choice' \| 'text' \| 'schedule' \| 'repair' \| 'custom'`                   | Required |
+| kind     | Question type, equal to `request.kind`                                                                                                                                                                                                   | `'target' \| 'choice' \| 'text' \| 'schedule' \| 'repair' \| 'custom' \| 'steps'`        | Required |
 | value    | The answer: for `choice`, the `value` of the chosen option or the "Other" text; for `text`, the entered text; for `schedule`, the schedule value; for `repair`, the `id` of the chosen candidate; for `custom`, the argument of `submit` | `string` (choice, text, repair), `VikingBotScheduleValue` (schedule), `unknown` (custom) | Required |
+
+Sequence submissions return `{ kind: 'steps', value: VikingBotInteractionSingleAnswer[] }`, with single-question answers in question order. Single-question submissions keep their existing shape.
 
 ### VikingBotInteractionCustomInputContext
 
