@@ -1,0 +1,38 @@
+{
+  "name": "@ov-superagent/console",
+  "version": "0.5.2-preview",
+  "license": "AGPL-3.0",
+  "private": true,
+  "description": "Read-only OpenViking SuperAgent console (RFC OVSA-CONSOLE-001 Slice A).",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "dev": "vite --port 5173",
+    "build": "tsc --noEmit && vite build",
+    "check": "tsc --noEmit",
+    "test": "node scripts/test.mjs",
+    "test:browser": "npm run build && node test/browser.mjs",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "lucide-react": "^0.545.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.6.6",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.1.4",
+    "jsdom": "^28.1.0",
+    "typescript": "^5.7.2",
+    "vite": "^7.3.1",
+    "vitest": "^3.0.5"
+  }
+}

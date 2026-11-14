@@ -53,7 +53,7 @@ ov-superagent logs primary
 
 For upgrades, see the [platform-specific instructions](docs/installation-reference.md#upgrade-and-rollback).
 
-The console at `http://127.0.0.1:3737` shows message processing and tool activity.
+The console at `http://127.0.0.1:3737` provides a read-only instance and Task dashboard (RFC OVSA-CONSOLE-001 Slice A) with explicit capability states. The existing message-processing and tool-activity timeline remains at `http://127.0.0.1:3737/activity`. See `packages/console/README.md` for frontend development and browser evidence.
 
 **Connect trusted chats only.** The agent can operate on its configured workspace, and chats served by one instance share runtime context. Feishu setup asks whether to authorize searching and reading messages as your user; review the scope before granting access. See [message access](docs/usage-reference.md#message-access).
 
