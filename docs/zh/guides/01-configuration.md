@@ -1963,6 +1963,9 @@ export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=ope
   }
 }
 ```
+
+**支持的区域**（`volcengine` 后端）：`cn-beijing`、`cn-shanghai`、`cn-guangzhou` 和 `ap-southeast-1`（东南亚）。未显式设置 `host` 时，`region` 用于选择内置的 VikingDB API 主机，应为上述值之一。
+
 </details>
 
 ##### ACL schema
