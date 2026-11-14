@@ -1,7 +1,6 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,7 +11,7 @@ import { DshBridgeFramer } from '../src/dsh-bridge/protocol.mjs';
 // The detach policy belongs to the platform adapter, exactly as in the product
 // code: `terminateProcessTree` signals the group on POSIX and the child on
 // Windows, so the fixture starts the child the way that signal expects.
-import { spawnDetached } from '../src/platform/index.mjs';
+import { spawn, spawnDetached } from '../src/platform/index.mjs';
 import { terminateProcessTree } from '../src/process-utils.mjs';
 
 // Helpers for tests that drive a real `dsh` process over the bridge.
