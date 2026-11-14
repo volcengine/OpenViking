@@ -3748,7 +3748,7 @@ class Session:
         * No prior WM -> call ``compression.ov_wm_v2`` with a plain completion
           and return the full 7-section markdown.
         * Has prior WM -> call ``compression.ov_wm_v2_update`` with the
-          ``update_working_memory`` tool forced on; parse per-section
+          ``update_working_memory`` tool available; parse per-section
           decisions and merge them against the previous WM. Invalid response
           content may fall back to the creation prompt. Model-call failures
           propagate to the task owner; retries belong to the VLM provider.
@@ -3976,11 +3976,7 @@ class Session:
                 response = await _complete(
                     prompt=prompt,
                     tools=[WM_CREATE_WITH_CHECKPOINTS_TOOL],
-                    tool_choice=(
-                        "auto"
-                        if getattr(vlm, "thinking", False)
-                        else {"type": "function", "function": {"name": "create_working_memory"}}
-                    ),
+                    tool_choice="auto",
                 )
                 if not (
                     getattr(response, "has_tool_calls", False)
@@ -4033,11 +4029,8 @@ class Session:
         resp = await _complete(
             prompt=update_prompt,
             tools=[WM_UPDATE_TOOL],
-            tool_choice=(
-                "auto"
-                if getattr(vlm, "thinking", False)
-                else {"type": "function", "function": {"name": "update_working_memory"}}
-            ),
+            # A relay may require auto even when local thinking is disabled.
+            tool_choice="auto",
         )
 
         has_tc = bool(getattr(resp, "has_tool_calls", False) and getattr(resp, "tool_calls", None))
