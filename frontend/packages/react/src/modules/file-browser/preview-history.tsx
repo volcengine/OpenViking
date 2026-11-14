@@ -6,11 +6,13 @@ import { diffLines } from './preview-diff.js';
 import { useDashboardQuery } from './use-dashboard-query.js';
 import { PreviewHistoryList } from './preview-history-list.js';
 import { PreviewHistoryRevision } from './preview-history-revision.js';
+import { PreviewHistorySnapshot } from './preview-history-snapshot.js';
 import { usePreviewMutation } from './use-preview-mutation.js';
 import type { PreviewWorkflowProps } from './preview-workflow-types.js';
 
 export function PreviewHistory({
   uri,
+  canSaveSnapshot,
   versioned,
   showContent,
   text,
@@ -19,6 +21,7 @@ export function PreviewHistory({
   loadingText,
   retryText,
 }: PreviewWorkflowProps & {
+  canSaveSnapshot: boolean;
   versioned: boolean;
   showContent: boolean;
   loadingText: string;
@@ -70,44 +73,59 @@ export function PreviewHistory({
   const identical =
     content.data !== undefined && content.data === current.data?.content;
   return (
-    <div className="ov-file-history__layout">
-      <PreviewHistoryList
-        query={query}
-        showContent={showContent}
-        selectedId={selected?.id}
-        compare={compare}
-        text={statusText}
-        locale={locale}
-        onCompare={() => setCompare(!compare)}
-        onSelect={(id) => {
-          setSelectedId(id);
-          setCopiedId(undefined);
-          copy.reset();
-        }}
-      />
-      {showContent ? (
-        <PreviewHistoryRevision
-          content={content}
-          current={current}
-          selectedPath={selected?.path}
-          view={view}
-          compare={compare}
-          changes={changes}
-          identical={identical}
-          copy={copy}
-          copied={Boolean(copiedId && copiedId === selected?.id)}
-          text={statusText}
-          setView={setView}
-          onCopy={() => {
-            const body = content.data;
-            if (body !== undefined && selected)
-              void copy.run(
-                async () => navigator.clipboard.writeText(body),
-                () => setCopiedId(selected.id),
-              );
+    <>
+      {canSaveSnapshot ? (
+        <PreviewHistorySnapshot
+          uri={uri}
+          text={text}
+          requestOptions={requestOptions}
+          onSaved={() => {
+            setSelectedId(undefined);
+            setCopiedId(undefined);
+            copy.reset();
+            query.retry();
           }}
         />
       ) : null}
-    </div>
+      <div className="ov-file-history__layout">
+        <PreviewHistoryList
+          query={query}
+          showContent={showContent}
+          selectedId={selected?.id}
+          compare={compare}
+          text={statusText}
+          locale={locale}
+          onCompare={() => setCompare(!compare)}
+          onSelect={(id) => {
+            setSelectedId(id);
+            setCopiedId(undefined);
+            copy.reset();
+          }}
+        />
+        {showContent ? (
+          <PreviewHistoryRevision
+            content={content}
+            current={current}
+            selectedPath={selected?.path}
+            view={view}
+            compare={compare}
+            changes={changes}
+            identical={identical}
+            copy={copy}
+            copied={Boolean(copiedId && copiedId === selected?.id)}
+            text={statusText}
+            setView={setView}
+            onCopy={() => {
+              const body = content.data;
+              if (body !== undefined && selected)
+                void copy.run(
+                  async () => navigator.clipboard.writeText(body),
+                  () => setCopiedId(selected.id),
+                );
+            }}
+          />
+        ) : null}
+      </div>
+    </>
   );
 }

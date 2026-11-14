@@ -1,8 +1,11 @@
+import { useDashboardAnalytics } from './use-dashboard-analytics.js';
+import { useTrack } from '../../shared/analytics/use-track.js';
+import { useExposure } from '../../shared/analytics/use-exposure.js';
 import { useState } from 'react';
 
 import { useLocale } from '../../shared/locale-context.js';
 import { DashboardState } from '../../shared/dashboard/dashboard-state.js';
-import { DashboardTabs } from './dashboard-tabs.js';
+import { DashboardTabs, experienceTabs } from './dashboard-tabs.js';
 import { experienceLabels } from './labels.js';
 import {
   ExperienceQueryState,
@@ -40,6 +43,9 @@ export function ExperienceDashboardContent({
   className,
   ...rest
 }: ExperienceDashboardProps) {
+  const track = useTrack();
+  const events = useDashboardAnalytics({ onOpenUri, onPageChange });
+  const exposure = useExposure('experience_dashboard_show', uri);
   const locale = useLocale(localeProp);
   const [localTab, setLocalTab] = useState<ExperienceDashboardTab>('impact');
   const [localDays, setLocalDays] = useState(7);
@@ -50,20 +56,17 @@ export function ExperienceDashboardContent({
   if (localTab === 'test' && missingTest) setLocalTab('impact');
   const days = controlledDays ?? localDays;
   const setTab = (value: ExperienceDashboardTab) => {
+    if (value !== tab) track('experience_dashboard_tab_change');
     setLocalTab(value);
     onTabChange?.(value);
   };
   const setDays = (value: number) => {
+    if (value !== days) track('experience_dashboard_range_change');
     setLocalDays(value);
     onDaysChange?.(value);
   };
   const t = experienceLabels(locale, labels);
   const directory = kind === 'directory';
-  const tabs = [
-    { key: 'impact' as const, title: t.impact },
-    { key: 'source' as const, title: t.source },
-    ...(missingTest ? [] : [{ key: 'test' as const, title: t.test }]),
-  ];
   const activeState = directory
     ? states.list
     : tab === 'source'
@@ -108,12 +111,13 @@ export function ExperienceDashboardContent({
       pageSize={pageSize}
       loading={activeState?.loading}
       labels={t}
-      onPageChange={onPageChange}
+      onPageChange={events.page}
     />
   ) : null;
   return (
     <div
       {...rest}
+      ref={exposure}
       data-resource-uri={uri}
       className={['ov-experience-dashboard', className]
         .filter(Boolean)
@@ -134,7 +138,7 @@ export function ExperienceDashboardContent({
               locale={locale}
               startIndex={startIndex}
               labels={t}
-              onOpenUri={onOpenUri}
+              onOpenUri={events.experience}
             />
           ) : states.list?.loading ? (
             // 目录表用表格骨架占住整页高度；通用占位条只有一百多像素，数据到达时
@@ -156,7 +160,7 @@ export function ExperienceDashboardContent({
         </div>
       ) : (
         <DashboardTabs
-          tabs={tabs}
+          tabs={experienceTabs(t, missingTest)}
           active={tab}
           label={t.title}
           onChange={setTab}
@@ -180,7 +184,7 @@ export function ExperienceDashboardContent({
                   onLoadMore ??
                   (onPageChange ? () => onPageChange(page + 1) : undefined)
                 }
-                onOpenUri={onOpenUri}
+                onOpenUri={events.trajectory}
               />
             ) : tab === 'source' ? (
               data.sources?.length ? (
@@ -188,7 +192,7 @@ export function ExperienceDashboardContent({
                   items={data.sources}
                   labels={t}
                   locale={locale}
-                  onOpenUri={onOpenUri}
+                  onOpenUri={events.source}
                 />
               ) : (
                 <ExperienceQueryState
@@ -206,7 +210,7 @@ export function ExperienceDashboardContent({
                   items={data.testMaterials}
                   startIndex={startIndex}
                   labels={t}
-                  onOpenUri={onOpenUri}
+                  onOpenUri={events.test}
                 />
                 {pagination}
               </>

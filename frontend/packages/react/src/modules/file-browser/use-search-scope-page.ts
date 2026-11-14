@@ -1,91 +1,65 @@
-import { useEffect, useRef, useState } from 'react';
+import { useMemo, useState, useSyncExternalStore } from 'react';
 import { useOvClient } from '../../client/provider.js';
-import type { OvClient, OvRequestOptions } from '../../client/types.js';
+import type { OvRequestOptions } from '../../client/types.js';
 import { nameFromUri } from './fs-model.js';
-import { loadPage, PAGE_SIZE } from './fs-page.js';
+import { DirectoryQueries } from './directory-queries.js';
+import { useQueryScope } from './use-query-scope.js';
 
-interface DirectoryPage {
-  client: OvClient;
-  options?: OvRequestOptions;
-  uri: string;
-  children: string[];
-  offset: number;
-  hasMore: boolean;
-  loading?: boolean;
-  error?: boolean;
-}
+const noSubscribe = () => () => {};
+const noSnapshot = () => undefined;
 
 export function useSearchScopePage(
   uri: string | undefined,
   requestOptions?: OvRequestOptions,
 ) {
-  const client = useOvClient();
-  const [page, setPage] = useState<DirectoryPage>();
-  const pending = useRef<AbortController | undefined>(undefined);
-
-  // Cancel the external listing on an account or request-option change and on unmount;
-  // those lifecycle changes can happen without a picker event.
-  useEffect(() => () => pending.current?.abort(), [client, requestOptions]);
-
-  function load(target: string, previous?: DirectoryPage) {
-    if (!client) return;
-    pending.current?.abort();
-    const controller = new AbortController();
-    pending.current = controller;
-    const offset = previous?.offset ?? 0;
-    const children = previous?.children ?? [];
-    const request = {
-      client,
-      options: requestOptions,
-      uri: target,
-      children,
-      offset,
-      hasMore: false,
-    };
-    setPage({ ...request, loading: true });
-    void loadPage(
-      client,
-      target,
-      offset,
-      controller.signal,
-      requestOptions,
-    ).then(
-      (result) => {
-        if (controller.signal.aborted) return;
-        const directories = result.entries.flatMap((entry) => {
-          if (!entry.isDir || entry.access === 'denied') return [];
-          const name = nameFromUri(entry.uri);
-          // Keep the selected root's alias even if the server expands it in its response.
-          return name && !name.includes('/') && name !== '.' && name !== '..'
-            ? [`${target}/${name}`]
-            : [];
-        });
-        setPage({
-          ...request,
-          children: [...new Set([...children, ...directories])],
-          offset: offset + PAGE_SIZE,
-          hasMore: result.hasMore,
-        });
-      },
-      () => {
-        if (!controller.signal.aborted) setPage({ ...request, error: true });
-      },
-    );
-  }
-
-  function cancel() {
-    pending.current?.abort();
-    setPage(undefined);
-  }
-
+  const { request, error, aborted } = useQueryScope(
+    useOvClient(),
+    requestOptions,
+  );
+  const [target, setTarget] = useState<string>();
+  const session = useMemo(
+    () =>
+      request && target ? new DirectoryQueries(request, target) : undefined,
+    [request, target],
+  );
+  const dirs = useSyncExternalStore(
+    aborted ? noSubscribe : (session?.subscribe ?? noSubscribe),
+    session?.getSnapshot ?? noSnapshot,
+    noSnapshot,
+  );
+  const current = target ? dirs?.[target] : undefined;
+  const page =
+    target && uri === target && (current || error)
+      ? {
+          uri: target,
+          children: [
+            ...new Set(
+              current?.entries.flatMap((entry) => {
+                if (!entry.isDir || entry.access === 'denied') return [];
+                const name = nameFromUri(entry.uri);
+                return name && name !== '.' && name !== '..'
+                  ? [`${target.replace(/\/$/, '')}/${name}`]
+                  : [];
+              }) ?? [],
+            ),
+          ],
+          hasMore: current?.hasMore ?? false,
+          loading: current?.loading,
+          error: !!(error ?? current?.error),
+        }
+      : undefined;
   return {
-    page:
-      page?.uri === uri &&
-      page?.client === client &&
-      page?.options === requestOptions
-        ? page
-        : undefined,
-    load,
-    cancel,
+    page,
+    load: (next: string, previous?: { error?: boolean }) => {
+      if (next !== target) setTarget(next);
+      else if (session)
+        void session.load(
+          next,
+          previous?.error ? 0 : 1,
+          undefined,
+          previous?.error,
+        );
+    },
+    cancel: () => setTarget(undefined),
   };
 }

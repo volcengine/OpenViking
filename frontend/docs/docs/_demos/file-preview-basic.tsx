@@ -105,7 +105,13 @@ export default function FilePreviewBasic() {
     setDrafts((current) => ({ ...current, [lang]: value }));
 
   const dashboard = (
-    <div style={{ padding: 16, color: '#8f959e', fontSize: 13 }}>
+    <div
+      style={{
+        padding: 16,
+        color: 'var(--ov-ui-color-text-3, var(--ov-ui-text-3-default))',
+        fontSize: 13,
+      }}
+    >
       {t.dashboard}
     </div>
   );

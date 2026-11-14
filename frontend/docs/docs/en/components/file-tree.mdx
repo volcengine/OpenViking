@@ -27,6 +27,14 @@ Your app keeps the expanded set and the paging state and passes the flattened tr
 
 The example uses simulated offline data: the row-end board icons come from `renderRowTrailing`, the file-type icons from `renderRowIcon`, and search only shows the `onSearch` event without opening a search UI. Check "Host-controlled loading" to see the controlled refresh state on its own.
 
+### Trailing position
+
+Switch the trailing position and scroll horizontally to compare the pinned and scrolling layouts. Select a file row to check its selected state.
+
+```tsx file="../../_demos/file-tree-trailing.tsx" preview
+
+```
+
 ## API
 
 ### FileTree
@@ -35,7 +43,10 @@ The example uses simulated offline data: the row-end board icons come from `rend
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | --------------------------------------------- |
 | rows                    | Visible rows in render order                                                                                                                | `readonly FileTreeRow[]`                               | Required                                      |
 | selectedId              | `id` of the selected row, owned by your app                                                                                                 | `string \| null`                                       | -                                             |
+| selectedIds             | Controlled multiple row selection; takes precedence over selectedId                                                                         | `readonly string[]`                                    | -                                             |
+| renderRowLeading        | Content between the toggle and icon                                                                                                         | `(row: FileTreeEntryRow) => ReactNode`                 | -                                             |
 | rootOrder               | Order of root directories; `'context'` sorts them as `user`, `session`, `agent`, `resources`, with other directories after them             | `'input' \| 'context'`                                 | `'input'`                                     |
+| rowTrailingPosition     | Pins trailing content to the visible right edge or scrolls it with the full row                                                             | `'row-end' \| 'viewport-end'`                          | `'viewport-end'`                              |
 | isReady                 | Whether the first load has finished; when `false`, `loadingFallback` is shown instead of the rows                                           | `boolean`                                              | `true`                                        |
 | loadingFallback         | Shown during the first load; falls back to `labels.loading`                                                                                 | `ReactNode`                                            | -                                             |
 | errorFallback           | Shown when the whole tree fails to load, usually with a title and a retry entry; falls back to the `message` of the error row               | `ReactNode`                                            | -                                             |
@@ -330,7 +341,7 @@ treeRef.current?.scrollToRow('resources', { block: 'center' });
 - Rows size to their content: names render in full, the container scrolls sideways, and deep indentation gets its space the same way.
 - Descriptions are at most 200px wide and truncate beyond that, so a long description does not stretch the row.
 - Chromium browsers use the same scrollbar styling on every platform. Overflow reserves 12px of space for an 8px rounded thumb, with native macOS light and dark colors. Hovering the scrollbar reveals its track and border; hovering the thumb darkens it in light mode and lightens it in dark mode.
-- Content returned by `renderRowTrailing` sits at the right edge of the row; when the row also shows trailing markers such as the level or access, it follows them directly.
+- `rowTrailingPosition` defaults to `'viewport-end'`, keeping `renderRowTrailing` content at the visible right edge during horizontal scrolling. Set it to `'row-end'` to place the content after level and access markers at the full row end and scroll it with the row.
 
 ## Theme variables
 
@@ -351,3 +362,7 @@ The root element has the class `ov-file-tree` and inner elements use `ov-file-tr
 | `--ov-ui-file-tree-row-height`    | `32px`                                | Row height                                      |
 | `--ov-ui-file-tree-row-radius`    | `4px`                                 | Row radius                                      |
 | `--ov-ui-file-tree-indent`        | `20px`                                | Indent per level                                |
+
+## Analytics
+
+Configure analytics through the Provider. See the [integration guide and event catalogue](../guide/analytics) for supported events and their semantics.

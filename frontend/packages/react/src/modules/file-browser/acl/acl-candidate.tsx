@@ -33,6 +33,7 @@ export function AclCandidate({
         name={principal}
         level={level ?? 'read'}
         onChange={onChange}
+        onSelectCurrent={level === undefined}
       />
     </div>
   );

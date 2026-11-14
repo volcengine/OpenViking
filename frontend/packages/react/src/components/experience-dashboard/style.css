@@ -6,5 +6,6 @@
 @import '../../shared/primitives/dropdown/dropdown.css';
 @import '../../shared/primitives/tooltip/tooltip.css';
 @import '../../theme.css';
+@import '../../shared/primitives/empty/empty.css';
 @import '../../shared/dashboard/dashboard.css';
 @import './experience-dashboard.css';

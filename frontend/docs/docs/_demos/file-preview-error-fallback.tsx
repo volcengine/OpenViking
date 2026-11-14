@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Button, Checkbox } from '#demo-controls';
 import { useLang } from '@rspress/core/runtime';
 import { FilePreview } from '@openviking/react/components/file-preview';
 import '@openviking/react/components/file-preview/style.css';
@@ -39,24 +40,12 @@ export default function FilePreviewErrorFallback() {
   return (
     <div>
       <p>{text.hint}</p>
-      <label>
-        <input
-          type="checkbox"
-          style={{ appearance: 'auto', width: 16, height: 16 }}
-          checked={failed}
-          onChange={(event) => setFailed(event.target.checked)}
-        />{' '}
+      <Checkbox checked={failed} onChange={setFailed}>
         {text.fail}
-      </label>{' '}
-      <label>
-        <input
-          type="checkbox"
-          style={{ appearance: 'auto', width: 16, height: 16 }}
-          checked={custom}
-          onChange={(event) => setCustom(event.target.checked)}
-        />{' '}
+      </Checkbox>{' '}
+      <Checkbox checked={custom} onChange={setCustom}>
         {text.custom}
-      </label>
+      </Checkbox>
       <div style={{ height: 220, marginTop: 16 }}>
         <FilePreview
           locale={locale}
@@ -73,16 +62,15 @@ export default function FilePreviewErrorFallback() {
                   >
                     {text.error}
                     <div>
-                      <button
-                        type="button"
-                        style={{ marginTop: 12, textDecoration: 'underline' }}
+                      <Button
+                        style={{ marginTop: 12 }}
                         onClick={() => {
                           setFailed(false);
                           reset();
                         }}
                       >
                         {text.retry}
-                      </button>
+                      </Button>
                     </div>
                   </section>
                 )

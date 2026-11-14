@@ -27,6 +27,14 @@ import '@openviking/react/components/experience-dashboard/style.css';
 
 示例使用固定数据：点击经验名称进入文件视图，点击轨迹名称只显示收到的 URI。
 
+### 渲染失败
+
+宿主传入的内容渲染出错时，组件显示默认兜底：插画、提示和「重试显示」按钮。需要替换展示时传入 `slots.errorFallback`。
+
+```tsx file="../../_demos/experience-dashboard-crash.tsx" preview
+
+```
+
 ## API
 
 ### ExperienceDashboard
@@ -118,3 +126,7 @@ import '@openviking/react/components/experience-dashboard/style.css';
 - 复制使用 `navigator.clipboard.writeText`，只在 HTTPS 或 localhost 下可用；不可用或浏览器拒绝时按钮显示「复制失败」。
 - 组件高度为 `100%` 且内容区自己滚动，父元素需要给出高度。
 - 类型从 `@openviking/react/components/experience-dashboard` 导出，包括 `ExperienceDashboardTab` 和 `ExperienceOutcome`；包根入口只导出组件和 `ExperienceDashboardProps`。
+
+## 埋点
+
+通过 Provider 统一接入，支持的事件和触发条件见[埋点指南与事件目录](../guide/analytics)。

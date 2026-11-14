@@ -126,6 +126,9 @@
 .ov-viking-bot__composer .ov-viking-bot__attach.ov-button {
   --ov-ui-button-height: 32px;
   border-radius: 6px;
+  /* 「@」是文字字形，16px 时与 14px 的「+」视觉等大。 */
+  font-size: 16px;
+  font-weight: 400;
 }
 .ov-viking-bot__composer .ov-viking-bot__attach.ov-button:not(:disabled) {
   color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
@@ -138,10 +141,19 @@
   width: 9px;
   height: 10.3334px;
 }
+/* 「@」下半部有收尾弧线，几何居中时看起来偏高，下移 1px 与「+」视觉对齐。 */
+.ov-viking-bot__attach-glyph {
+  display: block;
+  translate: 0 1px;
+}
 .ov-viking-bot__attach > svg {
   display: block;
-  width: 10.208px;
-  height: 10.208px;
+  width: 14px;
+  height: 14px;
+}
+/* 整个输入面板都可点击聚焦，光标与输入框一致；按钮保留各自的光标。 */
+.ov-viking-bot__sender {
+  cursor: text;
 }
 .ov-viking-bot__stop-icon {
   width: 10px;

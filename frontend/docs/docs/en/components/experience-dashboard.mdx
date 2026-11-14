@@ -27,6 +27,14 @@ Switch between "Experience directory", "Experience file", "Host data" and "Error
 
 The example uses fixed data: click an experience name to open its file view; clicking a trajectory name only shows the URI it receives.
 
+### Rendering failure
+
+When host content fails to render, the component shows the default fallback: an illustration, a message and a Retry display button. Pass `slots.errorFallback` to replace it.
+
+```tsx file="../../_demos/experience-dashboard-crash.tsx" preview
+
+```
+
 ## API
 
 ### ExperienceDashboard
@@ -120,3 +128,7 @@ Fields of each item in the `data.testMaterials` array.
 - Copying uses `navigator.clipboard.writeText`, which is available only over HTTPS or on localhost; when it is unavailable or the browser rejects it, the button shows "Copy failed".
 - The component is `100%` high and scrolls its content internally, so give its parent a height.
 - Types are exported from `@openviking/react/components/experience-dashboard`, including `ExperienceDashboardTab` and `ExperienceOutcome`; the package root exports only the component and `ExperienceDashboardProps`.
+
+## Analytics
+
+Configure analytics through the Provider. See the [integration guide and event catalogue](../guide/analytics) for supported events and their semantics.

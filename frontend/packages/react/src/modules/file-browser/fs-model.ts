@@ -26,48 +26,11 @@ export interface FsEntry {
 
 /** 一个目录已加载的子节点与分页状态。 */
 export interface DirState {
+  ready: boolean;
   entries: FsEntry[];
   hasMore: boolean;
   loading: boolean;
   error: Error | null;
-}
-
-/** 语义搜索返回的分组结果。Grouped results of a semantic search. */
-
-/** 空目录状态。An empty directory state. */
-export const emptyDir = (): DirState => ({
-  entries: [],
-  hasMore: false,
-  loading: false,
-  error: null,
-});
-
-/**
- * 把新到的一页并入目录状态：`offset` 为 0 是首屏、直接替换，否则追加到已有
- * 子节点之后。
- *
- * 追加而不是替换，是因为分页要保留前几页；替换会让「加载更多」把列表截成最后
- * 一页。
- *
- * Merges an arriving page into a directory's state: `offset` 0 is the first page and
- * replaces, anything else appends to the children already loaded.
- *
- * It appends rather than replaces because paging has to keep the earlier pages;
- * replacing would truncate the list to its last page on "load more".
- */
-export function mergePage(
-  current: DirState | undefined,
-  page: { entries: FsEntry[]; hasMore: boolean },
-  offset: number,
-): DirState {
-  const previous = current ?? emptyDir();
-  return {
-    entries:
-      offset === 0 ? page.entries : [...previous.entries, ...page.entries],
-    hasMore: page.hasMore,
-    loading: false,
-    error: null,
-  };
 }
 
 /** 从 URI 取末段名称。最后一段为空时回退到整个 URI。 */

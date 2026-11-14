@@ -72,12 +72,12 @@
   --ov-ui-scope-switcher-option-icon-radius: 12px;
 
   display: inline-flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   max-width: 100%;
   box-sizing: border-box;
-  height: 32px;
+  min-height: 32px;
   color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
   font-family: var(
     --ov-ui-font-family,
@@ -107,7 +107,7 @@
 .ov-scope-switcher__level {
   position: relative;
   display: inline-flex;
-  flex-shrink: 1;
+  flex-shrink: 0;
   align-items: center;
   gap: 4px;
   min-width: 0;
@@ -248,6 +248,7 @@ button:not(.ov-button).ov-scope-switcher__trigger[aria-expanded='true'] {
   z-index: 30;
   top: calc(100% + 4px);
   left: 0;
+  translate: var(--ov-ui-scope-switcher-panel-shift, 0px) 0;
   display: flex;
   flex-direction: column;
   width: min(var(--ov-ui-scope-switcher-panel-width), calc(100vw - 32px));
@@ -282,12 +283,11 @@ button:not(.ov-button).ov-scope-switcher__trigger[aria-expanded='true'] {
   overflow-y: auto;
 }
 /**
- * 最后一个层级的面板改从右侧展开，避免它被触发器挤到容器外。宿主若自带定位
- * 引擎可自行翻转；这里没有，用同一条规则覆盖最常见的情形。
+ * 最后一个层级的面板默认右对齐；换行或容器靠近视口边缘时，由定位 Hook
+ * 修正横向偏移，使面板保持在视口内。
  *
- * The last level's panel opens towards the right so its trigger cannot push it
- * out of the container. A host with its own positioning engine can flip it itself;
- * with none here, one rule covers the common case.
+ * The last level defaults to end alignment. The positioning hook corrects its
+ * horizontal offset at viewport edges, including when the level wraps.
  */
 .ov-scope-switcher__level:last-child:not(:first-child)
   .ov-scope-switcher__panel {
@@ -497,7 +497,8 @@ button:not(.ov-button).ov-scope-switcher__trigger[aria-expanded='true'] {
     var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
   outline-offset: 2px;
 }
-.ov-scope-switcher__trigger:focus-visible {
+.ov-scope-switcher__trigger:focus-visible,
+.ov-scope-switcher__search-field input:focus-visible {
   outline: none;
 }
 .ov-scope-switcher__option:focus-visible {

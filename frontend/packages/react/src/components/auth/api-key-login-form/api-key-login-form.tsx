@@ -1,3 +1,5 @@
+import { useTrack } from '../../../shared/analytics/use-track.js';
+import { useExposure } from '../../../shared/analytics/use-exposure.js';
 import { useId } from 'react';
 import { Field } from '../../../shared/auth/fields.js';
 import { FormFrame } from '../../../shared/auth/form-frame.js';
@@ -12,6 +14,8 @@ export function ApiKeyLoginForm({
   labels: overrides,
   ...options
 }: ApiKeyLoginFormProps) {
+  const track = useTrack();
+  const exposure = useExposure('api_key_login_form_show');
   const id = useId();
   const labels = useAuthLabels(locale, overrides);
   const form = useForm({ apiKey: '' }, ({ apiKey }) => ({
@@ -20,11 +24,15 @@ export function ApiKeyLoginForm({
   return (
     <FormFrame
       {...options}
+      formRef={exposure}
       labels={labels}
       submitLabel={labels.login}
       validate={form.validate}
       secondaryAction={alternateLogin}
-      onSubmit={() => onSubmit?.({ apiKey: form.values.apiKey })}
+      onSubmit={() => {
+        track('api_key_login_form_submit');
+        onSubmit?.({ apiKey: form.values.apiKey });
+      }}
     >
       <Field
         id={`${id}-key`}

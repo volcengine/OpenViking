@@ -2,7 +2,8 @@ import { VikingBotRegion } from './viking-bot-region.js';
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
 import { useRef } from 'react';
 import { resolveVikingBotLabels } from './labels.js';
-import { VikingBotSessionActions } from './session-actions.js';
+import { renderHeaderContent } from './header-content.js';
+import { useBotAnalytics } from './use-bot-analytics.js';
 import { VikingBotWelcome } from './welcome.js';
 import { QuickInputScope, useQuickInput } from './use-quick-input.js';
 import type { VikingBotQuickInput } from './capabilities.js';
@@ -27,6 +28,7 @@ export function VikingBotContent({
   streaming,
   draft,
   attachments,
+  accept,
   isSending,
   canSendWhileStreaming,
   isSubmitting,
@@ -59,6 +61,7 @@ export function VikingBotContent({
   labels: overrides,
   ...rest
 }: VikingBotProps) {
+  const analytics = useBotAnalytics(onSend);
   const locale = useLocale(localeProp);
   const labels = resolveVikingBotLabels(locale, overrides);
   const hasMessages = messages.length > 0;
@@ -83,25 +86,26 @@ export function VikingBotContent({
     shortcuts.select(item);
     inputRef.current?.focus();
   };
-  const renderedHeader =
-    header !== undefined ? (
-      header
-    ) : sessions || headerActions ? (
-      <VikingBotSessionActions
-        sessions={sessions}
-        extra={headerActions}
-        onOpenUri={onOpenUri}
-        onCopy={onCopy}
-        labels={labels}
-        locale={locale}
-      />
-    ) : null;
+  const updateDraft = (draft: string) => {
+    shortcuts.tracker.edit(draft);
+    onDraftChange?.(draft);
+  };
+  const renderedHeader = renderHeaderContent({
+    header,
+    sessions,
+    headerActions,
+    onOpenUri,
+    onCopy,
+    labels,
+    locale,
+  });
 
   if (children) {
     return (
       <div
         className={['ov-viking-bot', className].filter(Boolean).join(' ')}
         {...rest}
+        ref={analytics.exposure}
       >
         <LocaleProvider locale={locale}>{children}</LocaleProvider>
       </div>
@@ -114,6 +118,7 @@ export function VikingBotContent({
         <div
           className={['ov-viking-bot', className].filter(Boolean).join(' ')}
           {...rest}
+          ref={analytics.exposure}
         >
           {renderedHeader ? (
             <VikingBotRegion name="header">{renderedHeader}</VikingBotRegion>
@@ -133,7 +138,10 @@ export function VikingBotContent({
                 {emptyState === undefined ? (
                   <VikingBotWelcome
                     labels={labels}
-                    quickInputs={quickInputs}
+                    // 内置输入区上方常驻快捷输入；只有宿主自带输入区时欢迎页才保留一份。
+                    // The built-in composer always shows the quick inputs; the welcome
+                    // keeps its own copy only when the host supplies the composer.
+                    quickInputs={hasDefaultComposer ? undefined : quickInputs}
                     onSelect={selectQuickInput}
                     disabled={
                       isSending ||
@@ -177,30 +185,20 @@ export function VikingBotContent({
                     ref={inputRef}
                     value={draft}
                     attachments={attachments}
+                    accept={accept}
                     disabled={!isAvailable}
                     disabledReason={disabledReason}
                     isSending={isSending}
                     canSendWhileStreaming={canSendWhileStreaming}
                     isSubmitting={isSubmitting}
                     references={references}
-                    quickInputs={
-                      hasMessages || streaming || emptyState !== undefined
-                        ? quickInputs
-                        : undefined
-                    }
+                    quickInputs={quickInputs}
                     onQuickInputSelect={selectQuickInput}
-                    onValueChange={
-                      onDraftChange
-                        ? (next) => {
-                            shortcuts.tracker.edit(next);
-                            onDraftChange(next);
-                          }
-                        : undefined
-                    }
+                    onValueChange={onDraftChange && updateDraft}
                     onFilesAdded={onFilesAdded}
                     onAttachmentRemove={onAttachmentRemove}
                     onOpenUri={onOpenUri}
-                    onSend={onSend}
+                    onSend={analytics.send}
                     onCancel={onCancel}
                     labels={overrides}
                   />

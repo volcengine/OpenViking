@@ -562,6 +562,15 @@ export interface FileTreeProps extends Omit<
    * Selected row id, owned by the host.
    */
   selectedId?: string | null;
+  /** 受控多选；父子节点独立。Controlled independent multiple selection. */
+  selectedIds?: readonly string[];
+  /**
+   * 行尾插槽的位置，默认 `viewport-end` 吸附树的可视区域右侧；
+   * `row-end` 位于完整行末尾并随内容横向滚动。
+   * Positions the trailing slot. Defaults to `viewport-end`, pinned to the
+   * tree's visible right edge; `row-end` scrolls with the full row content.
+   */
+  rowTrailingPosition?: 'row-end' | 'viewport-end';
   /**
    * 显示内置搜索入口；默认显示，未提供 operations.search 时禁用。
    * Shows the built-in search trigger. Visible by default; disabled without operations.search.
@@ -603,16 +612,16 @@ export interface FileTreeProps extends Omit<
    * the row element, for one-off highlights, analytics or custom `data-*`.
    */
   getRowAttributes?: (row: FileTreeRow) => HTMLAttributes<HTMLDivElement>;
+  /** 展开箭头与文件图标之间的内容。Content between the toggle and icon. */
+  renderRowLeading?: (row: FileTreeEntryRow) => ReactNode;
   /**
    * 渲染行尾标记，例如看板入口、状态角标或数量。返回 `null` 时该行不显示标记。
-   * 内容与交互都由宿主决定，包括点击行为。标记显示在行右端；行内已有层级、权限
-   * 等行尾标记时，它紧跟在这些标记之后。
+   * 内容与交互都由宿主决定，包括点击行为，位置由 `rowTrailingPosition` 控制。
    *
    * Renders a trailing marker at the end of a row, such as a board entry, a status
    * badge or a count. Returning `null` shows no marker. Both the content and its
-   * interaction belong to the host, including the click behaviour. The marker sits
-   * at the right edge of the row; when the row also shows trailing markers such as
-   * the level or access, it follows them directly.
+   * interaction belong to the host, including the click behaviour.
+   * `rowTrailingPosition` controls its position.
    */
   renderRowTrailing?: (row: FileTreeEntryRow) => ReactNode;
   /**

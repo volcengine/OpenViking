@@ -1,18 +1,13 @@
 import { useLocale } from '../../shared/locale-context.js';
 import { Sender } from '@ark-design/ui/sender';
 import type { SenderInstance } from '@ark-design/ui/sender';
-import {
-  forwardRef,
-  useCallback,
-  useEffect,
-  useImperativeHandle,
-  useRef,
-} from 'react';
+import { forwardRef, useCallback, useImperativeHandle, useRef } from 'react';
 
 import { resolveVikingBotLabels } from './labels.js';
 import { VikingBotSubmitActions } from './composer-controls.js';
 import { composerEvents } from './composer-events.js';
 import { ComposerHeader } from './composer-header.js';
+import { attachmentsAreReady } from './composer-attachments.js';
 import { composerMention } from './composer-references.js';
 import { ComposerFooter } from './composer-footer.js';
 import { QuickInputs } from './quick-inputs.js';
@@ -21,6 +16,7 @@ import {
   composerCaret,
   toPlainText,
   toRichText,
+  useSyncComposerValue,
   writeComposerText,
 } from './composer-text.js';
 import type { VikingBotComposerProps, VikingBotComposerRef } from './types.js';
@@ -70,8 +66,10 @@ export const VikingBotComposerView = forwardRef<
     isSubmitting ||
     (isSending && !canSendWhileStreaming),
   );
-  const empty =
-    !value.trim() && !attachments.length && !references?.selected.length;
+  const canSubmit =
+    (value.trim() || attachments.length || references?.selected.length) &&
+    attachmentsAreReady(attachments);
+  const isSubmitMode = !isSending || canSendWhileStreaming;
   const remaining = Math.max(0, maxAttachments - attachments.length);
 
   const setText = useCallback(
@@ -83,23 +81,15 @@ export const VikingBotComposerView = forwardRef<
   );
   const shortcuts = useQuickInput(value, setText, onQuickInputSelect);
 
-  // useEffect 必要性：把受控 value 的后续变化同步到 Ark 编辑器。编辑器是外部
-  // 非 React 控件，只有它的 setValue 能改写内部文档，渲染计算无法做到。仅当
-  // 外部文本与编辑器当前纯文本不一致时才写入，避免覆盖用户正在输入的光标。
-  // useQuickInput 已按受控值更新归属；程序写入的同步回调不能再用光标认领文本。
-  // 组件卸载或 value 再次变化时由下一次同步覆盖，无需额外清理。
-  useEffect(() => {
-    const current = toPlainText(senderRef.current?.getValue() ?? []);
-    if (current === value) return;
-    writeComposerText(senderRef.current, value, writing);
-  }, [value]);
+  useSyncComposerValue(senderRef, value, writing);
 
   /** 按剩余额度截断并上报文件。 */
   const reportFiles = useCallback(
     (files: readonly File[]) => {
-      if (files.length && remaining) onFilesAdded?.(files.slice(0, remaining));
+      if (!locked && files.length && remaining)
+        onFilesAdded?.(files.slice(0, remaining));
     },
-    [onFilesAdded, remaining],
+    [locked, onFilesAdded, remaining],
   );
 
   useImperativeHandle(ref, () => ({
@@ -112,7 +102,7 @@ export const VikingBotComposerView = forwardRef<
   }));
 
   const submit = () => {
-    if (!onSend || locked || empty) return;
+    if (!onSend || locked || !canSubmit) return;
     const text = toPlainText(
       senderRef.current?.getValue() ?? toRichText(value),
     ).trim();
@@ -136,6 +126,7 @@ export const VikingBotComposerView = forwardRef<
         Boolean(onFilesAdded),
         !locked && remaining > 0,
         reportFiles,
+        senderRef,
       )}
     >
       {disabled && disabledReason ? (
@@ -156,13 +147,7 @@ export const VikingBotComposerView = forwardRef<
         className="ov-viking-bot__sender"
         defaultContent={toRichText(value)}
         sending={isSending && !canSendWhileStreaming}
-        sendDisabled={
-          disabled ||
-          !onValueChange ||
-          isSubmitting ||
-          (empty && (!isSending || canSendWhileStreaming)) ||
-          ((!isSending || canSendWhileStreaming) && !onSend)
-        }
+        sendDisabled={isSubmitMode ? locked || !canSubmit || !onSend : false}
         onContentChange={(content) => {
           if (!onValueChange || writing.current) return;
           const next = toPlainText(content);

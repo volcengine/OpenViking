@@ -4,8 +4,8 @@
 
 ## en-US
 
-Allow a version note when saving an ordinary file. If the file is saved but the snapshot is not created, show a warning. Wiki files keep their existing save flow.
+Save edits to ordinary files directly. To create a version with a note, open **Version history**, enter a note, and select **Save snapshot**.
 
 ## zh-CN
 
-保存普通文件时可填写版本备注。如果正文已保存但未创建快照，则显示提示。Wiki 保持原有保存流程。
+直接保存普通文件的编辑内容。要创建带备注的版本，打开「历史版本」，填写备注并点击「保存快照」。

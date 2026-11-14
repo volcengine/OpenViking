@@ -123,9 +123,7 @@ FilePreview, CommandConsole, VikingBot and its message list, composer and intera
     errorFallback: (reset) => (
       <div className="my-error" role="alert">
         Files are unavailable
-        <button type="button" onClick={reset}>
-          Retry display
-        </button>
+        <Button onClick={reset}>Retry display</Button>
       </div>
     ),
   }}
@@ -175,3 +173,5 @@ To adjust a single component, override its `--ov-ui-<component>-*` variables. Th
 - [Business components](../components/): a summary and usage of every business component.
 - [Blocks](../modules/): `OpenVikingProvider`, `requestOptions` and each block.
 - [Internationalization](./i18n): switch languages with `locale` and override text with `labels`.
+
+See [Analytics](./analytics) to collect interaction and exposure events.

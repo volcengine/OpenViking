@@ -94,6 +94,7 @@ export function useFileBrowserPreviewActions({
         setOpened(undefined);
         onDeleted(uri);
       },
+      'file_browser_resource_delete',
     );
   };
   const actionItems =
@@ -106,8 +107,10 @@ export function useFileBrowserPreviewActions({
           show,
           deleteFile,
           download: (pack) =>
-            transfer.run((api, overrides) =>
-              downloadPreview(api, uri, pack, overrides),
+            transfer.run(
+              (api, overrides) => downloadPreview(api, uri, pack, overrides),
+              undefined,
+              pack ? 'file_browser_pack_export' : 'file_preview_download',
             ),
         })
       : [];
@@ -139,6 +142,12 @@ export function useFileBrowserPreviewActions({
             kind={kind}
             uri={opened?.uri ?? uri}
             canWrite={canWrite}
+            canSaveSnapshot={
+              enabled &&
+              policy.edit &&
+              policy.fileHistory &&
+              !policy.versionedFile
+            }
             versioned={policy.versionedFile}
             showContent={isFile && !isBinaryFile(uri)}
             text={text}

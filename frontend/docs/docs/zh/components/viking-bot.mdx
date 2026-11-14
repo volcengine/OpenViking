@@ -17,17 +17,17 @@ import '@openviking/react/components/viking-bot/style.css';
 
 样式入口已包含主题基线和视图用到的 `@ark-design/ui` 样式，可以单独引入。
 
-消息列表、输入区和待确认交互区由 `@ark-design/ui` 渲染。它是可选 peer 依赖，不会随 `@openviking/react` 自动安装，使用前需要安装不低于 `0.0.0-beta.7` 的版本：
+消息列表和输入区由 `@ark-design/ui` 渲染。它是可选 peer 依赖，不会随 `@openviking/react` 自动安装，使用消息列表或输入区前需要安装不低于 `0.0.0-beta.7` 的版本：
 
 ```bash
 npm install @ark-design/ui@0.0.0-beta.7
 ```
 
-只需要待确认交互区时，可以从 `interaction` 子路径导入 `VikingBotInteraction`，样式入口相同：
+只需要待确认交互区时，可以从 `interaction` 子路径导入 `VikingBotInteraction`，同时引入对应样式：
 
 ```tsx
 import { VikingBotInteraction } from '@openviking/react/components/viking-bot/interaction';
-import '@openviking/react/components/viking-bot/style.css';
+import '@openviking/react/components/viking-bot/interaction/style.css';
 ```
 
 ## 代码演示
@@ -60,9 +60,25 @@ import '@openviking/react/components/viking-bot/style.css';
 
 ### 待确认交互
 
-依次演示 `choice`、`text`、`schedule`、`repair` 四种内置表单，提交后答案显示在示例底部；第一个表单还演示了步骤进度、「其他」输入项和取消按钮。
+演示输出目录、文本、定时和修复表单，提交结果显示在示例底部。输出目录支持搜索、自动定位、新建子目录、权限状态和提交前复核；目录与请求均为离线模拟。
 
 ```tsx file="../../_demos/viking-bot-interaction.tsx" preview
+
+```
+
+### 外部目录选择
+
+通过 `allowCustomInput.onOpen` 接管目录选择，使用公共 [ContextPicker](./context-picker) 管理弹窗，确认后调用 `select` 写回答案。
+
+```tsx file="../../_demos/viking-bot-custom-directory.tsx" preview
+
+```
+
+### 渲染失败
+
+宿主传入的内容渲染出错时，组件显示默认兜底：插画、提示和「重试显示」按钮。需要替换展示时传入 `slots.errorFallback`。
+
+```tsx file="../../_demos/viking-bot-crash.tsx" preview
 
 ```
 
@@ -76,13 +92,14 @@ import '@openviking/react/components/viking-bot/style.css';
 | streaming             | 助手仍在生成时已产生的片段，显示在 `insertIndex` 处；回复结束后由宿主并入 `messages` 并清除                                    | `VikingBotStreamingState`                                             | -                        |
 | draft                 | 输入框的草稿文本，受控；省略时不显示输入区，适用于只读会话                                                                     | `string`                                                              | -                        |
 | attachments           | 已选中的附件，显示在输入框上方                                                                                                 | `readonly VikingBotAttachment[]`                                      | -                        |
+| accept                | 文件选择器接受的类型                                                                                                           | `string`                                                              | -                        |
 | isSending             | 正在回复；停止与追加输入入口由 `onCancel` 和 `canSendWhileStreaming` 控制                                                      | `boolean`                                                             | `false`                  |
 | isSubmitting          | 追加输入正在等待后端接受，期间禁止重复发送                                                                                     | `boolean`                                                             | `false`                  |
 | canSendWhileStreaming | 生成中允许追加输入；由宿主映射服务的 `canSteer`                                                                                | `boolean`                                                             | `false`                  |
 | isAvailable           | 是否可以输入；为 `false` 时禁用输入区并显示不可用说明                                                                          | `boolean`                                                             | `true`                   |
 | unavailableMessage    | 不可用说明，显示在输入区上方，没有内置输入区时显示在头部下方；省略时使用内置文案                                               | `string`                                                              | -                        |
 | sessions              | 会话数据和操作，设置后头部显示会话标识、历史会话和新建会话入口                                                                 | `VikingBotSessions`                                                   | -                        |
-| quickInputs           | 快捷输入，点击后填入草稿，不自动发送                                                                                           | `readonly VikingBotQuickInput[]`                                      | -                        |
+| quickInputs           | 快捷输入，常驻在内置输入框上方，宿主自带输入区时显示在欢迎页；点击后填入草稿，不自动发送                                       | `readonly VikingBotQuickInput[]`                                      | -                        |
 | references            | 文件和目录引用的候选与已选项，省略时不显示引用入口                                                                             | `VikingBotReferences`                                                 | -                        |
 | interaction           | 待确认的问题，设置后替代输入区；语言跟随 `locale`，可用 `interaction.locale` 单独指定                                          | `VikingBotInteractionProps`                                           | -                        |
 | listKey               | 消息列表的身份标识，值变化时重置展示状态                                                                                       | `string`                                                              | `'viking-bot'`           |
@@ -245,15 +262,16 @@ import '@openviking/react/components/viking-bot/style.css';
 
 ### VikingBotAttachment
 
-| 参数         | 说明                                                    | 类型                                             | 默认值 |
-| ------------ | ------------------------------------------------------- | ------------------------------------------------ | ------ |
-| key          | 附件的唯一标识                                          | `string`                                         | 必填   |
-| name         | 文件名                                                  | `string`                                         | 必填   |
-| status       | 上传状态；为 `'error'` 时在文件名后显示失败提示         | `'pending' \| 'uploading' \| 'ready' \| 'error'` | -      |
-| errorMessage | 上传失败时的提示，省略时显示 `labels.toolError`         | `string`                                         | -      |
-| previewUrl   | 预览地址，输入区不使用，原样回传给回调                  | `string`                                         | -      |
-| mimeType     | MIME 类型，输入区不使用，原样回传给回调                 | `string`                                         | -      |
-| sizeBytes    | 字节大小，未知时为 `null`，输入区不使用，原样回传给回调 | `number \| null`                                 | -      |
+| 参数         | 说明                                                         | 类型                                             | 默认值 |
+| ------------ | ------------------------------------------------------------ | ------------------------------------------------ | ------ |
+| key          | 附件的唯一标识                                               | `string`                                         | 必填   |
+| uploadId     | 上传服务返回的标识                                           | `string`                                         | -      |
+| name         | 文件名                                                       | `string`                                         | 必填   |
+| status       | 上传状态；上传中或失败时显示提示，并禁用发送                 | `'pending' \| 'uploading' \| 'ready' \| 'error'` | -      |
+| errorMessage | 上传失败时的提示，省略时显示 `labels.attachmentUploadFailed` | `string`                                         | -      |
+| previewUrl   | 预览地址，输入区不使用，原样回传给回调                       | `string`                                         | -      |
+| mimeType     | MIME 类型，输入区不使用，原样回传给回调                      | `string`                                         | -      |
+| sizeBytes    | 字节大小，未知时为 `null`，输入区不使用，原样回传给回调      | `number \| null`                                 | -      |
 
 ### VikingBotDraft
 
@@ -394,7 +412,7 @@ import '@openviking/react/components/viking-bot/style.css';
 | total      | 步骤总数；大于 1 时显示进度                                                                                                                      | `number`                                                              | `1`                      |
 | disabled   | 是否禁用表单                                                                                                                                     | `boolean`                                                             | `false`                  |
 | submitting | 是否正在提交，提交期间禁用表单                                                                                                                   | `boolean`                                                             | `false`                  |
-| error      | 上一次提交失败的原因，显示在表单上方                                                                                                             | `ReactNode`                                                           | -                        |
+| error      | 上一次提交失败的原因，显示在表单内                                                                                                               | `ReactNode`                                                           | -                        |
 | onSubmit   | 提交答案时触发；返回 Promise 时，提交按钮在其完成前保持禁用                                                                                      | `(answer: VikingBotInteractionAnswer) => void \| Promise<void>`       | -                        |
 | onCancel   | 放弃本次交互时触发；省略时不显示取消按钮                                                                                                         | `() => void`                                                          | -                        |
 | slots      | 替换渲染异常的展示内容，见[错误展示插槽](../guide/getting-started#自定义错误展示)                                                                | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }` | -                        |
@@ -402,44 +420,104 @@ import '@openviking/react/components/viking-bot/style.css';
 | locale     | 界面语言，规则见[国际化](../guide/i18n)；在 `VikingBot` 的 `interaction` 中默认跟随 `VikingBot` 的语言                                           | `'zh-CN' \| 'en-US'`                                                  | 继承上级，默认 `'en-US'` |
 | className  | 附加到根元素的类名                                                                                                                               | `string`                                                              | -                        |
 
+待确认交互使用库内表单与基础控件，单独使用 `VikingBotInteraction` 无需安装 Ark Design。提交失败时保留草稿并显示错误，可以修改后重试；取消会恢复初始值。
+
+### VikingBotInteractionLabels
+
+| 参数                        | 说明                       | 类型                                       | 默认值                                                   |
+| --------------------------- | -------------------------- | ------------------------------------------ | -------------------------------------------------------- |
+| answer                      | 文本答案的标签             | `string`                                   | 答案                                                     |
+| title                       | 交互区域及缺省问题标题     | `string`                                   | 待确认                                                   |
+| submit                      | 提交按钮                   | `string`                                   | 提交                                                     |
+| cancel                      | 取消按钮                   | `string`                                   | 取消                                                     |
+| other                       | 自定义选项                 | `string`                                   | 其他                                                     |
+| submitted                   | 保留字段，内置表单不显示   | `string`                                   | 已提交                                                   |
+| cancelled                   | 保留字段，内置表单不显示   | `string`                                   | 已取消                                                   |
+| progress                    | 步骤进度，序号从 0 开始    | `(index: number, total: number) => string` | `${index + 1} / ${total}`                                |
+| scheduleNone                | 不更新选项                 | `string`                                   | 不更新                                                   |
+| scheduleDaily               | 每日选项                   | `string`                                   | 每日                                                     |
+| scheduleWeekly              | 每周选项                   | `string`                                   | 每周                                                     |
+| scheduleTime                | 更新时间标签               | `string`                                   | 更新时间                                                 |
+| scheduleWeekday             | 更新日期标签               | `string`                                   | 更新日期                                                 |
+| scheduleFrequency           | 更新频次标签               | `string`                                   | 更新频次                                                 |
+| scheduleHour                | 小时列表标签               | `string`                                   | 小时                                                     |
+| scheduleMinute              | 分钟列表标签               | `string`                                   | 分钟                                                     |
+| required                    | 选项未完成提示             | `string`                                   | 请完成当前问题                                           |
+| timeInvalid                 | 时间格式错误提示           | `string`                                   | 请输入有效时间，格式为 HH:mm（00:00–23:59）              |
+| weekdayRequired             | 更新日期未选提示           | `string`                                   | 请选择每周更新的日期                                     |
+| submitFailed                | 无错误详情时的提交失败提示 | `string`                                   | 提交失败，请重试                                         |
+| weekdays                    | 周一至周日的名称           | `readonly string[]`                        | ['周一', '周二', '周三', '周四', '周五', '周六', '周日'] |
+| directoryPickerTitle        | 目录弹窗标题               | `string`                                   | 选择保存目录                                             |
+| directoryPickerConfirm      | 确认目录按钮               | `string`                                   | 选择此目录                                               |
+| directoryPickerHint         | 未选目录提示               | `string`                                   | 请选择一个目录                                           |
+| directoryTarget             | 目录流程文案               | `string`                                   | 输出目录                                                 |
+| directorySelected           | 目录流程文案               | `string`                                   | 已选目标：                                               |
+| directorySearch             | 目录流程文案               | `string`                                   | 目录名称                                                 |
+| directoryEmpty              | 目录流程文案               | `string`                                   | 暂无搜索结果                                             |
+| directoryPermissionChecking | 目录流程文案               | `string`                                   | 正在读取目录权限                                         |
+| directoryPermissionWritable | 目录流程文案               | `string`                                   | 此目录可写，提交时将再次校验                             |
+| directoryNotWritable        | 目录流程文案               | `string`                                   | 此目录不可写，请选择其他目录                             |
+| directoryUnavailable        | 目录流程文案               | `string`                                   | 请选择一个已有目录                                       |
+| directoryCheckFailed        | 目录流程文案               | `string`                                   | 无法确认目录及写入权限，请重试或选择其他目录             |
+| directoryCreate             | 目录流程文案               | `string`                                   | 新建子目录                                               |
+| directoryCreateTitle        | 目录流程文案               | `string`                                   | 子目录                                                   |
+| directoryName               | 目录流程文案               | `string`                                   | 目录名称                                                 |
+| directoryNameHint           | 目录流程文案               | `string`                                   | 在上述目录内创建一个直属目录；请填写名称，不填完整路径   |
+| directoryCreateConfirm      | 目录流程文案               | `string`                                   | 创建并选择                                               |
+| directoryCreateFailed       | 目录流程文案               | `string`                                   | 无法创建目录，请确认目录权限后重试                       |
+| directoryRetry              | 目录流程文案               | `string`                                   | 重试                                                     |
+| directoryLoadFailed         | 目录流程文案               | `string`                                   | 目录加载失败                                             |
+| directoryParent             | 父目录说明                 | `(uri: string) => string`                  | `父目录：{uri}`                                          |
+
 ### VikingBotInteractionRequest
 
 `kind` 决定问题类型和可用字段，下面按类型分别列出。
 
+#### target 输出目录
+
+| 参数            | 说明                                                           | 类型                                  | 默认值   |
+| --------------- | -------------------------------------------------------------- | ------------------------------------- | -------- |
+| kind            | 输出目录表单                                                   | `'target'`                            | 必填     |
+| question        | 卡片标题                                                       | `ReactNode`                           | 输出目录 |
+| initialUri      | 初始目录 URI；树行异步加载后恢复选中并定位                     | `string`                              | `''`     |
+| directoryPicker | 目录数据、操作及宿主提供的权限状态；提交前校验由 onSubmit 完成 | `VikingBotInteractionDirectoryPicker` | 必填     |
+
 #### choice 单选
 
-| 参数             | 说明                                                                                   | 类型                                    | 默认值  |
-| ---------------- | -------------------------------------------------------------------------------------- | --------------------------------------- | ------- |
-| kind             | 问题类型                                                                               | `'choice'`                              | 必填    |
-| options          | 选项；必须选中其中一项（或填写「其他」）才能提交，否则点击提交没有反应                 | `readonly VikingBotInteractionOption[]` | 必填    |
-| question         | 问题文案                                                                               | `ReactNode`                             | -       |
-| allowCustomInput | 是否提供「其他」输入项；传对象时 `placeholder` 作为输入提示，省略时使用 `labels.other` | `boolean \| { placeholder?: string }`   | `false` |
+| 参数             | 说明                                                                              | 类型                                                                                                                                                                             | 默认值  |
+| ---------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| kind             | 问题类型                                                                          | `'choice'`                                                                                                                                                                       | 必填    |
+| options          | 选项；必须选中其中一项（或填写「其他」）才能提交，未完成时显示校验提示            | `readonly VikingBotInteractionOption[]`                                                                                                                                          | 必填    |
+| question         | 问题文案                                                                          | `ReactNode`                                                                                                                                                                      | -       |
+| allowCustomInput | 自定义答案；onOpen 由宿主接管选择，directoryPicker 复用内置目录弹窗，否则内联输入 | `boolean \| { placeholder?: string; open?: boolean; onOpen?: (context: VikingBotInteractionCustomInputContext) => void; directoryPicker?: VikingBotInteractionDirectoryPicker }` | `false` |
 
 #### text 文本输入
 
-| 参数         | 说明                                               | 类型        | 默认值 |
-| ------------ | -------------------------------------------------- | ----------- | ------ |
-| kind         | 问题类型                                           | `'text'`    | 必填   |
-| question     | 问题文案                                           | `ReactNode` | -      |
-| initialValue | 输入框的初始文本                                   | `string`    | `''`   |
-| description  | 补充说明，显示在输入框上方                         | `ReactNode` | -      |
-| multiline    | 是否多行；输入框始终是多行文本域，该字段不影响显示 | `boolean`   | -      |
+| 参数         | 说明                                            | 类型        | 默认值 |
+| ------------ | ----------------------------------------------- | ----------- | ------ |
+| kind         | 问题类型                                        | `'text'`    | 必填   |
+| question     | 问题文案                                        | `ReactNode` | -      |
+| initialValue | 输入框的初始文本                                | `string`    | `''`   |
+| description  | 补充说明，显示在输入框上方                      | `ReactNode` | -      |
+| multiline    | 默认使用多行文本域，传 `false` 时使用单行输入框 | `boolean`   | `true` |
 
 #### schedule 定时
 
-| 参数         | 说明                                   | 类型                     | 默认值 |
-| ------------ | -------------------------------------- | ------------------------ | ------ |
-| kind         | 问题类型                               | `'schedule'`             | 必填   |
-| initialValue | 定时的初始值                           | `VikingBotScheduleValue` | 必填   |
-| question     | 问题文案                               | `ReactNode`              | -      |
-| timezone     | 时区名称，显示在定时输入下方，仅作提示 | `string`                 | -      |
+更新频次使用分段单选，每周更新时显示星期选择。时间支持输入 `HH:mm` 或通过小时、分钟面板选择；切换频次会保留本次编辑的时间和星期。
+
+| 参数         | 说明                             | 类型                     | 默认值 |
+| ------------ | -------------------------------- | ------------------------ | ------ |
+| kind         | 问题类型                         | `'schedule'`             | 必填   |
+| initialValue | 定时的初始值                     | `VikingBotScheduleValue` | 必填   |
+| question     | 问题文案                         | `ReactNode`              | -      |
+| timezone     | 执行时区，作为时间输入的辅助说明 | `string`                 | -      |
 
 #### repair 修复候选
 
 | 参数         | 说明                                                 | 类型                               | 默认值 |
 | ------------ | ---------------------------------------------------- | ---------------------------------- | ------ |
 | kind         | 问题类型                                             | `'repair'`                         | 必填   |
-| options      | 候选；必须选中其中一项才能提交，否则点击提交没有反应 | `readonly VikingBotRepairOption[]` | 必填   |
+| options      | 候选；必须选中其中一项才能提交，未完成时显示校验提示 | `readonly VikingBotRepairOption[]` | 必填   |
 | question     | 问题文案                                             | `ReactNode`                        | -      |
 | initialValue | 初始选中的候选 `id`                                  | `string`                           | -      |
 
@@ -451,14 +529,51 @@ import '@openviking/react/components/viking-bot/style.css';
 | render   | 渲染函数，用于树选择器、上传器等宿主自己的表单                | `(context: VikingBotInteractionRenderContext) => ReactNode` | 必填   |
 | question | 问题文案；`custom` 由 `render` 自行绘制全部内容，不显示该字段 | `ReactNode`                                                 | -      |
 
+### VikingBotInteractionDirectoryPicker
+
+用于 `target.directoryPicker` 或 `choice.allowCustomInput.directoryPicker`。弹窗内的选择和搜索草稿在取消时丢弃，原答案保留；自动定位只展开初始目录的祖先并按需翻页，用户搜索或操作目录树后停止自动定位。宿主提供展开、分页、搜索和权限等执行回调，组件不直接请求业务接口。
+
+| 参数              | 说明                                                                    | 类型                                      | 默认值       |
+| ----------------- | ----------------------------------------------------------------------- | ----------------------------------------- | ------------ |
+| rows              | 目录树的可见行，文件行不显示，见 [FileTreeRow](./file-tree#filetreerow) | `readonly FileTreeRow[]`                  | 必填         |
+| operations        | 目录的执行能力，见下表                                                  | `VikingBotInteractionDirectoryOperations` | -            |
+| query             | 与 `onQueryChange` 一起提供的受控搜索词                                 | `string`                                  | `''`         |
+| onQueryChange     | 输入搜索词时通知宿主；未提供时搜索框禁用                                | `(query: string) => void`                 | -            |
+| isReady           | 首次加载完成                                                            | `boolean`                                 | `true`       |
+| loading           | 搜索或刷新等待状态                                                      | `boolean`                                 | `false`      |
+| error             | 加载错误，保留已有行并允许重试                                          | `ReactNode`                               | -            |
+| loadingFallback   | 首次加载内容                                                            | `ReactNode`                               | -            |
+| errorFallback     | 整树错误行的替代内容                                                    | `ReactNode`                               | -            |
+| emptyFallback     | 没有目录时的内容                                                        | `ReactNode`                               | 暂无搜索结果 |
+| permission        | 宿主提供当前草稿的权限状态                                              | `VikingBotInteractionDirectoryPermission` | -            |
+| onSelectionChange | 草稿目录变化时触发，由宿主读取权限                                      | `(uri: string) => void`                   | -            |
+
+### VikingBotInteractionDirectoryOperations
+
+| 参数            | 说明                                                                       | 类型                                                                                     | 默认值 |
+| --------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------ |
+| toggleExpand    | 展开或收起目录，自动定位也使用此回调                                       | `FileTreeOperations['toggleExpand']`                                                     | -      |
+| loadMore        | 加载下一页，自动定位缺失目录时也使用此回调                                 | `FileTreeOperations['loadMore']`                                                         | -      |
+| retry           | 重试失败的子节点                                                           | `FileTreeOperations['retry']`                                                            | -      |
+| refresh         | 重载目录；创建后的刷新失败不改判创建结果                                   | `(uri?: string) => Promise<void>`                                                        | -      |
+| createDirectory | 在父目录下创建一个直属子目录，成功返回新目录 URI；拒绝时保留名称并显示错误 | `(parentUri: string, name: string, options: { signal: AbortSignal }) => Promise<string>` | -      |
+
+### VikingBotInteractionDirectoryInfo
+
+| 参数        | 说明                                             | 类型      | 默认值 |
+| ----------- | ------------------------------------------------ | --------- | ------ |
+| uri         | 接口确认的规范目录 URI                           | `string`  | 必填   |
+| isDirectory | 条目确实是目录                                   | `boolean` | 必填   |
+| canWrite    | 当前用户拥有写入权限；创建子目录还需提供创建回调 | `boolean` | 必填   |
+
 ### VikingBotInteractionOption
 
-| 参数        | 说明                             | 类型        | 默认值 |
-| ----------- | -------------------------------- | ----------- | ------ |
-| value       | 选项值，提交答案时作为 `value`   | `string`    | 必填   |
-| label       | 选项主文案                       | `ReactNode` | 必填   |
-| description | 显示在文案下方的说明             | `ReactNode` | -      |
-| code        | 文案后的等宽片段，内置表单不显示 | `string`    | -      |
+| 参数        | 说明                           | 类型        | 默认值 |
+| ----------- | ------------------------------ | ----------- | ------ |
+| value       | 选项值，提交答案时作为 `value` | `string`    | 必填   |
+| label       | 选项主文案                     | `ReactNode` | 必填   |
+| description | 显示在文案下方的说明           | `ReactNode` | -      |
+| code        | 显示在选项文案下方的等宽片段   | `string`    | -      |
 
 ### VikingBotRepairOption
 
@@ -489,8 +604,24 @@ import '@openviking/react/components/viking-bot/style.css';
 
 | 参数  | 说明                                                                                                                                                        | 类型                                                                                        | 默认值 |
 | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ------ |
-| kind  | 问题类型，与 `request.kind` 一致                                                                                                                            | `'choice' \| 'text' \| 'schedule' \| 'repair' \| 'custom'`                                  | 必填   |
+| kind  | 问题类型，与 `request.kind` 一致                                                                                                                            | `'target' \| 'choice' \| 'text' \| 'schedule' \| 'repair' \| 'custom'`                      | 必填   |
 | value | 答案：`choice` 是所选选项的 `value` 或「其他」输入的文本，`text` 是输入的文本，`schedule` 是定时值，`repair` 是所选候选的 `id`，`custom` 是 `submit` 的参数 | `string`（choice、text、repair）、`VikingBotScheduleValue`（schedule）、`unknown`（custom） | 必填   |
+
+### VikingBotInteractionCustomInputContext
+
+| 参数   | 说明                                         | 类型                      | 默认值 |
+| ------ | -------------------------------------------- | ------------------------- | ------ |
+| value  | 当前自定义答案                               | `string`                  | 必填   |
+| select | 将宿主选中的值写回答案；禁用或交互卸载后忽略 | `(value: string) => void` | 必填   |
+
+### VikingBotInteractionDirectoryPermission
+
+| 参数     | 说明                 | 类型                                | 默认值 |
+| -------- | -------------------- | ----------------------------------- | ------ |
+| uri      | 状态对应的目录 URI   | `string`                            | 必填   |
+| checking | 权限读取中           | `boolean`                           | -      |
+| info     | 宿主映射后的权限数据 | `VikingBotInteractionDirectoryInfo` | -      |
+| error    | 权限读取错误         | `unknown`                           | -      |
 
 ## 注意
 
@@ -506,7 +637,7 @@ import '@openviking/react/components/viking-bot/style.css';
 - 引用标签显示图标和完整 URI，空间不足时省略并在标题中保留完整路径；只显示前 5 个，其余收进 `+N`，悬停、聚焦或点击 `+N` 展开。
 - 引用只出现在 `VikingBotDraft.references`，不会写进草稿文本。切换账号或会话时，宿主需要同时重置 `references.selected` 和 `attachments`。
 - 待确认交互是宿主状态，不是后端暂停：宿主根据自己的流生成问题，答案发回后清除 `interaction`。组件只渲染表单，并通过 `onSubmit` 上报答案。
-- 消息列表、输入区和待确认交互区在首次渲染时才加载 `@ark-design/ui`，加载期间先显示空容器。导入 VikingBot 本身不会加载它，因此模块在没有 `window` 的环境中也能导入。
+- 消息列表和输入区在首次渲染时才加载 `@ark-design/ui`，加载期间先显示空容器。导入 VikingBot 本身不会加载它，因此模块在没有 `window` 的环境中也能导入。
 - `VikingBotComposer`、`VikingBotMessageList` 和 `VikingBotSessionActions` 可以单独使用，例如把 `VikingBotSessionActions` 放进自己的顶栏。
 - `groupMessages`、`groupByActivity` 和 `messageText` 与内置消息列表使用同一套规则，自定义 `messageList` 时可以直接使用。
 - `DEFAULT_LABELS` 和 `DEFAULT_INTERACTION_LABELS` 是内置的英文文案，列出了各自 `labels` 的全部键。
@@ -515,3 +646,7 @@ import '@openviking/react/components/viking-bot/style.css';
 ## 请求与会话
 
 使用 [Console](../modules/console) 管理请求、会话和流式状态，设置 `modes={['conversation']}` 可单独接入对话。VikingBot 本身只接收数据与回调。
+
+## 埋点
+
+通过 Provider 统一接入，支持的事件和触发条件见[埋点指南与事件目录](../guide/analytics)。

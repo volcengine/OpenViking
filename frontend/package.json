@@ -17,7 +17,7 @@
     "lint:fix": "npm run build:lib && node scripts/lint.mjs --fix",
     "typecheck": "npm run build:lib && tsc --noEmit -p packages/react/tsconfig.json && tsc --noEmit -p packages/react/tsconfig.config.json && tsc --noEmit -p docs/tsconfig.json",
     "test": "npm run check:swatches && npm run build:lib && node scripts/test.mjs",
-    "build:lib": "npm run build --workspace @openviking/react",
+    "build:lib": "npm run build --workspace @openviking/react && node scripts/analytics-docs.mjs --check",
     "clean:lib": "node -e \"require('node:fs').rmSync('packages/react/dist',{recursive:true,force:true})\"",
     "build:docs": "npm run build --workspace @openviking/ui-docs",
     "build": "npm run build:lib && npm run build:docs",
@@ -29,12 +29,14 @@
     "changeset": "changeset",
     "check:release-notes": "node scripts/release-notes.mjs --check",
     "sync:release-notes": "node scripts/release-notes.mjs",
-    "version:react": "node scripts/release-notes.mjs --changesets-only && changeset version && npm install --package-lock-only --ignore-scripts --no-audit --no-fund && npm run sync:release-notes"
+    "version:react": "node scripts/release-notes.mjs --changesets-only && changeset version && npm install --package-lock-only --ignore-scripts --no-audit --no-fund && npm run sync:release-notes",
+    "sync:analytics-docs": "npm run build --workspace @openviking/react && node scripts/analytics-docs.mjs"
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.1",
     "@rsbuild/plugin-svgr": "^2.0.5",
     "@rslint/core": "0.10.0",
+    "@tanstack/react-query": "^5.107.1",
     "@types/node": "^22.19.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.2.0",

@@ -24,6 +24,7 @@ export function PreviewPackImport({
           void mutation.run(
             (client, options) => importPreviewPack(client, uri, file, options),
             onUpdated,
+            'file_browser_pack_import',
           );
       }}
     >

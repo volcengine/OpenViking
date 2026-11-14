@@ -29,16 +29,16 @@ function Shell({
   children: ReactNode;
 }) {
   return (
-    <div className="demo-panel">
-      <div className="demo-panel__header">
-        <span className="demo-panel__title">{title}</span>
+    <div className="ov-demo-scope-panel">
+      <div className="ov-demo-scope-panel__header">
+        <span className="ov-demo-scope-panel__title">{title}</span>
         {action}
       </div>
       {children}
       {footer && (
         <>
-          <div className="demo-panel__divider" />
-          <div className="demo-panel__footer">{footer}</div>
+          <div className="ov-demo-scope-panel__divider" />
+          <div className="ov-demo-scope-panel__footer">{footer}</div>
         </>
       )}
     </div>
@@ -104,7 +104,7 @@ export default function ScopeSwitcherPanel() {
                     size="mini"
                     type="text"
                     htmlType="button"
-                    className="demo-panel__action"
+                    className="ov-demo-scope-panel__action"
                   >
                     创建
                   </Button>
@@ -113,13 +113,13 @@ export default function ScopeSwitcherPanel() {
                   <>
                     <Button
                       htmlType="button"
-                      className="demo-panel__footer-item"
+                      className="ov-demo-scope-panel__footer-item"
                     >
                       库设置
                     </Button>
                     <Button
                       htmlType="button"
-                      className="demo-panel__footer-item"
+                      className="ov-demo-scope-panel__footer-item"
                     >
                       查看账单
                     </Button>
@@ -143,7 +143,10 @@ export default function ScopeSwitcherPanel() {
               <Shell
                 title="选择数据空间"
                 footer={
-                  <Button htmlType="button" className="demo-panel__footer-item">
+                  <Button
+                    htmlType="button"
+                    className="ov-demo-scope-panel__footer-item"
+                  >
                     管理空间
                   </Button>
                 }
@@ -164,7 +167,10 @@ export default function ScopeSwitcherPanel() {
               <Shell
                 title="选择 User"
                 footer={
-                  <Button htmlType="button" className="demo-panel__footer-item">
+                  <Button
+                    htmlType="button"
+                    className="ov-demo-scope-panel__footer-item"
+                  >
                     管理 User
                   </Button>
                 }
@@ -176,16 +182,16 @@ export default function ScopeSwitcherPanel() {
         />
       </ScopeSwitcher>
       <style>{`
-        .demo-panel { display: flex; flex-direction: column; gap: 4px; width: 100%; }
-        .demo-panel__header { display: flex; align-items: center; justify-content: space-between; padding: 0 8px; min-height: 22px; }
-        .demo-panel__title { font-size: 12px; font-weight: 500; line-height: 20px; color: var(--ov-ui-text-muted, #6e718c); }
+        .ov-demo-scope-panel { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+        .ov-demo-scope-panel__header { display: flex; align-items: center; justify-content: space-between; padding: 0 8px; min-height: 22px; }
+        .ov-demo-scope-panel__title { font-size: 12px; font-weight: 500; line-height: 20px; color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default)); }
 
-        .demo-panel__divider { height: 1px; margin: 4px 0; background: var(--ov-ui-border, #f0f2fa); }
-        .demo-panel__footer { display: flex; flex-direction: column; }
+        .ov-demo-scope-panel__divider { height: 1px; margin: 4px 0; background: var(--ov-ui-color-border-2, var(--ov-ui-border-2-default)); }
+        .ov-demo-scope-panel__footer { display: flex; flex-direction: column; }
 
 
-        .demo-panel__footer-item { padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--ov-ui-text-muted, #3f3f51); font: inherit; font-size: 13px; line-height: 22px; text-align: start; cursor: pointer; }
-        .demo-panel__footer-item:hover { background: var(--ov-ui-scope-switcher-row-hover, #f6f7fa); }
+        .ov-demo-scope-panel__footer-item { padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default)); font: inherit; font-size: 13px; line-height: 22px; text-align: start; cursor: pointer; }
+        .ov-demo-scope-panel__footer-item:hover { background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default)); }
       `}</style>
     </div>
   );

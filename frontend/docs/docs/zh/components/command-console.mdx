@@ -37,6 +37,14 @@ import '@openviking/react/components/command-console/style.css';
 
 示例的快捷入口都填入完整命令，只有 `compile` 例外：它只填入 `ov compile `，需要继续输入 `--compile-name <name>`。
 
+### 渲染失败
+
+宿主传入的内容渲染出错时，组件显示默认兜底：插画、提示和「重试显示」按钮。需要替换展示时传入 `slots.errorFallback`。
+
+```tsx file="../../_demos/command-console-crash.tsx" preview
+
+```
+
 ## API
 
 ### CommandConsole
@@ -316,3 +324,7 @@ import '@openviking/react/components/command-console/style.css';
 - 服务端渲染和 hydration 首屏使用 `createdAt`，没有则不显示时间；客户端接管后改用 `createdAtMs`。时间只在渲染时重新计算，不会定时刷新。
 - 颜色取自 `--ov-ui-color-*` 主题变量，暗色模式跟随 `<html>` 上的 `.dark` 类，详见[快速开始](../guide/getting-started)。
 - 类型从 `@openviking/react/components/command-console` 导出，包根入口只导出组件和 `CommandConsoleProps`。
+
+## 埋点
+
+通过 Provider 统一接入，支持的事件和触发条件见[埋点指南与事件目录](../guide/analytics)。

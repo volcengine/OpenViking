@@ -47,28 +47,30 @@ test('listing failure rejects and retry recovers', async () => {
 });
 
 for (const action of ['unmount', 'scope change']) {
-  test(`${action} cancels a pending command`, async () => {
-    const pending = deferred();
-    const fetch = recordingFetch((call) =>
-      call.path === '/api/v1/fs/ls' && call.uri === DIR
-        ? pending.promise
-        : listing(call),
-    );
-    const handle = createRef();
-    const view = await mount(render(fetch, handle));
-    let first;
-    await act(async () => {
-      first = handle.current.openResource(FILE);
+  for (const target of [FILE, DIR]) {
+    test(`${action} cancels a pending ${target === DIR ? 'directory expansion' : 'file navigation'}`, async () => {
+      const pending = deferred();
+      const fetch = recordingFetch((call) =>
+        call.path === '/api/v1/fs/ls' && call.uri === DIR
+          ? pending.promise
+          : listing(call),
+      );
+      const handle = createRef();
+      const view = await mount(render(fetch, handle));
+      let first;
+      await act(async () => {
+        first = handle.current.openResource(target);
+      });
+      await settle();
+      const signal = fetch.calls.find(
+        (c) => c.path === '/api/v1/fs/ls' && c.uri === DIR,
+      ).init.signal;
+      if (action === 'unmount') await view.unmount();
+      else await view.render(render(fetch, handle, false, 'new-account'));
+      assert.equal(await first, false);
+      assert.equal(signal.aborted, true);
+      await act(async () => pending.resolve(await ok([{ uri: FILE }])));
+      if (action !== 'unmount') await view.unmount();
     });
-    await settle();
-    const signal = fetch.calls.find(
-      (c) => c.path === '/api/v1/fs/ls' && c.uri === DIR,
-    ).init.signal;
-    if (action === 'unmount') await view.unmount();
-    else await view.render(render(fetch, handle, false, 'new-account'));
-    assert.equal(await first, false);
-    assert.equal(signal.aborted, true);
-    await act(async () => pending.resolve(await ok([{ uri: FILE }])));
-    if (action !== 'unmount') await view.unmount();
-  });
+  }
 }

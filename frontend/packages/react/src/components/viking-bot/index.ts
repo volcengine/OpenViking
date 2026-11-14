@@ -46,6 +46,12 @@ export type {
   VikingBotProps,
 } from './types.js';
 export type {
+  VikingBotInteractionCustomInputContext,
+  VikingBotInteractionDirectoryPicker,
+  VikingBotInteractionDirectoryPermission,
+  VikingBotInteractionDirectoryInfo,
+  VikingBotInteractionDirectoryOperations,
+  VikingBotInteractionTargetRequest,
   VikingBotInteractionAnswer,
   VikingBotInteractionLabels,
   VikingBotInteractionOption,

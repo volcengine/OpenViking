@@ -1,11 +1,14 @@
+import { useTrack } from '../../shared/analytics/use-track.js';
 import { useLocale } from '../../shared/locale-context.js';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import ChevronDownIcon from '../../../../icons/svg/scope-switcher/chevron-down.svg?react';
 import { resolveScopeLabels } from './labels.js';
 import { ScopePanel } from './scope-panel.js';
+import { usePanelPosition } from './use-panel-position.js';
 import type { ScopeSelectorProps } from './types.js';
 
 export function ScopeSelector(props: ScopeSelectorProps) {
+  const track = useTrack();
   const { identity, trigger: triggerContent } = props;
   const locale = useLocale(props.locale);
   const labels = resolveScopeLabels(locale, props.labels);
@@ -16,6 +19,8 @@ export function ScopeSelector(props: ScopeSelectorProps) {
   const slots = selectable?.slots;
 
   const [localVisible, setLocalVisible] = useState(false);
+  const [panel, setPanel] = useState<HTMLDivElement | null>(null);
+  usePanelPosition(panel);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const restoreSelectionFocus = useRef(false);
@@ -153,6 +158,7 @@ export function ScopeSelector(props: ScopeSelectorProps) {
       )}
       {open && selectable !== undefined && data !== undefined && (
         <div
+          ref={setPanel}
           id={panelId}
           className={
             slots?.renderPanel
@@ -169,6 +175,7 @@ export function ScopeSelector(props: ScopeSelectorProps) {
             slots={slots}
             actions={actions}
             onSelect={(option) => {
+              track('scope_switcher_option_select');
               restoreSelectionFocus.current = true;
               changeVisible(false);
               actions?.onSelect?.(option);

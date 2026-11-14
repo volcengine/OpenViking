@@ -1,3 +1,7 @@
+import {
+  startOperation,
+  errorKind,
+} from '../../../shared/analytics/reporter.js';
 import type {
   VikingBotDraft,
   VikingBotMessage,
@@ -10,6 +14,7 @@ import type { VikingBotChatService, VikingBotChatState } from './types.js';
 /** One request owns its accumulator and snapshot, never a global conversation. */
 export async function runChat({
   service,
+  analytics,
   state,
   draft,
   undelivered,
@@ -20,6 +25,10 @@ export async function runChat({
   attach,
 }: {
   service: VikingBotChatService;
+  analytics?: import('react').RefObject<
+    | import('../../../shared/analytics/reporter.js').AnalyticsReporter
+    | undefined
+  >;
   state: VikingBotChatState;
   draft: VikingBotDraft;
   undelivered: VikingBotDraft[];
@@ -29,6 +38,11 @@ export async function runChat({
   attach: (append: AppendInput) => void;
   save: (sessionId: string, messages: VikingBotMessage[]) => void;
 }) {
+  const operation = analytics?.current && startOperation();
+  if (operation)
+    analytics?.current?.emit('viking_bot_message_submit', () => ({
+      operation_id: operation.operation_id,
+    }));
   const timeline = createChatTimeline(state.messages, draft, current, update);
   attach(timeline.append);
   update({
@@ -43,6 +57,7 @@ export async function runChat({
   const recovered = sessionId
     ? []
     : state.messages.filter((message) => message.role === 'user');
+  let started = false;
   let complete = false;
   let interrupted = false;
   let delivered = false;
@@ -64,6 +79,21 @@ export async function runChat({
       delivered = true;
       undelivered.length = 0;
       signal.throwIfAborted();
+      if (
+        !started &&
+        (((event.type === 'text' || event.type === 'reasoning') &&
+          event.text.length > 0) ||
+          event.type === 'tool')
+      ) {
+        started = true;
+        if (operation)
+          analytics?.current?.emit('viking_bot_reply_start', operation.finish);
+      }
+      if (!started && event.type === 'complete' && event.text) {
+        started = true;
+        if (operation)
+          analytics?.current?.emit('viking_bot_reply_start', operation.finish);
+      }
       await timeline.apply(event);
       signal.throwIfAborted();
       if (event.type === 'complete' || event.type === 'interrupted') {
@@ -87,10 +117,24 @@ export async function runChat({
       status: 'idle',
       isSubmitting: false,
     });
+    if (operation)
+      analytics?.current?.emit(
+        interrupted ? 'viking_bot_reply_cancel' : 'viking_bot_reply_success',
+        operation.finish,
+      );
     save(sessionId, finished.added);
     return !interrupted;
   } catch (error) {
     if (!current()) return false;
+    if (operation) {
+      if (signal.aborted)
+        analytics?.current?.emit('viking_bot_reply_cancel', operation.finish);
+      else
+        analytics?.current?.emit('viking_bot_reply_fail', () => ({
+          ...operation.finish(),
+          error_kind: errorKind(error),
+        }));
+    }
     if (!delivered) undelivered.push(draft);
     const finished = await timeline.finish(signal.aborted);
     if (!current()) return false;

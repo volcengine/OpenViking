@@ -42,8 +42,15 @@ test('principal pagination resets for query changes, A-B-A changes, and reopenin
   try {
     await open();
     const input = document.querySelector('.ov-file-browser-acl__add input');
-    await act(async () => input.focus());
+    assert.equal(document.activeElement, input);
     await waitForDirectory();
+    assert.equal(input.getAttribute('aria-expanded'), 'false');
+    assert.equal(calls.length, 0);
+    await click(input);
+    await waitForDirectory();
+    assert.equal(input.getAttribute('aria-expanded'), 'true');
+    await click(input);
+    assert.equal(input.getAttribute('aria-expanded'), 'true');
     assert.equal(calls.at(-1).page, 1);
     await click(button('Load more'));
     await waitForDirectory();
@@ -57,14 +64,29 @@ test('principal pagination resets for query changes, A-B-A changes, and reopenin
     await waitForDirectory();
     assert.equal(calls.at(-1).page, 2);
     await click(button('Cancel'));
-    await act(async () => {
-      input.blur();
-      input.focus();
-    });
+    await click(input);
     await waitForDirectory();
     assert.equal(input.getAttribute('aria-expanded'), 'true');
     assert.equal(calls.at(-1).page, 1);
     assert.equal(calls.length, 6);
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('host picker limits new grants without hiding existing Group grants', async () => {
+  const fetch = fixture();
+  const view = await mount(
+    tree(fetch, { acl: { supportedPrincipalTypes: ['user'] } }),
+  );
+  try {
+    await open();
+    await click(document.querySelector('.ov-file-browser-acl__add input'));
+    assert.equal(button('Group'), undefined);
+    assert.ok(
+      document.querySelector('button[aria-label="group:research: Can read"]'),
+    );
+    assert.equal(fetch.countOf('/api/v1/admin/accounts/demo/groups'), 0);
   } finally {
     await view.unmount();
   }

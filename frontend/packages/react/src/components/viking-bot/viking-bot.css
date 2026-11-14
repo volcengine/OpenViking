@@ -160,6 +160,10 @@
   min-height: 0;
   overflow: auto;
 }
+/* 消息区渲染失败时，兜底占满消息区并垂直居中。 */
+.ov-viking-bot__body > .ov-error-boundary {
+  flex: 1;
+}
 
 .ov-viking-bot__list {
   display: flex;
@@ -447,16 +451,6 @@
 .ov-viking-bot .ark-agentic-sender-send-btn--submit-button:active,
 .ov-viking-bot__interaction .ark-agentic-sender-send-btn--submit-button:active {
   background-color: var(--ov-ui-color-primary, var(--ov-viking-bot-accent));
-}
-
-.ov-viking-bot .ark-agentic-ask-human-custom-editing,
-.ov-viking-bot__interaction .ark-agentic-ask-human-custom-editing {
-  border-color: var(--ov-ui-color-primary, var(--ov-viking-bot-accent));
-}
-
-.ov-viking-bot .ark-agentic-ask-human-step-arrow:focus-visible,
-.ov-viking-bot__interaction .ark-agentic-ask-human-step-arrow:focus-visible {
-  outline-color: var(--ov-ui-color-primary, var(--ov-viking-bot-accent));
 }
 
 .ov-viking-bot .ark-agentic-bubble__edit-btn--confirm,

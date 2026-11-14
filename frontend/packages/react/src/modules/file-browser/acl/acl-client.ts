@@ -65,11 +65,15 @@ export async function writeAcl(
   },
 ) {
   const value = await client.request({
-    method: change ? 'PUT' : 'DELETE',
+    method: 'PUT',
     path: OV_PATHS.acl,
-    ...(change
-      ? { body: { uri, acl_mode: change.mode, entries: change.direct_entries } }
-      : { query: { uri } }),
+    // Restoring inheritance is the same operation as the native DELETE alias,
+    // but PUT is also supported by hosted data gateways.
+    body: {
+      uri,
+      acl_mode: change?.mode ?? 'inherit',
+      entries: change?.direct_entries ?? [],
+    },
     options,
   });
   return parseReport(value, uri);

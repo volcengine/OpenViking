@@ -126,7 +126,10 @@
 .ov-viking-bot__header-action.ov-button {
   width: 24px;
   height: 24px;
-  padding: 0;
+  border: 0;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
 }
 .ov-viking-bot__header-action > svg {
   display: block;
@@ -214,12 +217,8 @@
   display: none;
 }
 .ov-viking-bot__empty-history {
-  display: flex;
   min-height: 160px;
-  margin: 0;
-  align-items: center;
   justify-content: center;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
 }
 .ov-viking-bot__reference-picker {
   min-width: 0;
@@ -329,10 +328,15 @@
   color: var(--ov-ui-color-status-success, var(--ov-ui-status-success-default));
 }
 @container (max-width: 360px) {
+  .ov-viking-bot__session-actions {
+    gap: 8px;
+  }
   .ov-viking-bot__session-meta > span {
     display: none;
   }
-  .ov-viking-bot__session-actions {
-    gap: 4px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ov-viking-bot__header-action.ov-button {
+    transition: none;
   }
 }

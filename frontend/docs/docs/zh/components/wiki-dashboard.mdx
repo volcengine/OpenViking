@@ -27,6 +27,14 @@ import '@openviking/react/components/wiki-dashboard/style.css';
 
 示例使用固定数据。操作图标和点击反馈由示例提供，勾选「隐藏宿主操作」可以移除。
 
+### 渲染失败
+
+宿主传入的内容渲染出错时，组件显示默认兜底：插画、提示和「重试显示」按钮。需要替换展示时传入 `slots.errorFallback`。
+
+```tsx file="../../_demos/wiki-dashboard-crash.tsx" preview
+
+```
+
 ## API
 
 ### WikiDashboard
@@ -122,3 +130,7 @@ import '@openviking/react/components/wiki-dashboard/style.css';
 - 组件没有顶层 `uri` 属性。请求和定位需要的 URI 通过 `onOpenUri`、`defineActions` 的闭包传入。
 - 切换文档时要重置筛选和展开状态，在外层给组件设置 `key={documentId}`。
 - 类型从 `@openviking/react/components/wiki-dashboard` 导出，包根入口只导出组件和 `WikiDashboardProps`。
+
+## 埋点
+
+通过 Provider 统一接入，支持的事件和触发条件见[埋点指南与事件目录](../guide/analytics)。

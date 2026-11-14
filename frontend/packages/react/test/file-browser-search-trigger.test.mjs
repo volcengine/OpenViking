@@ -156,6 +156,7 @@ test('failed searches expose the reason and can retry the same query', async () 
     await open();
     await type('profile');
     await waitForDebounce();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 1100)));
     assert.match(
       dialog().querySelector('[role="alert"]').textContent,
       /demo search failed/,
@@ -169,8 +170,8 @@ test('failed searches expose the reason and can retry the same query', async () 
         .click(),
     );
     await settle();
-    assert.equal(calls(fetch).length, 2);
-    assert.equal(calls(fetch)[1].body.query, 'profile');
+    assert.equal(calls(fetch).length, 3);
+    assert.equal(calls(fetch)[2].body.query, 'profile');
     assert.match(dialog().textContent, /No matching resources/);
     assert.equal(modeSwitch(), null);
   } finally {
@@ -194,10 +195,14 @@ test('closing cancels the pending search, clears the draft and restores focus', 
 
     await act(async () => dialog().querySelector('.ov-modal__close').click());
     await settle();
+    // 退出动画期间保持当前结果，动画结束后才重置并取消请求。
+    // The current results stay during the exit transition; the reset and the
+    // cancellation follow once it ends.
+    assert.equal(signal.aborted, false);
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 330)));
     assert.equal(signal.aborted, true);
 
     await act(async () => pending.resolve(await ok({ resources: [{ uri }] })));
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 330)));
     assert.equal(document.activeElement, trigger());
 
     await open();

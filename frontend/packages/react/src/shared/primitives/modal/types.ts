@@ -15,6 +15,10 @@ export interface ModalProps {
   /** Overrides the localized close button name, including an explicit empty string. */
   closeLabel?: string;
   closeIcon?: ReactNode;
-  /** Close intent from the mask, close button or Escape. The host controls open. */
+  /** Allow pointer clicks on the mask to close the modal. Defaults to true. */
+  maskClosable?: boolean;
+  /** Close intent from the close button, Escape or the mask when enabled. */
   onClose?: () => void;
+  /** Runs once the exit transition has finished and the panel is gone. */
+  afterClose?: () => void;
 }

@@ -20,14 +20,6 @@
   font-size: 13px;
   line-height: 20px;
 }
-.ov-directory-tour-demo__controls input {
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  flex-shrink: 0;
-  accent-color: var(--rp-c-brand);
-  cursor: pointer;
-}
 .ov-directory-tour-demo__controls output {
   margin-left: auto;
   color: var(--rp-c-text-2);

@@ -6,6 +6,7 @@ import type { AuthAction, AuthFormOptions, AuthLabels } from './types.js';
 
 interface Props extends AuthFormOptions {
   children: ReactNode;
+  formRef?: import('react').Ref<HTMLFormElement>;
   labels: AuthLabels;
   submitLabel: string;
   validate: () => boolean;
@@ -14,6 +15,7 @@ interface Props extends AuthFormOptions {
 }
 export function FormFrame({
   children,
+  formRef,
   labels,
   submitLabel,
   validate,
@@ -38,6 +40,7 @@ export function FormFrame({
   };
   return (
     <form
+      ref={formRef}
       className={`ov-auth ${options.className ?? ''}`}
       noValidate
       aria-busy={options.loading || undefined}

@@ -61,7 +61,7 @@ Built-in item ids:
 
 - The agent catalog, instructions and icons are built in, and no prop adds, removes or replaces them. The language is set only through `locale`, and the component has no language switcher.
 - The content and icons ship with the component, so you need no asset URLs and nothing is fetched at runtime. The component never runs the commands it shows; it only displays and copies them.
-- The default size is 1000px wide and at least 949px tall. In a narrower container the component scrolls horizontally.
+- The maximum width is 1000px, with a minimum height of 949px in the wide layout. Below a container width of 720px, the panel stacks vertically and the agent list scrolls horizontally.
 - API keys in code blocks show as `••••••••`. Click "Show API Key" on a block to reveal the original value; only one code block per set of instructions shows the key at a time. Copying always uses the original key, whatever is displayed.
 - The component does not persist `apiKey` or write it to DOM attributes. The text passed to `onCopy` contains the original key, so treat it as a credential and keep it out of logs.
 - Copying uses the Clipboard API, which needs a secure context (such as HTTPS) and clipboard permission. On failure the component shows "Copy failed. Please retry." and does not call `onCopy`.
@@ -71,3 +71,7 @@ Built-in item ids:
 - When Hermes uses a custom `baseUrl` (different from the default), its instructions use the Custom connection steps.
 - The Overseas tag appears at the end of an agent's tag row and follows the agent product's origin, not the region where a model is deployed. With `showOverseasTag={true}`, Cursor, OpenClaw, Hermes Agent, OpenCode and pi are tagged as well as Codex and Claude Code.
 - Types are exported from `@openviking/react/components/agent-connect`; the package root exports only the component and `AgentConnectProps`.
+
+## Analytics
+
+Configure analytics through the Provider. See the [integration guide and event catalogue](../guide/analytics) for supported events and their semantics.

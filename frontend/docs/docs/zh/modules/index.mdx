@@ -49,28 +49,62 @@ import '@openviking/react/modules/style.css';
 
 没有 Provider 时，FileBrowser 不发起请求，目录树一直停在加载状态；Console 使用不带身份信息的同源默认 Client。
 
-ScopeCascade 不走共享 Client，没有 `requestOptions`，也不需要 Provider；放在 Provider 内时，它只继承 Provider 的 `locale`。
+ScopeCascade 不走共享 Client，没有 `requestOptions`，也不需要 Provider；放在 Provider 内时，它可继承语言并通过 Provider 接入[埋点](../guide/analytics)。
 
 ### OpenVikingProvider
 
 字段省略时继承外层 Provider，最外层省略时使用「默认值」一列。
 
-| 参数        | 说明                                                                                                 | 类型                                          | 默认值                   |
-| ----------- | ---------------------------------------------------------------------------------------------------- | --------------------------------------------- | ------------------------ |
-| baseURL     | 服务地址及可选的网关前缀，不含 `/api/v1`，空字符串表示同源请求                                       | `string`                                      | `''`                     |
-| apiKey      | 凭证，作为 `X-API-Key` 请求头发送；商业版由浏览器 Cookie 鉴权，不需要传入                            | `string \| (() => string \| Promise<string>)` | -                        |
-| accountId   | OpenViking 账号 ID，对应数据空间，作为 `X-OpenViking-Account` 请求头发送                             | `string \| (() => string \| Promise<string>)` | -                        |
-| userId      | 账号内的用户 ID，作为 `X-OpenViking-User` 请求头发送                                                 | `string \| (() => string \| Promise<string>)` | -                        |
-| resourceId  | 当前库 ID，决定请求落在哪个库，作为 `V-Resource-Id` 请求头发送                                       | `string \| (() => string \| Promise<string>)` | -                        |
-| credentials | 传给 `fetch` 的 `credentials`，决定是否携带 Cookie；跨源请求仍遵循服务端 CORS 和浏览器的 Cookie 策略 | `'include' \| 'same-origin' \| 'omit'`        | `'include'`              |
-| signal      | 中止请求的信号，触发后进行中的请求被取消                                                             | `AbortSignal`                                 | -                        |
-| fetch       | 替换全局 `fetch`，用于测试、链路追踪或没有全局 `fetch` 的环境                                        | `typeof fetch`                                | 全局 `fetch`             |
-| locale      | 子树的界面语言，规则见[国际化](../guide/i18n)                                                        | `'zh-CN' \| 'en-US'`                          | 继承上级，默认 `'en-US'` |
-| children    | 使用这套请求配置的子树                                                                               | `ReactNode`                                   | -                        |
+| 参数               | 说明                                                                                                 | 类型                                          | 默认值                   |
+| ------------------ | ---------------------------------------------------------------------------------------------------- | --------------------------------------------- | ------------------------ |
+| baseURL            | 服务地址及可选的网关前缀，不含 `/api/v1`，空字符串表示同源请求                                       | `string`                                      | `''`                     |
+| apiKey             | 凭证，作为 `X-API-Key` 请求头发送；商业版由浏览器 Cookie 鉴权，不需要传入                            | `string \| (() => string \| Promise<string>)` | -                        |
+| accountId          | OpenViking 账号 ID，对应数据空间，作为 `X-OpenViking-Account` 请求头发送                             | `string \| (() => string \| Promise<string>)` | -                        |
+| userId             | 账号内的用户 ID，作为 `X-OpenViking-User` 请求头发送                                                 | `string \| (() => string \| Promise<string>)` | -                        |
+| resourceId         | 当前库 ID，决定请求落在哪个库，作为 `V-Resource-Id` 请求头发送                                       | `string \| (() => string \| Promise<string>)` | -                        |
+| credentials        | 传给 `fetch` 的 `credentials`，决定是否携带 Cookie；跨源请求仍遵循服务端 CORS 和浏览器的 Cookie 策略 | `'include' \| 'same-origin' \| 'omit'`        | `'include'`              |
+| signal             | 中止请求的信号，触发后进行中的请求被取消                                                             | `AbortSignal`                                 | -                        |
+| fetch              | 替换全局 `fetch`，用于测试、链路追踪或没有全局 `fetch` 的环境                                        | `typeof fetch`                                | 全局 `fetch`             |
+| locale             | 子树的界面语言，规则见[国际化](../guide/i18n)                                                        | `'zh-CN' \| 'en-US'`                          | 继承上级，默认 `'en-US'` |
+| analytics          | 操作和曝光事件的接入配置，见[埋点指南](../guide/analytics)                                           | `OpenVikingAnalyticsOptions \| false`         | 继承上级，根默认关闭     |
+| queryClient        | 复用宿主的 TanStack Query v5 客户端，省略时继承上层或创建内部实例                                    | `QueryClient`                                 | 按 Provider 生命周期创建 |
+| requestConcurrency | 按接口路径设置最大在途请求数，值为正整数，逐接口覆盖并继承                                           | `Partial<Record<OvPath, number>>`             | `{ [OV_PATHS.fsLs]: 3 }` |
+| children           | 使用这套请求配置的子树                                                                               | `ReactNode`                                   | -                        |
 
 - 身份字段 `apiKey`、`accountId`、`userId` 和 `resourceId` 也可以传函数，每次请求重新求值，因此能读到轮换后的凭证。
 - `fetch`、`signal` 和函数形式的身份字段按引用比较，变化会创建新的 Client，使用它的区块随之重置，请保持它们的引用稳定。
 - Provider 挂载时不发请求，也不读取浏览器里保存的凭证。
+
+### 查询缓存与并发
+
+SDK 自带查询运行时，无需另行安装 `@tanstack/react-query`。内部 QueryClient 在 Provider 生命周期内保持稳定，默认失败后重试一次、数据保鲜 5 秒，并保留 TanStack 的窗口聚焦刷新行为。目录分页和搜索共用查询缓存，展开、选中和输入状态由各区块实例维护。
+
+宿主已使用 TanStack Query v5 时，可直接传入原生实例，无需额外包裹 QueryClientProvider：
+
+```tsx
+import { QueryClient } from '@tanstack/react-query';
+import { OpenVikingProvider, OV_PATHS } from '@openviking/react/client';
+
+const queryClient = new QueryClient();
+
+<OpenVikingProvider
+  baseURL="/openviking"
+  queryClient={queryClient}
+  requestConcurrency={{ [OV_PATHS.fsLs]: 3 }}
+>
+  <App />
+</OpenVikingProvider>;
+```
+
+将 OpenViking 查询缓存恢复到新的运行时后，区块会重新请求；宿主的其他查询缓存不受影响。
+
+外部实例沿用宿主的查询策略，SDK 不改写其默认配置，也不在卸载时清空缓存。嵌套 Provider 省略 `queryClient` 时继承上层，显式传入时覆盖。
+
+`requestConcurrency` 默认只限制目录子项接口 `GET /api/v1/fs/ls`，其他接口默认不限制。配置逐接口合并，嵌套 Provider 继承未声明项。同一 QueryClient 下，同服务与身份作用域的目录树和搜索范围选择器共享队列；不同接口独立计数，实际重试也经过队列，重试等待不占槽位。
+
+查询键使用已解析的服务、身份与资源作用域，以及影响响应的参数；凭证不会以明文进入查询键。共享查询的一个使用者退出不会取消其他使用者的请求。显式 `signal` 中止当前使用者的订阅；最后一个使用者离开时由查询运行时处理取消。目录写操作成功后使当前作用域缓存失效，后台刷新失败保留已加载数据，并显示重试入口；写操作成功状态不受刷新失败影响。
+
+搜索防抖由区块负责，不属于 QueryClient 配置，FileBrowser 使用 400ms。
 
 ### 覆盖请求配置
 
@@ -102,3 +136,11 @@ const otherLibrary = { resourceId: 'library-b' };
 ```
 
 示例没有包 `OpenVikingProvider`，只用来查看样式：FileBrowser 的目录树停在加载状态，Console 不带身份信息。网格布局属于示例，应用自行决定布局。
+
+### 共享查询缓存
+
+模拟服务中，两个实例复用宿主 QueryClient。开启失败模拟后刷新，可检查保留数据和重试状态。
+
+```tsx file="../../_demos/query-client.tsx" preview
+
+```

@@ -11,7 +11,10 @@ export interface DashboardQuery<T> {
 
 /** Instance-local, cancellable queries. A changed identity never exposes old data. */
 export function useDashboardQuery<T>(
-  load: (client: OvClient, options: OvRequestOptions) => Promise<T>,
+  load: (
+    client: OvClient,
+    options: OvRequestOptions & { signal: AbortSignal },
+  ) => Promise<T>,
   requestOptions?: OvRequestOptions,
   enabled = true,
   refreshGeneration = 0,
