@@ -1,8 +1,20 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { after } from 'node:test';
 import { act, createElement as h } from 'react';
 import { VikingBotInteraction } from '@openviking/react/components/viking-bot/interaction';
 import { mount } from './helpers/module-dom.mjs';
+
+// JSDOM does not expose the browser APIs used by delayed tree reveal.
+const previousCSS = globalThis.CSS;
+const previousScroll = window.HTMLElement.prototype.scrollIntoView;
+globalThis.CSS = {
+  escape: (value) => value.replaceAll(':', '\\:').replaceAll('/', '\\/'),
+};
+window.HTMLElement.prototype.scrollIntoView = function () {};
+after(() => {
+  globalThis.CSS = previousCSS;
+  window.HTMLElement.prototype.scrollIntoView = previousScroll;
+});
 
 const click = (node) =>
   act(async () => {
@@ -52,6 +64,7 @@ test('target picker stays closed after disabling or submitting and preserves the
     for (const state of [{ disabled: true }, { submitting: true }]) {
       await click(trigger(view));
       assert.ok(modal());
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 350)));
       await view.render(render(state));
       assert.equal(modal(), null);
       await view.render(render());
