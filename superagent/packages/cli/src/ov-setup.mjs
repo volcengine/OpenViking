@@ -39,7 +39,7 @@ const UNNAMED = () => t('<实例名称>', '<instance name>');
 // Older OV releases let memory extraction update soul.md. An absent or
 // unfamiliar version cannot prove that behavior, so it never blocks setup or
 // produces a speculative warning.
-function hasLegacySoulExtraction(version) {
+export function hasLegacySoulExtraction(version) {
   if (typeof version !== 'string') return false;
   const match = version.trim().match(/^v?(\d+)\.(\d+)(?:\.(\d+))?/);
   if (!match) return false;
