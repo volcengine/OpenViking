@@ -784,17 +784,19 @@ async def test_http_contract_preserves_retries_and_compile_target_lifecycle(
     if not builtin_skill:
         await service.viking_fs.write_file(f"{skill}/SKILL.md", "Build a wiki", ctx=admin)
     await service.runtime_config_manager.patch_account(ctx.account_id, {"acl": {"enabled": True}})
-    await service.vikingdb_manager.upsert(
-        {
-            "id": "compile-source",
-            "uri": source,
-            "account_id": ctx.account_id,
-            "context_type": "resource",
-            "level": 0,
-            "vector": [0.1] * service.vikingdb_manager.vector_dim,
-        },
-        ctx=admin,
-    )
+    # Derived target indexing is stubbed below; ACL checks still need its context.
+    for name, uri in (("source", source), ("target", target)):
+        await service.vikingdb_manager.upsert(
+            {
+                "id": f"compile-{name}",
+                "uri": uri,
+                "account_id": ctx.account_id,
+                "context_type": "resource",
+                "level": 0,
+                "vector": [0.1] * service.vikingdb_manager.vector_dim,
+            },
+            ctx=admin,
+        )
     await service.fs.set_acl(
         source,
         [{"principal": "group:engineering", "level": "read"}],
