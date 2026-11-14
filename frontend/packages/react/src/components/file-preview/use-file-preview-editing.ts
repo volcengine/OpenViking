@@ -1,3 +1,5 @@
+import { useAnalyticsRef } from '../../shared/analytics/context.js';
+import { startOperation, errorKind } from '../../shared/analytics/reporter.js';
 import { useEffect, useRef, useState } from 'react';
 
 import type { FilePreviewFileTab, FilePreviewTab } from './types.js';
@@ -22,6 +24,7 @@ import type { FilePreviewFileTab, FilePreviewTab } from './types.js';
  * the new one.
  */
 export function useFilePreviewEditing(activeTabKey: string) {
+  const analytics = useAnalyticsRef();
   const [editing, setEditing] = useState(false);
   const [loadingEdit, setLoadingEdit] = useState(false);
   const [editFailed, setEditFailed] = useState(false);
@@ -81,6 +84,8 @@ export function useFilePreviewEditing(activeTabKey: string) {
     setSaveFailed(false);
     setVersionNotCreated(false);
     setDraft('');
+    if (wasEditing)
+      analytics.current?.emit('file_preview_edit_cancel', () => ({}));
     if (wasEditing && tab.kind === 'file') tab.editing?.onCancel?.(discarded);
   }
 
@@ -106,6 +111,7 @@ export function useFilePreviewEditing(activeTabKey: string) {
     if (content !== undefined) {
       setDraft(content);
       setEditing(true);
+      analytics.current?.emit('file_preview_edit_start', () => ({}));
     }
   }
 
@@ -130,6 +136,11 @@ export function useFilePreviewEditing(activeTabKey: string) {
     pendingSave.current = true;
     setSaving(true);
     setSaveFailed(false);
+    const operation = analytics.current && startOperation();
+    if (operation)
+      analytics.current?.emit('file_preview_save_submit', () => ({
+        operation_id: operation.operation_id,
+      }));
     const value = draft;
     let result: Awaited<ReturnType<typeof capability.save>>;
     try {
@@ -137,7 +148,12 @@ export function useFilePreviewEditing(activeTabKey: string) {
         note === undefined
           ? await capability.save(value)
           : await capability.save(value, note);
-    } catch {
+    } catch (error) {
+      if (operation && id === requestId.current)
+        analytics.current?.emit('file_preview_save_fail', () => ({
+          ...operation.finish(),
+          error_kind: errorKind(error),
+        }));
       if (id === requestId.current) setSaveFailed(true);
       return false;
     } finally {
@@ -145,6 +161,12 @@ export function useFilePreviewEditing(activeTabKey: string) {
       setSaving(false);
     }
     const current = id === requestId.current;
+    if (operation && current)
+      analytics.current?.emit('file_preview_save_success', () => ({
+        ...operation.finish(),
+        version_status:
+          result?.warning === 'version-not-created' ? 'not-created' : 'unknown',
+      }));
     if (current) {
       setEditing(false);
       setDraft('');

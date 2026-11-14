@@ -1,3 +1,4 @@
+import { useTrack } from '../../shared/analytics/use-track.js';
 import { Button } from '../../shared/primitives/button/button.js';
 import { Empty } from '../../shared/primitives/empty/empty.js';
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
@@ -27,6 +28,7 @@ export function VikingBotSessionActions({
   labels?: VikingBotLabels;
   locale?: Locale;
 }) {
+  const track = useTrack();
   const [historyOpen, setHistoryOpen] = useState(false);
   const locale = useLocale(localeProp);
   const labels = resolveVikingBotLabels(locale, overrides);
@@ -52,7 +54,10 @@ export function VikingBotSessionActions({
                   alignment="end"
                   value={sessions.currentId ? [sessions.currentId] : []}
                   onChange={([id]) => {
-                    if (id) sessions.onSelect(id);
+                    if (id) {
+                      track('viking_bot_session_select');
+                      sessions.onSelect(id);
+                    }
                   }}
                   open={historyOpen}
                   onOpenChange={(open) => {
@@ -148,7 +153,10 @@ export function VikingBotSessionActions({
                 htmlType="button"
                 className="ov-viking-bot__header-action"
                 aria-label={labels.newSession}
-                onClick={sessions.onNew}
+                onClick={() => {
+                  track('viking_bot_session_create_click');
+                  sessions.onNew();
+                }}
               >
                 <VikingBotIcon name="newSession" />
               </Button>

@@ -316,3 +316,7 @@ Defaults are the copy used when `locale` is `'en-US'`.
 - Server rendering and the hydration pass use `createdAt` and show no time without it; the client switches to `createdAtMs` afterwards. The time is recalculated when the component renders and does not refresh on a timer.
 - Colors come from the `--ov-ui-color-*` theme variables, and dark mode follows the `.dark` class on `<html>`; see [Getting started](../guide/getting-started).
 - Types are exported from `@openviking/react/components/command-console`; the package root exports only the component and `CommandConsoleProps`.
+
+## Analytics
+
+Configure analytics through the Provider. See the [integration guide and event catalogue](../guide/analytics) for supported events and their semantics.

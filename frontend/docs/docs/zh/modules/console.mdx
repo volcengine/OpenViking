@@ -252,3 +252,7 @@ Console 按适配器是否提供方法决定停止与追问能力。`steer` 返�
 - 切换 `locale` 会更新已有记录里的命令帮助、参数错误和取消提示，保留记录和草稿；服务端返回的内容保持原样。
 - 认证、账号切换和页面布局由宿主负责。`onOpenUri` 只上报资源链接的打开意图，导航由宿主完成。
 - 类型从 `@openviking/react/modules/console` 导出，包根入口只导出 `Console` 和 `ConsoleProps`。
+
+## 埋点
+
+通过 Provider 统一接入，支持的事件和触发条件见[埋点指南与事件目录](../guide/analytics)。

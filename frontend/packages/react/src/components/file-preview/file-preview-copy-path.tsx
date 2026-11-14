@@ -1,3 +1,4 @@
+import { useExposure } from '../../shared/analytics/use-exposure.js';
 import { useEffect, useRef, useState } from 'react';
 import { Tooltip } from '../../shared/primitives/tooltip/index.js';
 
@@ -21,6 +22,7 @@ export function FilePreviewCopyPath({
   failureLabel: string;
   onClick: () => Promise<boolean>;
 }) {
+  const exposure = useExposure('file_preview_copy_path_show');
   const [feedback, setFeedback] = useState<{ ok: boolean; message: string }>();
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const lastMessage = useRef('');
@@ -44,6 +46,7 @@ export function FilePreviewCopyPath({
     <span className="ov-file-preview__copy-path">
       <Tooltip content={label}>
         <button
+          ref={exposure}
           type="button"
           className="ov-file-preview__action ov-file-preview__action--copy-path"
           aria-label={label}

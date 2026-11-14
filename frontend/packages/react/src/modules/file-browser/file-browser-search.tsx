@@ -1,4 +1,6 @@
-import { useRenderErrors } from './file-browser-labels.js';
+import { useTrack } from '../../shared/analytics/use-track.js';
+import { useOpenExposure } from '../../shared/analytics/use-exposure.js';
+import { useRenderErrors, type ResolvedLabels } from './file-browser-labels.js';
 import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
@@ -12,7 +14,6 @@ import { FileBrowserSearchHeader } from './file-browser-search-header.js';
 import { useSearchHighlight } from './use-search-highlight.js';
 import type { FileBrowserHandle } from './types.js';
 import { FileBrowserSearchResults } from './file-browser-search-results.js';
-import type { ResolvedLabels } from './file-browser-labels.js';
 import {
   buildScopeOptions,
   isSearchScopeAllowed,
@@ -66,8 +67,9 @@ export function FileBrowserSearch({
   onOpenResource,
   onClose,
 }: FileBrowserSearchProps) {
+  const track = useTrack();
+  const exposure = useOpenExposure('file_browser_search_dialog_show', open);
   const client = useOvClient();
-  const renderErrors = useRenderErrors(locale);
   const inputRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState('');
   const [query, setQuery] = useState('');
@@ -145,6 +147,7 @@ export function FileBrowserSearch({
 
   const hits = useMemo(() => flattenResult(search.result), [search.result]);
   const openResult = (uri: string) => {
+    track('file_browser_search_result_select');
     onClose();
     void onOpenResource(uri).catch(() => {});
   };
@@ -201,13 +204,14 @@ export function FileBrowserSearch({
         onChange={setDraft}
         onToggleAdvanced={() => onToggleAdvanced(!advancedOpen)}
       />
-      <div className="ov-file-browser-search__content">
+      <div ref={exposure} className="ov-file-browser-search__content">
         <div className="ov-file-browser-search__results">
           <ErrorBoundary
-            message={renderErrors.search}
+            message={useRenderErrors(locale).search}
             resetKeys={[rootUri, query, mode]}
           >
             <FileBrowserSearchResults
+              open={open}
               mode={mode}
               hits={hits}
               listId={listId}

@@ -1,3 +1,4 @@
+import { useExposure } from '../../shared/analytics/use-exposure.js';
 import { useLocale } from '../../shared/locale-context.js';
 import { forwardRef, useImperativeHandle, useMemo, useRef } from 'react';
 
@@ -98,6 +99,7 @@ export const FileTree: FileTreeComponent = forwardRef<
   ref,
 ) {
   const locale = useLocale(localeProp);
+  const exposure = useExposure('file_tree_show');
   const rootRef = useRef<HTMLDivElement>(null);
   const visibleRows = useMemo(
     () => (rootOrder === 'context' ? orderContextRoots(rows) : rows),
@@ -151,7 +153,10 @@ export const FileTree: FileTreeComponent = forwardRef<
   return (
     <div
       {...rest}
-      ref={rootRef}
+      ref={(node) => {
+        rootRef.current = node;
+        exposure?.(node);
+      }}
       className={['ov-file-tree', className].filter(Boolean).join(' ')}
     >
       {slots?.toolbar ? (

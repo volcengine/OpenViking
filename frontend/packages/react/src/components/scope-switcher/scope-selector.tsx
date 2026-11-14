@@ -1,3 +1,4 @@
+import { useTrack } from '../../shared/analytics/use-track.js';
 import { useLocale } from '../../shared/locale-context.js';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import ChevronDownIcon from '../../../../icons/svg/scope-switcher/chevron-down.svg?react';
@@ -6,6 +7,7 @@ import { ScopePanel } from './scope-panel.js';
 import type { ScopeSelectorProps } from './types.js';
 
 export function ScopeSelector(props: ScopeSelectorProps) {
+  const track = useTrack();
   const { identity, trigger: triggerContent } = props;
   const locale = useLocale(props.locale);
   const labels = resolveScopeLabels(locale, props.labels);
@@ -169,6 +171,7 @@ export function ScopeSelector(props: ScopeSelectorProps) {
             slots={slots}
             actions={actions}
             onSelect={(option) => {
+              track('scope_switcher_option_select');
               restoreSelectionFocus.current = true;
               changeVisible(false);
               actions?.onSelect?.(option);

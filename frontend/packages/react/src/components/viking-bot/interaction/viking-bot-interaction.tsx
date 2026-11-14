@@ -1,3 +1,4 @@
+import { useTrack } from '../../../shared/analytics/use-track.js';
 import { TextArea } from '../../../shared/primitives/input/input.js';
 import { useLocale } from '../../../shared/locale-context.js';
 import { AskHuman } from '@ark-design/ui/ask-human';
@@ -60,6 +61,7 @@ export function VikingBotInteractionView({
   locale: localeProp,
   labels: overrides,
 }: VikingBotInteractionProps) {
+  const track = useTrack();
   const locale = useLocale(localeProp);
   const labels = resolveInteractionLabels(locale, overrides);
   const blocked = Boolean(disabled || submitting);
@@ -84,8 +86,14 @@ export function VikingBotInteractionView({
         {request.render({
           disabled: blocked,
           submitting,
-          submit: (value) => void onSubmit?.({ kind: 'custom', value }),
-          cancel: () => onCancel?.(),
+          submit: (value) => {
+            track('viking_bot_interaction_submit');
+            void onSubmit?.({ kind: 'custom', value });
+          },
+          cancel: () => {
+            track('viking_bot_interaction_cancel');
+            onCancel?.();
+          },
         })}
       </section>
     );
@@ -126,6 +134,7 @@ export function VikingBotInteractionView({
         submitText={labels.submit}
         onSkip={() => {
           if (blocked) return;
+          track('viking_bot_interaction_cancel');
           onCancel?.();
         }}
         onSubmit={async (value) => {
@@ -133,6 +142,7 @@ export function VikingBotInteractionView({
           // 选择类问题必须提交有效选项，否则用户看到的选择与提交内容不一致。
           if (!isValidAnswer(request, value)) return;
           // 返回宿主的 Promise，让 Ark 的提交中状态覆盖整个异步请求。
+          track('viking_bot_interaction_submit');
           await onSubmit?.(toAnswer(request, value));
         }}
         customRenderFields={{

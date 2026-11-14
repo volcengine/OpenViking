@@ -461,3 +461,7 @@ import '@openviking/react/components/file-preview/style.css';
 | `--ov-ui-font-mono`                 | 路径与编辑区的字体          | `ui-monospace, monospace`     |
 
 正文由 `@ark-design/ui` 渲染，颜色主要取自 Arco 的 `--color-*`、`--primary-*` 变量。在应用入口加载一份 Arco 颜色主题，例如 `@ark-design/ui/styles/aml-theme.css` 或 `@arco-design/web-react/dist/css/arco.css`；未加载时这些变量没有值，正文的颜色样式不会生效。暗色下还要在 `<body>` 上设置 `arco-theme="dark"`，与 `<html>` 上的 `.dark` 同时生效。
+
+## 埋点
+
+通过 Provider 统一接入，支持的事件和触发条件见[埋点指南与事件目录](../guide/analytics)。

@@ -87,6 +87,7 @@ function CompileConfigForm({
               options,
             }),
           onUpdated,
+          'file_browser_compile_config_save',
         );
       }}
     >

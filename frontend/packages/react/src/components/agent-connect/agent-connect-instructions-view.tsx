@@ -1,3 +1,4 @@
+import { useExposure } from '../../shared/analytics/use-exposure.js';
 import { Button } from '../../shared/primitives/button/button.js';
 import { useState } from 'react';
 
@@ -26,9 +27,11 @@ export function AgentConnectInstructionsView({
   onCopy,
 }: InstructionsViewProps) {
   const [visibleBlockId, onReveal] = useState<string | null>(null);
+  const exposure = useExposure('agent_connect_instructions_copy_show');
   const { status, setRoot, copy } = useAgentConnectCopy(
     instructions.copy,
     onCopy,
+    'instructions',
   );
   const controls = { locale, visibleBlockId, onReveal, onCopy };
   const command = instructions.command;
@@ -51,6 +54,7 @@ export function AgentConnectInstructionsView({
           {labels.instructions}
         </h4>
         <Button
+          ref={exposure}
           size="mini"
           type="text"
           className="ov-agent-connect__copy"
