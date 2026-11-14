@@ -4,8 +4,8 @@ import type { OvQueryValue } from './types.js';
 export interface QueryScope {
   service: string;
   credentials: RequestCredentials;
-  identity: number;
-  transport: number;
+  identity: string;
+  transport: string;
 }
 
 export const queryKeys = {

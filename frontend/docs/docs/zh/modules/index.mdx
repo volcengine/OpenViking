@@ -96,6 +96,8 @@ const queryClient = new QueryClient();
 </OpenVikingProvider>;
 ```
 
+将 OpenViking 查询缓存恢复到新的运行时后，区块会重新请求；宿主的其他查询缓存不受影响。
+
 外部实例沿用宿主的查询策略，SDK 不改写其默认配置，也不在卸载时清空缓存。嵌套 Provider 省略 `queryClient` 时继承上层，显式传入时覆盖。
 
 `requestConcurrency` 默认只限制目录子项接口 `GET /api/v1/fs/ls`，其他接口默认不限制。配置逐接口合并，嵌套 Provider 继承未声明项。同一 QueryClient 下，同服务与身份作用域的目录树和搜索范围选择器共享队列；不同接口独立计数，实际重试也经过队列，重试等待不占槽位。

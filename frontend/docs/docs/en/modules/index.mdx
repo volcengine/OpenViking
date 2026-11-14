@@ -96,6 +96,8 @@ const queryClient = new QueryClient();
 </OpenVikingProvider>;
 ```
 
+OpenViking entries restored into a new runtime are fetched again; unrelated host query entries remain available.
+
 External clients retain the host's query policies. The SDK neither overwrites their defaults nor clears their caches on unmount. Nested Providers inherit the parent's client unless explicitly overridden.
 
 By default, `requestConcurrency` limits only directory children requests, `GET /api/v1/fs/ls`. Other endpoints are unlimited unless configured. Settings merge per endpoint, including through nested Providers. Under one QueryClient, trees and search-scope pickers share a queue for the same service and identity scope. Endpoints count independently. Actual retries pass through the queue; retry delays hold no slot.

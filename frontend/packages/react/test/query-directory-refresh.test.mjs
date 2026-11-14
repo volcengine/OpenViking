@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { act, createElement as h } from 'react';
-import { QueryClient } from '@tanstack/react-query';
+import { QueryClient, dehydrate, hydrate } from '@tanstack/react-query';
 import {
   mount,
   ok,
@@ -15,10 +15,12 @@ const { OpenVikingProvider, useOvClient } = await import(
 );
 const { useFsTree } = await import(`${hooks}/fs-tree.js`);
 const ROOT = 'viking://resources';
-async function fixture(fetch) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: 1, retryDelay: 0, staleTime: 5000 } },
-  });
+async function fixture(fetch, options = {}) {
+  const queryClient =
+    options.queryClient ??
+    new QueryClient({
+      defaultOptions: { queries: { retry: 1, retryDelay: 0, staleTime: 5000 } },
+    });
   let tree, client;
   function Probe() {
     client = useOvClient();
@@ -26,7 +28,7 @@ async function fixture(fetch) {
     return null;
   }
   const view = await mount(
-    h(OpenVikingProvider, { fetch, queryClient }, h(Probe)),
+    h(OpenVikingProvider, { fetch, queryClient, ...options }, h(Probe)),
   );
   return {
     view,
@@ -165,6 +167,32 @@ test('refreshing a cached empty listing keeps the active preview mounted', async
     await act(async () => pending.resolve(await ok([])));
     await refresh;
     await view.unmount();
+    queryClient.clear();
+  }
+});
+
+test('restored host cache cannot collide with a different resolved account', async () => {
+  const fetch = recordingFetch((call) =>
+    ok([
+      {
+        uri: `${ROOT}/${new Headers(call.init.headers).get('X-OpenViking-Account')}`,
+      },
+    ]),
+  );
+  const first = await fixture(fetch, { accountId: 'A' });
+  const cached = dehydrate(first.queryClient);
+  await first.view.unmount();
+  first.queryClient.clear();
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { staleTime: 5000 } },
+  });
+  hydrate(queryClient, cached);
+  const next = await fixture(fetch, { queryClient, accountId: 'B' });
+  try {
+    assert.equal(next.tree.rows[0]?.uri, `${ROOT}/B`);
+    assert.equal(fetch.calls.length, 2);
+  } finally {
+    await next.view.unmount();
     queryClient.clear();
   }
 });

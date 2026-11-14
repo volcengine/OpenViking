@@ -32,13 +32,18 @@ export class RequestScheduler {
       .catch(() => undefined);
   }
 
-  private identities = new Map<string, number>();
+  // Restored caches and separate SDK runtimes must not reuse local identity IDs.
+  private namespace?: string;
+  private identities = new Map<string, string>();
   private lanes = new Map<string, { active: number; jobs: Job[] }>();
 
   identity(value: string) {
     let id = this.identities.get(value);
     if (id === undefined) {
-      id = this.identities.size + 1;
+      this.namespace ??=
+        globalThis.crypto?.randomUUID?.() ??
+        Math.random().toString(36).slice(2);
+      id = `${this.namespace}:${this.identities.size + 1}`;
       this.identities.set(value, id);
     }
     return id;
