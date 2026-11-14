@@ -604,25 +604,40 @@ describe("OpenVikingClient", () => {
     });
   });
 
-  it("maps response envelopes to typed errors", async () => {
-    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          status: "error",
-          error: { code: "NOT_FOUND", message: "missing" },
-        }),
-        { status: 404 },
-      ),
-    );
-    const client = new OpenVikingClient({
-      baseUrl: "https://example.com",
-      fetch: fetcher,
-    });
-    await expect(client.stat("missing")).rejects.toMatchObject({
+  it.each([
+    {
+      body: {
+        status: "error",
+        error: { code: "NOT_FOUND", message: "missing" },
+      },
+      status: 404,
       code: "NOT_FOUND",
-      statusCode: 404,
-    } satisfies Partial<OpenVikingError>);
-  });
+    },
+    ...[null, [], "not an envelope", 7, false].flatMap((body) =>
+      [200, 502].map((status) => ({ body, status, code: "UNKNOWN" })),
+    ),
+  ])(
+    "maps response envelopes to typed errors (%j)",
+    async ({ body, status, code }) => {
+      const fetcher = vi
+        .fn<typeof fetch>()
+        .mockImplementation(
+          async () => new Response(JSON.stringify(body), { status }),
+        );
+      const client = new OpenVikingClient({
+        baseUrl: "https://example.com",
+        fetch: fetcher,
+      });
+      await expect(client.stat("missing")).rejects.toMatchObject({
+        code,
+        statusCode: status,
+      } satisfies Partial<OpenVikingError>);
+      await expect(client.deleteSession("session")).rejects.toMatchObject({
+        code,
+        statusCode: status,
+      } satisfies Partial<OpenVikingError>);
+    },
+  );
 
   it("uses the raw health contract", async () => {
     const fetcher = vi
