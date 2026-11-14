@@ -136,9 +136,12 @@ async def test_target_source_syncs_before_semantic_executor(monkeypatch):
 
     await processor.on_dequeue(msg.to_dict())
 
-    assert _FakeTreeExecutor.calls[0]["incremental_update"] is True
-    assert _FakeTreeExecutor.calls[0]["target_uri"] == "viking://resources/org/repo"
-    assert _FakeTreeExecutor.calls[0]["changes"] == {
+    assert _FakeTreeExecutor.calls[0]["execution_plan"].refresh.incremental_update is True
+    assert (
+        _FakeTreeExecutor.calls[0]["execution_plan"].refresh.target_uri
+        == "viking://resources/org/repo"
+    )
+    assert _FakeTreeExecutor.calls[0]["execution_plan"].refresh.changes == {
         "added": [],
         "modified": ["viking://resources/org/repo/a.md"],
         "deleted": [],
@@ -182,9 +185,9 @@ async def test_stale_content_write_keeps_file_work_without_directory_aggregation
 
     await processor.on_dequeue(msg.to_dict())
 
-    assert _FakeTreeExecutor.calls[0]["aggregate_directory"] is False
-    assert _FakeTreeExecutor.calls[0]["changes"] == {"modified": [changed]}
-    assert _FakeTreeExecutor.calls[0]["coalesce_key"] == ""
+    assert _FakeTreeExecutor.calls[0]["execution_plan"].refresh.aggregate_directory is False
+    assert _FakeTreeExecutor.calls[0]["execution_plan"].refresh.changes == {"modified": [changed]}
+    assert _FakeTreeExecutor.calls[0]["execution_plan"].refresh.coalesce_key == ""
     assert _FakeTreeExecutor.runs == ["viking://resources/wiki"]
     processor._enqueue_parent_refresh.assert_not_awaited()
 
@@ -221,7 +224,7 @@ async def test_memory_reindex_uses_semantic_executor(monkeypatch, recursive):
 
     processor._process_memory_directory.assert_not_awaited()
     assert _FakeTreeExecutor.calls[0]["context_type"] == "memory"
-    assert _FakeTreeExecutor.calls[0]["recursive"] is recursive
+    assert _FakeTreeExecutor.calls[0]["execution_plan"].refresh.recursive is recursive
     assert _FakeTreeExecutor.runs == [msg.uri]
 
 
@@ -254,7 +257,7 @@ async def test_content_copy_does_not_enqueue_ancestor_refresh(monkeypatch):
     processor = _processor()
     plan_refresh = AsyncMock()
     monkeypatch.setattr(
-        "openviking.storage.queuefs.semantic_processor.plan_abstract_overview_refresh",
+        "openviking.storage.semantic_planning.plan_abstract_overview_refresh",
         plan_refresh,
     )
     msg = SemanticMsg(
@@ -351,3 +354,143 @@ async def test_sync_missing_source_never_touches_target(monkeypatch):
 
     fake_fs.sync_tree.assert_not_awaited()
     fake_fs.rm.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stale_content_write_retry_serializes_only_effective_file_work(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from openviking.utils.circuit_breaker import CircuitBreakerOpen
+
+    processor = _processor()
+    breaker = SimpleNamespace(check=MagicMock(side_effect=CircuitBreakerOpen()), retry_after=0)
+    monkeypatch.setattr(processor, "_account_breaker", lambda account_id: breaker)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs", lambda: _FakeVikingFS()
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.is_semantic_msg_stale",
+        AsyncMock(return_value=True),
+    )
+    queue = SimpleNamespace(enqueue=AsyncMock(return_value="retry"))
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.get_queue_manager",
+        lambda: SimpleNamespace(SEMANTIC="Semantic", get_queue=lambda *args, **kwargs: queue),
+    )
+    root = "viking://resources/repo"
+    msg = SemanticMsg(
+        root,
+        "resource",
+        recursive=False,
+        generation_trigger="content_write",
+        coalesce_key="old-directory",
+        coalesce_version=7,
+        changes={"modified": [f"{root}/a.py"], "deleted": [f"{root}/old.py"]},
+    )
+    result = await processor.on_dequeue(msg.to_dict())
+    assert result.outcome.value == "requeued"
+    retry = SemanticMsg.from_json(queue.enqueue.await_args.args[0].to_json())
+    assert retry.aggregate_directory is False
+    assert retry.changes == {"modified": [f"{root}/a.py"]}
+    assert retry.coalesce_key == ""
+    assert retry.coalesce_version == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lock_conflict", [False, True])
+async def test_parent_refresh_l2_read_failure_does_not_ack_unfinished_refresh(
+    monkeypatch, lock_conflict
+):
+    from openviking.storage.errors import LockAcquisitionError
+    from openviking.storage.queuefs.process_result import ProcessResult
+    from tests.storage.test_semantic_executor_incremental import _FakeVikingFS
+
+    root = "viking://resources/repo"
+    fs = _FakeVikingFS({root: [{"name": "a.txt"}]}, {f"{root}/a.txt": b"body"})
+    fs.exists = AsyncMock(return_value=True)
+    for module in ("semantic_processor", "semantic_executor"):
+        monkeypatch.setattr(f"openviking.storage.queuefs.{module}.get_viking_fs", lambda: fs)
+    monkeypatch.setattr(
+        "openviking.storage.semantic_planning.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticLockScope.resolve",
+        AsyncMock(return_value=SimpleNamespace(lock=None, close=AsyncMock())),
+    )
+    processor = _processor()
+    error = LockAcquisitionError("busy") if lock_conflict else RuntimeError("backend unavailable")
+    processor._load_transfer_file_summaries = AsyncMock(side_effect=error)
+    processor._generate_single_file_summary = AsyncMock(
+        return_value={"name": "a.txt", "summary": "current summary"}
+    )
+    processor._generate_overview = AsyncMock(return_value="current overview")
+    processor._normalize_overview_generation = lambda body: (body, "current abstract")
+    processor._vectorize_single_file = AsyncMock()
+    processor._vectorize_directory = AsyncMock(return_value=set())
+    processor._enqueue_parent_refresh = AsyncMock()
+    processor._requeue_semantic_msg_after_error = AsyncMock(return_value=ProcessResult.requeued())
+    msg = SemanticMsg(
+        root,
+        "resource",
+        recursive=False,
+        changes={"modified": [f"{root}/a.txt"]},
+        generation_trigger="parent_refresh",
+        propagate_to_parent=False,
+    )
+
+    result = await processor.on_dequeue(msg.to_dict())
+
+    processor._load_transfer_file_summaries.assert_awaited_once()
+    processor._vectorize_single_file.assert_not_awaited()
+    if lock_conflict:
+        assert result.outcome.value == "requeued"
+        processor._requeue_semantic_msg_after_error.assert_awaited_once()
+        assert processor._requeue_semantic_msg_after_error.await_args.args[1] is error
+        processor._generate_overview.assert_not_awaited()
+        assert fs.writes == []
+    else:
+        assert result.outcome.value == "success"
+        processor._requeue_semantic_msg_after_error.assert_not_awaited()
+        processor._generate_single_file_summary.assert_awaited_once()
+        processor._generate_overview.assert_awaited_once()
+        assert {path for path, _ in fs.writes} == {f"{root}/.abstract.md", f"{root}/.overview.md"}
+
+
+@pytest.mark.asyncio
+async def test_skill_file_failures_settle_one_package_with_all_details(monkeypatch):
+    from openviking.service.task_work_index import bind_task_context
+    from tests.storage.test_semantic_executor_incremental import _FakeVikingFS
+
+    root = "viking://agent/skills/demo/reference"
+    fs = _FakeVikingFS(
+        {root: [{"name": "a.py"}, {"name": "b.py"}]}, {f"{root}/a.py": b"a", f"{root}/b.py": b"b"}
+    )
+    fs.exists = AsyncMock(return_value=True)
+    for module in ("semantic_processor", "semantic_executor"):
+        monkeypatch.setattr(f"openviking.storage.queuefs.{module}.get_viking_fs", lambda: fs)
+    processor = _processor()
+    processor._resolve_skill_semantic_lock = AsyncMock(
+        return_value=SimpleNamespace(lock={"lease_ref": "owned"}, close=AsyncMock())
+    )
+    processor._generate_single_file_summary = AsyncMock(side_effect=RuntimeError("model failed"))
+    processor._vectorize_single_file = AsyncMock(return_value=False)
+    processor._generate_overview = AsyncMock(return_value="overview")
+    processor._normalize_overview_generation = lambda body: (body, "abstract")
+    processor._vectorize_directory = AsyncMock(return_value=set())
+    processor._enqueue_parent_refresh = AsyncMock()
+    msg = SemanticMsg(
+        root,
+        "skill",
+        account_id="account",
+        user_id="user",
+        propagate_to_parent=False,
+        skip_vectorization=True,
+    )
+    with bind_task_context("package-task", "account", "user"):
+        result = await processor.on_dequeue(msg.to_dict())
+    assert result.outcome.value == "failed"
+    assert len(result.errors) == 2
+    assert all("model failed" in detail for detail in result.errors)
+    assert any("a.py" in detail for detail in result.errors)
+    assert any("b.py" in detail for detail in result.errors)

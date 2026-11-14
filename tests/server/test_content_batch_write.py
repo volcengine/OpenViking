@@ -1547,3 +1547,46 @@ async def test_batch_write_rejects_path_traversal(client_with_resource):
     )
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+
+@pytest.mark.asyncio
+async def test_batch_summary_repair_does_not_apply_already_enqueued_tag_patch_twice(monkeypatch):
+    from openviking.storage.context_update_plan import DirectIndexAction
+    from openviking.storage.index_action import FieldPatch
+
+    uri = "viking://resources/wiki/a.md"
+    plan = ContextUpdatePlan(
+        uri,
+        "resource",
+        file_refresh=FileRefreshIntent(uri, "same-md5"),
+        direct_index_actions=(
+            DirectIndexAction(
+                "update_fields",
+                uri,
+                2,
+                "real-id",
+                field_patch=FieldPatch({"search_tags": ["team=new"]}, {"search_tags": "append"}),
+            ),
+        ),
+    )
+    enqueued = AsyncMock(return_value=True)
+    refresh = AsyncMock(return_value={"enqueued_count": 1, "parent_actions": {}})
+    monkeypatch.setattr(content_write_module, "enqueue_direct_index_actions", enqueued)
+    monkeypatch.setattr(content_write_module.Summarizer, "refresh_file_parents", refresh)
+    coordinator = ContentWriteCoordinator(_VFS("viking://resources/wiki"))
+    await coordinator._execute_batch_refresh_payload(
+        {
+            "resource_plans": [
+                {
+                    "plan": plan.to_dict(),
+                    "existed": True,
+                    "ingest_options": {"search_tags": ["team=new"], "search_tag_mode": "append"},
+                }
+            ]
+        },
+        ctx=RequestContext(UserIdentifier.the_default_user(), Role.USER),
+    )
+    enqueued.assert_awaited_once()
+    request = refresh.await_args.kwargs["changes"][0]
+    assert request.md5 == "same-md5"
+    assert request.ingest_options.search_tags is None

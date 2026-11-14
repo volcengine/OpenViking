@@ -6,13 +6,14 @@ Handles summarization and key information extraction.
 """
 
 from collections import defaultdict
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
 from openviking.core.namespace import context_type_for_uri
+from openviking.storage.context_update_plan import FileRefreshRequest, SemanticRefreshIntent
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
+from openviking.storage.semantic_planning import prepare_committed_refresh
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.ingest_options import IngestOptions
@@ -24,28 +25,6 @@ if TYPE_CHECKING:
     from openviking.server.identity import RequestContext
 
 logger = get_logger(__name__)
-
-
-@dataclass(frozen=True)
-class FileRefreshRequest:
-    """One committed flat-file change awaiting parent semantic maintenance.
-
-    This is an execution-time input for the shared summarizer, not a durable
-    RNFV or queue schema.  A batch coordinator collects one request per
-    successfully committed file and lets :meth:`refresh_file_parents` coalesce
-    them by direct parent.
-    """
-
-    file_uri: str
-    created: bool = False
-    md5: str | None = None
-    abstract: str = ""
-    vector_action: str = ""
-    ingest_options: IngestOptions = field(default_factory=IngestOptions)
-
-    def __post_init__(self) -> None:
-        if self.vector_action not in {"", "upsert", "merge"}:
-            raise ValueError(f"unsupported file vector action: {self.vector_action}")
 
 
 class Summarizer:
@@ -125,10 +104,6 @@ class Summarizer:
         the batch-only concern: one freshness decision and at most one
         ``SemanticMsg`` for every direct parent directory.
         """
-        from openviking.storage.abstract_overview import plan_abstract_overview_refresh
-        from openviking.storage.errors import LockAcquisitionError
-        from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
-        from openviking_cli.utils.config import get_openviking_config
 
         grouped: dict[str, list[FileRefreshRequest]] = defaultdict(list)
         for change in changes:
@@ -155,31 +130,48 @@ class Summarizer:
             added = sorted(change.file_uri for change in parent_changes if change.created)
             modified = sorted(change.file_uri for change in parent_changes if not change.created)
 
-            semantic_action = FreshnessAction.REFRESH_NOW
-            if force_refresh is not None:
-                semantic_config = get_openviking_config().semantic
-                try:
-                    decision = await plan_abstract_overview_refresh(
-                        viking_fs=get_viking_fs(),
-                        dir_uri=parent_uri,
-                        changed_entries=len(parent_changes),
-                        ctx=ctx,
-                        overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
-                        refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
-                        force_refresh=force_refresh,
-                    )
-                    semantic_action = decision.action
-                except LockAcquisitionError:
-                    # Parent aggregation is best-effort; changed-file work still runs.
-                    logger.info("Skipping busy parent semantic refresh: %s", parent_uri)
-                    semantic_action = FreshnessAction.NOOP
+            intent, semantic_action = await prepare_committed_refresh(
+                SemanticRefreshIntent(
+                    uri=parent_uri,
+                    context_type=context_type,
+                    recursive=False,
+                    changes={
+                        kind: uris
+                        for kind, uris in (("added", added), ("modified", modified))
+                        if uris
+                    },
+                    generation_trigger=generation_trigger,
+                    file_md5s={
+                        change.file_uri: change.md5 for change in parent_changes if change.md5
+                    },
+                    file_abstracts={
+                        change.file_uri: change.abstract
+                        for change in parent_changes
+                        if change.abstract
+                    },
+                    file_vector_actions={
+                        change.file_uri: change.vector_action
+                        for change in parent_changes
+                        if change.vector_action
+                    },
+                    file_ingest_options={
+                        change.file_uri: change.ingest_options
+                        for change in parent_changes
+                        if change.ingest_options != IngestOptions()
+                    },
+                    skip_vectorization=skip_vectorization,
+                    ingest_options=IngestOptions.from_value(ingest_options),
+                ),
+                viking_fs=get_viking_fs() if force_refresh is not None else None,
+                ctx=ctx,
+                force_refresh=force_refresh,
+                changed_entries=len(parent_changes),
+            )
             parent_actions[parent_uri] = semantic_action.value
-            aggregate_directory = semantic_action is FreshnessAction.REFRESH_NOW
-
-            msg = SemanticMsg(
-                uri=parent_uri,
-                context_type=context_type,
-                recursive=False,
+            assert intent is not None  # Committed file work survives a deferred/busy parent.
+            aggregate_directory = intent.aggregate_directory
+            msg = SemanticMsg.from_refresh(
+                intent,
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
                 peer_id=ctx.user.user_id,
@@ -187,11 +179,6 @@ class Summarizer:
                 lock_handoff=lock_handoff,
                 skip_vectorization=skip_vectorization,
                 telemetry_id=telemetry_id,
-                changes={
-                    change_type: uris
-                    for change_type, uris in (("added", added), ("modified", modified))
-                    if uris
-                },
                 coalesce_key=(
                     build_semantic_coalesce_key(
                         context_type=context_type,
@@ -205,25 +192,6 @@ class Summarizer:
                     and not (generation_trigger == "content_write" and context_type == "resource")
                     else ""
                 ),
-                generation_trigger=generation_trigger,
-                aggregate_directory=aggregate_directory,
-                ingest_options=ingest_options,
-                file_md5s={change.file_uri: change.md5 for change in parent_changes if change.md5}
-                or None,
-                file_abstracts={
-                    change.file_uri: change.abstract for change in parent_changes if change.abstract
-                }
-                or None,
-                file_vector_actions={
-                    change.file_uri: change.vector_action
-                    for change in parent_changes
-                    if change.vector_action
-                },
-                file_ingest_options={
-                    change.file_uri: change.ingest_options
-                    for change in parent_changes
-                    if change.ingest_options != IngestOptions()
-                },
             )
             enqueue_id = await semantic_queue.enqueue(msg)
             if enqueue_id == "deduplicated":
@@ -285,7 +253,9 @@ class Summarizer:
         lock_guard = (
             lock
             if isinstance(lock, PathLockGuard)
-            else PathLockGuard(agfs, lock) if lock is not None else None
+            else PathLockGuard(agfs, lock)
+            if lock is not None
+            else None
         )
         lock_handoff: Optional[Dict[str, Any]] = None
         if lock_guard is not None:
@@ -327,27 +297,29 @@ class Summarizer:
                 enqueue_units.append((uri, temp_uri))
 
             for target_uri, source_uri in enqueue_units:
-                msg = SemanticMsg(
-                    uri=source_uri,
-                    context_type=context_type,
+                msg = SemanticMsg.from_refresh(
+                    SemanticRefreshIntent(
+                        uri=source_uri,
+                        context_type=context_type,
+                        target_uri=target_uri if target_uri != source_uri else "",
+                        skip_vectorization=skip_vectorization,
+                        is_code_repo=kwargs.get("is_code_repo", False),
+                        ingest_options=ingest_options,
+                        source=source,
+                        generation_trigger=generation_trigger,
+                        changes=changes,
+                        file_md5s=file_md5s,
+                        artifact_files=tuple(artifact_files),
+                        file_abstracts=file_abstracts,
+                    ),
                     account_id=ctx.account_id,
                     user_id=ctx.user.user_id,
                     group_ids=ctx.group_ids,
                     peer_id=ctx.user.user_id,
                     role=str(ctx.role),
-                    skip_vectorization=skip_vectorization,
                     telemetry_id=telemetry.telemetry_id,
-                    target_uri=target_uri if target_uri != source_uri else None,
                     lock_handoff=lock_handoff,
-                    is_code_repo=kwargs.get("is_code_repo", False),
-                    ingest_options=ingest_options,
-                    source=source,
-                    generation_trigger=generation_trigger,
-                    changes=changes,
-                    file_md5s=file_md5s,
                     artifact_ref=artifact_ref,
-                    artifact_files=artifact_files,
-                    file_abstracts=file_abstracts,
                     plan=semantic_plan,
                 )
                 try:

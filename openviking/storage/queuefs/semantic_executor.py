@@ -11,7 +11,6 @@ from time import perf_counter
 from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Mapping, Optional, Set
 from weakref import WeakKeyDictionary
 
-from openviking.core.namespace import classify_uri
 from openviking.parse.parsers.media import get_media_type
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker_concurrency import run_to_completion
@@ -23,33 +22,33 @@ from openviking.service.task_work_index import (
 from openviking.storage.abstract_overview import (
     AbstractOverviewFormatError,
     AbstractOverviewWriteResult,
-    body_for_preview,
-    deterministic_sample,
     freshness_metadata,
-    read_abstract_overview_pending_snapshot,
+    parse_overview_file_summaries,
     write_abstract_overview,
 )
-from openviking.storage.context_update_plan import FileVectorSource, SemanticAction
+from openviking.storage.context_update_plan import (
+    SemanticAction,
+    SemanticExecutionPlan,
+    SemanticRefreshIntent,
+)
 from openviking.storage.errors import LockAcquisitionError
-from openviking.storage.index_action import FieldPatch
-from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
+from openviking.storage.semantic_planning import (
+    SemanticNodePreparation,
+    directory_index_arguments,
+    prepare_node,
+    resolve_semantic_execution,
+)
+from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import bind_ingestion_source_type, bind_telemetry, get_current_telemetry
 from openviking.utils.content_hash import content_md5
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.log_correlation import log_correlation
-from openviking_cli.utils import VikingURI
-from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
-    from openviking.storage.context_update_plan import SemanticPlan, SemanticTreeEntry
-
-# Session-internal files that should never be summarized by the semantic pipeline.
-# These are canonical archives (e.g. session transcripts) whose content provides
-# no additional retrieval value and would only waste tokens and add latency.
-_SKIP_FILENAMES = frozenset({"messages.jsonl"})
+    from openviking.storage.context_update_plan import SemanticPlan
 
 
 @dataclass
@@ -79,7 +78,6 @@ class DirNode:
     sampled_file_paths: Optional[Set[str]] = None
     total_entries: Optional[int] = None
     missing_summary_entries: Optional[int] = None
-    transfer_inputs_ready: bool = True
     dispatched: bool = False
     overview_scheduled: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -210,78 +208,65 @@ class SemanticTreeExecutor:
         file_vector_actions: Optional[Dict[str, str]] = None,
         file_ingest_options: Optional[Dict[str, IngestOptions | Dict[str, Any]]] = None,
         semantic_plan: Optional["SemanticPlan"] = None,
+        execution_plan: Optional["SemanticExecutionPlan"] = None,
         telemetry_id: str | None = None,
         source_contents: Optional[Mapping[tuple[str, int], str | bytes]] = None,
         source_raw_contents: Optional[Mapping[tuple[str, int], str | bytes]] = None,
         materialize_content: bool = False,
     ):
         self._processor = processor
-        self._context_type = context_type
         self._ctx = ctx
-        self._incremental_update = incremental_update
-        self._target_uri = target_uri
-        self._recursive = recursive
         self._lock = lock
-        self._is_code_repo = bool(
-            is_code_repo
-            or (
-                semantic_plan is not None
-                and semantic_plan.file_vector_source is FileVectorSource.SUMMARY_WHEN_AVAILABLE
-            )
+        self._execution_plan = execution_plan or resolve_semantic_execution(
+            semantic_plan
+            or SemanticRefreshIntent(
+                uri=target_uri or "viking://resources",
+                context_type=context_type,
+                target_uri=target_uri or "",
+                incremental_update=incremental_update,
+                recursive=recursive,
+                skip_vectorization=skip_vectorization,
+                is_code_repo=is_code_repo,
+                ingest_options=IngestOptions.from_value(ingest_options),
+                changes=changes,
+                source=source,
+                generation_trigger=generation_trigger,
+                aggregate_directory=aggregate_directory,
+                copy_source_uri=copy_source_uri,
+                coalesce_key=coalesce_key,
+                coalesce_version=coalesce_version,
+                file_md5s=file_md5s or {},
+                artifact_files=tuple(artifact_files or ()),
+                file_abstracts=file_abstracts or {},
+                file_vector_actions=file_vector_actions or {},
+                file_ingest_options={
+                    uri: IngestOptions.from_value(options)
+                    for uri, options in (file_ingest_options or {}).items()
+                },
+            ),
+            generation_trigger=generation_trigger,
         )
+        request = self._execution_plan.refresh
+        self._context_type = self._execution_plan.context_type
+        self._is_code_repo = request.is_code_repo
         self._source_type = (
             ("repository" if self._is_code_repo else "document")
             if context_type == "resource"
             else None
         )
-        self._changes_provided = changes is not None
-        self._changes = changes or {}
-        self._semantic_plan = semantic_plan
         self._source_contents = dict(source_contents or {})
-        self._source_raw_contents = (
-            dict(source_raw_contents) if source_raw_contents is not None else None
-        )
+        self._source_raw_contents = source_raw_contents
         self._materialize_content = materialize_content
-        self._semantic_resource_root = (
-            semantic_plan.root_uri.rstrip("/") if semantic_plan is not None else None
-        )
-        self._skip_vectorization = (
-            not semantic_plan.vectorize if semantic_plan is not None else skip_vectorization
-        )
-        self._ingest_options = IngestOptions.from_value(
-            semantic_plan.ingest_options if semantic_plan is not None else ingest_options
-        )
-        self._coalesce_key = coalesce_key
-        self._coalesce_version = coalesce_version
-        self._source = dict(source) if source else None
-        self._generation_trigger = generation_trigger
-        self._aggregate_directory = aggregate_directory
-        self._copy_source_uri = copy_source_uri
+        self._semantic_resource_root = self._execution_plan.root_uri
+        self._coalesce_key = request.coalesce_key
+        self._coalesce_version = request.coalesce_version
+        self._source = request.source
+        self._generation_trigger = request.generation_trigger
+        self._file_md5s = request.file_md5s
         self._task_context = get_task_context()
         self._telemetry = get_current_telemetry()
         self._telemetry_id = telemetry_id
         self._stale = False
-        self._changed_paths = {
-            path for key in ("added", "modified", "deleted") for path in self._changes.get(key, [])
-        }
-        self._tree_changed_paths = {
-            path.rstrip("/") for key in ("added", "deleted") for path in self._changes.get(key, [])
-        }
-        # Per-file md5 (target-URI keyed) supplied by local incremental apply, so
-        # re-vectorization records the fresh fingerprint instead of leaving it stale.
-        self._file_md5s = dict(file_md5s or {})
-        self._artifact_files = [path.strip("/") for path in (artifact_files or []) if path]
-        self._file_abstracts = dict(file_abstracts or {})
-        self._file_vector_actions = dict(file_vector_actions or {})
-        self._file_ingest_options = {
-            uri.rstrip("/"): IngestOptions.from_value(options)
-            for uri, options in (file_ingest_options or {}).items()
-        }
-        self._plan_entries_by_uri: Dict[str, "SemanticTreeEntry"] = {}
-        self._plan_children: Dict[str, tuple[List[str], List[str]]] = {}
-        self._plan_active_dirs: Set[str] = set()
-        if semantic_plan is not None:
-            self._initialize_semantic_plan(semantic_plan)
         self._node_concurrency = max(1, max_concurrent_llm)
         self._llm_sem = asyncio.Semaphore(max_concurrent_llm)
         self._viking_fs = get_viking_fs()
@@ -297,82 +282,26 @@ class SemanticTreeExecutor:
         self._closed = False
         self._failure: Optional[Exception] = None
         self._stats = SemanticTreeStats()
-        self._file_change_status: Dict[str, bool] = {}
-        self._dir_change_status: Dict[str, bool] = {}
-        self._overview_cache: Dict[str, Dict[str, str]] = {}
-        self._overview_bodies: Dict[str, str] = {}
-        self._overview_cache_lock = asyncio.Lock()
-        self._pending_abstract_dirs: Set[str] = set()
+        self._preparation = SemanticNodePreparation(
+            self._execution_plan,
+            viking_fs=self._viking_fs,
+            ctx=ctx,
+            lock=lock,
+            source_contents=source_contents,
+            source_raw_contents=source_raw_contents,
+            load_file_summaries=getattr(processor, "_load_transfer_file_summaries", None),
+            parse_file_summaries=getattr(
+                processor, "_parse_overview_md", parse_overview_file_summaries
+            ),
+        )
+        self._file_change_status = self._preparation.file_change_status
+        self._dir_change_status = self._preparation.dir_change_status
         self._parent_aggregation_stats: Dict[str, _ParentAggregationStats] = {}
         self._root_write_result = AbstractOverviewWriteResult(wrote=False)
         self._scheduled_vector_record_ids: set[str] = set()
 
-    @staticmethod
-    def _entry_record_abstract(entry: "SemanticTreeEntry", level: int) -> str:
-        slot = entry.slot(level)
-        return slot.abstract if slot is not None else ""
-
-    def _initialize_semantic_plan(self, plan: "SemanticPlan") -> None:
-        from openviking.storage.context_update_plan import SemanticAction
-
-        root = plan.root_uri.rstrip("/")
-        current_entries = list(plan.tree.entries)
-        children: Dict[str, tuple[List[str], List[str]]] = {}
-        for entry in current_entries:
-            uri = root if not entry.relative_path else f"{root}/{entry.relative_path}"
-            self._plan_entries_by_uri[uri] = entry
-            if not entry.relative_path:
-                continue
-            parent_rel = entry.relative_path.rsplit("/", 1)[0] if "/" in entry.relative_path else ""
-            parent_uri = root if not parent_rel else f"{root}/{parent_rel}"
-            dirs, files = children.setdefault(parent_uri, ([], []))
-            (dirs if entry.kind == "directory" else files).append(uri)
-
-        changed_uris: List[str] = []
-        for entry in plan.tree.entries:
-            if entry.semantic_action == SemanticAction.REUSE:
-                continue
-            uri = root if not entry.relative_path else f"{root}/{entry.relative_path}"
-            changed_uris.append(uri)
-            if entry.kind == "directory" and entry.semantic_action == SemanticAction.AGGREGATE:
-                self._plan_active_dirs.add(uri)
-            if entry.relative_path:
-                self._plan_active_dirs.add(uri.rsplit("/", 1)[0])
-        for active_uri in list(self._plan_active_dirs):
-            current = active_uri
-            while current != root and current.startswith(root + "/"):
-                parent = current.rsplit("/", 1)[0]
-                if parent not in self._plan_entries_by_uri:
-                    break
-                self._plan_active_dirs.add(parent)
-                current = parent
-
-        self._plan_children = {
-            uri: (sorted(dirs), sorted(files)) for uri, (dirs, files) in children.items()
-        }
-        self._incremental_update = True
-        self._target_uri = root
-        self._recursive = True
-        self._changes_provided = True
-        self._changed_paths = set(changed_uris)
-        self._tree_changed_paths = {
-            root if not entry.relative_path else f"{root}/{entry.relative_path}"
-            for entry in plan.tree.entries
-            if entry.membership_changed
-        }
-        self._file_md5s = {
-            uri: str(entry.md5)
-            for uri, entry in self._plan_entries_by_uri.items()
-            if entry.kind == "file" and entry.md5
-        }
-        self._file_abstracts = {
-            uri: abstract
-            for uri, entry in self._plan_entries_by_uri.items()
-            if entry.kind == "file" and (abstract := self._entry_record_abstract(entry, 2))
-        }
-
     def _record_skill_failure(self, uri: str, error: Exception) -> None:
-        if self._context_type == "skill":
+        if self._execution_plan.record_failures:
             self._stats.failures.append(f"{uri}: {error}")
 
     async def run(self, root_uri: str) -> None:
@@ -385,37 +314,27 @@ class SemanticTreeExecutor:
                 started_at=perf_counter()
             )
         self._scheduler = get_semantic_tree_scheduler(self._node_concurrency)
-        if self._semantic_plan is not None:
-            from openviking.storage.context_update_plan import (
-                SemanticAction,
-                SemanticTreeEntry,
+        self._preparation._root_uri = root_uri
+        self._semantic_resource_root = (
+            self._execution_plan.root_uri if self._execution_plan.fixed_actions else root_uri
+        )
+        entry = self._execution_plan.bindings.get(root_uri.rstrip("/"))
+        if (
+            entry is not None
+            and entry.semantic_action is SemanticAction.REUSE
+            and root_uri not in self._execution_plan.active_directories
+            and not any(slot.action.value != "none" for slot in entry.index_slots)
+        ):
+            self._stats.total_nodes = self._stats.done_nodes = 1
+            return
+        if entry is not None and entry.kind == "file":
+            self._stats.total_nodes = self._stats.in_progress_nodes = 1
+            with bind_ingestion_source_type(self._source_type):
+                await self._file_summary_task(root_uri, root_uri)
+            self._root_write_result = AbstractOverviewWriteResult(
+                wrote=True, abstract_body_changed=True
             )
-
-            entry = self._plan_entries_by_uri.get(root_uri.rstrip("/"))
-            if (
-                isinstance(entry, SemanticTreeEntry)
-                and entry.semantic_action == SemanticAction.REUSE
-            ):
-                self._stats.total_nodes = 1
-                self._stats.done_nodes = 1
-                return
-            if isinstance(entry, SemanticTreeEntry) and entry.kind == "file":
-                self._stats.total_nodes = 1
-                self._stats.in_progress_nodes = 1
-                # A file-root maintenance plan has no directory node or
-                # sidecars of its own. Execute its planned L2 work directly;
-                # the caller's parent freshness policy handles its parent.
-                previous_incremental = self._incremental_update
-                self._incremental_update = False
-                try:
-                    with bind_ingestion_source_type(self._source_type):
-                        await self._file_summary_task(root_uri, root_uri)
-                finally:
-                    self._incremental_update = previous_incremental
-                self._root_write_result = AbstractOverviewWriteResult(
-                    wrote=True, abstract_body_changed=True
-                )
-                return
+            return
 
         try:
             self._register_active()
@@ -449,14 +368,7 @@ class SemanticTreeExecutor:
                 self._log_parent_aggregations()
 
     def _is_parent_aggregation(self) -> bool:
-        return (
-            self._context_type == "resource"
-            and self._semantic_plan is None
-            and not self._recursive
-            and self._aggregate_directory
-            and self._generation_trigger
-            in {"content_write", "content_write_parent_refresh", "parent_refresh"}
-        )
+        return self._execution_plan.observe_parent_aggregation
 
     def _record_summary_source(self, dir_uri: str, file_path: str, source: str) -> None:
         if aggregation := self._parent_aggregation_stats.get(dir_uri):
@@ -471,11 +383,8 @@ class SemanticTreeExecutor:
         for dir_uri, aggregation in self._parent_aggregation_stats.items():
             counts = Counter(aggregation.sources.values())
             status = aggregation.status
-            if status == "completed":
-                if not self._aggregate_directory:
-                    status = "skipped"
-                elif self._stale:
-                    status = "stale"
+            if status == "completed" and self._stale:
+                status = "stale"
             logger.info(
                 "[ParentAggregation] %s uri=%s trigger=%s files=%d dirs=%d "
                 "abstract=%d overview=%d generated=%d failed_files=%d total_ms=%.3f status=%s",
@@ -541,6 +450,7 @@ class SemanticTreeExecutor:
     def _release_dir_node(self, dir_uri: str) -> None:
         self._nodes.pop(dir_uri, None)
         self._parent.pop(dir_uri, None)
+        self._preparation.directories.pop(dir_uri, None)
 
     @property
     def closed(self) -> bool:
@@ -656,188 +566,36 @@ class SemanticTreeExecutor:
             self._parent_aggregation_stats[dir_uri] = aggregation
 
         try:
-            children_dirs, file_paths = await self._list_dir(dir_uri, "_dispatch_dir")
+            prepared = await prepare_node(self._preparation, dir_uri, phase="directory")
+            children_dirs, file_paths = prepared.children_dirs, prepared.file_paths
             if aggregation is not None:
-                aggregation.files = len(file_paths)
-                aggregation.dirs = len(children_dirs)
-            if self._generation_trigger == "content_copy":
-                node = await self._prepare_transfer_node(dir_uri, children_dirs, file_paths)
-                self._nodes[dir_uri] = node
-                self._schedule_overview(dir_uri)
-                return False
-
-            direct_entries = sorted(
-                [("directory", uri) for uri in children_dirs]
-                + [("file", uri) for uri in file_paths],
-                key=lambda item: item[1].rsplit("/", 1)[-1],
-            )
-            sampled_entries = deterministic_sample(
-                direct_entries, get_openviking_config().semantic.overview_sample_limit
-            )
-            sampled_children_dirs = {uri for kind, uri in sampled_entries if kind == "directory"}
-            sampled_file_paths = {uri for kind, uri in sampled_entries if kind == "file"}
-            pending_snapshot = 0
-            if self._aggregate_directory:
-                try:
-                    pending_snapshot = await read_abstract_overview_pending_snapshot(
-                        viking_fs=self._viking_fs,
-                        dir_uri=dir_uri,
-                        ctx=self._ctx,
-                        lock=self._lock,
-                        existing_raw=(
-                            {
-                                level: raw
-                                for level in (0, 1)
-                                if (raw := self._source_raw_contents.get((dir_uri, level)))
-                                is not None
-                            }
-                            if self._source_raw_contents is not None
-                            else None
-                        ),
-                        **({"overview_body_out": self._overview_bodies} if aggregation else {}),
-                    )
-                except LockAcquisitionError:
-                    if self._generation_trigger != "content_write":
-                        raise
-                    # Content writes run one directory; retain their file work.
-                    self._aggregate_directory = False
-                    logger.info("Skipping busy parent semantic refresh: %s", dir_uri)
-            file_index = {path: idx for idx, path in enumerate(file_paths)}
-            child_index = {path: idx for idx, path in enumerate(children_dirs)}
-            if self._semantic_plan is not None:
-                required_file_paths = {
-                    path
-                    for path in file_paths
-                    if self._plan_entries_by_uri[path].semantic_action is not SemanticAction.REUSE
-                }
-                required_children_dirs = {
-                    path for path in children_dirs if path in self._plan_active_dirs
-                }
-                file_summaries: List[Optional[Dict[str, str]]] = [None] * len(file_paths)
-                children_abstracts: List[Optional[Dict[str, str]]] = [None] * len(children_dirs)
-                for path in file_paths:
-                    if path in required_file_paths or path not in sampled_file_paths:
-                        continue
-                    abstract = self._entry_record_abstract(self._plan_entries_by_uri[path], 2)
-                    if not abstract:
-                        raise RuntimeError(f"Semantic plan lacks L2 abstract for {path}")
-                    file_summaries[file_index[path]] = {
-                        "name": path.rsplit("/", 1)[-1],
-                        "summary": abstract,
-                    }
-                for path in children_dirs:
-                    if path in required_children_dirs or path not in sampled_children_dirs:
-                        continue
-                    abstract = self._entry_record_abstract(self._plan_entries_by_uri[path], 0)
-                    if not abstract:
-                        raise RuntimeError(f"Semantic plan lacks L0 abstract for {path}")
-                    children_abstracts[child_index[path]] = {
-                        "name": path.rsplit("/", 1)[-1],
-                        "abstract": abstract,
-                    }
-                pending = len(required_file_paths) + len(required_children_dirs)
-                node = DirNode(
-                    uri=dir_uri,
-                    children_dirs=children_dirs,
-                    file_paths=file_paths,
-                    file_index=file_index,
-                    child_index=child_index,
-                    file_summaries=file_summaries,
-                    children_abstracts=children_abstracts,
-                    pending=pending,
-                    pending_snapshot=pending_snapshot,
-                    sampled_children_dirs=sampled_children_dirs,
-                    sampled_file_paths=sampled_file_paths,
-                    dispatched=True,
-                )
-                self._nodes[dir_uri] = node
-                for file_path in sorted(required_file_paths):
-                    self._schedule_file(dir_uri, file_path)
-                for child_uri in sorted(required_children_dirs):
-                    self._schedule_dir(child_uri, dir_uri)
-                if pending == 0:
-                    self._schedule_overview(dir_uri)
-                return False
-            # Recursive/initial work still maintains every file. Incremental
-            # parent aggregation prepares only sampled inputs plus files that
-            # changed and therefore need their own vector maintenance.
-            required_file_paths = (
-                set(file_paths)
-                if self._recursive
-                else (
-                    set(file_paths) & self._changed_paths
-                    if not self._aggregate_directory
-                    else (
-                        sampled_file_paths | (set(file_paths) & self._changed_paths)
-                        if self._incremental_update
-                        else sampled_file_paths
-                    )
-                )
-            )
-            reuse_pending = (
-                aggregation is not None
-                and self._aggregate_directory
-                and self._incremental_update
-                and pending_snapshot > 0
-            )
-            if reuse_pending:
-                self._pending_abstract_dirs.add(dir_uri)
-            directory_only = self._generation_trigger == "parent_refresh"
-            if (reuse_pending or directory_only) and not self._skip_vectorization:
-                # Directory-only work also reuses the changed files' committed abstracts.
-                missing_abstracts = required_file_paths - {
-                    uri for uri, abstract in self._file_abstracts.items() if abstract.strip()
-                }
-                if not directory_only:
-                    missing_abstracts -= self._changed_paths
-                if missing_abstracts:
-                    try:
-                        abstracts = await self._processor._load_transfer_file_summaries(
-                            sorted(missing_abstracts), ctx=self._ctx
-                        )
-                        self._file_abstracts.update(abstracts)
-                    except LockAcquisitionError:
-                        raise
-                    except Exception as exc:
-                        logger.warning(
-                            "Failed to load L2 abstracts for %s; falling back to old overview: %s",
-                            dir_uri,
-                            exc,
-                        )
-            if self._recursive:
-                pending = len(children_dirs) + len(required_file_paths)
-            else:
-                pending = len(required_file_paths)
-
+                aggregation.files, aggregation.dirs = len(file_paths), len(children_dirs)
+                if prepared.binding.semantic_action is SemanticAction.REUSE:
+                    aggregation.status = "skipped"
+            pending = len(prepared.required_files) + len(prepared.required_directories)
             node = DirNode(
                 uri=dir_uri,
                 children_dirs=children_dirs,
                 file_paths=file_paths,
-                file_index=file_index,
-                child_index=child_index,
-                file_summaries=[None] * len(file_paths),
-                children_abstracts=[None] * len(children_dirs),
+                file_index={path: idx for idx, path in enumerate(file_paths)},
+                child_index={path: idx for idx, path in enumerate(children_dirs)},
+                file_summaries=prepared.file_summaries,
+                children_abstracts=prepared.children_abstracts,
                 pending=pending,
-                pending_snapshot=pending_snapshot,
-                sampled_children_dirs=sampled_children_dirs,
-                sampled_file_paths=sampled_file_paths,
+                pending_snapshot=prepared.pending_snapshot,
+                sampled_children_dirs=prepared.sampled_directories,
+                sampled_file_paths=prepared.sampled_files,
+                total_entries=prepared.total_entries,
+                missing_summary_entries=prepared.missing_summary_entries,
                 dispatched=True,
             )
             self._nodes[dir_uri] = node
-
+            for file_path in sorted(prepared.required_files):
+                self._schedule_file(dir_uri, file_path)
+            for child_uri in sorted(prepared.required_directories):
+                self._schedule_dir(child_uri, dir_uri)
             if pending == 0:
                 self._schedule_overview(dir_uri)
-                return False
-
-            for file_path in file_paths:
-                if file_path not in required_file_paths:
-                    continue
-                self._schedule_file(dir_uri, file_path)
-
-            if children_dirs:
-                if self._recursive:
-                    for child_uri in children_dirs:
-                        self._schedule_dir(child_uri, dir_uri)
             return False
         except LockAcquisitionError:
             # A content-write message can be dequeued before the writer releases
@@ -851,7 +609,7 @@ class SemanticTreeExecutor:
                 aggregation.status = "failed"
             logger.error(f"Failed to dispatch directory {dir_uri}: {e}", exc_info=True)
             self._record_skill_failure(dir_uri, e)
-            if self._semantic_plan is not None or self._generation_trigger == "content_copy":
+            if self._execution_plan.fail_dispatch:
                 raise
             if parent_uri:
                 await self._on_child_done(parent_uri, dir_uri, "")
@@ -859,439 +617,21 @@ class SemanticTreeExecutor:
                 self._root_done.set()
             return True
 
-    @staticmethod
-    def _transfer_summary_ready(value: str) -> bool:
-        summary = value.strip()
-        return bool(summary) and not summary.endswith(
-            ("[Directory abstract is not ready]", "[Directory overview is not ready]")
-        )
-
-    async def _load_transfer_candidates(
-        self,
-        candidates: List[tuple[str, str]],
-    ) -> Dict[tuple[str, str], Dict[str, str]]:
-        file_paths = [uri for kind, uri in candidates if kind == "file"]
-        file_summaries = await self._processor._load_transfer_file_summaries(
-            file_paths, ctx=self._ctx
-        )
-        loaded: Dict[tuple[str, str], Dict[str, str]] = {}
-        for file_path in file_paths:
-            summary = str(file_summaries.get(file_path) or "").strip()
-            if self._transfer_summary_ready(summary):
-                loaded[("file", file_path)] = {
-                    "name": file_path.rsplit("/", 1)[-1],
-                    "summary": summary,
-                }
-
-        child_uris = [uri for kind, uri in candidates if kind == "directory"]
-        if child_uris:
-            results = await asyncio.gather(
-                *[self._viking_fs.abstract(uri, ctx=self._ctx) for uri in child_uris],
-                return_exceptions=True,
-            )
-            for child_uri, result in zip(child_uris, results, strict=True):
-                if isinstance(result, BaseException):
-                    continue
-                abstract = str(result or "").strip()
-                if self._transfer_summary_ready(abstract):
-                    loaded[("directory", child_uri)] = {
-                        "name": child_uri.rsplit("/", 1)[-1],
-                        "abstract": abstract,
-                    }
-        return loaded
-
-    async def _prepare_transfer_node(
-        self,
-        dir_uri: str,
-        children_dirs: List[str],
-        file_paths: List[str],
-    ) -> DirNode:
-        """Sample the target directory first, then read only existing summaries."""
-        candidates = sorted(
-            [("file", uri) for uri in file_paths] + [("directory", uri) for uri in children_dirs],
-            key=lambda item: (item[1].rsplit("/", 1)[-1], item[0], item[1]),
-        )
-        primary = deterministic_sample(
-            candidates, get_openviking_config().semantic.overview_sample_limit
-        )
-        loaded = await self._load_transfer_candidates(primary)
-        selected = [candidate for candidate in primary if candidate in loaded]
-
-        inspected = set(primary)
-        selected.sort(key=lambda item: (item[1].rsplit("/", 1)[-1], item[0], item[1]))
-        selected_files = [uri for kind, uri in selected if kind == "file"]
-        selected_dirs = [uri for kind, uri in selected if kind == "directory"]
-        missing_count = (
-            sum(1 for candidate in inspected if candidate not in loaded)
-            if len(inspected) == len(candidates)
-            else None
-        )
-        pending_snapshot = await read_abstract_overview_pending_snapshot(
-            viking_fs=self._viking_fs,
-            dir_uri=dir_uri,
-            ctx=self._ctx,
-            lock=self._lock,
-        )
-        return DirNode(
-            uri=dir_uri,
-            children_dirs=selected_dirs,
-            file_paths=selected_files,
-            file_index={uri: idx for idx, uri in enumerate(selected_files)},
-            child_index={uri: idx for idx, uri in enumerate(selected_dirs)},
-            file_summaries=[loaded[("file", uri)] for uri in selected_files],
-            children_abstracts=[loaded[("directory", uri)] for uri in selected_dirs],
-            pending=0,
-            pending_snapshot=pending_snapshot,
-            total_entries=len(candidates),
-            missing_summary_entries=missing_count,
-            transfer_inputs_ready=not candidates or bool(selected),
-            dispatched=True,
-        )
-
-    async def _list_dir(self, uri: str, from_hint: str) -> tuple[list[str], list[str]]:
-        """List directory entries and return (child_dirs, file_paths)."""
-        if self._semantic_plan is not None:
-            return self._plan_children.get(uri.rstrip("/"), ([], []))
-        if self._artifact_files and self._root_uri:
-            return self._list_artifact_dir(uri)
-        try:
-            entries = await self._viking_fs.ls(uri, node_limit=LS_ALL_NODES, ctx=self._ctx)
-        except Exception as e:
-            logger.warning(
-                f"[SemanticTreeExecutor] Failed to list directory {uri}: {e} from {from_hint}"
-            )
-            raise
-
-        children_dirs: List[str] = []
-        file_paths: List[str] = []
-
-        for entry in entries:
-            name = entry.get("name", "")
-            if not name or name.startswith(".") or name in [".", ".."] or name in _SKIP_FILENAMES:
-                continue
-
-            item_uri = VikingURI(uri).join(name).uri
-            if entry.get("isDir", False):
-                children_dirs.append(item_uri)
-            else:
-                file_paths.append(item_uri)
-
-        return sorted(children_dirs), sorted(file_paths)
-
-    def _list_artifact_dir(self, uri: str) -> tuple[list[str], list[str]]:
-        root = self._root_uri.rstrip("/")
-        current = uri.rstrip("/")
-        if current == root:
-            prefix = ""
-        elif current.startswith(f"{root}/"):
-            prefix = current[len(root) + 1 :] + "/"
-        else:
-            return [], []
-
-        child_dirs: set[str] = set()
-        file_paths: list[str] = []
-        for rel_path in self._artifact_files:
-            if not rel_path.startswith(prefix):
-                continue
-            remainder = rel_path[len(prefix) :]
-            if not remainder:
-                continue
-            head, separator, _ = remainder.partition("/")
-            if not head or head.startswith(".") or head in _SKIP_FILENAMES:
-                continue
-            child_uri = VikingURI(current).join(head).uri
-            if separator:
-                child_dirs.add(child_uri)
-            else:
-                file_paths.append(child_uri)
-        return sorted(child_dirs), sorted(file_paths)
-
-    def _get_target_file_path(self, current_uri: str) -> Optional[str]:
-        if not self._incremental_update or not self._target_uri or not self._root_uri:
-            logger.warning(
-                "Invalid target_uri or root_uri for incremental update: "
-                f"target_uri={self._target_uri}, root_uri={self._root_uri}"
-            )
-            return None
-        if self._target_uri != self._root_uri:
-            logger.warning(
-                "Incremental semantic update expects target_uri == root_uri: "
-                f"target_uri={self._target_uri}, root_uri={self._root_uri}"
-            )
-            return None
-        return current_uri
-
-    def _is_direct_incremental_update(self) -> bool:
-        return self._semantic_plan is not None or (
-            self._incremental_update
-            and self._changes_provided
-            and self._target_uri == self._root_uri
-        )
-
-    def _directory_entries_changed(self, dir_uri: str) -> bool:
-        """Return whether this directory subtree gained or lost an entry."""
-        normalized = dir_uri.rstrip("/")
-        prefix = normalized + "/"
-        return any(
-            path == normalized or path.startswith(prefix) for path in self._tree_changed_paths
-        )
-
-    def _ingest_options_for_file(self, file_path: str) -> IngestOptions:
-        if self._generation_trigger == "content_write":
-            options = self._file_ingest_options.get(file_path.rstrip("/"))
-            if options is not None:
-                return options
-        if self._generation_trigger == "content_write" and file_path not in self._changed_paths:
-            return IngestOptions(acl_update=self._ingest_options.acl_update)
-        return self._ingest_options
-
-    def _ingest_options_for_directory(self) -> IngestOptions:
-        if self._generation_trigger == "content_write":
-            return IngestOptions(acl_update=self._ingest_options.acl_update)
-        return self._ingest_options
-
-    def _plan_scalar_override(self, uri: str, level: int) -> Optional[Dict[str, Any]]:
-        entry = self._plan_entries_by_uri.get(uri.rstrip("/"))
-        if entry is None:
-            return None
-        slot = entry.slot(level)
-        return slot.scalar_override() if slot is not None else None
-
-    def _plan_field_patch(self, uri: str, level: int) -> FieldPatch | None:
-        entry = self._plan_entries_by_uri.get(uri.rstrip("/"))
-        slot = entry.slot(level) if entry is not None else None
-        return slot.field_patch if slot is not None else None
-
-    async def _check_file_content_changed(self, file_path: str) -> bool:
-        if self._is_direct_incremental_update():
-            return file_path in self._changed_paths
-        target_path = self._get_target_file_path(file_path)
-        if not target_path:
-            return True
-        try:
-            current_stat = await self._viking_fs.stat(file_path, ctx=self._ctx, skip_count=True)
-            target_stat = await self._viking_fs.stat(target_path, ctx=self._ctx, skip_count=True)
-            current_size = current_stat.get("size") if isinstance(current_stat, dict) else None
-            target_size = target_stat.get("size") if isinstance(target_stat, dict) else None
-            if current_size is not None and target_size is not None and current_size != target_size:
-                return True
-            current_content = await self._viking_fs.read_file(file_path, ctx=self._ctx)
-            target_content = await self._viking_fs.read_file(target_path, ctx=self._ctx)
-            return current_content != target_content
-        except Exception:
-            return True
-
-    async def _read_existing_summary(
-        self, file_path: str, *, require_nonempty: bool = False
-    ) -> Optional[Dict[str, str]]:
-        """Read a supplied L2 abstract or a cached old parent overview entry.
-
-        Args:
-            file_path: Current file path
-
-        Returns:
-            Summary dict with 'name' and 'summary' keys, or None if not found
-        """
-        target_path = self._get_target_file_path(file_path)
-        if not target_path:
-            return None
-        vector_abstract = self._file_abstracts.get(target_path.rstrip("/"))
-        if vector_abstract and (not require_nonempty or vector_abstract.strip()):
-            return {
-                "name": file_path.rsplit("/", 1)[-1],
-                "summary": vector_abstract,
-            }
-
-        try:
-            parent_uri = "/".join(target_path.rsplit("/", 1)[:-1])
-            if not parent_uri:
-                return None
-
-            if parent_uri not in self._overview_cache:
-                try:
-                    from openviking.metrics.datasources.cache import CacheEventDataSource
-
-                    CacheEventDataSource.record_miss("L1")
-                except Exception:
-                    pass
-                async with self._overview_cache_lock:
-                    if parent_uri not in self._overview_cache:
-                        if parent_uri in self._overview_bodies:
-                            overview_content = self._overview_bodies[parent_uri]
-                        else:
-                            overview_path = f"{parent_uri}/.overview.md"
-                            overview_content = await self._viking_fs.read_file(
-                                overview_path, ctx=self._ctx
-                            )
-                        if overview_content:
-                            self._overview_cache[parent_uri] = self._processor._parse_overview_md(
-                                body_for_preview(overview_content)
-                            )
-                        else:
-                            self._overview_cache[parent_uri] = {}
-            else:
-                try:
-                    from openviking.metrics.datasources.cache import CacheEventDataSource
-
-                    CacheEventDataSource.record_hit("L1")
-                except Exception:
-                    pass
-
-            existing_summaries = self._overview_cache.get(parent_uri, {})
-            file_name = file_path.split("/")[-1]
-
-            if file_name in existing_summaries and (
-                not require_nonempty or existing_summaries[file_name].strip()
-            ):
-                return {"name": file_name, "summary": existing_summaries[file_name]}
-
-        except Exception as e:
-            logger.debug(f"Failed to read existing summary from overview.md for {file_path}: {e}")
-
-        return None
-
-    async def _check_dir_children_changed(
-        self, dir_uri: str, current_files: List[str], current_dirs: List[str]
-    ) -> bool:
-        if self._is_direct_incremental_update():
-            node = self._nodes.get(dir_uri)
-            if node is not None and node.pending_snapshot > 0:
-                return True
-            if self._directory_entries_changed(dir_uri):
-                return True
-            for current_file in current_files:
-                default_changed = (
-                    self._plan_entries_by_uri[current_file].semantic_action
-                    is not SemanticAction.REUSE
-                    if self._semantic_plan is not None
-                    else True
-                )
-                if self._file_change_status.get(current_file, default_changed):
-                    return True
-            for current_dir in current_dirs:
-                default_changed = (
-                    self._plan_entries_by_uri[current_dir].semantic_action
-                    is not SemanticAction.REUSE
-                    if self._semantic_plan is not None
-                    else True
-                )
-                if self._dir_change_status.get(current_dir, default_changed):
-                    return True
-            return False
-
-        target_path = self._get_target_file_path(dir_uri)
-        if not target_path:
-            return True
-        try:
-            target_dirs, target_files = await self._list_dir(
-                target_path, "_check_dir_children_changed"
-            )
-            current_file_names = {f.split("/")[-1] for f in current_files}
-            target_file_names = {f.split("/")[-1] for f in target_files}
-            if current_file_names != target_file_names:
-                return True
-            current_dir_names = {d.split("/")[-1] for d in current_dirs}
-            target_dir_names = {d.split("/")[-1] for d in target_dirs}
-            if current_dir_names != target_dir_names:
-                return True
-            for current_file in current_files:
-                if self._file_change_status.get(current_file, True):
-                    return True
-            for current_dir in current_dirs:
-                if self._dir_change_status.get(current_dir, True):
-                    return True
-            return False
-        except Exception:
-            return True
-
-    async def _read_existing_overview_abstract(
-        self, dir_uri: str
-    ) -> tuple[Optional[str], Optional[str]]:
-        if self._semantic_plan is not None:
-            snapshot_overview = self._source_contents.get((dir_uri.rstrip("/"), 1))
-            snapshot_abstract = self._source_contents.get((dir_uri.rstrip("/"), 0))
-            if snapshot_overview is not None or snapshot_abstract is not None:
-                return (
-                    str(snapshot_overview) if snapshot_overview is not None else None,
-                    str(snapshot_abstract) if snapshot_abstract is not None else None,
-                )
-            entry = self._plan_entries_by_uri.get(dir_uri.rstrip("/"))
-            if entry is None:
-                return None, None
-            overview = self._entry_record_abstract(entry, 1) or None
-            abstract = self._entry_record_abstract(entry, 0) or None
-            return overview, abstract
-        target_path = self._get_target_file_path(dir_uri)
-        if not target_path:
-            return None, None
-        try:
-            overview = await self._viking_fs.read_file(f"{target_path}/.overview.md", ctx=self._ctx)
-            abstract = await self._viking_fs.read_file(f"{target_path}/.abstract.md", ctx=self._ctx)
-            return body_for_preview(overview), body_for_preview(abstract)
-        except Exception:
-            return None, None
-
     async def _file_summary_task(self, parent_uri: str, file_path: str) -> None:
         """Generate file summary and notify parent completion."""
 
         file_name = file_path.split("/")[-1]
-        directory_only = self._generation_trigger == "parent_refresh"
-        need_vectorize = not directory_only
         semantic_succeeded = True
         file_content = None
+        prepared = None
         try:
-            summary_dict = None
-            if self._incremental_update:
-                content_changed = await self._check_file_content_changed(file_path)
-                self._file_change_status[file_path] = content_changed
-                node = self._nodes.get(parent_uri)
-                regenerate_sampled_summary = bool(
-                    self._aggregate_directory
-                    and node is not None
-                    and node.pending_snapshot > 0
-                    and node.sampled_file_paths is not None
-                    and file_path in node.sampled_file_paths
-                )
-
-                reuse_existing = directory_only or parent_uri in self._pending_abstract_dirs
-                if (not content_changed or directory_only) and (
-                    not regenerate_sampled_summary or reuse_existing
-                ):
-                    if reuse_existing:
-                        summary_dict = await self._read_existing_summary(
-                            file_path, require_nonempty=True
-                        )
-                    else:
-                        summary_dict = await self._read_existing_summary(file_path)
-                    if summary_dict is not None:
-                        need_vectorize = False
-                        vector_abstract = self._file_abstracts.get(file_path, "")
-                        self._record_summary_source(
-                            parent_uri,
-                            file_path,
-                            "abstract"
-                            if (vector_abstract.strip() if reuse_existing else vector_abstract)
-                            else "overview",
-                        )
-                    elif regenerate_sampled_summary:
-                        need_vectorize = False
-                    else:
-                        self._file_change_status[file_path] = True
-                elif not content_changed:
-                    # Pending freshness only records a count, not the changed
-                    # child URIs. Once that debt triggers aggregation, rebuild
-                    # every sampled input instead of trusting the old L1 body.
-                    # Deferred messages already maintained file vectors, so
-                    # this forced summary rebuild does not imply vector work.
-                    need_vectorize = False
-            else:
-                self._file_change_status[file_path] = True
+            prepared = await prepare_node(
+                self._preparation, file_path, phase="file", parent_uri=parent_uri
+            )
+            summary_dict = prepared.summary
+            file_content = prepared.file_content
+            self._record_summary_source(parent_uri, file_path, prepared.summary_source)
             if summary_dict is None:
-                file_content = self._source_contents.get((file_path.rstrip("/"), 2))
-                if file_content is not None and not isinstance(file_content, bytes):
-                    raise ValueError(f"file vector source must be bytes: {file_path}")
-                if file_content is None and hasattr(self._viking_fs, "read_file_bytes"):
-                    file_content = await self._viking_fs.read_file_bytes(file_path, ctx=self._ctx)
                 summary_kwargs: Dict[str, Any] = {
                     "llm_sem": self._llm_sem,
                     "ctx": self._ctx,
@@ -1318,22 +658,14 @@ class SemanticTreeExecutor:
             self._stats.done_nodes += 1
             self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)
 
+        prepared = self._preparation.files.pop(file_path)
         if self._closed:
             return
-        from openviking.storage.context_update_plan import (
-            IndexAction,
-            SemanticTreeEntry,
-        )
-
-        entry = self._plan_entries_by_uri.get(file_path.rstrip("/"))
-        slot = entry.slot(2) if isinstance(entry, SemanticTreeEntry) else None
-        if isinstance(entry, SemanticTreeEntry):
-            need_vectorize = bool(
-                semantic_succeeded
-                and slot is not None
-                and slot.action in {IndexAction.UPSERT, IndexAction.MERGE}
-            )
-        if need_vectorize and not self._skip_vectorization:
+        slot = prepared.binding.slot(2)
+        need_vectorize = prepared.vectorize
+        if not semantic_succeeded and not self._execution_plan.index_failed_file:
+            need_vectorize = False
+        if need_vectorize:
             use_summary = self._is_code_repo and bool(summary_dict.get("summary"))
             try:
                 vectorize_kwargs: Dict[str, Any] = {}
@@ -1345,15 +677,14 @@ class SemanticTreeExecutor:
                     vectorize_kwargs["materialize_content"] = True
                 manifest_md5 = self._file_md5s.get(file_path.rstrip("/")) or None
                 if file_content is not None and not manifest_md5:
-                    file_md5 = content_md5(file_content)
+                    file_md5: str | None = content_md5(file_content)
                 else:
                     file_md5 = manifest_md5
-                if self._semantic_plan is not None:
-                    vectorize_kwargs["scalar_override"] = self._plan_scalar_override(file_path, 2)
-                    vectorize_kwargs["field_patch"] = self._plan_field_patch(file_path, 2)
-                    vectorize_kwargs["action"] = slot.action.value if slot is not None else "upsert"
-                elif action := self._file_vector_actions.get(file_path.rstrip("/")):
-                    vectorize_kwargs["action"] = action
+                vectorize_kwargs["action"] = prepared.index_action
+                if prepared.scalar_override is not None:
+                    vectorize_kwargs["scalar_override"] = prepared.scalar_override
+                if prepared.field_patch is not None:
+                    vectorize_kwargs["field_patch"] = prepared.field_patch
                 enqueued = await self._processor._vectorize_single_file(
                     parent_uri=parent_uri,
                     context_type=self._context_type,
@@ -1361,11 +692,7 @@ class SemanticTreeExecutor:
                     summary_dict=summary_dict,
                     ctx=self._ctx,
                     use_summary=use_summary,
-                    ingest_options=(
-                        IngestOptions(acl_update=self._ingest_options.acl_update)
-                        if self._semantic_plan is not None
-                        else self._ingest_options_for_file(file_path)
-                    ),
+                    ingest_options=prepared.ingest_options,
                     file_md5=file_md5,
                     **vectorize_kwargs,
                 )
@@ -1379,7 +706,7 @@ class SemanticTreeExecutor:
                     e,
                     exc_info=True,
                 )
-                if self._context_type != "skill":
+                if not self._execution_plan.tolerate_index_failure:
                     raise
                 self._record_skill_failure(file_path, e)
         await self._on_file_done(
@@ -1431,18 +758,6 @@ class SemanticTreeExecutor:
         node.overview_scheduled = True
         self._schedule_work(SemanticTreeWork(kind="overview", dir_uri=dir_uri))
 
-    def _finalize_file_summaries(self, node: DirNode) -> List[Dict[str, str]]:
-        summaries: List[Dict[str, str]] = []
-        for idx, file_path in enumerate(node.file_paths):
-            if node.sampled_file_paths is not None and file_path not in node.sampled_file_paths:
-                continue
-            item = node.file_summaries[idx]
-            if item is None:
-                summaries.append({"name": file_path.split("/")[-1], "summary": ""})
-            else:
-                summaries.append(item)
-        return summaries
-
     def _select_direct_media_overview(
         self,
         node: DirNode,
@@ -1479,25 +794,6 @@ class SemanticTreeExecutor:
     @property
     def stale(self) -> bool:
         return self._stale
-
-    async def _finalize_children_abstracts(self, node: DirNode) -> List[Dict[str, str]]:
-        results: List[Dict[str, str]] = []
-        for idx, child_uri in enumerate(node.children_dirs):
-            if (
-                node.sampled_children_dirs is not None
-                and child_uri not in node.sampled_children_dirs
-            ):
-                continue
-            item = node.children_abstracts[idx]
-            if item is None:
-                try:
-                    abstract = await self._viking_fs.abstract(child_uri, ctx=self._ctx)
-                except Exception:
-                    abstract = ""
-                results.append({"name": child_uri.split("/")[-1], "abstract": abstract})
-            else:
-                results.append(item)
-        return results
 
     async def _is_stale(self) -> bool:
         if not self._coalesce_key or self._coalesce_version <= 0:
@@ -1564,26 +860,12 @@ class SemanticTreeExecutor:
         node = self._nodes.get(dir_uri)
         if not node:
             return
-        skill_definition_changed = (
-            self._context_type == "skill"
-            and classify_uri(dir_uri).is_skill_root
-            and f"{dir_uri}/SKILL.md" in self._changed_paths
-        )
-        if not self._aggregate_directory and not skill_definition_changed:
-            # Deferred aggregation still ran changed-file work. Finish without
-            # touching directory sidecars or their vectors.
-            self._stats.done_nodes += 1
-            self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)
-            self._release_dir_node(dir_uri)
-            if dir_uri == self._root_uri and self._root_done:
-                self._root_done.set()
-            return
-        need_vectorize = True
+        need_vectorize = False
         children_changed = True
-        should_write = True
+        should_write = False
         write_result = AbstractOverviewWriteResult(wrote=False)
-        abstract: Optional[str] = None
-        overview: Optional[str] = None
+        abstract: str | None = None
+        overview: str | None = None
         total_entries = (
             node.total_entries
             if node.total_entries is not None
@@ -1592,53 +874,24 @@ class SemanticTreeExecutor:
         sampled_inputs: List[tuple[str, Dict[str, str]]] = []
         sampled_entries = 0
         try:
-            if self._context_type == "skill" and classify_uri(dir_uri).is_skill_root:
-                # The package root describes the skill definition, independently
-                # of the summaries produced for its attachments.
-                definition_changed = f"{dir_uri}/SKILL.md" in self._changed_paths
-                plan_entry = self._plan_entries_by_uri.get(dir_uri.rstrip("/"))
-                repair = bool(plan_entry is not None and plan_entry.repair)
+            prepared = await prepare_node(self._preparation, dir_uri, phase="overview")
+            need_vectorize = prepared.vectorize
+            children_changed = prepared.input_changed
+            should_write = prepared.write_semantics
+            abstract, overview = prepared.abstract, prepared.overview
+            if prepared.definition_source:
                 overview, abstract = await self._processor._skill_root_semantics(
                     dir_uri,
                     ctx=self._ctx,
-                    regenerate=self._generation_trigger == "reindex"
-                    or definition_changed
-                    or repair,
+                    regenerate=prepared.regenerate_definition,
                     lock=self._lock,
                     skill_content=self._source_contents.get((f"{dir_uri}/SKILL.md", 2)),
                 )
-                should_write = False
-                need_vectorize = not self._incremental_update or definition_changed or repair
-                children_changed = definition_changed or repair
-            elif self._generation_trigger == "content_copy" and not node.transfer_inputs_ready:
-                need_vectorize = False
-                should_write = False
-            elif self._incremental_update and self._generation_trigger != "content_copy":
-                children_changed = await self._check_dir_children_changed(
-                    dir_uri, node.file_paths, node.children_dirs
-                )
-
-                if not children_changed:
-                    overview, abstract = await self._read_existing_overview_abstract(dir_uri)
-                    should_write = overview is None or abstract is None
-                    plan_entry = self._plan_entries_by_uri.get(dir_uri.rstrip("/"))
-                    if (
-                        self._semantic_plan is not None
-                        and plan_entry is not None
-                        and plan_entry.repair
-                    ):
-                        # RFV maintenance uses ``repair`` for both stale semantic
-                        # input and force rebuilds. Regenerate through the normal
-                        # semantic action before emitting its planned index slots.
-                        overview = None
-                        abstract = None
-                        should_write = True
-                    need_vectorize = should_write
-                    children_changed = should_write
             if should_write and (overview is None or abstract is None):
                 async with node.lock:
-                    file_summaries = self._finalize_file_summaries(node)
-                    children_abstracts = await self._finalize_children_abstracts(node)
+                    file_summaries, children_abstracts = await self._preparation.aggregation_inputs(
+                        dir_uri
+                    )
                 # Freshness describes the directory itself, including direct
                 # entries whose summaries failed. Those entries remain visible
                 # as unsampled coverage instead of disappearing from the count.
@@ -1651,7 +904,7 @@ class SemanticTreeExecutor:
                     key=lambda tagged: str(tagged[1].get("name") or ""),
                 )
                 sampled_entries = len(sampled_inputs)
-                if self._generation_trigger != "content_copy":
+                if prepared.use_direct_media:
                     overview = self._select_direct_media_overview(node, file_summaries)
                 if overview is None:
                     async with self._llm_sem:
@@ -1689,7 +942,7 @@ class SemanticTreeExecutor:
                     raise
                 except Exception as exc:
                     self._record_skill_failure(dir_uri, exc)
-                    if self._semantic_plan is not None:
+                    if self._execution_plan.fail_directory_write:
                         self.fail(exc)
                         return
                     raise
@@ -1702,59 +955,23 @@ class SemanticTreeExecutor:
                 aggregation.status = "failed"
             self._record_skill_failure(dir_uri, e)
         else:
-            slots = {}
-            if self._semantic_plan is not None:
-                entry = self._plan_entries_by_uri.get(dir_uri.rstrip("/"))
-                slots = {slot.level: slot for slot in entry.index_slots} if entry else {}
-
+            slots = {slot.level: slot for slot in prepared.binding.index_slots}
             enqueued_levels: set[int] = set()
-            if need_vectorize and not self._skip_vectorization:
+            if need_vectorize:
                 assert overview is not None and abstract is not None
                 try:
-                    directory_vector_kwargs: Dict[str, Any] = {}
-                    include_abstract = True
-                    include_overview = True
-                    if self._semantic_plan is not None:
-                        from openviking.storage.context_update_plan import (
-                            IndexAction,
+                    directory_vector_kwargs = directory_index_arguments(
+                        self._execution_plan,
+                        prepared,
+                        overview,
+                        abstract,
+                    )
+                    include_abstract = directory_vector_kwargs.get("include_abstract", True)
+                    include_overview = directory_vector_kwargs.get("include_overview", True)
+                    if prepared.definition_source:
+                        directory_vector_kwargs["skill_source_path"] = (self._source or {}).get(
+                            "path", ""
                         )
-
-                        def should_emit(level: int) -> bool:
-                            slot = slots.get(level)
-                            if slot is None or slot.action not in {
-                                IndexAction.UPSERT,
-                                IndexAction.MERGE,
-                            }:
-                                return False
-                            old_body = slot.abstract
-                            new_body = abstract if level == 0 else overview
-                            return entry.repair or not old_body or old_body != new_body
-
-                        include_abstract = should_emit(0)
-                        include_overview = should_emit(1)
-                        directory_vector_kwargs = {
-                            "scalar_overrides": {
-                                level: values
-                                for level in (0, 1)
-                                if (values := self._plan_scalar_override(dir_uri, level))
-                            },
-                            "actions": {
-                                level: slot.action
-                                for level, slot in slots.items()
-                                if slot.action in {IndexAction.UPSERT, IndexAction.MERGE}
-                            },
-                            "field_patches": {
-                                level: slot.field_patch
-                                for level, slot in slots.items()
-                                if slot.field_patch is not None
-                            },
-                            "include_abstract": include_abstract,
-                            "include_overview": include_overview,
-                            "md5s": {
-                                0: content_md5(abstract.encode("utf-8")),
-                                1: content_md5(overview.encode("utf-8")),
-                            },
-                        }
                     if self._telemetry_id is not None:
                         directory_vector_kwargs["telemetry_id"] = self._telemetry_id
                     if include_abstract or include_overview:
@@ -1764,17 +981,7 @@ class SemanticTreeExecutor:
                             abstract=abstract,
                             overview=overview,
                             ctx=self._ctx,
-                            ingest_options=(
-                                IngestOptions(acl_update=self._ingest_options.acl_update)
-                                if self._semantic_plan is not None
-                                else self._ingest_options_for_directory()
-                            ),
-                            **(
-                                {"skill_source_path": (self._source or {}).get("path", "")}
-                                if self._context_type == "skill"
-                                and classify_uri(dir_uri).is_skill_root
-                                else {}
-                            ),
+                            ingest_options=prepared.ingest_options,
                             **directory_vector_kwargs,
                         )
                     else:
@@ -1786,7 +993,7 @@ class SemanticTreeExecutor:
                         e,
                         exc_info=True,
                     )
-                    if self._context_type != "skill":
+                    if not self._execution_plan.tolerate_index_failure:
                         raise
                     self._record_skill_failure(dir_uri, e)
 
@@ -1819,7 +1026,7 @@ class SemanticTreeExecutor:
                 if enqueued:
                     enqueued_levels.add(level)
 
-            if self._semantic_plan is not None:
+            if slots:
                 self._scheduled_vector_record_ids.update(
                     slot.record_id for slot in slots.values() if slot.level in enqueued_levels
                 )

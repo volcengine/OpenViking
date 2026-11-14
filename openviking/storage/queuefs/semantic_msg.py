@@ -3,12 +3,12 @@
 """SemanticMsg: Semantic extraction queue message dataclass."""
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence
 from uuid import uuid4
 
-from openviking.storage.context_update_plan import SemanticPlan
+from openviking.storage.context_update_plan import SemanticPlan, SemanticRefreshIntent
 from openviking.utils.ingest_options import IngestOptions
 
 
@@ -196,6 +196,31 @@ class SemanticMsg:
     def to_json(self) -> str:
         """Convert object to JSON string."""
         return json.dumps(self.to_dict())
+
+    @classmethod
+    def from_refresh(cls, intent: SemanticRefreshIntent, **message_fields: Any) -> "SemanticMsg":
+        """Encode a runtime intent with the original, unversioned message schema."""
+        values = {item.name: getattr(intent, item.name) for item in fields(intent)}
+        values.pop("incremental_update")  # Derived after any historical source sync.
+        values["artifact_files"] = list(intent.artifact_files)
+        return cls(**{**values, **message_fields})
+
+    def preparation_input(self) -> SemanticPlan | SemanticRefreshIntent:
+        """Normalize current effective fields without reading storage or freshness.
+
+        Do not cache this result: stale-message filtering may cancel aggregation
+        before execution or retry. Old messages with both plan and flags retain
+        their explicit plan's precedence.
+        """
+        if self.plan is not None:
+            return self.plan
+        return SemanticRefreshIntent(
+            **{
+                item.name: getattr(self, item.name)
+                for item in fields(SemanticRefreshIntent)
+                if item.name != "incremental_update"
+            }
+        )
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SemanticMsg":
