@@ -33,22 +33,15 @@ benchmark/locomo/
 ## VikingBot 评测流程
 
 ### 前置配置说明
-- vikingbot评测须确保 OpenViking 服务端已配置 root_api_key，即开启多租户模式。每个sample数据都会使用sample_id如`conv-26`作为user_id，存储在OpenViking中。
-```json
-{
-  "server": {
-    "root_api_key": "your-key"
-  }
-}
-```
+- VikingBot 评测使用 OpenViking API key 认证。首次运行一键脚本时，preflight 会交互式选择 `ov.conf` 配置文件并初始化 API key，初始化成功后自动同步配置到 `ov.conf`。
+- API key 优先读取 `bot.ov_server.api_key`（`ov.conf`），其次 `ovcli.conf.api_key`；preflight 校验通过后同步到 `bot.ov_server.api_key` 持久化。User key 绑定 account/user 身份，所有 sample 共用同一 user（不再按 sample 创建独立 user），仍以 `sample_id` 作为 `peer_id` 隔离记忆。
+- 首次运行若未配置 User key，preflight 会用 `server.root_api_key`（`ov.conf`）自动初始化 default User key（account=default, user=default）。
 - OpenViking数据导入account会优先使用`ovcli.conf`中的account值，若未配置默认使用`default`；
-- vikingbot必须配置OpenViking 的root级别API KEY，默认使用上述的server.root_api_key，也可单独配置；
 - vikingbot查询数据account默认为`default`，如更改必须与导入OpenViking的account一致，即`ovcli.conf`中的account值，可通过`ov.conf`如下配置：
 ```json
 {
   "bot": {
     "ov_server": {
-      "root_api_key": "your-root-key",
       "account_id": "默认default，必须和ovcli.conf中的account_id一致"
     }
   }
@@ -217,7 +210,7 @@ bash run_full_eval.sh --sample 0           # 只处理第 0 个 sample
 |------|------|---------------------------|
 | `INPUT_FILE` | 输入数据文件路径 | `../data/locomo10.json`   |
 | `RESULT_DIR` | 结果输出目录 | `./result`                |
-| `GATEWAY_TOKEN` | OpenClaw Gateway Token | 需要设置为实际 openclaw 网关 token |
+| `GATEWAY_TOKEN` | OpenClaw Gateway Token | 通过 `OPENCLAW_GATEWAY_TOKEN` 环境变量设置 |
 
 ### 分步使用说明
 
@@ -430,7 +423,7 @@ A: 使用 `--force-ingest`（导入）或删除结果 CSV 文件。
 A: 增加 `--threads`（run_eval.py）或 `--parallel`（其他脚本）参数值。
 
 ### Q: 评测效果低，怎么排查 OpenViking 导入与评测查询的 account/user 是否一致？
-A: 先核对三处是否对齐：`ovcli.conf.account`（导入 account）、`ov.conf.bot.ov_server.account_id`（Vikingbot 查询 account）、评测脚本使用的 user（Vikingbot 按 `sample_id`，OpenClaw 默认 `eval-1`）。这几项不一致时，常见现象是“导入看起来成功，但评测回答质量明显下降或查不到上下文”。
+A: 先核对三处是否对齐：`ovcli.conf.account`（导入 account）、`ov.conf.bot.ov_server.account_id`（Vikingbot 查询 account）、评测脚本使用的 user（Vikingbot 在 API key 模式下由 User key 绑定 account/user 身份，所有 sample 共用同一 user（不再按 sample 创建独立 user，仍以 `sample_id` 作为 `peer_id` 隔离记忆）；OpenClaw 默认 `eval-1`）。这几项不一致时，常见现象是"导入看起来成功，但评测回答质量明显下降或查不到上下文"。
 
 ---
 
@@ -499,7 +492,7 @@ grep -i "error" result/qa_results.csv
    - `server.host` / `server.port`
 3. 跑 Vikingbot 脚本时留意 preflight 日志里打印的 `account` 和 `OpenViking URL`，确认和你配置里看到的一致。
 4. 记住查询侧是谁在查：
-   - Vikingbot 评测默认用 `sample_id` 当 user。
+   - Vikingbot 评测在 API key 模式下由 User key 绑定 account/user 身份，所有 sample 共用同一 user（不再按 sample 创建独立 user，仍以 `sample_id` 作为 `peer_id` 隔离记忆）。
    - OpenClaw QA 默认是 `--user eval-1 --agent-id locomo-eval`。
    - 你如果改过 OpenClaw 的 `--user` 或 `--agent-id`，要保证 ingest 和 qa 两边用的是同一套值。
 

@@ -19,7 +19,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 INPUT_FILE="$SCRIPT_DIR/../data/locomo10.json"
 RESULT_DIR="$SCRIPT_DIR/result"
 OUTPUT_CSV="$RESULT_DIR/qa_results.csv"
-GATEWAY_TOKEN="90f2d2dc2f7b4d50cb943d3d3345e667bb3e9bcb7ec3a1fb"
+GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-}"
+if [ -z "$GATEWAY_TOKEN" ]; then
+    echo "错误: 请设置 OPENCLAW_GATEWAY_TOKEN 环境变量" >&2
+    exit 1
+fi
 
 
 # 解析参数
