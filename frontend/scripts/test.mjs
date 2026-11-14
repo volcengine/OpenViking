@@ -2,7 +2,7 @@ import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { startTests } from './test-process.mjs';
 import { createRslib } from '@rslib/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { pluginSvgr } from '@rsbuild/plugin-svgr';
@@ -102,25 +102,22 @@ try {
     join(output, 'node_modules'),
     process.platform === 'win32' ? 'junction' : 'dir',
   );
-  process.exitCode = await new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      [
-        '--test',
-        'scripts/package.test.mjs',
-        'scripts/react-release*.test.mjs',
-        'scripts/release-notes*.test.mjs',
-        'packages/react/test/*.test.mjs',
-      ],
-      {
-        cwd: root,
-        stdio: 'inherit',
-        env: { ...process.env, NODE_ENV: 'test', OV_UI_TEST_HOOKS: output },
-      },
-    );
-    child.once('error', reject);
-    child.once('exit', (code) => resolve(code ?? 1));
-  });
+  const { completed } = startTests(
+    process.argv.length > 2
+      ? process.argv.slice(2)
+      : [
+          'scripts/package.test.mjs',
+          'scripts/test-process.test.mjs',
+          'scripts/react-release*.test.mjs',
+          'scripts/release-notes*.test.mjs',
+          'packages/react/test/*.test.mjs',
+        ],
+    {
+      cwd: root,
+      env: { ...process.env, NODE_ENV: 'test', OV_UI_TEST_HOOKS: output },
+    },
+  );
+  process.exitCode = await completed;
 } finally {
   await rm(output, { recursive: true, force: true });
 }

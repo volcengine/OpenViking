@@ -37,6 +37,10 @@ npm run changeset    # Add a release note for @openviking/react
 
 `dev`, `lint`, `lint:fix`, `typecheck`, `test` and `build` run `npm run build:lib` first, so the docs and the tests consume the library's built output. `npm run check` is an alias for `lint`, and `npm run` lists every script. The library is built into `packages/react/dist/` and the docs into `docs/doc_build/`.
 
+The Node test runner limits each test process to 512 MiB of V8 old space and 16 MiB per semi-space, with at most four test files running concurrently. A separate parent timer stops the test process tree after five minutes (exit code 124), including synchronously blocked workers. On macOS/Linux it kills the isolated process group; on Windows it uses `taskkill /T /F`. Interrupts also stop the test tree. These are test execution guards, not a total RSS limit.
+
+After `npm run build:lib`, run selected tests with `node scripts/test.mjs packages/react/test/viking-bot-directory-errors.test.mjs`. Keep DOM identity and absence assertions boolean, for example `assert.equal(document.activeElement === trigger, true)`: Node's assertion diff can deeply inspect jsdom and React references when DOM objects are passed directly. Simulated user clicks that test focus restoration must call `focus()` before `click()`.
+
 Pass files, directories or quoted globs after `--` to limit formatting and lint rules; type checking always covers the whole configured projects:
 
 ```bash
