@@ -1,0 +1,309 @@
+# Analytics
+
+Receive interaction, outcome, and exposure events through `OpenVikingProvider.analytics`, and forward them to your analytics platform.
+
+## Integration
+
+Omitting `analytics` at the root disables collection: no analytics events, exposure observers, or operation timers are created. Supply `onEvent` to enable collection. Business components and blocks need no additional analytics props.
+
+```tsx
+import { OpenVikingProvider } from '@openviking/react/client';
+import type { OpenVikingAnalyticsOptions } from '@openviking/react/client';
+
+const analytics = {
+  onEvent(event) {
+    // Call your SDK here and add page, source, and user context.
+    hostAnalytics.track(event.name, {
+      ...event.params,
+      instanceId: event.instanceId,
+    });
+  },
+} satisfies OpenVikingAnalyticsOptions;
+
+<OpenVikingProvider analytics={analytics}>{children}</OpenVikingProvider>;
+```
+
+The host supplies `hostAnalytics` and `children`. The library includes no analytics SDK and sends no requests to an analytics platform.
+
+### Select events
+
+Omit `events` to receive all built-in events, or pass `[]` to receive none. Event names are type checked. Checking `event.name` narrows `event.params` to that event's parameter type.
+
+```tsx
+const analytics = {
+  events: [
+    'openviking_file_preview_copy_path_click',
+    'openviking_file_browser_search_success',
+  ],
+  onEvent(event) {
+    if (event.name === 'openviking_file_browser_search_success') {
+      console.log(event.params.result_count, event.params.duration_ms);
+    }
+  },
+} satisfies OpenVikingAnalyticsOptions;
+```
+
+### Provider scope
+
+A nested Provider inherits analytics when the prop is omitted. Pass `false` to disable its subtree, or an options object to replace the outer configuration. A collection point delivers only to its nearest effective configuration, without also notifying the outer receiver. Configuration changes do not reload business data or replay interactions that happened while collection was disabled.
+
+`onEvent` may return `Promise<void>`. Delivery does not block business operations. Synchronous exceptions and rejected promises are isolated; the library does not retry or buffer events. Implement retries, sampling, or batching in your host adapter.
+
+## Examples
+
+### Interactions and exposure
+
+Collection starts disabled. Enable it to inspect file-tree exposure, file selection, and path copying. Simulating a receiver failure leaves interactions usable.
+
+```tsx file="../../_demos/analytics.tsx" preview
+
+```
+
+## Event semantics
+
+- Names follow `openviking_<target>_<event>`. Copying a path, file content, connection instructions, and a code block each have distinct events.
+- A business component's submit or click expresses user intent. The block or internal executor reports actual outcomes. When the host takes over execution, the library does not infer its business result.
+- `console_command_accepted` means asynchronous tasks were accepted. `console_command_success` follows only after all associated tasks succeed. A task polling failure does not imply execution failure.
+- `file_preview_download_start` means the browser download was initiated; it does not confirm that a file was saved locally.
+- A `file_preview_save_success` event with `version_status: 'not-created'` means the content was saved but a version was not created. `'unknown'` means the save interface did not confirm version creation.
+- Cancellation is distinct from failure. Unmounting or changing scope invalidates old requests without emitting stale success or failure events.
+
+### Exposure
+
+`*_show` and `directory_tour_start` fire when the target intersects the viewport with a positive width and height while the document is visible. Hidden elements, loading content placeholders, and background preview layers do not count. Each target reports once per display cycle. Rerenders, scrolling out and back in, or returning to the tab do not repeat an exposure. Reopening a dialog, advancing a tour step, or switching preview targets begins a new cycle.
+
+Exposure uses `IntersectionObserver` and does not detect occlusion by other elements. Environments without this API skip automatic exposure. Server rendering emits no events. Re-enabling analytics does not replay previous interactions; a currently visible target that has never reported may emit its first exposure.
+
+### Common fields and collected data
+
+| Field        | Description                                                                       | Type                                       |
+| ------------ | --------------------------------------------------------------------------------- | ------------------------------------------ |
+| `name`       | Fixed event name that narrows `params`                                            | `OpenVikingAnalyticsEventName`             |
+| `params`     | Parameters for that event, or `{}` for events without parameters                  | `OpenVikingAnalyticsEventMap[typeof name]` |
+| `instanceId` | Collection-point instance identifier; not a user, account, or resource identifier | `string`                                   |
+
+`operation_id` connects submission and outcome for one operation. `duration_ms` measures milliseconds from its start to the current stage. `step_index` starts at zero. `error_kind` is a fixed classification and never contains an error message.
+
+Built-in events omit full URIs, paths, file names, queries, command text, message and file content, email addresses, passwords, and API keys. Add page, source, user identity, and platform-specific fields in your host's `onEvent` adapter.
+
+## API
+
+Import these types from `@openviking/react/client`.
+
+### OpenVikingAnalyticsOptions
+
+| Property  | Description                                                                   | Type                                                         | Default             |
+| --------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------ | ------------------- |
+| `onEvent` | Receives selected events; receiver failures do not affect business operations | `(event: OpenVikingAnalyticsEvent) => void \| Promise<void>` | Required            |
+| `events`  | Selects the built-in events to receive                                        | `readonly OpenVikingAnalyticsEventName[]`                    | All built-in events |
+
+`OpenVikingProviderProps.analytics` accepts `OpenVikingAnalyticsOptions | false`; collection is disabled at the root by default. `OpenVikingAnalyticsEventMap` maps each name to its parameters. `OpenVikingAnalyticsEvent` is a union discriminated by `name`.
+
+## Event catalogue
+
+These tables share their definitions with the event types. All listed parameters are required. Exposure events describe the built-in views; the host owns analytics for replacement slot content.
+
+{/* analytics-events:start */}
+
+### File browser
+
+| Event name                                            | Occurrence                                                                                       | params                                                                                                                                                                                                              |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `openviking_file_browser_show`                        | The file browser enters the viewport.                                                            | `{}`                                                                                                                                                                                                                |
+| `openviking_file_browser_search_dialog_show`          | The search dialog becomes visible.                                                               | `{}`                                                                                                                                                                                                                |
+| `openviking_file_browser_search_results_show`         | Nonempty results of the current query become visible.                                            | `{}`                                                                                                                                                                                                                |
+| `openviking_file_browser_search_empty_show`           | The empty result of the current query becomes visible.                                           | `{}`                                                                                                                                                                                                                |
+| `openviking_file_browser_connect_agent_show`          | The connect-agent action becomes visible.                                                        | `{}`                                                                                                                                                                                                                |
+| `openviking_file_browser_import_resources_show`       | The default import-resources action becomes visible.                                             | `{}`                                                                                                                                                                                                                |
+| `openviking_file_browser_agent_connect_drawer_show`   | The built-in agent connection drawer becomes visible.                                            | `{}`                                                                                                                                                                                                                |
+| `openviking_file_browser_connect_agent_click`         | The user clicks connect agent.                                                                   | `{}`                                                                                                                                                                                                                |
+| `openviking_file_browser_import_resources_click`      | The user clicks the default import action; this does not imply an import completed.              | `{}`                                                                                                                                                                                                                |
+| `openviking_file_browser_search_result_select`        | The user selects a search result.                                                                | `{}`                                                                                                                                                                                                                |
+| `openviking_file_browser_search_submit`               | A nonempty debounced query starts a request; each query change is a new operation.               | `operation_id: string`<br />`mode: 'find' \| 'search' \| 'grep' \| 'glob'`<br />`has_filters: boolean`                                                                                                              |
+| `openviking_file_browser_search_success`              | The current search returns, including zero results.                                              | `operation_id: string`<br />`mode: 'find' \| 'search' \| 'grep' \| 'glob'`<br />`has_filters: boolean`<br />`duration_ms: number`<br />`result_count: number`                                                       |
+| `openviking_file_browser_search_fail`                 | The current search fails; cancelled and superseded requests are excluded.                        | `operation_id: string`<br />`mode: 'find' \| 'search' \| 'grep' \| 'glob'`<br />`has_filters: boolean`<br />`duration_ms: number`<br />`error_kind: 'network' \| 'http' \| 'business' \| 'permission' \| 'unknown'` |
+| `openviking_file_browser_pack_import_submit`          | Built-in ovpack import: execution starts.                                                        | `operation_id: string`                                                                                                                                                                                              |
+| `openviking_file_browser_pack_import_success`         | Built-in ovpack import: execution completes.                                                     | `operation_id: string`<br />`duration_ms: number`                                                                                                                                                                   |
+| `openviking_file_browser_pack_import_fail`            | Built-in ovpack import: execution fails; raw errors are omitted.                                 | `operation_id: string`<br />`duration_ms: number`<br />`error_kind: 'network' \| 'http' \| 'business' \| 'permission' \| 'unknown'`                                                                                 |
+| `openviking_file_browser_pack_export_submit`          | Built-in ovpack export and download initiation: execution starts.                                | `operation_id: string`                                                                                                                                                                                              |
+| `openviking_file_browser_pack_export_success`         | Built-in ovpack export and download initiation: execution completes.                             | `operation_id: string`<br />`duration_ms: number`                                                                                                                                                                   |
+| `openviking_file_browser_pack_export_fail`            | Built-in ovpack export and download initiation: execution fails; raw errors are omitted.         | `operation_id: string`<br />`duration_ms: number`<br />`error_kind: 'network' \| 'http' \| 'business' \| 'permission' \| 'unknown'`                                                                                 |
+| `openviking_file_browser_resource_delete_submit`      | Resource deletion after confirmation: execution starts.                                          | `operation_id: string`                                                                                                                                                                                              |
+| `openviking_file_browser_resource_delete_success`     | Resource deletion after confirmation: execution completes.                                       | `operation_id: string`<br />`duration_ms: number`                                                                                                                                                                   |
+| `openviking_file_browser_resource_delete_fail`        | Resource deletion after confirmation: execution fails; raw errors are omitted.                   | `operation_id: string`<br />`duration_ms: number`<br />`error_kind: 'network' \| 'http' \| 'business' \| 'permission' \| 'unknown'`                                                                                 |
+| `openviking_file_browser_compile_config_save_submit`  | Compile configuration save, not compilation completion: execution starts.                        | `operation_id: string`                                                                                                                                                                                              |
+| `openviking_file_browser_compile_config_save_success` | Compile configuration save, not compilation completion: execution completes.                     | `operation_id: string`<br />`duration_ms: number`                                                                                                                                                                   |
+| `openviking_file_browser_compile_config_save_fail`    | Compile configuration save, not compilation completion: execution fails; raw errors are omitted. | `operation_id: string`<br />`duration_ms: number`<br />`error_kind: 'network' \| 'http' \| 'business' \| 'permission' \| 'unknown'`                                                                                 |
+| `openviking_file_browser_acl_change_submit`           | ACL change: execution starts.                                                                    | `operation_id: string`                                                                                                                                                                                              |
+| `openviking_file_browser_acl_change_success`          | ACL change: execution completes.                                                                 | `operation_id: string`<br />`duration_ms: number`                                                                                                                                                                   |
+| `openviking_file_browser_acl_change_fail`             | ACL change: execution fails; raw errors are omitted.                                             | `operation_id: string`<br />`duration_ms: number`<br />`error_kind: 'network' \| 'http' \| 'business' \| 'permission' \| 'unknown'`                                                                                 |
+| `openviking_file_browser_history_dialog_show`         | The history dialog becomes visible.                                                              | `{}`                                                                                                                                                                                                                |
+| `openviking_file_browser_compile_config_dialog_show`  | The compile configuration dialog becomes visible.                                                | `{}`                                                                                                                                                                                                                |
+| `openviking_file_browser_delete_confirm_dialog_show`  | The delete confirmation dialog becomes visible.                                                  | `{}`                                                                                                                                                                                                                |
+| `openviking_file_browser_pack_import_dialog_show`     | The ovpack import dialog becomes visible.                                                        | `{}`                                                                                                                                                                                                                |
+| `openviking_file_browser_acl_dialog_show`             | The ACL dialog becomes visible.                                                                  | `{}`                                                                                                                                                                                                                |
+| `openviking_file_browser_history_revision_select`     | The user selects a historical revision; its content is omitted.                                  | `{}`                                                                                                                                                                                                                |
+
+### File tree
+
+| Event name                                | Occurrence                                                                    | params |
+| ----------------------------------------- | ----------------------------------------------------------------------------- | ------ |
+| `openviking_file_tree_show`               | The file tree enters the viewport.                                            | `{}`   |
+| `openviking_file_tree_entry_select`       | The user selects a file or directory; this does not imply its content loaded. | `{}`   |
+| `openviking_file_tree_directory_expand`   | The user expands a directory.                                                 | `{}`   |
+| `openviking_file_tree_directory_collapse` | The user collapses a directory.                                               | `{}`   |
+
+### File preview
+
+| Event name                                     | Occurrence                                                                     | params                                                                                                                              |
+| ---------------------------------------------- | ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `openviking_file_preview_content_show`         | Preview content becomes visible, excluding loading and failure placeholders.   | `{}`                                                                                                                                |
+| `openviking_file_preview_source_show`          | The source view becomes visible.                                               | `{}`                                                                                                                                |
+| `openviking_file_preview_tab_change`           | The user selects another preview tab.                                          | `{}`                                                                                                                                |
+| `openviking_file_preview_source_view_select`   | The user selects source mode.                                                  | `{}`                                                                                                                                |
+| `openviking_file_preview_preview_view_select`  | The user selects preview mode.                                                 | `{}`                                                                                                                                |
+| `openviking_file_preview_edit_start`           | Editing starts after the complete content is available.                        | `{}`                                                                                                                                |
+| `openviking_file_preview_edit_cancel`          | The user cancels editing and discards the draft.                               | `{}`                                                                                                                                |
+| `openviking_file_preview_copy_path_show`       | Copy path: action becomes visible.                                             | `{}`                                                                                                                                |
+| `openviking_file_preview_copy_path_click`      | Copy path: copy is requested.                                                  | `{}`                                                                                                                                |
+| `openviking_file_preview_copy_path_success`    | Copy path: clipboard write completes.                                          | `{}`                                                                                                                                |
+| `openviking_file_preview_copy_path_fail`       | Copy path: clipboard write fails.                                              | `{}`                                                                                                                                |
+| `openviking_file_preview_copy_content_show`    | Copy content: action becomes visible.                                          | `{}`                                                                                                                                |
+| `openviking_file_preview_copy_content_click`   | Copy content: copy is requested.                                               | `{}`                                                                                                                                |
+| `openviking_file_preview_copy_content_success` | Copy content: clipboard write completes.                                       | `{}`                                                                                                                                |
+| `openviking_file_preview_copy_content_fail`    | Copy content: clipboard write fails.                                           | `{}`                                                                                                                                |
+| `openviking_file_preview_save_show`            | Save action becomes visible.                                                   | `{}`                                                                                                                                |
+| `openviking_file_preview_download_show`        | Download action becomes visible.                                               | `{}`                                                                                                                                |
+| `openviking_file_preview_save_submit`          | Content save: execution starts.                                                | `operation_id: string`                                                                                                              |
+| `openviking_file_preview_save_success`         | Content save: execution completes.                                             | `operation_id: string`<br />`duration_ms: number`<br />`version_status: 'not-created' \| 'unknown'`                                 |
+| `openviking_file_preview_save_fail`            | Content save: execution fails; raw errors are omitted.                         | `operation_id: string`<br />`duration_ms: number`<br />`error_kind: 'network' \| 'http' \| 'business' \| 'permission' \| 'unknown'` |
+| `openviking_file_preview_download_start`       | Browser download is initiated; this does not imply the file was saved to disk. | `operation_id: string`<br />`duration_ms: number`                                                                                   |
+| `openviking_file_preview_download_fail`        | Download initiation fails.                                                     | `operation_id: string`<br />`duration_ms: number`<br />`error_kind: 'network' \| 'http' \| 'business' \| 'permission' \| 'unknown'` |
+
+### Console block
+
+| Event name                                 | Occurrence                                                              | params                                                                                                                              |
+| ------------------------------------------ | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `openviking_console_command_panel_show`    | Command panel becomes visible.                                          | `{}`                                                                                                                                |
+| `openviking_console_chat_panel_show`       | Chat panel becomes visible.                                             | `{}`                                                                                                                                |
+| `openviking_console_command_mode_select`   | The user selects command mode.                                          | `{}`                                                                                                                                |
+| `openviking_console_chat_mode_select`      | The user selects conversation mode.                                     | `{}`                                                                                                                                |
+| `openviking_console_command_preset_select` | The user selects a command preset; this does not imply execution.       | `{}`                                                                                                                                |
+| `openviking_console_command_submit`        | A nonempty command starts execution, excluding clear.                   | `operation_id: string`                                                                                                              |
+| `openviking_console_command_accepted`      | An asynchronous task is accepted, not completed.                        | `operation_id: string`<br />`duration_ms: number`                                                                                   |
+| `openviking_console_command_success`       | A synchronous command succeeds or all associated tasks complete.        | `operation_id: string`<br />`duration_ms: number`                                                                                   |
+| `openviking_console_command_fail`          | The command or an associated task fails.                                | `operation_id: string`<br />`duration_ms: number`<br />`error_kind: 'network' \| 'http' \| 'business' \| 'permission' \| 'unknown'` |
+| `openviking_console_command_cancel`        | The user cancels a command or an associated task confirms cancellation. | `operation_id: string`<br />`duration_ms: number`                                                                                   |
+
+### Command view
+
+| Event name                                  | Occurrence                                                              | params |
+| ------------------------------------------- | ----------------------------------------------------------------------- | ------ |
+| `openviking_command_console_command_submit` | The command view requests submission; execution success is not implied. | `{}`   |
+
+### Conversation
+
+| Event name                                   | Occurrence                                                                                  | params                                                                                                                              |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `openviking_viking_bot_message_submit`       | A new reply request starts; input is omitted. In-stream follow-ups report send intent only. | `operation_id: string`                                                                                                              |
+| `openviking_viking_bot_reply_start`          | The first renderable text, reasoning, or tool content arrives, not just a connection.       | `operation_id: string`<br />`duration_ms: number`                                                                                   |
+| `openviking_viking_bot_reply_success`        | A normal reply completion is received.                                                      | `operation_id: string`<br />`duration_ms: number`                                                                                   |
+| `openviking_viking_bot_reply_fail`           | A reply fails or its stream ends without a terminal event.                                  | `operation_id: string`<br />`duration_ms: number`<br />`error_kind: 'network' \| 'http' \| 'business' \| 'permission' \| 'unknown'` |
+| `openviking_viking_bot_reply_cancel`         | The user stops the reply or an explicit interruption is received.                           | `operation_id: string`<br />`duration_ms: number`                                                                                   |
+| `openviking_viking_bot_session_create_click` | The user requests a new session, not its successful creation.                               | `{}`                                                                                                                                |
+| `openviking_viking_bot_session_select`       | The user selects a session.                                                                 | `{}`                                                                                                                                |
+| `openviking_viking_bot_interaction_submit`   | The user submits an interaction card; answers are omitted.                                  | `{}`                                                                                                                                |
+| `openviking_viking_bot_interaction_cancel`   | The user cancels an interaction card.                                                       | `{}`                                                                                                                                |
+| `openviking_viking_bot_send_click`           | The user sends conversation input; its content is omitted.                                  | `{}`                                                                                                                                |
+
+### Scope selection
+
+| Event name                                    | Occurrence                                                            | params |
+| --------------------------------------------- | --------------------------------------------------------------------- | ------ |
+| `openviking_scope_switcher_option_select`     | The user selects a scope option; its identifier and name are omitted. | `{}`   |
+| `openviking_scope_cascade_selection_complete` | A user selection forms a valid three-level scope.                     | `{}`   |
+
+### Agent connection
+
+| Event name                                           | Occurrence                                                              | params |
+| ---------------------------------------------------- | ----------------------------------------------------------------------- | ------ |
+| `openviking_agent_connect_show`                      | The agent connection component becomes visible.                         | `{}`   |
+| `openviking_agent_connect_tab_change`                | The user switches connection categories.                                | `{}`   |
+| `openviking_agent_connect_select`                    | The user selects a connection method; configuration is omitted.         | `{}`   |
+| `openviking_agent_connect_instructions_copy_show`    | The copy button for connection instructions becomes visible.            | `{}`   |
+| `openviking_agent_connect_instructions_copy_click`   | The user copies the connection instructions; copied content is omitted. | `{}`   |
+| `openviking_agent_connect_instructions_copy_success` | The connection instructions are written to the clipboard.               | `{}`   |
+| `openviking_agent_connect_instructions_copy_fail`    | Copying the connection instructions fails.                              | `{}`   |
+| `openviking_agent_connect_code_block_copy_show`      | The copy button for code block becomes visible.                         | `{}`   |
+| `openviking_agent_connect_code_block_copy_click`     | The user copies the code block; copied content is omitted.              | `{}`   |
+| `openviking_agent_connect_code_block_copy_success`   | The code block are written to the clipboard.                            | `{}`   |
+| `openviking_agent_connect_code_block_copy_fail`      | Copying the code block fails.                                           | `{}`   |
+
+### Directory tour
+
+| Event name                            | Occurrence                                                      | params               |
+| ------------------------------------- | --------------------------------------------------------------- | -------------------- |
+| `openviking_directory_tour_start`     | The first tour step becomes visible.                            | `step_index: number` |
+| `openviking_directory_tour_step_show` | The current tour step becomes visible; step content is omitted. | `step_index: number` |
+| `openviking_directory_tour_complete`  | The user completes the tour.                                    | `step_index: number` |
+| `openviking_directory_tour_close`     | The user closes the tour early.                                 | `step_index: number` |
+
+### Wiki dashboard
+
+| Event name                                       | Occurrence                                 | params |
+| ------------------------------------------------ | ------------------------------------------ | ------ |
+| `openviking_wiki_dashboard_show`                 | The Wiki dashboard becomes visible.        | `{}`   |
+| `openviking_wiki_dashboard_filter_change`        | The user changes Wiki conflict filters.    | `{}`   |
+| `openviking_wiki_dashboard_resource_open_click`  | The user requests opening a Wiki resource. | `{}`   |
+| `openviking_wiki_dashboard_dashboard_open_click` | The user requests a dashboard.             | `{}`   |
+
+### Experience dashboard
+
+| Event name                                                 | Occurrence                                      | params |
+| ---------------------------------------------------------- | ----------------------------------------------- | ------ |
+| `openviking_experience_dashboard_show`                     | The experience dashboard becomes visible.       | `{}`   |
+| `openviking_experience_dashboard_tab_change`               | The user switches experience dashboard tabs.    | `{}`   |
+| `openviking_experience_dashboard_range_change`             | The user changes the experience time range.     | `{}`   |
+| `openviking_experience_dashboard_page_change`              | The user changes the experience dashboard page. | `{}`   |
+| `openviking_experience_dashboard_experience_open_click`    | The user requests a experience.                 | `{}`   |
+| `openviking_experience_dashboard_trajectory_open_click`    | The user requests a trajectory.                 | `{}`   |
+| `openviking_experience_dashboard_source_open_click`        | The user requests a source.                     | `{}`   |
+| `openviking_experience_dashboard_test_material_open_click` | The user requests a test material.              | `{}`   |
+
+### Email login
+
+| Event name                           | Occurrence                                                                                                               | params |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ | ------ |
+| `openviking_email_login_form_show`   | Email login form becomes visible.                                                                                        | `{}`   |
+| `openviking_email_login_form_submit` | Email login form is submitted after local validation; inputs are omitted and this does not imply authentication success. | `{}`   |
+
+### API key login
+
+| Event name                             | Occurrence                                                                                                                 | params |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ------ |
+| `openviking_api_key_login_form_show`   | API key login form becomes visible.                                                                                        | `{}`   |
+| `openviking_api_key_login_form_submit` | API key login form is submitted after local validation; inputs are omitted and this does not imply authentication success. | `{}`   |
+
+### Password forms
+
+| Event name                                      | Occurrence                                                                                                                          | params |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| `openviking_password_reset_request_form_show`   | Password reset request form becomes visible.                                                                                        | `{}`   |
+| `openviking_password_reset_request_form_submit` | Password reset request form is submitted after local validation; inputs are omitted and this does not imply authentication success. | `{}`   |
+| `openviking_password_setup_form_show`           | Password setup form becomes visible.                                                                                                | `{}`   |
+| `openviking_password_setup_form_submit`         | Password setup form is submitted after local validation; inputs are omitted and this does not imply authentication success.         | `{}`   |
+
+### Login method
+
+| Event name                                | Occurrence                                                    | params |
+| ----------------------------------------- | ------------------------------------------------------------- | ------ |
+| `openviking_login_method_selector_select` | The user selects a login method; account details are omitted. | `{}`   |
+
+### Invitation confirmation
+
+| Event name                                        | Occurrence                                                                   | params |
+| ------------------------------------------------- | ---------------------------------------------------------------------------- | ------ |
+| `openviking_invitation_confirmation_show`         | The invitation confirmation becomes visible.                                 | `{}`   |
+| `openviking_invitation_confirmation_accept_click` | The user clicks accept invitation; this does not imply acceptance succeeded. | `{}`   |
+
+{/* analytics-events:end */}

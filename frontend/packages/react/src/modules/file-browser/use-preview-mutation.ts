@@ -1,3 +1,8 @@
+import { useAnalyticsRef } from '../../shared/analytics/context.js';
+import {
+  beginMutation,
+  type MutationTarget,
+} from '../../shared/analytics/mutation.js';
 import { useEffect, useMemo, useState } from 'react';
 import { useOvClient, useOvSignal } from '../../client/provider.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
@@ -8,6 +13,7 @@ export function usePreviewMutation(
   uri: string,
   requestOptions?: OvRequestOptions,
 ) {
+  const analytics = useAnalyticsRef();
   const client = useOvClient();
   const inherited = useOvSignal();
   const signal = requestOptions?.signal ?? inherited;
@@ -35,6 +41,7 @@ export function usePreviewMutation(
       options: OvRequestOptions,
     ) => Promise<unknown>,
     onSuccess?: () => void,
+    analyticsTarget?: MutationTarget,
   ) => {
     if (
       !client ||
@@ -48,9 +55,11 @@ export function usePreviewMutation(
       ? AbortSignal.any([signal, owner.controller.signal])
       : owner.controller.signal;
     setState({ owner, pending: true });
+    const event = beginMutation(analytics, analyticsTarget);
     try {
       await operation(client, { ...requestOptions, signal: composed });
       if (composed.aborted) return;
+      event?.success();
       setState({ owner, pending: false, succeeded: true });
       try {
         onSuccess?.();
@@ -58,7 +67,10 @@ export function usePreviewMutation(
         /* Notification cannot undo API success. */
       }
     } catch (error) {
-      if (!composed.aborted) setState({ owner, pending: false, error });
+      if (!composed.aborted) {
+        event?.fail(error);
+        setState({ owner, pending: false, error });
+      }
     } finally {
       owner.pending = false;
     }

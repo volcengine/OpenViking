@@ -1,3 +1,5 @@
+import { useTrack } from '../../shared/analytics/use-track.js';
+import { useOpenExposure } from '../../shared/analytics/use-exposure.js';
 import { useRenderErrors } from './file-browser-labels.js';
 import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -66,8 +68,9 @@ export function FileBrowserSearch({
   onOpenResource,
   onClose,
 }: FileBrowserSearchProps) {
+  const track = useTrack();
+  const exposure = useOpenExposure('file_browser_search_dialog_show', open);
   const client = useOvClient();
-  const renderErrors = useRenderErrors(locale);
   const inputRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState('');
   const [query, setQuery] = useState('');
@@ -144,6 +147,7 @@ export function FileBrowserSearch({
 
   const hits = useMemo(() => flattenResult(search.result), [search.result]);
   const openResult = (uri: string) => {
+    track('file_browser_search_result_select');
     close();
     void onOpenResource(uri).catch(() => {});
   };
@@ -199,10 +203,10 @@ export function FileBrowserSearch({
         onChange={setDraft}
         onToggleAdvanced={() => onToggleAdvanced(!advancedOpen)}
       />
-      <div className="ov-file-browser-search__content">
+      <div ref={exposure} className="ov-file-browser-search__content">
         <div className="ov-file-browser-search__results">
           <ErrorBoundary
-            message={renderErrors.search}
+            message={useRenderErrors(locale).search}
             resetKeys={[rootUri, query, mode]}
           >
             <FileBrowserSearchResults

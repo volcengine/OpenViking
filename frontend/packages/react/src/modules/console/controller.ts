@@ -1,3 +1,4 @@
+import type { CommandAnalytics } from './use-command-analytics.js';
 import type { TaskReference } from '../../shared/task-tracking/types.js';
 import type { SetStateAction } from 'react';
 import type { Locale } from '../../shared/locale.js';
@@ -17,6 +18,7 @@ export function createConsoleController(
   client: OvClient,
   options: OvRequestOptions = {},
   trackTask?: (task: TaskReference) => string,
+  analytics?: CommandAnalytics,
 ) {
   let state: Omit<ConsoleState, 'records'> & {
     records: readonly ConsoleRecord[];
@@ -30,12 +32,12 @@ export function createConsoleController(
   let running: AbortController | undefined;
   let active = false;
   let sequence = 0;
-  let cancelRunning: (() => void) | undefined;
+  let cancelRunning: ((report?: boolean) => void) | undefined;
   const update = (patch: Partial<ConsoleState>) => {
     state = { ...state, ...patch };
     listeners.forEach((listener) => listener());
   };
-  const cancel = () => cancelRunning?.();
+  const cancel = () => cancelRunning?.(true);
   const clear = () => {
     cancel();
     update({
@@ -65,6 +67,7 @@ export function createConsoleController(
       : controller.signal;
     running = controller;
     const id = `command-${++sequence}`;
+    const event = analytics?.begin(id);
     const current = () => active && running === controller;
     const finish = (message: ConsoleMessage) => {
       if (!current()) return;
@@ -88,7 +91,8 @@ export function createConsoleController(
       });
     };
     const onAbort = () => finish({ code: 'cancelled' });
-    cancelRunning = () => {
+    cancelRunning = (report = false) => {
+      if (report) event?.cancel();
       controller.abort();
       signal.removeEventListener('abort', onAbort);
     };
@@ -120,6 +124,7 @@ export function createConsoleController(
         },
       );
       if (!current() || signal.aborted) return;
+      event?.success(taskKeys);
       update({
         records: state.records.map((record) =>
           record.id === id
@@ -129,6 +134,7 @@ export function createConsoleController(
       });
     } catch (error) {
       if (!current() || signal.aborted) return;
+      event?.fail(error);
       const localMessage =
         error instanceof ConsoleCommandError
           ? { code: error.code, value: error.value, usage: error.usage }
@@ -172,7 +178,7 @@ export function createConsoleController(
     start() {
       active = true;
       return () => {
-        cancel();
+        cancelRunning?.();
         active = false;
       };
     },

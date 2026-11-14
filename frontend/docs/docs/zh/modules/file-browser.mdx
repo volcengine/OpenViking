@@ -495,3 +495,7 @@ await browserRef.current?.openResource(resultUri, { reveal: true });
 - 默认 352px，最小 200px，最大为 520px 与「容器宽度减去 321px」（预览区至少 320px，加 1px 分隔线）中的较小值，因此放进窄栏时树会收窄，不会挤没预览区。
 - 宽度只在当前实例内生效，不写入 `localStorage`，是否记住由宿主决定。
 - 当前宽度以 CSS 变量 `--ov-file-browser-tree-width` 写在根元素的内联样式上，可以读取，但覆盖它不会生效。
+
+## 埋点
+
+通过 Provider 统一接入，支持的事件和触发条件见[埋点指南与事件目录](../guide/analytics)。

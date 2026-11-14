@@ -1,3 +1,5 @@
+import { useTrack } from '../../shared/analytics/use-track.js';
+import { useExposure } from '../../shared/analytics/use-exposure.js';
 import { useRenderErrors } from './labels.js';
 import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 /* eslint-disable jsx-a11y/no-noninteractive-tabindex -- Labelled conflict region must support keyboard horizontal scrolling. */
@@ -27,6 +29,11 @@ function WikiDashboardContent(props: WikiDashboardProps) {
     className,
     ...rest
   } = props;
+  const track = useTrack();
+  const exposure = useExposure(
+    'wiki_dashboard_show',
+    kind === 'file' ? data?.path : kind,
+  );
   const locale = useLocale(localeProp);
   const t = wikiLabels(locale, labels);
   const [severity, setSeverity] = useState<WikiConflict['severity'] | 'all'>(
@@ -45,6 +52,7 @@ function WikiDashboardContent(props: WikiDashboardProps) {
     : undefined;
   return (
     <div
+      ref={exposure}
       {...rest}
       className={['ov-wiki-dashboard', className].filter(Boolean).join(' ')}
     >
@@ -70,7 +78,10 @@ function WikiDashboardContent(props: WikiDashboardProps) {
           {kind === 'file' ? (
             <WikiSeverityFilter
               value={severity}
-              onChange={setSeverity}
+              onChange={(value) => {
+                track('wiki_dashboard_filter_change');
+                setSeverity(value);
+              }}
               labels={t}
             />
           ) : null}
@@ -88,7 +99,14 @@ function WikiDashboardContent(props: WikiDashboardProps) {
                 conflict={conflict}
                 path={data?.path}
                 labels={t}
-                onOpenUri={onOpenUri}
+                onOpenUri={
+                  onOpenUri
+                    ? () => {
+                        track('wiki_dashboard_resource_open_click');
+                        onOpenUri();
+                      }
+                    : undefined
+                }
                 actions={defineActions?.(conflict)}
               />
             ))}
@@ -104,7 +122,10 @@ function WikiDashboardContent(props: WikiDashboardProps) {
                     type="button"
                     className="ov-wiki-dashboard__link"
                     disabled={!onOpenDashboard && !onOpenUri}
-                    onClick={() => (onOpenDashboard ?? onOpenUri)?.(file)}
+                    onClick={() => {
+                      track('wiki_dashboard_dashboard_open_click');
+                      (onOpenDashboard ?? onOpenUri)?.(file);
+                    }}
                   >
                     <span>{file.split('/').pop()}</span>
                     <span className="ov-wiki-dashboard__file-uri">{file}</span>

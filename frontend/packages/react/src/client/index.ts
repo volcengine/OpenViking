@@ -1,4 +1,10 @@
 export { createOvClient } from './client.js';
+export type {
+  OpenVikingAnalyticsOptions,
+  OpenVikingAnalyticsEvent,
+  OpenVikingAnalyticsEventName,
+  OpenVikingAnalyticsEventMap,
+} from './analytics/types.js';
 export { OvClientError, isOvClientError } from './errors.js';
 export { OV_PATHS, OV_PATH_BUILDERS, type OvPath } from './paths.js';
 export {

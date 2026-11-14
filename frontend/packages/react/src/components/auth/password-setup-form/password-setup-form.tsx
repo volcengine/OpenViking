@@ -1,3 +1,5 @@
+import { useTrack } from '../../../shared/analytics/use-track.js';
+import { useExposure } from '../../../shared/analytics/use-exposure.js';
 import { useId } from 'react';
 import { Field } from '../../../shared/auth/fields.js';
 import { FormFrame } from '../../../shared/auth/form-frame.js';
@@ -14,6 +16,8 @@ export function PasswordSetupForm({
   labels: overrides,
   ...options
 }: PasswordSetupFormProps) {
+  const track = useTrack();
+  const exposure = useExposure('password_setup_form_show');
   const id = useId();
   const labels = useAuthLabels(locale, overrides);
   const form = useForm(
@@ -37,10 +41,14 @@ export function PasswordSetupForm({
   return (
     <FormFrame
       {...options}
+      formRef={exposure}
       labels={labels}
       submitLabel={labels.confirm}
       validate={form.validate}
-      onSubmit={() => onSubmit?.({ password: form.values.password })}
+      onSubmit={() => {
+        track('password_setup_form_submit');
+        onSubmit?.({ password: form.values.password });
+      }}
     >
       {account && (
         <div className="ov-auth__account">

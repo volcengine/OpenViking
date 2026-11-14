@@ -175,3 +175,14 @@ export function DashboardTabs<T extends string>({
     </>
   );
 }
+
+export function experienceTabs(
+  t: { impact: string; source: string; test: string },
+  missingTest: boolean,
+) {
+  return [
+    { key: 'impact' as const, title: t.impact },
+    { key: 'source' as const, title: t.source },
+    ...(missingTest ? [] : [{ key: 'test' as const, title: t.test }]),
+  ];
+}

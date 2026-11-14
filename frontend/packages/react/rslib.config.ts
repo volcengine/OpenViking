@@ -84,6 +84,7 @@ export default defineConfig({
             './src/shared/primitives/input/input.tsx',
           'shared/primitives/checkbox/checkbox':
             './src/shared/primitives/checkbox/checkbox.tsx',
+          'client/analytics/events': './src/client/analytics/events.ts',
           style: './src/shared/docs-controls.css',
         },
       },

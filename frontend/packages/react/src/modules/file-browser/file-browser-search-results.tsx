@@ -1,3 +1,4 @@
+import { useExposure } from '../../shared/analytics/use-exposure.js';
 import type { RefObject } from 'react';
 import SearchEmptyArt from '../../../../icons/svg/file-browser/search-empty.svg?react';
 import { Button } from '../../shared/primitives/button/button.js';
@@ -56,6 +57,14 @@ export function FileBrowserSearchResults({
   onSelectMode,
   onOpen,
 }: FileBrowserSearchResultsProps) {
+  const exposure = useExposure(
+    hits.length
+      ? 'file_browser_search_results_show'
+      : 'file_browser_search_empty_show',
+    hits,
+    undefined,
+    searched && !loading && !error,
+  );
   // 模式行只在真有结果时出现：设计稿的空态、加载态与失败态都没有这一行，它上面
   // 的数字也只在有东西可数时才说得通。
   //
@@ -119,7 +128,11 @@ export function FileBrowserSearchResults({
 
   if (hits.length === 0) {
     return (
-      <p role="status" className="ov-file-browser-search__no-results">
+      <p
+        ref={exposure}
+        role="status"
+        className="ov-file-browser-search__no-results"
+      >
         {text.searchEmpty}
       </p>
     );
@@ -135,6 +148,7 @@ export function FileBrowserSearchResults({
         onSelectMode={onSelectMode}
       />
       <ul
+        ref={exposure}
         id={listId}
         role="listbox"
         aria-label={text.searchTitle}

@@ -2,7 +2,8 @@ import { VikingBotRegion } from './viking-bot-region.js';
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
 import { useRef } from 'react';
 import { resolveVikingBotLabels } from './labels.js';
-import { VikingBotSessionActions } from './session-actions.js';
+import { renderHeaderContent } from './header-content.js';
+import { useBotAnalytics } from './use-bot-analytics.js';
 import { VikingBotWelcome } from './welcome.js';
 import { QuickInputScope, useQuickInput } from './use-quick-input.js';
 import type { VikingBotQuickInput } from './capabilities.js';
@@ -59,6 +60,7 @@ export function VikingBotContent({
   labels: overrides,
   ...rest
 }: VikingBotProps) {
+  const analytics = useBotAnalytics(onSend);
   const locale = useLocale(localeProp);
   const labels = resolveVikingBotLabels(locale, overrides);
   const hasMessages = messages.length > 0;
@@ -83,25 +85,22 @@ export function VikingBotContent({
     shortcuts.select(item);
     inputRef.current?.focus();
   };
-  const renderedHeader =
-    header !== undefined ? (
-      header
-    ) : sessions || headerActions ? (
-      <VikingBotSessionActions
-        sessions={sessions}
-        extra={headerActions}
-        onOpenUri={onOpenUri}
-        onCopy={onCopy}
-        labels={labels}
-        locale={locale}
-      />
-    ) : null;
+  const renderedHeader = renderHeaderContent({
+    header,
+    sessions,
+    headerActions,
+    onOpenUri,
+    onCopy,
+    labels,
+    locale,
+  });
 
   if (children) {
     return (
       <div
         className={['ov-viking-bot', className].filter(Boolean).join(' ')}
         {...rest}
+        ref={analytics.exposure}
       >
         <LocaleProvider locale={locale}>{children}</LocaleProvider>
       </div>
@@ -114,6 +113,7 @@ export function VikingBotContent({
         <div
           className={['ov-viking-bot', className].filter(Boolean).join(' ')}
           {...rest}
+          ref={analytics.exposure}
         >
           {renderedHeader ? (
             <VikingBotRegion name="header">{renderedHeader}</VikingBotRegion>
@@ -200,7 +200,7 @@ export function VikingBotContent({
                     onFilesAdded={onFilesAdded}
                     onAttachmentRemove={onAttachmentRemove}
                     onOpenUri={onOpenUri}
-                    onSend={onSend}
+                    onSend={analytics.send}
                     onCancel={onCancel}
                     labels={overrides}
                   />
