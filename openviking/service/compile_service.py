@@ -40,6 +40,7 @@ from openviking.service.memory_compile import MemoryCompileRunner
 from openviking.service.task_domain import sanitize_task_result
 from openviking.service.task_tracker import TaskRecord
 from openviking.storage.acl import AclAction
+from openviking.utils.path_safety import normalize_storage_target_uri
 from openviking_cli.exceptions import (
     FailedPreconditionError,
     InvalidArgumentError,
@@ -1133,7 +1134,7 @@ class CompileService:
     def _normalize_request_uris(
         self, request: CompileInputs | CompileRequest, ctx: RequestContext
     ) -> CompileInputs | CompileRequest:
-        """Normalize identity-bound names without requiring live resources."""
+        """Resolve identity-bound URIs and sanitize target whitespace before checks or persistence."""
         sources = list(
             dict.fromkeys(
                 validate_request_viking_uri(
@@ -1155,9 +1156,9 @@ class CompileService:
                 "Select a Skill directory or its SKILL.md, "
                 "e.g. viking://user/<user_id>/skills/<skill_name>."
             )
-        target = validate_request_viking_uri(
-            resolve_path_variables(request.to), ctx, field_name="to"
-        ).rstrip("/")
+        target = normalize_storage_target_uri(
+            validate_request_viking_uri(resolve_path_variables(request.to), ctx, field_name="to")
+        )
         self._validate_target(target)
         return request.model_copy(update={"from_": sources, "to": target, "skill": skill})
 

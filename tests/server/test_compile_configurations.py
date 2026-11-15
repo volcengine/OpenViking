@@ -34,7 +34,7 @@ from openviking_cli.exceptions import (
 from openviking_cli.session.user_id import UserIdentifier
 
 SOURCE = "viking://resources/source"
-TARGET = "viking://resources/wiki"
+TARGET = "viking://resources/wiki_output"
 SKILL = "viking://system/compile/example-skills/llm-wiki"
 INPUTS = {"from": [SOURCE], "to": TARGET, "skill": SKILL}
 SAVED_INPUTS = {**INPUTS, "compile_name": "research-summary"}
@@ -429,11 +429,14 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
     store = service.compile.lifecycle.store
     tracker = get_task_tracker()
 
-    created = await client.post("/api/v1/compile/create", json=SAVED_INPUTS)
+    inputs = {**SAVED_INPUTS, "to": TARGET.replace("_", " ")}
+    created = await client.post("/api/v1/compile/create", json=inputs)
     assert created.status_code == 200, created.text
     assert created.json()["result"] == {"compile_name": "research-summary"}
     compile_name = created.json()["result"]["compile_name"]
     state = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
+    assert state["to"] == TARGET
+    assert not await service.viking_fs.exists(inputs["to"], ctx=ctx)
     assert state["task_first_create_time"] is state["last_run_time"] is None
     assert await store.list_runs(ctx.account_id, ctx.user.user_id, compile_name) == []
     assert runtime.calls == []
@@ -485,7 +488,7 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
 
     added_source = SOURCE + "-added"
     await service.viking_fs.write_file(f"{added_source}/source.md", "source", ctx=ctx)
-    update = CompileConfigUpdate(**SAVED_INPUTS, auto_update=False)
+    update = CompileConfigUpdate(**inputs, auto_update=False)
     for sources in ([SOURCE, added_source], [SOURCE]):
         update.from_ = sources
         await service.compile.update_config(update, ctx)
@@ -512,8 +515,9 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
     state_before_full = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
     assert state_before_full["progress"]["model_name"] == "model-a"
     runs_before_full = await store.list_runs(ctx.account_id, ctx.user.user_id, compile_name)
-    full = await execute(INPUTS, "compile-full-execution")
+    full = await execute({**INPUTS, "to": inputs["to"]}, "compile-full-execution")
     assert full.status == "completed", full.error
+    assert runtime.calls[-1]["to"] == TARGET
     assert runtime.calls[-1]["args"]["changes"]["head"] is None
     assert runtime.calls[-1]["args"]["changes"]["execution"]["mode"] == "full"
     assert await store.get(ctx.account_id, ctx.user.user_id, compile_name) == state_before_full
