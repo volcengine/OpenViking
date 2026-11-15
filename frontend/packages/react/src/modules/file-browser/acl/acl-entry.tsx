@@ -16,6 +16,8 @@ export function AclAvatar({ principal }: { principal: string }) {
 }
 export function AclEntry({
   entry,
+  administrator,
+  currentUser,
   source,
   text,
   disabled,
@@ -26,8 +28,10 @@ export function AclEntry({
   source?: string;
   text: AclText;
   disabled: boolean;
-  onChange: (level: FileBrowserAclLevel) => void;
-  onRemove: () => void;
+  administrator?: boolean;
+  currentUser?: boolean;
+  onChange?: (level: FileBrowserAclLevel) => void;
+  onRemove?: () => void;
 }) {
   const name =
     entry.principal === 'user:*'
@@ -37,17 +41,35 @@ export function AclEntry({
     <li className="ov-file-browser-acl__entry">
       <AclAvatar principal={entry.principal} />
       <div className="ov-file-browser-acl__identity">
-        <span className="ov-file-browser-acl__name">{name}</span>
-        <span className="ov-file-browser-acl__source">{source}</span>
+        <div className="ov-file-browser-acl__name-line">
+          <span className="ov-file-browser-acl__name" title={name}>
+            {name}
+          </span>
+          {administrator ? (
+            <span className="ov-file-browser-acl__badge">
+              {text.administratorBadge}
+            </span>
+          ) : null}
+          {currentUser ? (
+            <span className="ov-file-browser-acl__badge ov-file-browser-acl__badge--current">
+              {text.currentUserBadge}
+            </span>
+          ) : null}
+        </div>
+        {source ? (
+          <span className="ov-file-browser-acl__source">{source}</span>
+        ) : null}
       </div>
-      <AclMenu
-        level={entry.level}
-        text={text}
-        name={entry.principal}
-        disabled={disabled}
-        onChange={onChange}
-        onRemove={onRemove}
-      />
+      {onChange ? (
+        <AclMenu
+          level={entry.level}
+          text={text}
+          name={entry.principal}
+          disabled={disabled}
+          onChange={onChange}
+          onRemove={onRemove}
+        />
+      ) : null}
     </li>
   );
 }

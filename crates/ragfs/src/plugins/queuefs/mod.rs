@@ -3,19 +3,22 @@
 //! A filesystem-based message queue with multi-queue support where operations are performed
 //! through control files within each queue directory:
 //! - `/queue_name/enqueue` - Write to this file to add a message to the queue
-//! - `/queue_name/dequeue` - Read from this file to remove and return the first message
+//! - `/queue_name/enqueue_ext` - Write a versioned frame with message ID and scheduling key
+//! - `/queue_name/dequeue` - Read from this file to claim an eligible message
 //! - `/queue_name/peek` - Read from this file to view the first message without removing it
 //! - `/queue_name/size` - Read from this file to get the current queue size
 //! - `/queue_name/status` - Read pending and processing message counts
 //! - `/queue_name/messages` - Read all unacknowledged messages without changing queue state
 //! - `/queue_name/clear` - Write to this file to clear all messages from the queue
 //! - `/queue_name/ack` - Write message ID to this file to acknowledge and delete it
+//! - `/queue_name/retry` - Return a processing message to pending without changing its identity
 
 mod backend;
 #[cfg(feature = "cache")]
 mod cache_backend;
 #[cfg(feature = "cache")]
 mod cache_protocol;
+mod enqueue_protocol;
 
 use crate::core::{
     errors::{Error, Result},
@@ -45,6 +48,10 @@ const CONTROL_FILES: &[ControlFileSpec] = &[
         mode: 0o222,
     },
     ControlFileSpec {
+        name: "enqueue_ext",
+        mode: 0o222,
+    },
+    ControlFileSpec {
         name: "dequeue",
         mode: 0o444,
     },
@@ -70,6 +77,10 @@ const CONTROL_FILES: &[ControlFileSpec] = &[
     },
     ControlFileSpec {
         name: "ack",
+        mode: 0o222,
+    },
+    ControlFileSpec {
+        name: "retry",
         mode: 0o222,
     },
 ];
@@ -224,6 +235,14 @@ impl QueueStorage {
             Self::Local(backend) => backend.lock().await.ack(queue_name, message_id),
             #[cfg(feature = "cache")]
             Self::Cache(storage) => storage.ack(queue_name, message_id).await,
+        }
+    }
+
+    async fn retry(&self, queue_name: &str, message_id: &str) -> Result<bool> {
+        match self {
+            Self::Local(backend) => backend.lock().await.retry(queue_name, message_id),
+            #[cfg(feature = "cache")]
+            Self::Cache(storage) => storage.retry(queue_name, message_id).await,
         }
     }
 }
@@ -420,13 +439,13 @@ impl FileSystem for QueueFileSystem {
                     .list_unacked(&queue_name)
                     .await?
                     .into_iter()
-                .map(|msg| {
-                    let timestamp = queue_message_timestamp(&msg);
-                    QueueMessage {
-                        id: msg.id,
-                        data: String::from_utf8_lossy(&msg.data).to_string(),
-                        timestamp,
-                    }
+                    .map(|msg| {
+                        let timestamp = queue_message_timestamp(&msg);
+                        QueueMessage {
+                            id: msg.id,
+                            data: String::from_utf8_lossy(&msg.data).to_string(),
+                            timestamp,
+                        }
                     })
                     .collect::<Vec<_>>();
                 Ok(serde_json::to_vec(&messages)?)
@@ -449,6 +468,11 @@ impl FileSystem for QueueFileSystem {
             .ok_or_else(|| Error::InvalidOperation("no operation specified".to_string()))?;
 
         match operation.as_str() {
+            "enqueue_ext" => {
+                let message = enqueue_protocol::decode(data)?;
+                self.storage.enqueue(&queue_name, message).await?;
+                Ok(data.len() as u64)
+            }
             "enqueue" => {
                 let msg = Message::new(data.to_vec());
                 let len = data.len() as u64;
@@ -464,8 +488,13 @@ impl FileSystem for QueueFileSystem {
                 self.storage.ack(&queue_name, &msg_id).await?;
                 Ok(0)
             }
+            "retry" => {
+                let msg_id = String::from_utf8_lossy(data).trim().to_string();
+                self.storage.retry(&queue_name, &msg_id).await?;
+                Ok(0)
+            }
             _ => Err(Error::InvalidOperation(format!(
-                "Cannot write to '{}'. Use enqueue, clear, or ack",
+                "Cannot write to '{}'. Use enqueue, enqueue_ext, clear, ack, or retry",
                 operation
             ))),
         }
@@ -846,12 +875,14 @@ impl ServicePlugin for QueueFSPlugin {
          \n\
          Control files per queue:\n\
          - enqueue: Write to add a message to the queue\n\
-         - dequeue: Read to remove and return the first message\n\
+         - enqueue_ext: Write a QFSE v1 envelope with UUID, optional group_key or serial_key TLV, and raw payload\n\
+         - dequeue: Read to claim an eligible message; group metadata stays in the backend\n\
          - peek: Read to view the first message without removing it\n\
          - size: Read to get the current queue size\n\
          - status: Read pending and processing message counts\n\
          - clear: Write to clear all messages from the queue\n\
          - ack: Write message id to acknowledge and delete it\n\
+         - retry: Write processing message id to return it to pending, retaining serial priority\n\
          \n\
          Supports nested queues:\n\
             mkdir /queuefs/logs/errors\n\
@@ -933,6 +964,114 @@ mod tests {
     }
 
     /// Create a queue filesystem with one initialized queue.
+    async fn retry_contract(fs: &QueueFileSystem) {
+        fs.mkdir("/retry-jobs", 0o755).await.unwrap();
+        let first = enqueue_serial(fs, "retry-jobs", "A", b"original").await;
+        let original = dequeue_msg(fs, "retry-jobs").await;
+        let later = enqueue_serial(fs, "retry-jobs", "A", b"follower").await;
+        let cold = enqueue_serial(fs, "retry-jobs", "B", b"cold").await;
+        for _ in 0..2 {
+            fs.write("/retry-jobs/retry", first.as_bytes(), 0, WriteFlag::None)
+                .await
+                .unwrap();
+        }
+        ack_message(fs, "retry-jobs", &first).await; // Pending ACK must be a no-op.
+        assert_eq!(queue_size(fs, "retry-jobs").await, 3);
+        let one = dequeue_msg(fs, "retry-jobs").await;
+        let two = dequeue_msg(fs, "retry-jobs").await;
+        assert!(one.id == first || two.id == first);
+        assert!(one.id == cold || two.id == cold);
+        let replay = if one.id == first { &one } else { &two };
+        assert_eq!(replay.data, original.data);
+        assert_eq!(replay.timestamp, original.timestamp);
+        assert_eq!(fs.read("/retry-jobs/dequeue", 0, 0).await.unwrap(), b"{}");
+        ack_message(fs, "retry-jobs", &cold).await;
+        fs.write("/retry-jobs/retry", first.as_bytes(), 0, WriteFlag::None)
+            .await
+            .unwrap();
+        assert_eq!(dequeue_msg(fs, "retry-jobs").await.id, first);
+        assert_eq!(fs.read("/retry-jobs/dequeue", 0, 0).await.unwrap(), b"{}");
+        ack_message(fs, "retry-jobs", &first).await;
+        assert_eq!(dequeue_msg(fs, "retry-jobs").await.id, later);
+        ack_message(fs, "retry-jobs", &later).await;
+        assert_eq!(
+            fs.read("/retry-jobs/status", 0, 0).await.unwrap(),
+            br#"{"pending":0,"processing":0}"#
+        );
+        fs.remove_all("/retry-jobs").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn retry_preserves_delivery_and_serial_priority_on_local_backends() {
+        retry_contract(&QueueFileSystem::new()).await;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("queue.db");
+        let fs = QueueFileSystem::with_backend(Box::new(
+            SQLiteQueueBackend::open(path.to_str().unwrap(), SQLiteQueueOptions::default())
+                .unwrap(),
+        ));
+        retry_contract(&fs).await;
+        fs.mkdir("/restart", 0o755).await.unwrap();
+        let first = enqueue_serial(&fs, "restart", "A", b"first").await;
+        dequeue_msg(&fs, "restart").await;
+        let later = enqueue_serial(&fs, "restart", "A", b"later").await;
+        fs.write("/restart/retry", first.as_bytes(), 0, WriteFlag::None)
+            .await
+            .unwrap();
+        drop(fs);
+        let fs = QueueFileSystem::with_backend(Box::new(
+            SQLiteQueueBackend::open(path.to_str().unwrap(), SQLiteQueueOptions::default())
+                .unwrap(),
+        ));
+        assert_eq!(dequeue_msg(&fs, "restart").await.id, first);
+        assert_eq!(fs.read("/restart/dequeue", 0, 0).await.unwrap(), b"{}");
+        ack_message(&fs, "restart", &first).await;
+        assert_eq!(dequeue_msg(&fs, "restart").await.id, later);
+    }
+
+    #[cfg(feature = "cache")]
+    #[tokio::test]
+    async fn redis_retry_preserves_serial_priority_and_releases_node_at_zero_inflight() {
+        let Ok(endpoint) = std::env::var("REDIS_URL") else {
+            return;
+        };
+        let runtime =
+            crate::cache_runtime::CacheRuntime::redis(crate::cache_runtime::RedisProviderConfig {
+                endpoints: vec![endpoint],
+                ..crate::cache_runtime::RedisProviderConfig::default()
+            })
+            .await
+            .unwrap();
+        let prefix = format!("queuefs-retry-contract:{}", uuid::Uuid::new_v4());
+        let first = QueueFileSystem::with_cache_runtime(runtime.clone(), prefix.clone())
+            .await
+            .unwrap();
+        let peer = QueueFileSystem::with_cache_runtime(runtime.clone(), prefix)
+            .await
+            .unwrap();
+        retry_contract(&first).await;
+        first.mkdir("/node-retry", 0o755).await.unwrap();
+        let n1 = enqueue_group(&first, "node-retry", "N", b"one").await;
+        let n2 = enqueue_group(&first, "node-retry", "N", b"two").await;
+        assert_eq!(dequeue_msg(&first, "node-retry").await.id, n1);
+        assert_eq!(dequeue_msg(&first, "node-retry").await.id, n2);
+        first
+            .write("/node-retry/retry", n1.as_bytes(), 0, WriteFlag::None)
+            .await
+            .unwrap();
+        assert_eq!(peer.read("/node-retry/dequeue", 0, 0).await.unwrap(), b"{}");
+        first
+            .write("/node-retry/retry", n2.as_bytes(), 0, WriteFlag::None)
+            .await
+            .unwrap();
+        assert_eq!(dequeue_msg(&peer, "node-retry").await.id, n1);
+        assert_eq!(dequeue_msg(&peer, "node-retry").await.id, n2);
+        first.remove_all("/node-retry").await.unwrap();
+        first.shutdown().await.unwrap();
+        peer.shutdown().await.unwrap();
+        runtime.close().await.unwrap();
+    }
+
     async fn queuefs_with(queue: &str) -> QueueFileSystem {
         let fs = QueueFileSystem::new();
         fs.mkdir(&format!("/{queue}"), 0o755).await.unwrap();
@@ -956,6 +1095,458 @@ mod tests {
     async fn queue_size(fs: &dyn FileSystem, queue: &str) -> usize {
         let size = fs.read(&format!("/{queue}/size"), 0, 0).await.unwrap();
         String::from_utf8(size).unwrap().parse().unwrap()
+    }
+
+    fn enqueue_frame(id: uuid::Uuid, key: Option<&str>, payload: &[u8]) -> Vec<u8> {
+        enqueue_key_frame(id, key.map(|key| (2, key)), payload)
+    }
+
+    fn enqueue_key_frame(id: uuid::Uuid, key: Option<(u16, &str)>, payload: &[u8]) -> Vec<u8> {
+        let mut metadata = Vec::new();
+        if let Some((kind, key)) = key {
+            metadata.extend_from_slice(&kind.to_be_bytes());
+            metadata.extend_from_slice(&1u16.to_be_bytes());
+            metadata.extend_from_slice(&(key.len() as u32).to_be_bytes());
+            metadata.extend_from_slice(key.as_bytes());
+        }
+        let mut frame = b"QFSE".to_vec();
+        frame.extend_from_slice(&1u16.to_be_bytes());
+        frame.extend_from_slice(&0u16.to_be_bytes());
+        frame.extend_from_slice(&((28 + metadata.len()) as u32).to_be_bytes());
+        frame.extend_from_slice(id.as_bytes());
+        frame.extend_from_slice(&metadata);
+        frame.extend_from_slice(payload);
+        frame
+    }
+
+    async fn enqueue_group(fs: &QueueFileSystem, queue: &str, key: &str, payload: &[u8]) -> String {
+        enqueue_key(fs, queue, 2, key, payload).await
+    }
+
+    async fn enqueue_serial(
+        fs: &QueueFileSystem,
+        queue: &str,
+        key: &str,
+        payload: &[u8],
+    ) -> String {
+        enqueue_key(fs, queue, 3, key, payload).await
+    }
+
+    async fn enqueue_key(
+        fs: &QueueFileSystem,
+        queue: &str,
+        kind: u16,
+        key: &str,
+        payload: &[u8],
+    ) -> String {
+        let id = uuid::Uuid::new_v4();
+        fs.write(
+            &format!("/{queue}/enqueue_ext"),
+            &enqueue_key_frame(id, Some((kind, key)), payload),
+            0,
+            WriteFlag::None,
+        )
+        .await
+        .unwrap();
+        id.to_string()
+    }
+
+    async fn ack_message(fs: &QueueFileSystem, queue: &str, id: &str) {
+        fs.write(&format!("/{queue}/ack"), id.as_bytes(), 0, WriteFlag::None)
+            .await
+            .unwrap();
+    }
+
+    async fn maybe_dequeue(fs: &QueueFileSystem, queue: &str) -> Option<TestQueueMessage> {
+        let raw = fs.read(&format!("/{queue}/dequeue"), 0, 0).await.unwrap();
+        if raw == b"{}" {
+            None
+        } else {
+            Some(serde_json::from_slice(&raw).unwrap())
+        }
+    }
+
+    #[tokio::test]
+    async fn grouped_queue_contract_preserves_payload_and_ack_boundary() {
+        let fs = queuefs_with("serial").await;
+        fs.mkdir("/node", 0o755).await.unwrap();
+        let a1 = enqueue_serial(&fs, "serial", "用户:A", b"first").await;
+        let a2 = enqueue_serial(&fs, "serial", "用户:A", b"second").await;
+        let b1 = enqueue_serial(&fs, "serial", "B", b"other").await;
+        assert_eq!(dequeue_msg(&fs, "serial").await.id, a1);
+        assert_eq!(dequeue_msg(&fs, "serial").await.id, b1);
+        assert!(maybe_dequeue(&fs, "serial").await.is_none());
+        assert!(fs
+            .write(
+                "/serial/config",
+                br#"{"group_policy":"node"}"#,
+                0,
+                WriteFlag::None
+            )
+            .await
+            .is_err());
+        let status: serde_json::Value =
+            serde_json::from_slice(&fs.read("/serial/status", 0, 0).await.unwrap()).unwrap();
+        assert_eq!(status, serde_json::json!({"pending": 1, "processing": 2}));
+        let snapshot: Vec<TestQueueMessage> =
+            serde_json::from_slice(&fs.read("/serial/messages", 0, 0).await.unwrap()).unwrap();
+        assert_eq!(snapshot.len(), 3);
+        ack_message(&fs, "serial", &a1).await;
+        let second = dequeue_msg(&fs, "serial").await;
+        assert_eq!((second.id, second.data), (a2, "second".to_string()));
+        let a3 = enqueue_serial(&fs, "serial", "用户:A", b"third").await;
+        ack_message(&fs, "serial", &a1).await;
+        assert!(maybe_dequeue(&fs, "serial").await.is_none());
+        // Clear removes both deliveries and scheduling state.
+        fs.write("/serial/clear", b"", 0, WriteFlag::None)
+            .await
+            .unwrap();
+        ack_message(&fs, "serial", &a3).await;
+        let fresh = enqueue_serial(&fs, "serial", "用户:A", b"fresh").await;
+        assert_eq!(dequeue_msg(&fs, "serial").await.id, fresh);
+        for payload in [b"one", b"two"] {
+            enqueue_group(&fs, "node", "A", payload).await;
+        }
+        assert!(maybe_dequeue(&fs, "node").await.is_some());
+        assert!(maybe_dequeue(&fs, "node").await.is_some());
+    }
+
+    #[tokio::test]
+    async fn enqueue_ext_rejects_invalid_frames_before_queue_mutation() {
+        let fs = queuefs_with("test").await;
+        let id = uuid::Uuid::new_v4();
+        let valid = enqueue_frame(id, Some("A"), b"payload");
+        for end in 0..valid.len() - b"payload".len() {
+            assert!(fs
+                .write("/test/enqueue_ext", &valid[..end], 0, WriteFlag::None)
+                .await
+                .is_err());
+        }
+        let mut invalid_frames = vec![
+            enqueue_frame(id, Some(""), b"payload"),
+            enqueue_frame(uuid::Uuid::nil(), Some("A"), b"payload"),
+            enqueue_frame(id, Some(&"a".repeat(4097)), b"payload"),
+        ];
+        for (offset, value) in [(4, 2), (6, 1), (29, 99), (31, 0), (36, 255)] {
+            let mut invalid = valid.clone();
+            invalid[offset] = value;
+            invalid_frames.push(invalid);
+        }
+        let mut duplicate = valid[..37].to_vec();
+        duplicate.extend_from_slice(&valid[28..37]);
+        duplicate[8..12].copy_from_slice(&46u32.to_be_bytes());
+        invalid_frames.push(duplicate);
+        for key in ["", &"a".repeat(4097)] {
+            invalid_frames.push(enqueue_key_frame(id, Some((3, key)), b"payload"));
+        }
+        let mut both = enqueue_frame(id, Some("A"), b"");
+        both.extend_from_slice(&enqueue_key_frame(id, Some((3, "A")), b"")[28..]);
+        both[8..12].copy_from_slice(&46u32.to_be_bytes());
+        invalid_frames.push(both);
+        let mut duplicate_serial = enqueue_key_frame(id, Some((3, "A")), b"");
+        duplicate_serial.extend_from_slice(&duplicate_serial.clone()[28..]);
+        duplicate_serial[8..12].copy_from_slice(&46u32.to_be_bytes());
+        invalid_frames.push(duplicate_serial);
+        for invalid in invalid_frames {
+            assert!(fs
+                .write("/test/enqueue_ext", &invalid, 0, WriteFlag::None)
+                .await
+                .is_err());
+        }
+        assert_eq!(queue_size(&fs, "test").await, 0);
+        fs.write("/test/enqueue_ext", &valid, 0, WriteFlag::None)
+            .await
+            .unwrap();
+        assert!(matches!(
+            fs.write("/test/enqueue_ext", &valid, 0, WriteFlag::None)
+                .await,
+            Err(Error::AlreadyExists(_))
+        ));
+        assert_eq!(queue_size(&fs, "test").await, 1);
+        let message = dequeue_msg(&fs, "test").await;
+        assert_eq!(
+            (message.id, message.data),
+            (id.to_string(), "payload".to_string())
+        );
+        // Optional extensions remain forward-compatible; payload starts at header_len.
+        let optional_id = uuid::Uuid::new_v4();
+        let mut optional = enqueue_frame(optional_id, Some("B"), b"");
+        optional.extend_from_slice(&99u16.to_be_bytes());
+        optional.extend_from_slice(&0u16.to_be_bytes());
+        optional.extend_from_slice(&1u32.to_be_bytes());
+        optional.push(b'x');
+        let header_len = optional.len() as u32;
+        optional[8..12].copy_from_slice(&header_len.to_be_bytes());
+        optional.extend_from_slice(b"optional");
+        fs.write("/test/enqueue_ext", &optional, 0, WriteFlag::None)
+            .await
+            .unwrap();
+        assert_eq!(dequeue_msg(&fs, "test").await.data, "optional");
+        // The old path treats even a protocol-shaped frame as opaque payload.
+        let legacy = queuefs_with("legacy").await;
+        enqueue(&legacy, "legacy", &valid).await;
+        let stored = dequeue_msg(&legacy, "legacy").await;
+        assert_eq!(stored.data, String::from_utf8_lossy(&valid));
+        assert_ne!(stored.id, id.to_string());
+        let directory = tempfile::tempdir().unwrap();
+        let sqlite = QueueFileSystem::with_backend(Box::new(
+            SQLiteQueueBackend::open(
+                directory.path().join("queue.db").to_str().unwrap(),
+                SQLiteQueueOptions::default(),
+            )
+            .unwrap(),
+        ));
+        sqlite.mkdir("/test", 0o755).await.unwrap();
+        sqlite
+            .write("/test/enqueue_ext", &valid, 0, WriteFlag::None)
+            .await
+            .unwrap();
+        assert_eq!(dequeue_msg(&sqlite, "test").await.id, id.to_string());
+        ack_message(&sqlite, "test", &id.to_string()).await;
+        let plain = enqueue_frame(id, None, b"plain");
+        sqlite
+            .write("/test/enqueue_ext", &plain, 0, WriteFlag::None)
+            .await
+            .unwrap();
+        assert!(matches!(
+            sqlite
+                .write("/test/enqueue_ext", &plain, 0, WriteFlag::None)
+                .await,
+            Err(Error::AlreadyExists(_))
+        ));
+        assert_eq!(dequeue_msg(&sqlite, "test").await.id, id.to_string());
+        enqueue(&sqlite, "test", b"legacy").await;
+        assert_eq!(dequeue_msg(&sqlite, "test").await.data, "legacy");
+    }
+
+    #[cfg(feature = "cache")]
+    #[tokio::test]
+    async fn redis_mixed_message_keys_keep_namespaces_and_owners_independent() {
+        let Ok(endpoint) = std::env::var("REDIS_URL") else {
+            return;
+        };
+        let runtime =
+            crate::cache_runtime::CacheRuntime::redis(crate::cache_runtime::RedisProviderConfig {
+                endpoints: vec![endpoint],
+                ..crate::cache_runtime::RedisProviderConfig::default()
+            })
+            .await
+            .unwrap();
+        let prefix = format!("queuefs-mixed-contract:{}", uuid::Uuid::new_v4());
+        let first = QueueFileSystem::with_cache_runtime(runtime.clone(), prefix.clone())
+            .await
+            .unwrap();
+        let peer = QueueFileSystem::with_cache_runtime(runtime.clone(), prefix.clone())
+            .await
+            .unwrap();
+        first.mkdir("/mixed", 0o755).await.unwrap();
+        let serial = enqueue_serial(&first, "mixed", "用户:A", b"s1").await;
+        let later = enqueue_serial(&first, "mixed", "用户:A", b"s2").await;
+        let group = enqueue_group(&first, "mixed", "用户:A", b"g1").await;
+        let group_two = enqueue_group(&first, "mixed", "用户:A", b"g2").await;
+        enqueue(&first, "mixed", b"plain").await;
+        let mut ids = Vec::new();
+        for _ in 0..4 {
+            ids.push(dequeue_msg(&first, "mixed").await.id);
+        }
+        assert!(ids.contains(&serial) && ids.contains(&group) && ids.contains(&group_two));
+        assert!(!ids.contains(&later));
+        assert!(maybe_dequeue(&peer, "mixed").await.is_none());
+        let group_three = enqueue_group(&peer, "mixed", "用户:A", b"g3").await;
+        enqueue(&peer, "mixed", b"another plain").await;
+        assert_eq!(dequeue_msg(&peer, "mixed").await.data, "another plain");
+        assert!(maybe_dequeue(&peer, "mixed").await.is_none());
+        assert_eq!(dequeue_msg(&first, "mixed").await.id, group_three);
+        ack_message(&first, "mixed", &serial).await;
+        assert_eq!(dequeue_msg(&peer, "mixed").await.id, later);
+        let last_serial = enqueue_serial(&first, "mixed", "用户:A", b"s3").await;
+        ack_message(&first, "mixed", &serial).await;
+        assert!(maybe_dequeue(&peer, "mixed").await.is_none());
+        for id in [&group, &group_two] {
+            ack_message(&first, "mixed", id).await;
+        }
+        let last_group = enqueue_group(&peer, "mixed", "用户:A", b"g4").await;
+        assert!(maybe_dequeue(&peer, "mixed").await.is_none());
+        ack_message(&first, "mixed", &group_three).await;
+        assert_eq!(dequeue_msg(&peer, "mixed").await.id, last_group);
+        assert!(maybe_dequeue(&first, "mixed").await.is_none());
+        ack_message(&peer, "mixed", &later).await;
+        assert_eq!(dequeue_msg(&first, "mixed").await.id, last_serial);
+        first
+            .write("/mixed/clear", b"", 0, WriteFlag::None)
+            .await
+            .unwrap();
+        assert_eq!(queue_size(&peer, "mixed").await, 0);
+        first.remove_all("/mixed").await.unwrap();
+        first.shutdown().await.unwrap();
+        peer.shutdown().await.unwrap();
+        runtime
+            .del(&[cache_protocol::queue_names_key(&prefix)])
+            .await
+            .unwrap();
+        runtime.close().await.unwrap();
+    }
+
+    #[cfg(feature = "cache")]
+    #[tokio::test]
+    async fn redis_grouped_delivery_and_owner_recovery_contract() {
+        let Ok(endpoint) = std::env::var("REDIS_URL") else {
+            return;
+        };
+        let runtime =
+            crate::cache_runtime::CacheRuntime::redis(crate::cache_runtime::RedisProviderConfig {
+                endpoints: vec![endpoint],
+                command_timeout_ms: 1_000,
+                ..crate::cache_runtime::RedisProviderConfig::default()
+            })
+            .await
+            .unwrap();
+        let prefix = format!("queuefs-group-contract:{}", uuid::Uuid::new_v4());
+        let first = QueueFileSystem::with_cache_runtime(runtime.clone(), prefix.clone())
+            .await
+            .unwrap();
+        let second = QueueFileSystem::with_cache_runtime(runtime.clone(), prefix.clone())
+            .await
+            .unwrap();
+        let third = QueueFileSystem::with_cache_runtime(runtime.clone(), prefix.clone())
+            .await
+            .unwrap();
+        first.mkdir("/serial", 0o755).await.unwrap();
+        first.mkdir("/node", 0o755).await.unwrap();
+        assert!(second.read("/node/config", 0, 0).await.is_err());
+        let s1 = enqueue_serial(&first, "serial", "A", b"serial active").await;
+        let s2 = enqueue_serial(&first, "serial", "A", b"serial later").await;
+        assert!(first
+            .write(
+                "/serial/config",
+                br#"{"group_policy":"node"}"#,
+                0,
+                WriteFlag::None
+            )
+            .await
+            .is_err());
+        assert!(matches!(
+            first
+                .write(
+                    "/serial/enqueue_ext",
+                    &enqueue_key_frame(
+                        uuid::Uuid::parse_str(&s1).unwrap(),
+                        Some((3, "A")),
+                        b"overwrite"
+                    ),
+                    0,
+                    WriteFlag::None
+                )
+                .await,
+            Err(Error::AlreadyExists(_))
+        ));
+        assert_eq!(queue_size(&second, "serial").await, 2);
+        let (one, two) = tokio::join!(
+            maybe_dequeue(&first, "serial"),
+            maybe_dequeue(&second, "serial")
+        );
+        assert_ne!(one.is_some(), two.is_some());
+        let (owner, peer) = if one.is_some() {
+            (&first, &second)
+        } else {
+            (&second, &first)
+        };
+        assert_eq!(one.or(two).unwrap().id, s1);
+        let independent = enqueue_serial(owner, "serial", "B", b"other key").await;
+        assert_eq!(dequeue_msg(peer, "serial").await.id, independent);
+        assert!(maybe_dequeue(owner, "serial").await.is_none());
+        let n1 = enqueue_group(owner, "node", "A", b"node one").await;
+        let n2 = enqueue_group(owner, "node", "A", b"node two").await;
+        let n3 = enqueue_group(owner, "node", "A", b"node three").await;
+        assert_eq!(dequeue_msg(owner, "node").await.id, n1);
+        assert_eq!(dequeue_msg(owner, "node").await.id, n2);
+        assert!(maybe_dequeue(peer, "node").await.is_none());
+        ack_message(owner, "node", &n1).await;
+        ack_message(owner, "node", &n1).await;
+        assert!(maybe_dequeue(peer, "node").await.is_none());
+        ack_message(owner, "node", &n2).await;
+        // All in-flight messages ACKed: pending messages may choose a new owner.
+        assert_eq!(dequeue_msg(peer, "node").await.id, n3);
+        ack_message(peer, "node", &n3).await;
+        let r1 = enqueue_group(owner, "node", "R", b"recover one").await;
+        let r2 = enqueue_group(owner, "node", "R", b"recover two").await;
+        let r3 = enqueue_group(owner, "node", "R", b"pending").await;
+        assert_eq!(dequeue_msg(owner, "node").await.id, r1);
+        assert_eq!(dequeue_msg(owner, "node").await.id, r2);
+        assert!(maybe_dequeue(peer, "node").await.is_none());
+        owner.shutdown().await.unwrap();
+        assert!(owner.read("/serial/dequeue", 0, 0).await.is_err());
+        let recovered = tokio::time::timeout(std::time::Duration::from_secs(12), async {
+            loop {
+                if let Some(message) = maybe_dequeue(peer, "serial").await {
+                    break message;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(recovered.id, s1);
+        assert!(maybe_dequeue(&third, "serial").await.is_none());
+        ack_message(peer, "serial", &s1).await;
+        assert_eq!(dequeue_msg(&third, "serial").await.id, s2);
+        ack_message(peer, "serial", &s1).await;
+        let s3 = enqueue_serial(peer, "serial", "A", b"still blocked").await;
+        assert!(maybe_dequeue(peer, "serial").await.is_none());
+        ack_message(&third, "serial", &s2).await;
+        assert_eq!(dequeue_msg(peer, "serial").await.id, s3);
+        // Each queue recovers atomically, but the background sweep visits them separately.
+        tokio::time::timeout(std::time::Duration::from_secs(12), async {
+            loop {
+                let status: serde_json::Value =
+                    serde_json::from_slice(&peer.read("/node/status", 0, 0).await.unwrap())
+                        .unwrap();
+                if status["processing"] == 0 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let (one, two) = tokio::join!(maybe_dequeue(peer, "node"), maybe_dequeue(&third, "node"));
+        assert_ne!(one.is_some(), two.is_some());
+        let (new_owner, other) = if one.is_some() {
+            (peer, &third)
+        } else {
+            (&third, peer)
+        };
+        let mut recovered_ids = vec![one.or(two).unwrap().id];
+        recovered_ids.push(dequeue_msg(new_owner, "node").await.id);
+        recovered_ids.push(dequeue_msg(new_owner, "node").await.id);
+        recovered_ids.sort();
+        let mut expected = vec![r1, r2, r3];
+        expected.sort();
+        assert_eq!(recovered_ids, expected);
+        for id in &recovered_ids[..2] {
+            ack_message(new_owner, "node", id).await;
+        }
+        let next = enqueue_group(peer, "node", "R", b"next").await;
+        assert!(maybe_dequeue(other, "node").await.is_none());
+        ack_message(new_owner, "node", &recovered_ids[2]).await;
+        assert_eq!(dequeue_msg(other, "node").await.id, next);
+        peer.write("/node/clear", b"", 0, WriteFlag::None)
+            .await
+            .unwrap();
+        let fresh = enqueue_group(peer, "node", "R", b"fresh").await;
+        assert_eq!(dequeue_msg(peer, "node").await.id, fresh);
+        peer.remove_all("/node").await.unwrap();
+        peer.mkdir("/node", 0o755).await.unwrap();
+        assert!(peer.read("/node/config", 0, 0).await.is_err());
+        peer.remove_all("/node").await.unwrap();
+        peer.remove_all("/serial").await.unwrap();
+        peer.shutdown().await.unwrap();
+        third.shutdown().await.unwrap();
+        runtime
+            .del(&[cache_protocol::queue_names_key(&prefix)])
+            .await
+            .unwrap();
+        runtime.close().await.unwrap();
     }
 
     #[tokio::test]
@@ -1056,14 +1647,13 @@ mod tests {
         assert!(entries[0].is_dir);
 
         // Queue directory should list control files
-        let entries = fs
-            .read_dir("/test", None, None, None, None)
-            .await
-            .unwrap();
-        assert_eq!(entries.len(), 8);
+        let entries = fs.read_dir("/test", None, None, None, None).await.unwrap();
+        assert_eq!(entries.len(), 10);
 
         let names: Vec<String> = entries.iter().map(|e| e.name.clone()).collect();
         assert!(names.contains(&"enqueue".to_string()));
+        assert!(names.contains(&"enqueue_ext".to_string()));
+        assert!(!names.contains(&"config".to_string()));
         assert!(names.contains(&"dequeue".to_string()));
         assert!(names.contains(&"peek".to_string()));
         assert!(names.contains(&"size".to_string()));
@@ -1219,10 +1809,7 @@ mod tests {
         fs.mkdir("/logs/warnings", 0o755).await.unwrap();
 
         // List /logs should show subdirectories
-        let entries = fs
-            .read_dir("/logs", None, None, None, None)
-            .await
-            .unwrap();
+        let entries = fs.read_dir("/logs", None, None, None, None).await.unwrap();
         assert_eq!(entries.len(), 2);
         let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
         assert!(names.contains(&"errors"));

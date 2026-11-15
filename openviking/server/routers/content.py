@@ -31,7 +31,7 @@ from openviking.server.telemetry import run_operation
 from openviking.storage.acl import AclSpec
 from openviking.storage.vector_ids import is_vector_record_id
 from openviking.telemetry import TelemetryRequest
-from openviking_cli.exceptions import NotFoundError, PermissionDeniedError
+from openviking_cli.exceptions import NotFoundError, OpenVikingError, PermissionDeniedError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -114,6 +114,18 @@ class SetTagsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     uri: str
+    tags: list[str] | None = None
+    mode: str = "replace"
+    recursive: bool = False
+    telemetry: TelemetryRequest = False
+
+
+class BatchSetTagsRequest(BaseModel):
+    """Request to update retrieval tags for a batch of files or directories."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    uris: list[str] = Field(min_length=1, max_length=50)
     tags: list[str] | None = None
     mode: str = "replace"
     recursive: bool = False
@@ -356,15 +368,49 @@ async def set_tags(
     request: SetTagsRequest = Body(...),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Set explicit k=v retrieval tags metadata for a file or directory."""
+    """Set explicit retrieval tags metadata for one file or directory."""
     service = get_service()
     uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
     tags = [] if request.mode == "clear" else request.tags or []
+
+    async def update_tags():
+        result = await service.fs.batch_set_tags(
+            uris=[uri],
+            tags=tags,
+            mode=request.mode,
+            recursive=request.recursive,
+            ctx=_ctx,
+        )
+        if result["failed"]:
+            error = result["failed"][0]["error"]
+            raise OpenVikingError(error["message"], code=error["code"])
+        return result["items"][0]
+
     execution = await run_operation(
         operation="content.set_tags",
         telemetry=request.telemetry,
-        fn=lambda: service.fs.set_tags(
-            uri=uri,
+        fn=update_tags,
+    )
+    return Response(
+        status="ok",
+        result=execution.result,
+        telemetry=execution.telemetry,
+    ).model_dump(exclude_none=True)
+
+
+@router.post("/batch_set_tags")
+async def batch_set_tags(
+    request: BatchSetTagsRequest = Body(...),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Set explicit retrieval tags metadata for a batch of files or directories."""
+    service = get_service()
+    tags = [] if request.mode == "clear" else request.tags or []
+    execution = await run_operation(
+        operation="content.batch_set_tags",
+        telemetry=request.telemetry,
+        fn=lambda: service.fs.batch_set_tags(
+            uris=request.uris,
             tags=tags,
             mode=request.mode,
             recursive=request.recursive,

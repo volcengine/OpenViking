@@ -32,7 +32,6 @@ class WatchRuntime:
         max_concurrency: int = 4,
         poll_interval: float = POLL_INTERVAL,
         leader_ttl: float = LEADER_TTL,
-        leader_provider: str = "auto",
         task_missing_grace: float = TASK_MISSING_GRACE,
         run_timeout: float = RUN_TIMEOUT,
         leadership_candidate: Any = None,
@@ -51,7 +50,6 @@ class WatchRuntime:
         self._dispatcher = OwnerLoopDispatcher()
         self._leadership_candidate = leadership_candidate
         if leader_enabled and leadership_candidate is None:
-            leader_mode = self._leader_mode(leader_provider)
             viking_fs = watch_manager._viking_fs
             if viking_fs is None:
                 raise ValueError(
@@ -63,7 +61,6 @@ class WatchRuntime:
                 ttl_secs=leader_ttl,
                 renew_interval_secs=poll_interval,
                 retry_interval_secs=poll_interval,
-                mode=leader_mode,
             )
         self._running = False
         self._is_leader = False
@@ -73,16 +70,6 @@ class WatchRuntime:
         self._active_runs: set[str] = set()
         self._occupancy_initialized = False
         self._dispatch_lock = AsyncSemaphore()
-
-    def _leader_mode(self, provider: str) -> str:
-        provider = provider.strip().lower()
-        if provider == "auto":
-            return "local" if self.watch_manager.store.provider == "file" else "distributed"
-        if provider == "local":
-            return "local"
-        if provider == "cache":
-            return "distributed"
-        raise ValueError("watch_leader_provider must be one of: 'auto', 'local', 'cache'")
 
     @property
     def is_running(self) -> bool:

@@ -77,7 +77,7 @@ function fixture({ source, attrsUri = true }) {
 
 for (const source of ['registry', 'metadata']) {
   for (const aliasRoot of [false, true]) {
-    test(`FileBrowser discovers a Wiki child through ${source} with ${aliasRoot ? 'alias' : 'canonical'} root`, async () => {
+    test(`FileBrowser opens a Wiki child through ${source} with ${aliasRoot ? 'alias' : 'canonical'} root`, async () => {
       const { fetch } = fixture({ source });
       const rootUri = aliasRoot ? 'viking://~/resources' : root;
       const render = (currentUri) =>
@@ -86,17 +86,19 @@ for (const source of ['registry', 'metadata']) {
       try {
         assert.equal(
           browser.previewTabs.some((tab) => tab.key === `dashboard:${file}`),
-          true,
+          source === 'metadata',
         );
         await view.render(render(alias));
         assert.equal(
           browser.previewTabs.some((tab) => tab.key === `dashboard:${alias}`),
-          true,
+          source === 'metadata',
         );
-        assert.equal(displayed.uri, alias);
-        assert.equal(displayed.isRoot, false);
+        assert.equal(fetch.countOf('/api/v1/compile/configs'), 0);
         await act(async () => browser.actions.openDashboard(alias));
         await settle();
+        assert.equal(fetch.countOf('/api/v1/compile/configs'), 1);
+        assert.equal(displayed.uri, alias);
+        assert.equal(displayed.isRoot, false);
         assert.equal(browser.previewKey, `dashboard:${alias}`);
         assert.match(view.container.textContent, /No matching conflicts/);
         assert.equal(
@@ -104,10 +106,14 @@ for (const source of ['registry', 'metadata']) {
           'Pending conflicts',
         );
         await view.render(render(`${root}/wiki-other/page.md`));
+        assert.equal(fetch.countOf('/api/v1/compile/configs'), 1);
         assert.equal(
           browser.previewTabs.some((tab) => tab.key.startsWith('dashboard:')),
           false,
         );
+        await view.render(render(alias));
+        assert.equal(fetch.countOf('/api/v1/compile/configs'), 1);
+        assert.notEqual(browser.previewKey, `dashboard:${alias}`);
       } finally {
         await view.unmount();
       }
@@ -121,6 +127,9 @@ test('discovery falls back to native stat when attrs omits the canonical URI', a
     h(OpenVikingProvider, { fetch }, h(Probe, { currentUri: alias })),
   );
   try {
+    assert.equal(fetch.countOf('/api/v1/compile/configs'), 0);
+    await act(async () => browser.actions.openDashboard(alias));
+    await settle();
     assert.equal(
       browser.previewTabs.some((tab) => tab.key === `dashboard:${alias}`),
       true,
@@ -141,6 +150,8 @@ test('Wiki discovery never reuses a home-alias identity after the authenticated 
     );
   const view = await mount(render());
   try {
+    await act(async () => browser.actions.openDashboard(alias));
+    await settle();
     assert.equal(
       browser.previewTabs.some((tab) => tab.key.startsWith('dashboard:')),
       true,

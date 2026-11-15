@@ -1,3 +1,6 @@
+import { normalizeResourceUri } from './fs-uri.js';
+import { toApiDate } from '../../shared/primitives/date-picker/api-date.js';
+import { experienceDateBounds } from './experience-date-range.js';
 import { OV_PATHS } from '../../client/paths.js';
 import { resolveDashboardUri } from './dashboard-resource.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
@@ -7,22 +10,25 @@ import type {
   ExperienceItem,
 } from '../../components/experience-dashboard/types.js';
 
-export const EXPERIENCE_PAGE_SIZE = 20;
-export const isExperienceDirectory = (uri: string) =>
-  /^viking:\/\/(?:user\/[^/]+|~)\/memories\/experiences\/?$/.test(uri);
-export const isExperienceFile = (uri: string) =>
-  /^viking:\/\/(?:user\/[^/]+|~)\/memories\/experiences\/[^/]+\.md$/i.test(uri);
-
-/** Native API date bounds are UTC and inclusive. */
-export function experienceDateRange(days: number, now = new Date()) {
-  if (!days) return {};
-  const start = new Date(now);
-  start.setUTCDate(start.getUTCDate() - days + 1);
+/** Keep the same UTC date window across native requests and custom loaders. */
+export function experienceDateQuery(days: number) {
+  const bounds = experienceDateBounds(days);
+  if (!bounds) return {};
   return {
-    start_date: start.toISOString().slice(0, 10),
-    end_date: now.toISOString().slice(0, 10),
+    startDate: toApiDate(bounds.start, 'utc'),
+    endDate: toApiDate(bounds.end, 'utc'),
   };
 }
+
+export const EXPERIENCE_PAGE_SIZE = 20;
+export const isExperienceDirectory = (uri: string) =>
+  /^viking:\/\/(?:user\/[^/]+|~)(?:\/peers\/[^/]+)?\/memories\/experiences\/?$/.test(
+    normalizeResourceUri(uri),
+  );
+export const isExperienceFile = (uri: string) =>
+  /^viking:\/\/(?:user\/[^/]+|~)(?:\/peers\/[^/]+)?\/memories\/experiences\/[^/]+\.md$/i.test(
+    normalizeResourceUri(uri),
+  );
 
 export async function readExperiences(
   client: OvClient,
@@ -105,7 +111,7 @@ export async function readExperienceSources(
 }
 
 export interface ExperienceTrajectoryPage {
-  items: ExperienceTrajectory[];
+  items: readonly ExperienceTrajectory[];
   total: number;
   has_more: boolean;
 }

@@ -50,8 +50,10 @@ afterEach(() => {
 
 test('Escape respects a host control and is consumed only when the tour can close', async () => {
   let closed = 0;
+  const anchor = target();
+  const locateTarget = async () => anchor;
   const view = await mount(
-    h(DirectoryTour, { ...props, onClose: () => closed++ }),
+    h(DirectoryTour, { ...props, locateTarget, onClose: () => closed++ }),
   );
   const input = document.createElement('input');
   document.body.append(input);
@@ -72,7 +74,7 @@ test('Escape respects a host control and is consumed only when the tour can clos
   await act(async () => document.dispatchEvent(owned));
   assert.equal(closed, 1);
   assert.equal(owned.defaultPrevented, true);
-  await view.render(h(DirectoryTour, props));
+  await view.render(h(DirectoryTour, { ...props, locateTarget }));
   const unowned = new window.KeyboardEvent('keydown', {
     key: 'Escape',
     bubbles: true,
@@ -82,9 +84,10 @@ test('Escape respects a host control and is consumed only when the tour can clos
   assert.equal(unowned.defaultPrevented, false);
   await view.unmount();
   input.remove();
+  anchor.remove();
 });
 
-test('visual viewport offsets bound both anchored and recovery cards', async () => {
+test('visual viewport offsets bound the anchored card', async () => {
   const viewport = new window.EventTarget();
   Object.assign(viewport, {
     width: 400,
@@ -118,9 +121,6 @@ test('visual viewport offsets bound both anchored and recovery cards', async () 
     ),
     '164px',
   );
-  await view.render(h(DirectoryTour, props));
-  await frame();
-  assert.equal(surface().parentElement.style.left, '145px');
   await view.unmount();
   anchor.remove();
 });

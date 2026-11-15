@@ -1,11 +1,13 @@
-import { Button } from '../../../shared/components/button/button.js';
+import { Button } from '../../../shared/primitives/button/button.js';
 import type { AclText } from './acl-labels.js';
 
 export function AclPrincipalTabs({
+  supported,
   type,
   text,
   onChange,
 }: {
+  supported: readonly ('user' | 'group')[];
   type: 'user' | 'group';
   text: AclText;
   onChange: (type: 'user' | 'group') => void;
@@ -16,7 +18,7 @@ export function AclPrincipalTabs({
       role="group"
       aria-label={text.addPrincipal}
     >
-      {(['user', 'group'] as const).map((value) => (
+      {supported.map((value) => (
         <Button
           key={value}
           size="small"

@@ -1,3 +1,5 @@
+import type { TaskSnapshot } from '../../shared/task-tracking/types.js';
+export type VikingBotTask = TaskSnapshot;
 import type { ReactNode } from 'react';
 import type { VikingBotReference } from './capabilities.js';
 
@@ -84,6 +86,8 @@ export interface VikingBotToolPart {
   output?: string;
   /** Normalized result cards; the host adapts its search response. */
   results?: readonly VikingBotToolResultLink[];
+  /** Background task snapshots supplied by the module or host. */
+  tasks?: readonly VikingBotTask[];
   /** 调用耗时，单位毫秒。Call duration in milliseconds. */
   durationMs?: number;
   /** Execution timestamps for the activity duration. */
@@ -91,7 +95,7 @@ export interface VikingBotToolPart {
   completedAt?: number | string;
   /** 所属执行块标识。Owning activity block. */
   groupId?: string;
-  /** MCP 服务名，火山版按服务分组展示。MCP server name; the managed agent groups by it. */
+  /** MCP 服务名，用于按服务分组展示。MCP server name, used to group tools by service. */
   server?: string;
   /** 该调用对应的后端接口，用于展示可点击的接口标签。Backend endpoint, shown as a tag. */
   endpoint?: { method: string; path: string };
@@ -109,6 +113,8 @@ export interface VikingBotToolResultPart {
   output: string;
   /** Normalized result cards, replacing the raw output presentation. */
   results?: readonly VikingBotToolResultLink[];
+  /** Background task snapshots supplied by the module or host. */
+  tasks?: readonly VikingBotTask[];
   /** 该结果是否为错误。Whether the result is an error. */
   isError?: boolean;
   /** 所属执行块标识。Owning activity block. */
@@ -154,13 +160,13 @@ export type VikingBotMessagePart =
 
 /** 一条消息。A single message. */
 export interface VikingBotMessage {
+  /** Readable submitted answers; original parts remain available for persistence. */
+  answerSummary?: readonly { label: string; value: string }[];
   /** 消息唯一标识。Unique message key. */
   id: string;
   /**
-   * 消息角色。开源版只有 user 和 assistant；火山版额外有 system 提示与
-   * tool 独立块，因此这里保留四类。
-   * Message role. The open-source host has user and assistant only; the managed
-   * agent also emits system notices and standalone tool blocks.
+   * 消息角色：用户、助手、系统提示，以及独立的工具块。
+   * Message role: user, assistant, system notice, or a standalone tool block.
    */
   role: 'user' | 'assistant' | 'system' | 'tool';
   /** 消息的内容片段。Content parts of the message. */
@@ -176,6 +182,8 @@ export interface VikingBotMessage {
    * Tone of a system message, `info` by default; `error` for failures.
    */
   tone?: 'info' | 'error';
+  /** 客户端失败提示，不进入会话存储或模型输入。Client-only failure notice. */
+  clientError?: Error;
   /**
    * 合并后的消息携带的原始动作清单；合并时保留每条消息自己的 messageId，
    * 渲染时按原始消息回传，避免把动作挂到错误的消息上。
@@ -189,9 +197,9 @@ export interface VikingBotMessage {
     action: NonNullable<VikingBotMessage['action']>;
   }[];
   /**
-   * 消息级动作，由宿主声明。火山版用它在助手消息下挂「提交会话」。
-   * Message-level action declared by the host. The managed agent uses it for
-   * the memory-commit control under an assistant message.
+   * 消息级动作，由宿主声明，显示在助手消息下方，例如「提交会话」。
+   * Message-level action declared by the host, shown under an assistant message,
+   * for example a memory-commit control.
    */
   action?: {
     /** 动作标识。Action key. */
@@ -219,6 +227,8 @@ export interface VikingBotStreamingState {
 export interface VikingBotAttachment {
   /** 附件唯一标识。Unique attachment key. */
   key: string;
+  /** 上传服务返回的标识。Identifier returned by the upload service. */
+  uploadId?: string;
   /** 文件名。File name. */
   name: string;
   /** 本地对象 URL 或宿主解析出的预览地址。Local object URL or a host-resolved preview link. */
@@ -251,6 +261,8 @@ export interface VikingBotLabels {
   toolOutput?: string;
   similarity?: string;
   sessionHistory?: string;
+  session?: string;
+  locateSession?: string;
   emptySessions?: string;
   loading?: string;
   loadMore?: string;
@@ -258,6 +270,7 @@ export interface VikingBotLabels {
   searchReferences?: string;
   emptyReferences?: string;
   removeReference?: string;
+  openReference?: string;
   expandReference?: string;
   collapseReference?: string;
   /** 欢迎标题。Welcome heading. */
@@ -274,6 +287,8 @@ export interface VikingBotLabels {
   attach?: string;
   /** 移除附件按钮文案。Remove-attachment button label. */
   removeAttachment?: string;
+  uploadingAttachment?: string;
+  attachmentUploadFailed?: string;
   /** 复制按钮文案。Copy button label. */
   copy?: string;
   /** 复制成功提示。Message shown after a successful copy. */

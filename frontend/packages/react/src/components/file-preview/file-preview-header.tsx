@@ -7,8 +7,10 @@ import { FilePreviewCopyPath } from './file-preview-copy-path.js';
 import { getPathFileName, splitPathSegments } from './file-preview-path.js';
 import type {
   FilePreviewActions,
+  FilePreviewActionSource,
   FilePreviewLabels,
   FilePreviewLevel,
+  FilePreviewToolbarOptions,
 } from './types.js';
 
 /**
@@ -31,6 +33,8 @@ export interface FilePreviewHeaderProps {
   /** The header action area: a node, or a function of the actions context. */
   slotActions?: ReactNode | ((actions: FilePreviewActions) => ReactNode);
   extraActions?: ReactNode;
+  actionItems?: FilePreviewActionSource;
+  toolbar?: FilePreviewToolbarOptions;
   actions: FilePreviewActions;
   levels?: readonly FilePreviewLevel[];
   levelKey?: string;
@@ -49,6 +53,8 @@ export function FilePreviewHeader({
   titleExtra,
   slotActions,
   extraActions,
+  actionItems,
+  toolbar,
   actions,
   text,
   onOpenParent,
@@ -60,6 +66,9 @@ export function FilePreviewHeader({
       slotActions(actions)
     ) : slotActions === undefined ? (
       <FilePreviewToolbar
+        key={path ?? fileName}
+        options={toolbar}
+        actionItems={actionItems}
         actions={actions}
         text={text}
         extraActions={extraActions}
@@ -80,11 +89,14 @@ export function FilePreviewHeader({
             disabled={actions.busy}
             onOpen={onOpenParent}
           />
-          {actions.canCopyPath ? (
+          {toolbar?.copyPath !== false && actions.canCopyPath ? (
             <FilePreviewCopyPath
+              key={path}
               label={text.copyPath}
+              successLabel={text.copied}
+              failureLabel={text.copyFailed}
               disabled={actions.busy}
-              onClick={() => void actions.copyPath()}
+              onClick={actions.copyPath}
             />
           ) : null}
           {titleExtra}

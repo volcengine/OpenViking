@@ -1,0 +1,13 @@
+@import '../loading-icon/loading-icon.css';
+
+.ov-notice__icon-mark {
+  stroke: var(
+    --ov-ui-color-text-on-primary,
+    var(--ov-ui-text-on-primary-default)
+  );
+}
+.ov-notice__loading-icon {
+  width: calc(20px * 20 / 24);
+  height: calc(20px * 20 / 24);
+  margin: calc(20px * 2 / 24);
+}

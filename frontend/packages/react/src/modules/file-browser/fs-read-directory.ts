@@ -1,6 +1,7 @@
 import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import { isAbort, type DirectorySummary } from './fs-model.js';
+import { isAbort } from './fs-errors.js';
+import { type DirectorySummary } from './fs-model.js';
 
 /**
  * 读目录的两级摘要，各自成一个页签：L0 是摘要，L1 是总览。

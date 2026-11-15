@@ -1,8 +1,6 @@
 import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-
-const isHomeUri = (uri: string) =>
-  uri === 'viking://~' || uri.startsWith('viking://~/');
+import { isHomeResourceUri } from './fs-uri.js';
 
 /** Native stat resolves the home alias in the authenticated request scope. */
 export async function readDashboardStat(
@@ -21,7 +19,7 @@ export async function readDashboardStat(
     typeof stat?.isDir !== 'boolean' ||
     typeof canonical !== 'string' ||
     !canonical ||
-    isHomeUri(canonical)
+    isHomeResourceUri(canonical)
   )
     throw new TypeError('Invalid canonical resource stat');
   return { uri: canonical, isDir: stat.isDir };
@@ -32,7 +30,7 @@ export async function resolveDashboardUri(
   uri: string,
   options: OvRequestOptions,
 ) {
-  return isHomeUri(uri)
+  return isHomeResourceUri(uri)
     ? (await readDashboardStat(client, uri, options)).uri
     : uri;
 }

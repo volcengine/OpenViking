@@ -20,6 +20,7 @@ test('theme follows an adopted ancestry and observes later changes there', async
   second.dataset.theme = 'green';
   const branch = document.createElement('div');
   const anchor = document.createElement('div');
+  anchor.getBoundingClientRect = () => new window.DOMRect(100, 100, 120, 32);
   anchor.className = 'tour-target';
   branch.append(anchor);
   first.append(branch);
@@ -51,9 +52,10 @@ test('theme follows an adopted ancestry and observes later changes there', async
     await settle();
     assert.equal(primary(), 'red');
 
-    await act(async () => branch.remove());
-    await settle();
-    await act(async () => first.append(branch));
+    await act(async () => {
+      branch.remove();
+      first.append(branch);
+    });
     await settle();
     assert.equal(primary(), 'blue');
     assert.equal(document.querySelector('.ov-directory-tour'), dialog);

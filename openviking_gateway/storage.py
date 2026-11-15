@@ -168,8 +168,11 @@ class Database:
         self.path = path
         # Protect the file before SQLite opens it, not once per operation.
         fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
-        os.fchmod(fd, 0o600)
-        os.close(fd)
+        try:
+            if os.name != "nt":
+                os.fchmod(fd, 0o600)
+        finally:
+            os.close(fd)
         self.encryptor = encryptor
         self.loop = None
         self.pool = queue.LifoQueue(maxsize=6)

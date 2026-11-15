@@ -6,8 +6,24 @@ from collections import deque
 
 import pytest
 
+from openviking.pyagfs import get_binding_client
 from openviking.pyagfs.async_client import AsyncAGFSClient
-from openviking.pyagfs.leader import _LocalLeaderBackend
+
+
+@pytest.fixture
+def native_client(tmp_path):
+    client_class, _ = get_binding_client()
+    client = client_class(
+        config={
+            "service_name": "leader-test",
+            "coordination": {
+                "provider": "sqlite",
+                "sqlite_path": str(tmp_path / "coordination.db"),
+            },
+        }
+    )
+    yield client
+    client.close()
 
 
 class FakeNativeLeader:
@@ -16,7 +32,7 @@ class FakeNativeLeader:
         self.renew_results = deque(renew_results)
         self.released: list[str] = []
 
-    def leader_validate(self):
+    async def leader_validate_async(self):
         return None
 
     async def leader_try_acquire_async(self, key, holder_id, ttl_secs):
@@ -216,7 +232,7 @@ async def test_candidate_cancellation_does_not_wait_for_unfinished_acquire():
 
 
 def test_distributed_candidate_fails_fast_without_native_capability():
-    with pytest.raises(RuntimeError, match="missing leader_validate"):
+    with pytest.raises(RuntimeError, match="missing leader_validate_async"):
         AsyncAGFSClient(object()).leader_candidate(
             "watch",
             "node-a",
@@ -227,40 +243,52 @@ def test_distributed_candidate_fails_fast_without_native_capability():
 
 
 @pytest.mark.asyncio
-async def test_local_candidates_compete_without_native_leader_api():
-    agfs = AsyncAGFSClient(object())
-    first_candidate = agfs.leader_candidate(
-        "watch",
-        "node-a",
-        ttl_secs=1,
-        renew_interval_secs=0.1,
-        retry_interval_secs=0.01,
-        mode="local",
-    )
-    second_candidate = agfs.leader_candidate(
-        "watch",
-        "node-b",
-        ttl_secs=1,
-        renew_interval_secs=0.1,
-        retry_interval_secs=0.01,
-        mode="local",
-    )
+@pytest.mark.parametrize("interruption", ["error", "cancel", "close"])
+async def test_candidate_initializes_on_enter_and_recovers_after_interruption(interruption):
+    class GatedValidation(FakeNativeLeader):
+        def __init__(self):
+            super().__init__()
+            self.started = asyncio.Event()
+            self.finish = asyncio.Event()
+            self.fail = interruption == "error"
 
-    async with first_candidate, second_candidate:
-        first = await anext(first_candidate)
-        waiting = asyncio.create_task(anext(second_candidate))
-        await asyncio.sleep(0.03)
-        assert not waiting.done()
+        async def leader_validate_async(self):
+            self.started.set()
+            await self.finish.wait()
+            if self.fail:
+                raise RuntimeError("initialization failed")
 
-        await first_candidate.aclose()
-        second = await asyncio.wait_for(waiting, 1)
-        assert first.stop_event.is_set()
-        assert second.holder_id == "node-b"
+    native = GatedValidation()
+    candidate = AsyncAGFSClient(native).leader_candidate(
+        "watch", "node-a", ttl_secs=1, renew_interval_secs=0.2, retry_interval_secs=0.01
+    )
+    assert not native.started.is_set()
+    entering = asyncio.create_task(candidate.__aenter__())
+    await asyncio.wait_for(native.started.wait(), 1)
+    assert not entering.done()
+    assert native.acquire_calls == 0
+    with pytest.raises(RuntimeError, match="already active"):
+        await candidate.__aenter__()
+    if interruption == "cancel":
+        entering.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await entering
+    else:
+        if interruption == "close":
+            await candidate.aclose()
+        native.finish.set()
+        with pytest.raises(RuntimeError, match="initialization failed|closed during validation"):
+            await entering
+    native.fail = False
+    native.finish.set()
+    async with candidate:
+        assert (await anext(candidate)).holder_id == "node-a"
+    assert native.released == ["lease-1"]
 
 
 @pytest.mark.asyncio
-async def test_local_leader_backend_is_shared_across_client_wrappers():
-    native = object()
+async def test_local_leader_backend_is_shared_across_client_wrappers(native_client):
+    native = native_client
     first_agfs = AsyncAGFSClient(native)
     second_agfs = AsyncAGFSClient(native)
     first_candidate = first_agfs.leader_candidate(
@@ -269,7 +297,6 @@ async def test_local_leader_backend_is_shared_across_client_wrappers():
         ttl_secs=1,
         renew_interval_secs=0.1,
         retry_interval_secs=0.01,
-        mode="local",
     )
     second_candidate = second_agfs.leader_candidate(
         "watch_wrappers",
@@ -277,7 +304,6 @@ async def test_local_leader_backend_is_shared_across_client_wrappers():
         ttl_secs=1,
         renew_interval_secs=0.1,
         retry_interval_secs=0.01,
-        mode="local",
     )
 
     async with first_candidate, second_candidate:
@@ -291,15 +317,15 @@ async def test_local_leader_backend_is_shared_across_client_wrappers():
         assert first.stop_event.is_set()
         assert second.holder_id == "node-b"
 
+
 def test_candidate_rejects_renewal_interval_at_or_above_ttl():
     with pytest.raises(ValueError, match="less than ttl"):
-        AsyncAGFSClient(object()).leader_candidate(
+        AsyncAGFSClient(FakeNativeLeader()).leader_candidate(
             "watch",
             "node-a",
             ttl_secs=1,
             renew_interval_secs=1,
             retry_interval_secs=0.1,
-            mode="local",
         )
 
 
@@ -321,20 +347,8 @@ def test_candidate_rejects_invalid_parameters(values, match):
         "ttl_secs": 1,
         "renew_interval_secs": 0.2,
         "retry_interval_secs": 0.1,
-        "mode": "local",
         **values,
     }
 
     with pytest.raises(ValueError, match=match):
-        AsyncAGFSClient(object()).leader_candidate(**params)
-
-
-@pytest.mark.asyncio
-async def test_local_renew_expiry_removes_owner_mapping():
-    backend = _LocalLeaderBackend()
-    lease_ref = await backend.acquire("expired_local_key", "node-a", 0.01)
-    assert lease_ref is not None
-    await asyncio.sleep(0.03)
-
-    assert not await backend.renew(lease_ref, 0.1)
-    assert backend._owners == {}
+        AsyncAGFSClient(FakeNativeLeader()).leader_candidate(**params)

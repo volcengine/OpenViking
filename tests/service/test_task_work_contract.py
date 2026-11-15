@@ -286,6 +286,7 @@ async def test_remote_inline_execution_observes_terminal_cancellation(
     tracker, remote = TaskTracker(first), TaskTracker(second)
     await tracker.create("compile", task_id="task", **OWNER)
     started = asyncio.Event()
+    cancellation_received = asyncio.Event()
     work_ids = []
 
     async def execute():
@@ -293,21 +294,28 @@ async def test_remote_inline_execution_observes_terminal_cancellation(
         started.set()
         try:
             await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancellation_received.set()
+            raise
         finally:
             await remote.unregister_running_task("task")
 
     worker = asyncio.create_task(execute())
     polling = None
     try:
-        await asyncio.wait_for(started.wait(), 1)
+        await asyncio.wait_for(started.wait(), 10)
         await getattr(tracker, cancel_method)("task", **OWNER)
         assert (await tracker.get("task", **OWNER)).status is TaskStatus.CANCELLED
         assert await tracker.get_work_state("task", work_ids[0], **OWNER) is WorkState.CANCELLED
         assert not worker.done()
         monkeypatch.setattr("openviking.service.task_tracker._CANCEL_POLL_INTERVAL", 0)
         polling = asyncio.create_task(remote._cancel_poll_loop())
+        # Cancellation delivery precedes durable cleanup. MySQL commits during
+        # unregister_running_task must settle before the worker propagates it;
+        # a one-second timeout on the worker can cancel that cleanup itself.
+        await asyncio.wait_for(cancellation_received.wait(), 10)
         with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(worker, 1)
+            await asyncio.wait_for(worker, 10)
         assert remote._work_index.active_tasks_by_owner() == {}
         assert (await tracker.get("task", **OWNER)).status is TaskStatus.CANCELLED
     finally:

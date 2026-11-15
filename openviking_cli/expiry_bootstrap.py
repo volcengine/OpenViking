@@ -22,9 +22,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def load_expiry_config(path: Path):
     from openviking.server.config import TTLAdapterConfig
+    from openviking_cli.utils.config.config_loader import expand_config_environment
     from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
-    raw = json.loads(os.path.expandvars(path.expanduser().read_text(encoding="utf-8-sig")))
+    raw = json.loads(expand_config_environment(path.expanduser().read_text(encoding="utf-8-sig")))
     config = OpenVikingConfig.from_dict(raw)
     ttl = TTLAdapterConfig.model_validate(raw.get("server", {}).get("ttl_adapter") or {})
     if not (config.uses_redis_expiry() or ttl.writer_enabled):

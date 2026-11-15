@@ -10,8 +10,6 @@
 | preferences | `viking://user/{user_id}/memories/preferences/` | 按主题分类的用户偏好 |
 | entities | `viking://user/{user_id}/memories/entities/` | 重要实体（人物、项目等） |
 | events | `viking://user/{user_id}/memories/events/` | 重要事件 |
-| identity | `viking://user/{user_id}/memories/identity.md` | 助手身份与自我介绍 |
-| soul | `viking://user/{user_id}/memories/soul.md` | 助手原则、边界、风格和连续性 |
 | cases | `viking://user/{user_id}/memories/cases/` | 可训练、可评估的任务案例 |
 | trajectories | `viking://user/{user_id}/memories/trajectories/` | 从 Agent 任务轨迹提炼的可复用操作契约 |
 | experiences | `viking://user/{user_id}/memories/experiences/` | 可复用的执行经验 |
@@ -19,6 +17,8 @@
 | skills | `viking://user/{user_id}/memories/skills/` | 技能执行经验与工作流策略 |
 
 以上是随部署提供的内置类型，`tools` 和 `skills` 默认关闭；实际抽取还取决于生效的记忆策略和 Agent 进化设置。表中为 Self 路径，支持 Peer 的类型也可存放在 `viking://user/{user_id}/peers/{peer_id}/memories/` 下。部署模板可以扩展或覆盖 Registry；Account 模板 API 只允许修改其列出的字段和类型。
+
+`memories/soul.md` 是静态 Agent 指令文件，创建用户工作区时按原 Soul 的默认正文初始化。可通过文件接口编辑，不参与 session commit 的自动提取或合并。已有用户在初始化或下次提取 Self 记忆时，若缺少 `soul.md` 则按默认内容补齐；已有 `soul.md` 和 `identity.md` 均保持原样。
 
 ---
 

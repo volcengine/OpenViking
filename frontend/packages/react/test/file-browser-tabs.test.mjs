@@ -68,3 +68,15 @@ test('a tree row keeps its own aria-expanded under the hover popover', async () 
   assert.equal(nodes[1].hasAttribute('aria-expanded'), false);
   await tree.unmount();
 });
+
+test('a selected file shows loading instead of the no-selection illustration on initial client render', async () => {
+  const { FileBrowser } =
+    await import('@openviking/react/modules/file-browser');
+  const { createElement } = await import('react');
+  const { renderMarkup } = await import('./helpers/csr-render.mjs');
+  const html = renderMarkup(
+    createElement(FileBrowser, { uri: 'viking://resources/guide.md' }),
+  );
+  assert.match(html, /ov-file-browser__hint[^>]*role="status"[^>]*>Loading…/);
+  assert.doesNotMatch(html, /ov-file-browser__empty-art/);
+});

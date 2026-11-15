@@ -1,7 +1,8 @@
+import { readTaskReferences } from '../../shared/task-tracking/read-references.js';
 import type {
-  TuiRecordContent,
-  TuiSearchResultItem,
-} from '../../components/tui/index.js';
+  CommandConsoleRecordContent,
+  CommandConsoleSearchResultItem,
+} from '../../components/command-console/index.js';
 
 function object(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -18,7 +19,7 @@ export function formatResult(
   name: string,
   data: unknown,
   values: Record<string, string | number | boolean>,
-): TuiRecordContent {
+): CommandConsoleRecordContent {
   if (['read', 'abstract', 'overview'].includes(name))
     return {
       variant: 'resource-preview',
@@ -45,8 +46,48 @@ export function formatResult(
       }),
     };
   const result = object(data);
+  if (
+    [
+      'add-resource',
+      'add-skill',
+      'add-memory',
+      'compile',
+      'compile create',
+      'mkdir',
+      'cp',
+      'mv',
+      'rm',
+      'write',
+    ].includes(name)
+  ) {
+    const hidden =
+      name === 'add-resource'
+        ? new Set(['sourcepath', 'tempuri'])
+        : new Set<string>();
+    const rows = Object.entries(result).filter(
+      ([key, value]) =>
+        value !== undefined &&
+        value !== null &&
+        !hidden.has(key.replace(/_/g, '').toLowerCase()),
+    );
+    return {
+      variant: 'write-result',
+      lines: rows.length
+        ? rows.slice(0, 12).map(([key, value]) => {
+            const label = (
+              key === 'status' && readTaskReferences(name, data).length
+                ? 'submission_status'
+                : key
+            ).replaceAll('_', ' ');
+            return `${label[0]?.toUpperCase() ?? ''}${label.slice(1)}: ${text(value)}`;
+          })
+        : data === null || data === undefined
+          ? []
+          : [text(data)],
+    };
+  }
   if (['find', 'search'].includes(name)) {
-    const items: TuiSearchResultItem[] = [];
+    const items: CommandConsoleSearchResultItem[] = [];
     for (const key of ['memories', 'resources', 'skills']) {
       const entries = result[key];
       if (!Array.isArray(entries)) continue;

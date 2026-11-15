@@ -111,8 +111,13 @@ for (const kind of ['wiki', 'experience']) {
       h(OpenVikingProvider, { fetch }, h(Probe, { currentUri })),
     );
     try {
+      assert.equal(fetch.countOf('/api/v1/compile/configs'), 0);
       await act(async () => browser.actions.openDashboard(currentUri));
       await settle();
+      assert.equal(
+        fetch.countOf('/api/v1/compile/configs'),
+        kind === 'wiki' ? 1 : 0,
+      );
       assert.match(
         view.container.textContent,
         kind === 'wiki' ? /1/ : /Task success1/,

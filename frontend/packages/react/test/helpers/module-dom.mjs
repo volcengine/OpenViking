@@ -19,10 +19,14 @@ for (const name of [
   'Node',
   'Element',
   'HTMLElement',
+  'HTMLImageElement',
+  'HTMLIFrameElement',
   'MutationObserver',
+  'SVGElement',
 ]) {
   globalThis[name] = name === 'window' ? dom.window : dom.window[name];
 }
+globalThis.getComputedStyle = window.getComputedStyle.bind(window);
 Object.defineProperty(globalThis, 'navigator', {
   configurable: true,
   value: dom.window.navigator,
@@ -55,6 +59,16 @@ export async function settle(times = 3) {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
   }
+}
+
+export async function setTextarea(textarea, value) {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      'value',
+    ).set.call(textarea, value);
+    textarea.dispatchEvent(new window.Event('input', { bubbles: true }));
+  });
 }
 
 /**
@@ -111,7 +125,12 @@ export function recordingFetch(handler) {
       // The remaining query parameters stay available: some cases answer differently
       // depending on an argument such as `limit`.
       query: Object.fromEntries(parsed.searchParams),
-      body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      body:
+        init?.body instanceof FormData
+          ? init.body
+          : init?.body
+            ? JSON.parse(String(init.body))
+            : undefined,
       init,
     };
     calls.push(call);

@@ -640,6 +640,40 @@ class TestOutputLanguageOverride:
     def test_windows_timezone_hint_values(self, timezone_value, expected):
         assert _language_from_timezone_value(timezone_value) == expected
 
+    @pytest.mark.parametrize(
+        "timezone_value",
+        [
+            "Europe/Astrakhan",
+            "Europe/Kaliningrad",
+            "Europe/Kirov",
+            "Europe/Moscow",
+            "Europe/Samara",
+            "Europe/Saratov",
+            "Europe/Ulyanovsk",
+            "Europe/Volgograd",
+            "Asia/Anadyr",
+            "Asia/Barnaul",
+            "Asia/Chita",
+            "Asia/Irkutsk",
+            "Asia/Kamchatka",
+            "Asia/Khandyga",
+            "Asia/Krasnoyarsk",
+            "Asia/Magadan",
+            "Asia/Novokuznetsk",
+            "Asia/Novosibirsk",
+            "Asia/Omsk",
+            "Asia/Sakhalin",
+            "Asia/Srednekolymsk",
+            "Asia/Tomsk",
+            "Asia/Ust-Nera",
+            "Asia/Vladivostok",
+            "Asia/Yakutsk",
+            "Asia/Yekaterinburg",
+        ],
+    )
+    def test_every_russian_timezone_hints_russian(self, timezone_value):
+        assert _language_from_timezone_value(timezone_value) == "ru"
+
     def test_timezone_hint_overrides_english_locale_for_weak_fallback(self):
         with patch.dict(
             os.environ,

@@ -1,3 +1,4 @@
+import type { FileBrowserExperienceDataSource } from './experience-data-source.js';
 import { dashboardLabels as resolveDashboardLabels } from './dashboard-labels.js';
 import type { FileBrowserDashboardLabels } from './types.js';
 import { readCompileTargets } from './dashboard-data.js';
@@ -27,6 +28,7 @@ export function useBrowserDashboards({
   requestOptions,
   onOpenUri,
   dashboardKinds,
+  experienceDataSource,
   renderDashboard,
   dashboardLabels,
 }: {
@@ -37,12 +39,18 @@ export function useBrowserDashboards({
   generation: number;
   dashboardLabels?: FileBrowserDashboardLabels;
   dashboardKinds?: readonly FileBrowserDashboard['kind'][];
+  experienceDataSource?: FileBrowserExperienceDataSource;
   renderDashboard?: (dashboard: FileBrowserDashboard) => ReactNode;
   locale?: 'en-US' | 'zh-CN';
   requestOptions?: OvRequestOptions;
   onOpenUri: (uri: string) => Promise<void>;
 }) {
   const [opened, setOpened] = useState<string | null>(null);
+  const [previousUri, setPreviousUri] = useState(uri);
+  if (previousUri !== uri) {
+    setPreviousUri(uri);
+    if (opened !== uri) setOpened(null);
+  }
   const load = useCallback(
     (client: OvClient, options: OvRequestOptions) =>
       readCompileTargets(client, rootUri, options),
@@ -50,12 +58,6 @@ export function useBrowserDashboards({
   );
   const wikiEnabled =
     dashboardKinds === undefined || dashboardKinds.includes('wiki');
-  const catalog = useDashboardQuery(
-    load,
-    requestOptions,
-    wikiEnabled,
-    generation,
-  );
   const loadHint = useCallback(
     async (client: OvClient, options: OvRequestOptions) =>
       uri ? readDashboardHint(client, uri, options) : undefined,
@@ -83,6 +85,19 @@ export function useBrowserDashboards({
           } as FileTreeRow,
         ]
       : metadataRows;
+  // Tree tags and scoped attrs advertise boards without querying Compile.
+  // The registry only enriches an explicitly opened Wiki board.
+  const wantsWiki =
+    wikiEnabled &&
+    uri !== null &&
+    opened === uri &&
+    resolveDashboard(canonicalUri ?? uri, knownRows, [])?.kind !== 'experience';
+  const catalog = useDashboardQuery(
+    load,
+    requestOptions,
+    wantsWiki,
+    generation,
+  );
   // An old server without Compile has no Wiki feature. Other failures stay visible.
   const unsupported =
     isOvClientError(catalog.error) && catalog.error.statusCode === 404;
@@ -139,6 +154,7 @@ export function useBrowserDashboards({
             renderDashboard?.(current) ??
             (current.kind === 'experience'
               ? createElement(ExperienceDashboardPane, {
+                  dataSource: experienceDataSource,
                   uri,
                   locale,
                   requestOptions,
@@ -170,7 +186,12 @@ export function useBrowserDashboards({
         }
       : undefined;
   return {
+    isWiki: resolved?.kind === 'wiki',
+    contentPending: Boolean(
+      uri && /\.md$/i.test(uri) && !resolved && hint.loading,
+    ),
     dashboards,
+    current,
     tab,
     isOpen: uri !== null && opened === uri && Boolean(current),
     open,

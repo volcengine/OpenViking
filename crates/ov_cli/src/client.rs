@@ -443,6 +443,22 @@ impl HttpClient {
         self.post("/api/v1/fs/attrs/set_tags", &body).await
     }
 
+    pub async fn batch_set_tags(
+        &self,
+        uris: &[String],
+        tags: Vec<String>,
+        mode: &str,
+        recursive: bool,
+    ) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "uris": uris,
+            "tags": tags,
+            "mode": mode,
+            "recursive": recursive,
+        });
+        self.post("/api/v1/content/batch_set_tags", &body).await
+    }
+
     pub async fn acl_get(&self, uri: &str) -> Result<Value> {
         self.get("/api/v1/acl", &[("uri".to_string(), uri.to_string())])
             .await

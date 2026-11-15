@@ -3,26 +3,29 @@ import { useOvClient, useOvSignal } from '../../client/provider.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { OV_PATHS } from '../../client/paths.js';
 import { useDashboardQuery } from './use-dashboard-query.js';
+import type {
+  ExperienceListPage,
+  FileBrowserExperienceDataSource,
+} from './experience-data-source.js';
 import {
-  experienceDateRange,
+  experienceDateQuery,
+  EXPERIENCE_PAGE_SIZE,
   isExperienceDirectory,
   readExperiences,
   readExperienceSources,
-  EXPERIENCE_PAGE_SIZE,
 } from './experience-data.js';
-import type {
-  ExperienceTrajectoryPage,
-  ExperienceOutcomeResult,
-} from './experience-data.js';
+import type { ExperienceOutcomeResult } from './experience-data.js';
 
 export function useExperienceDashboard({
   uri,
   requestOptions,
+  dataSource,
   enabled = true,
   refreshGeneration = 0,
 }: {
   uri: string;
   requestOptions?: OvRequestOptions;
+  dataSource?: FileBrowserExperienceDataSource;
   enabled?: boolean;
   refreshGeneration?: number;
 }) {
@@ -68,49 +71,58 @@ export function useExperienceDashboard({
   const setTab = (value: 'impact' | 'source' | 'test') =>
     setState({ ...current, tab: value, page: 0 });
   const directory = isExperienceDirectory(uri);
+  const {
+    list: listSource,
+    sources: sourcesSource,
+    outcomes: outcomesSource,
+  } = dataSource ?? {};
   const loadList = useCallback(
-    (client: OvClient, options: OvRequestOptions) =>
-      readExperiences(client, uri, page, options),
-    [uri, page],
+    async (
+      client: OvClient,
+      options: OvRequestOptions & { signal: AbortSignal },
+    ): Promise<ExperienceListPage> => {
+      const custom = await listSource?.({
+        uri,
+        offset: page * EXPERIENCE_PAGE_SIZE,
+        limit: EXPERIENCE_PAGE_SIZE,
+        signal: options.signal,
+      });
+      options.signal.throwIfAborted();
+      return custom ?? readExperiences(client, uri, page, options);
+    },
+    [uri, page, listSource],
   );
   const loadSources = useCallback(
-    (client: OvClient, options: OvRequestOptions) =>
-      readExperienceSources(client, uri, options),
-    [uri],
-  );
-  const loadTrajectories = useCallback(
-    async (client: OvClient, options: OvRequestOptions) => {
-      const result = await client.request<ExperienceTrajectoryPage>({
-        method: 'GET',
-        path: OV_PATHS.experienceTrajectories,
-        query: {
-          experience_uri: uri,
-          offset: page * EXPERIENCE_PAGE_SIZE,
-          limit: EXPERIENCE_PAGE_SIZE,
-          ...experienceDateRange(days),
-        },
-        options,
-      });
-      if (
-        !Array.isArray(result?.items) ||
-        !Number.isSafeInteger(result.total) ||
-        result.total < 0 ||
-        result.items.some(
-          (item) =>
-            typeof item?.uri !== 'string' || typeof item.name !== 'string',
-        )
-      )
-        throw new TypeError('Invalid Experience trajectories');
-      return result;
-    },
-    [uri, page, days],
+    async (
+      client: OvClient,
+      options: OvRequestOptions & { signal: AbortSignal },
+    ) =>
+      sourcesSource
+        ? sourcesSource({ uri, signal: options.signal })
+        : readExperienceSources(client, uri, options),
+    [uri, sourcesSource],
   );
   const loadOutcomes = useCallback(
-    async (client: OvClient, options: OvRequestOptions) => {
+    async (
+      client: OvClient,
+      options: OvRequestOptions & { signal: AbortSignal },
+    ) => {
+      const { startDate, endDate } = experienceDateQuery(days);
+      if (outcomesSource)
+        return outcomesSource({
+          uri,
+          startDate,
+          endDate,
+          signal: options.signal,
+        });
       const result = await client.request<ExperienceOutcomeResult>({
         method: 'GET',
         path: OV_PATHS.experienceOutcomes,
-        query: { experience_uri: uri, ...experienceDateRange(days) },
+        query: {
+          experience_uri: uri,
+          start_date: startDate,
+          end_date: endDate,
+        },
         options,
       });
       if (
@@ -131,36 +143,38 @@ export function useExperienceDashboard({
         throw new TypeError('Invalid Experience outcomes');
       return result.outcome_distribution;
     },
-    [uri, days],
+    [uri, days, outcomesSource],
   );
   const list = useDashboardQuery(
     loadList,
     requestOptions,
     enabled && directory,
     refreshGeneration,
+    'file_browser_experience_dashboard_load',
+    (value) => value.items.length === 0,
+    !!listSource,
   );
   const sources = useDashboardQuery(
     loadSources,
     requestOptions,
     enabled && !directory && tab === 'source',
     refreshGeneration,
-  );
-  const trajectories = useDashboardQuery(
-    loadTrajectories,
-    requestOptions,
-    enabled && !directory && tab === 'impact',
-    refreshGeneration,
+    'file_browser_experience_dashboard_load',
+    (value) => value.length === 0,
+    !!sourcesSource,
   );
   const outcomes = useDashboardQuery(
     loadOutcomes,
     requestOptions,
     enabled && !directory && tab === 'impact',
     refreshGeneration,
+    'file_browser_experience_dashboard_load',
+    (value) => value.length === 0,
+    !!outcomesSource,
   );
   return {
     list,
     sources,
-    trajectories,
     outcomes,
     page,
     setPage,
