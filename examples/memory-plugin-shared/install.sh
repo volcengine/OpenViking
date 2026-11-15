@@ -61,6 +61,7 @@
 #   kimicode   ~/.kimi-code/plugins
 #   codebuddy  a local marketplace registered with codebuddy, installed from ~/.codebuddy/plugins
 #   qoder      a local marketplace registered with qodercli (or qoderclicn), installed from ~/.qoder/plugins (or ~/.qoder-cn/plugins)
+#   antigravity ~/.gemini/config/plugins/openviking-memory (the Antigravity app and agy)
 #   opencode   ~/.config/opencode/plugins/openviking, openviking.js, opencode.json(c)
 #   pi         ~/.pi/agent/extensions/openviking
 #   dsh        dsh plugin add into the chosen profile
@@ -68,7 +69,7 @@
 #              command inside DeepSeek Harness.app, while Desktop is quit
 #   cli        npm install -g @openviking/cli: ov in npm's global bin directory,
 #              or in ~/.local/bin when that needs sudo
-# Cursor, TRAE, TRAE CN and ZCode run their hooks from
+# Cursor, TRAE, TRAE CN, ZCode and Antigravity run their hooks from
 # ~/.openviking/agent-integrations, where Kimi Code keeps its uninstall helper and
 # CodeBuddy Code and Qoder CLI their managed marketplaces.
 # The plugin bundle is unpacked to ~/.openviking/memory-plugin-marketplace when
@@ -240,7 +241,7 @@ usage() {
 Usage: install.sh [options]
 
 Options:
-  --harness LIST     Comma-separated harnesses: claude, codex, cursor, trae, trae-cn, trae-cli, zcode, kimicode, codebuddy, qoder, opencode, pi, dsh, dsh-desktop, cli.
+  --harness LIST     Comma-separated harnesses: claude, codex, cursor, trae, trae-cn, trae-cli, zcode, kimicode, codebuddy, qoder, antigravity, opencode, pi, dsh, dsh-desktop, cli.
                      Use trae-cli for TraeCode CLI 2.0 (installed through its Codex-compatible plugin format).
                      dsh is the dsh CLI from npm; dsh-desktop is DeepSeek Harness Desktop (macOS only).
                      cli is the OpenViking CLI (ov), installed from npm. Without --harness: the detected ones and cli.
@@ -258,7 +259,7 @@ Options:
   --user ID          Optional OpenViking user.
   --statusline       Register the Claude Code statusline without asking.
   --no-statusline    Skip the statusline prompt.
-  --uninstall        Remove the Cursor, TRAE, TRAE CN, ZCode, Kimi Code, CodeBuddy Code and Qoder CLI integrations,
+  --uninstall        Remove the Cursor, TRAE, TRAE CN, ZCode, Kimi Code, CodeBuddy Code, Qoder CLI and Antigravity integrations,
                      plus any legacy TraeCode CLI hook config. Claude Code, Codex, OpenCode,
                      pi, dsh and dsh-desktop are removed with the commands the install prints at the end.
   --yes, -y          Ask nothing: use defaults and install without asking for confirmation.
@@ -584,8 +585,18 @@ qoder_home() { # qoder_home <qodercli|qoderclicn>
   fi
 }
 
+# The Antigravity app and its agy CLI read one configuration directory, so one
+# plugin there serves both.
+antigravity_config_dir() {
+  printf '%s' "$HOME/.gemini/config"
+}
+
+antigravity_plugin_dir() {
+  printf '%s' "$(antigravity_config_dir)/plugins/openviking-memory"
+}
+
 refresh_available_harnesses() {
-  HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_KIMICODE=0; HAVE_CODEBUDDY=0; HAVE_QODER=0; HAVE_DSH=0; HAVE_DSH_DESKTOP=0
+  HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_KIMICODE=0; HAVE_CODEBUDDY=0; HAVE_QODER=0; HAVE_ANTIGRAVITY=0; HAVE_DSH=0; HAVE_DSH_DESKTOP=0
   has_available_bin "$CLAUDE_BINS" && HAVE_CLAUDE=1
   has_available_bin "$CODEX_BINS" && HAVE_CODEX=1
   { command -v cursor >/dev/null 2>&1 || command -v cursor-agent >/dev/null 2>&1 || [ -d "/Applications/Cursor.app" ] || [ -d "$HOME/.cursor" ]; } && HAVE_CURSOR=1
@@ -600,6 +611,8 @@ refresh_available_harnesses() {
   { command -v kimi >/dev/null 2>&1 || [ -d "$HOME/.kimi-code" ]; } && HAVE_KIMICODE=1
   { command -v codebuddy >/dev/null 2>&1 || [ -d "$HOME/.codebuddy" ]; } && HAVE_CODEBUDDY=1
   { command -v qodercli >/dev/null 2>&1 || command -v qoderclicn >/dev/null 2>&1 || [ -d "$(qoder_home qodercli)" ] || [ -d "$(qoder_home qoderclicn)" ]; } && HAVE_QODER=1
+  # Both the app and agy create the shared configuration directory on first run.
+  { command -v agy >/dev/null 2>&1 || [ -d "$(antigravity_config_dir)" ]; } && HAVE_ANTIGRAVITY=1
   return 0
 }
 
@@ -724,7 +737,7 @@ NODE
 CLAUDE_BINS="$(normalize_bin_list "$CLAUDE_BINS_ARG" claude)"
 CODEX_BINS="$(normalize_bin_list "$CODEX_BINS_ARG" codex)"
 
-HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_DSH=0; HAVE_DSH_DESKTOP=0
+HAVE_CLAUDE=0; HAVE_CODEX=0; HAVE_CURSOR=0; HAVE_TRAE=0; HAVE_TRAE_CN=0; HAVE_TRAE_CLI=0; HAVE_OPENCODE=0; HAVE_PI=0; HAVE_ZCODE=0; HAVE_ANTIGRAVITY=0; HAVE_DSH=0; HAVE_DSH_DESKTOP=0
 # DeepSeek Harness Desktop is released for macOS and Windows; of the systems
 # this script runs on, only macOS ever offers it.
 DSH_DESKTOP_OFFERED=0
@@ -748,6 +761,7 @@ SEL_ZCODE=0
 SEL_KIMICODE=0
 SEL_CODEBUDDY=0
 SEL_QODER=0
+SEL_ANTIGRAVITY=0
 SEL_CLI=0
 TUI_CURSOR=0; TUI_LINES=0
 
@@ -808,6 +822,7 @@ EOF
   if [ "$i" -eq "$idx" ]; then printf 'codebuddy|codebuddy'; return 0; fi
   i=$((i + 1))
   if [ "$i" -eq "$idx" ]; then printf 'qoder|qodercli'; return 0; fi
+  if [ "$i" -eq "$idx" ]; then printf 'antigravity|agy'; return 0; fi
   i=$((i + 1))
   if [ "$i" -eq "$idx" ]; then printf 'cli|ov'; return 0; fi
   printf 'add|'
@@ -846,6 +861,7 @@ tui_bin_label() {
     kimicode:*) printf 'Kimi Code' ;;
     codebuddy:*) printf 'CodeBuddy Code' ;;
     qoder:*) printf 'Qoder CLI' ;;
+    antigravity:*) printf 'Antigravity' ;;
     cli:*) printf 'CLI (ov)' ;;
     claude:*) printf '%s %s' "$bin" "$(t '(Claude-format)' '（Claude 格式）')" ;;
     codex:*) printf '%s %s' "$bin" "$(t '(Codex-format)' '（Codex 格式）')" ;;
@@ -880,6 +896,8 @@ tui_bin_selected() {
     [ "$SEL_CODEBUDDY" -eq 1 ]
   elif [ "$kind" = "qoder" ]; then
     [ "$SEL_QODER" -eq 1 ]
+  elif [ "$kind" = "antigravity" ]; then
+    [ "$SEL_ANTIGRAVITY" -eq 1 ]
   elif [ "$kind" = "cli" ]; then
     [ "$SEL_CLI" -eq 1 ]
   else
@@ -896,6 +914,7 @@ tui_bin_detected() { # tui_bin_detected <kind> <bin>
     kimicode) [ "$HAVE_KIMICODE" -eq 1 ] ;;
     codebuddy) [ "$HAVE_CODEBUDDY" -eq 1 ] ;;
     qoder) [ "$HAVE_QODER" -eq 1 ] ;;
+    antigravity) [ "$HAVE_ANTIGRAVITY" -eq 1 ] ;;
     dsh) [ "$HAVE_DSH" -eq 1 ] ;;
     dsh-desktop) [ "$HAVE_DSH_DESKTOP" -eq 1 ] ;;
     *) command -v "$2" >/dev/null 2>&1 ;;
@@ -916,6 +935,7 @@ tui_set_all_bins() {
   SEL_KIMICODE=1
   SEL_CODEBUDDY=1
   SEL_QODER=1
+  SEL_ANTIGRAVITY=1
   SEL_CLI=1
 }
 
@@ -950,6 +970,8 @@ tui_toggle_bin() {
     SEL_CODEBUDDY=$((1 - SEL_CODEBUDDY)); return 0
   elif [ "$kind" = "qoder" ]; then
     SEL_QODER=$((1 - SEL_QODER)); return 0
+  elif [ "$kind" = "antigravity" ]; then
+    SEL_ANTIGRAVITY=$((1 - SEL_ANTIGRAVITY)); return 0
   elif [ "$kind" = "cli" ]; then
     SEL_CLI=$((1 - SEL_CLI)); return 0
   else
@@ -1037,6 +1059,7 @@ tui_reset_bin_selection() {
   SEL_KIMICODE=0
   SEL_CODEBUDDY=0
   SEL_QODER=0
+  SEL_ANTIGRAVITY=0
   SEL_CLI=$((1 - UNINSTALL))
   while IFS= read -r bin; do
     [ -n "$bin" ] || continue
@@ -1067,6 +1090,7 @@ EOF
   if [ "$HAVE_KIMICODE" -eq 1 ]; then SEL_KIMICODE=1; any=1; fi
   if [ "$HAVE_CODEBUDDY" -eq 1 ]; then SEL_CODEBUDDY=1; any=1; fi
   if [ "$HAVE_QODER" -eq 1 ]; then SEL_QODER=1; any=1; fi
+  if [ "$HAVE_ANTIGRAVITY" -eq 1 ]; then SEL_ANTIGRAVITY=1; any=1; fi
   if [ "$any" -ne 1 ]; then
     SEL_CLAUDE_BINS="$TUI_CLAUDE_BINS"
     SEL_CODEX_BINS="$TUI_CODEX_BINS"
@@ -1155,7 +1179,7 @@ tui_has_selection() {
   [ -n "$(list_words "$SEL_CLAUDE_BINS")" ] || [ -n "$(list_words "$SEL_CODEX_BINS")" ] \
     || [ "$SEL_OPENCODE" -eq 1 ] || [ "$SEL_PI" -eq 1 ] || [ "$SEL_DSH" -eq 1 ] || [ "$SEL_DSH_DESKTOP" -eq 1 ] || [ "$SEL_CURSOR_APP" -eq 1 ] \
     || [ "$SEL_TRAE" -eq 1 ] || [ "$SEL_TRAE_CN" -eq 1 ] || [ "$SEL_ZCODE" -eq 1 ] \
-    || [ "$SEL_KIMICODE" -eq 1 ] || [ "$SEL_CODEBUDDY" -eq 1 ] || [ "$SEL_QODER" -eq 1 ] || [ "$SEL_CLI" -eq 1 ]
+    || [ "$SEL_KIMICODE" -eq 1 ] || [ "$SEL_CODEBUDDY" -eq 1 ] || [ "$SEL_QODER" -eq 1 ] || [ "$SEL_ANTIGRAVITY" -eq 1 ] || [ "$SEL_CLI" -eq 1 ]
 }
 
 tui_finish_selection() {
@@ -1175,6 +1199,7 @@ tui_finish_selection() {
   [ "$SEL_KIMICODE" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}kimicode"
   [ "$SEL_CODEBUDDY" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}codebuddy"
   [ "$SEL_QODER" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}qoder"
+  [ "$SEL_ANTIGRAVITY" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}antigravity"
   [ "$SEL_CLI" -eq 1 ] && SELECTED_HARNESSES="${SELECTED_HARNESSES:+$SELECTED_HARNESSES,}cli"
   return 0
 }
@@ -1252,6 +1277,7 @@ select_harnesses() {
   [ "$HAVE_KIMICODE" -eq 1 ] && detected="${detected:+$detected,}kimicode"
   [ "$HAVE_CODEBUDDY" -eq 1 ] && detected="${detected:+$detected,}codebuddy"
   [ "$HAVE_QODER" -eq 1 ] && detected="${detected:+$detected,}qoder"
+  [ "$HAVE_ANTIGRAVITY" -eq 1 ] && detected="${detected:+$detected,}antigravity"
 
   if [ -n "$REQUESTED_HARNESSES" ]; then
     SELECTED_HARNESSES="$REQUESTED_HARNESSES"
@@ -1511,7 +1537,7 @@ validate_selected_harnesses() {
   local h bad=0
   while IFS= read -r h; do
     case "$h" in
-      claude|codex|cursor|trae|trae-cn|opencode|pi|zcode|kimicode|codebuddy|qoder|dsh|cli) ;;
+      claude|codex|cursor|trae|trae-cn|opencode|pi|zcode|kimicode|codebuddy|qoder|antigravity|dsh|cli) ;;
       dsh-desktop)
         [ "$DSH_DESKTOP_OFFERED" -eq 1 ] || {
           err "$(t 'DeepSeek Harness Desktop (dsh-desktop) is installed by this script on macOS only; on Windows, add the plugin from its Plugins page.' '本脚本仅在 macOS 上安装 DeepSeek Harness Desktop（dsh-desktop）；Windows 上请在其“插件”页添加。')"
@@ -1560,7 +1586,7 @@ EOF
   if contains_harness cli; then ok=1; fi
   # Cursor and TRAE are config-driven integrations. They may be installed
   # before the desktop app itself, so a CLI in PATH is not required.
-  if contains_harness cursor || contains_harness trae || contains_harness trae-cn || contains_harness trae-cli || contains_harness zcode || contains_harness kimicode || contains_harness codebuddy || contains_harness qoder; then ok=1; fi
+  if contains_harness cursor || contains_harness trae || contains_harness trae-cn || contains_harness trae-cli || contains_harness zcode || contains_harness kimicode || contains_harness codebuddy || contains_harness qoder || contains_harness antigravity; then ok=1; fi
   if [ "$ok" -ne 1 ]; then
     err "$(t 'No selected compatible CLI command was found in PATH.' '未在 PATH 中找到任何已选择的兼容 CLI 命令。')"
     exit 2
@@ -2411,7 +2437,8 @@ remove_legacy_trae_cli_integration() {
     && [ ! -d "$OV_HOME/agent-integrations/trae" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae-cn" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae-cli" ] \
-    && [ ! -d "$OV_HOME/agent-integrations/zcode" ]; then
+    && [ ! -d "$OV_HOME/agent-integrations/zcode" ] \
+    && [ ! -d "$OV_HOME/agent-integrations/antigravity" ]; then
     rm -rf "$OV_HOME/agent-integrations/memory-plugin-shared"
   fi
 }
@@ -2802,6 +2829,27 @@ NODE
       uninstall_marketplace_host qoder "Qoder CLI" "$cli" plugins "$(qoder_home "$cli")" openviking-memory@openviking
     done
   fi
+  if contains_harness antigravity; then
+    local ag_dir ag_lib
+    ag_dir="$(antigravity_plugin_dir)"
+    ag_lib="$(install_lib_dir)" || ag_lib=""
+    if [ -d "$ag_dir" ] && [ -n "$ag_lib" ] && ! "$NODE_BIN" --input-type=module - "$ag_dir/hooks.json" "$ag_lib/host-json-config.mjs" <<'NODE'
+import fs from "node:fs";
+import { pathToFileURL } from "node:url";
+const [hooksPath, helper] = process.argv.slice(2);
+const { readJson, ownsHook } = await import(pathToFileURL(helper).href);
+process.exit(fs.existsSync(hooksPath) && ownsHook(readJson(hooksPath)) ? 0 : 1);
+NODE
+    then
+      warn "$(t 'Left in place because OpenViking did not write it:' '不是 OpenViking 写入的，已保留：') $ag_dir"
+    elif [ -d "$ag_dir" ] && [ -z "$ag_lib" ]; then
+      warn "$(t 'Installer runtime not found; remove the plugin by hand:' '未找到安装器运行时，请手动移除插件：') rm -rf \"$ag_dir\""
+    else
+      rm -rf "$ag_dir"
+    fi
+    rm -rf "$OV_HOME/agent-integrations/antigravity"
+    info "$(t 'Removed the Antigravity OpenViking plugin.' '已移除 Antigravity OpenViking 插件。')"
+  fi
   if [ ! -d "$OV_HOME/agent-integrations/cursor" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae-cn" ] \
@@ -2809,7 +2857,8 @@ NODE
     && [ ! -d "$OV_HOME/agent-integrations/zcode" ] \
     && [ ! -d "$OV_HOME/agent-integrations/kimicode" ] \
     && [ ! -d "$OV_HOME/agent-integrations/codebuddy" ] \
-    && [ ! -d "$OV_HOME/agent-integrations/qoder" ]; then
+    && [ ! -d "$OV_HOME/agent-integrations/qoder" ] \
+    && [ ! -d "$OV_HOME/agent-integrations/antigravity" ]; then
     rm -rf "$OV_HOME/agent-integrations/memory-plugin-shared"
   fi
   if contains_harness cli; then
@@ -2900,6 +2949,69 @@ install_zcode() {
     || { warn "$(t 'Failed to merge ZCode config' 'ZCode 配置合并失败')"; return 1; }
   info "$(t 'ZCode hooks installed:' 'ZCode hooks 已安装：') $config_path (hooks.events)"
   info "$(t 'ZCode MCP installed:' 'ZCode MCP 已安装：') $config_path (mcp.servers)"
+}
+
+# Antigravity loads plugins from directories, each a plugin.json and a
+# hooks.json whose top-level keys name the hooks. The directory is the
+# installer's alone, so it is written whole instead of merged into user files.
+install_antigravity() {
+  step_heading "$(t 'Antigravity integration' 'Antigravity 集成')"
+  local root plugin_dir lib
+  ensure_bundle
+  root="$(assemble_agent_integration antigravity antigravity)" || return 1
+  plugin_dir="$(antigravity_plugin_dir)"
+  lib="$(require_install_lib_dir)" || return 1
+  "$NODE_BIN" --input-type=module - "$root" "$plugin_dir" "$NODE_BIN" "$SOURCE_MODE" "$lib/host-json-config.mjs" <<'NODE' || return 1
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const [root, pluginDir, nodeBin, sourceMode, helper] = process.argv.slice(2);
+const { readJson, ownsHook } = await import(pathToFileURL(helper).href);
+const hostDir = path.join(root, "hosts", "antigravity");
+const version = readJson(path.join(root, "plugin.json")).version;
+const existing = path.join(pluginDir, "hooks.json");
+// A directory of the same name that this installer did not write stays put.
+if (fs.existsSync(pluginDir) && !(fs.existsSync(existing) && ownsHook(readJson(existing)))) {
+  process.stderr.write(`${pluginDir} exists and is not an OpenViking plugin; move it aside and re-run.\n`);
+  process.exit(1);
+}
+const quote = (value) => `'${String(value).replace(/'/g, `'"'"'`)}'`;
+const env = `OPENVIKING_INTEGRATION_ID='openviking-memory' OPENVIKING_INTEGRATION_VERSION=${quote(version)} OPENVIKING_HOOK_SOURCE='antigravity'`;
+const render = (command) => {
+  const match = /^node\s+__OPENVIKING_PLUGIN_ROOT__\/(\S+)(\s.*)?$/u.exec(command);
+  if (!match) throw new Error(`Unsupported Antigravity hook command template: ${command}`);
+  const args = (match[2] || "").replaceAll("__OPENVIKING_CLIENT_ID__", "antigravity");
+  return `${env} ${quote(nodeBin)} ${quote(path.join(root, match[1]))}${args} # openviking-memory`;
+};
+const template = readJson(path.join(hostDir, "hooks.json"));
+const hooks = Object.fromEntries(Object.entries(template).map(([name, events]) => [name,
+  Object.fromEntries(Object.entries(events).map(([event, handlers]) => [event,
+    handlers.map((handler) => ({ ...handler, command: render(handler.command) }))])),
+]));
+const tmp = `${pluginDir}.${process.pid}.tmp`;
+fs.rmSync(tmp, { recursive: true, force: true });
+fs.mkdirSync(tmp, { recursive: true });
+fs.copyFileSync(path.join(hostDir, "plugin.json"), path.join(tmp, "plugin.json"));
+fs.writeFileSync(path.join(tmp, "hooks.json"), JSON.stringify(hooks, null, 2) + "\n", { mode: 0o600 });
+fs.rmSync(pluginDir, { recursive: true, force: true });
+fs.renameSync(tmp, pluginDir);
+const manifestPath = path.join(root, "integration.json");
+const previous = fs.existsSync(manifestPath) ? readJson(manifestPath) : {};
+const now = new Date().toISOString();
+fs.writeFileSync(manifestPath, JSON.stringify({
+  schemaVersion: 1,
+  id: "openviking-memory",
+  version,
+  client: "antigravity",
+  installMode: "managed-native",
+  source: sourceMode,
+  capabilities: ["hooks"],
+  hooksConfig: path.join(pluginDir, "hooks.json"),
+  installedAt: previous.installedAt || now,
+  updatedAt: now,
+}, null, 2) + "\n");
+NODE
+  info "$(t 'Antigravity plugin installed:' 'Antigravity 插件已安装：') $plugin_dir"
 }
 
 install_kimicode() {
@@ -3360,6 +3472,28 @@ EOF
       ok=0; agent_fatal=1
     fi
   fi
+  if contains_harness antigravity; then
+    local ag_root="$OV_HOME/agent-integrations/antigravity" ag_hooks
+    ag_hooks="$(antigravity_plugin_dir)/hooks.json"
+    if [ -f "$(antigravity_plugin_dir)/plugin.json" ] \
+      && [ -f "$ag_root/scripts/hook.mjs" ] \
+      && [ -f "$ag_root/integration.json" ] \
+      && [ -f "$OV_HOME/agent-integrations/memory-plugin-shared/lib/agent-hook-runtime.mjs" ] \
+      && grep -q 'OPENVIKING_INTEGRATION_ID' "$ag_hooks" 2>/dev/null \
+      && grep -qF "$ag_root/scripts/hook.mjs" "$ag_hooks" 2>/dev/null; then
+      "$NODE_BIN" --check "$ag_root/scripts/hook.mjs" || { ok=0; agent_fatal=1; }
+      if ! printf '%s' '{}' | OPENVIKING_MEMORY_ENABLED=0 \
+        "$NODE_BIN" "$ag_root/scripts/hook.mjs" session-start antigravity >/dev/null; then
+        warn "antigravity: $(t 'installed Hook runtime failed its smoke test' '已安装的 Hook 运行时 smoke test 失败')"
+        ok=0; agent_fatal=1
+      else
+        info "antigravity: $(t 'plugin installed (Hooks)' '插件已安装（Hooks）')"
+      fi
+    else
+      warn "antigravity: $(t 'plugin installation is incomplete' '插件安装不完整')"
+      ok=0; agent_fatal=1
+    fi
+  fi
   if contains_harness codebuddy; then validate_marketplace_host codebuddy codebuddy plugin openviking-memory; fi
   if contains_harness qoder; then validate_marketplace_host qoder "$(qoder_clis)" plugins openviking-memory@openviking; fi
   if contains_harness opencode; then
@@ -3535,7 +3669,7 @@ count_steps() {
   STEP_TOTAL=3
   if contains_harness claude; then STEP_TOTAL=$((STEP_TOTAL + $(list_count "$CLAUDE_BINS"))); fi
   if contains_harness codex; then STEP_TOTAL=$((STEP_TOTAL + $(list_count "$CODEX_BINS"))); fi
-  for h in cursor trae trae-cn zcode kimicode codebuddy qoder opencode pi dsh dsh-desktop cli; do
+  for h in cursor trae trae-cn zcode kimicode codebuddy qoder antigravity opencode pi dsh dsh-desktop cli; do
     if contains_harness "$h"; then STEP_TOTAL=$((STEP_TOTAL + 1)); fi
   done
 }
@@ -3645,7 +3779,7 @@ $CODEX_BINS
 EOF
   fi
   if [ "$SOURCE_MODE" = "archive" ] && { contains_harness cursor || contains_harness trae || contains_harness trae-cn \
-    || contains_harness zcode || contains_harness kimicode || contains_harness codebuddy || contains_harness qoder || contains_harness opencode || contains_harness pi; }; then
+    || contains_harness zcode || contains_harness kimicode || contains_harness codebuddy || contains_harness qoder || contains_harness antigravity || contains_harness opencode || contains_harness pi; }; then
     plan_item "$bundle ($(t 'plugin bundle download' '下载插件包'))"
   fi
   if contains_harness cursor; then
@@ -3662,7 +3796,10 @@ EOF
   if contains_harness zcode; then
     plan_paths ZCode "$HOME/.zcode/cli/config.json" "$HOME/.zcode/hooks.json" "$(zcode_mcp_path)" "$OV_HOME/agent-integrations/zcode"
   fi
-  if contains_harness cursor || contains_harness trae || contains_harness trae-cn || contains_harness zcode; then
+  if contains_harness antigravity; then
+    plan_paths Antigravity "$(antigravity_plugin_dir)" "$OV_HOME/agent-integrations/antigravity"
+  fi
+  if contains_harness cursor || contains_harness trae || contains_harness trae-cn || contains_harness zcode || contains_harness antigravity; then
     plan_paths "$(t 'Shared hook runtime' '共享 hook 运行时')" "$OV_HOME/agent-integrations/memory-plugin-shared"
   fi
   if contains_harness kimicode; then
@@ -3811,6 +3948,9 @@ EOF
   if contains_harness kimicode; then
     next_steps "Kimi Code" "$(t 'start a new session (not /reload)' '新建会话（不要用 /reload）')" "$rerun" "" "$uninstall kimicode"
   fi
+  if contains_harness antigravity; then
+    next_steps Antigravity "$(t 'start a new conversation in the Antigravity app or agy' '在 Antigravity app 或 agy 中新开一个对话')" "$rerun" "" "$uninstall antigravity"
+  fi
   if contains_harness codebuddy; then
     next_steps "CodeBuddy Code" "$(t 'run /reload-plugins or start a new session' '运行 /reload-plugins 或新建会话')" "$rerun" "" "$uninstall codebuddy"
   fi
@@ -3933,6 +4073,7 @@ if contains_harness zcode; then install_zcode; fi
 if contains_harness kimicode; then install_kimicode; fi
 if contains_harness codebuddy; then install_marketplace_host codebuddy "CodeBuddy Code" codebuddy plugin; fi
 if contains_harness qoder; then install_marketplace_host qoder "Qoder CLI" "$(qoder_clis)" plugins; fi
+if contains_harness antigravity; then install_antigravity; fi
 if contains_harness opencode; then install_opencode; fi
 if contains_harness pi; then install_pi; fi
 if contains_harness dsh; then install_dsh; fi

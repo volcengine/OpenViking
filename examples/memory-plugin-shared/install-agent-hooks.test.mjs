@@ -885,3 +885,71 @@ test("malformed existing agent JSON fails without overwriting user configuration
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+// Antigravity loads a plugin from a directory of its own under ~/.gemini/config,
+// and runs each hook command through a shell, so the rendered command has to
+// work as a shell line exactly as written.
+test("Antigravity installs its plugin directory, replaces a hand-made copy and uninstalls cleanly", () => {
+  const home = mkdtempSync(join(tmpdir(), "openviking-antigravity-install-"));
+  const pluginDir = join(home, ".gemini", "config", "plugins", "openviking-memory");
+  const runtime = join(home, ".openviking", "agent-integrations", "antigravity");
+  try {
+    // The manual steps the docs gave before the installer knew this host.
+    writeJson(join(pluginDir, "hooks.json"), {
+      "openviking-memory": { Stop: [{ type: "command", command: "node /checkout/examples/agent-hook-plugin/scripts/hook.mjs stop antigravity" }] },
+    });
+    runInstall(home, "cursor,antigravity");
+
+    const hooks = JSON.parse(readFileSync(join(pluginDir, "hooks.json"), "utf8"));
+    assert.deepEqual(Object.keys(hooks), ["openviking-memory"]);
+    assert.deepEqual(Object.keys(hooks["openviking-memory"]), ["SessionStart", "PreInvocation", "Stop"]);
+    assert.equal(JSON.parse(readFileSync(join(pluginDir, "plugin.json"), "utf8")).name, "openviking-memory");
+    const commands = hookCommands(hooks);
+    assert.equal(commands.length, 3);
+    for (const command of commands) {
+      assert.match(command, /OPENVIKING_INTEGRATION_ID='openviking-memory'/);
+      assert.ok(command.includes(join(runtime, "scripts", "hook.mjs")), command);
+      assert.doesNotMatch(command, /__OPENVIKING_/);
+    }
+    const sessionStart = spawnSync("sh", ["-c", hooks["openviking-memory"].SessionStart[0].command], {
+      env: { ...process.env, HOME: home, OPENVIKING_MEMORY_ENABLED: "0" },
+      input: "{}",
+      encoding: "utf8",
+    });
+    assert.equal(sessionStart.status, 0, sessionStart.stderr);
+    assert.equal(JSON.parse(readFileSync(join(runtime, "integration.json"), "utf8")).client, "antigravity");
+    // One host's installation carries no other host's configuration.
+    assert.equal(existsSync(join(runtime, "hosts", "cursor")), false);
+
+    // Antigravity still runs from the shared runtime after Cursor is removed.
+    runUninstall(home, "cursor");
+    assert.ok(existsSync(join(home, ".openviking", "agent-integrations", "memory-plugin-shared", "lib", "agent-hook-runtime.mjs")));
+
+    runUninstall(home, "antigravity");
+    assert.equal(existsSync(pluginDir), false);
+    assert.equal(existsSync(runtime), false);
+    assert.equal(existsSync(join(home, ".openviking", "agent-integrations", "memory-plugin-shared")), false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity leaves a plugin directory it did not write alone", () => {
+  const home = mkdtempSync(join(tmpdir(), "openviking-antigravity-foreign-"));
+  const pluginDir = join(home, ".gemini", "config", "plugins", "openviking-memory");
+  const foreign = { "my-hooks": { Stop: [{ type: "command", command: "echo mine" }] } };
+  try {
+    writeJson(join(pluginDir, "hooks.json"), foreign);
+    const install = runInstaller(home, [
+      "--harness", "antigravity", "--source", "dev", "--lang", "en",
+      "--url", "http://127.0.0.1:9", "--api-key", "", "--yes",
+    ]);
+    assert.match(`${install.stdout}\n${install.stderr}`, /is not an OpenViking plugin/);
+    assert.deepEqual(JSON.parse(readFileSync(join(pluginDir, "hooks.json"), "utf8")), foreign);
+
+    runUninstall(home, "antigravity");
+    assert.deepEqual(JSON.parse(readFileSync(join(pluginDir, "hooks.json"), "utf8")), foreign);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
