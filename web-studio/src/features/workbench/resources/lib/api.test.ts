@@ -1,25 +1,36 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  deleteSharedResource,
   fetchDirectorySidecarContent,
   fetchFsList,
 } from '#/features/workbench/resources/lib/api'
 
-const { getContentReadMock, getFsLsMock } = vi.hoisted(() => ({
-  getContentReadMock: vi.fn(),
-  getFsLsMock: vi.fn(),
-}))
+const { deleteResourcesMock, getContentReadMock, getFsLsMock } = vi.hoisted(
+  () => ({
+    deleteResourcesMock: vi.fn(),
+    getContentReadMock: vi.fn(),
+    getFsLsMock: vi.fn(),
+  }),
+)
 
 vi.mock('#/shared/api/ov-client/index', async (importOriginal) => {
   const original = await importOriginal()
   return {
     ...original,
+    deleteResources: deleteResourcesMock,
     getContentRead: getContentReadMock,
     getFsLs: getFsLsMock,
   }
 })
 
 beforeEach(() => {
+  deleteResourcesMock.mockReset()
+  deleteResourcesMock.mockResolvedValue({
+    data: { status: 'ok', result: { semantic_status: 'complete' } },
+    headers: {},
+    status: 200,
+  })
   getContentReadMock.mockReset()
   getFsLsMock.mockReset()
   getFsLsMock.mockResolvedValue({
@@ -61,6 +72,23 @@ describe('fetchDirectorySidecarContent', () => {
         raw: true,
       },
     })
+  })
+})
+
+describe('deleteSharedResource', () => {
+  it('uses the restricted endpoint and waits for index cleanup', async () => {
+    await deleteSharedResource('viking://resources/project', true)
+
+    expect(deleteResourcesMock).toHaveBeenCalledWith({
+      query: { uri: 'viking://resources/project', recursive: true, wait: true },
+    })
+  })
+
+  it('rejects non-shared URIs before sending a request', async () => {
+    await expect(
+      deleteSharedResource('viking://user/alice/resources/private', true),
+    ).rejects.toThrow()
+    expect(deleteResourcesMock).not.toHaveBeenCalled()
   })
 })
 

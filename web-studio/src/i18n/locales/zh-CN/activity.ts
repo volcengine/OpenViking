@@ -143,6 +143,21 @@ const activity = {
     resizeContext: '调整文件系统宽度',
     resizeAction: '调整终端和 Agent 面板宽度',
     readFailed: '无法读取 {{uri}}',
+    deleteResource: {
+      button: '删除共享资源',
+      title: '永久删除共享资源？',
+      fileDescription:
+        '该资源及其语义索引将被永久删除，关联的定时同步也会移除。此操作无法撤销。',
+      directoryDescription:
+        '该目录下的全部内容及其语义索引将被永久删除，关联的定时同步也会移除。此操作无法撤销。',
+      confirmationLabel: '输入上方完整 URI 以确认删除',
+      cancel: '取消',
+      confirm: '永久删除',
+      deleting: '正在删除并更新索引...',
+      deleted: '共享资源已删除，索引已更新',
+      deletedIndexFailed: '资源已删除，但索引更新失败，请重建索引',
+      failed: '共享资源删除失败',
+    },
     tabs: {
       terminal: '终端',
       agent: 'Agent',

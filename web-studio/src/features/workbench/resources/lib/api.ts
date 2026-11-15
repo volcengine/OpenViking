@@ -1,4 +1,5 @@
 import {
+  deleteResources,
   getContentAbstract,
   getContentOverview,
   getContentRead,
@@ -219,6 +220,32 @@ export async function fetchFsStat(
       abstract: '',
       overview: '',
     }
+  }
+}
+
+export async function deleteSharedResource(
+  uri: string,
+  isDirectory: boolean,
+): Promise<{ semanticStatus?: string }> {
+  if (!uri.startsWith('viking://resources/')) {
+    // Internal guard: the localized UI prevents this path.
+    // eslint-disable-next-line studio-i18n/no-literal-message
+    throw new Error('Only shared resources can be deleted')
+  }
+  try {
+    const result = await getOvResult<Record<string, unknown>>(
+      deleteResources({
+        query: { uri, recursive: isDirectory, wait: true },
+      }),
+    )
+    return {
+      semanticStatus:
+        typeof result.semantic_status === 'string'
+          ? result.semantic_status
+          : undefined,
+    }
+  } catch (error) {
+    throw toVikingApiError(error)
   }
 }
 

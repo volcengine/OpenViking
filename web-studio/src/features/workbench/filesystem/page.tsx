@@ -9,6 +9,7 @@ import {
   PanelRightCloseIcon,
   PanelRightOpenIcon,
   TerminalIcon,
+  Trash2Icon,
   WandSparkles,
 } from 'lucide-react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
@@ -56,6 +57,7 @@ import {
   PanelTab,
 } from '#/features/workbench/filesystem/components/context-explorer'
 import { DataManagementDialog } from '#/features/workbench/filesystem/components/data-management-dialog'
+import { DeleteResourceDialog } from '#/features/workbench/filesystem/components/delete-resource-dialog'
 import { SnapshotComparisonDialog } from '#/features/workbench/filesystem/components/snapshot-comparison-dialog'
 import { TerminalPanel } from '#/features/workbench/filesystem/components/terminal-panel'
 import {
@@ -135,6 +137,7 @@ function FilesystemWorkbench() {
     () => search.upload ?? false,
   )
   const [findPaletteOpen, setFindPaletteOpen] = useState(false)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [taskDialogOpen, setTaskDialogOpen] = useState(false)
   const [dataManagementMode, setDataManagementMode] = useState<
     'history' | 'transfer' | 'compare' | null
@@ -455,8 +458,12 @@ function FilesystemWorkbench() {
     : normalizeDirUri(parentUri(selectedUri))
   useEffect(() => {
     setDataManagementMode(null)
+    setDeleteDialogOpen(false)
   }, [selectedUri])
   const canManageSelectedUri = selectedUri !== ROOT_URI
+  const canDeleteSelectedUri =
+    canUseLocalTools &&
+    selectedUri.replace(/\/$/, '').startsWith('viking://resources/')
   const canTransferSelectedUri = transferUri.startsWith('viking://resources/')
   const displayUri =
     selectedUri === ROOT_URI ? selectedUri : selectedUri.replace(/\/$/, '')
@@ -653,6 +660,19 @@ function FilesystemWorkbench() {
                   </span>
                 </Button>
               )}
+            {canDeleteSelectedUri ? (
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                className="text-destructive hover:text-destructive"
+                title={t('deleteResource.button')}
+                aria-label={t('deleteResource.button')}
+                onClick={() => setDeleteDialogOpen(true)}
+              >
+                <Trash2Icon className="size-4" />
+              </Button>
+            ) : null}
             {canManageSelectedUri ? (
               <Button
                 type="button"
@@ -807,6 +827,26 @@ function FilesystemWorkbench() {
             tasks={tasks}
           />
         </>
+      ) : null}
+      {canDeleteSelectedUri ? (
+        <DeleteResourceDialog
+          open={deleteDialogOpen}
+          onOpenChange={setDeleteDialogOpen}
+          uri={selectedUri}
+          isDirectory={selectedIsDirectory}
+          onDeleted={({ semanticStatus }) => {
+            const parent = normalizeDirUri(parentUri(selectedUri))
+            setCurrentUri(parent)
+            setSelectedFile(createEntryFromUri(parent, true))
+            syncSearch({ file: undefined, uri: parent })
+            void invalidateAll()
+            if (semanticStatus === 'failed') {
+              toast.warning(t('deleteResource.deletedIndexFailed'))
+            } else {
+              toast.success(t('deleteResource.deleted'))
+            }
+          }}
+        />
       ) : null}
       {dataManagementMode === 'compare' ? (
         <SnapshotComparisonDialog

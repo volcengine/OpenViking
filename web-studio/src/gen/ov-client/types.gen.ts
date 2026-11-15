@@ -1390,6 +1390,66 @@ export type PostResourcesResponses = {
     200: unknown;
 };
 
+export type DeleteResourcesData = {
+    body?: never;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+    };
+    path?: never;
+    query: {
+        /**
+         * Uri
+         *
+         * URI below viking://resources/
+         */
+        uri: string;
+        /**
+         * Recursive
+         *
+         * Remove a directory recursively
+         */
+        recursive?: boolean;
+        /**
+         * Wait
+         *
+         * Wait for semantic index cleanup
+         */
+        wait?: boolean;
+    };
+    url: '/api/v1/resources';
+};
+
+export type DeleteResourcesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type DeleteResourcesError = DeleteResourcesErrors[keyof DeleteResourcesErrors];
+
+export type DeleteResourcesResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
 export type PostSkillsData = {
     body: AddSkillRequest;
     headers?: {

@@ -3,12 +3,13 @@
 """Resource endpoints for OpenViking HTTP Server."""
 
 from typing import Any, Dict, Literal, Optional
+from urllib.parse import unquote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
-from openviking.core.uri_validation import validate_content_target_uri
+from openviking.core.uri_validation import validate_content_target_uri, validate_request_viking_uri
 from openviking.server.auth import get_request_context, get_upload_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
@@ -18,6 +19,7 @@ from openviking.server.resource_ingest import (
     ingest_temp_upload,
 )
 from openviking.server.responses import response_from_result
+from openviking.server.routers.filesystem import rm as remove_filesystem_entry
 from openviking.server.skill_ingest import ingest_temp_upload_skill, install_skills
 from openviking.server.telemetry import run_operation
 from openviking.server.temp_upload_store import TempUploadStore
@@ -25,6 +27,35 @@ from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError
 
 router = APIRouter(prefix="/api/v1", tags=["resources"])
+
+_SHARED_RESOURCES_ROOT = "viking://resources"
+
+
+@router.delete("/resources")
+async def delete_resource(
+    uri: str = Query(..., description="URI below viking://resources/"),
+    recursive: bool = Query(False, description="Remove a directory recursively"),
+    wait: bool = Query(True, description="Wait for semantic index cleanup"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Delete one shared resource without exposing general filesystem deletion."""
+    resolved = validate_request_viking_uri(resolve_path_variables(uri), _ctx).rstrip("/")
+    decoded_segments = unquote(resolved).replace("\\", "/").split("/")
+    if not resolved.startswith(f"{_SHARED_RESOURCES_ROOT}/") or any(
+        segment in {".", ".."} for segment in decoded_segments
+    ):
+        raise InvalidArgumentError(
+            "Only children of viking://resources/ can be deleted through this endpoint"
+        )
+    # FSService enforces MANAGE ACL, removes vectors, refreshes parent semantic
+    # metadata and synchronizes watches. Its tracked fs_rm task keeps the same
+    # asynchronous semantics when wait=false.
+    return await remove_filesystem_entry(
+        uri=resolved,
+        recursive=recursive,
+        wait=wait,
+        _ctx=_ctx,
+    )
 
 
 class AddSkillRequest(BaseModel):

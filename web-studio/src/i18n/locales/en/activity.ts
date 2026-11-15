@@ -150,6 +150,22 @@ const activity = {
     resizeContext: 'Resize filesystem width',
     resizeAction: 'Resize Terminal and Agent width',
     readFailed: 'Failed to read {{uri}}',
+    deleteResource: {
+      button: 'Delete shared resource',
+      title: 'Permanently delete shared resource?',
+      fileDescription:
+        'This resource and its semantic index will be permanently deleted. Associated scheduled syncs will also be removed. This cannot be undone.',
+      directoryDescription:
+        'Everything in this directory and its semantic index will be permanently deleted. Associated scheduled syncs will also be removed. This cannot be undone.',
+      confirmationLabel: 'Type the full URI above to confirm deletion',
+      cancel: 'Cancel',
+      confirm: 'Delete permanently',
+      deleting: 'Deleting and updating index...',
+      deleted: 'Shared resource deleted and index updated',
+      deletedIndexFailed:
+        'Resource deleted, but the index update failed. Rebuild the index.',
+      failed: 'Could not delete shared resource',
+    },
     tabs: {
       terminal: 'Terminal',
       agent: 'Agent',
