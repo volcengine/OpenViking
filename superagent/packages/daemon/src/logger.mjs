@@ -13,6 +13,7 @@ export function redactSensitive(value) {
     .replace(/((?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|app[_-]?secret|client[_-]?secret|credential|password|cookie)\s*[=:]\s*["']?)[^\s,"'&}]+/gi, '$1[REDACTED]')
     .replace(/([?&](?:token|api_key|access_token|secret|password)=)[^&\s]+/gi, '$1[REDACTED]')
     .replace(/\b(?:sk|t)-[A-Za-z0-9_-]{12,}\b/g, '[REDACTED]')
+    .replace(/\b(?:oc_sk|ovgm|apikey)_[A-Za-z0-9_-]{12,}\b/g, '[REDACTED]')
     .replace(/\b(?:github_pat_[A-Za-z0-9_]{12,}|gh[pousr]_[A-Za-z0-9]{12,}|xox[baprs]-[A-Za-z0-9-]{12,})\b/g, '[REDACTED]');
 }
 
@@ -36,16 +37,18 @@ function cleanValue(value, seen = new WeakSet(), depth = 0) {
     seen.add(value);
     if (Array.isArray(value)) return value.map((item) => cleanValue(item, seen, depth + 1));
     const cleaned = {};
-    for (const [key, child] of Object.entries(value)) {
-      if (/(?:authorization|api[_-]?key|token|secret|credential|password|cookie)/i.test(key)) {
-        cleaned[key] = '[REDACTED]';
-      } else {
-        cleaned[key] = cleanValue(child, seen, depth + 1);
-      }
-    }
+    for (const [key, child] of Object.entries(value)) cleaned[key] = cleanField(key, child, seen, depth + 1);
     return cleaned;
   }
   return value;
+}
+
+const SENSITIVE_KEY = /(?:authorization|api[_-]?key|token|secret|credential|password|cookie)/i;
+
+// A field named like a secret is withheld whatever its value; any other value
+// is redacted by pattern.
+function cleanField(key, value, seen, depth) {
+  return SENSITIVE_KEY.test(key) ? '[REDACTED]' : cleanValue(value, seen, depth);
 }
 
 export function safeError(error) {
@@ -72,11 +75,10 @@ export function createLogger(level = 'info', base = {}) {
     const record = {
       time: new Date().toISOString(),
       level: kind,
-      message,
-      ...base,
+      message: cleanValue(message),
     };
-    for (const [key, value] of Object.entries(fields)) {
-      if (value !== undefined) record[key] = cleanValue(value);
+    for (const [key, value] of Object.entries({ ...base, ...fields })) {
+      if (value !== undefined) record[key] = cleanField(key, value);
     }
     const stream = kind === 'error' ? process.stderr : process.stdout;
     stream.write(`${JSON.stringify(record)}\n`);
