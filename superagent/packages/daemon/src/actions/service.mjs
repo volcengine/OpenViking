@@ -66,8 +66,10 @@ const HANDLERS = {
 };
 
 // A refusal the model can act on; `code` is what logs and activities record.
-function blocked(code, message) {
-  return Object.assign(new Error(message), { code });
+// logMessage, when set, is what logs and activities keep instead of a message
+// that names ids meant only for the model.
+function blocked(code, message, logMessage = undefined) {
+  return Object.assign(new Error(message), { code, ...(logMessage ? { logMessage } : {}) });
 }
 
 // Tools whose success changes something (a delivery, a decision, a timer), as
@@ -247,11 +249,12 @@ export class ActionService {
     } catch (error) {
       trace.outcome = trace.invoked ? 'failed' : 'blocked';
       trace.code = error.code ?? (trace.invoked ? 'connector_failed' : 'error');
-      this.logger.warn('agent_tool', { ...trace, durationMs: Date.now() - startedAt, error: safeError(error) });
+      const logged = error.logMessage ?? safeError(error);
+      this.logger.warn('agent_tool', { ...trace, durationMs: Date.now() - startedAt, error: logged });
       if (trace.outcome === 'blocked' && (tool?.action || silence)) {
         this.store.recordActivity({
           eventKey: `tool:${randomUUID()}`, kind: 'delivery.blocked', status: 'BLOCKED',
-          conversationKey: caller.convKey ?? null, inboundSeq: trace.decisionSeq ?? null, summary: safeError(error),
+          conversationKey: caller.convKey ?? null, inboundSeq: trace.decisionSeq ?? null, summary: logged,
           metadata: { tool: name, code: trace.code, connector: trace.connector, via, runtime: trace.runtime,
             decisionSeq: trace.decisionSeq, newerSeq: trace.newerSeq },
         });
@@ -469,7 +472,13 @@ export class ActionService {
     const newerSeq = this.store.newerAcceptedSeq(decision.scope_key, decision.seq);
     if (newerSeq !== null) {
       caller.trace.newerSeq = newerSeq;
-      throw blocked('stale_decision', 'Delivery blocked: a newer authenticated input arrived in the same chat/thread, or about the same subject. Reconsider with the new input, then use its event= as decision_id if the action still fits.');
+      // Name the newest input so the model can decide on it without waiting
+      // for its line to be steered in.
+      const head = 'Delivery blocked: a newer authenticated input arrived in the same chat/thread, or about the same subject.';
+      const tail = ' Reconsider with the new input, then use its event= as decision_id if the action still fits.';
+      const newerEventId = this.store.inboundBySeq(newerSeq)?.eventId;
+      const newest = newerEventId ? ` The newest there is event=${newerEventId}.` : '';
+      throw blocked('stale_decision', `${head}${newest}${tail}`, `${head}${tail}`);
     }
   }
 

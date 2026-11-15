@@ -1062,6 +1062,7 @@ describe('decision references', () => {
     const stale = await reply('evt-question').catch((error) => error);
     assert.equal(stale.code, 'stale_decision');
     assert.doesNotMatch(stale.message, /msg=/);
+    assert.match(stale.message, /The newest there is event=evt-follow-up\./);
     // Copy the tag the hint names from the newer input's line, as the model would.
     const [, tag] = /use its (\w+)= as decision_id/.exec(stale.message);
     const line = formatInboundLine(followUp);
