@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from pydantic import ValidationError
 
@@ -20,6 +21,7 @@ from openviking.service.compile_service import (
     CompileSessionStatus,
 )
 from openviking.service.compile_targets import new_record, parse_schedule
+from openviking.service.external_task_service import CompileDependencyFailure
 from openviking.service.task_tracker import get_task_tracker
 from openviking.storage.errors import ResourceBusyError
 from openviking.storage.queuefs import get_queue_manager
@@ -38,6 +40,22 @@ TARGET = "viking://resources/wiki_output"
 SKILL = "viking://system/compile/example-skills/llm-wiki"
 INPUTS = {"from": [SOURCE], "to": TARGET, "skill": SKILL}
 SAVED_INPUTS = {**INPUTS, "compile_name": "research-summary"}
+
+
+@pytest.mark.parametrize("body", [b'{"error":{"message":"Ark unavailable"}}', b"unavailable"])
+async def test_compile_runtime_424_is_non_retryable(service, monkeypatch, body):
+    """Runtime 424 preserves request context even when the response is not JSON."""
+    service.compile.configure_local_backend("http://localhost:1", "")
+    request = AsyncMock(return_value=httpx.Response(424, content=body))
+    monkeypatch.setattr(httpx.AsyncClient, "request", request)
+    with pytest.raises(CompileDependencyFailure, match=r"HTTP 424 /runtime/v1/tasks/status") as exc:
+        await service.compile._client().get("session", connection={"request_id": "request-424"})
+    assert exc.value.code == "CompileDependencyFailed"
+    assert exc.value.transient is False
+    assert "request_id=request-424" in str(exc.value)
+    if body.startswith(b"{"):
+        assert "Ark unavailable" in str(exc.value)
+    request.assert_awaited_once()
 
 
 @pytest.mark.parametrize(
@@ -414,9 +432,12 @@ async def test_compile_admission_rejects_invalid_inputs_before_publication(
     )
 
 
-@pytest.mark.parametrize("role", [Role.USER, Role.ADMIN, Role.GLOBAL])
+@pytest.mark.parametrize(
+    ("role", "cancel_424"),
+    [(Role.USER, False), (Role.ADMIN, False), (Role.GLOBAL, False), (Role.USER, True)],
+)
 async def test_configuration_runs_full_isolation_and_failure_recovery(
-    service, app, client, monkeypatch, role
+    service, app, client, monkeypatch, role, cancel_424
 ):
     ensure_target = service.fs.ensure_compile_target
     ctx, runtime = await prepare(service, app, monkeypatch)
@@ -454,7 +475,23 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
         )
         assert response.status_code == 202, response.text
         task_id = response.json()["result"]["task_id"]
+        if cancel_424 and runtime.status == "failed":
+            await tracker.register_work(task_id, "compile", "ExternalTask", **owner)
+            await tracker.start_work(task_id, "compile", **owner)
+
+            async def interrupt_poll(*args, **kwargs):
+                await tracker.cancel(task_id, **owner)
+                raise asyncio.CancelledError()
+
+            runtime.get.side_effect = interrupt_poll
+            runtime.cancel = AsyncMock(
+                side_effect=CompileDependencyFailure(
+                    "CompileDependencyFailed", "HTTP 424 cancel: Ark unavailable", transient=False
+                )
+            )
         await service.compile._tasks.execute(task_id, **owner)
+        if cancel_424 and runtime.status == "failed":
+            await tracker.mark_work_done(task_id, "compile", **owner)
         for call in commit.await_args_list:
             executor = call.kwargs["ctx"]
             assert (executor.role, executor.group_ids, executor.bypass_acl) == (
@@ -542,6 +579,14 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
     assert history.status_code == 200, history.text
     assert history.json()["result"]["runs"][0]["task_id"] == failed.task_id
     assert history.json()["result"]["next_cursor"] is not None
+    if cancel_424:
+        assert failed_run["status"] == "failed"
+        assert "Ark unavailable" in failed.error and "Ark unavailable" in failed_run["error"]
+        runtime.status, runtime.get.side_effect = "completed", None
+        runtime.get.return_value = CompileSessionStatus(status="completed", stage="done")
+        successor = await execute({"compile_name": compile_name}, "compile-after-424")
+        assert successor.status == "completed"
+        assert await service.fs.read(f"{TARGET}/page.md", ctx) != preserved
 
     # Output history distinguishes the frozen run from later edits to this file and other files.
     uri = f"{TARGET}/page.md"

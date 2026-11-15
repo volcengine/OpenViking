@@ -30,6 +30,7 @@ from openviking.service.compile_targets import (
     validate_compile_name,
 )
 from openviking.service.external_task_service import (
+    CompileDependencyFailure,
     ExternalTaskCancellation,
     ExternalTaskError,
     ExternalTaskRetryExhaustedError,
@@ -359,24 +360,28 @@ class CompileAPIClient:
         try:
             body = response.json()
         except ValueError as exc:
-            if not response.is_success:
+            if response.is_success:
                 raise ExternalTaskError(
-                    "UNAVAILABLE" if response.status_code >= 500 else "INVALID_ARGUMENT",
-                    "Compile API request failed",
-                    transient=response.status_code in {408, 425, 429}
-                    or response.status_code >= 500,
+                    "INVALID_RESPONSE", "Compile API returned a non-JSON response", transient=False
                 ) from exc
-            raise ExternalTaskError(
-                "INVALID_RESPONSE",
-                "Compile API returned a non-JSON response",
-                transient=False,
-            ) from exc
+            body = {}
         if response.is_success:
             return body
 
         detail = body.get("detail") if isinstance(body, dict) else None
         error = body.get("error") if isinstance(body, dict) else None
         source = detail if isinstance(detail, dict) else error if isinstance(error, dict) else {}
+        if response.status_code == 424:
+            request_id = (
+                body.get("request_id") if isinstance(body, dict) else None
+            ) or headers.get("X-Tt-Logid")
+            detail_message = source.get("message") or (detail if isinstance(detail, str) else None)
+            reason = f"HTTP 424 {path}: {detail_message or 'Compile dependency failed'}"
+            if request_id and str(request_id) not in reason:
+                reason += f" (request_id={request_id})"
+            raise CompileDependencyFailure(
+                str(source.get("code") or "CompileDependencyFailed"), reason, transient=False
+            )
         default_code = "UNAVAILABLE" if response.status_code >= 500 else "INVALID_ARGUMENT"
         code = str(source.get("code") or default_code)
         message = str(source.get("message") or detail or error or "Compile API request failed")
@@ -1306,7 +1311,11 @@ class CompileService:
             status=status,
             stage=task.stage,
             result=task.result,
-            meta=task.meta,
+            meta={
+                key: value
+                for key, value in task.meta.items()
+                if key != "compile_runtime_http_status"
+            },
             error_code=error_code,
             error_message=error_message,
         )

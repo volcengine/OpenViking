@@ -947,13 +947,19 @@ class CompileLifecycle:
             await self._advance_progress(task, run)
             await self._save_checkpoint(task, {"phase": "finished"})
             return ExternalTaskSnapshot(
-                status=run["status"], result=run.get("result"), error_message=run.get("error")
+                status=run["status"],
+                result=run.get("result"),
+                error_code=snapshot.error_code,
+                error_message=run.get("error"),
             )
         ctx = await self.task_ctx(task)
         target = task.meta["request"]["to"]
         meta = run["meta"]
-        if await get_task_tracker().is_cancellation_requested(
-            task.task_id, account_id=task.account_id, user_id=task.user_id
+        if (
+            not task.has_compile_dependency_failure()
+            and await get_task_tracker().is_cancellation_requested(
+                task.task_id, account_id=task.account_id, user_id=task.user_id
+            )
         ):
             snapshot = ExternalTaskSnapshot(status="cancelled")
         try:
