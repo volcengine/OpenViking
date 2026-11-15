@@ -5,6 +5,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
+import { writeHostJsonConfigs } from "./lib/install/host-json-config.mjs";
 
 // `--source dev` installs out of the checkout the installer sits in, and the
 // rest of the suite reads that tree while these installs run, so the installs
@@ -550,6 +551,46 @@ test("combined hook-host install preserves unrelated hooks and is idempotent", (
       assert.equal(existsSync(`${file}.bak`), false, `${file}.bak`);
     }
     assert.equal(existsSync(join(home, ".openviking", "agent-integrations", "memory-plugin-shared")), false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("Windows host renders cmd-compatible hook commands without the env prefix", () => {
+  const home = mkdtempSync(join(tmpdir(), "openviking-agent-hooks-win-"));
+  try {
+    const hooksPath = join(home, ".zcode", "hooks.json");
+    const mcpPath = join(home, ".zcode", "mcp.json");
+    const root = join(home, "plugin-root");
+    cpSync(join(checkout, "examples", "agent-hook-plugin"), root, { recursive: true });
+    const options = {
+      kind: "zcode",
+      hooksPath,
+      mcpPath,
+      root,
+      clientId: "zcode",
+      // Backslash spelling on purpose: the Windows rendering must forward-slash it.
+      nodeBin: "C:\\tools\\node\\node.exe",
+      sourceMode: "dev",
+      platform: "win32",
+    };
+    writeHostJsonConfigs(options);
+    writeHostJsonConfigs(options);
+
+    const commands = hookCommands(JSON.parse(readFileSync(hooksPath, "utf8")));
+    assert.equal(commands.length, 4, JSON.stringify(commands));
+    for (const command of commands) {
+      assert.ok(command.startsWith('"C:/tools/node/node.exe"'), command);
+      assert.doesNotMatch(command, /OPENVIKING_INTEGRATION_ID=/, command);
+      assert.doesNotMatch(command, /\\/, command);
+      assert.ok(command.endsWith("# openviking-memory"), command);
+      assert.ok(command.includes("scripts/hook.mjs") || command.includes("scripts/uri-guard.mjs"), command);
+    }
+    const zcodeMcp = JSON.parse(readFileSync(mcpPath, "utf8")).mcpServers.openviking;
+    assert.equal(zcodeMcp.command, "C:/tools/node/node.exe");
+    assert.ok(zcodeMcp.args.every((arg) => !arg.includes("\\")), JSON.stringify(zcodeMcp.args));
+    assert.ok(zcodeMcp.args[0].endsWith("/servers/mcp-proxy.mjs"), JSON.stringify(zcodeMcp.args));
+    assert.equal(zcodeMcp.env.OPENVIKING_INTEGRATION_ID, "openviking-memory");
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

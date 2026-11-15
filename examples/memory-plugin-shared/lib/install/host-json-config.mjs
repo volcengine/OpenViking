@@ -61,6 +61,22 @@ function shellArg(value) {
   return `'${String(value).replace(/'/g, `'"'"'`)}'`;
 }
 
+// cmd.exe knows neither the `KEY=value` env prefix nor single-quoted
+// arguments, so the POSIX spelling of a hook command dies there before node
+// ever starts (volcengine/OpenViking#7726: every hook failed in ~100-250ms
+// with "'OPENVIKING_INTEGRATION_ID' is not recognized"). Windows commands
+// drop the env prefix — the runtime reads event and client id from argv, and
+// those variables only feed the User-Agent — and quote forward-slash paths
+// with double quotes, the one spelling node, cmd and the installer's own
+// validation grep all accept.
+function toForwardSlashes(value) {
+  return String(value).replaceAll("\\", "/");
+}
+
+function windowsArg(value) {
+  return `"${toForwardSlashes(value)}"`;
+}
+
 // Everything this installer writes today carries the integration id. The script
 // names are how an entry from an older install, written before that env prefix
 // existed, still gets reclaimed instead of accumulating beside the new one.
@@ -109,7 +125,9 @@ function isKnownLegacyOpenVikingServer(value) {
 }
 
 /** Render the host's hook and MCP templates into the user's own config files. */
-export function writeHostJsonConfigs({ kind, hooksPath, mcpPath, root, clientId, nodeBin, sourceMode }) {
+export function writeHostJsonConfigs({ kind, hooksPath, mcpPath, root, clientId, nodeBin, sourceMode, platform = process.platform }) {
+  const windows = platform === "win32";
+  const posixPath = (value) => (windows ? toForwardSlashes(value) : String(value));
   // One plugin serves every config-driven host; `kind` names the host directory
   // this client's configuration templates live in.
   const hostDir = path.join(root, "hosts", kind);
@@ -131,8 +149,9 @@ export function writeHostJsonConfigs({ kind, hooksPath, mcpPath, root, clientId,
     const match = /^node\s+"?__OPENVIKING_PLUGIN_ROOT__\/([^\s"]+)"?(\s.*)?$/u.exec(command);
     if (!match) throw new Error(`Unsupported ${clientId} hook command template: ${command}`);
     const args = (match[2] || "").replaceAll("__OPENVIKING_CLIENT_ID__", clientId);
-    const rendered = `${shellArg(nodeBin)} ${shellArg(path.join(root, match[1]))}${args}`;
-    return `${envPrefix} ${rendered} # openviking-memory`;
+    const script = path.join(root, match[1]);
+    if (windows) return `${windowsArg(nodeBin)} ${windowsArg(script)}${args} # openviking-memory`;
+    return `${envPrefix} ${shellArg(nodeBin)} ${shellArg(script)}${args} # openviking-memory`;
   }
 
   function renderHookValue(value) {
@@ -184,8 +203,8 @@ export function writeHostJsonConfigs({ kind, hooksPath, mcpPath, root, clientId,
   }
   mcp.mcpServers.openviking = {
     ...templateServer,
-    command: nodeBin,
-    args: [path.join(root, "servers", "mcp-proxy.mjs")],
+    command: posixPath(nodeBin),
+    args: [posixPath(path.join(root, "servers", "mcp-proxy.mjs"))],
     env: { ...(templateServer.env || {}), ...integrationEnv },
   };
   atomicWrite(mcpPath, mcp);
