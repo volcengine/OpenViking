@@ -4,6 +4,10 @@ export interface FileBrowserWorkflowLabels {
   configure: string;
   historyEmpty: string;
   historyLimit: string;
+  snapshotNote: string;
+  saveSnapshot: string;
+  snapshotSaved: string;
+  snapshotUnchanged: string;
   compareChanges: string;
   noChanges: string;
   addedLines: string;
@@ -21,6 +25,10 @@ export interface FileBrowserWorkflowLabels {
   cancel: string;
   save: string;
   failed: string;
+  copyFailed: string;
+  sourcesRequired: string;
+  skillRequired: string;
+  failureTitle: (action: string) => string;
   sources: string;
   skill: string;
   instruction: string;

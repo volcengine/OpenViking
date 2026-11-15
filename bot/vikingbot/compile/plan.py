@@ -1,4 +1,4 @@
-"""Typed, collection-level Compile plans. Python syntax is parsed, never executed."""
+"""Validated stage selection for a Markdown file pipeline; DSL text is never executed."""
 
 from __future__ import annotations
 
@@ -6,288 +6,103 @@ import ast
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from vikingbot.compile.results import RecordDraft
-
-# Shared operator and DSL rules; input_binding describes the collection available to each role.
-PLANNING_RULES = """## Available Operators
-
-Operators are the processing steps supported by the runtime. Select and combine
-those needed for the task. Each operator may appear at most once across the whole
-plan, including completed stages. The four operators below are not a required sequence.
-
-### Map
-
-Processes assigned source text. It can produce final files directly or return
-structured intermediate items called records. Each record contains information
-needed by later steps, such as facts extracted from a document.
-Map can also process records produced by an earlier step.
-
-Source-to-record extraction uses ranges. Describe work on assigned ranges rather
-than requiring the entire document. Preserve source identities, versions and
-applicability so later steps can combine evidence across ranges.
-Only file output can use input_unit=file to keep a document's ranges together.
-
-### Shuffle
-
-Collects records into groups according to a grouping rule.
-Each group is a collection of records that Reduce will process together.
-
-### Reduce
-
-Processes all records in a group together, combining their information.
-It must produce final files and be followed immediately by Finalize.
-One group may produce multiple output files.
-
-### Finalize
-
-Publishes the generated files to the requested destination and ends the flow.
-
-## Plan Syntax
-
-Write plan as a string of assignments and operator calls. The runtime provides
+PLANNING_RULES = """## Available stages and plan syntax
 {input_binding}
+Map reads assigned source ranges and writes Markdown drafts following the Skill.
+Use input_unit=file when a document's ranges must stay together; otherwise use range.
+Shuffle groups Markdown drafts by their contents for joint processing by Reduce.
+Reduce merges each group into one or more Markdown files, preserving unique facts,
+source citations, conditions, conflicting claims and applicability differences.
+Finalize publishes the selected files and must end the plan.
 
-These are examples of individual calls, not a complete plan or a prescribed sequence:
+Choose only necessary stages. Independent outputs need Map then Finalize.
+Cross-source consolidation needs Map, Shuffle, Reduce, then Finalize.
+Each operator can appear at most once. Each intermediate result has a new name
+and is consumed exactly once. Do not use imports, loops or other Python calls.
 
-- Map: mapped = p.map(sources, task=contract.extract)
-  mapped names the result; sources is the input; task selects the work configuration.
-  A previous records result can replace sources.
-- Shuffle: grouped = p.shuffle(records, by=contract.routing)
-  records is a previous records result; by selects the grouping rule.
-  Add against=target only when target_has_content is true and the task requires
-  comparing, updating or integrating existing target content.
-  Its consuming Reduce must produce files.
-  Otherwise grouping uses only the current inputs.
-- Reduce: combined = p.reduce(groups, task=contract.reduce)
-  groups is a previous Shuffle result; task selects the work configuration.
-- Finalize: p.finalize(files, into=target)
-  files is a previous Map or Reduce result containing output files.
+Examples:
+files = p.map(sources, task=contract.extract)
+p.finalize(files, into=target)
 
-The task argument can reference contract.extract, contract.reduce or contract.synthesize.
-Each contains instructions and settings for the work to perform. Any of them can be used
-by Map or Reduce; their names suggest common uses rather than operator types or positions.
-The by argument can reference contract.routing or contract.final_routing.
-Use these configuration names; reuse a configuration when multiple steps need the same work.
-Define optional work configurations and grouping rules only when referenced by the plan.
+or:
+drafts = p.map(sources, task=contract.extract)
+groups = p.shuffle(drafts, by=contract.routing)
+files = p.reduce(groups, task=contract.reduce)
+p.finalize(files, into=target)
 
-## Plan Rules
-
-Write a single sequence of the operator calls shown above. Do not include
-Python control flow, imports or other function calls.
-Give each intermediate result a new variable name and pass it to exactly
-one subsequent call. End the sequence with one Finalize call.
-Map accepts sources or records; Shuffle accepts records; Reduce accepts groups;
-Finalize accepts files. Other input types are unsupported.
-
-Each call describes a processing step over a collection of data.
-The runtime assigns files, text ranges or records to individual jobs within
-that step; do not write a separate call for each source file or job.
-
-## Access Boundaries
-
-Work with the assigned materials. Avoid scanning all history.
-
+Shuffle may add against=target when the target has content and relevant existing
+files must be integrated. Similarity requests joint processing, not mandatory merging.
+Map and Reduce always use file tools and produce Markdown.
+Define reduce and routing only when used. Stage instructions supplement the Skill.
 """
 
 
-# Common tasks share one collection flow; explicit plans still pass the AST whitelist.
-DEFAULT_PLAN = (
-    "records = p.map(sources, task=contract.extract)\n"
-    "groups = p.shuffle(records, by=contract.routing)\n"
-    "changes = p.reduce(groups, task=contract.reduce)\n"
-    "p.finalize(changes, into=target)"
-)
-
-
 class PlanModel(BaseModel):
-    """Discard undeclared planner fields while validating declared fields and constraints.
+    """Reject undeclared planning options instead of silently ignoring stage mistakes."""
 
-    Open dictionaries such as transform fields and scope definitions retain their
-    entries; only unknown model attributes are omitted from the parsed plan.
-    """
-
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
 
 class Transform(PlanModel):
-    """A bounded transformation; fields declare the permitted intermediate structure."""
+    """Markdown work instructions; input_unit controls source assignment granularity."""
 
-    instructions: str = Field(
-        min_length=1,
-        description="Work on assigned inputs, expected results and any step-specific constraints or checks. "
-        "Map/Reduce also receive the full Skill and user instruction; avoid repeating them.",
-    )
-    output: Literal["records", "files"] = Field(
-        default="records",
-        description="records carries evidence to later steps; files produces output files. "
-        "Reduce requires files.",
-    )
-    execution: Literal["direct", "agent"] = Field(
-        description="Use direct for straightforward tasks with small results. "
-        "Prefer agent for detailed knowledge compilation or large results. "
-        "Both modes can read assigned materials and Skill references.",
-    )
-    input_unit: Literal["range", "file"] = Field(
-        default="range",
-        description="When Map reads sources: records extraction uses ranges. "
-        "file applies only to files output and keeps each file's ranges together; "
-        "range permits separate or budgeted batches of ranges. "
-        "Map over records handles each record separately.",
-    )
-    fields: dict[str, str] = Field(
-        default_factory=lambda: {"text": "Facts extracted from the source."},
-        description="Record content field names mapped to instructions for producing their values; "
-        'e.g. {"facts": "Facts, conditions and exceptions to retain"}. Omit for files output.',
-    )
-
-    @field_validator("fields", mode="before")
-    @classmethod
-    def field_descriptions(cls, value):
-        """Preserve field order, treating name-only lists and null descriptions as undescribed."""
-        if isinstance(value, list) and all(isinstance(name, str) for name in value):
-            return dict.fromkeys(value, "")
-        if isinstance(value, dict):
-            return {
-                name: "" if description is None else description
-                for name, description in value.items()
-            }
-        return value
-
-    @field_validator("fields")
-    @classmethod
-    def check_fields(cls, value):
-        """Preserve business field descriptions and order while omitting reserved names.
-
-        The record result model defines the reserved envelope fields.
-        An empty mapping is valid when no business fields remain after normalization.
-        """
-        reserved = RecordDraft.model_fields.keys() - {"payload"}
-        return {name: description for name, description in value.items() if name not in reserved}
+    instructions: str = Field(min_length=1)
+    input_unit: Literal["range", "file"] = "range"
 
 
 class Routing(PlanModel):
-    """Group records by semantic instructions or preserve the entire collection as one group."""
+    """Semantic grouping criteria, or one collection for a task requiring global synthesis."""
 
-    mode: Literal["semantic", "all"] = Field(
-        default="semantic",
-        description="semantic groups related records using instructions; all puts every record in one group.",
-    )
-    instructions: str = Field(
-        default="",
-        description="Which records belong together and why; required for semantic mode. "
-        "Specify the purpose of joint processing and criteria for keeping records separate. "
-        "Must stand alone: Shuffle does not receive the Skill or user instruction.",
-    )
+    mode: Literal["semantic", "all"] = "semantic"
+    instructions: str = ""
 
     @model_validator(mode="after")
-    def check_instructions(self) -> Routing:
-        """Semantic grouping needs criteria; global grouping needs no model decision."""
+    def check_instructions(self):
+        """Require explicit grouping criteria for semantic routing."""
         if self.mode == "semantic" and not self.instructions.strip():
             raise ValueError("Semantic routing requires instructions")
         return self
 
 
 class Contract(PlanModel):
-    """Task-local interpretation of the original Skill, which remains authoritative.
+    """Stage-specific instructions; the original Skill remains authoritative."""
 
-    distinguish maps scope field names to their extraction meanings.
-    Scope values describe evidence; they are not equality keys for candidate grouping.
-    No identifiers in this contract enumerate individual input documents.
-    """
-
-    extract: Transform = Field(
-        description="Work configuration, typically for processing sources: extract facts or generate files.",
-    )
-    reduce: Transform | None = Field(
-        default=None,
-        description="Additional work configuration, typically consolidating related facts into a topic summary.",
-    )
-    synthesize: Transform | None = Field(
-        default=None,
-        description="Additional work configuration, typically processing earlier results into final deliverables.",
-    )
-    routing: str | Routing = Field(
-        default="",
-        description="Grouping rule referenced by Shuffle's by parameter; omit when not used.",
-    )
-    final_routing: str | Routing = Field(
-        default="",
-        description="Another grouping rule for a Shuffle step needing different criteria; same format as routing.",
-    )
-    distinguish: dict[str, str] = Field(
-        default_factory=dict,
-        description="Record applicability field names mapped to extraction instructions, not actual values; "
-        'e.g. {"version": "Product version these facts apply to"}. These are not exact-match grouping keys.',
-    )
-    output_format: Literal["wiki", "files"] = Field(
-        default="files",
-        description="Use files for ordinary file outputs or wiki for Markdown knowledge pages. "
-        "The Skill defines page metadata, types and structure.",
-    )
-
-    @field_validator("distinguish", mode="before")
-    @classmethod
-    def scope_descriptions(cls, value):
-        """Read saved name lists as fields without descriptions; mappings retain their meanings."""
-        return dict.fromkeys(value, "") if isinstance(value, list) else value
-
-    @model_validator(mode="before")
-    @classmethod
-    def apply_transform_defaults(cls, value):
-        """Default Reduce output to files while preserving explicit output choices."""
-        if not isinstance(value, dict):
-            return value
-        value = dict(value)
-        if isinstance(value.get("reduce"), dict):
-            value["reduce"] = {"output": "files", **value["reduce"]}
-        return value
+    extract: Transform
+    reduce: Transform | None = None
+    routing: Routing | None = None
+    output_format: Literal["wiki", "files"] = "files"
 
 
 class PlanProposal(PlanModel):
-    """A task contract with an optional custom flow; omission uses the four standard operators."""
+    """Explicit stage sequence and the work definitions referenced by it."""
 
-    contract: Contract = Field(
-        description="Work definitions, grouping rules and output requirements referenced by the plan.",
-    )
-    plan: str = Field(
-        default=DEFAULT_PLAN,
-        min_length=1,
-        max_length=8000,
-        description="Assignments and operator calls as a string, connecting the chosen steps and ending with Finalize.",
-    )
+    contract: Contract
+    plan: str = Field(min_length=1, max_length=8000)
 
 
 class ReviewDecision(PlanModel):
-    """A future-plan proposal; acceptance never changes completed outputs or task failures."""
+    """An advisory replacement of only the remaining stages and their instructions."""
 
     action: Literal["continue", "revise"]
-    reason: str = Field(
-        default="", max_length=600, description="Brief observed basis for the decision."
-    )
-    contract: Contract | None = Field(default=None, description="Complete contract for a revision.")
-    plan: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=8000,
-        description="Complete remaining DSL starting from current.handle and ending with Finalize.",
-    )
+    reason: str = Field(default="", max_length=600)
+    contract: Contract | None = None
+    plan: str | None = Field(default=None, min_length=1, max_length=8000)
 
     @model_validator(mode="after")
-    def check_revision(self) -> ReviewDecision:
-        """Require both revision fields, or neither for continuation; reject ambiguous decisions."""
-        if self.action == "revise":
-            if self.contract is None or self.plan is None:
-                raise ValueError("A revision requires contract and plan")
-        elif self.contract is not None or self.plan is not None:
-            raise ValueError("Continue must not include contract or plan")
+    def check_revision(self):
+        """Require a complete replacement for revise and no replacement for continue."""
+        if (self.action == "revise") != (self.contract is not None and self.plan is not None):
+            raise ValueError("Revise requires contract and plan")
+        if self.action == "continue" and (self.contract is not None or self.plan is not None):
+            raise ValueError("Continue must not include a replacement")
         return self
 
 
 @dataclass(frozen=True)
 class Node:
-    """A validated operation over an already-bound dataset; order is topological."""
+    """A validated operation consuming a single bound collection."""
 
     name: str
     op: str
@@ -311,7 +126,7 @@ def parse_plan(
     finalize, no unused datasets, rebinding, implicit fan-out or literals.
     input_handle/type bind the sole available collection; completed_names cannot be
     rebound. completed_ops prevents reuse of executed operators. Reduce produces files
-    consumed by Finalize. Each Shuffle record belongs to one work set. Invalid plans
+    consumed by Finalize. Each Markdown draft belongs to one work set. Invalid plans
     raise ValueError.
     """
     if len(program) > 8000:
@@ -322,7 +137,7 @@ def parse_plan(
         raise ValueError("Invalid plan syntax") from exc
     if not tree.body:
         raise ValueError("Plan must contain at least one operation")
-    if input_type not in {"sources", "records", "groups", "files"}:
+    if input_type not in {"sources", "groups", "files"}:
         raise ValueError(f"Invalid input type: {input_type}")
     handles = {input_handle: input_type}
     used: set[str] = set()
@@ -384,23 +199,19 @@ def parse_plan(
                     f"missing={sorted(required - set(kwargs))}; unexpected={sorted(set(kwargs) - required)}. "
                     f"Received {ast.unparse(call)}."
                 )
-            task = reference(
-                kwargs["task"], "contract", {"extract", "reduce", "synthesize"}, "task"
-            )
+            task = reference(kwargs["task"], "contract", {"extract", "reduce"}, "task")
             transform = getattr(contract, task)
             if transform is None:
                 raise ValueError(f"Missing transform: {task}")
             if op == "reduce":
                 valid = handles[source] == "groups"
-                if transform.output != "files":
-                    raise ValueError("Reduce requires output=files")
             else:
-                valid = handles[source] in {"sources", "records"}
-            output_type = transform.output
+                valid = handles[source] == "sources"
+            output_type = "files"
         elif op == "shuffle":
             if set(kwargs) not in ({"by"}, {"by", "against"}):
                 raise ValueError("shuffle requires by and optional against=target")
-            task = reference(kwargs["by"], "contract", {"routing", "final_routing"}, "by")
+            task = reference(kwargs["by"], "contract", {"routing"}, "by")
             if not getattr(contract, task):
                 raise ValueError(f"Missing routing requirements: {task}")
             if "against" in kwargs:
@@ -408,7 +219,7 @@ def parse_plan(
                 if not isinstance(value, ast.Name) or value.id != "target":
                     raise ValueError("Only the bound target can be searched")
                 against = True
-            valid, output_type = handles[source] == "records", "groups"
+            valid, output_type = handles[source] == "files", "groups"
         else:
             into = kwargs.get("into")
             if set(kwargs) != {"into"} or not isinstance(into, ast.Name) or into.id != "target":

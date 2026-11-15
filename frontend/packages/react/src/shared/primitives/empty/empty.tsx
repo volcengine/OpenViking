@@ -2,6 +2,7 @@ import { forwardRef, type ReactNode } from 'react';
 
 import Chart from '../../../../../icons/svg/empty/chart.svg?react';
 import Conversation from '../../../../../icons/svg/empty/conversation.svg?react';
+import Crash from '../../../../../icons/svg/empty/crash.svg?react';
 import Folder from '../../../../../icons/svg/empty/folder.svg?react';
 import People from '../../../../../icons/svg/empty/people.svg?react';
 import Search from '../../../../../icons/svg/file-browser/search-empty.svg?react';
@@ -10,6 +11,7 @@ import Tray from '../../../../../icons/svg/console/history-empty.svg?react';
 const illustrations = {
   chart: Chart,
   conversation: Conversation,
+  crash: Crash,
   folder: Folder,
   people: People,
   search: Search,
@@ -24,7 +26,8 @@ export type EmptyIllustration = keyof typeof illustrations;
  *
  * An empty state: artwork above, copy below, centred. The artwork shares the
  * search empty state's 258 × 140 dashed-grid line style and theme colours.
- * `compact` fits popovers, trees and cards.
+ * `compact` fits popovers, trees and cards. A failure passes `role="alert"` so it is
+ * announced at once, and `action` holds its recovery control.
  */
 export const Empty = forwardRef<
   HTMLDivElement,
@@ -32,11 +35,21 @@ export const Empty = forwardRef<
     illustration: EmptyIllustration;
     title: ReactNode;
     description?: ReactNode;
+    action?: ReactNode;
+    role?: 'status' | 'alert';
     size?: 'default' | 'compact';
     className?: string;
   }
 >(function Empty(
-  { illustration, title, description, size = 'default', className },
+  {
+    illustration,
+    title,
+    description,
+    action,
+    role = 'status',
+    size = 'default',
+    className,
+  },
   ref,
 ) {
   const Art = illustrations[illustration];
@@ -46,7 +59,7 @@ export const Empty = forwardRef<
       className={['ov-empty', `ov-empty--${size}`, className]
         .filter(Boolean)
         .join(' ')}
-      role="status"
+      role={role}
     >
       <Art className="ov-empty__art" aria-hidden="true" focusable="false" />
       <div className="ov-empty__text">
@@ -55,6 +68,7 @@ export const Empty = forwardRef<
           <p className="ov-empty__description">{description}</p>
         ) : null}
       </div>
+      {action}
     </div>
   );
 });

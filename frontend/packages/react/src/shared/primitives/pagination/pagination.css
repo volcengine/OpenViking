@@ -57,15 +57,22 @@
   letter-spacing: 1px;
   line-height: 1;
 }
-
 .ov-pagination__item:focus-visible {
-  outline: 2px solid
-    var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
-  outline-offset: 1px;
+  outline: none;
+  box-shadow:
+    inset 0 0 0 1px var(--ov-ui-color-focus, var(--ov-ui-focus-default)),
+    0 0 0 2px var(--ov-ui-color-focus-ring, var(--ov-ui-focus-ring-default));
 }
 
 @media (prefers-reduced-motion: reduce) {
   .ov-pagination__item {
     transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .ov-pagination__item:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
   }
 }

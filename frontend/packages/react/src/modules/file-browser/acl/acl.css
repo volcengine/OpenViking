@@ -1,23 +1,20 @@
 .ov-file-browser-acl {
-  --ov-ui-modal-width: 520px;
+  --ov-ui-modal-width: 492px;
+}
+.ov-file-browser-acl .ov-modal__panel {
+  border-radius: 20px;
 }
 .ov-file-browser-acl .ov-modal__body {
   box-sizing: border-box;
-  padding: 24px;
+  min-height: min(342px, calc(100dvh - 48px));
+  padding: 28px 24px 32px;
 }
 .ov-file-browser-acl__title {
-  margin: 0 32px 8px 0;
+  margin: 0 32px 24px 0;
   color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
   font-size: 18px;
   font-weight: 500;
   line-height: 28px;
-}
-.ov-file-browser-acl__uri {
-  margin: 0 0 16px;
-  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
-  overflow-wrap: anywhere;
-  font-size: 12px;
-  line-height: 20px;
 }
 .ov-file-browser-acl__status {
   color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
@@ -46,74 +43,75 @@
   flex: 1;
   margin: 0;
 }
-.ov-file-browser-acl .ov-modal__body button:not(.ov-button),
-.ov-file-browser-acl__tag-anchor button:not(.ov-button) {
-  min-height: 28px;
-  border: 1px solid var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
-  border-radius: 6px;
-  padding: 3px 10px;
-  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
-  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+.ov-file-browser-acl__level,
+.ov-file-browser-acl__tag {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 4px;
+  padding: 0 4px;
+  background: transparent;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
   font: inherit;
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 12px;
+  line-height: 24px;
+  white-space: nowrap;
   cursor: pointer;
 }
-.ov-file-browser-acl .ov-modal__body button:not(.ov-button):disabled {
+.ov-file-browser-acl__level:disabled {
   color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
   cursor: not-allowed;
 }
-.ov-file-browser-acl
-  .ov-modal__body
-  button:not(.ov-button):not(:disabled):hover,
-.ov-file-browser-acl__tag-anchor button:not(.ov-button):hover {
+.ov-file-browser-acl__level:hover:not(:disabled),
+.ov-file-browser-acl__tag {
   background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
 }
-.ov-file-browser-acl
-  .ov-modal__body
-  :is(button:not(.ov-button), input:not(.ov-input__element), h2):focus-visible,
-.ov-file-browser-acl__manage:focus-visible,
-.ov-file-browser-acl__tag-anchor button:not(.ov-button):focus-visible {
+.ov-file-browser-acl__level:focus-visible,
+.ov-file-browser-acl__tag:focus-visible,
+.ov-file-browser-acl__title:focus-visible {
   outline: 2px solid var(--ov-ui-color-primary, var(--ov-ui-primary-default));
   outline-offset: 2px;
 }
-.ov-file-browser-acl__add {
-  margin-top: 20px;
+.ov-file-browser-acl__add .ov-input__affix {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
 }
-.ov-file-browser-acl__add > label {
-  display: block;
-  margin-bottom: 8px;
-  font-size: 13px;
-  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
-}
-.ov-file-browser-acl__picker {
-  border: 1px solid var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+.ov-file-browser-acl-picker.ov-dropdown.ov-popover {
+  width: 444px;
+  padding: 8px 6px 6px;
   border-radius: 8px;
-  padding: 12px;
-  margin-top: 8px;
-  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
 }
 .ov-file-browser-acl__types {
   display: flex;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: 4px;
+  margin: 0 -6px 4px;
+  padding: 0 6px;
+  border-bottom: 1px solid
+    var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
 }
-.ov-file-browser-acl__types button:not(.ov-button)[aria-pressed='true'] {
-  border-color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
-  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
-  background: var(
-    --ov-ui-color-primary-light,
-    var(--ov-ui-primary-light-default)
-  );
+.ov-file-browser-acl__types .ov-button {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  font-size: 12px;
+}
+.ov-file-browser-acl__types .ov-button[aria-pressed='true'] {
+  border-bottom-color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
 }
 .ov-file-browser-acl__candidates {
-  padding: 4px;
+  max-height: min(176px, 32dvh);
+  padding: 4px 6px;
+  overflow-y: auto;
 }
 .ov-file-browser-acl__candidate {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 44px;
+  min-height: 36px;
 }
 .ov-file-browser-acl__candidate > label {
   display: flex;
@@ -144,8 +142,10 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  margin: 20px 0 0;
-  padding: 0 0 120px;
+  margin: 16px 0 0;
+  padding: 0;
+  max-height: 280px;
+  overflow: auto;
   list-style: none;
 }
 .ov-file-browser-acl__entry {
@@ -153,7 +153,7 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
-  min-height: 40px;
+  min-height: 35px;
 }
 .ov-file-browser-acl__avatar {
   display: flex;
@@ -167,8 +167,9 @@
     --ov-ui-color-primary-light,
     var(--ov-ui-primary-light-default)
   );
-  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
-  font-size: 12px;
+  color: var(--ov-ui-color-primary-active, var(--ov-ui-primary-active-default));
+  font-size: 16px;
+  font-weight: 500;
 }
 .ov-file-browser-acl__avatar[data-group] {
   border-radius: 6px;
@@ -180,7 +181,33 @@
   flex: 1;
   min-width: 0;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
+}
+.ov-file-browser-acl__name-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.ov-file-browser-acl__badge {
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(
+    --ov-ui-color-primary-light,
+    var(--ov-ui-primary-light-default)
+  );
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  font-size: 10px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+.ov-file-browser-acl__badge--current {
+  --ov-ui-acl-current: var(
+    --ov-ui-color-status-success,
+    var(--ov-ui-status-success-default)
+  );
+  color: var(--ov-ui-acl-current);
+  background: color-mix(in srgb, var(--ov-ui-acl-current) 9%, transparent);
 }
 .ov-file-browser-acl__name {
   color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
@@ -190,8 +217,8 @@
 }
 .ov-file-browser-acl__source {
   color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
-  font-size: 12px;
-  line-height: 18px;
+  font-size: 11px;
+  line-height: 16px;
   overflow-wrap: anywhere;
 }
 .ov-file-browser-acl__fixed {
@@ -200,55 +227,20 @@
   font-size: 13px;
   white-space: nowrap;
 }
-.ov-file-browser-acl__menu-anchor {
-  position: relative;
-  flex: 0 0 auto;
-}
-.ov-file-browser-acl
-  .ov-modal__body
-  button:not(.ov-button).ov-file-browser-acl__level {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border-color: transparent;
-  white-space: nowrap;
-}
-.ov-file-browser-acl__menu {
-  position: absolute;
-  z-index: 2;
-  top: 100%;
-  right: 0;
-  min-width: 136px;
-  border: 1px solid var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+.ov-file-browser-acl-menu.ov-dropdown.ov-popover {
+  width: 136px;
   border-radius: 8px;
-  padding: 4px;
-  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
-  box-shadow: 0 4px 16px
-    color-mix(
-      in srgb,
-      var(--ov-ui-color-shadow, var(--ov-ui-shadow-default)) 12%,
-      transparent
-    );
 }
-.ov-file-browser-acl__menu button:not(.ov-button) {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  gap: 8px;
-  border: 0;
-  border-radius: 4px;
-  text-align: left;
+.ov-file-browser-acl-menu .ov-dropdown__item {
   min-height: 32px;
+  padding: 5px 10px;
 }
 .ov-file-browser-acl__check {
-  display: flex;
-  width: 12px;
+  display: inline-flex;
+  flex: 0 0 12px;
 }
-.ov-file-browser-acl__menu button:not(.ov-button).ov-file-browser-acl__remove {
-  margin-top: 4px;
-  border-top: 1px solid
-    var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
-  border-radius: 0;
+.ov-file-browser-acl-menu .ov-file-browser-acl__remove {
+  padding-inline-start: 32px;
   color: var(--ov-ui-color-status-error, var(--ov-ui-status-error-default));
 }
 .ov-file-browser-acl__more {
@@ -281,42 +273,33 @@
 .ov-file-browser-acl__confirmation li {
   overflow-wrap: anywhere;
 }
-.ov-file-browser-acl__tag-anchor {
-  position: relative;
+.ov-file-browser-acl__tag {
+  padding: 0 6px;
+  font-size: 10px;
   font-weight: 400;
-}
-.ov-file-browser-acl__tag-anchor .ov-file-browser-acl__tag {
-  min-height: 24px;
-  padding: 1px 6px;
-  border-color: transparent;
-  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
-  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
-  font-size: 12px;
-  white-space: nowrap;
-}
-.ov-file-browser-acl__tag-detail {
-  position: absolute;
-  z-index: 3;
-  top: calc(100% + 8px);
-  right: 0;
-  width: min(244px, calc(100vw - 48px));
-  box-sizing: border-box;
-  padding: 12px 16px;
-  border: 1px solid var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
-  border-radius: 8px;
-  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
-  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
-  box-shadow: 0 4px 16px
-    color-mix(
-      in srgb,
-      var(--ov-ui-color-shadow, var(--ov-ui-shadow-default)) 12%,
-      transparent
-    );
-  font-size: 13px;
   line-height: 20px;
 }
-.ov-file-browser-acl__tag-detail p {
+.ov-file-browser-acl-tag-detail.ov-popover {
+  width: min(244px, calc(100vw - 16px));
+  padding: 12px 16px;
+}
+.ov-file-browser-acl-tag-detail p {
   margin: 0 0 8px;
+}
+.ov-file-browser-acl-tag-detail p:first-child {
+  font-size: 13px;
+  font-weight: 500;
+}
+.ov-file-browser-acl-tag-detail .ov-file-browser-acl__manage {
+  display: flex;
+  justify-content: flex-start;
+  gap: 4px;
+  width: 100%;
+  border-top: 1px solid
+    var(--ov-ui-color-border-1, var(--ov-ui-border-1-default));
+  border-radius: 0;
+  padding: 4px 0 0;
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
 }
 @media (max-width: 480px) {
   .ov-file-browser-acl .ov-modal__body {
@@ -324,8 +307,8 @@
   }
 }
 @media (pointer: coarse) {
-  .ov-file-browser-acl .ov-modal__body button:not(.ov-button),
-  .ov-file-browser-acl__tag-anchor button:not(.ov-button) {
+  .ov-file-browser-acl__level,
+  .ov-file-browser-acl__tag {
     min-height: 44px;
   }
 }

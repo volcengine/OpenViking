@@ -1,3 +1,4 @@
+import { MonitoringFlow } from '../../shared/monitoring/flow-context.js';
 import { useRenderErrors } from './file-browser-labels.js';
 import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import type { FilePreviewActions } from '../../components/file-preview/index.js';
@@ -175,12 +176,15 @@ export function FileBrowserPreviewPane(
   props: Parameters<typeof FileBrowserPreviewPaneContent>[0],
 ) {
   return (
-    <ErrorBoundary
-      message={useRenderErrors(props.locale).preview}
-      locale={props.locale}
-      resetKeys={[props.browser.currentUri]}
-    >
-      <FileBrowserPreviewPaneContent {...props} />
-    </ErrorBoundary>
+    <MonitoringFlow operation={props.browser.previewMonitoring}>
+      <ErrorBoundary
+        monitoringRegion="preview"
+        message={useRenderErrors(props.locale).preview}
+        locale={props.locale}
+        resetKeys={[props.browser.currentUri]}
+      >
+        <FileBrowserPreviewPaneContent {...props} />
+      </ErrorBoundary>
+    </MonitoringFlow>
   );
 }

@@ -1,3 +1,4 @@
+@import '../../shared/feedback/style.css';
 @import '../../shared/error-boundary/error-boundary.css';
 @import '../../shared/primitives/select/style.css';
 @import '../../shared/primitives/popover/popover.css';
@@ -15,7 +16,6 @@
 @import '@ark-design/ui/activity-timeline/style/index.css';
 @import '@ark-design/ui/markdown-renderer/style/index.css';
 @import '@ark-design/ui/sender/style/index.css';
-@import '@ark-design/ui/ask-human/style/index.css';
 @import '@ark-design/ui/error-card/style/index.css';
 @import '../file-tree/style.css';
 @import '../../shared/primitives/tooltip/style.css';

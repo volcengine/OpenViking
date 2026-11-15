@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { rsbuild } from '@rslib/core';
 import { pluginReact } from '@rsbuild/plugin-react';
@@ -40,7 +40,7 @@ test('FilePreview sanitizes Markdown HTML and resolves imported images in mixed 
           const { origin, pathname } = new URL(url);
           return origin === 'https://preview.test' &&
             pathname.startsWith('/static/js/')
-            ? readFile(join(output, pathname))
+            ? super.fetch(pathToFileURL(join(output, pathname)).href)
             : null;
         }
       })(),

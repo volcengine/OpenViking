@@ -1,3 +1,4 @@
+import type { Workflow } from '../../shared/monitoring/workflow.js';
 import type { ErrorFallback } from '../../shared/error-boundary/types.js';
 import type { FileBrowserWorkflowLabels } from './preview-workflow-types.js';
 import type { FileBrowserOpenResourceOptions } from './resource-navigation-types.js';
@@ -19,6 +20,7 @@ export type {
 import type { Locale } from '../../shared/locale.js';
 import type { AgentConnectProps } from '../../components/agent-connect/index.js';
 import type { FileBrowserActionBarLabels } from '../../components/file-browser-action-bar/index.js';
+import type { FileBrowserExperienceDataSource } from './experience-data-source.js';
 import type { FileBrowserDashboard } from './dashboard-model.js';
 import type {
   FilePreviewLabels,
@@ -264,6 +266,8 @@ export interface FileBrowserProps extends Omit<
   agentConnectOpen?: boolean;
   /** Host capability filter. Omitted enables both; an empty array disables discovery. */
   dashboardKinds?: readonly FileBrowserDashboard['kind'][];
+  /** Overrides individual requests for the built-in experience dashboard. */
+  experienceDataSource?: FileBrowserExperienceDataSource;
   /**
    * 用户请求打开或关闭内置接入抽屉时触发；宿主改变属性时不触发。
    * Called when the user requests to open or close the built-in connection drawer.
@@ -333,6 +337,8 @@ export interface FileBrowserProps extends Omit<
  * own view from these without the composite one.
  */
 export interface FileBrowserApi {
+  treeMonitoring: readonly Workflow<'file_browser_directory_load'>[];
+  previewMonitoring?: Workflow<'file_browser_preview_load'>;
   identifyUri: (uri: string) => string;
   dashboards: ReadonlyMap<string, FileBrowserDashboard>;
   previewDashboard?: FileBrowserDashboard;
@@ -408,6 +414,8 @@ export interface UseFileBrowserOptions {
   locale?: Locale;
   dashboardLabels?: FileBrowserDashboardLabels;
   dashboardKinds?: readonly FileBrowserDashboard['kind'][];
+  /** Overrides individual requests for the built-in experience dashboard. */
+  experienceDataSource?: FileBrowserExperienceDataSource;
   renderDashboard?: (dashboard: FileBrowserDashboard) => ReactNode;
   /**
    * 宿主是否受控地持有当前资源。受控时 `currentUri` 就是唯一事实；非受控时

@@ -1,3 +1,4 @@
+import { notificationError } from './helpers/feedback-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
@@ -50,7 +51,8 @@ test('import uploads multipart, retains the selected File after failure and reup
       input.dispatchEvent(new window.Event('change', { bubbles: true })),
     );
     await submit();
-    assert.ok(workflow().querySelector('[role="alert"]'));
+    assert.ok(notificationError());
+    assert.equal(Boolean(workflow().querySelector('[role="alert"]')), false);
     assert.equal(input.files[0], file);
     const count = fetch.calls.length;
     await view.render(tree(fetch, target, { locale: 'zh-CN' }));
@@ -85,7 +87,7 @@ test('import uploads multipart, retains the selected File after failure and reup
       workflow().querySelector('[role="status"]').textContent,
       /导入成功/,
     );
-    assert.equal(workflow().querySelector('[role="alert"]'), null);
+    assert.equal(Boolean(notificationError()), false);
   } finally {
     await view.unmount();
   }

@@ -1,3 +1,4 @@
+import { MonitoringFlow } from '../../shared/monitoring/flow-context.js';
 import { useTrack } from '../../shared/analytics/use-track.js';
 import { useOpenExposure } from '../../shared/analytics/use-exposure.js';
 import { useRenderErrors, type ResolvedLabels } from './file-browser-labels.js';
@@ -69,12 +70,11 @@ export function FileBrowserSearch({
 }: FileBrowserSearchProps) {
   const track = useTrack();
   const exposure = useOpenExposure('file_browser_search_dialog_show', open);
-  const client = useOvClient();
+  const client = useOvClient('local');
   const inputRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState('');
   const [query, setQuery] = useState('');
   const [composing, setComposing] = useState(false);
-  const [generation, setGeneration] = useState(0);
   const [mode, setMode] = useState<SearchMode>(DEFAULT_SEARCH_MODE);
   const [filters, setFilters] = useState<SearchFilters>(EMPTY_FILTERS);
 
@@ -105,7 +105,6 @@ export function FileBrowserSearch({
     client,
     mode,
     query: !composing && !awaitingQuery ? query : '',
-    generation,
     filters: effectiveFilters,
     rootUri,
     requestOptions,
@@ -153,7 +152,7 @@ export function FileBrowserSearch({
   };
   const retry = () => {
     inputRef.current?.focus();
-    setGeneration((value) => value + 1);
+    search.retry();
   };
   const { active, activeIndex, listId, onHighlight, onKeyDown } =
     useSearchHighlight(
@@ -171,12 +170,7 @@ export function FileBrowserSearch({
       closeLabel={text.searchDismiss}
       closeIcon={<SearchCloseIcon aria-hidden="true" />}
       triggerRef={triggerRef}
-      className={[
-        'ov-file-browser-search',
-        advancedOpen ? 'ov-file-browser-search--advanced' : '',
-      ]
-        .filter(Boolean)
-        .join(' ')}
+      className={`ov-file-browser-search${advancedOpen ? ' ov-file-browser-search--advanced' : ''}`}
       onClose={onClose}
       afterClose={reset}
     >
@@ -206,34 +200,40 @@ export function FileBrowserSearch({
       />
       <div ref={exposure} className="ov-file-browser-search__content">
         <div className="ov-file-browser-search__results">
-          <ErrorBoundary
-            message={useRenderErrors(locale).search}
-            resetKeys={[rootUri, query, mode]}
+          <MonitoringFlow
+            operation={search.monitoring}
+            unobservedInput={!!search.result && !search.monitoring}
           >
-            <FileBrowserSearchResults
-              open={open}
-              mode={mode}
-              hits={hits}
-              listId={listId}
-              activeIndex={activeIndex}
-              query={query.trim()}
-              onHighlight={onHighlight}
-              onRetry={retry}
-              fallbackFocusRef={inputRef}
-              loading={search.loading || (awaitingQuery && !!draft.trim())}
-              error={search.error}
-              searched={search.result !== null}
-              text={text}
-              onSelectMode={(next) => {
-                setMode(next);
-                // 切模式时把筛选收敛到新模式真正会用的形态，显示与请求才不会脱节。
-                // Collapse the filters to what the new mode actually uses, so the display
-                // and the request cannot drift apart.
-                setFilters((current) => normalizeFilters(current, next));
-              }}
-              onOpen={openResult}
-            />
-          </ErrorBoundary>
+            <ErrorBoundary
+              monitoringRegion="search"
+              message={useRenderErrors(locale).search}
+              resetKeys={[rootUri, query, mode]}
+            >
+              <FileBrowserSearchResults
+                open={open}
+                mode={mode}
+                hits={hits}
+                listId={listId}
+                activeIndex={activeIndex}
+                query={query.trim()}
+                onHighlight={onHighlight}
+                onRetry={retry}
+                fallbackFocusRef={inputRef}
+                loading={search.loading || (awaitingQuery && !!draft.trim())}
+                error={search.error}
+                searched={search.result !== null}
+                text={text}
+                onSelectMode={(next) => {
+                  setMode(next);
+                  // 切模式时把筛选收敛到新模式真正会用的形态，显示与请求才不会脱节。
+                  // Collapse the filters to what the new mode actually uses, so the display
+                  // and the request cannot drift apart.
+                  setFilters((current) => normalizeFilters(current, next));
+                }}
+                onOpen={openResult}
+              />
+            </ErrorBoundary>
+          </MonitoringFlow>
         </div>
         {advancedOpen ? (
           <FileBrowserSearchAdvanced

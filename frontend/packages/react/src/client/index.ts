@@ -27,3 +27,10 @@ export type {
   OvStreamSpec,
   OvSuccessEnvelope,
 } from './types.js';
+
+export type {
+  OpenVikingMonitoringOptions,
+  OpenVikingMonitoringEvent,
+  OpenVikingMonitoringEventName,
+} from './monitoring/types.js';
+export type { OpenVikingMonitoringEventMap } from './monitoring/events.js';

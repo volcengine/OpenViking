@@ -126,6 +126,8 @@ export interface VikingBotProps
   draft?: string;
   /** 宿主已选中的附件。Attachments already selected by the host. */
   attachments?: readonly VikingBotAttachment[];
+  /** 文件选择器接受的类型。Accepted types in the file picker. */
+  accept?: string;
   /** 是否正在回复。Whether a reply is streaming. */
   isSending?: boolean;
   /** Supplied from the service's canSteer capability. Defaults to false. */

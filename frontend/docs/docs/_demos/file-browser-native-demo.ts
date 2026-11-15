@@ -22,10 +22,24 @@ const systemDirectories = new Map([
   [COMPILE, [EXAMPLE_SKILLS]],
   [EXAMPLE_SKILLS, []],
 ]);
+const originalSnapshot = {
+  oid: 'demo-snapshot',
+  message: 'Offline example revision',
+  author: { time_seconds: 1794268800 },
+  committer: { time_seconds: 1794268800 },
+};
+const savedSnapshots = new Map<
+  string,
+  { info: typeof originalSnapshot; content: string }[]
+>();
+let nextSnapshot = 1;
+const canonicalUri = (path: string) =>
+  path.replace(/^viking:\/\/~(?=\/|$)/, DEMO_USER);
 
 /** Fictional native API responses; package bytes are demo text, not an actual backup. */
 export function nativePreviewDemoResponse(
   url: URL,
+  files: Readonly<Record<string, string>>,
   init?: RequestInit,
 ): Response | undefined {
   const uri = url.searchParams.get('uri') ?? '';
@@ -43,15 +57,37 @@ export function nativePreviewDemoResponse(
             { headers: { 'content-type': 'video/webm' } },
           )
         : undefined;
-    case '/api/v1/snapshot/log':
-      return ok([
-        {
-          oid: 'demo-snapshot',
-          message: 'Offline example revision',
-          author: { time_seconds: 1794268800 },
-          committer: { time_seconds: 1794268800 },
-        },
-      ]);
+    case '/api/v1/snapshot/commit': {
+      const { message, paths } = JSON.parse(body) as {
+        message: string;
+        paths: string[];
+      };
+      const targets = paths.map(canonicalUri);
+      const changed = targets.filter((target) => {
+        const latest = savedSnapshots.get(target)?.[0];
+        return latest?.content !== files[target];
+      });
+      if (changed.length === 0) {
+        const latest = savedSnapshots.get(targets[0] ?? '')?.[0];
+        return ok({ result: 'noop', commit_oid: latest?.info.oid });
+      }
+      const oid = `demo-snapshot-${nextSnapshot++}`;
+      const timestamp = { time_seconds: Math.floor(Date.now() / 1000) };
+      const info = { oid, message, author: timestamp, committer: timestamp };
+      for (const target of changed) {
+        const snapshot = { info, content: files[target] ?? '' };
+        savedSnapshots.set(target, [
+          snapshot,
+          ...(savedSnapshots.get(target) ?? []),
+        ]);
+      }
+      return ok({ result: 'created', commit_oid: oid });
+    }
+    case '/api/v1/snapshot/log': {
+      const path = canonicalUri(url.searchParams.get('paths') ?? '');
+      const history = (savedSnapshots.get(path) ?? []).map(({ info }) => info);
+      return ok([...history, originalSnapshot]);
+    }
     case '/api/v1/snapshot/versions':
       return ok({
         versions: [
@@ -65,10 +101,17 @@ export function nativePreviewDemoResponse(
         ],
         next_before_version: null,
       });
-    case '/api/v1/snapshot/show':
+    case '/api/v1/snapshot/show': {
+      const path = canonicalUri(url.searchParams.get('path') ?? '');
+      const target = url.searchParams.get('target_ref');
+      const snapshot = savedSnapshots
+        .get(path)
+        ?.find(({ info }) => info.oid === target);
       return new Response(
-        '# Historical content\n\nThis revision is simulated.',
+        snapshot?.content ??
+          '# Historical content\n\nThis revision is simulated.',
       );
+    }
     case '/api/v1/compile/config':
       return ok(config);
     case '/api/v1/compile/config/update':

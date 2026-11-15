@@ -7,6 +7,7 @@ import { usePreviewMutation } from './use-preview-mutation.js';
 
 export function PreviewPackImport({
   uri,
+  locale,
   canWrite,
   text,
   requestOptions,
@@ -42,7 +43,11 @@ export function PreviewPackImport({
           mutation.reset();
         }}
       />
-      <PreviewMutationError error={mutation.error} text={text} />
+      <PreviewMutationError
+        error={mutation.error}
+        title={text.failureTitle(text.importSubmit)}
+        locale={locale}
+      />
       {mutation.succeeded ? <p role="status">{text.imported}</p> : null}
       <div className="ov-file-browser-workflow__actions">
         <Button size="small" htmlType="button" onClick={onClose}>

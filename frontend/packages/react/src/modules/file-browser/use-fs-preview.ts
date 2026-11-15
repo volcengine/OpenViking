@@ -1,3 +1,7 @@
+import {
+  beginWorkflow,
+  type Workflow,
+} from '../../shared/monitoring/workflow.js';
 import { useEffect, useState } from 'react';
 
 import type {
@@ -7,7 +11,8 @@ import type {
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { directoryIcon } from './fs-icon.js';
 import { resolveLabels, resolveSummaryLabels } from './file-browser-labels.js';
-import { isAbort, toDirectoryTab, type DirectorySummary } from './fs-model.js';
+import { isAbort } from './fs-errors.js';
+import { toDirectoryTab, type DirectorySummary } from './fs-model.js';
 import { isSystemUri } from './preview-policy.js';
 import { readDirectory } from './fs-read-directory.js';
 import { loadingTab } from './fs-preview-loading-tab.js';
@@ -17,6 +22,7 @@ import { readFile } from './fs-read-file.js';
 import { abortError, readPreviewStat } from './fs-stat.js';
 
 export interface PreviewState {
+  monitoring?: Workflow<'file_browser_preview_load'>;
   tabs: readonly FilePreviewTab[] | null;
   activeKey: string | null;
   error: Error | null;
@@ -93,6 +99,8 @@ export function useFsPreview({
   generation = 0,
   requestOptions,
 }: UseFsPreviewOptions): PreviewState {
+  const [monitoring, setMonitoring] =
+    useState<Workflow<'file_browser_preview_load'>>();
   const [directory, setDirectory] = useState<{
     uri: string;
     summary: DirectorySummary;
@@ -128,7 +136,15 @@ export function useFsPreview({
     setError(null);
     const options = { ...requestOptions, signal: controller.signal };
     if (contentKind === 'pending') return () => controller.abort();
-    const metadata = readPreviewStat(client, uri, options);
+    const operation = beginWorkflow(
+      client,
+      'file_browser_preview_load',
+      controller.signal,
+    );
+    if (operation) operation.identity = uri;
+    setMonitoring(operation);
+    const api = operation?.client(client) ?? client;
+    const metadata = readPreviewStat(api, uri, options);
     void metadata.then((result) => {
       if (!controller.signal.aborted && result?.updatedAt)
         setStat({ uri, updatedAt: result.updatedAt });
@@ -153,10 +169,10 @@ export function useFsPreview({
       if (isDir)
         return isSystemUri(uri)
           ? { tab: toSystemDirectoryTab(uri, openParent) }
-          : { summary: await readDirectory(client, uri, options) };
+          : { summary: await readDirectory(api, uri, options) };
       return {
         tab: await readFile(
-          client,
+          api,
           uri,
           options,
           openParent,
@@ -203,6 +219,7 @@ export function useFsPreview({
       },
       (cause: unknown) => {
         if (isAbort(cause) || controller.signal.aborted) return;
+        operation?.fail(cause, 'protocol', controller.signal);
         setTabs([]);
         setError(cause instanceof Error ? cause : new Error(String(cause)));
       },
@@ -250,6 +267,7 @@ export function useFsPreview({
       ).length
     : body?.length;
   return {
+    monitoring,
     tabs: directoryTab ? [directoryTab] : tabs,
     activeKey,
     error,

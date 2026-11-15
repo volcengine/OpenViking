@@ -1,3 +1,5 @@
+import { observeCommand, tagCommandRecords } from './command-monitoring.js';
+import type { MonitoringSpan } from '../../shared/monitoring/trace/span.js';
 import type { CommandAnalytics } from './use-command-analytics.js';
 import type { TaskReference } from '../../shared/task-tracking/types.js';
 import type { SetStateAction } from 'react';
@@ -5,10 +7,10 @@ import type { Locale } from '../../shared/locale.js';
 import {
   ConsoleCommandError,
   formatConsoleMessage,
+  commandErrorText,
   type ConsoleMessage,
   type ConsoleRecord,
 } from './command-messages.js';
-import { isOvClientError } from '../../client/errors.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type { ConsoleState } from './types.js';
 import { executeCommand } from './commands.js';
@@ -17,7 +19,7 @@ import { tokenize, parseArguments } from './command-parser.js';
 export function createConsoleController(
   client: OvClient,
   options: OvRequestOptions = {},
-  trackTask?: (task: TaskReference) => string,
+  trackTask?: (task: TaskReference, origin?: MonitoringSpan) => string,
   analytics?: CommandAnalytics,
 ) {
   let state: Omit<ConsoleState, 'records'> & {
@@ -34,6 +36,7 @@ export function createConsoleController(
   let sequence = 0;
   let cancelRunning: ((report?: boolean) => void) | undefined;
   const update = (patch: Partial<ConsoleState>) => {
+    tagCommandRecords(client, patch.records);
     state = { ...state, ...patch };
     listeners.forEach((listener) => listener());
   };
@@ -68,6 +71,7 @@ export function createConsoleController(
     running = controller;
     const id = `command-${++sequence}`;
     const event = analytics?.begin(id);
+    const monitoring = observeCommand(client, signal);
     const current = () => active && running === controller;
     const finish = (message: ConsoleMessage) => {
       if (!current()) return;
@@ -115,15 +119,16 @@ export function createConsoleController(
       let taskKeys: string[] = [];
       const content = await executeCommand(
         command,
-        client,
+        monitoring?.client ?? client,
         { ...options, signal },
         locale,
         (tasks) => {
           if (current() && !signal.aborted && trackTask)
-            taskKeys = tasks.map(trackTask);
+            taskKeys = tasks.map((task) => trackTask(task, monitoring?.span));
         },
       );
       if (!current() || signal.aborted) return;
+      monitoring?.finish(content);
       event?.success(taskKeys);
       update({
         records: state.records.map((record) =>
@@ -134,16 +139,12 @@ export function createConsoleController(
       });
     } catch (error) {
       if (!current() || signal.aborted) return;
+      monitoring?.finish();
       event?.fail(error);
       const localMessage =
         error instanceof ConsoleCommandError
           ? { code: error.code, value: error.value, usage: error.usage }
           : undefined;
-      const message = isOvClientError(error)
-        ? `${error.code}: ${error.message}`
-        : error instanceof Error
-          ? error.message
-          : String(error);
       update({
         error,
         failedCommand: command,
@@ -153,7 +154,7 @@ export function createConsoleController(
                 ...record,
                 status: 'error',
                 localMessage,
-                content: { variant: 'text', text: message },
+                content: { variant: 'text', text: commandErrorText(error) },
               }
             : record,
         ),

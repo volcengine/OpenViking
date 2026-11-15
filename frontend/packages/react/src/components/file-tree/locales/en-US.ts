@@ -1,9 +1,6 @@
 import type { ResolvedLabels } from '../file-tree-row-context.js';
 
 const messages = {
-  readOnly: 'Read-only',
-  noAccess: 'No access',
-  traverseOnly: 'Traverse only',
   search: 'Search files ⌘+K...',
   refresh: 'Refresh file tree',
   empty: 'No files yet',

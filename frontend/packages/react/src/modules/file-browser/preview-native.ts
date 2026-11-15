@@ -7,6 +7,20 @@ import type {
   PreviewHistoryEntry,
 } from './preview-workflow-types.js';
 
+export function savePreviewSnapshot(
+  client: OvClient,
+  uri: string,
+  message: string,
+  options: OvRequestOptions,
+) {
+  return client.request<{ result: 'created' | 'noop' }>({
+    method: 'POST',
+    path: OV_PATHS.snapshotCommit,
+    body: { message, paths: [uri], branch: 'main' },
+    options,
+  });
+}
+
 export async function readPreviewHistory(
   client: OvClient,
   uri: string,

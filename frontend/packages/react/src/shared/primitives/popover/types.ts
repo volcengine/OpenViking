@@ -50,6 +50,8 @@ export interface PopoverProps {
   anchorRef?: RefObject<HTMLElement | null>;
   /** 触发方式，默认 `hover`。 Trigger mode, `hover` by default. */
   trigger?: PopoverTrigger;
+  /** 点击已打开的触发元素时是否关闭，默认 true。Whether another trigger click closes it. */
+  clickToClose?: boolean;
   /** 悬停后多久展示，单位毫秒。延迟只作用于 `hover`。 Hover delay in ms; `hover` only. */
   delay?: number;
   /** Controlled visibility; omitted values use instance-local state. */

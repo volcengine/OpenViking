@@ -1,6 +1,7 @@
+import { withMonitoring } from '../../../shared/monitoring/with-monitoring.js';
 import { useTrack } from '../../../shared/analytics/use-track.js';
 import type { LoginMethodSelectorProps } from './types.js';
-export function LoginMethodSelector({
+function LoginMethodSelectorView({
   methods,
   disabled,
   className,
@@ -32,3 +33,8 @@ export function LoginMethodSelector({
     </div>
   );
 }
+
+export const LoginMethodSelector = withMonitoring(
+  LoginMethodSelectorView,
+  'LoginMethodSelector',
+);

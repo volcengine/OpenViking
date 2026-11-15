@@ -1,3 +1,7 @@
+import {
+  ErrorNotification,
+  errorMessage,
+} from '../../shared/feedback/error-notification.js';
 import { useEffect, useRef, useState } from 'react';
 import { Compartment, EditorState, Transaction } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers } from '@codemirror/view';
@@ -25,7 +29,9 @@ export function FilePreviewCodeEditor(props: FilePreviewCodeEditorProps) {
   latest.current = props;
   const access = useRef(new Compartment());
   const highlighting = useRef(new Compartment());
-  const [highlightFailed, setHighlightFailed] = useState(false);
+  const [highlightFailure, setHighlightFailure] = useState<{
+    reason: unknown;
+  }>();
   const [attempt, setAttempt] = useState(0);
   const language = prismLanguage(props.source);
 
@@ -98,21 +104,21 @@ export function FilePreviewCodeEditor(props: FilePreviewCodeEditorProps) {
   useEffect(() => {
     const view = editor.current!;
     let active = true;
-    setHighlightFailed(false);
+    setHighlightFailure(undefined);
     view.dispatch({ effects: highlighting.current.reconfigure([]) });
     void loadPrismLanguage(language)
       .then((grammar) => {
         if (active && grammar)
           view.dispatch({
             effects: highlighting.current.reconfigure(
-              prismHighlight(grammar, () => {
-                if (active) setHighlightFailed(true);
+              prismHighlight(grammar, (reason) => {
+                if (active) setHighlightFailure({ reason });
               }),
             ),
           });
       })
-      .catch(() => {
-        if (active) setHighlightFailed(true);
+      .catch((reason: unknown) => {
+        if (active) setHighlightFailure({ reason });
       });
     return () => {
       active = false;
@@ -122,13 +128,23 @@ export function FilePreviewCodeEditor(props: FilePreviewCodeEditorProps) {
   return (
     <>
       <div className="ov-file-preview__code-editor" ref={container} />
-      {highlightFailed ? (
-        <div className="ov-file-preview__notice" role="alert">
-          {props.text.highlightFailed}{' '}
-          <Button size="small" onClick={() => setAttempt((value) => value + 1)}>
+      {highlightFailure ? (
+        <>
+          <ErrorNotification
+            title={props.text.highlightFailed}
+            identity={highlightFailure}
+            error={highlightFailure.reason}
+          >
+            {errorMessage(highlightFailure.reason)}
+          </ErrorNotification>
+          <Button
+            size="small"
+            title={props.text.highlightFailed}
+            onClick={() => setAttempt((value) => value + 1)}
+          >
             {props.text.retry}
           </Button>
-        </div>
+        </>
       ) : null}
     </>
   );

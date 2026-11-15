@@ -1,3 +1,4 @@
+import { withMonitoring } from '../../shared/monitoring/with-monitoring.js';
 import { useTrack } from '../../shared/analytics/use-track.js';
 import { useExposure } from '../../shared/analytics/use-exposure.js';
 import { useLocale } from '../../shared/locale-context.js';
@@ -21,7 +22,7 @@ export type {
 } from './types.js';
 
 /** 按设计稿固定文案与图标；选择与复制保持实例内交互。 */
-export function AgentConnect({
+function AgentConnectView({
   apiKey,
   locale: localeProp,
   baseUrl = DEFAULT_BASE_URL,
@@ -164,3 +165,5 @@ export function AgentConnect({
     </div>
   );
 }
+
+export const AgentConnect = withMonitoring(AgentConnectView, 'AgentConnect');

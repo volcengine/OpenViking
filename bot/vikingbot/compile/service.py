@@ -42,7 +42,7 @@ from vikingbot.agent.tools.compile import (
 )
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.agent.tools.spawn import WaitSubagentsTool
-from vikingbot.compile import file_ops
+from vikingbot.compile import file_ops, simple
 from vikingbot.compile.models import (
     COMPILE_DRAFT_ROOT,
     COMPILE_STAGING_ROOT,
@@ -59,7 +59,6 @@ from vikingbot.compile.models import (
     has_directory_plan,
     utc_now,
 )
-from vikingbot.compile.ops import finalize as finalize_op
 from vikingbot.compile.pipeline import Pipeline
 from vikingbot.compile.pipeline_agent import agent_runner as pipeline_agent_runner
 from vikingbot.compile.renderer import (
@@ -319,6 +318,7 @@ class BotCompileService:
                 task_id=task_id,
                 principal_scope=principal_scope,
                 sanitized_request=normalized_request,
+                meta={"mode": self.config.compile.mode},
                 status="accepted",
                 stage="queued",
                 created_at=now,
@@ -779,6 +779,13 @@ class BotCompileService:
         try:
             await self._set_state(task_id, status="running", stage="collecting_context")
             client = await VikingClient.create(connection=connection, config=self.config)
+            simple_mode = (await self.store.get(task_id)).meta["mode"] == "simple"
+            if simple_mode and target_type == "skill":
+                raise CompileFailure(
+                    "INVALID_ARGUMENT",
+                    "Publishing a Skill package requires bot.compile.mode=complex.",
+                    stage="agent",
+                )
             source_files = None
             source_request = request
             execution = (request.changes or {}).get("execution") or {}
@@ -786,7 +793,7 @@ class BotCompileService:
             directory_plan = has_directory_plan(request.changes)
             if directory_plan and request.changes.get("head"):
                 pass
-            elif full_execution:
+            elif full_execution and not simple_mode:
                 source_files = await self._list_source_files(
                     client, request.from_, allow_empty=True
                 )
@@ -808,6 +815,47 @@ class BotCompileService:
                         fail_task=lambda failure: self._fail(task_id, failure),
                     )
                 )
+            if simple_mode:
+                await self._set_state(task_id, status="running", stage="agent")
+                loop = AgentLoop(
+                    bus=self.agent_loop.bus,
+                    provider=_CompileProvider(self.agent_loop.provider, self._model_slots),
+                    workspace=workspace,
+                    model=self.agent_loop.model,
+                    temperature=self.agent_loop.temperature,
+                    max_iterations=self.limits.simple_agent_iterations,
+                    sandbox_manager=sandbox_manager,
+                    config=task_config,
+                )
+
+                async def save_progress(writer):
+                    """Persist acknowledged and in-flight target URIs across cancellation or restart."""
+
+                    def record(task):
+                        task.meta["outputs"] = dict(writer.outcomes)
+                        task.meta["unconfirmed"] = sorted(writer.unconfirmed)
+
+                    await self.store.update(task_id, record)
+
+                result = await simple.run(
+                    loop,
+                    client,
+                    request,
+                    source_request.from_,
+                    skill_text,
+                    session_key,
+                    connection,
+                    save_progress,
+                    agent_usage,
+                )
+
+                def finish(task):
+                    if task.status == "running":
+                        task.status = task.stage = "completed"
+                        task.result = result
+
+                await self.store.update(task_id, finish)
+                return
             if target_type in {"resource", "skill"} or directory_plan:
                 focused_loop = None
 
@@ -1042,7 +1090,6 @@ class BotCompileService:
         usage,
         agent_runner=None,
         tool_context=None,
-        resume=False,
     ) -> bool:
         """Run the shared collection pipeline and publish through the target namespace API.
 
@@ -1050,7 +1097,6 @@ class BotCompileService:
         the surrounding lifecycle. Acknowledged partial output completes with diagnostic errors.
         Return whether the workspace must remain available for audit and replay.
         The surrounding lifecycle also preserves shards on failure/cancellation.
-        Local recovery sets resume to use a stopped task's copied Reduce checkpoint.
         """
         pipeline = Pipeline(
             client=client,
@@ -1090,8 +1136,7 @@ class BotCompileService:
             if source_files is not None
             else await self._list_pipeline_source_files(client, request)
         )
-        if not resume:
-            await pipeline.files.put("inputs", dict.fromkeys(ordered, "pending"))
+        await pipeline.files.put("inputs", dict.fromkeys(ordered, "pending"))
 
         source_limits = self.limits.model_copy(
             update={"source_batch_chars": min(self.limits.source_batch_chars, 10_000)}
@@ -1120,23 +1165,7 @@ class BotCompileService:
                     yield batch
 
         try:
-            try:
-                if resume:
-                    from vikingbot.compile.resume import run as resume_pipeline
-
-                    rendered = await resume_pipeline(pipeline)
-                else:
-                    rendered = await pipeline.run(source_batches())
-            except (CompileFailure, TimeoutError) as exc:
-                if not pipeline.artifacts or getattr(exc, "code", None) == "SKILL_REPAIR_FAILED":
-                    raise
-                pipeline.warnings.append(
-                    f"Partial output; Compile did not finish: {str(exc)[:500]}"
-                )
-                async with asyncio.timeout(self.limits.salvage_grace_seconds):
-                    rendered = await finalize_op.run(
-                        pipeline, list(dict.fromkeys(pipeline.artifacts))
-                    )
+            rendered = await pipeline.run(source_batches())
             # Cancellation must stop recovery before any write, including a queued cancel.
             current = await self.store.get(task_id)
             if current.status in TERMINAL_STATUSES or current.status == "cancelling":

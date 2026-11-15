@@ -51,6 +51,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     agentConnectOpen,
     onAgentConnectOpenChange,
     dashboardKinds,
+    experienceDataSource,
     renderDashboard,
     acl,
     readOnly,
@@ -134,15 +135,13 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     rootUri,
     locale,
     dashboardKinds,
+    experienceDataSource,
     renderDashboard,
     dashboardLabels: labels?.dashboard,
     controlled: isControlled,
     summaryLabels,
     formatCharacterCount: text.formatCharacterCount,
-    accessLabels: {
-      accessDenied: text.accessDenied,
-      traverseOnly: text.traverseOnly,
-    },
+    accessLabels: text,
     defaultExpandedUri,
     currentUri,
     requestOptions,
@@ -156,7 +155,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     requestOptions,
     refresh: browser.actions.refresh,
   });
-  const navigation = useFileBrowserHandle(browser, ref);
+  const navigation = useFileBrowserHandle(browser, ref, rootUri);
 
   const search = useFileBrowserSearchDialog(layoutRef);
   const baseClass = stacked
@@ -184,6 +183,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
         <div className="ov-file-browser__tree">
           <FileBrowserTreePane
             treeRef={navigation.treeRef}
+            treeScrollRef={navigation.treeScrollRef}
             rootUri={rootUri}
             entries={{
               agentConnect,

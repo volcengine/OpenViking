@@ -50,7 +50,6 @@ export function DropdownSurface({
     },
     [onReady, externalSurface],
   );
-  if (typeof document === 'undefined') return null;
   return createPortal(
     <div
       ref={surfaceRef}

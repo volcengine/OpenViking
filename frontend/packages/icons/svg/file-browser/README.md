@@ -5,13 +5,10 @@
   The artwork follows the repository license.
 - `refresh-cw-01.svg` is the console's refresh glyph. The 14 × 14 viewBox and
   paths are unchanged; its stroke inherits the button's theme color.
-- `search-empty.svg` is the empty search state's artwork, redrawn in the style of
-  `svg/console/history-empty.svg`: the same 258 × 140 canvas, document outline,
-  fold and magnifier geometry, but the design's five per-row grid paths collapsed
-  into one dashed grid masked by a radial fade, and the white backdrop dropped so
-  the dialog's own surface shows through. The design's fixed colours become theme
-  variables: `--ov-ui-color-border-2` for the grid, `--ov-ui-color-border-3` for
-  the sheet behind, `currentColor` for the front sheet and glyph.
+- `search-empty.svg` is the original 258 × 140 illustration from the OpenViking
+  Console search empty state (Figma node `10557:63404`). Its paths, dimensions
+  and gradient geometry are unchanged. Paint follows the dialog surface,
+  border and text theme tokens.
 - `search-close.svg` is exported from the OpenViking Console
   search dialog. Its original dimensions and paths are unchanged; its
   stroke inherits the theme color. The artwork follows the repository license.

@@ -12,6 +12,7 @@ export type {
   FileBrowserPreviewActionContext,
 } from './types.js';
 
+export type { FileBrowserExperienceDataSource } from './experience-data-source.js';
 export type { FileBrowserDashboard } from './dashboard-model.js';
 
 export type {

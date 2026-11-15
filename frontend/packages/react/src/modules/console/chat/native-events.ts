@@ -1,3 +1,4 @@
+import { markFault } from '../../../shared/monitoring/fault.js';
 import { readTaskReferences } from '../../../shared/task-tracking/read-references.js';
 import type { OvStreamEvent } from '../../../client/types.js';
 import { OvClientError } from '../../../client/errors.js';
@@ -20,6 +21,7 @@ export async function* nativeChatEvents(
 ): AsyncGenerator<VikingBotChatEvent> {
   const pending: { id: string; name: string }[] = [];
   let sequence = 0;
+  const turn = globalThis.crypto.randomUUID();
   let iteration = 0;
   let reasoningHadDelta = false;
   for await (const frame of source) {
@@ -42,10 +44,10 @@ export async function* nativeChatEvents(
       typeof data === 'object' &&
       'error' in data
     ) {
-      throw new Error(textOf(data.error));
+      throw markFault(new Error(textOf(data.error)), 'business');
     }
     const text = textOf(data);
-    if (event.event === 'error') throw new Error(text);
+    if (event.event === 'error') throw markFault(new Error(text), 'business');
     if (event.event === 'reasoning_delta' || event.event === 'reasoning') {
       if (event.event === 'reasoning' && reasoningHadDelta) continue;
       if (event.event === 'reasoning_delta') reasoningHadDelta = true;
@@ -66,7 +68,7 @@ export async function* nativeChatEvents(
       const opening = text.indexOf('(');
       const name = opening > 0 ? text.slice(0, opening) : text;
       const raw = opening > 0 ? text.slice(opening + 1, -1) : '';
-      const id = `native-tool-${sequence++}`;
+      const id = `native-tool-${turn}-${sequence++}`;
       let input: Record<string, unknown> | undefined;
       try {
         input = raw ? (JSON.parse(raw) as Record<string, unknown>) : undefined;

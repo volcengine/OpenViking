@@ -159,7 +159,6 @@ import '@openviking/react/components/directory-tour/style.css';
 - 位置随滚动、窗口缩放和目录行尺寸变化更新，卡片限制在可视视口内，包括缩放和软键盘的影响；目录行滚出可见区域时，卡片和高亮一起隐藏。
 - 卡片是非模态 `dialog`：显示后获得焦点，按 Escape 触发 `onClose`，关闭时焦点回到原来的元素（该元素仍在文档里时）。宿主控件已用 `preventDefault()` 处理的 Escape，卡片不再响应。
 - 卡片通过浏览器的 Popover API 渲染在顶层，不需要设置 `z-index`，也不会创建全屏遮罩或 SVG，需要浏览器支持该 API。
-- 服务端渲染时不创建浮层；初始 `open` 为 `true` 时，在 hydration 完成后才创建。
 - 预设步骤的文案是英文，其他语言需要自己提供 `title` 和 `description`。六个预设 `target` 的插画随 JS 打包，不需要托管图片。
 - 包根入口只导出 `DirectoryTour` 和 `DirectoryTourProps`；`DirectoryTourIntro`、`openVikingDirectoryTourSteps` 和其余类型从 `@openviking/react/components/directory-tour` 导入。
 

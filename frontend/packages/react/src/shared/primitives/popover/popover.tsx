@@ -71,6 +71,7 @@ export function Popover({
   alignment = 'center',
   anchorRef,
   trigger = 'hover',
+  clickToClose = true,
   delay = 300,
   open: controlledOpen,
   role,
@@ -178,7 +179,7 @@ export function Popover({
   const show = () => {
     if (disabled) return;
     if (trigger === 'click') {
-      change(!open);
+      if (!open || clickToClose) change(!open);
       return;
     }
     clearTimer();
