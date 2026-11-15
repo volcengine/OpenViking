@@ -3,6 +3,9 @@ import type { ShellLabels } from '../file-browser-labels.js';
 const messages = {
   formatCharacterCount: (count) =>
     `${count.toLocaleString('en-US')} ${count === 1 ? 'character' : 'characters'}`,
+  formatPreviewUpdatedAt: (time) => `Updated on ${time}`,
+  previewModelNotice:
+    'Content parsing provided by the Content Understanding Model',
   accessDenied: 'You do not have permission to view this node.',
   traverseOnly:
     'This directory can only be expanded to reach accessible children.',
@@ -18,7 +21,7 @@ const messages = {
   searchEmpty: 'No matching resources',
   searchFailed: 'Failed to run the search',
   searchModePlaceholders: {
-    find: 'Enter a semantic query',
+    find: 'Search files or directories',
     search: 'Enter a question that needs conversation context',
     grep: 'Enter a regular expression or exact text',
     glob: 'Enter a file pattern, e.g. **/*.md',
@@ -50,9 +53,6 @@ const messages = {
   searchAdvancedLabel: 'Advanced filters',
   loading: 'Loading…',
   searchDismiss: 'Esc to close',
-  searchPreview: 'Search result preview',
-  searchPreviewEmpty: 'No content to preview',
-  searchPreviewFailed: 'Could not load the preview',
   searchLoading: 'Searching…',
   previewMode: 'Preview',
   sourceMode: 'Source',
@@ -80,3 +80,10 @@ const messages = {
 export default messages;
 
 export const stackedEmpty = 'Select a file above to preview it';
+
+export const renderErrors = {
+  browser: 'File browser could not be displayed.',
+  tree: 'File tree could not be displayed.',
+  preview: 'File preview failed.',
+  search: 'Search results could not be displayed.',
+};

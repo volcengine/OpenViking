@@ -57,7 +57,7 @@ test('internal Modal preserves scoped themes and exit-safe focus/scroll lifetime
     trigger.style.setProperty('--ov-ui-color-bg-1', 'rgb(20, 30, 40)');
     await click(trigger);
     assert.ok(panel() && !view.container.contains(panel()));
-    assert.equal(document.querySelector('dialog'), null);
+    assert.equal(document.querySelector('dialog') === null, true);
     assert.equal(
       panel().closest('.ov-modal').style.getPropertyValue('--ov-ui-color-bg-1'),
       'rgb(20, 30, 40)',
@@ -66,16 +66,20 @@ test('internal Modal preserves scoped themes and exit-safe focus/scroll lifetime
     assert.equal(document.body.style.overflowY, 'hidden');
     const previous = panel();
     await click(panel().querySelector('.ov-modal__close'));
-    assert.equal(panel(), previous);
+    assert.equal(panel() === previous, true);
     assert.equal(document.body.style.overflowY, 'hidden');
     await finish();
-    assert.equal(panel(), null);
+    assert.equal(panel() === null, true);
     assert.equal(document.body.style.overflow, overflow);
-    assert.equal(document.activeElement, trigger);
+    assert.equal(
+      document.activeElement === trigger,
+      true,
+      'focus returns to the modal trigger',
+    );
     await click(trigger);
     await click(document.querySelector('.ov-modal__mask'));
     await finish();
-    assert.equal(panel(), null);
+    assert.equal(panel() === null, true);
     await click(trigger);
     await act(() =>
       panel()
@@ -101,7 +105,7 @@ test('internal Modal preserves scoped themes and exit-safe focus/scroll lifetime
         ),
     );
     await finish();
-    assert.equal(panel(), null);
+    assert.equal(panel() === null, true);
   } finally {
     await view.unmount();
   }
@@ -124,7 +128,7 @@ test('controlled close intent may be blocked and locale changes retain content',
       panel().querySelector('.ov-modal__close').getAttribute('aria-label'),
       '关闭弹窗',
     );
-    assert.equal(panel().querySelector('input'), input);
+    assert.equal(panel().querySelector('input') === input, true);
     assert.equal(input.value, 'Unsaved content');
     await view.render(
       h(Host, { blocked: true, onIntent, locale: 'zh-CN', closeLabel: '' }),

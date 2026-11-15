@@ -1,104 +1,52 @@
-"""Prepare accepted artifacts and revision-bound publication operations."""
-
-from __future__ import annotations
-
-import json
-from typing import TYPE_CHECKING
+"""Prepare safe Markdown writes from the selected completed stage."""
 
 from openviking.utils.path_safety import safe_join_viking_uri
 from vikingbot.compile import file_ops
 from vikingbot.compile.hashing import content_hash
-from vikingbot.compile.models import CompileFailure
 from vikingbot.compile.renderer import RenderedBundle, validate_relative_file_path
 
-if TYPE_CHECKING:
-    from vikingbot.compile.pipeline import Pipeline
 
+async def run(runtime, documents):
+    """Reject duplicate paths and unseen replacements before preparing publication operations.
 
-async def run(runtime: Pipeline, references: list[str]) -> RenderedBundle:
-    """Validate accepted artifacts and prepare revision-bound publication operations.
-
-    References name accepted task artifacts validated during generation or checkpoint
-    recovery. The returned bundle contains write operations for the service to publish,
-    without performing target writes here. Invalid artifacts raise before publication.
-    Partial recovery retains the same write guards. Skill packages are checked together
-    and may use a task-wide budget of three repair submissions before publication.
+    Only selected, completed worker outputs are eligible. Existing target files require a
+    prior read by a worker. This preflight does not provide atomic compare-and-swap writes.
     """
-    if runtime.skill_target:
-        artifacts = [await runtime.files.get(ref) for ref in references]
-        try:
-            file_ops.validate_skill_output({a["path"]: a["content"] for a in artifacts})
-        except ValueError as error:
-            try:
-                references = await file_ops.repair_skill_output(runtime, artifacts, str(error))
-            except Exception as exc:
-                raise CompileFailure("SKILL_REPAIR_FAILED", str(exc), stage="skill_repair") from exc
-    files, owners, revisions, outputs = {}, {}, {}, {}
-    for reference in references:
-        artifact = await runtime.files.get(reference)
-        path = artifact["path"]
-        validate_relative_file_path(path)
-        if path in owners:
+    bundle = RenderedBundle()
+    contents, outputs = {}, {}
+    for document in documents:
+        path = validate_relative_file_path(document.path)
+        if path in contents:
             raise ValueError(f"Multiple output writers claim {path}")
-        owners[path] = artifact["owner"]
-        payload = file_ops.file_bytes(artifact)
-        if content_hash(payload) != artifact["sha256"]:
-            raise ValueError(f"Stored file hash mismatch: {path}")
-        text = file_ops.encode_content(payload)["content"]
-        if not payload or (text is not None and not text.strip()):
-            raise ValueError(f"Empty output: {path}")
-        if path.lower().endswith((".md", ".json")):
-            payload.decode("utf-8")
-        if path.endswith(".json"):
-            json.loads(payload)
-        files[path] = payload
-        revisions[path] = artifact["base_hash"]
-        outputs[path] = {"source_refs": artifact["source_refs"]}
-    if runtime.skill_target and files:
-        file_ops.validate_skill_output(
-            {path: file_ops.encode_content(raw)["content"] for path, raw in files.items()}
+        content = (await runtime.files.sandbox.read_file_bytes(document.workspace_path)).decode(
+            "utf-8"
         )
-    rendered = RenderedBundle()
-    for path, payload in files.items():
+        if not path.lower().endswith(".md") or not content.strip():
+            raise ValueError(f"Output must be nonempty UTF-8 Markdown: {path}")
+        contents[path] = content
+        outputs[path] = {"source_refs": document.source_refs, "sha256": content_hash(content)}
         uri = safe_join_viking_uri(runtime.target, path)
-        old = runtime.old.get(path)
-        revision = revisions.get(path)
-        if revision is None and runtime.skill_target:
-            # Detect collisions even when a plan deliberately skips history matching.
-            if await file_ops.load_old(runtime, path) is not None:
-                raise ValueError(f"Create conflicts with an existing target: {uri}")
-        elif revision is not None and (old is None or content_hash(old) != revision):
-            raise ValueError(f"Stale prepared artifact: {uri}")
-        if (
-            runtime.skill_target
-            and old is not None
-            and payload == (old.encode() if isinstance(old, str) else old)
-        ):
-            rendered.unchanged.append(uri)
-            continue
-        operation = {
-            "uri": uri,
-            **file_ops.encode_content(payload),
-            "mode": "replace" if revision else "create",
-        }
-        operation.pop("content_base64" if operation["content"] is not None else "content")
-        rendered.operations.append(operation)
-        (rendered.updated if revision else rendered.created).append(uri)
-        if (
-            not runtime.skill_target
-            and path.lower().endswith(".md")
-            and runtime.output_format == "wiki"
-        ):
-            rendered.wiki_uris.append(uri)
-    for path, output in outputs.items():
-        output["sha256"] = content_hash(files[path])
-    await runtime.files.put(
-        "finalize",
-        {
-            "owners": owners,
-            "prepared_files": len(files),
-            "outputs": outputs,
-            "excluded": {},
-        },
-    )
-    return rendered
+        read_before = path in runtime.old
+        old = await file_ops.load_old(runtime, path)
+        if old is not None and not read_before:
+            # Create mode lets the server preserve an existing target as a reported conflict.
+            mode = "create"
+        elif old is not None:
+            current = await runtime.client.download_bytes(uri)
+            if content_hash(current) != content_hash(old):
+                raise ValueError(f"Target changed after reading: {uri}")
+            if current == content.encode("utf-8"):
+                bundle.unchanged.append(uri)
+                continue
+            mode = "replace"
+        else:
+            mode = "create"
+        bundle.operations.append({"uri": uri, "content": content, "mode": mode})
+        (bundle.updated if mode == "replace" else bundle.created).append(uri)
+        if runtime.output_format == "wiki":
+            bundle.wiki_uris.append(uri)
+        outputs[path] = {"source_refs": document.source_refs, "sha256": content_hash(content)}
+    if runtime.skill_target and contents:
+        file_ops.validate_skill_output(contents)
+    await runtime.files.put("finalize", {"outputs": outputs})
+    return bundle

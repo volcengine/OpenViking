@@ -12,32 +12,47 @@ import {
   type ReactNode,
   type TextareaHTMLAttributes,
 } from 'react';
+import { InputFrame } from './input-frame.js';
 
 export interface InputProps extends Omit<
   InputHTMLAttributes<HTMLInputElement>,
   'size' | 'prefix' | 'type'
 > {
-  type?: 'text' | 'search' | 'email' | 'url' | 'tel' | 'password' | 'number';
+  type?:
+    | 'text'
+    | 'search'
+    | 'email'
+    | 'url'
+    | 'tel'
+    | 'password'
+    | 'number'
+    | 'time';
   size?: 'mini' | 'small' | 'default' | 'large';
   prefix?: ReactNode;
   suffix?: ReactNode;
+  /** Set false when the suffix contains an interactive control. */
+  suffixAriaHidden?: boolean;
 }
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
-  { size = 'default', prefix, suffix, className, style, disabled, ...rest },
+  {
+    size = 'default',
+    prefix,
+    suffix,
+    suffixAriaHidden = true,
+    className,
+    style,
+    disabled,
+    ...rest
+  },
   ref,
 ) {
   return (
-    <span
+    <InputFrame
       role="presentation"
-      className={[
-        'ov-input',
-        `ov-input--${size}`,
-        disabled && 'ov-input--disabled',
-        className,
-      ]
-        .filter(Boolean)
-        .join(' ')}
+      size={size}
+      disabled={disabled}
+      className={className}
       style={style}
       onMouseDown={(event) => {
         if (event.target !== event.currentTarget.querySelector('input'))
@@ -61,11 +76,14 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
         className="ov-input__element"
       />
       {suffix != null ? (
-        <span className="ov-input__affix" aria-hidden="true">
+        <span
+          className="ov-input__affix"
+          aria-hidden={suffixAriaHidden || undefined}
+        >
           {suffix}
         </span>
       ) : null}
-    </span>
+    </InputFrame>
   );
 });
 

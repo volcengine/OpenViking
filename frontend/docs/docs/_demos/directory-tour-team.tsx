@@ -1,3 +1,4 @@
+import { Checkbox, Button } from '#demo-controls';
 import { useCallback, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { useLang } from '@rspress/core/runtime';
@@ -69,24 +70,21 @@ export default function DirectoryTourTeam() {
   return (
     <div className="ov-directory-tour-demo">
       <div className="ov-directory-tour-demo__controls">
-        <label>
-          <input
-            type="checkbox"
-            checked={shown}
-            onChange={(event) => {
-              const next = event.target.checked;
-              flushSync(() => setShown(next));
-              setOpen(next && !seen);
-            }}
-          />
+        <Checkbox
+          checked={shown}
+          onChange={(next) => {
+            flushSync(() => setShown(next));
+            setOpen(next && !seen);
+          }}
+        >
           <span>
             {zh ? '模拟团队经验目录出现' : 'Simulate team directory appearing'}
           </span>
-        </label>
+        </Checkbox>
         {shown && (
-          <button type="button" onClick={() => setOpen(true)}>
+          <Button htmlType="button" onClick={() => setOpen(true)}>
             {zh ? '查看团队经验介绍' : 'View team introduction'}
-          </button>
+          </Button>
         )}
         <output aria-live="polite">
           {seen

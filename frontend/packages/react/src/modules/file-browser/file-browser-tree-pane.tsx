@@ -1,3 +1,6 @@
+import { MonitoringFlow } from '../../shared/monitoring/flow-context.js';
+import { useRenderErrors } from './file-browser-labels.js';
+import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import { Button } from '../../shared/primitives/button/button.js';
 import type { Ref } from 'react';
 import type { Locale } from '../../shared/locale.js';
@@ -31,6 +34,7 @@ import type { FileBrowserApi, FileBrowserDashboardLabels } from './types.js';
  */
 export interface FileBrowserTreePaneProps {
   treeRef?: Ref<FileTreeHandle>;
+  treeScrollRef?: Ref<HTMLDivElement>;
   entries: Pick<
     FileBrowserActionBarProps,
     | 'agentConnect'
@@ -55,8 +59,9 @@ export interface FileBrowserTreePaneProps {
   retryLabel: string;
 }
 
-export function FileBrowserTreePane({
+function FileBrowserTreePaneContent({
   treeRef,
+  treeScrollRef,
   entries,
   locale,
   dashboardLabels,
@@ -90,7 +95,7 @@ export function FileBrowserTreePane({
         refreshLabel={refreshLabel}
         onRefresh={() => void browser.actions.refresh()}
       />
-      <div className="ov-file-browser__tree-scroll">
+      <div ref={treeScrollRef} className="ov-file-browser__tree-scroll">
         {browser.dashboardError ? (
           <div
             className="ov-file-browser__hint ov-file-browser__hint--error"
@@ -147,5 +152,20 @@ export function FileBrowserTreePane({
         />
       </div>
     </>
+  );
+}
+
+export function FileBrowserTreePane(props: FileBrowserTreePaneProps) {
+  return (
+    <MonitoringFlow operation={props.browser.treeMonitoring}>
+      <ErrorBoundary
+        monitoringRegion="directory"
+        message={useRenderErrors(props.locale).tree}
+        locale={props.locale}
+        resetKeys={[props.rootUri]}
+      >
+        <FileBrowserTreePaneContent {...props} />
+      </ErrorBoundary>
+    </MonitoringFlow>
   );
 }

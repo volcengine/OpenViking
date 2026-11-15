@@ -1,3 +1,8 @@
+import { useExposure } from '../../shared/analytics/use-exposure.js';
+import {
+  ErrorNotification,
+  errorMessage,
+} from '../../shared/feedback/error-notification.js';
 import type { RefObject } from 'react';
 import { Button } from '../../shared/primitives/button/button.js';
 import { Modal } from '../../shared/primitives/modal/modal.js';
@@ -26,6 +31,12 @@ export function FileBrowserDeleteDialog({
   onClose: () => void;
   onConfirm: () => void;
 }) {
+  const exposure = useExposure(
+    'file_browser_delete_confirm_dialog_show',
+    open,
+    undefined,
+    open,
+  );
   return (
     <Modal
       open={open}
@@ -35,7 +46,7 @@ export function FileBrowserDeleteDialog({
       className="ov-file-browser-delete"
       onClose={onClose}
     >
-      <h2 className="ov-file-browser-delete__title">
+      <h2 ref={exposure} className="ov-file-browser-delete__title">
         <span className="ov-file-browser-delete__warning" aria-hidden="true">
           <WarningIcon width={12} height={12} />
         </span>
@@ -45,10 +56,14 @@ export function FileBrowserDeleteDialog({
         {text.deleteMessage(uri.split('/').pop() ?? uri)}
       </p>
       {error !== undefined ? (
-        <p className="ov-file-browser-delete__error" role="alert">
-          {text.deleteFailed}
-          {error instanceof Error ? `: ${error.message}` : ''}
-        </p>
+        <ErrorNotification
+          title={text.deleteFailed}
+          identity={error}
+          error={error}
+          locale={locale}
+        >
+          {errorMessage(error)}
+        </ErrorNotification>
       ) : null}
       <div className="ov-file-browser-delete__actions">
         <Button size="small" type="default" onClick={onClose}>

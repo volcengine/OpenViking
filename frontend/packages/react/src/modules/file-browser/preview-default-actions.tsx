@@ -1,3 +1,4 @@
+import { markPreviewAction } from '../../shared/analytics/preview-actions.js';
 import type { FilePreviewAction } from '../../components/file-preview/index.js';
 import type { FileBrowserPreviewActions } from './preview-types.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
@@ -29,12 +30,17 @@ export function defaultPreviewActions({
   const packActions: FilePreviewAction[] = [];
   const destructiveActions: FilePreviewAction[] = [];
   if (policy.download && options?.download !== false)
-    contentActions.push({
-      key: 'download',
-      label: text.download,
-      icon: <ImportIcon width={16} height={16} />,
-      onClick: () => download(false),
-    });
+    contentActions.push(
+      markPreviewAction(
+        {
+          key: 'download',
+          label: text.download,
+          icon: <ImportIcon width={16} height={16} />,
+          onClick: () => download(false),
+        },
+        'download',
+      ),
+    );
   if (policy.history && options?.history !== false)
     contentActions.push({
       key: 'history',

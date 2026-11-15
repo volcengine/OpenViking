@@ -1,3 +1,6 @@
+import { useToast } from '../../shared/primitives/toast/use-toast.js';
+import { TextArea, Input } from '../../shared/primitives/input/input.js';
+import { Checkbox } from '../../shared/primitives/checkbox/checkbox.js';
 import { useCallback, useId, useState } from 'react';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { OV_PATHS } from '../../client/paths.js';
@@ -54,6 +57,7 @@ function CompileConfigForm({
 }: Props & { initial: CompileConfig }) {
   const id = useId();
   const [draft, setDraft] = useState(initial);
+  const [toast, toastHolder] = useToast({ locale });
   const [sources, setSources] = useState(initial.from.join('\n'));
   const mutation = usePreviewMutation(uri, requestOptions);
   const change = (value: Partial<CompileConfig>) => {
@@ -62,6 +66,7 @@ function CompileConfigForm({
   };
   return (
     <form
+      noValidate
       onSubmit={(event) => {
         event.preventDefault();
         if (!canWrite) return;
@@ -76,6 +81,16 @@ function CompileConfigForm({
           auto_update: draft.auto_update,
           update_schedule: draft.update_schedule,
         };
+        if (!body.from.length || !body.skill.trim()) {
+          toast.warning({
+            id: 'compile-validation',
+            content: !body.from.length
+              ? text.sourcesRequired
+              : text.skillRequired,
+          });
+          return;
+        }
+        toast.clear();
         void mutation.run(
           (client, options) =>
             client.request({
@@ -85,12 +100,14 @@ function CompileConfigForm({
               options,
             }),
           onUpdated,
+          'file_browser_compile_config_save',
         );
       }}
     >
+      {toastHolder}
       <fieldset disabled={!canWrite || mutation.pending}>
         <label htmlFor={`${id}-sources`}>{text.sources}</label>
-        <textarea
+        <TextArea
           id={`${id}-sources`}
           required
           value={sources}
@@ -100,27 +117,25 @@ function CompileConfigForm({
           }}
         />
         <label htmlFor={`${id}-skill`}>{text.skill}</label>
-        <input
+        <Input
           id={`${id}-skill`}
           required
           value={draft.skill}
           onChange={(event) => change({ skill: event.target.value })}
         />
         <label htmlFor={`${id}-instruction`}>{text.instruction}</label>
-        <textarea
+        <TextArea
           id={`${id}-instruction`}
           value={draft.instruction ?? ''}
           onChange={(event) => change({ instruction: event.target.value })}
         />
-        <label htmlFor={`${id}-automatic`}>
-          <input
-            id={`${id}-automatic`}
-            type="checkbox"
-            checked={draft.auto_update}
-            onChange={(event) => change({ auto_update: event.target.checked })}
-          />
+        <Checkbox
+          id={`${id}-automatic`}
+          checked={draft.auto_update}
+          onChange={(next) => change({ auto_update: next })}
+        >
           {text.automatic}
-        </label>
+        </Checkbox>
         <PreviewCompileSchedule
           value={draft.update_schedule}
           text={text}
@@ -128,7 +143,11 @@ function CompileConfigForm({
           onChange={(update_schedule) => change({ update_schedule })}
         />
       </fieldset>
-      <PreviewMutationError error={mutation.error} text={text} />
+      <PreviewMutationError
+        error={mutation.error}
+        title={text.failureTitle(text.save)}
+        locale={locale}
+      />
       {mutation.succeeded ? <p role="status">{text.saved}</p> : null}
       <div className="ov-file-browser-workflow__actions">
         <Button size="small" htmlType="button" onClick={onClose}>

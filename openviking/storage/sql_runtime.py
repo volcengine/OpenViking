@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import sys
 import threading
 from collections.abc import Awaitable, Callable
 from concurrent.futures import Future
@@ -197,7 +198,9 @@ class SQLRuntime:
                 await asyncio.to_thread(wait_ready.wait)
 
     def _thread_main(self, ready: Event, stopped: Event) -> None:
-        loop = asyncio.new_event_loop()
+        # psycopg rejects Windows' default Proactor loop. Select the compatible
+        # loop in this thread without changing the caller's event-loop policy.
+        loop = asyncio.SelectorEventLoop() if sys.platform == "win32" else asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         with self._state_lock:
             self._loop = loop

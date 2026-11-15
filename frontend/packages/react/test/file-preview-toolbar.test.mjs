@@ -75,7 +75,7 @@ test('standalone preview offers editing only on the active editable level', asyn
   }
 });
 
-test('FileBrowser loads the full file, writes it, and reloads the displayed body', async () => {
+test('FileBrowser saves edits without waiting for background work or creating a snapshot', async () => {
   const uri = 'viking://resources/guide.md';
   let fullReads = 0;
   const requests = recordingFetch(({ path, body: request }) => {
@@ -86,9 +86,10 @@ test('FileBrowser loads the full file, writes it, and reloads the displayed body
       assert.equal(request.uri, uri);
       assert.equal(request.mode, 'replace');
       assert.equal(request.content, '# Updated');
+      assert.notEqual(request.wait, true);
       assert.equal(request.version_message, undefined);
-      assert.equal(request.expected_content_sha256, undefined);
-      return ok({});
+      assert.equal(request.use_snapshot, undefined);
+      return ok({ task_id: 'content-write' });
     }
     return ok([]);
   });
@@ -121,8 +122,11 @@ test('FileBrowser loads the full file, writes it, and reloads the displayed body
     assert.equal(fullReads, 1);
     await setEditor(view.container.querySelector('.cm-content'), '# Updated');
     await click(view, 'Save');
-    assert.equal(document.querySelector('.ov-file-preview-version-note'), null);
     assert.equal(requests.countOf('/api/v1/content/write'), 1);
+    assert.equal(requests.countOf('/api/v1/snapshot/commit'), 0);
+    assert.equal(requests.countOf('/api/v1/tasks/content-write'), 0);
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.equal(view.container.querySelector('.cm-content'), null);
     assert.equal(requests.countOf('/api/v1/content/read'), reads + 1);
     await view.render(render(true));
     assert.equal(button(view, 'Edit'), undefined);

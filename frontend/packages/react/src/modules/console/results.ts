@@ -1,3 +1,4 @@
+import { readTaskReferences } from '../../shared/task-tracking/read-references.js';
 import type {
   CommandConsoleRecordContent,
   CommandConsoleSearchResultItem,
@@ -73,7 +74,11 @@ export function formatResult(
       variant: 'write-result',
       lines: rows.length
         ? rows.slice(0, 12).map(([key, value]) => {
-            const label = key.replaceAll('_', ' ');
+            const label = (
+              key === 'status' && readTaskReferences(name, data).length
+                ? 'submission_status'
+                : key
+            ).replaceAll('_', ' ');
             return `${label[0]?.toUpperCase() ?? ''}${label.slice(1)}: ${text(value)}`;
           })
         : data === null || data === undefined

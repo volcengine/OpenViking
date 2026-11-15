@@ -57,8 +57,6 @@
 - 按 [`useEffect` 官方约定](https://react.dev/reference/react/useEffect) 声明完整依赖；不得靠省略依赖或关闭 Hooks lint 消除重跑。
 - 按 [Synchronizing with Effects](https://react.dev/learn/synchronizing-with-effects) 对称地建立和清理订阅、连接、定时器等资源；异步请求取消或忽略过期结果，避免旧结果覆盖新状态。
 - 保证开发环境 Strict Mode 的建立、清理、再建立过程正确；不得用“只执行一次”的 ref 标记或全局变量掩盖缺失清理的问题。
-- 浏览器 API 在客户端的必要阶段访问，保持模块导入和服务端渲染安全；不要把副作用搬进渲染函数或 `useMemo` 来规避 Effect。
+- 浏览器 API 在客户端的必要阶段访问；不要把副作用搬进渲染函数或 `useMemo` 来规避 Effect。
 
 业务 Hook 与控制器是区块内部实现，不从根入口或区块子路径导出；`components/` 保持纯 UI、接口无关。
-
-VikingBot 对话是公开无头模块的明确例外：`modules/viking-bot` 导出 `useVikingBotChat`、`useVikingBotSessions` 及必要契约，供 Console 与独立 VikingBot 宿主共同使用；不导出组合组件，不提供 CSS 入口，不从根入口或 Console 入口转导出 Hook。其他模块 Hook 仍按上述内部边界执行。

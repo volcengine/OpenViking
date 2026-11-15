@@ -10,7 +10,7 @@ export const isEditableText = (uri: string) =>
   /\.(?:md|json|jsonl|txt|yaml|yml)$/i.test(normalizeResourceUri(uri)) &&
   !isSystemUri(uri) &&
   !isSummaryUri(uri);
-const supportsFileHistory = (uri: string) =>
+export const supportsFileHistory = (uri: string) =>
   isEditableText(uri) &&
   !/\/\.relations\.json$/i.test(normalizeResourceUri(uri));
 

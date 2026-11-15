@@ -96,7 +96,9 @@ export function ReferenceButton({
             aria-label={labels.reference}
             disabled={disabled}
           >
-            @
+            <span className="ov-viking-bot__attach-glyph" aria-hidden="true">
+              @
+            </span>
           </Button>
         </Tooltip>
       )}

@@ -15,7 +15,7 @@ export interface FileBrowserDetailProps {
   activeKey: string | null;
   locale: Locale;
   labels?: FileBrowserLabels['preview'];
-  footer?: string;
+  footer?: ReactNode;
   titleExtra?: ReactNode;
   readOnly?: boolean;
   previewSlots?: FilePreviewHeaderSlots;

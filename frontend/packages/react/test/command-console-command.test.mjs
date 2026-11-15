@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRslib } from '@rslib/core';
 import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { renderMarkup } from './helpers/csr-render.mjs';
 import { CommandConsole } from '@openviking/react/components/command-console';
 
 // Exercise generic matching without exposing implementation helpers publicly.
@@ -159,7 +159,7 @@ test('a new host command is discoverable without selecting it or opening its det
     ],
     examples: ['/brand-new-command 25'],
   };
-  const html = renderToStaticMarkup(
+  const html = renderMarkup(
     createElement(CommandConsole, {
       ...props,
       commands: [next],
@@ -171,7 +171,7 @@ test('a new host command is discoverable without selecting it or opening its det
   assert.ok(!html.includes('class="ov-command-console__hint"'));
   assert.ok(!html.includes('aria-selected="true"'));
   assert.ok(!html.includes('aria-activedescendant'));
-  const empty = renderToStaticMarkup(
+  const empty = renderMarkup(
     createElement(CommandConsole, { ...props, commands: [] }),
   );
   assert.ok(!empty.includes('role="listbox"'));
@@ -179,12 +179,12 @@ test('a new host command is discoverable without selecting it or opening its det
 });
 
 test('locale changes generic UI, labels override it, and host command copy is preserved', () => {
-  const chinese = renderToStaticMarkup(
+  const chinese = renderMarkup(
     createElement(CommandConsole, { ...props, locale: 'zh-CN' }),
   );
   for (const text of ['宿主操作', '刷新宿主索引', '执行成功'])
     assert.ok(chinese.includes(text), text);
-  const override = renderToStaticMarkup(
+  const override = renderMarkup(
     createElement(CommandConsole, {
       ...props,
       locale: 'zh-CN',
@@ -197,7 +197,7 @@ test('locale changes generic UI, labels override it, and host command copy is pr
   assert.ok(override.includes('Custom status'));
   assert.ok(override.includes('Custom catalogue'));
   assert.ok(!chinese.includes('aria-activedescendant'));
-  const english = renderToStaticMarkup(createElement(CommandConsole, props));
+  const english = renderMarkup(createElement(CommandConsole, props));
   assert.ok(english.includes('Succeeded'));
   assert.ok(english.includes('刷新宿主索引'));
 });

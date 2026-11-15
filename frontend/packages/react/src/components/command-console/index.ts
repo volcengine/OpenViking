@@ -14,6 +14,7 @@ export type {
   CommandConsoleLabels,
   CommandConsoleProps,
   CommandConsoleRecord,
+  CommandConsoleTask,
   CommandConsoleRecordContent,
   CommandConsoleRecordStatus,
   CommandConsoleResourcePreviewContent,

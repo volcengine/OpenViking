@@ -135,3 +135,9 @@ const messages = {
   },
 };
 export default messages;
+
+export const renderErrors = {
+  console: 'Console could not be displayed.',
+  toolbar: 'Toolbar could not be displayed.',
+  command: 'Command panel could not be displayed.',
+};

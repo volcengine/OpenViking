@@ -129,8 +129,9 @@ class VikingClient:
         )
 
     async def create_session(self, key, session, memory_types=None):
-        # Commits only feed memory extraction; the gateway writes its own summaries.
-        memory_policy = {"working_memory": {"enabled": False}}
+        memory_policy = {}
+        if not await self._supports_commit_wm_override(key):
+            memory_policy["working_memory"] = {"enabled": False}
         if memory_types is not None:
             memory_policy["memory_types"] = memory_types
         try:
@@ -145,7 +146,7 @@ class VikingClient:
                         "message_count_threshold": 0,
                         "idle_timeout_seconds": 0,
                     },
-                    "memory_policy": memory_policy,
+                    **({"memory_policy": memory_policy} if memory_policy else {}),
                 },
             )
         except VikingError as error:
@@ -153,13 +154,20 @@ class VikingClient:
                 raise
 
     async def commit(self, key, session, keep=0):
+        body = {"keep_recent_count": keep}
+        # The gateway owns summaries; leave the resolved extraction policy intact.
+        if await self._supports_commit_wm_override(key):
+            body["enable_working_memory"] = False
         return await self.request(
             "POST",
             f"/api/v1/sessions/{session}/commit",
             key,
-            {"keep_recent_count": keep},
+            body,
             timeout=45,
         )
+
+    async def _supports_commit_wm_override(self, key):
+        return Version((await self.health(key))["version"]) >= Version("0.5.0")
 
     async def read_content(self, key, uri):
         try:

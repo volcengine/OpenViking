@@ -66,7 +66,7 @@ export interface DirectoryTourProps {
   currentStep?: number;
   defaultStep?: number;
   placement?: 'right' | 'left';
-  /** Deadline before automatically skipping an unresolved target. Default 10000. */
+  /** Deadline before showing the current step without an anchor. Default 10000. */
   locateTimeout?: number;
   className?: string;
   style?: CSSProperties;

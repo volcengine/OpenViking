@@ -40,6 +40,7 @@ export function useFsTreeReveal({
     uri: string,
     offset: number,
     signal?: AbortSignal,
+    refresh?: boolean,
   ) => Promise<DirState | undefined>;
   setExpanded: Dispatch<SetStateAction<ReadonlySet<string>>>;
   resolveHome: (signal: AbortSignal) => Promise<string | undefined>;
@@ -62,10 +63,10 @@ export function useFsTreeReveal({
       if (callerSignal) signals.push(callerSignal);
       const signal = AbortSignal.any(signals);
       const valid = () => {
-        if (controller.signal.aborted || scope.current() !== current)
-          return false;
         if (callerSignal?.aborted && isTimeoutReason(callerSignal.reason))
           callerSignal.throwIfAborted();
+        if (controller.signal.aborted || scope.current() !== current)
+          return false;
         return !signal.aborted;
       };
       let home: string | undefined;
@@ -84,9 +85,18 @@ export function useFsTreeReveal({
       const target = identify(resource);
       const root = identify(rootUri);
       if (!valid()) return false;
-      if (target === root || !target.startsWith(childPrefix(root)))
+      if (target !== root && !target.startsWith(childPrefix(root)))
         return false;
       await initialLoad.current;
+      const expand = async (uri: string) => {
+        if (!valid()) return false;
+        setExpanded((previous) => new Set(previous).add(uri));
+        // The row is already located. Child refresh errors stay in its error
+        // row and must not turn successful selection into a navigation failure.
+        await fetchPage(uri, 0, signal, true);
+        return valid();
+      };
+      if (target === root) return expand(rootUri);
       let parent = rootUri;
       while (valid()) {
         const cached = dirs.current[parent];
@@ -123,7 +133,7 @@ export function useFsTreeReveal({
           return entry;
         };
         const scan = async (first: DirState | undefined) => {
-          let page = first ?? (await fetchPage(parent, 0, signal));
+          let page = first ?? (await fetchPage(parent, 0, signal, true));
           while (valid() && page) {
             if (page.error) throw page.error;
             const entry = await find(page);
@@ -135,7 +145,10 @@ export function useFsTreeReveal({
               return find(page);
           }
         };
-        const usable = cached && !cached.error && !cached.loading;
+        const usable =
+          cached &&
+          !cached.error &&
+          (!cached.loading || cached.entries.length > 0);
         let entry = await scan(usable ? cached : undefined);
         // An import may create a new child in a directory already cached in the
         // tree. Retry from page one once before treating a cache miss as final.
@@ -144,7 +157,7 @@ export function useFsTreeReveal({
         if (!entry || entry.access === 'denied') return false;
         if (identify(entry.uri) === identify(resource)) {
           if (entry.access === 'container') return false;
-          return true;
+          return entry.isDir ? expand(entry.uri) : true;
         }
         if (!entry.isDir) return false;
         setExpanded((previous) => new Set(previous).add(entry.uri));

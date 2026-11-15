@@ -1,7 +1,10 @@
+import type { renderErrors as EnglishRenderErrors } from './en-US.js';
 import type { ShellLabels } from '../file-browser-labels.js';
 
 const messages = {
-  formatCharacterCount: (count) => `${count.toLocaleString('zh-CN')} 个字符`,
+  formatCharacterCount: (count) => `${count.toLocaleString('zh-CN')} 字符数`,
+  formatPreviewUpdatedAt: (time) => `更新于 ${time}`,
+  previewModelNotice: '内容解析由 内容理解大模型 提供',
   accessDenied: '无权查看此节点。',
   traverseOnly: '此目录仅可展开以访问有权限的子节点。',
   systemDirectory: '选择此目录中的文件以预览内容。',
@@ -16,7 +19,7 @@ const messages = {
   searchEmpty: '没有匹配的资源',
   searchFailed: '搜索失败',
   searchModePlaceholders: {
-    find: '输入语义检索内容',
+    find: '搜索文件或目录',
     search: '输入需要结合会话理解的问题',
     grep: '输入正则表达式或精确文本',
     glob: '输入文件模式，例如 **/*.md',
@@ -47,9 +50,6 @@ const messages = {
   searchAdvancedLabel: '高级筛选',
   loading: '加载中…',
   searchDismiss: 'Esc 退出',
-  searchPreview: '搜索结果预览',
-  searchPreviewEmpty: '暂无可预览内容',
-  searchPreviewFailed: '预览加载失败',
   searchLoading: '搜索中…',
   previewMode: '预览',
   sourceMode: '源码',
@@ -77,3 +77,10 @@ const messages = {
 export default messages;
 
 export const stackedEmpty = '从上方选中一个文件预览';
+
+export const renderErrors = {
+  browser: '文件浏览器显示失败',
+  tree: '目录树显示失败',
+  preview: '文件预览失败',
+  search: '搜索结果显示失败',
+} satisfies Record<keyof typeof EnglishRenderErrors, string>;

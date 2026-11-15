@@ -1,3 +1,5 @@
+import type { TaskSnapshot } from '../../shared/task-tracking/types.js';
+export type VikingBotTask = TaskSnapshot;
 import type { ReactNode } from 'react';
 import type { VikingBotReference } from './capabilities.js';
 
@@ -84,6 +86,8 @@ export interface VikingBotToolPart {
   output?: string;
   /** Normalized result cards; the host adapts its search response. */
   results?: readonly VikingBotToolResultLink[];
+  /** Background task snapshots supplied by the module or host. */
+  tasks?: readonly VikingBotTask[];
   /** 调用耗时，单位毫秒。Call duration in milliseconds. */
   durationMs?: number;
   /** Execution timestamps for the activity duration. */
@@ -109,6 +113,8 @@ export interface VikingBotToolResultPart {
   output: string;
   /** Normalized result cards, replacing the raw output presentation. */
   results?: readonly VikingBotToolResultLink[];
+  /** Background task snapshots supplied by the module or host. */
+  tasks?: readonly VikingBotTask[];
   /** 该结果是否为错误。Whether the result is an error. */
   isError?: boolean;
   /** 所属执行块标识。Owning activity block. */
@@ -154,6 +160,8 @@ export type VikingBotMessagePart =
 
 /** 一条消息。A single message. */
 export interface VikingBotMessage {
+  /** Readable submitted answers; original parts remain available for persistence. */
+  answerSummary?: readonly { label: string; value: string }[];
   /** 消息唯一标识。Unique message key. */
   id: string;
   /**
@@ -174,6 +182,8 @@ export interface VikingBotMessage {
    * Tone of a system message, `info` by default; `error` for failures.
    */
   tone?: 'info' | 'error';
+  /** 客户端失败提示，不进入会话存储或模型输入。Client-only failure notice. */
+  clientError?: Error;
   /**
    * 合并后的消息携带的原始动作清单；合并时保留每条消息自己的 messageId，
    * 渲染时按原始消息回传，避免把动作挂到错误的消息上。
@@ -217,6 +227,8 @@ export interface VikingBotStreamingState {
 export interface VikingBotAttachment {
   /** 附件唯一标识。Unique attachment key. */
   key: string;
+  /** 上传服务返回的标识。Identifier returned by the upload service. */
+  uploadId?: string;
   /** 文件名。File name. */
   name: string;
   /** 本地对象 URL 或宿主解析出的预览地址。Local object URL or a host-resolved preview link. */
@@ -275,6 +287,8 @@ export interface VikingBotLabels {
   attach?: string;
   /** 移除附件按钮文案。Remove-attachment button label. */
   removeAttachment?: string;
+  uploadingAttachment?: string;
+  attachmentUploadFailed?: string;
   /** 复制按钮文案。Copy button label. */
   copy?: string;
   /** 复制成功提示。Message shown after a successful copy. */

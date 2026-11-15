@@ -14,7 +14,7 @@ export function useConsoleConversation(zh: boolean): Partial<VikingBotProps> {
   const [attachments, setAttachments] = useState<
     readonly VikingBotAttachment[]
   >([]);
-  const [sessions, setSessions] = useState<readonly VikingBotSession[]>([
+  const [sessions] = useState<readonly VikingBotSession[]>([
     {
       id: 'session_20261109030400_6c4ebf',
       title: zh ? '整理项目资料' : 'Organize project resources',
@@ -28,7 +28,7 @@ export function useConsoleConversation(zh: boolean): Partial<VikingBotProps> {
   ]);
   const [currentId, setCurrentId] = useState<string>();
   const [expanded, setExpanded] = useState(true);
-  const reset = (id: string) => {
+  const reset = (id?: string) => {
     setCurrentId(id);
     setDraft('');
     setAttachments([]);
@@ -122,18 +122,10 @@ export function useConsoleConversation(zh: boolean): Partial<VikingBotProps> {
       items: sessions,
       currentId,
       currentUri: currentId ? `viking://session/${currentId}` : undefined,
-      onNew: () => {
-        const id = `docs-${Date.now()}`;
-        setSessions((items) => [
-          {
-            id,
-            title: zh ? '新会话' : 'New session',
-            updatedAt: new Date().toISOString(),
-          },
-          ...items,
-        ]);
-        reset(id);
-      },
+      // 与内置对话一致：新建只清空当前会话，真正的会话在首次发送时才创建。
+      // Like the built-in conversation, starting anew only clears the current
+      // session; a real session is created on the first send.
+      onNew: () => reset(),
       onSelect: reset,
     },
     references: {

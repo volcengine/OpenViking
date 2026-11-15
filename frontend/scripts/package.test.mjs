@@ -1,3 +1,4 @@
+import '../packages/react/test/helpers/browser-env.mjs';
 import assert from 'node:assert/strict';
 import { access, readFile } from 'node:fs/promises';
 import test from 'node:test';
@@ -20,7 +21,7 @@ test('all public package targets exist in the build', async () => {
   }
 });
 
-test('JavaScript entries resolve and import without browser globals', async () => {
+test('JavaScript entries expose their API in the browser environment', async () => {
   for (const [entry, target] of Object.entries(manifest.exports)) {
     if (typeof target === 'string') continue;
     const specifier = entry.replace(/^\./, manifest.name);
@@ -58,12 +59,13 @@ test('business entries expose components without headless Hooks', async () => {
   }
 });
 
-test('VikingBot headless hooks have one explicit subpath without exposing controllers', async () => {
-  const hooks = await import('@openviking/react/modules/viking-bot');
-  assert.deepEqual(Object.keys(hooks).sort(), [
-    'useVikingBotChat',
-    'useVikingBotSessions',
-  ]);
+test('VikingBot chat hooks remain internal to Console', () => {
+  assert.throws(
+    () => import.meta.resolve('@openviking/react/modules/viking-bot'),
+    {
+      code: 'ERR_PACKAGE_PATH_NOT_EXPORTED',
+    },
+  );
   assert.equal('./hooks/viking-bot' in manifest.exports, false);
   assert.equal('./modules/viking-bot/style.css' in manifest.exports, false);
 });

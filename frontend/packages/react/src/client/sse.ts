@@ -47,8 +47,10 @@ function parseEvent(lines: readonly string[]): OvStreamEvent | undefined {
 }
 
 /** 把字节流解成文本块；没有 `TextDecoderStream` 时退回手写解码器。 */
-function createDecoder(): TransformStream<Uint8Array, string> {
-  if (typeof TextDecoderStream !== 'undefined') {
+function createDecoder(
+  observeBytes?: (size: number) => void,
+): TransformStream<Uint8Array, string> {
+  if (!observeBytes && typeof TextDecoderStream !== 'undefined') {
     return new TextDecoderStream() as unknown as TransformStream<
       Uint8Array,
       string
@@ -58,6 +60,7 @@ function createDecoder(): TransformStream<Uint8Array, string> {
   const decoder = new TextDecoder('utf-8');
   return new TransformStream<Uint8Array, string>({
     transform(bytes, controller) {
+      observeBytes?.(bytes.byteLength);
       controller.enqueue(decoder.decode(bytes, { stream: true }));
     },
     flush(controller) {
@@ -106,6 +109,7 @@ function createDecoder(): TransformStream<Uint8Array, string> {
  */
 export function decodeEventStream(
   body: ReadableStream<Uint8Array>,
+  observeBytes?: (size: number) => void,
 ): ReadableStream<OvStreamEvent> {
   // 当前行、当前块与「上一个字符是 CR」的状态都跨 chunk 累积。
   // The current line, the current block and "the previous character was CR" all
@@ -114,7 +118,7 @@ export function decodeEventStream(
   let block: string[] = [];
   let skipLf = false;
 
-  return body.pipeThrough(createDecoder()).pipeThrough(
+  return body.pipeThrough(createDecoder(observeBytes)).pipeThrough(
     new TransformStream<string, OvStreamEvent>({
       transform(chunk, controller) {
         const finishLine = () => {
