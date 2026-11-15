@@ -3,17 +3,20 @@
   "version": "0.5.2-preview",
   "license": "AGPL-3.0",
   "private": true,
-  "description": "Read-only OpenViking SuperAgent console (RFC OVSA-CONSOLE-001 Slice A).",
+  "description": "OpenViking SuperAgent console frontend and isolated RFC contract mock demo.",
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
   },
   "scripts": {
     "dev": "vite --port 5173",
+    "demo": "npm run build && node test/mock-server.mjs",
+    "demo:dev": "VITE_OVSA_API_TARGET=http://127.0.0.1:3740 vite --port 5173",
     "build": "tsc --noEmit && vite build",
     "check": "tsc --noEmit",
     "test": "node scripts/test.mjs",
     "test:browser": "npm run build && node test/browser.mjs",
+    "test:demo-browser": "npm run build && node test/demo-browser.mjs",
     "test:watch": "vitest"
   },
   "dependencies": {

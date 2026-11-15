@@ -153,3 +153,69 @@ export type Metrics = {
   outbox?: { uncertain?: number }
   generatedAt?: string
 }
+
+export type OperationStep = { name: string; state: string; message?: string }
+export type Operation = {
+  id: string
+  kind: string
+  instanceId: string
+  state: string
+  steps: OperationStep[]
+  revision?: number | string
+  rolledBack?: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export type Configuration = {
+  instanceId: string
+  revision: string
+  desired: {
+    displayName: string
+    workspace: string
+    runtime: string
+    model: string
+    effort: string
+    scheduler: string
+    connectors: string[]
+  }
+  effective: { runtime?: string; model?: string; ready?: boolean }
+  restartRequired: boolean
+  ignoredFields: string[]
+  capabilities: { canEdit: boolean; canRestart: boolean; workerMode: boolean }
+}
+
+export type ModelProvider = {
+  id: string
+  revision: string
+  protocol: string
+  baseUrl: string
+  models: Array<{ id: string; efforts: string[] }>
+  credential: { ref?: string; configured: boolean; configuredAt?: string }
+  authKind: 'api_key' | 'oauth' | 'environment' | 'external'
+  bindings: Array<{ instanceId: string; runtime: string; state: string }>
+}
+
+export type DiagnosticSummary = {
+  instanceId: string
+  release: string
+  platform: string
+  drift: boolean
+  database: { state: string }
+  openviking: { state: string; version?: string }
+  connectors: { ready: number; total: number }
+  runtime: { state: string; name: string }
+  generatedAt: string
+}
+
+export type LogEntry = { id: string; stream: string; severity: string; message: string; createdAt: string }
+export type AuditEntry = {
+  id: string
+  actor: string
+  action: string
+  instanceId: string
+  result: string
+  revision?: string | number
+  diff?: Record<string, { from?: unknown; to?: unknown }>
+  createdAt: string
+}

@@ -1,5 +1,5 @@
 import { Activity, AlertTriangle, ArrowUpRight, Bot, CheckCircle2, Clock3, ListChecks, Radio, Server, Zap } from 'lucide-react'
-import { api } from '../api'
+import { api, isDemoMode } from '../api'
 import { Card, CardHeader, EmptyState, ErrorState, Loading, StatusBadge, TextLink } from '../components'
 import { dateTime, duration, number, reasonText, tokens } from '../format'
 import { useApi } from '../hooks'
@@ -42,7 +42,7 @@ export function OverviewPage({ instance, capabilities }: { instance: string; cap
           <div><dt>Effort</dt><dd>{data.runtime?.effort ?? '—'}</dd></div><div><dt>Revision</dt><dd>{data.runtime?.revision ?? '—'}</dd></div>
           <div><dt>Cognition epoch</dt><dd>{data.runtime?.epoch ?? '—'}</dd></div><div><dt>Active turns</dt><dd>{number(data.runtime?.work?.activeTurns)}</dd></div>
         </dl>
-        <div className="card-footnote">Runtime switching is disabled. This console does not modify the manifest or runtime.</div>
+        <div className="card-footnote">{isDemoMode() && capabilities.modules['runtime.control']?.effective ? 'Mock Runtime controls are available on the Runtime page; no real instance is modified.' : 'Runtime switching is disabled. This console does not modify the manifest or runtime.'}</div>
       </Card>
 
       <Card>

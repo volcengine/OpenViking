@@ -11,13 +11,14 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': 'http://127.0.0.1:3737',
-      '/health': 'http://127.0.0.1:3737',
-      '/ready': 'http://127.0.0.1:3737',
+      '/api': process.env.VITE_OVSA_API_TARGET ?? 'http://127.0.0.1:3737',
+      '/health': process.env.VITE_OVSA_API_TARGET ?? 'http://127.0.0.1:3737',
+      '/ready': process.env.VITE_OVSA_API_TARGET ?? 'http://127.0.0.1:3737',
     },
   },
   test: {
     environment: 'jsdom',
+    include: ['src/**/*.test.{ts,tsx}'],
     setupFiles: ['./src/test/setup.ts'],
     css: true,
   },

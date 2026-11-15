@@ -1,15 +1,19 @@
 import { useState } from 'react'
 import { AlertTriangle, ArrowLeft, ArrowRight, Box, Check, CircleDashed, Clock3, FileInput, MessageSquareText, Radio, RotateCcw } from 'lucide-react'
-import { api } from '../api'
+import { api, isDemoMode } from '../api'
+import { ActionFeedback, ConfirmDialog, useAction } from '../components/Controls'
 import { Card, CardHeader, Definition, EmptyState, ErrorState, Loading, StatusBadge } from '../components'
 import { dateTime, relativeTime, titleCase, tokens } from '../format'
 import { useApi } from '../hooks'
-import type { Activity, TaskReport } from '../types'
+import type { Activity, Capabilities, TaskReport } from '../types'
 
 type Tab = 'overview' | 'inputs' | 'reports' | 'events'
 
-export function TaskDetailPage({ instance, taskId }: { instance: string; taskId: string }) {
+export function TaskDetailPage({ instance, taskId, capabilities }: { instance: string; taskId: string; capabilities?: Capabilities }) {
   const [tab, setTab] = useState<Tab>('overview')
+  const [confirmCancel, setConfirmCancel] = useState(false)
+  const action = useAction()
+  const canCancel = Boolean(capabilities?.modules['tasks.control']?.effective && isDemoMode())
   const task = useApi(() => api.task(instance, taskId), `task:${instance}:${taskId}`, 10_000)
   const inputs = useApi(() => api.taskInputs(instance, taskId, { limit: 50 }), `inputs:${instance}:${taskId}`)
   const reports = useApi(() => api.taskReports(instance, taskId, { limit: 50 }), `reports:${instance}:${taskId}`, 10_000)
@@ -20,7 +24,8 @@ export function TaskDetailPage({ instance, taskId }: { instance: string; taskId:
   const value = task.data
   return <div className="page-stack task-detail">
     <a className="back-link" href="#/tasks"><ArrowLeft size={15} /> All tasks</a>
-    <div className="page-heading task-title-row"><div><div className="eyebrow">{value.id} / {value.runtime.toUpperCase()}</div><h1>{value.title}</h1><p>Created {dateTime(value.createdAt)} · Updated {relativeTime(value.updatedAt)}</p></div><StatusBadge status={value.recovering ? 'recovering' : value.status} /></div>
+    <div className="page-heading task-title-row"><div><div className="eyebrow">{value.id} / {value.runtime.toUpperCase()}</div><h1>{value.title}</h1><p>Created {dateTime(value.createdAt)} · Updated {relativeTime(value.updatedAt)}</p></div><div className="heading-actions"><StatusBadge status={value.recovering ? 'recovering' : value.status} />{value.worker?.canCancel && <button className="button secondary" disabled={!canCancel || action.busy || value.status === 'stopped'} onClick={() => setConfirmCancel(true)}>Cancel task</button>}</div></div>
+    <ActionFeedback error={action.error} success={action.success} />
     {value.recovering && <div className="notice warning"><RotateCcw size={17} /><div><strong>Recovery in progress</strong><span>The previous Worker process is no longer assumed to be running. Persisted turns, usage, and reports remain available.</span></div></div>}
     <div className="detail-summary">
       <Card><span>Current status</span><strong>{titleCase(value.status)}</strong><small>Revision {value.revision}</small></Card>
@@ -33,7 +38,7 @@ export function TaskDetailPage({ instance, taskId }: { instance: string; taskId:
     {tab === 'overview' && <div className="detail-grid">
       <Card><CardHeader title="Current Worker" description="Worker is a projection of the current Task turn, not a separate persistent resource" />
         <dl className="definitions"><Definition label="State"><StatusBadge status={value.worker?.state} /></Definition><Definition label="Turn">{value.worker?.turn ?? '—'}</Definition><Definition label="Started">{dateTime(value.worker?.startedAt)}</Definition><Definition label="Native session"><code>{value.worker?.sessionRef ?? 'Not exposed'}</code></Definition><Definition label="Termination">{titleCase(value.worker?.termination)}</Definition></dl>
-        <div className="boundary-note"><Radio size={16} /><span>Task cancellation belongs to Slice B and is not exposed here. No stop request or external-side-effect rollback is implied.</span></div>
+        <div className="boundary-note"><Radio size={16} /><span>{canCancel ? 'Cancellation uses expectedRevision. stopRequested is not process termination confirmation.' : 'Task cancellation is only interactive in the mock demo. No stop request or external-side-effect rollback is implied.'}</span></div>
       </Card>
       <Card><CardHeader title="Task metadata" description="Persisted Router assignment" />
         <dl className="definitions"><Definition label="Task ID"><code>{value.id}</code></Definition><Definition label="Runtime">{value.runtime}</Definition><Definition label="Turn count">{value.turns}</Definition><Definition label="Recovering">{value.recovering ? 'Yes' : 'No'}</Definition><Definition label="Error kind">{value.errorKind ?? 'None'}</Definition><Definition label="Source reference"><code>{value.origin?.sourceRef ?? '—'}</code></Definition></dl>
@@ -51,6 +56,7 @@ export function TaskDetailPage({ instance, taskId }: { instance: string; taskId:
 
     {tab === 'events' && <Card><CardHeader title="Task events" description="Redacted Activity entries linked by task ID and turn" />
       {events.loading ? <Loading /> : events.error ? <ErrorState error={events.error} retry={events.reload} /> : events.data?.items.length ? <EventList events={events.data.items} /> : <EmptyState title="No task events" description="No Activity entries are linked to this task." />}</Card>}
+    {confirmCancel && <ConfirmDialog title={`Cancel ${value.id}?`} confirmLabel="Request cancellation" danger busy={action.busy} onClose={() => setConfirmCancel(false)} onConfirm={async () => { const ok = await action.run(() => api.cancelTask(instance, taskId, value.revision, 'Requested from OVSA console mock demo'), 'Stop was requested. Worker termination remains pending until the handle settles.'); if (ok) { setConfirmCancel(false); await task.reload() } }}><div className="notice warning"><AlertTriangle size={17} /><div><strong>External effects are not undone</strong><span>Code changes, pull requests, messages, and other completed side effects remain. The response distinguishes stopRequested from confirmed or uncertain termination.</span></div></div></ConfirmDialog>}
   </div>
 }
 

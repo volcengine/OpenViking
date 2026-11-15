@@ -1,4 +1,5 @@
 import { Check, LockKeyhole, ShieldCheck, Wrench, X } from 'lucide-react'
+import { isDemoMode } from '../api'
 import { Card, StatusBadge } from '../components'
 import { reasonText } from '../format'
 import type { Capabilities, ModuleState } from '../types'
@@ -34,7 +35,7 @@ export function CapabilitiesPage({ capabilities }: { capabilities: Capabilities 
   const effective = entries.filter(([, value]) => value.effective).length
   return <div className="page-stack">
     <div className="page-heading"><div><div className="eyebrow">SYSTEM / RFC OVSA-CONSOLE-001</div><h1>Capabilities</h1><p>What this instance exposes, what the owner enabled, and what can actually run.</p></div><StatusBadge status={capabilities.source === 'legacy' ? 'degraded' : 'ready'} label={capabilities.source === 'legacy' ? 'Legacy discovery' : 'RFC v1 discovery'} /></div>
-    <div className="capability-summary"><Card><ShieldCheck size={22} /><div><strong>{effective} effective modules</strong><span>Effective = enabled by owner ∧ available in this environment.</span></div></Card><Card><LockKeyhole size={22} /><div><strong>Read-only delivery</strong><span>No mutation endpoint is called by this frontend, even when a control module is available.</span></div></Card></div>
+    <div className="capability-summary"><Card><ShieldCheck size={22} /><div><strong>{effective} effective modules</strong><span>Effective = enabled by owner ∧ available in this environment.</span></div></Card><Card><LockKeyhole size={22} /><div><strong>{isDemoMode() ? 'Isolated mock delivery' : 'Read-only delivery'}</strong><span>{isDemoMode() ? 'Enabled mutations exercise the RFC contract against in-memory demo data only.' : 'No mutation endpoint is called outside the explicit mock demo, even when a control module is available.'}</span></div></Card></div>
     <Card className="capability-card"><div className="capability-header"><span>Module</span><span>Enabled</span><span>Available</span><span>Effective</span><span>Reason</span></div>
       {entries.sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => <CapabilityRow key={key} moduleKey={key} value={value} />)}
     </Card>
