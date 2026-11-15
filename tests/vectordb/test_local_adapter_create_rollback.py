@@ -64,3 +64,53 @@ def test_create_collection_discards_partial_collection_after_index_failure(tmp_p
         is True
     )
     assert collection.create_index_calls == 2
+
+
+def test_create_collection_load_failure_keeps_existing_collection(tmp_path):
+    adapter = LocalCollectionAdapter("context", str(tmp_path), "default")
+    collection_path = Path(adapter._collection_path())
+    collection_path.mkdir(parents=True)
+    meta = collection_path / "collection_meta.json"
+    meta.write_text('{"CollectionName": "context"}', encoding="utf-8")
+
+    def fail_load():
+        raise OSError("store is locked by another process")
+
+    adapter._load_existing_collection_if_needed = fail_load
+
+    with pytest.raises(OSError, match="locked"):
+        adapter.create_collection(
+            "context",
+            {"Fields": []},
+            distance="cosine",
+            sparse_weight=0.0,
+            index_name="default",
+        )
+
+    # A failure to open an existing collection must never delete its data.
+    assert meta.exists()
+    assert meta.read_text(encoding="utf-8") == '{"CollectionName": "context"}'
+    assert adapter._collection is None
+
+
+def test_create_collection_keeps_healthy_existing_collection(tmp_path):
+    adapter = LocalCollectionAdapter("context", str(tmp_path), "default")
+    collection_path = Path(adapter._collection_path())
+    collection_path.mkdir(parents=True)
+    meta = collection_path / "collection_meta.json"
+    meta.write_text("{}", encoding="utf-8")
+    existing = _FakeCollection()
+    adapter._load_existing_collection_if_needed = lambda: setattr(adapter, "_collection", existing)
+
+    assert (
+        adapter.create_collection(
+            "context",
+            {"Fields": []},
+            distance="cosine",
+            sparse_weight=0.0,
+            index_name="default",
+        )
+        is False
+    )
+    assert existing.drop_calls == 0
+    assert meta.exists()

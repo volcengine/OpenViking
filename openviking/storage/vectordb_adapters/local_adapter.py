@@ -95,13 +95,22 @@ class LocalCollectionAdapter(CollectionAdapter):
         sparse_weight: float,
         index_name: str,
     ) -> bool:
-        """Create the collection and discard its persisted files if indexing fails.
+        """Create the collection and discard storage written by a failed attempt.
 
         The local backend writes ``collection_meta.json`` during construction.
         Leaving that metadata behind after a failed ``create_index`` makes the
         next startup load an indexless collection whose searches silently
         return no results.
+
+        Only storage created by this attempt may be removed. The base method
+        first loads an existing collection; if that load fails (for example
+        because another process holds the native store lock), ``_collection``
+        is still ``None`` and the persisted data must be left untouched.
         """
+        collection_path = self._collection_path()
+        meta_path = os.path.join(collection_path, "collection_meta.json") if collection_path else ""
+        existing_meta = bool(meta_path) and os.path.exists(meta_path)
+        existing_dir = bool(collection_path) and os.path.isdir(collection_path)
         try:
             return super().create_collection(
                 name,
@@ -111,7 +120,10 @@ class LocalCollectionAdapter(CollectionAdapter):
                 index_name=index_name,
             )
         except Exception:
-            collection_path = self._collection_path()
+            if existing_meta:
+                # The failure happened while discovering an already persisted
+                # collection; nothing here was created by this attempt.
+                raise
             partial_collection = self._collection
             self._collection = None
             if partial_collection is not None:
@@ -121,7 +133,7 @@ class LocalCollectionAdapter(CollectionAdapter):
                     logger.exception(
                         "local_adapter: failed to close partially created collection %s", name
                     )
-            if collection_path and os.path.isdir(collection_path):
+            if collection_path and not existing_dir:
                 try:
                     shutil.rmtree(collection_path)
                 except OSError:
@@ -131,9 +143,16 @@ class LocalCollectionAdapter(CollectionAdapter):
                     # Without its metadata the collection cannot be adopted later,
                     # even if a locked file kept the directory in place.
                     try:
-                        os.remove(os.path.join(collection_path, "collection_meta.json"))
+                        os.remove(meta_path)
                     except OSError:
                         pass
+            elif meta_path:
+                # The directory predates this attempt, so keep its contents but
+                # remove the metadata this attempt wrote.
+                try:
+                    os.remove(meta_path)
+                except OSError:
+                    pass
             raise
 
     def update_data(self, data_list: List[Dict[str, Any]]):
