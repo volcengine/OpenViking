@@ -144,8 +144,8 @@ const activity = {
     resizeAction: '调整终端和 Agent 面板宽度',
     readFailed: '无法读取 {{uri}}',
     transferResource: {
-      copyButton: '复制共享资源',
-      moveButton: '重命名或移动共享资源',
+      copyButton: '复制',
+      moveButton: '移动或重命名',
       copyTitle: '复制共享资源',
       moveTitle: '重命名或移动共享资源',
       copyDescription:
@@ -166,7 +166,7 @@ const activity = {
       moveFailed: '共享资源移动失败',
     },
     deleteResource: {
-      button: '删除共享资源',
+      button: '删除',
       title: '永久删除共享资源？',
       fileDescription:
         '该资源及其语义索引将被永久删除，关联的定时同步也会移除。此操作无法撤销。',

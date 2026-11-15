@@ -618,10 +618,10 @@ function FilesystemWorkbench() {
         />
 
         <main className="flex min-h-0 min-w-0 flex-1 flex-col lg:border-b-0">
-          <div className="flex min-h-14 items-center gap-3 border-b px-4">
+          <div className="flex min-h-14 flex-wrap items-center gap-2 border-b px-4 py-2">
             <button
               type="button"
-              className="min-w-0 flex-1 truncate rounded px-1.5 py-1 text-left font-mono text-xs font-semibold text-foreground transition-colors hover:bg-muted"
+              className="min-w-0 flex-1 basis-full truncate rounded px-1.5 py-1 text-left font-mono text-xs font-semibold text-foreground transition-colors hover:bg-muted sm:basis-0"
               title={selectedUri}
               onClick={() => void revealResource(selectedUri)}
             >
@@ -668,41 +668,35 @@ function FilesystemWorkbench() {
                 </Button>
               )}
             {canDeleteSelectedUri ? (
-              <>
+              <div className="flex shrink-0 items-center gap-2">
                 <Button
                   type="button"
-                  size="icon-sm"
-                  variant="ghost"
-                  title={t('transferResource.copyButton')}
-                  aria-label={t('transferResource.copyButton')}
+                  size="sm"
+                  variant="outline"
                   onClick={() => setTransferOperation('copy')}
                 >
                   <CopyIcon className="size-4" />
+                  {t('transferResource.copyButton')}
                 </Button>
                 <Button
                   type="button"
-                  size="icon-sm"
-                  variant="ghost"
-                  title={t('transferResource.moveButton')}
-                  aria-label={t('transferResource.moveButton')}
+                  size="sm"
+                  variant="outline"
                   onClick={() => setTransferOperation('move')}
                 >
                   <PencilIcon className="size-4" />
+                  {t('transferResource.moveButton')}
                 </Button>
-              </>
-            ) : null}
-            {canDeleteSelectedUri ? (
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                className="text-destructive hover:text-destructive"
-                title={t('deleteResource.button')}
-                aria-label={t('deleteResource.button')}
-                onClick={() => setDeleteDialogOpen(true)}
-              >
-                <Trash2Icon className="size-4" />
-              </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="destructive"
+                  onClick={() => setDeleteDialogOpen(true)}
+                >
+                  <Trash2Icon className="size-4" />
+                  {t('deleteResource.button')}
+                </Button>
+              </div>
             ) : null}
             {canManageSelectedUri ? (
               <Button

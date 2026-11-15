@@ -151,8 +151,8 @@ const activity = {
     resizeAction: 'Resize Terminal and Agent width',
     readFailed: 'Failed to read {{uri}}',
     transferResource: {
-      copyButton: 'Copy shared resource',
-      moveButton: 'Rename or move shared resource',
+      copyButton: 'Copy',
+      moveButton: 'Move / Rename',
       copyTitle: 'Copy shared resource',
       moveTitle: 'Rename or move shared resource',
       copyDescription:
@@ -174,7 +174,7 @@ const activity = {
       moveFailed: 'Could not move shared resource',
     },
     deleteResource: {
-      button: 'Delete shared resource',
+      button: 'Delete',
       title: 'Permanently delete shared resource?',
       fileDescription:
         'This resource and its semantic index will be permanently deleted. Associated scheduled syncs will also be removed. This cannot be undone.',
