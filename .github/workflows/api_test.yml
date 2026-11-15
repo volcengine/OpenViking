@@ -30,7 +30,14 @@ concurrency:
 
 jobs:
   prepare:
-    runs-on: ubuntu-24.04
+    runs-on: >-
+      ${{ fromJSON(github.repository == 'volcengine/OpenViking' &&
+          (github.event_name == 'pull_request' || github.event_name == 'push') &&
+          !startsWith(github.ref, 'refs/tags/') && vars.CI_DISABLE_SELF_HOSTED != 'true' &&
+          vars.CI_LINUX_BUILDS_ENABLED == 'true' &&
+          (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) &&
+          '["self-hosted","Linux","X64","ci-linux-builds"]' || '["ubuntu-24.04"]') }}
+    timeout-minutes: 5
     outputs:
       api_changed: ${{ steps.plan.outputs.api_changed }}
       cuvs_changed: ${{ steps.plan.outputs.cuvs_changed }}
@@ -50,18 +57,63 @@ jobs:
 
   native-runtime:
     needs: prepare
+    outputs:
+      test_runner: ${{ steps.test-pool.outputs.runner }}
+      test_container: ${{ steps.test-pool.outputs.container }}
     if: >-
       (needs.prepare.outputs.api_changed == 'true' || needs.prepare.outputs.cuvs_changed == 'true') &&
       (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' ||
        (github.repository == 'volcengine/OpenViking' &&
         (github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v'))))
-    runs-on: ubuntu-24.04
+    runs-on: >-
+      ${{ fromJSON(github.repository == 'volcengine/OpenViking' &&
+          (github.event_name == 'pull_request' || github.event_name == 'push') &&
+          !startsWith(github.ref, 'refs/tags/') && vars.CI_DISABLE_SELF_HOSTED != 'true' &&
+          vars.CI_LINUX_BUILDS_ENABLED == 'true' &&
+          (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) &&
+          '["self-hosted","Linux","X64","ci-linux-builds"]' || '["ubuntu-24.04"]') }}
+    container:
+      image: ubuntu:24.04
+      # Bootstrap HTTPS apt with the host's read-only CA bundle.
+      options: --volume /etc/ssl/certs/ca-certificates.crt:/tmp/runner-ca-certificates.crt:ro
     timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      DEBIAN_FRONTEND: noninteractive
     steps:
+      - name: Share the Linux test destination
+        id: test-pool
+        env:
+          TEST_RUNNER: ${{ runner.environment == 'self-hosted' && '["self-hosted","Linux","X64","ci-linux-builds"]' || '["ubuntu-24.04"]' }}
+          TEST_CONTAINER: ${{ runner.environment == 'self-hosted' && 'ubuntu:24.04' || '' }}
+        run: |
+          echo "runner=$TEST_RUNNER" >> "$GITHUB_OUTPUT"
+          echo "container=$TEST_CONTAINER" >> "$GITHUB_OUTPUT"
+      - name: Install native build system dependencies
+        env:
+          UBUNTU_MIRROR: ${{ runner.environment == 'self-hosted' && vars.CI_UBUNTU_MIRROR || '' }}
+        run: |
+          sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources
+          if [ -n "$UBUNTU_MIRROR" ]; then
+            case "$UBUNTU_MIRROR" in https://*) ;; *) exit 1 ;; esac
+            sed -i \
+              "s|https://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR%/}|g; s|https://security.ubuntu.com/ubuntu|${UBUNTU_MIRROR%/}|g" \
+              /etc/apt/sources.list.d/ubuntu.sources
+          fi
+          apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
+            -o Acquire::Retries=2 -o Acquire::https::Timeout=20 \
+            -o APT::Update::Error-Mode=any update
+          apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
+            -o Acquire::Retries=2 install -y \
+            git ca-certificates build-essential clang pkg-config curl unzip xz-utils \
+            python3 libssl-dev
       - uses: actions/checkout@v6
         with:
           submodules: recursive
           fetch-depth: 0
+      - uses: ./.github/actions/linux-test-env
       - uses: actions/setup-python@v6
         with:
           python-version: '3.10'
@@ -88,12 +140,20 @@ jobs:
       os_json: '["ubuntu-24.04"]'
       python_json: '["3.11"]'
       native_artifact: native-runtime-linux-x64-cp310-abi3
+      linux_runner_json: ${{ needs.native-runtime.outputs.test_runner }}
+      linux_container: ${{ needs.native-runtime.outputs.test_container }}
 
   database-tests:
     name: MySQL & Redis Integration Tests
     needs: [prepare, native-runtime]
     if: needs.prepare.outputs.api_changed == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(needs.native-runtime.outputs.test_runner) }}
+    container:
+      image: ${{ needs.native-runtime.outputs.test_container }}
+      options: --volume /etc/ssl/certs/ca-certificates.crt:/tmp/runner-ca-certificates.crt:ro
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 20
     services:
       mysql:
@@ -104,7 +164,7 @@ jobs:
           MYSQL_USER: openviking_test
           MYSQL_PASSWORD: integration-test-password
         ports:
-          - 3306:3306
+          - ${{ needs.native-runtime.outputs.test_container != '' && '3306' || '3306:3306' }}
         options: >-
           --health-cmd="mysqladmin ping --silent"
           --health-interval=10s
@@ -113,21 +173,42 @@ jobs:
       redis:
         image: redis:6.2
         ports:
-          - 6379:6379
+          - ${{ needs.native-runtime.outputs.test_container != '' && '6379' || '6379:6379' }}
         options: >-
           --health-cmd="redis-cli ping"
           --health-interval=5s
           --health-timeout=5s
           --health-retries=12
     env:
-      OV_TEST_MYSQL: '{"host":"127.0.0.1","port":3306,"user":"openviking_test","password":"integration-test-password","database":"openviking_test"}'
-      OPENVIKING_WATCH_MYSQL_PARAMS: '{"host":"127.0.0.1","port":3306,"user":"openviking_test","password":"integration-test-password","database":"openviking_test"}'
-      OV_TEST_REDIS: redis://127.0.0.1:6379
+      OV_TEST_MYSQL: ${{ format('{{"host":"{0}","port":3306,"user":"openviking_test","password":"integration-test-password","database":"openviking_test"}}', needs.native-runtime.outputs.test_container != '' && 'mysql' || '127.0.0.1') }}
+      OPENVIKING_WATCH_MYSQL_PARAMS: ${{ format('{{"host":"{0}","port":3306,"user":"openviking_test","password":"integration-test-password","database":"openviking_test"}}', needs.native-runtime.outputs.test_container != '' && 'mysql' || '127.0.0.1') }}
+      OV_TEST_REDIS: ${{ needs.native-runtime.outputs.test_container != '' && 'redis://redis:6379' || 'redis://127.0.0.1:6379' }}
       OPENVIKING_CONFIG_FILE: ${{ github.workspace }}/.venv/database-test-ov.conf
     steps:
+      - name: Bootstrap self-hosted Ubuntu test container
+        if: runner.environment == 'self-hosted'
+        env:
+          UBUNTU_MIRROR: ${{ vars.CI_UBUNTU_MIRROR }}
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources
+          if [ -n "$UBUNTU_MIRROR" ]; then
+            case "$UBUNTU_MIRROR" in https://*) ;; *) exit 1 ;; esac
+            sed -i \
+              "s|https://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR%/}|g; s|https://security.ubuntu.com/ubuntu|${UBUNTU_MIRROR%/}|g" \
+              /etc/apt/sources.list.d/ubuntu.sources
+          fi
+          apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
+            -o Acquire::Retries=2 -o Acquire::https::Timeout=20 \
+            -o APT::Update::Error-Mode=any update
+          apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
+            -o Acquire::Retries=2 install -y --no-install-recommends \
+            git ca-certificates curl python3 cmake build-essential
       - uses: actions/checkout@v6
         with:
           submodules: recursive
+      - uses: ./.github/actions/linux-test-env
+        if: runner.environment == 'self-hosted'
       - uses: actions/setup-python@v6
         with:
           python-version: '3.10'
@@ -169,7 +250,13 @@ jobs:
   api-tests:
     needs: [prepare, native-runtime]
     name: API & CLI Integration Tests (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-24.04' && fromJSON(needs.native-runtime.outputs.test_runner) || matrix.os }}
+    container:
+      image: ${{ matrix.os == 'ubuntu-24.04' && needs.native-runtime.outputs.test_container || '' }}
+      options: --volume /etc/ssl/certs/ca-certificates.crt:/tmp/runner-ca-certificates.crt:ro
+    defaults:
+      run:
+        shell: ${{ matrix.os == 'windows-latest' && 'pwsh' || 'bash' }}
     timeout-minutes: 60
     if: >-
       needs.prepare.outputs.api_changed == 'true' &&
@@ -184,10 +271,31 @@ jobs:
         os: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'release') && fromJSON('["ubuntu-24.04", "macos-15", "windows-latest"]') || fromJSON('["ubuntu-24.04"]') }}
     
     steps:
+      - name: Bootstrap self-hosted Ubuntu test container
+        if: runner.environment == 'self-hosted'
+        env:
+          UBUNTU_MIRROR: ${{ vars.CI_UBUNTU_MIRROR }}
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources
+          if [ -n "$UBUNTU_MIRROR" ]; then
+            case "$UBUNTU_MIRROR" in https://*) ;; *) exit 1 ;; esac
+            sed -i \
+              "s|https://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR%/}|g; s|https://security.ubuntu.com/ubuntu|${UBUNTU_MIRROR%/}|g" \
+              /etc/apt/sources.list.d/ubuntu.sources
+          fi
+          apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
+            -o Acquire::Retries=2 -o Acquire::https::Timeout=20 \
+            -o APT::Update::Error-Mode=any update
+          apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
+            -o Acquire::Retries=2 install -y --no-install-recommends \
+            git ca-certificates curl python3 cmake build-essential ffmpeg lsof procps
       - uses: actions/checkout@v6
         with:
           submodules: recursive
           fetch-depth: 100
+      - uses: ./.github/actions/linux-test-env
+        if: runner.environment == 'self-hosted'
 
       - name: Set up Python 3.10
         uses: actions/setup-python@v6
@@ -213,7 +321,7 @@ jobs:
             ${{ runner.os }}-pip-
 
       - name: Install system dependencies (Ubuntu)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && runner.environment != 'self-hosted'
         run: |
           sudo apt-get update -y && sudo apt-get install -y cmake build-essential ffmpeg --no-install-recommends
 
