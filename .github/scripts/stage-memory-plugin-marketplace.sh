@@ -20,6 +20,7 @@ DIRS=(
   claude-code-memory-plugin
   codex-memory-plugin
   agent-hook-plugin
+  kimi-code-memory-plugin
   opencode-plugin
   pi-coding-agent-extension
   memory-plugin-shared

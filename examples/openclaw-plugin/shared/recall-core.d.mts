@@ -64,6 +64,8 @@ export type DetailedRecall = {
   hintCount: number;
   budgetUsed: number;
   stage: "server_assembled" | "ranked" | "no_results" | "filtered_out";
+  /** Present only when a request failed, so an empty block can be told from an outage. */
+  error?: string;
 };
 
 export function buildRecallBlockDetailed(

@@ -680,6 +680,20 @@ Claude Code、Cursor、TRAE、ZCode、Kimi Code、CodeBuddy Code、Qoder CLI、D
 - `UserPromptSubmit` 返回纯文本上下文，不是 JSON。
 - 安装时保留其他插件记录，不修改旧的 `config.toml` 或 `mcp.json`。
 
+### Kimi Code 插件（独立分发，2.x，社区实现）
+
+这是一个社区维护的实现，位于 [`examples/kimi-code-memory-plugin`](https://github.com/volcengine/OpenViking/blob/main/examples/kimi-code-memory-plugin/DESIGN.md)，面向 **Kimi Code 2.6.2**。它不是上面 `agent-hook-plugin` 适配器的替代品；后者仍是 Kimi Code CLI 0.43.x 的旧路径，代码和文档都保持独立。参见[社区插件](./08-community-plugins.md)。
+
+| 方面 | 行为 |
+|---|---|
+| 安装 | 宿主原生 `/plugins install`，目录或 ZIP；宿主继承的 `PATH` 中需有 Node.js 22.19+ |
+| Hook | `SessionStart`、`UserPromptSubmit`、`PreToolUse`、`Stop`、`PreCompact`、`SessionEnd`；不注册 `Interrupt` |
+| 捕获 | 每个 agent 的 `wire.jsonl`，投影活动分支；每个子代理使用独立 OpenViking 会话 |
+| 提交 | `Stop` 每捕获 8 条消息提交；`SessionEnd` 与 `PreCompact` 提交全部；开放尾部在闭合前阻止提交 |
+| URI guard | Read、Glob、Grep、Edit、Write、ReadMediaFile 拒绝 `viking://` 路径；shell 命令不检查 |
+| 历史 | 显式运行 `scripts/backfill.mjs`；安装前的内容不会自动导入 |
+| 身份 | 插件名 `openviking-memory`，与旧宿主相同；注册表同名只保留一个条目，因此同一宿主只安装一个 |
+
 ### CodeBuddy Code
 
 [CodeBuddy Code](./20-codebuddy.md)。带 6 个 hook、一个 MCP 代理和 4 个 skill 的插件，由统一安装器以本地 marketplace 的形式安装；与 ZCode、Kimi Code 一样是 `agent-hook-plugin` 的宿主适配器。

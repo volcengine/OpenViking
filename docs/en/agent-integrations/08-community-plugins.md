@@ -112,6 +112,38 @@ To uninstall:
 curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness antigravity
 ```
 
+## Kimi Code memory plugin, standalone distribution (2.x, community)
+
+Source: [examples/kimi-code-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/kimi-code-memory-plugin)
+
+This is a community-maintained implementation for **Kimi Code 2.6.2**, in the
+same category as the `agent-hook-plugin` Kimi integration above. It does not
+modify or replace that adapter; the adapter remains the legacy path for Kimi
+Code CLI 0.43.x and keeps its own code and documentation.
+
+Both are Kimi native plugins loaded from the host's managed plugin directory.
+What differs is distribution: the adapter above is assembled by OpenViking's
+installer, while this directory is self-contained and can be installed directly.
+
+- Six hooks: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `Stop`, `PreCompact`, `SessionEnd`. `Interrupt` is not registered.
+- `PreToolUse` denies `viking://` paths on Read, Glob, Grep, Edit, Write and ReadMediaFile. Shell commands are not intercepted.
+- Capture reads each agent's `wire.jsonl`, projects the active branch, and gives every subagent its own OpenViking session.
+- Install with the host's own plugin manager; Node.js 22.19+ must be on the host's `PATH`:
+
+```text
+/plugins install <path to examples/kimi-code-memory-plugin>
+/plugins install <https://…/openviking-memory.zip>
+```
+
+- A reusable install URL is OpenViking's own plugin marketplace:
+  `https://docs.openviking.ai/dl/plugins/kimi/marketplace.json`. Point
+  `KIMI_CODE_PLUGIN_MARKETPLACE_URL` at it before launching, or enter it in the
+  TUI marketplace **Custom** tab and install **OpenViking Memory**. This ships
+  only the ~280 KB plugin ZIP, not the ~416 MB repository, and is classified
+  `third_party`; Kimi verifies the ZIP's SHA-256 from the entry.
+- Sessions that predate installation are imported explicitly with `node ./scripts/backfill.mjs`; see [Kimi Code](./22-kimi-code.md).
+- Both distributions use the plugin name `openviking-memory`. The host registry keeps one entry per name, so install only one on a host.
+
 ## AstrBot plugin
 
 [AstrBot](https://github.com/AstrBotDevs/AstrBot) is a multi-platform IM bot framework supporting QQ, Telegram, Discord, Lark, and 20+ other platforms.

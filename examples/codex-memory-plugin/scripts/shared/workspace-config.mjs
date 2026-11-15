@@ -132,7 +132,7 @@ export function checkMinClientVersion(declared, clientVersion, warnings = []) {
   if (compareVersions(current, required) >= 0) return true;
   warnings.push(
     `this workspace asks for OpenViking plugin ${required} and this one is ${current}; `
-    + "settings it introduced will be ignored rather than blocking the session",
+    + "its settings still apply, but a newer-only key may not be understood by this client",
   );
   return false;
 }
@@ -344,7 +344,8 @@ function set(object, path, value) {
  * than trusted; an out-of-range value is clamped instead of rejected so a typo
  * degrades rather than disables.
  */
-export function normalizeWorkspaceConfig(value, warnings = []) {
+export function normalizeWorkspaceConfig(value, warnings = [], { layer = "" } = {}) {
+  const where = layer ? ` in ${layer}` : "";
   for (const [path, { min, max, integer }] of Object.entries(RANGES)) {
     const raw = get(value, path);
     if (raw === undefined) continue;
@@ -352,12 +353,19 @@ export function normalizeWorkspaceConfig(value, warnings = []) {
     // silently pin a knob to a bound instead of reporting a bad value.
     const number = typeof raw === "number" || typeof raw === "string" ? Number(raw) : NaN;
     if (!Number.isFinite(number)) {
-      warnings.push(`ignored '${path}': ${JSON.stringify(raw)} is not a number`);
+      warnings.push(`ignored '${path}'${where}: ${JSON.stringify(raw)} is not a number`);
       set(value, path, undefined);
       continue;
     }
-    const clamped = Math.min(max, Math.max(min, integer ? Math.floor(number) : number));
-    if (clamped !== number) warnings.push(`clamped '${path}' from ${number} to ${clamped} (allowed ${min}..${max})`);
+    // Rounding is not clamping: a fractional int is rounded the same way the
+    // schema rounds it, and only a real bound violation is reported as one.
+    const rounded = integer ? Math.round(number) : number;
+    const clamped = Math.min(max, Math.max(min, rounded));
+    if (clamped !== rounded) {
+      warnings.push(`clamped '${path}'${where} from ${number} to ${clamped} (allowed ${min}..${max})`);
+    } else if (rounded !== number) {
+      warnings.push(`rounded '${path}'${where} from ${number} to ${rounded}`);
+    }
     set(value, path, clamped);
   }
 
@@ -366,7 +374,7 @@ export function normalizeWorkspaceConfig(value, warnings = []) {
     const raw = get(value, path);
     if (raw === undefined) continue;
     if (!allowed.includes(raw)) {
-      warnings.push(`ignored '${path}': ${JSON.stringify(raw)} is not one of ${allowed.join(", ")}`);
+      warnings.push(`ignored '${path}'${where}: ${JSON.stringify(raw)} is not one of ${allowed.join(", ")}`);
       set(value, path, undefined);
     }
   }

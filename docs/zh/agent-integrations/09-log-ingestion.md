@@ -28,6 +28,8 @@
 | `cursor` | 暂缓 | `~/Library/Application Support/Cursor/User/**/state.vscdb` | 无文档、随版本漂移的 KV blob，暂未实现 |
 
 > 这里的 harness（agent 框架）指 CC / Codex 等整套工具，区别于 OpenViking 里“tool（工具调用）”的概念。
+>
+> Kimi Code 不是服务端导入适配器。它的社区独立分发插件用 `node ./scripts/backfill.mjs` 导入已有会话；见 [Kimi Code](./22-kimi-code.md#导入已有历史)。
 
 ## 在 ov.conf 中开启
 

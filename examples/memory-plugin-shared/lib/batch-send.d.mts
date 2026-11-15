@@ -1,4 +1,13 @@
 export const BATCH_LIMIT: number;
+
+export interface SendItem {
+  index: number;
+  status: "sent" | "queued" | "failed" | "enqueue_failed";
+  dedupKey?: string;
+  deduped?: boolean;
+  retryable?: boolean;
+}
+
 export function sendSessionMessages(
   fetchJSON: (path: string, init?: any) => Promise<{ ok: boolean; status?: number; result?: any; error?: any }>,
   sessionId: string,
@@ -12,4 +21,5 @@ export function sendSessionMessages(
   retryable: boolean;
   usedBatch: boolean;
   lastError: any;
+  items: SendItem[];
 }>;

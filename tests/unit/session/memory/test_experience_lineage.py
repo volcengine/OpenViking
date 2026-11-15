@@ -113,6 +113,10 @@ def test_collect_read_experience_uris_supports_generic_openviking_reads():
     [
         "mcp__plugin_openviking-memory_openviking__read",
         "mcp__PLUGIN_openviking-memory_OpenViking__READ",
+        # Kimi Code sanitises the server name but keeps its hyphens, so the
+        # qualified tool is `mcp__plugin-openviking-memory_openviking__read`.
+        "mcp__plugin-openviking-memory_openviking__read",
+        "mcp__PLUGIN-OPENVIKING-MEMORY_OPENVIKING__READ",
     ],
 )
 def test_collect_read_experience_uris_supports_plugin_namespaced_reads(tool_name):
@@ -142,6 +146,8 @@ def test_collect_read_experience_uris_supports_plugin_namespaced_reads(tool_name
         "openviking_multi_read",
         "mcp__plugin_openviking-memory_openviking__multi_read",
         "mcp__PLUGIN_openviking-memory_OpenViking__MULTI_READ",
+        "mcp__plugin-openviking-memory_openviking__multi_read",
+        "mcp__PLUGIN-OPENVIKING-MEMORY_OPENVIKING__MULTI_READ",
     ],
 )
 def test_collect_read_experience_uris_filters_failed_multi_read_results(tool_name):

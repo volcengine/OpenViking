@@ -123,6 +123,14 @@ export const DEFAULT_TOOL_HINTS = {
     tool: "OpenViking MCP read",
     example: (uri) => `read(uri="${uri}")`,
   },
+  // Kimi's `ReadMediaFile` reads a local image/audio/video path. A viking:// URI
+  // is no more a local path here than it is for `Read`, so it gets the same
+  // replacement. That the MCP read may not return media is a separate limit; it
+  // does not make the URI local.
+  readmediafile: {
+    tool: "OpenViking MCP read",
+    example: (uri) => `read(uri="${uri}")`,
+  },
   glob: {
     tool: "OpenViking MCP glob or list",
     example: (uri, input = {}) => (

@@ -34,7 +34,20 @@ let _userSpaceCache = null;
  * auto-recall's module-level fetchJSON closure.
  */
 async function resolveUserSpace(fetchJSON, actorPeerId = "") {
-  if (_userSpaceCache) return _userSpaceCache;
+  return (await resolveUserSpaceOutcome(fetchJSON, actorPeerId)).space;
+}
+
+/**
+ * The user space, and whether resolving it actually succeeded.
+ *
+ * When both probes fail the fallback name `default` is a guess. Reading
+ * `viking://user/default/...` after that returns 404, which looks exactly like
+ * "this user has no profile" — and a caller would record the injection as done
+ * and never try again. So the guess is reported as a failure, not cached, and
+ * the caller can retry later.
+ */
+async function resolveUserSpaceOutcome(fetchJSON, actorPeerId = "") {
+  if (_userSpaceCache) return { space: _userSpaceCache, resolved: true, cached: true };
 
   let fallbackSpace = "default";
   const status = await fetchJSON("/api/v1/system/status");
@@ -53,13 +66,26 @@ async function resolveUserSpace(fetchJSON, actorPeerId = "") {
       .map((e) => (typeof e.name === "string" ? e.name.trim() : ""))
       .filter((n) => n && !n.startsWith(".") && !USER_RESERVED_DIRS.has(n));
     if (spaces.length > 0) {
-      if (spaces.includes(fallbackSpace)) { _userSpaceCache = fallbackSpace; return fallbackSpace; }
-      if (spaces.includes("default")) { _userSpaceCache = "default"; return "default"; }
-      if (spaces.length === 1) { _userSpaceCache = spaces[0]; return spaces[0]; }
+      const picked = spaces.includes(fallbackSpace)
+        ? fallbackSpace
+        : spaces.includes("default") ? "default" : (spaces.length === 1 ? spaces[0] : "");
+      if (picked) {
+        _userSpaceCache = picked;
+        return { space: picked, resolved: true };
+      }
     }
+    // The listing answered, so the space set is authoritative even though none
+    // of them matched: the fallback is still a real directory name here.
+    _userSpaceCache = fallbackSpace;
+    return { space: fallbackSpace, resolved: true };
   }
-  _userSpaceCache = fallbackSpace;
-  return fallbackSpace;
+  // Nothing answered. Do not cache a guess: the next attempt must be able to
+  // find the real space.
+  return {
+    space: fallbackSpace,
+    resolved: false,
+    error: lsRes.error?.message || `http_${lsRes.status || 0}`,
+  };
 }
 
 /**
@@ -107,14 +133,30 @@ function tokensToCharsBudget(content, maxTokens) {
 }
 
 async function readProfile(fetchJSON, profileUri, actorPeerId = "") {
+  return (await readProfileOutcome(fetchJSON, profileUri, actorPeerId)).text;
+}
+
+/**
+ * The profile text, and whether the read itself succeeded.
+ *
+ * "The user has no profile yet" and "the read failed" both produce no text, and
+ * a caller that has to decide whether to retry cannot tell them apart from a
+ * bare `null`. A 404 is an answer — there is no profile — while a timeout, a
+ * 401 or a 5xx is not.
+ */
+async function readProfileOutcome(fetchJSON, profileUri, actorPeerId = "") {
   const res = await fetchJSON(
     `/api/v1/content/read?uri=${encodeURIComponent(profileUri)}`,
     {},
     { actorPeerId },
   );
-  if (!res.ok || typeof res.result !== "string") return null;
-  const trimmed = res.result.trim();
-  return trimmed || null;
+  if (res.ok && typeof res.result === "string") {
+    const trimmed = res.result.trim();
+    return { text: trimmed || null, ok: true };
+  }
+  // A missing profile is a successful read of "nothing there".
+  if (res.status === 404) return { text: null, ok: true };
+  return { text: null, ok: false, error: res.error?.message || `http_${res.status}` };
 }
 
 /**
@@ -127,10 +169,25 @@ async function readProfile(fetchJSON, profileUri, actorPeerId = "") {
  * to keep owner-namespacing visible and unambiguous when multiple owners exist.
  */
 async function lsDir(fetchJSON, dirUri, actorPeerId = "") {
+  return (await lsDirOutcome(fetchJSON, dirUri, actorPeerId)).entries;
+}
+
+/**
+ * A directory listing, and whether the read itself failed.
+ *
+ * An empty directory and an unreachable server both produce no entries. A 404
+ * is an answer — this user has nothing filed there yet — while a timeout, a 401
+ * or a 5xx is not, and a caller deciding whether to retry has to tell them
+ * apart.
+ */
+async function lsDirOutcome(fetchJSON, dirUri, actorPeerId = "") {
   const url = `/api/v1/fs/ls?uri=${encodeURIComponent(dirUri)}&output=agent&recursive=true&abs_limit=512&node_limit=512`;
   const res = await fetchJSON(url, {}, { actorPeerId });
-  if (!res.ok || !Array.isArray(res.result)) return [];
-  return res.result
+  if (!res.ok || !Array.isArray(res.result)) {
+    if (res.status === 404) return { entries: [], ok: true };
+    return { entries: [], ok: false, error: res.error?.message || `http_${res.status || 0}` };
+  }
+  const entries = res.result
     .filter((e) => !e.isDir)
     .map((e) => {
       const rel = typeof e.rel_path === "string" && e.rel_path
@@ -143,6 +200,7 @@ async function lsDir(fetchJSON, dirUri, actorPeerId = "") {
     })
     .filter((e) => e.name && e.name.endsWith(".md"))
     .sort((a, b) => a.name.localeCompare(b.name));
+  return { entries, ok: true };
 }
 
 /**
@@ -325,11 +383,21 @@ function truncateToTokens(text, maxTokens) {
  * the endpoint, or any failure, yield no catalog.
  */
 async function fetchSkillCatalog(fetchJSON, actorPeerId = "") {
+  return (await fetchSkillCatalogOutcome(fetchJSON, actorPeerId)).groups;
+}
+
+/** The catalog groups, and whether the endpoint failed rather than being empty. */
+async function fetchSkillCatalogOutcome(fetchJSON, actorPeerId = "") {
   const res = await fetchJSON(
     `/api/v1/skills?node_limit=${SKILL_CATALOG_NODE_LIMIT}`,
     {},
     { actorPeerId },
   );
+  // A server without the endpoint is not a failure: the catalog is optional.
+  const unsupported = res.status === 404 || res.status === 405;
+  if (!res.ok && !unsupported) {
+    return { groups: [], ok: false, error: res.error?.message || `http_${res.status || 0}` };
+  }
   const skills = res.ok && Array.isArray(res.result?.skills) ? res.result.skills : [];
   const own = [];
   const shared = [];
@@ -346,10 +414,13 @@ async function fetchSkillCatalog(fetchJSON, actorPeerId = "") {
   }
   const ownNames = new Set(own.map((e) => e.name));
   const byName = (a, b) => a.name.localeCompare(b.name);
-  return [
-    own.sort(byName),
-    shared.filter((e) => !ownNames.has(e.name)).sort(byName),
-  ].filter((group) => group.length > 0);
+  return {
+    groups: [
+      own.sort(byName),
+      shared.filter((e) => !ownNames.has(e.name)).sort(byName),
+    ].filter((group) => group.length > 0),
+    ok: true,
+  };
 }
 
 function renderSkillGroups(groups, budgetTokens, withDescriptions) {
@@ -424,7 +495,15 @@ function formatSkillCatalog(groups, budgetTokens) {
  * }>}
  *   Counts are summed across both roots; profileChars covers both raw profiles.
  */
-export async function buildProfileBlock(fetchJSON, totalBudgetTokens, actorPeerId = "", options = {}) {
+/**
+ * The profile block, plus whether anything failed to read.
+ *
+ * A caller that injects the profile once per session has to distinguish "the
+ * user has no profile" from "the server did not answer": the first is done, the
+ * second is worth one bounded retry. Both produce no block, which is why the
+ * outcome is reported separately.
+ */
+export async function buildProfileBlockDetailed(fetchJSON, totalBudgetTokens, actorPeerId = "", options = {}) {
   const { skillCatalog = false, skillCatalogTokenBudget = 0, sessionStartMaxBytes = 0 } = options;
   // Hosts that spill (Claude Code, Codex) or drop (ZCode) oversized hook output
   // get a byte cap. An estimated token is about 4 UTF-8 bytes at most, so the
@@ -433,7 +512,8 @@ export async function buildProfileBlock(fetchJSON, totalBudgetTokens, actorPeerI
     ? Math.max(0, Math.floor(sessionStartMaxBytes / 4) - 50)
     : Infinity;
   const skillBudget = Math.min(skillCatalogTokenBudget, Math.floor(capTokens / 4));
-  const space = await resolveUserSpace(fetchJSON, actorPeerId);
+  const spaceOutcome = await resolveUserSpaceOutcome(fetchJSON, actorPeerId);
+  const space = spaceOutcome.space;
 
   // Profile, preferences and entities carry no message range, so extraction
   // writes the user's own facts to the user root even inside a peer session:
@@ -448,15 +528,35 @@ export async function buildProfileBlock(fetchJSON, totalBudgetTokens, actorPeerI
 
   // Every read is independent, and a hook on the SessionStart path pays for
   // every round trip.
+  // Every read reports whether it failed, not just the profile: a listing or a
+  // skill catalogue that timed out leaves a partial block, and a caller that
+  // injected it once would never fill in the rest.
+  const readOutcomes = [];
+  if (!spaceOutcome.resolved) {
+    readOutcomes.push({ ok: false, error: `user_space_unresolved:${spaceOutcome.error || "unknown"}` });
+  }
+  const profileRead = async (uri) => {
+    const outcome = await readProfileOutcome(fetchJSON, uri, actorPeerId);
+    readOutcomes.push(outcome);
+    return outcome.text;
+  };
+  const listingRead = async (uri) => {
+    const outcome = await lsDirOutcome(fetchJSON, uri, actorPeerId);
+    readOutcomes.push(outcome);
+    return outcome.entries;
+  };
+  const skillRead = async () => {
+    const outcome = await fetchSkillCatalogOutcome(fetchJSON, actorPeerId);
+    readOutcomes.push(outcome);
+    return outcome.groups;
+  };
   const reads = await Promise.all([
     ...scopes.flatMap((s) => [
-      readProfile(fetchJSON, s.profileUri, actorPeerId),
-      lsDir(fetchJSON, s.prefUri, actorPeerId),
-      lsDir(fetchJSON, s.entUri, actorPeerId),
+      profileRead(s.profileUri),
+      listingRead(s.prefUri),
+      listingRead(s.entUri),
     ]),
-    skillCatalog && skillBudget > 0
-      ? fetchSkillCatalog(fetchJSON, actorPeerId)
-      : [],
+    skillCatalog && skillBudget > 0 ? skillRead() : [],
   ]);
   const skillGroups = reads.pop();
   scopes.forEach((s, i) => {
@@ -466,12 +566,15 @@ export async function buildProfileBlock(fetchJSON, totalBudgetTokens, actorPeerI
   const skills = formatSkillCatalog(skillGroups, skillBudget);
 
   const peerProfile = peer?.profile ? dedupeProfileLines(peer.profile, user.profile) : null;
+  const readFailed = readOutcomes.some((outcome) => outcome?.ok === false);
+  const firstReadError = (list) => list.find((outcome) => outcome?.ok === false)?.error;
   if (
     !user.profile && !peerProfile
     && scopes.every((s) => s.prefs.length === 0 && s.ents.length === 0)
     && skills.lines.length === 0
   ) {
-    return null;
+    // An empty profile is a finished read; a failed one is not.
+    return { block: null, empty: !readFailed, failed: readFailed, error: readFailed ? firstReadError(readOutcomes) : undefined };
   }
 
   const memoryBudget = Math.min(totalBudgetTokens, Math.max(0, capTokens - skills.used));
@@ -521,12 +624,31 @@ export async function buildProfileBlock(fetchJSON, totalBudgetTokens, actorPeerI
     skillLines = [];
     block = render();
   }
-  if (!block) return null;
+  if (!block) {
+    // Content existed but the byte cap removed all of it. Reporting that as
+    // `empty` would tell the caller "this user has no memory" and the dropped
+    // preferences and entities would never be injected in this session.
+    const prefCount = scopes.reduce((n, s) => n + s.prefs.length, 0);
+    const entCount = scopes.reduce((n, s) => n + s.ents.length, 0);
+    return {
+      block: null,
+      empty: false,
+      failed: readFailed,
+      error: readFailed ? firstReadError(readOutcomes) : undefined,
+      truncated: true,
+      droppedPref: prefCount,
+      droppedEnt: entCount,
+      droppedSkill: skills.count,
+    };
+  }
 
   const prefCount = scopes.reduce((n, s) => n + s.prefs.length, 0);
   const entCount = scopes.reduce((n, s) => n + s.ents.length, 0);
   return {
     block,
+    empty: false,
+    failed: readFailed,
+    error: readFailed ? firstReadError(readOutcomes) : undefined,
     chars: block.length,
     tokens: estimateTokens(block),
     profileUri: user.profileUri,
@@ -541,6 +663,21 @@ export async function buildProfileBlock(fetchJSON, totalBudgetTokens, actorPeerI
     droppedSkill: skillLines.length ? skills.dropped : skills.count,
     skillTokens: skillLines.length ? skills.used : 0,
   };
+}
+
+/**
+ * The profile block, as every existing caller receives it.
+ *
+ * The returned object carries `block` plus the counts a statusline or a log
+ * uses. It keeps that shape: `null` when there is nothing to inject. A caller
+ * that also has to know whether the emptiness was a failed read asks
+ * `buildProfileBlockDetailed`, which reports `empty` and `failed` alongside.
+ */
+export async function buildProfileBlock(fetchJSON, totalBudgetTokens, actorPeerId = "", options = {}) {
+  const detailed = await buildProfileBlockDetailed(fetchJSON, totalBudgetTokens, actorPeerId, options);
+  if (!detailed.block) return null;
+  const { empty: _empty, failed: _failed, error: _error, ...rest } = detailed;
+  return rest;
 }
 
 function utf8Bytes(text) {

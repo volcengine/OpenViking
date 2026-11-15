@@ -244,10 +244,16 @@ export function resolveConnection(harness, {
   rootKeyFallback = false,
 } = {}) {
   const name = str(harness, "");
-  const loaded = files || loadCredentialFiles(env);
+  const mode = sourceMode(env);
+  // `OPENVIKING_CREDENTIAL_SOURCE=env` means "read no file", and that has to
+  // include the paths this function reports: a doctor line showing
+  // `ovcli.conf` next to `credentialSource: env` is a contradiction that sends
+  // people looking in the wrong place.
+  const loaded = files || (mode === "env"
+    ? { cliFile: {}, cliPath: "", cliPathCandidate: "", ovFile: {}, ovPath: "" }
+    : loadCredentialFiles(env));
   const { cliFile, ovFile, cliPath, ovPath } = loaded;
   const host = hostInput || {};
-  const mode = sourceMode(env);
   const envHasCredentials = hasEnvCredentialFields(env);
   const pinned = mode === "cli" ||
     (mode === "auto" && !envHasCredentials && Boolean(cliPath) && hasCredentialFields(cliFile));

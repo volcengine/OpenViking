@@ -51,16 +51,20 @@ function createSemaphore(limit) {
   const queue = [];
   return async function acquire() {
     if (active >= limit) {
+      // The releasing holder hands its slot straight to the waiter, so `active`
+      // never dips and then rises — a window in which a third caller would see
+      // a free slot and push the real concurrency past the limit.
       await new Promise((resolve) => queue.push(resolve));
+    } else {
+      active += 1;
     }
-    active += 1;
     let released = false;
     return () => {
       if (released) return;
       released = true;
-      active -= 1;
       const next = queue.shift();
       if (next) next();
+      else active -= 1;
     };
   };
 }
@@ -98,7 +102,12 @@ function parseSseMessages(text) {
     const data = dataLines.join("\n").trim();
     dataLines = [];
     if (!data || data === "[DONE]") return;
-    messages.push(JSON.parse(data));
+    // A gateway error page or a `data: ping` line inside an event stream is not
+    // a message. Skipping the bad frame keeps the valid ones; throwing here
+    // discarded the whole batch and hid the real HTTP status.
+    const parsed = parseMaybeJson(data);
+    if (parsed == null) return;
+    messages.push(parsed);
   }
 
   for (const rawLine of String(text || "").split(/\r\n|\r|\n/)) {
@@ -166,6 +175,7 @@ export function createOpenVikingMcpProxy({
   let reinitializeInFlight = null;
   let stdoutChain = Promise.resolve();
   let shuttingDown = false;
+  let deletingSession = false;
   let reinitCounter = 0;
   const acquire = createSemaphore(MAX_CONCURRENT_REQUESTS);
 
@@ -349,21 +359,32 @@ export function createOpenVikingMcpProxy({
   }
 
   async function deleteSession() {
-    if (!sessionId || shuttingDown) return;
-    shuttingDown = true;
+    // `shuttingDown` means the process is exiting; a DELETE that already ran is
+    // a different fact. Sharing one flag made a failed delete unrepeatable and
+    // leaked the session upstream.
+    if (!sessionId || deletingSession) return;
+    deletingSession = true;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), DELETE_TIMEOUT_MS);
+    let deleted = false;
     try {
-      await fetchImpl(proxyConfig.mcpUrl, {
+      const response = await fetchImpl(proxyConfig.mcpUrl, {
         method: "DELETE",
         headers: headersForRequest(true),
         signal: controller.signal,
       });
+      // `fetch` resolves for an HTTP error, so the status has to be checked:
+      // a 500/401 is a failed delete, not a deleted session.
+      deleted = response?.ok !== false;
+      if (!deleted) logError("delete_session_failed", { status: response?.status });
     } catch (err) {
       logError("delete_session_failed", err);
     } finally {
       clearTimeout(timer);
-      sessionId = "";
+      // Keep the id when the delete failed: the next close can retry it,
+      // instead of leaking the upstream session with no way to name it again.
+      if (deleted) sessionId = "";
+      deletingSession = false;
     }
   }
 

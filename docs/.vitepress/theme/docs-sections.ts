@@ -114,12 +114,15 @@ export const sections: DocSection[] = [
         p('agent-integrations/10-opencode'),
         p('agent-integrations/17-dsh')
       ]),
+      g('Community implementations', '社区实现', [
+        p('agent-integrations/08-community-plugins'),
+        p('agent-integrations/22-kimi-code')
+      ]),
       g('Agents and frameworks', 'Agent 与框架', [
         p('agent-integrations/03-openclaw'),
         p('agent-integrations/05-hermes'),
         p('agent-integrations/11-pi'),
-        p('agent-integrations/07-langchain-langgraph'),
-        p('agent-integrations/08-community-plugins')
+        p('agent-integrations/07-langchain-langgraph')
       ]),
       g('Shared setup and tuning', '通用接入与调优', [
         p('agent-integrations/06-mcp-clients'),

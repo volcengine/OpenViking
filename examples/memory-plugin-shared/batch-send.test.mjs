@@ -49,7 +49,8 @@ test("sendSessionMessages chunks batches at the server limit", async () => {
 
   assert.deepEqual(chunkSizes, [100, 100, 50]);
   assert.deepEqual(onSent, [100, 100, 50]);
-  assert.deepEqual(res, {
+  const { items, ...counters } = res;
+  assert.deepEqual(counters, {
     sent: 250,
     queued: 0,
     enqueueFailed: 0,
@@ -58,6 +59,11 @@ test("sendSessionMessages chunks batches at the server limit", async () => {
     usedBatch: true,
     lastError: null,
   });
+  // Every payload is accounted for individually, in order, so a caller can map
+  // a queue dedup key back to the message it belongs to.
+  assert.equal(items.length, 250);
+  assert.deepEqual(items.slice(0, 2), [{ index: 0, status: "sent" }, { index: 1, status: "sent" }]);
+  assert.equal(items.every((item, index) => item.index === index && item.status === "sent"), true);
 });
 
 for (const status of [404, 405]) {

@@ -26,6 +26,8 @@ import { loadConfig as loadClaudeCode } from "../claude-code-memory-plugin/scrip
 import { readProxyConfig as claudeCodeProxy } from "../claude-code-memory-plugin/servers/mcp-proxy.mjs";
 import { loadConfig as loadCodex } from "../codex-memory-plugin/scripts/config.mjs";
 import { readProxyConfig as codexProxy } from "../codex-memory-plugin/servers/mcp-proxy.mjs";
+import { loadConfig as loadKimiCode } from "../kimi-code-memory-plugin/scripts/config.mjs";
+import { readProxyConfig as kimiCodeProxy } from "../kimi-code-memory-plugin/servers/mcp-proxy.mjs";
 import { resolveConfig as loadDsh } from "../dsh-memory-plugin/config.mjs";
 import { buildMcpConfig as dshMcpConfig } from "../dsh-memory-plugin/mcp-env.mjs";
 import { readProxyConfig as dshProxy } from "../dsh-memory-plugin/servers/mcp-proxy.mjs";
@@ -59,6 +61,17 @@ const HARNESSES = [
     rootKeyFallback: true,
     hook: ({ env, cwd }) => loadClaudeCode(cwd, { env }),
     proxy: ({ env }) => claudeCodeProxy(env),
+  },
+  // Kimi Code's hook and proxy both start in the plugin root, which is not the
+  // user's project, so the workspace layer is resolved from the session's own
+  // cwd by the hook and not at all by the proxy. The connection must still be
+  // the same one, because it can only come from the files and the environment.
+  {
+    name: "kimicode",
+    dir: "kimi-code-memory-plugin",
+    section: "kimicode",
+    hook: ({ env, cwd }) => loadKimiCode(cwd, { env }),
+    proxy: ({ env }) => kimiCodeProxy(env),
   },
   {
     name: "opencode",

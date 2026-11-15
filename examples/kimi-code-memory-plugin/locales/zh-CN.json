@@ -1,0 +1,23 @@
+{
+  "displayName": "OpenViking 记忆",
+  "shortDescription": "Kimi Code 长期记忆",
+  "longDescription": "在每次提问前召回相关记忆，捕获模型实际看到的对话轮次，并通过 MCP 暴露 OpenViking 自己的工具。",
+  "developerName": "OpenViking",
+  "tryPrompts": [
+    "上周我们关于捕获游标定了什么？",
+    "记住这个项目用 pnpm 部署",
+    "在我的记忆里搜索 OpenViking 插件的设计"
+  ],
+  "mcpOverrides": {
+    "openviking": {
+      "displayName": "OpenViking",
+      "description": "搜索、写入和管理 OpenViking 长期记忆"
+    }
+  },
+  "skillOverrides": {
+    "openviking-memory": {
+      "displayName": "OpenViking 记忆",
+      "description": "检索、记住和遗忘长期记忆"
+    }
+  }
+}

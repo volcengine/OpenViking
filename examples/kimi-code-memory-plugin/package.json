@@ -1,0 +1,24 @@
+{
+  "name": "@openviking/kimi-code-memory-plugin",
+  "version": "0.6.0",
+  "description": "OpenViking long-term memory plugin for Kimi Code",
+  "type": "module",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/volcengine/OpenViking",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/volcengine/OpenViking",
+    "directory": "examples/kimi-code-memory-plugin"
+  },
+  "keywords": ["memory", "openviking", "kimi-code"],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 tests/unit/*.test.mjs tests/contract/*.test.mjs tests/e2e/*.test.mjs",
+    "doctor": "node ./scripts/doctor.mjs",
+    "recover": "node ./scripts/recover.mjs",
+    "pack": "node ./scripts/pack.mjs"
+  },
+  "private": true
+}

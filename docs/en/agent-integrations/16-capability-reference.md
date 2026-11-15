@@ -682,6 +682,20 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 - `UserPromptSubmit` returns plain context text, not JSON.
 - Installation keeps other plugin records and does not edit the older `config.toml` or `mcp.json`.
 
+### Kimi Code plugin, standalone distribution (2.x, community)
+
+This community-maintained implementation lives in [`examples/kimi-code-memory-plugin`](https://github.com/volcengine/OpenViking/blob/main/examples/kimi-code-memory-plugin/DESIGN.md) and targets **Kimi Code 2.6.2**. It is not a replacement for the `agent-hook-plugin` adapter above; that integration remains the legacy path for Kimi Code CLI 0.43.x and keeps its own code and documentation. See [Community Plugins](./08-community-plugins.md).
+
+| Area | Behaviour |
+|---|---|
+| Install | The host's native `/plugins install`, from a directory or ZIP; Node.js 22.19+ on the host's `PATH` |
+| Hooks | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `Stop`, `PreCompact`, `SessionEnd`; `Interrupt` is not registered |
+| Capture | Each agent's `wire.jsonl`, active branch projection; every subagent gets its own OpenViking session |
+| Commit | `Stop` at 8 captured messages; `SessionEnd` and `PreCompact` commit everything; an open tail blocks the commit until it closes |
+| URI guard | Read, Glob, Grep, Edit, Write and ReadMediaFile are denied `viking://` paths; shell commands are not checked |
+| History | Explicit `scripts/backfill.mjs`; nothing before installation is imported automatically |
+| Identity | Plugin name `openviking-memory`, the same as the legacy host; the registry keeps one entry per name, so install one per host |
+
 ### CodeBuddy Code
 
 [CodeBuddy Code](./20-codebuddy.md). A plugin with 6 hooks, an MCP proxy, and 4 skills, installed by the unified installer as a local marketplace, and an `agent-hook-plugin` host adapter like ZCode and Kimi Code.

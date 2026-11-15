@@ -456,6 +456,37 @@ test("DELETEs the upstream MCP session on close", async () => {
   });
 });
 
+test("a failed DELETE keeps the upstream session id for a retry", async () => {
+  let deletes = 0;
+  await withServer((_req, res, entry) => {
+    if (entry.method === "POST") {
+      res.writeHead(200, { "content-type": "application/json", "mcp-session-id": "sid-retry" });
+      res.end(JSON.stringify(jsonRpc(1, {})));
+      return;
+    }
+    assert.equal(entry.method, "DELETE");
+    deletes += 1;
+    if (deletes === 1) {
+      res.writeHead(500, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "delete failed" }));
+      return;
+    }
+    res.writeHead(204);
+    res.end("");
+  }, async ({ url, requests }) => {
+    const { proxy } = makeProxy({ url });
+    await proxy.handleMessage({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } });
+
+    await proxy.closeSession(); // 500: the id must survive
+    assert.equal(requests.filter((request) => request.method === "DELETE").length, 1);
+
+    await proxy.closeSession(); // retry with the same upstream id
+    const deletes = requests.filter((request) => request.method === "DELETE");
+    assert.equal(deletes.length, 2);
+    assert.equal(deletes[1].headers["mcp-session-id"], "sid-retry");
+  });
+});
+
 test("an aborted request maps to -32004 naming the timeout budget", async () => {
   const { proxy, messages } = makeProxy({
     url: "http://127.0.0.1:1933/mcp",

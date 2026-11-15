@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Build the downloads the docs site serves under /dl: the installer, the history
-# import script, the plugin bundle, the Claude Code URL marketplace, the Codex git marketplace and the
-# channel data of the version check, laid out like the TOS release bucket. Each docs host publishes the tree built from
-# the commit it deploys, with its own address in the marketplace manifest.
+# import script, the plugin bundle, the Claude Code URL marketplace, the Kimi
+# Code marketplace, the Codex git marketplace and the channel data of the
+# version check, laid out like the TOS release bucket. Each docs host publishes
+# the tree built from the commit it deploys, with its own address in the
+# marketplace manifests.
 
 set -euo pipefail
 
@@ -28,9 +30,13 @@ STAGE="${WORK}/memory-plugin-marketplace"
 bash "${SCRIPTS}/stage-memory-plugin-marketplace.sh" "${STAGE}"
 PLUGIN_VERSION="$(jq -r .version "${STAGE}/claude-code-memory-plugin/.claude-plugin/plugin.json")"
 CLAUDE_ZIP="plugins/claude/openviking-memory-${PLUGIN_VERSION}.zip"
+# The Kimi plugin is published as its own archive: the host installs a plugin
+# from a ZIP, and the marketplace entry points at this exact file.
+KIMI_VERSION="$(jq -r .version "${STAGE}/kimi-code-memory-plugin/kimi.plugin.json")"
+KIMI_ZIP="plugins/kimi/openviking-memory-${KIMI_VERSION}.zip"
 
 rm -rf "${OUT}"
-mkdir -p "${OUT}/memory-plugin-shared" "${OUT}/releases/latest" "${OUT}/plugins/claude"
+mkdir -p "${OUT}/memory-plugin-shared" "${OUT}/releases/latest" "${OUT}/plugins/claude" "${OUT}/plugins/kimi"
 case "${OUT}" in /*) ;; *) OUT="${PWD}/${OUT}" ;; esac
 
 bash "${SCRIPTS}/stamp-installer-version.sh" "${SHARED}/install.sh" "${VERSION}" "${OUT}/memory-plugin-shared/install.sh"
@@ -60,6 +66,9 @@ bash "${SCRIPTS}/reproducible-zip.sh" "${OUT}/releases/latest/memory-plugin-mark
 bash "${SCRIPTS}/reproducible-zip.sh" "${OUT}/${CLAUDE_ZIP}" "${STAGE}" claude-code-memory-plugin
 bash "${SCRIPTS}/generate-claude-marketplace-json.sh" "${BASE}/${CLAUDE_ZIP}" \
   "${OUT}/${CLAUDE_ZIP}" "${STAGE}" "${OUT}/plugins/claude/marketplace.json"
+
+bash "${SCRIPTS}/reproducible-zip.sh" "${OUT}/${KIMI_ZIP}" "${STAGE}" kimi-code-memory-plugin
+bash "${SCRIPTS}/generate-kimi-marketplace-json.sh" "${BASE}/${KIMI_ZIP}" "${OUT}/${KIMI_ZIP}" "${STAGE}/kimi-code-memory-plugin" "${OUT}/plugins/kimi/marketplace.json"
 
 # What the install site's version check answers with. No checksum: the two
 # hosts deploy one after the other and keep no earlier build, so a pinned

@@ -135,8 +135,15 @@ export function resolveWorkspaceSettings(cwd, env = process.env, { clientVersion
     if (registry.entry?.peer) layers.push({ layer: "registry", data: { peer: registry.entry.peer } });
     if (!layers.length) return { ...empty, root, warnings };
 
-    const { value, provenance } = mergeConfigLayers(layers, warnings);
-    normalizeWorkspaceConfig(value, warnings);
+    // Normalize each layer before merging. Doing it after the merge lets a typo
+    // in the higher layer erase a valid value from the lower one, which turns
+    // "this typo was ignored" into "the whole setting fell back to default".
+    const normalized = layers.map((layer) => {
+      const data = structuredClone(layer.data ?? {});
+      normalizeWorkspaceConfig(data, warnings, { layer: layer.layer });
+      return { ...layer, data };
+    });
+    const { value, provenance } = mergeConfigLayers(normalized, warnings);
     return {
       settings: projectWorkspaceSettings(value),
       root,
@@ -145,9 +152,14 @@ export function resolveWorkspaceSettings(cwd, env = process.env, { clientVersion
       announced: announcedOverrides(provenance),
       value,
     };
-  } catch {
-    // A hook must never die over a config file. An unreadable layer is no layer.
-    return empty;
+  } catch (error) {
+    // A hook must never die over a config file. An unreadable layer is no layer,
+    // but the reason still has to reach doctor: silently returning defaults is
+    // indistinguishable from "this repository configures nothing".
+    return {
+      ...empty,
+      warnings: [`workspace config could not be resolved: ${error?.code || error?.message || "unknown error"}`],
+    };
   }
 }
 
@@ -224,7 +236,10 @@ export function buildPluginConfig(harness, {
   });
 
   const recallRewrite = normalizeRewriteMode(
-    env.OPENVIKING_RECALL_COMPRESS ?? env.OPENVIKING_RECALL_REWRITE ?? settings.recallCompress,
+    // An empty `OPENVIKING_RECALL_COMPRESS=` in the shell is not a setting. The
+    // schema's own env layer skips empty strings; reading with `??` here would
+    // let the empty value win and silently discard `ovcli.conf`'s choice.
+    str(env.OPENVIKING_RECALL_COMPRESS) || str(env.OPENVIKING_RECALL_REWRITE) || settings.recallCompress,
     knobDefault(KNOBS.find((knob) => knob.name === "recallCompress"), harnessKey(name)),
   );
   const config = {

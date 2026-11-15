@@ -151,9 +151,11 @@ async function readCache(path) {
 async function writeCache(path, value) {
   if (!path) return;
   try {
-    await mkdir(dirname(path), { recursive: true });
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
     const tmp = `${path}.tmp`;
-    await writeFile(tmp, JSON.stringify(value));
+    // The digest holds memory facts and `viking://` URIs; keep it private, as
+    // the workspace-identity cache already does.
+    await writeFile(tmp, JSON.stringify(value), { mode: 0o600 });
     await rename(tmp, path);
   } catch { /* best effort */ }
 }
@@ -175,8 +177,12 @@ export async function compressRecallContext({
     return { status: COMPRESS_OK, context: String(shortContext ?? input).trim() };
   }
 
-  const maxInputChars = Math.max(1000, Number(cfg.recallCompressMaxInputChars || 18000));
-  const maxBullets = Math.max(1, Number(cfg.recallCompressMaxBullets || 6));
+  // A non-numeric string would make `Math.max` NaN, and `slice(0, NaN)` an
+  // empty input — the compressor would silently produce nothing.
+  const rawInput = Number(cfg.recallCompressMaxInputChars);
+  const maxInputChars = Number.isFinite(rawInput) ? Math.max(1000, rawInput) : 18000;
+  const rawBullets = Number(cfg.recallCompressMaxBullets);
+  const maxBullets = Number.isFinite(rawBullets) ? Math.max(1, rawBullets) : 6;
   const key = recallDigestCacheKey({
     query,
     rendered: input,
