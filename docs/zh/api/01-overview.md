@@ -361,6 +361,9 @@ JSON 输出 - 错误：
 |------|------|------|
 | POST | `/api/v1/resources/temp_upload` | 上传后续导入所需的临时文件 |
 | POST | `/api/v1/resources` | 从 URL 或临时文件添加资源 |
+| POST | `/api/v1/resources/cp` | 复制共享资源 |
+| POST | `/api/v1/resources/mv` | 移动或重命名共享资源 |
+| DELETE | `/api/v1/resources` | 删除共享资源 |
 | GET | `/api/v1/fs/ls` | 列出目录 |
 | GET | `/api/v1/fs/tree` | 获取目录树 |
 | GET | `/api/v1/fs/stat` | 获取资源状态 |

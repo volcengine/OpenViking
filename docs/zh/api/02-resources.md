@@ -799,6 +799,42 @@ shared 模式的响应示例：
 
 ---
 
+### 管理共享资源
+
+以下 HTTP 接口用于复制、移动/重命名或删除 `viking://resources/` 下的子资源。共享 Resources 根目录本身、用户私有资源和其他命名空间不允许使用这些接口。复制和移动的 `from_uri`、`to_uri` 都必须是该共享根目录下的完整 URI；API 不会自动生成目标位置。操作仍受正常文件系统 ACL 校验约束。
+
+**复制**
+
+```http
+POST /api/v1/resources/cp
+Content-Type: application/json
+
+{"from_uri":"viking://resources/guide","to_uri":"viking://resources/guide-copy","recursive":true}
+```
+
+`from_uri`、`to_uri` 必填。`recursive` 默认为 `false`，复制目录时应设为 `true`。响应及向量/语义处理沿用[文件系统 cp](03-filesystem.md#cp)，包括 `result.from`、`result.to` 和 `result.recursive`。
+
+**移动或重命名**
+
+```http
+POST /api/v1/resources/mv
+Content-Type: application/json
+
+{"from_uri":"viking://resources/guide-copy","to_uri":"viking://resources/renamed-guide"}
+```
+
+两个 URI 字段均必填。操作沿用[文件系统 mv](03-filesystem.md#mv) 的权限校验和 Watch 处理；响应包含 `result.from` 和 `result.to`。
+
+**删除**
+
+```http
+DELETE /api/v1/resources?uri=viking://resources/renamed-guide&recursive=true&wait=true
+```
+
+`uri` 必填，`recursive` 默认为 `false`。与文件系统删除接口不同，此接口的 `wait` 默认为 `true`，等待语义清理。设为 `wait=false` 时，可用响应中存在的 `result.task_id` [查询任务进度](17-tasks.md)。响应包含 `result.uri`，其他清理/状态字段与[文件系统 rm](03-filesystem.md#rm) 一致。
+
+---
+
 ## 相关文档
 
 - [文件系统](03-filesystem.md) - 文件和目录操作
