@@ -136,6 +136,14 @@ def plan_entries(
         # whole body, so exempting that tier lets one entry eat the budget.
         return tier == "uri" or tokens <= cap
 
+    def entry_budget(index: int) -> int:
+        # Reserve a fair share for every unplaced candidate. The per-entry cap
+        # alone is twice that share, so using it as the floor budget can let
+        # early hits starve later ones even when none exceeds the cap.
+        remaining = max_tokens - used - (SEPARATOR_TOKENS if slots else 0)
+        fair_share = remaining // max(1, len(candidates) - index)
+        return min(cap, fair_share)
+
     for index, candidate in enumerate(candidates):
         start, ceiling = tier_window(candidate, pins.for_category(candidate.category))
         placed: Optional[_Slot] = None
@@ -145,15 +153,11 @@ def plan_entries(
             if text is None:
                 continue
             if tier == "uri" and clip_source is not None:
-                # Clipping is the last content-bearing fallback. Share the
-                # remaining total across unplaced candidates so early hits
-                # cannot consume their 2x cap and starve all later hits.
-                remaining = max_tokens - used - (SEPARATOR_TOKENS if slots else 0)
-                fair_share = remaining // max(1, len(candidates) - index)
+                # Clipping is the last content-bearing fallback.
                 entry = _clip_entry(
                     candidate,
                     *clip_source,
-                    token_budget=min(cap, fair_share),
+                    token_budget=entry_budget(index),
                 )
                 if entry is not None:
                     cost = entry.tokens + (SEPARATOR_TOKENS if slots else 0)
@@ -168,7 +172,7 @@ def plan_entries(
 
             entry = _make_entry(candidate, tier, text)
             cost = entry.tokens + (SEPARATOR_TOKENS if slots else 0)
-            if fits_cap(tier, entry.tokens) and used + cost <= max_tokens:
+            if fits_cap(tier, entry.tokens) and entry.tokens <= entry_budget(index):
                 placed = _Slot(candidate=candidate, entry=entry, ceiling=ceiling, cost=cost)
                 break
             if tier != "uri":
@@ -194,6 +198,29 @@ def plan_entries(
 
     floor_used = used
 
+    def restore_clipped_pass() -> int:
+        """Spend leftover budget on whole originals, still respecting the cap."""
+        nonlocal used
+        restored = 0
+        for slot in slots:
+            if not slot.truncated:
+                continue
+            text = tier_text(slot.candidate, slot.entry.detail, contents=contents)
+            if text is None:
+                continue
+            entry = _make_entry(slot.candidate, slot.entry.detail, text)
+            if not fits_cap(slot.entry.detail, entry.tokens):
+                continue
+            delta = entry.tokens - slot.entry.tokens
+            if used + delta > max_tokens:
+                continue
+            slot.entry = entry
+            slot.cost += delta
+            slot.truncated = False
+            used += delta
+            restored += 1
+        return restored
+
     def upgrade_pass(target: Tier, *, respect_cap: bool) -> int:
         nonlocal used
         upgraded = 0
@@ -218,9 +245,10 @@ def plan_entries(
             upgraded += 1
         return upgraded
 
-    # Slots are in score order, so the depth passes spend whatever budget is
-    # left on the best hits first — no absolute score threshold, which the
-    # observed 0.38-0.50 score band cannot support anyway.
+    # Slots are in score order, so restoration and depth passes spend leftover
+    # budget on the best hits first. Restoration only recovers the original
+    # tier within the cap; it never crosses the category's read boundary.
+    restored = restore_clipped_pass()
     overview_upgrades = upgrade_pass("overview", respect_cap=True)
     full_upgrades = upgrade_pass("full", respect_cap=True)
     # Leftover budget is worth spending: one more depth pass without the
@@ -244,6 +272,7 @@ def plan_entries(
         "tier_counts": tier_counts,
         "fill": {
             "floor_tokens": floor_used,
+            "restored": restored,
             "overview_upgrades": overview_upgrades,
             "full_upgrades": full_upgrades,
             "spare_upgrades": spare_upgrades,
