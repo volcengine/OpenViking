@@ -1450,6 +1450,88 @@ export type DeleteResourcesResponses = {
     200: unknown;
 };
 
+export type PostResourcesCpData = {
+    body: CpRequest;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/resources/cp';
+};
+
+export type PostResourcesCpErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostResourcesCpError = PostResourcesCpErrors[keyof PostResourcesCpErrors];
+
+export type PostResourcesCpResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
+export type PostResourcesMvData = {
+    body: MvRequest;
+    headers?: {
+        /**
+         * X-Api-Key
+         */
+        'x-api-key'?: string | null;
+        /**
+         * Authorization
+         */
+        authorization?: string | null;
+        /**
+         * X-Openviking-Account
+         */
+        'X-OpenViking-Account'?: string | null;
+        /**
+         * X-Openviking-User
+         */
+        'X-OpenViking-User'?: string | null;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/v1/resources/mv';
+};
+
+export type PostResourcesMvErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type PostResourcesMvError = PostResourcesMvErrors[keyof PostResourcesMvErrors];
+
+export type PostResourcesMvResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
+
 export type PostSkillsData = {
     body: AddSkillRequest;
     headers?: {

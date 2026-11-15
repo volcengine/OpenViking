@@ -150,6 +150,29 @@ const activity = {
     resizeContext: 'Resize filesystem width',
     resizeAction: 'Resize Terminal and Agent width',
     readFailed: 'Failed to read {{uri}}',
+    transferResource: {
+      copyButton: 'Copy shared resource',
+      moveButton: 'Rename or move shared resource',
+      copyTitle: 'Copy shared resource',
+      moveTitle: 'Rename or move shared resource',
+      copyDescription:
+        'Create a copy inside the shared Resources directory. The source stays unchanged. Vector records are copied and parent semantic indexes refresh in the background.',
+      moveDescription:
+        'Rename or move inside the shared Resources directory. The old URI will stop working. Vector records, scheduled syncs, and Compile configuration migrate according to the existing rules.',
+      sourceLabel: 'Current resource',
+      targetLabel: 'Full target URI',
+      targetPlaceholder: 'viking://resources/',
+      targetHint:
+        'Only children of viking://resources/ are allowed. The target must differ from the current URI.',
+      cancel: 'Cancel',
+      copyConfirm: 'Copy',
+      moveConfirm: 'Move',
+      submitting: 'Processing...',
+      copied: 'Resource copied; index is updating in the background',
+      moved: 'Resource moved; index is updating in the background',
+      copyFailed: 'Could not copy shared resource',
+      moveFailed: 'Could not move shared resource',
+    },
     deleteResource: {
       button: 'Delete shared resource',
       title: 'Permanently delete shared resource?',

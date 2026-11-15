@@ -4,10 +4,12 @@ import {
   ArrowLeftIcon,
   BotIcon,
   ClipboardIcon,
+  CopyIcon,
   HistoryIcon,
   PackageIcon,
   PanelRightCloseIcon,
   PanelRightOpenIcon,
+  PencilIcon,
   TerminalIcon,
   Trash2Icon,
   WandSparkles,
@@ -59,6 +61,8 @@ import {
 import { DataManagementDialog } from '#/features/workbench/filesystem/components/data-management-dialog'
 import { DeleteResourceDialog } from '#/features/workbench/filesystem/components/delete-resource-dialog'
 import { SnapshotComparisonDialog } from '#/features/workbench/filesystem/components/snapshot-comparison-dialog'
+import { TransferResourceDialog } from '#/features/workbench/filesystem/components/transfer-resource-dialog'
+import type { ResourceTransferOperation } from '#/features/workbench/filesystem/components/transfer-resource-dialog'
 import { TerminalPanel } from '#/features/workbench/filesystem/components/terminal-panel'
 import {
   FILESYSTEM_LEFT_WIDTH,
@@ -138,6 +142,8 @@ function FilesystemWorkbench() {
   )
   const [findPaletteOpen, setFindPaletteOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [transferOperation, setTransferOperation] =
+    useState<ResourceTransferOperation | null>(null)
   const [taskDialogOpen, setTaskDialogOpen] = useState(false)
   const [dataManagementMode, setDataManagementMode] = useState<
     'history' | 'transfer' | 'compare' | null
@@ -459,6 +465,7 @@ function FilesystemWorkbench() {
   useEffect(() => {
     setDataManagementMode(null)
     setDeleteDialogOpen(false)
+    setTransferOperation(null)
   }, [selectedUri])
   const canManageSelectedUri = selectedUri !== ROOT_URI
   const canDeleteSelectedUri =
@@ -661,6 +668,30 @@ function FilesystemWorkbench() {
                 </Button>
               )}
             {canDeleteSelectedUri ? (
+              <>
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="ghost"
+                  title={t('transferResource.copyButton')}
+                  aria-label={t('transferResource.copyButton')}
+                  onClick={() => setTransferOperation('copy')}
+                >
+                  <CopyIcon className="size-4" />
+                </Button>
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="ghost"
+                  title={t('transferResource.moveButton')}
+                  aria-label={t('transferResource.moveButton')}
+                  onClick={() => setTransferOperation('move')}
+                >
+                  <PencilIcon className="size-4" />
+                </Button>
+              </>
+            ) : null}
+            {canDeleteSelectedUri ? (
               <Button
                 type="button"
                 size="icon-sm"
@@ -827,6 +858,39 @@ function FilesystemWorkbench() {
             tasks={tasks}
           />
         </>
+      ) : null}
+      {canDeleteSelectedUri && transferOperation ? (
+        <TransferResourceDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setTransferOperation(null)
+          }}
+          operation={transferOperation}
+          uri={selectedUri}
+          isDirectory={selectedIsDirectory}
+          onCompleted={(targetUri) => {
+            void invalidateAll()
+            if (transferOperation === 'move') {
+              const normalizedTarget = selectedIsDirectory
+                ? normalizeDirUri(targetUri)
+                : normalizeFileUri(targetUri)
+              const nextCurrentUri = selectedIsDirectory
+                ? normalizedTarget
+                : normalizeDirUri(parentUri(normalizedTarget))
+              setCurrentUri(nextCurrentUri)
+              setSelectedFile(
+                createEntryFromUri(normalizedTarget, selectedIsDirectory),
+              )
+              syncSearch({
+                file: selectedIsDirectory ? undefined : normalizedTarget,
+                uri: nextCurrentUri,
+              })
+              toast.success(t('transferResource.moved'))
+            } else {
+              toast.success(t('transferResource.copied'))
+            }
+          }}
+        />
       ) : null}
       {canDeleteSelectedUri ? (
         <DeleteResourceDialog

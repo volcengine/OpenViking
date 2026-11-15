@@ -143,6 +143,28 @@ const activity = {
     resizeContext: '调整文件系统宽度',
     resizeAction: '调整终端和 Agent 面板宽度',
     readFailed: '无法读取 {{uri}}',
+    transferResource: {
+      copyButton: '复制共享资源',
+      moveButton: '重命名或移动共享资源',
+      copyTitle: '复制共享资源',
+      moveTitle: '重命名或移动共享资源',
+      copyDescription:
+        '在共享资源目录内创建一个副本，原资源保持不变。向量记录会一并复制，父目录语义索引在后台更新。',
+      moveDescription:
+        '在共享资源目录内重命名或移动。旧 URI 将不再可用，向量记录、定时同步和编译配置会按现有规则迁移。',
+      sourceLabel: '当前资源',
+      targetLabel: '目标完整 URI',
+      targetPlaceholder: 'viking://resources/',
+      targetHint: '仅限 viking://resources/ 子项，目标不能与当前 URI 相同。',
+      cancel: '取消',
+      copyConfirm: '复制',
+      moveConfirm: '移动',
+      submitting: '正在处理...',
+      copied: '资源已复制，索引正在后台更新',
+      moved: '资源已移动，索引正在后台更新',
+      copyFailed: '共享资源复制失败',
+      moveFailed: '共享资源移动失败',
+    },
     deleteResource: {
       button: '删除共享资源',
       title: '永久删除共享资源？',

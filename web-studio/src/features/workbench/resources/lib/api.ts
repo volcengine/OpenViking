@@ -9,6 +9,8 @@ import {
   getOvResult,
   normalizeOvClientError,
   postContentWrite,
+  postResourcesCp,
+  postResourcesMv,
 } from '#/shared/api/ov-client/index'
 import {
   fetchFind,
@@ -223,11 +225,53 @@ export async function fetchFsStat(
   }
 }
 
+function assertSharedResourceUri(uri: string): void {
+  const normalized = uri.replace(/\/$/, '')
+  if (!normalized.startsWith('viking://resources/')) {
+    // Internal guard: the localized UI prevents this path.
+    // eslint-disable-next-line studio-i18n/no-literal-message
+    throw new Error('Only shared resources are allowed')
+  }
+}
+
+export async function transferSharedResource(
+  operation: 'copy' | 'move',
+  fromUri: string,
+  toUri: string,
+  isDirectory: boolean,
+): Promise<{ semanticStatus?: string }> {
+  assertSharedResourceUri(fromUri)
+  assertSharedResourceUri(toUri)
+  const from = fromUri.replace(/\/$/, '')
+  const to = toUri.replace(/\/$/, '')
+  try {
+    if (operation === 'move') {
+      await getOvResult(
+        postResourcesMv({ body: { from_uri: from, to_uri: to } }),
+      )
+      return {}
+    }
+    const result = await getOvResult<Record<string, unknown>>(
+      postResourcesCp({
+        body: { from_uri: from, to_uri: to, recursive: isDirectory },
+      }),
+    )
+    return {
+      semanticStatus:
+        typeof result.semantic_status === 'string'
+          ? result.semantic_status
+          : undefined,
+    }
+  } catch (error) {
+    throw toVikingApiError(error)
+  }
+}
+
 export async function deleteSharedResource(
   uri: string,
   isDirectory: boolean,
 ): Promise<{ semanticStatus?: string }> {
-  if (!uri.startsWith('viking://resources/')) {
+  if (!uri.replace(/\/$/, '').startsWith('viking://resources/')) {
     // Internal guard: the localized UI prevents this path.
     // eslint-disable-next-line studio-i18n/no-literal-message
     throw new Error('Only shared resources can be deleted')
