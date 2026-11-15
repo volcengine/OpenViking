@@ -2,14 +2,18 @@ import json
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import quote
 
 import pytest
+from PIL import Image
 
 from openviking.parse.image_rewrite import (
     IMAGE_MAPPINGS_FILENAME,
+    _rewrite_content,
     build_artifact_image_mappings,
 )
 from openviking.parse.output import LocalParseOutputStore, read_artifact_manifest
+from openviking.parse.parsers.markdown import MarkdownParser
 from openviking.parse.understanding_api import UnderstandingAPI
 
 
@@ -35,20 +39,30 @@ class _FakeVikingFS:
         self.deleted_temps.append(uri)
 
 
-def test_build_artifact_image_mappings_uses_existing_sibling_images(tmp_path: Path):
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stem", ["plain", "space name", "中文 图", "percent%20", "hash#image", "plus+image"]
+)
+async def test_build_artifact_image_mappings_uses_existing_sibling_images(tmp_path: Path, stem):
     chapter = tmp_path / "章节"
     chapter.mkdir()
-    (chapter / "正文_img1.png").write_bytes(b"png")
-    (chapter / "正文_img2.jpg").write_bytes(b"jpg")
-    (chapter / "正文.md").write_text(
+    png, jpg = f"{stem}.png", f"{stem}.jpg"
+    Image.new("RGB", (64, 64), "red").save(chapter / png)
+    Image.new("RGB", (64, 64), "blue").save(chapter / jpg)
+    Image.new("RGB", (64, 64), "green").save(tmp_path / "secret.png")
+    png_ref, jpg_ref = quote(png), f"./{quote(jpg)}"
+    source = chapter / "正文.md"
+    source.write_text(
         "\n".join(
             [
-                "![image](正文_img1.png)",
-                '<img src="./正文_img2.jpg">',
+                f"![image]({png_ref})",
+                f'<img src="{jpg_ref}">',
                 "![remote](https://example.com/a.png)",
                 "![missing](missing.png)",
+                "![outside](%2e%2e/secret.png)",
+                "![invalid](bad%FF.png)",
                 "```markdown",
-                "![example](正文_img1.png)",
+                f"![example]({png_ref})",
                 "```",
             ]
         ),
@@ -57,10 +71,30 @@ def test_build_artifact_image_mappings_uses_existing_sibling_images(tmp_path: Pa
 
     assert build_artifact_image_mappings(tmp_path) == {
         "章节/正文.md": {
-            "正文_img1.png": "正文_img1.png",
-            "./正文_img2.jpg": "正文_img2.jpg",
+            png_ref: png,
+            jpg_ref: jpg,
         }
     }
+    result = await MarkdownParser().parse(
+        source, parse_output_store=LocalParseOutputStore(str(tmp_path / "output"))
+    )
+    assert result.artifact_ref is not None
+    root = Path(result.artifact_ref.root) / result.artifact_ref.resource_rel
+    mappings = json.loads((root / IMAGE_MAPPINGS_FILENAME).read_text(encoding="utf-8"))
+    assert mappings == {"正文.md": {png_ref: png, jpg_ref: jpg}}
+    for name in (png, jpg):
+        assert (root / name).read_bytes() == (chapter / name).read_bytes()
+    assert not (root / "secret.png").exists()
+    rewritten, count = _rewrite_content(
+        source.read_text(encoding="utf-8"),
+        "viking://resources/doc",
+        {png, jpg},
+        mappings["正文.md"],
+    )
+    assert count == 2
+    assert f"![image](viking://resources/doc/{png})" in rewritten
+    assert f'<img src="viking://resources/doc/{jpg}">' in rewritten
+    assert f"![example]({png_ref})" in rewritten
 
 
 @pytest.mark.asyncio

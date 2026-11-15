@@ -25,6 +25,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from urllib.parse import unquote
 
 import yaml
 
@@ -931,7 +932,7 @@ class MarkdownParser(BaseParser):
             allowed root, otherwise None
         """
         try:
-            path = Path(self._unwrap_link_destination(path_str))
+            path = Path(unquote(self._unwrap_link_destination(path_str), errors="strict"))
 
             # Reject absolute paths: they can point anywhere on the host
             if path.is_absolute():

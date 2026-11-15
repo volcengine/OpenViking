@@ -12,6 +12,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any, Dict, Optional, Set
+from urllib.parse import unquote
 
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import get_viking_fs
@@ -71,11 +72,10 @@ def build_artifact_image_mappings(root_dir: Path) -> Dict[str, Dict[str, str]]:
             # Queries/fragments are not part of the local filesystem path, but
             # the exact original reference remains the mapping key used later.
             path_part = re.split(r"[?#]", ref, maxsplit=1)[0]
-            ref_path = Path(path_part)
-            if not path_part or ref_path.is_absolute():
-                continue
-
             try:
+                ref_path = Path(unquote(path_part, errors="strict"))
+                if not path_part or ref_path.is_absolute():
+                    continue
                 candidate = (md_dir / ref_path).resolve()
                 candidate.relative_to(root)
             except (OSError, ValueError):
