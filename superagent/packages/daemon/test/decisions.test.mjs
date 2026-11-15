@@ -141,6 +141,14 @@ describe('turn-end decision settlement', () => {
     assert.deepEqual([settlement().expected_unsettled, settlement().optional_unsettled, settlement().nudged], [3, 1, 3]);
   });
 
+  it('lets a reaction wake the Agent without asking for a decision of its own', async (t) => {
+    const { activities, submitted, ingest, settlement, turn } = setup(t);
+    const reaction = ingest({ messageId: 're_ok12345678901', kind: 'message.reaction.created', content: '[reaction OK]' });
+    await turn([reaction.seq]);
+    assert.deepEqual([activities, submitted], [[], []]);
+    assert.deepEqual([settlement().expected_unsettled, settlement().optional_unsettled, settlement().nudged], [0, 1, 0]);
+  });
+
   it('reminds about only the newest line of an undecided group burst', async (t) => {
     const { activities, submitted, ingest, settlement, turn } = setup(t);
     const burst = ['om_gburstA123456', 'om_gburstB123456', 'om_gburstC123456']

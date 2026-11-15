@@ -15,6 +15,8 @@ export function eventDeliveryItem(event, seq = event.seq, overrides = {}) {
     scopeKey: event.scopeKey,
     scope: { kind: event.source, key: event.scopeKey, conversationKey: event.conversationKey },
     chatType: event.kind.startsWith('message.') ? event.chatType : null,
+    // A few quick reactions are one input, in a direct chat as in a group.
+    batched: event.kind.startsWith('message.reaction.'),
     ...(event.replyRoute ? { target: {
       connector: event.connectorInstance, ...event.replyRoute,
       chatId: event.chatId, threadId: event.threadId, messageId: event.messageId,
