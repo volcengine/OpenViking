@@ -128,12 +128,19 @@ class LocalCollectionAdapter(CollectionAdapter):
             self._collection = None
             if partial_collection is not None:
                 try:
-                    partial_collection.drop()
+                    if existing_dir:
+                        # The directory predates this attempt. The native
+                        # collection's drop() deletes its whole directory, so
+                        # only close the handle here and leave existing files
+                        # untouched.
+                        partial_collection.close()
+                    else:
+                        partial_collection.drop()
                 except Exception:
                     logger.exception(
                         "local_adapter: failed to close partially created collection %s", name
                     )
-            if collection_path and not existing_dir:
+            if collection_path and not existing_dir and os.path.isdir(collection_path):
                 try:
                     shutil.rmtree(collection_path)
                 except OSError:
@@ -146,9 +153,10 @@ class LocalCollectionAdapter(CollectionAdapter):
                         os.remove(meta_path)
                     except OSError:
                         pass
-            elif meta_path:
-                # The directory predates this attempt, so keep its contents but
-                # remove the metadata this attempt wrote.
+            elif existing_dir and meta_path:
+                # Keep the pre-existing directory and its contents, but remove
+                # the metadata this attempt wrote so the broken collection can
+                # never be adopted later.
                 try:
                     os.remove(meta_path)
                 except OSError:

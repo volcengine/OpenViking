@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -114,3 +115,57 @@ def test_create_collection_keeps_healthy_existing_collection(tmp_path):
     )
     assert existing.drop_calls == 0
     assert meta.exists()
+
+
+class _DeletingCollection:
+    def __init__(self, collection_path: Path):
+        self._collection_path = collection_path
+        self.drop_calls = 0
+        self.close_calls = 0
+
+    def create_index(self, _name, _meta):
+        raise RuntimeError("index creation failed")
+
+    def close(self):
+        self.close_calls += 1
+
+    def drop(self):
+        self.drop_calls += 1
+        # The real PersistentCollection.drop() removes its whole directory.
+        shutil.rmtree(self._collection_path, ignore_errors=True)
+
+
+def test_create_collection_failure_keeps_preexisting_directory_contents(tmp_path):
+    adapter = LocalCollectionAdapter("context", str(tmp_path), "default")
+    collection_path = Path(adapter._collection_path())
+    (collection_path / "recovery").mkdir(parents=True)
+    note = collection_path / "operator-note.txt"
+    note.write_text("keep me", encoding="utf-8")
+    keep = collection_path / "recovery" / "keep.bin"
+    keep.write_bytes(b"\x00\x01")
+    collection = _DeletingCollection(collection_path)
+
+    def create_backend(_meta):
+        (collection_path / "collection_meta.json").write_text("{}", encoding="utf-8")
+        return collection
+
+    adapter._create_backend_collection = create_backend
+    adapter._sanitize_scalar_index_fields = lambda **kwargs: kwargs["scalar_index_fields"]
+    adapter._build_default_index_meta = lambda **kwargs: {}
+
+    with pytest.raises(RuntimeError, match="index creation failed"):
+        adapter.create_collection(
+            "context",
+            {"Fields": []},
+            distance="cosine",
+            sparse_weight=0.0,
+            index_name="default",
+        )
+
+    # A directory that predates the attempt is closed, never dropped.
+    assert collection.drop_calls == 0
+    assert collection.close_calls == 1
+    assert note.read_text(encoding="utf-8") == "keep me"
+    assert keep.exists()
+    assert not (collection_path / "collection_meta.json").exists()
+    assert adapter._collection is None
