@@ -115,6 +115,38 @@ The plugin reads its connection from `~/.openviking/ovcli.conf`; `OPENVIKING_URL
 
 The verified host contract, the transcript format, and the adapter's v1 scope are recorded in [`hosts/codebuddy/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/codebuddy/DESIGN.md).
 
+## Antigravity memory integration
+
+Source: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
+
+The Antigravity integration serves the Antigravity desktop app and the `agy` CLI, which load the same plugins from `~/.gemini/config/plugins/`:
+
+- **SessionStart** injects the user profile.
+- **PreInvocation** recalls relevant memories on the first model call of each turn. Antigravity runs this hook before every model call, so later calls in a tool loop skip recall.
+- **Stop** captures the finished steps of the conversation transcript in a detached worker, then commits the OpenViking session.
+
+Antigravity hooks use their own `hooks.json` format: each top-level key names a hook, and context is returned as `injectSteps` system messages. A Claude Code `hooks.json` therefore cannot be reused.
+
+### Install
+
+Prerequisites: Node.js 18+, a running OpenViking server, an OpenViking repository checkout, and the Antigravity app or `agy`. The installer does not configure Antigravity yet; from the checkout root, run:
+
+```bash
+dest=~/.gemini/config/plugins/openviking-memory
+mkdir -p "$dest"
+cp examples/agent-hook-plugin/hosts/antigravity/plugin.json "$dest/"
+sed -e "s#__OPENVIKING_PLUGIN_ROOT__#$PWD/examples/agent-hook-plugin#g" \
+    -e "s#__OPENVIKING_CLIENT_ID__#antigravity#g" \
+    examples/agent-hook-plugin/hosts/antigravity/hooks.json > "$dest/hooks.json"
+```
+
+Connection settings come from `~/.openviking/ovcli.conf` as for the other integrations. Add the OpenViking MCP server separately in `~/.gemini/config/mcp_config.json` if you want the agent to search memory itself.
+
+Restart the Antigravity app or start a new `agy` session, then verify that:
+
+- the `agy` log under `~/.gemini/antigravity-cli/log/` reports `loaded 1 named hooks`;
+- after a turn, `~/.openviking/hook-state/antigravity/<conversation-id>.json` records `lastStep`.
+
 ## AstrBot plugin
 
 [AstrBot](https://github.com/AstrBotDevs/AstrBot) is a multi-platform IM bot framework supporting QQ, Telegram, Discord, Lark, and 20+ other platforms.

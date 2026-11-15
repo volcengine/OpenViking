@@ -1,0 +1,101 @@
+import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import test from "node:test";
+
+import { expectExit, runHookScript } from "../../memory-plugin-shared/testing/support.mjs";
+
+const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+const hookEntry = join(pluginRoot, "scripts", "hook.mjs");
+
+// Step shapes as written by agy 1.5.x to .system_generated/logs/transcript_full.jsonl.
+const step = (index, fields) => `${JSON.stringify({ step_index: index, status: "DONE", ...fields })}\n`;
+const firstTurn = step(0, {
+  source: "USER_EXPLICIT",
+  type: "USER_INPUT",
+  content: "<USER_REQUEST>\nWhat is the retry budget?\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nlocal time\n</ADDITIONAL_METADATA>",
+})
+  + step(1, { source: "SYSTEM_SDK", type: "SYSTEM_MESSAGE", content: "<openviking-context>old</openviking-context>" })
+  + step(2, { source: "MODEL", type: "PLANNER_RESPONSE", tool_calls: [{ name: "run_command" }] })
+  + step(3, { source: "MODEL", type: "GENERIC", content: "Command output: 3" })
+  + step(4, { source: "MODEL", type: "PLANNER_RESPONSE", content: "The retry budget is three attempts." });
+
+async function runHook(event, input, env) {
+  const run = expectExit(await runHookScript(hookEntry, { argv: [event, "antigravity"], input, env }));
+  return JSON.parse(run.stdout.trim() || "{}");
+}
+
+test("Antigravity hooks.json uses named hooks with the dispatcher's event names", () => {
+  const hooks = JSON.parse(readFileSync(join(pluginRoot, "hosts", "antigravity", "hooks.json"), "utf8"));
+  const handlers = hooks["openviking-memory"];
+  assert.deepEqual(Object.keys(handlers), ["SessionStart", "PreInvocation", "Stop"]);
+  assert.match(handlers.PreInvocation[0].command, /hook\.mjs pre-invocation __OPENVIKING_CLIENT_ID__$/);
+});
+
+test("Antigravity recalls once per turn and captures only new transcript text", async () => {
+  const messages = [];
+  const commits = [];
+  const server = createServer((request, response) => {
+    let body = "";
+    request.on("data", (chunk) => { body += chunk; });
+    request.on("end", () => {
+      if (request.url === "/api/v1/search/search" || request.url === "/api/v1/search/recall") {
+        response.end(JSON.stringify({ result: { rendered: "antigravity memory", entries: [], stats: {} } }));
+      } else if (request.url?.includes("/messages")) {
+        const parsed = JSON.parse(body);
+        messages.push(...(parsed.messages ?? [parsed]));
+        response.end(JSON.stringify({ result: { ok: true } }));
+      } else {
+        if (request.url?.endsWith("/commit")) commits.push(request.url);
+        response.end(JSON.stringify({ result: { ok: true } }));
+      }
+    });
+  });
+  await new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  const root = mkdtempSync(join(tmpdir(), "openviking-antigravity-hook-"));
+  const transcriptPath = join(root, "transcript_full.jsonl");
+  writeFileSync(transcriptPath, firstTurn);
+  const env = {
+    HOME: root,
+    OPENVIKING_URL: `http://127.0.0.1:${server.address().port}`,
+    OPENVIKING_HOOK_STATE_DIR: join(root, "state"),
+    OPENVIKING_MEMORY_ENABLED: "1",
+    OPENVIKING_WRITE_PATH_ASYNC: "0",
+  };
+  try {
+    const base = { conversationId: "conv-1", cwd: "/workspace", transcriptPath };
+    const call = (invocationNum, initialNumSteps) => ({
+      ...base, invocationNum, initialNumSteps, lastUserInput: "What is the retry budget?",
+    });
+    const recalled = await Promise.all([
+      runHook("pre-invocation", call(0, 1), env),
+      runHook("pre-invocation", call(0, 1), env),
+      runHook("pre-invocation", call(1, 3), env),
+    ]);
+    const injected = recalled.filter((output) => /antigravity memory/.test(
+      output.injectSteps?.[0]?.systemMessage?.systemMessage || "",
+    ));
+    assert.equal(injected.length, 1, "only the first model call of a turn recalls");
+    assert.ok(recalled.every((output) => output.injectSteps || Object.keys(output).length === 0));
+
+    await runHook("stop", base, env);
+    assert.deepEqual(messages.map((message) => [message.role, message.parts?.[0]?.text ?? message.content]), [
+      ["user", "What is the retry budget?"],
+      ["assistant", "The retry budget is three attempts."],
+    ]);
+    assert.equal(commits.length, 1);
+    assert.ok(commits[0].includes("ag-conv-1"));
+
+    // A second Stop sends only steps written since the first one.
+    appendFileSync(transcriptPath, step(5, { source: "USER_EXPLICIT", type: "USER_INPUT", content: "<USER_REQUEST>\nAnd the timeout?\n</USER_REQUEST>" })
+      + step(6, { source: "MODEL", type: "PLANNER_RESPONSE", content: "Thirty seconds.", status: "RUNNING" }));
+    await runHook("stop", base, env);
+    assert.deepEqual(messages.slice(2).map((message) => message.parts?.[0]?.text ?? message.content), ["And the timeout?"]);
+  } finally {
+    server.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
