@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 from collections import OrderedDict
+from decimal import Decimal, DecimalException
 from typing import Any, Iterable
 
 from openviking_cli.exceptions import InvalidArgumentError
@@ -84,16 +85,51 @@ def build_search_tags_filter(tags: Iterable[str] | None) -> dict[str, Any] | Non
 
 
 def merge_search_tags(existing: Iterable[str] | None, incoming: Iterable[str] | None) -> list[str]:
-    """Merge normalized search tags by key, replacing old values with incoming ones."""
+    """Merge by key with ordered assignment and finite decimal arithmetic."""
     ordered: OrderedDict[str, str] = OrderedDict()
 
     for item in normalize_search_tags(existing, discard_invalid=True):
         key, value = item.split("=", 1)
         ordered[key] = value
 
-    for item in normalize_search_tags(incoming, discard_invalid=True):
-        key, value = item.split("=", 1)
-        ordered[key] = value
+    invalid_tags: list[str] = []
+    for item in incoming or []:
+        if item is None:
+            continue
+        try:
+            normalized = normalize_search_tag(item)
+        except InvalidArgumentError:
+            invalid_tags.append(str(item))
+            continue
+        key, raw_value = normalized.split("=", 1)
+        if not key.endswith(("+", "-")):
+            ordered[key] = raw_value
+            continue
+
+        operator = key[-1]
+        key = key[:-1]
+        if not key:
+            invalid_tags.append(str(item))
+            continue
+        try:
+            current = Decimal(ordered.get(key, "0"))
+            operand = Decimal(raw_value)
+        except DecimalException as exc:
+            raise InvalidArgumentError(f"invalid numeric value for tag '{key}'") from exc
+        if not current.is_finite() or not operand.is_finite():
+            raise InvalidArgumentError(f"tag arithmetic requires finite values for '{key}'")
+        result = current + operand if operator == "+" else current - operand
+        ordered[key] = str(result)
+
+    if invalid_tags:
+        logger.warning(
+            "Discarded invalid search tags: %s",
+            invalid_tags,
+            extra={
+                "invalid_tags": invalid_tags,
+                "invalid_tag_count": len(invalid_tags),
+            },
+        )
 
     return [f"{key}={value}" for key, value in ordered.items()]
 
@@ -102,7 +138,7 @@ def preserve_memory_type_tag(
     existing: Iterable[str] | None,
     incoming: Iterable[str] | None,
 ) -> list[str]:
-    """Preserve the extracted memory type while updating ordinary search tags."""
+    """Preserve the extracted memory type on already resolved search tags."""
     existing_memory_type = next(
         (
             tag
@@ -118,7 +154,4 @@ def preserve_memory_type_tag(
         for tag in normalize_search_tags(incoming, discard_invalid=True)
         if not tag.startswith("memory_type=")
     ]
-    return merge_search_tags(
-        [existing_memory_type] if existing_memory_type is not None else [],
-        user_tags,
-    )
+    return [existing_memory_type, *user_tags] if existing_memory_type is not None else user_tags

@@ -1,3 +1,7 @@
+import {
+  observation,
+  type ObservedSpec,
+} from '../shared/monitoring/request-observer.js';
 import { OvClientError } from './errors.js';
 import {
   buildQuery,
@@ -57,14 +61,25 @@ function buildRequest(
   headers: Record<string, string>,
 ): { url: string; init: RequestInit } {
   const hasBody = spec.body !== undefined;
+  const multipart = spec.body instanceof FormData;
+  const requestHeaders = { ...headers };
+  if (multipart) {
+    for (const key of Object.keys(requestHeaders))
+      if (key.toLowerCase() === 'content-type') delete requestHeaders[key];
+  }
   return {
     url: joinUrl(effective.baseURL, spec.path) + buildQuery(spec.query),
     init: {
       method: spec.method,
-      headers: hasBody
-        ? { 'content-type': 'application/json', ...headers }
-        : headers,
-      body: hasBody ? JSON.stringify(spec.body) : undefined,
+      headers:
+        hasBody && !multipart
+          ? { 'content-type': 'application/json', ...requestHeaders }
+          : requestHeaders,
+      body: multipart
+        ? (spec.body as FormData)
+        : hasBody
+          ? JSON.stringify(spec.body)
+          : undefined,
       credentials: effective.credentials,
     },
   };
@@ -108,17 +123,21 @@ export function createOvClient(options: OvClientOptions = {}): OvClient {
      */
     resolved?: OvResolvedOptions,
   ): Promise<{ response: Response; effective: OvResolvedOptions }> {
+    const observer = observation(spec as ObservedSpec);
     const effective = resolved ?? (await resolveFor(defaults, spec.options));
     const { url, init } = buildRequest(effective, spec, {
       ...headers,
       ...effective.headers,
     });
     const active = signal ?? effective.signal;
+    if (observer) {
+      observer.phase = 'send';
+      observer.signal = active;
+    }
     try {
-      return {
-        response: await fetchImpl(url, { ...init, signal: active }),
-        effective,
-      };
+      const response = await fetchImpl(url, { ...init, signal: active });
+      observer?.response(response);
+      return { response, effective };
     } catch (error) {
       normalizeTransportError(error, active);
     }
@@ -143,12 +162,16 @@ export function createOvClient(options: OvClientOptions = {}): OvClient {
     // `parseJson` reports "not JSON" with `undefined`, so a legitimate `null` is
     // kept: otherwise a `null` body becomes the string `"null"` and the caller's
     // type is silently different.
+    const observer = observation(spec as ObservedSpec);
+    if (observer) observer.phase = 'read-body';
     const raw = await readText(response, effective.signal);
+    observer?.capture(raw);
     const parsed = parseJson(raw);
     const body = parsed !== undefined ? parsed : raw.trim() ? raw : undefined;
 
+    if (observer) observer.phase = 'business-envelope';
     if (!response.ok) throw toClientError(response, body);
-    throwIfErrorEnvelope(response, body);
+    throwIfErrorEnvelope(response, body, observer?.business);
 
     const envelope = readEnvelope(body);
     return {
@@ -165,9 +188,13 @@ export function createOvClient(options: OvClientOptions = {}): OvClient {
     async request<TResult>(spec: OvRequestSpec): Promise<TResult> {
       if (spec.responseType === 'blob') {
         const { response, effective } = await send(spec);
+        const observer = observation(spec as ObservedSpec);
+        if (observer) observer.phase = 'read-body';
         if (!response.ok) {
           // 失败响应仍是 JSON 外壳，先解析才能保留服务端的错误码。
           const raw = await readText(response, effective.signal);
+          observer?.capture(raw);
+          if (observer) observer.phase = 'business-envelope';
           throw toClientError(response, parseJson(raw) ?? raw);
         }
         return (await readBlob(response, effective.signal)) as TResult;

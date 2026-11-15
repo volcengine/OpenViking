@@ -544,7 +544,7 @@ async def test_studio_full_configuration_preview_and_save_are_root_only(
 
 @pytest.mark.parametrize(
     "memory_type",
-    ["profile", "preferences", "entities", "events", "soul", "identity"],
+    ["profile", "preferences", "entities", "events"],
 )
 async def test_account_memory_templates_publish_and_reset(
     lightweight_admin_client,
@@ -568,8 +568,6 @@ async def test_account_memory_templates_publish_and_reset(
         "events",
         "preferences",
         "entities",
-        "soul",
-        "identity",
     }
     assert all(item["status"] == "system_default" for item in initial.json()["result"]["templates"])
     assert path not in fs.agfs._files
@@ -579,8 +577,6 @@ async def test_account_memory_templates_publish_and_reset(
         "events": ("event_name", "summary"),
         "preferences": ("topic", "content"),
         "entities": ("category", "name", "content"),
-        "soul": ("core_truths", "boundaries", "vibe", "continuity"),
-        "identity": ("creature", "name", "vibe", "avatar", "emoji", "introduction"),
     }[memory_type]
     body = {
         "description": "Remember business facts in {{ language.lower() }}.",
@@ -589,11 +585,8 @@ async def test_account_memory_templates_publish_and_reset(
             for name in editable_fields
         ],
     }
-    if memory_type in {"events", "soul", "identity"}:
-        variable = {"events": "summary", "soul": "core_truths", "identity": "introduction"}[
-            memory_type
-        ]
-        body["content_template"] = "# Business\n{{ " + variable + " }}"
+    if memory_type == "events":
+        body["content_template"] = "# Business\n{{ summary }}"
     publish = await client.put(f"{root}/{memory_type}", json=body, headers=headers)
     assert publish.status_code == 200, publish.text
     result = publish.json()["result"]
@@ -697,11 +690,7 @@ async def test_account_memory_template_yaml_uses_literal_multiline_strings(
         for kind in EDITABLE_MEMORY_TEMPLATE_FIELDS
         for edit in ("exact", "description", "field_description")
     ]
-    + [
-        (kind, edit)
-        for kind in ("events", "soul", "identity")
-        for edit in ("rstrip", "newline", "crlf", "heading")
-    ],
+    + [(kind, edit) for kind in ("events",) for edit in ("rstrip", "newline", "crlf", "heading")],
 )
 async def test_account_memory_templates_default_form_roundtrip(
     lightweight_admin_client,
@@ -731,7 +720,7 @@ async def test_account_memory_templates_default_form_roundtrip(
             if f["name"] in EDITABLE_MEMORY_TEMPLATE_FIELDS[memory_type]
         ],
     }
-    if memory_type in ("events", "soul", "identity"):
+    if memory_type == "events":
         original = defaults["content_template"]
         body["content_template"] = {
             "rstrip": original.rstrip(),
@@ -792,7 +781,7 @@ def _editable_template_form(defaults, memory_type):
             if field["name"] in EDITABLE_MEMORY_TEMPLATE_FIELDS[memory_type]
         ],
     }
-    if memory_type in ("events", "soul", "identity"):
+    if memory_type == "events":
         body["content_template"] = defaults["content_template"]
     return body
 
@@ -804,7 +793,7 @@ def _editable_template_form(defaults, memory_type):
         for kind, fields in EDITABLE_MEMORY_TEMPLATE_FIELDS.items()
         for module in ("description", *fields)
     ]
-    + [(kind, "content_template") for kind in ("events", "soul", "identity")],
+    + [(kind, "content_template") for kind in ("events",)],
 )
 async def test_account_memory_templates_module_reset_clears_override(
     lightweight_admin_client, lightweight_admin_app, template_account, memory_type, module
@@ -1147,7 +1136,7 @@ async def test_account_memory_templates_range_values_are_checked_at_render_time(
 
 @pytest.mark.parametrize(
     "memory_type, field_name",
-    [("events", "summary"), ("soul", "core_truths"), ("identity", "introduction")],
+    [("events", "summary")],
 )
 @pytest.mark.parametrize("formatting", [".strip().upper()", " | trim | upper"])
 async def test_account_memory_templates_string_formatting_reaches_file_body(
@@ -1212,7 +1201,7 @@ async def test_account_memory_templates_description_only_keeps_safe_deployment_m
 
 @pytest.mark.parametrize(
     "memory_type, field_name",
-    [("events", "summary"), ("soul", "core_truths"), ("identity", "introduction")],
+    [("events", "summary")],
 )
 @pytest.mark.parametrize("request_kind", ["description_only", "empty", "roundtrip"])
 async def test_account_memory_templates_inherit_exact_deployment_body(
@@ -1401,9 +1390,7 @@ async def test_account_memory_templates_old_content_can_be_read_replaced_and_res
         assert path + ".backup" not in fs.agfs._files
 
 
-@pytest.mark.parametrize(
-    "memory_type", ["profile", "events", "preferences", "entities", "soul", "identity"]
-)
+@pytest.mark.parametrize("memory_type", ["profile", "events", "preferences", "entities"])
 async def test_account_memory_templates_locked_fields_cannot_be_modified(
     lightweight_admin_client,
     lightweight_admin_app,
@@ -1419,7 +1406,7 @@ async def test_account_memory_templates_locked_fields_cannot_be_modified(
     fs = lightweight_admin_app.state.fake_service.viking_fs
     original = dict(fs.agfs._files)
     editable = {"description", "fields"}
-    if memory_type in {"events", "soul", "identity"}:
+    if memory_type == "events":
         editable.add("content_template")
     invalid = [
         {key: None if value is not None else "changed"}
@@ -1457,7 +1444,7 @@ async def test_account_memory_templates_locked_fields_cannot_be_modified(
         invalid.extend(
             {"fields": [{"name": name, "description": "changed"}]} for name in ("goal", "ranges")
         )
-    if memory_type in {"events", "soul", "identity"}:
+    if memory_type == "events":
         invalid.extend([{"content_template": None}, {"content_template": " "}])
     for body in invalid:
         response = await client.put(url, json=body, headers=headers)
@@ -1653,11 +1640,11 @@ async def test_account_memory_templates_commit_keeps_snapshot_through_file_write
 
     account_id, headers = template_account
     fs = lightweight_admin_app.state.fake_service.viking_fs
-    url = f"/api/v1/admin/accounts/{account_id}/memory-templates/soul"
+    url = f"/api/v1/admin/accounts/{account_id}/memory-templates/events"
     template = {
         "description": "ACCOUNT_DESCRIPTION",
-        "content_template": "# OLD_TEMPLATE\n{{ core_truths }}",
-        "fields": [{"name": "core_truths", "description": "Business core values"}],
+        "content_template": "# OLD_TEMPLATE\n{{ summary }}",
+        "fields": [{"name": "summary", "description": "Business summary"}],
     }
     assert (
         await lightweight_admin_client.put(url, json=template, headers=headers)
@@ -1669,10 +1656,11 @@ async def test_account_memory_templates_commit_keeps_snapshot_through_file_write
         "openviking.storage.viking_fs",
     ):
         monkeypatch.setattr(f"{module}.get_viking_fs", lambda: fs)
+    monkeypatch.setattr("openviking.session.compressor_v3.ensure_agent_file", AsyncMock())
     initialized = []
 
     async def initialize(registry, ctx, allowed_memory_types=None):
-        initialized.append(registry.get("soul").filename_template)
+        initialized.append(registry.get("events").filename_template)
 
     monkeypatch.setattr(MemoryTypeRegistry, "initialize_memory_files", initialize)
     # Deliberately retain a cached deployment registry: request snapshots must win.
@@ -1685,7 +1673,7 @@ async def test_account_memory_templates_commit_keeps_snapshot_through_file_write
         AsyncMock(return_value=updater),
     )
     ctx = RequestContext(user=UserIdentifier(account_id, "alice"), role=Role.USER)
-    uri = "viking://user/alice/memories/soul.md"
+    uri = "viking://user/alice/memories/events/test.md"
 
     def orchestrator(**kwargs):
         provider = kwargs["context_provider"]
@@ -1693,7 +1681,7 @@ async def test_account_memory_templates_commit_keeps_snapshot_through_file_write
 
         async def run():
             # A publish during the LLM call must not switch the writer's template.
-            changed = {**template, "content_template": "# NEW_TEMPLATE\n{{ core_truths }}"}
+            changed = {**template, "content_template": "# NEW_TEMPLATE\n{{ summary }}"}
             assert (
                 await lightweight_admin_client.put(url, json=changed, headers=headers)
             ).status_code == 200
@@ -1702,9 +1690,14 @@ async def test_account_memory_templates_commit_keeps_snapshot_through_file_write
                 errors=[],
                 upsert_operations=[
                     ResolvedOperation(
-                        memory_type="soul",
+                        memory_type="events",
                         uris=[uri],
-                        memory_fields={"core_truths": "Business fact"},
+                        memory_fields={
+                            "event_name": "test",
+                            "goal": "test",
+                            "ranges": "0",
+                            "summary": "Business fact",
+                        },
                     )
                 ],
             ), []
@@ -1719,12 +1712,12 @@ async def test_account_memory_templates_commit_keeps_snapshot_through_file_write
         await compressor._extract_user_memories(
             messages=[Message(id="m1", role="user", parts=[TextPart("Business fact")])],
             ctx=ctx,
-            allowed_memory_types={"soul"},
+            allowed_memory_types={"events"},
         )
     finally:
         await updater.close()
     resolver.get_vlm.assert_awaited_once_with(account_id)
-    assert initialized == ["soul.md"]
+    assert initialized == [get_default_registry().get("events").filename_template]
     content = MemoryFileUtils.read(fs.files[uri], uri=uri).content
     assert "# OLD_TEMPLATE" in content and "Business fact" in content
     assert "# NEW_TEMPLATE" not in content

@@ -6,6 +6,8 @@ const messages = {
   toolInput: 'Input',
   toolOutput: 'Output',
   similarity: 'Similarity',
+  session: 'Session',
+  locateSession: 'Locate session in the file browser',
   sessionHistory: 'Session history',
   newSession: 'New session',
   emptySessions: 'No sessions yet',
@@ -21,11 +23,13 @@ const messages = {
   welcomeTitle: 'Welcome to VikingBot',
   welcomeDescription:
     'Connect your resources, memories and context to turn your data into usable knowledge.',
-  placeholder: 'Ask VikingBot anything',
+  placeholder: 'Ask questions about your directories',
   send: 'Send',
   stop: 'Stop',
-  attach: 'Attach files',
+  attach: 'Add resources',
   removeAttachment: 'Remove attachment',
+  uploadingAttachment: 'Uploading…',
+  attachmentUploadFailed: 'Attachment upload failed',
   copy: 'Copy',
   copied: 'Copied',
   reasoning: 'Reasoning',
@@ -43,3 +47,13 @@ const messages = {
 } satisfies Required<VikingBotLabels>;
 
 export default messages;
+
+export const renderErrors = {
+  bot: 'Conversation could not be displayed.',
+  list: 'Message list could not be displayed.',
+  message: 'Message could not be displayed.',
+  composer: 'Input area could not be displayed.',
+  interaction: 'Interaction form could not be displayed.',
+  header: 'Conversation toolbar could not be displayed.',
+  footer: 'Conversation footer could not be displayed.',
+};

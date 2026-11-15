@@ -388,6 +388,37 @@ func (c *Client) SetTags(ctx context.Context, uri string, tags []string, opts *S
 	return result, err
 }
 
+// BatchSetTags updates retrieval tags for multiple URIs.
+func (c *Client) BatchSetTags(ctx context.Context, uris []string, tags []string, opts *SetTagsOptions) (map[string]any, error) {
+	if opts == nil {
+		opts = &SetTagsOptions{Mode: "replace"}
+	}
+	mode := opts.Mode
+	if mode == "" {
+		mode = "replace"
+	}
+	if tags == nil {
+		tags = []string{}
+	}
+	normalized := make([]string, len(uris))
+	for index, uri := range uris {
+		normalized[index] = NormalizeURI(uri)
+	}
+	payload := map[string]any{
+		"uris":      normalized,
+		"tags":      tags,
+		"mode":      mode,
+		"recursive": opts.Recursive,
+	}
+	setAny(payload, "telemetry", opts.Telemetry)
+	if err := mergeExtraProtected(payload, opts.Extra, "uris", "tags", "mode", "recursive", "telemetry"); err != nil {
+		return nil, err
+	}
+	var result map[string]any
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/content/batch_set_tags", nil, payload, &result)
+	return result, err
+}
+
 // Reindex triggers reindexing for a URI.
 func (c *Client) Reindex(ctx context.Context, uri string, opts *ReindexOptions) (map[string]any, error) {
 	if opts == nil {

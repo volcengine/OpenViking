@@ -86,7 +86,7 @@ from openviking.utils.git_auth import (
 )
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.media_processor import _smart_stem
-from openviking.utils.network_guard import ensure_public_remote_target
+from openviking.utils.network_guard import RequestValidator, ensure_public_remote_target
 from openviking.utils.path_safety import normalize_storage_target_uri
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking.utils.skill_processor import SkillProcessingPreparation, SkillProcessor
@@ -133,6 +133,7 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "enforce_public_remote_targets",
         "resource_lock",
         "stage_callback",
+        "target_was_reserved",
         "args",
         "strict",
         "source_name",
@@ -340,6 +341,7 @@ class ResourceService:
                 "temp_file_id",
                 "git_head_sha_hint",
                 "resource_lock",
+                "target_was_reserved",
             }:
                 continue
             try:
@@ -715,6 +717,7 @@ class ResourceService:
             await self._viking_fs.rm(
                 root_uri,
                 recursive=True,
+                no_vector=True,
                 ctx=ctx,
                 lease_ref=resource_lock,
             )
@@ -939,6 +942,9 @@ class ResourceService:
                         viking_fs=self._viking_fs,
                         ctx=ctx,
                     )
+            internal_kwargs["target_was_reserved"] = (
+                msg.cleanup_empty_target_on_failure and not msg.defer_target_resolution
+            )
             if msg.defer_target_resolution:
                 from openviking_cli.utils.uri import VikingURI
 
@@ -1174,6 +1180,7 @@ class ResourceService:
             source_info = await self._preflight_git_source(
                 path,
                 auth_config=preflight_git_auth,
+                request_validator=processor_kwargs.get("request_validator"),
                 branch=processor_kwargs.get("branch") or processor_kwargs.get("ref"),
                 commit=processor_kwargs.get("commit"),
             )
@@ -1663,6 +1670,7 @@ class ResourceService:
         source: str,
         *,
         auth_config: Optional[GitHttpAuthConfig] = None,
+        request_validator: Optional[RequestValidator] = None,
         branch: Optional[str] = None,
         commit: Optional[str] = None,
     ) -> _ResourceSourceInfo:
@@ -1692,15 +1700,15 @@ class ResourceService:
             ref = "HEAD"
             ls_remote_args = ["git", "ls-remote", repo_url, "HEAD"]
 
+        env = build_git_http_auth_env(auth_config, repo_url) if auth_config is not None else None
+        env = overlay_parser_subprocess_env(
+            ParserNetworkContext(ParserNetworkOperation.GIT_COMMAND, repo_url),
+            env,
+            request_validator=request_validator,
+        )
+
         proc = None
         try:
-            env = (
-                build_git_http_auth_env(auth_config, repo_url) if auth_config is not None else None
-            )
-            env = overlay_parser_subprocess_env(
-                ParserNetworkContext(ParserNetworkOperation.GIT_COMMAND, repo_url),
-                env,
-            )
             proc = await asyncio.create_subprocess_exec(
                 *ls_remote_args,
                 env=env,
@@ -2903,11 +2911,11 @@ class ResourceService:
                 unregister_telemetry(telemetry_id)
 
     async def cancel_skill_processing(self, task_id: str, ctx: RequestContext) -> None:
-        """Stop one failed update's work before its caller restores the old package."""
+        """Stop one failed update's work before its caller releases the package lock."""
         from openviking.service.task_tracker import get_task_tracker
 
         tracker = get_task_tracker()
-        task = await tracker.cancel_skill_update_for_rollback(
+        task = await tracker.cancel_skill_processing(
             task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
         )
         if task is None:

@@ -1,4 +1,5 @@
 import WikiDiscussSvg from '../../../icons/svg/dashboards/discuss.svg?react';
+import FileLinkSvg from '../../../icons/svg/dashboards/file-link.svg?react';
 import WikiHistorySvg from '../../../icons/svg/dashboards/history.svg?react';
 import WikiSuccessSvg from '../../../icons/svg/dashboards/success.svg?react';
 import WikiEditSvg from '../../../icons/svg/dashboards/edit.svg?react';
@@ -16,6 +17,8 @@ import DocumentSvg from '../../../icons/svg/file.svg?react';
 import FolderSvg from '../../../icons/svg/folder.svg?react';
 import FolderOpenSvg from '../../../icons/svg/folder-open.svg?react';
 import PdfSvg from '../../../icons/svg/pdf.svg?react';
+import CheckSvg from '../../../icons/svg/scope-switcher/check.svg?react';
+import CopySvg from '../../../icons/svg/file-preview/copy.svg?react';
 import SpaceSvg from '../../../icons/svg/scope-switcher/space.svg?react';
 import UserSvg from '../../../icons/svg/scope-switcher/user.svg?react';
 import { swatches } from '../../../icons/library-swatches.json';
@@ -101,6 +104,8 @@ export const WikiConflictBoardIcon = createIcon(
 );
 export const SpaceIcon = createIcon(SpaceSvg, 'SpaceIcon');
 export const UserIcon = createIcon(UserSvg, 'UserIcon');
+export const CheckIcon = createIcon(CheckSvg, 'CheckIcon');
+export const CopyIcon = createIcon(CopySvg, 'CopyIcon');
 
 /**
  * 库的默认图标。库没有固定字形，设计稿里是一个按名称取色的圆形渐变底，因此这里
@@ -200,3 +205,5 @@ export const WikiSuccessIcon = createIcon(WikiSuccessSvg, 'WikiSuccessIcon');
 export const WikiHistoryIcon = createIcon(WikiHistorySvg, 'WikiHistoryIcon');
 
 export const WikiDiscussIcon = createIcon(WikiDiscussSvg, 'WikiDiscussIcon');
+
+export const FileLinkIcon = createIcon(FileLinkSvg, 'FileLinkIcon');

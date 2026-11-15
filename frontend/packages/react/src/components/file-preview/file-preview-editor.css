@@ -1,0 +1,110 @@
+.ov-file-preview__code-editor {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 120px;
+  overflow: hidden;
+}
+
+.ov-file-preview__code-editor .cm-editor {
+  height: 100%;
+  color: inherit;
+  background: none;
+}
+
+.ov-file-preview__code-editor .cm-editor.cm-focused {
+  outline: none;
+}
+
+.ov-file-preview__editor:not([data-pointer-focus])
+  .cm-editor:has(.cm-content:focus-visible) {
+  outline: 2px solid var(--ov-ui-file-preview-focus-ring);
+  outline-offset: -2px;
+}
+
+.ov-file-preview__code-editor .cm-scroller {
+  overflow: auto;
+  font-family: var(--ov-ui-font-mono, ui-monospace, monospace);
+  font-size: 14px;
+  line-height: 25px;
+}
+
+.ov-file-preview__code-editor .cm-content {
+  padding: 8px 0;
+}
+.ov-file-preview__code-editor .cm-line {
+  padding: 0 8px;
+}
+.ov-file-preview__code-editor .cm-gutters {
+  border: 0;
+  background: none;
+  color: var(--ov-ui-file-preview-text-muted);
+}
+.ov-file-preview__code-editor .cm-cursor {
+  border-left-color: var(--ov-ui-file-preview-text);
+}
+.ov-file-preview__code-editor .cm-selectionBackground,
+.ov-file-preview__code-editor .cm-content ::selection {
+  background: var(
+    --ov-ui-color-primary-light,
+    var(--ov-ui-primary-light-default)
+  );
+}
+.ov-file-preview__code-editor
+  :is(
+    .ov-file-preview__token--comment,
+    .ov-file-preview__token--prolog,
+    .ov-file-preview__token--doctype,
+    .ov-file-preview__token--cdata
+  ) {
+  color: var(--ov-ui-file-preview-text-muted);
+}
+.ov-file-preview__code-editor
+  :is(
+    .ov-file-preview__token--punctuation,
+    .ov-file-preview__token--operator,
+    .ov-file-preview__token--entity,
+    .ov-file-preview__token--url
+  ) {
+  color: var(--ov-ui-file-preview-text);
+}
+.ov-file-preview__code-editor
+  :is(
+    .ov-file-preview__token--property,
+    .ov-file-preview__token--tag,
+    .ov-file-preview__token--constant,
+    .ov-file-preview__token--symbol,
+    .ov-file-preview__token--deleted,
+    .ov-file-preview__token--keyword
+  ) {
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+}
+.ov-file-preview__code-editor
+  :is(.ov-file-preview__token--boolean, .ov-file-preview__token--number) {
+  color: var(--ov-ui-color-syntax-number, var(--ov-ui-syntax-number-default));
+}
+.ov-file-preview__code-editor
+  :is(
+    .ov-file-preview__token--selector,
+    .ov-file-preview__token--attr-name,
+    .ov-file-preview__token--string,
+    .ov-file-preview__token--char,
+    .ov-file-preview__token--builtin,
+    .ov-file-preview__token--inserted
+  ) {
+  color: var(--ov-ui-color-status-success, var(--ov-ui-status-success-default));
+}
+.ov-file-preview__code-editor
+  :is(
+    .ov-file-preview__token--atrule,
+    .ov-file-preview__token--attr-value,
+    .ov-file-preview__token--function,
+    .ov-file-preview__token--class-name
+  ) {
+  color: var(--ov-ui-color-error, var(--ov-ui-error-default));
+}
+.ov-file-preview__code-editor .ov-file-preview__token--bold {
+  font-weight: bold;
+}
+.ov-file-preview__code-editor .ov-file-preview__token--italic {
+  font-style: italic;
+}

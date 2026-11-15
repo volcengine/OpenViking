@@ -149,7 +149,7 @@ Run `ov --help` and `ov <command> --help` for the exact command surface of your 
 - `cp` - Copy a file, or copy a directory recursively with `-r`.
 - `mv` - Move or rename a resource.
 - `stat` - Show resource metadata.
-- `attrs` - Get logical extended attributes.
+- `attrs` - Get logical extended attributes or update tags for one or multiple URIs.
 - `get` - Download a file to a local path.
 
 ```bash

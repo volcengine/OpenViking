@@ -1,8 +1,9 @@
-import { Input } from '../../shared/components/input/input.js';
+import { Input } from '../../shared/primitives/input/input.js';
+import { Empty } from '../../shared/primitives/empty/empty.js';
 import type { Locale } from '../../shared/locale.js';
 import { useEffect, useId, useMemo, useState } from 'react';
 import type { SenderProps } from '@ark-design/ui/sender';
-import { usePortalTheme } from '../../shared/components/tooltip/use-portal-theme.js';
+import { usePortalTheme } from '../../shared/primitives/tooltip/use-portal-theme.js';
 import { FileTree } from '../file-tree/index.js';
 import type { FileTreeEntryRow } from '../file-tree/index.js';
 import type { VikingBotLabels } from './model.js';
@@ -138,7 +139,13 @@ export function ReferencePicker({
             editor ? { onMouseDown: (event) => event.preventDefault() } : {}
           }
           loadingFallback={<p role="status">{labels.loading}</p>}
-          emptyFallback={<p role="status">{labels.emptyReferences}</p>}
+          emptyFallback={
+            <Empty
+              size="compact"
+              illustration="search"
+              title={labels.emptyReferences}
+            />
+          }
           labels={{
             expand: labels.expandReference,
             collapse: labels.collapseReference,

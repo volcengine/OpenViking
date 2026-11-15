@@ -1,4 +1,4 @@
-import { Button } from '../../shared/components/button/button.js';
+import { Button } from '../../shared/primitives/button/button.js';
 import type { ReactNode } from 'react';
 
 import type { FilePreviewLabels } from './types.js';
@@ -100,32 +100,13 @@ export function LoadFailedState({
   );
 }
 
-/** 格式不支持态，带下载入口。An unsupported-format state with a download entry. */
+/** 格式不支持态；宿主操作由 actions 提供。Unsupported format; host commands use actions. */
 export function UnsupportedState({
   text,
-  onDownload,
 }: {
   text: Required<FilePreviewLabels>;
-  onDownload?: () => void;
 }) {
-  return (
-    <StatePanel
-      title={text.unsupported}
-      action={
-        onDownload ? (
-          <Button
-            size="small"
-            type="default"
-            htmlType="button"
-            className="ov-file-preview__button"
-            onClick={onDownload}
-          >
-            {text.download}
-          </Button>
-        ) : undefined
-      }
-    />
-  );
+  return <StatePanel title={text.unsupported} />;
 }
 
 /** 正文被截断时的提示，固定在正文下方。 */

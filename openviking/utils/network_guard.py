@@ -21,6 +21,11 @@ _LOCAL_HOSTNAMES = {
     "localhost",
     "localhost.localdomain",
 }
+# Alibaba ECS and EC2 IPv6 IMDS are outside the link-local address ranges.
+_METADATA_ADDRESSES = {
+    ipaddress.ip_address("100.100.100.200"),
+    ipaddress.ip_address("fd00:ec2::254"),
+}
 
 
 def _get_allowed_code_hosting_domains() -> set[str]:
@@ -88,19 +93,11 @@ def _resolve_host_addresses(host: str) -> set[str]:
     return addresses
 
 
-def _is_public_ip(address: str) -> bool:
-    try:
-        return ipaddress.ip_address(address).is_global
-    except ValueError:
-        return False
-
-
 def ensure_public_remote_target(source: str) -> None:
-    """Reject loopback, link-local, private, and other non-public targets.
+    """Reject unsafe destinations, including on configured code hosts.
 
-    Skips validation if:
-    - allow_private_networks is True in config
-    - Host is in any configured code platform domain list
+    Configured code hosts and allow_private_networks permit private networks,
+    but never loopback, link-local, unspecified, multicast or metadata targets.
     """
     host = extract_remote_host(source)
     if not host:
@@ -115,16 +112,6 @@ def ensure_public_remote_target(source: str) -> None:
             "loopback, link-local, private, and otherwise non-public destinations are not allowed."
         )
 
-    # Check if private networks are allowed globally
-    if _is_allow_private_networks():
-        return
-
-    # Check if host is in allowed code hosting domains
-    allowed_domains = _get_allowed_code_hosting_domains()
-    normalized_domains = {_normalize_host(d) for d in allowed_domains}
-    if normalized_host in normalized_domains:
-        return
-
     resolved_addresses = _resolve_host_addresses(host)
     if not resolved_addresses:
         raise PermissionDeniedError(
@@ -132,15 +119,35 @@ def ensure_public_remote_target(source: str) -> None:
             f"host '{host}' could not be resolved to a verifiable public address."
         )
 
-    non_public = sorted(addr for addr in resolved_addresses if not _is_public_ip(addr))
-    if non_public:
-        raise PermissionDeniedError(
-            "HTTP server only accepts public remote resource targets; "
-            f"host '{host}' resolves to non-public address '{non_public[0]}'. "
-            "To allow this, add the domain to its code.<platform>_domains list "
-            "or code.code_hosting_domains "
-            "or set allow_private_networks=true in your ov.conf."
-        )
+    allow_private = _is_allow_private_networks() or normalized_host in {
+        _normalize_host(d) for d in _get_allowed_code_hosting_domains()
+    }
+    for address in sorted(resolved_addresses):
+        ip = ipaddress.ip_address(address)
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
+        if (
+            ip.is_loopback
+            or ip.is_link_local
+            or ip.is_unspecified
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip in _METADATA_ADDRESSES
+        ):
+            raise PermissionDeniedError(
+                "HTTP server rejects unsafe non-public address "
+                f"'{address}' resolved from host '{host}'; "
+                "code hosting domain lists and allow_private_networks cannot override this restriction."
+            )
+
+        if not allow_private and not ip.is_global:
+            raise PermissionDeniedError(
+                "HTTP server only accepts public remote resource targets; "
+                f"host '{host}' resolves to non-public address '{address}'. "
+                "To allow this, add the domain to its code.<platform>_domains list "
+                "or code.code_hosting_domains "
+                "or set allow_private_networks=true in your ov.conf."
+            )
 
 
 def build_httpx_request_validation_hooks(

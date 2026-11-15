@@ -1499,10 +1499,14 @@ class SemanticTreeExecutor:
                 results.append(item)
         return results
 
-    def _is_stale(self) -> bool:
+    async def _is_stale(self) -> bool:
+        if not self._coalesce_key or self._coalesce_version <= 0:
+            return False
         from openviking.storage.queuefs.semantic_queue import is_semantic_coalesce_stale
 
-        return is_semantic_coalesce_stale(self._coalesce_key, self._coalesce_version)
+        return await is_semantic_coalesce_stale(
+            self._coalesce_key, self._coalesce_version, agfs=self._viking_fs._async_agfs
+        )
 
     async def _write_directory_semantics(
         self,

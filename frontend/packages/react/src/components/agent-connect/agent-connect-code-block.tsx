@@ -1,4 +1,5 @@
-import { Button } from '../../shared/components/button/button.js';
+import { useExposure } from '../../shared/analytics/use-exposure.js';
+import { Button } from '../../shared/primitives/button/button.js';
 import { useId } from 'react';
 import CopyIcon from '../../../../icons/svg/agent-connect/copy.svg?react';
 import EyeIcon from '../../../../icons/svg/agent-connect/eye.svg?react';
@@ -30,6 +31,7 @@ export function AgentConnectCodeBlock({
   onReveal,
   onCopy,
 }: CodeBlockProps) {
+  const exposure = useExposure('agent_connect_code_block_copy_show');
   const id = useId();
   const revealed = visibleBlockId === id;
   const hasKey = display !== copyText;
@@ -65,6 +67,7 @@ export function AgentConnectCodeBlock({
             </Button>
           ) : null}
           <Button
+            ref={exposure}
             size="mini"
             type="text"
             iconOnly

@@ -279,6 +279,8 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
     for module in ("semantic_processor", "semantic_executor", "semantic_lock"):
         monkeypatch.setattr(f"openviking.storage.queuefs.{module}.get_viking_fs", lambda: fs)
     agfs = _FakeAgfs()
+    monkeypatch.setattr(agfs, "revision_allocate_async", AsyncMock(return_value=1), raising=False)
+    monkeypatch.setattr(agfs, "revision_publish_async", AsyncMock(return_value=1), raising=False)
     store = PersistentTaskStore(agfs)
     tracker = TaskTracker(store)
     # A local completion must release the message lock without the next poll.

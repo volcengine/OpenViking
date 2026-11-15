@@ -1,2 +1,2 @@
-export { FilePreview, LoadingState } from './file-preview.js';
+export { FilePreview } from './file-preview.js';
 export type * from './types.js';

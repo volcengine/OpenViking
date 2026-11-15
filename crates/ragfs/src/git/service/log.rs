@@ -16,6 +16,12 @@ impl GitService {
             return Ok(Vec::new());
         }
 
+        if req.paths.is_some() {
+            if let Some(out) = self.log_with_snapshot_log(&req).await? {
+                return Ok(out);
+            }
+        }
+
         self.log_with_scan_limit(req, MAX_LOG_COMMITS_SCANNED).await
     }
 
@@ -95,6 +101,266 @@ impl GitService {
     }
 }
 
+impl GitService {
+    /// Try SnapshotLog fast path for filtered log requests.
+    async fn log_with_snapshot_log(
+        &self,
+        req: &LogRequest,
+    ) -> Result<Option<Vec<LogEntry>>, GitError> {
+        let Some(store) = self.snapshot_log_store.clone() else {
+            return Ok(None);
+        };
+        let Some(paths) = req.paths.as_ref() else {
+            return Ok(None);
+        };
+        let limits = store.limits();
+        if !crate::git::snapshot_log::can_index_account_branch(limits, &req.account, &req.branch)
+            || !crate::git::snapshot_log::can_index_paths(limits, paths)
+        {
+            return Ok(None);
+        }
+
+        let current_head = resolve_ref(
+            self.ref_store.as_ref(),
+            self.object_store.as_ref(),
+            &req.account,
+            &req.branch,
+        )
+        .await?;
+        let latest = match store
+            .load_latest_indexed_commit(&req.account, &req.branch)
+            .await
+        {
+            Ok(Some(latest)) => latest,
+            Ok(None) => {
+                self.trigger_snapshot_log_backfill(&req.account, &req.branch);
+                return Ok(None);
+            }
+            Err(err) => {
+                warn!(
+                    "snapshot log latest query failed for {}/{}: {}",
+                    req.account, req.branch, err
+                );
+                return Ok(None);
+            }
+        };
+        let latest_oid = match ObjectId::from_hex(latest.1.as_bytes()) {
+            Ok(oid) => oid,
+            Err(err) => {
+                warn!(
+                    "snapshot log latest oid is invalid for {}/{}: {}",
+                    req.account, req.branch, err
+                );
+                return Ok(None);
+            }
+        };
+
+        if latest_oid == current_head {
+            return self
+                .load_snapshot_log_entries(store.as_ref(), req, latest.0, req.limit)
+                .await;
+        }
+
+        match self
+            .scan_snapshot_log_tail(
+                req,
+                current_head,
+                latest_oid,
+                crate::git::snapshot_log::SNAPSHOT_LOG_TAIL_SCAN_LIMIT,
+            )
+            .await?
+        {
+            Some(tail) => {
+                self.trigger_snapshot_log_backfill(&req.account, &req.branch);
+                self.merge_snapshot_log_tail(store.as_ref(), req, latest.0, tail)
+                    .await
+            }
+            None => {
+                let fresh_head = resolve_ref(
+                    self.ref_store.as_ref(),
+                    self.object_store.as_ref(),
+                    &req.account,
+                    &req.branch,
+                )
+                .await?;
+                if fresh_head == latest_oid {
+                    return self
+                        .load_snapshot_log_entries(store.as_ref(), req, latest.0, req.limit)
+                        .await;
+                }
+                if fresh_head != current_head {
+                    if let Some(tail) = self
+                        .scan_snapshot_log_tail(
+                            req,
+                            fresh_head,
+                            latest_oid,
+                            crate::git::snapshot_log::SNAPSHOT_LOG_TAIL_SCAN_LIMIT,
+                        )
+                        .await?
+                    {
+                        self.trigger_snapshot_log_backfill(&req.account, &req.branch);
+                        return self
+                            .merge_snapshot_log_tail(store.as_ref(), req, latest.0, tail)
+                            .await;
+                    }
+                }
+                warn!(
+                    "snapshot log latest is not on branch chain for {}/{}",
+                    req.account, req.branch
+                );
+                Ok(None)
+            }
+        }
+    }
+
+    /// Merge tail-scan matches with indexed history behind the latest boundary.
+    async fn merge_snapshot_log_tail(
+        &self,
+        store: &dyn crate::git::snapshot_log::SnapshotLogStore,
+        req: &LogRequest,
+        latest_id: i64,
+        mut tail: Vec<LogEntry>,
+    ) -> Result<Option<Vec<LogEntry>>, GitError> {
+        if tail.len() >= req.limit {
+            tail.truncate(req.limit);
+            return Ok(Some(tail));
+        }
+        let remaining = req.limit - tail.len();
+        let Some(indexed) = self
+            .load_snapshot_log_entries(store, req, latest_id, remaining)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let mut seen: HashSet<ObjectId> = tail.iter().map(|entry| entry.oid).collect();
+        for entry in indexed {
+            if seen.insert(entry.oid) {
+                tail.push(entry);
+            }
+            if tail.len() >= req.limit {
+                break;
+            }
+        }
+        Ok(Some(tail))
+    }
+
+    /// Load SnapshotLog hits and project them to `LogEntry` values.
+    async fn load_snapshot_log_entries(
+        &self,
+        store: &dyn crate::git::snapshot_log::SnapshotLogStore,
+        req: &LogRequest,
+        max_id: i64,
+        limit: usize,
+    ) -> Result<Option<Vec<LogEntry>>, GitError> {
+        let Some(paths) = req.paths.as_ref() else {
+            return Ok(None);
+        };
+        let hits = match store
+            .query_path_commits(&req.account, &req.branch, paths, max_id, limit)
+            .await
+        {
+            Ok(hits) => hits,
+            Err(err) => {
+                warn!(
+                    "snapshot log path query failed for {}/{}: {}",
+                    req.account, req.branch, err
+                );
+                return Ok(None);
+            }
+        };
+        let mut out = Vec::with_capacity(hits.len());
+        for hit in hits {
+            let oid = match ObjectId::from_hex(hit.commit_oid.as_bytes()) {
+                Ok(oid) => oid,
+                Err(err) => {
+                    warn!(
+                        "snapshot log hit oid is invalid for {}/{}: {}",
+                        req.account, req.branch, err
+                    );
+                    return Ok(None);
+                }
+            };
+            let meta = match load_commit_meta(self.object_store.as_ref(), &req.account, &oid).await
+            {
+                Ok(meta) => meta,
+                Err(err) => {
+                    warn!(
+                        "snapshot log hit commit is unreadable for {}/{}: {}",
+                        req.account, req.branch, err
+                    );
+                    return Ok(None);
+                }
+            };
+            out.push(log_entry_from_meta(oid, meta));
+        }
+        Ok(Some(out))
+    }
+
+    /// Scan HEAD toward latest indexed commit, returning tail matches only.
+    async fn scan_snapshot_log_tail(
+        &self,
+        req: &LogRequest,
+        head: ObjectId,
+        latest_oid: ObjectId,
+        max_commits_scanned: usize,
+    ) -> Result<Option<Vec<LogEntry>>, GitError> {
+        let paths = req.paths.as_ref().expect("filtered request");
+        let mut next_oid = Some(head);
+        let mut next_meta: Option<CommitMeta> = None;
+        let mut scanned = 0usize;
+        let mut out = Vec::new();
+
+        while let Some(commit_oid) = next_oid {
+            if commit_oid == latest_oid {
+                return Ok(Some(out));
+            }
+            let meta = match next_meta.take() {
+                Some(meta) => meta,
+                None => {
+                    load_commit_meta(self.object_store.as_ref(), &req.account, &commit_oid).await?
+                }
+            };
+            let parent_oid = meta.parents.first().copied();
+            let parent_meta = match parent_oid {
+                Some(parent_oid) => Some(
+                    load_commit_meta(self.object_store.as_ref(), &req.account, &parent_oid).await?,
+                ),
+                None => None,
+            };
+
+            scanned += 1;
+            if commit_touches_any_path(
+                self.object_store.as_ref(),
+                &req.account,
+                meta.tree,
+                parent_meta.as_ref().map(|parent| parent.tree),
+                paths,
+            )
+            .await?
+            {
+                out.push(log_entry_from_meta(commit_oid, meta));
+                if out.len() >= req.limit {
+                    return Ok(Some(out));
+                }
+            }
+
+            next_oid = parent_oid;
+            next_meta = parent_meta;
+            if scanned >= max_commits_scanned && next_oid.is_some() && next_oid != Some(latest_oid)
+            {
+                return Err(GitError::LogScanLimitExceeded {
+                    scanned,
+                    max_scanned: max_commits_scanned,
+                    matched: out.len(),
+                    requested: req.limit,
+                });
+            }
+        }
+
+        Ok(None)
+    }
+}
+
 fn log_entry_from_meta(oid: ObjectId, meta: CommitMeta) -> LogEntry {
     LogEntry {
         oid,
@@ -106,7 +372,9 @@ fn log_entry_from_meta(oid: ObjectId, meta: CommitMeta) -> LogEntry {
     }
 }
 
-pub(super) fn normalize_log_paths(paths: Option<Vec<String>>) -> Result<Option<Vec<String>>, GitError> {
+pub(super) fn normalize_log_paths(
+    paths: Option<Vec<String>>,
+) -> Result<Option<Vec<String>>, GitError> {
     let Some(mut paths) = paths else {
         return Ok(None);
     };

@@ -1,3 +1,4 @@
+import '../packages/react/test/helpers/browser-env.mjs';
 import assert from 'node:assert/strict';
 import { access, readFile } from 'node:fs/promises';
 import test from 'node:test';
@@ -20,7 +21,7 @@ test('all public package targets exist in the build', async () => {
   }
 });
 
-test('JavaScript entries resolve and import without browser globals', async () => {
+test('JavaScript entries expose their API in the browser environment', async () => {
   for (const [entry, target] of Object.entries(manifest.exports)) {
     if (typeof target === 'string') continue;
     const specifier = entry.replace(/^\./, manifest.name);
@@ -58,6 +59,17 @@ test('business entries expose components without headless Hooks', async () => {
   }
 });
 
+test('VikingBot chat hooks remain internal to Console', () => {
+  assert.throws(
+    () => import.meta.resolve('@openviking/react/modules/viking-bot'),
+    {
+      code: 'ERR_PACKAGE_PATH_NOT_EXPORTED',
+    },
+  );
+  assert.equal('./hooks/viking-bot' in manifest.exports, false);
+  assert.equal('./modules/viking-bot/style.css' in manifest.exports, false);
+});
+
 test('public stylesheets resolve through package exports', async () => {
   for (const entry of Object.keys(manifest.exports)) {
     if (!entry.endsWith('.css')) continue;
@@ -77,8 +89,8 @@ test('Modal remains internal and has no root or subpath API', async () => {
   for (const path of [
     'components/modal',
     'components/modal/style.css',
-    'shared/components/modal/modal.js',
-    'shared/components/modal/style.css',
+    'shared/primitives/modal/modal.js',
+    'shared/primitives/modal/style.css',
   ]) {
     assert.throws(() => import.meta.resolve(`@openviking/react/${path}`), {
       code: 'ERR_PACKAGE_PATH_NOT_EXPORTED',

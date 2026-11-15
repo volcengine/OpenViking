@@ -119,6 +119,7 @@ export function dashboardDemoResponse(url: URL): Response | undefined {
             name: 'Release verification',
             created_at: '2026-11-09T12:03:00Z',
             description: 'Verify approvals and rollback conditions.',
+            outcome: 'success',
           },
         ],
         total: 1,
@@ -163,6 +164,7 @@ export const experienceViewData: ExperienceDashboardData = {
       uri: DEMO_EXPERIENCE,
       name: 'release-check.md',
       modTime: '2026-11-09 12:03',
+      isUpdated: true,
     },
   ],
   outcomes: [
@@ -176,6 +178,7 @@ export const experienceViewData: ExperienceDashboardData = {
       name: 'Release verification',
       created_at: '2026-11-09T12:03:00Z',
       description: 'Verify approvals and rollback conditions.',
+      outcome: 'success',
     },
   ],
   trajectoryTotal: 1,

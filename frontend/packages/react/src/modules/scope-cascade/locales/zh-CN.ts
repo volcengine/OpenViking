@@ -1,3 +1,4 @@
+import type { renderErrors as EnglishRenderErrors } from './en-US.js';
 import type enUS from './en-US.js';
 
 const messages: typeof enUS = {
@@ -6,3 +7,7 @@ const messages: typeof enUS = {
   retry: '重试',
 };
 export default messages;
+
+export const renderErrors = {
+  selector: '作用域选择器显示失败',
+} satisfies Record<keyof typeof EnglishRenderErrors, string>;

@@ -1,4 +1,4 @@
-import { Button } from '../../shared/components/button/button.js';
+import { Button } from '../../shared/primitives/button/button.js';
 import { Bubble } from '@ark-design/ui/bubble';
 import { ErrorCard } from '@ark-design/ui/error-card';
 
@@ -101,7 +101,7 @@ export function VikingBotMessageRow({
   );
   return (
     <article
-      className={`ov-viking-bot__message ov-viking-bot__message--${message.role}`}
+      className={`ov-viking-bot__message ov-viking-bot__message--${message.role}${message.answerSummary ? ' ov-viking-bot__message--answers' : ''}`}
     >
       {message.role === 'user' ? (
         <UserMessageGroup

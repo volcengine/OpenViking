@@ -188,7 +188,7 @@ This endpoint is the core entry point for resource management. It supports vario
 | instruction | string | No | "" | Processing instructions for semantic extraction (experimental feature) |
 | wait | bool | No | False | Whether to wait for semantic processing and vectorization to complete before returning |
 | timeout | float | No | None | Deprecated: accepted for compatibility and ignored; configure HTTP timeouts on the client |
-| strict | bool | No | False | Whether to use strict mode |
+| strict | bool | No | False | Strict scanner/parser checks; false allows partial first native imports only, while incomplete updates always fail |
 | ignore_dirs | string | No | None | Directory names to ignore (comma-separated) |
 | include | string | No | None | File patterns to include (glob) |
 | exclude | string | No | None | File patterns to exclude (glob) |
@@ -240,13 +240,54 @@ This endpoint is the core entry point for resource management. It supports vario
 - If the request omits the app pair, user-token watches use `FEISHU_APP_ID` and `FEISHU_APP_SECRET`, or `feishu.app_id` and `feishu.app_secret` in `ov.conf`. Feishu refresh tokens are bound to their issuing app, so whichever app credentials are used must match the supplied user token.
 - Watch task token state and request-supplied app credentials are stored in the internal `viking://resources/.watch_tasks.json` control file and hidden from watch API/MCP/CLI responses. If VikingFS file encryption is enabled, this control file is encrypted at rest; otherwise the server-side control file contains this private state in plaintext.
 - For local directory inputs, scanning respects `.gitignore` files (root and nested) with standard Git semantics; `ignore_dirs`, `include`, and `exclude` further refine what is ingested.
-- Directory ingestion is best-effort only when at least one selected file succeeds: failed files are reported in `meta.failed_files` while successful files are committed. Leaf failures from nested ZIP files are reported with archive-qualified paths such as `bundle.zip/path/to/file` and retain their remote task IDs. If no file succeeds, or the filters select no processable files, the task fails and no empty resource directory is retained.
+- First native directory ingestion is best-effort in non-strict mode only when at least one selected file succeeds: failed files are reported in `meta.failed_files` while successful files are committed. Leaf failures from nested ZIP files are reported with archive-qualified paths such as `bundle.zip/path/to/file` and retain their remote task IDs. If no file succeeds, or the filters select no processable files, the task fails and no empty resource directory is retained.
 - `args.parse_mode=no_split` still invokes the normal format Parser. PDF, Word, PowerPoint, HTML, and other supported documents are converted to Markdown, but heading-, paragraph-, and size-based splitting is skipped. A directory import applies this independently to each supported document and continues to honor `.gitignore`, filters, and `preserve_structure`. Directory files configured for Understanding fall back to their native Parser in this mode; a file type without native parsing support is recorded in `meta.failed_files` without preventing other selected files from succeeding.
 - For a single-file input in `no_split` mode, when parsing produces exactly one visible file and `to` is omitted, that file is stored directly under the resolved parent (for example, `guide.md` becomes `viking://resources/guide.md`). No wrapper directory or directory-level `.abstract.md` / `.overview.md` is created. If parsing also produces images or other visible files, the wrapper directory is retained. An explicit `to` is always preserved as the exact final URI.
 - `no_split` changes only the stored Markdown layout. Semantic processing, file vectorization, and any internal embedding chunking remain unchanged. Relative Markdown links are resolved against the same no-split output layout, so links do not point to split-only paths. Understanding is not called for directory files in this mode.
 - To create or update plain text directly, use [content/write](12-content.md#write) instead of `add_resource`. Semantic processing and embeddings are refreshed automatically after resource ingestion and content writes.
 
 #### 3. Usage Examples
+
+##### Non-strict first imports
+
+For a new target's first native import, `strict=false` (the default) permits
+successful documents to be committed when some selected documents fail. The
+result reports `status="partial"`, `import_complete=false`, and `failed_files`.
+`strict=true` refuses incomplete results. Unsupported formats and deliberate
+filters retain the existing scanner behavior; no new import-policy option is added.
+
+**Existing-target updates are unchanged:** actual read/parse failures reject the
+round, even with `strict=false`. Old content, tags, indexes, target/child ACLs and
+ancestor summaries are not deleted, quarantined or rebuilt. Complete updates use
+the existing pipeline. Automatic source-revocation cleanup is outside this change.
+
+The first-import gate checks the final URI under its target lock: the current
+job owns the new reservation, the target has no business/summary content, the
+account-scoped vector inventory is empty. Completed Task and Watch execution
+history is not queried: after all old content, metadata and index/ACL records
+have been removed, the same URI can be newly reserved for a partial import.
+Old empty directories, orphan index/ACL records, and a retry after a partial
+import are updates, not first imports. Inventory errors
+fail closed, including when `build_index=false`.
+
+Authentication failures, root access failures and zero successful documents still
+fail. Async acceptance is not completion; inspect the Task result. A Watch's first
+partial result does not advance the source checkpoint. Later Watch rounds are
+updates and refuse incomplete snapshots. The change provides no cross-store
+atomic transaction or rollback guarantee. Delegated Connectors retain their
+existing external processing behavior.
+
+```python
+await client.add_resource(
+    "https://example.feishu.cn/wiki/your_node",
+    to="viking://resources/new-docs",
+    options={"strict": False, "args": {"feishu_recursive": True},
+             "watch_interval": 60},
+)
+```
+
+CLI defaults to non-strict first imports; `--strict` requires a complete first
+import. REST uses its existing `strict` field; MCP uses the non-strict default.
 
 These examples use the default asynchronous mode without waiting parameters. Save the returned `task_id` and query the [Task API](17-tasks.md). Read summaries or search the imported content only after the task reaches `completed`.
 

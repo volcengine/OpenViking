@@ -1,3 +1,4 @@
+import { Button } from '#demo-controls';
 import {
   ExperienceBoardIcon,
   WikiBoardIcon,
@@ -18,7 +19,6 @@ const INDICATOR = {
   flex: 'none',
   width: 24,
   height: 24,
-  marginLeft: 'auto',
   borderRadius: 4,
 } as const;
 
@@ -37,12 +37,17 @@ export function Indicator({
         ? text.conflict
         : text.wiki;
   return (
-    <button
-      type="button"
+    <Button
+      htmlType="button"
       title={label}
       aria-label={label}
       onClick={(event) => event.stopPropagation()}
-      style={{ ...INDICATOR, color: pending ? '#eb7d00' : '#0b9e6b' }}
+      style={{
+        ...INDICATOR,
+        color: pending
+          ? 'var(--ov-ui-color-warning, var(--ov-ui-warning-default))'
+          : 'var(--ov-ui-color-status-success, var(--ov-ui-status-success-default))',
+      }}
     >
       {indicator.kind === 'experience' ? (
         <ExperienceBoardIcon width={12} height={12} aria-hidden />
@@ -51,7 +56,7 @@ export function Indicator({
       ) : (
         <WikiBoardIcon width={12} height={12} aria-hidden />
       )}
-    </button>
+    </Button>
   );
 }
 

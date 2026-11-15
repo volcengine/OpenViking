@@ -10,6 +10,7 @@ HTMLElement.prototype.scrollIntoView = () => {};
 
 test('a selector opened after the tour claims Escape before the tour closes', async () => {
   const anchor = document.createElement('button');
+  anchor.getBoundingClientRect = () => new window.DOMRect(100, 100, 120, 32);
   document.body.append(anchor);
   let closed = 0;
   const view = await mount(

@@ -43,8 +43,8 @@ export function VikingBotIcon({
   const Icon = icons[name];
   return (
     <Icon
-      width={16}
-      height={16}
+      width={name === 'history' ? 12.667 : 16}
+      height={name === 'history' ? 12.667 : 16}
       aria-hidden={ariaLabel ? undefined : true}
       aria-label={ariaLabel}
       focusable="false"

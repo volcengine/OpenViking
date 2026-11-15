@@ -2,10 +2,46 @@
 
 For changes that should ship to npm, run `npm run changeset` from `frontend/`.
 Select `@openviking/react`, choose patch, minor, or major, and describe the
-change for package consumers. Commit the generated Markdown file with the PR.
+change for package consumers. Before committing, edit the generated Markdown
+file to include both language sections in the same file:
 
-Changesets remain available for preparing a stable version and changelog with
-`npm run version:react`. Merging a PR never publishes a stable version.
+```md
+---
+'@openviking/react': patch
+---
+
+## en-US
+
+Fix file preview navigation when opening a resource URI.
+
+## zh-CN
+
+修复打开资源 URI 时文件预览的导航行为。
+```
+
+Both sections are required and must describe the same change, including any
+breaking changes and migration steps. Keep package names and the version bump
+in one frontmatter block. Do not create a separate changeset for each language.
+Empty changesets created with `npm run changeset -- --empty` do not need notes.
+
+Run `npm run check:release-notes` before committing. CI checks for missing,
+duplicate or empty language sections and out-of-date documentation pages.
+Reviewers check that the two descriptions match.
+
+Run `npm run version:react` to prepare a stable version. Changesets consumes the
+files, updates versions and writes both languages into
+`packages/react/CHANGELOG.md` using the configured
+[changelog formatter](https://github.com/changesets/changesets/blob/main/docs/modifying-changelog-format.md).
+The command then updates the lockfile and generates the Chinese and English
+release-note pages under `docs/docs/{zh,en}/guide/changelog.md`. Commit these
+release materials together for review before publishing. Merging a PR never
+publishes a stable version.
+
+`CHANGELOG.md` is the archive after changeset files are consumed. Keep its
+language markers when correcting a released note, then run
+`npm run sync:release-notes`. Edit pending notes in their changeset files;
+do not edit the generated documentation pages. The documentation shows only
+the selected language and current package major, grouped by minor in descending release order. Only minor groups are collapsible, with the newest group expanded by default. All release content within a group is displayed vertically. Older majors remain in the archive. Automatic beta builds are not listed.
 
 On the official repository, pushes to `main` that change
 `frontend/packages/react/src/**` or `frontend/packages/icons/**` automatically
@@ -17,12 +53,27 @@ by `-beta.<run>.<attempt>.g<commit>`. For example, stable `0.1.7` produces
 published with npm's `beta` dist-tag. Install with
 `npm install @openviking/react@beta`. Package and lockfile changes made by the
 workflow are temporary and are not committed back.
+During beta staging, release-note checks and generation use the latest stable
+version archived in `CHANGELOG.md`, preserving the prepared stable major even
+when npm's `latest` still belongs to an older major.
 
 For a stable release, manually run **React UI Release**, choose `latest`, and
 enter an exact stable version such as `0.1.8`. Select the branch or tag to
 release. Alternatively, push `react@<version>`; the tag must match the package
 manifest at that commit. Stable tags and manual runs are the only ways to
-publish `latest`. An already published version is skipped.
+publish `latest`. An already published npm version is skipped.
+
+Stable releases also create or update a GitHub Release at `react@<version>`,
+using that version's archived `en-US` and `zh-CN` notes from
+`packages/react/CHANGELOG.md`. Missing, empty or unpaired notes stop the workflow
+before npm publishing. The GitHub Release runs after npm succeeds; rerunning an
+already published stable version skips npm and repairs its GitHub Release.
+Manual stable releases create the tag at the selected commit if it is absent.
+React releases do not replace the repository's main-product Latest release.
+Beta runs only publish to npm.
+
+To backfill an existing stable tag, dispatch the current workflow from `main`
+with channel `latest` and the already published version.
 
 When a manual run selects a tag ref, the chosen channel and version inputs still
 control the release. Tag-to-manifest validation applies only to tag push events.

@@ -1,5 +1,5 @@
-import { Button } from '../../shared/components/button/button.js';
-import { Tooltip } from '../../shared/components/tooltip/tooltip.js';
+import { Button } from '../../shared/primitives/button/button.js';
+import { Tooltip } from '../../shared/primitives/tooltip/tooltip.js';
 import type { WikiDashboardAction } from './types.js';
 
 export function WikiActionButton({

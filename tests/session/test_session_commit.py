@@ -381,7 +381,7 @@ class TestCommit:
     ):
         memory_policy_provider = AsyncMock(
             return_value={
-                "memory_types": ["profile"],
+                "memory_types": ["profile", "soul", "identity"],
             }
         )
         session_with_messages._memory_policy_provider = memory_policy_provider

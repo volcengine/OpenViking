@@ -10,6 +10,16 @@
  * overriding the baseline, or adjusts just this component by overriding any
  * variable below.
  */
+.ov-viking-bot__reasoning-body {
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ov-viking-bot__submit-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .ov-viking-bot {
   --ov-viking-bot-radius: 6px;
   --ov-viking-bot-text: var(
@@ -149,6 +159,10 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
+}
+/* 消息区渲染失败时，兜底占满消息区并垂直居中。 */
+.ov-viking-bot__body > .ov-error-boundary {
+  flex: 1;
 }
 
 .ov-viking-bot__list {
@@ -328,6 +342,28 @@
   font-size: 12px;
 }
 
+.ov-viking-bot__notice.ov-viking-bot__notice--error {
+  border: 1px solid
+    color-mix(in srgb, var(--ov-viking-bot-danger) 35%, var(--ov-viking-bot-bg));
+  background: color-mix(
+    in srgb,
+    var(--ov-viking-bot-danger) 8%,
+    var(--ov-viking-bot-bg)
+  );
+  padding: 10px 12px;
+  color: var(--ov-viking-bot-danger);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.ov-viking-bot__notice--error svg [stroke] {
+  stroke: currentColor;
+}
+
+.ov-viking-bot__notice--error svg [fill]:not([fill='none']) {
+  fill: currentColor;
+}
+
 .ov-viking-bot__message--system {
   align-items: center;
 }
@@ -415,16 +451,6 @@
 .ov-viking-bot .ark-agentic-sender-send-btn--submit-button:active,
 .ov-viking-bot__interaction .ark-agentic-sender-send-btn--submit-button:active {
   background-color: var(--ov-ui-color-primary, var(--ov-viking-bot-accent));
-}
-
-.ov-viking-bot .ark-agentic-ask-human-custom-editing,
-.ov-viking-bot__interaction .ark-agentic-ask-human-custom-editing {
-  border-color: var(--ov-ui-color-primary, var(--ov-viking-bot-accent));
-}
-
-.ov-viking-bot .ark-agentic-ask-human-step-arrow:focus-visible,
-.ov-viking-bot__interaction .ark-agentic-ask-human-step-arrow:focus-visible {
-  outline-color: var(--ov-ui-color-primary, var(--ov-viking-bot-accent));
 }
 
 .ov-viking-bot .ark-agentic-bubble__edit-btn--confirm,

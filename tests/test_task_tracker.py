@@ -8,6 +8,7 @@ import json
 import threading
 import time
 from copy import deepcopy
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, create_autospec
 
 import pytest
@@ -237,6 +238,43 @@ async def test_wait_reconciles_when_notification_is_lost(monkeypatch, tracker: T
     await tracker.complete(task.task_id, {}, **_owner_kwargs())
     assert (await asyncio.wait_for(waiter, 1)).status is TaskStatus.COMPLETED
     assert store._task_changes.waiter_count == 0
+
+
+@pytest.mark.parametrize("entry", ["wait", "wait_for_work", "wait_for_task_work"])
+async def test_wait_caps_backoff_at_one_second(monkeypatch, tracker: TaskTracker, entry):
+    from openviking.service import task_tracker
+
+    task = await tracker.create("add_resource", task_id="task", **_owner_kwargs())
+    if entry != "wait":
+        await tracker.register_work(task.task_id, "work", "Embedding", **_owner_kwargs())
+    delays: list[float] = []
+    now = 0.0
+
+    async def wait_once(futures, *, timeout):
+        nonlocal now
+        assert len(delays) < 8, "Waiter did not observe completion"
+        delays.append(timeout)
+        now += timeout
+        if len(delays) == 8:
+            if entry == "wait":
+                await tracker.complete(task.task_id, {}, **_owner_kwargs())
+            else:
+                await tracker.mark_work_done(task.task_id, "work", **_owner_kwargs())
+        return set(), set(futures)
+
+    # Advance only the Tracker's clock; leave asyncio's real timeout clock intact.
+    monkeypatch.setattr(task_tracker, "time", SimpleNamespace(monotonic=lambda: now))
+    monkeypatch.setattr(asyncio, "wait", wait_once)
+
+    args = [["work"]] if entry == "wait_for_work" else []
+    result = await asyncio.wait_for(
+        getattr(tracker, entry)(task.task_id, *args, **_owner_kwargs()), 1
+    )
+    if entry == "wait":
+        assert result.status is TaskStatus.COMPLETED
+    else:
+        assert result is None
+    assert delays == pytest.approx([0.05, 0.1, 0.2, 0.4, 0.8, 1.0, 1.0, 1.0])
 
 
 async def test_wait_for_task_work_uses_short_initial_poll(monkeypatch, tracker: TaskTracker):
@@ -827,8 +865,10 @@ async def test_list_limit(tracker: TaskTracker):
 
 
 async def test_list_can_hide_internal_tasks_before_limit(tracker: TaskTracker):
-    visible = await tracker.create("add_resource", meta={}, **_owner_kwargs())
-    internal = await tracker.create("add_resource", meta={"internal": True}, **_owner_kwargs())
+    visible = await tracker.create("add_resource", task_id="task-0", meta={}, **_owner_kwargs())
+    internal = await tracker.create(
+        "add_resource", task_id="task-1", meta={"internal": True}, **_owner_kwargs()
+    )
 
     assert [task.task_id for task in await tracker.list_tasks(limit=1)] == [internal.task_id]
     assert [task.task_id for task in await tracker.list_tasks(limit=1, include_internal=False)] == [

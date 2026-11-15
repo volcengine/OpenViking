@@ -4,7 +4,7 @@ import { createElement as h, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
-import { act, click, key } from './helpers/tui-dom.mjs';
+import { act, click, key } from './helpers/command-console-dom.mjs';
 import './helpers/console-dom.mjs';
 
 const { ReferenceTags } = await import(
