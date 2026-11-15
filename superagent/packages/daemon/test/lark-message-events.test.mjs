@@ -29,30 +29,39 @@ function fixture(t) {
   return { store, resolve };
 }
 
+const mine = 'om_mine1234567890';
+// The bot's own reply in the target's thread, as the journal records it.
+function botSent(store, { messageId = mine, threadId = 'omt_thread1234567' } = {}) {
+  store.db.prepare(`INSERT INTO cognition_journal (epoch, kind, at_ms, chat_id, thread_id, message_id, actor, text, detail_json)
+    VALUES (0, 'outbound', ?, ?, ?, ?, 'me', 'hi', '{"connectorInstance":"lark"}')`).run(Date.now(), chatId, threadId, messageId);
+}
+
 const reaction = (overrides = {}) => ({
   header: { event_id: 'evt-reaction', event_type: 'im.message.reaction.created_v1', create_time: String(Date.now()) },
   event: { message_id: target, reaction_type: { emoji_type: 'THUMBSUP' }, operator_type: 'user',
     user_id: { open_id: userId }, action_time: String(Date.now()), ...overrides },
 });
 
-it('places a reaction in the thread of the message it is on', (t) => {
-  const { resolve } = fixture(t);
-  const event = resolve(reaction());
+it('places a reaction on the bot\'s message in that message\'s thread', (t) => {
+  const { store, resolve } = fixture(t);
+  botSent(store);
+  const event = resolve(reaction({ message_id: mine }));
   assert.equal(deterministicFilter(event, config), null);
   assert.equal(event.chatId, chatId);
   assert.equal(event.threadId, 'omt_thread1234567');
-  assert.equal(event.parentId, target);
+  assert.equal(event.parentId, mine);
   assert.match(event.messageId, /^re_/);
   assert.equal(event.senderId, userId);
-  assert.deepEqual(event.replyRoute, { action: 'message.reply', input: { message_id: target } });
+  assert.deepEqual(event.replyRoute, { action: 'message.reply', input: { message_id: mine } });
   const line = formatInboundLine(event);
-  assert.match(line, /^\[chat=oc_reacttest123456 thread=omt_thread1234567 source=lark msg=re_\w+ event=evt-reaction target=om_target12345678 /);
+  assert.match(line, /^\[chat=oc_reacttest123456 thread=omt_thread1234567 source=lark msg=re_\w+ event=evt-reaction target=om_mine1234567890 /);
   assert.match(line, /\] \[reaction THUMBSUP\]$/);
 });
 
 it('names a removed reaction', (t) => {
-  const { resolve } = fixture(t);
-  const raw = reaction();
+  const { store, resolve } = fixture(t);
+  botSent(store);
+  const raw = reaction({ message_id: mine });
   raw.header.event_type = 'im.message.reaction.deleted_v1';
   assert.equal(resolve(raw).content, '[removed reaction THUMBSUP]');
 });
@@ -69,8 +78,10 @@ it('places a recall and credits its author', (t) => {
   assert.equal(event.content, '[recalled a message]');
 });
 
-it('drops the bot\'s own reactions and events about unknown messages', (t) => {
+it('drops the bot\'s own reactions, reactions on someone else\'s message, and events about unknown messages', (t) => {
   const { resolve } = fixture(t);
+  assert.equal(deterministicFilter(resolve(reaction()), config), 'unsupported_message_type',
+    'a reaction on a person\'s message is theirs to read, not a request to the Agent');
   assert.equal(deterministicFilter(resolve(reaction({ operator_type: 'app', user_id: undefined, app_id: 'cli_x' })), config),
     'unsupported_message_type');
   assert.equal(deterministicFilter(resolve(reaction({ message_id: 'om_unknown1234567' })), config),
@@ -79,12 +90,36 @@ it('drops the bot\'s own reactions and events about unknown messages', (t) => {
 
 it('places a reaction on the bot\'s own message and drops the recall of one', (t) => {
   const { store, resolve } = fixture(t);
-  store.db.prepare(`INSERT INTO cognition_journal (epoch, kind, at_ms, chat_id, thread_id, message_id, actor, text, detail_json)
-    VALUES (0, 'outbound', ?, ?, NULL, 'om_mine1234567890', 'me', 'hi', '{"connectorInstance":"lark"}')`).run(Date.now(), chatId);
-  const event = resolve(reaction({ message_id: 'om_mine1234567890' }));
+  botSent(store, { threadId: null });
+  const event = resolve(reaction({ message_id: mine }));
   assert.equal(deterministicFilter(event, config), null);
   assert.equal(event.chatId, chatId);
   assert.equal(event.threadId, null);
   assert.equal(deterministicFilter(resolve({ header: { event_id: 'evt-recall-mine', event_type: 'im.message.recalled_v1' },
     event: { message_id: 'om_mine1234567890', chat_id: chatId, recall_type: 'message_owner' } }), config), 'unsupported_message_type');
+});
+
+it('takes a reaction only on the bot\'s newest message in that thread', (t) => {
+  const { store, resolve } = fixture(t);
+  botSent(store);
+  botSent(store, { messageId: 'om_mineLater12345' });
+  botSent(store, { messageId: 'om_mineElsewhere1', threadId: 'omt_other12345678' });
+  assert.equal(deterministicFilter(resolve(reaction({ message_id: mine })), config), 'unsupported_message_type',
+    'an older message of the bot\'s is not where people answer it');
+  assert.equal(deterministicFilter(resolve(reaction({ message_id: 'om_mineLater12345' })), config), null);
+  assert.equal(deterministicFilter(resolve(reaction({ message_id: 'om_mineElsewhere1' })), config), null,
+    'each thread has its own newest message');
+});
+
+it('a reaction never makes a reply stale; a recall does', (t) => {
+  const { store, resolve } = fixture(t);
+  const target = store.db.prepare("SELECT seq, scope_key FROM connector_events WHERE event_id = 'evt-target'").get();
+  botSent(store);
+  const placed = store.ingest(resolve(reaction({ message_id: mine })));
+  assert.equal(placed.inbound.scopeKey, target.scope_key, 'the reaction lands in the same thread');
+  assert.equal(placed.filterReason, null);
+  assert.equal(store.newerAcceptedSeq(target.scope_key, target.seq), null);
+  store.ingest(resolve({ header: { event_id: 'evt-recall-2', event_type: 'im.message.recalled_v1' },
+    event: { message_id: 'om_target12345678', chat_id: 'oc_reacttest123456', recall_time: String(Date.now()), recall_type: 'message_owner' } }));
+  assert.notEqual(store.newerAcceptedSeq(target.scope_key, target.seq), null);
 });

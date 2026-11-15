@@ -6,16 +6,18 @@ import { normalizeEvent } from './event.mjs';
 export const LARK_MESSAGE_EVENT_KINDS = new Set(['message.recalled', 'message.reaction.created', 'message.reaction.deleted']);
 
 // Places a Lark recall or reaction in the conversation of the message it is
-// about, from the daemon's own history: a message someone sent here, or one
-// the bot sent. Reactions name no chat, and a recall's thread is only known
-// here. One about an unknown message, the bot's own reaction, or the recall of
-// the bot's own message is not shown to the Agent.
+// about, from the daemon's own history: a recall by the message someone sent
+// here, a reaction only by the bot's newest message in that chat/thread, where
+// people answer it with an OK. Reactions name no chat, and a recall's thread
+// is only known here. Anything else (an unknown message, a reaction on another
+// message, the bot's own reaction, the recall of the bot's own message) is not
+// shown to the Agent.
 export function resolveLarkMessageEvent(db, event) {
   const target = event.data.target_message_id;
   const instance = event.connectorInstance;
   const ignore = () => ({ ...event, data: { ...event.data, supported: false } });
   if (event.actor?.type === 'app') return ignore();
-  const inbound = db.prepare(`SELECT chat_id, chat_type, tenant_key, thread_id, thread_root_id, sender_id, sender_type
+  const inbound = event.kind !== 'message.recalled' ? null : db.prepare(`SELECT chat_id, chat_type, tenant_key, thread_id, thread_root_id, sender_id, sender_type
     FROM connector_events WHERE connector_instance = ? AND message_id = ? AND kind = 'message.created'
     ORDER BY seq DESC LIMIT 1`).get(instance, target);
   let place = inbound;
@@ -24,6 +26,12 @@ export function resolveLarkMessageEvent(db, event) {
       WHERE COALESCE(json_extract(detail_json, '$.connectorInstance'), json_extract(detail_json, '$.source'), 'lark') = ?
         AND message_id = ? AND actor = 'me' AND chat_id IS NOT NULL ORDER BY seq DESC LIMIT 1`).get(instance, target);
     if (!own || event.kind === 'message.recalled') return ignore();
+    const newest = db.prepare(`SELECT message_id FROM cognition_journal
+      WHERE COALESCE(json_extract(detail_json, '$.connectorInstance'), json_extract(detail_json, '$.source'), 'lark') = ?
+        AND actor = 'me' AND chat_id = ? AND thread_id IS ? AND message_id IS NOT NULL AND status = 'COMMITTED'
+        AND COALESCE(json_extract(detail_json, '$.action'), 'message.send') IN ('message.send', 'message.reply')
+      ORDER BY seq DESC LIMIT 1`).get(instance, own.chat_id, own.thread_id ?? null);
+    if (newest && newest.message_id !== target) return ignore();
     const chat = db.prepare(`SELECT chat_type, tenant_key FROM connector_events
       WHERE connector_instance = ? AND chat_id = ? AND kind = 'message.created' ORDER BY seq DESC LIMIT 1`).get(instance, own.chat_id);
     if (!chat) return ignore();
