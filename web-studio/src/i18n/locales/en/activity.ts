@@ -150,6 +150,7 @@ const activity = {
     resizeContext: 'Resize filesystem width',
     resizeAction: 'Resize Terminal and Agent width',
     readFailed: 'Failed to read {{uri}}',
+    resourceActionsMenu: 'Resource actions',
     transferResource: {
       copyButton: 'Copy',
       moveButton: 'Move / Rename',

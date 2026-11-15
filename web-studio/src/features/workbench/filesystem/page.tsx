@@ -5,6 +5,7 @@ import {
   BotIcon,
   ClipboardIcon,
   CopyIcon,
+  EllipsisIcon,
   HistoryIcon,
   PackageIcon,
   PanelRightCloseIcon,
@@ -50,6 +51,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from '#/shared/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '#/shared/ui/dropdown-menu'
 
 import { AgentPanel } from '#/features/workbench/filesystem/components/agent-panel'
 import {
@@ -618,10 +625,10 @@ function FilesystemWorkbench() {
         />
 
         <main className="flex min-h-0 min-w-0 flex-1 flex-col lg:border-b-0">
-          <div className="flex min-h-14 flex-wrap items-center gap-2 border-b px-4 py-2">
+          <div className="flex min-h-14 items-center gap-3 border-b px-4">
             <button
               type="button"
-              className="min-w-0 flex-1 basis-full truncate rounded px-1.5 py-1 text-left font-mono text-xs font-semibold text-foreground transition-colors hover:bg-muted sm:basis-0"
+              className="min-w-0 flex-1 truncate rounded px-1.5 py-1 text-left font-mono text-xs font-semibold text-foreground transition-colors hover:bg-muted"
               title={selectedUri}
               onClick={() => void revealResource(selectedUri)}
             >
@@ -668,35 +675,43 @@ function FilesystemWorkbench() {
                 </Button>
               )}
             {canDeleteSelectedUri ? (
-              <div className="flex shrink-0 items-center gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setTransferOperation('copy')}
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="ghost"
+                      title={t('resourceActionsMenu')}
+                      aria-label={t('resourceActionsMenu')}
+                    />
+                  }
                 >
-                  <CopyIcon className="size-4" />
-                  {t('transferResource.copyButton')}
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setTransferOperation('move')}
-                >
-                  <PencilIcon className="size-4" />
-                  {t('transferResource.moveButton')}
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="destructive"
-                  onClick={() => setDeleteDialogOpen(true)}
-                >
-                  <Trash2Icon className="size-4" />
-                  {t('deleteResource.button')}
-                </Button>
-              </div>
+                  <EllipsisIcon className="size-4" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-auto min-w-40">
+                  <DropdownMenuItem
+                    onClick={() => setTransferOperation('copy')}
+                  >
+                    <CopyIcon />
+                    {t('transferResource.copyButton')}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => setTransferOperation('move')}
+                  >
+                    <PencilIcon />
+                    {t('transferResource.moveButton')}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    variant="destructive"
+                    className="[&[data-variant=destructive]]:text-destructive! [&[data-variant=destructive]_*]:text-destructive!"
+                    onClick={() => setDeleteDialogOpen(true)}
+                  >
+                    <Trash2Icon />
+                    {t('deleteResource.button')}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             ) : null}
             {canManageSelectedUri ? (
               <Button

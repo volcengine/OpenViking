@@ -143,6 +143,7 @@ const activity = {
     resizeContext: '调整文件系统宽度',
     resizeAction: '调整终端和 Agent 面板宽度',
     readFailed: '无法读取 {{uri}}',
+    resourceActionsMenu: '资源操作',
     transferResource: {
       copyButton: '复制',
       moveButton: '移动或重命名',
