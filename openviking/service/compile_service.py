@@ -12,6 +12,7 @@ from typing import Any, Mapping
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from openviking.concurrency import bounded_map
 from openviking.core.identifiers import validate_user_id
 from openviking.core.namespace import classify_uri, uri_parts
 from openviking.core.path_variables import resolve_path_variables
@@ -1107,9 +1108,13 @@ class CompileService:
         allowed = await fs._can_access_many([item["uri"] for item in outputs], ctx)
         outputs = [item for item in outputs if allowed.get(item["uri"], False)]
         page = outputs[:limit]
-        for item in page:
+
+        async def fill_latest_snapshot(item: dict[str, Any]) -> None:
+            """Set an output's latest commit in place, using None for no history; errors propagate."""
             history = await fs.log(ctx=ctx, paths=[item["uri"]], limit=1)
             item["latest_snapshot_id"] = history[0]["oid"] if history else None
+
+        await bounded_map(page, fill_latest_snapshot, concurrency=8)
         return {"outputs": page, "next_cursor": page[-1]["uri"] if len(outputs) > limit else None}
 
     @staticmethod

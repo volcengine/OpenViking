@@ -563,6 +563,26 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
         await service.fs.show(output["latest_snapshot_id"], path=uri, ctx=ctx) == b"manual update"
     )
 
+    uris = [f"{TARGET}/{index:02}.md" for index in range(20)]
+    changes = [{"uri": uri, "change_type": "added"} for uri in reversed(uris)]
+    fs = service.viking_fs
+    active = peak = 0
+
+    async def log(**kwargs):
+        """Yield history reads so their overlap is observable."""
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0)
+        active -= 1
+        return [{"oid": kwargs["paths"][0]}]
+
+    monkeypatch.setattr(fs, "diff_paths", AsyncMock(return_value=changes))
+    monkeypatch.setattr(fs, "log", log)
+    read_outputs = service.compile.run_outputs
+    result = await read_outputs(compile_name, first.task_id, ctx, limit=20, cursor=None)
+    assert peak == 8 and [item["latest_snapshot_id"] for item in result["outputs"]] == uris
+
 
 @pytest.mark.parametrize("rule", [{"frequency": "daily", "hour": 10}, {"frequency": "weekly"}])
 def test_omitted_schedule_fields_spread_across_plans(rule):
