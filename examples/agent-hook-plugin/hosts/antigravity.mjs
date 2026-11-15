@@ -13,12 +13,19 @@ import { readFile } from "node:fs/promises";
 import { addAgentMessages, commitAgentSession } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
 import { filterCaptureTurns } from "../../memory-plugin-shared/lib/capture-utils.mjs";
 
-const USER_REQUEST = /<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>/;
+// The host wraps a typed request as `<USER_REQUEST>…</USER_REQUEST>` followed by
+// metadata blocks. Only that record is unwrapped, and only an envelope that
+// opens the record, so text that merely quotes the tags is kept verbatim.
+const USER_REQUEST = /^<USER_REQUEST>\s*([\s\S]*)\s*<\/USER_REQUEST>/;
 const INJECTED = /<openviking-context\b[^>]*>[\s\S]*?<\/openviking-context>/g;
 
 export function cleanAntigravityText(text) {
+  return String(text || "").replace(INJECTED, "").trim();
+}
+
+function userRequestText(text) {
   const raw = String(text || "");
-  return (raw.match(USER_REQUEST)?.[1] ?? raw).replace(INJECTED, "").trim();
+  return cleanAntigravityText(raw.match(USER_REQUEST)?.[1] ?? raw);
 }
 
 /** The user requests and text replies of finished steps after `afterStep`. */
@@ -34,10 +41,10 @@ export function buildAntigravityTurns(jsonl, afterStep = -1) {
     // A step still being written is read again by the next Stop.
     if (step.status && step.status !== "DONE") break;
     lastStep = index;
-    const role = step.type === "USER_INPUT" && step.source === "USER_EXPLICIT" ? "user"
-      : step.type === "PLANNER_RESPONSE" ? "assistant" : "";
-    const content = role ? cleanAntigravityText(step.content) : "";
-    if (content) turns.push({ role, content });
+    const turn = step.type === "USER_INPUT" && step.source === "USER_EXPLICIT"
+      ? { role: "user", content: userRequestText(step.content) }
+      : step.type === "PLANNER_RESPONSE" ? { role: "assistant", content: cleanAntigravityText(step.content) } : null;
+    if (turn?.content) turns.push(turn);
   }
   return { turns, lastStep };
 }

@@ -89,11 +89,20 @@ test("Antigravity recalls once per turn and captures only new transcript text", 
     assert.equal(commits.length, 1);
     assert.ok(commits[0].includes("ag-conv-1"));
 
-    // A second Stop sends only steps written since the first one.
-    appendFileSync(transcriptPath, step(5, { source: "USER_EXPLICIT", type: "USER_INPUT", content: "<USER_REQUEST>\nAnd the timeout?\n</USER_REQUEST>" })
-      + step(6, { source: "MODEL", type: "PLANNER_RESPONSE", content: "Thirty seconds.", status: "RUNNING" }));
+    // A second Stop sends only steps written since the first one. Replies that
+    // quote the host's request envelope keep their text.
+    const quoted = "The transcript wraps your prompt like this:\n<USER_REQUEST>your prompt</USER_REQUEST>\nKeep metadata separate.";
+    const template = "An empty template:\n```\n<USER_REQUEST></USER_REQUEST>\n```";
+    appendFileSync(transcriptPath, step(5, { source: "USER_EXPLICIT", type: "USER_INPUT", content: "<USER_REQUEST>\nHow is my prompt wrapped?\n</USER_REQUEST>" })
+      + step(6, { source: "MODEL", type: "PLANNER_RESPONSE", content: quoted })
+      + step(7, { source: "MODEL", type: "PLANNER_RESPONSE", content: template })
+      + step(8, { source: "MODEL", type: "PLANNER_RESPONSE", content: "Thirty seconds.", status: "RUNNING" }));
     await runHook("stop", base, env);
-    assert.deepEqual(messages.slice(2).map((message) => message.parts?.[0]?.text ?? message.content), ["And the timeout?"]);
+    assert.deepEqual(messages.slice(2).map((message) => message.parts?.[0]?.text ?? message.content), [
+      "How is my prompt wrapped?",
+      quoted,
+      template,
+    ]);
   } finally {
     server.close();
     rmSync(root, { recursive: true, force: true });
