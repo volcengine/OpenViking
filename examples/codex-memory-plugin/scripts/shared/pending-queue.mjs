@@ -249,6 +249,7 @@ export async function listPending() {
     if (!f.endsWith(".json")) continue;
     try {
       const entry = await readEntry(dir, f);
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
       entries.push({ filename: f, entry });
     } catch {
       // Corrupted file - skip.

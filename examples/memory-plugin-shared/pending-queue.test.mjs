@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readdir, utimes } from "node:fs/promises";
+import { readdir, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -41,6 +41,28 @@ test("enqueue deduplicates identical payloads", async () => {
     assert.equal(second.ok, true);
     assert.equal(second.deduped, true);
     assert.equal((await listPending()).length, 1);
+  });
+});
+
+test("replayPending skips non-object JSON without blocking healthy messages", async () => {
+  await withPendingDir(async (dir) => {
+    const invalid = [null, false, 42, "corrupt", []];
+    for (const [index, value] of invalid.entries()) {
+      await writeFile(join(dir, `invalid-${index}.json`), JSON.stringify(value));
+    }
+    const payload = { role: "user", content: "offline message" };
+    await enqueue("addMessage", "queue-corrupt", payload);
+
+    const calls = [];
+    const result = await replayPending(async (path, init) => {
+      calls.push({ path, body: JSON.parse(init.body) });
+      return { ok: true };
+    }, () => {});
+
+    assert.deepEqual(result, { replayed: 1, failed: 0, skipped: 0, deferred: 0 });
+    assert.deepEqual(calls, [{ path: "/api/v1/sessions/queue-corrupt/messages", body: payload }]);
+    assert.deepEqual(await listPending(), []);
+    assert.deepEqual((await readdir(dir)).sort(), invalid.map((_, index) => `invalid-${index}.json`));
   });
 });
 
