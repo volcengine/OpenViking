@@ -236,3 +236,64 @@ Blank context, overlong text, an out-of-range threshold, or extra parameters ret
 - [Rule validation (Beta)](../workflows/02-rule-validation.md)
 - [Background Tasks](./17-tasks.md)
 - [Server Rules configuration](../configuration/01-server.md#rules)
+
+
+## Opt-in automatic context delivery
+
+`POST /api/v1/search/search` accepts `rules` only in `mode="context"`:
+
+```json
+{
+  "query": "Prepare a release",
+  "mode": "context",
+  "max_tokens": 4000,
+  "rules": {"task_context": "Prepare a release", "max_tokens": 1500}
+}
+```
+
+MCP `search(mode="context")` accepts the same `rules` option and returns the Rule
+block before the ordinary memory text.
+
+Omitting `rules` preserves the existing response and performs no Rule lookup.
+`task_context` follows Rule Search validation (nonblank, at most 64,000 characters);
+`rule_probability_threshold` is optional and retains the Rule Search default.
+`rules.max_tokens` defaults to 1024 (64–32000), and is a cap **within**, not in
+addition to, the outer `max_tokens`. The complete matched Rule block, including
+conditions, exceptions and citations, is budgeted first. If it cannot fit, none
+of its Rules are injected; a bounded incomplete-check notice is returned instead.
+Ordinary context uses the remaining budget. Token counts are estimates, not a
+model-specific tokenizer guarantee.
+
+The response adds an independent `rules` object with `rendered`, `used_tokens`,
+`status`, and `delivery` (`complete`, `reason`, `rule_count`). `entries`, `rendered`
+and `digest` remain ordinary memory/resource/skill context. Consumers must inject
+`rules.rendered` separately, before their selected memory block; never summarize
+or truncate the Rule block. Empty memory or a `no_relevant` memory digest does not
+suppress Rules. `delivery.complete` describes delivery of the selected Rules, not
+proof that every relevant policy was retrieved or that an agent will obey it.
+
+The same authenticated request context is passed to Rule Search. A Rule lookup
+has a 10-second deadline; failure or oversized/incomplete delivery is explicitly
+marked incomplete while ordinary retrieval can continue. No Rule compilation or
+new policy storage is performed. Matching can make model calls and adds latency
+and provider cost. Cancellation is propagated.
+
+### Claude Code and Codex hooks
+
+In the existing `ovcli.conf` plugin section, opt in with:
+
+```json
+{"plugin": {"rulesAutoInject": true, "rulesMaxTokens": 1500}}
+```
+
+The environment equivalents are `OPENVIKING_RULES_AUTO_INJECT=true` and
+`OPENVIKING_RULES_MAX_TOKENS=1500`. Keep automatic recall enabled. User-prompt hooks
+supply the actual prompt after existing input filters, including short nonempty
+prompts, without requiring the model to invoke a tool. A filter that drops the
+prompt still prevents transmission. Rule text is kept outside both server-side
+memory rewriting and local memory compression. Older servers or incomplete
+responses produce an explicit incomplete-check notice, not a claim of no Rules.
+Other consumers using the shared recall block builders inherit the opt-in setting;
+custom/low-level integrations must explicitly forward and consume Rules. This does
+not add a Hermes prefetch trigger or a `PreToolUse` execution gate. Rule injection
+is advisory context delivery, not a security enforcement boundary.

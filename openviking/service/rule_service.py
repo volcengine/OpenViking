@@ -282,6 +282,12 @@ class RuleSearchRequest(BaseModel):
         return self
 
 
+class RuleContextRequest(RuleSearchRequest):
+    """Opt-in Rule lookup within a shared context budget."""
+
+    max_tokens: int = Field(default=1024, ge=64, le=32000)
+
+
 class RuleRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

@@ -31,6 +31,7 @@ CTX = RequestContext(user=UserIdentifier.the_default_user("test_user"), role=Rol
 
 # Every parameter the context path consumes, paired with a non-default value.
 CONTEXT_ONLY_ARGS = {
+    "rules": {"task_context": "release"},
     "query_expansion": "off",
     "max_tokens": 999,
     "quotas": {"events": 5},
@@ -175,11 +176,35 @@ def test_the_refusal_names_what_the_caller_typed():
     """The tool splits two router fields in two, and the caller has to hear their own name."""
     from openviking.server.routers.search import context_only_fields_error
 
-    message = context_only_fields_error({"detail": {"detail_by_category"}},
-                                        as_named_by_caller={"detail": {"detail_by_category"}})
+    message = context_only_fields_error(
+        {"detail": {"detail_by_category"}}, as_named_by_caller={"detail": {"detail_by_category"}}
+    )
     assert "detail_by_category" in message
 
-    both = context_only_fields_error({"detail": {"detail", "detail_by_category"}},
-                                     as_named_by_caller={"detail": {"detail", "detail_by_category"}})
+    both = context_only_fields_error(
+        {"detail": {"detail", "detail_by_category"}},
+        as_named_by_caller={"detail": {"detail", "detail_by_category"}},
+    )
     assert "detail_by_category" in both and "detail" in both
 
+
+@pytest.mark.asyncio
+async def test_context_mode_delivers_rules_even_without_memory(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from openviking.retrieve.context_assembler.models import AssembleResult
+
+    assemble = AsyncMock(
+        return_value=AssembleResult(
+            rules={"rendered": "Never publish credentials; except synthetic fixtures."},
+        )
+    )
+    monkeypatch.setattr(mcp_endpoint, "assemble_context", assemble)
+    text = await mcp_endpoint.search(
+        query="release",
+        mode="context",
+        rules={"task_context": "release"},
+    )
+    assert "except synthetic fixtures" in text
+    assert assemble.await_args.kwargs["ctx"] is CTX
+    assert assemble.await_args.kwargs["params"].rules["task_context"] == "release"

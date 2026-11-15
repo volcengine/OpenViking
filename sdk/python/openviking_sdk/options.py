@@ -37,7 +37,14 @@ class SearchOptions(FindOptions, total=False):
     search_type: Literal["semantic", "keywords"]
 
 
+class ContextRulesOptions(TypedDict, total=False):
+    task_context: str
+    max_tokens: int
+    rule_probability_threshold: float
+
+
 class SearchContextOptions(_ExtraOptions, total=False):
+    rules: ContextRulesOptions
     search_type: Literal["semantic", "keywords"]
     image: Any
     node_limit: int
@@ -260,6 +267,7 @@ class SearchContextEntry(TypedDict, total=False):
 
 
 class SearchContextResult(TypedDict, total=False):
+    rules: Dict[str, Any]
     entries: List[SearchContextEntry]
     rendered: str
     digest: str

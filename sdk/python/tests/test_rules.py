@@ -97,3 +97,15 @@ async def test_rule_search_posts_threshold_options():
             "rule_probability_threshold": 0.8,
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_search_context_forwards_rule_options_without_changing_the_task():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=SimpleNamespace())
+    client._handle_response_data = lambda _: {"result": {"rules": {"rendered": "Rule"}}}
+    options = {"rules": {"task_context": "release", "max_tokens": 256}}
+    result = await client.search_context("release", options=options)
+    assert client._request.await_args.kwargs["json"]["rules"] == options["rules"]
+    assert result["rules"]["rendered"] == "Rule"
+    await client.close()

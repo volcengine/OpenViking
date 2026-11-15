@@ -1497,3 +1497,225 @@ async def test_context_rerank_keeps_the_other_peer_penalty():
     )
 
     assert [(entry.uri, entry.score) for entry in result.entries] == [(own, 0.85)]
+
+
+async def test_rules_are_opt_in_and_share_the_total_context_budget():
+    from unittest.mock import AsyncMock
+
+    from openviking.utils.token_estimation import estimate_text_tokens
+
+    rule_text = "Never publish credentials. Exception: synthetic test fixtures only."
+    service = _service(hits=[], bodies={})
+    service.rules = SimpleNamespace(
+        search_rules=AsyncMock(
+            return_value={
+                "rules": [{"uri": "viking://user/test_user/memories/rules/release/key.md"}],
+                "rendered": rule_text,
+                "delivery": {"complete": True},
+            }
+        )
+    )
+    ctx = _ctx()
+    plain = await assemble_context(service=service, ctx=ctx, params=AssembleParams(query="release"))
+    assert "rules" not in plain.to_dict()
+    service.rules.search_rules.assert_not_awaited()
+
+    result = await assemble_context(
+        service=service,
+        ctx=ctx,
+        params=AssembleParams(
+            query="release",
+            max_tokens=128,
+            rules={"task_context": "release"},
+        ),
+    )
+    assert result.rules["rendered"] == rule_text
+    assert result.rules["delivery"]["complete"] is True
+    assert result.stats["used_tokens"] == estimate_text_tokens(rule_text)
+    assert result.stats["used_tokens"] <= 128
+    assert service.rules.search_rules.await_args.kwargs["ctx"] is ctx
+    assert service.rules.search_rules.await_args.args[0].task_context == "release"
+
+
+async def test_rules_survive_no_relevant_memory_rewrite(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    service = _service(
+        hits=[
+            {
+                "uri": f"{USER_ROOT}/memories/preferences/a.md",
+                "score": 0.8,
+                "abstract": "memory",
+            }
+        ],
+        bodies={},
+    )
+    service.rules = SimpleNamespace(
+        search_rules=AsyncMock(
+            return_value={
+                "rules": [{"uri": f"{USER_ROOT}/memories/rules/release/test.md"}],
+                "rendered": "Run tests before release, unless only documentation changed.",
+                "delivery": {"complete": True},
+            }
+        )
+    )
+    monkeypatch.setattr(pipeline_module, "server_rewrite_enabled", lambda _: True)
+    rewrite = AsyncMock(return_value=("", "no_relevant", None))
+    monkeypatch.setattr(pipeline_module, "rewrite_context", rewrite)
+    result = await assemble_context(
+        service=service,
+        ctx=_ctx(),
+        params=AssembleParams(
+            query="release",
+            rewrite=True,
+            rules={"task_context": "release"},
+        ),
+    )
+    assert result.rendered == result.digest == ""
+    assert "unless only documentation changed" in result.rules["rendered"]
+    assert "Run tests before release" not in rewrite.await_args.kwargs["rendered"]
+
+
+async def test_rule_budget_never_slices_constraints_and_charges_the_notice():
+    from unittest.mock import AsyncMock
+
+    service = _service(hits=[], bodies={})
+    service.rules = SimpleNamespace(
+        search_rules=AsyncMock(
+            return_value={
+                "rules": [{"uri": f"{USER_ROOT}/memories/rules/release/long.md"}],
+                "rendered": "NEVER release. " * 300 + "Exception: internal staging.",
+                "delivery": {"complete": True},
+            }
+        )
+    )
+    result = await assemble_context(
+        service=service,
+        ctx=_ctx(),
+        params=AssembleParams(
+            query="release",
+            max_tokens=64,
+            rules={"task_context": "release", "max_tokens": 64},
+        ),
+    )
+    assert result.rules["delivery"] == {
+        "complete": False,
+        "reason": "budget_exceeded",
+        "rule_count": 1,
+    }
+    assert "NEVER release" not in result.rules["rendered"]
+    assert "incomplete" in result.rules["rendered"]
+    assert 0 < result.stats["used_tokens"] <= 64
+
+
+async def test_rules_timeout_is_visible_but_cancellation_propagates(monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    import pytest
+
+    from openviking.retrieve.context_assembler import rules as rules_module
+
+    service = _service(hits=[], bodies={})
+
+    async def blocked(*args, **kwargs):
+        await asyncio.Event().wait()
+
+    service.rules = SimpleNamespace(search_rules=blocked)
+    monkeypatch.setattr(rules_module, "RULE_CONTEXT_TIMEOUT_SECONDS", 0.001)
+    params = AssembleParams(query="release", rules={"task_context": "release"})
+    result = await assemble_context(service=service, ctx=_ctx(), params=params)
+    assert result.rules["delivery"]["reason"] == "lookup_failed"
+    service.rules.search_rules = AsyncMock(side_effect=asyncio.CancelledError)
+    with pytest.raises(asyncio.CancelledError):
+        await assemble_context(service=service, ctx=_ctx(), params=params)
+
+
+async def test_empty_or_incomplete_rule_search_does_not_inject_service_guidance():
+    from unittest.mock import AsyncMock
+
+    service = _service(hits=[], bodies={})
+    lookup = AsyncMock(
+        return_value={
+            "rules": [],
+            "rendered": "No active compiled Rule met the thresholds.",
+            "delivery": {"complete": True},
+        }
+    )
+    service.rules = SimpleNamespace(search_rules=lookup)
+    params = AssembleParams(query="release", rules={"task_context": "release"})
+    empty = await assemble_context(service=service, ctx=_ctx(), params=params)
+    assert empty.rules["rendered"] == ""
+    assert empty.rules["delivery"]["complete"] is True
+    assert empty.stats["used_tokens"] == 0
+    lookup.return_value = {
+        "rules": [{"uri": f"{USER_ROOT}/memories/rules/release/a.md"}],
+        "rendered": "PARTIAL_RULE",
+        "delivery": {"complete": False},
+    }
+    incomplete = await assemble_context(service=service, ctx=_ctx(), params=params)
+    assert "PARTIAL_RULE" not in incomplete.rules["rendered"]
+    assert incomplete.rules["delivery"]["reason"] == "upstream_incomplete"
+
+
+async def test_rules_reserve_budget_before_memory_and_reject_an_oversized_digest(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from openviking.utils.token_estimation import estimate_text_tokens
+
+    service = _service(
+        hits=[
+            {
+                "uri": f"{USER_ROOT}/memories/preferences/a.md",
+                "score": 0.8,
+                "abstract": "Memory detail. " * 40,
+            }
+        ],
+        bodies={},
+    )
+    rule_text = "Never release without tests; except documentation-only changes. " * 4
+    service.rules = SimpleNamespace(
+        search_rules=AsyncMock(
+            return_value={
+                "rules": [{"uri": f"{USER_ROOT}/memories/rules/release/a.md"}],
+                "rendered": rule_text,
+                "delivery": {"complete": True},
+            }
+        )
+    )
+    rewrite = AsyncMock(return_value=("oversized digest " * 300, "ok", None))
+    monkeypatch.setattr(pipeline_module, "rewrite_context", rewrite)
+    for enabled in (False, True):
+        result = await assemble_context(
+            service=service,
+            ctx=_ctx(),
+            params=AssembleParams(
+                query="release",
+                max_tokens=128,
+                rewrite=enabled,
+                rules={"task_context": "release"},
+            ),
+        )
+        assert result.rules["rendered"] == rule_text
+        assert result.entries and result.rendered
+        assert result.digest == ""
+        assert estimate_text_tokens(rule_text + "\n\n" + result.rendered) <= 128
+        assert result.stats["used_tokens"] <= 128
+        if enabled:
+            assert result.stats["rewrite"] == "failed"
+    assert "Never release" not in rewrite.await_args.kwargs["rendered"]
+
+    # A complete block may consume the entire shared budget, leaving no memory.
+    service.rules.search_rules.return_value["rendered"] = "R" * (128 * 4)
+    full = await assemble_context(
+        service=service,
+        ctx=_ctx(),
+        params=AssembleParams(
+            query="release",
+            max_tokens=128,
+            rules={"task_context": "release"},
+        ),
+    )
+    assert full.rules["delivery"]["complete"] is True
+    assert full.entries == [] and full.rendered == ""
+    assert full.stats["used_tokens"] == 128

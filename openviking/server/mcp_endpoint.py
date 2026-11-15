@@ -88,7 +88,7 @@ from openviking.server.routers.search import context_only_fields_error
 from openviking.server.skill_ingest import install_skills
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import download_token_store, upload_token_store
-from openviking.service.rule_service import RuleSearchRequest
+from openviking.service.rule_service import RuleContextRequest, RuleSearchRequest
 from openviking.service.skill_sources import GIT_SKILL_SOURCE_PREFIXES
 from openviking.storage.acl import AclSpec
 from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
@@ -669,6 +669,7 @@ async def search(
     level: Optional[List[int]] = None,
     context_type: Optional[Union[str, List[str]]] = None,
     mode: Literal["list", "context"] = "list",
+    rules: Optional[RuleContextRequest] = None,
     query_expansion: Literal["off", "auto"] = "auto",
     max_tokens: Annotated[int, Field(ge=64, le=32000)] = DEFAULT_MAX_TOKENS,
     quotas: Optional[Dict[str, int]] = None,
@@ -725,6 +726,9 @@ async def search(
             service=service,
             ctx=ctx,
             params=AssembleParams(
+                rules=RuleContextRequest.model_validate(rules).model_dump()
+                if rules is not None
+                else None,
                 query=query,
                 search_type=search_type,
                 limit=limit,
@@ -745,11 +749,12 @@ async def search(
                 rewrite_max_bullets=rewrite_max_bullets,
             ),
         )
-        if result.digest.strip():
-            return result.digest
-        if result.rendered.strip():
-            return result.rendered
-        return "No matching context found."
+        memory = result.digest if result.digest.strip() else result.rendered
+        rule_context = result.rules["rendered"] if result.rules else ""
+        return (
+            "\n\n".join(block for block in (rule_context, memory) if block.strip())
+            or "No matching context found."
+        )
 
     # POST /search rejects these in list mode and this tool did not, so the two faces of
     # one feature disagreed about whether the request was valid. The list path calls
@@ -763,6 +768,7 @@ async def search(
     supplied_by_caller = {
         name: value
         for name, (value, default) in {
+            "rules": (rules, None),
             "query_expansion": (query_expansion, "auto"),
             "max_tokens": (max_tokens, DEFAULT_MAX_TOKENS),
             "quotas": (quotas, None),
