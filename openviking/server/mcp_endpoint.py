@@ -1511,6 +1511,40 @@ async def remember(messages: list[StoreMessage]) -> str:
     )
 
 
+# -- set_tags --------------------------------------------------------------
+
+
+@_mcp_error_results()
+@mcp.tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
+async def set_tags(
+    uri: str,
+    tags: Optional[List[str]] = None,
+    mode: Literal["replace", "append", "clear"] = "replace",
+    recursive: bool = False,
+) -> dict[str, Any]:
+    """Update k=v retrieval tags without rewriting content or rebuilding embeddings.
+
+    Uses the HTTP set_tags semantics: replace with omitted or empty tags is a
+    no-op; clear removes tags and ignores supplied values. recursive applies a
+    directory update to its descendants. Returns normalized requested tags and
+    update counts; unindexed targets do not gain vector records.
+    """
+    service = get_service()
+    ctx = _get_ctx()
+    uri = _resolve_mcp_workspace_uri(uri, ctx)
+    result = await service.fs.batch_set_tags(
+        uris=[uri],
+        tags=[] if mode == "clear" else tags or [],
+        mode=mode,
+        recursive=recursive,
+        ctx=ctx,
+    )
+    if result["failed"]:
+        error = result["failed"][0]["error"]
+        raise OpenVikingError(error["message"], code=error["code"])
+    return result["items"][0]
+
+
 # -- write -----------------------------------------------------------------
 
 
