@@ -816,6 +816,8 @@ class CompileLifecycle:
         progress = self._checkpoint(task).get("baseline") or {}
         run["status"] = "running"
         run["started_at"] = run["started_at"] or time.time()
+        # Snapshot failures must retain the start time for terminal run publication.
+        await self._save_run(task, run)
         if (
             compile_name
             and not classify_uri(request["skill"]).is_system

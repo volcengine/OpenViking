@@ -21,7 +21,7 @@ from openviking.service.external_task_service import ExternalTaskError, External
 from openviking.service.task_domain import TaskPatch, TaskRecord, TaskStatus
 from openviking.service.task_store import PersistentTaskStore
 from openviking.storage.errors import ResourceBusyError
-from openviking_cli.exceptions import ConflictError, InvalidArgumentError
+from openviking_cli.exceptions import ConflictError, InvalidArgumentError, PermissionDeniedError
 from tests.test_task_tracker import _FakeAgfs
 
 SOURCE = "viking://resources/source"
@@ -242,6 +242,18 @@ def compile_metric_events(monkeypatch):
         lambda name, payload: events.append((name, deepcopy(payload))),
     )
     return events
+
+
+@pytest.mark.parametrize("configured", [False, True])
+async def test_snapshot_denial_keeps_start_time(setup, registered, monkeypatch, configured):
+    """Snapshot permission failures retain start and finish times in both execution modes."""
+    task = registered[2] if configured else make_task(setup)
+    monkeypatch.setattr(setup.fs, "commit", AsyncMock(side_effect=PermissionDeniedError("denied")))
+    with pytest.raises(PermissionDeniedError):
+        await setup.lifecycle.on_start(task)
+    await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="failed"))
+    run = await setup.lifecycle._read_run(task)
+    assert run["status"] == "failed" and 0 < run["started_at"] <= run["finished_at"]
 
 
 @pytest.mark.parametrize("configured", [False, True])
