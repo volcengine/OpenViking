@@ -2,9 +2,11 @@ import json
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlsplit
 
 import pytest
+from bs4 import BeautifulSoup
+from markdown_it import MarkdownIt
 from PIL import Image
 
 from openviking.parse.image_rewrite import (
@@ -41,7 +43,17 @@ class _FakeVikingFS:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "stem", ["plain", "space name", "中文 图", "percent%20", "hash#image", "plus+image"]
+    "stem",
+    [
+        "plain",
+        "space name",
+        "中文 图",
+        "percent%20",
+        "hash#image",
+        "plus+image",
+        "中文",
+        "closing)paren",
+    ],
 )
 async def test_build_artifact_image_mappings_uses_existing_sibling_images(tmp_path: Path, stem):
     chapter = tmp_path / "章节"
@@ -92,8 +104,17 @@ async def test_build_artifact_image_mappings_uses_existing_sibling_images(tmp_pa
         mappings["正文.md"],
     )
     assert count == 2
-    assert f"![image](viking://resources/doc/{png})" in rewritten
-    assert f'<img src="viking://resources/doc/{jpg}">' in rewritten
+    rendered = BeautifulSoup(MarkdownIt("commonmark").render(rewritten), "html.parser")
+    images = rendered.find_all("img")
+    assert len(images) == 6  # Two rewritten and four unchanged refs; the fenced example is text.
+    for image, name in zip(images[:2], (png, jpg), strict=True):
+        destination = urlsplit(str(image["src"]))
+        assert destination.scheme == "viking" and destination.netloc == "resources"
+        assert not destination.query and not destination.fragment
+        assert unquote(destination.path) == f"/doc/{name}"
+        assert (root / unquote(destination.path).removeprefix("/doc/")).read_bytes() == (
+            chapter / name
+        ).read_bytes()
     assert f"![example]({png_ref})" in rewritten
 
 
