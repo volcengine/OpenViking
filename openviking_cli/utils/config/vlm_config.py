@@ -94,6 +94,12 @@ class VLMCredential(BaseModel):
         default=None,
         description="Reasoning effort for OpenAI-compatible reasoning models",
     )
+    top_p: Optional[float] = RuntimeField(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Nucleus sampling parameter for OpenAI-compatible providers",
+    )
     keepalive_expiry: Optional[float] = RuntimeField(
         default=None,
         ge=0.0,
@@ -236,6 +242,12 @@ class VLMConfig(BaseModel):
         default=None,
         description="Reasoning effort for OpenAI-compatible reasoning models",
     )
+    top_p: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Nucleus sampling parameter for OpenAI-compatible providers",
+    )
 
     # New multi-credential configuration
     credentials: List[VLMCredential] = Field(
@@ -362,6 +374,7 @@ class VLMConfig(BaseModel):
             or self.extra_headers
             or self.extra_request_body
             or self.reasoning_effort
+            or self.top_p is not None
             or self.keepalive_expiry is not None
             or self.forward_api_key is not None
         ):
@@ -385,6 +398,8 @@ class VLMConfig(BaseModel):
                 self.providers[self.provider]["extra_request_body"] = self.extra_request_body
             if self.reasoning_effort and "reasoning_effort" not in self.providers[self.provider]:
                 self.providers[self.provider]["reasoning_effort"] = self.reasoning_effort
+            if self.top_p is not None and "top_p" not in self.providers[self.provider]:
+                self.providers[self.provider]["top_p"] = self.top_p
             if (
                 self.keepalive_expiry is not None
                 and "keepalive_expiry" not in self.providers[self.provider]
@@ -424,6 +439,11 @@ class VLMConfig(BaseModel):
                     primary_cfg.get("extra_request_body") or self.extra_request_body
                 ),
                 reasoning_effort=(primary_cfg.get("reasoning_effort") or self.reasoning_effort),
+                top_p=(
+                    primary_cfg.get("top_p")
+                    if primary_cfg.get("top_p") is not None
+                    else self.top_p
+                ),
                 keepalive_expiry=(
                     primary_cfg.get("keepalive_expiry")
                     if primary_cfg.get("keepalive_expiry") is not None
@@ -455,6 +475,11 @@ class VLMConfig(BaseModel):
                 ),
                 reasoning_effort=(
                     backup_cfg.get("reasoning_effort") or self.backup.reasoning_effort
+                ),
+                top_p=(
+                    backup_cfg.get("top_p")
+                    if backup_cfg.get("top_p") is not None
+                    else self.backup.top_p
                 ),
                 keepalive_expiry=(
                     backup_cfg.get("keepalive_expiry")
@@ -499,6 +524,11 @@ class VLMConfig(BaseModel):
                         reasoning_effort=(
                             provider_cfg.get("reasoning_effort") or self.reasoning_effort
                         ),
+                        top_p=(
+                            provider_cfg.get("top_p")
+                            if provider_cfg.get("top_p") is not None
+                            else self.top_p
+                        ),
                         keepalive_expiry=(
                             provider_cfg.get("keepalive_expiry")
                             if provider_cfg.get("keepalive_expiry") is not None
@@ -534,6 +564,8 @@ class VLMConfig(BaseModel):
                 cred.extra_request_body = self.extra_request_body
             if not cred.reasoning_effort:
                 cred.reasoning_effort = self.reasoning_effort
+            if cred.top_p is None:
+                cred.top_p = self.top_p
             if cred.keepalive_expiry is None:
                 cred.keepalive_expiry = self.keepalive_expiry
 
@@ -589,6 +621,8 @@ class VLMConfig(BaseModel):
             config["extra_request_body"] = self.extra_request_body
         if self.reasoning_effort and "reasoning_effort" not in config:
             config["reasoning_effort"] = self.reasoning_effort
+        if self.top_p is not None and "top_p" not in config:
+            config["top_p"] = self.top_p
         if self.keepalive_expiry is not None and "keepalive_expiry" not in config:
             config["keepalive_expiry"] = self.keepalive_expiry
         return config
@@ -620,6 +654,8 @@ class VLMConfig(BaseModel):
             config["extra_request_body"] = cred.extra_request_body
         if cred.reasoning_effort:
             config["reasoning_effort"] = cred.reasoning_effort
+        if cred.top_p is not None:
+            config["top_p"] = cred.top_p
         if cred.keepalive_expiry is not None:
             config["keepalive_expiry"] = cred.keepalive_expiry
         return config
@@ -767,6 +803,8 @@ class VLMConfig(BaseModel):
             result["extra_request_body"] = credential.extra_request_body
         if credential.reasoning_effort:
             result["reasoning_effort"] = credential.reasoning_effort
+        if credential.top_p is not None:
+            result["top_p"] = credential.top_p
 
         return result
 
@@ -804,6 +842,8 @@ class VLMConfig(BaseModel):
                 result["extra_request_body"] = config.get("extra_request_body")
             if config.get("reasoning_effort"):
                 result["reasoning_effort"] = config.get("reasoning_effort")
+            if config.get("top_p") is not None:
+                result["top_p"] = config.get("top_p")
 
         return result
 

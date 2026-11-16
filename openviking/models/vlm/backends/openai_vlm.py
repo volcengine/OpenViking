@@ -197,6 +197,8 @@ class OpenAIVLM(VLMBase):
             max_tokens_param = "max_tokens"
             if self.temperature is not None:
                 kwargs["temperature"] = self.temperature
+            if self.top_p is not None:
+                kwargs["top_p"] = self.top_p
 
         if kwargs.get("tools") and self.provider != "openai-codex":
             if re.match(r"gpt-(?:5\.[456]|6-(?:sol|luna))(?:-|$)", kwargs["model"].lower()):
