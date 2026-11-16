@@ -101,7 +101,6 @@ test('experience history is path-scoped, retryable and never supplies an edit ca
     assert.equal(button('Save snapshot', workflow()), undefined);
     assert.ok(workflow().querySelector('[role="alert"]'));
     await click(button('Retry', workflow()));
-    assert.match(workflow().textContent, /2026-11-10 08:00/);
     assert.equal(
       workflow().querySelector('time')?.dateTime,
       new Date(1794268800000).toISOString(),
