@@ -809,6 +809,36 @@ Possible shared response:
 
 ---
 
+### Shared resource operations
+
+These HTTP endpoints apply the corresponding [filesystem operations](03-filesystem.md) to children of `viking://resources/`. The shared root itself, other namespaces and paths containing `.` or `..` segments are rejected. Copy and move validate both source and destination. Authentication and filesystem ACL checks apply.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/resources/cp` | Copy a shared file or directory |
+| POST | `/api/v1/resources/mv` | Move or rename a shared file or directory |
+| DELETE | `/api/v1/resources?uri={uri}` | Delete a shared file or directory |
+
+Copy and move accept a JSON body with these fields:
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| from_uri | str | Yes | - | Source URI below `viking://resources/` |
+| to_uri | str | Yes | - | Exact destination URI below `viking://resources/` |
+| recursive | bool | No | false | Copy only; must be true when copying a directory |
+
+Delete accepts these query parameters:
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| uri | str | Yes | - | URI below `viking://resources/` to delete |
+| recursive | bool | No | false | Remove a directory recursively |
+| wait | bool | No | true | Wait for semantic index cleanup; false uses the tracked asynchronous deletion task |
+
+Responses and side effects follow `cp()`, `mv()` and `rm()` in the filesystem reference. Copy retains its overwrite, merge and rollback behavior. Delete requires MANAGE permission and also removes vectors, refreshes parent semantic metadata and synchronizes watches.
+
+---
+
 ## Related Documentation
 
 - [File System](03-filesystem.md) - File and directory operations

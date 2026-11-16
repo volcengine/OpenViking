@@ -799,6 +799,36 @@ shared 模式的响应示例：
 
 ---
 
+### 共享资源操作
+
+这些 HTTP 接口将对应的[文件系统操作](03-filesystem.md)限制在 `viking://resources/` 的子路径中。共享根目录本身、其他命名空间以及包含 `.` 或 `..` 路径段的 URI 均被拒绝。复制和移动会同时校验源路径与目标路径，并执行身份认证和文件系统 ACL 检查。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/resources/cp` | 复制共享文件或目录 |
+| POST | `/api/v1/resources/mv` | 移动或重命名共享文件或目录 |
+| DELETE | `/api/v1/resources?uri={uri}` | 删除共享文件或目录 |
+
+复制和移动接收以下 JSON 请求体字段：
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| from_uri | str | 是 | - | `viking://resources/` 下的源 URI |
+| to_uri | str | 是 | - | `viking://resources/` 下的完整目标 URI |
+| recursive | bool | 否 | false | 仅用于复制；复制目录时必须为 true |
+
+删除接收以下查询参数：
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| uri | str | 是 | - | 要删除的 `viking://resources/` 下的 URI |
+| recursive | bool | 否 | false | 递归删除目录 |
+| wait | bool | 否 | true | 等待语义索引清理；false 使用可跟踪的异步删除任务 |
+
+响应和副作用与文件系统参考中的 `cp()`、`mv()`、`rm()` 一致。复制保留相同的覆盖、合并和回滚行为。删除需要 MANAGE 权限，同时删除向量、刷新父目录语义元数据并同步 watch。
+
+---
+
 ## 相关文档
 
 - [文件系统](03-filesystem.md) - 文件和目录操作

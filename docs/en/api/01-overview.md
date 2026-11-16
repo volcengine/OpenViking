@@ -366,6 +366,9 @@ This catalog follows the routes actually mounted by the server. Each group headi
 |--------|------|-------------|
 | POST | `/api/v1/resources/temp_upload` | Upload a temporary file for a later import |
 | POST | `/api/v1/resources` | Add a resource from a URL or temporary upload |
+| POST | `/api/v1/resources/cp` | Copy a shared resource within the resources subtree |
+| POST | `/api/v1/resources/mv` | Move or rename a shared resource within the resources subtree |
+| DELETE | `/api/v1/resources` | Delete a shared resource |
 | GET | `/api/v1/fs/ls` | List a directory |
 | GET | `/api/v1/fs/tree` | Get a directory tree |
 | GET | `/api/v1/fs/stat` | Get resource status |
