@@ -11,12 +11,60 @@ on:
         description: Publish the validated CI image to GHCR
         type: boolean
         default: true
+      image:
+        description: Locally built image to publish from the dedicated runner host
+        type: string
+        default: ghcr.io/volcengine/openviking-ci-ubuntu24:8bdbe12f8
 
 jobs:
   ci-image:
+    runs-on: [self-hosted, Linux, X64, ci-linux-builds]
+    timeout-minutes: 15
     permissions:
       contents: read
       packages: write
-    uses: ./.github/workflows/ci-linux-image.yml
-    with:
-      publish: ${{ inputs.publish }}
+    env:
+      IMAGE: ${{ inputs.image }}
+    steps:
+      - name: Validate locally built image
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$IMAGE" in
+            ghcr.io/volcengine/openviking-ci-ubuntu24:*) ;;
+            *) echo "Unexpected CI image repository" >&2; exit 1 ;;
+          esac
+          export DOCKER_CONFIG="$RUNNER_TEMP/ci-image-auth-$GITHUB_RUN_ID"
+          mkdir -m 700 "$DOCKER_CONFIG"
+          echo "DOCKER_CONFIG=$DOCKER_CONFIG" >> "$GITHUB_ENV"
+          test "$(docker image inspect --format '{{.Architecture}}' "$IMAGE")" = amd64
+          docker run --rm --network none "$IMAGE" bash -euc '
+            git --version
+            gcc --version
+            cmake --version
+            ccache --version
+            pkg-config --modversion openssl
+            printf "#include <openssl/ssl.h>\nint main(void) { return OPENSSL_init_ssl(0, 0) != 1; }\n" \
+              | gcc -x c - -lssl -lcrypto -o /tmp/openssl-smoke
+            /tmp/openssl-smoke
+            printf "#include <filesystem>\nint main() { return std::filesystem::path(\"/tmp\").empty(); }\n" \
+              | g++ -std=c++17 -x c++ - -o /tmp/cpp-smoke
+            /tmp/cpp-smoke
+            ffmpeg -version
+            command -v curl unzip xz lsof ps python3
+            test -s /etc/ssl/certs/ca-certificates.crt
+          '
+      - uses: docker/login-action@v4
+        if: inputs.publish
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish image with Actions authentication
+        if: inputs.publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker push "$IMAGE"
+          docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
