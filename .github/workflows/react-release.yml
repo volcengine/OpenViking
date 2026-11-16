@@ -32,7 +32,7 @@ jobs:
   publish:
     if: github.repository == 'volcengine/OpenViking'
     permissions:
-      contents: read
+      contents: write
       id-token: write
     runs-on: ubuntu-24.04
     defaults:
@@ -40,6 +40,8 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
@@ -54,6 +56,11 @@ jobs:
           RELEASE_CHANNEL: ${{ inputs.channel }}
           RELEASE_VERSION: ${{ inputs.version }}
         run: node scripts/react-release.mjs
+      - name: Prepare GitHub Release notes
+        if: steps.release.outputs.channel == 'latest'
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: node scripts/react-github-release.mjs prepare "$RELEASE_VERSION" "$RUNNER_TEMP/react-release-notes.md"
       - name: Check whether version already exists
         id: published
         env:
@@ -83,3 +90,9 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           RELEASE_CHANNEL: ${{ steps.release.outputs.channel }}
         run: npm publish --workspace @openviking/react --access public --provenance --tag "$RELEASE_CHANNEL"
+      - name: Publish GitHub Release
+        if: steps.release.outputs.channel == 'latest'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: node scripts/react-github-release.mjs publish "$RELEASE_VERSION" "$RUNNER_TEMP/react-release-notes.md"

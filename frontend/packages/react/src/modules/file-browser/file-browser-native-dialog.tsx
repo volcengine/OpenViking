@@ -1,3 +1,4 @@
+import { useExposure } from '../../shared/analytics/use-exposure.js';
 import type { RefObject } from 'react';
 import { Modal } from '../../shared/primitives/modal/modal.js';
 import { PreviewHistory } from './preview-history.js';
@@ -11,6 +12,7 @@ export function FileBrowserNativeDialog({
   text,
   triggerRef,
   canWrite,
+  canSaveSnapshot,
   versioned,
   showContent,
   ...props
@@ -19,9 +21,17 @@ export function FileBrowserNativeDialog({
   text: ResolvedLabels;
   triggerRef: RefObject<HTMLElement | null>;
   canWrite: boolean;
+  canSaveSnapshot: boolean;
   versioned: boolean;
   showContent: boolean;
 }) {
+  const exposure = useExposure(
+    kind === 'history'
+      ? 'file_browser_history_dialog_show'
+      : kind === 'configure'
+        ? 'file_browser_compile_config_dialog_show'
+        : 'file_browser_pack_import_dialog_show',
+  );
   const title = kind === 'configure' ? text.workflow.configure : text[kind];
   const common = { ...props, text: text.workflow };
   return (
@@ -31,13 +41,20 @@ export function FileBrowserNativeDialog({
       locale={props.locale}
       triggerRef={triggerRef}
       onClose={props.onClose}
-      className="ov-file-browser-workflow"
+      className={
+        kind === 'history'
+          ? 'ov-file-browser-workflow ov-file-history'
+          : 'ov-file-browser-workflow'
+      }
     >
-      <h2>{title}</h2>
-      <p className="ov-file-browser-workflow__uri">{props.uri}</p>
+      <h2 ref={exposure}>{title}</h2>
+      {kind === 'history' ? null : (
+        <p className="ov-file-browser-workflow__uri">{props.uri}</p>
+      )}
       {kind === 'history' ? (
         <PreviewHistory
           {...common}
+          canSaveSnapshot={canSaveSnapshot}
           versioned={versioned}
           showContent={showContent}
           loadingText={text.loading}

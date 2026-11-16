@@ -1,3 +1,4 @@
+@import './context-picker/style.css';
 @import '../theme.css';
 @import './file-tree/style.css';
 @import './file-preview/style.css';

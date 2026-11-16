@@ -301,6 +301,10 @@ ov ls viking://resources/docs --tags team=search,env=prod --fields tags
 ov grep "TODO" --uri viking://resources/docs --tags team=search,env=prod
 ov glob "**/*.md" --uri viking://resources/docs --tags team=search,env=prod
 
+# Save now without indexing, then explicitly process it later
+ov write viking://resources/docs/draft.md --content "# Draft" --defer-processing
+ov reindex viking://resources/docs/draft.md --wait
+
 # Temporarily override identity from CLI flags
 ov --account acme --user alice ls viking://
 

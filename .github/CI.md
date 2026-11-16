@@ -11,19 +11,116 @@ PR checks, API tests and Rust CLI checks cancel older runs for the same PR.
 Release and scheduled runs are not cancelled by this policy.
 
 The API workflow produces one Ubuntu 24.04 x86 native runtime with Python 3.10.
-Its API test job (3.10) and cuVS job (3.11) reuse that same-run artifact. Both
+Its API and database test jobs (3.10) and cuVS job (3.11) reuse that same-run artifact. Both
 native extensions target `cp310-abi3`. Restore requires matching commit, OS,
 architecture, runtime libc, platform, build options and ABI, and validates every
 file checksum before writing it. Other test platforms build locally. Release
 wheels build independently in Ubuntu 20.04/macOS/Windows; Ubuntu 24.04 test
 binaries and musl CLI binaries are never reused in release wheels.
 
-Builds and ordinary tests use GitHub-hosted runners to measure build reuse and
-cache behavior independently of self-hosted machine capacity. There is no
-`ov-ci-runner` scheduling or manual selection in these workflows.
-The existing P0 Memory Tests remain on their original ECS environment, selected
-with `[self-hosted, Linux, X64, openviking-ecs]`. That runner must have the
-`openviking-ecs` custom label; its display name alone does not select it.
+With repository variable `CI_LINUX_BUILDS_ENABLED=true`, trusted Linux API jobs
+use `[self-hosted, Linux, X64, ci-linux-builds]`. Linux x86_64 wheel builds
+alternate between GitHub-hosted and this dedicated pool.
+Only the dedicated runner `iv-yezentk8ao3z47ge5tmm` has that custom label; runner
+display names do not select machines.
+Linux wheels use the dedicated runner on even workflow run numbers.
+API native runtime preparation and its short change-planning job always use
+the dedicated runner for eligible events, regardless of workflow run number.
+The planning job runs Git/Python on the host with a five-minute execution limit.
+Linux API/CLI, MySQL/Redis and
+cuVS tests inherit their same-run native producer's destination. This keeps the
+entire trusted Linux API dependency chain off the hosted queue.
+Wheel builds send 50% of consecutive runs to each destination, and reruns keep
+the same destination. This is not half of all Linux jobs or an equal share of
+execution time. Conditional skips can change the observed share.
+The old ECS runner does not receive these jobs.
+
+Only official repository PRs from the same repository and branch pushes are
+eligible. Release/tag events, schedules, manual builds, fork PRs and other
+repositories use GitHub-hosted. The native producer publishes its selected labels
+and container image for its consumers; no extra selector job or token is needed.
+Studio, both musl CLI targets, other tests/checks and source packaging stay hosted. Native ARM,
+macOS and Windows assignments are unchanged.
+
+Self-hosted builds and tests require Docker access and use disposable containers with
+job-local HOME/Cargo/Rustup directories and post-job ownership cleanup.
+Wheels retain Ubuntu 20.04/glibc 2.31. API native runtime preparation uses Ubuntu
+24.04 on both destinations so its artifact remains compatible with hosted tests.
+Self-hosted API, database and cuVS consumers also use Ubuntu 24.04 containers;
+hosted consumers retain their existing host execution. Database consumers use
+service-container DNS inside containers and loopback on hosted runners.
+The Linux wheel execution timeout is 60 minutes and native preparation is limited
+to 45 minutes, with a 15-minute limit on system package installation. Timeouts start when execution begins, not while queued; there is
+no automatic queue fallback.
+
+The host planning job restores its workspace ownership before checkout to
+recover root-owned build files from interrupted containers. Container cleanup
+uses the host-created workspace parent to determine the owner; checkout can
+recreate the checkout directory as root.
+
+### Prebuilt Ubuntu 24.04 CI image
+
+`.github/images/ubuntu24-ci.Dockerfile` preinstalls Git, GCC/G++, CMake, ccache,
+OpenSSL development headers, Python 3 and the system tools used by API, database
+and cuVS tests. It contains no repository checkout, credentials or Python/Rust
+project dependencies. Python versions, Rust and dependency lockfiles remain
+managed by the existing setup actions. The API runtime uses GCC; Linux release
+wheels keep their existing Clang compiler and Ubuntu 20.04/glibc 2.31 baseline.
+
+Run **Build Linux CI Base Image** manually. Its default `publish=false` builds
+the amd64 image and checks its installed tools on a hosted runner. After that
+passes, run with `publish=true` to publish
+`ghcr.io/volcengine/openviking-ci-ubuntu24:<commit-sha>`. Make this GHCR package
+publicly readable, then set repository Actions variable `CI_UBUNTU24_IMAGE` to
+the digest reference printed in the workflow summary. Another reachable public
+registry can also host the image; avoid mutable `latest` tags.
+
+The API native producer uses that image and passes it to its self-hosted test
+consumers. Each bootstrap checks actual dpkg installation status: complete images
+skip apt, while incomplete images install the required packages. With no image
+variable, the producer uses stock `ubuntu:24.04` and installs packages as before.
+The first pull still downloads the image; subsequent jobs on the same host reuse
+Docker's cached layers. Rebuild and validate periodically for OS package updates,
+then update the digest variable. Remove the variable to return to stock Ubuntu.
+
+For a local Linux build, provide the host CA bundle in the build context; minimal
+Ubuntu needs it to verify HTTPS before installing `ca-certificates`. The Dockerfile
+uses HTTPS sources and fails immediately on incomplete package indexes.
+`UBUNTU_MIRROR` optionally selects an HTTPS mirror, including its `/ubuntu` path:
+
+```sh
+ci_context=$(mktemp -d)
+cp .github/images/ubuntu24-ci.Dockerfile "$ci_context/Dockerfile"
+cp /etc/ssl/certs/ca-certificates.crt "$ci_context/bootstrap-ca-certificates.crt"
+docker build --platform linux/amd64 \
+  --build-arg UBUNTU_MIRROR=https://mirrors.aliyun.com/ubuntu \
+  -t ghcr.io/volcengine/openviking-ci-ubuntu24:local "$ci_context"
+```
+
+Before enabling routing, dispatch `_build.yml` on this branch with
+`check_linux_runner=true`, `build_wheels=false` and `build_sdist=false`. Its
+five-minute diagnostic checks Docker access, HTTPS package-index downloads and
+package installation in both container images without checking out repository
+code. Enable `CI_LINUX_BUILDS_ENABLED` only after it passes. The runner user must
+be able to access Docker without interactive sudo.
+
+Package sources use HTTPS. Minimal Ubuntu images bootstrap TLS verification with
+the host's `/etc/ssl/certs/ca-certificates.crt`, mounted read-only at a temporary
+path until the container installs its own certificates. The host CA bundle must
+exist. Incomplete apt index downloads fail the job instead of continuing with
+missing package metadata.
+If official Ubuntu endpoints are unreachable from the dedicated machine, set
+`CI_UBUNTU_MIRROR` to a reachable HTTPS Ubuntu mirror, including its `/ubuntu` path.
+The override applies only to self-hosted builds/tests and the readiness diagnostic;
+hosted builds retain the official sources. The diagnostic prints host/container
+TCP reachability to help distinguish mirror access from Docker networking issues.
+
+If the dedicated runner is offline or stuck, set repository Actions variable
+`CI_DISABLE_SELF_HOSTED=true`, cancel affected runs and trigger new runs.
+New jobs use hosted runners; already queued jobs retain their original labels.
+After repairing/updating the runner, remove the disable variable to resume the
+dedicated routing. Removing `CI_LINUX_BUILDS_ENABLED` also leaves these builds/tests hosted.
+Release builds remain hosted regardless of either variable.
 
 The cuVS check now lives in the API workflow so it can consume the same artifact.
 Its check name stays `cuvs-tests / Lite Test (ubuntu-24.04, 3.11)`, matching the
@@ -54,9 +151,11 @@ select API tests, including newly introduced runtime paths.
 Local checks:
 
 ```sh
+python3 -m pip install pytest PyYAML
 python3 -m pytest --noconftest -q -o addopts='' \
   tests/misc/test_abi3_packaging_config.py \
-  tests/misc/test_release_tag_selection.py
+  tests/misc/test_release_tag_selection.py \
+  tests/misc/test_linux_runner.py
 actionlint .github/workflows/pr.yml .github/workflows/api_test.yml \
   .github/workflows/_build.yml .github/workflows/_test_lite.yml \
   .github/workflows/_test_full.yml .github/workflows/rust-cli.yml
@@ -65,3 +164,50 @@ actionlint .github/workflows/pr.yml .github/workflows/api_test.yml \
 Compare wall time, runner queue time, compiler cache hits and native build counts
 on GitHub before quoting a speedup. A local workflow validation cannot measure
 runner queueing or exercise the complete multi-platform build.
+
+## Database integration tests
+
+The API workflow's `MySQL & Redis Integration Tests` job starts fresh MySQL 8.4
+and Redis 6.2 service containers on Ubuntu 24.04. It runs for PR changes selected
+by `api_changed`, including server/service/resource code, tests, dependencies and
+CI scripts. Manual, scheduled and release runs use the workflow's existing
+repository and release-tag rules. No external database or API-key secrets are
+needed.
+
+The job installs the locked `test` and `mysql` extras, checks both connections,
+and executes the account store's deployment SQL and migrations. The database
+user has privileges only on the disposable `openviking_test` database; fixtures
+need DDL privileges to create and drop isolated Task/Work and Watch tables.
+
+The executed suites cover account-store initialization and distributed
+authentication, Redis/MySQL credential snapshots and cache invalidation,
+Task/Work lifecycle and concurrency, and Watch persistence and cross-instance
+ownership. File variants of Task/Work and Watch also run for comparison.
+PostgreSQL account-store tests are not included because that backend is not yet
+on this branch's `main` baseline.
+
+`database_integration.py verify` rejects skipped/failed database cases, missing
+account contracts, and any backend suite with zero passing cases. The two
+Watch file-only skips are expected. GitHub publishes database case counts in
+the job summary and retains `database-integration-results` JUnit XML for seven
+days, including failed runs.
+
+To reproduce against **fresh, disposable** local databases, set `OV_TEST_MYSQL`
+and `OPENVIKING_WATCH_MYSQL_PARAMS` to JSON connection objects with `host`,
+`port`, `user`, `password`, and `database`, set `OV_TEST_REDIS` to a standalone
+Redis URL without a database path, and set `OPENVIKING_CONFIG_FILE` to a writable
+temporary file. After preparing the native runtime and installing the extras,
+run the same commands as the workflow:
+
+```sh
+uv run --no-sync python .github/scripts/database_integration.py prepare
+uv run --no-sync python -m pytest -q -o addopts='' \
+  tests/server/test_account_services.py::test_mysql_load_creates_default_account \
+  tests/server/test_account_services.py::test_distributed_authentication_state_is_shared_and_service_scoped \
+  tests/server/test_redis_mysql_account_store.py \
+  tests/service/test_task_work_contract.py \
+  tests/resource/test_watch_store.py \
+  --junitxml=database-integration.xml
+uv run --no-sync python .github/scripts/database_integration.py verify database-integration.xml
+python3 -m pytest --noconftest -q -o addopts='' tests/misc/test_database_integration_ci.py
+```

@@ -628,7 +628,9 @@ def _build_git_config_dict(git_config: Any, storage_path: Path) -> Dict[str, Any
     any TOML file. For ``backend == "local"`` a ``local`` sub-dict is emitted
     (defaulting ``base_dir`` to ``{storage_path}/.ovgit`` when empty); for
     ``backend == "s3"`` an ``s3`` sub-dict is emitted with keys matching the Rust
-    ``GitS3ConfigPy`` struct.
+    ``GitS3ConfigPy`` struct. ``snapshot`` is copied from the Python config
+    model, with the default SnapshotLog SQLite path resolved under
+    ``storage_path`` so independent workspaces do not share one index DB.
     """
     backend = getattr(git_config, "backend", "local")
     result: Dict[str, Any] = {
@@ -638,6 +640,19 @@ def _build_git_config_dict(git_config: Any, storage_path: Path) -> Dict[str, Any
         "author_name": getattr(git_config, "author_name", "viking-bot"),
         "author_email": getattr(git_config, "author_email", "bot@viking.local"),
     }
+    snapshot = getattr(git_config, "snapshot", None)
+    if snapshot is not None:
+        if hasattr(snapshot, "model_dump"):
+            result["snapshot"] = snapshot.model_dump(mode="json", exclude_none=True)
+        elif isinstance(snapshot, dict):
+            result["snapshot"] = dict(snapshot)
+        snapshot_log = result.get("snapshot", {}).get("log")
+        if isinstance(snapshot_log, dict) and snapshot_log.get("provider", "sqlite") == "sqlite":
+            sqlite_cfg = snapshot_log.setdefault("sqlite", {})
+            if isinstance(sqlite_cfg, dict) and not sqlite_cfg.get("path"):
+                sqlite_cfg["path"] = str(
+                    storage_path / "_system" / "snapshot" / "log" / "snapshot_log.db"
+                )
 
     if backend == "s3":
         s3_cfg = getattr(git_config, "s3", None)

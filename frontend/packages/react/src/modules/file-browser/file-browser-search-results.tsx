@@ -1,3 +1,8 @@
+import { useExposure } from '../../shared/analytics/use-exposure.js';
+import type { RefObject } from 'react';
+import SearchEmptyArt from '../../../../icons/svg/file-browser/search-empty.svg?react';
+import { Button } from '../../shared/primitives/button/button.js';
+import { Empty } from '../../shared/primitives/empty/empty.js';
 import { FileBrowserSearchRow } from './file-browser-search-row.js';
 import { FileBrowserSearchModeRow } from './file-browser-search-mode-row.js';
 import type { SearchHit, SearchMode } from './search-types.js';
@@ -16,16 +21,21 @@ import type { ResolvedLabels } from './file-browser-labels.js';
  * to count, and "0 results" reads as a failure.
  */
 export interface FileBrowserSearchResultsProps {
+  open: boolean;
   mode: SearchMode;
+  listId: string;
+  activeIndex: number;
+  query: string;
+  onHighlight: (index: number) => void;
+  onRetry: () => void;
   hits: SearchHit[];
   loading: boolean;
   error: Error | null;
   /** 是否已经搜过；`false` 时显示空态。Whether a search has run; `false` shows the empty state. */
   searched: boolean;
   text: ResolvedLabels;
-  menuOpen: boolean;
-  onToggleMenu: () => void;
-  onCloseMenu: () => void;
+  /** 「切换」不在时的焦点去处，通常是搜索输入框。 Where focus goes when the switch is gone. */
+  fallbackFocusRef?: RefObject<HTMLElement | null>;
   onSelectMode: (mode: SearchMode) => void;
   onOpen: (uri: string) => void;
 }
@@ -34,78 +44,79 @@ export interface FileBrowserSearchResultsProps {
 const SKELETON_WIDTHS = [368, 348, 319, 359, 335, 316, 368, 351];
 
 export function FileBrowserSearchResults({
+  open,
   mode,
+  listId,
+  activeIndex,
+  query,
+  onHighlight,
+  onRetry,
   hits,
   loading,
   error,
   searched,
   text,
-  menuOpen,
-  onToggleMenu,
-  onCloseMenu,
+  fallbackFocusRef,
   onSelectMode,
   onOpen,
 }: FileBrowserSearchResultsProps) {
-  // 每个分支都带模式行：切换入口是「换一种方式再试」的唯一路径，任何状态下都
-  // 必须可达。数量只在真有结果时给，其余状态传 null。
-  //
-  // Every branch carries the mode row: the switch is the only way to "try another
-  // mode", so it must stay reachable in every state. The count is passed only when
-  // results exist, `null` otherwise.
-  const modeRow = (count: number | null) => (
-    <FileBrowserSearchModeRow
-      mode={mode}
-      count={count}
-      text={text}
-      menuOpen={menuOpen}
-      onToggleMenu={onToggleMenu}
-      onCloseMenu={onCloseMenu}
-      onSelectMode={onSelectMode}
-    />
+  const exposure = useExposure(
+    hits.length
+      ? 'file_browser_search_results_show'
+      : 'file_browser_search_empty_show',
+    hits,
+    undefined,
+    open && searched && !loading && !error,
   );
-
-  if (loading) {
+  // 模式行只在真有结果时出现：设计稿的空态、加载态与失败态都没有这一行，它上面
+  // 的数字也只在有东西可数时才说得通。
+  //
+  // The mode row appears only when there are results: the design draws neither the
+  // empty, loading nor failure state with it, and its number only means something
+  // when there is something to count.
+  if (loading && !hits.length) {
     return (
-      <>
-        {modeRow(null)}
-        <div className="ov-file-browser-search__skeletons" aria-busy="true">
-          <p role="status" className="ov-file-browser-search__sr-only">
-            {text.searchLoading}
-          </p>
-          {SKELETON_WIDTHS.map((width, index) => (
-            <div
-              className="ov-file-browser-search__skeleton"
-              key={`${width}-${index}`}
-            >
-              <span className="ov-file-browser-search__skeleton-dot" />
-              <span
-                className="ov-file-browser-search__skeleton-bar"
-                style={{ width }}
-              />
-            </div>
-          ))}
-        </div>
-      </>
+      <div className="ov-file-browser-search__skeletons" aria-busy="true">
+        <p role="status" className="ov-file-browser-search__sr-only">
+          {text.searchLoading}
+        </p>
+        {SKELETON_WIDTHS.map((width, index) => (
+          <div
+            className="ov-file-browser-search__skeleton"
+            key={`${width}-${index}`}
+          >
+            <span className="ov-file-browser-search__skeleton-dot" />
+            <span
+              className="ov-file-browser-search__skeleton-bar"
+              style={{ width }}
+            />
+          </div>
+        ))}
+      </div>
     );
   }
 
-  if (error) {
-    return (
-      <>
-        {modeRow(null)}
-        <div role="alert" className="ov-file-browser-search__error">
-          <p>{text.searchFailed}</p>
-          <p>{error.message}</p>
-        </div>
-      </>
-    );
-  }
+  const failure = error ? (
+    <>
+      <div role="alert" className="ov-file-browser-search__error">
+        <p>{text.searchFailed}</p>
+        <p>{error.message}</p>
+      </div>
+      <Button size="small" disabled={loading} onClick={onRetry}>
+        {text.retry}
+      </Button>
+    </>
+  ) : null;
+  if (failure && !hits.length) return failure;
 
   if (!searched) {
     return (
-      <>
-        {modeRow(null)}
-        <div className="ov-file-browser-search__empty">
+      <div className="ov-file-browser-search__empty">
+        <SearchEmptyArt
+          className="ov-file-browser-search__empty-art"
+          aria-hidden="true"
+        />
+        <div className="ov-file-browser-search__empty-text">
           <p className="ov-file-browser-search__empty-title">
             {text.searchEmptyTitle}
           </p>
@@ -113,29 +124,47 @@ export function FileBrowserSearchResults({
             {text.searchHint}
           </p>
         </div>
-      </>
+      </div>
     );
   }
 
   if (hits.length === 0) {
     return (
-      <>
-        {modeRow(0)}
-        <p role="status" className="ov-file-browser-search__no-results">
-          {text.searchEmpty}
-        </p>
-      </>
+      <Empty
+        ref={exposure}
+        illustration="search"
+        title={text.searchEmpty}
+        className="ov-file-browser-search__no-results"
+      />
     );
   }
 
   return (
     <>
-      {modeRow(hits.length)}
-      <ul className="ov-file-browser-search__list">
-        {hits.map((hit) => (
+      {failure}
+      {loading ? <p role="status">{text.searchLoading}</p> : null}
+      <FileBrowserSearchModeRow
+        mode={mode}
+        count={hits.length}
+        text={text}
+        fallbackFocusRef={fallbackFocusRef}
+        onSelectMode={onSelectMode}
+      />
+      <ul
+        ref={exposure}
+        id={listId}
+        role="listbox"
+        aria-label={text.searchTitle}
+        className="ov-file-browser-search__list"
+      >
+        {hits.map((hit, index) => (
           <FileBrowserSearchRow
-            key={`${hit.uri}#${hit.line ?? 0}`}
+            key={`${hit.uri}#${hit.line ?? 0}-${index}`}
+            id={`${listId}-${index}`}
             hit={hit}
+            query={query}
+            active={index === activeIndex}
+            onHighlight={() => onHighlight(index)}
             onOpen={onOpen}
           />
         ))}

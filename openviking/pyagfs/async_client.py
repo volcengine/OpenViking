@@ -379,6 +379,10 @@ class AsyncAGFSClient:
 
     # -- pathlock async wrappers ------------------------------------------------
 
+    def pathlock_handle_mode(self) -> str:
+        """Read the runtime provider's handle mode; this performs no storage I/O."""
+        return self._client.pathlock_handle_mode()
+
     async def pathlock_acquire_exact(
         self,
         path: str,

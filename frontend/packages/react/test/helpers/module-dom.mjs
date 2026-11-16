@@ -20,10 +20,13 @@ for (const name of [
   'Element',
   'HTMLElement',
   'HTMLImageElement',
+  'HTMLIFrameElement',
   'MutationObserver',
+  'SVGElement',
 ]) {
   globalThis[name] = name === 'window' ? dom.window : dom.window[name];
 }
+globalThis.getComputedStyle = window.getComputedStyle.bind(window);
 Object.defineProperty(globalThis, 'navigator', {
   configurable: true,
   value: dom.window.navigator,
@@ -56,6 +59,16 @@ export async function settle(times = 3) {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
   }
+}
+
+export async function setTextarea(textarea, value) {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      'value',
+    ).set.call(textarea, value);
+    textarea.dispatchEvent(new window.Event('input', { bubbles: true }));
+  });
 }
 
 /**

@@ -135,6 +135,7 @@ async def delete_privacy_selector(
             field_reference.target_key,
             field_reference.field,
             updated_by=_ctx.user.user_id,
+            wait_for_lock=False,
         )
         if outcome is None:
             raise NotFoundError(request.selector, "privacy config field")
@@ -165,6 +166,7 @@ async def delete_privacy_selector(
         _ctx,
         target_reference.category,
         target_reference.target_key,
+        wait_for_lock=False,
     )
     return Response(
         status="ok",
@@ -323,6 +325,7 @@ async def delete_privacy_field(
         target_key,
         field,
         updated_by=_ctx.user.user_id,
+        wait_for_lock=False,
     )
     if outcome is None:
         raise NotFoundError(f"{category}/{target_key}/fields/{field}", "privacy config field")
@@ -394,6 +397,7 @@ async def upsert_privacy_config(
             updated_by=_ctx.user.user_id,
             change_reason=request.change_reason,
             labels=request.labels,
+            wait_for_lock=False,
         )
     payload = None if result is None else result.to_dict()
     if payload is not None and warnings:
@@ -426,6 +430,7 @@ async def patch_privacy_config(
             updated_by=_ctx.user.user_id,
             change_reason=request.change_reason,
             labels=request.labels,
+            wait_for_lock=False,
         )
     payload = None if result is None else result.to_dict()
     if payload is not None and warnings:
@@ -444,7 +449,7 @@ async def delete_privacy_config(
     privacy = service.privacy_configs
     deleted = False
     if privacy is not None:
-        deleted = await privacy.delete(_ctx, category, target_key)
+        deleted = await privacy.delete(_ctx, category, target_key, wait_for_lock=False)
     return Response(
         status="ok",
         result={
@@ -471,5 +476,6 @@ async def activate_privacy_version(
         target_key=target_key,
         version=request.version,
         updated_by=_ctx.user.user_id,
+        wait_for_lock=False,
     )
     return Response(status="ok", result=result.to_dict())

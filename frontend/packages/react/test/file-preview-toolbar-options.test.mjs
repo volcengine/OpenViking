@@ -1,3 +1,4 @@
+import { waitForEditor } from './helpers/preview-editor-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { act, createElement as h } from 'react';
@@ -35,9 +36,13 @@ test('built-in editing is shown by default and component toolbar flags can hide 
     assert.equal(view.container.querySelector('[toolbar]'), null);
     await view.render(tree({ edit: true }));
     await click('Edit');
-    assert.equal(view.container.querySelector('textarea').value, '# Initial');
+    await waitForEditor(view.container);
+    assert.equal(
+      view.container.querySelector('.cm-content').textContent,
+      '# Initial',
+    );
     await click('Cancel');
-    assert.equal(view.container.querySelector('textarea'), null);
+    assert.equal(view.container.querySelector('.cm-content'), null);
   } finally {
     await view.unmount();
   }
@@ -62,14 +67,15 @@ test('changing visibility does not reset an active editor or remove save/cancel'
   const view = await mount(tree());
   try {
     await click('Edit');
-    const textarea = view.container.querySelector('textarea');
+    await waitForEditor(view.container);
+    const editor = view.container.querySelector('.cm-content');
     await view.render(tree({ edit: false, viewSwitch: false }));
-    assert.equal(view.container.querySelector('textarea'), textarea);
-    assert.equal(textarea.value, '# Initial');
+    assert.equal(view.container.querySelector('.cm-content'), editor);
+    assert.equal(editor.textContent, '# Initial');
     assert.ok(button('Save'));
     assert.ok(button('Cancel'));
     await click('Save');
-    assert.equal(view.container.querySelector('textarea'), null);
+    assert.equal(view.container.querySelector('.cm-content'), null);
     assert.equal(button('Edit'), undefined);
   } finally {
     await view.unmount();

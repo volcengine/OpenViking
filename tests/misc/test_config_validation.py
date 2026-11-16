@@ -27,6 +27,24 @@ from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig, V
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
+def test_postgres_pathlock_binding_without_redis(tmp_path):
+    config = AGFSConfig(
+        path=str(tmp_path),
+        pathlock={"provider": "postgres", "postgres_dsn_env": "OV_POSTGRES_DSN"},
+    )
+    binding = RagfsBindingConfig(agfs=config, service_name="pg-community").to_binding_dict()
+    assert binding["pathlock"]["provider"] == "postgres"
+    assert binding["pathlock"]["postgres_dsn_env"] == "OV_POSTGRES_DSN"
+    assert binding["service_name"] == "pg-community"
+    assert not binding["cache"]["enabled"]
+
+
+@pytest.mark.parametrize("value", [None, "", "  ", 42])
+def test_postgres_pathlock_requires_dsn_environment_name(value):
+    with pytest.raises(ValueError):
+        AGFSConfig(pathlock={"provider": "postgres", "postgres_dsn_env": value})
+
+
 def test_agfs_validation():
     """Test AGFS config validation"""
     print("=" * 60)

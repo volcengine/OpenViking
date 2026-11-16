@@ -1,9 +1,5 @@
-import { useEffect, useLayoutEffect, useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
 import type { OverlayPlacement } from './types.js';
-
-// Measure before paint in browsers; server renderers have no viewport.
-const usePositionEffect =
-  typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
 /** 浮层与触发元素之间的间隙。 Gap between the surface and its trigger. */
 export const OVERLAY_OFFSET = 6;
@@ -15,6 +11,7 @@ export interface OverlayPosition {
   left: number;
   /** 实际采用的方位，可能与请求的不同。 The placement actually used. */
   placement: OverlayPlacement;
+  anchorWidth?: number;
 }
 
 /** 方位翻转到对侧。 The opposite side of a placement. */
@@ -37,7 +34,7 @@ export function resolvePosition(
   trigger: DOMRect,
   surface: { width: number; height: number },
   placement: OverlayPlacement,
-  alignment: 'center' | 'end' = 'center',
+  alignment: 'start' | 'center' | 'end' = 'center',
 ): OverlayPosition {
   const viewportWidth = window.innerWidth;
   const viewportHeight = window.innerHeight;
@@ -72,9 +69,11 @@ export function resolvePosition(
         ? trigger.top - surface.height - OVERLAY_OFFSET
         : trigger.bottom + OVERLAY_OFFSET;
     const left =
-      alignment === 'end'
-        ? trigger.right - surface.width
-        : trigger.left + trigger.width / 2 - surface.width / 2;
+      alignment === 'start'
+        ? trigger.left
+        : alignment === 'end'
+          ? trigger.right - surface.width
+          : trigger.left + trigger.width / 2 - surface.width / 2;
     return {
       top: clamp(top, surface.height, viewportHeight),
       left: clamp(left, surface.width, viewportWidth),
@@ -115,7 +114,7 @@ export function useOverlayPosition(
   triggerRef: React.RefObject<HTMLElement | null>,
   surface: HTMLElement | null,
   placement: OverlayPlacement,
-  alignment: 'center' | 'end' = 'center',
+  alignment: 'start' | 'center' | 'end' = 'center',
 ) {
   const [position, setPosition] = useState<OverlayPosition>({
     top: 0,
@@ -123,9 +122,10 @@ export function useOverlayPosition(
     placement,
   });
 
-  // Sync committed geometry and scoped theme; release both on close or unmount.
-  // The server uses an inert effect instead of attempting layout measurement.
-  usePositionEffect(() => {
+  // Sync the committed portal's geometry and theme with browser layout changes;
+  // viewport/ancestor mutations need updates beyond React renders or UI events.
+  // Close, dependency changes and unmount release observers, listeners and styles.
+  useLayoutEffect(() => {
     if (!open) return;
     const trigger = triggerRef.current;
     if (!trigger || !surface) return;
@@ -190,18 +190,22 @@ export function useOverlayPosition(
     const update = () => {
       const triggerRect = trigger.getBoundingClientRect();
       const surfaceRect = surface.getBoundingClientRect();
-      const next = resolvePosition(
-        triggerRect,
-        { width: surfaceRect.width, height: surfaceRect.height },
-        placement,
-        alignment,
-      );
+      const next = {
+        ...resolvePosition(
+          triggerRect,
+          { width: surfaceRect.width, height: surfaceRect.height },
+          placement,
+          alignment,
+        ),
+        anchorWidth: triggerRect.width,
+      };
       // 坐标没变就不写 state：每次写入新对象都会触发一次重渲染，而重渲染
       // 又会让本 effect 重跑，形成无限循环。
       setPosition((previous) =>
         previous.top === next.top &&
         previous.left === next.left &&
-        previous.placement === next.placement
+        previous.placement === next.placement &&
+        previous.anchorWidth === next.anchorWidth
           ? previous
           : next,
       );
@@ -213,6 +217,7 @@ export function useOverlayPosition(
     // 用 ResizeObserver 盯住它，尺寸稳定下来后重新定位。
     const observer = new ResizeObserver(update);
     observer.observe(surface);
+    observer.observe(trigger);
 
     window.addEventListener('scroll', update, true);
     window.addEventListener('resize', update);

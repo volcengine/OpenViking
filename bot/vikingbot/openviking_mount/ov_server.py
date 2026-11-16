@@ -2,7 +2,7 @@ import base64
 import json
 import re
 import uuid
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional
 
 from loguru import logger
 
@@ -719,6 +719,10 @@ class VikingClient:
             wait=wait,
         )
 
+    async def write(self, uri: str, content: str, mode: str = "replace") -> Dict[str, Any]:
+        """Write one text file with the task identity and return the OV content receipt."""
+        return await self.client.write(uri, content, mode=mode)
+
     async def batch_write(
         self,
         *,
@@ -727,7 +731,6 @@ class VikingClient:
         wait: bool = True,
         skip_conflicts: bool = False,
         defer_processing: bool = False,
-        edit_source: Literal["manual", "agent", "compile"] = "manual",
     ) -> Dict[str, Any]:
         """Publish a bundle, optionally retaining conflicting targets and reporting their URIs."""
         return await self.client.batch_write(
@@ -737,7 +740,6 @@ class VikingClient:
             options={
                 "skip_conflicts": skip_conflicts,
                 "defer_processing": defer_processing,
-                "edit_source": edit_source,
             },
         )
 
@@ -748,6 +750,8 @@ class VikingClient:
         user_id: Optional[str] = None,
         offset: int = 0,
         limit: int = -1,
+        *,
+        raise_on_error: bool = False,
     ) -> str:
         """读取内容
 
@@ -756,6 +760,7 @@ class VikingClient:
             level: 读取级别 ("abstract" - L0摘要, "overview" - L1概览, "read" - L2完整内容)
             offset: Starting line number (0-indexed); only used for level="read"
             limit: Number of lines to read, -1 means read to end; only used for level="read"
+            raise_on_error: Propagate read errors when the caller must distinguish them from empty files.
         """
         if self._skill_snapshot_ref(uri):
             if level in {"read", "raw"}:
@@ -792,8 +797,12 @@ class VikingClient:
             else:
                 raise ValueError(f"Unsupported level: {level}")
         except FileNotFoundError:
+            if raise_on_error:
+                raise
             return ""
         except Exception as e:
+            if raise_on_error:
+                raise
             logger.warning(f"Failed to read content from {uri}: {e}")
             return ""
         finally:

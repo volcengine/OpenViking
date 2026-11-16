@@ -1,4 +1,4 @@
-import { Button } from '#demo-controls';
+import { Checkbox, Button } from '#demo-controls';
 import { useCallback, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { useLang } from '@rspress/core/runtime';
@@ -69,7 +69,7 @@ export default function DirectoryTourBasic() {
   const locateTarget = useCallback(
     (target: string, signal: AbortSignal) => {
       const id = TARGETS[target];
-      if (signal.aborted || !id || (missing && target === 'userSessions'))
+      if (signal.aborted || !id || (missing && target === 'userExperiences'))
         return Promise.resolve(null);
       flushSync(() =>
         setExpanded(
@@ -87,7 +87,6 @@ export default function DirectoryTourBasic() {
   );
   const steps = openVikingDirectoryTourSteps.map((step, index) => ({
     ...step,
-    nextLabel: zh && index === 4 ? '下一个' : undefined,
     title: zh ? TITLES[index] : step.title,
     description: zh ? DESCRIPTIONS[index] : step.description,
   }));
@@ -96,13 +95,13 @@ export default function DirectoryTourBasic() {
     rows.push(
       entry('user/memories', 'memories', 1, expanded.has('user/memories')),
     );
-    if (expanded.has('user/memories'))
+    if (!missing && expanded.has('user/memories'))
       rows.push(entry('user/memories/experiences', 'experiences', 2));
     rows.push(
       entry('user/peers', 'peers', 1),
       entry('user/resources', 'resources', 1),
     );
-    if (!missing) rows.push(entry('user/sessions', 'sessions', 1));
+    rows.push(entry('user/sessions', 'sessions', 1));
   }
   rows.push(entry('resources', 'Resources', 0));
   return (
@@ -122,19 +121,17 @@ export default function DirectoryTourBasic() {
               ? '了解 OV 目录树'
               : 'Explore OV directories'}
         </Button>
-        <label>
-          <input
-            type="checkbox"
-            checked={missing}
-            onChange={(event) => {
-              close();
-              setMissing(event.target.checked);
-            }}
-          />
+        <Checkbox
+          checked={missing}
+          onChange={(next) => {
+            close();
+            setMissing(next);
+          }}
+        >
           <span>
-            {zh ? '模拟 sessions 不存在' : 'Simulate missing sessions'}
+            {zh ? '模拟 experiences 不存在' : 'Simulate missing experiences'}
           </span>
-        </label>
+        </Checkbox>
         <output aria-live="polite">
           {complete ? (zh ? '引导已完成' : 'Guide completed') : ''}
           {skipped ? ` (${skipped} ${zh ? '步已跳过' : 'skipped'})` : ''}

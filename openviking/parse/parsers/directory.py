@@ -425,6 +425,7 @@ class DirectoryParser(BaseParser):
                             "ok": False,
                             "meta": error_meta if isinstance(error_meta, dict) else {},
                             "error": str(error),
+                            "error_code": str(getattr(error, "code", "")),
                         }
                     else:
                         try:
@@ -451,6 +452,7 @@ class DirectoryParser(BaseParser):
                                 "ok": False,
                                 "meta": getattr(sub_result, "meta", {}) or {},
                                 "error": str(exc),
+                                "error_code": str(getattr(exc, "code", "")),
                             }
                 elif job["native_parser_unavailable"]:
                     error = (
@@ -697,16 +699,17 @@ class DirectoryParser(BaseParser):
                 pass
             display_path = display_path.replace("\\", "/")
 
-            normalized.append(
-                {
-                    "path": display_path,
-                    "parser": "feishu",
-                    "status": "failed",
-                    "type": str(item.get("type") or ""),
-                    "token": str(item.get("token") or ""),
-                    "reason": str(item.get("reason") or "unknown error"),
-                }
-            )
+            entry = {
+                "path": display_path,
+                "parser": "feishu",
+                "status": "failed",
+                "type": str(item.get("type") or ""),
+                "token": str(item.get("token") or ""),
+                "reason": str(item.get("reason") or "unknown error"),
+            }
+            if item.get("error_code"):
+                entry["error_code"] = str(item["error_code"])
+            normalized.append(entry)
         return normalized
 
     @staticmethod
@@ -758,6 +761,8 @@ class DirectoryParser(BaseParser):
                     entry[key] = meta[key]
         if detail.get("error"):
             entry["error"] = str(detail["error"])
+            if detail.get("error_code"):
+                entry["error_code"] = detail["error_code"]
         return entry
 
     @staticmethod
@@ -904,7 +909,7 @@ class DirectoryParser(BaseParser):
         if preserve_structure:
             parent = str(PurePosixPath(classified_file.rel_path).parent)
             dest = (
-                    _normalize_output_target(f"{target_uri}/{parent}", target_writer)
+                _normalize_output_target(f"{target_uri}/{parent}", target_writer)
                 if parent != "."
                 else target_uri
             )
@@ -1018,14 +1023,13 @@ class DirectoryParser(BaseParser):
                     "ok": False,
                     "meta": meta if isinstance(meta, dict) else {},
                     "error": str(exc),
+                    "error_code": str(getattr(exc, "code", "")),
                 }
         else:
             try:
                 content = detect_and_convert_encoding(src_file.read_bytes(), src_file)
                 if preserve_structure:
-                    dst_uri = _normalize_output_target(
-                        f"{target_uri}/{rel_path}", target_writer
-                    )
+                    dst_uri = _normalize_output_target(f"{target_uri}/{rel_path}", target_writer)
                 else:
                     dst_uri = _normalize_output_target(
                         f"{target_uri}/{PurePosixPath(rel_path).name}",

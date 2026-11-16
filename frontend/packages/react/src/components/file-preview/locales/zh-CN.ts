@@ -1,3 +1,4 @@
+import type { renderErrors as EnglishRenderErrors } from './en-US.js';
 import type { FilePreviewLabels } from '../types.js';
 
 const messages = {
@@ -16,10 +17,18 @@ const messages = {
   editFile: '编辑文件',
   save: '保存编辑',
   editor: '编辑正文',
+  editorLoadFailed: '编辑器加载失败',
+  highlightFailed: '语法高亮加载失败',
   leaveEditing: '取消编辑',
   retry: '重试',
   loadFailed: '文件加载失败',
   saveFailed: '保存失败',
+  versionNoteTitle: '填写版本备注',
+  versionNoteLabel: '描述',
+  versionNotePlaceholder: '给当前版本写句说明',
+  versionNoteCancel: '取消',
+  versionNoteConfirm: '确定',
+  versionNotCreated: '正文已保存，未创建新版本。',
   unsupported: '不支持预览此格式',
   loading: '加载中…',
   fileEmpty: '该文件为空',
@@ -28,3 +37,9 @@ const messages = {
 } satisfies Required<FilePreviewLabels>;
 
 export default messages;
+
+export const renderErrors = {
+  preview: '文件预览失败',
+  content: '页签内容显示失败',
+  editor: '文件编辑器显示失败',
+} satisfies Record<keyof typeof EnglishRenderErrors, string>;

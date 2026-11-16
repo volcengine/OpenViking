@@ -3,9 +3,6 @@ import { FileBrowser } from '@openviking/react/modules/file-browser';
 import { OpenVikingProvider } from '@openviking/react/client';
 import { mount, ok, recordingFetch, settle } from './module-dom.mjs';
 export { act, h, mount, ok, recordingFetch, settle };
-for (const name of ['MutationObserver', 'HTMLIFrameElement', 'SVGElement'])
-  globalThis[name] = window[name];
-globalThis.getComputedStyle = window.getComputedStyle.bind(window);
 export const URI = 'viking://resources/handbook';
 export const initial = () => ({
   uri: URI,
@@ -56,7 +53,7 @@ export function fixture(intercept) {
     }
     if (call.path.endsWith('/fs/ls')) return ok([{ uri: URI, isDir: true }]);
     if (call.path.endsWith('/fs/stat'))
-      return ok({ isDir: true, permission: 'manage' });
+      return ok({ isDir: true, access: 'manage' });
     if (
       call.path.endsWith('/content/abstract') ||
       call.path.endsWith('/content/overview')
@@ -105,8 +102,14 @@ export async function level(principal, text) {
   const entry = [
     ...document.querySelectorAll('.ov-file-browser-acl__entry'),
   ].find((node) => node.querySelector(`button[aria-label^="${principal}:"]`));
-  await click(entry?.querySelector('button'));
-  await click(button(text, entry));
+  const trigger = entry?.querySelector('button');
+  await click(trigger);
+  await click(
+    button(
+      text,
+      document.getElementById(trigger.getAttribute('aria-controls')),
+    ),
+  );
 }
 export const writes = (fetch) =>
   fetch.calls.filter(

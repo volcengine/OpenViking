@@ -119,6 +119,9 @@ class AGFSSyncClientProtocol(Protocol):
     ) -> Dict[str, Any]:
         """Return one page of flat glob matches for the given AGFS directory."""
 
+    def pathlock_handle_mode(self) -> Literal["lock_path", "logical_path"]:
+        """Return the actual runtime provider's lease handle representation."""
+
     def pathlock_acquire_batch_async(
         self,
         ctx: Dict[str, str],

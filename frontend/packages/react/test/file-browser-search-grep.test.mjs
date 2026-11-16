@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { flattenResult } from '../src/modules/file-browser/search-hit-order.ts';
 
 import {
-  flattenResult,
   normalizeGlobResult,
   normalizeGrepResult,
 } from '../src/modules/file-browser/search-model.ts';

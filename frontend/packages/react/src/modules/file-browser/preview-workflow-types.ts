@@ -4,6 +4,24 @@ export interface FileBrowserWorkflowLabels {
   configure: string;
   historyEmpty: string;
   historyLimit: string;
+  snapshotPrompt: string;
+  snapshotChoice: string;
+  keepSnapshot: string;
+  skipSnapshot: string;
+  snapshotFileSaved: string;
+  done: string;
+  snapshotNote: string;
+  saveSnapshot: string;
+  snapshotSaved: string;
+  snapshotUnchanged: string;
+  compareChanges: string;
+  noChanges: string;
+  addedLines: string;
+  removedLines: string;
+  copyOriginal: string;
+  copied: string;
+  historyPreview: string;
+  historyMarkdown: string;
   version: string;
   importFile: string;
   importHint: string;
@@ -13,6 +31,10 @@ export interface FileBrowserWorkflowLabels {
   cancel: string;
   save: string;
   failed: string;
+  copyFailed: string;
+  sourcesRequired: string;
+  skillRequired: string;
+  failureTitle: (action: string) => string;
   sources: string;
   skill: string;
   instruction: string;
@@ -50,5 +72,7 @@ export interface PreviewHistoryEntry {
   snapshot: string;
   path: string;
   title: string;
+  numbered?: boolean;
+  note?: string;
   timestamp?: number;
 }

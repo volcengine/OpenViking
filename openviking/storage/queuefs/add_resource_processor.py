@@ -375,7 +375,7 @@ class AddResourceProcessor(DequeueHandlerBase):
                 checkpoint = self._resource_service._initial_source_checkpoint(
                     result.get("meta"), instruction=msg.instruction
                 )
-                if checkpoint is not None:
+                if checkpoint is not None and result.get("import_complete") is not False:
                     result["source_checkpoint"] = checkpoint
                 await tracker.complete(
                     msg.task_id,

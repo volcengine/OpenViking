@@ -1,3 +1,4 @@
+import { Select, SelectOption } from '#demo-controls';
 import { useMemo, useState } from 'react';
 import { useLang } from '@rspress/core/runtime';
 import { Console } from '@openviking/react/modules/console';
@@ -12,19 +13,21 @@ export default function ConsoleChat() {
     <>
       <label>
         {zh ? '模拟服务：' : 'Simulated service: '}
-        <select
-          value={edition}
-          onChange={(event) => setEdition(event.target.value as typeof edition)}
+        <Select
+          value={[edition]}
+          onChange={([value]) => {
+            if (value !== undefined) setEdition(value);
+          }}
         >
-          <option value="native">
+          <SelectOption value="native">
             {zh ? '开源协议（中断与追问）' : 'Native (interrupt and follow-up)'}
-          </option>
-          <option value="commercial">
+          </SelectOption>
+          <SelectOption value="commercial">
             {zh
               ? '火山协议（不提供这两项能力）'
               : 'Commercial (neither capability)'}
-          </option>
-        </select>
+          </SelectOption>
+        </Select>
       </label>
       <div style={{ height: 640 }}>
         <Console

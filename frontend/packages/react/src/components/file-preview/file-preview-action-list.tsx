@@ -1,3 +1,4 @@
+import { usePreviewActionExposure } from '../../shared/analytics/preview-actions.js';
 import { Button } from '../../shared/primitives/button/button.js';
 import { Tooltip } from '../../shared/primitives/tooltip/tooltip.js';
 import { FilePreviewMenu } from './file-preview-menu.js';
@@ -13,16 +14,15 @@ export function FilePreviewActionList({
   disabled,
   text,
   pending,
-  failure,
   execute,
 }: {
   items: FilePreviewActionItems;
   disabled: boolean;
   text: Required<FilePreviewLabels>;
   pending: boolean;
-  failure?: { reason: unknown };
   execute: (action: FilePreviewAction) => Promise<void>;
 }) {
+  const exposure = usePreviewActionExposure(items);
   const groups = normalizeFilePreviewActions(items);
   const count = groups.reduce((total, group) => total + group.length, 0);
   const action = groups[0]?.[0];
@@ -32,6 +32,7 @@ export function FilePreviewActionList({
       {count === 1 ? (
         <Tooltip content={action.label}>
           <Button
+            ref={exposure}
             size="small"
             type="default"
             iconOnly
@@ -58,16 +59,6 @@ export function FilePreviewActionList({
           onSelect={(selected) => void execute(selected)}
         />
       )}
-      {failure ? (
-        <span className="ov-file-preview__action-error" role="alert">
-          {text.actionFailed}
-          {failure.reason instanceof Error
-            ? `: ${failure.reason.message}`
-            : typeof failure.reason === 'string'
-              ? `: ${failure.reason}`
-              : ''}
-        </span>
-      ) : null}
     </>
   );
 }

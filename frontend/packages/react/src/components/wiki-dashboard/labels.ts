@@ -1,3 +1,6 @@
+import { useLocale } from '../../shared/locale-context.js';
+import { renderErrors as renderEn } from './locales/en-US.js';
+import { renderErrors as renderZh } from './locales/zh-CN.js';
 import type { WikiDashboardLabels } from './types.js';
 import { mergeLabels } from '../../shared/locale.js';
 const en: WikiDashboardLabels = {
@@ -54,3 +57,8 @@ export const wikiLabels = (
   locale?: string,
   labels?: Partial<WikiDashboardLabels>,
 ): WikiDashboardLabels => mergeLabels(locale === 'zh-CN' ? zh : en, labels);
+
+/** Private render-failure copy; independent of request errors and public label overrides. */
+export function useRenderErrors(locale?: Parameters<typeof useLocale>[0]) {
+  return useLocale(locale) === 'zh-CN' ? renderZh : renderEn;
+}

@@ -4,6 +4,8 @@ import type { FilePreviewActions } from './types.js';
 /** A host command. Return values are ignored; rejected promises report failure. */
 export interface FilePreviewAction {
   key: string;
+  /** Keep a frequently used command visible next to the view controls. */
+  pinned?: boolean;
   icon: ReactNode;
   label: string;
   disabled?: boolean;

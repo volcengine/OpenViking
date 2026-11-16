@@ -282,6 +282,34 @@ class ContentWriteCoordinator:
             return content
         return await self._privacy_sanitizer.sanitize_for_write(content, ctx=ctx, uri=uri)
 
+    @staticmethod
+    def _resolve_conflict_edit(
+        previous_content: str,
+        final_bytes: bytes,
+        ingest_options: IngestOptions | None,
+        *,
+        user_id: str,
+    ) -> tuple[bytes, IngestOptions, list[str] | None]:
+        resolved, conflict_tags = resolve_manual_conflicts(
+            previous_content, final_bytes.decode("utf-8"), user_id=user_id
+        )
+        options = ingest_options or IngestOptions()
+        if conflict_tags is None:
+            return final_bytes, options, None
+        return (
+            resolved.encode("utf-8"),
+            replace(
+                options,
+                search_tags=merge_search_tags(options.search_tags, conflict_tags),
+                search_tag_mode=(
+                    "append"
+                    if options.search_tags is None
+                    else IngestOptions.vector_search_tag_mode(options.search_tag_mode)
+                ),
+            ),
+            conflict_tags,
+        )
+
     async def write(
         self,
         *,
@@ -295,6 +323,7 @@ class ContentWriteCoordinator:
         tag_mode: str = "replace",
         acl: AclSpec | Dict[str, Any] | None = None,
         resolve_conflicts: bool = False,
+        defer_processing: bool = False,
     ) -> Dict[str, Any]:
         task = None
         task_id = None
@@ -330,6 +359,7 @@ class ContentWriteCoordinator:
                     tag_mode=tag_mode,
                     acl=acl,
                     resolve_conflicts=resolve_conflicts,
+                    defer_processing=defer_processing,
                     root_operation="content_write",
                     root_task_factory=create_root_task,
                 )
@@ -347,6 +377,31 @@ class ContentWriteCoordinator:
             result,
             ctx=ctx,
             wait=wait,
+        )
+
+    async def _complete_content_write_task_directly(
+        self,
+        *,
+        task_factory: Callable[[], Awaitable[Any]],
+        result: Dict[str, Any],
+        ctx: RequestContext,
+        resource_id: str,
+    ) -> None:
+        task = await task_factory()
+        tracker = get_task_tracker()
+        await tracker.start(
+            task.task_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
+        terminal_result = deepcopy(result)
+        terminal_result.setdefault("task_id", task.task_id)
+        await tracker.complete(
+            task.task_id,
+            terminal_result,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+            resource_id=resource_id,
         )
 
     async def _fail_content_write_task(
@@ -496,6 +551,7 @@ class ContentWriteCoordinator:
         tag_mode: str = "replace",
         acl: AclSpec | Dict[str, Any] | None = None,
         resolve_conflicts: bool = False,
+        defer_processing: bool = False,
         root_operation: str = "content_write",
         root_task_factory: Callable[[], Awaitable[Any]] | None = None,
     ) -> Dict[str, Any]:
@@ -525,6 +581,10 @@ class ContentWriteCoordinator:
                 ingest_options,
                 acl_update=await self._viking_fs.prepare_acl_update(normalized_uri, acl, ctx),
             )
+        if defer_processing and ingest_options != IngestOptions():
+            raise InvalidArgumentError("defer_processing does not support tags or ACL updates")
+        if defer_processing and resolve_conflicts:
+            raise InvalidArgumentError("defer_processing does not support resolve_conflicts")
 
         # ``create`` is an upsert alias for ``replace``: it overwrites an existing
         # file or materializes a missing one, never conflicting. Normalize it away
@@ -558,6 +618,20 @@ class ContentWriteCoordinator:
             validate_storage=False,
         )
         telemetry_id = get_current_telemetry().telemetry_id
+
+        if defer_processing:
+            return await self._write_file_only(
+                uri=normalized_uri,
+                root_uri=root_uri,
+                content=content,
+                mode=mode,
+                response_mode=response_mode,
+                context_type=context_type,
+                ctx=ctx,
+                root_operation=root_operation,
+                root_task_factory=root_task_factory,
+                defer_processing=True,
+            )
 
         if context_type == "memory" and not is_abstract_overview_uri(normalized_uri):
             return await self._write_memory_with_refresh(
@@ -689,6 +763,10 @@ class ContentWriteCoordinator:
             operation["ingest_options"] != IngestOptions() for operation in normalized_operations
         ):
             raise InvalidArgumentError("defer_processing does not support tags or ACL updates")
+        if defer_processing and any(
+            operation["resolve_conflicts"] for operation in normalized_operations
+        ):
+            raise InvalidArgumentError("defer_processing does not support resolve_conflicts")
         for operation in normalized_operations:
             operation["content"] = normalize_account_memory_template_write(
                 operation["uri"], operation["content"], operation["mode"]
@@ -770,6 +848,7 @@ class ContentWriteCoordinator:
                             and write_mode == "replace"
                             and current == desired
                             and operation["ingest_options"] == IngestOptions()
+                            and not operation["resolve_conflicts"]
                         ):
                             unchanged.append(uri)
                             continue
@@ -781,6 +860,30 @@ class ContentWriteCoordinator:
                 pending.append((operation, exists, write_mode))
 
             if not file_only and not defer_processing:
+                for operation, existed, _ in pending:
+                    uri = operation["uri"]
+                    if not (
+                        operation["resolve_conflicts"]
+                        and existed
+                        and operation["mode"] in {"replace", "create"}
+                        and context_type_for_uri(uri) == "resource"
+                        and uri.lower().endswith(".md")
+                    ):
+                        continue
+                    previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
+                    edited = operation["content"]
+                    edited_bytes = edited.encode("utf-8") if isinstance(edited, str) else edited
+                    (
+                        resolved_bytes,
+                        operation["ingest_options"],
+                        operation["conflict_tags"],
+                    ) = self._resolve_conflict_edit(
+                        previous_content,
+                        edited_bytes,
+                        operation["ingest_options"],
+                        user_id=ctx.user.user_id,
+                    )
+                    operation["content"] = resolved_bytes.decode("utf-8")
                 prepared_resources = await self._prepare_batch_resource_plans(
                     pending=pending,
                     ctx=ctx,
@@ -825,6 +928,10 @@ class ContentWriteCoordinator:
                         if prepared is not None:
                             final_content = prepared.final_bytes
                             committed_resource_plans.append(prepared)
+                        if not final_content.strip() and operation.get("conflict_tags") is not None:
+                            await self._upsert_uri_tags(
+                                uri=uri, tags=operation["conflict_tags"], mode="append", ctx=ctx
+                            )
                         if (
                             not file_only
                             and context_type_for_uri(uri)
@@ -939,6 +1046,17 @@ class ContentWriteCoordinator:
                 else:
                     lock_handoff = None
                     refresh = {"kind": "none"}
+                if defer_processing and not file_only:
+                    await self._complete_content_write_task_directly(
+                        task_factory=root_task_factory,
+                        result=result,
+                        ctx=ctx,
+                        resource_id=normalized_root,
+                    )
+                    await lock_guard.close()
+                    lock_settled = True
+                    return result
+
                 await root_task_factory()
                 root_dispatched = False
 
@@ -1110,6 +1228,15 @@ class ContentWriteCoordinator:
                 raise InvalidArgumentError(
                     f"batch-write append does not support binary content: {uri}"
                 )
+            resolve_conflicts = raw.get("resolve_conflicts", False)
+            if not isinstance(resolve_conflicts, bool):
+                raise InvalidArgumentError(
+                    f"batch-write resolve_conflicts must be a boolean: {uri}"
+                )
+            if resolve_conflicts and has_content_base64:
+                raise InvalidArgumentError(
+                    f"batch-write resolve_conflicts requires text content: {uri}"
+                )
             if context_type == "memory" and mode in {"create", "upsert"}:
                 self._validate_create_extension(uri)
             if context_type == "memory" and mode == "append":
@@ -1138,6 +1265,7 @@ class ContentWriteCoordinator:
                     "mode": mode,
                     "expected_sha256": raw.get("expected_sha256"),
                     "if_absent": if_absent,
+                    "resolve_conflicts": resolve_conflicts,
                     "ingest_options": ingest_options,
                 }
             )
@@ -1930,19 +2058,11 @@ class ContentWriteCoordinator:
             if (mode == "append" or resolve_conflicts) and target_preexisting:
                 previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
             if resolve_conflicts:
-                edited = content.decode("utf-8") if isinstance(content, bytes) else content
-                content, conflict_tags = resolve_manual_conflicts(previous_content, edited)
-                if conflict_tags is not None:
-                    options = ingest_options or IngestOptions()
-                    ingest_options = replace(
-                        options,
-                        search_tags=merge_search_tags(options.search_tags, conflict_tags),
-                        search_tag_mode=(
-                            "append"
-                            if options.search_tags is None
-                            else IngestOptions.vector_search_tag_mode(options.search_tag_mode)
-                        ),
-                    )
+                edited_bytes = content.encode("utf-8") if isinstance(content, str) else content
+                resolved_bytes, ingest_options, conflict_tags = self._resolve_conflict_edit(
+                    previous_content, edited_bytes, ingest_options, user_id=ctx.user.user_id
+                )
+                content = resolved_bytes.decode("utf-8")
             final_bytes = await self._render_final_bytes(
                 uri,
                 content,
@@ -1981,6 +2101,9 @@ class ContentWriteCoordinator:
                     target=prepared.target,
                 ),
             )
+            if resolve_conflicts and not final_bytes.strip() and conflict_tags is not None:
+                # Empty bodies can skip vector upserts, leaving stale tags.
+                await self._upsert_uri_tags(uri=uri, tags=conflict_tags, mode="append", ctx=ctx)
             has_async_work = bool(
                 prepared.plan.direct_index_actions or prepared.plan.file_refresh is not None
             )
@@ -2163,8 +2286,12 @@ class ContentWriteCoordinator:
             # materialized, while keeping the state check inside the exact lock.
             await self._classify_locked_write_target(uri, ctx=ctx)
             previous_content = await self._viking_fs.read_file(uri, ctx=ctx)
-            await self._write_in_place(
-                uri, content, mode=mode, ctx=ctx, lease_ref=lease, existing_raw=previous_content
+            await self._commit_content(
+                [uri],
+                lease,
+                lambda: self._write_in_place(
+                    uri, content, mode=mode, ctx=ctx, lease_ref=lease, existing_raw=previous_content
+                ),
             )
             result = self._build_write_result(
                 uri=uri,
@@ -2307,6 +2434,7 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
         root_operation: str = "content_write",
         root_task_factory: Callable[[], Awaitable[Any]] | None = None,
+        defer_processing: bool = False,
     ) -> Dict[str, Any]:
         lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
         lock_guard = PathLockGuard(self._viking_fs._async_agfs)
@@ -2325,14 +2453,19 @@ class ContentWriteCoordinator:
 
         try:
             target_state = await self._classify_locked_write_target(uri, ctx=ctx)
-            final_bytes = await self._write_in_place(
-                uri,
-                content,
-                mode=mode,
-                ctx=ctx,
-                lease_ref=lease,
-                is_new_file=target_state.is_new_file,
+            final_bytes = await self._commit_content(
+                [uri],
+                lease,
+                lambda: self._write_in_place(
+                    uri,
+                    content,
+                    mode=mode,
+                    ctx=ctx,
+                    lease_ref=lease,
+                    is_new_file=target_state.is_new_file,
+                ),
             )
+            processing_status = "deferred" if defer_processing else "skipped"
             result = self._build_write_result(
                 uri=uri,
                 root_uri=root_uri,
@@ -2340,10 +2473,19 @@ class ContentWriteCoordinator:
                 mode=response_mode,
                 written_bytes=len(final_bytes),
                 queue_status=None,
-                semantic_status="skipped",
-                vector_status="skipped",
+                semantic_status=processing_status,
+                vector_status=processing_status,
             )
             if root_task_factory is not None:
+                if defer_processing:
+                    await self._complete_content_write_task_directly(
+                        task_factory=root_task_factory,
+                        result=result,
+                        ctx=ctx,
+                        resource_id=uri,
+                    )
+                    await lock_guard.close()
+                    return result
                 await root_task_factory()
                 root_dispatched = False
 

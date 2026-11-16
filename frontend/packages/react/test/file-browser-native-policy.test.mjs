@@ -27,7 +27,7 @@ const cases = [
     `${rootUri}/guide.md`,
     false,
     [],
-    ['download', 'exportPack', 'delete'],
+    ['download', 'history', 'exportPack', 'delete'],
     true,
   ],
   [`${rootUri}/folder`, true, [], ['importPack', 'exportPack'], false],
@@ -50,7 +50,7 @@ const cases = [
       `${home}/memories/experiences/nested/a.md`,
       false,
       [],
-      ['download', 'exportPack', 'delete'],
+      ['download', 'history', 'exportPack', 'delete'],
       true,
     ],
   ]),
@@ -79,7 +79,7 @@ const cases = [
     `${rootUri}/wiki-other/doc.md`,
     false,
     [{ to: target }],
-    ['download', 'exportPack', 'delete'],
+    ['download', 'history', 'exportPack', 'delete'],
     true,
   ],
   [
@@ -111,10 +111,12 @@ for (const [uri, isDir, targets, actions, editable] of cases) {
       );
       assert.equal(context.canEdit, editable);
       if (/\.(png|webm)$/.test(uri)) {
-        assert.equal(
-          view.container.querySelector('.ov-file-preview__footer'),
-          null,
+        const footer = view.container.querySelector('.ov-file-preview__footer');
+        assert.match(
+          footer?.textContent ?? '',
+          /Content parsing provided by the Content Understanding Model/,
         );
+        assert.doesNotMatch(footer.textContent, /characters?/);
         assert.ok(
           view.container.querySelector('img[data-ov-preview-image],video'),
         );
@@ -156,7 +158,7 @@ test('boolean visibility hides defaults without granting resources a capability 
           download: false,
           exportPack: false,
           delete: false,
-          history: true,
+          history: false,
           configure: true,
         },
       }),
@@ -172,7 +174,7 @@ test('boolean visibility hides defaults without granting resources a capability 
     await view.render(tree(fetch, uri, { ...props, readOnly: true }));
     assert.deepEqual(
       context.defaultActions.flat().map((item) => item.key),
-      ['download', 'exportPack'],
+      ['download', 'history', 'exportPack'],
     );
     assert.equal(context.canEdit, false);
   } finally {
