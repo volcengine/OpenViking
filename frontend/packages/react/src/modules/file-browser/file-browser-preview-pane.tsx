@@ -19,8 +19,8 @@ import { FileBrowserFailure } from './file-browser-failure.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
 import type { useFileBrowserAcl } from './use-file-browser-acl.js';
 import { useFileBrowserPreviewActions } from './use-file-browser-preview-actions.js';
+import type { FileBrowserApi } from './file-browser-state-types.js';
 import type {
-  FileBrowserApi,
   FileBrowserLabels,
   FileBrowserPreviewActions,
   FileBrowserPreviewSlots,

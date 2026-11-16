@@ -3,21 +3,19 @@ import { resolveLabels, resolveSummaryLabels } from './file-browser-labels.js';
 import { useMemo, useRef, useState } from 'react';
 import { useDirectoryPreviewLevels } from './use-directory-preview-levels.js';
 
-import type {
-  FileTreeEntryRow,
-  FileTreeRow,
-} from '../../components/file-tree/index.js';
+import type { FileTreeEntryRow } from '../../components/file-tree/index.js';
 import { useOvClient } from '../../client/provider.js';
 import { useFsPreview } from './use-fs-preview.js';
 import { dashboardKey, mergeDashboardTab } from './dashboard-model.js';
 import { useBrowserDashboards } from './use-browser-dashboards.js';
 import { useFsTree } from './use-fs-tree.js';
+import { useFileBrowserTreeActions } from './use-file-browser-tree-actions.js';
 import { findSelectedRowId } from './fs-uri.js';
 import type {
   FileBrowserActions,
   FileBrowserApi,
   UseFileBrowserOptions,
-} from './types.js';
+} from './file-browser-state-types.js';
 
 /**
  * 文件浏览模块的目录与预览联动：目录行展开树，文件行打开预览。
@@ -48,16 +46,17 @@ export function useFileBrowser({
   const text = resolveLabels(accessLabels, locale);
   const client = useOvClient('local');
   const [pendingUri, setPendingUri] = useState<string | null>(currentUri);
-  const [refreshing, setRefreshing] = useState(false);
-  // External edits must refresh the directory and preview even if URI and client
-  // are unchanged; the shared generation invalidates both requests.
-  const [refreshGeneration, setRefreshGeneration] = useState(0);
   const tree = useFsTree({
     client,
     rootUri,
     defaultExpandedUri,
     requestOptions,
   });
+  const {
+    actions: treeActions,
+    refreshing,
+    refreshGeneration,
+  } = useFileBrowserTreeActions(tree);
   // 当前资源是目录还是文件，决定预览读摘要还是正文。
   //
   // 判定不能用「可见行里有没有这一行」：根目录本身从不出现在 `tree.rows` 里，
@@ -106,7 +105,7 @@ export function useFileBrowser({
   // 回调引用必须稳定，且不能依赖 `onUriChange`：宿主传内联箭头函数时它每轮都
   // 变，这个回调跟着变，预览的取数 effect 依赖它，于是每次提交都重跑并取消
   // 上一次请求——一次选中就能滚成无限重载。用 ref 读最新的通知函数，依赖只留
-  // `openTree`。
+  // 树操作。
   //
   // Clicking an ancestor in the breadcrumb selects it — the same action as clicking
   // that row in the tree, so it goes through the same selection path rather than a
@@ -117,23 +116,25 @@ export function useFileBrowser({
   // change this callback, and the preview's loading effect depends on it — so every
   // commit would re-run the effect and cancel the previous request, turning one
   // selection into an endless reload. A ref carries the latest notification and
-  // only `openTree` remains as a dependency.
-  const { open: openTree, toggleExpand, loadMore, retry, refresh } = tree;
+  // only the tree operations remain as dependencies.
+  const { open: openTree, toggleExpand, cancelReveal } = tree;
   const notifyUriChange = useRef(onUriChange);
   notifyUriChange.current = onUriChange;
   const openParent = useMemo(
     () => async (uri: string) => {
+      cancelReveal();
       setPendingUri(uri);
       notifyUriChange.current(uri);
       await openTree(uri);
     },
-    [openTree],
+    [cancelReveal, openTree],
   );
 
-  const { rows, openPath, reveal, cancelReveal } = tree;
+  const { rows, openPath, reveal } = tree;
   const openResource = useMemo(
     () => async (resource: string) => {
       const uri = requestUri(resource);
+      cancelReveal();
       setPendingUri(uri);
       notifyUriChange.current(uri);
       const directory = tree.directoryUris.has(identifyUri(uri))
@@ -141,7 +142,7 @@ export function useFileBrowser({
         : uri.slice(0, uri.lastIndexOf('/'));
       await openPath(directory);
     },
-    [openPath, tree.directoryUris, identifyUri, requestUri],
+    [cancelReveal, openPath, tree.directoryUris, identifyUri, requestUri],
   );
 
   const boards = useBrowserDashboards({
@@ -225,24 +226,11 @@ export function useFileBrowser({
         if (row.type === 'directory') await openTree(row.uri);
       },
       toggleExpand,
-      loadMore: async (row: FileTreeRow) => {
-        if ('parentId' in row && row.parentId) await loadMore(row.parentId);
-      },
-      retry: async (row: FileTreeRow) => {
-        if ('parentId' in row && row.parentId) await retry(row.parentId);
-      },
-      // Refresh the directory and preview together after external changes.
-      refresh: async () => {
-        setRefreshing(true);
-        try {
-          setRefreshGeneration((generation) => generation + 1);
-          await refresh();
-        } finally {
-          setRefreshing(false);
-        }
-      },
+      ...treeActions,
       openUri: openResource,
       openResource: navigateResource,
+      reveal,
+      cancelReveal,
       openDashboard,
       setPreviewKey: (key: string) => {
         if (activeUri && key === dashboardKey(activeUri))
@@ -265,12 +253,11 @@ export function useFileBrowser({
       cancelReveal,
       openTree,
       toggleExpand,
-      loadMore,
-      retry,
-      refresh,
+      treeActions,
       openDashboard,
       closeDashboard,
       openResource,
+      reveal,
       activeUri,
     ],
   );
