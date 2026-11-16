@@ -17,9 +17,13 @@ import {
 
 test('the FileBrowser editor highlights pending Wiki anchors without including metadata in the draft', async () => {
   const { view, fetch } = await mountWikiFile();
+  const dashboard = () =>
+    view.container.querySelector('[role="tab"][data-key^="dashboard:"]');
   try {
+    assert.ok(dashboard());
     await click(view.container.querySelector('button[aria-label="Edit"]'));
     const editor = await waitForEditor(view.container);
+    assert.equal(dashboard(), null);
     const markedLines = () => [
       ...editor.querySelectorAll('.ov-file-preview__annotation-line'),
     ];
@@ -58,6 +62,7 @@ test('the FileBrowser editor highlights pending Wiki anchors without including m
     );
     assert.equal(write.body.content, 'The process requires three approvals.');
     assert.equal(write.body.resolve_conflicts, true);
+    assert.ok(dashboard());
   } finally {
     await view.unmount();
   }
@@ -66,6 +71,8 @@ test('the FileBrowser editor highlights pending Wiki anchors without including m
 test('the FileBrowser Wiki conflict pencil opens the matching file directly in the editor', async () => {
   const { view, fetch, openDashboard, pencil, activeTab } =
     await mountWikiFile();
+  const dashboard = () =>
+    view.container.querySelector('[role="tab"][data-key^="dashboard:"]');
   try {
     for (let attempt = 0; attempt < 2; attempt++) {
       await openDashboard();
@@ -78,10 +85,12 @@ test('the FileBrowser Wiki conflict pencil opens the matching file directly in t
       await click(pencil());
       const editor = await waitForEditor(view.container);
       assert.equal(activeTab(), file);
+      assert.equal(dashboard(), null);
       assert.equal(editor.textContent, body + fixedSentence);
       await click(button('Cancel', view.container));
       assert.equal(view.container.querySelector('.cm-content'), null);
       assert.equal(activeTab(), file);
+      assert.ok(dashboard());
     }
     assert.equal(fetch.countOf('/api/v1/content/write'), 0);
   } finally {

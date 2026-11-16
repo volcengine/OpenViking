@@ -474,6 +474,7 @@ All fields are optional, and omitted fields follow `locale`.
 - Line boundaries, whitespace and word characters follow the server's Python semantics. A page that fills the preview cap triggers a full read before filtering and truncation, so a page end cannot be mistaken for a file end or expose partial metadata.
 - Wiki ownership follows compile targets and resource tags, independently of dashboard visibility. Trailing `CONFLICTS_CONTENT` comments are separated from the body and still supplied to the conflict dashboard parser. Invalid JSON stays out of the body while the dashboard retains its error and retry behavior.
 - When editing a Wiki file, unresolved conflicts with a unique body match highlight the matching lines. Hover over a highlighted line to see the conflict description and reason.
+- The dashboard tab is hidden while editing a file and returns after saving or cancelling.
 - Wiki saves send `use_snapshot: true` to preserve version history and `resolve_conflicts: true` so the server preserves and updates conflict records. Ordinary text saves leave snapshots disabled by default.
 - All YAML frontmatter, ordinary HTML comments and fenced Markdown examples survive. In a Markdown file with confirmed scope, an unclosed reserved trailer starting on its own line is hidden through the end of the file; markers quoted in YAML frontmatter, code fences or inline examples survive.
 - The refresh button reloads the expanded directories and the current preview.

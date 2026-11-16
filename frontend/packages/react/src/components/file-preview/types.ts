@@ -244,6 +244,8 @@ export interface FilePreviewContentTab extends FilePreviewTabBase {
    * Tab kind discriminator, always `content`.
    */
   kind: 'content';
+  /** 编辑文件时隐藏页签。Hide the tab while a file is being edited. */
+  hideWhileEditing?: boolean;
   /**
    * 页签行显示的内容。内容页签没有 `source.fileName` 可以回落，因此这里是必填。
    * What the tab row shows. A content tab has no `source.fileName` to fall back

@@ -157,11 +157,12 @@ import '@openviking/react/components/file-preview/style.css';
 
 展示宿主自己的内容，例如看板或图谱，包含 `FilePreviewTabBase` 的全部字段。
 
-| 参数    | 说明                                                 | 类型        | 默认值 |
-| ------- | ---------------------------------------------------- | ----------- | ------ |
-| kind    | 页签类型，固定为 `'content'`                         | `'content'` | 必填   |
-| title   | 页签行显示的内容，内容页签没有文件名可以回落         | `ReactNode` | 必填   |
-| content | 页签正文，铺满页签行以下的区域，排版与滚动由宿主负责 | `ReactNode` | 必填   |
+| 参数             | 说明                                                 | 类型        | 默认值  |
+| ---------------- | ---------------------------------------------------- | ----------- | ------- |
+| kind             | 页签类型，固定为 `'content'`                         | `'content'` | 必填    |
+| title            | 页签行显示的内容，内容页签没有文件名可以回落         | `ReactNode` | 必填    |
+| content          | 页签正文，铺满页签行以下的区域，排版与滚动由宿主负责 | `ReactNode` | 必填    |
+| hideWhileEditing | 编辑文件期间隐藏该页签                               | `boolean`   | `false` |
 
 ### FilePreviewSource
 

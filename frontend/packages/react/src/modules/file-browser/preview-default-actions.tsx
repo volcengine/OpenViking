@@ -49,6 +49,7 @@ export function defaultPreviewActions({
         pinned: policy.fileHistory,
         label: text.history,
         icon: <HistoryIcon width={16} height={16} />,
+        className: 'ov-file-browser__preview-action--history',
         onClick: () => show('history'),
       }),
     );

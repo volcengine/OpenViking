@@ -157,11 +157,12 @@ A directory's summary levels, for example an L0 abstract and an L1 overview. It 
 
 Shows content of your own, such as a dashboard or a graph. It includes every field of `FilePreviewTabBase`.
 
-| Property | Description                                                                          | Type        | Default  |
-| -------- | ------------------------------------------------------------------------------------ | ----------- | -------- |
-| kind     | Tab kind, always `'content'`                                                         | `'content'` | Required |
-| title    | What the tab row shows; a content tab has no file name to fall back to               | `ReactNode` | Required |
-| content  | The tab body, filling everything below the tab row; you own its layout and scrolling | `ReactNode` | Required |
+| Property         | Description                                                                          | Type        | Default  |
+| ---------------- | ------------------------------------------------------------------------------------ | ----------- | -------- |
+| kind             | Tab kind, always `'content'`                                                         | `'content'` | Required |
+| title            | What the tab row shows; a content tab has no file name to fall back to               | `ReactNode` | Required |
+| content          | The tab body, filling everything below the tab row; you own its layout and scrolling | `ReactNode` | Required |
+| hideWhileEditing | Hides this tab while a file is being edited                                          | `boolean`   | `false`  |
 
 ### FilePreviewSource
 

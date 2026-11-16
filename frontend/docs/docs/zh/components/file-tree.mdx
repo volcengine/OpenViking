@@ -190,18 +190,20 @@ import '@openviking/react/components/file-tree/style.css';
 
 默认文案随 `locale` 切换，下表列出中文默认值。
 
-| 参数     | 说明                                        | 类型                 | 默认值            |
-| -------- | ------------------------------------------- | -------------------- | ----------------- |
-| search   | 搜索入口的文案                              | `string`             | `搜索文件 ⌘+K...` |
-| refresh  | 刷新按钮的提示文案和无障碍名称              | `string`             | `刷新文件树`      |
-| empty    | 空树和空目录的提示                          | `string`             | `暂无文件`        |
-| error    | 子节点或整树加载失败时的默认提示            | `string`             | `加载失败`        |
-| retry    | 「重试」按钮文案                            | `string`             | `重试`            |
-| loadMore | 「加载更多」按钮文案                        | `string`             | `加载更多`        |
-| loading  | 加载中的提示                                | `string`             | `加载中…`         |
-| expand   | 展开按钮的无障碍名称，`{name}` 替换为节点名 | `string`             | `展开 {name}`     |
-| collapse | 折叠按钮的无障碍名称，`{name}` 替换为节点名 | `string`             | `收起 {name}`     |
-| info     | 目录说明文案                                | `FileTreeInfoLabels` | -                 |
+| 参数           | 说明                                        | 类型                 | 默认值            |
+| -------------- | ------------------------------------------- | -------------------- | ----------------- |
+| search         | 搜索入口的文案                              | `string`             | `搜索文件 ⌘+K...` |
+| refresh        | 刷新按钮的提示文案和无障碍名称              | `string`             | `刷新文件树`      |
+| empty          | 整棵树为空时的提示                          | `string`             | `暂无文件`        |
+| emptyDirectory | 展开空文件夹时的提示                        | `string`             | `该文件夹为空`    |
+| shared         | 共享资源根目录的标签，空字符串可隐藏        | `string`             | `共享`            |
+| error          | 子节点或整树加载失败时的默认提示            | `string`             | `加载失败`        |
+| retry          | 「重试」按钮文案                            | `string`             | `重试`            |
+| loadMore       | 「加载更多」按钮文案                        | `string`             | `加载更多`        |
+| loading        | 加载中的提示                                | `string`             | `加载中…`         |
+| expand         | 展开按钮的无障碍名称，`{name}` 替换为节点名 | `string`             | `展开 {name}`     |
+| collapse       | 折叠按钮的无障碍名称，`{name}` 替换为节点名 | `string`             | `收起 {name}`     |
+| info           | 目录说明文案                                | `FileTreeInfoLabels` | -                 |
 
 ### FileTreeInfoLabels
 
