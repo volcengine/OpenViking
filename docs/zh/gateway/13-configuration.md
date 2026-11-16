@@ -59,6 +59,7 @@ description: 查询 OpenViking 网关的配置字段、环境变量、上下文�
 | `openviking_breaker_seconds` | 两者 | `30` | 大于 0 | 一个账号的 OpenViking 调用被跳过多久后进行试探调用 |
 | `health_interval_seconds` | 两者 | `60` | 1 及以上 | 检查 OpenViking 状态的间隔秒数 |
 | `capture_concurrency` | 两者 | `1` | 1 及以上 | 每个进程并发投递的会话数；停机时停止新 claim，最多等待在途投递 100 秒 |
+| `capture_delivery_records` | 两者 | `false` | `true`、`false` | 每次投递、提交和失败的尝试都写一条[保存记录](../api/25-gateway.md#capture-records)，而不只在状态变化时写。使用 `store` 输出时，这些记录和请求共用每个账户的存储记录历史（Redis 每个账户保留最近 10,000 行），因此请求页和概览覆盖的时间更短；适合配合 `stdout` 和 `file` 输出使用 |
 | `client_rules` | 两者 | `{}`（只用内置规则） | 见[客户端规则](#client-rules) | 在网关内置的辅助请求和客户端插入消息识别规则上增删条目 |
 
 例如，独立网关的 `gateway.conf` 可以在尚未配置任何账号时路由 OpenViking 密钥：

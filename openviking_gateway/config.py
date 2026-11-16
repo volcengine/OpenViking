@@ -137,6 +137,8 @@ class GatewayConfig(BaseModel):
     openviking_breaker_seconds: float = Field(default=30, gt=0)
     health_interval_seconds: float = Field(default=60, ge=1)
     capture_concurrency: int = Field(default=1, ge=1)
+    # Write a capture record for every delivery, commit and failed attempt.
+    capture_delivery_records: bool = False
     client_rules: ClientRules = Field(default_factory=ClientRules)
 
     @model_validator(mode="after")

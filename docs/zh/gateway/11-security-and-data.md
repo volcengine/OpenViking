@@ -79,7 +79,7 @@ SQLite 文件只有运行网关的系统用户能读取；Redis 由网络和 ACL
 | Responses 响应与上游的对应关系 | 30 天 | `response_ttl_seconds` |
 | OpenViking 中的会话和记忆 | 遵循 OpenViking 自己的规则 | — |
 
-OpenViking 密钥记录过期，或被使用 `volatile-lru` 的 Redis 后端驱逐后，写回任务因读不到凭据而以 `gateway_key_revoked` 暂停。用户的下一个请求会重建记录，并在同一 scope 中恢复写回。如果用户不再请求，最后一轮待写回内容不会存入 OpenViking。这些状态属于缓存，允许丢失。与吊销一样，现有的短时进程内缓存可能延迟观察到过期。
+OpenViking 密钥记录在密钥使用期间会自动续期：剩余时间不到 `session_ttl_seconds` 的一半时，请求会把记录按完整时长重新保存。记录仍然过期，或被使用 `volatile-lru` 的 Redis 后端驱逐后，写回任务读不到凭据，会以 `gateway_key_missing` 每 5 分钟重试一次，最多持续 `session_ttl_seconds`，之后以 `gateway_key_revoked` 暂停。用户的下一个请求会重建记录，并在同一 scope 中恢复写回。如果用户不再请求，最后一轮待写回内容不会存入 OpenViking。这些状态属于缓存，允许丢失。与吊销一样，现有的短时进程内缓存可能延迟观察到过期。
 
 Redis 每个账号最多保留 10,000 条请求日志。读取时跳过早于 `log_retention_days` 的条目；这些条目仍留在存储中，直到被更新的条目挤出上限，或者该账号连续 `log_retention_days` 没有新日志。Redis 不需要每小时清理。Redis Responses 路由记录按 TTL 过期，删除用户时不扫描它们；被吊销的密钥无法访问这些记录。
 

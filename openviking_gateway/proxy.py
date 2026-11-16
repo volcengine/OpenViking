@@ -51,6 +51,10 @@ PATH_PROTOCOL = {
 }
 # Each bookkeeping step after a reply gets this long; the record is written either way.
 BOOKKEEPING_SECONDS = 30
+# Waits before each retry of queueing a finished turn for saving.
+STAGE_RETRY_SECONDS = (1, 5, 25)
+# Staging retries pending per process at most; past this a turn is recorded as lost at once.
+STAGE_RETRY_LIMIT = 256
 PRIMARY_PATH = {
     "anthropic": "/v1/messages",
     "chat": "/v1/chat/completions",
@@ -585,20 +589,19 @@ class ProxyRequest:
             if self.metrics["status"] >= 300 and "error_reason" not in self.metrics:
                 self.record.fail(self.metrics["status"], "upstream_error")
             # Each step fails on its own: the record is written whatever happens here.
-            try:
-                async with async_timeout.timeout(BOOKKEEPING_SECONDS):
-                    if (
-                        self.response.status < 300
-                        and self.prepared
-                        and await self.management.get(
-                            self.credential["account"], "keys", self.credential["id"]
-                        )
-                    ):
-                        await self.app.state.kernel.completed(
-                            self.prepared, self.credential, self.capture
-                        )
-            except Exception:
-                self.bookkeeping_failed("completed")
+            if self.response.status < 300 and self.prepared:
+                try:
+                    await self.completed()
+                except Exception:
+                    self.bookkeeping_failed("completed")
+                    # The turn is not queued for saving yet: try again in the background.
+                    background = self.app.state.background
+                    if len(background) < STAGE_RETRY_LIMIT:
+                        task = asyncio.create_task(self.retry_completed())
+                        background.add(task)
+                        task.add_done_callback(background.discard)
+                    else:
+                        await self.stage_lost()
             try:
                 if (
                     self.capture.response_id
@@ -636,6 +639,44 @@ class ProxyRequest:
                     self.bookkeeping_failed("capture_status")
         finally:
             await self.record.emit()
+
+    async def completed(self):
+        async with async_timeout.timeout(BOOKKEEPING_SECONDS):
+            if await self.management.get(self.credential["account"], "keys", self.credential["id"]):
+                await self.app.state.kernel.completed(self.prepared, self.credential, self.capture)
+
+    async def retry_completed(self):
+        # Each part of completed() is idempotent, so a retry after a partial run is safe.
+        for delay in STAGE_RETRY_SECONDS:
+            await asyncio.sleep(delay)
+            try:
+                await self.completed()
+                return
+            except Exception as error:
+                logger.warning(
+                    "OpenViking Gateway could not queue a finished turn for saving: %s",
+                    type(error).__name__,
+                )
+        await self.stage_lost()
+
+    async def stage_lost(self):
+        logger.error("OpenViking Gateway lost a finished turn: it could not be queued for saving")
+        try:
+            await self.management.log(
+                self.credential["account"],
+                {
+                    "kind": "capture",
+                    "event": "capture",
+                    "session": self.prepared.session,
+                    "protocol": self.prepared.protocol,
+                    "credential_id": self.credential["id"],
+                    "capture_status": "lost",
+                    "capture_reason": "stage_failed",
+                },
+                user_id=self.credential["user_id"],
+            )
+        except Exception:
+            logger.exception("OpenViking Gateway could not record a lost turn")
 
     def bookkeeping_failed(self, step):
         logger.exception("OpenViking Gateway response bookkeeping failed: %s", step)

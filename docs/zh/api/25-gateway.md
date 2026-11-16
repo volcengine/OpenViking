@@ -84,7 +84,7 @@ OpenViking 拒绝 API 密钥时，返回 401 `openviking_http_401`。
 | `session_source` | 对话是怎样确定的：`header`（`X-OpenViking-Session`）、`reply_match`（历史延续了某个对话的回复）或 `new` |
 | `recall_reason`、`recall_count`、`recall_ms` | 记忆检索的结果代码、补充的条数和检索耗时，见[没有补充记忆](../gateway/12-troubleshooting.md#no-memory-is-added) |
 | `replay_hits` | 原样放回记忆的历史消息数 |
-| `capture_status`、`capture_reason`、`capture_retry_at` | 保存状态（`active`、`disabled`、`retrying` 或 `paused`）、原因，以及下次重试时间（Unix 时间戳，秒），见[保存状态](../gateway/10-overview-and-requests.md#saving-status) |
+| `capture_status`、`capture_reason`、`capture_retry_at` | 保存状态（`active`、`disabled`、`retrying`、`paused`，[保存记录](#capture-records)中还可能是 `lost`）、原因，以及下次重试时间（Unix 时间戳，秒），见[保存状态](../gateway/10-overview-and-requests.md#saving-status) |
 | `tool_skip_reason` | 请求没有拿到 OpenViking 工具的原因，见[什么时候不提供工具](../gateway/04-openviking-tools.md#when-tools-are-not-offered) |
 | `tool_stop_reason` | 工具 Token 预算用完、后续调用被拒绝时为 `token_budget`，见[上限](../gateway/04-openviking-tools.md#limits) |
 | `compaction_failed` | 压缩失败的原因（`still_over_threshold` 时摘要已保留），见[长对话超出上下文长度](../gateway/12-troubleshooting.md#long-conversations-hit-the-context-limit) |
@@ -99,6 +99,18 @@ OpenViking 拒绝 API 密钥时，返回 401 `openviking_http_401`。
 以 `first_upstream_` 和 `hidden_upstream_` 开头的字段把 token 用量拆成首次服务商调用和 OpenViking 工具轮次两部分，首次调用缓存命中率按前者计算。
 
 `/overview` 由这些记录汇总而来。除用量和缓存数据外，还返回 `degradations`（异常代码 → 次数）、`capture_issues`（正在重试或已暂停保存的对话数）、`cache_alerts`、`openviking`（OpenViking 的 `status`，降级时另有 `reason`）和 `log_retention_days`。
+
+### 保存记录 {#capture-records}
+
+`kind` 和 `event` 为 `capture` 的记录描述保存，而不是请求。它包含 `session`、`protocol`、`credential_id`、`capture_status` 和 `capture_reason`（见[保存状态](../gateway/10-overview-and-requests.md#saving-status)）。对话的保存状态变化时写一条；一轮已完成的对话没能排入保存队列时，也写一条 `capture_status: lost`、`capture_reason: stage_failed` 的记录。设置 `capture_delivery_records: true` 后，每次保存（`delivered`）、每次提交（`committed`）和每次失败的尝试也各写一条。
+
+| 字段 | 含义 |
+| --- | --- |
+| `attempts` | 到目前为止连续失败的次数，出现在失败记录中 |
+| `turns`、`messages` | 这次保存写入的轮数和消息数，随 `delivered` 出现 |
+| `lag_ms` | 被保存的轮次中最早的一轮排入队列到这次保存的时间，随 `delivered` 出现。作为最新回复先排入队列的回复，会在下一个请求确认它时重新排入 |
+| `request_id` | 排入第一轮被保存内容的请求，随 `delivered` 出现（已知时）。OpenViking 收到的每一轮写入都带有该轮请求的 `X-Request-ID` |
+| `openviking_session` | 写入的 OpenViking 会话，随 `delivered` 和 `committed` 出现 |
 
 ### 状态行 {#status-line}
 

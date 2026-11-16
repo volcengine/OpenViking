@@ -35,6 +35,7 @@ const enums = {
     disabled: '已关闭',
     retrying: '重试中',
     paused: '已暂停',
+    lost: '已丢失',
   },
   captureReason: {
     history_changed: '对话历史有改动，后续内容改存到新的 OpenViking 会话',
@@ -46,6 +47,10 @@ const enums = {
     delivery_recovered: '保存已恢复正常',
     delivery_failed: '保存到 OpenViking 失败',
     invalid_archive_id: 'OpenViking 返回了无法识别的归档',
+    gateway_key_missing: '密钥记录缺失，保存会一直重试，直到用户下次发请求',
+    stage_failed: '一轮已完成的对话没能排入保存队列',
+    delivered: '已保存到 OpenViking',
+    committed: '已在 OpenViking 中提交',
   },
   recallReason: {
     recalled: '已补充记忆',

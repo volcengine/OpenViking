@@ -23,7 +23,7 @@ import orjson
 
 from .archives import TERMINAL, observe_archive
 from .capture_store import Document, LeaseLost
-from .client import VikingError
+from .client import CALL, CallContext, VikingError
 from .models import Policy
 from .notices import without_notices
 from .protocols import (
@@ -102,6 +102,8 @@ class CapturePipeline:
         position always has a prefix anchor and a source ID.
         """
         bounds = [start, *(i for i in range(start + 1, stop) if is_user(messages[i])), stop]
+        call = CALL.get()
+        request = {"request_id": call.request_id} if call and call.request_id else {}
         turns = []
         for begin, end in pairwise(bounds):
             captured = with_peers(capture_messages(messages[begin:end], chain[begin:end]), peers)
@@ -113,6 +115,8 @@ class CapturePipeline:
                         "continued": not is_user(messages[begin]),
                         "confirmed": confirmed,
                         "ready": 0 if confirmed else time.time() + idle_seconds,
+                        "queued_at": time.time(),
+                        **request,
                     }
                 )
         return turns
@@ -168,12 +172,17 @@ class CapturePipeline:
                 True,
                 0,
             )
-            if value.get("error", {}).get("reason") == "gateway_key_revoked":
+            # A new authenticated request supplies the key a paused delivery lacked.
+            if value.get("error", {}).get("reason") in {
+                "gateway_key_revoked",
+                "gateway_key_missing",
+            }:
                 value["error"] = {}
             # Reusing a prepared prompt does not generate another queue write.
             value.update(
                 request_anchor=user_anchor,
                 credential_id=credential["id"],
+                credential_source=credential.get("source", "issued"),
                 account=credential["account"],
                 user_id=credential["user_id"],
                 protocol=request.protocol,
@@ -278,11 +287,15 @@ class BranchChanged(Exception):
 
 
 class CaptureWorker:
-    def __init__(self, store, management, viking, stats=None):
+    def __init__(
+        self, store, management, viking, session_ttl=30 * 86400, records=False, stats=None
+    ):
         self.queue, self.replay = store.capture, store.replay
         self.management, self.viking = management, viking
         # The status line's delivery counters; a worker without one counts for nobody.
         self.stats = stats or Stats()
+        # ``records`` writes a row for every delivery, commit and failed attempt.
+        self.session_ttl, self.records = session_ttl, records
 
     async def save(self, item, previous, value, written=None):
         """Merge worker-owned progress into a concurrently updated request tail.
@@ -347,17 +360,25 @@ class CaptureWorker:
                     await self.management.delete(
                         old.value["account"], "keys", old.value["credential_id"]
                     )
+                backoff = RECOVERY_SECONDS if attempts >= MAX_ATTEMPTS else 10 * 2 ** (attempts - 1)
+                # An account without an order or over its rate needs longer than a blip.
+                if reason == "openviking_http_402":
+                    backoff = 3600
+                elif reason == "openviking_http_429":
+                    backoff = max(backoff, 60)
                 failure = {
                     "attempts": attempts,
                     "reason": reason,
-                    "retry_at": time.time()
-                    + (RECOVERY_SECONDS if attempts >= MAX_ATTEMPTS else 10 * 2 ** (attempts - 1)),
+                    "retry_at": time.time() + backoff,
                 }
                 await self.save(item, old, {**old.value, "error": failure})
-                # Record status changes only: a paused capture retries forever.
-                if attempts in (1, MAX_ATTEMPTS) or reason != previous.get("reason"):
+                # Record status changes only, unless every attempt is recorded: a paused
+                # capture retries forever.
+                changed = attempts in (1, MAX_ATTEMPTS) or reason != previous.get("reason")
+                if changed or self.records:
                     status = "paused" if attempts >= MAX_ATTEMPTS else "retrying"
-                    await self.log(item, old.value, status, reason)
+                    await self.log(item, old.value, status, reason, attempts=attempts)
+                if changed:
                     logger.warning("Capture %s: %s (attempt %s)", item["session"], reason, attempts)
                 else:
                     logger.debug("Capture %s: %s (attempt %s)", item["session"], reason, attempts)
@@ -379,16 +400,18 @@ class CaptureWorker:
             return error.reason == "openviking_http_401"
         return False
 
-    async def log(self, item, state, status, reason):
+    async def log(self, item, state, status, reason, **fields):
         await self.management.log(
             state["account"],
             {
                 "kind": "capture",
+                "event": "capture",
                 "session": item["session"],
                 "protocol": state["protocol"],
                 "credential_id": state["credential_id"],
                 "capture_status": status,
                 "capture_reason": reason,
+                **fields,
             },
             # Capture states written before schema 6 carry no user.
             user_id=state.get("user_id"),
@@ -408,15 +431,46 @@ class CaptureWorker:
             await self.save(item, doc, state)
             return
         if not key:
-            # No retries: periodic saves would refresh touched and defeat TTL expiry.
-            # A new authenticated request supplies a key and clears this pause.
-            state["error"] = {"attempts": 0, "reason": "gateway_key_revoked", "retry_at": None}
+            now = time.time()
+            previous = state.get("error") or {}
+            if (
+                state.get("credential_source", "issued") != "openviking"
+                or previous.get("reason") == "openviking_http_401"
+                or now - previous.get("since", now) > self.session_ttl
+            ):
+                # No retries: periodic saves would refresh touched and defeat TTL expiry.
+                # A new authenticated request supplies a key and clears this pause.
+                state["error"] = {"attempts": 0, "reason": "gateway_key_revoked", "retry_at": None}
+                if not await self.queue.swap(
+                    item["scope"], item["session"], doc, state, None, owner=item["owner"]
+                ):
+                    raise BranchChanged
+                self.stats.capture_failed += 1
+                await self.log(item, state, "paused", "gateway_key_revoked")
+                return
+            # The record of an OpenViking key that OpenViking did not reject has expired or
+            # was evicted; the user's next request writes it again. Retry until the session
+            # itself would have expired.
+            first = previous.get("reason") != "gateway_key_missing"
+            state["error"] = {
+                "attempts": previous.get("attempts", 0) + 1,
+                "reason": "gateway_key_missing",
+                "since": previous.get("since", now),
+                "retry_at": now + RECOVERY_SECONDS,
+            }
             if not await self.queue.swap(
-                item["scope"], item["session"], doc, state, None, owner=item["owner"]
+                item["scope"], item["session"], doc, state, ready_at(state), owner=item["owner"]
             ):
                 raise BranchChanged
             self.stats.capture_failed += 1
-            await self.log(item, state, "paused", "gateway_key_revoked")
+            if first or self.records:
+                await self.log(
+                    item,
+                    state,
+                    "retrying",
+                    "gateway_key_missing",
+                    attempts=state["error"]["attempts"],
+                )
             return
         token, session = key["openviking_key"], state["ov_session"]
         policy = Policy.model_validate(state["policy"])
@@ -425,12 +479,17 @@ class CaptureWorker:
         await self.viking.create_session(token, session, policy.capture_memory_types)
         # A write or commit whose response is lost is sent again; the rare
         # duplicate in OpenViking is accepted.
-        wrote = False
+        delivered = []
         while state["pending"] and state["pending"][0]["ready"] <= time.time():
             turn = state["pending"][0]
-            for offset in range(0, len(turn["messages"]), 100):
-                await self.viking.write(token, session, turn["messages"][offset : offset + 100])
-            wrote = True
+            # The writes carry the ID of the request that queued the turn.
+            bound = CALL.set(CallContext(request_id=turn.get("request_id", "")))
+            try:
+                for offset in range(0, len(turn["messages"]), 100):
+                    await self.viking.write(token, session, turn["messages"][offset : offset + 100])
+            finally:
+                CALL.reset(bound)
+            delivered.append(turn)
             count = len(turn["messages"])
             if turn.get("continued") and state["retained"]:
                 # Commits keep whole turns, so a continuation joins its turn.
@@ -444,8 +503,22 @@ class CaptureWorker:
             state["idle"] = not turn["confirmed"]
             doc = await self.save(item, doc, state, turn["messages"][-1])
             state = copy.deepcopy(doc.value)
-        if wrote:
+        if delivered:
             self.stats.capture_delivered += 1
+        if delivered and self.records:
+            queued = [t["queued_at"] for t in delivered if "queued_at" in t]
+            first = delivered[0].get("request_id")
+            await self.log(
+                item,
+                state,
+                "active",
+                "delivered",
+                turns=len(delivered),
+                messages=sum(len(t["messages"]) for t in delivered),
+                **({"lag_ms": round((time.time() - min(queued)) * 1000, 2)} if queued else {}),
+                **({"request_id": first} if first else {}),
+                openviking_session=session,
+            )
         # Each save may merge a concurrent request, so continue from what it stored.
         if state.get("archive") and state["archive"]["status"] not in TERMINAL:
             state["archive"] = await observe_archive(self.viking, state["archive"], token)
@@ -476,6 +549,8 @@ class CaptureWorker:
         state["archive"] = archive if uri else None
         state["retained"] = state["retained"][len(archived) :]
         await self.save(item, doc, state)
+        if self.records:
+            await self.log(item, state, "active", "committed", openviking_session=session)
 
 
 def peer_keys(messages, chain):

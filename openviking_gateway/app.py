@@ -176,7 +176,16 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
                     config.openviking_breaker_seconds,
                 )
                 app.state.kernel = MemoryKernel(store, app.state.viking)
-                app.state.worker = CaptureWorker(store, management, app.state.viking, stats=stats)
+                app.state.worker = CaptureWorker(
+                    store,
+                    management,
+                    app.state.viking,
+                    config.session_ttl_seconds,
+                    config.capture_delivery_records,
+                    stats=stats,
+                )
+                # Bookkeeping retries that outlive their request.
+                app.state.background = background = set()
                 # The first probe runs in the background: an embedded server is not listening yet.
                 app.state.health = {"status": "starting"}
                 stopped = asyncio.Event()
@@ -198,10 +207,11 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
                     stopped.set()
                     for task in maintenance:
                         task.cancel()
-                    _, pending = await asyncio.wait(captures, timeout=CAPTURE_DRAIN_SECONDS)
+                    draining = [*captures, *background]
+                    _, pending = await asyncio.wait(draining, timeout=CAPTURE_DRAIN_SECONDS)
                     for task in pending:
                         task.cancel()
-                    await asyncio.gather(*maintenance, *captures, return_exceptions=True)
+                    await asyncio.gather(*maintenance, *draining, return_exceptions=True)
         finally:
             await close()
 

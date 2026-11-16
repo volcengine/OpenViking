@@ -264,9 +264,10 @@ def test_05_eviction_keeps_permanent_state_and_recovers_credentials(harness):
     _, capture = session_keys(harness, "credential-rebuild")
     for key in credential_keys(harness, "key-a"):
         harness.redis("DEL", key)
+    # OpenViking never rejected the key, so delivery keeps retrying until a request returns.
     wait_for(
         lambda: (
-            (document(harness, capture).get("error") or {}).get("reason") == "gateway_key_revoked"
+            (document(harness, capture).get("error") or {}).get("reason") == "gateway_key_missing"
         ),
         timeout=40,
     )

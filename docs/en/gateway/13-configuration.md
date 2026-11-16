@@ -59,6 +59,7 @@ An embedded and a standalone gateway share most fields; they differ in which fil
 | `openviking_breaker_seconds` | Both | `30` | More than 0 | How long an account's OpenViking calls are skipped before a trial call |
 | `health_interval_seconds` | Both | `60` | 1 or more | Seconds between OpenViking status checks |
 | `capture_concurrency` | Both | `1` | 1 or more | Concurrent conversation deliveries per process; shutdown stops new claims and gives in-flight deliveries up to 100 seconds to finish |
+| `capture_delivery_records` | Both | `false` | `true`, `false` | Write a [saving record](../api/25-gateway.md#capture-records) for every delivery, commit and failed attempt, not only for status changes. With the `store` sink these rows share each account's stored record history with requests (Redis keeps the latest 10,000 rows per account), so the Requests page and Overview cover a shorter period; meant for the `stdout` and `file` sinks |
 | `client_rules` | Both | `{}` (packaged rules only) | See [Client rules](#client-rules) | Text added to or removed from what the gateway recognizes as housekeeping requests and client-inserted messages |
 
 For example, a standalone `gateway.conf` can route OpenViking keys before any account is configured:

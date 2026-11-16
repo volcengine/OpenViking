@@ -419,7 +419,7 @@ appendfsync everysec
 
 网关不导出 Prometheus 之类的监控指标。请求日志默认写入存储，可通过 Studio 的[概览和请求日志](../gateway/10-overview-and-requests.md#overview)标签页查看，或者调用管理 API 的 `/gateway/admin/overview` 和 `/gateway/admin/logs`。
 
-在网关配置中设置 `request_log_sink: "stdout"`，或设置 `OPENVIKING_GATEWAY_REQUEST_LOG_SINK=stdout`，重启后新记录只写到 stdout。每个模型请求（包括失败的请求）和每次后台保存状态变更各产生一行 JSON，即使 stdout 接到管道也会立即刷新。每条记录包含 `time`（写入时的 Unix 秒数）、`account` 和 `user_id`（密钥确认之前就失败的请求为 `null`，旧保存状态也可能为 `null`），以及位于顶层的现有请求指标，如 `kind`、`status`、`input_tokens` 和 `cached_tokens`。不包含凭证、提示词或回复。采集系统负责这些记录的保留期限和访问权限；`log_retention_days` 只作用于存储中的日志。
+在网关配置中设置 `request_log_sink: "stdout"`，或设置 `OPENVIKING_GATEWAY_REQUEST_LOG_SINK=stdout`，重启后新记录只写到 stdout。每个模型请求（包括失败的请求）和每次后台保存状态变更各产生一行 JSON，即使 stdout 接到管道也会立即刷新。设置 `capture_delivery_records: true` 时，每次投递、提交和失败的尝试也各产生一行。每条记录包含 `time`（写入时的 Unix 秒数）、`account` 和 `user_id`（密钥确认之前就失败的请求为 `null`，旧保存状态也可能为 `null`），以及位于顶层的现有请求指标，如 `kind`、`status`、`input_tokens` 和 `cached_tokens`。不包含凭证、提示词或回复。采集系统负责这些记录的保留期限和访问权限；`log_retention_days` 只作用于存储中的日志。
 
 设置 `request_log_sink: "file"` 和 `request_log_path`，就把同样的行写到文件。写文件由后台线程完成，磁盘慢也不会拖住请求；它的队列（10,000 行）满了时，新行被丢弃，并计入状态行的 `records_dropped`。文件达到 `request_log_max_bytes`（默认 256 MiB）时轮转，保留四个旧文件（`requests.jsonl.1` … `.4`）。这种输出需要单个 worker 进程：独立网关设 `workers: 1`，嵌入式网关需要服务端只有一个 worker；需要扩容时增加副本。在 Kubernetes 上，把文件放在日志采集器能读到的卷上，例如用 chart 的 `extraVolumes` 和 `extraVolumeMounts`：
 

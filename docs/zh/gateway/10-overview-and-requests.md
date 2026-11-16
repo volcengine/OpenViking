@@ -117,9 +117,11 @@ description: 读懂 Studio 中 OpenViking 网关的“概览”和“请求日�
 | --- | --- | --- |
 | **正常** | 保存正常进行。 | — |
 | **已关闭** | 这段对话的[上下文配置](08-context-profiles.md#save-conversations)不保存对话。 | 不保存任何内容。 |
-| **重试中** | OpenViking 拒绝了保存或无法访问。 | 在 10、20、40、80 秒后依次重试。 |
+| **重试中** | OpenViking 拒绝了保存或无法访问。 | 在 10、20、40、80 秒后依次重试；OpenViking 返回 `429` 时至少隔一分钟，返回 `402` 时隔一小时。 |
 | **已暂停** | 连续失败 5 次。 | 之后每 5 分钟重试一次，直到成功；未保存的轮次一直保留，直到保存成功或对话过期。 |
-| **已暂停**，原因为 `gateway_key_revoked` | 这段对话的网关密钥已被吊销或删除。 | 不再重试。用户之后用有效密钥在这段对话里发请求时，保存自动恢复。 |
+| **重试中**，原因为 `gateway_key_missing` | 这段对话所用 OpenViking 密钥的记录过期或被驱逐，但 OpenViking 从未拒绝这个密钥。 | 每 5 分钟重试一次，最多持续 `session_ttl_seconds`，之后以 `gateway_key_revoked` 暂停。用这个密钥发出的任何请求都会重新写入记录；这段对话里的请求会立即恢复保存。 |
+| **已暂停**，原因为 `gateway_key_revoked` | 这段对话的网关密钥已被吊销或删除，OpenViking 拒绝了用户的 OpenViking 密钥，或者 OpenViking 密钥的记录缺失已达 `session_ttl_seconds`。 | 不再重试。用户之后用有效密钥在这段对话里发请求时，保存自动恢复。 |
+| **已丢失**，原因为 `stage_failed` | 一轮已完成的对话没能排入保存队列，1、5、25 秒后的重试也都失败；网关会记录一条错误日志。 | 这段对话的下一个请求会重新发送历史，这一轮随之排入队列。如果之后没有请求，这一轮不会被保存。 |
 
 展开的行和**保存**标记的悬停提示会显示最近一次变化的原因：
 
@@ -130,6 +132,9 @@ description: 读懂 Studio 中 OpenViking 网关的“概览”和“请求日�
 | OpenViking 响应超时 | `openviking_timeout` | OpenViking 响应太慢。 |
 | 保存到 OpenViking 失败 | `delivery_failed` | 其他原因导致保存失败，网关按上表重试。 |
 | 保存已恢复正常 | `delivery_recovered` | 失败之后又保存成功了。 |
+| 密钥记录缺失，保存会一直重试，直到用户下次发请求 | `gateway_key_missing` | 见上表。 |
+| 一轮已完成的对话没能排入保存队列 | `stage_failed` | 见上表。 |
+| 已保存到 OpenViking、已在 OpenViking 中提交 | `delivered`、`committed` | 仅在 `capture_delivery_records: true` 时出现：每次保存、每次提交各写一条记录。 |
 | 对话历史有改动，后续内容改存到新的 OpenViking 会话 | `history_changed` | 正常现象：客户端编辑、重新生成或压缩了对话，网关用当前历史在新的 OpenViking 会话中继续保存。 |
 | 保存过程中对话历史有改动，后续内容改存到新的 OpenViking 会话 | `history_changed_during_delivery` | 正常现象：同上，只是发生在保存进行中。 |
 | 已保存的一轮对话在停顿后又继续了，后续内容改存到新的 OpenViking 会话 | `continued_after_idle` | 正常现象：已在**最新回复等待时长**之后保存的一轮又继续了。 |

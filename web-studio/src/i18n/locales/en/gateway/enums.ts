@@ -35,6 +35,7 @@ const enums = {
     disabled: 'Off',
     retrying: 'Retrying',
     paused: 'Paused',
+    lost: 'Lost',
   },
   captureReason: {
     history_changed:
@@ -47,6 +48,11 @@ const enums = {
     delivery_recovered: 'Saving works again',
     delivery_failed: 'Saving to OpenViking failed',
     invalid_archive_id: 'OpenViking returned an unexpected archive',
+    gateway_key_missing:
+      "The key's record is missing; saving retries until the user's next request",
+    stage_failed: "A finished turn couldn't be queued for saving",
+    delivered: 'Saved to OpenViking',
+    committed: 'Committed in OpenViking',
   },
   recallReason: {
     recalled: 'Memory added',

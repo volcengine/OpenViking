@@ -1,5 +1,7 @@
 """OpenViking API keys used directly as gateway keys (``openviking_keys``)."""
 
+import time
+
 import pytest
 from conftest import make_due
 
@@ -120,6 +122,27 @@ async def test_capture_worker_delivers_with_the_stored_key(running_gateway):
     assert writes
     session_keys = {key for path, key in calls if path.startswith("/api/v1/sessions")}
     assert session_keys == {OV_KEY}
+
+
+async def test_key_record_in_use_does_not_expire(running_gateway):
+    app, client, _, _, _, _ = running_gateway
+    management, ttl = app.state.management, app.state.config.session_ttl_seconds
+    assert (await client.get("/v1/models", headers=bearer(OV_KEY))).status_code == 200
+    record = await management.credential(RECORD)
+    stored = {k: v for k, v in record.items() if k not in {"account", "id", "expires_at"}}
+    # More than half of the lifetime left: the record is not written again.
+    assert (await client.get("/v1/models", headers=bearer(OV_KEY))).status_code == 200
+    assert await management.credential(RECORD) == record
+    # Close to its end, a request in use extends it, and the user's record with it.
+    await management.save("tenant", "keys", RECORD, stored, ttl=60)
+    await management.save("tenant", "users", "bob", {"user_id": "bob"}, ttl=60)
+    assert (await client.get("/v1/models", headers=bearer(OV_KEY))).status_code == 200
+    refreshed = await management.credential(RECORD)
+    assert refreshed["expires_at"] > time.time() + ttl - 60
+    assert {k: v for k, v in refreshed.items() if k != "expires_at"} == {
+        k: v for k, v in record.items() if k != "expires_at"
+    }
+    assert (await management.get("tenant", "users", "bob"))["expires_at"] > time.time() + 3600
 
 
 async def test_revoked_openviking_key_deletes_the_record(running_gateway):

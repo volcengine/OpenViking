@@ -84,7 +84,7 @@ The log holds metadata only, never message content, keys or error messages. Ever
 | `session_source` | How the conversation was found: `header` (`X-OpenViking-Session`), `reply_match` (the history continues one conversation's reply) or `new` |
 | `recall_reason`, `recall_count`, `recall_ms` | Memory search result code, entries added and search time; see [No memory is added](../gateway/12-troubleshooting.md#no-memory-is-added) |
 | `replay_hits` | Earlier messages whose memory was replayed unchanged |
-| `capture_status`, `capture_reason`, `capture_retry_at` | Saving status (`active`, `disabled`, `retrying` or `paused`), its reason, and the next retry in epoch seconds; see [Saving status](../gateway/10-overview-and-requests.md#saving-status) |
+| `capture_status`, `capture_reason`, `capture_retry_at` | Saving status (`active`, `disabled`, `retrying`, `paused`, or `lost` on a [saving record](#capture-records)), its reason, and the next retry in epoch seconds; see [Saving status](../gateway/10-overview-and-requests.md#saving-status) |
 | `tool_skip_reason` | Why the request got no OpenViking tools; see [When tools are not offered](../gateway/04-openviking-tools.md#when-tools-are-not-offered) |
 | `tool_stop_reason` | `token_budget` when the tool token budget refused further calls; see [Limits](../gateway/04-openviking-tools.md#limits) |
 | `compaction_failed` | Why compaction failed (with `still_over_threshold` the summary was kept); see [Long conversations hit the context limit](../gateway/12-troubleshooting.md#long-conversations-hit-the-context-limit) |
@@ -99,6 +99,18 @@ The log holds metadata only, never message content, keys or error messages. Ever
 Fields that start with `first_upstream_` and `hidden_upstream_` split the token usage between the first provider call and the OpenViking tool rounds; the first-call cache hit rate uses the first group.
 
 `/overview` aggregates these records. Besides usage and cache figures, it returns `degradations` (issue code → count), `capture_issues` (conversations retrying or paused), `cache_alerts`, `openviking` (OpenViking's `status`, plus `reason` when degraded) and `log_retention_days`.
+
+### Saving records {#capture-records}
+
+A record with `kind` and `event` set to `capture` describes saving, not a request. It carries `session`, `protocol`, `credential_id`, `capture_status` and `capture_reason` ([Saving status](../gateway/10-overview-and-requests.md#saving-status)). One is written when a conversation's saving status changes, and with `capture_status: lost` and `capture_reason: stage_failed` when a finished turn could not be queued for saving. With `capture_delivery_records: true`, one is also written for every save (`delivered`), every commit (`committed`) and every failed attempt.
+
+| Field | Meaning |
+| --- | --- |
+| `attempts` | Consecutive failed attempts so far, on a failure record |
+| `turns`, `messages` | Turns and messages this save wrote, with `delivered` |
+| `lag_ms` | Time from when the oldest saved turn was queued until this save, with `delivered`. A reply first queued as the conversation's latest reply is queued again when the next request confirms it |
+| `request_id` | The request that queued the first saved turn, with `delivered`, when known. OpenViking receives each turn's request ID as `X-Request-ID` on the writes |
+| `openviking_session` | The OpenViking session written to, with `delivered` and `committed` |
 
 ### Status line {#status-line}
 
