@@ -428,15 +428,17 @@ class MemoryKernel:
                 return {**root, "tools": [], "tool_skip_reason": ""}
             if tool_block_reason(body, protocol, upstream):
                 return {**root, "tools": [], "tool_skip_reason": ""}
-            # A failed load leaves the session without tools.
-            tools, reason = [], ""
             try:
                 tools = select_tools(await self.viking.tools(credential["openviking_key"]), policy)
             except VikingError:
-                reason = "tools_unavailable"
-            decision = await self.store.replay.put(
-                scope, sid, K.TOOLS, "", {"tools": tools, "tool_skip_reason": reason}
-            )
+                # Nothing is stored, so the conversation's next request loads again.
+                return {**root, "tools": [], "tool_skip_reason": "tools_unavailable"}
+            value = {"tools": tools, "tool_skip_reason": ""}
+            # Tools that arrive after the first injection are announced on the next one.
+            if any(kind == K.INJECTION for kind, _ in records):
+                value["late"] = True
+            decision = await self.store.replay.put(scope, sid, K.TOOLS, "", value)
+            records[K.TOOLS, ""] = decision
         tools, reason = decision["tools"], decision.get("tool_skip_reason", "")
         closed = records.get((K.TOOLS_CLOSED, ""))
         # Client OpenViking tools may appear late, as when MCP servers connect after the
@@ -576,6 +578,8 @@ class MemoryKernel:
         overhead = token_estimate(block("gateway-recall", lead + "\n"))
         # The search entries a recall returned, for the notice.
         entries = []
+        # Whether this turn's opening tells the model about the gateway tools.
+        noted = False
 
         async def retrieve():
             if not reserved:
@@ -609,8 +613,14 @@ class MemoryKernel:
                 return {**decision, "reason": getattr(error, "reason", "recall_timeout")}
 
         async def opening():
+            nonlocal noted
             if existing:
-                return "", []
+                late = request.records.get((K.TOOLS, ""), {}).get("late")
+                if not (late and tools) or any(v.get("tools_noted") for _, v in existing):
+                    return "", []
+                noted = True
+                return block("gateway-session-start", gateway_note(policy, tools)), []
+            noted = bool(tools)
             profile = await build_profile(self.viking, credential["openviking_key"], policy, tools)
             request.metrics["profile_reason"] = profile["reason"]
             # After client-side compaction, the capture document still names the earlier sessions.
@@ -634,6 +644,8 @@ class MemoryKernel:
         # The opening block is immutable with recall but has its own budget, and
         # the window status line costs nothing.
         decision["text"] = "\n\n".join(part for part in (start, recalled) if part)
+        if noted:
+            decision["tools_noted"] = True
         if reminder:
             decision["reminder"] = reminder
         if policy.show_recall:

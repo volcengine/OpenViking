@@ -120,6 +120,8 @@ class VikingClient:
         self.identities = TTLCache(ttl=30, capacity=4096)
         # Every caller sees the same MCP tools; the last good list outlives failures.
         self.tools_cache, self.last_tools = TTLCache(ttl=300, capacity=1), None
+        # Until a list has loaded once, a failed load is retried at most this often.
+        self.tools_retry_at = 0.0
 
     def budget(self, timeout):
         """``timeout``, cut to what is left of the request's OpenViking budget."""
@@ -322,11 +324,16 @@ class VikingClient:
                 ):
                     raise VikingError("openviking_mcp_invalid_catalog")
                 self.last_tools = tools
-            except VikingError:
+            except VikingError as error:
                 if self.last_tools is None:
+                    # Only an OpenViking that did not answer blocks the load for every account.
+                    if unanswered(error):
+                        self.tools_retry_at = time.monotonic() + 30
                     raise
             return self.last_tools
 
+        if self.last_tools is None and time.monotonic() < self.tools_retry_at:
+            raise VikingError("openviking_unavailable")
         return await self.tools_cache.get("tools/list", load)
 
     async def mcp(self, method, key, params=None, timeout=120, peer=None):
