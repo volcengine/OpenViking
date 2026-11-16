@@ -180,6 +180,18 @@ describe('turn-end decision settlement', () => {
     assert.equal(submitted.filter((item) => item.seq === held.seq).length, 3);
   });
 
+  it('still gives a held input its timer reminder when turn-end reminders are off', async (t) => {
+    const { policy, activities, timers, ingest, fire, turn } = setup(t, { decisionReminderLimit: 0 });
+    const held = ingest({ messageId: 'om_zeroA123456789', chatId: 'oc_zero12345678', chatType: 'group' });
+    ingest({ messageId: 'om_zeroB123456789', chatId: 'oc_zero12345678', chatType: 'group' });
+    policy.onStaleDecision({ seq: held.seq });
+    assert.deepEqual(timers.map(({ ms }) => ms), [60_000]);
+    assert.equal(await fire(), 1);
+    await turn([held.seq]);
+    assert.deepEqual(activities.filter(({ inboundSeq }) => inboundSeq === held.seq).map(({ status }) => status),
+      ['NUDGED', 'MISSING']);
+  });
+
   it('drops a held input decided before its timer fires', async (t) => {
     const { store, policy, activities, timers, ingest, deliver, fire, turn } = setup(t);
     const held = ingest({ messageId: 'om_decideA123456', chatId: 'oc_decide1234567', chatType: 'group' });

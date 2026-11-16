@@ -103,9 +103,10 @@ export class DecisionPolicy {
       const row = this.store.inboundBySeq(seq);
       if (row?.status !== 'DONE' || !expected(row) || this.store.decisionOutcome(row.seq)) return;
       const entry = this.track(row.seq);
-      // Already blocked once, or out of reminders.
-      if (entry.blocked || entry.reminded >= entry.limit) return;
-      Object.assign(entry, { blocked: true, limit: this.decisionReminderLimit + 1 });
+      // Already blocked once, or out of reminders even counting the timer's.
+      const limit = this.decisionReminderLimit + 1;
+      if (entry.blocked || entry.reminded >= limit) return;
+      Object.assign(entry, { blocked: true, limit });
       entry.timer = this.setTimer(() => this.remindBlocked(row.seq), this.blockedDelayMs);
       entry.timer?.unref?.();
     } catch (error) {
