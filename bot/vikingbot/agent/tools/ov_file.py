@@ -14,7 +14,11 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional
 import httpx
 from loguru import logger
 
-from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
+from openviking.utils.image_input import compress_image_input
+from openviking.utils.media_limits import (
+    MAX_INLINE_TOOL_RESULT_MEDIA_BYTES,
+    MAX_MEDIA_FILE_BYTES,
+)
 from vikingbot.agent.tools.base import MultimodalToolResult, Tool, ToolContext
 from vikingbot.openviking_mount.ov_server import VikingClient
 from vikingbot.utils.image_format import sniff_image_format
@@ -1143,12 +1147,12 @@ class VikingMultiReadTool(OVFileTool):
                 "success": False,
                 "media_kind": "image",
             }
-        if size > cls._MAX_INLINE_MEDIA_BYTES:
+        if size > MAX_MEDIA_FILE_BYTES:
             return {
                 "uri": uri,
                 "content": (
-                    f"Image is {size} bytes; the inline limit is "
-                    f"{cls._MAX_INLINE_MEDIA_BYTES} bytes."
+                    f"Image is {size} bytes; the resource file limit is "
+                    f"{MAX_MEDIA_FILE_BYTES} bytes."
                 ),
                 "success": False,
                 "media_kind": "image",
@@ -1169,15 +1173,31 @@ class VikingMultiReadTool(OVFileTool):
                 "success": False,
                 "media_kind": "image",
             }
-        encoded = base64.b64encode(data).decode("ascii")
+        model_data, mime_type = await asyncio.to_thread(
+            compress_image_input, data, image_format.mime_type
+        )
+        if len(model_data) > cls._MAX_INLINE_MEDIA_BYTES:
+            return {
+                "uri": uri,
+                "content": (
+                    f"Model rendition is {len(model_data)} bytes; the inline limit is "
+                    f"{cls._MAX_INLINE_MEDIA_BYTES} bytes."
+                ),
+                "success": False,
+                "media_kind": "image",
+            }
+        encoded = base64.b64encode(model_data).decode("ascii")
         return {
             "uri": uri,
-            "content": (f"Image resource ({image_format.mime_type}, {len(data)} bytes)."),
+            "content": (
+                f"Image resource ({image_format.mime_type}, {len(data)} bytes); "
+                f"model input ({mime_type}, {len(model_data)} bytes)."
+            ),
             "image": {
                 "type": "image_url",
-                "image_url": {"url": f"data:{image_format.mime_type};base64,{encoded}"},
+                "image_url": {"url": f"data:{mime_type};base64,{encoded}"},
             },
-            "media_bytes": len(data),
+            "media_bytes": len(model_data),
             "sha256": hashlib.sha256(data).hexdigest(),
             "success": True,
             "media_kind": "image",

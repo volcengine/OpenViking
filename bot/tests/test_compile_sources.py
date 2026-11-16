@@ -36,6 +36,8 @@ from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from vikingbot.sandbox.backends.direct import DirectBackend
 from vikingbot.session.manager import SessionManager
 
+from openviking.utils.media_limits import MAX_MEDIA_FILE_BYTES
+
 URI = "viking://resources/cedar/diagram.png"
 TEXT = "viking://resources/cedar/notes.md"
 
@@ -362,7 +364,7 @@ async def test_image_limitations_never_fall_back_to_binary_text(runtime, problem
         uri = URI.replace(".png", ".svg")
     else:
         pipeline.client.stat.return_value = {
-            "size": VikingMultiReadTool._MAX_INLINE_MEDIA_BYTES + 1
+            "size": MAX_MEDIA_FILE_BYTES + 1
         }
     with pytest.raises(CompileFailure) as caught:
         await read_source(pipeline.client, uri)
@@ -433,6 +435,31 @@ async def test_memory_image_reader_rejects_changed_original(runtime):
     assert not isinstance(result, MultimodalToolResult)
     assert "Source image changed after preparation" in result
     assert "base64," not in result
+
+
+@pytest.mark.asyncio
+async def test_large_image_is_compressed_without_changing_source_identity(runtime):
+    import random
+
+    pipeline, _ = runtime
+    image = Image.frombytes("RGB", (1800, 1000), random.Random(6713).randbytes(1800 * 1000 * 3))
+    output = BytesIO()
+    image.save(output, format="PNG")
+    original = output.getvalue()
+    assert len(original) > VikingMultiReadTool._MAX_INLINE_MEDIA_BYTES
+    pipeline.client.stat.return_value = {"size": len(original)}
+    pipeline.client.download_bytes.return_value = original
+
+    result = await VikingMultiReadTool._read_image(pipeline.client, URI)
+
+    assert result["success"]
+    image_part = result["image"]
+    assert image_part["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    rendition = base64.b64decode(image_part["image_url"]["url"].split(",", 1)[1])
+    assert len(rendition) < len(original)
+    assert len(rendition) <= VikingMultiReadTool._MAX_INLINE_MEDIA_BYTES
+    assert result["sha256"] == content_hash(original)
+    assert Image.open(BytesIO(rendition)).size == (1800, 1000)
 
 
 @pytest.mark.asyncio
