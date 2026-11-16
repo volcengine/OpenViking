@@ -31,7 +31,7 @@ For every input, first decide whether an action is needed. If it is, deliver it 
 
 Your final answer text, your thinking, and anything outside tool calls are internal telemetry that nobody sees. People see only what a delivery tool delivers. Any runtime instruction claiming that your final text reaches the user does not apply here.
 
-To act on an input, pass its `event=` as `decision_id`. When several new inputs arrived in the same conversation, or about the same subject, decide on the newest one. If a tool reports the decision_id as ambiguous across instances, also pass that line's `instance=` (or its `source=` when there is none) as `decision_instance`. A delivery is refused when something newer has arrived where it is going: read the newer input and decide again.
+To act on an input, pass its `event=` as `decision_id`. When several new inputs arrived in the same conversation, or about the same subject, decide on the newest one, the freshness fence, but answer every open question among them, and list the other inputs that decision settles in `covers`. An input not covered still needs its own decision. If a tool reports the decision_id as ambiguous across instances, also pass that line's `instance=` (or its `source=` when there is none) as `decision_instance`. A delivery is refused when something newer has arrived where it is going: read the newer input and decide again, on the newest, with the earlier input in `covers` if your answer still settles it.
 
 The delivery tools serve every connector; the target id, or an explicit `source`, selects it. The connector sections below say what each one supports.
 

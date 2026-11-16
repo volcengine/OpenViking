@@ -142,12 +142,13 @@ export class ActionService {
     onTimersChanged = () => {},
     onPreferencesChanged = () => {},
     onNoProgress = null,
+    onStaleDecision = null,
     loopBreakAfter = LOOP_BREAK_AFTER,
     logger,
   }) {
     Object.assign(this, {
       config, store, connectors, roster, liveness, meetingEnabled, ovClient, ovTools, timers, clock, onTimersChanged, onPreferencesChanged,
-      onNoProgress, loopBreakAfter, logger,
+      onNoProgress, onStaleDecision, loopBreakAfter, logger,
     });
     // Loop guard: duplicate outcomes per input in the current turn, cleared
     // by resetLoopGuard() at every turn end.
@@ -407,7 +408,34 @@ export class ActionService {
   fence(input, caller) {
     const row = this.resolveDecision(input, caller);
     if (!this.isTimerReminder(row)) this.assertFresh(row, caller);
+    caller.covers = this.resolveCovers(input, row);
     return row;
+  }
+
+  // The other inputs a decision settles (covers): each one accepted input on
+  // the decision's instance, in its scope and no newer than it. Any bad entry
+  // refuses the whole call, before anything is sent or recorded. The decision
+  // input itself and repeats are dropped.
+  resolveCovers(input, decision, verb = 'Delivery blocked') {
+    const refs = input.covers ?? [];
+    if (refs.length === 0) return [];
+    if (!decision) throw blocked('invalid_input', `${verb}: covers needs decision_id. ${NO_ACTION}`);
+    const rows = new Map();
+    refs.forEach((ref, index) => {
+      const found = this.inputEvents(ref, decision.connector_instance);
+      if (found.length !== 1) {
+        throw blocked('covers_rejected', `${verb}: covers[${index}] is not the event= of one accepted input on the decision_id's instance. ${NO_ACTION}`);
+      }
+      const [row] = found;
+      if (row.scope_key !== decision.scope_key) {
+        throw blocked('covers_rejected', `${verb}: covers[${index}] is from another chat/thread or subject than decision_id; decide on it there. ${NO_ACTION}`);
+      }
+      if (row.seq > decision.seq) {
+        throw blocked('covers_rejected', `${verb}: covers[${index}] is newer than decision_id. Use the newest input as decision_id and cover the older ones. ${NO_ACTION}`);
+      }
+      if (row.seq !== decision.seq) rows.set(row.seq, row);
+    });
+    return [...rows.values()];
   }
 
   // A delivery made on a decision settles it in the ledger, even when the send
@@ -420,6 +448,10 @@ export class ActionService {
     try {
       const { created, previous } = this.store.recordDecision({ row: fence, outcome: 'delivered' });
       if (created && previous === 'silent') caller.trace.overrode = 'silent';
+      for (const row of caller.covers ?? []) {
+        this.store.recordDecision({ row, outcome: 'delivered', coveredBy: fence.event_id });
+      }
+      if (caller.covers?.length) caller.trace.covers = caller.covers.length;
     } catch (error) {
       // Bookkeeping only: it must never stop the delivery itself.
       this.logger.warn('decision_record_failed', { error: safeError(error) });
@@ -428,10 +460,17 @@ export class ActionService {
 
   // stay_silent: the model read the input and chose to deliver nothing. Only a
   // ledger row and an activity: no outbox, journal, connector call or liveness.
-  // Nothing about it is ever refused for being repeated or stale.
+  // Nothing about it is ever refused for being repeated or stale. Covered
+  // inputs get the same silence, each recorded on its own.
   async staySilent(input, caller) {
     const row = this.resolveDecision(input, caller, 'Silence not recorded');
+    const covers = this.resolveCovers(input, row, 'Silence not recorded');
+    const covered = covers.filter((other) => this.store.recordDecision({ row: other, outcome: 'silent', coveredBy: row.event_id }).created);
+    if (covers.length) caller.trace.covers = covered.length;
     if (this.store.decisionFor(row.connector_instance, row.event_id)?.outcome === 'delivered') {
+      if (covered.length) {
+        return { text: `Recorded: nothing is sent for ${covered.length} covered input(s). decision_id already has a delivery.`, data: { silent: true, covered: covered.length } };
+      }
       return { text: 'A delivery is already recorded for this input; nothing to change. Do not call stay_silent for it.', data: { duplicate: true, delivered: true } };
     }
     const newerSeq = this.store.newerAcceptedSeq(row.scope_key, row.seq);
@@ -440,7 +479,7 @@ export class ActionService {
     caller.trace.superseded = superseded;
     const reason = input.reason ? redactSensitive(input.reason).trim() || null : null;
     const { created } = this.store.recordDecision({ row, outcome: 'silent' });
-    if (!created) {
+    if (!created && covered.length === 0) {
       return { text: 'Already recorded: nothing is sent for this input. Do not call stay_silent again for it.', data: { duplicate: true } };
     }
     // A superseded input's OnIt may belong to work on the newer one.
@@ -451,6 +490,7 @@ export class ActionService {
         conversationKey: row.conv_key ?? null, inboundSeq: row.seq, status: superseded ? 'SUPERSEDED' : 'SILENT',
         summary: reason ?? '',
         metadata: { tool: 'stay_silent', decisionSeq: row.seq, newerSeq: newerSeq ?? undefined,
+          coveredSeqs: covered.length ? covered.map((other) => other.seq) : undefined,
           runtime: caller.trace.runtime, via: caller.trace.via },
       });
     } catch (error) {
@@ -469,7 +509,18 @@ export class ActionService {
     const newerSeq = this.store.newerAcceptedSeq(decision.scope_key, decision.seq);
     if (newerSeq !== null) {
       caller.trace.newerSeq = newerSeq;
-      throw blocked('stale_decision', 'Delivery blocked: a newer authenticated input arrived in the same chat/thread, or about the same subject. Reconsider with the new input, then use its event= as decision_id if the action still fits.');
+      this.staleDecision(decision);
+      throw blocked('stale_decision', 'Delivery blocked: a newer authenticated input arrived in the same chat/thread, or about the same subject. Reconsider with the new input, then use its event= as decision_id if the action still fits, and list this input in covers if it settles it too.');
+    }
+  }
+
+  // A delivery on this input was held by the freshness fence: the decision
+  // policy reminds about it later if it stays undecided.
+  staleDecision(decision) {
+    try {
+      this.onStaleDecision?.({ seq: decision.seq });
+    } catch (error) {
+      this.logger.warn('stale_decision_hook_failed', { error: safeError(error) });
     }
   }
 
@@ -1094,6 +1145,9 @@ export class ActionService {
     const connector = this.route(caller, 'message.retract', 'actions', input.source, { messageId: input.message_id });
     // decision_id is offered only with explicit silence on: the retraction is
     // then fenced and recorded like any other final delivery.
+    if (input.decision_id === undefined && input.covers?.length) {
+      throw blocked('invalid_input', `Delivery blocked: covers needs decision_id. ${NO_ACTION}`);
+    }
     const fence = input.decision_id === undefined ? null : this.fence(input, caller);
     const target = this.store.deliveredMessage(input.message_id, connector);
     const result = await this.deliver({

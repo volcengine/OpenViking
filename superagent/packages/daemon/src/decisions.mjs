@@ -35,36 +35,59 @@ export function warnIfStagedRepliesInert(config, runtime, logger) {
 // Whether an unsettled input needs a decision: every chat message on every IM
 // (direct, group, thread, card answer), as zouk asks a send or no_reply of
 // every inbound message. A reminder costs a turn only when the model missed
-// one. Non-chat events (mail) stay optional: each is its own subject scope and
-// one owner notice may rightly cover several, so a mail without its own
-// decision is not reliably a miss, and nobody is waiting in a conversation.
-// A reaction wakes the Agent but asks for no decision of its own.
+// one. Reactions (message.reaction.*) ask for none: a nod at the bot's own
+// message is not a question. Non-chat events (mail) stay optional: each is
+// its own subject scope and one owner notice may rightly cover several, so a
+// mail without its own decision is not reliably a miss, and nobody is waiting
+// in a conversation.
 function expected(row) {
-  return Boolean(row.chatId) && Boolean(row.kind?.startsWith('message.'))
-    && !row.kind.startsWith('message.reaction.');
+  return Boolean(row.chatId) && Boolean(row.kind?.startsWith('message.')) && !row.kind.startsWith('message.reaction.');
 }
 
-// Turn-end check that every input a successful turn consumed ended in a
-// decision: a final delivery or stay_silent (the ledger in `decisions`). It
-// never judges the decision, never sends anything, and never touches the
-// inbound ledger, freshness or the outbox. An expected input with no decision
-// gets up to `decisionReminderLimit` reminder lines (same event= and seq,
-// undecided=1). The seq lets each reminder turn settle again without moving
-// the freshness fence or counting as a new input. Later misses are recorded.
+// Turn-end reminders an undecided input gets before it is recorded MISSING
+// (OV_SUPERAGENT_DECISION_REMINDER_LIMIT). One whose delivery the freshness
+// fence held first gets one more, from a timer this long after the block
+// (OV_SUPERAGENT_DECISION_REMINDER_DELAY_MS).
+export const DECISION_REMINDER_LIMIT = 2;
+export const DECISION_REMINDER_DELAY_MS = 60_000;
+
+// Turn-end check that every input a successful turn consumed ended in its own
+// decision: a final delivery or stay_silent on it, or one that listed it in
+// covers (the ledger in `decisions`). A newer input in the same chat no longer
+// settles it. It never judges the decision, never sends anything, and never
+// touches the inbound ledger, freshness or the outbox. An expected input with
+// no decision is shown again (same event= and seq, undecided=1) at the end of
+// each turn that held it, up to `decisionReminderLimit` times, then recorded
+// MISSING. The seq lets each reminder turn settle again without moving the
+// freshness fence or counting as a new input. One a delivery was blocked on
+// as stale first waits `blockedDelayMs` on a timer (its first reminder,
+// mid-turn too), then follows the same turn-end steps: one reminder more in
+// all.
 export class DecisionPolicy {
   constructor({
-    store, harness, logger, recordActivity, explicitSilence = true, decisionReminderLimit = 3,
+    store, harness, logger, recordActivity, explicitSilence = true, decisionReminderLimit = DECISION_REMINDER_LIMIT,
     notifyFailure = null, isStopping = () => false,
+    blockedDelayMs = DECISION_REMINDER_DELAY_MS, setTimer = setTimeout, clearTimer = clearTimeout,
   }) {
-    Object.assign(this, { store, harness, logger, recordActivity, explicitSilence, decisionReminderLimit, notifyFailure, isStopping });
-    this.nudged = new Map();
+    Object.assign(this, {
+      store, harness, logger, recordActivity, explicitSilence, decisionReminderLimit, notifyFailure, isStopping,
+      blockedDelayMs, setTimer, clearTimer,
+    });
+    // seq -> { reminded, limit, timer }: undecided inputs still being reminded.
+    this.pending = new Map();
     this.recovered = new Set();
   }
 
-  onTurnSucceeded({ inboundSeqs = [] } = {}) {
-    if (this.isStopping() || !this.explicitSilence) return;
+  // Whether this instance checks decisions at all.
+  checking() {
+    if (this.isStopping() || !this.explicitSilence) return null;
     const runtime = this.store.getCognitionState().runtime;
-    if (getRuntimeDefinition(runtime)?.capabilities.agentTools !== 'core') return;
+    return getRuntimeDefinition(runtime)?.capabilities.agentTools === 'core' ? runtime : null;
+  }
+
+  onTurnSucceeded({ inboundSeqs = [] } = {}) {
+    const runtime = this.checking();
+    if (!runtime) return;
     try {
       this.settle({ inboundSeqs, runtime });
     } catch (error) {
@@ -72,31 +95,77 @@ export class DecisionPolicy {
     }
   }
 
-  // The newest accepted input of each scope among a turn's seqs.
-  newestPerScope(inboundSeqs) {
-    const scopes = new Map();
-    for (const seq of Array.isArray(inboundSeqs) ? inboundSeqs : []) {
+  // A delivery on this input was refused as stale. Still undecided after the
+  // delay, it is reminded about from the timer, without waiting for a turn end.
+  onStaleDecision({ seq } = {}) {
+    try {
+      if (!this.checking()) return;
+      const row = this.store.inboundBySeq(seq);
+      if (row?.status !== 'DONE' || !expected(row) || this.store.decisionOutcome(row.seq)) return;
+      const entry = this.track(row.seq);
+      // Already blocked once, or out of reminders.
+      if (entry.blocked || entry.reminded >= entry.limit) return;
+      Object.assign(entry, { blocked: true, limit: this.decisionReminderLimit + 1 });
+      entry.timer = this.setTimer(() => this.remindBlocked(row.seq), this.blockedDelayMs);
+      entry.timer?.unref?.();
+    } catch (error) {
+      this.logger.warn('decision_block_tracking_failed', { error: safeError(error) });
+    }
+  }
+
+  remindBlocked(seq) {
+    const entry = this.pending.get(seq);
+    if (!entry) return;
+    entry.timer = null;
+    try {
+      const runtime = this.checking();
+      const row = runtime ? this.store.inboundBySeq(seq) : null;
+      if (!row || this.store.decisionOutcome(seq)) {
+        this.pending.delete(seq);
+        return;
+      }
+      this.remind(row, entry, runtime);
+    } catch (error) {
+      this.logger.warn('decision_reminder_failed', { error: safeError(error) });
+    }
+  }
+
+  track(seq) {
+    let entry = this.pending.get(seq);
+    if (!entry) {
+      entry = { reminded: 0, limit: this.decisionReminderLimit, blocked: false, timer: null };
+      this.pending.set(seq, entry);
+      if (this.pending.size > REMINDER_HISTORY_LIMIT) this.forget(this.pending.keys().next().value);
+    }
+    return entry;
+  }
+
+  forget(seq) {
+    const entry = this.pending.get(seq);
+    if (entry?.timer) this.clearTimer(entry.timer);
+    this.pending.delete(seq);
+  }
+
+  remind(row, entry, runtime) {
+    entry.reminded += 1;
+    this.harness.redeliverUndecided(row, { seq: row.seq, undecided: true });
+    this.missing(row, 'NUDGED', runtime);
+    this.logger.info('decision_nudged', { seq: row.seq, reminder: entry.reminded, conversationRef: opaqueRef(row.scopeKey) });
+  }
+
+  // Every accepted input this turn consumed, each on its own.
+  settle({ inboundSeqs, runtime }) {
+    const counts = { delivered: 0, silent: 0, expected_unsettled: 0, optional_unsettled: 0, nudged: 0, missing: 0 };
+    let checked = 0;
+    for (const seq of new Set(Array.isArray(inboundSeqs) ? inboundSeqs : [])) {
       if (seq === null || seq === undefined) continue;
       const row = this.store.inboundBySeq(seq);
       if (row?.status !== 'DONE' || !row.scopeKey) continue;
-      const current = scopes.get(row.scopeKey);
-      if (!current || row.seq > current.seq) scopes.set(row.scopeKey, row);
-    }
-    return scopes;
-  }
-
-  settle({ inboundSeqs, runtime }) {
-    const scopes = this.newestPerScope(inboundSeqs);
-    const counts = { delivered: 0, silent: 0, superseded: 0, expected_unsettled: 0, optional_unsettled: 0, nudged: 0 };
-    for (const [scopeKey, row] of scopes) {
-      const outcome = this.store.coveringDecision(scopeKey, row.seq);
+      checked += 1;
+      const outcome = this.store.decisionOutcome(row.seq);
       if (outcome) {
+        this.forget(row.seq);
         counts[outcome === 'delivered' ? 'delivered' : 'silent'] += 1;
-        continue;
-      }
-      // The newer input is checked when its own turn ends.
-      if (this.store.newerAcceptedSeq(scopeKey, row.seq) !== null) {
-        counts.superseded += 1;
         continue;
       }
       if (!expected(row)) {
@@ -104,19 +173,18 @@ export class DecisionPolicy {
         continue;
       }
       counts.expected_unsettled += 1;
-      const reminders = this.nudged.get(row.seq) ?? 0;
-      if (reminders < this.decisionReminderLimit) {
-        this.nudged.set(row.seq, reminders + 1);
-        if (this.nudged.size > REMINDER_HISTORY_LIMIT) this.nudged.delete(this.nudged.keys().next().value);
-        this.harness.redeliverUndecided(row, { seq: row.seq, undecided: true });
-        this.missing(row, 'NUDGED', runtime);
-        this.logger.info('decision_nudged', { seq: row.seq, reminder: reminders + 1, conversationRef: opaqueRef(scopeKey) });
+      const entry = this.track(row.seq);
+      // A blocked input's first reminder is its timer's.
+      if (entry.timer) continue;
+      if (entry.reminded < entry.limit) {
+        this.remind(row, entry, runtime);
         counts.nudged += 1;
       } else {
         this.missing(row, 'MISSING', runtime);
+        counts.missing += 1;
       }
     }
-    if (scopes.size > 0) this.logger.info('decision_settlement', counts);
+    if (checked > 0) this.logger.info('decision_settlement', counts);
     return counts;
   }
 
@@ -127,10 +195,9 @@ export class DecisionPolicy {
 
   // A turn the loop breaker stopped (AgentRuntime.breakLoop), on any instance:
   // the model may never have read what that turn held, and nothing else
-  // restarts it. Each of its inputs still without a decision (the newest in
-  // its scope, nothing newer accepted there) comes back once as a fresh line,
-  // with its seq; mail and other optional inputs too, since a stopped turn is
-  // no evidence they were looked at. One a stopped turn holds a second time is
+  // restarts it. Each of its inputs still without its own decision comes back
+  // once as a fresh line, with its seq; mail and other optional inputs too,
+  // since a stopped turn is no evidence they were looked at. One a stopped turn holds a second time is
   // not shown again: its sender gets the failure notice instead.
   onTurnStopped({ inboundSeqs = [] } = {}) {
     if (this.isStopping()) return;
@@ -142,15 +209,15 @@ export class DecisionPolicy {
   }
 
   recoverStopped(inboundSeqs, runtime) {
-    const scopes = this.newestPerScope(inboundSeqs);
-    const counts = { decided: 0, superseded: 0, redelivered: 0, missing: 0 };
-    for (const [scopeKey, row] of scopes) {
-      if (this.store.coveringDecision(scopeKey, row.seq)) {
+    const counts = { decided: 0, redelivered: 0, missing: 0 };
+    let checked = 0;
+    for (const seq of new Set(Array.isArray(inboundSeqs) ? inboundSeqs : [])) {
+      if (seq === null || seq === undefined) continue;
+      const row = this.store.inboundBySeq(seq);
+      if (row?.status !== 'DONE' || !row.scopeKey) continue;
+      checked += 1;
+      if (this.store.decisionOutcome(row.seq)) {
         counts.decided += 1;
-        continue;
-      }
-      if (this.store.newerAcceptedSeq(scopeKey, row.seq) !== null) {
-        counts.superseded += 1;
         continue;
       }
       if (this.recovered.has(row.seq)) {
@@ -165,8 +232,13 @@ export class DecisionPolicy {
       this.missing(row, 'NUDGED', runtime, 'loop_stopped');
       counts.redelivered += 1;
     }
-    if (scopes.size > 0) this.logger.info('stopped_turn_settlement', counts);
+    if (checked > 0) this.logger.info('stopped_turn_settlement', counts);
     return counts;
+  }
+
+  // Timers die with the daemon.
+  stop() {
+    for (const seq of [...this.pending.keys()]) this.forget(seq);
   }
 
   missing(row, status, runtime, reason = null) {

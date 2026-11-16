@@ -12,7 +12,7 @@ import { chatEvent, mailEvent } from './event-fixture.mjs';
 const quiet = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
 
 // A real Store and Harness; the runtime only records what it is handed.
-function setup(t, { runtime = 'codex', explicitSilence = true, decisionReminderLimit = 3, notifyFailure = null } = {}) {
+function setup(t, { runtime = 'codex', explicitSilence = true, decisionReminderLimit = undefined, notifyFailure = null } = {}) {
   const store = new Store(':memory:', quiet);
   store.initializeCognition(runtime, 'token');
   const submitted = [];
@@ -26,6 +26,8 @@ function setup(t, { runtime = 'codex', explicitSilence = true, decisionReminderL
   const activities = [];
   const logs = [];
   const state = { stopping: false };
+  // Timers the policy starts, fired by hand.
+  const timers = [];
   const policy = new DecisionPolicy({
     store, harness,
     logger: { ...quiet, info: (message, fields) => logs.push({ message, ...fields }) },
@@ -34,11 +36,25 @@ function setup(t, { runtime = 'codex', explicitSilence = true, decisionReminderL
     decisionReminderLimit,
     notifyFailure,
     isStopping: () => state.stopping,
+    blockedDelayMs: 60_000,
+    setTimer: (fn, ms) => { const timer = { fn, ms, cleared: false }; timers.push(timer); return timer; },
+    clearTimer: (timer) => { timer.cleared = true; },
   });
   t.after(() => { harness.stop(); store.close(); });
   const ingest = (fields) => store.ingest(chatEvent({ chatType: 'p2p', ...fields })).inbound;
-  const silence = (row) => store.recordDecision({ row: store.db.prepare('SELECT * FROM connector_events WHERE seq = ?').get(row.seq),
-    outcome: 'silent' });
+  const raw = (row) => store.db.prepare('SELECT * FROM connector_events WHERE seq = ?').get(row.seq);
+  const silence = (row) => store.recordDecision({ row: raw(row), outcome: 'silent' });
+  const deliver = (row, covers = []) => {
+    store.recordDecision({ row: raw(row), outcome: 'delivered' });
+    for (const other of covers) store.recordDecision({ row: raw(other), outcome: 'delivered', coveredBy: raw(row).event_id });
+  };
+  const fire = async () => {
+    const due = timers.filter((timer) => !timer.cleared && !timer.fired);
+    for (const timer of due) { timer.fired = true; timer.fn(); }
+    await harness.ingressBarrier;
+    harness.flushBufferedIngress();
+    return due.length;
+  };
   const settlement = () => logs.filter((line) => line.message === 'decision_settlement').at(-1);
   const turn = async (inboundSeqs) => {
     policy.onTurnSucceeded({ inboundSeqs });
@@ -51,44 +67,43 @@ function setup(t, { runtime = 'codex', explicitSilence = true, decisionReminderL
     await harness.ingressBarrier;
     harness.flushBufferedIngress();
   };
-  return { store, policy, submitted, activities, logs, state, ingest, silence, settlement, turn, stopped };
+  return { store, policy, submitted, activities, logs, state, timers, ingest, silence, deliver, fire, settlement, turn, stopped };
 }
 
 describe('turn-end decision settlement', () => {
-  it('leaves a decided scope alone', async (t) => {
+  it('leaves a decided input alone', async (t) => {
     const { activities, submitted, ingest, silence, settlement, turn } = setup(t);
     const row = ingest({ messageId: 'om_decided123456' });
     silence(row);
     await turn([row.seq]);
     assert.deepEqual(activities, []);
     assert.deepEqual(submitted, []);
-    assert.deepEqual(settlement(), { message: 'decision_settlement', delivered: 0, silent: 1, superseded: 0,
-      expected_unsettled: 0, optional_unsettled: 0, nudged: 0 });
+    assert.deepEqual(settlement(), { message: 'decision_settlement', delivered: 0, silent: 1,
+      expected_unsettled: 0, optional_unsettled: 0, nudged: 0, missing: 0 });
   });
 
-  it('reminds an undecided direct message three times with its original event= and seq, then stops', async (t) => {
+  it('reminds an input never attempted twice, with its original event= and seq, then records it missing', async (t) => {
     const { activities, submitted, logs, ingest, turn } = setup(t);
     const row = ingest({ messageId: 'om_forgot1234567', chatId: 'oc_p2p12345678' });
     await turn([row.seq, null]);
-    for (let reminder = 2; reminder <= 3; reminder += 1) await turn([row.seq]);
+    await turn([row.seq]);
     assert.deepEqual(activities.map(({ kind, status, inboundSeq, metadata }) => [kind, status, inboundSeq, metadata]),
-      Array.from({ length: 3 }, () => ['agent.decision_missing', 'NUDGED', row.seq, { expectation: 'expected', runtime: 'codex' }]));
-    assert.equal(submitted.length, 3);
+      Array.from({ length: 2 }, () => ['agent.decision_missing', 'NUDGED', row.seq, { expectation: 'expected', runtime: 'codex' }]));
+    assert.equal(submitted.length, 2);
     for (const [index, item] of submitted.entries()) {
       assert.equal(item.seq, row.seq);
       assert.equal(item.receiptId, undefined);
       assert.match(item.text, /^\[chat=oc_p2p12345678 source=lark msg=om_forgot1234567 event=message:om_forgot1234567 time=\S+ from=\S+ undecided=1\] hello$/);
       assert.equal(logs.filter((line) => line.message === 'decision_nudged')[index].reminder, index + 1);
     }
-    assert.ok(logs.filter((line) => line.message === 'decision_nudged').every((line) => line.seq === row.seq));
     assert.doesNotMatch(JSON.stringify(logs), /oc_p2p|om_forgot/);
 
-    // The third reminder turn checks the same seq again but adds no fourth.
+    // The second reminder turn checks the same seq again but adds no third.
     await turn([row.seq]);
-    assert.equal(submitted.length, 3);
-    assert.deepEqual(activities.map(({ status }) => status), ['NUDGED', 'NUDGED', 'NUDGED', 'MISSING']);
+    assert.equal(submitted.length, 2);
+    assert.deepEqual(activities.map(({ status }) => status), ['NUDGED', 'NUDGED', 'MISSING']);
     await turn([]);
-    assert.equal(activities.length, 4);
+    assert.equal(activities.length, 3);
   });
 
   it('honors a zero reminder limit', async (t) => {
@@ -99,27 +114,87 @@ describe('turn-end decision settlement', () => {
     assert.deepEqual(activities.map(({ status }) => status), ['MISSING']);
   });
 
-  it('lets one decision on the newest input cover a burst, but not one on an older input', async (t) => {
-    const { activities, ingest, silence, settlement, turn } = setup(t);
-    const burst = ['om_burstA1234567', 'om_burstB1234567', 'om_burstC1234567']
-      .map((messageId) => ingest({ messageId, chatId: 'oc_group12345678', chatType: 'group' }));
-    silence(burst[2]);
-    await turn(burst.map((row) => row.seq));
-    assert.equal(settlement().silent, 1);
+  it('asks every input of a burst for its own decision: three decisions, or one that covers the other two', async (t) => {
+    const { activities, submitted, ingest, silence, deliver, settlement, turn } = setup(t);
+    const group = (prefix, chatId) => ['A', 'B', 'C']
+      .map((letter) => ingest({ messageId: `om_${prefix}${letter}12345678`, chatId, chatType: 'group' }));
+    // One decision each.
+    const each = group('each', 'oc_each12345678');
+    deliver(each[0]);
+    silence(each[1]);
+    deliver(each[2]);
+    await turn(each.map((row) => row.seq));
+    assert.deepEqual([settlement().delivered, settlement().silent, settlement().nudged], [2, 1, 0]);
+    // One decision on the newest, covering the other two.
+    const covered = group('cover', 'oc_cover1234567');
+    deliver(covered[2], covered.slice(0, 2));
+    await turn(covered.map((row) => row.seq));
+    assert.deepEqual([settlement().delivered, settlement().nudged], [3, 0]);
+    assert.deepEqual([activities, submitted], [[], []]);
 
-    const direct = ['om_directA123456', 'om_directB123456'].map((messageId) => ingest({ messageId, chatId: 'oc_p2pB12345678' }));
-    silence(direct[0]);
-    await turn(direct.map((row) => row.seq));
-    assert.deepEqual(activities.map(({ status, inboundSeq }) => [status, inboundSeq]), [['NUDGED', direct[1].seq]]);
+    // The newest alone no longer settles the older two: each is reminded.
+    const partly = group('part', 'oc_part12345678');
+    deliver(partly[2]);
+    await turn(partly.map((row) => row.seq));
+    assert.deepEqual(activities.map(({ status, inboundSeq }) => [status, inboundSeq]),
+      [['NUDGED', partly[0].seq], ['NUDGED', partly[1].seq]]);
+    assert.deepEqual(submitted.map((item) => item.seq), [partly[0].seq, partly[1].seq]);
+    // Covering one of them later settles it; the other goes on being reminded.
+    deliver(partly[2], [partly[0]]);
+    await turn([partly[0].seq, partly[1].seq]);
+    assert.deepEqual(activities.slice(2).map(({ status, inboundSeq }) => [status, inboundSeq]), [['NUDGED', partly[1].seq]]);
+    await turn([partly[1].seq]);
+    assert.deepEqual(activities.at(-1).status, 'MISSING');
   });
 
-  it('skips a scope with a newer input, which its own turn will check', async (t) => {
-    const { activities, submitted, ingest, settlement, turn } = setup(t);
+  it('reminds about an older input with no decision of its own even when a newer one arrived', async (t) => {
+    const { activities, ingest, turn } = setup(t);
     const first = ingest({ messageId: 'om_firstA1234567' });
     ingest({ messageId: 'om_secondB123456' });
     await turn([first.seq]);
-    assert.equal(settlement().superseded, 1);
-    assert.deepEqual([activities, submitted], [[], []]);
+    assert.deepEqual(activities.map(({ status, inboundSeq }) => [status, inboundSeq]), [['NUDGED', first.seq]]);
+  });
+
+  it('gives an input whose reply the fence held a timer reminder first, then two turn-end ones, then records it missing', async (t) => {
+    const { policy, activities, submitted, timers, ingest, fire, turn } = setup(t);
+    const held = ingest({ messageId: 'om_heldA12345678', chatId: 'oc_held12345678', chatType: 'group' });
+    const newest = ingest({ messageId: 'om_heldB12345678', chatId: 'oc_held12345678', chatType: 'group' });
+    policy.onStaleDecision({ seq: held.seq });
+    // A second block changes nothing; a decided or optional input starts no timer.
+    policy.onStaleDecision({ seq: held.seq });
+    assert.deepEqual(timers.map(({ ms }) => ms), [60_000]);
+    // The turn that held it ends before the timer: no turn-end reminder yet.
+    await turn([held.seq, newest.seq]);
+    assert.deepEqual(activities.map(({ inboundSeq }) => inboundSeq), [newest.seq]);
+    // The timer reminds, mid-turn, with the input's seq.
+    assert.equal(await fire(), 1);
+    assert.deepEqual(activities.slice(1).map(({ status, inboundSeq }) => [status, inboundSeq]), [['NUDGED', held.seq]]);
+    assert.match(submitted.at(-1).text, /msg=om_heldA12345678 [^\]]* undecided=1\]/);
+    assert.equal(submitted.at(-1).seq, held.seq);
+    // Then the shared turn-end steps: two more reminders, then MISSING.
+    await turn([held.seq]);
+    await turn([held.seq]);
+    await turn([held.seq]);
+    assert.deepEqual(activities.filter(({ inboundSeq }) => inboundSeq === held.seq).map(({ status }) => status),
+      ['NUDGED', 'NUDGED', 'NUDGED', 'MISSING']);
+    assert.equal(submitted.filter((item) => item.seq === held.seq).length, 3);
+  });
+
+  it('drops a held input decided before its timer fires', async (t) => {
+    const { store, policy, activities, timers, ingest, deliver, fire, turn } = setup(t);
+    const held = ingest({ messageId: 'om_decideA123456', chatId: 'oc_decide1234567', chatType: 'group' });
+    const newest = ingest({ messageId: 'om_decideB123456', chatId: 'oc_decide1234567', chatType: 'group' });
+    policy.onStaleDecision({ seq: held.seq });
+    deliver(newest, [held]);
+    assert.equal(store.decisionOutcome(held.seq), 'delivered');
+    await fire();
+    await turn([held.seq, newest.seq]);
+    assert.deepEqual(activities, []);
+    // Nothing to remind about for a decided input or a reaction.
+    const reaction = ingest({ messageId: 're_held123456789', kind: 'message.reaction.created', content: '[reaction OK]' });
+    policy.onStaleDecision({ seq: held.seq });
+    policy.onStaleDecision({ seq: reaction.seq });
+    assert.equal(timers.length, 1);
   });
 
   it('expects a decision on every chat message, group and mention alike, never on mail', async (t) => {
@@ -143,20 +218,14 @@ describe('turn-end decision settlement', () => {
 
   it('lets a reaction wake the Agent without asking for a decision of its own', async (t) => {
     const { activities, submitted, ingest, settlement, turn } = setup(t);
+    const asked = ingest({ messageId: 'om_asked12345678' });
     const reaction = ingest({ messageId: 're_ok12345678901', kind: 'message.reaction.created', content: '[reaction OK]' });
     await turn([reaction.seq]);
     assert.deepEqual([activities, submitted], [[], []]);
     assert.deepEqual([settlement().expected_unsettled, settlement().optional_unsettled, settlement().nudged], [0, 1, 0]);
-  });
-
-  it('reminds about only the newest line of an undecided group burst', async (t) => {
-    const { activities, submitted, ingest, settlement, turn } = setup(t);
-    const burst = ['om_gburstA123456', 'om_gburstB123456', 'om_gburstC123456']
-      .map((messageId) => ingest({ messageId, chatId: 'oc_gburst1234567', chatType: 'group' }));
-    await turn(burst.map((row) => row.seq));
-    assert.deepEqual(activities.map(({ status, inboundSeq }) => [status, inboundSeq]), [['NUDGED', burst[2].seq]]);
-    assert.deepEqual(submitted.map((item) => item.text.includes(' msg=om_gburstC123456 ')), [true]);
-    assert.equal(settlement().nudged, 1);
+    // Nor does a reaction settle the message before it.
+    await turn([asked.seq, reaction.seq]);
+    assert.deepEqual(activities.map(({ status, inboundSeq }) => [status, inboundSeq]), [['NUDGED', asked.seq]]);
   });
 
   it('does nothing for Volc or while the daemon stops', async (t) => {
@@ -237,17 +306,19 @@ describe('loop-stopped turn recovery', () => {
     // Mail too: a stopped turn is no evidence anyone looked at it.
     const mail = store.ingest(mailEvent({ uid: 9 })).inbound;
 
+    // An older input with a newer one in its chat comes back too: nothing
+    // settled it.
     await stopped([looped.seq, waiting.seq, older.seq, mail.seq]);
-    assert.deepEqual(submitted.map((item) => item.seq), [waiting.seq, mail.seq]);
+    assert.deepEqual(submitted.map((item) => item.seq), [waiting.seq, older.seq, mail.seq]);
     assert.match(submitted[0].text, /msg=om_waiting123456 event=message:om_waiting123456 [^\]]* undecided=1\] hello$/);
     assert.deepEqual(logs.filter((line) => line.message === 'stopped_turn_settlement').at(-1),
-      { message: 'stopped_turn_settlement', decided: 1, superseded: 1, redelivered: 2, missing: 0 });
+      { message: 'stopped_turn_settlement', decided: 1, redelivered: 3, missing: 0 });
     assert.deepEqual(activities.map(({ status, inboundSeq, metadata }) => [status, inboundSeq, metadata.expectation]),
-      [['NUDGED', waiting.seq, 'loop_stopped'], ['NUDGED', mail.seq, 'loop_stopped']]);
+      [['NUDGED', waiting.seq, 'loop_stopped'], ['NUDGED', older.seq, 'loop_stopped'], ['NUDGED', mail.seq, 'loop_stopped']]);
 
     // Held by a stopped turn again: not shown a third time, its sender is told.
     await stopped([waiting.seq]);
-    assert.equal(submitted.length, 2);
+    assert.equal(submitted.length, 3);
     assert.deepEqual(notices.map((info) => info.inboundSeqs), [[waiting.seq]]);
     assert.match(notices[0].error, /中止/);
     assert.deepEqual(activities.at(-1).status, 'MISSING');

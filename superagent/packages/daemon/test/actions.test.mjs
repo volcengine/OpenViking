@@ -34,7 +34,7 @@ const mcpPath = fileURLToPath(new URL('../src/actions/mcp.mjs', import.meta.url)
 function setup(t, { ids = ['lark'], run = null, roster = null, liveness = null, meetingEnabled = false, ovClient = null,
   ovTools = null, openVikingConfigPath = undefined,
   owners = { lark: OWNER }, channel = 'lark', profile = undefined, explicitSilence = false, stagedReplies = false,
-  larkMessageAccess = 'owner', onNoProgress = null, connectors: given = null } = {}) {
+  larkMessageAccess = 'owner', onNoProgress = null, onStaleDecision = null, connectors: given = null } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'actions-'));
   const workspace = path.join(directory, 'workspace');
   fs.mkdirSync(workspace);
@@ -46,7 +46,7 @@ function setup(t, { ids = ['lark'], run = null, roster = null, liveness = null, 
   const service = new ActionService({
     config: { workspace, tempDir: path.join(directory, 'tmp'), maxReplyChars: 1_000, channel, profile, explicitSilence, stagedReplies,
       larkMessageAccess, ...(openVikingConfigPath !== undefined ? { openVikingConfigPath } : {}) },
-    store, connectors, roster, liveness, meetingEnabled, ovClient, ovTools, onNoProgress,
+    store, connectors, roster, liveness, meetingEnabled, ovClient, ovTools, onNoProgress, onStaleDecision,
     logger: { debug() {}, info: record('info'), warn: record('warn'), error: record('error'), child() { return this; } },
   });
   t.after(() => { store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
@@ -1650,13 +1650,14 @@ describe('stay_silent decisions', () => {
     failing.fail = false;
     assert.equal(outcome('message:om_failed1234567'), 'delivered');
 
-    // Attribution to an older input settles the fence, not the older one.
+    // Attribution to an older input settles the fence, not the older one: a
+    // newer input's decision no longer settles it either.
     const older = inbound({ messageId: 'om_olderA1234567', chatId: 'oc_attrib1234567' });
-    const newest = inbound({ messageId: 'om_newestB123456', chatId: 'oc_attrib1234567' });
+    inbound({ messageId: 'om_newestB123456', chatId: 'oc_attrib1234567' });
     await call('send_message', { chat_id: 'oc_attrib1234567', markdown: 'both', decision_id: 'message:om_newestB123456',
       response_to_id: 'message:om_olderA1234567' });
     assert.equal(outcome('message:om_olderA1234567'), undefined);
-    assert.equal(store.coveringDecision(newest.scopeKey, older.seq), 'delivered');
+    assert.equal(store.decisionOutcome(older.seq), null);
 
     // A dry run is a decision too.
     service.config.dryRun = true;
@@ -1665,10 +1666,82 @@ describe('stay_silent decisions', () => {
     assert.equal(outcome('message:om_dryrun1234567'), 'delivered');
   });
 
+  it('settles the inputs a delivery or silence covers, each attributed to the decision', async (t) => {
+    const { store, call, inbound, logs } = setupOn(t);
+    const covered = (store) => store.db.prepare('SELECT event_id, outcome, covered_by FROM decisions ORDER BY seq')
+      .all().map((row) => [row.event_id, row.outcome, row.covered_by]);
+    const burst = ['om_coverA1234567', 'om_coverB1234567', 'om_coverC1234567']
+      .map((messageId) => inbound({ messageId, chatId: 'oc_cover12345678' }));
+    await call('send_message', { chat_id: 'oc_cover12345678', markdown: 'all three', decision_id: 'message:om_coverC1234567',
+      covers: ['message:om_coverA1234567', 'message:om_coverB1234567', 'message:om_coverA1234567', 'message:om_coverC1234567'] });
+    assert.deepEqual(covered(store), [
+      ['message:om_coverA1234567', 'delivered', 'message:om_coverC1234567'],
+      ['message:om_coverB1234567', 'delivered', 'message:om_coverC1234567'],
+      ['message:om_coverC1234567', 'delivered', null],
+    ]);
+    assert.deepEqual(burst.map((row) => store.decisionOutcome(row.seq)), ['delivered', 'delivered', 'delivered']);
+    assert.equal(toolLines(logs).at(-1).covers, 2);
+
+    // Silence covers too, each input on its own row.
+    const quiet = ['om_quietA1234567', 'om_quietB1234567'].map((messageId) => inbound({ messageId, chatId: 'oc_quietC1234567' }));
+    const silent = await call('stay_silent', { decision_id: 'message:om_quietB1234567', covers: ['message:om_quietA1234567'] });
+    assert.equal(silent.data.silent, true);
+    assert.deepEqual(quiet.map((row) => store.decisionOutcome(row.seq)), ['silent', 'silent']);
+    assert.equal(store.decisionFor('lark', 'message:om_quietA1234567').covered_by, 'message:om_quietB1234567');
+    // A silence that only adds a cover to an already delivered decision records it.
+    const late = inbound({ messageId: 'om_lateA12345678', chatId: 'oc_late123456789' });
+    inbound({ messageId: 'om_lateB12345678', chatId: 'oc_late123456789' });
+    await call('send_message', { chat_id: 'oc_late123456789', markdown: 'b', decision_id: 'message:om_lateB12345678' });
+    const extra = await call('stay_silent', { decision_id: 'message:om_lateB12345678', covers: ['message:om_lateA12345678'] });
+    assert.equal(extra.data.covered, 1);
+    assert.equal(store.decisionOutcome(late.seq), 'silent');
+  });
+
+  it('refuses a whole call whose covers name another scope, a newer input or an unknown one', async (t) => {
+    const { store, call, inbound, connectors } = setupOn(t);
+    inbound({ messageId: 'om_scopeA1234567', chatId: 'oc_scopeA1234567' });
+    const other = inbound({ messageId: 'om_scopeB1234567', chatId: 'oc_scopeB1234567' });
+    const older = inbound({ messageId: 'om_olderC1234567', chatId: 'oc_scopeC1234567' });
+    inbound({ messageId: 'om_newerC1234567', chatId: 'oc_scopeC1234567' });
+    const sends = () => connectors.calls.filter(({ action }) => action === 'message.send').length;
+    const attempt = (tool, decision, covers) => call(tool, tool === 'stay_silent'
+      ? { decision_id: decision, covers }
+      : { chat_id: 'oc_scopeC1234567', markdown: 'x', decision_id: decision, covers });
+    for (const tool of ['send_message', 'stay_silent']) {
+      await assert.rejects(attempt(tool, 'message:om_newerC1234567', ['message:om_olderC1234567', 'message:om_scopeB1234567']),
+        (error) => error.code === 'covers_rejected' && /covers\[1\] is from another chat\/thread/.test(error.message));
+      await assert.rejects(attempt(tool, 'message:om_newerC1234567', ['message:om_missing12345678']),
+        (error) => error.code === 'covers_rejected' && /covers\[0\] is not the event= of one accepted input/.test(error.message));
+    }
+    // Newer than decision_id: a silence on the older input may not cover the newest.
+    await assert.rejects(attempt('stay_silent', 'message:om_olderC1234567', ['message:om_newerC1234567']),
+      (error) => error.code === 'covers_rejected' && /newer than decision_id/.test(error.message));
+    // Nothing applied: no send, no decision on any of them.
+    assert.equal(sends(), 0);
+    assert.deepEqual([other.seq, older.seq].map((seq) => store.decisionOutcome(seq)), [null, null]);
+    assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM decisions').get().n, 0);
+    // A retraction without decision_id cannot cover anything.
+    await assert.rejects(call('retract_message', { message_id: 'om_x123456789012', covers: ['message:om_olderC1234567'] }),
+      (error) => error.code === 'invalid_input' && /covers needs decision_id/.test(error.message));
+  });
+
+  it('tells the decision policy when the freshness fence holds a delivery', async (t) => {
+    const stale = [];
+    const { call, inbound } = setupOn(t, { onStaleDecision: (info) => stale.push(info.seq) });
+    const older = inbound({ messageId: 'om_fenceA1234567', chatId: 'oc_fence12345678' });
+    inbound({ messageId: 'om_fenceB1234567', chatId: 'oc_fence12345678' });
+    await assert.rejects(call('reply_message', { message_id: 'om_fenceA1234567', markdown: 'x', decision_id: 'message:om_fenceA1234567' }),
+      (error) => error.code === 'stale_decision' && /list this input in covers/.test(error.message));
+    assert.deepEqual(stale, [older.seq]);
+    // stay_silent is never stale.
+    await call('stay_silent', { decision_id: 'message:om_fenceA1234567' });
+    assert.deepEqual(stale, [older.seq]);
+  });
+
   it('records a requested retraction as the decision on the request, through the freshness fence', async (t) => {
     const { store, service, call, connectors, inbound, logs } = setupOn(t);
     const retract = service.tools().find((tool) => tool.name === 'retract_message');
-    assert.deepEqual(Object.keys(retract.inputSchema.properties), ['source', 'message_id', 'decision_id', 'decision_instance']);
+    assert.deepEqual(Object.keys(retract.inputSchema.properties), ['source', 'message_id', 'decision_id', 'decision_instance', 'covers']);
     assert.deepEqual(retract.inputSchema.required, ['message_id']);
 
     inbound({ messageId: 'om_ask123456789', chatId: 'oc_undo123456789' });
@@ -1680,7 +1753,7 @@ describe('stay_silent decisions', () => {
       [['message:om_ask123456789', 'delivered'], ['message:om_undo123456789', 'delivered']]);
     assert.equal(toolLines(logs).at(-1).decisionSeq, request.seq);
     // Nothing is left to remind about, and a silence on it changes nothing.
-    assert.equal(store.coveringDecision(request.scopeKey, request.seq), 'delivered');
+    assert.equal(store.decisionOutcome(request.seq), 'delivered');
     assert.match((await call('stay_silent', { decision_id: 'message:om_undo123456789' })).text, /^STOP: /);
 
     // Fenced like every other delivery: a newer input there blocks it.
