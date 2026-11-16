@@ -7,7 +7,7 @@ from typing import Any, Iterator
 
 import httpx
 
-from openviking.models.model_error import ModelError, ModelErrorKind, model_exception_chain
+from openviking.models.model_error import ModelError, ModelErrorKind, model_error_from_exception
 from openviking.pyagfs.exceptions import (
     AGFSAlreadyExistsError,
     AGFSClientError,
@@ -350,7 +350,7 @@ def _map_structured_model_error(error: ModelError, *, context: Exception) -> Ope
         and error.status_code is None
         and any(
             isinstance(item, TimeoutError) or "timeout" in type(item).__name__.lower()
-            for item in model_exception_chain(error)
+            for item in _iter_exception_chain(context)
         )
     ):
         code = "DEADLINE_EXCEEDED"
@@ -388,9 +388,10 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
 
     # A provider boundary owns classification. Project its kind and status
     # without classifying the message again.
-    for item in model_exception_chain(exc):
+    for item in _iter_exception_chain(exc):
         if isinstance(item, ModelError):
-            return _map_structured_model_error(item, context=exc)
+            model_error = model_error_from_exception(item) or item
+            return _map_structured_model_error(model_error, context=exc)
 
     status, source = _extract_structured_http_status(exc)
     if status is None:

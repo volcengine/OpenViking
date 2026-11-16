@@ -112,8 +112,7 @@ _TRANSIENT_SERVICE_STATUS = {409, 500, 502, 503}
 _TRANSIENT_NETWORK_STATUS = {408, 504}
 
 
-def model_exception_chain(error: BaseException) -> list[BaseException]:
-    """Follow the causal chain once, preferring an explicit cause over context."""
+def _exception_chain(error: BaseException) -> list[BaseException]:
     chain: list[BaseException] = []
     seen: set[int] = set()
     current: BaseException | None = error
@@ -365,7 +364,7 @@ def model_error_from_status(
 
 def model_error_from_exception(error: BaseException) -> ModelError | None:
     """Reuse the nearest classification or classify the first SDK failure."""
-    for item in model_exception_chain(error):
+    for item in _exception_chain(error):
         classified = _sdk_kind(item)
         if classified is None:
             continue
@@ -406,7 +405,7 @@ def model_error_boundary(func: F) -> F:
                     raise
                 if args and isinstance(getattr(args[0], "provider", None), str):
                     converted.provider = args[0].provider
-                if any(item is converted for item in model_exception_chain(error)):
+                if any(item is converted for item in _exception_chain(error)):
                     raise converted
                 raise converted from error
 
@@ -422,7 +421,7 @@ def model_error_boundary(func: F) -> F:
                 raise
             if args and isinstance(getattr(args[0], "provider", None), str):
                 converted.provider = args[0].provider
-            if any(item is converted for item in model_exception_chain(error)):
+            if any(item is converted for item in _exception_chain(error)):
                 raise converted
             raise converted from error
 
