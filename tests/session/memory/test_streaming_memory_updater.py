@@ -1714,6 +1714,159 @@ async def test_streaming_memory_updater_submit_waits_for_all_merge_groups(monkey
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("buffered", [False, True])
+@pytest.mark.parametrize("fail", [False, True])
+async def test_cancelled_submit_preserves_window_and_waits_for_all_merge_groups(
+    monkeypatch, buffered, fail
+):
+    peer_id = "web-visitor-alice"
+    entered = {key: asyncio.Event() for key in (None, peer_id)}
+    release = {key: asyncio.Event() for key in (None, peer_id)}
+    finished = {key: asyncio.Event() for key in (None, peer_id)}
+    reasons = {}
+
+    async def process_batch(self, group_key, requests, reason):
+        key = group_key.peer_id
+        reasons[key] = reason
+        entered[key].set()
+        await release[key].wait()
+        finished[key].set()
+        if fail and key is None:
+            raise OSError("self merge failed")
+        return StreamingMemoryUpdateResult(
+            operations=requests[0].operations,
+            apply_result=MemoryUpdateResult(),
+            request_count=1,
+        )
+
+    monkeypatch.setattr(StreamingMemoryUpdater, "_process_batch", process_batch)
+    updater = StreamingMemoryUpdater(
+        registry=_registry(),
+        config=StreamingMemoryUpdaterConfig(
+            max_operations_per_update=8 if buffered else 1,
+            max_wait_seconds=60,
+            timer_check_interval_seconds=60,
+        ),
+    )
+    request = MemoryUpdateRequest(
+        operations=ResolvedOperations(
+            upsert_operations=[_note_op("self"), _peer_note_op("peer", peer_id)],
+            delete_file_contents=[],
+            errors=[],
+        ),
+        messages=[],
+        ctx=_ctx(),
+    )
+    submit = asyncio.create_task(updater.submit(request))
+    close = None
+    try:
+        if buffered:
+
+            async def wait_for_buffered_groups():
+                while await updater.get_buffered_operation_count() != 2:
+                    await asyncio.sleep(0)
+
+            await asyncio.wait_for(wait_for_buffered_groups(), 1)
+            assert not any(event.is_set() for event in entered.values())
+        else:
+            await asyncio.wait_for(asyncio.gather(*(event.wait() for event in entered.values())), 1)
+        submit.cancel()
+        await asyncio.sleep(0)
+        if buffered:
+            assert not any(event.is_set() for event in entered.values())
+            assert await updater.get_buffered_operation_count() == 2
+            close = asyncio.create_task(updater.close())
+        await asyncio.wait_for(asyncio.gather(*(event.wait() for event in entered.values())), 1)
+        assert reasons == dict.fromkeys(entered, "close" if buffered else "count")
+        assert not submit.done()
+
+        release[None].set()
+        await asyncio.wait_for(finished[None].wait(), 1)
+        assert not finished[peer_id].is_set()
+        assert not submit.done()
+        submit.cancel()
+        await asyncio.sleep(0)
+        assert not submit.done()
+
+        release[peer_id].set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(submit, 1)
+        assert all(event.is_set() for event in finished.values())
+    finally:
+        for event in release.values():
+            event.set()
+        await asyncio.gather(submit, close or updater.close(), return_exceptions=True)
+        await updater.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("peer_fails_first", [False, True])
+@pytest.mark.parametrize("other_fails", [False, True])
+async def test_failed_merge_group_waits_for_other_group_to_finish(
+    monkeypatch, peer_fails_first, other_fails
+):
+    failed = asyncio.Event()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+    first_error = (
+        ValueError("peer merge failed") if peer_fails_first else OSError("self merge failed")
+    )
+    later_error = (
+        OSError("self merge failed") if peer_fails_first else ValueError("peer merge failed")
+    )
+
+    async def process_batch(self, group_key, requests, reason):
+        if (group_key.peer_id is not None) == peer_fails_first:
+            failed.set()
+            raise first_error
+        started.set()
+        await release.wait()
+        finished.set()
+        if other_fails:
+            raise later_error
+        return StreamingMemoryUpdateResult(
+            operations=requests[0].operations,
+            apply_result=MemoryUpdateResult(),
+            request_count=1,
+        )
+
+    monkeypatch.setattr(StreamingMemoryUpdater, "_process_batch", process_batch)
+    updater = StreamingMemoryUpdater(
+        registry=_registry(),
+        config=StreamingMemoryUpdaterConfig(max_operations_per_update=1),
+    )
+    request = MemoryUpdateRequest(
+        operations=ResolvedOperations(
+            upsert_operations=[
+                _note_op("self"),
+                _peer_note_op("peer", "web-visitor-alice"),
+            ],
+            delete_file_contents=[],
+            errors=[],
+        ),
+        messages=[],
+        ctx=_ctx(),
+    )
+    submit = asyncio.create_task(updater.submit(request))
+    try:
+        await asyncio.wait_for(failed.wait(), 1)
+        await asyncio.wait_for(started.wait(), 1)
+        await asyncio.sleep(0)
+        assert not submit.done()
+        assert not finished.is_set()
+        release.set()
+        with pytest.raises(type(first_error), match=str(first_error)) as error:
+            await asyncio.wait_for(submit, 1)
+        assert error.value is first_error
+        assert finished.is_set()
+    finally:
+        release.set()
+        await asyncio.gather(submit, return_exceptions=True)
+        await updater.close()
+
+
+@pytest.mark.asyncio
 async def test_streaming_memory_updater_applies_cross_group_links_after_all_groups(monkeypatch):
     fs = PathlockedInMemoryVikingFS({})
     fs.search = AsyncMock(return_value=[])
