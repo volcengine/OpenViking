@@ -4,8 +4,6 @@
 
 from __future__ import annotations
 
-from openviking.pyagfs.async_client import state_transaction
-
 import json
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -60,8 +58,7 @@ async def _user_config_lock(
     path = uri_to_path(uri, ctx=ctx)
     lease = await acquire(path)
     try:
-        async with state_transaction(agfs):
-            yield lease
+        yield lease
     finally:
         await release(lease)
 

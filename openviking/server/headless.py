@@ -52,11 +52,6 @@ async def serve(config: ServerConfig) -> None:
         tracer_module.init_tracer_from_server_config(config)
         init_otel_log_handler_from_server_config(config)
         await runtime.start()
-        ready_hook = getattr(
-            getattr(service, "_agfs_client", None), "mark_runtime_ready", None
-        )
-        if ready_hook is not None:
-            ready_hook(runtime.is_healthy)
         print(f"OpenViking roles ready: {','.join(config.roles)}", flush=True)
         await stop.wait()
     finally:

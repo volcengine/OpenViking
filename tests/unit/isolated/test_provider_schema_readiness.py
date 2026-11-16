@@ -9,11 +9,11 @@ from openviking.server.routers import system
 @pytest.mark.asyncio
 async def test_provider_schema_readiness_projects_only_public_identity(monkeypatch):
     provider = SimpleNamespace(
-        shared_state_backend="mysql",
-        shared_schema={"version": 1, "checksum": "d" * 64, "password": "never-public"},
-        check_state=AsyncMock(),
+        backends={"account": "mysql", "task": "mysql", "watch": "mysql", "files": "s3", "runtime_config": "file"},
+        schema={"version": 2, "checksum": "d" * 64, "password": "never-public"},
+        check_ready=AsyncMock(),
     )
-    service = SimpleNamespace(_initialized=True, _agfs_client=provider, embedding_provider=object())
+    service = SimpleNamespace(_initialized=True, _agfs_client=object(), _runtime_adapter=provider, embedding_provider=object())
     monkeypatch.setattr(system, "get_service", lambda: service)
     monkeypatch.setattr(system, "_probe_agfs_readiness", AsyncMock(return_value={"status": "ok", "checks": {"filesystem": "ok"}}))
     storage = SimpleNamespace(health_check=AsyncMock(return_value=True))
@@ -23,5 +23,6 @@ async def test_provider_schema_readiness_projects_only_public_identity(monkeypat
     response = await system.readiness_check(SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(api_key_manager=None))))
     assert response.status_code == 200
     value = json.loads(response.body)
-    assert value["shared_schema"] == {"version": 1, "checksum": "d" * 64}
+    assert value["shared_schema"] == {"version": 2, "checksum": "d" * 64}
+    assert value["shared_state"]["runtime_config"] == "file"
     assert "never-public" not in response.body.decode()

@@ -19,8 +19,6 @@ snapshot (``snapshot_id`` + ``snapshot_path``) holding its content.
 
 from __future__ import annotations
 
-from openviking.pyagfs.async_client import state_transaction
-
 import asyncio
 import hashlib
 import json
@@ -287,8 +285,7 @@ class CompileStateStore:
             return
         lease = await self._agfs.pathlock_acquire_exact(path, timeout_secs=LOCK_TIMEOUT_SECONDS)
         try:
-            async with state_transaction(self._agfs):
-                yield lease
+            yield lease
         finally:
             await self._agfs.pathlock_release(lease)
 

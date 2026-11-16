@@ -392,9 +392,11 @@ async def test_api_lifespan_closes_owned_resources_after_startup_failure(monkeyp
     from contextlib import asynccontextmanager
 
     from openviking.server import app as app_module
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
     service = SimpleNamespace(close=AsyncMock())
     monkeypatch.setattr(app_module, "OpenVikingService", lambda: service)
+    monkeypatch.setattr(app_module, "get_openviking_config", lambda: OpenVikingConfig())
     monkeypatch.setattr(
         app_module,
         "_initialize_runtime_state",
@@ -737,3 +739,29 @@ def test_runtime_health_requires_tracker_loops(monkeypatch):
     runtime = ServerRuntime(SimpleNamespace(), ServerConfig(roles=["api"]))
     runtime.started = True
     assert not runtime.is_healthy()
+
+
+async def test_native_adapter_preflight_blocks_consumers_and_initialization():
+    adapter = SimpleNamespace(
+        prepare=AsyncMock(side_effect=RuntimeError("schema incomplete")),
+        start=AsyncMock(),
+        stop=AsyncMock(),
+    )
+    service = SimpleNamespace(
+        _runtime_adapter=adapter,
+        close=AsyncMock(),
+        prepare_background=AsyncMock(),
+        start_queue_worker=AsyncMock(),
+        start_scheduler=AsyncMock(),
+    )
+    runtime = ServerRuntime(service, ServerConfig(roles=["queue_worker", "scheduler"]))
+    runtime.shared.prepare = AsyncMock()
+    with pytest.raises(RuntimeError, match="schema incomplete"):
+        await runtime.start()
+    runtime.shared.prepare.assert_not_awaited()
+    service.prepare_background.assert_not_awaited()
+    service.start_queue_worker.assert_not_awaited()
+    service.start_scheduler.assert_not_awaited()
+    adapter.start.assert_not_awaited()
+    adapter.stop.assert_awaited_once()
+    service.close.assert_awaited_once()

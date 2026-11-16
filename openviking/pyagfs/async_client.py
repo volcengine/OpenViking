@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager, nullcontext
 from collections.abc import Iterator
 from typing import Any, BinaryIO, Dict, List, Union
 
@@ -83,17 +82,6 @@ def ensure_same_encryption_account(src_path: str, dst_path: str) -> None:
         )
 
 
-@asynccontextmanager
-async def state_transaction(client):
-    """仅状态后端选择组合发布，普通AGFS继续原文件语义。"""
-    factory = getattr(client, "state_transaction", None)
-    if factory is None:
-        yield
-    else:
-        async with factory():
-            yield
-
-
 class AsyncAGFSClient:
     """Run blocking AGFS binding client operations off the event loop.
 
@@ -104,16 +92,6 @@ class AsyncAGFSClient:
 
     def __init__(self, client: AGFSSyncClientProtocol):
         self._client = client
-
-    @asynccontextmanager
-    async def state_transaction(self):
-        """组合领域状态发布；底层可按短事务实现，普通字节存储不改变。"""
-        factory = getattr(self._client, "state_transaction", None)
-        if factory is None:
-            yield
-        else:
-            async with factory():
-                yield
 
     def leader_candidate(
         self,
@@ -140,10 +118,8 @@ class AsyncAGFSClient:
     async def run(self, method_name: str, /, *args: Any, **kwargs: Any) -> Any:
         """Run a sync method off-thread, settling I/O before propagating cancellation."""
         method = getattr(self._client, method_name)
-        scope = getattr(self._client, "state_call_scope", None)
         try:
-            with scope(asyncio.current_task()) if scope else nullcontext():
-                return await run_to_completion(lambda: asyncio.to_thread(method, *args, **kwargs))
+            return await run_to_completion(lambda: asyncio.to_thread(method, *args, **kwargs))
         except TypeError as exc:
             message = str(exc)
             if "ctx" not in kwargs or "unexpected keyword argument 'ctx'" not in message:

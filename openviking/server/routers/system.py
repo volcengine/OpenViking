@@ -116,8 +116,8 @@ async def readiness_check(request: Request):
         )
 
     checks = {}
-    state_client = getattr(service, "_agfs_client", None)
-    state_backend = getattr(state_client, "shared_state_backend", None)
+    adapter = getattr(service, "_runtime_adapter", None)
+    state_backend = getattr(adapter, "backends", None)
     serverless = getattr(getattr(service, "_config", None), "runtime_mode", "dedicated") == "serverless"
 
     # 1. AGFS: probe filesystem access
@@ -210,19 +210,19 @@ async def readiness_check(request: Request):
         except Exception as e:
             checks["ollama"] = f"error: {e}"
 
-    state_check = getattr(state_client, "check_state", None)
+    state_check = getattr(adapter, "check_ready", None)
     if state_check is not None:
         try:
             await state_check()
-            checks["business_state"] = "ok"
+            checks["runtime"] = "ok"
         except Exception:
-            checks["business_state"] = "unavailable"
+            checks["runtime"] = "unavailable"
 
     all_ok = all(_is_ready_check_ok(v) for v in checks.values())
     status_code = 200 if all_ok else 503
     content = {"status": "ready" if all_ok else "not_ready", "checks": checks, "shared_state": state_backend}
     # provider可报告已验证schema身份，私有化迁移准出使用；原生流程不在这里建表。
-    schema = getattr(state_client, "shared_schema", None)
+    schema = getattr(adapter, "schema", None)
     if isinstance(schema, dict):
         content["shared_schema"] = {key: schema.get(key) for key in ("version", "checksum")}
     return JSONResponse(

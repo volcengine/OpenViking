@@ -255,6 +255,10 @@ class ServerRuntime:
         if self.stopped:
             raise RuntimeError("A stopped ServerRuntime cannot be restarted")
         try:
+            # 私有化迁移/数据交接门禁先于原生初始化与consumer启动，不允许先执行后验收。
+            adapter = getattr(self.shared.service, "_runtime_adapter", None)
+            if adapter is not None:
+                await adapter.prepare()
             await self.shared.prepare()
             await self.shared.service.prepare_background(
                 queue_worker=self.queue_worker is not None, scheduler=self.scheduler is not None
@@ -266,6 +270,9 @@ class ServerRuntime:
                 await self.queue_worker.start()
             self.shared.service._initialized = True
             self.started = True
+            # 生命周期接缝仅发布运行就绪，原生 Store/文件和 Task 算法保持独立。
+            if adapter is not None:
+                await adapter.start(self.is_healthy)
         except BaseException:
             await self.stop()
             raise
@@ -274,6 +281,9 @@ class ServerRuntime:
         if self.stopped:
             return
         self.started = False
+        adapter = getattr(self.shared.service, "_runtime_adapter", None)
+        if adapter is not None:
+            await adapter.stop()
         # Core drains producers, expiry callbacks and queue writers before stores.
         # Account state must stay available throughout that drain, including rollback.
         if self.owns_service:

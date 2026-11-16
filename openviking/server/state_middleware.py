@@ -16,7 +16,7 @@ class StateCapacityMiddleware:
             except RuntimeError:
                 service = None
             factory = getattr(
-                getattr(service, "_agfs_client", None), "http_capacity_middleware", None
+                getattr(service, "_runtime_adapter", None), "http_capacity_middleware", None
             )
             if factory:
                 result = factory()
