@@ -910,78 +910,6 @@ func TestWriteSendsProcessingModeAndExtra(t *testing.T) {
 	}
 }
 
-func TestWriteSendsDeferProcessingWithoutMetadataUpdates(t *testing.T) {
-	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body := readJSONBody(t, r)
-		if !reflect.DeepEqual(body, map[string]any{
-			"uri": "viking://resources/a.md", "content": "draft", "mode": "replace",
-			"wait": false, "defer_processing": true, "use_snapshot": true,
-		}) {
-			t.Fatalf("body = %#v", body)
-		}
-		writeOK(t, w, map[string]any{"uri": "viking://resources/a.md"})
-	}))
-	defer closeServer()
-
-	if _, err := client.Write(context.Background(), "resources/a.md", "draft", &WriteOptions{
-		DeferProcessing: true,
-		UseSnapshot:     true,
-	}); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestBatchWriteSendsDeferProcessingWithoutMetadataUpdates(t *testing.T) {
-	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body := readJSONBody(t, r)
-		if !reflect.DeepEqual(body, map[string]any{
-			"root_uri": "viking://resources/project", "defer_processing": true, "use_snapshot": true,
-			"operations": []any{map[string]any{"uri": "viking://resources/project/a.md", "content": "draft"}},
-		}) {
-			t.Fatalf("body = %#v", body)
-		}
-		writeOK(t, w, map[string]any{"created": []string{"viking://resources/project/a.md"}})
-	}))
-	defer closeServer()
-
-	if _, err := client.BatchWrite(context.Background(), "resources/project", []BatchWriteOperation{
-		{URI: "resources/project/a.md", Content: String("draft")},
-	}, &BatchWriteOptions{DeferProcessing: true, UseSnapshot: true}); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestBatchWriteSendsConditionalAndConflictFields(t *testing.T) {
-	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body := readJSONBody(t, r)
-		if body["skip_conflicts"] != true || body["use_snapshot"] != true {
-			t.Fatalf("body = %#v", body)
-		}
-		operations := body["operations"].([]any)
-		first := operations[0].(map[string]any)
-		second := operations[1].(map[string]any)
-		if first["expected_sha256"] != strings.Repeat("a", 64) || first["resolve_conflicts"] != true {
-			t.Fatalf("first operation = %#v", first)
-		}
-		if second["if_absent"] != true {
-			t.Fatalf("second operation = %#v", second)
-		}
-		writeOK(t, w, map[string]any{"updated": 1})
-	}))
-	defer closeServer()
-
-	operations := []BatchWriteOperation{
-		{URI: "resources/project/a.md", Content: String("resolved"), ExpectedSHA256: String(strings.Repeat("a", 64)), ResolveConflicts: true},
-		{URI: "resources/project/b.md", Content: String("created"), IfAbsent: true},
-	}
-	if _, err := client.BatchWrite(context.Background(), "resources/project", operations, &BatchWriteOptions{
-		SkipConflicts: true,
-		UseSnapshot:   true,
-	}); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestWriteSendsClearWithoutTags(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body := readJSONBody(t, r)
@@ -1069,7 +997,7 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 			} else if body["wait"] != *wait {
 				t.Errorf("wait = %#v, want %v", body["wait"], *wait)
 			}
-			if body["root_uri"] != "viking://resources/project" || body["future_flag"] != float64(0) || body["processing_mode"] != "vectors_only" || body["defer_processing"] != false {
+			if body["root_uri"] != "viking://resources/project" || body["future_flag"] != float64(0) || body["processing_mode"] != "vectors_only" || body["defer_processing"] != false || body["skip_conflicts"] != true {
 				t.Fatalf("body = %#v", body)
 			}
 			operations, ok := body["operations"].([]any)
@@ -1078,11 +1006,12 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 			}
 			operation, ok := operations[0].(map[string]any)
 			if !ok || !reflect.DeepEqual(operation, map[string]any{
-				"uri":      "viking://resources/project/a.txt",
-				"content":  "hello",
-				"mode":     "upsert",
-				"tags":     []any{"team=search"},
-				"tag_mode": "append",
+				"uri":             "viking://resources/project/a.txt",
+				"content":         "hello",
+				"mode":            "upsert",
+				"expected_sha256": strings.Repeat("a", 64),
+				"tags":            []any{"team=search"},
+				"tag_mode":        "append",
 				"acl": map[string]any{
 					"acl_mode": "restricted",
 					"entries":  []any{map[string]any{"principal": "group:engineering", "level": "write"}},
@@ -1104,16 +1033,17 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 
 	operations := []BatchWriteOperation{
 		{
-			URI:     "resources/project/a.txt",
-			Content: String("hello"),
-			Mode:    "upsert",
-			Tags:    []string{"team=search"},
-			TagMode: "append",
-			ACL:     &ACLSpec{ACLMode: "restricted", Entries: []ACLEntry{{Principal: "group:engineering", Level: "write"}}},
+			URI:            "resources/project/a.txt",
+			Content:        String("hello"),
+			Mode:           "upsert",
+			ExpectedSHA256: String(strings.Repeat("a", 64)),
+			Tags:           []string{"team=search"},
+			TagMode:        "append",
+			ACL:            &ACLSpec{ACLMode: "restricted", Entries: []ACLEntry{{Principal: "group:engineering", Level: "write"}}},
 		},
 	}
 	for _, wait = range []*bool{nil, Bool(false), Bool(true)} {
-		opts := &BatchWriteOptions{Wait: wait, ProcessingMode: "vectors_only", Extra: map[string]any{"future_flag": 0}}
+		opts := &BatchWriteOptions{Wait: wait, ProcessingMode: "vectors_only", SkipConflicts: true, Extra: map[string]any{"future_flag": 0}}
 		if _, err := client.BatchWrite(context.Background(), "resources/project", operations, opts); err != nil {
 			t.Fatal(err)
 		}

@@ -466,11 +466,13 @@ async def test_async_http_client_write_forwards_processing_mode():
     await client.write(
         "viking://resources/demo.md",
         "updated",
-        options={"processing_mode": "vectors_only"},
+        options={"processing_mode": "vectors_only", "defer_processing": True, "use_snapshot": True},
     )
 
     payload = fake_http.post.await_args.kwargs["json"]
     assert payload["processing_mode"] == "vectors_only"
+    assert payload["defer_processing"] is True
+    assert payload["use_snapshot"] is True
 
 
 @pytest.mark.asyncio
@@ -1034,11 +1036,19 @@ async def test_write_extra_forwards_unknown_fields_to_payload():
     await client.write(
         "viking://resources/demo.md",
         "body",
-        options={"extra": {"future_flag": 1}},
+        options={"extra": {"future_flag": 1, "resolve_conflicts": True}},
     )
 
     payload = fake_http.post.await_args.kwargs["json"]
     assert payload["future_flag"] == 1
+    assert payload["resolve_conflicts"] is True
+
+    with pytest.raises(ValueError, match="extra cannot override 'resolve_conflicts'"):
+        await client.write(
+            "viking://resources/demo.md",
+            "body",
+            options={"resolve_conflicts": False, "extra": {"resolve_conflicts": True}},
+        )
 
 
 @pytest.mark.asyncio
@@ -1737,61 +1747,6 @@ async def test_batch_write_serializes_processing_mode_and_operation_metadata():
     assert payload["operations"][0]["tags"] == ["team=search"]
     assert payload["operations"][0]["tag_mode"] == "append"
     assert payload["operations"][0]["acl"] == {"acl_mode": "restricted", "entries": []}
-
-
-@pytest.mark.asyncio
-async def test_write_serializes_official_conflict_options_and_preserves_extra_compatibility():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    client._request = AsyncMock(return_value=object())
-    client._handle_response_data = lambda _response: {"result": {}}
-
-    await client.write(
-        "viking://resources/wiki/a.md",
-        "resolved",
-        options={"resolve_conflicts": True, "use_snapshot": True},
-    )
-    payload = client._request.await_args.kwargs["json"]
-    assert payload["resolve_conflicts"] is True
-    assert payload["use_snapshot"] is True
-
-    await client.write(
-        "viking://resources/wiki/a.md",
-        "resolved",
-        options={"extra": {"resolve_conflicts": True}},
-    )
-    assert client._request.await_args.kwargs["json"]["resolve_conflicts"] is True
-
-    with pytest.raises(ValueError, match="extra cannot override 'resolve_conflicts'"):
-        await client.write(
-            "viking://resources/wiki/a.md",
-            "resolved",
-            options={
-                "resolve_conflicts": False,
-                "extra": {"resolve_conflicts": True},
-            },
-        )
-
-
-@pytest.mark.asyncio
-async def test_write_serializes_defer_processing_without_metadata_updates():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    client._request = AsyncMock(return_value=object())
-    client._handle_response_data = lambda _response: {"result": {}}
-
-    await client.write(
-        "viking://resources/wiki/a.md",
-        "draft",
-        options={"defer_processing": True, "use_snapshot": True},
-    )
-
-    assert client._request.await_args.kwargs["json"] == {
-        "uri": "viking://resources/wiki/a.md",
-        "content": "draft",
-        "mode": "replace",
-        "wait": False,
-        "defer_processing": True,
-        "use_snapshot": True,
-    }
 
 
 @pytest.mark.asyncio

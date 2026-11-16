@@ -477,6 +477,7 @@ describe("OpenVikingClient", () => {
     await client.write("resources/demo.md", "updated", {
       tags: [],
       tagMode: "replace",
+      resolveConflicts: true,
     });
     await client.list("resources", { tags: ["env=prod"], includeTags: true });
     await client.tree("resources", { tags: ["env=prod"], includeTags: true });
@@ -488,6 +489,7 @@ describe("OpenVikingClient", () => {
     expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toMatchObject({
       tags: [],
       tag_mode: "replace",
+      resolve_conflicts: true,
     });
     expect(
       new URL(String(fetcher.mock.calls[1]![0])).searchParams.get("tags"),
@@ -557,6 +559,7 @@ describe("OpenVikingClient", () => {
           uri: "resources/project/a.txt",
           content: "hello",
           mode: "upsert",
+          expectedSha256: "a".repeat(64),
           tags: ["team=search"],
           tagMode: "append",
           acl: {
@@ -567,6 +570,7 @@ describe("OpenVikingClient", () => {
       ],
       {
         processingMode: "vectors_only",
+        skipConflicts: true,
         extra: { future_flag: 0 },
       },
     );
@@ -582,12 +586,14 @@ describe("OpenVikingClient", () => {
     expect(batchWriteBody).toMatchObject({
       root_uri: "viking://resources/project",
       future_flag: 0,
+      skip_conflicts: true,
     });
     expect(batchWriteBody.operations).toEqual([
       {
         uri: "viking://resources/project/a.txt",
         content: "hello",
         mode: "upsert",
+        expected_sha256: "a".repeat(64),
         tags: ["team=search"],
         tag_mode: "append",
         acl: {
@@ -605,97 +611,6 @@ describe("OpenVikingClient", () => {
       create_parent: false,
       future_flag: false,
     });
-  });
-
-  it("sends batch defer_processing without metadata updates", async () => {
-    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok({}));
-    const client = new OpenVikingClient({
-      baseUrl: "https://example.com",
-      fetch: fetcher,
-    });
-
-    await client.batchWrite(
-      "resources/project",
-      [{ uri: "resources/project/a.md", content: "draft" }],
-      { deferProcessing: true, useSnapshot: true },
-    );
-
-    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
-      root_uri: "viking://resources/project",
-      operations: [
-        { uri: "viking://resources/project/a.md", content: "draft" },
-      ],
-      defer_processing: true,
-      use_snapshot: true,
-    });
-  });
-
-  it("serializes write conflict options and batch conditional fields", async () => {
-    const fetcher = vi
-      .fn<typeof fetch>()
-      .mockImplementation(async () => ok({}));
-    const client = new OpenVikingClient({
-      baseUrl: "https://example.com",
-      fetch: fetcher,
-    });
-
-    await client.write("resources/project/a.md", "resolved", {
-      useSnapshot: true,
-      resolveConflicts: true,
-    });
-    await client.batchWrite(
-      "resources/project",
-      [
-        {
-          uri: "resources/project/a.md",
-          content: "resolved",
-          expectedSha256: "a".repeat(64),
-          resolveConflicts: true,
-        },
-        {
-          uri: "resources/project/b.md",
-          content: "created",
-          ifAbsent: true,
-        },
-      ],
-      { skipConflicts: true, useSnapshot: true },
-    );
-
-    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toMatchObject({
-      use_snapshot: true,
-      resolve_conflicts: true,
-    });
-    const batchBody = JSON.parse(String(fetcher.mock.calls[1]![1]?.body));
-    expect(batchBody).toMatchObject({
-      skip_conflicts: true,
-      use_snapshot: true,
-    });
-    expect(batchBody.operations).toEqual([
-      {
-        uri: "viking://resources/project/a.md",
-        content: "resolved",
-        expected_sha256: "a".repeat(64),
-        resolve_conflicts: true,
-      },
-      {
-        uri: "viking://resources/project/b.md",
-        content: "created",
-        if_absent: true,
-      },
-    ]);
-
-    await client.write("resources/project/a.md", "resolved", {
-      extra: { resolve_conflicts: true },
-    });
-    expect(JSON.parse(String(fetcher.mock.calls[2]![1]?.body))).toMatchObject({
-      resolve_conflicts: true,
-    });
-    expect(() =>
-      client.write("resources/project/a.md", "resolved", {
-        resolveConflicts: false,
-        extra: { resolve_conflicts: true },
-      }),
-    ).toThrow("extra cannot override resolve_conflicts");
   });
 
   it("maps response envelopes to typed errors", async () => {
