@@ -45,6 +45,8 @@ def test_epub_table_preserves_pipes_in_inline_and_block_code(tmp_path):
                     <tr><td><code>a|b</code></td><td>choice</td></tr>
                     <tr><td><pre><code>left|right</code></pre></td><td>pipeline</td></tr>
                     <tr><td><code>a\|b</code></td><td>literal backslash</td></tr>
+                    <tr><td><ul><li><code>left|right</code></li></ul></td><td>list</td></tr>
+                    <tr><td><blockquote><p><code>a\|b</code></p></blockquote></td><td>quote</td></tr>
                   </tbody>
                 </table>
                 <p><code>c|d</code></p>
@@ -58,4 +60,6 @@ def test_epub_table_preserves_pipes_in_inline_and_block_code(tmp_path):
     assert r"| `a\|b` | choice |" in lines
     assert r"| `left\|right` | pipeline |" in lines
     assert r"| `a\\|b` | literal backslash |" in lines
+    assert r"| - `left\|right` | list |" in lines
+    assert r"| `a\\|b` | quote |" in lines
     assert "`c|d`" in lines

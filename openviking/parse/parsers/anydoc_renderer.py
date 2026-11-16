@@ -375,7 +375,7 @@ class _AnyDocMarkdownRenderer:
         self.asset_paths[reference] = relative
         return relative
 
-    def _render_list(self, list_model: Any) -> str:
+    def _render_list(self, list_model: Any, *, in_table_cell: bool = False) -> str:
         if list_model is None or not list_model.items:
             return ""
         rendered_items: list[str] = []
@@ -383,7 +383,10 @@ class _AnyDocMarkdownRenderer:
         for index, item in enumerate(list_model.items):
             ordinal = int(list_model.start) + index
             marker = self._list_marker(list_model, item, ordinal)
-            body = self._render_blocks(item.blocks)
+            if in_table_cell:
+                body = "\n".join(self._render_cell_parts(item.blocks))
+            else:
+                body = self._render_blocks(item.blocks)
             if len(item.blocks) > 1:
                 loose = True
             lines = body.splitlines() or [""]
@@ -442,8 +445,12 @@ class _AnyDocMarkdownRenderer:
     def _render_cell(self, cell: Any | None) -> str:
         if cell is None:
             return ""
+        parts = self._render_cell_parts(cell.blocks)
+        return "<br>".join(line.strip() for line in "<br>".join(parts).splitlines() if line.strip())
+
+    def _render_cell_parts(self, blocks: list[Any]) -> list[str]:
         parts: list[str] = []
-        for block in cell.blocks:
+        for block in blocks:
             kind = _kind(block)
             if kind == "heading":
                 text = self._render_inlines(block.content, context="table_cell").strip()
@@ -454,13 +461,13 @@ class _AnyDocMarkdownRenderer:
                 if text.strip():
                     parts.append(text)
             elif kind == "list":
-                text = self._render_list(block.list).replace("\n", " ").strip()
+                text = self._render_list(block.list, in_table_cell=True).replace("\n", " ").strip()
                 if text:
                     parts.append(text)
             elif kind == "table":
                 parts.extend(self._flatten_nested_table(block.table))
             elif kind == "block_quote":
-                text = self._render_blocks(block.blocks).replace("\n", " ").strip()
+                text = " ".join(self._render_cell_parts(block.blocks)).replace("\n", " ").strip()
                 if text:
                     parts.append(text)
             elif kind == "code_block":
@@ -473,7 +480,7 @@ class _AnyDocMarkdownRenderer:
                     parts.append(f"${source}$")
             elif kind != "rule":
                 raise RuntimeError(f"Unsupported AnyDoc table-cell block kind: {kind}")
-        return "<br>".join(line.strip() for line in "<br>".join(parts).splitlines() if line.strip())
+        return parts
 
     def _flatten_nested_table(self, table: Any) -> list[str]:
         lines: list[str] = []
