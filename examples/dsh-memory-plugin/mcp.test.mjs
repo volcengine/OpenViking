@@ -50,25 +50,32 @@ test("the mount config validates against the pinned bridge's own schema", () => 
   assert.equal(parsed.reconnect.enabled, true);
 });
 
-test("reconnecting survives a server restart instead of giving up first", () => {
+test("reconnecting never gives up on a server that is coming back", () => {
   const config = resolveConfig({
     endpoint: "http://127.0.0.1:1933",
     workspacePeer: false,
   }, {});
   const { reconnect } = Config(buildMcpConfig(config));
 
-  // The bridge stops for good once this budget runs out: no timer, no retry,
-  // every tool unregistered. The default ten attempts from a 500 ms start
-  // under a 30 s ceiling add up to roughly 150 s, which a cold OpenViking
-  // server can outlast — model warm-up plus binding the port. A restart would
-  // then leave the memory surface disconnected until the host is restarted
-  // too. Assert the width recovery actually needs, not just that it is on.
-  const delays = Array.from({ length: reconnect.maxAttempts }, (_, index) =>
-    Math.min(reconnect.maxDelayMs, reconnect.initialDelayMs * 2 ** index));
-  const budgetMs = delays.reduce((total, delay) => total + delay, 0);
-  assert.ok(budgetMs >= 15 * 60 * 1000, `reconnect budget ${budgetMs}ms must outlast a slow server restart`);
-  // A server that is back must not be hammered while it settles.
-  assert.ok(reconnect.maxDelayMs >= 30000);
+  // Running out of attempts is fatal, not patient: the bridge unregisters
+  // every tool and schedules nothing further, so the memory surface stays
+  // disconnected until the host restarts. The default ten attempts cover
+  // about 150 s, which a cold OpenViking server outlasts — model warm-up,
+  // then binding the port. Since the server behind this transport is a local
+  // daemon that can be away for an unbounded stretch, no finite allowance is
+  // the right answer; the backoff ceiling bounds the cost instead.
+  assert.ok(
+    reconnect.maxAttempts >= 1e6,
+    `maxAttempts ${reconnect.maxAttempts} still gives up eventually`,
+  );
+
+  // The ceiling is what keeps an absent server cheap: once the ramp is over,
+  // the wait between probes has to stay flat and modest.
+  assert.ok(reconnect.maxDelayMs >= 30000, "backoff must reach a real ceiling");
+  const lateAttempt = Math.min(reconnect.maxDelayMs, reconnect.initialDelayMs * 2 ** 40);
+  assert.equal(lateAttempt, reconnect.maxDelayMs, "backoff must stop growing at the ceiling");
+  assert.ok(lateAttempt <= 60000, `a probe every ${lateAttempt}ms is too eager`);
+
   // The transport is a local stdio proxy that starts instantly, so the first
   // attempt should not be delayed.
   assert.ok(reconnect.initialDelayMs <= 5000);

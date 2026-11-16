@@ -42,12 +42,20 @@ export function buildMcpConfig(config) {
     // server has had a chance to answer. That budget is not just too short,
     // it is final: once spent, the bridge unregisters every tool and never
     // schedules another attempt, and the memory surface stays dark until the
-    // host restarts. Give recovery a window wide enough to outlast a restart.
+    // host restarts.
+    //
+    // Any finite number is the wrong shape here, because the server behind
+    // this transport is a local daemon that can legitimately be away for an
+    // unbounded stretch — a reboot, a manual stop, a crash loop. Leave the
+    // count effectively unbounded and let the backoff ceiling do the work:
+    // after the first few attempts it settles into one probe every 30 s,
+    // which costs nothing while the server is away and reconnects within
+    // half a minute of it coming back.
     reconnect: {
       enabled: true,
       initialDelayMs: 1000,
       maxDelayMs: 30000,
-      maxAttempts: 60,
+      maxAttempts: Number.MAX_SAFE_INTEGER,
     },
   };
 }
