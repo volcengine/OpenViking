@@ -105,7 +105,9 @@ def warn_unknown_config_fields(
     """
     warn_unknown_fields(
         data=data,
-        valid_fields=set(model.model_fields) | (extra_valid_fields or set()),
+        valid_fields=set(model.model_fields)
+        | {field.alias for field in model.model_fields.values() if isinstance(field.alias, str)}
+        | (extra_valid_fields or set()),
         logger=logger,
         path_prefix=path_prefix,
     )
@@ -118,15 +120,24 @@ def warn_unknown_config_fields(
         if child_model is None:
             continue
         child_prefix = f"{path_prefix}.{key}" if path_prefix else key
+        is_mapping = get_origin(field.annotation) in (dict, Mapping)
+        if is_mapping and not isinstance(value, Mapping):
+            continue
         is_sequence = isinstance(value, (list, tuple))
-        for index, item in enumerate(value if is_sequence else (value,)):
+        items = value.items() if is_mapping else enumerate(value if is_sequence else (value,))
+        for child_key, item in items:
             if not isinstance(item, Mapping):
                 continue
+            item_prefix = child_prefix
+            if is_mapping:
+                item_prefix = f"{child_prefix}.{child_key}"
+            elif is_sequence:
+                item_prefix = f"{child_prefix}[{child_key}]"
             warn_unknown_config_fields(
                 data=item,
                 model=child_model,
                 logger=logger,
-                path_prefix=f"{child_prefix}[{index}]" if is_sequence else child_prefix,
+                path_prefix=item_prefix,
             )
 
 

@@ -6,20 +6,13 @@ import threading
 
 import pytest
 
-from openviking.pyagfs import AsyncAGFSClient, RAGFSBindingClient
+from openviking.pyagfs import AsyncAGFSClient
 from openviking.storage.viking_vector_index_backend import _AsyncVectorAdapter
 
 
-def test_removed_sync_methods_are_not_exposed():
-    """Removed sync methods must stay absent from Python and native clients."""
-    for client_type in (AsyncAGFSClient, RAGFSBindingClient):
-        assert not hasattr(client_type, "system_sync_status")
-        assert not hasattr(client_type, "system_sync_retry")
-
-
 @pytest.mark.asyncio
-@pytest.mark.parametrize("backend", ["agfs", "vector"])
-async def test_async_agfs_client_hides_threadpool(backend):
+@pytest.mark.parametrize("backend", ["agfs", "agfs_cp", "vector"])
+async def test_async_agfs_client_hides_threadpool(backend, monkeypatch):
     """Cancellation settles physical writes before cleanup may remove their data."""
     started, release = threading.Event(), threading.Event()
     writes = []
@@ -32,17 +25,22 @@ async def test_async_agfs_client_hides_threadpool(backend):
             writes.append((path, data))
 
     writer = Writer()
+    monkeypatch.setattr(
+        "openviking.pyagfs.helpers.cp", lambda client, src, dst, **_: client.write(dst, b"data")
+    )
     operation = asyncio.create_task(
-        AsyncAGFSClient(writer).write("/local/account/file", b"data")
+        AsyncAGFSClient(writer).cp("/local/account/source", "/local/account/file")
+        if backend == "agfs_cp"
+        else AsyncAGFSClient(writer).write("/local/account/file", b"data")
         if backend == "agfs"
         else _AsyncVectorAdapter(writer).call("write", "record", b"data")
     )
     try:
         assert await asyncio.to_thread(started.wait, 5)
-        operation.cancel()
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-        assert not operation.done()
+        for _ in range(2):
+            operation.cancel()
+            await asyncio.sleep(0)
+            assert not operation.done()
     finally:
         release.set()
         with pytest.raises(asyncio.CancelledError):

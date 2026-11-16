@@ -39,6 +39,16 @@
             "prefix": ".ovgit",
             "use_path_style": false,
             "cas_mode": "native"
+        },
+        "snapshot": {
+            "log": {
+                "provider": "mysql",
+                "mysql": {
+                    "dsn_env": "OPENVIKING_SNAPSHOT_LOG_DSN",
+                    "max_connections": 16,
+                    "connect_timeout_ms": 3000
+                }
+            }
         }
     }
 }

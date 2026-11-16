@@ -1,4 +1,7 @@
+import asyncio
+import io
 import json
+import zipfile
 from email.parser import BytesParser
 from email.policy import default
 from unittest.mock import AsyncMock, Mock
@@ -6,15 +9,23 @@ from unittest.mock import AsyncMock, Mock
 import httpx
 import pytest
 
+from openviking.config.binding import manager_over_source
+from openviking.config.parser_api import get_effective_parser_api_config
+from openviking.config.source import MemoryConfigSource
 from openviking.parse.accessors.base import LocalResource, SourceType
+from openviking.parse.output import LocalParseOutputStore
 from openviking.parse.parser_router import ParserRouter
 from openviking.parse.understanding_api import (
     PREPARED_FILE_ID_ARG,
     UnderstandingAPI,
     UnderstandingAPIError,
 )
+from openviking.server.identity import RequestContext, Role
 from openviking.utils.media_processor import UnifiedResourceProcessor
+from openviking.utils.resource_processor import ResourceProcessor
 from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
 
 @pytest.mark.asyncio
@@ -149,40 +160,107 @@ async def test_upload_file_validates_input_and_returns_file_id(monkeypatch, tmp_
 
 @pytest.mark.asyncio
 async def test_parse_prepared_file_id_creates_response_and_polls(monkeypatch, tmp_path):
-    zip_path = tmp_path / "result.zip"
-    zip_path.write_bytes(b"zip")
-    api = UnderstandingAPI.__new__(UnderstandingAPI)
-    api._video_exts = {"mp4"}
-    api._audio_exts = {"mp3"}
-    api._image_exts = {"png"}
-    api._create_file = AsyncMock(side_effect=AssertionError("prepared file must not reupload"))
-    api._create_response_for_file = AsyncMock(return_value={"id": "response-1"})
+    """Prepared work survives source cleanup and key rotation without resubmission."""
+    cluster = OpenVikingConfig.from_dict(
+        {
+            "parser_api": {
+                "enable": True,
+                "host": "https://parser.example.test",
+                "api_key": "legacy-key",
+                "extensions": ["pdf"],
+            }
+        }
+    )
+    monkeypatch.setattr("openviking.config.binding.get_openviking_config", lambda: cluster)
+    manager = manager_over_source(MemoryConfigSource(), base_config=cluster)
+    await manager.patch_account("a", {"parser_api": {"api_key": "key-a"}})
+    contexts = [
+        RequestContext(user=UserIdentifier(account, "alice"), role=Role.USER)
+        for account in ("a", "b")
+    ]
+    requests = []
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as zipped:
+        zipped.writestr("report/0.md", "parsed content")
 
-    async def poll_response(*, response_id):
-        assert response_id == "response-1"
-        return {"status": "completed"}
+    async def handler(request):
+        await asyncio.sleep(0)
+        auth = request.headers.get("Authorization")
+        requests.append((request.method, request.url.path, auth))
+        if request.url.path == "/result.zip":
+            assert auth is None
+            return httpx.Response(200, content=archive.getvalue())
+        owner = {"Bearer key-a": "a", "Bearer rotated-a": "a", "Bearer legacy-key": "b"}[auth]
+        if request.url.path.endswith("/files"):
+            return httpx.Response(200, json={"id": f"file-{owner}"})
+        if request.method == "POST":
+            file_id = json.loads(request.content)["input"][0]["content"][0]["file"]["file_id"]
+            assert file_id == f"file-{owner}"
+            return httpx.Response(200, json={"id": f"response-{owner}"})
+        assert request.url.path.endswith(f"/responses/response-{owner}")
+        return httpx.Response(
+            200,
+            json={
+                "status": "completed",
+                "result": {"zip_url": "https://downloads.example.test/result.zip"},
+            },
+        )
 
-    monkeypatch.setattr(api, "_poll_response", poll_response)
-    monkeypatch.setattr(api, "_extract_zip_url", lambda _: "https://example.com/result.zip")
-    monkeypatch.setattr(api, "_download_zip", lambda _: _return(zip_path))
+    client_type = httpx.AsyncClient
     monkeypatch.setattr(
-        api,
-        "_unpack_zip_to_temp_dir",
-        lambda **_: _return("viking://temp/result"),
+        "openviking.parse.understanding_api.httpx.AsyncClient",
+        lambda **kwargs: client_type(transport=httpx.MockTransport(handler), **kwargs),
     )
-
-    result = await api.parse(
-        "/tmp/upload_already_cleaned.pdf",
-        source_name="uploaded.pdf",
-        resolved_extension=".pdf",
-        **{PREPARED_FILE_ID_ARG: "file-1"},
+    source = tmp_path / "report.pdf"
+    source.write_bytes(b"%PDF-1.7")
+    processor = ResourceProcessor(object(), runtime_config_manager=manager)
+    file_ids = await asyncio.gather(
+        *[processor.upload_understanding_file(source, ctx=ctx) for ctx in contexts]
     )
+    assert file_ids == ["file-a", "file-b"]
+    source.unlink()
+    store = LocalParseOutputStore(str(tmp_path / "artifacts"))
+    router = ParserRouter(object())
+    configs = [await get_effective_parser_api_config(manager, ctx.account_id) for ctx in contexts]
+    results = await asyncio.gather(
+        *[
+            router.parse(
+                source,
+                parser_backend="understanding",
+                parser_api_config=config,
+                understanding_file_id=file_id,
+                resolved_extension=".pdf",
+                parse_output_store=store,
+            )
+            for file_id, config in zip(file_ids, configs, strict=True)
+        ]
+    )
+    assert [result.meta["response_id"] for result in results] == ["response-a", "response-b"]
+    assert all(result.source_format == "pdf" for result in results)
+    assert sum(path.endswith("/files") for _, path, _ in requests) == 2
+    for result in results:
+        await store.cleanup(result.artifact_ref)
 
-    api._create_response_for_file.assert_awaited_once_with(file_id="file-1")
-    assert result.meta["file_id"] == "file-1"
-    assert result.meta["response_id"] == "response-1"
-    assert result.source_format == "pdf"
-    api._create_file.assert_not_awaited()
+    await manager.patch_account("a", {"parser_api": {"api_key": "rotated-a"}})
+    restored = manager_over_source(manager._source, base_config=cluster)
+    requests.clear()
+    configs = [await get_effective_parser_api_config(restored, ctx.account_id) for ctx in contexts]
+    results = await asyncio.gather(
+        *[
+            router.parse(
+                source,
+                parser_backend="understanding",
+                parser_api_config=config,
+                understanding_response_id=f"response-{ctx.account_id}",
+                parse_output_store=store,
+            )
+            for ctx, config in zip(contexts, configs, strict=True)
+        ]
+    )
+    assert all(method == "GET" for method, _, _ in requests)
+    assert {auth for _, _, auth in requests if auth} == {"Bearer rotated-a", "Bearer legacy-key"}
+    for result in results:
+        await store.cleanup(result.artifact_ref)
 
 
 @pytest.mark.asyncio
@@ -235,7 +313,7 @@ async def test_parse_failure_preserves_observed_remote_ids(monkeypatch, tmp_path
     assert isinstance(exc_info.value, RuntimeError)
     warning.assert_called_once_with(
         "[UnderstandingAPI] Parse failed: %s; meta=%s",
-        exc_info.value.__cause__,
+        str(exc_info.value),
         exc_info.value.meta,
     )
 
@@ -435,22 +513,28 @@ async def test_api_calls_do_not_retry_transient_http_error(monkeypatch, method):
 
 
 @pytest.mark.asyncio
-async def test_parse_http_failure_preserves_message_and_remote_ids(monkeypatch, tmp_path):
-    api = _api_with_transport(
-        monkeypatch,
-        lambda _: httpx.Response(400, json={"error": {"code": "invalid", "message": "bad file"}}),
-    )
-    api._create_file = AsyncMock(return_value={"id": "file-1"})
-    api._create_response_for_file = AsyncMock(return_value={"id": "response-1"})
-    source = tmp_path / "report.pdf"
-    source.write_bytes(b"%PDF-fixture")
+async def test_parse_http_failure_preserves_message_and_remote_ids(monkeypatch, tmp_path, caplog):
+    requests = []
 
-    with pytest.raises(UnderstandingAPIError, match="bad file") as exc_info:
-        await api.parse(source)
+    def handler(request):
+        requests.append(request)
+        assert request.headers["Authorization"] == "Bearer test-key"
+        if request.method == "POST":
+            assert request.url.path == "/api/v3/responses"
+            return httpx.Response(200, json={"id": "response-1"})
+        return httpx.Response(403, json={"message": "credential test-key cannot access response"})
+
+    api = _api_with_transport(monkeypatch, handler)
+    with pytest.raises(UnderstandingAPIError, match="cannot access response") as exc_info:
+        await api.parse(tmp_path / "removed.pdf", understanding_file_id="file-1")
 
     assert exc_info.value.meta["file_id"] == "file-1"
     assert exc_info.value.meta["response_id"] == "response-1"
     assert isinstance(exc_info.value.__cause__, httpx.HTTPStatusError)
+    assert exc_info.value.__cause__.response.status_code == 403
+    assert len(requests) == 2  # One submission and one denied poll; no fallback or resubmission.
+    assert "test-key" not in str(exc_info.value)
+    assert "test-key" not in caplog.text
 
 
 @pytest.mark.asyncio

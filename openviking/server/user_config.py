@@ -6,12 +6,16 @@ from __future__ import annotations
 
 import json
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
 
-from openviking.core.namespace import canonical_user_root
+from openviking.core.namespace import canonical_user_root, resolve_current_user_uri
 from openviking.core.uri_validation import validate_content_target_uri
-from openviking.server.config import AddTargetsConfig, UserConfig
+from openviking.server.config import (
+    AddTargetsConfig,
+    UserConfig,
+    UserSettingsPatch,
+    validate_config_input,
+)
 from openviking.storage.acl import AclAction
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
@@ -19,15 +23,6 @@ if TYPE_CHECKING:
     from openviking.server.config import ServerConfig
     from openviking.server.identity import RequestContext
     from openviking.storage.viking_fs import VikingFS
-
-
-@dataclass(frozen=True)
-class ResolvedAddTargets:
-    resource_uri: Optional[str] = None
-    skill_uri: Optional[str] = None
-
-
-_UpdateResult = TypeVar("_UpdateResult")
 
 
 def user_config_uri(ctx: RequestContext) -> str:
@@ -43,7 +38,11 @@ async def _user_config_lock(
     viking_fs: VikingFS,
     uri: str,
     ctx: RequestContext,
+    lease_ref: object | None = None,
 ) -> AsyncIterator[Optional[dict[str, Any]]]:
+    if lease_ref is not None:
+        yield lease_ref
+        return
     uri_to_path = getattr(viking_fs, "_uri_to_path", None)
     agfs = getattr(viking_fs, "_async_agfs", None)
     acquire = getattr(agfs, "pathlock_acquire_exact", None)
@@ -57,26 +56,6 @@ async def _user_config_lock(
         yield lease
     finally:
         await release(lease)
-
-
-def _user_config_from_payload(payload: Any) -> UserConfig:
-    if not isinstance(payload, dict):
-        raise InvalidArgumentError("user config must be an object")
-    try:
-        return UserConfig.model_validate(payload)
-    except Exception as exc:
-        raise InvalidArgumentError(str(exc)) from exc
-
-
-def validate_user_memory_policy(memory_policy: Optional[dict[str, Any]]) -> None:
-    if memory_policy is None:
-        return
-    from openviking.session.memory.memory_type_registry import get_default_registry
-    from openviking.session.memory_policy import MemoryPolicy
-
-    MemoryPolicy.from_dict(memory_policy).validate_memory_types(
-        set(get_default_registry().list_names(include_disabled=False))
-    )
 
 
 async def validate_resource_add_target(
@@ -111,23 +90,23 @@ async def validate_skill_add_target(
     return resolved
 
 
-async def validate_add_targets(
+def resolve_add_targets(
     settings: AddTargetsConfig,
     *,
     ctx: RequestContext,
-    viking_fs: VikingFS,
-) -> ResolvedAddTargets:
+) -> AddTargetsConfig:
+    """Expand home aliases without revalidating stored configuration."""
     resource_uri = (
-        await validate_resource_add_target(settings.resource_uri, ctx=ctx, viking_fs=viking_fs)
-        if settings.resource_uri
-        else None
+        resolve_current_user_uri(settings.resource_uri, ctx)
+        if settings.resource_uri and settings.resource_uri.startswith("viking://~/")
+        else settings.resource_uri
     )
     skill_uri = (
-        await validate_skill_add_target(settings.skill_uri, ctx=ctx, viking_fs=viking_fs)
-        if settings.skill_uri
-        else None
+        resolve_current_user_uri(settings.skill_uri, ctx)
+        if settings.skill_uri and settings.skill_uri.startswith("viking://~/")
+        else settings.skill_uri
     )
-    return ResolvedAddTargets(
+    return AddTargetsConfig.model_construct(
         resource_uri=resource_uri,
         skill_uri=skill_uri,
     )
@@ -137,37 +116,44 @@ async def read_user_config(
     viking_fs: VikingFS,
     ctx: RequestContext,
 ) -> UserConfig:
-    read_file = getattr(viking_fs, "read_file", None)
-    if not callable(read_file):
-        return UserConfig()
     uri = user_config_uri(ctx)
     try:
-        raw = await read_file(uri, ctx=ctx)
+        raw = await viking_fs.read_file(uri, ctx=ctx)
     except (NotFoundError, FileNotFoundError):
         return UserConfig()
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise InvalidArgumentError(f"Invalid user config JSON: {exc}") from exc
-    return _user_config_from_payload(payload)
+    return UserConfig.from_stored(payload)
 
 
-async def update_user_config(
+async def patch_user_config(
     viking_fs: VikingFS,
     ctx: RequestContext,
-    updater: Callable[[UserConfig], _UpdateResult],
-) -> _UpdateResult:
-    """Apply a locked read-modify-write update to the current user's config."""
+    patch: UserSettingsPatch,
+) -> UserConfig:
+    """Merge a validated sparse patch without revalidating untouched settings."""
+    from openviking.config.merge import apply_three_state_patch
+
+    changes = patch.model_dump(by_alias=True, exclude_unset=True)
+    if patch.add_targets is not None:
+        resolved = resolve_add_targets(patch.add_targets, ctx=ctx)
+        changes["add_targets"] = resolved.model_dump(include=patch.add_targets.model_fields_set)
     uri = user_config_uri(ctx)
     async with _user_config_lock(viking_fs, uri, ctx) as handle:
         current = await read_user_config(viking_fs, ctx)
-        before = current.model_dump()
-        result = updater(current)
-        runtime = await validate_add_targets(current.add_targets, ctx=ctx, viking_fs=viking_fs)
-        current.add_targets.resource_uri = runtime.resource_uri
-        current.add_targets.skill_uri = runtime.skill_uri
-        validate_user_memory_policy(current.memory_policy)
-        if current.model_dump() != before:
+        before = current.model_dump(by_alias=True)
+        payload = apply_three_state_patch(
+            current.model_dump(by_alias=True, exclude_none=True),
+            {field: changes[field] for field in ("add_targets", "ttl") if field in changes},
+        )
+        if "memory_policy" in changes:
+            # Memory policy remains a whole-policy replacement.
+            payload["memory_policy"] = changes["memory_policy"]
+        updated = UserConfig.from_stored(payload)
+        if updated.model_dump(by_alias=True) != before:
+            await _prepare_ttl_change(ctx, current, updated)
             before_content = json.dumps(before, ensure_ascii=False, sort_keys=True)
             await viking_fs.write_file(
                 user_config_backup_uri(ctx),
@@ -178,7 +164,7 @@ async def update_user_config(
                 await viking_fs.write_file(
                     uri,
                     json.dumps(
-                        current.model_dump(exclude_none=True),
+                        updated.model_dump(by_alias=True, exclude_none=True),
                         ensure_ascii=False,
                         sort_keys=True,
                     ),
@@ -193,66 +179,60 @@ async def update_user_config(
                     lease_ref=handle,
                 )
                 raise
-        return result
+            if current.ttl != updated.ttl:
+                await _publish_ttl_change(ctx, updated)
+        return updated
+
+
+async def _prepare_ttl_change(ctx: RequestContext, before: UserConfig, after: UserConfig) -> None:
+    if before.ttl == after.ttl:
+        return
+    from openviking.ttl.wiring import get_ttl_adapter
+
+    await get_ttl_adapter().prepare_user_configuration(ctx, before.ttl, after.ttl)
+
+
+async def _publish_ttl_change(ctx: RequestContext, config: UserConfig) -> None:
+    from openviking.ttl.wiring import get_ttl_adapter
+
+    adapter = get_ttl_adapter()
+    if adapter is not None:
+        await adapter.publish_user_configuration(ctx, config.ttl)
 
 
 async def write_user_config(
     viking_fs: VikingFS,
     ctx: RequestContext,
     user_config: UserConfig,
-) -> ResolvedAddTargets:
-    runtime = await validate_add_targets(user_config.add_targets, ctx=ctx, viking_fs=viking_fs)
+    *,
+    lease_ref: object | None = None,
+) -> None:
+    """Persist validated initial settings for a newly created user."""
+    runtime = resolve_add_targets(user_config.add_targets, ctx=ctx)
     user_config.add_targets.resource_uri = runtime.resource_uri
     user_config.add_targets.skill_uri = runtime.skill_uri
-    validate_user_memory_policy(user_config.memory_policy)
     uri = user_config_uri(ctx)
-    async with _user_config_lock(viking_fs, uri, ctx) as handle:
+    async with _user_config_lock(viking_fs, uri, ctx, lease_ref) as handle:
+        await _prepare_ttl_change(ctx, UserConfig(), user_config)
         await viking_fs.write_file(
             uri,
             json.dumps(
-                user_config.model_dump(exclude_none=True),
+                user_config.model_dump(by_alias=True, exclude_none=True),
                 ensure_ascii=False,
                 sort_keys=True,
             ),
             ctx=ctx,
             lease_ref=handle,
         )
-    return runtime
+        await _publish_ttl_change(ctx, user_config)
 
 
 async def delete_user_config(viking_fs: VikingFS, ctx: RequestContext) -> None:
     try:
         await viking_fs.rm(user_config_uri(ctx), ctx=ctx)
     except (NotFoundError, FileNotFoundError):
-        return
-
-
-async def read_user_add_targets(
-    viking_fs: VikingFS,
-    ctx: RequestContext,
-) -> AddTargetsConfig:
-    return (await read_user_config(viking_fs, ctx)).add_targets
-
-
-async def write_user_add_targets(
-    viking_fs: VikingFS,
-    ctx: RequestContext,
-    settings: AddTargetsConfig,
-) -> ResolvedAddTargets:
-    runtime = await validate_add_targets(settings, ctx=ctx, viking_fs=viking_fs)
-
-    def _set(user_config: UserConfig) -> None:
-        user_config.add_targets = settings
-
-    await update_user_config(viking_fs, ctx, _set)
-    return runtime
-
-
-async def delete_user_add_targets(viking_fs: VikingFS, ctx: RequestContext) -> None:
-    def _clear(user_config: UserConfig) -> None:
-        user_config.add_targets = AddTargetsConfig()
-
-    await update_user_config(viking_fs, ctx, _clear)
+        pass
+    await _publish_ttl_change(ctx, UserConfig())
 
 
 async def read_user_memory_policy(
@@ -267,14 +247,10 @@ async def write_user_memory_policy(
     ctx: RequestContext,
     memory_policy: Optional[dict[str, Any]],
 ) -> Optional[dict[str, Any]]:
-    normalized = UserConfig(memory_policy=memory_policy).memory_policy
-    validate_user_memory_policy(normalized)
-
-    def _set(user_config: UserConfig) -> None:
-        user_config.memory_policy = normalized
-
-    await update_user_config(viking_fs, ctx, _set)
-    return normalized
+    patch = UserSettingsPatch(memory_policy=memory_policy)
+    validate_config_input(patch)
+    updated = await patch_user_config(viking_fs, ctx, patch)
+    return updated.memory_policy
 
 
 async def effective_resource_add_target(
@@ -283,16 +259,9 @@ async def effective_resource_add_target(
     ctx: RequestContext,
     server_config: Optional[ServerConfig],
 ) -> Optional[str]:
-    user_settings = await read_user_add_targets(viking_fs, ctx)
-    if user_settings.resource_uri:
-        return await validate_resource_add_target(
-            user_settings.resource_uri, ctx=ctx, viking_fs=viking_fs
-        )
-    configured = getattr(
-        getattr(getattr(server_config, "user_config_defaults", None), "add_targets", None),
-        "resource_uri",
-        None,
-    )
+    configured = resolve_user_add_targets(
+        await read_user_config(viking_fs, ctx), server_config
+    ).resource_uri
     if configured:
         return await validate_resource_add_target(configured, ctx=ctx, viking_fs=viking_fs)
     return None
@@ -304,23 +273,22 @@ async def effective_skill_add_target(
     ctx: RequestContext,
     server_config: Optional[ServerConfig],
 ) -> Optional[str]:
-    user_settings = await read_user_add_targets(viking_fs, ctx)
-    if user_settings.skill_uri:
-        return await validate_skill_add_target(
-            user_settings.skill_uri, ctx=ctx, viking_fs=viking_fs
-        )
-    configured = getattr(
-        getattr(getattr(server_config, "user_config_defaults", None), "add_targets", None),
-        "skill_uri",
-        None,
-    )
+    configured = resolve_user_add_targets(
+        await read_user_config(viking_fs, ctx), server_config
+    ).skill_uri
     if configured:
         return await validate_skill_add_target(configured, ctx=ctx, viking_fs=viking_fs)
     return None
 
 
-def public_add_targets(settings: AddTargetsConfig) -> dict[str, Optional[str]]:
-    return {
-        "resource_uri": settings.resource_uri,
-        "skill_uri": settings.skill_uri,
-    }
+def resolve_user_add_targets(
+    user_config: UserConfig, server_config: Optional[ServerConfig]
+) -> AddTargetsConfig:
+    """Apply deployment defaults only where the User has no add target."""
+    defaults = (
+        server_config.user_config_defaults.add_targets if server_config else AddTargetsConfig()
+    )
+    return AddTargetsConfig.model_construct(
+        resource_uri=user_config.add_targets.resource_uri or defaults.resource_uri,
+        skill_uri=user_config.add_targets.skill_uri or defaults.skill_uri,
+    )

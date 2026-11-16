@@ -1,0 +1,175 @@
+/**
+ * 输入区样式。颜色取自 `viking-bot.css` 里从主题基线派生的组件变量，
+ * 这里只补充输入区特有的几何量。
+ *
+ * Composer styles. Colours come from the component variables derived from the
+ * theme baseline in `viking-bot.css`; only composer-specific geometry is set here.
+ */
+.ov-viking-bot__composer {
+  display: flex;
+  box-sizing: border-box;
+  flex: none;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 0 16px 16px;
+}
+
+.ov-viking-bot__composer .ov-viking-bot__sender {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  border: 0.5px solid var(--ov-viking-bot-border-strong);
+  border-radius: 20px;
+  background: var(--ov-viking-bot-bg);
+  box-shadow: 0 2px 6px
+    color-mix(
+      in srgb,
+      var(--ov-ui-color-shadow, var(--ov-ui-shadow-default)) 5%,
+      transparent
+    );
+  padding: 12px;
+}
+.ov-viking-bot__sender .ark-agentic-sender-richTextArea {
+  margin: 0;
+  padding-top: 0;
+  color: var(--ov-viking-bot-text);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  letter-spacing: 0.3px;
+  line-height: var(--agentic-sender-rich-textarea-line-height);
+}
+.ov-viking-bot__sender .tiptap.ProseMirror {
+  outline: none;
+  font: inherit;
+}
+.ov-viking-bot__sender
+  .ark-agentic-sender-richTextArea
+  .tiptap.ProseMirror
+  .ark-agentic-sender-richTextArea-paragraph {
+  font: inherit;
+}
+.ov-viking-bot__sender .tiptap p {
+  margin: 0;
+}
+.ov-viking-bot__sender
+  .ark-agentic-sender-richTextArea
+  .tiptap
+  p.is-editor-empty:first-child::before,
+.ov-viking-bot__sender
+  .ark-agentic-sender-richTextArea
+  .ark-agentic-sender-richTextArea-placeholder::before {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-conversation-meta-default));
+  font: inherit;
+}
+
+.ov-viking-bot__composer--compact {
+  padding: 6px 8px 8px;
+}
+
+.ov-viking-bot__composer-hint {
+  margin: 0;
+  color: var(--ov-viking-bot-text-muted);
+  font-size: 12px;
+}
+
+.ov-viking-bot__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ov-viking-bot__attachments > li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--ov-viking-bot-border);
+  border-radius: var(--ov-viking-bot-radius);
+  padding: 2px 6px;
+  font-size: 12px;
+}
+
+.ov-viking-bot__attachments button:not(.ov-button) {
+  border: none;
+  background: none;
+  padding: 0 2px;
+  color: var(--ov-viking-bot-text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.ov-viking-bot__attachments button:not(.ov-button):hover {
+  color: var(--ov-viking-bot-text);
+}
+
+.ov-viking-bot__attachments button:not(.ov-button):focus-visible {
+  outline: 2px solid var(--ov-viking-bot-focus);
+  outline-offset: 1px;
+}
+
+.ov-viking-bot__attachment-status {
+  color: var(--ov-viking-bot-danger);
+}
+
+.ov-viking-bot__composer-actions {
+  display: flex;
+  width: 100%;
+  min-height: 32px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+}
+.ov-viking-bot__composer-tools {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+.ov-viking-bot__attach,
+.ov-viking-bot__submit {
+  flex-shrink: 0;
+}
+.ov-viking-bot__composer .ov-viking-bot__attach.ov-button {
+  --ov-ui-button-height: 32px;
+  border-radius: 6px;
+  /* 「@」是文字字形，16px 时与 14px 的「+」视觉等大。 */
+  font-size: 16px;
+  font-weight: 400;
+}
+.ov-viking-bot__composer .ov-viking-bot__attach.ov-button:not(:disabled) {
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+}
+.ov-viking-bot__composer .ov-viking-bot__attach.ov-button:not(:disabled):hover {
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+}
+.ov-viking-bot__submit > svg {
+  display: block;
+  width: 9px;
+  height: 10.3334px;
+}
+/* 「@」下半部有收尾弧线，几何居中时看起来偏高，下移 1px 与「+」视觉对齐。 */
+.ov-viking-bot__attach-glyph {
+  display: block;
+  translate: 0 1px;
+}
+.ov-viking-bot__attach > svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+/* 整个输入面板都可点击聚焦，光标与输入框一致；按钮保留各自的光标。 */
+.ov-viking-bot__sender {
+  cursor: text;
+}
+.ov-viking-bot__stop-icon {
+  width: 10px;
+  height: 10px;
+  border-radius: 1px;
+  background: currentColor;
+}

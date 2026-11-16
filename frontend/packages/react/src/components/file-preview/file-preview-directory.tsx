@@ -1,0 +1,181 @@
+import { levelToFileTab } from './file-preview-source.js';
+import type { Locale } from '../../shared/locale.js';
+import { useId, useState } from 'react';
+
+import type {
+  ViewerHandle,
+  ViewerViewModeOption,
+} from '@ark-design/ui/file-viewer/core';
+
+import type { FilePreviewActions } from './types.js';
+import { FilePreviewBody } from './file-preview-body.js';
+import { FilePreviewHeader } from './file-preview-header.js';
+import {
+  FilePreviewTransition,
+  needsAsyncLoad,
+  probeStatusOf,
+} from './file-preview-transition.js';
+import { LoadingState } from './file-preview-state.js';
+import type { useFilePreviewEditing } from './use-file-preview-editing.js';
+import { TabList } from '../../shared/primitives/tabs/tab-list.js';
+import type {
+  FilePreviewDirectoryTab,
+  FilePreviewLabels,
+  FilePreviewViewMode,
+  FilePreviewToolbarOptions,
+} from './types.js';
+
+/**
+ * 目录页签的正文：标题行之下多一层同级视图切换（L0 摘要 / L1 总览），每一级
+ * 各自是一份 Markdown，走与文件页签相同的渲染路径。
+ *
+ * 这一层属于目录这种实体：文件没有同级视图可切，给它加同样的插槽只会留一个
+ * 永远空着的位置。
+ *
+ * The body of a directory tab: one extra level of sibling switching between
+ * summary levels (L0 / L1) under the header, each level its own Markdown going
+ * through the same rendering path as a file tab.
+ *
+ * That level belongs to the directory entity: a file has no sibling views to
+ * switch, so giving it the same slot would only leave a permanently empty space.
+ */
+export interface FilePreviewDirectoryBodyProps {
+  toolbar?: FilePreviewToolbarOptions;
+  tab: FilePreviewDirectoryTab;
+  text: Required<FilePreviewLabels>;
+  locale?: Locale;
+  actions: FilePreviewActions;
+  editing: ReturnType<typeof useFilePreviewEditing>;
+  viewMode: FilePreviewViewMode;
+  onViewModeChange: (mode: FilePreviewViewMode) => void;
+  onHandleChange: (handle: ViewerHandle | null) => void;
+  onViewModesChange: (modes: readonly ViewerViewModeOption[]) => void;
+  onCancelEditing: () => void;
+}
+
+/**
+ * 把某一级摘要包装成文件页签的形状，正文渲染因此只有一条路径。
+ * Wraps one level as a file tab so the body has exactly one rendering path.
+ */
+
+export function FilePreviewDirectoryBody({
+  toolbar,
+  tab,
+  text,
+  locale,
+  actions,
+  editing,
+  viewMode,
+  onViewModeChange,
+  onHandleChange,
+  onViewModesChange,
+  onCancelEditing,
+}: FilePreviewDirectoryBodyProps) {
+  // 层级由外层持有（复制正文要跟着当前层级），这里只补一个非受控时的初值。
+  // The level is owned by the outer component, because copy-content follows it; this
+  // only supplies the uncontrolled default.
+  const [internalKey, setInternalKey] = useState(
+    () => tab.defaultLevelKey ?? tab.levels[0].key,
+  );
+  const activeKey = tab.activeLevelKey ?? internalKey;
+  const fileTab =
+    levelToFileTab(tab, activeKey) ?? levelToFileTab(tab, tab.levels[0].key);
+  const tabsId = useId();
+  const changeLevel = (key: string) => {
+    if (tab.activeLevelKey === undefined) setInternalKey(key);
+    tab.onActiveLevelChange?.(key);
+  };
+
+  // 层级 key 对不上时 `levelToFileTab` 会返回 undefined；此时不渲染标题行与
+  // 正文，避免用一个不存在的页签去取渲染数据。
+  //
+  // A mismatched level key leaves `levelToFileTab` undefined; skip the header and
+  // body rather than rendering from a tab that does not exist.
+  if (!fileTab) return null;
+  // 摘要还在读取：只渲染外壳与加载态，层级切换与正文都等数据到了再说。
+  const header = (
+    <FilePreviewHeader
+      path={fileTab.source.path}
+      fileName={fileTab.source.fileName}
+      canOpenParent={Boolean(tab.operations?.openParent)}
+      titleExtra={tab.slots?.titleExtra}
+      slotActions={tab.slots?.actions}
+      extraActions={tab.slots?.extraActions}
+      toolbar={toolbar}
+      actionItems={tab.actions}
+      actions={actions}
+      text={text}
+      onOpenParent={(uri) => void tab.operations?.openParent?.(uri)}
+    />
+  );
+  // Still reading the summary: render the shell and the loading state only; the
+  // level switch and the body wait for the data.
+  if (tab.loading) {
+    return (
+      <>
+        {header}
+        <div className="ov-file-preview__body">
+          <LoadingState text={text} />
+        </div>
+      </>
+    );
+  }
+
+  return (
+    <>
+      {header}
+      {/* 同级视图切换：下划线页签，位于标题行与正文之间。 */}
+      {/* Sibling switching: underlined tabs between the header and the body. */}
+      {tab.levels.length > 1 ? (
+        <TabList
+          id={tabsId}
+          label={text.viewSwitch}
+          items={tab.levels}
+          activeKey={activeKey}
+          className="ov-file-preview__levels"
+          tabClassName="ov-file-preview__level"
+          indicatorClassName="ov-file-preview__level-indicator"
+          onChange={changeLevel}
+        />
+      ) : null}
+      <div
+        className="ov-file-preview__body"
+        role={tab.levels.length > 1 ? 'tabpanel' : undefined}
+        aria-labelledby={
+          tab.levels.length > 1 ? `${tabsId}-${activeKey}` : undefined
+        }
+      >
+        <FilePreviewTransition
+          identity={fileTab.key}
+          tab={fileTab}
+          targetKey={tab.key}
+          needsLoad={needsAsyncLoad(fileTab.source)}
+          text={text}
+        >
+          {(layer) => (
+            <FilePreviewBody
+              fileTab={layer.tab}
+              monitoringTargetKey={layer.targetKey}
+              onLoadingChange={layer.onLoadingChange}
+              text={text}
+              locale={locale}
+              viewMode={viewMode}
+              editing={editing}
+              onViewModeChange={onViewModeChange}
+              onHandleChange={onHandleChange}
+              onViewModesChange={onViewModesChange}
+              onCancelEditing={onCancelEditing}
+              onStateChange={(state) =>
+                layer.onProbeStatus(probeStatusOf(state))
+              }
+              reports={layer.reports}
+            />
+          )}
+        </FilePreviewTransition>
+      </div>
+      {tab.slots?.footer ? (
+        <div className="ov-file-preview__footer">{tab.slots.footer}</div>
+      ) : null}
+    </>
+  );
+}

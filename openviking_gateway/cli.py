@@ -156,6 +156,7 @@ def main():
         host=config.host,
         port=config.port,
         workers=config.workers,
+        timeout_keep_alive=config.keep_alive_seconds,
         log_level="info",
         # Signed upload tokens live in query strings; log request metadata only.
         access_log=False,

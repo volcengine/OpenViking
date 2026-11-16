@@ -52,6 +52,7 @@ const enums = {
     recalled: 'Memory added',
     empty: 'Nothing relevant found',
     disabled: 'Recall is off or the budget is used up',
+    budget: 'Too little budget left to add memory',
     recall_timeout: 'Recall timed out',
   },
   toolSkipReason: {

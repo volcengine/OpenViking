@@ -18,6 +18,7 @@ from openviking.storage.vectordb.collection.result import (
     SearchResult,
 )
 from openviking.storage.vectordb.index.index import IIndex
+from openviking_cli.exceptions import FailedPreconditionError, UnimplementedError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.vectordb_config import (
     OpenGaussIndexConfig,
@@ -26,7 +27,14 @@ from openviking_cli.utils.config.vectordb_config import (
 from .catalog import (
     _try_make_metadata_table_distributed,
 )
+from .fulltext import OpenGaussFulltextMixin
 from .metadata import BUILD_KEYS, SEARCH_KEYS, migrate_persisted_index_meta
+from .retrieval import (
+    OpenGaussRetrievalMixin,
+    _validate_output_fields,
+    _validate_search_parameters,
+    _validate_sparse_vector,
+)
 from .sql import (
     _DISTANCE_OP,
     _META_TABLE,
@@ -106,7 +114,7 @@ class _PgIndex(IIndex):
         pass
 
 
-class OpenGaussCollection(ICollection):
+class OpenGaussCollection(OpenGaussFulltextMixin, OpenGaussRetrievalMixin, ICollection):
     """A single OpenViking collection stored in an openGauss/PostgreSQL table.
 
     Schema design:
@@ -145,6 +153,9 @@ class OpenGaussCollection(ICollection):
         self._field_names.add("id")
         if dim > 0:
             self._field_names.add("vector")
+        self._sparse_maintenance_checks = (
+            "sparse_vector" in self._field_names and not self._distributed
+        )
         self._array_fields = {
             field.get("FieldName") or field.get("field_name") or field.get("name", "")
             for field in meta.get("Fields", [])
@@ -187,6 +198,53 @@ class OpenGaussCollection(ICollection):
                 raise
             finally:
                 cur.close()
+
+    def validate_sparse_index(self) -> bool:
+        name = self._sparse_posting_table_name()
+        term_index = _bounded_identifier(f"{name}_term_idx")
+        rows = self._execute(
+            """SELECT x.relname, i.indisvalid, i.indisready, a.amname,
+                      i.indisprimary, i.indisunique, i.indnatts,
+                      pg_catalog.pg_get_indexdef(i.indexrelid, 1, true),
+                      pg_catalog.pg_get_indexdef(i.indexrelid, 2, true),
+                      i.indpred IS NULL AND i.indexprs IS NULL
+               FROM pg_catalog.pg_index i
+               JOIN pg_catalog.pg_class t ON t.oid = i.indrelid
+               JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
+               JOIN pg_catalog.pg_class x ON x.oid = i.indexrelid
+               JOIN pg_catalog.pg_am a ON a.oid = x.relam
+               WHERE n.nspname = current_schema() AND t.relname = %s
+                 AND (x.relname = %s OR i.indisprimary)""",
+            (name, term_index),
+            fetch=True,
+        )
+        term_ready = primary_ready = False
+        for index, valid, ready, method, primary, unique, count, first, second, plain in rows:
+            if not (valid and ready and method == "btree" and count == 2 and plain):
+                continue
+            keys = tuple(re.sub(r'[\s"]', "", key) for key in (first, second))
+            if index == term_index and keys == ("term", "id"):
+                term_ready = True
+            if primary and unique and keys == ("id", "term"):
+                primary_ready = True
+        return term_ready and primary_ready
+
+    def _query_rows(self, sql: str, params, index_name: Optional[str] = None):
+        """Use the pool's thread-local transaction without serializing collection reads."""
+        cursor = self._cursor()
+        try:
+            if index_name is not None:
+                self._apply_search_params_on_cursor(cursor, index_name)
+            cursor.execute(sql, params)
+            columns = [desc[0] for desc in cursor.description]
+            rows = cursor.fetchall()
+            self._conn.commit()
+            return columns, rows
+        except Exception:
+            self._conn.rollback()
+            raise
+        finally:
+            cursor.close()
 
     def _index_catalog_table(self) -> str:
         return _index_meta_table_name(self._name)
@@ -349,60 +407,210 @@ class OpenGaussCollection(ICollection):
                 normalized[bound] = _date_time_to_epoch_ms(normalized[bound])
         return normalized
 
+    def _has_sparse_column_on_cursor(self, cursor) -> bool:
+        if self._distributed:
+            return False
+        cursor.execute(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = %s "
+            "AND column_name = 'sparse_vector')",
+            (self._name,),
+        )
+        return bool(cursor.fetchone()[0])
+
+    @staticmethod
+    def _content_write_record(record, columns):
+        if "_ov_content_empty" in record:
+            raise ValueError("_ov_content_empty is an internal field")
+        if "content" not in record:
+            return record
+        content = record["content"]
+        if content is not None and not isinstance(content, str):
+            raise ValueError("content must be text or NULL")
+        if "_ov_content_empty" in columns:
+            return {**record, "_ov_content_empty": content == ""}
+        return record
+
+    def _unstored_fields(self, columns=None) -> frozenset[str]:
+        if columns is None:
+            columns = self._get_all_columns()
+        return _UNSTORED_FIELDS - set(columns)
+
     def _select_output_columns(self, output_fields: Optional[List[str]]) -> str:
-        """Build the SELECT column list from output_fields."""
+        """Build the projection; None and [] both retain the all-fields contract."""
+        _validate_output_fields(output_fields)
         if not output_fields:
             return "*"
         allowed_fields = self._field_names | _UNSTORED_FIELDS
         unknown_fields = sorted(set(output_fields) - allowed_fields)
         if unknown_fields:
             raise ValueError(f"Unknown openGauss output fields: {unknown_fields}")
+        physical_columns = (
+            set(self._get_all_columns()) if _UNSTORED_FIELDS.intersection(output_fields) else set()
+        )
+        unstored_fields = self._unstored_fields(physical_columns)
         cols = [_quote_identifier("id")]
         for field in output_fields:
             if field == "id":
                 continue
             quoted = _quote_identifier(field, kind="openGauss output field")
-            if field in _UNSTORED_FIELDS:
+            if field in unstored_fields:
                 # Schema/metadata still lists ``content``; the physical table
                 # does not. Project NULL so official URI rewrite/migration
                 # output_fields do not become a missing-column SQL error.
                 cols.append(f"NULL AS {quoted}")
             else:
                 cols.append(quoted)
+        if "content" in output_fields and "_ov_content_empty" in physical_columns:
+            cols.append('"_ov_content_empty"')
         return ", ".join(cols)
 
     def _row_to_dict(self, row, columns: List[str]) -> Dict[str, Any]:
         record = {}
+        explicitly_empty = False
         for column, value in zip(columns, row, strict=True):
+            if column == "_ov_content_empty":
+                explicitly_empty = bool(value)
+                continue
             if column == "vector":
                 record[column] = _coerce_vector(value)
             elif column == "sparse_vector":
                 record[column] = _coerce_sparse_vector(value)
             else:
                 record[column] = value
+        if explicitly_empty and "content" in record and record["content"] is None:
+            record["content"] = ""
         return record
 
     # ------------------------------------------------------------------
     # ICollection: collection lifecycle
     # ------------------------------------------------------------------
 
-    def update(self, fields: Optional[Dict[str, Any]] = None, description: Optional[str] = None):
-        if fields:
-            self._meta.update(fields)
-        if description is not None:
-            self._meta["Description"] = description
-        # Persist updated meta
-        self._execute(
-            f"""
-            UPDATE "{_META_TABLE}"
-            SET meta_json = %s
-            WHERE table_name = %s
-            """,
-            (json.dumps(self._meta), self._name),
+    def _load_metadata_on_cursor(self, cursor) -> Dict[str, Any]:
+        cursor.execute(
+            f'SELECT meta_json FROM "{_META_TABLE}" WHERE table_name = %s FOR UPDATE',
+            (self._name,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise RuntimeError("openGauss collection metadata is missing")
+        return json.loads(row[0]) if isinstance(row[0], str) else dict(row[0])
+
+    def _adopt_metadata(self, meta: Dict[str, Any]) -> None:
+        with self._lock:
+            self._adopt_metadata_locked(meta)
+
+    def _adopt_metadata_locked(self, meta: Dict[str, Any]) -> None:
+        fields = meta.get("Fields", [])
+        self._meta = meta
+        self._dim = meta.get("_dim", getattr(self, "_dim", 0))
+        self._field_names = {
+            field.get("FieldName") or field.get("field_name") or field.get("name", "")
+            for field in fields
+        } | {"id"}
+        if self._dim > 0:
+            self._field_names.add("vector")
+        self._array_fields = {
+            field.get("FieldName") or field.get("field_name") or field.get("name", "")
+            for field in fields
+            if (field.get("FieldType") or field.get("field_type") or field.get("type"))
+            in {"list<string>", "list<int64>"}
+        }
+        self._date_time_fields = {
+            field.get("FieldName") or field.get("field_name") or field.get("name", "")
+            for field in fields
+            if (field.get("FieldType") or field.get("field_type") or field.get("type"))
+            == "date_time"
+        }
+        self._sparse_maintenance_checks = (
+            "sparse_vector" in self._field_names and not self._distributed
         )
 
-    def get_meta_data(self) -> Dict[str, Any]:
-        return dict(self._meta)
+    def update(self, fields=None, description: Optional[str] = None):
+        from .sql import _field_to_column_ddl
+
+        definitions = fields.get("Fields") if isinstance(fields, dict) else fields
+        if fields is not None and not isinstance(definitions, list):
+            raise ValueError("openGauss schema update requires a list of field definitions")
+        with self._lock:
+            cursor = self._cursor()
+            try:
+                if definitions:
+                    # Serialize schema changes before locking their metadata row.
+                    cursor.execute(f'LOCK TABLE "{self._name}" IN SHARE ROW EXCLUSIVE MODE')
+                meta = self._load_metadata_on_cursor(cursor)
+                existing = {field["FieldName"]: field for field in meta.get("Fields", [])}
+                for field in definitions or []:
+                    if not isinstance(field, dict) or not field.get("FieldName"):
+                        raise ValueError("invalid field definition")
+                    name = _validate_identifier(field["FieldName"], kind="openGauss field name")
+                    if name == "_ov_content_empty":
+                        raise ValueError("_ov_content_empty is an internal field")
+                    if name in existing:
+                        if existing[name].get("FieldType") != field.get("FieldType"):
+                            raise ValueError(
+                                "changing existing field types requires an explicit migration"
+                            )
+                        continue
+                    if field.get("FieldType") == "vector":
+                        raise ValueError("adding vector fields requires an explicit migration")
+                    ddl = _field_to_column_ddl(field)
+                    if not ddl:
+                        raise ValueError(f"unsupported field definition: {name}")
+                    cursor.execute(f'ALTER TABLE "{self._name}" ADD COLUMN {ddl}')
+                    existing[name] = dict(field)
+                if fields is not None:
+                    meta["Fields"] = list(existing.values())
+                if description is not None:
+                    meta["Description"] = description
+                cursor.execute(
+                    f'UPDATE "{_META_TABLE}" SET meta_json = %s WHERE table_name = %s',
+                    (json.dumps(meta), self._name),
+                )
+                if cursor.rowcount != 1:
+                    raise RuntimeError("Collection metadata update did not affect exactly one row")
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+            finally:
+                cursor.close()
+            self._adopt_metadata(meta)
+
+    def get_meta_data(self, raise_on_error: bool = False) -> Dict[str, Any]:
+        with self._lock:
+            return self._get_meta_data_locked(raise_on_error=raise_on_error)
+
+    def _get_meta_data_locked(self, raise_on_error: bool = False) -> Dict[str, Any]:
+        if getattr(self, "_conn", None) is not None:
+            rows = self._execute(
+                f'SELECT meta_json FROM "{_META_TABLE}" WHERE table_name = %s',
+                (self._name,),
+                fetch=True,
+            )
+            if not rows:
+                raise RuntimeError("openGauss collection metadata is missing")
+            persisted = json.loads(rows[0][0]) if isinstance(rows[0][0], str) else rows[0][0]
+            self._adopt_metadata(persisted)
+        meta = dict(self._meta)
+        physical = self._get_column_types()
+        meta["Fields"] = [
+            dict(field)
+            for field in meta.get("Fields", [])
+            if (field.get("FieldName") or field.get("field_name") or field.get("name")) in physical
+            and (field.get("FieldName") or field.get("field_name") or field.get("name"))
+            != "_ov_content_empty"
+        ]
+        meta["FullText"] = (
+            [dict(item) for item in meta.get("FullText", [])]
+            if self.validate_fulltext_index()
+            else []
+        )
+        return {
+            key: value
+            for key, value in meta.items()
+            if not key.startswith("_") and key != "RetrievalCapabilities"
+        }
 
     def close(self):
         pass  # Connection lifecycle managed by adapter
@@ -411,13 +619,24 @@ class OpenGaussCollection(ICollection):
         idx_table = _quote_identifier(
             self._index_catalog_table(), kind="openGauss index metadata table"
         )
-        self._execute(f'DROP TABLE IF EXISTS "{self._name}" CASCADE')
-        self._execute(f"DROP TABLE IF EXISTS {idx_table} CASCADE")
-        self._execute(
-            f'DELETE FROM "{_META_TABLE}" WHERE table_name = %s',
-            (self._name,),
-        )
-        self._indexes.clear()
+        with self._lock:
+            cursor = self._cursor()
+            try:
+                cursor.execute(f'DROP TABLE IF EXISTS "{self._name}" CASCADE')
+                self._drop_sparse_postings_on_cursor(cursor)
+                cursor.execute(f"DROP TABLE IF EXISTS {idx_table} CASCADE")
+                cursor.execute(
+                    f'DELETE FROM "{_META_TABLE}" WHERE table_name = %s',
+                    (self._name,),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+            finally:
+                cursor.close()
+            self._indexes.clear()
+            self._pending_indexes.clear()
 
     # ------------------------------------------------------------------
     # ICollection: index management
@@ -793,20 +1012,17 @@ class OpenGaussCollection(ICollection):
         for index_name, index_meta in list(self._indexes.items()):
             physical_index_name = index_meta.get("_pg_index_name")
             if not physical_index_name:
-                self._delete_index_meta_and_scalar_indexes(index_name, index_meta)
                 self._indexes.pop(index_name, None)
                 continue
             index_definition = self._physical_index_definition(physical_index_name)
             try:
                 normalized_meta = self._normalized_index_meta(index_name, index_meta)
             except Exception:
-                self._delete_index_meta_and_scalar_indexes(index_name, index_meta)
                 self._indexes.pop(index_name, None)
                 continue
             if not index_definition or not self._index_definition_matches(
                 normalized_meta, index_definition
             ):
-                self._delete_index_meta_and_scalar_indexes(index_name, index_meta)
                 self._indexes.pop(index_name, None)
 
     def _search_param_statements(self, index_name: str) -> list[str]:
@@ -854,6 +1070,20 @@ class OpenGaussCollection(ICollection):
     def create_index(self, index_name: str, meta_data: Dict[str, Any]) -> IIndex:
         _validate_identifier(index_name, kind="openGauss index name")
         index_meta = self._normalized_index_meta(index_name, meta_data)
+        vector_spec = index_meta.get("VectorIndex", {})
+        sparse_spec = index_meta.get("SparseIndex")
+        if sparse_spec is not None or vector_spec.get("EnableSparse"):
+            if sparse_spec is not None and not isinstance(sparse_spec, dict):
+                raise ValueError("openGauss SparseIndex must be an object")
+            sparse_spec = sparse_spec or {}
+            if sparse_spec.get("implementation", "postings") != "postings":
+                raise ValueError("openGauss SparseIndex supports postings only")
+            self.create_sparse_index(
+                candidate_limit=getattr(self, "_retrieval_config", {}).get("candidate_limit", 1000),
+                sparse_weight=sparse_spec.get(
+                    "weight", vector_spec.get("SearchWithSparseLogitAlpha", 0.5)
+                ),
+            )
         if self._index_requires_data(index_meta) and not self._table_has_rows():
             existing_definition = self._physical_index_definition(index_meta["_pg_index_name"])
             if existing_definition and not self._index_definition_matches(
@@ -1064,32 +1294,43 @@ class OpenGaussCollection(ICollection):
         advance: Optional[Dict[str, Any]] = None,
         return_detail_info: bool = False,
     ) -> SearchResult:
-        # Accept shared search options; openGauss does not apply time decay.
-        # Sparse support is checked before the dense emptiness short-circuit:
-        # a pure sparse query must fail loudly instead of returning an empty
-        # result set that looks like "no recall".
-        if sparse_vector:
-            raise NotImplementedError(
-                "openGauss backend does not support sparse or hybrid vector search"
+        _validate_search_parameters(limit, offset, output_fields)
+        self._validate_ranked_filters(filters)
+        if sparse_vector is not None:
+            sparse_vector = _validate_sparse_vector(sparse_vector)
+        if sparse_vector or advance is not None:
+            if limit and getattr(self, "_conn", None) is not None:
+                self.get_meta_data(raise_on_error=True)
+            return self.search_ranked(
+                index_name,
+                dense_vector=dense_vector,
+                sparse_vector=sparse_vector,
+                limit=limit,
+                offset=offset,
+                filters=filters,
+                output_fields=output_fields,
+                advance=advance,
+                return_detail_info=return_detail_info,
             )
 
-        if not dense_vector:
-            return SearchResult(data=[])
-
-        self._materialize_pending_index(index_name)
-        if index_name in self._pending_indexes and not self._table_has_rows():
-            return SearchResult(data=[])
-        if not self.has_index(index_name):
-            raise RuntimeError(f"openGauss physical ANN index {index_name!r} is missing or invalid")
-        distance_metric, op = self._resolve_distance_and_op(index_name)
         select_cols = self._select_output_columns(output_fields)
-
         where_frag, where_params = _build_where_clause(
             self._normalize_filter_date_times(filters), self._array_fields
         )
+        if dense_vector is None or dense_vector == []:
+            return SearchResult(data=[])
+        normalized_vector = _validate_vector(dense_vector, self._dim, field_name="query vector")
+        if limit == 0:
+            return SearchResult(data=[])
+        if index_name in self._pending_indexes and not self._table_has_rows():
+            return SearchResult(data=[])
+        if not self.has_index(index_name):
+            raise FailedPreconditionError(
+                f"openGauss physical ANN index {index_name!r} is missing or invalid"
+            )
+        distance_metric, op = self._resolve_distance_and_op(index_name)
         where_clause = f"WHERE {where_frag}" if where_frag else ""
 
-        normalized_vector = _validate_vector(dense_vector, self._dim, field_name="query vector")
         vector_str = "[" + ",".join(str(value) for value in normalized_vector) + "]"
         sql = f"""
             SELECT {select_cols}, vector {op} %s::vector AS _distance
@@ -1100,23 +1341,7 @@ class OpenGaussCollection(ICollection):
         """
         params = [vector_str] + where_params + [limit, offset]
 
-        try:
-            with self._lock:
-                cur = self._cursor()
-                try:
-                    self._apply_search_params_on_cursor(cur, index_name)
-                    cur.execute(sql, params)
-                    col_names = [desc[0] for desc in cur.description]
-                    rows = cur.fetchall()
-                    self._conn.commit()
-                except Exception:
-                    self._conn.rollback()
-                    raise
-                finally:
-                    cur.close()
-        except Exception as error:
-            logger.error("opengauss_adapter: search_by_vector failed: %s", error)
-            raise
+        col_names, rows = self._query_rows(sql, params, index_name)
 
         if not rows:
             return SearchResult(data=[])
@@ -1140,13 +1365,19 @@ class OpenGaussCollection(ICollection):
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
     ) -> SearchResult:
+        _validate_search_parameters(limit, offset, output_fields)
+        self._validate_ranked_filters(filters)
         select_cols = self._select_output_columns(output_fields)
         quoted_field = _quote_identifier(field, kind="openGauss scalar sort field")
+        if field not in self._field_names:
+            raise ValueError(f"Unknown openGauss scalar sort field: {field!r}")
         where_frag, where_params = _build_where_clause(
             self._normalize_filter_date_times(filters), self._array_fields
         )
         where_clause = f"WHERE {where_frag}" if where_frag else ""
         sort_dir = "DESC" if (order or "desc").lower() == "desc" else "ASC"
+        if limit == 0:
+            return SearchResult(data=[])
 
         sql = f"""
             SELECT {select_cols}, {quoted_field} AS _scalar_val
@@ -1193,11 +1424,18 @@ class OpenGaussCollection(ICollection):
         offset: int = 0,
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> SearchResult:
+        _validate_search_parameters(limit, offset, output_fields)
+        if advance is not None:
+            raise UnimplementedError("openGauss random search does not support advanced ranking")
+        self._validate_ranked_filters(filters)
         select_cols = self._select_output_columns(output_fields)
         where_frag, where_params = _build_where_clause(
             self._normalize_filter_date_times(filters), self._array_fields
         )
+        if limit == 0:
+            return SearchResult(data=[])
         where_clause = f"WHERE {where_frag}" if where_frag else ""
 
         sql = f"""
@@ -1245,8 +1483,20 @@ class OpenGaussCollection(ICollection):
         mode: Optional[str] = None,
         fields: Optional[List[str]] = None,
     ) -> SearchResult:
-        raise NotImplementedError(
-            "openGauss backend does not provide OpenViking keyword/full-text search"
+        if mode not in (None, "bm25"):
+            raise ValueError("openGauss keyword search mode must be bm25")
+        if fields is not None and fields != ["content"]:
+            raise ValueError("openGauss keyword search supports the content field only")
+        return OpenGaussFulltextMixin.search_by_keywords(
+            self,
+            index_name,
+            keywords=keywords,
+            query=query,
+            limit=limit,
+            offset=offset,
+            filters=filters,
+            output_fields=output_fields,
+            engine=mode or "bm25",
         )
 
     def search_by_id(
@@ -1303,7 +1553,7 @@ class OpenGaussCollection(ICollection):
         filters: Optional[Dict[str, Any]] = None,
         output_fields: Optional[List[str]] = None,
     ) -> SearchResult:
-        raise NotImplementedError(
+        raise UnimplementedError(
             "openGauss backend requires upstream multimodal embedding before vector search"
         )
 
@@ -1318,13 +1568,16 @@ class OpenGaussCollection(ICollection):
         import uuid
 
         all_columns = set(self._get_all_columns())
+        unstored_fields = self._unstored_fields(all_columns)
+        maintain_sparse = "sparse_vector" in all_columns and not self._distributed
         column_types = self._get_column_types()
         prepared_records: list[tuple[str, list[str], list[str], list[Any]]] = []
 
         for record_index, record in enumerate(data_list):
+            record = self._content_write_record(record, all_columns)
             record_id = record.get("id") or record.get("_id") or str(uuid.uuid4())
             unknown_fields = sorted(
-                set(record) - {"id", "_id", "vector"} - all_columns - _UNSTORED_FIELDS
+                set(record) - {"id", "_id", "vector"} - all_columns - unstored_fields
             )
             if unknown_fields:
                 raise ValueError(
@@ -1335,7 +1588,7 @@ class OpenGaussCollection(ICollection):
             extra_fields = {
                 field_name: field_value
                 for field_name, field_value in record.items()
-                if field_name not in {"id", "_id", "vector"} | _UNSTORED_FIELDS
+                if field_name not in {"id", "_id", "vector"} | unstored_fields
             }
             column_names = ["id"]
             placeholders = ["%s"]
@@ -1347,6 +1600,12 @@ class OpenGaussCollection(ICollection):
                 column_type = column_types.get(field_name, "").lower()
                 if field_name in self._date_time_fields:
                     field_value = _date_time_to_epoch_ms(field_value)
+                if field_name == "sparse_vector" and getattr(self, "_meta", {}).get(
+                    "_sparse_index", {}
+                ).get("sparse_enabled"):
+                    from .retrieval import _validate_sparse_vector
+
+                    field_value = _validate_sparse_vector(field_value)
                 if column_type == "jsonb":
                     placeholders.append("%s::jsonb")
                     field_value = json.dumps(field_value, ensure_ascii=False)
@@ -1394,8 +1653,13 @@ class OpenGaussCollection(ICollection):
                         if column_name != "id"
                     ] + [record_id]
 
-                    updated = 0
-                    if update_set:
+                    if not update_set:
+                        cursor.execute(
+                            f'UPDATE {table_identifier} SET "id" = "id" WHERE "id" = %s',
+                            [record_id],
+                        )
+                        updated = cursor.rowcount
+                    else:
                         cursor.execute(
                             f"UPDATE {table_identifier} SET {update_set} "
                             f"WHERE {_quote_identifier('id')} = %s",
@@ -1415,26 +1679,43 @@ class OpenGaussCollection(ICollection):
                                 values,
                             )
                         except Exception as error:
-                            cursor.execute("ROLLBACK TO SAVEPOINT ov_upsert_insert")
+                            # Only a unique race is recoverable inside this transaction.
+                            # A disconnected cursor must not obscure the original failure.
                             if getattr(error, "pgcode", None) != "23505":
                                 raise
+                            cursor.execute("ROLLBACK TO SAVEPOINT ov_upsert_insert")
                             if update_set:
                                 cursor.execute(
                                     f"UPDATE {table_identifier} SET {update_set} "
                                     f"WHERE {_quote_identifier('id')} = %s",
                                     update_values,
                                 )
-                                if cursor.rowcount != 1:
-                                    raise RuntimeError(
-                                        f"openGauss concurrent upsert recovery failed for {record_id!r}"
-                                    ) from error
-                        finally:
-                            cursor.execute("RELEASE SAVEPOINT ov_upsert_insert")
+                            else:
+                                cursor.execute(
+                                    f'UPDATE {table_identifier} SET "id" = "id" WHERE "id" = %s',
+                                    [record_id],
+                                )
+                            if cursor.rowcount != 1:
+                                raise RuntimeError(
+                                    f"openGauss concurrent upsert recovery failed for {record_id!r}"
+                                ) from error
+                        cursor.execute("RELEASE SAVEPOINT ov_upsert_insert")
+                if maintain_sparse:
+                    self._sync_sparse_postings_on_cursor(
+                        cursor, [row[0] for row in prepared_records]
+                    )
                 self._conn.commit()
             except Exception:
-                self._conn.rollback()
+                try:
+                    self._conn.rollback()
+                except Exception:
+                    logger.warning("openGauss upsert rollback failed during error cleanup", exc_info=True)
+                try:
+                    cursor.close()
+                except Exception:
+                    logger.warning("openGauss upsert cursor close failed during error cleanup", exc_info=True)
                 raise
-            finally:
+            else:
                 cursor.close()
         try:
             self._materialize_pending_indexes()
@@ -1452,13 +1733,16 @@ class OpenGaussCollection(ICollection):
                 raise ValueError("primary key 'id' is required for update")
 
         all_columns = set(self._get_all_columns())
+        unstored_fields = self._unstored_fields(all_columns)
+        maintain_sparse = "sparse_vector" in all_columns and not self._distributed
         column_types = self._get_column_types()
         prepared_updates: list[tuple[str, list[str], list[Any]]] = []
 
         for record_index, record in enumerate(data_list):
+            record = self._content_write_record(record, all_columns)
             primary_key = str(record["id"])
             unknown_fields = sorted(
-                set(record) - {"id", "_id", "vector"} - all_columns - _UNSTORED_FIELDS
+                set(record) - {"id", "_id", "vector"} - all_columns - unstored_fields
             )
             if unknown_fields:
                 raise ValueError(
@@ -1469,7 +1753,7 @@ class OpenGaussCollection(ICollection):
             assignments: list[str] = []
             values: list[Any] = []
             for field_name, field_value in record.items():
-                if field_name in {"id", "_id"} | _UNSTORED_FIELDS:
+                if field_name in {"id", "_id"} | unstored_fields:
                     continue
                 _validate_identifier(field_name, kind="openGauss field name")
                 if field_name == "vector":
@@ -1485,6 +1769,12 @@ class OpenGaussCollection(ICollection):
                     continue
                 if field_name in self._date_time_fields:
                     field_value = _date_time_to_epoch_ms(field_value)
+                if field_name == "sparse_vector" and getattr(self, "_meta", {}).get(
+                    "_sparse_index", {}
+                ).get("sparse_enabled"):
+                    from .retrieval import _validate_sparse_vector
+
+                    field_value = _validate_sparse_vector(field_value)
                 if column_types.get(field_name, "").lower() == "jsonb":
                     assignments.append(f"{_quote_identifier(field_name)} = %s::jsonb")
                     field_value = json.dumps(field_value, ensure_ascii=False)
@@ -1519,6 +1809,10 @@ class OpenGaussCollection(ICollection):
                         missing_ids.append(primary_key)
                 if missing_ids:
                     raise ValueError(f"record not found for primary key(s): {missing_ids}")
+                if maintain_sparse:
+                    self._sync_sparse_postings_on_cursor(
+                        cursor, [row[0] for row in prepared_updates]
+                    )
                 self._conn.commit()
                 return [primary_key for primary_key, _, _ in prepared_updates]
             except Exception:
@@ -1568,13 +1862,32 @@ class OpenGaussCollection(ICollection):
             return
         str_keys = [str(k) for k in primary_keys]
         placeholders = ", ".join(["%s"] * len(str_keys))
-        self._execute(
-            f'DELETE FROM "{self._name}" WHERE id IN ({placeholders})',
-            str_keys,
-        )
+        with self._lock:
+            cursor = self._cursor()
+            try:
+                cursor.execute(f'DELETE FROM "{self._name}" WHERE id IN ({placeholders})', str_keys)
+                if self._has_sparse_column_on_cursor(cursor):
+                    self._delete_sparse_postings_on_cursor(cursor, str_keys)
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+            finally:
+                cursor.close()
 
     def delete_all_data(self):
-        self._execute(f'TRUNCATE TABLE "{self._name}"')
+        with self._lock:
+            cursor = self._cursor()
+            try:
+                cursor.execute(f'TRUNCATE TABLE "{self._name}"')
+                if self._has_sparse_column_on_cursor(cursor):
+                    self._delete_sparse_postings_on_cursor(cursor)
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+            finally:
+                cursor.close()
 
     def aggregate_data(
         self,

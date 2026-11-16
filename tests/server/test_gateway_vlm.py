@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.config.vlm import AccountVLMProvider
+from openviking.models.vlm.registry import DEFAULT_AZURE_API_VERSION
 from openviking.server.gateway_vlm import vlm_upstreams
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
@@ -81,7 +82,6 @@ def test_glm_and_byteplus():
 @pytest.mark.parametrize(
     "provider,model,reason",
     [
-        ("azure", "deployment", "azure"),
         ("openai-codex", "gpt", "openai_codex"),
         ("litellm", "some/model", "litellm_no_api_base"),
         ("litellm", "gemini/gemini-2.0-flash", "litellm_unsupported_route"),
@@ -94,6 +94,25 @@ def test_skipped_credentials_have_actionable_reasons(provider, model, reason):
     result = vlm_upstreams(configured(provider, model, api_base=base))
     assert result["upstreams"] == []
     assert result["skipped"] == [{"id": "vlm-primary", "reason": reason}]
+
+
+@pytest.mark.parametrize(
+    "provider,model,api_version,query",
+    [
+        ("azure", "gpt-4o", "2024-10-21", "2024-10-21"),
+        ("litellm", "azure/gpt-4o", None, DEFAULT_AZURE_API_VERSION),
+    ],
+)
+def test_azure_deployments_become_exact_endpoints(provider, model, api_version, query):
+    config = configured(
+        provider, model, api_base="https://res.openai.azure.com/", api_version=api_version
+    )
+    (upstream,) = vlm_upstreams(config)["upstreams"]
+    assert upstream["base_url"] == (
+        f"https://res.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version={query}"
+    )
+    assert (upstream["append_endpoint_path"], upstream["key_header"]) == (False, "api-key")
+    assert (upstream["vendor"], upstream["models"]) == ("generic", ["gpt-4o"])
 
 
 def test_litellm_openai_routes_send_the_bare_model_name():

@@ -19,8 +19,6 @@ const upstreams = {
       invalid_configuration: '模型配置无效，请检查服务端配置后重新导入。',
       openai_codex:
         'Codex 的 OAuth 凭证会定期刷新，网关无法长期使用。请手动添加上游。',
-      azure:
-        'Azure OpenAI 需要 api-version 参数，网关暂不支持。请手动添加上游。',
       litellm_no_api_base:
         '这个 LiteLLM 凭证没有填写 api_base，网关无法确定地址。请在服务端配置里补上 api_base 后重新导入。',
       litellm_unsupported_route:
@@ -78,27 +76,48 @@ const upstreams = {
   },
   test: {
     action: '测试',
-    connection: '测试连接',
+    connection: '测试',
     running: '测试中…',
-    hint: '用已保存的密钥和请求头向服务商请求模型列表。它只验证地址和密钥是否可用，不检查模型配置，也不发送对话请求。',
+    hint: '先检查上游连接，再选择模型发送真实生成请求。',
     savedOnly: '测试的是已保存的设置。要测试改动后的设置，请先保存。',
     passthrough: '这个上游由客户端自带 API Key，网关没有可用于测试的 API Key。',
     noKey: '请先填写 API Key。',
+    codingPlan: '这个 Coding Plan 尚未授权通过网关发起模型请求。',
     result: {
-      unverified: '可达，密钥未验证 · {{status}}',
-      ok: '可连通 · {{status}}',
+      connected: '连接可用 · {{status}}',
+      connectionUnverified: '连接可用 · {{status}}',
+      ok: '模型可用 · {{status}}',
       failed: '失败 · {{status}}',
       unreachable: '无法连接',
       error: '无法测试',
     },
     explain: {
-      ok: '服务商接受了密钥，并返回了模型列表。',
+      connected: '服务商接受了密钥，并返回了模型列表。',
+      connectionUnverified:
+        '地址可达，但服务商不提供模型列表，API Key 尚未验证；仍可继续测试模型。',
+      ok: '所选模型已成功生成回复。',
       auth: '服务商拒绝了 API Key 或某个请求头。',
-      rateLimited: '地址可达，但服务商限制了请求频率，密钥尚未验证。',
-      notFound: '地址可达，但服务商不提供模型列表，API Key 尚未验证。',
+      rateLimited: '服务商限制了请求频率，本次模型生成没有完成。',
+      requestRejected:
+        '服务商拒绝了生成请求（HTTP {{status}}）。请检查模型名、协议和完整请求地址。',
+      invalidResponse: '服务商返回成功状态，但响应不符合所选模型协议。',
       status: '服务商返回了 HTTP {{status}}。',
       unreachable:
-        '网关在 10 秒内没有连上服务商。请检查 Base URL，以及网关到服务商之间的网络。',
+        '网关没有连上服务商或请求超时。请检查 Base URL，以及网关到服务商之间的网络。',
+    },
+    dialog: {
+      title: '测试“{{name}}”',
+      description:
+        '先检查已保存配置的连接，再发送一次最小的非流式生成请求测试所选模型。',
+      connection: '上游连接',
+      checkingConnection: '正在检查连接…',
+      exactEndpoint: '完整请求地址没有模型列表可检查，请直接测试模型。',
+      model: '模型',
+      modelPlaceholder: '输入服务商模型名',
+      configuredModel: '可选择已配置的模型，也可以输入其他模型名。',
+      unconfiguredModel: '这个上游未限制模型，请输入服务商支持的模型名。',
+      response: '上游响应（JSON）',
+      run: '运行测试',
     },
   },
   delete: {
@@ -182,7 +201,7 @@ const upstreams = {
     baseUrl: {
       label: 'Base URL',
       description:
-        '照服务商 SDK 文档填写 base_url，网关在后面拼接 /chat/completions、/responses 或 /v1/messages。同一服务商的不同协议地址不同时，请分别添加上游。',
+        '照服务商 SDK 文档填写 base_url，网关在后面拼接 /chat/completions、/responses 或 /v1/messages。同一服务商的不同协议地址不同时，请分别添加上游。地址里可以带查询参数，密钥请写成 {api_key}。',
       preview: '请求将发往',
       missingPath:
         '这个服务商的 base_url 需要带路径，只填域名会请求到错误地址。',
@@ -191,6 +210,18 @@ const upstreams = {
       removeVersion: '去掉 /v1',
       correctPath: '改用 {{url}}',
       useDefault: '使用默认地址',
+    },
+    appendEndpointPath: {
+      label: '拼接协议接口路径',
+      description:
+        '在 Base URL 后拼接所选协议的接口路径。如果 Base URL 已经是完整的请求地址，请关闭此开关。',
+    },
+    keyHeader: {
+      label: '密钥发送方式',
+      authorization: 'Authorization: Bearer',
+      apiKey: 'api-key 请求头（Azure OpenAI）',
+      xApiKey: 'x-api-key 请求头',
+      inUrl: '放在地址里（{api_key}），不发送鉴权请求头',
     },
     authMode: {
       label: 'API Key 由谁提供',

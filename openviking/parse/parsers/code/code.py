@@ -232,6 +232,9 @@ class CodeRepositoryParser(BaseParser):
                 result.meta["repo_ref"] = branch
             if commit:
                 result.meta["repo_commit"] = commit
+            resolved_head_sha = source_meta.get("resolved_head_sha")
+            if resolved_head_sha:
+                result.meta["resolved_head_sha"] = resolved_head_sha
 
             return result
 

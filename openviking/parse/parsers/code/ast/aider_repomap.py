@@ -7,6 +7,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
+from openviking.parse.parsers.code.ast.process_engine import (
+    _configure_tree_sitter_cache_dir,
+)
+
 logger = logging.getLogger(__name__)
 
 _QUERY_DIR = Path(__file__).with_name("queries") / "tree-sitter-language-pack"
@@ -127,6 +131,16 @@ def _query_captures(rel_name: str, content: str):
         raise ValueError(f"missing tags query for language: {lang}")
 
     query_lang = _query_language_name(lang)
+    _configure_tree_sitter_cache_dir()
+    # get_parser() downloads with the GIL held in the native extension, which
+    # would freeze the whole process even inside asyncio.to_thread. prefetch()
+    # performs the same on-demand download without holding the GIL, so run it
+    # first in this worker thread. Do not swallow failures: the caller
+    # (_extract_with_grep_ast) catches and falls back to LLM, and catching here
+    # would make get_parser() retry the same download a second time.
+    from tree_sitter_language_pack import prefetch
+
+    prefetch([query_lang])
     parser = get_parser(query_lang)
     language = get_language(query_lang)
     tree = parser.parse(content.encode("utf-8"))

@@ -225,9 +225,7 @@ class TestOverviewGenerationFlow:
             "openviking.storage.queuefs.semantic_processor.get_openviking_config",
             return_value=config,
         ):
-            await SemanticProcessor(
-                vlm_resolver=_TestVLMResolver(config.vlm)
-            )._generate_overview(
+            await SemanticProcessor(vlm_resolver=_TestVLMResolver(config.vlm))._generate_overview(
                 "viking://resources/example/client",
                 [{"name": "client.go", "summary": description + "\n" + skeleton}],
                 [],
@@ -541,10 +539,55 @@ class TestOutputLanguageOverride:
         )
         assert result == "en"
 
-    def test_override_set_bypasses_detection(self):
-        config = self._make_config(override="en")
-        result = resolve_output_language("これは日本語のテキストです", config=config)
-        assert result == "en"
+    async def test_override_set_bypasses_detection(self, monkeypatch):
+        from openviking.config.binding import manager_over_source
+        from openviking.config.source import MemoryConfigSource
+        from openviking.server.identity import RequestContext, Role
+        from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+        from openviking_cli.session.user_id import UserIdentifier
+        from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
+
+        cluster = OpenVikingConfig.from_dict({"output_language_override": "en"})
+        monkeypatch.setattr("openviking.config.binding.get_openviking_config", lambda: cluster)
+        monkeypatch.setattr(
+            "openviking.storage.queuefs.semantic_processor.get_openviking_config", lambda: cluster
+        )
+        monkeypatch.setattr(
+            "openviking.storage.queuefs.semantic_processor.get_viking_fs", lambda: MagicMock()
+        )
+        manager = manager_over_source(MemoryConfigSource(), base_config=cluster)
+        await manager.patch_account("a", {"output_language_override": "en"})
+        await manager.patch_account("b", {"output_language_override": "zh-CN"})
+        vlm = LanguageAwareMockVLM()
+        processor = SemanticProcessor(
+            vlm_resolver=_TestVLMResolver(vlm), runtime_config_manager=manager
+        )
+        contexts = [
+            RequestContext(user=UserIdentifier(account, "alice"), role=Role.USER)
+            for account in ("a", "b")
+        ]
+        summaries = await asyncio.gather(
+            *[
+                processor._generate_text_summary(
+                    "viking://resources/readme.md",
+                    "readme.md",
+                    asyncio.Semaphore(1),
+                    ctx=ctx,
+                    file_content="这是需要保留的中文文档。".encode(),
+                )
+                for ctx in contexts
+            ]
+        )
+        assert [item["summary"] for item in summaries] == [
+            vlm.language_responses["en"],
+            vlm.language_responses["zh-CN"],
+        ]
+        await manager.patch_account("a", {"output_language_override": ""})
+        await processor._generate_overview(
+            "viking://resources/project", [summaries[1]], [], ctx=contexts[0]
+        )
+        assert "Output Language: zh-CN" in vlm.prompts_received[-1]
+        assert cluster.output_language_override == "en"
 
     def test_override_set_wins_over_fallback(self):
         config = self._make_config(override="zh-CN", fallback="en")
@@ -596,6 +639,40 @@ class TestOutputLanguageOverride:
     )
     def test_windows_timezone_hint_values(self, timezone_value, expected):
         assert _language_from_timezone_value(timezone_value) == expected
+
+    @pytest.mark.parametrize(
+        "timezone_value",
+        [
+            "Europe/Astrakhan",
+            "Europe/Kaliningrad",
+            "Europe/Kirov",
+            "Europe/Moscow",
+            "Europe/Samara",
+            "Europe/Saratov",
+            "Europe/Ulyanovsk",
+            "Europe/Volgograd",
+            "Asia/Anadyr",
+            "Asia/Barnaul",
+            "Asia/Chita",
+            "Asia/Irkutsk",
+            "Asia/Kamchatka",
+            "Asia/Khandyga",
+            "Asia/Krasnoyarsk",
+            "Asia/Magadan",
+            "Asia/Novokuznetsk",
+            "Asia/Novosibirsk",
+            "Asia/Omsk",
+            "Asia/Sakhalin",
+            "Asia/Srednekolymsk",
+            "Asia/Tomsk",
+            "Asia/Ust-Nera",
+            "Asia/Vladivostok",
+            "Asia/Yakutsk",
+            "Asia/Yekaterinburg",
+        ],
+    )
+    def test_every_russian_timezone_hints_russian(self, timezone_value):
+        assert _language_from_timezone_value(timezone_value) == "ru"
 
     def test_timezone_hint_overrides_english_locale_for_weak_fallback(self):
         with patch.dict(

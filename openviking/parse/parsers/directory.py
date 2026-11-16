@@ -257,6 +257,11 @@ class DirectoryParser(BaseParser):
 
             file_jobs: List[Dict[str, Any]] = []
             understanding_jobs: List[Dict[str, Any]] = []
+            account_options = (
+                {"parser_api_config": kwargs["parser_api_config"]}
+                if kwargs.get("parser_api_config") is not None
+                else {}
+            )
             for index, cf in enumerate(processable_files):
                 entry = entry_map.get(cf.path)
                 remote = entry is not None and entry.kind == "url"
@@ -307,13 +312,17 @@ class DirectoryParser(BaseParser):
                     ),
                 }
                 if use_understanding:
-                    parse_options = {"parser_backend": ParserBackend.UNDERSTANDING}
+                    parse_options = {
+                        "parser_backend": ParserBackend.UNDERSTANDING,
+                        **account_options,
+                    }
                     if remote:
                         parse_options.update(
                             _source=entry.url,
                             resource_name=cf.path.name,
                             feishu_access_token=kwargs.get("feishu_access_token"),
                             feishu_config=kwargs.get("feishu_config"),
+                            _feishu_resolved_type=entry.doc_type,
                         )
                         if kwargs.get("lark_file"):
                             parse_options["lark_file"] = kwargs["lark_file"]
@@ -416,6 +425,7 @@ class DirectoryParser(BaseParser):
                             "ok": False,
                             "meta": error_meta if isinstance(error_meta, dict) else {},
                             "error": str(error),
+                            "error_code": str(getattr(error, "code", "")),
                         }
                     else:
                         try:
@@ -442,6 +452,7 @@ class DirectoryParser(BaseParser):
                                 "ok": False,
                                 "meta": getattr(sub_result, "meta", {}) or {},
                                 "error": str(exc),
+                                "error_code": str(getattr(exc, "code", "")),
                             }
                 elif job["native_parser_unavailable"]:
                     error = (
@@ -472,6 +483,8 @@ class DirectoryParser(BaseParser):
                         preserve_structure=preserve_structure,
                         import_root=str(source_path),
                         split_content=split_content,
+                        # Nested archives parse their members through a new DirectoryParser.
+                        parse_options=account_options,
                     )
 
                 file_entry = self._file_status_entry(cf, parser_name, detail)
@@ -686,16 +699,17 @@ class DirectoryParser(BaseParser):
                 pass
             display_path = display_path.replace("\\", "/")
 
-            normalized.append(
-                {
-                    "path": display_path,
-                    "parser": "feishu",
-                    "status": "failed",
-                    "type": str(item.get("type") or ""),
-                    "token": str(item.get("token") or ""),
-                    "reason": str(item.get("reason") or "unknown error"),
-                }
-            )
+            entry = {
+                "path": display_path,
+                "parser": "feishu",
+                "status": "failed",
+                "type": str(item.get("type") or ""),
+                "token": str(item.get("token") or ""),
+                "reason": str(item.get("reason") or "unknown error"),
+            }
+            if item.get("error_code"):
+                entry["error_code"] = str(item["error_code"])
+            normalized.append(entry)
         return normalized
 
     @staticmethod
@@ -747,6 +761,8 @@ class DirectoryParser(BaseParser):
                     entry[key] = meta[key]
         if detail.get("error"):
             entry["error"] = str(detail["error"])
+            if detail.get("error_code"):
+                entry["error_code"] = detail["error_code"]
         return entry
 
     @staticmethod
@@ -893,7 +909,7 @@ class DirectoryParser(BaseParser):
         if preserve_structure:
             parent = str(PurePosixPath(classified_file.rel_path).parent)
             dest = (
-                    _normalize_output_target(f"{target_uri}/{parent}", target_writer)
+                _normalize_output_target(f"{target_uri}/{parent}", target_writer)
                 if parent != "."
                 else target_uri
             )
@@ -955,6 +971,7 @@ class DirectoryParser(BaseParser):
         preserve_structure: bool = True,
         import_root: Optional[str] = None,
         split_content: bool = True,
+        parse_options: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Process one file into the VikingFS directory temp.
 
@@ -982,6 +999,7 @@ class DirectoryParser(BaseParser):
                     preserve_structure=preserve_structure,
                     import_root=import_root,
                     split_content=split_content,
+                    parse_options=parse_options,
                     output_store=output_store,
                 )
                 await DirectoryParser._merge_parser_result(
@@ -1005,14 +1023,13 @@ class DirectoryParser(BaseParser):
                     "ok": False,
                     "meta": meta if isinstance(meta, dict) else {},
                     "error": str(exc),
+                    "error_code": str(getattr(exc, "code", "")),
                 }
         else:
             try:
                 content = detect_and_convert_encoding(src_file.read_bytes(), src_file)
                 if preserve_structure:
-                    dst_uri = _normalize_output_target(
-                        f"{target_uri}/{rel_path}", target_writer
-                    )
+                    dst_uri = _normalize_output_target(f"{target_uri}/{rel_path}", target_writer)
                 else:
                     dst_uri = _normalize_output_target(
                         f"{target_uri}/{PurePosixPath(rel_path).name}",

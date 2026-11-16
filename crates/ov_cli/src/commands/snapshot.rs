@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
-use crate::SnapshotCmd;
+use crate::cli::SnapshotCmd;
 use crate::client::{HttpClient, SnapshotCommitReq, SnapshotRestoreReq, SnapshotShowResult};
 use crate::error::Result;
 use crate::output::{OutputFormat, output_success};
@@ -35,6 +35,8 @@ pub async fn dispatch(
         }
         SnapshotCmd::Restore {
             project_dir,
+            file,
+            current_commit_id,
             source_commit,
             branch,
             dry_run,
@@ -42,14 +44,22 @@ pub async fn dispatch(
             author_name,
             author_email,
         } => {
-            let req = SnapshotRestoreReq {
-                project_dir,
-                source_commit,
-                branch,
-                dry_run,
-                message,
-                author_name,
-                author_email,
+            let req = match file {
+                Some(path) => SnapshotRestoreReq::File {
+                    path,
+                    restore_commit_id: source_commit,
+                    current_commit_id,
+                    dry_run,
+                },
+                None => SnapshotRestoreReq::Tree {
+                    project_dir,
+                    source_commit,
+                    branch,
+                    dry_run,
+                    message,
+                    author_name,
+                    author_email,
+                },
             };
             let value = client.snapshot_restore(&req).await?;
             print_restore(&value, output_format, compact);
@@ -83,6 +93,19 @@ pub async fn dispatch(
                 .snapshot_diff(&path, from_ref.as_deref(), &to_ref)
                 .await?;
             print_diff(&value, output_format, compact);
+            Ok(())
+        }
+        SnapshotCmd::DiffPaths {
+            paths,
+            from_ref,
+            to_ref,
+            offset,
+            limit,
+        } => {
+            let value = client
+                .snapshot_diff_paths(&paths, from_ref.as_deref(), &to_ref, offset, limit)
+                .await?;
+            output_success(&value, output_format, compact);
             Ok(())
         }
         SnapshotCmd::IgnoreGet => {

@@ -24,6 +24,11 @@ export const SHARED_DIR = join(ROOT, "examples", "memory-plugin-shared", "lib");
 // its copies at pack time, so committing them would only tax every review diff.
 export const TARGETS = [
   {
+    root: join(ROOT, "examples", "magpie-memory-plugin"),
+    dir: join(ROOT, "examples", "magpie-memory-plugin", "shared"),
+    committed: false,
+  },
+  {
     root: join(ROOT, "examples", "claude-code-memory-plugin"),
     dir: join(ROOT, "examples", "claude-code-memory-plugin", "scripts", "shared"),
     committed: true,
@@ -103,6 +108,16 @@ export const SKILL_TARGETS = [
   },
   {
     skill: "openviking-memory",
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "codebuddy", "skills"),
+    committed: true,
+  },
+  {
+    skill: "openviking-memory",
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "qoder", "skills"),
+    committed: true,
+  },
+  {
+    skill: "openviking-memory",
     dir: join(ROOT, "examples", "dsh-memory-plugin", "skills"),
     committed: true,
   },
@@ -132,6 +147,16 @@ export const SKILL_TARGETS = [
   {
     skill: "openviking-skills",
     dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "cursor", "skills"),
+    committed: true,
+  },
+  {
+    skill: "openviking-skills",
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "codebuddy", "skills"),
+    committed: true,
+  },
+  {
+    skill: "openviking-skills",
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "qoder", "skills"),
     committed: true,
   },
   {
@@ -185,6 +210,16 @@ export const SKILL_TARGETS = [
   },
   {
     skill: "ov-experience-memory",
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "codebuddy", "skills"),
+    committed: true,
+  },
+  {
+    skill: "ov-experience-memory",
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "qoder", "skills"),
+    committed: true,
+  },
+  {
+    skill: "ov-experience-memory",
     dir: join(ROOT, "examples", "dsh-memory-plugin", "skills"),
     committed: true,
   },
@@ -198,6 +233,24 @@ export const SKILL_TARGETS = [
     dir: join(ROOT, "examples", "opencode-plugin", "skills"),
     committed: true,
   },
+  // MCP hosts discover rule_search dynamically. OpenClaw exposes ov_rule_search
+  // through its REST client. Ship the workflow wherever the host bundles skills.
+  ...[
+    ["examples", "claude-code-memory-plugin", "skills"],
+    ["examples", "codex-memory-plugin", "skills"],
+    ["examples", "agent-hook-plugin", "hosts", "cursor", "skills"],
+    ["examples", "agent-hook-plugin", "hosts", "codebuddy", "skills"],
+    ["examples", "agent-hook-plugin", "hosts", "qoder", "skills"],
+    ["examples", "dsh-memory-plugin", "skills"],
+    ["examples", "pi-coding-agent-extension", "skills"],
+    ["examples", "opencode-plugin", "skills"],
+    ["examples", "openclaw-plugin", "skills"],
+    ["agent-plugins", "skills"],
+  ].map((path) => ({
+    skill: "openviking-rule-search",
+    dir: join(ROOT, ...path),
+    committed: true,
+  })),
 ];
 
 const SOURCE_EXTENSIONS = new Set([".mjs", ".js", ".cjs", ".ts", ".mts"]);

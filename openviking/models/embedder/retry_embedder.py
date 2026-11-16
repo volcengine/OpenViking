@@ -5,7 +5,7 @@
 from typing import Any, Dict
 
 from openviking.models.embedder.base import EmbedderBase, EmbeddingInput, EmbedResult
-from openviking.utils.model_retry import retry_async, retry_sync
+from openviking.utils.model_retry import effective_max_retries, retry_async, retry_sync
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -37,9 +37,10 @@ class RetryEmbedder(EmbedderBase):
     ) -> EmbedResult:
         return retry_sync(
             lambda: self.inner.embed(content, is_query=is_query, **kwargs),
-            max_retries=self.max_retries,
+            max_retries=effective_max_retries(self.max_retries),
             logger=logger,
             operation_name=f"{self.provider} embedding",
+            model_errors_only=True,
         )
 
     async def embed_async(
@@ -50,9 +51,10 @@ class RetryEmbedder(EmbedderBase):
     ) -> EmbedResult:
         return await retry_async(
             lambda: self.inner.embed_async(content, is_query=is_query, **kwargs),
-            max_retries=self.max_retries,
+            max_retries=effective_max_retries(self.max_retries),
             logger=logger,
             operation_name=f"{self.provider} async embedding",
+            model_errors_only=True,
         )
 
     def prepare_embedding_input(self, content: EmbeddingInput) -> EmbeddingInput:

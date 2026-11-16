@@ -18,7 +18,7 @@ risk/
 
 > 以上仅展示目录结构。实际主题和结论由来源与指令决定，文件名概括结论。
 
-Skill 源码：[examples/compile/ov-compile-skills/knowledge-distillation](https://github.com/volcengine/OpenViking/tree/main/examples/compile/ov-compile-skills/knowledge-distillation)
+Skill 源码：[openviking/system_assets/compile/example-skills/knowledge-distillation](https://github.com/volcengine/OpenViking/tree/main/openviking/system_assets/compile/example-skills/knowledge-distillation)
 
 先确认[前置条件](01-overview.md#前置条件)，并在 OpenViking 仓库根目录运行以下命令。来源目录需替换为自己的资料目录。
 
@@ -32,7 +32,7 @@ ov ls -r viking://resources/finance-reports
 ## 第二步：添加 Skill
 
 ```bash
-ov add-skill examples/compile/ov-compile-skills/knowledge-distillation -p viking://agent/skills --wait
+ov add-skill openviking/system_assets/compile/example-skills/knowledge-distillation -p viking://agent/skills --wait
 ov skills list
 # → viking://agent/skills/knowledge-distillation
 ```
@@ -42,21 +42,23 @@ ov skills list
 在 `--instruction` 里说清**分析问题、对比维度、基线和范围**——这直接决定蒸馏的方向：
 
 ```bash
-ov compile \
+ov compile create --compile-name finance-insights \
   --from viking://resources/finance-reports \
   --to viking://resources/finance-insights \
   --skill viking://agent/skills/knowledge-distillation \
   --instruction "对比近三年财报，找到营收质量、盈利能力和风险的变化及驱动因素"
+ov compile --compile-name finance-insights
 ```
 
 `--from` 可以传多个来源，用于跨知识库对比：
 
 ```bash
-ov compile \
+ov compile create --compile-name finance-comparison \
   --from viking://resources/finance-2024,viking://resources/finance-2025 \
   --to viking://resources/finance-insights \
   --skill viking://agent/skills/knowledge-distillation \
   --instruction "对比两个年度知识库，找出关键指标的变化与结构性差异"
+ov compile --compile-name finance-comparison
 ```
 
 命令会立刻返回 `task_id`：

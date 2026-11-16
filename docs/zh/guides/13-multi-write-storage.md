@@ -14,6 +14,7 @@ V2 多写在 primary 成功后返回，metadata 和 backup 在后台异步更新
       "backups": {
         "initial_partitions": 16,
         "checkpoint_interval_secs": 86400,
+        "reconcile_existing_data": false,
         "provider": "filesystem",
         "items": [
           {
@@ -30,12 +31,13 @@ V2 多写在 primary 成功后返回，metadata 和 backup 在后台异步更新
 }
 ```
 
-V2 的三个顶层配置是：
+V2 的顶层配置是：
 
 | 字段 | 默认值 | 含义 |
 | --- | --- | --- |
 | `initial_partitions` | `16` | 为 account 创建的 metadata partition 数量 |
 | `checkpoint_interval_secs` | `86400` | Checkpoint 扫描间隔，最小值为 `60` |
+| `reconcile_existing_data` | `false` | 扫描 primary 已存在文件并写入 V2 metadata |
 | `provider` | `"filesystem"` | Metadata segment provider：`filesystem` 或 `cache` |
 
 每个 `items[]` 需要 `name`、`backend` 和 backend 专用 `params`。
@@ -66,11 +68,30 @@ redirects 字段，输出 warning 后会在调用 Rust 前删除，字段不生�
 
 ## 首次启用与回滚
 
-`.multiwrite.json` 不存在时，mount 先启用前台 V2 事件提交，再在后台导入
-primary 当前文件。导入不会删除 backup 中多余的旧文件。
+`.multiwrite.json` 不存在时，mount 先启用前台 V2 事件提交，并初始化 V2
+metadata。若 `reconcile_existing_data=true`，启动流程还会扫描 primary 当前文件
+并写入 V2 metadata。该流程不会删除 backup 中多余的旧文件。
+
+默认 `reconcile_existing_data=false` 时，primary 上启用前已存在的文件不会作为
+V2 write event 记录。只有在 backup 已与 primary 对齐，或明确跳过历史回填时
+才保持默认值。
 
 旧多写协议和旧迁移字段直接拒绝。启用多写前必须创建完整备份；回滚二进制
 前必须先恢复该备份。
+
+## Backup 配置变更
+
+当配置中的 backup 名称集合与已持久化的 `backend_states` 不一致时，启动流程
+会重置 V2 multi-write metadata，并对 primary 当前文件重新执行 full import。该
+路径覆盖新增、删除和更名 backup。
+
+配置变更期间会重新扫描 primary 当前文件，并驱动 backup catch-up。该过程会带来
+额外 I/O，前台 IOPS 可能升高。建议在维护窗口内执行，且切换期间不进行业务写入。
+
+reset + full import 只枚举 primary 当前仍存在的文件，不会保留旧 segment 中的
+删除或移动历史。若保留的 backup 已经存在 primary 中不再存在的旧文件，切换后这些
+旧文件可能继续残留在 backup 侧。若切换期间同时发生写入、删除或移动操作，backup
+侧也可能产生少量脏数据，主要表现为旧路径或旧版本文件残留。
 
 ## 验证
 

@@ -226,6 +226,54 @@ setting only after switching to a remote vectordb backend such as VikingDB.
 For deployment, Studio management, backups and troubleshooting, see
 [OpenViking Gateway deployment and operations](https://docs.openviking.ai/en/guides/22-gateway-operations).
 
+## Standalone OpenViking Gateway
+
+Use `deploy/helm/openviking-gateway` when the gateway needs independent replicas,
+rollouts and a Service. The `openviking` chart's `gateway.enabled` runs inside the
+OpenViking Server and follows its single-replica lifecycle; it is still the
+simplest choice when you operate both together.
+
+The standalone chart targets unreleased gateway features: until `appVersion`
+names a published release, `image.tag` is required and must name a compatible build.
+To release the chart, set `appVersion` to the release without the `v` and bump `version`,
+then run `PYTHONPATH=. python scripts/gateway_chart_check.py` and the gateway kind suite
+(`tests/gateway/e2e`) against that release image.
+
+```bash
+helm upgrade --install gateway ./deploy/helm/openviking-gateway \
+  --set-string image.tag='<gateway-image-tag>' \
+  --set-string config.openviking_url=https://ov.example.com
+```
+
+By default this creates a single SQLite replica, PVC, and ClusterIP Service on
+port 80, forwarding to 1935. `config` renders a JSON `gateway.conf`; `host`, `port`
+and `storage_path` are fixed by the chart. The OpenViking endpoint must use API-key
+authentication. A default StorageClass is sufficient, or select one with
+`persistence.storageClass` or use `persistence.existingClaim`.
+
+Set both `config.storage.kernel` and `config.storage.management` to `redis`, and
+set `config.storage.redis` (endpoints, `password_env: OPENVIKING_GATEWAY_REDIS_PASSWORD`),
+before increasing `replicaCount`. Redis deployments use RollingUpdate and do
+not create a PVC; multiple replicas get a PDB. SQLite uses Recreate and rejects
+multiple replicas. Disabling persistence uses emptyDir and loses SQLite state
+when the Pod is replaced. PVCs are retained after uninstall.
+
+Use `existingSecret` entries `management-key`, `redis-password` and `root-key`
+for the management credential, Redis password and encryption root key. Local
+and KMS encryption require a pre-generated root key, shared read-only by all
+replicas. Other credentials use `$VAR` references in `config` and `extraEnv`
+with `secretKeyRef`. External Secret changes require a Deployment restart.
+
+The chart provides no Ingress. Its Service and Deployment share a name; use
+`fullnameOverride` to pin it. The stable selectors are `app.kubernetes.io/name`
+and `app.kubernetes.io/instance`. `service.type`, `service.loadBalancerSourceRanges`,
+and optional `networkPolicy.ingressFrom` support external routing. All probes
+use `/health`; startup allows 300 seconds, preStop sleeps 15 seconds, and the
+default termination grace is 660 seconds.
+
+For Redis settings, encryption key creation, a complete multi-replica values
+example, shutdown timing and operations, see the [gateway operations guide](../../docs/en/guides/22-gateway-operations.md#helm).
+
 ## Configuration
 
 | Parameter | Description | Default |

@@ -12,10 +12,12 @@ import yaml
 
 from openviking.core.namespace import user_space_fragment
 from openviking.prompts.manager import PromptManager
+from openviking.session.memory.constants import RETIRED_MEMORY_TYPES
 from openviking.session.memory.dataclass import MemoryField, MemoryTypeSchema
 from openviking.session.memory.merge_op import MergeOp
 from openviking.session.memory.merge_op.base import FieldType
 from openviking.session.memory.utils.template_utils import TemplateUtils
+from openviking.system_assets import builtin_memory_templates_dir
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -23,7 +25,10 @@ logger = get_logger(__name__)
 
 def resolve_memory_templates_dir() -> Path:
     """Resolve the memory templates directory from PromptManager semantics."""
-    return PromptManager._resolve_templates_dir(None) / "memory"
+    templates_dir = PromptManager._resolve_templates_dir(None)
+    if templates_dir == PromptManager._get_bundled_templates_dir():
+        return builtin_memory_templates_dir()
+    return templates_dir / "memory"
 
 
 class MemoryTypeRegistry:
@@ -46,7 +51,7 @@ class MemoryTypeRegistry:
 
         from openviking_cli.utils.config import get_openviking_config
 
-        memory_templates_dir = str(PromptManager._get_bundled_templates_dir() / "memory")
+        memory_templates_dir = str(builtin_memory_templates_dir())
         config = get_openviking_config()
         custom_dir = config.memory.custom_templates_dir
 
@@ -81,15 +86,19 @@ class MemoryTypeRegistry:
                 )
         else:
             memory_templates_dir = str(resolve_memory_templates_dir())
-            if memory_templates_dir != str(
-                PromptManager._get_bundled_templates_dir() / "memory"
-            ) and os.path.exists(memory_templates_dir):
+            if memory_templates_dir != str(builtin_memory_templates_dir()) and os.path.exists(
+                memory_templates_dir
+            ):
                 loaded = self.load_from_directory(memory_templates_dir, replace=True)
                 logger.info(
                     "Loaded %s memory schemas from configured prompt templates: %s",
                     loaded,
                     memory_templates_dir,
                 )
+
+        # Deployment overrides must not revive the retired automatic agent memories.
+        for name in RETIRED_MEMORY_TYPES:
+            self._types.pop(name, None)
 
     def register(self, memory_type: MemoryTypeSchema) -> None:
         """Register a memory type. Raises error if already exists."""
@@ -201,6 +210,7 @@ class MemoryTypeRegistry:
                 description=field_data.get("description", ""),
                 merge_op=MergeOp(field_data.get("merge_op", "patch")),
                 init_value=field_data.get("init_value"),
+                required=field_data.get("required", True),
             )
             fields.append(field)
 
@@ -309,7 +319,10 @@ class MemoryTypeRegistry:
 
             # Write the file
             try:
-                await viking_fs.write_file(file_uri, full_content, ctx=ctx)
+                from openviking.observability.reporting.facts import bind_memory_type
+
+                with bind_memory_type(schema.memory_type):
+                    await viking_fs.write_file(file_uri, full_content, ctx=ctx)
                 logger.info(f"[MemoryTypeRegistry] Initialized memory file: {file_uri}")
             except Exception:
                 pass

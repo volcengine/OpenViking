@@ -56,7 +56,7 @@ def test_all_task_types_accepted(task_type):
     from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
 
     e = GeminiDenseEmbedder(
-        "gemini-embedding-2-preview",
+        "gemini-embedding-2",
         api_key=GOOGLE_API_KEY,
         task_type=task_type,
         dimension=768,
@@ -71,7 +71,7 @@ def test_config_nonsymmetric_routing():
 
     cfg = EmbeddingConfig(
         dense=EmbeddingModelConfig(
-            model="gemini-embedding-2-preview",
+            model="gemini-embedding-2",
             provider="gemini",
             api_key=GOOGLE_API_KEY,
             dimension=768,
@@ -91,7 +91,7 @@ def test_invalid_api_key_error_message():
     from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
 
     _fake_key = "INVALID_KEY_" + "XYZZY_123"
-    bad = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key=_fake_key)
+    bad = GeminiDenseEmbedder("gemini-embedding-2", api_key=_fake_key)
     with pytest.raises(RuntimeError, match="Invalid API key"):
         bad.embed("hello")
 

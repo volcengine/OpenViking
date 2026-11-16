@@ -1,6 +1,7 @@
 """Native wire contracts: hidden calls, exact replay and one visible stream."""
 
 import copy
+from types import SimpleNamespace
 
 import orjson
 import pytest
@@ -8,9 +9,106 @@ from aiohttp import web
 from test_app import enable_tools
 
 from openviking_gateway.protocols import SSEDecoder
-from openviking_gateway.tool_protocols.common import sse
+from openviking_gateway.tool_loop import HiddenToolLoop
+from openviking_gateway.tool_protocols import ResponseCapture
+from openviking_gateway.tool_protocols.common import ToolLoopError, ToolRound, sse
+from openviking_gateway.tool_protocols.responses import ResponsesProtocol, response_error_code
 
 PATHS = {"responses": "/v1/responses", "anthropic": "/v1/messages"}
+
+
+@pytest.mark.parametrize(
+    ("detail", "expected"),
+    [
+        ({"code": "invalid_prompt"}, "invalid_prompt"),
+        ({"code": "upstream_rate_limit"}, "rate_limit_exceeded"),
+        ({"type": "rate_limit_error"}, "rate_limit_exceeded"),
+        ({"code": "provider_capacity"}, "server_error"),
+    ],
+)
+def test_responses_upstream_error_code_is_schema_compatible(detail, expected):
+    assert response_error_code(detail) == expected
+
+
+def test_responses_stream_uses_closed_items_when_terminal_output_is_empty():
+    protocol = ResponsesProtocol({"stream": True})
+    protocol.begin()
+    items = [
+        {
+            "type": "reasoning",
+            "id": "rs_1",
+            "summary": [],
+            "encrypted_content": "opaque-signature",
+        },
+        {
+            "type": "message",
+            "id": "msg_1",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "Found blue", "annotations": []}],
+        },
+        {
+            "type": "function_call",
+            "id": "fc_1",
+            "call_id": "call_1",
+            "name": "lookup",
+            "arguments": '{"query":"blue"}',
+            "status": "completed",
+        },
+    ]
+
+    for index, item in enumerate(items):
+        initial = copy.deepcopy(item)
+        if item["type"] == "message":
+            initial["content"] = []
+        if item["type"] == "function_call":
+            initial["arguments"] = ""
+        protocol.accumulate(
+            {"type": "response.output_item.added", "output_index": index, "item": initial}
+        )
+        protocol.accumulate(
+            {"type": "response.output_item.done", "output_index": index, "item": item}
+        )
+
+    protocol.accumulate(
+        {
+            "type": "response.completed",
+            "response": {"status": "completed", "output": [], "usage": {"input_tokens": 10}},
+        }
+    )
+
+    result = protocol.end()
+
+    assert result.output == items
+    assert result.calls == [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "lookup", "arguments": '{"query":"blue"}'},
+        }
+    ]
+    assert result.usage == {"input_tokens": 10}
+
+
+@pytest.mark.parametrize(("index", "closed"), [(0, False), (1, True)])
+def test_responses_stream_still_rejects_incomplete_or_gapped_sparse_output(index, closed):
+    protocol = ResponsesProtocol({"stream": True})
+    protocol.begin()
+    item = {"type": "message", "id": "msg_1", "role": "assistant", "content": []}
+    protocol.accumulate({"type": "response.output_item.added", "output_index": index, "item": item})
+    if closed:
+        protocol.accumulate(
+            {"type": "response.output_item.done", "output_index": index, "item": item}
+        )
+    protocol.accumulate(
+        {
+            "type": "response.completed",
+            "response": {"status": "completed", "output": [], "usage": {}},
+        }
+    )
+
+    with pytest.raises(ToolLoopError, match="Responses output items are missing"):
+        protocol.end()
 
 
 def native_response(protocol, number, *, owned=False, mixed=False, custom=False):
@@ -612,7 +710,16 @@ async def test_native_stream_failure_uses_protocol_terminal(running_gateway, pro
         if failure == "truncated":
             events.pop()
         elif failure == "error":
-            events[-1] = {"type": "error", "error": {"message": "upstream failure"}}
+            events[-1] = {
+                "type": "error",
+                "error": {
+                    "type": "upstream_overloaded",
+                    "code": "upstream_rate_limit",
+                    "message": "upstream failure",
+                    "request_id": "private-request-id",
+                },
+                "provider_metadata": {"endpoint": "http://internal.example"},
+            }
         elif failure == "incomplete_call" and protocol == "responses":
             events[-1]["type"] = "response.incomplete"
             events[-1]["response"]["status"] = "incomplete"
@@ -628,11 +735,26 @@ async def test_native_stream_failure_uses_protocol_terminal(running_gateway, pro
     )
     assert response.status_code == 200
     events = [SSEDecoder.data(f) for f in SSEDecoder().feed(response.content)]
+    if failure == "error" and protocol == "anthropic":
+        assert events[-1]["type"] == "error"
+        assert events[-1]["error"] == {
+            "type": "upstream_overloaded",
+            "code": "upstream_rate_limit",
+            "message": "upstream failure",
+        }
+        return
     if protocol == "responses":
         assert events[-1]["type"] == "response.failed"
         failed = events[-1]["response"]
         assert failed["status"] == "failed"
-        assert failed["error"]["code"] == "server_error"
+        if failure == "error":
+            assert failed["error"] == {
+                "code": "rate_limit_exceeded",
+                "message": "upstream failure",
+            }
+        else:
+            assert failed["error"]["code"] == "server_error"
+            assert failed["error"]["message"]
         assert failed["id"] == events[0]["response"]["id"]
         assert [e["sequence_number"] for e in events] == list(range(len(events)))
         assert not any(item["type"] == "function_call" for item in failed["output"])
@@ -674,6 +796,27 @@ async def test_responses_custom_tool_mixed_handoff(running_gateway, streaming):
     assert value["output"][-1]["type"] == "custom_tool_call"
     assert value["output"][-1]["input"] == "pwd"
     assert "openviking_search" not in response.text
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_responses_relays_null_tools(running_gateway, streaming):
+    app, client, admin, key, _, _ = running_gateway
+    await enable_tools(client, admin)
+
+    async def backend(request):
+        if request.path != "/v1/responses":
+            return None
+        value = {**native_response("responses", 1), "tools": None}
+        return await wire_response(request, "responses", value, streaming)
+
+    app.state.test_backend["handler"] = backend
+    response = await client.post(
+        "/v1/responses",
+        headers={"Authorization": "Bearer " + key["key"]},
+        json=request_body("responses", streaming),
+    )
+    assert response.status_code == 200, response.text
+    assert visible_response("responses", response, streaming)["tools"] is None
 
 
 @pytest.mark.parametrize("protocol", ["responses", "anthropic"])
@@ -807,6 +950,148 @@ async def test_native_text_streams_before_round_finishes_and_cancel_closes(proto
 
 
 @pytest.mark.parametrize("protocol", ["responses", "anthropic"])
+async def test_native_events_arriving_together_leave_together(protocol):
+    """One write per upstream chunk, the same bytes as event by event, failures included."""
+    from types import SimpleNamespace
+
+    from openviking_gateway.tool_loop import HiddenToolLoop, ToolLoopError
+    from openviking_gateway.tool_protocols import ResponseCapture
+
+    events = native_events(protocol, native_response(protocol, 1, owned=True))[:-3]
+    error = {"type": "error", "error": {"type": "overloaded_error"}}
+
+    async def relay(chunks):
+        class Content:
+            async def iter_any(self):
+                for chunk in chunks:
+                    yield chunk
+
+        response = SimpleNamespace(
+            status=200,
+            headers={"content-type": "text/event-stream"},
+            content=Content(),
+            close=lambda: None,
+        )
+        prepared = SimpleNamespace(
+            body=request_body(protocol, True),
+            protocol=protocol,
+            root={"policy": {}},
+            metrics={},
+            tools_active=True,
+            reply_lead="",
+        )
+        loop = HiddenToolLoop(
+            prepared,
+            SimpleNamespace(allowed={"openviking_search"}),
+            None,
+            ResponseCapture(protocol),
+        )
+        loop.adapter.identifier = "fixed"
+        writes = []
+        with pytest.raises(ToolLoopError, match="Model stream failed") as caught:
+            async for write in loop.run(response, None):
+                writes.append(write)
+        writes.append(loop.error(caught.value))
+        return writes
+
+    one_by_one = await relay([sse(event) for event in [*events, error]])
+    together = await relay([b"".join(sse(event) for event in [*events, error])])
+    assert len(together) == 2 < len(one_by_one)
+    assert b"".join(together) == b"".join(one_by_one)
+    terminal = SSEDecoder.data(SSEDecoder().feed(together[-1])[0])
+    if protocol == "responses":
+        assert terminal["type"] == "response.failed"
+        assert terminal["response"]["error"] == {
+            "code": "server_error",
+            "message": "Model stream failed",
+        }
+    else:
+        assert terminal["error"] == {
+            "type": "overloaded_error",
+            "message": "Model stream failed",
+        }
+
+
+@pytest.mark.parametrize("protocol", ["chat", "responses", "anthropic"])
+def test_upstream_stream_error_uses_protocol_terminator(protocol):
+    from types import SimpleNamespace
+
+    prepared = SimpleNamespace(
+        body=request_body(protocol, True),
+        protocol=protocol,
+        root={"policy": {}},
+        metrics={},
+        tools_active=True,
+        reply_lead="",
+    )
+    loop = HiddenToolLoop(
+        prepared,
+        SimpleNamespace(allowed={"openviking_search"}),
+        None,
+        ResponseCapture(protocol),
+    )
+    upstream = {
+        "type": "error",
+        "error": {
+            "type": "upstream_overloaded",
+            "code": "upstream_rate_limit",
+            "message": "request to http://internal.example failed",
+            "request_id": "private-request-id",
+        },
+        "provider_metadata": {"region": "private-region"},
+    }
+    loop.adapter.begin()
+    with pytest.raises(ToolLoopError, match="Model stream failed") as caught:
+        list(loop.decode(SSEDecoder(), sse(upstream)))
+
+    wire = loop.error(caught.value)
+    values = [
+        SSEDecoder.data(frame)
+        for frame in SSEDecoder().feed(wire)
+        if b"[DONE]" not in frame
+    ]
+    expected = {
+        "type": "error",
+        "error": {
+            "type": "upstream_overloaded",
+            "code": "upstream_rate_limit",
+            "message": "request to http://internal.example failed",
+        },
+    }
+    if protocol == "responses":
+        expected = {
+            "type": "response.failed",
+            "response": {
+                "id": loop.adapter.identifier,
+                "object": "response",
+                "model": "model",
+                "status": "failed",
+                "error": {
+                    "code": "rate_limit_exceeded",
+                    "message": "request to http://internal.example failed",
+                },
+                "incomplete_details": None,
+                "output": [],
+            },
+            "sequence_number": 0,
+        }
+    assert values == [expected]
+    assert wire.endswith(b"data: [DONE]\n\n") == (protocol == "chat")
+
+
+def test_streamed_text_append_keeps_the_text_on_a_bad_delta():
+    from openviking_gateway.tool_protocols.common import append
+
+    block = {"type": "text", "text": None}
+    for piece in ("ab", "c", "d"):
+        append(block, "text", piece)
+    assert block == {"type": "text", "text": "abcd"}
+    with pytest.raises(TypeError):
+        append(block, "text", None)
+    assert block == {"type": "text", "text": "abcd"}
+
+
+@pytest.mark.parametrize("protocol", ["responses", "anthropic"])
 async def test_native_replay_survives_restart_edits_and_archive_boundary(
     setup_kernel, credential, policy, protocol
 ):
@@ -890,6 +1175,26 @@ def test_custom_responses_tools_are_captured_as_complete_pairs():
             "tool_output": "/work/project",
         }
     ]
+
+
+@pytest.mark.parametrize("protocol", ["chat", "responses", "anthropic"])
+def test_hidden_chain_continues_from_the_chain_before(protocol):
+    """A reply's anchors continue the request's chain: hashing only the reply gives the same."""
+    from openviking_gateway.tool_protocols import hidden_chain
+
+    messages = [
+        {"role": "system", "content": "Be brief."},
+        {"role": "user", "content": [{"type": "text", "text": "héllo 🙂", "cache_control": {}}]},
+        {"role": "assistant", "content": [{"type": "thinking", "thinking": "hm"}]},
+        {"role": "assistant", "content": "Hi", "reasoning_content": "hm"},
+        {"role": "user", "content": "<context>docs</context><user_query> why? </user_query>"},
+        {"type": "function_call", "call_id": "c-1", "name": "f", "arguments": "{}"},
+    ]
+    chain = hidden_chain(messages, protocol)
+    assert chain[0] == chain[2] == "" and all(chain[3:])
+    for index in range(len(messages) + 1):
+        head = hidden_chain(messages[:index], protocol)
+        assert [*head, *hidden_chain(messages[index:], protocol, head)] == chain
 
 
 @pytest.mark.parametrize("archive", [False, True])
@@ -1310,3 +1615,31 @@ async def test_admin_disabling_anthropic_tools_preserves_history_and_logs(
     else:
         assert not logs[0].get("degradation")
         assert requests[-1]["messages"] == [requests[0]["messages"][0], *body["messages"][1:]]
+
+
+async def test_tool_loop_logs_rounds_read_one_by_one(setup_kernel, credential, policy):
+    """Rounds in different usage forms still add up, and nulls never break the sum."""
+    kernel, store, _, _ = setup_kernel
+    policy.update(gateway_tools=True, recall=False)
+    prepared = await kernel.prepare(
+        request_body("chat", False), "chat", {}, credential, {"id": "u"}, policy
+    )
+    loop = HiddenToolLoop(
+        prepared, SimpleNamespace(allowed={"openviking_search"}), store, ResponseCapture("chat")
+    )
+    usages = [
+        {"prompt_tokens": 1000, "prompt_cache_hit_tokens": 800, "prompt_tokens_details": None},
+        {"prompt_tokens": 1100, "prompt_tokens_details": {"cached_tokens": 900}},
+    ]
+    for number, usage in enumerate(usages):
+        loop.round = ToolRound([], [], usage, False)
+        loop.observe()
+        loop.rounds = number + 1
+    loop.adapter.begin()
+    loop.adapter.load(native_response("chat", 1))
+    loop.round = loop.adapter.end()
+    await loop.persist()
+    assert loop.capture.usage["input_tokens"] == 2100
+    assert loop.capture.usage["cached_tokens"] == 1700
+    assert prepared.metrics["first_upstream_cached_tokens"] == 800
+    assert prepared.metrics["hidden_upstream_cached_tokens"] == 900

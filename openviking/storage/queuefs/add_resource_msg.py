@@ -22,6 +22,7 @@ class AddResourceMsg:
     user_id: str
     group_ids: list[str] = field(default_factory=list)
     role: str
+    _task_work_id: str = ""
     path: str = ""
     source_path: str = ""
     telemetry_id: Optional[str] = None
@@ -52,6 +53,10 @@ class AddResourceMsg:
     watch_interval: float = 0
     is_active: Optional[bool] = None
     watch_task_id: Optional[str] = None
+    # Transient exact-revision hint resolved by the add_resource git
+    # preflight. Consumed by the accessor to skip a second ls-remote; it is
+    # never persisted into WatchTask processor kwargs.
+    git_head_sha_hint: Optional[str] = None
     skip_watch_management: bool = True
     defer_target_resolution: bool = False
     cleanup_empty_target_on_failure: bool = False
@@ -159,6 +164,7 @@ class AddResourceMsg:
 
         return cls(
             task_id=str(task_id),
+            _task_work_id=str(data.get("_task_work_id") or ""),
             path=str(path or ""),
             source_path=str(data.get("source_path") or path or ""),
             root_uri=str(root_uri),
@@ -210,6 +216,12 @@ class AddResourceMsg:
             watch_task_id=(
                 str(data["watch_task_id"])
                 if isinstance(data.get("watch_task_id"), str) and data["watch_task_id"]
+                else None
+            ),
+            git_head_sha_hint=(
+                str(data["git_head_sha_hint"])
+                if isinstance(data.get("git_head_sha_hint"), str)
+                and data["git_head_sha_hint"].strip()
                 else None
             ),
             skip_watch_management=bool(data.get("skip_watch_management", True)),

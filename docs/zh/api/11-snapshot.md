@@ -1,10 +1,10 @@
 # 版本管理
 
-快照将指定范围内的文件树保存为不可变版本。使用 `commit` 保存、`log` 查看历史、`show` 读取旧版文件、`diff` 对比文件在两个版本间的差异、`restore` 恢复已保存的内容。未提交或被排除的文件不在恢复范围内，ACL 和向量索引也不保存历史版本。
+快照将指定范围内的文件树保存为不可变版本。使用 `commit` 保存、`log` 查看历史、`show` 读取旧版文件、`diff` 对比文件内容、`diff-paths` 列出变化文件、`restore` 恢复已保存的内容。未提交或被排除的文件不在恢复范围内，ACL 和向量索引也不保存历史版本。
 
 快照能力底层由内嵌在 Rust RAGFS 层的 [gitoxide](https://github.com/Byron/gitoxide) 驱动，按 `account_id` 维护一个逻辑 Git 仓库（每个账号一个仓库），使用快照 API 管理版本即可，无需直接修改底层仓库。
 
-五个核心命令：
+核心命令：
 
 | 命令 | 作用 |
 |------|------|
@@ -12,6 +12,7 @@
 | `log` | 从最新提交开始回溯历史 |
 | `show` | 查看某个提交的元数据，或读取该提交中某个文件的内容 |
 | `diff` | 以 unified diff 格式对比某个文件在两个快照中的内容 |
+| `diff-paths` | 分页列出指定目录内发生变化的源文件 |
 | `restore` | 把目录（或整棵账号树）恢复到某个历史快照的状态 |
 
 此外还提供账号级 `.ovgitignore` 排除规则的管理命令（`get`/`set`/`delete`），用于在 `commit` 时按规则排除匹配的文件。详见 [ignore 管理](#ignore-管理)。
@@ -30,7 +31,8 @@
 | 操作 | 权限要求 |
 |------|----------|
 | `show(path=...)` / `diff` / `log` | `read` |
-| `commit` | `write`；目录会递归检查当前全部子节点，任一子节点无权则整次失败 |
+| `diff_paths` | 来源目录和每个变化文件的 `read`；任一子节点无权则整次失败，且不暴露该 URI |
+| `commit` | `read`；目录会递归检查当前全部子节点，任一子节点无权则整次失败 |
 | `restore` 覆盖已有文件 | 文件的 `write` |
 | `restore` 新建文件 | 父目录的 `write` |
 | `restore` 删除文件 | 文件的 `write` |
@@ -119,7 +121,7 @@ ov snapshot commit -m "v1 initial import" --paths viking://resources/my_md.md -o
 }
 ```
 
-`changed` 为本次提交中新增/修改/删除的路径数；`ignored` 为本次被账号 `.ovgitignore` 规则排除的候选路径数（系统内置剪枝不计入）。当工作区相对上一次提交没有任何变化时返回 `noop`，`commit_oid` 为当前 HEAD（`noop` 同样返回 `ignored`，但不含 `changed`）：
+`changed` 为本次提交中新增/修改/删除的路径数；`ignored` 为本次被账号 `.ovgitignore` 规则排除的候选路径数（系统内置剪枝不计入）。分支首次提交即使未选中文件或文件全部被排除，也创建有效快照，返回 `created`、`changed=0`；空目录本身不被记录。当工作区相对上一次提交没有任何变化时返回 `noop`，`commit_oid` 为当前 HEAD（`noop` 同样返回 `ignored`，但不含 `changed`）：
 
 ```json
 {
@@ -147,6 +149,9 @@ ov snapshot commit -m "v1 initial import" --paths viking://resources/my_md.md -o
 | paths | List[str] | 否 | null | 只返回修改了任一指定 `viking://` URI 的提交；USER/ADMIN 必须显式传入。本地 ROOT 模式可省略以查询全局历史。最多接受 32 条路径，每条 account-relative 路径最多包含 64 个层级。HTTP 接口通过重复 `paths` 查询参数传入多个 URI |
 
 过滤发生在限制返回数量之前，因此 `limit=10` 和 `paths=[X]` 表示最多返回 10 条与 X 有关的提交，而不是先取最近 10 条提交再过滤。
+
+当传入 `paths` 时，服务端可使用 `ov.conf` 中的 `git.snapshot.log`
+路径历史索引。该索引从快照提交派生，不改变本 API 的请求或响应格式。
 
 为限制存储开销，过滤请求最多检查 1,000 条提交。如果尚未收集到请求数量的匹配结果，并且仍存在未检查的更早历史，接口将返回 `INVALID_ARGUMENT` 错误，而不是返回不完整的历史列表。非过滤请求不受该扫描预算限制，因为每检查一条提交都会推进返回数量限制。
 
@@ -275,10 +280,14 @@ curl -X GET "http://localhost:1933/api/v1/snapshot/show?target_ref=3f2a1b9c&path
   -H "X-API-Key: your-key"
 ```
 
-不带 `path` 时返回提交元数据 JSON；带 `path` 时返回原始字节流（`Content-Type: application/octet-stream`），并附带两个响应头：
+不带 `path` 时返回提交元数据 JSON；带 `path` 时返回原始字节流（`Content-Type: application/octet-stream`），并附带以下响应头：
 
 - `X-Snapshot-Oid`：blob 对象的 OID
-- `X-Snapshot-Size`：blob 字节数
+- `X-Snapshot-Size`：返回的正文字节数
+- `X-Snapshot-Commit-Oid`：`target_ref` 解析得到的完整 commit OID，与 blob OID 不同
+- `X-Snapshot-Time-Seconds`：该 commit 的 `committer.time_seconds`，整数 Unix 秒时间戳
+
+时间戳表示请求的快照提交时间，不是文件最后修改时间或 run 完成时间。分支和标签只解析一次，确保正文与 commit 响应头对应同一快照。`raw=false` 时也返回 commit 响应头，去除记忆字段仅影响正文及其字节数。
 
 **CLI**
 
@@ -382,6 +391,61 @@ ov snapshot diff viking://resources/my_project/guide.md \
 ```
 
 `change_type` 为 `added`、`deleted`、`modified` 或 `unchanged`。参与对比的单侧文件上限为 10 MiB 和 100,000 行，生成的 diff 上限为 20 MiB；超限时返回 `RESOURCE_EXHAUSTED`，不会返回被截断的 diff。
+
+---
+
+### diff_paths()
+
+列出一个或多个目录在两个快照之间新增、修改和删除的源文件，排除派生摘要 `.abstract.md`、`.overview.md`、`.relations.json`。重叠目录中的同一文件只返回一次，结果按 URI 排序。
+
+| HTTP 参数 | 必填 | 默认值 | 说明 |
+|-----------|------|--------|------|
+| `paths` | 是 | - | 目录 URI 列表；通过重复查询参数传入多个目录 |
+| `from` | 否 | null | 基线快照引用；省略（SDK `from_ref=None`）时与空树比较，目标快照的文件均返回 `added` |
+| `to` | 是 | - | 有效的目标快照引用，不允许为空或 null |
+| `offset` | 否 | 0 | 起始位置，必须为非负整数 |
+| `limit` | 否 | 100 | 每页条数，范围 1–1000 |
+
+**HTTP API**
+
+```http
+GET /api/v1/snapshot/diff-paths?paths={uri1}&paths={uri2}&from={base}&to={head}&offset=0&limit=100
+```
+
+**CLI**
+
+```bash
+ov snapshot diff-paths \
+  --paths viking://resources/research,viking://resources/notes \
+  --from 3f2a1b9c --to 9a0b1c2d --offset 0 --limit 100 -o json
+```
+
+**Python SDK (HTTP)**
+
+```python
+page = client.snapshot.diff_paths(
+    ["viking://resources/research", "viking://resources/notes"],
+    from_ref="3f2a1b9c", to_ref="9a0b1c2d", offset=0, limit=100,
+)
+```
+
+**响应**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "changes": [{"uri": "viking://resources/research/guide.md", "change_type": "modified"}],
+    "offset": 0,
+    "limit": 100,
+    "total": 1,
+    "has_more": false,
+    "next_offset": null
+  }
+}
+```
+
+`change_type` 为 `added`、`modified` 或 `deleted`。`has_more=true` 时，保持目录和快照 ID 不变，以 `next_offset` 查询下一页；最后一页的 `next_offset=null`。分页限制响应大小，底层仍会计算完整变化列表。读取文件内容可使用 [diff()](#diff) 或 [show()](#show)。
 
 ---
 
@@ -522,6 +586,54 @@ ov snapshot restore 3f2a1b9c viking://resources/my_project -m "restore to v1" -o
   }
 }
 ```
+
+---
+
+### 单文件版本恢复
+
+`POST /api/v1/snapshot/restore` 可恢复任意有权限文件路径的历史内容，不要求 Compile 配置或产物归属。该模式接受以下字段，不与 `project_dir`、`source_commit` 混用：
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| path | str | 文件 URI，同时用作历史快照中的读取路径 |
+| restore_commit_id | str | 来源 commit ID，40 位小写十六进制 |
+| current_commit_id | str | 可选。省略时直接恢复；传入时须匹配该文件在 `main` 上最后一次变更的 commit ID，否则返回 `409 CONFLICT`，resource 为 `VERSION_CONFLICT` |
+| dry_run | bool | 可选；仅校验，不修改内容或创建快照 |
+
+```bash
+ov snapshot restore <restore_commit_id> --file viking://resources/wiki/entity/project.md
+ov snapshot restore <restore_commit_id> --file viking://resources/wiki/entity/project.md --current-commit-id <current_commit_id>
+```
+
+`GET /api/v1/snapshot/versions?uri=<文件 URI>&limit=20` 返回原生 Git 历史，从新到旧排列：
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources/wiki/entity/project.md",
+    "versions": [{"oid": "54c71fb7bf134b71a9b7ed604c21f5b412345678", "message": "content write"}],
+    "next_before_snapshot": null
+  }
+}
+```
+
+每项是包含 `oid` 的原生 commit 元信息，不维护额外版本索引、UUID 或版本编号。`limit` 为 1–100，默认 20；将 `next_before_snapshot` 作为 `before_snapshot` 原样传入，从该 commit 之后继续翻页，null 表示结束。历史与 Compile 配置及 run 无关。
+
+```bash
+curl -X POST "http://localhost:1933/api/v1/snapshot/restore" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "viking://resources/wiki/entity/project.md",
+    "restore_commit_id": "0334d9abe4ac4f25a3e59d0b401bb01c12345678",
+    "current_commit_id": "54c71fb7bf134b71a9b7ed604c21f5b412345678"
+  }'
+```
+
+响应包含 `uri`、`snapshot_id` 和 `result`（`created`、`noop` 或 `dry_run`）。内容变化会生成新的 forward snapshot，并执行正常索引维护；内容相同时可返回已有快照和 `noop`。dry run 不写内容、不创建快照。省略 `current_commit_id` 时，dry run 返回的 `snapshot_id` 为 null。
+
+传入 `current_commit_id` 时，恢复前校验文件最新 commit，在内容写锁内再次校验。存在未提交编辑时也返回 `409`；省略 `current_commit_id` 可直接恢复。过期请求返回 `409`，缺失历史或路径返回 `404`。保留 ACL 和索引维护，按同一路径恢复，不自动追踪重命名。文件及目录回滚都不写 Compile state/run；目录回滚已经产生 forward commit，不额外重复提交。
 
 ---
 

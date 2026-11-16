@@ -194,9 +194,13 @@ def test_domain_stats_delta_helper_applies_non_negative_deltas_and_handles_reset
 
     collector.collect(registry)
 
-    counters = dict(registry.iter_counters())
-    series = dict(counters["openviking_test_cumulative_total"])
-    assert series[()] == 18
+    metrics = {
+        m.name: m
+        for r in registry.collect().resource_metrics
+        for s in r.scope_metrics
+        for m in s.metrics
+    }
+    assert metrics["openviking_test_cumulative_total"].data.data_points[0].value == 18
 
 
 def test_service_probe_collector_emits_valid_on_success_and_invalid_on_failure(

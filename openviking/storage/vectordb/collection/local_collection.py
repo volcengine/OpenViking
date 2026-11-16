@@ -54,6 +54,7 @@ from openviking_cli.utils.logger import default_logger as logger
 
 # Use imported constants, no longer defined here
 AUTO_ID_KEY = SpecialFields.AUTO_ID.value
+_RECOVERY_BATCH_SIZE = 1024
 
 
 class _MutationMarker:
@@ -270,29 +271,17 @@ class LocalCollection(ICollection):
     def get_meta_data(self):
         return self.meta.get_meta_data()
 
-    def _close_unlocked(self) -> None:
-        self._delete_scheduler_job()
-
-        # Shutdown scheduler
-        if self.scheduler:
-            self.scheduler.shutdown(wait=False)
-            self.scheduler = None
-
-        self.store_mgr = None
-
-        # Close all indexes
-        def close_index(name, index):
-            try:
-                index.close()
-            except Exception as e:
-                logger.warning(f"Failed to close index {name}: {e}")
-
-        self.indexes.iterate(close_index)
-        self.indexes.clear()
-
     def close(self):
         with self._index_mutation_barrier.exclusive_mutation():
-            self._close_unlocked()
+            self._persist_all_indexes()
+            self._delete_scheduler_job()
+            if self.scheduler:
+                self.scheduler.shutdown(wait=False)
+                self.scheduler = None
+            for name, index in self.indexes.get_all().items():
+                index.close()
+                self.indexes.remove(name)
+            self.store_mgr = None
 
     def begin_bulk_ingest(self) -> None:
         """Defer optional derived-index rebuilds until the outer scope exits."""
@@ -1385,33 +1374,33 @@ class PersistCollection(LocalCollection):
                 "Index '%s': replaying delta records lazily to recover from last persistent snapshot",
                 index_name,
             )
-            upsert_list: List[DeltaRecord] = []
-            delete_list: List[DeltaRecord] = []
+            records: List[DeltaRecord] = []
+            batch_operation = "upsert"
             _processed = 0
             _seen = 0
             _last_log = 0.0
             for data in delta_records:
                 _seen += 1
                 if data.type == OpType.PUT.value:
-                    if delete_list:
-                        _processed += self._replay_recovery_records(
-                            index_name=index_name,
-                            index=index,
-                            records=delete_list,
-                            operation="delete",
-                        )
-                        delete_list = []
-                    upsert_list.append(data)
+                    operation = "upsert"
                 elif data.type == OpType.DEL.value:
-                    if upsert_list:
+                    operation = "delete"
+                else:
+                    operation = None
+                if operation is not None:
+                    # Preserve log order without retaining an entire run of PUTs or DELs.
+                    if records and (
+                        operation != batch_operation or len(records) >= _RECOVERY_BATCH_SIZE
+                    ):
                         _processed += self._replay_recovery_records(
                             index_name=index_name,
                             index=index,
-                            records=upsert_list,
-                            operation="upsert",
+                            records=records,
+                            operation=batch_operation,
                         )
-                        upsert_list = []
-                    delete_list.append(data)
+                        records = []
+                    batch_operation = operation
+                    records.append(data)
                 now = time.time()
                 if now - _last_log >= 5.0 and _seen > 0:
                     logger.info(
@@ -1421,19 +1410,12 @@ class PersistCollection(LocalCollection):
                         index_name,
                     )
                     _last_log = now
-            if upsert_list:
+            if records:
                 _processed += self._replay_recovery_records(
                     index_name=index_name,
                     index=index,
-                    records=upsert_list,
-                    operation="upsert",
-                )
-            if delete_list:
-                _processed += self._replay_recovery_records(
-                    index_name=index_name,
-                    index=index,
-                    records=delete_list,
-                    operation="delete",
+                    records=records,
+                    operation=batch_operation,
                 )
             logger.info("Index '%s': replay complete (%d records)", index_name, _processed)
             index._start_dense_rebuild_worker()
@@ -1486,12 +1468,6 @@ class PersistCollection(LocalCollection):
         Iterates through all indexes. If they are PersistentIndex type, calls their persist() method.
         """
         self.flush_all_indexes()
-
-    def close(self):
-        """Close the collection and release resources."""
-        with self._index_mutation_barrier.exclusive_mutation():
-            self.flush_all_indexes()
-            self._close_unlocked()
 
     def flush_all_indexes(self):
         """Manually trigger persistence of all indexes.

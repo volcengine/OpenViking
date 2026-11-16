@@ -90,6 +90,8 @@ const requests = {
       'Summary of about {{tokens}} tokens written in {{duration}}',
     compactionFailed:
       'Compaction failed ({{reason}}), so the full history was sent',
+    compactionStillOver:
+      'Summary kept, but usage is still at or above Compact at ({{reason}})',
     window: 'Window {{number}}, managed by the model',
     windowReset: 'The model started a new window',
     saving: 'Saving to OpenViking',
@@ -98,6 +100,7 @@ const requests = {
     toolsSkipped: 'Not offered: {{reason}}',
     toolRounds:
       'Rounds: {{rounds}} · extra model calls: {{calls}} · tokens added: about {{tokens}}',
+    contextOverride: 'Sent in X-OpenViking-Context',
     whatHappened: 'What happened',
     whatToDo: 'What to do',
     httpError:

@@ -8,6 +8,7 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role, ToolContext
 from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.page_id_map import PageIdMap
 from openviking.session.memory.tools import (
     MEMORY_TOOLS_REGISTRY,
     MemoryLsTool,
@@ -128,33 +129,38 @@ class TestMemoryTools:
         assert "Delete or replace the oversized source" in guidance
 
     @pytest.mark.asyncio
-    async def test_read_tool_uses_offset_and_limit_for_visible_content(self):
-        class MockPageIdMap:
-            def get_page_id(self, uri):
-                return 42
+    @pytest.mark.parametrize("root", ["viking://~", "viking://user/alice"])
+    async def test_read_tool_uses_offset_and_limit_for_visible_content(self, root):
+        canonical_uri = "viking://user/alice/memories/experiences/test.md"
 
         class MockVikingFS:
             async def read_file(self, uri, ctx=None, **kwargs):
+                assert uri == canonical_uri
                 return (
                     'line1\nline2\nline3\n\n<!-- MEMORY_FIELDS\n{"memory_type": "experiences"}\n-->'
                 )
 
         tool_ctx = ToolContext(
             viking_fs=MockVikingFS(),
-            request_ctx=RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER),
+            request_ctx=RequestContext(
+                user=UserIdentifier(account_id="test-account", user_id="alice"), role=Role.USER
+            ),
             default_search_uris=[],
             read_file_contents={},
-            page_id_map=MockPageIdMap(),
+            page_id_map=PageIdMap(),
         )
 
+        page_id = tool_ctx.page_id_map.get_page_id(canonical_uri)
         result = await MemoryReadTool().execute(
             tool_ctx,
-            uri="viking://user/default/memories/experiences/test.md",
+            uri=f"{root}/memories/experiences/test.md",
             offset=1,
             limit=1,
         )
 
-        assert result["page_id"] == 42
+        assert result["page_id"] == page_id
+        assert set(tool_ctx.read_file_contents) == {canonical_uri}
+        assert tool_ctx.page_id_map.resolve(page_id) == canonical_uri
         assert result["content"] == "2\tline2"
 
     @pytest.mark.asyncio
@@ -253,13 +259,33 @@ class TestMemoryTools:
         assert viking_fs.received_target_uri == tool_ctx.default_search_uris
         assert viking_fs.received_limit == 12
 
-    def test_ls_tool_properties(self):
-        """Test MemoryLsTool properties."""
-        tool = MemoryLsTool()
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("root", ["viking://~", "viking://user/alice"])
+    @pytest.mark.parametrize("recursive", [False, True])
+    async def test_ls_tool_lists_memory_directory(self, root, recursive):
+        canonical_uri = "viking://user/alice/memories"
 
-        assert tool.name == "ls"
-        assert "List directory" in tool.description
-        assert "uri" in tool.parameters["properties"]
+        class MockVikingFS:
+            async def ls(self, uri, **kwargs):
+                assert uri == canonical_uri
+                return [{"name": "entities", "isDir": True}]
+
+            async def glob(self, pattern, *, uri, **kwargs):
+                assert uri == canonical_uri
+                return {
+                    "matches": [{"uri": f"{uri}/entities/person.md", "size": 12, "isDir": False}]
+                }
+
+        tool_ctx = ToolContext(
+            viking_fs=MockVikingFS(),
+            request_ctx=RequestContext(
+                user=UserIdentifier(account_id="test-account", user_id="alice"), role=Role.USER
+            ),
+            default_search_uris=[],
+            read_file_contents={},
+        )
+        result = await MemoryLsTool().execute(tool_ctx, uri=f"{root}/memories", recursive=recursive)
+        assert result == ("entities/person.md 12B" if recursive else "entities/")
 
     def test_to_schema(self):
         """Test tool to_schema method."""

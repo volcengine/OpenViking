@@ -1,0 +1,66 @@
+/*
+ * 插画画布 258 × 140，线稿只占中间约 30–108，上下各留约 30 的网格渐隐。
+ * 负外边距裁掉这段留白，让图文间距和上下内边距按线稿实际边缘计算。
+ */
+.ov-empty {
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  padding: 24px 16px;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+  font-family: var(--ov-ui-font-family, 'PingFang SC', sans-serif);
+  text-align: center;
+}
+.ov-empty__art {
+  display: block;
+  flex: none;
+  width: 258px;
+  max-width: 100%;
+  height: auto;
+  margin-block: -32px -30px;
+}
+.ov-empty__text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+.ov-empty__title,
+.ov-empty__description {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.ov-empty__title {
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+}
+.ov-empty__description {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  font-size: 13px;
+  line-height: 22px;
+}
+/* 紧凑尺寸：插画 120 宽，留白按比例裁掉，图文间距 8，标题 13 次要色。 */
+.ov-empty--compact {
+  gap: 8px;
+  padding: 16px 12px;
+}
+.ov-empty--compact .ov-empty__art {
+  width: 120px;
+  margin-block: -16px -14px;
+}
+.ov-empty--compact .ov-empty__title {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  font-size: 13px;
+  font-weight: 400;
+}
+.ov-empty--compact .ov-empty__description {
+  font-size: 12px;
+  line-height: 20px;
+}

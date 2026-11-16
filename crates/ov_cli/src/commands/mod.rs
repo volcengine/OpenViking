@@ -5,6 +5,7 @@ pub mod compile;
 pub mod content;
 pub mod crypto;
 pub mod filesystem;
+pub mod mcps;
 pub mod observer;
 pub mod pack;
 pub mod privacy;

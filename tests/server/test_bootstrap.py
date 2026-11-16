@@ -19,7 +19,7 @@ from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingl
 from openviking_cli.utils.config.storage_config import StorageConfig
 
 
-def test_main_keeps_config_host_when_cli_host_is_omitted(monkeypatch):
+def test_main_keeps_config_host_when_cli_host_is_omitted(monkeypatch, capsys):
     config = ServerConfig(host="127.0.0.1", port=1933)
     captured: dict[str, object] = {}
 
@@ -70,6 +70,7 @@ def test_main_keeps_config_host_when_cli_host_is_omitted(monkeypatch):
 
     assert captured["host"] == "127.0.0.1"
     assert captured["port"] == 1933
+    assert "OpenViking HTTP Server is running on 127.0.0.1:1933" in capsys.readouterr().out
 
 
 def test_main_coerces_cli_host_all_to_none(monkeypatch):
@@ -226,7 +227,7 @@ def test_bot_alias_propagates_resolved_config_to_workers(monkeypatch):
         assert os.environ[app_module.WORKER_BOT_API_URL_ENV] == "http://127.0.0.1:19000"
 
 
-def test_main_prints_config_diagnostics_on_validation_error(monkeypatch, capsys):
+def test_main_prints_safe_config_diagnostics_on_validation_error(monkeypatch, capsys):
     """An unknown top-level config field must exit 1 with actionable diagnostics."""
     config = ServerConfig(host="127.0.0.1", port=1933)
 
@@ -262,8 +263,9 @@ def test_main_prints_config_diagnostics_on_validation_error(monkeypatch, capsys)
 
     assert exc.value.code == 1
     err = capsys.readouterr().err
-    assert "/tmp/ov.conf" in err
-    assert "Unknown config field 'claude_code'" in err
+    assert "Failed to load OpenViking server configuration (ValueError)." in err
+    assert "/tmp/ov.conf" not in err
+    assert "Unknown config field 'claude_code'" not in err
     assert "openviking-server doctor" in err
     assert "examples/ov.conf.example" in err
 
@@ -392,7 +394,12 @@ def test_main_restart_cleans_up_managed_children_and_preserves_launch_command(
 ):
     import sys
 
-    config = ServerConfig(host="127.0.0.1", port=1933, with_bot=True)
+    config = ServerConfig(
+        host="127.0.0.1",
+        port=1933,
+        with_bot=True,
+        ttl_adapter={"enabled": True},
+    )
     steps = []
     monkeypatch.setattr(sys, "argv", ["openviking-server", "--with-bot", "--bot-port", "19000"])
     original_argv = [sys.executable, "/venv/bin/openviking-server", *sys.argv[1:]]
@@ -405,7 +412,7 @@ def test_main_restart_cleans_up_managed_children_and_preserves_launch_command(
         classmethod(
             lambda cls, **kw: SimpleNamespace(
                 memory=SimpleNamespace(
-                    session_auto_commit=SessionAutoCommitConfig(enabled=True, idle_backend="redis")
+                    session_auto_commit=SessionAutoCommitConfig(enabled=False, idle_backend="redis")
                 ),
                 expiry=ExpiryConfig(),
             )

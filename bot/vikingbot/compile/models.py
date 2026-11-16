@@ -23,29 +23,24 @@ WikiLanguage = Literal["en", "zh-CN"]
 
 
 class CompileLimits(BaseModel):
-    """Bound task execution and source loading; output size is checked per submission."""
+    """Bound task execution, source loading and Markdown routing concurrency."""
 
     model_config = ConfigDict(frozen=True)
 
-    # Estimated complete input tokens, including tools and repair/read history, before planning.
-    direct_input_tokens: int = Field(default=110_000, ge=1)
-    # Soft request budget for prompt, input JSON, emit schema and estimated output space.
-    # Larger indivisible records may exceed it; this is not the model's token limit.
+    # Soft request budget for prompt, input JSON, control schema and estimated output space.
+    # Larger indivisible inputs may exceed it; this is not the model's token limit.
     merge_input_chars: int = Field(default=60_000, ge=1)
     # Source text plus repeated context per range/read batch, independent of request packing.
     source_batch_chars: int = Field(default=40_000, ge=1)
+    simple_agent_iterations: int = Field(default=150, ge=1, description="Simple compile rounds.")
     agent_iterations: int = 120
-    # Per-child model/tool rounds, including draft checks and submission; parent budget is separate.
+    # Per-transform model/tool rounds, including draft checks and submission; parent budget is separate.
     subagent_iterations: int = Field(default=70, ge=1)
-    # Wall-clock limits include provider capacity waits, transport retries and tool reads.
-    pipeline_call_seconds: float = Field(default=600, gt=0)
-    pipeline_plan_seconds: float = Field(default=600, gt=0)
-    pipeline_agent_seconds: float = Field(default=1200, gt=0)
     # Per-task Map workers, also used for Resource source subagents.
     source_concurrency: int = Field(default=6, ge=1)
     # Per-task Shuffle routing workers and embedding batches.
     shuffle_concurrency: int = Field(default=6, ge=1)
-    # Maximum primary records per routing request, including retried records.
+    # Maximum primary Markdown drafts per routing request.
     shuffle_batch_size: int = Field(default=4, ge=1, strict=True)
     # Per-task Reduce workers, also used for consolidating same-path candidate files.
     merge_concurrency: int = Field(default=10, ge=1)
@@ -69,27 +64,23 @@ class CompileRequest(BaseModel):
     openviking_connection: OpenVikingConnection | None = None
     _principal_scope: str = PrivateAttr(default="local")
 
-    @model_validator(mode="before")
-    @classmethod
-    def _accept_reason(cls, data: Any) -> Any:
-        if isinstance(data, dict) and "reason" in data:
-            data = dict(data)
-            data.setdefault("instruction", data.pop("reason"))
-        return data
-
 
 class SanitizedCompileRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    """Stored normalized inputs ignore unknown fields; the service validates public arguments."""
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     from_: list[str] = Field(alias="from")
     to: str
     instruction: str
-    instruction_provided: bool = False
     skill: str
-    # Inclusive source modification cutoff in UTC; None compiles all source files.
-    last_compile_time: datetime | None = None
-    # Rebuild resource index.md files from actual Markdown paths; preserve knowledge bodies.
-    wiki_links: bool = Field(default=False, strict=True)
+    # The OV service freezes the directory plan before submitting this execution.
+    changes: dict[str, Any] | None = None
+
+
+def has_directory_plan(changes: dict[str, Any] | None) -> bool:
+    """Identify directory-based task inputs; request normalization validates their contents."""
+    return isinstance(changes, dict) and "diff_dirs" in changes and "full_dirs" in changes
 
 
 class WikiPageDraft(BaseModel):
@@ -205,7 +196,9 @@ class CompileErrorInfo(BaseModel):
 
 
 class CompileResult(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    """Stored task outcomes expose only fields in the published result schema."""
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     from_: list[str] = Field(alias="from")
     to: str
@@ -218,8 +211,6 @@ class CompileResult(BaseModel):
     conflicts: list[dict[str, str]] = Field(default_factory=list)
     page_count: int = 0
     link_count: int = 0
-    # Path diagnostics are informational and never consume the agent repair budget.
-    link_report: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -262,7 +253,7 @@ class CompileAccepted(BaseModel):
 
 
 class CompileSessionRequest(BaseModel):
-    """Status or cancellation request scoped by the authenticated caller and session ID."""
+    """Status, cancellation, or archive request scoped by authenticated caller and session ID."""
 
     model_config = ConfigDict(extra="forbid")
 

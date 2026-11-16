@@ -41,7 +41,7 @@ def test_vendor_tool_capabilities(vendor, replay, extra, offered):
         assert reason == "deepseek_reasoning_history_required"
 
 
-def test_default_policy_offers_read_only_and_future_tools():
+def test_default_policy_offers_every_tool_including_future_ones():
     policy = Policy().model_dump()
     assert policy["gateway_tools"]
     catalog = [*MCP_TOOLS, mcp_tool("future", {})]
@@ -49,7 +49,7 @@ def test_default_policy_offers_read_only_and_future_tools():
         tool["function"]["name"].removeprefix("openviking_")
         for tool in select_tools(catalog, policy)
     }
-    assert names == {"find", "search", "read", "list", "grep", "glob", "health", "future"}
+    assert names == {tool["name"] for tool in catalog}
 
 
 def test_tools_default_to_all_and_only_raw_disabled_names_are_excluded():
@@ -257,6 +257,7 @@ def gateway_call(name, arguments, identifier="g-1"):
     [
         ("search", {"query": " release\n  date "}, '> OpenViking search: "release date"'),
         ("search", {"query": "q" * 200}, '> OpenViking search: "' + "q" * 79 + '…"'),
+        ("read", {"uri": "viking://a"}, "> OpenViking read: viking://a"),
         ("read", {"uris": ["viking://a"]}, "> OpenViking read: viking://a"),
         (
             "read",

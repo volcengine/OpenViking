@@ -3410,6 +3410,7 @@ async def test_directory_output_unchanged_still_applies_planned_scalar_fields(mo
         SemanticTreeSnapshot,
     )
     from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor
+    from openviking.storage.queuefs.semantic_processor import SemanticProcessor
     from openviking_cli.session.user_id import UserIdentifier
 
     root = "viking://resources/repo"
@@ -3421,10 +3422,16 @@ async def test_directory_output_unchanged_still_applies_planned_scalar_fields(mo
         lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
     )
 
-    class Processor:
+    embedding_queue = SimpleNamespace(enqueue=AsyncMock(return_value="embedding-id"))
+    queue_manager = SimpleNamespace(
+        EMBEDDING="Embedding",
+        get_queue=lambda *args, **kwargs: embedding_queue,
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: queue_manager)
+
+    class Processor(SemanticProcessor):
         _generate_overview = AsyncMock(return_value="overview")
         _vectorize_directory = AsyncMock(return_value=set())
-        _update_vector_fields = AsyncMock(return_value=True)
 
         @staticmethod
         def _normalize_overview_generation(overview):
@@ -3481,22 +3488,12 @@ async def test_directory_output_unchanged_still_applies_planned_scalar_fields(mo
     await executor.run(root)
 
     processor._vectorize_directory.assert_not_awaited()
-    processor._update_vector_fields.assert_awaited_once_with(
-        record_id="root-l0",
-        uri=root,
-        level=0,
-        field_patch=FieldPatch(
-            {"search_tags": ["scope=new"]},
-            {"search_tags": "append"},
-            {
-                "abstract": "abstract",
-                "uri": root,
-                "level": 0,
-                "account_id": "acc",
-            },
-        ),
-        ctx=executor._ctx,
-    )
+    embedding_queue.enqueue.assert_awaited_once()
+    message = embedding_queue.enqueue.await_args.args[0]
+    assert message.action.value == "update_fields"
+    assert message.record_ids == ["root-l0"]
+    assert message.update_fields == {"search_tags": ["scope=new"]}
+    assert message.field_modes == {"search_tags": "append"}
 
 
 @pytest.mark.asyncio
@@ -3665,7 +3662,8 @@ async def test_file_repair_passes_partial_update_to_embedding(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_direct_only_plan_skips_semantic_queue(monkeypatch):
+@pytest.mark.parametrize("action_name", ["delete", "update_fields"])
+async def test_direct_only_plan_skips_semantic_queue(monkeypatch, action_name):
     from openviking.server.identity import RequestContext, Role
     from openviking.storage.context_update_plan import DirectIndexAction
     from openviking.utils.resource_processor import ResourceProcessor
@@ -3678,15 +3676,22 @@ async def test_direct_only_plan_skips_semantic_queue(monkeypatch):
     )
     monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: viking_fs)
     processor = ResourceProcessor(SimpleNamespace(get_embedder=lambda: None))
-    processor._enqueue_index_actions = AsyncMock()
+    embedding_queue = SimpleNamespace(enqueue=AsyncMock(return_value="embedding-id"))
+    queue_manager = SimpleNamespace(
+        EMBEDDING="Embedding",
+        get_queue=lambda *args, **kwargs: embedding_queue,
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: queue_manager)
     summarizer = SimpleNamespace(summarize=AsyncMock())
     processor._get_summarizer = lambda: summarizer
     action = DirectIndexAction(
-        "update_fields",
+        action_name,
         root + "/a.py",
         2,
         "a-l2",
-        field_patch=FieldPatch({"search_tags": ["scope=new"]}),
+        field_patch=(
+            FieldPatch({"search_tags": ["scope=new"]}) if action_name == "update_fields" else None
+        ),
     )
 
     await processor.finish_prepared_resource(
@@ -3707,7 +3712,7 @@ async def test_direct_only_plan_skips_semantic_queue(monkeypatch):
                         "uri": action.uri,
                         "level": action.level,
                         "record_id": action.record_id,
-                        "field_patch": action.field_patch.to_dict(),
+                        "field_patch": action.field_patch.to_dict() if action.field_patch else None,
                         "md5": action.md5,
                     }
                 ],
@@ -3719,7 +3724,12 @@ async def test_direct_only_plan_skips_semantic_queue(monkeypatch):
         processing_mode="semantic_and_vectors",
     )
 
-    processor._enqueue_index_actions.assert_awaited_once()
+    embedding_queue.enqueue.assert_awaited_once()
+    message = embedding_queue.enqueue.await_args.args[0]
+    assert message.action.value == action_name
+    assert message.record_ids == ["a-l2"]
+    if action_name == "update_fields":
+        assert message.update_fields == {"search_tags": ["scope=new"]}
     summarizer.summarize.assert_not_awaited()
     viking_fs._async_agfs.pathlock_release.assert_awaited_once_with(lock)
 

@@ -5,10 +5,10 @@
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from openviking.utils.model_retry import retry_async, retry_sync
+from openviking.utils.model_retry import effective_max_retries, retry_async, retry_sync
 from openviking_cli.utils import get_logger
 
-from .base import VLMBase, VLMResponse
+from .base import ToolResultMediaMode, VLMBase, VLMResponse
 
 logger = get_logger(__name__)
 
@@ -24,6 +24,9 @@ class RetryVLM(VLMBase):
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.inner, name)
+
+    def tool_result_media_mode(self) -> ToolResultMediaMode | None:
+        return self.inner.tool_result_media_mode()
 
     @property
     def token_tracker(self):
@@ -59,9 +62,10 @@ class RetryVLM(VLMBase):
                 messages=messages,
                 **kwargs,
             ),
-            max_retries=self.max_retries,
+            max_retries=effective_max_retries(self.max_retries),
             logger=logger,
             operation_name=f"{self.provider} VLM completion",
+            model_errors_only=True,
         )
 
     async def get_completion_async(
@@ -84,9 +88,10 @@ class RetryVLM(VLMBase):
                 max_tokens=max_tokens,
                 **kwargs,
             ),
-            max_retries=self.max_retries,
+            max_retries=effective_max_retries(self.max_retries),
             logger=logger,
             operation_name=f"{self.provider} VLM async completion",
+            model_errors_only=True,
         )
 
     def get_vision_completion(
@@ -109,9 +114,10 @@ class RetryVLM(VLMBase):
                 messages=messages,
                 **kwargs,
             ),
-            max_retries=self.max_retries,
+            max_retries=effective_max_retries(self.max_retries),
             logger=logger,
             operation_name=f"{self.provider} VLM vision completion",
+            model_errors_only=True,
         )
 
     async def get_vision_completion_async(
@@ -134,9 +140,10 @@ class RetryVLM(VLMBase):
                 messages=messages,
                 **kwargs,
             ),
-            max_retries=self.max_retries,
+            max_retries=effective_max_retries(self.max_retries),
             logger=logger,
             operation_name=f"{self.provider} VLM async vision completion",
+            model_errors_only=True,
         )
 
     def supports_media(

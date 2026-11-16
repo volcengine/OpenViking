@@ -195,7 +195,7 @@ class ExpiryConsumer:
     ) -> _BucketScan:
         next_poll_at_ms: int | None = None
         started_at_seconds = redis_now_ms // 1000
-        for attempt in range(self._binding.options.max_attempts):
+        for attempt in range(self._binding.options.max_attempts or 1):
             while available > 0:
                 limit = min(self._config.scan_batch_size, available)
                 page = await self._store.read_bucket_page(
@@ -322,6 +322,10 @@ class ExpiryConsumer:
     async def _finish_failed_attempt(
         self, lease: ShardExecution, claim: Claim, reason: str
     ) -> None:
+        if self._binding.options.max_attempts is None:
+            # Leave the durable claim in place. Its timestamp bounds retries,
+            # including after consumer replacement, without an in-memory timer.
+            return
         attempt, _ = decode_claim_score(claim.claim_score)
         if attempt + 1 >= self._binding.options.max_attempts:
             await self._log_exhausted_and_ack(lease, claim, reason)

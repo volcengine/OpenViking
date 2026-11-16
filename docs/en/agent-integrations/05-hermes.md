@@ -42,7 +42,7 @@ available after OpenViking finishes extraction. Existing server data is kept.
 
 Quick Local keeps its server running after Hermes exits. See the
 [plugin guide](https://hermes-agent.nousresearch.com/docs/plugins/openviking)
-for model support, server controls and the known local embedding issue.
+for model support, server controls and runtime upgrade instructions.
 
 ## Check status
 

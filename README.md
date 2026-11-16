@@ -11,7 +11,7 @@
 
 English / [中文](docs/repository/README_CN.md) / [日本語](docs/repository/README_JA.md)
 
-<a href="https://www.openviking.ai">Website</a> · <a href="https://openviking.ai/studio">Live Demo</a> · <a href="https://github.com/volcengine/OpenViking">GitHub</a> · <a href="https://github.com/volcengine/OpenViking/issues">Issues</a> · <a href="https://docs.openviking.ai/">Docs</a> · <a href="https://blog.openviking.ai/">Blog</a>
+<a href="https://www.openviking.ai">Website</a> · <a href="https://studio.openviking.ai">Live Demo</a> · <a href="https://github.com/volcengine/OpenViking">GitHub</a> · <a href="https://github.com/volcengine/OpenViking/issues">Issues</a> · <a href="https://docs.openviking.ai/">Docs</a> · <a href="https://blog.openviking.ai/">Blog</a>
 
 <p>
   <a href="https://github.com/volcengine/OpenViking/releases"><img src="https://img.shields.io/github/v/release/volcengine/OpenViking?color=369eff&labelColor=black&logo=github&style=flat-square" alt="release"></a>
@@ -45,14 +45,14 @@ OpenViking is an open-source context database for AI agents — one filesystem f
 
 Most agent memory is a black box: text goes in, embeddings come out, and nobody can see what was actually stored. OpenViking organizes context as a virtual filesystem under `viking://` instead. Agents navigate it like files — `ls`, `tree`, `read`, `write`, `grep` — and you can open any directory to inspect and edit what your agent knows. Every directory carries a generated summary, so agents can scan summaries first and decide what to read.
 
-<a href="https://openviking.ai/studio" target="_blank" rel="noopener noreferrer">
+<a href="https://studio.openviking.ai" target="_blank" rel="noopener noreferrer">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/studio-playground-dark.png">
-    <img src="docs/images/studio-playground.png" alt="OpenViking Studio: browse context and try semantic search">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/studio-filesystem-dark.png">
+    <img src="docs/images/studio-filesystem.png" alt="OpenViking Studio Filesystem: browse personal memories and resources">
   </picture>
 </a>
 
-[Try OpenViking Studio](https://openviking.ai/studio) in your browser, no installation required. [Self-host Web Studio](web-studio/README.md).
+[Try OpenViking Studio](https://studio.openviking.ai) in your browser, no installation required. [Self-host Web Studio](web-studio/README.md).
 
 ## Why OpenViking
 
@@ -109,6 +109,8 @@ viking://resources/my_project/
 ## Proof it works
 
 OpenViking 0.3.22 has been evaluated on long-conversation user memory (LoCoMo) and multi-turn agent tasks (tau2-bench). Full results and setup details, including knowledge-base QA, are in the [benchmark report](https://blog.openviking.ai/post/openviking-benchmark-results/); reproduction scripts live in [./benchmark](./benchmark).
+
+To run your own experiments, follow the [RAG and Memory evaluation guide](benchmark/README.md) for routine VikingBot memory evaluation, published LoCoMo reproduction, separate mem0 prompt comparisons, and RAG evaluation.
 
 The memory evaluation used [Doubao 2.0 Pro](https://console.volcengine.com/ark/region:cn-beijing/model/detail?Id=doubao-seed-2-0-pro) as the VLM and [Doubao-embedding-vision-251215](https://console.volcengine.com/ark/region:cn-beijing/model/detail?Id=doubao-embedding-vision) as the embedding model.
 
@@ -191,25 +193,17 @@ Connect your coding agent to OpenViking for cross-session memory. The memory plu
 <summary><strong>Let your agent install it</strong></summary>
 
 ```text
-Install the OpenViking memory plugin for me by running:
+Install the OpenViking memory plugin and help me start using it. OpenViking is a context database for AI agents (https://github.com/volcengine/OpenViking); the command and link below are from its official docs.
 
-curl -fsSL https://openviking.ai/install | bash -s -- --yes --url <SERVER_URL>
+1. Run the official installer. It needs network access and writes to my home directory; if your sandbox blocks that, ask me for approval:
+   curl -fsSL https://openviking.ai/install | bash -s -- --yes --lang en --url <SERVER_URL> --api-key <API_KEY>
+2. Once it's installed, read the OpenViking onboarding guide and use it to walk me through setup. The guide has you ask me before choices like importing history or adding a working rule. docs.openviking.ai and docs.openviking.net are the same docs site; use whichever loads:
+   https://docs.openviking.ai/agents/en/onboarding.md
 
-<SERVER_URL> is the address of my OpenViking server; ask me for it, don't guess.
-If the server has auth turned on, it needs a user key (a root key can't read or
-write memories): check whether one is already saved; if not, ask me for it and
-pass it with --api-key, and tell me how to hand it over if I'd rather not paste
-it into this chat. Never repeat the key back. If auth is off, add --api-key ''
-so an earlier saved key isn't reused.
-
-The script needs network access and writes to my home directory; if a sandbox
-blocks it, ask me to approve running it outside the sandbox.
-
-When it finishes, tell me which tools it installed into and the next steps for
-each, then ask whether I want it in any other tool.
+The API key is a user key I created for myself on that server; the installer stores it in ~/.openviking/ovcli.conf on this machine. Use it in the command as it is; there's no need to show it in your replies, and don't write it into any other file or rule. Talk to me in English.
 ```
 
-Have your server's address ready, plus its API key if it has auth turned on.
+Before you send it, replace `<SERVER_URL>` with your server's address and `<API_KEY>` with a user key; a root key can't read or write memories. If the server has auth turned off, use `--api-key ''`.
 
 </details>
 
@@ -316,6 +310,8 @@ Setup guides for each integration:
 
 For setup instructions and integration details, see [Integrations](https://openviking.ai/integrations).
 
+For framework applications, see the [LangChain/LangGraph and Microsoft Agent Framework packages](integrations/frameworks/README.md), with a guide to adding other adapters.
+
 ## Desktop App (Beta)
 
 The desktop app is a console for macOS and Windows x64 (beta). It configures supported local agent integrations, inspects recall and capture events in sessions, and syncs local memories and skills to OpenViking.
@@ -396,6 +392,7 @@ The server supports [accounts and user isolation](https://docs.openviking.ai/en/
 - [NoKV](https://github.com/NoKV-Lab/NoKV) - AI native distributed file system
 - [loopx](https://github.com/huangruiteng/loopx) - Lightweight loop engineering state kernel
 - [Hermes Agent](https://github.com/NousResearch/hermes-agent) - The agent that grows with you
+- [NVIDIA cuVS](https://github.com/NVIDIA/cuvs) - GPU-accelerated vector search and clustering library
 
 To propose a partnership, [open an issue](https://github.com/volcengine/OpenViking/issues).
 
@@ -424,6 +421,7 @@ The OpenViking project uses different licenses for different components:
 - **Main Project**: AGPLv3 - see the [LICENSE](./LICENSE) file for details
 - **crates/ov\_cli**: Apache 2.0 - see the [LICENSE](./crates/LICENSE) for details
 - **examples**: Apache 2.0 - see the [LICENSE](./examples/LICENSE) for details. The Hermes plugin in `examples/hermes-plugin` retains its [MIT license](./examples/hermes-plugin/LICENSE).
+- **integrations/frameworks**: the LangChain/LangGraph adapter uses AGPLv3 and the Microsoft Agent Framework adapter uses MIT; see each package's `LICENSE`. Their runnable examples retain Apache 2.0; see each package's `examples/LICENSE`.
 - **third\_party**: Respective original licenses of third-party projects
 
 Please also note: any wholesale rewriting and subsequent re-open-sourcing of this project is prohibited; any request to translate all or a substantial portion of the project code into another coding language requires prior written authorization from Volcano Engine. For permission requests, please contact the Volcano Engine team — see [Community & Contributing](#community--contributing) for contact channels.

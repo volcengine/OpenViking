@@ -10,7 +10,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Body, Depends, Query
 from fastapi.responses import Response as FastAPIResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.pyagfs.exceptions import (
@@ -98,9 +98,7 @@ async def log(
         else None
     )
     try:
-        result = await service.fs.log(
-            branch=branch, limit=limit, paths=canonical_paths, ctx=_ctx
-        )
+        result = await service.fs.log(branch=branch, limit=limit, paths=canonical_paths, ctx=_ctx)
     except AGFSNotFoundError:
         raise NotFoundError(branch, "git_ref")
     except (AGFSClientError, ValueError) as e:
@@ -112,17 +110,56 @@ async def log(
 
 
 class RestoreRequest(BaseModel):
-    """Request body for ``POST /api/v1/snapshot/restore``."""
+    """Restore a directory snapshot or one file; modes cannot be mixed."""
 
     model_config = ConfigDict(extra="forbid")
 
     project_dir: Optional[str] = None
-    source_commit: str
+    source_commit: Optional[str] = None
+    path: Optional[str] = None
+    restore_commit_id: Optional[str] = Field(
+        None, pattern=r"^[0-9a-f]{40}$", description="Full commit ID supplying content at path"
+    )
+    current_commit_id: Optional[str] = Field(
+        None, pattern=r"^[0-9a-f]{40}$", description="Optional expected last commit changing path"
+    )
     branch: str = "main"
     dry_run: bool = False
     message: Optional[str] = None
     author_name: Optional[str] = None
     author_email: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _one_mode(self) -> "RestoreRequest":
+        if self.path is not None:
+            if self.project_dir is not None or self.source_commit is not None:
+                raise ValueError("path cannot be combined with project_dir or source_commit")
+            if not self.restore_commit_id:
+                raise ValueError("path requires restore_commit_id")
+        elif not self.source_commit:
+            raise ValueError("source_commit is required")
+        return self
+
+
+@router.get("/versions")
+async def versions(
+    uri: str = Query(..., description="File URI"),
+    limit: int = Query(20, ge=1, le=100),
+    before_snapshot: Optional[str] = Query(None, pattern=r"^[0-9a-f]{40}$"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """List a file's native snapshot commits, newest first."""
+    uri = validate_request_viking_uri(uri, _ctx, field_name="uri")
+    try:
+        result = await get_service().fs.file_versions(
+            uri, _ctx, limit=limit, before=before_snapshot
+        )
+    except (AGFSClientError, ValueError) as exc:
+        mapped = map_exception(exc)
+        if mapped is not None:
+            raise mapped from exc
+        raise
+    return Response(status="ok", result=result)
 
 
 @router.post("/restore")
@@ -130,7 +167,7 @@ async def restore(
     request: RestoreRequest = Body(...),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Forward-commit restore: rebuild project_dir from source_commit on top of HEAD."""
+    """Restore a directory or one file's historical content as a forward commit."""
     service = get_service()
     project_dir = (
         validate_request_viking_uri(request.project_dir, _ctx, field_name="project_dir")
@@ -138,6 +175,16 @@ async def restore(
         else None
     )
     try:
+        if request.path is not None:
+            path = validate_request_viking_uri(request.path, _ctx, field_name="path")
+            result = await service.fs.restore_file_version(
+                uri=path,
+                restore_commit_id=request.restore_commit_id,
+                current_commit_id=request.current_commit_id,
+                ctx=_ctx,
+                dry_run=request.dry_run,
+            )
+            return Response(status="ok", result=result)
         result = await service.fs.restore(
             project_dir=project_dir,
             source_commit=request.source_commit,
@@ -171,9 +218,7 @@ async def restore(
         # With GitRestoreWritebackPartialError wired up, structured partial
         # failures now go through the branch above; this clause only catches
         # the degraded path.
-        raise InternalError(
-            f"snapshot restore failed: {e}", cause=e
-        ) from e
+        raise InternalError(f"snapshot restore failed: {e}", cause=e) from e
     return Response(status="ok", result=result)
 
 
@@ -184,7 +229,11 @@ async def show(
     raw: bool = Query(True, description="Return raw stored content with memory fields"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Without ``path``: commit metadata JSON. With ``path``: raw blob bytes + X-Snapshot-* headers."""
+    """Return commit JSON without ``path``, or file bytes with blob/commit IDs and commit time.
+
+    The file response's X-Snapshot-Time-Seconds is the resolved commit's committer
+    Unix timestamp, including when raw=false strips memory fields from the body.
+    """
     service = get_service()
     canonical_path = (
         validate_request_viking_uri(path, _ctx, field_name="path") if path is not None else None
@@ -223,6 +272,8 @@ async def show(
         headers={
             "X-Snapshot-Oid": str(blob["oid"]),
             "X-Snapshot-Size": str(len(content)),
+            "X-Snapshot-Commit-Oid": str(blob["commit_oid"]),
+            "X-Snapshot-Time-Seconds": str(blob["commit_time_seconds"]),
         },
     )
 
@@ -249,6 +300,31 @@ async def diff(
             to_ref=to_ref,
             raw=raw,
             ctx=_ctx,
+        )
+    except (AGFSClientError, ValueError) as exc:
+        mapped = map_exception(exc)
+        if mapped is not None:
+            raise mapped from exc
+        raise
+    return Response(status="ok", result=result)
+
+
+@router.get("/diff-paths")
+async def diff_paths(
+    paths: List[str] = Query(
+        ..., min_length=1, description="Directory URIs; repeat for each directory"
+    ),
+    from_ref: Optional[str] = Query(None, alias="from", min_length=1),
+    to_ref: str = Query(..., alias="to", min_length=1),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """List changed source files in URI order; omitted ``from`` means an empty tree."""
+    paths = [validate_request_viking_uri(path, _ctx, field_name="paths") for path in paths]
+    try:
+        result = await get_service().fs.diff_paths(
+            paths, from_ref=from_ref, to_ref=to_ref, offset=offset, limit=limit, ctx=_ctx
         )
     except (AGFSClientError, ValueError) as exc:
         mapped = map_exception(exc)

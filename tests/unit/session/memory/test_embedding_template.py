@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from openviking.prompts.manager import PromptManager
 from openviking.session.memory.dataclass import MemoryField, MemoryFile
 from openviking.session.memory.experience_lineage import experience_source_tag
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
@@ -15,6 +14,7 @@ from openviking.session.memory.merge_op import MergeOp
 from openviking.session.memory.merge_op.base import FieldType
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
+from openviking.system_assets import builtin_memory_templates_dir
 from openviking.utils.ingest_options import IngestOptions
 
 
@@ -27,7 +27,7 @@ class TestMemoryFieldSchema:
 class TestEmbeddingTemplateYamlParsing:
     @pytest.fixture(autouse=True)
     def setup(self):
-        memory_dir = PromptManager._get_bundled_templates_dir() / "memory"
+        memory_dir = builtin_memory_templates_dir()
         self.registry = MemoryTypeRegistry(load_schemas=False)
         self.registry.load_from_yaml(str(memory_dir / "events.yaml"))
         self.registry.load_from_yaml(str(memory_dir / "preferences.yaml"))
@@ -113,7 +113,7 @@ class TestEmbeddingTextConstruction:
     )
     async def test_vectorization_preserves_write_tag_mode(self, tags, mode, expected_mode):
         registry = MemoryTypeRegistry(load_schemas=False)
-        memory_dir = PromptManager._get_bundled_templates_dir() / "memory"
+        memory_dir = builtin_memory_templates_dir()
         registry.load_from_yaml(str(memory_dir / "trajectories.yaml"))
         uri = "viking://user/alice/memories/trajectories/exchange.md"
         updater = MemoryUpdater(registry=registry, vikingdb=Mock())
@@ -156,7 +156,7 @@ class TestEmbeddingTextConstruction:
     @pytest.mark.asyncio
     async def test_trajectory_vectorization_adds_source_experience_search_tags(self):
         registry = MemoryTypeRegistry(load_schemas=False)
-        memory_dir = PromptManager._get_bundled_templates_dir() / "memory"
+        memory_dir = builtin_memory_templates_dir()
         registry.load_from_yaml(str(memory_dir / "trajectories.yaml"))
         experience_uri = "viking://user/alice/memories/experiences/exchange.md"
         trajectory_uri = "viking://user/alice/memories/trajectories/exchange.md"

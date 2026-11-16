@@ -19,6 +19,8 @@ curl -fsSL https://openviking.ai/install | bash
 
 安装器会把插件作为本地文件插件复制到 `~/.config/opencode/plugins/`，把 `openviking` MCP server 条目写进 `~/.config/opencode/opencode.json`，并配置 `~/.openviking/ovcli.conf`。
 
+安装完成后，在 OpenCode 中新开一个会话，让它按 https://docs.openviking.net/agents/zh/onboarding.md 执行。它会检查连接，并带你完成首次使用，详见[一键接入](../getting-started/07-agent-onboarding.md)。
+
 ### 手动 npm 安装
 
 已发布的 npm 包是 `@openviking/opencode-plugin`。首次配置 OpenCode 时：
@@ -125,10 +127,10 @@ API key 会由 hooks 和 MCP proxy 作为 `Authorization: Bearer ...` 发送；`
 
 ## 验证
 
-安装后重启 OpenCode。进入 OpenCode session 后，插件应暴露 `openviking` MCP server，透传服务端完整 MCP 工具集（16 个工具）。OpenCode 会给 MCP 工具加 `openviking_` 前缀：
+安装后重启 OpenCode。进入 OpenCode session 后，插件应暴露 `openviking` MCP server，透传服务端完整 MCP 工具集（17 个工具）。OpenCode 会给 MCP 工具加 `openviking_` 前缀：
 
 - `openviking_find`、`openviking_search`（`openviking_search` 的 `mode="context"` 替代原 recall 工具）
-- `openviking_read`、`openviking_list`、`openviking_tree`、`openviking_grep`、`openviking_glob`
+- `openviking_read`、`openviking_download`、`openviking_list`、`openviking_tree`、`openviking_grep`、`openviking_glob`
 - `openviking_remember`、`openviking_write`、`openviking_edit`、`openviking_add_resource`、`openviking_add_skill`
 - `openviking_list_watches`、`openviking_cancel_watch`、`openviking_forget`、`openviking_health`
 

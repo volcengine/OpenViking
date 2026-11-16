@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import List, Optional, Union
 
 from openviking.parse.base import ParseResult
+from openviking.parse.temp import get_parser_download_temp_dir
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.utils.zip_safe import safe_extract_zip
 from openviking_cli.exceptions import InvalidArgumentError
@@ -64,7 +65,13 @@ class ZipParser(BaseParser):
             raise FileNotFoundError(f"ZIP file not found: {path}")
 
         # Extract ZIP to temporary directory (non-blocking)
-        temp_dir = Path(await asyncio.to_thread(tempfile.mkdtemp, prefix="ov_zip_"))
+        temp_dir = Path(
+            await asyncio.to_thread(
+                tempfile.mkdtemp,
+                prefix="ov_zip_",
+                dir=get_parser_download_temp_dir(),
+            )
+        )
         try:
             # Extract zip (non-blocking)
             def _extract_zip():

@@ -219,6 +219,7 @@ async def commit_and_enqueue_plan(
     plan: ContextUpdatePlan,
     *,
     ctx: RequestContext,
+    semantic_lock_handoff: dict[str, Any] | None = None,
     inline_store: Any = None,
     inline_ref: Any = None,
     target: Any = None,
@@ -270,6 +271,7 @@ async def commit_and_enqueue_plan(
         refresh_result = await summarizer.refresh_file_parent(
             file_uri=plan.file_refresh.file_uri,
             ctx=ctx,
+            lock_handoff=semantic_lock_handoff,
             ingest_options=IngestOptions.from_value(ingest_options),
             created=file_created,
             file_md5=plan.file_refresh.md5,

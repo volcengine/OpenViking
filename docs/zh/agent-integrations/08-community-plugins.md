@@ -40,6 +40,8 @@ curl -fsSL https://openviking.ai/install | bash
 
 实现细节与当前已验证的 ZCode 假设见插件目录中的 [README](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin) 和 [DESIGN.md](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/DESIGN.md)。
 
+安装完成后，在 ZCode 中新开一个会话，让它按 https://docs.openviking.net/agents/zh/onboarding.md 执行。它会检查连接，并带你完成首次使用，详见[一键接入](../getting-started/07-agent-onboarding.md)。
+
 ## Kimi Code 记忆集成
 
 源码：[examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
@@ -71,6 +73,41 @@ curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harnes
 
 已验证的宿主契约和版本见
 [`hosts/kimicode/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/kimicode/DESIGN.md)。
+
+安装完成后，在 Kimi Code 中新开一个会话，让它按 https://docs.openviking.net/agents/zh/onboarding.md 执行。它会检查连接，并带你完成首次使用，详见[一键接入](../getting-started/07-agent-onboarding.md)。
+
+## Antigravity 记忆集成
+
+源码：[examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
+
+Antigravity 集成同时服务 Antigravity 桌面 app 与 `agy` CLI，两者从 `~/.gemini/config/plugins/` 加载同一批插件：
+
+- **SessionStart** 注入用户画像。
+- **PreInvocation** 在每轮的第一次模型调用时召回相关记忆。Antigravity 在每次模型调用前都会运行这个 Hook，工具循环中的后续调用会跳过召回。
+- **Stop** 在后台进程中采集对话 transcript 里已完成的步骤，然后 commit OpenViking 会话。
+
+Antigravity 的 `hooks.json` 格式与 Claude Code 不同：顶层 key 是 Hook 名，上下文以 `injectSteps` 系统消息返回，因此不能直接复用 Claude Code 的 `hooks.json`。
+
+### 安装
+
+前置条件：Node.js 18+、运行中的 OpenViking 服务，以及 Antigravity app 或 `agy`。
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --yes --harness antigravity
+```
+
+安装脚本把插件写到 `~/.gemini/config/plugins/openviking-memory`，运行时写到 `~/.openviking/agent-integrations/antigravity`。如果同名目录已存在且不是 OpenViking 写入的，安装脚本会保留它并停止。连接配置与其他集成一样读取 `~/.openviking/ovcli.conf`。安装脚本不添加 MCP 服务；如果希望 Agent 主动检索记忆，另外在 `~/.gemini/config/mcp_config.json` 中添加 OpenViking MCP 服务。
+
+重启 Antigravity app 或开启新的 `agy` 会话后，确认：
+
+- `~/.gemini/antigravity-cli/log/` 下的 `agy` 日志出现 `loaded 1 named hooks`；
+- 一轮对话结束后，`~/.openviking/hook-state/antigravity/<conversation-id>.json` 记录了 `lastStep`。
+
+卸载：
+
+```bash
+curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harness antigravity
+```
 
 ## AstrBot 插件
 

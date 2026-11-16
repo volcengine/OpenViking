@@ -8,10 +8,12 @@ import asyncio
 import contextlib
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import Any, Generic, TypeVar
 
+from openviking.service.task_tracker_concurrency import run_to_completion
+from openviking.service.task_work_index import detach_task_context
 from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
 
@@ -19,6 +21,18 @@ logger = get_logger(__name__)
 
 T = TypeVar("T")
 R = TypeVar("R")
+
+
+def _create_background_task(
+    loop: asyncio.AbstractEventLoop,
+    coroutine: Coroutine[Any, Any, R],
+    *,
+    name: str,
+) -> asyncio.Task[R]:
+    """Create shared batch work outside any submitter's Task lifecycle."""
+
+    with detach_task_context():
+        return loop.create_task(coroutine, name=name)
 
 
 @dataclass(slots=True)
@@ -102,7 +116,16 @@ class StreamingBatcher(Generic[T, R]):
         if should_flush:
             self._trigger_background_flush("count")
 
-        return await future
+        try:
+            return await asyncio.shield(future)
+        except asyncio.CancelledError:
+            # Keep delivery settlement behind accepted shared work. Cancellation
+            # does not change the existing count/time/close batching window.
+            try:
+                await run_to_completion(lambda: future)
+            except Exception:
+                pass
+            raise
 
     async def close(self) -> R | None:
         if self._closed:
@@ -130,15 +153,21 @@ class StreamingBatcher(Generic[T, R]):
                     tracer.set("flush_reason", reason)
                     tracer.set("request_count", len(items))
                     tracer.set("input_size", sum(self._item_size(item.payload) for item in items))
-                    result = await self.process_batch([item.payload for item in items], reason)
+                    # A shared batch has no single caller-owned Task, including
+                    # when flush() or close() is awaited directly.
+                    with detach_task_context():
+                        result = await self.process_batch([item.payload for item in items], reason)
                     metadata = self._get_result_metadata(result)
                     if metadata is not None:
                         metadata.setdefault("batch_id", batch_id)
                         metadata.setdefault("batch_trace_id", batch_trace_id)
-            except Exception as exc:
+            except (Exception, asyncio.CancelledError) as exc:
                 for item in items:
                     if not item.future.done():
-                        item.future.set_exception(exc)
+                        if isinstance(exc, asyncio.CancelledError):
+                            item.future.cancel()
+                        else:
+                            item.future.set_exception(exc)
                 raise
 
             self._last_result = result
@@ -156,7 +185,8 @@ class StreamingBatcher(Generic[T, R]):
             logger.warning("[%s] timer loop not started: no running event loop", self.name)
             self._timer_task = None
             return
-        self._timer_task = loop.create_task(
+        self._timer_task = _create_background_task(
+            loop,
             self._run_timer_loop(),
             name=f"{self.name}-flush-loop",
         )
@@ -180,7 +210,8 @@ class StreamingBatcher(Generic[T, R]):
             try:
                 await asyncio.sleep(self.config.timer_check_interval_seconds)
                 if await self._should_flush_by_time_or_count():
-                    flush_task = asyncio.create_task(
+                    flush_task = _create_background_task(
+                        asyncio.get_running_loop(),
                         self.flush("time"),
                         name=f"{self.name}-flush-time",
                     )
@@ -220,7 +251,11 @@ class StreamingBatcher(Generic[T, R]):
             except Exception as exc:
                 logger.warning("[%s] background flush failed: %s", self.name, exc)
 
-        loop.create_task(_runner(), name=f"{self.name}-flush-{reason}")
+        _create_background_task(
+            loop,
+            _runner(),
+            name=f"{self.name}-flush-{reason}",
+        )
 
     def _buffered_size_unlocked(self) -> int:
         return sum(self._item_size(item.payload) for item in self._buffer)

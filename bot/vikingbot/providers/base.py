@@ -7,6 +7,8 @@ from typing import Any, AsyncIterator, Callable, Literal
 
 import json_repair
 
+from openviking.models.model_error import ModelErrorKind
+
 
 @dataclass
 class ToolCallRequest:
@@ -27,6 +29,7 @@ class LLMResponse:
     finish_reason: str = "stop"
     usage: dict[str, int] = field(default_factory=dict)
     reasoning_content: str | None = None  # Kimi, DeepSeek-R1 etc.
+    error_kind: ModelErrorKind | None = None
 
     @property
     def has_tool_calls(self) -> bool:
@@ -150,7 +153,7 @@ class LLMProvider(ABC):
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
         max_tokens: int | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         session_id: str | None = None,
         thinking: bool | None = None,
         reasoning_effort: str | None = None,
@@ -179,7 +182,7 @@ class LLMProvider(ABC):
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
         max_tokens: int | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         session_id: str | None = None,
     ) -> AsyncIterator[LLMStreamEvent]:
         """Stream a chat completion request.
@@ -197,8 +200,12 @@ class LLMProvider(ABC):
         yield LLMStreamEvent(type="response", response=response)
 
     def supports_tool_result_media(self, model: str | None = None) -> bool:
-        """Whether this provider can preserve media inside a tool result."""
+        """Whether this provider can deliver media returned by a tool to the model."""
         return False
+
+    def should_inline_tool_result_media(self, model: str | None = None) -> bool:
+        """Agent Loop policy; scoped providers can opt into adapted image delivery."""
+        return self.supports_tool_result_media(model)
 
     @abstractmethod
     def get_default_model(self) -> str:

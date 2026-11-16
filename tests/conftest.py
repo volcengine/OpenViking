@@ -19,6 +19,12 @@ from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 from tests.utils.mock_agfs import MockLocalAGFS
+from tests.utils.watch_fixtures import (  # noqa: F401
+    watch_manager,
+    watch_store,
+    watch_tracker,
+    watch_vfs,
+)
 
 
 # ── Workaround: local .so may lack AGFS_Grep symbol (new in latest source) ──
@@ -156,6 +162,8 @@ async def service(
     OpenVikingConfigSingleton.reset_instance()
     OpenVikingConfigSingleton.initialize(
         config_dict={
+            # Domain tests use a file-only fake; Watch leadership has dedicated fixtures.
+            "enable_watch_scheduler": False,
             "storage": {
                 "workspace": str(test_data_dir),
                 "agfs": {"backend": "local"},

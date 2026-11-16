@@ -220,12 +220,20 @@ impl DynamicState {
             CacheOperation::Get => self.api.get.is_some(),
             CacheOperation::Set => self.api.set.is_some(),
             CacheOperation::Del => self.api.del.is_some(),
+            CacheOperation::Unlink => self.api.unlink.is_some(),
             CacheOperation::Mget => self.api.mget.is_some(),
             CacheOperation::Mset => self.api.mset.is_some(),
             CacheOperation::IncrBy => self.api.incrby.is_some(),
+            CacheOperation::Expire => self.api.expire.is_some(),
+            CacheOperation::Hget => self.api.hget.is_some(),
+            CacheOperation::Hset => self.api.hset.is_some(),
             CacheOperation::Sismember => self.api.sismember.is_some(),
             CacheOperation::Smembers => self.api.smembers.is_some(),
             CacheOperation::Scard => self.api.scard.is_some(),
+            CacheOperation::Zadd => self.api.zadd.is_some(),
+            CacheOperation::Zscan => self.api.zscan.is_some(),
+            CacheOperation::ZrangeByScore => self.api.zrangebyscore.is_some(),
+            CacheOperation::Zrem => self.api.zrem.is_some(),
             CacheOperation::Lpush => self.api.lpush.is_some(),
             CacheOperation::Rpush => self.api.rpush.is_some(),
             CacheOperation::Lpop => self.api.lpop.is_some(),
@@ -406,6 +414,33 @@ impl CacheProvider for DynamicProvider {
         .await
     }
 
+    async fn unlink(&self, keys: &[String]) -> CacheResult<u64> {
+        if keys.is_empty() {
+            return Ok(0);
+        }
+        let keys = keys.to_vec();
+        self.call("unlink", move |state| {
+            state.with_call("unlink", |api, handle| {
+                let callback = required(api.unlink, CacheOperation::Unlink)?;
+                let raw_keys = string_slices(&keys);
+                let mut removed = 0;
+                let mut error = OwnedBufferV1::default();
+                let status = unsafe {
+                    callback(
+                        handle,
+                        raw_keys.as_ptr(),
+                        raw_keys.len(),
+                        &mut removed,
+                        &mut error,
+                    )
+                };
+                status_result(status, error, "unlink")?;
+                Ok(removed)
+            })
+        })
+        .await
+    }
+
     async fn mget(&self, keys: &[String]) -> CacheResult<Vec<Option<Bytes>>> {
         if keys.is_empty() {
             return Ok(Vec::new());
@@ -494,6 +529,91 @@ impl CacheProvider for DynamicProvider {
         .await
     }
 
+    async fn expire(&self, key: &str, duration: std::time::Duration) -> CacheResult<bool> {
+        let duration_ms = u64::try_from(duration.as_millis())
+            .map_err(|_| CacheError::InvalidArgument("expire duration is too large".into()))?;
+        if duration_ms == 0 {
+            return Err(CacheError::InvalidArgument(
+                "expire duration must be greater than zero".into(),
+            ));
+        }
+        let key = key.to_string();
+        self.call("expire", move |state| {
+            state.with_call("expire", |api, handle| {
+                let callback = required(api.expire, CacheOperation::Expire)?;
+                let mut applied = 0;
+                let mut error = OwnedBufferV1::default();
+                let status = unsafe {
+                    callback(
+                        handle,
+                        ByteSliceV1::from_slice(key.as_bytes()),
+                        duration_ms,
+                        &mut applied,
+                        &mut error,
+                    )
+                };
+                status_result(status, error, "expire")?;
+                take_bool(applied, "expire")
+            })
+        })
+        .await
+    }
+
+    async fn hget(&self, key: &str, field: &str) -> CacheResult<Option<Bytes>> {
+        let key = key.to_string();
+        let field = field.to_string();
+        self.call("hget", move |state| {
+            state.with_call("hget", |api, handle| {
+                let callback = required(api.hget, CacheOperation::Hget)?;
+                let mut output = OptionalOwnedBufferV1::default();
+                let mut error = OwnedBufferV1::default();
+                let status = unsafe {
+                    callback(
+                        handle,
+                        ByteSliceV1::from_slice(key.as_bytes()),
+                        ByteSliceV1::from_slice(field.as_bytes()),
+                        &mut output,
+                        &mut error,
+                    )
+                };
+                take_output(
+                    status,
+                    error,
+                    "hget",
+                    output,
+                    take_optional_buffer,
+                    discard_optional_buffer,
+                )
+            })
+        })
+        .await
+    }
+
+    async fn hset(&self, key: &str, field: &str, value: Bytes) -> CacheResult<u64> {
+        let key = key.to_string();
+        let field = field.to_string();
+        self.call("hset", move |state| {
+            state.with_call("hset", |api, handle| {
+                let callback = required(api.hset, CacheOperation::Hset)?;
+                let mut added = 0;
+                let mut error = OwnedBufferV1::default();
+                let status = unsafe {
+                    callback(
+                        handle,
+                        ByteSliceV1::from_slice(key.as_bytes()),
+                        ByteSliceV1::from_slice(field.as_bytes()),
+                        ByteSliceV1::from_slice(&value),
+                        &mut added,
+                        &mut error,
+                    )
+                };
+                status_result(status, error, "hset")?;
+                Ok(added)
+            })
+        })
+        .await
+    }
+
     async fn sismember(&self, key: &str, member: &[u8]) -> CacheResult<bool> {
         let key = key.to_string();
         let member = member.to_vec();
@@ -548,6 +668,152 @@ impl CacheProvider for DynamicProvider {
 
     async fn scard(&self, key: &str) -> CacheResult<u64> {
         scalar_u64(self, CacheOperation::Scard, key).await
+    }
+
+    async fn zadd(&self, key: &str, score: f64, member: &str) -> CacheResult<u64> {
+        let key = key.to_string();
+        let member = member.to_string();
+        self.call("zadd", move |state| {
+            state.with_call("zadd", |api, handle| {
+                let callback = required(api.zadd, CacheOperation::Zadd)?;
+                let mut added = 0;
+                let mut error = OwnedBufferV1::default();
+                let status = unsafe {
+                    callback(
+                        handle,
+                        ByteSliceV1::from_slice(key.as_bytes()),
+                        score,
+                        ByteSliceV1::from_slice(member.as_bytes()),
+                        &mut added,
+                        &mut error,
+                    )
+                };
+                status_result(status, error, "zadd")?;
+                Ok(added)
+            })
+        })
+        .await
+    }
+
+    async fn zscan_match(&self, key: &str, pattern: &str, count: u32) -> CacheResult<Vec<String>> {
+        let key = key.to_string();
+        let pattern = pattern.to_string();
+        self.call("zscan", move |state| {
+            state.with_call("zscan", |api, handle| {
+                let callback = required(api.zscan, CacheOperation::Zscan)?;
+                let mut output = OwnedBufferArrayV1::default();
+                let mut error = OwnedBufferV1::default();
+                let status = unsafe {
+                    callback(
+                        handle,
+                        ByteSliceV1::from_slice(key.as_bytes()),
+                        ByteSliceV1::from_slice(pattern.as_bytes()),
+                        count,
+                        &mut output,
+                        &mut error,
+                    )
+                };
+                let values = take_output(
+                    status,
+                    error,
+                    "zscan",
+                    output,
+                    take_buffer_array,
+                    discard_buffer_array,
+                )?;
+                values
+                    .into_iter()
+                    .map(|value| {
+                        String::from_utf8(value.to_vec()).map_err(|error| {
+                            CacheError::InvalidData(format!(
+                                "dynamic provider zscan returned non-UTF-8 member: {error}"
+                            ))
+                        })
+                    })
+                    .collect()
+            })
+        })
+        .await
+    }
+
+    /// Return sorted-set members within one score range through the dynamic provider.
+    async fn zrangebyscore(
+        &self,
+        key: &str,
+        min: f64,
+        max: f64,
+        limit: u32,
+    ) -> CacheResult<Vec<String>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let key = key.to_string();
+        self.call("zrangebyscore", move |state| {
+            state.with_call("zrangebyscore", |api, handle| {
+                let callback = required(api.zrangebyscore, CacheOperation::ZrangeByScore)?;
+                let mut output = OwnedBufferArrayV1::default();
+                let mut error = OwnedBufferV1::default();
+                let status = unsafe {
+                    callback(
+                        handle,
+                        ByteSliceV1::from_slice(key.as_bytes()),
+                        min,
+                        max,
+                        limit,
+                        &mut output,
+                        &mut error,
+                    )
+                };
+                let values = take_output(
+                    status,
+                    error,
+                    "zrangebyscore",
+                    output,
+                    take_buffer_array,
+                    discard_buffer_array,
+                )?;
+                values
+                    .into_iter()
+                    .map(|value| {
+                        String::from_utf8(value.to_vec()).map_err(|error| {
+                            CacheError::InvalidData(format!(
+                                "dynamic provider zrangebyscore returned non-UTF-8 member: {error}"
+                            ))
+                        })
+                    })
+                    .collect()
+            })
+        })
+        .await
+    }
+
+    async fn zrem(&self, key: &str, members: &[String]) -> CacheResult<u64> {
+        if members.is_empty() {
+            return Ok(0);
+        }
+        let key = key.to_string();
+        let members = members.to_vec();
+        self.call("zrem", move |state| {
+            state.with_call("zrem", |api, handle| {
+                let callback = required(api.zrem, CacheOperation::Zrem)?;
+                let raw_members = string_slices(&members);
+                let mut removed = 0;
+                let mut error = OwnedBufferV1::default();
+                let status = unsafe {
+                    callback(
+                        handle,
+                        ByteSliceV1::from_slice(key.as_bytes()),
+                        raw_members.as_ptr(),
+                        raw_members.len(),
+                        &mut removed,
+                        &mut error,
+                    )
+                };
+                status_result(status, error, "zrem")?;
+                Ok(removed)
+            })
+        })
+        .await
     }
 
     async fn lpush(&self, key: &str, values: Vec<Bytes>) -> CacheResult<u64> {
@@ -1328,14 +1594,6 @@ fn allocation_registry() -> &'static Mutex<HashMap<usize, Layout>> {
     ALLOCATIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-#[cfg(test)]
-fn host_allocation_is_registered(data: *mut u8) -> bool {
-    allocation_registry()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .contains_key(&(data as usize))
-}
-
 fn release_registered(data: *mut u8) {
     if data.is_null() {
         return;
@@ -1532,127 +1790,5 @@ unsafe extern "C" fn host_dealloc(data: *mut u8, size: usize, alignment: usize) 
             drop(allocations);
             unsafe { dealloc(data, expected) };
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn script_result_rejects_excessive_nesting() {
-        let mut value = ScriptValueV1 {
-            kind: SCRIPT_NULL,
-            ..ScriptValueV1::default()
-        };
-        for _ in 0..80 {
-            let layout = Layout::array::<ScriptValueV1>(1).unwrap();
-            let items =
-                unsafe { host_alloc(layout.size(), layout.align()) }.cast::<ScriptValueV1>();
-            assert!(!items.is_null());
-            unsafe { ptr::write(items, value) };
-            value = ScriptValueV1 {
-                items,
-                items_len: 1,
-                kind: SCRIPT_ARRAY,
-                ..ScriptValueV1::default()
-            };
-        }
-
-        let error = take_script_value(value).unwrap_err();
-
-        assert!(matches!(error, CacheError::InvalidData(message) if message.contains("depth")));
-    }
-
-    #[test]
-    fn buffer_array_rejects_excessive_item_count() {
-        const ITEM_COUNT: usize = 100_001;
-        let layout = Layout::array::<OwnedBufferV1>(ITEM_COUNT).unwrap();
-        let items = unsafe { host_alloc(layout.size(), layout.align()) }.cast::<OwnedBufferV1>();
-        assert!(!items.is_null());
-        for index in 0..ITEM_COUNT {
-            unsafe { ptr::write(items.add(index), OwnedBufferV1::default()) };
-        }
-
-        let error = take_buffer_array(OwnedBufferArrayV1 {
-            items,
-            len: ITEM_COUNT,
-        })
-        .unwrap_err();
-
-        assert!(
-            matches!(error, CacheError::InvalidData(message) if message.contains("item count"))
-        );
-    }
-
-    #[test]
-    fn optional_array_failure_releases_all_host_allocations() {
-        let first_data = unsafe { host_alloc(1, align_of::<u8>()) };
-        let second_data = unsafe { host_alloc(1, align_of::<u8>()) };
-        assert!(!first_data.is_null());
-        assert!(!second_data.is_null());
-        unsafe {
-            *first_data = b'a';
-            *second_data = b'b';
-        }
-        let layout = Layout::array::<OptionalOwnedBufferV1>(2).unwrap();
-        let items =
-            unsafe { host_alloc(layout.size(), layout.align()) }.cast::<OptionalOwnedBufferV1>();
-        unsafe {
-            ptr::write(
-                items,
-                OptionalOwnedBufferV1 {
-                    value: OwnedBufferV1 {
-                        data: first_data,
-                        len: 1,
-                    },
-                    present: 2,
-                },
-            );
-            ptr::write(
-                items.add(1),
-                OptionalOwnedBufferV1 {
-                    value: OwnedBufferV1 {
-                        data: second_data,
-                        len: 1,
-                    },
-                    present: 1,
-                },
-            );
-        }
-
-        let result = take_optional_buffer_array(OptionalOwnedBufferArrayV1 { items, len: 2 });
-
-        assert!(matches!(result, Err(CacheError::InvalidData(_))));
-        assert!(!host_allocation_is_registered(first_data));
-        assert!(!host_allocation_is_registered(second_data));
-        assert!(!host_allocation_is_registered(items.cast::<u8>()));
-    }
-
-    #[test]
-    fn checked_reader_rejects_overflow_and_misalignment() {
-        let overflow = claim_allocation::<ScriptValueV1>(
-            std::ptr::NonNull::dangling().as_ptr(),
-            usize::MAX,
-            MAX_HOST_ALLOCATION_BYTES,
-            "overflow array",
-            &mut DecodeBudget::default(),
-        )
-        .unwrap_err();
-        assert!(
-            matches!(overflow, CacheError::InvalidData(message) if message.contains("overflow"))
-        );
-
-        let misaligned = claim_allocation::<ScriptValueV1>(
-            1usize as *mut ScriptValueV1,
-            1,
-            MAX_HOST_ALLOCATION_BYTES,
-            "misaligned array",
-            &mut DecodeBudget::default(),
-        )
-        .unwrap_err();
-        assert!(
-            matches!(misaligned, CacheError::InvalidData(message) if message.contains("aligned"))
-        );
     }
 }

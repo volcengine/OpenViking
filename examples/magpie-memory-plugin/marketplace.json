@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "plugins": [
+    {
+      "package": "@openviking/magpie-plugin",
+      "name": "OpenViking",
+      "kind": "middleware",
+      "icon": "https://raw.githubusercontent.com/volcengine/OpenViking/main/docs/images/ov-logo-icon.png",
+      "summary": {
+        "zh": "为 Agent 召回和保存 OpenViking 记忆；切换 OV/VikingBot 模型并自动重启验证。记忆和模型管理可独立开关。",
+        "en": "OpenViking memory recall/capture and OV/VikingBot model switching with automatic restart; independently controlled."
+      }
+    }
+  ]
+}

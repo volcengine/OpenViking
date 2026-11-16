@@ -7,14 +7,24 @@ import json
 import logging
 import time
 import uuid
+from dataclasses import replace
+from typing import NamedTuple
+from urllib.parse import quote, unquote_plus
 
 import aiohttp
+import async_timeout
 import orjson
 from fastapi import HTTPException
 from fastapi.responses import Response, StreamingResponse
+from pydantic import ValidationError
 from starlette.background import BackgroundTask
 
-from .protocols import SSEDecoder, parse_body
+from openviking.core.peer_id import normalize_peer_id
+
+from .capture import CapturePipeline
+from .client import PEER_HEADER
+from .models import KEY_PLACEHOLDER, Policy, validation_detail
+from .protocols import HEARTBEAT_SECONDS, SSEDecoder, heartbeat, parse_body
 from .storage import digest
 from .tool_executor import ToolExecutor
 from .tool_loop import HiddenToolLoop, ToolLoopError
@@ -39,6 +49,45 @@ PATH_PROTOCOL = {
     "/v1/chat/completions": "chat",
     "/v1/responses": "responses",
 }
+PRIMARY_PATH = {
+    "anthropic": "/v1/messages",
+    "chat": "/v1/chat/completions",
+    "responses": "/v1/responses",
+}
+
+
+async def open_upstream(http, method, url, wait, total=None, **kwargs):
+    """Start a model call that waits at most ``wait`` seconds at a time on the upstream.
+
+    The reply must start within ``wait`` (connecting, sending the body and receiving the
+    headers), and its body may then pause for at most ``wait`` between reads, so a reply that
+    keeps arriving is never cut. ``total``, when given, also bounds the whole call.
+    """
+    # aiohttp's sock_read covers the headers and every body read but starts only after the
+    # request body is written; the outer bound covers connecting and sending the body.
+    timeout = aiohttp.ClientTimeout(total=total, sock_read=wait)
+    async with async_timeout.timeout(wait):
+        return await http.request(method, url, timeout=timeout, **kwargs)
+
+
+class _ClosingStreamingResponse(StreamingResponse):
+    def __init__(self, content, *, close_upstream, cleanup, **kwargs):
+        super().__init__(content, **kwargs)
+        self._close_upstream = close_upstream
+        self._cleanup = cleanup
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            try:
+                self._close_upstream()
+            finally:
+                try:
+                    if close := getattr(self.body_iterator, "aclose", None):
+                        await close()
+                finally:
+                    await self._cleanup()
 
 
 def filtered_headers(headers, request=False):
@@ -61,21 +110,28 @@ def filtered_headers(headers, request=False):
     }
 
 
-def upstream_url(upstream, path):
-    base = upstream["base_url"].rstrip("/")
-    if upstream["protocol"] != "anthropic":
+def query_names(pairs):
+    return {unquote_plus(pair.partition("=")[0]) for pair in pairs}
+
+
+def upstream_url(upstream, path, query=""):
+    """The upstream address for a client path; ``{api_key}`` stays unfilled."""
+    base, _, stored = upstream["base_url"].partition("?")
+    base = base.rstrip("/")
+    if not upstream.get("append_endpoint_path", True):
+        primary = PRIMARY_PATH[upstream["protocol"]]
+        if path != primary and not path.startswith(primary + "/"):
+            raise HTTPException(404, f"This upstream is an exact endpoint for {primary} only")
+        path = path[len(primary) :]
+    elif upstream["protocol"] != "anthropic":
         path = path.removeprefix("/v1")
-    return base + path
+    pairs = [pair for pair in stored.split("&") if pair]
+    names = query_names(pairs)
+    pairs += [pair for pair in query.split("&") if pair and not query_names([pair]) & names]
+    return base + path + ("?" + "&".join(pairs) if pairs else "")
 
 
-def upstream_headers(upstream, incoming):
-    headers = filtered_headers(incoming, request=True)
-    headers.update(upstream.get("headers", {}))
-    # Drop configured copies of the auth headers set below; other protocols keep x-api-key.
-    own = (
-        {"authorization", "x-api-key"} if upstream["protocol"] == "anthropic" else {"authorization"}
-    )
-    headers = {k: v for k, v in headers.items() if k.lower() not in own}
+def upstream_key(upstream, incoming):
     key = (
         upstream.get("api_key", "")
         if upstream.get("auth_mode") != "passthrough"
@@ -87,10 +143,80 @@ def upstream_headers(upstream, incoming):
         )
     if not key:
         raise HTTPException(401, "Upstream API key is missing")
-    # Anthropic-compatible services accept either header; some require Bearer.
-    headers["Authorization"] = "Bearer " + key
-    if upstream["protocol"] == "anthropic":
-        headers["x-api-key"] = key
+    return key
+
+
+def context_error(detail, status=400, reason="context_override_invalid"):
+    """An ``X-OpenViking-Context`` error, in the management API's ``{reason, detail}`` shape."""
+    return HTTPException(status, {"reason": reason, "detail": detail})
+
+
+def context_override(policy, header):
+    """The stored policy with the fields of an ``X-OpenViking-Context`` header applied."""
+    if not policy.get("client_overrides", True):
+        raise context_error(
+            "This key's context profile does not accept X-OpenViking-Context.",
+            403,
+            "context_override_not_allowed",
+        )
+    try:
+        override = json.loads(header)
+    except (ValueError, RecursionError):
+        raise context_error("X-OpenViking-Context is not valid JSON")
+    if not isinstance(override, dict):
+        raise context_error("X-OpenViking-Context must be a JSON object")
+    # The profile's name and its switch are not per-conversation settings.
+    if blocked := override.keys() & {"name", "client_overrides"}:
+        raise context_error("X-OpenViking-Context cannot set " + ", ".join(sorted(blocked)))
+    try:
+        merged = Policy.model_validate({**policy, **override})
+        saved = Policy.model_validate(policy)
+    except ValidationError as error:
+        raise context_error(validation_detail(error))
+    # Tool access only narrows: the header cannot offer a tool the profile withholds.
+    merged.gateway_tools = merged.gateway_tools and saved.gateway_tools
+    merged.disabled_tools = list(dict.fromkeys([*saved.disabled_tools, *merged.disabled_tools]))
+    return {**policy, **merged.model_dump()}, sorted(override)
+
+
+def request_peer(headers, credential):
+    """The peer of an ``X-OpenViking-Actor-Peer`` header, else the key's default peer.
+
+    A blank header falls back to the default, so a client cannot drop a key's peer.
+    """
+    header = headers.get(PEER_HEADER)
+    try:
+        peer = normalize_peer_id(header)
+    except ValueError:
+        raise context_error(
+            PEER_HEADER + " must be one path segment of letters, digits, '_', '.', '-' "
+            "and at most one '@'.",
+            reason="peer_invalid",
+        ) from None
+    return peer or credential.get("default_peer_id")
+
+
+def fill_key(url, key):
+    return url.replace(KEY_PLACEHOLDER, quote(key, safe=""))
+
+
+def upstream_headers(upstream, incoming):
+    headers = filtered_headers(incoming, request=True)
+    headers.update(upstream.get("headers", {}))
+    key = upstream_key(upstream, incoming)
+    name = upstream.get("key_header", "authorization")
+    # Drop configured copies of the auth headers set below.
+    if KEY_PLACEHOLDER in upstream.get("base_url", ""):
+        own, auth = {"authorization", "x-api-key", "api-key"}, {}
+    elif name == "authorization":
+        own, auth = {"authorization"}, {"Authorization": "Bearer " + key}
+        # Anthropic-compatible services accept either header; some require Bearer.
+        if upstream["protocol"] == "anthropic":
+            own, auth = own | {"x-api-key"}, {**auth, "x-api-key": key}
+    else:
+        own, auth = {"authorization", name}, {name: key}
+    headers = {k: v for k, v in headers.items() if k.lower() not in own}
+    headers.update(auth)
     headers["accept-encoding"] = "identity"
     return headers
 
@@ -103,13 +229,49 @@ def check_coding_plan(upstream):
 def matches(upstream, protocol, model):
     return (
         upstream.get("enabled", True)
-        and (not protocol or upstream["protocol"] == protocol)
+        and (
+            upstream["protocol"] == protocol
+            if protocol
+            else upstream.get("append_endpoint_path", True)
+        )
         and (
             not model
             or not upstream.get("models")
             or model in upstream["models"]
             or model in upstream.get("aliases", {})
         )
+    )
+
+
+class Binding(NamedTuple):
+    policy: dict | None
+    # Disabled ones included; callers skip them.
+    upstreams: list[dict]
+    # Empty allows every model.
+    models: list[str]
+
+
+async def default_policy(management, config, account):
+    """Use the account's default profile, or the deployment's when none is stored."""
+    policy = await management.get(account, "policies", "default")
+    return policy or config.default_profile.model_dump()
+
+
+async def resolve_binding(management, config, credential):
+    """The context profile, upstreams and models a credential's requests use."""
+    account = credential["account"]
+    upstreams = await management.list(account, "upstreams")
+    if credential.get("source") == "openviking":
+        # An OpenViking key stores no binding: it uses the account's defaults.
+        return Binding(
+            await default_policy(management, config, account),
+            upstreams or [{**u.model_dump(), "id": i} for i, u in config.default_upstreams.items()],
+            [],
+        )
+    return Binding(
+        await management.get(account, "policies", credential["policy_id"]),
+        [u for u in upstreams if u["id"] in credential["upstream_ids"]],
+        credential["models"],
     )
 
 
@@ -128,6 +290,7 @@ class ProxyRequest:
                 break
         self.protocol = PATH_PROTOCOL.get(self.path)
         self.prepared = None
+        self.peer = None
         self.metrics = {"request_id": uuid.uuid4().hex, "kind": "passthrough"}
 
     async def run(self):
@@ -151,12 +314,13 @@ class ProxyRequest:
             self.headers.setdefault("content-type", "application/json")
         self.started = time.monotonic()
         try:
-            self.response = await self.app.state.http.request(
+            self.response = await open_upstream(
+                self.app.state.http,
                 self.request.method,
                 self.target,
+                self.config.upstream_timeout_seconds,
                 data=self.raw or None,
                 headers=self.headers,
-                timeout=aiohttp.ClientTimeout(total=self.config.upstream_timeout_seconds),
                 allow_redirects=False,
             )
         except (aiohttp.ClientError, asyncio.TimeoutError):
@@ -183,22 +347,41 @@ class ProxyRequest:
             except (ValueError, RecursionError):
                 pass
         self.model = routing.get("model", "") if isinstance(routing, dict) else ""
+        binding = await resolve_binding(self.management, self.config, self.credential)
         # Calls on a stored response are pinned to its upstream and carry no model.
-        if self.credential["models"] and self.raw and not self.path.startswith("/v1/responses/"):
+        if binding.models and self.raw and not self.path.startswith("/v1/responses/"):
             if self.request.headers.get("content-encoding", "identity").lower() != "identity":
                 raise HTTPException(415, "Compressed request bodies are not supported")
             if not self.model or not isinstance(self.model, str):
                 raise HTTPException(400, "Request model is missing")
-        if self.credential["models"] and self.model and self.model not in self.credential["models"]:
+        if binding.models and self.model and self.model not in binding.models:
             raise HTTPException(403, "Model is not allowed by this key")
         self.metrics["model"] = self.model
-        self.upstreams = [
-            u
-            for u in await self.management.list(self.credential["account"], "upstreams")
-            if u["id"] in self.credential["upstream_ids"]
-        ]
+        self.policy = binding.policy
+        # The header is checked on every request that carries it, enhanced or not.
+        header = self.request.headers.get("x-openviking-context")
+        if header is not None and self.policy:
+            self.policy, self.metrics["context_override"] = context_override(self.policy, header)
+        # Like the context header, a peer is checked on every request, enhanced or not.
+        self.peer = request_peer(self.request.headers, self.credential)
+        if self.peer:
+            self.metrics["peer"] = self.peer
+        self.upstreams = binding.upstreams
+        # A host in front of the gateway may pick the upstream, but only an allowed one.
+        url = self.request.headers.get("x-openviking-upstream-url")
+        if url is not None:
+            self.upstreams = [u for u in self.upstreams if u["base_url"] == url.rstrip("/")]
+            if not self.upstreams:
+                raise HTTPException(403, "Upstream URL is not allowed")
+        # A stored response is pinned below; an exact responses endpoint may hold it.
+        stored_response = self.path.startswith("/v1/responses/")
         candidates = sorted(
-            [u for u in self.upstreams if matches(u, self.protocol, self.model)],
+            [
+                u
+                for u in self.upstreams
+                if matches(u, self.protocol, self.model)
+                or (stored_response and matches(u, "responses", self.model))
+            ],
             key=lambda u: (-u["priority"], u["id"]),
         )
         if not candidates:
@@ -216,6 +399,10 @@ class ProxyRequest:
                 raise HTTPException(403, "Response upstream is no longer allowed")
         # Pinned upstream selection in the kernel is restricted to allowed models.
         self.candidates = candidates
+        # A missing client key fails before the request freezes a session or calls OpenViking.
+        # A conversation may stay pinned to a candidate with its own key; url() checks that one.
+        if all(u.get("auth_mode") == "passthrough" for u in candidates):
+            upstream_key(self.upstream, self.request.headers)
 
     async def prepare(self):
         if (
@@ -224,10 +411,7 @@ class ProxyRequest:
             and tool_protocol(self.protocol).enhanced_supported(self.body)
             and not self.request.headers.get("content-encoding")
         ):
-            policy = await self.management.get(
-                self.credential["account"], "policies", self.credential["policy_id"]
-            )
-            if not policy:
+            if not self.policy:
                 raise HTTPException(403, "Context policy is unavailable")
             self.body, self.prepared, metrics = await self.app.state.kernel.enhance(
                 self.body,
@@ -235,10 +419,11 @@ class ProxyRequest:
                 dict(self.request.headers),
                 self.credential,
                 self.upstream,
-                policy,
+                self.policy,
                 self.path.endswith("count_tokens"),
                 self.candidates,
                 self.summarize,
+                peer=self.peer,
             )
             self.metrics.update(metrics)
             if self.prepared:
@@ -253,8 +438,9 @@ class ProxyRequest:
                 self.metrics.update(self.prepared.metrics)
 
     def url(self, upstream):
-        target = upstream_url(upstream, self.path)
-        return target + "?" + self.request.url.query if self.request.url.query else target
+        key = upstream_key(upstream, self.request.headers)
+        filled = {**upstream, "base_url": fill_key(upstream["base_url"], key)}
+        return upstream_url(filled, self.path, self.request.url.query)
 
     async def outgoing(self, body, upstream, prepared):
         """Vendor fields and the model alias, for the client request and its summary."""
@@ -268,13 +454,14 @@ class ProxyRequest:
         try:
             check_coding_plan(upstream)
             headers = upstream_headers(upstream, self.request.headers)
+            target = self.url(upstream)
         except HTTPException as error:
             raise SummaryError(f"summary_http_{error.status_code}") from error
         headers.setdefault("content-type", "application/json")
         body = await self.outgoing(body, upstream, prepared)
         try:
             async with self.app.state.http.post(
-                self.url(upstream),
+                target,
                 data=orjson.dumps(body),
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=self.config.upstream_timeout_seconds),
@@ -325,6 +512,20 @@ class ProxyRequest:
                     {"upstream_id": self.upstream["id"], "user_id": self.credential["user_id"]},
                     ttl=self.config.response_ttl_seconds,
                 )
+            if self.prepared:
+                # Delivery may have failed or recovered while this request was in flight.
+                # A worker row inserted between this read and the log below can still be
+                # older than this row; if the read fails, the prepare-time fields are kept.
+                try:
+                    capture = await self.store.capture.get(
+                        self.prepared.scope, self.prepared.session
+                    )
+                    CapturePipeline.metrics(
+                        replace(self.prepared, capture=capture, metrics=self.metrics),
+                        Policy.model_validate(self.prepared.root["policy"]),
+                    )
+                except Exception:
+                    logger.exception("OpenViking Gateway capture status refresh failed")
             await self.management.log(
                 self.credential["account"], self.metrics, user_id=self.credential["user_id"]
             )
@@ -340,6 +541,7 @@ class ProxyRequest:
             self.credential,
             self.config.public_url,
             self.config.max_body_bytes,
+            self.config.mcp_file_links,
         )
         loop = HiddenToolLoop(prepared, executor, self.store, capture)
         headers = {
@@ -349,36 +551,51 @@ class ProxyRequest:
         }
 
         async def send(payload, timeout):
-            # Without a total tool deadline each continuation gets the usual upstream timeout.
-            return await self.app.state.http.post(
+            # A total tool deadline also bounds the whole continuation, body included.
+            return await open_upstream(
+                self.app.state.http,
+                "POST",
                 self.target,
+                self.config.upstream_timeout_seconds,
+                total=timeout,
                 data=orjson.dumps(payload),
                 headers=self.headers,
-                timeout=aiohttp.ClientTimeout(
-                    total=timeout or self.config.upstream_timeout_seconds
-                ),
                 allow_redirects=False,
             )
 
+        completed = False
+
         async def stream():
+            nonlocal completed
             finished = False
+            chunks = heartbeat(loop.run(response, send), HEARTBEAT_SECONDS)
             try:
-                async for chunk in loop.run(response, send):
+                async for chunk in chunks:
+                    if chunk is None:
+                        yield b": keep-alive\n\n"
+                        continue
                     await self.relay()
                     yield chunk
                 finished = True
+                completed = True
             except (ToolLoopError, aiohttp.ClientError) as error:
                 self.metrics["degradation"] = "hidden_tool_loop_failed"
-                yield loop.error(str(error))
+                yield loop.error(error)
             finally:
+                await chunks.aclose()
                 if not finished:
                     capture.complete = False
                 self.metrics.update(prepared.metrics)
 
+        async def cleanup():
+            if not completed:
+                capture.complete = False
+            await self.finish()
+
         if self.body.get("stream"):
             headers["content-type"] = "text/event-stream"
-            return StreamingResponse(
-                stream(), headers=headers, background=BackgroundTask(self.finish)
+            return _ClosingStreamingResponse(
+                stream(), headers=headers, close_upstream=response.close, cleanup=cleanup
             )
         try:
             async for _ in loop.run(response, send):
@@ -409,19 +626,24 @@ class ProxyRequest:
         response, capture = self.response, self.capture
         headers = filtered_headers(response.headers)
         if "text/event-stream" in response.headers.get("content-type", ""):
+            headers = {k: v for k, v in headers.items() if k.lower() != "content-length"}
 
             async def stream():
                 decoder = SSEDecoder()
                 observe = not response.headers.get("content-encoding")
                 finished = False
+                chunks = heartbeat(response.content.iter_any(), HEARTBEAT_SECONDS)
                 try:
-                    async for chunk in response.content.iter_any():
+                    async for chunk in chunks:
+                        if chunk is None:
+                            if observe and not decoder.buffer:
+                                yield b": keep-alive\n\n"
+                            continue
                         if observe:
                             try:
-                                for frame in decoder.feed(chunk):
-                                    data = decoder.data(frame)
-                                    if data:
-                                        capture.event(data)
+                                # A chunk inside one event completes none: no reply to reread.
+                                if frames := decoder.feed(chunk):
+                                    capture.events(d for d in map(decoder.data, frames) if d)
                             except Exception:
                                 observe = False
                                 capture.complete = False
@@ -430,6 +652,7 @@ class ProxyRequest:
                         yield chunk
                     finished = True
                 finally:
+                    await chunks.aclose()
                     response.close()
                     if not finished:
                         capture.complete = False

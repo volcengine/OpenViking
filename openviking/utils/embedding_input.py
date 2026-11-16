@@ -10,12 +10,6 @@ EMBEDDING_TRUNCATION_SUFFIX = "\n...(truncated for embedding)"
 _CJK_RUN = re.compile("[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]+")
 
 
-def estimate_embedding_input_tokens(text: str) -> int:
-    """Estimate CJK=1 and all other characters=1/4 tokens, rounding up."""
-    other_chars = len(text) if text.isascii() else len(_CJK_RUN.sub("", text))
-    return len(text) - other_chars + (other_chars + 3) // 4
-
-
 def truncate_embedding_input(
     text: str,
     max_tokens: int,

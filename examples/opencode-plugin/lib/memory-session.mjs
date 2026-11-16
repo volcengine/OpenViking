@@ -25,6 +25,8 @@ import {
   safeStringify,
 } from "./utils.mjs"
 
+const STALE_SESSION_STATE_MS = 7 * 24 * 60 * 60 * 1000
+
 export function createMemorySessionManager({ config, pluginRoot }) {
   const sessions = new Map()
   const statePath = path.join(pluginRoot, "openviking-session-state.json")
@@ -77,10 +79,17 @@ export function createMemorySessionManager({ config, pluginRoot }) {
         log("ERROR", "persistence", "Unsupported session map version", { version: data.version })
         return
       }
+      const staleBefore = Date.now() - STALE_SESSION_STATE_MS
+      let pruned = 0
       for (const [opencodeSessionId, persisted] of Object.entries(data.sessions ?? {})) {
+        if (isPrunable(persisted, staleBefore)) {
+          pruned += 1
+          continue
+        }
         sessions.set(opencodeSessionId, deserializeSessionState(persisted))
       }
-      log("INFO", "persistence", "Session state loaded", { count: sessions.size })
+      log("INFO", "persistence", "Session state loaded", { count: sessions.size, pruned })
+      if (pruned > 0) await enqueueSave()
     } catch (error) {
       log("ERROR", "persistence", "Failed to load session state", { error: error?.message })
       if (fs.existsSync(statePath)) {
@@ -116,6 +125,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   function serializeSessionState(state) {
     return {
       ovSessionId: state.ovSessionId,
+      parentId: state.parentId ?? "",
       createdAt: state.createdAt,
       lastActivityAt: state.lastActivityAt,
       lastCommitTime: state.lastCommitTime,
@@ -133,9 +143,16 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     }
   }
 
+  // A stale session whose messages are all captured holds nothing left to send.
+  function isPrunable(persisted, staleBefore) {
+    if ((persisted.lastActivityAt ?? 0) >= staleBefore) return false
+    return (persisted.messages ?? []).every(([, message]) => message.captured)
+  }
+
   function deserializeSessionState(persisted) {
     return {
       ovSessionId: persisted.ovSessionId,
+      parentId: persisted.parentId ?? "",
       createdAt: persisted.createdAt,
       lastActivityAt: persisted.lastActivityAt,
       lastCommitTime: persisted.lastCommitTime,
@@ -194,6 +211,13 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       opencode_session: sessionId,
       openviking_session: state.ovSessionId,
     })
+    if (shouldSkipSubagentSession(state)) {
+      log("INFO", "capture", "Skipping capture for subagent session", {
+        opencode_session: sessionId,
+        openviking_session: state.ovSessionId,
+        parent_session: state.parentId,
+      })
+    }
   }
 
   async function handleSessionDeleted(event) {
@@ -240,6 +264,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     if (!sessionId || !messageId) return
 
     const state = getOrCreateSession(sessionId, event)
+    if (shouldSkipSubagentSession(state)) return
     const captured = state.messages.get(messageId)
     const next = captured ?? createMessageState()
     if (role === "user") {
@@ -261,6 +286,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     if (!sessionId || !messageId) return
 
     const state = getOrCreateSession(sessionId, event)
+    if (shouldSkipSubagentSession(state)) return
     const message = state.messages.get(messageId) ?? createMessageState()
     if (message.captured) return
     const partId = part.id ?? `${messageId}:${message.parts.size}`
@@ -300,8 +326,12 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     // not send the same pending messages twice.
     const run = (state.flushChain ?? Promise.resolve()).then(async () => {
       const added = await flushPendingMessages(opencodeSessionId, state)
-      if (commit && isCaptureEnabled(config)) {
-        await commitOvSession(state.ovSessionId, { force: true, reason })
+      if (commit && isCaptureEnabled(config) && !shouldSkipSubagentSession(state)) {
+        const result = await commitOvSession(state.ovSessionId, { force: true, reason })
+        // Server lost the session (reset/reinstall); drop the stale mapping.
+        if (result.status === "not_found" && sessions.get(opencodeSessionId) === state) {
+          sessions.delete(opencodeSessionId)
+        }
       } else if (added > 0) {
         await maybeCommitByThreshold(state)
       }
@@ -331,18 +361,29 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   }
 
   function createSessionState(opencodeSessionId, event = {}) {
-    const parentId = event?.properties?.info?.parentID ?? event?.properties?.parentID ?? event?.parentID ?? ""
+    const isSessionEvent = typeof event?.type === "string" && event.type.startsWith("session.")
+    const parentId = isSessionEvent
+      ? (event?.properties?.info?.parentID ?? event?.properties?.parentID ?? event?.parentID ?? "")
+      : ""
     const ovSessionId = parentId
       ? deriveHarnessSessionId("oc-", parentId, `subagent-${opencodeSessionId}`)
       : deriveHarnessSessionId("oc-", opencodeSessionId)
     return {
       ovSessionId,
+      // Kept on the state (and persisted) so capture, commit, and the
+      // replay/recovery paths can all tell a spawned child session from a
+      // primary one — #6027.
+      parentId,
       createdAt: Date.now(),
       lastActivityAt: Date.now(),
       lastCommitTime: undefined,
       compactedAt: undefined,
       messages: new Map(),
     }
+  }
+
+  function shouldSkipSubagentSession(state) {
+    return Boolean(config.skipSubagentSessions) && Boolean(state?.parentId)
   }
 
   function createMessageState() {
@@ -406,6 +447,11 @@ export function createMemorySessionManager({ config, pluginRoot }) {
 
   async function flushPendingMessages(opencodeSessionId, state) {
     if (!isCaptureEnabled(config)) return 0
+    // Recovery/replay paths (idle flush, dispose flushAll, tool commit, a
+    // state file reloaded after a restart) come through here too, so the
+    // child-session gate has to hold at this boundary — not just at the
+    // message events. See #6027.
+    if (shouldSkipSubagentSession(state)) return 0
     const toSend = []
     for (const [messageId, message] of state.messages.entries()) {
       if (message.captured) continue
@@ -499,6 +545,14 @@ export function createMemorySessionManager({ config, pluginRoot }) {
         status: res.status,
       })
       return { status: "queued" }
+    }
+    if (res.status === 404) {
+      log("WARN", "session", "OpenViking session not found", {
+        openviking_session: ovSessionId,
+        reason,
+        trace_id: res.traceId,
+      })
+      return { status: "not_found" }
     }
     log("ERROR", "session", "Failed to commit OpenViking session", {
       openviking_session: ovSessionId,

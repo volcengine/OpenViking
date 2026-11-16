@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from openviking.message import Message
+from openviking.message.part import TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.agent_experience_context_provider import (
     AgentExperienceContextProvider,
@@ -13,13 +15,13 @@ from openviking.session.memory.agent_experience_context_provider import (
 from openviking.session.memory.agent_trajectory_context_provider import (
     AgentTrajectoryContextProvider,
 )
+from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_updater import ExtractContext
 from openviking.session.memory.session_extract_context_provider import (
     SessionExtractContextProvider,
 )
-from openviking.message import Message
-from openviking.message.part import TextPart
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -112,6 +114,8 @@ async def test_agent_experience_prefetch_starts_with_conversation_and_new_trajec
 
 @pytest.mark.asyncio
 async def test_agent_experience_prefetch_includes_structured_read_results():
+    experience_uri = "viking://user/user_sample_9/memories/experiences/personal_experience_sharing_conversation_flow.md"
+    source_uri = "viking://user/user_sample_9/memories/trajectories/previous_discussion.md"
     provider = AgentExperienceContextProvider(
         messages=[],
         trajectory_summary="album release party discussion",
@@ -124,11 +128,25 @@ async def test_agent_experience_prefetch_includes_structured_read_results():
     provider._viking_fs = AsyncMock()
     provider._transaction_handle = None
 
-    provider.search_files = AsyncMock(
-        return_value=[
-            "viking://user/user_sample_9/memories/experiences/personal_experience_sharing_conversation_flow.md"
-        ]
+    provider.search_files = AsyncMock(return_value=[experience_uri])
+    source = MemoryFile(
+        uri=source_uri,
+        memory_type="trajectories",
+        content="# Previous discussion\nComplete procedure and failure evidence.",
+        backlinks=[{"from_uri": experience_uri, "link_type": "derived_from"}],
+        extra_fields={
+            "trajectory_name": "previous_discussion",
+            "outcome": "success",
+            "task_query": "Discuss the album release party.",
+            "retrieval_anchor": "Stage: final_response; Boundary: completed discussion.",
+            "case_name": "discussion_case",
+            "source_archive_uri": "viking://user/default/sessions/previous/archive/001",
+            "last_update_trace_id": "source-trace-id",
+            "version": 3,
+        },
     )
+    stored_source = MemoryFileUtils.write(source)
+    provider._viking_fs.read_file.return_value = stored_source
 
     read_result = {
         "experience_name": "personal_experience_sharing_conversation_flow",
@@ -138,10 +156,10 @@ async def test_agent_experience_prefetch_includes_structured_read_results():
     }
     provider.read_file = AsyncMock(return_value=read_result)
     provider._read_file_contents = {
-        "viking://user/user_sample_9/memories/experiences/personal_experience_sharing_conversation_flow.md": SimpleNamespace(
+        experience_uri: SimpleNamespace(
             extra_fields={"experience_name": "personal_experience_sharing_conversation_flow"},
             content="line one\nline two",
-            links=[],
+            links=[{"to_uri": source_uri, "link_type": "derived_from"}],
         )
     }
 
@@ -151,12 +169,31 @@ async def test_agent_experience_prefetch_includes_structured_read_results():
         messages = await provider.prefetch()
 
     assert any(msg.get("role") == "user" for msg in messages)
-    assert add_tool_call_pair.call_count == 2
+    assert add_tool_call_pair.call_count == 3
     assert (
         add_tool_call_pair.call_args_list[1].kwargs["result"]["context_role"]
         == "candidate_experience"
     )
     assert add_tool_call_pair.call_args_list[1].kwargs["result"]["page_id"] == 1
+    assert add_tool_call_pair.call_args_list[1].kwargs["result"] == {
+        **read_result,
+        "uri": experience_uri,
+        "context_role": "candidate_experience",
+    }
+    source_result = add_tool_call_pair.call_args_list[2].kwargs["result"]
+    assert source_result == {
+        "trajectory_name": source.extra_fields["trajectory_name"],
+        "outcome": source.extra_fields["outcome"],
+        "task_query": source.extra_fields["task_query"],
+        "retrieval_anchor": source.extra_fields["retrieval_anchor"],
+        "case_name": source.extra_fields["case_name"],
+        "memory_type": "trajectories",
+        "content": source.content,
+        "uri": source_uri,
+        "context_role": "candidate_source_trajectory",
+    }
+    assert MemoryFileUtils.read(stored_source, uri=source_uri).to_metadata() == source.to_metadata()
+    provider._viking_fs.write_file.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -177,11 +214,14 @@ async def test_agent_experience_prefetch_missing_experience_dir_returns_empty_ca
     provider._transaction_handle = None
     provider.search_files = AsyncMock(return_value=[])
 
-    with patch(
-        "openviking.session.memory.agent_experience_context_provider.tracer.error"
-    ) as tracer_error, patch(
-        "openviking.session.memory.agent_experience_context_provider.add_tool_call_pair_to_messages"
-    ) as add_tool_call_pair:
+    with (
+        patch(
+            "openviking.session.memory.agent_experience_context_provider.tracer.error"
+        ) as tracer_error,
+        patch(
+            "openviking.session.memory.agent_experience_context_provider.add_tool_call_pair_to_messages"
+        ) as add_tool_call_pair,
+    ):
         messages = await provider.prefetch()
 
     assert messages[-1]["role"] == "user"

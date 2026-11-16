@@ -1,0 +1,82 @@
+replicaCount: 1
+nameOverride: ""
+fullnameOverride: ""
+image:
+  repository: ghcr.io/volcengine/openviking
+  # Required until appVersion names a published release containing these features.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Optional management-key and redis-password entries; root-key is required for
+# enabled local/KMS encryption. See the operations guide for generating it.
+existingSecret: ""
+config:
+  openviking_url: http://openviking:1933
+  # Seven-day retention for sessions and Responses state.
+  session_ttl_seconds: 604800
+  response_ttl_seconds: 604800
+  storage:
+    kernel: sqlite
+    management: sqlite
+    # Redis also needs connection settings, e.g.
+    # redis: {endpoints: ["redis://redis:6379"], password_env: OPENVIKING_GATEWAY_REDIS_PASSWORD}
+  encryption:
+    enabled: false
+    provider: local
+
+persistence:
+  enabled: true
+  existingClaim: ""
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 10Gi
+
+service:
+  type: ClusterIP
+  port: 80
+  annotations: {}
+  loadBalancerSourceRanges: []
+networkPolicy:
+  enabled: false
+  # Kubernetes NetworkPolicyPeer entries, e.g. podSelector or ipBlock.
+  # Empty denies incoming traffic when the policy is enabled.
+  ingressFrom: []
+
+terminationGracePeriodSeconds: 660
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    cpu: "2"
+    memory: 4Gi
+startupProbe:
+  httpGet:
+    path: /health
+    port: http
+  periodSeconds: 2
+  failureThreshold: 150
+  timeoutSeconds: 2
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  periodSeconds: 30
+  timeoutSeconds: 5
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  periodSeconds: 5
+  timeoutSeconds: 5
+
+# Inject other credentials through secretKeyRef and refer to them as $VAR in config.
+extraEnv: []
+extraVolumes: []
+extraVolumeMounts: []
+podLabels: {}
+podAnnotations: {}
+nodeSelector: {}
+affinity: {}
+tolerations: []

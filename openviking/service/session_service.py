@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.namespace import canonical_session_uri
+from openviking.privacy.sanitizer import PrivacySanitizer
+from openviking.privacy.service import UserPrivacyConfigService
 from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.server.identity import RequestContext
 from openviking.server.user_config import read_user_memory_policy
@@ -82,6 +84,8 @@ class SessionService:
         self._default_user_memory_policy: Optional[Dict[str, Any]] = None
         self._default_user_auto_commit_policy: Optional[Dict[str, Any]] = None
         self._usage_reporter: Optional["UsageReporter"] = None
+        self._privacy_config_service: Optional[UserPrivacyConfigService] = None
+        self._privacy_sanitizer: Optional[PrivacySanitizer] = None
         # Server-wide controls remain disabled until configured during app setup.
         self._session_auto_commit_config = SessionAutoCommitConfig()
         # Per-worker in-flight guard so bursts don't spawn duplicate commit
@@ -115,12 +119,16 @@ class SessionService:
         viking_fs: VikingFS,
         session_compressor: "SessionCompressorV3",
         vlm_resolver: Optional["VLMResolver"] = None,
+        privacy_config_service: Optional[UserPrivacyConfigService] = None,
+        privacy_sanitizer: Optional[PrivacySanitizer] = None,
     ) -> None:
         """Set dependencies (for deferred initialization)."""
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
         self._session_compressor = session_compressor
         self._vlm_resolver = vlm_resolver
+        self._privacy_config_service = privacy_config_service
+        self._privacy_sanitizer = privacy_sanitizer
 
     def set_tool_output_externalization_config(
         self, config: ToolOutputExternalizationConfig
@@ -222,7 +230,7 @@ class SessionService:
         *,
         session_uri: Optional[str] = None,
     ) -> Session:
-        """Create a new session or load an existing one.
+        """Construct a Session handle without reading or creating persisted data.
 
         Args:
             session_id: Session ID, creates a new session (auto-generated ID) if None
@@ -247,7 +255,10 @@ class SessionService:
             memory_policy_provider=lambda: self._get_user_memory_policy(ctx),
             usage_reporter=self._usage_reporter,
             vlm_resolver=self._vlm_resolver,
+            runtime_config_manager=self._runtime_config_manager,
             expiry_reporter=self._session_expiry_adapter,
+            privacy_config_service=self._privacy_config_service,
+            privacy_sanitizer=self._privacy_sanitizer,
         )
 
     async def _get_user_memory_policy(self, ctx: RequestContext) -> Optional[Dict[str, Any]]:
@@ -284,10 +295,6 @@ class SessionService:
         """
         self._record_lifecycle_metric("create", "attempt")
         try:
-            if session_id:
-                existing = self.session(ctx, session_id)
-                if await existing.exists():
-                    raise AlreadyExistsError(f"Session '{session_id}' already exists")
             session = self.session(ctx, session_id)
             if memory_policy is not None:
                 policy = MemoryPolicy.from_dict(memory_policy)
@@ -310,31 +317,38 @@ class SessionService:
                     event_tags,
                     discard_invalid=True,
                 )
-            await session.ensure_exists()
+            created = await session.ensure_exists()
+            if session_id and not created:
+                raise AlreadyExistsError(f"Session '{session_id}' already exists")
             self._record_lifecycle_metric("create", "ok")
             return session
         except Exception:
             self._record_lifecycle_metric("create", "error")
             raise
 
+    async def open(
+        self, session_id: str, ctx: RequestContext, *, auto_create: bool = False
+    ) -> Session:
+        """Resolve a persisted Session without loading its messages or metadata.
+
+        Mutations load their state under their own lock. Archive and tool-result
+        readers only need a validated Session URI. Creation defaults live here
+        so those callers do not duplicate provisioning rules.
+        """
+        session = self.session(ctx, session_id)
+        if not await session.exists():
+            if not auto_create:
+                raise NotFoundError(session_id, "session")
+            session.meta.auto_commit_policy = self._new_session_auto_commit_policy()
+            await session.ensure_exists()
+        return session
+
     async def get(
         self, session_id: str, ctx: RequestContext, *, auto_create: bool = False
     ) -> Session:
-        """Get an existing session.
-
-        Args:
-            session_id: Session ID
-            ctx: Request context
-            auto_create: If True, create the session when it does not exist.
-                         Default is False (raise NotFoundError).
-        """
+        """Get a Session with its current messages and metadata loaded."""
         try:
-            session = self.session(ctx, session_id)
-            if not await session.exists():
-                if not auto_create:
-                    raise NotFoundError(session_id, "session")
-                session.meta.auto_commit_policy = self._new_session_auto_commit_policy()
-                await session.ensure_exists()
+            session = await self.open(session_id, ctx, auto_create=auto_create)
             await session.load()
             self._record_lifecycle_metric("get", "ok")
             return session
@@ -386,12 +400,12 @@ class SessionService:
         self._ensure_initialized()
 
         session_uri = canonical_session_uri(ctx, session_id)
-        session = await self.get(session_id, ctx)
+        session = self.session(ctx, session_id)
         if not await session.exists():
             self._record_lifecycle_metric("delete", "error")
             raise NotFoundError(session_id, "session")
 
-        await self._viking_fs.rm(session_uri, recursive=True, ctx=ctx)
+        await self._viking_fs.rm(session_uri, recursive=True, ctx=ctx, no_vector=True)
         if self._session_expiry_adapter is not None:
             from openviking.scheduling.expiry import SESSION_ITEM_TYPE, ItemIdentity
 
@@ -401,6 +415,25 @@ class SessionService:
         logger.info(f"Deleted session: {session_id}")
         self._record_lifecycle_metric("delete", "ok")
         return True
+
+    async def retry_archive(
+        self,
+        session_id: str,
+        archive_id: str,
+        ctx: RequestContext,
+        *,
+        expected_messages_sha256: str,
+        allow_ownerless_ready: bool = False,
+        allow_cancelled_failure: bool = False,
+    ) -> Dict[str, Any]:
+        """Submit one hash-bound, server-verified archive recovery."""
+        session = await self.get(session_id, ctx)
+        return await session.retry_archive(
+            archive_id,
+            expected_messages_sha256=expected_messages_sha256,
+            allow_ownerless_ready=allow_ownerless_ready,
+            allow_cancelled_failure=allow_cancelled_failure,
+        )
 
     async def commit(
         self,
@@ -413,6 +446,10 @@ class SessionService:
         keep_recent_turn_count: Optional[int] = None,
         retained_message_token_budget: Optional[int] = None,
         min_raw_tail_steps: Optional[int] = None,
+        session_window_context: Optional[int] = None,
+        summary_token_ratio: Optional[float] = None,
+        retained_token_ratio: Optional[float] = None,
+        reasoning_effort: Optional[str] = None,
         event_tags: Optional[List[str]] = None,
         reset_context: bool = False,
     ) -> Dict[str, Any]:
@@ -436,6 +473,10 @@ class SessionService:
             keep_recent_turn_count=keep_recent_turn_count,
             retained_message_token_budget=retained_message_token_budget,
             min_raw_tail_steps=min_raw_tail_steps,
+            session_window_context=session_window_context,
+            summary_token_ratio=summary_token_ratio,
+            retained_token_ratio=retained_token_ratio,
+            reasoning_effort=reasoning_effort,
             event_tags=event_tags,
             reset_context=reset_context,
         )
@@ -451,6 +492,10 @@ class SessionService:
         keep_recent_turn_count: Optional[int] = None,
         retained_message_token_budget: Optional[int] = None,
         min_raw_tail_steps: Optional[int] = None,
+        session_window_context: Optional[int] = None,
+        summary_token_ratio: Optional[float] = None,
+        retained_token_ratio: Optional[float] = None,
+        reasoning_effort: Optional[str] = None,
         event_tags: Optional[List[str]] = None,
         reset_context: bool = False,
     ) -> Dict[str, Any]:
@@ -469,7 +514,7 @@ class SessionService:
             archive_uri, archived
         """
         self._ensure_initialized()
-        session = await self.get(session_id, ctx)
+        session = await self.open(session_id, ctx)
         commit_kwargs: Dict[str, Any] = {"keep_recent_count": keep_recent_count}
         optional_retention = {
             "enable_working_memory": enable_working_memory,
@@ -477,6 +522,10 @@ class SessionService:
             "keep_recent_turn_count": keep_recent_turn_count,
             "retained_message_token_budget": retained_message_token_budget,
             "min_raw_tail_steps": min_raw_tail_steps,
+            "session_window_context": session_window_context,
+            "summary_token_ratio": summary_token_ratio,
+            "retained_token_ratio": retained_token_ratio,
+            "reasoning_effort": reasoning_effort,
         }
         commit_kwargs.update(
             {key: value for key, value in optional_retention.items() if value is not None}
@@ -551,33 +600,6 @@ class SessionService:
         )
         return task.to_dict() if task else None
 
-    async def extract(self, session_id: str, ctx: RequestContext) -> List[Any]:
-        """Extract memories from a session.
-
-        Args:
-            session_id: Session ID to extract from
-
-        Returns:
-            List of extracted memories
-        """
-        self._ensure_initialized()
-        if not self._session_compressor:
-            raise NotInitializedError("SessionCompressorV3")
-
-        session = await self.get(session_id, ctx)
-        archive_uri = f"{session.uri}/manual_extract"
-
-        memories = await self._session_compressor.extract_long_term_memories(
-            messages=session.messages,
-            user=ctx.user,
-            session_id=session_id,
-            ctx=ctx,
-            archive_uri=archive_uri,
-            agent_evolution_enabled=await self.get_agent_evolution_enabled(ctx.account_id),
-        )
-        self._record_lifecycle_metric("extract", "ok")
-        return memories
-
     @staticmethod
     def effective_auto_commit_policy(session: Session) -> Optional[Dict[str, Any]]:
         """Return the resolved auto-commit policy (defaults filled), or None when disabled."""
@@ -609,18 +631,17 @@ class SessionService:
         policy value of ``None`` disables automatic commits.
         """
         self._ensure_initialized()
-        session = await self.get(session_id, ctx)
+        session = await self.open(session_id, ctx)
         normalized_event_tags = (
             normalize_search_tags(event_tags, discard_invalid=True)
             if event_tags is not None
             else None
         )
-        if normalized_event_tags is not None or update_auto_commit_policy:
-            await session.update_config(
-                event_search_tags=normalized_event_tags,
-                auto_commit_policy=auto_commit_policy,
-                update_auto_commit_policy=update_auto_commit_policy,
-            )
+        await session.update_config(
+            event_search_tags=normalized_event_tags,
+            auto_commit_policy=auto_commit_policy,
+            update_auto_commit_policy=update_auto_commit_policy,
+        )
         return session
 
     async def maybe_schedule_auto_commit(

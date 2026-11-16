@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { GatewayConnectionSettings } from '#/features/connection/components/gateway-connection-settings'
 import {
   cleanup,
   fireEvent,
@@ -7,7 +8,6 @@ import {
   waitFor,
 } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { GatewayConnectionSettings } from './route'
 
 const { health, saveConnection, navigate, connectionState } = vi.hoisted(
   () => ({
@@ -28,10 +28,10 @@ const { health, saveConnection, navigate, connectionState } = vi.hoisted(
     },
   }),
 )
-vi.mock('#/hooks/use-app-connection', () => ({
+vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   useAppConnection: () => ({ ...connectionState, saveConnection }),
 }))
-vi.mock('#/hooks/use-server-mode', async (importOriginal) => ({
+vi.mock('#/features/connection/lib/health', async (importOriginal) => ({
   ...(await importOriginal<object>()),
   fetchServerHealth: health,
 }))
@@ -61,7 +61,9 @@ it('shows one key input and logs in with the OV key against the gateway host', a
     target: { value: 'ov-user-key' },
   })
   fireEvent.click(screen.getByText('gatewayConnection.connect'))
-  await waitFor(() => expect(navigate).toHaveBeenCalledWith({ to: '/gateway' }))
+  await waitFor(() =>
+    expect(navigate).toHaveBeenCalledWith({ to: '/admin/gateway' }),
+  )
   expect(health).toHaveBeenCalledWith('http://gateway.test', {
     'X-API-Key': 'ov-user-key',
   })

@@ -19,6 +19,16 @@
 2. Confirm `~/.zcode/cli/config.json` contains `hooks.enabled: true`, OpenViking entries under `hooks.events`, and `mcp.servers.openviking`.
 3. Run `node ~/.openviking/agent-integrations/zcode/scripts/ov-memory-doctor.mjs` to check the installation and the server connection.
 
+## Step 3: Start using
+
+Start a new ZCode session and send:
+
+```text
+Follow https://docs.openviking.net/agents/en/onboarding.md to walk me through my first use of OpenViking.
+```
+
+The agent checks the connection and walks you through the first use.
+
 ## Troubleshoot
 
 | Problem | Fix |

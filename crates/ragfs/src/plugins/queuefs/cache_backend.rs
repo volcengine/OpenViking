@@ -1,10 +1,11 @@
 use super::backend::{Message, QueueState, StoredMessage};
 use super::cache_protocol::{
-    heartbeat_key, instance_key_prefix, last_enqueue_time_from_pending_payloads, queue_key_prefix,
-    queue_names_key, unix_secs, QueueKeys, ACK_SCRIPT, CLEAR_SCRIPT, CREATE_QUEUE_SCRIPT,
-    DEQUEUE_SCRIPT, ENQUEUE_SCRIPT, HEARTBEAT_INTERVAL_SECS, HEARTBEAT_TTL_SECS,
-    LIST_UNACKED_SCRIPT, PEEK_SCRIPT, RECOVER_STALE_SCRIPT, REMOVE_QUEUE_SCRIPT,
-    STARTUP_RECOVERY_SWEEPS, STATUS_SCRIPT,
+    encoded_group_key, heartbeat_key, instance_key_prefix, last_enqueue_time_from_pending_payloads,
+    queue_key_prefix, queue_names_key, recovery_leader_key, unix_secs, QueueKeys, ACK_SCRIPT,
+    ACQUIRE_RECOVERY_LEADER_SCRIPT, CLEAR_SCRIPT, CREATE_QUEUE_SCRIPT, DEQUEUE_SCRIPT,
+    ENQUEUE_SCRIPT, HEARTBEAT_INTERVAL_SECS, HEARTBEAT_TTL_SECS, LIST_UNACKED_SCRIPT, PEEK_SCRIPT,
+    PENDING_IDS_SCRIPT, RECOVERY_INTERVAL_SECS, RECOVERY_LEADER_TTL_SECS, RECOVER_STALE_SCRIPT,
+    RELEASE_RECOVERY_LEADER_SCRIPT, REMOVE_QUEUE_SCRIPT, RETRY_SCRIPT, STATUS_SCRIPT,
 };
 use crate::cache_runtime::{
     CacheError, CacheOperation, CacheRuntime, Expiration, ScriptDefinition, ScriptRequest,
@@ -17,21 +18,28 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{watch, Mutex};
 use tokio::task::JoinHandle;
-use tokio::time::Instant;
 use uuid::Uuid;
 
-const CREATE_QUEUE_ID: &str = "queuefs.create_queue.v1";
-const REMOVE_QUEUE_ID: &str = "queuefs.remove_queue.v1";
-const ENQUEUE_ID: &str = "queuefs.enqueue.v1";
-const DEQUEUE_ID: &str = "queuefs.dequeue.v1";
-const PEEK_ID: &str = "queuefs.peek.v1";
-const STATUS_ID: &str = "queuefs.status.v1";
-const LIST_UNACKED_ID: &str = "queuefs.list_unacked.v1";
-const ACK_ID: &str = "queuefs.ack.v1";
-const CLEAR_ID: &str = "queuefs.clear.v1";
-const RECOVER_STALE_ID: &str = "queuefs.recover_stale.v1";
+const CREATE_QUEUE_ID: &str = "queuefs.create_queue.v2";
+const REMOVE_QUEUE_ID: &str = "queuefs.remove_queue.v3";
+const ENQUEUE_ID: &str = "queuefs.enqueue.v4";
+const DEQUEUE_ID: &str = "queuefs.dequeue.v4";
+const PEEK_ID: &str = "queuefs.peek.v2";
+const STATUS_ID: &str = "queuefs.status.v2";
+const PENDING_IDS_ID: &str = "queuefs.pending_ids.v1";
+const LIST_UNACKED_ID: &str = "queuefs.list_unacked.v2";
+const ACK_ID: &str = "queuefs.ack.v4";
+const RETRY_ID: &str = "queuefs.retry.v1";
+const CLEAR_ID: &str = "queuefs.clear.v4";
+const RECOVER_STALE_ID: &str = "queuefs.recover_stale.v4";
+const ACQUIRE_RECOVERY_LEADER_ID: &str = "queuefs.acquire_recovery_leader.v1";
+const RELEASE_RECOVERY_LEADER_ID: &str = "queuefs.release_recovery_leader.v1";
 
 const SCRIPT_DEFINITIONS: &[ScriptDefinition] = &[
+    ScriptDefinition {
+        id: RETRY_ID,
+        redis_lua: RETRY_SCRIPT,
+    },
     ScriptDefinition {
         id: CREATE_QUEUE_ID,
         redis_lua: CREATE_QUEUE_SCRIPT,
@@ -61,6 +69,10 @@ const SCRIPT_DEFINITIONS: &[ScriptDefinition] = &[
         redis_lua: LIST_UNACKED_SCRIPT,
     },
     ScriptDefinition {
+        id: PENDING_IDS_ID,
+        redis_lua: PENDING_IDS_SCRIPT,
+    },
+    ScriptDefinition {
         id: ACK_ID,
         redis_lua: ACK_SCRIPT,
     },
@@ -72,7 +84,34 @@ const SCRIPT_DEFINITIONS: &[ScriptDefinition] = &[
         id: RECOVER_STALE_ID,
         redis_lua: RECOVER_STALE_SCRIPT,
     },
+    ScriptDefinition {
+        id: ACQUIRE_RECOVERY_LEADER_ID,
+        redis_lua: ACQUIRE_RECOVERY_LEADER_SCRIPT,
+    },
+    ScriptDefinition {
+        id: RELEASE_RECOVERY_LEADER_ID,
+        redis_lua: RELEASE_RECOVERY_LEADER_SCRIPT,
+    },
 ];
+
+#[derive(Clone, Copy)]
+struct BackgroundTiming {
+    heartbeat_interval: Duration,
+    heartbeat_ttl: Duration,
+    recovery_interval: Duration,
+    recovery_leader_ttl: Duration,
+}
+
+impl Default for BackgroundTiming {
+    fn default() -> Self {
+        Self {
+            heartbeat_interval: Duration::from_secs(HEARTBEAT_INTERVAL_SECS),
+            heartbeat_ttl: Duration::from_secs(HEARTBEAT_TTL_SECS),
+            recovery_interval: Duration::from_secs(RECOVERY_INTERVAL_SECS),
+            recovery_leader_ttl: Duration::from_secs(RECOVERY_LEADER_TTL_SECS),
+        }
+    }
+}
 
 pub(super) struct CacheQueueStorage {
     runtime: Arc<CacheRuntime>,
@@ -87,6 +126,14 @@ pub(super) struct CacheQueueStorage {
 
 impl CacheQueueStorage {
     pub(super) async fn open(runtime: Arc<CacheRuntime>, key_prefix: String) -> Result<Self> {
+        Self::open_with_timing(runtime, key_prefix, BackgroundTiming::default()).await
+    }
+
+    async fn open_with_timing(
+        runtime: Arc<CacheRuntime>,
+        key_prefix: String,
+        timing: BackgroundTiming,
+    ) -> Result<Self> {
         runtime
             .require_operations(&[
                 CacheOperation::Set,
@@ -94,8 +141,6 @@ impl CacheQueueStorage {
                 CacheOperation::Mget,
                 CacheOperation::Sismember,
                 CacheOperation::Smembers,
-                CacheOperation::Llen,
-                CacheOperation::Lrange,
                 CacheOperation::ExecuteScript,
             ])
             .map_err(|error| cache_error("validate provider operations", error))?;
@@ -106,19 +151,22 @@ impl CacheQueueStorage {
         }
         let instance_id = Uuid::new_v4().to_string();
         let heartbeat = heartbeat_key(&key_prefix, &instance_id);
-        refresh_heartbeat(&runtime, &heartbeat).await?;
+        refresh_heartbeat(&runtime, &heartbeat, timing.heartbeat_ttl).await?;
 
         let (heartbeat_stop, heartbeat_receiver) = watch::channel(false);
         let heartbeat_task = tokio::spawn(run_heartbeat(
             Arc::clone(&runtime),
             heartbeat,
             heartbeat_receiver,
+            timing,
         ));
         let (recovery_stop, recovery_receiver) = watch::channel(false);
-        let recovery_task = tokio::spawn(run_startup_recovery(
+        let recovery_task = tokio::spawn(run_continuous_recovery(
             Arc::clone(&runtime),
             key_prefix.clone(),
+            instance_id.clone(),
             recovery_receiver,
+            timing,
         ));
 
         Ok(Self {
@@ -175,6 +223,11 @@ impl CacheQueueStorage {
         keys: Vec<String>,
         args: Vec<Bytes>,
     ) -> Result<ScriptValue> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(Error::InvalidOperation(
+                "queue consumer is shut down".to_string(),
+            ));
+        }
         self.runtime
             .execute_script(ScriptRequest {
                 script_id: script_id.to_string(),
@@ -192,7 +245,7 @@ impl CacheQueueStorage {
             self.execute(
                 "create_queue",
                 CREATE_QUEUE_ID,
-                vec![queue_names_key(&self.key_prefix), keys.meta],
+                keys.script_keys(&self.key_prefix),
                 vec![bytes(name), bytes(unix_secs(SystemTime::now()).to_string())],
             )
             .await?,
@@ -207,11 +260,12 @@ impl CacheQueueStorage {
     }
 
     pub(super) async fn remove_queue(&self, name: &str) -> Result<()> {
+        let keys = QueueKeys::new(&self.key_prefix, name);
         let removed = integer(
             self.execute(
                 "remove_queue",
                 REMOVE_QUEUE_ID,
-                vec![queue_names_key(&self.key_prefix)],
+                keys.script_keys(&self.key_prefix),
                 vec![bytes(name), bytes(queue_key_prefix(&self.key_prefix))],
             )
             .await?,
@@ -254,23 +308,27 @@ impl CacheQueueStorage {
     }
 
     pub(super) async fn enqueue(&self, queue_name: &str, msg: Message) -> Result<()> {
+        msg.validate_keys()?;
         let keys = QueueKeys::new(&self.key_prefix, queue_name);
         let payload = serde_json::to_string(&StoredMessage::from_message(&msg))?;
+        let group = if let Some(key) = msg.serial_key.as_deref() {
+            format!("s:{}", encoded_group_key(key))
+        } else if let Some(key) = msg.group_key.as_deref() {
+            format!("g:{}", encoded_group_key(key))
+        } else {
+            "p".to_string()
+        };
         let enqueued = integer(
             self.execute(
                 "enqueue",
                 ENQUEUE_ID,
-                vec![
-                    queue_names_key(&self.key_prefix),
-                    keys.message(&msg.id),
-                    keys.pending,
-                    keys.meta,
-                ],
+                keys.script_keys(&self.key_prefix),
                 vec![
                     bytes(queue_name),
                     bytes(&msg.id),
                     bytes(payload),
                     bytes(unix_secs(SystemTime::now()).to_string()),
+                    bytes(group),
                 ],
             )
             .await?,
@@ -278,22 +336,29 @@ impl CacheQueueStorage {
         if enqueued == 0 {
             return Err(Error::NotFound(format!("queue '{}' not found", queue_name)));
         }
+        if enqueued == -2 {
+            return Err(Error::AlreadyExists(format!(
+                "message '{}' already exists",
+                msg.id
+            )));
+        }
         Ok(())
     }
 
     pub(super) async fn dequeue(&self, queue_name: &str) -> Result<Option<Message>> {
         self.require_queue(queue_name).await?;
         let keys = QueueKeys::new(&self.key_prefix, queue_name);
+        let args = vec![
+            bytes(&keys.message_prefix),
+            bytes(&self.instance_id),
+            bytes(unix_secs(SystemTime::now()).to_string()),
+        ];
         match self
             .execute(
                 "dequeue",
                 DEQUEUE_ID,
-                vec![keys.pending, keys.processing],
-                vec![
-                    bytes(keys.message_prefix),
-                    bytes(&self.instance_id),
-                    bytes(unix_secs(SystemTime::now()).to_string()),
-                ],
+                keys.script_keys(&self.key_prefix),
+                args,
             )
             .await?
         {
@@ -311,13 +376,9 @@ impl CacheQueueStorage {
     pub(super) async fn peek(&self, queue_name: &str) -> Result<Option<Message>> {
         self.require_queue(queue_name).await?;
         let keys = QueueKeys::new(&self.key_prefix, queue_name);
+        let args = vec![bytes(&keys.message_prefix)];
         match self
-            .execute(
-                "peek",
-                PEEK_ID,
-                vec![keys.pending],
-                vec![bytes(keys.message_prefix)],
-            )
+            .execute("peek", PEEK_ID, keys.script_keys(&self.key_prefix), args)
             .await?
         {
             ScriptValue::Null => Ok(None),
@@ -328,15 +389,7 @@ impl CacheQueueStorage {
     }
 
     pub(super) async fn size(&self, queue_name: &str) -> Result<usize> {
-        self.require_queue(queue_name).await?;
-        let keys = QueueKeys::new(&self.key_prefix, queue_name);
-        usize::try_from(
-            self.runtime
-                .llen(&keys.pending)
-                .await
-                .map_err(|error| cache_error("size", error))?,
-        )
-        .map_err(|_| Error::internal("redis size returned an invalid value"))
+        Ok(self.status(queue_name).await?.pending)
     }
 
     pub(super) async fn status(&self, queue_name: &str) -> Result<QueueState> {
@@ -345,19 +398,12 @@ impl CacheQueueStorage {
             .execute(
                 "status",
                 STATUS_ID,
-                vec![
-                    queue_names_key(&self.key_prefix),
-                    keys.pending,
-                    keys.processing,
-                ],
+                keys.script_keys(&self.key_prefix),
                 vec![bytes(queue_name)],
             )
             .await?;
         if matches!(value, ScriptValue::Null) {
-            return Err(Error::NotFound(format!(
-                "queue '{}' not found",
-                queue_name
-            )));
+            return Err(Error::NotFound(format!("queue '{}' not found", queue_name)));
         }
         let ScriptValue::Array(values) = value else {
             return Err(invalid_result("queue status", value));
@@ -378,12 +424,13 @@ impl CacheQueueStorage {
     pub(super) async fn list_unacked(&self, queue_name: &str) -> Result<Vec<Message>> {
         self.require_queue(queue_name).await?;
         let keys = QueueKeys::new(&self.key_prefix, queue_name);
+        let args = vec![bytes(&keys.message_prefix)];
         string_array(
             self.execute(
                 "list_unacked",
                 LIST_UNACKED_ID,
-                vec![keys.pending, keys.processing],
-                vec![bytes(keys.message_prefix)],
+                keys.script_keys(&self.key_prefix),
+                args,
             )
             .await?,
         )?
@@ -398,8 +445,8 @@ impl CacheQueueStorage {
         self.execute(
             "clear",
             CLEAR_ID,
-            vec![keys.pending, keys.processing],
-            vec![bytes(keys.message_prefix)],
+            keys.script_keys(&self.key_prefix),
+            vec![],
         )
         .await?;
         Ok(())
@@ -408,35 +455,51 @@ impl CacheQueueStorage {
     pub(super) async fn ack(&self, queue_name: &str, msg_id: &str) -> Result<bool> {
         self.require_queue(queue_name).await?;
         let keys = QueueKeys::new(&self.key_prefix, queue_name);
-        let message_key = keys.message(msg_id);
         boolean(
             self.execute(
                 "ack",
                 ACK_ID,
-                vec![keys.processing, message_key],
+                keys.script_keys(&self.key_prefix),
                 vec![bytes(msg_id)],
             )
             .await?,
         )
     }
 
+    pub(super) async fn retry(&self, queue_name: &str, msg_id: &str) -> Result<bool> {
+        self.require_queue(queue_name).await?;
+        let keys = QueueKeys::new(&self.key_prefix, queue_name);
+        Ok(integer(
+            self.execute(
+                "retry",
+                RETRY_ID,
+                keys.script_keys(&self.key_prefix),
+                vec![bytes(msg_id)],
+            )
+            .await?,
+        )? > 0)
+    }
+
     #[allow(dead_code)]
     pub(super) async fn get_last_enqueue_time(&self, queue_name: &str) -> Result<SystemTime> {
         self.require_queue(queue_name).await?;
         let keys = QueueKeys::new(&self.key_prefix, queue_name);
-        let pending_key = keys.pending.clone();
-        let pending_ids = self
-            .runtime
-            .lrange(&pending_key, 0, -1)
-            .await
-            .map_err(|error| cache_error("get_last_enqueue_time list pending", error))
-            .and_then(bytes_array_to_strings)?;
+        let message_prefix = keys.message_prefix.clone();
+        let pending_ids = string_array(
+            self.execute(
+                "get_last_enqueue_time list pending",
+                PENDING_IDS_ID,
+                keys.script_keys(&self.key_prefix),
+                vec![],
+            )
+            .await?,
+        )?;
         if pending_ids.is_empty() {
             return Ok(UNIX_EPOCH);
         }
         let message_keys = pending_ids
             .iter()
-            .map(|id| keys.message(id))
+            .map(|id| format!("{message_prefix}{id}"))
             .collect::<Vec<_>>();
         let payloads = self
             .runtime
@@ -499,13 +562,18 @@ impl Drop for CacheQueueStorage {
     }
 }
 
-async fn run_heartbeat(runtime: Arc<CacheRuntime>, key: String, mut stop: watch::Receiver<bool>) {
-    let mut interval = tokio::time::interval(Duration::from_secs(HEARTBEAT_INTERVAL_SECS));
+async fn run_heartbeat(
+    runtime: Arc<CacheRuntime>,
+    key: String,
+    mut stop: watch::Receiver<bool>,
+    timing: BackgroundTiming,
+) {
+    let mut interval = tokio::time::interval(timing.heartbeat_interval);
     interval.tick().await;
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                if let Err(error) = refresh_heartbeat(&runtime, &key).await {
+                if let Err(error) = refresh_heartbeat(&runtime, &key, timing.heartbeat_ttl).await {
                     tracing::warn!("queuefs cache heartbeat failed: {error}");
                 }
             }
@@ -518,13 +586,13 @@ async fn run_heartbeat(runtime: Arc<CacheRuntime>, key: String, mut stop: watch:
     }
 }
 
-async fn refresh_heartbeat(runtime: &CacheRuntime, key: &str) -> Result<()> {
+async fn refresh_heartbeat(runtime: &CacheRuntime, key: &str, ttl: Duration) -> Result<()> {
     runtime
         .set(
             key,
             Bytes::from_static(b"1"),
             SetOptions {
-                expiration: Some(Expiration::After(Duration::from_secs(HEARTBEAT_TTL_SECS))),
+                expiration: Some(Expiration::After(ttl)),
                 ..SetOptions::default()
             },
         )
@@ -533,35 +601,56 @@ async fn refresh_heartbeat(runtime: &CacheRuntime, key: &str) -> Result<()> {
         .map_err(|error| cache_error("heartbeat", error))
 }
 
-async fn run_startup_recovery(
+async fn run_continuous_recovery(
     runtime: Arc<CacheRuntime>,
     key_prefix: String,
+    leader_token: String,
     mut stop: watch::Receiver<bool>,
+    timing: BackgroundTiming,
 ) {
-    let started_at = Instant::now();
-    for sweep_index in 0..STARTUP_RECOVERY_SWEEPS {
-        let deadline = started_at + startup_recovery_delay_before_sweep(sweep_index);
-        if deadline > Instant::now() {
-            tokio::select! {
-                _ = tokio::time::sleep_until(deadline) => {}
-                changed = stop.changed() => {
-                    if changed.is_err() || *stop.borrow() {
-                        return;
+    let mut interval = tokio::time::interval(timing.recovery_interval);
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                match acquire_or_renew_recovery_leader(
+                    &runtime,
+                    &key_prefix,
+                    &leader_token,
+                    timing.recovery_leader_ttl,
+                ).await {
+                    Ok(true) => {
+                        if let Err(error) = recover_stale(
+                            &runtime,
+                            &key_prefix,
+                            &leader_token,
+                            timing.recovery_leader_ttl,
+                        ).await {
+                            tracing::warn!("queuefs cache recover_stale failed: {error}");
+                        }
                     }
+                    Ok(false) => {}
+                    Err(error) => tracing::warn!("queuefs cache recovery leader lease failed: {error}"),
+                }
+            }
+            changed = stop.changed() => {
+                if changed.is_err() || *stop.borrow() {
+                    break;
                 }
             }
         }
-        if let Err(error) = recover_stale(&runtime, &key_prefix).await {
-            tracing::warn!("queuefs cache startup recover_stale failed: {error}");
-        }
+    }
+
+    if let Err(error) = release_recovery_leader(&runtime, &key_prefix, &leader_token).await {
+        tracing::warn!("queuefs cache recovery leader release failed: {error}");
     }
 }
 
-fn startup_recovery_delay_before_sweep(sweep_index: usize) -> Duration {
-    Duration::from_secs(HEARTBEAT_TTL_SECS * sweep_index as u64)
-}
-
-async fn recover_stale(runtime: &CacheRuntime, key_prefix: &str) -> Result<usize> {
+async fn recover_stale(
+    runtime: &CacheRuntime,
+    key_prefix: &str,
+    leader_token: &str,
+    leader_ttl: Duration,
+) -> Result<usize> {
     let queues = runtime
         .smembers(&queue_names_key(key_prefix))
         .await
@@ -569,13 +658,16 @@ async fn recover_stale(runtime: &CacheRuntime, key_prefix: &str) -> Result<usize
         .and_then(bytes_array_to_strings)?;
     let mut recovered = 0;
     for queue in queues {
+        if !acquire_or_renew_recovery_leader(runtime, key_prefix, leader_token, leader_ttl).await? {
+            break;
+        }
         let keys = QueueKeys::new(key_prefix, &queue);
         recovered += usize::try_from(integer(
             execute_runtime(
                 runtime,
                 "recover_stale",
                 RECOVER_STALE_ID,
-                vec![keys.processing, keys.pending],
+                keys.script_keys(key_prefix),
                 vec![bytes(instance_key_prefix(key_prefix))],
             )
             .await?,
@@ -583,6 +675,41 @@ async fn recover_stale(runtime: &CacheRuntime, key_prefix: &str) -> Result<usize
         .map_err(|_| Error::internal("redis recover_stale returned an invalid value"))?;
     }
     Ok(recovered)
+}
+
+async fn acquire_or_renew_recovery_leader(
+    runtime: &CacheRuntime,
+    key_prefix: &str,
+    leader_token: &str,
+    ttl: Duration,
+) -> Result<bool> {
+    boolean(
+        execute_runtime(
+            runtime,
+            "acquire recovery leader",
+            ACQUIRE_RECOVERY_LEADER_ID,
+            vec![recovery_leader_key(key_prefix)],
+            vec![bytes(leader_token), bytes(ttl.as_millis().to_string())],
+        )
+        .await?,
+    )
+}
+
+async fn release_recovery_leader(
+    runtime: &CacheRuntime,
+    key_prefix: &str,
+    leader_token: &str,
+) -> Result<bool> {
+    boolean(
+        execute_runtime(
+            runtime,
+            "release recovery leader",
+            RELEASE_RECOVERY_LEADER_ID,
+            vec![recovery_leader_key(key_prefix)],
+            vec![bytes(leader_token)],
+        )
+        .await?,
+    )
 }
 
 async fn execute_runtime(
@@ -672,11 +799,8 @@ mod tests {
 
     fn lifecycle_test_runtime() -> Arc<CacheRuntime> {
         let provider = Arc::new(
-            crate::cache_runtime::MemoryMockProvider::new().with_script_handler(|request| {
-                panic!(
-                    "script execution is outside this lifecycle test's scope: {}",
-                    request.script_id
-                )
+            crate::cache_runtime::MemoryMockProvider::new().with_script_handler(|_| {
+                crate::cache_runtime::ScriptResult::encode(&ScriptValue::Integer(1))
             }),
         );
         CacheRuntime::memory_with_provider(provider)
@@ -697,18 +821,23 @@ mod tests {
     }
 
     #[test]
-    fn startup_recovery_uses_original_zero_thirty_sixty_second_offsets() {
+    fn default_background_timing_matches_recovery_contract() {
+        let timing = BackgroundTiming::default();
         assert_eq!(
-            startup_recovery_delay_before_sweep(0),
-            Duration::from_secs(0)
+            timing.heartbeat_interval,
+            Duration::from_secs(HEARTBEAT_INTERVAL_SECS)
         );
         assert_eq!(
-            startup_recovery_delay_before_sweep(1),
-            Duration::from_secs(30)
+            timing.heartbeat_ttl,
+            Duration::from_secs(HEARTBEAT_TTL_SECS)
         );
         assert_eq!(
-            startup_recovery_delay_before_sweep(2),
-            Duration::from_secs(60)
+            timing.recovery_interval,
+            Duration::from_secs(RECOVERY_INTERVAL_SECS)
+        );
+        assert_eq!(
+            timing.recovery_leader_ttl,
+            Duration::from_secs(RECOVERY_LEADER_TTL_SECS)
         );
     }
 
@@ -769,9 +898,13 @@ mod tests {
         assert_eq!(first.dequeue("jobs").await.unwrap().unwrap().id, message_id);
 
         first.shutdown().await.unwrap();
-        let second = CacheQueueStorage::open(Arc::clone(&runtime), prefix.clone())
-            .await
-            .unwrap();
+        let second = CacheQueueStorage::open_with_timing(
+            Arc::clone(&runtime),
+            prefix.clone(),
+            fast_background_timing(),
+        )
+        .await
+        .unwrap();
         let recovered = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
                 if let Some(message) = second.dequeue("jobs").await.unwrap() {
@@ -784,8 +917,99 @@ mod tests {
         .unwrap();
 
         assert_eq!(recovered.id, message_id);
+        second.remove_queue("jobs").await.unwrap();
         second.shutdown().await.unwrap();
         runtime.del(&[queue_names_key(&prefix)]).await.unwrap();
         runtime.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn running_node_recovers_processing_after_peer_crash() {
+        let Ok(endpoint) = std::env::var("REDIS_URL") else {
+            return;
+        };
+        let runtime = CacheRuntime::redis(crate::cache_runtime::RedisProviderConfig {
+            endpoints: vec![endpoint],
+            connect_timeout_ms: 5_000,
+            command_timeout_ms: 1_000,
+            default_ttl_seconds: 60,
+            ..crate::cache_runtime::RedisProviderConfig::default()
+        })
+        .await
+        .unwrap();
+        let prefix = format!("queuefs-continuous-recovery-test:{}", Uuid::new_v4());
+        let survivor = CacheQueueStorage::open_with_timing(
+            Arc::clone(&runtime),
+            prefix.clone(),
+            fast_background_timing(),
+        )
+        .await
+        .unwrap();
+        let failed = CacheQueueStorage::open_with_timing(
+            Arc::clone(&runtime),
+            prefix.clone(),
+            fast_background_timing(),
+        )
+        .await
+        .unwrap();
+        failed.create_queue("jobs").await.unwrap();
+        let mut message = Message::new(b"payload".to_vec());
+        message.serial_key = Some("A".to_string());
+        let message_id = message.id.clone();
+        failed.enqueue("jobs", message).await.unwrap();
+        let mut later = Message::new(b"later".to_vec());
+        later.serial_key = Some("A".to_string());
+        let later_id = later.id.clone();
+        failed.enqueue("jobs", later).await.unwrap();
+        assert_eq!(
+            failed.dequeue("jobs").await.unwrap().unwrap().id,
+            message_id
+        );
+
+        let heartbeat = heartbeat_key(&prefix, &failed.instance_id);
+        for task in [
+            failed.heartbeat_task.lock().await.take(),
+            failed.recovery_task.lock().await.take(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            task.abort();
+        }
+        runtime.del(&[heartbeat]).await.unwrap();
+        drop(failed);
+
+        let recovered = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some(message) = survivor.dequeue("jobs").await.unwrap() {
+                    break message;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(recovered.id, message_id);
+        assert_eq!(recovered.serial_key.as_deref(), Some("A"));
+        assert!(survivor.dequeue("jobs").await.unwrap().is_none());
+        survivor.ack("jobs", &message_id).await.unwrap();
+        assert_eq!(
+            survivor.dequeue("jobs").await.unwrap().unwrap().id,
+            later_id
+        );
+        survivor.remove_queue("jobs").await.unwrap();
+        survivor.shutdown().await.unwrap();
+        runtime.del(&[queue_names_key(&prefix)]).await.unwrap();
+        runtime.close().await.unwrap();
+    }
+
+    fn fast_background_timing() -> BackgroundTiming {
+        BackgroundTiming {
+            heartbeat_interval: Duration::from_millis(20),
+            heartbeat_ttl: Duration::from_millis(100),
+            recovery_interval: Duration::from_millis(20),
+            recovery_leader_ttl: Duration::from_millis(100),
+        }
     }
 }

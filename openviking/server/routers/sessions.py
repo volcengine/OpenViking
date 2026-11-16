@@ -315,7 +315,6 @@ async def create_session(
     event_tags = _event_tags_from_extraction_config(request.memory_extraction_config)
 
     async def _create() -> dict[str, Any]:
-        await service.initialize_user_directories(_ctx)
         session = await service.sessions.create(
             _ctx,
             request.session_id,
@@ -452,7 +451,7 @@ async def list_tool_results(
 ):
     """List externalized tool results for a session."""
     service = get_service()
-    session = await service.sessions.get(session_id, _ctx, auto_create=False)
+    session = await service.sessions.open(session_id, _ctx, auto_create=False)
     result = await session.list_tool_results(tool_name=tool_name, limit=limit)
     return Response(status="ok", result=_to_jsonable(result))
 
@@ -474,7 +473,7 @@ async def read_tool_result(
             details={"field": "limit", "value": limit},
         )
     service = get_service()
-    session = await service.sessions.get(session_id, _ctx, auto_create=False)
+    session = await service.sessions.open(session_id, _ctx, auto_create=False)
     result = await session.read_tool_result(
         tool_result_id,
         offset=offset,
@@ -495,7 +494,7 @@ async def search_tool_result(
 ):
     """Search within an externalized tool result."""
     service = get_service()
-    session = await service.sessions.get(session_id, _ctx, auto_create=False)
+    session = await service.sessions.open(session_id, _ctx, auto_create=False)
     result = await session.search_tool_result(
         tool_result_id,
         query=q,
@@ -531,11 +530,11 @@ async def get_session_archive(
     archive_id: str = Path(..., description="Archive ID"),
     _ctx: RequestContext = Depends(get_session_request_context),
 ):
-    """Get one completed archive for a session."""
+    """Get one archive; failed/pending archives include retry inputs."""
     from openviking_cli.exceptions import NotFoundError
 
     service = get_service()
-    session = await service.sessions.get(session_id, _ctx, auto_create=False)
+    session = await service.sessions.open(session_id, _ctx, auto_create=False)
     try:
         result = await session.get_session_archive(archive_id)
     except NotFoundError:
@@ -635,6 +634,25 @@ class CommitRequest(BaseModel):
         le=10_000,
         description="Minimum number of latest atomic assistant Steps kept raw.",
     )
+    session_window_context: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Model context window used to derive Working Memory budgets.",
+    )
+    summary_token_ratio: Optional[float] = Field(
+        default=None,
+        gt=0,
+        description="Working Memory summary budget ratio of session_window_context.",
+    )
+    retained_token_ratio: Optional[float] = Field(
+        default=None,
+        gt=0,
+        description="Retained raw-message budget ratio of session_window_context.",
+    )
+    reasoning_effort: Optional[str] = Field(
+        default=None,
+        description="Per-call reasoning effort forwarded to Working Memory generation.",
+    )
     extraction_metadata: Optional[ExtractionMetadataRequest] = Field(
         default=None,
         description=(
@@ -663,6 +681,49 @@ class CommitRequest(BaseModel):
         return self
 
 
+class ArchiveRetryRequest(BaseModel):
+    """Hash-bound authorization for one audited archive recovery."""
+
+    expected_messages_sha256: str = Field(
+        ...,
+        pattern=r"^[0-9a-f]{64}$",
+        description="messages_sha256 returned by GET .../archives/{archive_id}, passed back unchanged.",
+    )
+    allow_ownerless_ready: bool = Field(
+        default=False,
+        description=(
+            "Permit a Phase 1 ready archive with no QueueFS or active task owner. "
+            "Failed archives do not require this opt-in."
+        ),
+    )
+    allow_cancelled_failure: bool = Field(
+        default=False,
+        description=(
+            "Permit a failed archive whose recorded failure is cancellation. "
+            "This is an explicit post-review opt-in; hash, ownership, and "
+            "durable-receipt safety checks still apply."
+        ),
+    )
+
+
+@router.post("/{session_id}/archives/{archive_id}/retry")
+async def retry_session_archive(
+    session_id: str = Path(...),
+    archive_id: str = Path(..., pattern=r"^archive_[0-9]+$"),
+    body: ArchiveRetryRequest = Body(...),
+    _ctx: RequestContext = Depends(get_session_request_context),
+):
+    result = await get_service().sessions.retry_archive(
+        session_id,
+        archive_id,
+        _ctx,
+        expected_messages_sha256=body.expected_messages_sha256,
+        allow_ownerless_ready=body.allow_ownerless_ready,
+        allow_cancelled_failure=body.allow_cancelled_failure,
+    )
+    return Response(status="ok", result=result).model_dump(exclude_none=True)
+
+
 @router.post("/{session_id}/commit")
 async def commit_session(
     session_id: str = Path(..., description="Session ID"),
@@ -683,6 +744,10 @@ async def commit_session(
         "keep_recent_turn_count": body.keep_recent_turn_count,
         "retained_message_token_budget": body.retained_message_token_budget,
         "min_raw_tail_steps": body.min_raw_tail_steps,
+        "session_window_context": body.session_window_context,
+        "summary_token_ratio": body.summary_token_ratio,
+        "retained_token_ratio": body.retained_token_ratio,
+        "reasoning_effort": body.reasoning_effort,
     }
     commit_kwargs.update(
         {key: value for key, value in optional_retention.items() if value is not None}
@@ -706,17 +771,6 @@ async def commit_session(
         result=execution.result,
         telemetry=execution.telemetry,
     ).model_dump(exclude_none=True)
-
-
-@router.post("/{session_id}/extract")
-async def extract_session(
-    session_id: str = Path(..., description="Session ID"),
-    _ctx: RequestContext = Depends(get_session_request_context),
-):
-    """Extract memories from a session."""
-    service = get_service()
-    result = await service.sessions.extract(session_id, _ctx)
-    return Response(status="ok", result=_to_jsonable(result))
 
 
 @router.post("/{session_id}/messages")
@@ -743,8 +797,8 @@ async def add_message(
     service = get_service()
 
     async def _add() -> dict[str, Any]:
-        session = await service.sessions.get(session_id, _ctx, auto_create=True)
         parts = _resolve_message_parts(request, _ctx)
+        session = await service.sessions.open(session_id, _ctx, auto_create=True)
 
         specs = [
             {
@@ -798,7 +852,6 @@ async def batch_add_messages(
     service = get_service()
 
     async def _batch_add() -> dict[str, Any]:
-        session = await service.sessions.get(session_id, _ctx, auto_create=True)
         specs = []
         for msg_request in request.messages:
             parts = _resolve_message_parts(msg_request, _ctx)
@@ -813,6 +866,7 @@ async def batch_add_messages(
                     "source_message_ids": msg_request.source_message_ids,
                 }
             )
+        session = await service.sessions.open(session_id, _ctx, auto_create=True)
         add_many_async = getattr(session, "add_messages_async", None)
         if callable(add_many_async):
             msgs = await add_many_async(specs)

@@ -48,6 +48,11 @@ const common = {
     done: '已复制到剪贴板',
     failed: '复制失败，请选中文本后手动复制。',
   },
+  docs: {
+    link: '文档',
+    learnMore: '了解更多',
+    troubleshoot: '排查说明',
+  },
   access: {
     title: '先连接 OpenViking',
     invalid: 'OpenViking API 密钥无效',
@@ -64,21 +69,25 @@ const common = {
       '网关管理密钥由部署这台网关的人设置，用来修改上游和上下文配置。它不是 OpenViking API 密钥，也不是客户端用的网关密钥。',
     where: '在哪里找？',
     prefix:
-      'openviking-server init 和 openviking-gateway init 生成的值以 ovgm_ 开头。',
+      'openviking-server init、openviking-gateway init 和 Studio“开启网关”生成的值都以 ovgm_ 开头。',
     environment: '也可能设在环境变量里，它优先于配置文件：',
+    studio: 'Root 可以在“设置 → 服务端配置 → 文件编辑”中查看 ov.conf。',
+    reset: '实在找不到，就在原来的位置换一个至少 32 个字符的新密钥，然后重启。',
+    resetDocs: '如何重置',
     keyPlaceholder: '<至少 32 个字符>',
     session: '只保存在当前浏览器标签页，关闭后自动锁定。',
     wrongKey: '这是网关密钥（给客户端用的），请输入网关管理密钥。',
     invalid:
-      '网关管理密钥不正确。请向部署这台网关的人确认。注意，这里要填的不是 OpenViking 的管理员 API 密钥。',
+      '网关管理密钥不正确。如果密钥被更换或遗失，请看上方的“在哪里找？”。注意，这里要填的不是 OpenViking 的管理员 API 密钥。',
     unlock: '解锁',
     unlocked: '已解锁，现在可以修改上游和上下文配置',
     lock: '锁定',
     editing: '可修改上游和上下文配置',
     expired: '网关管理密钥已失效，上游和上下文配置恢复为只读。',
     readOnly:
-      '上游和上下文配置由网关管理员统一提供。你可以查看、测试连接，并在签发密钥时选用。',
-    adminReadOnly: 'OpenViking 的管理员和 Root 也需要网关管理密钥才能修改。',
+      '上游和上下文配置由网关管理员统一提供。你可以查看，并在签发密钥时选用。',
+    adminReadOnly:
+      'OpenViking 的管理员和 Root 也需要网关管理密钥才能修改。如果这台服务是你部署的，密钥在 ov.conf 的 gateway.management_key 里。',
     shared:
       '你正在修改本账号所有用户共用的配置，保存后立即对使用它的密钥生效。',
     publicTitle: '这台网关对所有 OpenViking 商业版用户开放',
@@ -110,7 +119,6 @@ const common = {
     fixLabel: '需要修改的配置',
     terminal: '终端',
     environment: '环境变量',
-    docs: '部署说明',
     enable: {
       description: 'Studio 可以直接开启：把设置写入 ov.conf，然后重启服务。',
       descriptionManualRestart:
@@ -143,11 +151,11 @@ const common = {
         'ov.conf 已保存，但无法确认服务是否重启成功：{{message}}。请检查服务状态，然后点“重试”。',
       keyTitle: '保存网关管理密钥',
       keyOnce:
-        '密钥只显示这一次。修改上游和上下文配置时需要它；关闭这个浏览器标签页之前，当前页面保持解锁。',
+        '密钥已写入 ov.conf 的 gateway.management_key，Root 之后可以在“设置 → 服务端配置”中查看。修改上游和上下文配置时需要它；关闭这个浏览器标签页之前，当前页面保持解锁。',
       copyKey: '复制网关管理密钥',
       copyFailed: '复制失败，密钥已选中，请按 Ctrl+C 或 ⌘C 复制。',
       keyOnceManual:
-        '密钥只显示这一次。修改上游和上下文配置时需要它；重启服务后，在网关页面点“输入网关管理密钥”并粘贴。',
+        '密钥已写入 ov.conf 的 gateway.management_key，Root 之后可以在“设置 → 服务端配置”中查看。修改上游和上下文配置时需要它；重启服务后，在网关页面点“输入网关管理密钥”并粘贴。',
       keySaved: '已保存',
       continue: '已保存，打开网关',
     },
@@ -156,7 +164,8 @@ const common = {
     reasons: {
       management_key_required:
         '上游和上下文配置由网关管理员统一提供，输入网关管理密钥后才能修改。',
-      management_key_invalid: '网关管理密钥不正确，请向部署这台网关的人确认。',
+      management_key_invalid:
+        '网关管理密钥不正确，请用当前的密钥重新解锁。解锁对话框的“在哪里找？”列出了它的存放位置。',
       vlm_import_forbidden: '你没有导入 OpenViking 模型配置的权限。',
       vlm_import_unavailable:
         '这台网关不在 OpenViking 服务内运行，读不到服务端的模型配置，请手动添加上游。',
@@ -197,8 +206,8 @@ const common = {
     unknownCategory: '未知分类“{{name}}”',
     quotasAllZero: '至少把一个分类设为大于 0，或关闭分类限额',
     softBelowHard: '须低于硬提醒时机',
-    baseUrl:
-      '请输入 http:// 或 https:// 地址，不能包含账号密码、查询参数或片段',
+    baseUrl: '请输入 http:// 或 https:// 地址，不能包含账号密码或 # 片段',
+    baseUrlPlaceholder: '地址里只能使用 {api_key} 占位符，且不能放在域名里',
     subscriptionKey:
       '不支持 Claude 订阅令牌（sk-ant-oat…），请使用模型 API Key。',
     apiKeyRequired: '请填写 API Key，或改为由每个客户端自带 API Key',

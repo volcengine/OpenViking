@@ -42,6 +42,7 @@ class SkillPackageRetriever(HierarchicalRetriever):
         if limit <= 0 or not await proxy.collection_exists_bound():
             return QueryResult(query=query, matched_contexts=[], searched_directories=target_dirs)
 
+        # Package search never reranks, so only an explicit threshold filters vector scores.
         threshold = self._resolve_threshold(score_threshold)
         query_vector = sparse_vector = None
         if search_type == "semantic" and self.embedder:

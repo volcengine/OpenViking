@@ -1,0 +1,23 @@
+# OpenViking onboarding guide: troubleshooting (for agents)
+
+Look here when a command from the [onboarding guide](https://docs.openviking.ai/agents/en/onboarding.md) fails. Find the symptom, fix it and retry once; if it still fails, tell the user which step didn't work, what it affects and what they can do.
+
+| Symptom | What to do |
+|---|---|
+| `The server rejected the API key (HTTP 401/403)` or `The server requires an API key` (Chinese `服务拒绝了该 API key`, `该服务需要 API key`) | The key is wrong, revoked, or for another account. Ask the user to copy it again from the OpenViking console (User Management → API Key) and re-run the install command with the new `--api-key` in their own terminal. On a self-hosted server, use a user key; a root key can't read or write memories. |
+| `Cannot reach <url>` (Chinese `无法连接`) | Run `curl -sS -o /dev/null -w '%{http_code}\n' <url>/health`. Any HTTP status, even 401, means the server is reachable. A timeout or connection error means a proxy, VPN or firewall is in the way; ask the user. |
+| `CLI not found; skipping: <command>` for this host (for example `Codex-format CLI not found; skipping: codex`) | The installer's shell can't find this host's command, often because it is on a `PATH` set only for interactive shells. Ask the user to run the install command from their original message in their own terminal, where the command works, then continue at Step 1. Don't paste the command back to them; it contains the key. |
+| Node.js missing or older than 18 (pi needs 22.19+) | Ask the user to install or upgrade Node.js, then re-run the installer. |
+| A sandbox blocks network access or writes to the home directory | Ask the user to approve running it outside the sandbox. Don't work around the sandbox. |
+| `curl` exits with code 7 or 6 in Codex | Most likely the sandbox blocked the network, not that the site is down. Ask to run that command outside the sandbox. |
+| The host refuses to run `curl … \| bash` | Ask the user to run the install command from their original message in their own terminal, then continue at Step 1. Don't paste the command back to them; it contains the key. |
+| This host is not under `Done`, and `Not done` doesn't mention it | The installer didn't detect this host. Re-run it for this host alone, with `<value>` from the `--harness` column of Appendix A in the onboarding guide: `curl -fsSL https://openviking.ai/install \| bash -s -- --yes --harness <value>,cli`. It keeps the saved connection, so leave out the key. Then continue at Step 1. |
+| Windows | The installer supports macOS and Linux only. Tell the user and stop. |
+| docs.openviking.ai doesn't load | Use docs.openviking.net with the same path. The installer already tries both hosts. |
+| `ov: command not found` | Re-run the installer with `--yes --harness cli`; it keeps the saved connection. If `ov` is installed but not on `PATH`, add `$(npm prefix -g)/bin`, or `~/.local/bin` when the installer fell back to `~/.local`. |
+| `ov` says it needs a display language | Run `ov language en` (or `ov language zh-CN`). |
+| DeepSeek Harness: `dsh plugin add` failed | Install pnpm (`npm i -g pnpm`) and re-run the installer with `--harness dsh`. |
+| `Installation validation failed` | Re-run the install for the current host. If it fails again, show the user the failing check. |
+| Import script prints `not supported yet` | The script can't read this host's history directly: convert it as in [Other hosts: convert sessions to JSONL](https://docs.openviking.ai/agents/en/onboarding-other-hosts.md) and import it with `--input`. |
+| Import script prints `--session: no session matches …` | The id was wrong and nothing was uploaded. Run `--list` again and use the ids it prints. |
+| No recall after the restart | First tell apart "nothing relevant stored yet" from "the hooks didn't run". Codex and TraeCode CLI: trust the OpenViking hooks in `/hooks` and confirm `openviking-memory` is enabled in `/plugins`. Cursor and TRAE: the app was not fully quit. Otherwise run the doctor: Claude Code `/openviking-memory:ov` or the `ov-memory-doctor` skill; Codex the `$ov-memory-doctor` skill; Cursor, TRAE, TRAE CN, ZCode `node ~/.openviking/agent-integrations/<cursor\|trae\|trae-cn\|zcode>/scripts/ov-memory-doctor.mjs`; pi `/viking`; DeepSeek Harness `dsh --profile <profile> --dump-config` should list `openviking-memory`, where `<profile>` is the one the installer printed. On command-line hosts, setting `OPENVIKING_DEBUG=1` before starting writes hook logs to `~/.openviking/logs/`; desktop apps opened from the dock or a launcher don't see variables set in a shell. |

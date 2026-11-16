@@ -19,6 +19,8 @@ curl -fsSL https://openviking.ai/install | bash
 
 The installer copies the plugin into `~/.config/opencode/plugins/` as a local file plugin, writes the `openviking` MCP server entry into `~/.config/opencode/opencode.json`, and configures `~/.openviking/ovcli.conf`.
 
+Once installed, start a new OpenCode session and ask it to follow https://docs.openviking.ai/agents/en/onboarding.md. It checks the connection and walks you through the first use; see [One-click setup](../getting-started/07-agent-onboarding.md).
+
 ### Manual npm install
 
 The published npm package is `@openviking/opencode-plugin`. For a first-time OpenCode config:
@@ -125,10 +127,10 @@ API keys are sent as `Authorization: Bearer ...` by both hooks and the MCP proxy
 
 ## Verify
 
-Restart OpenCode after installation. In an OpenCode session, the plugin should expose the `openviking` MCP server with the full server MCP tool set (16 tools). OpenCode namespaces MCP tools as `openviking_*`:
+Restart OpenCode after installation. In an OpenCode session, the plugin should expose the `openviking` MCP server with the full server MCP tool set (17 tools). OpenCode namespaces MCP tools as `openviking_*`:
 
 - `openviking_find`, `openviking_search` (`openviking_search` with `mode="context"` replaces the former recall tool)
-- `openviking_read`, `openviking_list`, `openviking_tree`, `openviking_grep`, `openviking_glob`
+- `openviking_read`, `openviking_download`, `openviking_list`, `openviking_tree`, `openviking_grep`, `openviking_glob`
 - `openviking_remember`, `openviking_write`, `openviking_edit`, `openviking_add_resource`, `openviking_add_skill`
 - `openviking_list_watches`, `openviking_cancel_watch`, `openviking_forget`, `openviking_health`
 

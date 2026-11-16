@@ -123,7 +123,7 @@ class Message:
                 "skill_uri": part.skill_uri,
                 "tool_status": part.tool_status,
             }
-            if part.tool_input:
+            if part.tool_input is not None:
                 d["tool_input"] = part.tool_input
             if part.tool_output:
                 d["tool_output"] = part.tool_output
