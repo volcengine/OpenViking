@@ -7,7 +7,6 @@ from typing import Any, Iterator
 
 import httpx
 
-from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking.pyagfs.exceptions import (
     AGFSAlreadyExistsError,
     AGFSClientError,
@@ -299,7 +298,6 @@ def _build_upstream_error(
     status: int | None = None,
     source: BaseException | None = None,
     vlm_context: BaseException | None = None,
-    extra_details: dict[str, Any] | None = None,
 ) -> OpenVikingError:
     labels = {
         "INVALID_ARGUMENT": "Upstream model request was rejected",
@@ -322,8 +320,6 @@ def _build_upstream_error(
         details["upstream_status_code"] = status
     if source is not None:
         details["upstream_error_type"] = type(source).__name__
-    if extra_details:
-        details.update(extra_details)
     # Search for VLM model/api_base annotations. vlm_context is the outermost
     # exception (where failover wrappers attach the annotation); source may be
     # an inner exception from the chain.
@@ -381,39 +377,6 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
             source=source,
             message=_upstream_detail_message(exc),
             vlm_context=exc,
-        )
-
-    # Only use a carried kind after the existing status/transport handling.
-    # UNKNOWN keeps the legacy configuration and message fallbacks below.
-    for item in _iter_exception_chain(exc):
-        if not isinstance(item, ModelError):
-            continue
-        model_code = {
-            ModelErrorKind.TRANSIENT_SERVICE_ERROR: "UNAVAILABLE",
-            ModelErrorKind.TRANSIENT_NETWORK_ERROR: "UNAVAILABLE",
-            ModelErrorKind.RATE_LIMIT_ERROR: "RESOURCE_EXHAUSTED",
-            ModelErrorKind.AUTHENTICATION_ERROR: "UNAUTHENTICATED",
-            ModelErrorKind.PERMISSION_DENIED: "PERMISSION_DENIED",
-            ModelErrorKind.QUOTA_EXHAUSTED: "RESOURCE_EXHAUSTED",
-            ModelErrorKind.MODEL_NOT_FOUND: "NOT_FOUND",
-            ModelErrorKind.UNSUPPORTED: "INVALID_ARGUMENT",
-            ModelErrorKind.INVALID_REQUEST: "INVALID_ARGUMENT",
-            ModelErrorKind.INPUT_TOO_LARGE: "INVALID_ARGUMENT",
-            ModelErrorKind.CONTENT_SAFETY: "INVALID_ARGUMENT",
-        }.get(item.kind)
-        if model_code is None:
-            break
-        details: dict[str, Any] = {"model_error_kind": item.kind.value}
-        if item.provider:
-            details["provider"] = item.provider
-        if item.code:
-            details["provider_error_code"] = item.code
-        return _build_upstream_error(
-            code=model_code,
-            message=_upstream_detail_message(exc),
-            source=item,
-            vlm_context=exc,
-            extra_details=details,
         )
 
     if _is_model_api_key_configuration_error(exc):

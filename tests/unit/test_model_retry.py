@@ -27,7 +27,6 @@ from openviking.utils.model_retry import (
     ERROR_CLASS_UNKNOWN,
     classify_api_error,
     extract_metric_error_code,
-    is_retryable_api_error,
     retry_async,
     retry_sync,
 )
@@ -74,14 +73,6 @@ def test_classify_other_agfs_errors(error, expected, wrapped):
 
 def test_classify_api_error_recognizes_request_burst_too_fast():
     assert classify_api_error(RuntimeError("RequestBurstTooFast")) == ERROR_CLASS_TRANSIENT
-
-
-@pytest.mark.parametrize("kind", [ModelErrorKind.QUOTA_EXHAUSTED, ModelErrorKind.INPUT_TOO_LARGE])
-def test_sdk_wrapper_preserves_non_retryable_model_error(kind):
-    error = httpx.ConnectError("SDK wrapper")
-    error.__cause__ = ModelError(kind, "provider rejected request")
-
-    assert not is_retryable_api_error(error)
 
 
 def test_classify_api_error_recognizes_timed_out_message():

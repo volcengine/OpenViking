@@ -83,23 +83,6 @@ _CODE_KINDS = {
     "UNSUPPORTEDVALUE": ModelErrorKind.UNSUPPORTED,
 }
 
-# Numeric business codes are provider-scoped: the same number has no portable
-# meaning across model APIs.
-_PROVIDER_CODE_KINDS = {
-    "minimax": {
-        "1000": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
-        "1001": ModelErrorKind.TRANSIENT_NETWORK_ERROR,
-        "1002": ModelErrorKind.RATE_LIMIT_ERROR,
-        "1004": ModelErrorKind.AUTHENTICATION_ERROR,
-        "1008": ModelErrorKind.QUOTA_EXHAUSTED,
-        "1013": ModelErrorKind.TRANSIENT_SERVICE_ERROR,
-        "1026": ModelErrorKind.CONTENT_SAFETY,
-        "1027": ModelErrorKind.CONTENT_SAFETY,
-        "2013": ModelErrorKind.INVALID_REQUEST,
-        "2049": ModelErrorKind.AUTHENTICATION_ERROR,
-    }
-}
-
 _TRANSIENT_SERVICE_STATUS = {409, 500, 502, 503}
 _TRANSIENT_NETWORK_STATUS = {408, 504}
 
@@ -217,17 +200,10 @@ def _kind_from_status(status_code: int | None) -> ModelErrorKind | None:
     return None
 
 
-def _sdk_kind(error: BaseException) -> tuple[ModelErrorKind, str | None] | None:
+def _sdk_kind(error: BaseException) -> tuple[ModelErrorKind, str] | None:
     module = type(error).__module__
     name = type(error).__name__
     mro_names = {base.__name__ for base in type(error).__mro__}
-
-    if isinstance(error, ModelError):
-        carried_kind = error.kind
-        if carried_kind is ModelErrorKind.UNKNOWN:
-            code_kinds = _PROVIDER_CODE_KINDS.get((error.provider or "").lower(), {})
-            carried_kind = code_kinds.get(error.code or "", carried_kind)
-        return carried_kind, error.provider
 
     if isinstance(error, TimeoutError):
         return ModelErrorKind.TRANSIENT_NETWORK_ERROR, "network"
@@ -344,17 +320,17 @@ def model_error_from_status(
 
 
 def model_error_from_exception(error: BaseException) -> ModelError | None:
-    """Reuse the nearest classification or classify the first SDK failure."""
+    """Convert a recognized SDK/API exception at the provider boundary."""
     for item in _exception_chain(error):
+        if isinstance(item, ModelError):
+            return item
         classified = _sdk_kind(item)
         if classified is None:
             continue
         kind, provider = classified
-        if isinstance(item, ModelError) and kind is item.kind:
-            return item
         return ModelError(
             kind,
-            str(item) if isinstance(item, ModelError) else str(error),
+            str(error),
             provider=provider,
             status_code=_status_code(item),
             code=_error_code(item),
@@ -365,10 +341,6 @@ def model_error_from_exception(error: BaseException) -> ModelError | None:
 def model_error_kind(error: BaseException) -> ModelErrorKind | None:
     """Return the structured model kind carried by an exception chain."""
     for item in _exception_chain(error):
-        if isinstance(item, ModelError):
-            # Preserve the carried classification before inspecting SDK wrappers.
-            error = item
-            break
         kind = getattr(item, "kind", None)
         if isinstance(kind, ModelErrorKind):
             return kind
