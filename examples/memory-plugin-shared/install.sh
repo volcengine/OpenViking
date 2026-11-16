@@ -3473,17 +3473,23 @@ EOF
     fi
   fi
   if contains_harness antigravity; then
-    local ag_root="$OV_HOME/agent-integrations/antigravity" ag_hooks
+    local ag_root="$OV_HOME/agent-integrations/antigravity" ag_hooks ag_command
     ag_hooks="$(antigravity_plugin_dir)/hooks.json"
+    # The rendered command shell-quotes its paths, so it is checked by running
+    # it the way Antigravity does, not by searching for the raw path.
+    ag_command="$("$NODE_BIN" -e '
+const hook = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))["openviking-memory"];
+const command = hook?.SessionStart?.[0]?.command;
+if (typeof command !== "string" || !command.includes("OPENVIKING_INTEGRATION_ID=")) process.exit(1);
+process.stdout.write(command);
+' "$ag_hooks" 2>/dev/null)" || ag_command=""
     if [ -f "$(antigravity_plugin_dir)/plugin.json" ] \
       && [ -f "$ag_root/scripts/hook.mjs" ] \
       && [ -f "$ag_root/integration.json" ] \
       && [ -f "$OV_HOME/agent-integrations/memory-plugin-shared/lib/agent-hook-runtime.mjs" ] \
-      && grep -q 'OPENVIKING_INTEGRATION_ID' "$ag_hooks" 2>/dev/null \
-      && grep -qF "$ag_root/scripts/hook.mjs" "$ag_hooks" 2>/dev/null; then
+      && [ -n "$ag_command" ]; then
       "$NODE_BIN" --check "$ag_root/scripts/hook.mjs" || { ok=0; agent_fatal=1; }
-      if ! printf '%s' '{}' | OPENVIKING_MEMORY_ENABLED=0 \
-        "$NODE_BIN" "$ag_root/scripts/hook.mjs" session-start antigravity >/dev/null; then
+      if ! printf '%s' '{}' | OPENVIKING_MEMORY_ENABLED=0 sh -c "$ag_command" >/dev/null; then
         warn "antigravity: $(t 'installed Hook runtime failed its smoke test' '已安装的 Hook 运行时 smoke test 失败')"
         ok=0; agent_fatal=1
       else

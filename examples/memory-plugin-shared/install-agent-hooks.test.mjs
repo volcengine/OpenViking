@@ -934,6 +934,33 @@ test("Antigravity installs its plugin directory, replaces a hand-made copy and u
   }
 });
 
+// The renderer shell-quotes the runtime path, so an apostrophe in it no longer
+// appears verbatim in hooks.json; validation has to run the command instead.
+test("Antigravity installs and validates under a home path containing an apostrophe", () => {
+  const base = mkdtempSync(join(tmpdir(), "openviking-antigravity-quote-"));
+  const home = join(base, "Agent's Space");
+  const pluginDir = join(home, ".gemini", "config", "plugins", "openviking-memory");
+  try {
+    mkdirSync(join(home, ".gemini", "config"), { recursive: true });
+    runInstall(home, "antigravity");
+
+    const hooks = JSON.parse(readFileSync(join(pluginDir, "hooks.json"), "utf8"));
+    for (const [event, input] of [["SessionStart", "{}"], ["Stop", "{}"]]) {
+      const run = spawnSync("sh", ["-c", hooks["openviking-memory"][event][0].command], {
+        env: { ...process.env, HOME: home, OPENVIKING_MEMORY_ENABLED: "0" },
+        input,
+        encoding: "utf8",
+      });
+      assert.equal(run.status, 0, `${event}: ${run.stderr}`);
+    }
+
+    runUninstall(home, "antigravity");
+    assert.equal(existsSync(pluginDir), false);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test("Antigravity leaves a plugin directory it did not write alone", () => {
   const home = mkdtempSync(join(tmpdir(), "openviking-antigravity-foreign-"));
   const pluginDir = join(home, ".gemini", "config", "plugins", "openviking-memory");
