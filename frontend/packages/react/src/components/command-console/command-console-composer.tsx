@@ -18,6 +18,7 @@ export interface CommandConsoleComposerProps {
   labels: ResolvedCommandConsoleLabels;
   completion: CommandConsoleCompletion;
   disabled: boolean;
+  busy: boolean;
   readOnly: boolean;
   canSubmit: boolean;
   activeIndex: number;
@@ -39,6 +40,7 @@ export function CommandConsoleComposer({
   labels,
   completion,
   disabled,
+  busy,
   readOnly,
   canSubmit,
   activeIndex,
@@ -47,6 +49,7 @@ export function CommandConsoleComposer({
   onSubmit,
   onOpenUri,
 }: CommandConsoleComposerProps) {
+  const inputDisabled = disabled || busy;
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const inputId = useId();
   const mirrorRef = useRef<HTMLSpanElement>(null);
@@ -69,7 +72,7 @@ export function CommandConsoleComposer({
     history,
     completion,
     inline,
-    disabled,
+    disabled: inputDisabled,
     readOnly,
     canSubmit,
     activeIndex,
@@ -84,7 +87,8 @@ export function CommandConsoleComposer({
     <div
       ref={anchorRef}
       className="ov-command-console__composer"
-      data-disabled={disabled || undefined}
+      data-disabled={inputDisabled || undefined}
+      aria-busy={busy || undefined}
     >
       <div className="ov-command-console__input-row" data-value={`${value}\n`}>
         <label className="ov-command-console__input-label" htmlFor={inputId}>
@@ -114,7 +118,7 @@ export function CommandConsoleComposer({
           value={value}
           placeholder={labels.placeholder}
           readOnly={readOnly}
-          disabled={disabled}
+          disabled={inputDisabled}
           autoCapitalize="off"
           autoCorrect="off"
           spellCheck={false}

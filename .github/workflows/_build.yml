@@ -248,7 +248,7 @@ jobs:
           -o Acquire::Retries=2 -o Acquire::https::Timeout=20 \
           -o APT::Update::Error-Mode=any update
         apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
-          -o Acquire::Retries=2 install -y \
+          -o Acquire::Retries=2 -o Acquire::https::Timeout=20 install -y --no-install-recommends \
           git ca-certificates cmake build-essential clang tzdata curl \
           pkg-config unzip xz-utils python3 libicu66 \
           libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \

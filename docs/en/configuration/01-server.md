@@ -196,7 +196,7 @@ filtering and Rule applicability. It does not configure retrieval reranking.
 | `model` | string / `null` | provider default | Model name or endpoint ID; required for `custom` |
 | `timeout` | number | `30` | HTTP request timeout in seconds |
 | `extra_headers` | object / `null` | `null` | Additional HTTP request headers |
-| `log_payloads` | boolean | `false` | Log complete requests and responses; these may contain task and Rule content |
+| `log_payloads` | boolean | `false` | Log safe request and response summaries when `log.level=DEBUG`; task, Rule and response content are omitted |
 
 | Provider | Default request URL | Default model | Notes |
 |---|---|---|---|
@@ -248,7 +248,7 @@ discard source restrictions. Empty does not mean unknown or inapplicable.
 | `mode` | `noul`, `choice`, or `null` | `noul` | Jev rerank mode; `null` also uses `noul` |
 | `threshold` | number | `0.1` | Minimum rerank score considered relevant; filters only model rerank scores, never vector scores, and a request `score_threshold` overrides it |
 | `max_input_tokens` | integer; `0` or `>= 128` | `0` | Maximum estimated tokens per query-document pair; `0` disables truncation |
-| `log_payloads` | boolean | `false` | Log complete rerank request and response payloads; may expose query and document content |
+| `log_payloads` | boolean | `false` | Jev only: log safe request and response summaries when `log.level=DEBUG`; query, document and response content are omitted |
 
 Rerank has no separate `enabled` field. It becomes available when the required provider credentials are configured.
 

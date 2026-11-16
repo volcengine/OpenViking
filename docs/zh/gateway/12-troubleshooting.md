@@ -93,9 +93,11 @@ Studio 无法为你加载网关时，会用一张设置卡片代替网关标签�
 | 404 "Unknown response for this key"、403 "Response upstream is no longer allowed" | 查询的 Responses 响应不是这把密钥创建的，或者创建它的上游已停用、不再绑定到这把密钥。 |
 | 413 "Request exceeds configured body limit" | 请求体超过了 `max_body_bytes`（见[请求大小上限](05-long-conversations.md#side-effects)），或者超过了代理自己的上限。 |
 | 426 | 对 Responses API 发起了 WebSocket 连接。这是预期行为，Codex 会改用 HTTP。 |
-| 502 "Model upstream is unavailable" | 网关连不上服务商，或者调用超过了 `upstream_timeout_seconds`。在上游上点**测试**（见[测试和删除](07-upstreams.md#test-and-delete)）。 |
+| 502 "Model upstream is unavailable" | 网关连不上服务商，或者服务商没有在 `upstream_timeout_seconds` 内开始回复。在上游上点**测试**（见[测试和删除](07-upstreams.md#test-and-delete)）。 |
 
 "Hidden tool request timed out"（504）发生在调用服务商之后，会记入请求日志，见[失败处理](04-openviking-tools.md#failure-handling)。
+
+已经开始的流式回复不会因为时间长被切断，只有服务商超过 `upstream_timeout_seconds` 没有发送任何数据，或者使用 OpenViking 工具的请求用完了工具**总时长**时才会中断；这时流提前结束，使用 OpenViking 工具的请求会报 "Hidden tool request timed out"。
 
 ## 上游返回错误 {#the-upstream-returned-an-error}
 

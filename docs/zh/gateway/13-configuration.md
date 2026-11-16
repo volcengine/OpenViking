@@ -46,7 +46,7 @@ description: 查询 OpenViking 网关的配置字段、环境变量、上下文�
 | `request_log_sink` | 两者 | `store` | `store`, `stdout` | 将请求和后台保存日志写入存储，或以每条一行 JSON 写到 stdout 并立即刷新；见[观测](../guides/22-gateway-operations.md#monitoring) |
 | `log_retention_days` | 两者 | `30` | 1 及以上 | 存储中的请求日志保留天数；stdout 的保留期限由日志采集系统管理 |
 | `max_body_bytes` | 两者 | `33554432`（32 MiB） | 1,024 及以上 | 请求和上传的大小上限，单位为字节 |
-| `upstream_timeout_seconds` | 两者 | `600` | 大于 0 | 服务商请求超时 |
+| `upstream_timeout_seconds` | 两者 | `600` | 大于 0 | 网关等待服务商的秒数：等回复开始（建立连接、发送请求、收到响应头），以及之后等回复的每一部分。持续有数据的回复不会被切断，无论持续多久 |
 | `health_interval_seconds` | 两者 | `60` | 1 及以上 | 检查 OpenViking 状态的间隔秒数 |
 | `capture_concurrency` | 两者 | `1` | 1 及以上 | 每个进程并发投递的会话数；停机时停止新 claim，最多等待在途投递 100 秒 |
 | `client_rules` | 两者 | `{}`（只用内置规则） | 见[客户端规则](#client-rules) | 在网关内置的辅助请求和客户端插入消息识别规则上增删条目 |

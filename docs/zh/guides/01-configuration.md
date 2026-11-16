@@ -1308,7 +1308,7 @@ Choice 不受这个 Noul 专用开关影响，始终将全部候选放入共享 
 | `candidates_visible` | bool | 仅用于 Jev Noul；默认 `false`，每个候选隔离到自己的问题中。显式 `true` 可共享候选上下文；Choice 忽略此选项。 |
 | `timeout` | float | HTTP Rerank provider（包括 Jev）的请求超时时间，单位为秒。默认：`30.0` |
 | `max_input_tokens` | int | 每个 query-document 对发送给 reranker 的最大估算原始文本 token 数；超长输入会保留开头和结尾。`0` 表示不截断。默认：`0` |
-| `log_payloads` | bool | 记录完整 rerank 请求和响应；日志可能包含 query 和文档内容。默认：`false` |
+| `log_payloads` | bool | 仅用于 Jev：在 `log.level=DEBUG` 时记录安全的请求和响应摘要；不记录 query、文档和响应正文。默认：`false` |
 | `threshold` | float | Rerank 分数阈值，范围为 `0.0` 到 `1.0`。Rerank 后低于此值的结果会被过滤；它不过滤向量分数（未使用 Rerank 或 Rerank 失败时），请求中的 `score_threshold` 优先。默认：`0.1` |
 | `extra_headers` | object | 自定义 HTTP 请求头（OpenAI 兼容 provider 可用，可选） |
 

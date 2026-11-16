@@ -26,7 +26,9 @@ from openviking.observability.context import get_root_observability_context
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking.utils.model_retry import extract_metric_error_code
-from openviking_cli.utils.logger import default_logger as logger
+from openviking_cli.utils import get_logger
+
+logger = get_logger(__name__)
 
 VOLCENGINE_CLIENT_REQUEST_ID_HEADER = "X-Client-Request-Id"
 VOLCENGINE_CLIENT_REQUEST_ID = "ToB-direct,OpenViking_Service,openviking-service_cn-beijing"

@@ -542,6 +542,12 @@ export interface CommandConsoleProps extends Omit<
    */
   disabled?: boolean;
   /**
+   * 执行中暂时锁定输入与提交，不展示不可用提示；进度由 records 展示。
+   * Temporarily locks input and submission while executing, without an
+   * unavailable message. Progress is displayed through records.
+   */
+  busy?: boolean;
+  /**
    * 无记录时展示的空态节点，完全替换内置空态。
    * 省略时按 `quickCommands` 展示内置空态，没有可用快捷命令时不显示任何空态内容；
    * 传 `null` 时同样不显示。
