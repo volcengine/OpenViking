@@ -1,0 +1,70 @@
+name: Build Linux CI Base Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the validated Ubuntu 24.04 image to GHCR
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+      - name: Select image name
+        id: image
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: echo "tag=ghcr.io/${REPOSITORY,,}-ci-ubuntu24:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .github/images
+          file: .github/images/ubuntu24-ci.Dockerfile
+          platforms: linux/amd64
+          tags: ${{ steps.image.outputs.tag }}
+          load: true
+          push: false
+      - name: Verify installed system dependencies
+        env:
+          IMAGE: ${{ steps.image.outputs.tag }}
+        run: |
+          docker run --rm --network none "$IMAGE" bash -euc '
+            git --version
+            gcc --version
+            g++ --version
+            cmake --version
+            ccache --version
+            python3 --version
+            pkg-config --modversion openssl
+            printf "#include <openssl/ssl.h>\nint main(void) { return OPENSSL_init_ssl(0, 0) != 1; }\n" \
+              | gcc -x c - -lssl -lcrypto -o /tmp/openssl-smoke
+            /tmp/openssl-smoke
+            printf "#include <filesystem>\nint main() { return std::filesystem::path(\"/tmp\").empty(); }\n" \
+              | g++ -std=c++17 -x c++ - -o /tmp/cpp-smoke
+            /tmp/cpp-smoke
+            ffmpeg -version
+            command -v curl unzip xz lsof ps
+            test -s /etc/ssl/certs/ca-certificates.crt
+          '
+      - uses: docker/login-action@v4
+        if: inputs.publish
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish validated image
+        if: inputs.publish
+        env:
+          IMAGE: ${{ steps.image.outputs.tag }}
+        run: |
+          docker push "$IMAGE"
+          reference=$(docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE")
+          printf 'Set `CI_UBUNTU24_IMAGE` to `%s` after making the package publicly readable.\n' \
+            "$reference" >> "$GITHUB_STEP_SUMMARY"

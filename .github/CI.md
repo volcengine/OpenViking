@@ -50,8 +50,38 @@ Self-hosted API, database and cuVS consumers also use Ubuntu 24.04 containers;
 hosted consumers retain their existing host execution. Database consumers use
 service-container DNS inside containers and loopback on hosted runners.
 The Linux wheel execution timeout is 60 minutes and native preparation is limited
-to 30 minutes. Timeouts start when execution begins, not while queued; there is
+to 45 minutes, with a 15-minute limit on system package installation. Timeouts start when execution begins, not while queued; there is
 no automatic queue fallback.
+
+The host planning job restores its workspace ownership before checkout to
+recover root-owned build files from interrupted containers. Container cleanup
+uses the host-created workspace parent to determine the owner; checkout can
+recreate the checkout directory as root.
+
+### Prebuilt Ubuntu 24.04 CI image
+
+`.github/images/ubuntu24-ci.Dockerfile` preinstalls Git, GCC/G++, CMake, ccache,
+OpenSSL development headers, Python 3 and the system tools used by API, database
+and cuVS tests. It contains no repository checkout, credentials or Python/Rust
+project dependencies. Python versions, Rust and dependency lockfiles remain
+managed by the existing setup actions. The API runtime uses GCC; Linux release
+wheels keep their existing Clang compiler and Ubuntu 20.04/glibc 2.31 baseline.
+
+Run **Build Linux CI Base Image** manually. Its default `publish=false` builds
+the amd64 image and checks its installed tools on a hosted runner. After that
+passes, run with `publish=true` to publish
+`ghcr.io/volcengine/openviking-ci-ubuntu24:<commit-sha>`. Make this GHCR package
+publicly readable, then set repository Actions variable `CI_UBUNTU24_IMAGE` to
+the digest reference printed in the workflow summary. Another reachable public
+registry can also host the image; avoid mutable `latest` tags.
+
+The API native producer uses that image and passes it to its self-hosted test
+consumers. Each bootstrap checks actual dpkg installation status: complete images
+skip apt, while incomplete images install the required packages. With no image
+variable, the producer uses stock `ubuntu:24.04` and installs packages as before.
+The first pull still downloads the image; subsequent jobs on the same host reuse
+Docker's cached layers. Rebuild and validate periodically for OS package updates,
+then update the digest variable. Remove the variable to return to stock Ubuntu.
 
 Before enabling routing, dispatch `_build.yml` on this branch with
 `check_linux_runner=true`, `build_wheels=false` and `build_sdist=false`. Its
