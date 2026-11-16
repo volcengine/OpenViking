@@ -121,6 +121,7 @@ INPUT_TOO_LARGE_PATTERNS = (
     "too many input tokens",
     "input length exceeds",
     "exceeds the context length",
+    "exceeds the available context size",
     "exceeds the max input length",
     "is too large to process",
     "expected maxlength",

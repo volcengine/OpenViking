@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Literal, Optional, Union
 
-from openviking.models.model_error import model_error_kind
+from openviking.models.model_error import ModelErrorKind, model_error_kind
 from openviking.utils.exceptions import AllCredentialsFailedError
 from openviking.utils.model_retry import (
     OrderedCredentialSwitcher,
@@ -823,6 +823,7 @@ class MultiCredentialVLM(VLMBase):
         credential_ids: List[str],
         failback_timeout_seconds: float = 600.0,  # 10 minutes
         failback_request_count: int = 50,
+        context_windows: Optional[List[Optional[int]]] = None,
     ):
         """Initialize MultiCredentialVLM with multiple VLM instances.
 
@@ -831,11 +832,20 @@ class MultiCredentialVLM(VLMBase):
             credential_ids: List of credential IDs corresponding to the VLM instances
             failback_timeout_seconds: Time after which to attempt failback
             failback_request_count: Number of requests after which to attempt failback
+            context_windows: Optional declared total context sizes, in credential order
         """
         if not vlm_instances:
             raise ValueError("At least one VLM instance is required")
         if len(vlm_instances) != len(credential_ids):
             raise ValueError("vlm_instances and credential_ids must have the same length")
+        if context_windows is not None:
+            if len(context_windows) != len(vlm_instances):
+                raise ValueError("context_windows and vlm_instances must have the same length")
+            if any(
+                window is not None and (type(window) is not int or window <= 0)
+                for window in context_windows
+            ):
+                raise ValueError("context_windows must contain positive integers or None")
 
         # Expose the common runtime behavior expected by callers that inspect
         # the wrapper as a VLMBase. Provider-specific identity remains on each
@@ -859,6 +869,9 @@ class MultiCredentialVLM(VLMBase):
 
         self._vlm_instances = vlm_instances
         self._credential_ids = credential_ids
+        self._context_windows = (
+            list(context_windows) if context_windows is not None else [None] * len(vlm_instances)
+        )
         self._logger = logging.getLogger(__name__)
         self._switcher = OrderedCredentialSwitcher(
             n=len(vlm_instances),
@@ -884,6 +897,10 @@ class MultiCredentialVLM(VLMBase):
             AllCredentialsFailedError if all credentials fail
         """
         aggregated_errors = []
+        window_floor = None
+        overflow_error = None
+        tried_larger_credential = False
+        active_overflow = False
 
         # Start from the current (possibly failed-back) active credential, then
         # cycle through the whole ring once. This means an unavailable active
@@ -898,20 +915,33 @@ class MultiCredentialVLM(VLMBase):
             idx = (start + offset) % n
             credential_id = self._credential_ids[idx]
             vlm_instance = self._vlm_instances[idx]
+            if window_floor is not None:
+                window = self._context_windows[idx]
+                if window is None or window <= window_floor:
+                    continue
+                tried_larger_credential = True
 
             try:
                 method = getattr(vlm_instance, method_name)
                 result = method(*args, **kwargs)
-                self._switcher.commit_success(idx)
+                if not active_overflow:
+                    self._switcher.commit_success(idx)
                 return result
             except Exception as exc:
                 _annotate_vlm_error(exc, vlm_instance)
                 kind = model_error_kind(exc)
 
-                if self._switcher.is_fail_fast(kind):
-                    # Request-level failure (400 / input too large / content
-                    # safety): re-raise the original exception so callers can
-                    # react to its type; trying other credentials is useless.
+                if kind is ModelErrorKind.INPUT_TOO_LARGE:
+                    window = self._context_windows[idx]
+                    if window is None:
+                        raise
+                    overflow_error = overflow_error or exc
+                    window_floor = window
+                    if idx == start:
+                        active_overflow = True
+                elif self._switcher.is_fail_fast(kind):
+                    # Other request-level failures cannot be resolved by a
+                    # different credential; preserve the original exception.
                     raise
                 aggregated_errors.append((credential_id, kind, exc, idx))
 
@@ -921,6 +951,8 @@ class MultiCredentialVLM(VLMBase):
                     kind.value,
                 )
 
+        if overflow_error is not None and not tried_larger_credential:
+            raise overflow_error
         raise AllCredentialsFailedError(aggregated_errors)
 
     async def _get_completion_with_failover_async(self, method_name: str, *args, **kwargs):
@@ -938,6 +970,10 @@ class MultiCredentialVLM(VLMBase):
             AllCredentialsFailedError if all credentials fail
         """
         aggregated_errors = []
+        window_floor = None
+        overflow_error = None
+        tried_larger_credential = False
+        active_overflow = False
 
         # See the sync variant for the ring-traversal rationale.
         start = self._switcher.maybe_failback()
@@ -947,17 +983,31 @@ class MultiCredentialVLM(VLMBase):
             idx = (start + offset) % n
             credential_id = self._credential_ids[idx]
             vlm_instance = self._vlm_instances[idx]
+            if window_floor is not None:
+                window = self._context_windows[idx]
+                if window is None or window <= window_floor:
+                    continue
+                tried_larger_credential = True
 
             try:
                 method = getattr(vlm_instance, method_name)
                 result = await method(*args, **kwargs)
-                self._switcher.commit_success(idx)
+                if not active_overflow:
+                    self._switcher.commit_success(idx)
                 return result
             except Exception as exc:
                 _annotate_vlm_error(exc, vlm_instance)
                 kind = model_error_kind(exc)
 
-                if self._switcher.is_fail_fast(kind):
+                if kind is ModelErrorKind.INPUT_TOO_LARGE:
+                    window = self._context_windows[idx]
+                    if window is None:
+                        raise
+                    overflow_error = overflow_error or exc
+                    window_floor = window
+                    if idx == start:
+                        active_overflow = True
+                elif self._switcher.is_fail_fast(kind):
                     # Request-level failure: re-raise the original exception;
                     # trying other credentials is useless.
                     raise
@@ -969,6 +1019,8 @@ class MultiCredentialVLM(VLMBase):
                     kind.value,
                 )
 
+        if overflow_error is not None and not tried_larger_credential:
+            raise overflow_error
         raise AllCredentialsFailedError(aggregated_errors)
 
     async def stream_with_failover(
@@ -982,6 +1034,10 @@ class MultiCredentialVLM(VLMBase):
         already delivered output, so subsequent errors fail the request.
         """
         aggregated_errors = []
+        window_floor = None
+        overflow_error = None
+        tried_larger_credential = False
+        active_overflow = False
         start = self._switcher.maybe_failback()
         n = self._switcher.n
 
@@ -990,12 +1046,18 @@ class MultiCredentialVLM(VLMBase):
             credential_id = self._credential_ids[idx]
             vlm_instance = self._vlm_instances[idx]
             emitted = False
+            if window_floor is not None:
+                window = self._context_windows[idx]
+                if window is None or window <= window_floor:
+                    continue
+                tried_larger_credential = True
 
             try:
                 async for item in stream_factory(vlm_instance):
                     emitted = True
                     yield item
-                self._switcher.commit_success(idx)
+                if not active_overflow:
+                    self._switcher.commit_success(idx)
                 return
             except Exception as exc:
                 _annotate_vlm_error(exc, vlm_instance)
@@ -1003,7 +1065,15 @@ class MultiCredentialVLM(VLMBase):
                     raise
 
                 kind = model_error_kind(exc)
-                if self._switcher.is_fail_fast(kind):
+                if kind is ModelErrorKind.INPUT_TOO_LARGE:
+                    window = self._context_windows[idx]
+                    if window is None:
+                        raise
+                    overflow_error = overflow_error or exc
+                    window_floor = window
+                    if idx == start:
+                        active_overflow = True
+                elif self._switcher.is_fail_fast(kind):
                     raise
                 aggregated_errors.append((credential_id, kind, exc, idx))
                 self._logger.warning(
@@ -1012,6 +1082,8 @@ class MultiCredentialVLM(VLMBase):
                     kind.value,
                 )
 
+        if overflow_error is not None and not tried_larger_credential:
+            raise overflow_error
         raise AllCredentialsFailedError(aggregated_errors)
 
     def get_completion(
@@ -1123,6 +1195,10 @@ class MultiCredentialVLM(VLMBase):
         errors = []
         attempted = False
         active_credential_failed = False
+        window_floor = None
+        overflow_error = None
+        tried_larger_credential = False
+        active_overflow = False
 
         for offset in range(self._switcher.n):
             idx = (start + offset) % self._switcher.n
@@ -1133,6 +1209,11 @@ class MultiCredentialVLM(VLMBase):
                 size_bytes=size_bytes,
             ):
                 continue
+            if window_floor is not None:
+                window = self._context_windows[idx]
+                if window is None or window <= window_floor:
+                    continue
+                tried_larger_credential = True
 
             attempted = True
             credential_id = self._credential_ids[idx]
@@ -1145,7 +1226,7 @@ class MultiCredentialVLM(VLMBase):
                 )
                 # Capability routing alone must not change the credential used
                 # by text and vision calls.
-                if idx == start or active_credential_failed:
+                if (idx == start or active_credential_failed) and not active_overflow:
                     self._switcher.commit_success(idx)
                 return result
             except Exception as error:
@@ -1153,7 +1234,15 @@ class MultiCredentialVLM(VLMBase):
                 kind = model_error_kind(error)
                 if idx == start:
                     active_credential_failed = True
-                if self._switcher.is_fail_fast(kind):
+                if kind is ModelErrorKind.INPUT_TOO_LARGE:
+                    window = self._context_windows[idx]
+                    if window is None:
+                        raise
+                    overflow_error = overflow_error or error
+                    window_floor = window
+                    if idx == start:
+                        active_overflow = True
+                elif self._switcher.is_fail_fast(kind):
                     raise
                 errors.append((credential_id, kind, error, idx))
                 self._logger.warning(
@@ -1162,6 +1251,8 @@ class MultiCredentialVLM(VLMBase):
                     kind.value,
                 )
 
+        if overflow_error is not None and not tried_larger_credential:
+            raise overflow_error
         if attempted:
             raise AllCredentialsFailedError(errors)
         raise UnsupportedMediaInputError(
