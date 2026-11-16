@@ -130,7 +130,7 @@ With `snapshot_interval_seconds` above zero, each gateway process writes one JSO
 | `records_failed`, `records_dropped` | Records the sink failed to write, and records the `file` sink dropped because its queue was full |
 | `store_errors` | Requests that failed or lost their memory on a state store error (`store_unavailable`, or the issue `memory_store_failure`) |
 | `openviking.state`, `openviking.reason` | The gateway's last OpenViking status check: `ok`, `degraded` or `starting`, and the reason when degraded |
-| `openviking.open_circuits` | Always `0` for now |
+| `openviking.open_circuits` | OpenViking accounts whose calls are skipped right now because they stopped answering; see [OpenViking is degraded](../gateway/12-troubleshooting.md#openviking-is-degraded) |
 | `capture.delivered` | Conversations whose pending turns this process wrote to OpenViking in the interval |
 | `capture.failed` | Delivery attempts of this process that failed in the interval. `capture.delivered` and `capture.failed` are per process and can be summed across processes |
 | `capture.due`, `capture.scheduled` | Conversations whose saving is due now, and those with any saving scheduled. Left out, with `oldest_due_age_s`, when the store could not be read. They describe the shared store: read them from any one process (with Redis, summing them counts the backlog once per replica) |
@@ -307,7 +307,7 @@ Check `reason`, not the text of `detail`. When the server does not have the gate
 | 422 | `invalid_configuration` | The request body or Base URL is invalid. The error never repeats submitted credentials. |
 | 403 | `vlm_import_forbidden` | The caller may not import; `can_import_vlm` in `/access` is authoritative. |
 | 404 | `vlm_import_unavailable` | A standalone gateway cannot read the server's model settings. Add upstreams by hand. |
-| 503 | `openviking_unavailable`, `openviking_unreachable` | The gateway cannot reach OpenViking. Check that OpenViking is running; for a standalone gateway, also check `openviking_url` (in `gateway.conf` or `OPENVIKING_GATEWAY_OPENVIKING_URL`). |
+| 503 | `openviking_unavailable`, `openviking_unreachable`, `openviking_timeout` | The gateway cannot reach OpenViking, or it did not answer in time. Check that OpenViking is running; for a standalone gateway, also check `openviking_url` (in `gateway.conf` or `OPENVIKING_GATEWAY_OPENVIKING_URL`). |
 | 503 | `openviking_version_mismatch` | Standalone gateways only: OpenViking Server is older than required. `required_version` in the response gives the minimum version. |
 
 Other HTTP errors from OpenViking are reported as `openviking_http_<status>`. The gateway's own generic HTTP errors are reported as `gateway_http_<status>`, for example 405 `gateway_http_405` for an unsupported method. These names apply to the management API, `/uploads` and `/downloads`; model routes use the reasons below.
@@ -326,6 +326,7 @@ An error the gateway produces on a model route (`/gateway/v1/*`, `/gateway/api/v
 | 403 | `root_key_not_allowed`, `trusted_mode_unsupported` | openviking | A root key cannot back a gateway key; the gateway does not support trusted authentication. |
 | 429 | `openviking_rate_limited` | openviking | OpenViking rate limited the key check. |
 | 503 | `openviking_unavailable` | openviking | OpenViking could not be reached, or failed, while the gateway checked a key for the first time. |
+| 503 | `openviking_timeout` | openviking | OpenViking did not answer that check in time. |
 | 503 | `openviking_version_mismatch` | openviking | OpenViking Server is older than the gateway requires. |
 | varies | `openviking_error` | openviking | Any other OpenViking error during that check, with OpenViking's status. |
 | 403 | `oauth_credential_unsupported` | gateway | The client or the upstream uses a Claude subscription token. |

@@ -81,6 +81,10 @@ const enums = {
   },
   openviking: {
     unavailable: "OpenViking is unreachable or didn't answer in time",
+    timeout: "OpenViking didn't answer in time",
+    circuitOpen:
+      'OpenViking stopped answering for this account, so it was skipped for now',
+    budgetExhausted: 'The time allowed for OpenViking calls ran out',
     unauthorized: 'OpenViking rejected the key. It may be wrong or revoked.',
     httpStatus: 'OpenViking returned HTTP {{status}}',
     errorCode: 'OpenViking reported error {{code}}',

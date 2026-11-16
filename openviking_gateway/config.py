@@ -128,6 +128,13 @@ class GatewayConfig(BaseModel):
     prepare_timeout_seconds: float = Field(default=0, ge=0)
     # Total limit of one compaction summary call; 0 means upstream_timeout_seconds.
     summary_timeout_seconds: float = Field(default=0, ge=0)
+    # One deadline per request, from its arrival, for the identity check of a known key,
+    # recall, profile and the tool list. 0 keeps each call's own timeout.
+    openviking_budget_seconds: float = Field(default=0, ge=0)
+    # Consecutive unanswered OpenViking calls for one account that stop its calls for
+    # openviking_breaker_seconds; then one trial call decides. 0 turns this off.
+    openviking_breaker_failures: int = Field(default=0, ge=0)
+    openviking_breaker_seconds: float = Field(default=30, gt=0)
     health_interval_seconds: float = Field(default=60, ge=1)
     capture_concurrency: int = Field(default=1, ge=1)
     client_rules: ClientRules = Field(default_factory=ClientRules)

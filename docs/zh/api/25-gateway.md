@@ -130,7 +130,7 @@ OpenViking 拒绝 API 密钥时，返回 401 `openviking_http_401`。
 | `records_failed`、`records_dropped` | 输出写入失败的记录，以及 `file` 输出因队列已满而丢弃的记录 |
 | `store_errors` | 因状态存储出错而失败或失去记忆的请求（`store_unavailable`，或异常 `memory_store_failure`） |
 | `openviking.state`、`openviking.reason` | 网关最近一次 OpenViking 状态检查的结果：`ok`、`degraded` 或 `starting`，降级时附原因 |
-| `openviking.open_circuits` | 目前恒为 `0` |
+| `openviking.open_circuits` | 因持续无响应、调用正被跳过的 OpenViking 账号数；见[OpenViking 异常](../gateway/12-troubleshooting.md#openviking-is-degraded) |
 | `capture.delivered` | 本区间内本进程把待保存轮次写入 OpenViking 的对话数 |
 | `capture.failed` | 本区间内本进程失败的保存尝试次数。`capture.delivered` 和 `capture.failed` 按进程统计，可以跨进程相加 |
 | `capture.due`、`capture.scheduled` | 现在该保存的对话数，以及有任何待保存安排的对话数。读不到存储时与 `oldest_due_age_s` 一起省略。它们描述的是共享存储，从任意一个进程读取即可（使用 Redis 时把它们相加，积压会按副本数重复计算） |
@@ -307,7 +307,7 @@ curl -X POST "$SERVER_URL/gateway/admin/keys?account_id=team" \
 | 422 | `invalid_configuration` | 请求体或 Base URL 不合法。错误信息不会回显提交的凭证。 |
 | 403 | `vlm_import_forbidden` | 调用方没有导入权限，以 `/access` 的 `can_import_vlm` 为准。 |
 | 404 | `vlm_import_unavailable` | 独立网关读不到服务端的模型配置，请手动添加上游。 |
-| 503 | `openviking_unavailable`、`openviking_unreachable` | 网关连不上 OpenViking。检查 OpenViking 是否运行；独立网关还要检查 `openviking_url`（`gateway.conf` 或 `OPENVIKING_GATEWAY_OPENVIKING_URL`）。 |
+| 503 | `openviking_unavailable`、`openviking_unreachable`、`openviking_timeout` | 网关连不上 OpenViking，或它没有及时应答。检查 OpenViking 是否运行；独立网关还要检查 `openviking_url`（`gateway.conf` 或 `OPENVIKING_GATEWAY_OPENVIKING_URL`）。 |
 | 503 | `openviking_version_mismatch` | 仅独立网关：OpenViking Server 低于要求的版本，响应中的 `required_version` 给出最低版本。 |
 
 OpenViking 返回的其他 HTTP 错误记为 `openviking_http_<status>`；网关自身的通用 HTTP 错误记为 `gateway_http_<status>`，例如对不支持的方法返回 405 `gateway_http_405`。这些名称适用于管理 API、`/uploads` 和 `/downloads`；模型路由使用下面的原因。
@@ -326,6 +326,7 @@ OpenViking 返回的其他 HTTP 错误记为 `openviking_http_<status>`；网关
 | 403 | `root_key_not_allowed`、`trusted_mode_unsupported` | openviking | root 密钥不能用于网关密钥；网关不支持 trusted 认证。 |
 | 429 | `openviking_rate_limited` | openviking | OpenViking 对密钥检查限流。 |
 | 503 | `openviking_unavailable` | openviking | 网关首次检查一把密钥时，OpenViking 无法访问或出错。 |
+| 503 | `openviking_timeout` | openviking | OpenViking 没有及时应答这次检查。 |
 | 503 | `openviking_version_mismatch` | openviking | OpenViking Server 版本低于网关要求。 |
 | 不定 | `openviking_error` | openviking | 这次检查中 OpenViking 的其他错误，状态码与 OpenViking 相同。 |
 | 403 | `oauth_credential_unsupported` | gateway | 客户端或上游使用了 Claude 订阅令牌。 |

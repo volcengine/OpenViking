@@ -69,6 +69,9 @@ def test_recall_line_clips_names_and_stays_short():
         ("openviking_http_503", "OpenViking HTTP 503"),
         ("openviking_version_mismatch", "OpenViking version mismatch"),
         ("recall_timeout", "OpenViking timed out"),
+        ("openviking_timeout", "OpenViking timed out"),
+        ("openviking_circuit_open", "OpenViking is not answering; skipped"),
+        ("openviking_budget_exhausted", "OpenViking time budget used up"),
         ("openviking_FORBIDDEN", "openviking_FORBIDDEN"),
     ],
 )

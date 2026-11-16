@@ -67,7 +67,7 @@ Studio 无法为你加载网关时，会用一张设置卡片代替网关标签�
 | 这个 OpenViking API 密钥属于其他账号。（`other_account`） | 密钥所属的账号不是你在 Studio 中管理的账号。 |
 | OpenViking 拒绝了这个密钥。（`openviking_http_401`、`openviking_http_403`） | 密钥不完整、已被重新生成，或者用户已被删除。使用该用户当前的密钥。 |
 | OpenViking 无法识别这个密钥所属的用户（`openviking_identity_missing`） | OpenViking 没有返回这个密钥对应的用户。使用本账号中某个用户的密钥。 |
-| 网关连不上 OpenViking，无法校验这个密钥。（`openviking_unavailable`） | 网关访问不到 OpenViking；独立网关检查 `openviking_url`。 |
+| 网关连不上 OpenViking，无法校验这个密钥。（`openviking_unavailable`、`openviking_timeout`） | 网关访问不到 OpenViking；独立网关检查 `openviking_url`。 |
 | OpenViking 版本低于网关的要求。（`openviking_version_mismatch`） | 仅独立网关：OpenViking Server 低于 `min_server_version`（0.4.16），请升级。从源码安装、没有版本标签的服务可能报告 `0.1.dev123` 这样的开发版本号；请安装正式版本，或者把 `min_server_version` 改成与之匹配的值。 |
 | 没有执行此操作的权限。（`forbidden`） | 粘贴的 OpenViking API 密钥不属于对话框中选中的用户，例如管理员粘贴了自己的密钥，而不是所选用户的。请粘贴所选用户自己的密钥，或者改选密钥所属的用户。普通用户粘贴的密钥不是自己的，也会报这个错。 |
 | 这个用户已不在本账号中，请重新选择。（`unknown_user`） | 对话框打开期间，所选用户被移出了本账号。`unknown_policy` 和 `unknown_upstream` 同理，分别表示所选的上下文配置或上游已被删除。刷新后重新选择。 |
@@ -81,7 +81,7 @@ Studio 无法为你加载网关时，会用一张设置卡片代替网关标签�
 | 401 `gateway_key_invalid` | 客户端没有发送网关密钥，发送了已吊销的密钥或服务商的 API Key，或者用户的 OpenViking API 密钥重新生成后，网关删除了这把密钥。检查客户端实际发送的密钥，必要时[重新签发](09-gateway-keys.md#issue-a-key)。 |
 | 401 `openviking_key_invalid` | OpenViking 拒绝了客户端发送的 OpenViking API 密钥，例如密钥已重新生成。请使用用户当前的 OpenViking API 密钥。 |
 | 402 `openviking_not_ordered`，403 `openviking_forbidden` | 网关检查密钥时，OpenViking 拒绝了这把 OpenViking 密钥（或网关密钥背后的 OpenViking 密钥），例如服务未下单；请求不会转发。请恢复服务订购或密钥权限。 |
-| 429 `openviking_rate_limited`，503 `openviking_unavailable`，`openviking_error` | 使用 OpenViking 密钥的第一个请求无法确认：OpenViking 对检查限流、无法访问或返回了错误。稍后重试，并检查 OpenViking。网关已经认识的密钥不会因此被拒绝，它的请求会带着 `revocation_check_unavailable` 继续处理。 |
+| 429 `openviking_rate_limited`，503 `openviking_unavailable`，503 `openviking_timeout`，`openviking_error` | 使用 OpenViking 密钥的第一个请求无法确认：OpenViking 对检查限流、无法访问、5 秒内没有应答或返回了错误。稍后重试，并检查 OpenViking。网关已经认识的密钥不会因此被拒绝，它的请求会带着 `revocation_check_unavailable` 继续处理。 |
 | 403 `oauth_credential_unsupported` | 客户端发送了 Claude 订阅令牌，例如 Claude Code 用订阅账号登录且没有设置 `ANTHROPIC_AUTH_TOKEN`；或者上游保存的就是订阅令牌。请改用 API Key。 |
 | 403 `model_not_allowed` | 模型不在密钥[允许的模型](09-gateway-keys.md#allowed-models)范围内。签发一把允许这个模型的密钥。 |
 | 400 `model_missing`、415 `compressed_body_unsupported` | 只出现在限定了模型的密钥上：请求体必须写明模型，且不能经过压缩编码。 |
@@ -122,10 +122,18 @@ Studio 无法为你加载网关时，会用一张设置卡片代替网关标签�
 | 原因 | 处理 |
 | --- | --- |
 | OpenViking 无法访问或响应超时（`openviking_unavailable`） | OpenViking 没有运行或无法访问。独立网关检查 `openviking_url` 和网络。 |
+| OpenViking 响应超时（`openviking_timeout`） | OpenViking 接受了连接，但在超时前没有应答。检查它的负载和服务端日志。 |
 | OpenViking 返回了 HTTP …（`openviking_http_<status>`），或 OpenViking 报告了错误 …（`openviking_<CODE>`） | OpenViking 返回了错误。查看 OpenViking Server 的日志。 |
 | `trusted_mode_unsupported` | OpenViking 使用 Trusted 模式。把它改为 `api_key` 认证。 |
 
-OpenViking 异常期间，请求照常发给模型，只是不带记忆；保存对话会一直重试，直到 OpenViking 恢复。网关会以逐渐拉长的间隔重新检查，最长间隔为 `health_interval_seconds`（默认 60 秒）。
+OpenViking 异常期间，请求照常发给模型，只是不带记忆；保存对话会一直重试，直到 OpenViking 恢复。请求会立即跳过召回、用户画像和对网关已知密钥的检查，原因与卡片上的相同，不再等待 OpenViking。网关会以逐渐拉长的间隔重新检查，最长间隔为 `health_interval_seconds`（默认 60 秒）。
+
+健康检查比较粗：两次检查之间，每个请求仍会等每次 OpenViking 调用各自的超时（密钥检查 5 秒，召回为配置中的**超时时间**）。OpenViking 卡住而不是拒绝连接时，有两项设置可以限制等待：
+
+- `openviking_budget_seconds` 给每个请求一个从到达时开始计算的截止时间，覆盖密钥检查、召回、用户画像和工具列表。时间用完后，请求不再等剩下的调用，按下文的原因继续处理。网关还没见过的密钥离开 OpenViking 无法确认，所以它的第一个请求在时间用完时收到 503 `openviking_timeout`。
+- `openviking_breaker_failures` 在某个账号的 OpenViking 调用连续这么多次没有应答（超时、连接错误、HTTP 5xx 或 429）后，暂停调用。在 `openviking_breaker_seconds`（默认 30 秒）内，这个账号的请求立即跳过密钥检查、召回、用户画像和工具，不带记忆发给模型，原因为 `openviking_circuit_open`；之后由一次试探调用决定是否恢复。拒绝（401、402、403）和不存在的应答不计数。后台保存不受影响。[状态行](../guides/22-gateway-operations.md#status-line)以 `openviking.open_circuits` 报告暂停中的账号数。
+
+两项默认都关闭；见[配置](13-configuration.md#gateway-fields)。
 
 ## 没有补充记忆 {#no-memory-is-added}
 
@@ -136,7 +144,9 @@ OpenViking 异常期间，请求照常发给模型，只是不带记忆；保存
 | **没有找到相关内容**（`empty`） | 新用户通常如此。对话提交、OpenViking 提取之后才会有记忆。 | 继续使用即可；一直没有记忆时，见[OpenViking 中看不到对话](#conversations-do-not-appear-in-openviking)。 |
 | **召回已关闭或预算已用完**（`disabled`） | 上下文配置关闭了召回，当前上下文窗口剩下的召回预算不足 64 token，或者消息短于 3 个字符。 | 召回被关闭时，在上下文配置中打开。 |
 | **剩余预算不足，未补充记忆**（`budget`） | 这条消息的召回预算扣掉记忆块的包装后，留给检索结果的不足 64 token，所以没有检索。可能是这段对话快用完了**单个上下文窗口预算**（进入下一个上下文窗口后重新计算，例如压缩之后），也可能是**单条消息预算**设得太低，接近 64 token 的下限。 | **单条消息预算**接近下限时，调大它。 |
-| **OpenViking 无法访问或响应超时**（`openviking_unavailable`）、**召回超时**（`recall_timeout`） | 检索没有完成。 | 查看 OpenViking 卡片（见[OpenViking 异常](#openviking-is-degraded)）。OpenViking 在运行但响应慢时，调长**超时时间**。 |
+| **OpenViking 无法访问或响应超时**（`openviking_unavailable`）、**OpenViking 响应超时**（`openviking_timeout`）、**召回超时**（`recall_timeout`） | 检索没有完成。 | 查看 OpenViking 卡片（见[OpenViking 异常](#openviking-is-degraded)）。OpenViking 在运行但响应慢时，调长**超时时间**。 |
+| **分配给 OpenViking 调用的时间已用完**（`openviking_budget_exhausted`） | 这个请求之前的 OpenViking 调用用完了 `openviking_budget_seconds`，检索没有运行或被截断。 | 查明 OpenViking 为什么慢；如果设得太紧，调大 `openviking_budget_seconds`。 |
+| **OpenViking 对这个账号持续无响应，暂时跳过**（`openviking_circuit_open`） | 这个账号最近的调用都没有应答，网关暂时跳过了 OpenViking。 | 查看 OpenViking 卡片和服务端；试探调用成功后会自动恢复。 |
 | **OpenViking 拒绝了这个密钥**（`openviking_http_401`） | 用户的 OpenViking 密钥已失效。 | 用当前的密钥签发新的网关密钥，见[用户的 OpenViking API 密钥变了](09-gateway-keys.md#when-the-openviking-key-changes)。 |
 | **OpenViking 返回了 HTTP …**（`openviking_http_<status>`）或 **OpenViking 报告了错误 …**（`openviking_<CODE>`） | 检索在 OpenViking 内部失败。OpenViking Server 低于 `min_server_version` 时也可能这样失败。 | 查看 OpenViking Server 的日志。 |
 | **检测到 OpenViking 插件**（`plugin_present`） | 网关发现了 OpenViking 插件，让出了这段对话。 | 正常行为，见[两者同时使用时](../guides/15-gateway.md#when-both-are-in-use)。 |

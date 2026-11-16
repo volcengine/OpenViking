@@ -126,7 +126,8 @@ The expanded row and the **Saving** badge's tooltip show the reason for the late
 | Reason shown | Code | Meaning |
 | --- | --- | --- |
 | OpenViking rejected the key. It may be wrong or revoked. | `openviking_http_401` | The user's OpenViking key is no longer valid. |
-| OpenViking is unreachable or didn't answer in time | `openviking_unavailable` | OpenViking is down, unreachable or too slow. |
+| OpenViking is unreachable or didn't answer in time | `openviking_unavailable` | OpenViking is down or unreachable. |
+| OpenViking didn't answer in time | `openviking_timeout` | OpenViking is too slow. |
 | Saving to OpenViking failed | `delivery_failed` | A save failed for another reason; the gateway retries as above. |
 | Saving works again | `delivery_recovered` | A save succeeded after failures. |
 | The conversation history changed, so saving continues in a new OpenViking session | `history_changed` | Normal: the client edited, regenerated or compacted the conversation, and the gateway continues saving the current history in a new OpenViking session. |

@@ -4,6 +4,9 @@
 
 import asyncio
 import hashlib
+import time
+from collections import OrderedDict
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from urllib.parse import urlencode
@@ -24,6 +27,10 @@ class CallContext:
     """What OpenViking calls made while serving one gateway request carry."""
 
     request_id: str = ""
+    # The OpenViking account whose breaker circuit the calls consult and feed.
+    circuit: str | None = None
+    # ``time.monotonic()`` by which the request's OpenViking calls must have answered.
+    deadline: float | None = None
 
 
 # Set per request; tasks the request starts copy it, background work has none.
@@ -51,17 +58,108 @@ class VikingError(Exception):
         self.reason, self.status = reason, status
 
 
+def unanswered(error):
+    """Whether a failed call says OpenViking is not answering, rather than refusing."""
+    if error.reason in ("openviking_unavailable", "openviking_timeout"):
+        return True
+    return error.reason.startswith("openviking_http_") and (
+        error.status >= 500 or error.status == 429
+    )
+
+
+class Breaker:
+    """Per-account circuits: consecutive unanswered calls stop calls for a while."""
+
+    def __init__(self, failures, seconds, capacity=4096):
+        self.failures, self.seconds, self.capacity = failures, seconds, capacity
+        self.circuits = OrderedDict()
+
+    def allow(self, key) -> bool:
+        circuit = self.circuits.get(key)
+        if circuit is None or not circuit["opened_until"]:
+            return True
+        self.circuits.move_to_end(key)
+        now = time.monotonic()
+        # Open until then, after which one trial call at a time decides.
+        if now < circuit["opened_until"] or now < circuit["trial"]:
+            return False
+        # A trial that never reports back, such as a cancelled one, expires as well.
+        circuit["trial"] = now + self.seconds
+        return True
+
+    def record(self, key, answered: bool):
+        if answered:
+            self.circuits.pop(key, None)
+            return
+        circuit = self.circuits.setdefault(key, {"failures": 0, "opened_until": 0, "trial": 0})
+        self.circuits.move_to_end(key)
+        circuit["failures"] += 1
+        if circuit["failures"] >= self.failures or circuit["opened_until"]:
+            circuit["opened_until"] = time.monotonic() + self.seconds
+            circuit["trial"] = 0
+        if len(self.circuits) > self.capacity:
+            self.circuits.popitem(last=False)
+
+    def open_count(self) -> int:
+        now = time.monotonic()
+        return sum(now < circuit["opened_until"] for circuit in self.circuits.values())
+
+
 class VikingClient:
-    def __init__(self, http: aiohttp.ClientSession, base_url: str, min_version: str):
+    def __init__(
+        self,
+        http: aiohttp.ClientSession,
+        base_url: str,
+        min_version: str,
+        breaker_failures=0,
+        breaker_seconds=30,
+    ):
         self.http, self.base_url, self.min_version = http, base_url.rstrip("/"), min_version
+        self.breaker = Breaker(breaker_failures, breaker_seconds) if breaker_failures else None
         self.unavailable_reason = ""
         self.identities = TTLCache(ttl=30, capacity=4096)
         # Every caller sees the same MCP tools; the last good list outlives failures.
         self.tools_cache, self.last_tools = TTLCache(ttl=300, capacity=1), None
 
+    def budget(self, timeout):
+        """``timeout``, cut to what is left of the request's OpenViking budget."""
+        call = CALL.get()
+        if call is None or call.deadline is None:
+            return timeout
+        remaining = call.deadline - time.monotonic()
+        if remaining < 0.05:
+            raise VikingError("openviking_budget_exhausted")
+        return min(timeout, remaining)
+
+    @contextmanager
+    def guarded(self, errors):
+        """One call under the request's circuit; ``errors`` mean OpenViking did not answer."""
+        context = CALL.get()
+        circuit = context.circuit if context and self.breaker else None
+        if circuit and not self.breaker.allow(circuit):
+            raise VikingError("openviking_circuit_open")
+        try:
+            yield
+        except VikingError as error:
+            failure, cause = error, None
+        # Before ClientError: aiohttp's timeouts are both.
+        except asyncio.TimeoutError as error:
+            failure, cause = VikingError("openviking_timeout"), error
+        except errors as error:
+            failure, cause = VikingError("openviking_unavailable"), error
+        else:
+            if circuit:
+                self.breaker.record(circuit, True)
+            return
+        if circuit:
+            self.breaker.record(circuit, not unanswered(failure))
+        if cause is None:
+            raise failure
+        raise failure from cause
+
     async def request(self, method, path, key, body=None, timeout=30, peer=None):
         """``peer`` is the actor peer for recall; OpenViking's session routes ignore it."""
-        try:
+        with self.guarded((aiohttp.ClientError, ValueError)):
             async with self.http.request(
                 method,
                 self.base_url + path,
@@ -81,14 +179,12 @@ class VikingClient:
                 if data.get("status") == "error":
                     raise VikingError("openviking_" + data.get("error", {}).get("code", "error"))
                 return data.get("result", data)
-        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as error:
-            raise VikingError("openviking_unavailable") from error
 
     async def identify(self, credential=""):
         """Identify a caller; only successful identities are cached, for 30 seconds."""
 
         async def load():
-            result = await self.request("GET", "/health", credential, timeout=5)
+            result = await self.request("GET", "/health", credential, timeout=self.budget(5))
             if result.get("auth_mode") == "trusted":
                 raise VikingError("trusted_mode_unsupported", 403)
             if result.get("auth_mode") == "dev":
@@ -143,7 +239,7 @@ class VikingClient:
                 "rewrite": False,
                 **({"peer_scope": "actor"} if peer and policy.recall_peer_scope == "actor" else {}),
             },
-            timeout=policy.recall_timeout,
+            timeout=self.budget(policy.recall_timeout),
             peer=peer,
         )
 
@@ -216,7 +312,7 @@ class VikingClient:
     async def tools(self, key):
         async def load():
             try:
-                result = await self.mcp("tools/list", key, timeout=5)
+                result = await self.mcp("tools/list", key, timeout=self.budget(5))
                 tools = result.get("tools") if isinstance(result, dict) else None
                 if not isinstance(tools, list) or not all(
                     isinstance(tool, dict)
@@ -237,7 +333,7 @@ class VikingClient:
         """Stateless Streamable HTTP MCP; accept both JSON and SSE responses."""
         from .protocols import SSEDecoder
 
-        try:
+        with self.guarded((aiohttp.ClientError, ValueError, KeyError)):
             async with self.http.post(
                 self.base_url + "/mcp",
                 headers={
@@ -273,8 +369,6 @@ class VikingClient:
                 if "error" in value:
                     raise VikingError("openviking_mcp_error")
                 return value["result"]
-        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, KeyError) as error:
-            raise VikingError("openviking_unavailable") from error
 
     async def upload(self, token, filename, content):
         data = aiohttp.FormData()

@@ -168,7 +168,13 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
                 connector=aiohttp.TCPConnector(limit=1024, limit_per_host=512),
             ) as http:
                 app.state.http = http
-                app.state.viking = VikingClient(http, openviking_url, config.min_server_version)
+                app.state.viking = VikingClient(
+                    http,
+                    openviking_url,
+                    config.min_server_version,
+                    config.openviking_breaker_failures,
+                    config.openviking_breaker_seconds,
+                )
                 app.state.kernel = MemoryKernel(store, app.state.viking)
                 app.state.worker = CaptureWorker(store, management, app.state.viking, stats=stats)
                 # The first probe runs in the background: an embedded server is not listening yet.
@@ -270,6 +276,10 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
                 "oauth_credential_unsupported",
                 "Claude subscription OAuth credentials are not supported",
             )
+        call = CALL.get()
+        if call and config.openviking_budget_seconds:
+            # The budget covers the first confirmation of a key as well.
+            call.deadline = record.started + config.openviking_budget_seconds
         if config.openviking_keys and key and not key.startswith("ovgw_"):
             credential = await openviking_credential(app, key)
             invalid = GatewayError(
@@ -284,6 +294,9 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
             )
         if not credential:
             raise invalid
+        if call:
+            # From here on, this account's circuit applies.
+            call.circuit = credential.get("openviking_account", credential["account"])
         if reason := app.state.viking.unavailable_reason:
             # Like recall, skip the check while OV is down instead of waiting for its timeout.
             record.metrics["revocation_reason"] = reason

@@ -54,6 +54,9 @@ description: 查询 OpenViking 网关的配置字段、环境变量、上下文�
 | `upstream_timeout_seconds` | 两者 | `600` | 大于 0 | 网关等待服务商的秒数：等回复开始（建立连接、发送请求、收到响应头），以及之后等回复的每一部分。持续有数据的回复不会被切断，无论持续多久。等待超时时，客户端收到 504 `upstream_timeout`；已经开始的流以一条错误事件结束 |
 | `prepare_timeout_seconds` | 两者 | `0` | 0 及以上 | 网关为请求补充记忆（查找会话、召回、画像、工具）最多花费的秒数，超过后不带记忆转发请求，并标记 `prepare_timeout`。压缩摘要请求的时间不计入。`0` 表示不限制 |
 | `summary_timeout_seconds` | 两者 | `0` | 0 及以上 | 一次压缩摘要请求的总秒数，见[摘要怎么生成](05-long-conversations.md#how-the-summary-is-written)。`0` 表示使用 `upstream_timeout_seconds` |
+| `openviking_budget_seconds` | 两者 | `0` | 0 及以上 | 每个请求一个从到达时开始计算的截止时间，覆盖密钥检查、召回、用户画像和工具列表；见[OpenViking 异常](12-troubleshooting.md#openviking-is-degraded)。`0` 表示各调用沿用自己的超时 |
+| `openviking_breaker_failures` | 两者 | `0` | 0 及以上 | 某个账号的 OpenViking 调用连续这么多次没有应答后，它的请求在 `openviking_breaker_seconds` 内跳过 OpenViking，之后由一次试探调用决定是否恢复。`0` 表示关闭 |
+| `openviking_breaker_seconds` | 两者 | `30` | 大于 0 | 一个账号的 OpenViking 调用被跳过多久后进行试探调用 |
 | `health_interval_seconds` | 两者 | `60` | 1 及以上 | 检查 OpenViking 状态的间隔秒数 |
 | `capture_concurrency` | 两者 | `1` | 1 及以上 | 每个进程并发投递的会话数；停机时停止新 claim，最多等待在途投递 100 秒 |
 | `client_rules` | 两者 | `{}`（只用内置规则） | 见[客户端规则](#client-rules) | 在网关内置的辅助请求和客户端插入消息识别规则上增删条目 |

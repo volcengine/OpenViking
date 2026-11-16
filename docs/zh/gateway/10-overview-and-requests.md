@@ -126,7 +126,8 @@ description: 读懂 Studio 中 OpenViking 网关的“概览”和“请求日�
 | 显示的原因 | 代码 | 含义 |
 | --- | --- | --- |
 | OpenViking 拒绝了这个密钥，它可能填错了或已被吊销。 | `openviking_http_401` | 用户的 OpenViking 密钥已失效。 |
-| OpenViking 无法访问或响应超时 | `openviking_unavailable` | OpenViking 没有运行、连不上或响应太慢。 |
+| OpenViking 无法访问或响应超时 | `openviking_unavailable` | OpenViking 没有运行或连不上。 |
+| OpenViking 响应超时 | `openviking_timeout` | OpenViking 响应太慢。 |
 | 保存到 OpenViking 失败 | `delivery_failed` | 其他原因导致保存失败，网关按上表重试。 |
 | 保存已恢复正常 | `delivery_recovered` | 失败之后又保存成功了。 |
 | 对话历史有改动，后续内容改存到新的 OpenViking 会话 | `history_changed` | 正常现象：客户端编辑、重新生成或压缩了对话，网关用当前历史在新的 OpenViking 会话中继续保存。 |

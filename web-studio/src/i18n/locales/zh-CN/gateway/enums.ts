@@ -77,6 +77,9 @@ const enums = {
   },
   openviking: {
     unavailable: 'OpenViking 无法访问或响应超时',
+    timeout: 'OpenViking 响应超时',
+    circuitOpen: 'OpenViking 对这个账号持续无响应，暂时跳过',
+    budgetExhausted: '分配给 OpenViking 调用的时间已用完',
     unauthorized: 'OpenViking 拒绝了这个密钥，它可能填错了或已被吊销。',
     httpStatus: 'OpenViking 返回了 HTTP {{status}}',
     errorCode: 'OpenViking 报告了错误 {{code}}',
