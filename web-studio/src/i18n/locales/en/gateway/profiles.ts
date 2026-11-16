@@ -28,6 +28,8 @@ const profiles = {
     agentWindowsOn: 'Agent-managed windows',
     toolsEnabled_one: '{{count}} tool enabled',
     toolsEnabled_other: '{{count}} tools enabled',
+    sealOn: 'Sent as references',
+    unsealOn: 'References · values in tool calls',
   },
   deleteDialog: {
     title: 'Delete “{{name}}”?',
@@ -246,6 +248,16 @@ const profiles = {
       label: 'Token budget',
       description:
         "Estimated tokens that tool calls and results may add to one request. Once used up, further OpenViking calls are refused; the model continues with the results it has and the client's own tools. Leave empty for no limit.",
+    },
+  },
+  credentials: {
+    title: 'Seal credentials',
+    description:
+      'Replace the credentials registered in OpenViking Privacy with their references in everything sent to the model, and stop offering the privacy_resolve tool. Applies to ongoing conversations too. If the credentials cannot be read, requests fail.',
+    unseal: {
+      label: 'Put values in tool calls',
+      description:
+        "Replace references with the real values in the tool calls the client runs, so the model can use a credential it never sees. The values then stay in the client's conversation history.",
     },
   },
 }

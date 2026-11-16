@@ -170,7 +170,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 
 ## 上下文配置的设置 {#context-profile-settings}
 
-在 Studio 中：**上下文配置** → 打开一份配置。下面几张表按编辑器的分区排列，先写 Studio 中的名称，再写管理 API 中的名称（管理 API 把上下文配置称为 `policies`）。**名称**（`name`，默认 `Default`）是配置的显示名称；各分区的作用见[上下文配置](08-context-profiles.md#context-profiles)。**允许客户端覆盖设置**（`client_overrides`，默认 `true`）允许客户端用 `X-OpenViking-Context` 请求头为新对话修改其余所有设置，见[允许客户端覆盖设置](08-context-profiles.md#client-overrides)。
+在 Studio 中：**上下文配置** → 打开一份配置。下面几张表按编辑器的分区排列，先写 Studio 中的名称，再写管理 API 中的名称（管理 API 把上下文配置称为 `policies`）。**名称**（`name`，默认 `Default`）是配置的显示名称；各分区的作用见[上下文配置](08-context-profiles.md#context-profiles)。**允许客户端覆盖设置**（`client_overrides`，默认 `true`）允许客户端用 `X-OpenViking-Context` 请求头为新对话修改除[凭据开关](#profile-credentials)以外的其余所有设置，见[允许客户端覆盖设置](08-context-profiles.md#client-overrides)。
 
 ### 召回记忆 {#profile-recall}
 
@@ -237,6 +237,15 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | Token 预算 | `tool_total_tokens` | `null`（不限） | 1,024 及以上 | 工具调用和结果在一次请求中最多增加的估算 token 数，用完后拒绝继续调用 OpenViking 工具。 |
 
 API 请求省略 `disabled_tools` 时使用空列表，`gateway_tools` 开启时提供全部可用工具。
+
+### 封存凭据 {#profile-credentials}
+
+作用见[封存凭据](08-context-profiles.md#seal-credentials)。两项设置都对进行中的对话生效，`X-OpenViking-Context` 不能修改它们。封存需要 OpenViking Server 0.5.2 或更高版本。
+
+| Studio 名称 | API 名称 | 默认值 | 取值范围 | 含义 |
+| --- | --- | --- | --- | --- |
+| 封存凭据 | `seal_secrets` | `false` | | 发往上游的所有内容中，已登记的凭据都换成引用；之后开始的对话不提供 `privacy_resolve`。 |
+| 在工具调用中填入真值 | `unseal_tool_calls` | `false` | 需要 `seal_secrets` | 在客户端执行的工具调用里，把用户本人的引用换成不少于 6 个字符的真实值。 |
 
 ## 上游设置 {#upstream-settings}
 

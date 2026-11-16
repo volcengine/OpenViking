@@ -86,7 +86,8 @@ Saved changes to an upstream or a context profile apply to every gateway key tha
 | --- | --- |
 | Any upstream setting except priority, such as the API key, models or **Enabled** | At once, in ongoing conversations too. For what turning an upstream off does to its conversations, see [Routing](07-upstreams.md#routing). |
 | Upstream priority | Only in conversations that start afterwards. An ongoing conversation stays on its upstream as long as that upstream can still serve it. |
-| Any context profile setting | Only in conversations that start afterwards. |
+| **Seal credentials** and **Put values in tool calls** in a context profile | At once, in ongoing conversations too; see [Seal credentials](08-context-profiles.md#seal-credentials). |
+| Any other context profile setting | Only in conversations that start afterwards. |
 | A gateway key | Keys cannot be edited. To change a key's context profile, upstreams, allowed models or user, issue a new key and revoke the old one; see [After issuing](09-gateway-keys.md#after-issuing). |
 
 A conversation records its context profile at its first request and keeps it, because changing what the model sees mid-conversation would break the provider's [prompt cache](01-how-it-works.md#replay). How soon a client picks up a profile change therefore depends on how often it starts a new conversation:

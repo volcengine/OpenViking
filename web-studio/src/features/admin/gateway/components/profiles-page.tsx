@@ -105,6 +105,14 @@ function summarize(
             count: offeredTools(settings, tools).length,
           }),
     ),
+    credentials: state(
+      settings.seal_secrets,
+      t(
+        settings.unseal_tool_calls
+          ? 'profiles.summary.unsealOn'
+          : 'profiles.summary.sealOn',
+      ),
+    ),
   }
 }
 

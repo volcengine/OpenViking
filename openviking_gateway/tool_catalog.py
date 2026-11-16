@@ -87,6 +87,9 @@ def tool_block_reason(body, protocol, upstream, restores_reasoning=True):
 def select_tools(catalog, policy):
     """Freeze the MCP tools the policy leaves enabled, then any native tools, as functions."""
     disabled = set(policy.get("disabled_tools", []))
+    if policy.get("seal_secrets"):
+        # It returns plaintext; with sealing the model passes the reference itself.
+        disabled.add("privacy_resolve")
     selected = []
     for tool in catalog:
         name = tool["name"]

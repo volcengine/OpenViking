@@ -34,14 +34,18 @@ Request logs hold metadata only, never content:
 | --- | --- |
 | Request type, model, status, upstream | Message text |
 | A hash of the conversation ID | Recalled memory |
-| Token counts, memory counts and timing | Tool arguments or results |
-| Saving status and issues | Any key |
+| Token counts, memory counts, sealed credential counts and timing | Tool arguments or results |
+| Saving status and issues | Any key, credential value or reference |
 
 The gateway writes no HTTP access log, and its error messages never repeat submitted values. The default `store` sink makes request logs available in Studio; see [Requests](10-overview-and-requests.md#requests). The `stdout` sink emits the same metadata with account and user identifiers as plain JSON; storage encryption does not apply to stdout. Log collection and access are managed by your deployment; see [Monitoring](../guides/22-gateway-operations.md#monitoring).
 
 ## What providers see {#what-providers-see}
 
 Every [upstream](../guides/15-gateway.md#key-terms) receives the full model input, including memory the gateway added and OpenViking tool results. Only add providers you trust with that data.
+
+With [Seal credentials](08-context-profiles.md#seal-credentials) on, credentials registered in OpenViking Privacy reach providers only as references. Their values are held in the gateway's memory and never written to its storage or logs: what clients send is sealed before the gateway stores anything, and recalled memory and OpenViking tool results are sealed before the gateway records them. What the gateway recorded before sealing was turned on keeps any values it held, and is sealed when sent. Providers still see the user ID and the credential names inside references, so do not give credentials sensitive names. Values in other encodings, earlier versions and thinking signed before sealing was turned on can still reach providers.
+
+With **Put values in tool calls** on as well, the client receives the values in its tool calls, so they end up in the client's conversation history on the user's machine; the next request seals them again. A prompt-injected tool call can then send a value wherever the client lets it, so review such calls as you would any command that uses a secret.
 
 Some things never leave the gateway: `X-OpenViking-*` headers, client credentials and cookies are never forwarded to upstreams. When an upstream takes each client's own provider key, that key reaches the provider only as the upstream's credential.
 

@@ -12,7 +12,7 @@ A [context profile](../guides/15-gateway.md#key-terms) is a named set of memory 
 
 In embedded dev mode, startup seeds `default_profile` into the `default` account once; later edits to `ov.conf` do not change that saved profile, so edit it in Studio.
 
-Besides its name and the [Let clients override settings](#client-overrides) switch, a profile has four sections. The defaults below are also the recommended settings:
+Besides its name and the [Let clients override settings](#client-overrides) switch, a profile has five sections. The defaults below are also the recommended settings:
 
 | Section | What it does | Main settings and defaults |
 | --- | --- | --- |
@@ -20,6 +20,7 @@ Besides its name and the [Let clients override settings](#client-overrides) swit
 | Save conversations | Writes finished turns to an OpenViking session and commits it, so OpenViking can extract memories. | Save the latest reply after: 600 s · Commit after: 20,000 tokens · Keep recent messages: 10 |
 | Long conversations | When a conversation nears the context window, has the same model write a summary that replaces the earlier messages. | Compaction: on · Compact at: 0.9 of the window · Summary length: 8,000 tokens · Agent-managed context windows: off |
 | OpenViking tools | Lets the model use OpenViking's tools while it answers. | On · every tool selected; see [OpenViking tools](04-openviking-tools.md) |
+| Seal credentials | Sends credentials registered in OpenViking Privacy to the model as references, never as values. | Off · Put values in tool calls: off; see [Seal credentials](#seal-credentials) |
 
 Each section has its own switch, and Long conversations has one each for compaction and agent-managed context windows. Recall and saving are independent: a profile can recall without saving, or save without recalling.
 
@@ -34,7 +35,7 @@ Saved changes reach only conversations that start afterwards; see [When changes 
 Other actions:
 
 - **Duplicate**, on a card or in the editor's **More actions** (⋯) menu, opens a copy named "Copy of …". It is the quickest way to make a variant.
-- **Reset to recommended**, in the same menu, restores the recommended settings of the four sections; the name and **Let clients override settings** stay as they are. Save to apply them.
+- **Reset to recommended**, in the same menu, restores the recommended settings of the five sections; the name and **Let clients override settings** stay as they are. Save to apply them.
 - A profile that keys use cannot be deleted. Revoke those keys first, or, if they are still needed, issue replacements that use another profile.
 - While Studio is read-only, cards show **View** instead of **Edit**, and creating, duplicating and deleting are unavailable; see [Unlock editing](06-manage-in-studio.md#unlock-editing).
 
@@ -99,12 +100,25 @@ The **Save conversations** section (on by default) controls [saving](../guides/1
 
 ## Long conversations and OpenViking tools {#long-conversations-and-tools}
 
-The last two sections of the editor each have their own page:
+These two sections of the editor each have their own page:
 
 - **Long conversations** holds **Compaction** with **Compact at** and **Summary length**, the experimental **Agent-managed context windows** with **Soft reminder at** and **Hard reminder at**, and **Default context window** under **Advanced settings**. See [Long conversations in the gateway](05-long-conversations.md#long-conversations); for models with a smaller window, set the window as described in [Set the model's context window](05-long-conversations.md#context-window).
 - **OpenViking tools** holds the **Tools** list and **Show tool calls**, with **Rounds per request**, **Time limit per call**, **Result size**, **Total time** and **Token budget** under **Advanced settings**. See [Choose tools](04-openviking-tools.md#choose-tools) and [Limits](04-openviking-tools.md#limits). The gateway runs the selected tools without the client's permission prompts; before you leave tools that change data selected, read [Risks and controls](04-openviking-tools.md#risks-and-controls).
 
 The API name and range of every setting are in the [Configuration reference](13-configuration.md#context-profile-settings).
+
+## Seal credentials {#seal-credentials}
+
+**Seal credentials** (off by default) keeps the credentials registered in the `credential` category of [OpenViking Privacy](../concepts/13-privacy.md) away from the model. Before anything goes upstream, the gateway replaces each registered value with its reference, such as <code v-pre>{{ov_privacy:alice:viking://~/privacy/credential/github#/values/token}}</code>: in what the client sends, in recalled memory, in OpenViking tool results and in summaries. Conversations that start afterwards no longer offer the `privacy_resolve` tool, which returns values; in earlier ones its results are sealed too.
+
+**Put values in tool calls** (off by default, needs sealing) replaces references with the real values in the tool calls the client runs, so a command like <code v-pre>curl -H "Authorization: Bearer {{ov_privacy:...}}"</code> works although the model never sees the token. Only the client's copy of a call changes, and only a reference written exactly as OpenViking renders it, to one of the user's own fields whose value is 6 characters or longer: a shorter value would not be sealed again in the next request. Reply text, thinking, tools the provider runs itself and Responses built-in calls such as `local_shell_call` keep their references. The model is told to pass references verbatim in conversations that start afterwards.
+
+- **When it applies.** Unlike other profile settings, both switches apply to ongoing conversations as soon as they are saved. Only what the model is offered and told, the tool list and the note on references, waits for a new conversation.
+- **What is matched.** The current value of each top-level text field, 6 characters or longer, as written or escaped the way common JSON encoders write it. Encoded or split values and values from before a rotation are not matched. Signed thinking, encrypted reasoning, images and other base64 data are left as they are, except in tool calls and tool results.
+- **Failures.** Sealing needs OpenViking Server 0.5.2 or later, the first with the credential tree. The gateway reads the credentials with the user's own OpenViking key, at most every 30 seconds. When they cannot be read and the last copy is more than 10 minutes old, requests with a body fail with 503 `secrets_unavailable` before reaching the provider, and the gateway log names the cause. A user without registered credentials is not affected. A compressed body gets 415. A model request whose body is not a JSON object, or any JSON body the gateway could only forward byte for byte, such as one with a duplicate key, gets 400. Bodies that are not JSON, such as file uploads, pass through unsealed.
+- **With a memory plugin.** When the client runs an [OpenViking plugin](../guides/15-gateway.md#when-both-are-in-use), the gateway still seals but never puts values in tool calls, and leaves that to the plugin.
+
+What this means for providers and for local data is in [What providers see](11-security-and-data.md#what-providers-see).
 
 ## Let clients override settings {#client-overrides}
 
@@ -114,11 +128,11 @@ The API name and range of every setting are in the [Configuration reference](13-
 X-OpenViking-Context: {"recall":false,"max_tokens":800,"context_types":["memory"]}
 ```
 
-- **What it can change.** Every setting except `name` and `client_overrides`. Fields the header leaves out keep the profile's values. Tool access only narrows: `disabled_tools` in the header adds to the tools the profile unchecks, and `gateway_tools` can turn OpenViking tools off but not back on, so `{"disabled_tools":[]}` or `{"gateway_tools":true}` offers nothing the profile withholds.
+- **What it can change.** Every setting except `name`, `client_overrides`, `seal_secrets` and `unseal_tool_calls`, so a client cannot turn sealing off. Fields the header leaves out keep the profile's values. Tool access only narrows: `disabled_tools` in the header adds to the tools the profile unchecks, and `gateway_tools` can turn OpenViking tools off but not back on, so `{"disabled_tools":[]}` or `{"gateway_tools":true}` offers nothing the profile withholds.
 - **When it applies.** As with a saved profile change, a conversation keeps the settings it started with: only the header on a conversation's first request shapes it. Later headers are still checked, so an invalid one, or any header once the switch is off, still fails.
 - **Errors.** With the switch off, any request that carries the header gets 403 `context_override_not_allowed` instead of being served with the saved settings. With it on, the request gets 400 `context_override_invalid` when the header:
   - is not a JSON object;
-  - names an unknown field, `name` or `client_overrides`;
+  - names an unknown field, `name`, `client_overrides`, `seal_secrets` or `unseal_tool_calls`;
   - holds a value out of range.
 - **In the request log.** [Request details](10-overview-and-requests.md#request-details) list the names of the fields the client sent in the header, never their values.
 

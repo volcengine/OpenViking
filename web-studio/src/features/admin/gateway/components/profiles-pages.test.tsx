@@ -96,6 +96,8 @@ const coding = {
   idle_seconds: 30.5,
   gateway_tools: true,
   disabled_tools: ['read', 'removed_tool'],
+  seal_secrets: true,
+  unseal_tool_calls: true,
   // A field this version of the form does not know about.
   future_setting: 'discard me',
 } as Profile
@@ -244,6 +246,7 @@ describe('profile list', () => {
     expect(
       codingCard.getByText('profiles.summary.recallOn {"tokens":"1,600"}'),
     ).toBeTruthy()
+    expect(codingCard.getByText('profiles.summary.unsealOn')).toBeTruthy()
     // Long conversations do not depend on saving.
     expect(codingCard.getAllByText('states.off')).toHaveLength(1)
     expect(
@@ -416,6 +419,7 @@ describe('profile editor', () => {
           'longConversations',
           'agentWindows',
           'tools',
+          'sealCredentials',
         ] as const
       ).map((section) => gatewayDocsUrl(section, 'en')),
     )
@@ -686,6 +690,36 @@ describe('profile editor', () => {
     expect(api.saveProfile.mock.calls[0][2]).toMatchObject({
       gateway_tools: true,
       show_tool_calls: false,
+    })
+  })
+
+  it('offers unsealing only while credentials are sealed', async () => {
+    renderAt('/admin/gateway/profiles/p2')
+    await screen.findByDisplayValue('Chat')
+    const unseal = () =>
+      screen.queryByRole('switch', {
+        name: 'profiles.credentials.unseal.label',
+      })
+    expect(sectionSwitch('credentials').getAttribute('aria-checked')).toBe(
+      'false',
+    )
+    expect(unseal()).toBeNull()
+
+    fireEvent.click(sectionSwitch('credentials'))
+    fireEvent.click(unseal()!)
+    expect(unseal()!.getAttribute('aria-checked')).toBe('true')
+    // The gateway rejects unsealing without sealing, so switching sealing off clears it.
+    fireEvent.click(sectionSwitch('credentials'))
+    expect(unseal()).toBeNull()
+    fireEvent.click(sectionSwitch('credentials'))
+    expect(unseal()!.getAttribute('aria-checked')).toBe('false')
+
+    fireEvent.click(unseal()!)
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(api.saveProfile).toHaveBeenCalledTimes(1))
+    expect(api.saveProfile.mock.calls[0][2]).toMatchObject({
+      seal_secrets: true,
+      unseal_tool_calls: true,
     })
   })
 

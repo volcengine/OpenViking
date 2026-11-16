@@ -70,6 +70,10 @@ class Policy(BaseModel):
     agent_windows: bool = False
     window_soft_ratio: float = Field(default=0.7, ge=0.3, le=0.95)
     window_hard_ratio: float = Field(default=0.85, ge=0.4, le=0.97)
+    # Registered credentials go upstream as their references; read live, not per session.
+    seal_secrets: bool = False
+    # The client's tool calls get the values of the references they carry.
+    unseal_tool_calls: bool = False
     # Clients may override the other fields per conversation with X-OpenViking-Context.
     client_overrides: bool = True
 
@@ -89,6 +93,12 @@ class Policy(BaseModel):
     def check_window_ratios(self):
         if self.window_soft_ratio >= self.window_hard_ratio:
             raise ValueError("window_soft_ratio must be below window_hard_ratio")
+        return self
+
+    @model_validator(mode="after")
+    def check_unseal_needs_seal(self):
+        if self.unseal_tool_calls and not self.seal_secrets:
+            raise ValueError("unseal_tool_calls requires seal_secrets")
         return self
 
 
