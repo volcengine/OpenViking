@@ -32,6 +32,15 @@ test('standalone preview offers editing only on the active editable level', asyn
           kind: 'file',
           key: 'guide',
           source: { content: '', fileName: 'guide.md' },
+          actions: [
+            {
+              key: 'custom',
+              label: 'Custom command',
+              icon: '⋯',
+              pinned: true,
+              onClick: () => {},
+            },
+          ],
           levels: [
             {
               key: 'l0',
@@ -54,6 +63,7 @@ test('standalone preview offers editing only on the active editable level', asyn
   );
   try {
     assert.equal(button(view, 'Edit'), undefined);
+    assert.ok(button(view, 'Custom command'));
     await click(view, 'Body');
     await click(view, 'Edit');
     await waitForEditor(view.container);
@@ -63,6 +73,7 @@ test('standalone preview offers editing only on the active editable level', asyn
     );
     assert.ok(button(view, 'Cancel')?.closest('.ov-file-preview__header'));
     assert.ok(button(view, 'Save')?.closest('.ov-file-preview__header'));
+    assert.equal(button(view, 'Custom command'), undefined);
     await click(view, 'Cancel');
     assert.deepEqual(saved, []);
     await click(view, 'Edit');
@@ -76,12 +87,13 @@ test('standalone preview offers editing only on the active editable level', asyn
 });
 
 test('FileBrowser saves edits before offering an optional snapshot without waiting for background work', async () => {
-  const uri = 'viking://resources/guide.md';
+  const rootUri = 'viking://user/alice/memories';
+  const uri = `${rootUri}/guide.md`;
   let fullReads = 0;
   const requests = recordingFetch(({ path, body: request }) => {
     if (path.endsWith('/fs/ls')) return ok([{ uri, isDir: false }]);
     if (path.endsWith('/fs/stat')) return ok({ uri, isDir: false });
-    if (path.endsWith('/content/read')) return ok('');
+    if (path.endsWith('/content/read')) return ok('# Initial');
     if (path.endsWith('/content/write')) {
       assert.equal(request.uri, uri);
       assert.equal(request.mode, 'replace');
@@ -108,7 +120,7 @@ test('FileBrowser saves edits before offering an optional snapshot without waiti
     createElement(
       OpenVikingProvider,
       { fetch },
-      createElement(FileBrowser, { uri, readOnly }),
+      createElement(FileBrowser, { rootUri, uri, readOnly }),
     );
   const view = await mount(render(false));
   try {
@@ -120,7 +132,7 @@ test('FileBrowser saves edits before offering an optional snapshot without waiti
       [...toolbar.querySelectorAll('button')].map(
         (node) => node.getAttribute('aria-label') ?? node.textContent.trim(),
       ),
-      ['Cancel', 'Save', 'Version history'],
+      ['Cancel', 'Save', 'Version history', 'Copy content'],
     );
     assert.ok(button(view, 'Copy path'));
     await click(view, 'Version history');

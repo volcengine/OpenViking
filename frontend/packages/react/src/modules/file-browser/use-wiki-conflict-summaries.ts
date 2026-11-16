@@ -1,17 +1,29 @@
 import { QueriesObserver } from '@tanstack/query-core';
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
+import { isOvClientError } from '../../client/errors.js';
 import { OV_PATHS } from '../../client/paths.js';
 import { useOvClient } from '../../client/provider.js';
 import { queryKeys } from '../../client/query-keys.js';
 import type { OvRequestOptions } from '../../client/types.js';
 import { useQueryScope } from './use-query-scope.js';
 import {
+  InvalidWikiConflictSearchResponse,
   readWikiConflictSummary,
   type WikiConflictSummary,
 } from './wiki-conflict-summary.js';
 
 const emptyResults = [] as const;
 const emptySnapshot = () => emptyResults;
+
+function needsConflictListing(error: unknown) {
+  return (
+    error instanceof InvalidWikiConflictSearchResponse ||
+    (isOvClientError(error) &&
+      (error.statusCode === 404 ||
+        error.statusCode === 405 ||
+        error.statusCode === 501))
+  );
+}
 
 export function useWikiConflictSummaries(
   directories: readonly string[],
@@ -66,10 +78,13 @@ export function useWikiConflictSummaries(
   }, [observer, options]);
 
   const summaries = new Map<string, WikiConflictSummary>();
+  const listingRoots: string[] = [];
   for (const { uri, queryKey } of options) {
     const state = queryClient?.getQueryState<WikiConflictSummary>(queryKey);
     if (state?.status === 'success' && state.data)
       summaries.set(uri, state.data);
+    if (state?.data?.limited || needsConflictListing(state?.error))
+      listingRoots.push(uri);
   }
-  return summaries;
+  return { summaries, listingRoots };
 }

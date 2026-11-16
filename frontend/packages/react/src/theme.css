@@ -46,6 +46,7 @@
 .ov-select,
 .ov-textarea,
 .ov-checkbox,
+.ov-switch,
 .ov-radio,
 .ov-form-field,
 .ov-directory-tour,
@@ -223,6 +224,7 @@ html.dark .ov-experience-dashboard,
 .dark .ov-drawer,
 .dark .ov-modal,
 .dark .ov-checkbox,
+.dark .ov-switch,
 .dark .ov-radio,
 html.dark .ov-form-field,
 .dark .ov-date-picker,
@@ -302,12 +304,19 @@ html.dark .ov-error-boundary,
 .ov-select,
 .ov-textarea,
 .ov-checkbox,
+.ov-switch,
 .ov-radio,
 .ov-form-field,
-.ov-form-field__error {
+.ov-form-field__error,
+.ov-file-browser-workflow,
+.ov-file-history,
+.ov-time-picker__popup,
+.ov-compile-picker {
   --ov-ui-bg-white-default: var(--ov-ui-bg-1-default);
   --ov-ui-bg-2-default: #fafbfd;
   --ov-ui-bg-7-default: var(--ov-ui-border-1-default);
+  --ov-ui-bg-8-default: #ffffff;
+  --ov-ui-bg-9-default: #ffffff;
   --ov-ui-bg-11-default: #e1e3ef;
   --ov-ui-border-4-default: #acb0c5;
   --ov-ui-neutral-4-default: #c9cdd4;
@@ -327,14 +336,21 @@ html.dark .ov-input,
 html.dark .ov-select,
 html.dark .ov-textarea,
 html.dark .ov-checkbox,
+.dark .ov-switch,
 html.dark .ov-radio,
 html.dark .ov-form-field,
-html.dark .ov-form-field__error {
+html.dark .ov-form-field__error,
+html.dark .ov-file-browser-workflow,
+html.dark .ov-file-history,
+html.dark .ov-time-picker__popup,
+html.dark .ov-compile-picker {
   --ov-ui-bg-white-default: rgb(255 255 255 / 0.1%);
   --ov-ui-bg-2-default: rgb(252 253 254 / 1%);
   --ov-ui-bg-4-default: rgb(246 248 250 / 6%);
   --ov-ui-bg-5-default: rgb(241 243 245 / 8%);
   --ov-ui-bg-7-default: #1a1b1e;
+  --ov-ui-bg-8-default: #282a2f;
+  --ov-ui-bg-9-default: #212327;
   --ov-ui-bg-11-default: #1e2023;
   --ov-ui-border-2-default: rgb(221 226 233 / 15%);
   --ov-ui-border-3-default: rgb(221 226 233 / 30%);
@@ -352,6 +368,65 @@ html.dark .ov-form-field__error {
   --ov-ui-error-default: #ff706d;
   --ov-ui-error-bg-default: rgb(159 33 28 / 20%);
   --ov-ui-error-border-default: rgb(255 112 109 / 30%);
+}
+
+/* Surfaces migrated from the same theme; declarations belong to their roots,
+ * so native elements and portaled content never depend on a child control. */
+html.dark .ov-file-browser-workflow,
+html.dark .ov-file-history,
+html.dark .ov-time-picker__popup,
+html.dark .ov-compile-picker,
+html.dark .ov-switch {
+  --ov-ui-bg-3-default: rgb(250 251 252 / 4%);
+  --ov-ui-border-1-default: #353535;
+}
+
+.ov-file-history {
+  --ov-ui-file-history-latest-end-default: #9985ff;
+  --ov-ui-file-history-latest-border-default: #2929ff;
+  --ov-ui-file-history-canvas-default: #fbfbfb;
+  --ov-ui-file-history-grid-default: rgb(0 0 0 / 8%);
+  --ov-ui-file-history-legend-default: rgb(240 240 240 / 30%);
+  --ov-ui-file-history-added-default: #0da39e;
+  --ov-ui-file-history-removed-default: #e31b54;
+}
+html.dark .ov-file-history {
+  --ov-ui-file-history-canvas-default: var(--ov-ui-bg-2-default);
+  --ov-ui-file-history-grid-default: var(--ov-ui-border-1-default);
+  --ov-ui-file-history-legend-default: var(--ov-ui-bg-3-default);
+}
+
+.ov-switch {
+  --ov-ui-switch-off-default: #c9c9d4;
+  --ov-ui-switch-dot-default: var(
+    --ov-ui-color-bg-white,
+    var(--ov-ui-bg-white-default)
+  );
+  --ov-ui-switch-disabled-dot-default: var(--ov-ui-switch-dot-default);
+  --ov-ui-switch-unavailable-checked-default: var(
+    --ov-ui-primary-disabled-default
+  );
+  --ov-ui-switch-spinner-off-default: #e5e6eb;
+  --ov-ui-switch-spinner-disabled-default: #c9c9d4;
+  --ov-ui-switch-focus-default: #86909c;
+  --ov-ui-switch-track-shadow-default: inset 0 1px 1px rgb(0 0 0 / 8%);
+  --ov-ui-switch-dot-shadow-default:
+    0 1px 4px rgb(0 0 0 / 15%), 0 1.16667px 0 rgb(20 20 20 / 8%);
+}
+html.dark .ov-switch {
+  --ov-ui-switch-off-default: #42464e;
+  --ov-ui-switch-dot-default: var(
+    --ov-ui-color-text-on-primary,
+    var(--ov-ui-text-on-primary-default)
+  );
+  --ov-ui-switch-disabled-dot-default: rgb(246 248 250 / 20%);
+  --ov-ui-switch-unavailable-checked-default: color-mix(
+    in srgb,
+    var(--ov-ui-color-primary, var(--ov-ui-primary-default)) 50%,
+    transparent
+  );
+  --ov-ui-switch-spinner-off-default: #484849;
+  --ov-ui-switch-focus-default: #929293;
 }
 
 .ov-checkbox {

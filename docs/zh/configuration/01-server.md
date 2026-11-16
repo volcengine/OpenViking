@@ -496,6 +496,39 @@ namespace 中混跑新旧版本；保留已有持久化队列 handoff。
 |---|---|---:|---|
 | `max_concurrent` | integer | `10` | 同时消费的外部异步任务数，必须大于 `0`；修改后需重启服务 |
 
+## 日志配置
+
+`log` 统一控制独立服务器的 Python、Rust 和 C++ 输出。默认级别为 `INFO`，
+便于看到兜底和重试；业务过程使用 `DEBUG`。第三方日志保留原级别语义。
+Bootstrap 启动结果和失败提示直接打印到 stdout/stderr，即使设置高日志阈值
+或文件输出也会显示。
+
+| 字段 | 类型 / 可选值 | 默认值 | 作用 |
+| --- | --- | --- | --- |
+| `level` | `DEBUG`、`INFO`、`WARNING`、`ERROR`、`CRITICAL` | `INFO` | 输出阈值；大小写不敏感，兼容 `WARN` 和 `FATAL` |
+| `format` | 公共格式字符串 | 见下文 | Python、Rust、C++ 使用同一日志头 |
+| `output` | `stdout`、`stderr`、`file` 或文件路径 | `stdout` | `file` 写入 `storage.workspace/log/openviking.log` |
+| `rotation` | boolean | `true` | Python 文件输出轮转，并通知 Rust 重开文件 |
+| `rotation_days` | integer | `3` | Python 保留的轮转文件数量 |
+| `rotation_interval` | `midnight`、`H`、`D`、`W0`–`W6` | `midnight` | Python 文件轮转周期；C++ 文件 sink 不参与轮转 |
+
+公共 `format` 的精确值：
+
+```text
+%(asctime)s %(levelname)s %(name)s pid=%(process)d request_id=%(request_id)s trace_id=%(trace_id)s message=%(message)s
+```
+
+输出时间为 UTC 毫秒，消息及附加字符串按 JSON 规则转义，每条事件占一行，
+不含终端颜色。缺失的关联字段显示 `-`。升级时，旧内建格式
+`%(asctime)s - %(name)s - %(levelname)s - %(message)s` 自动转为公共格式；
+其他自定义格式和未知级别会导致配置校验失败。
+
+原生输出配置改变后需要重启服务；Python 重配不能代表原生组件已经更新。
+Rust 没有 `CRITICAL`，该阈值仍映射到 `ERROR`，输出仍标为 `ERROR`。
+已有 `server.observability.usage_audit` 配置管理用量及 HTTP 请求记录；
+安全操作审计落库记为独立功能待办。
+SDK 导入不会接管宿主 root logger。日志内容边界见[日志规范](https://github.com/volcengine/OpenViking/blob/main/docs/repository/LOGGING_CN.md)。
+
 ## Compile API 配置
 
 | 字段 | 类型 | 默认值 | 说明 |

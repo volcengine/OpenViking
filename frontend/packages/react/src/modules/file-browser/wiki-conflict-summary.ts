@@ -7,6 +7,8 @@ import { normalizeResourceUri } from './fs-uri.js';
 const CONFLICT_LIMIT = 100;
 const HIT_GROUPS = ['resources', 'memories', 'skills'] as const;
 
+export class InvalidWikiConflictSearchResponse extends TypeError {}
+
 export interface WikiConflictSummary {
   files: string[];
   directDirectories: string[];
@@ -20,12 +22,16 @@ function readHits(result: unknown) {
     !isRecord(result) ||
     (!HIT_GROUPS.some((group) => group in result) && result.total !== 0)
   ) {
-    throw new TypeError('Invalid Wiki conflict search response');
+    throw new InvalidWikiConflictSearchResponse(
+      'Invalid Wiki conflict search response',
+    );
   }
   const hits = HIT_GROUPS.flatMap((group) => {
     const hits = result[group] ?? [];
     if (!Array.isArray(hits)) {
-      throw new TypeError('Invalid Wiki conflict search response');
+      throw new InvalidWikiConflictSearchResponse(
+        'Invalid Wiki conflict search response',
+      );
     }
     return hits as unknown[];
   });
@@ -34,7 +40,9 @@ function readHits(result: unknown) {
     total !== undefined &&
     (typeof total !== 'number' || !Number.isInteger(total) || total < 0)
   ) {
-    throw new TypeError('Invalid Wiki conflict search total');
+    throw new InvalidWikiConflictSearchResponse(
+      'Invalid Wiki conflict search total',
+    );
   }
   return { hits, total };
 }
@@ -71,7 +79,9 @@ export async function readWikiConflictSummary(
       typeof hit.uri !== 'string' ||
       typeof hit.level !== 'number'
     ) {
-      throw new TypeError('Invalid Wiki conflict search hit');
+      throw new InvalidWikiConflictSearchResponse(
+        'Invalid Wiki conflict search hit',
+      );
     }
     if (hit.level !== 2 || !hit.uri.startsWith(prefix)) continue;
     const relative = hit.uri.slice(prefix.length);

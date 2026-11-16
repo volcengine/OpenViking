@@ -1,4 +1,5 @@
 import { markPreviewAction } from '../../shared/analytics/preview-actions.js';
+import { keepPreviewActionWhileEditing } from '../../components/file-preview/file-preview-action-visibility.js';
 import CopyIcon from '../../../../icons/svg/file-preview/copy.svg?react';
 import type {
   FilePreviewAction,
@@ -27,13 +28,13 @@ export function previewActionContext(
   ) {
     commands.push(
       markPreviewAction(
-        {
+        keepPreviewActionWhileEditing({
           key: 'copyContent',
           pinned: context.editing,
           label: text.copyContent,
           icon: <CopyIcon width={16} height={16} />,
           onClick: () => navigator.clipboard.writeText(content),
-        },
+        }),
         'copyContent',
       ),
     );

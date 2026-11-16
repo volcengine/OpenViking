@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   fixture,
-  tree,
+  tree as resourceTree,
   mount,
-  rootUri,
+  rootUri as resourceRoot,
   workflow,
   click,
   button,
@@ -13,6 +13,9 @@ import {
 } from './helpers/preview-native-dom.mjs';
 import { waitForEditor, setEditor } from './helpers/preview-editor-dom.mjs';
 
+const rootUri = 'viking://user/alice/memories';
+const tree = (fetch, uri, props = {}) =>
+  resourceTree(fetch, uri, { rootUri, ...props });
 const uri = `${rootUri}/guide.md`;
 async function save(view) {
   await click(view.container.querySelector('[aria-label="Edit"]'));
@@ -110,7 +113,7 @@ test('snapshot draft survives locale and label changes; switching account aborts
 });
 
 test('Wiki compile output saves with automatic versioning and no manual snapshot choice', async () => {
-  const target = `${rootUri}/wiki`;
+  const target = `${resourceRoot}/wiki`;
   const file = `${target}/guide.md`;
   const fetch = fixture(
     file,
@@ -127,13 +130,36 @@ test('Wiki compile output saves with automatic versioning and no manual snapshot
     },
     [{ to: target }],
   );
-  const view = await mount(tree(fetch, file));
+  const view = await mount(resourceTree(fetch, file));
   try {
     await save(view);
     assert.equal(workflow(), null);
     const write = fetch.calls.find((c) => c.path.endsWith('/content/write'));
     assert.equal(write.body.resolve_conflicts, true);
+    assert.equal(write.body.use_snapshot, true);
+    assert.equal('edit_source' in write.body, false);
     assert.equal(fetch.countOf('/api/v1/snapshot/commit'), 0);
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('ordinary resources save content without manual snapshot or history controls', async () => {
+  const file = `${resourceRoot}/guide.md`;
+  const fetch = fixture(file, false, (call) => {
+    if (call.path.endsWith('/content/read'))
+      return ok(call.query.limit === '-1' ? '# Initial' : '');
+  });
+  const view = await mount(resourceTree(fetch, file));
+  try {
+    await save(view);
+    assert.equal(workflow(), null);
+    assert.equal(fetch.countOf('/api/v1/content/write'), 1);
+    assert.equal(fetch.countOf('/api/v1/snapshot/commit'), 0);
+    assert.equal(
+      view.container.querySelector('[aria-label="Version history"]'),
+      null,
+    );
   } finally {
     await view.unmount();
   }

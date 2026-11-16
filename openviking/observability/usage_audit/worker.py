@@ -36,6 +36,7 @@ class UsageAuditWorker:
         self._current_batch: list[ObservabilityEvent] | None = None
         self._closed = False
         self.dropped_count = 0
+        self._persistence_failure_reported = False
 
     async def start(self) -> None:
         """Start the background flush loop."""
@@ -93,14 +94,14 @@ class UsageAuditWorker:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
-                logger.warning("Usage/Audit worker loop error: %s", exc)
+                logger.info("usage audit worker retrying error_type=%s", type(exc).__name__)
                 continue
 
             self._current_batch = batch
             try:
                 await self._flush(batch)
             except asyncio.CancelledError:
-                logger.warning(
+                logger.info(
                     "Usage/Audit worker cancelled with %d in-flight events",
                     len(batch),
                 )
@@ -116,10 +117,14 @@ class UsageAuditWorker:
         try:
             await self._store.record_batch(batch)
         except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "Usage/Audit batch flush failed: %s",
-                exc,
-                exc_info=logger.isEnabledFor(logging.DEBUG),
+            level = logging.INFO if self._persistence_failure_reported else logging.ERROR
+            self._persistence_failure_reported = True
+            logger.log(
+                level,
+                "usage audit persistence failed total=%d error_type=%s",
+                len(batch),
+                type(exc).__name__,
+                extra={"total": len(batch), "error_type": type(exc).__name__},
             )
 
     async def flush(self) -> None:
@@ -137,7 +142,7 @@ class UsageAuditWorker:
                 await asyncio.wait_for(asyncio.shield(task), timeout=timeout_seconds)
             except asyncio.TimeoutError:
                 if self._current_batch:
-                    logger.warning(
+                    logger.info(
                         "Usage/Audit shutdown waiting for %d in-flight events",
                         len(self._current_batch),
                     )
@@ -163,4 +168,4 @@ class UsageAuditWorker:
             try:
                 await asyncio.wait_for(self._flush(remaining), timeout=timeout_seconds)
             except asyncio.TimeoutError:
-                logger.warning("Usage/Audit shutdown flush timed out")
+                logger.info("Usage/Audit shutdown flush timed out")

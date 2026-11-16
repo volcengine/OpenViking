@@ -35,6 +35,7 @@ export const OV_PATHS = {
   snapshotCommit: '/api/v1/snapshot/commit',
   snapshotVersions: '/api/v1/snapshot/versions',
   snapshotShow: '/api/v1/snapshot/show',
+  snapshotRestore: '/api/v1/snapshot/restore',
   resourceTempUpload: '/api/v1/resources/temp_upload',
   packImport: '/api/v1/pack/import',
   packExport: '/api/v1/pack/export',

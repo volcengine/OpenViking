@@ -85,3 +85,49 @@ test('FileBrowser summarizes Wiki conflicts before expansion and refreshes witho
     await view.unmount();
   }
 });
+
+test('newly listed conflict tags update an empty search result until the next conflict refresh', async () => {
+  const root = 'viking://resources';
+  const wiki = `${root}/wiki`;
+  const file = `${wiki}/fresh.md`;
+  let browser;
+  function Tree() {
+    browser = useFileBrowser({ rootUri: root, currentUri: null });
+    return null;
+  }
+  const fetch = recordingFetch(({ path, uri }) => {
+    if (path.endsWith('/search/find')) return ok({ resources: [], total: 0 });
+    if (path.endsWith('/ls') && uri === root)
+      return ok([{ uri: wiki, isDir: true, tags: ['compile_target=true'] }]);
+    if (path.endsWith('/ls') && uri === wiki)
+      return ok([{ uri: file, tags: ['has_conflict=true'] }]);
+    return ok({});
+  });
+  const view = await mount(h(OpenVikingProvider, { fetch }, h(Tree)));
+  const status = (uri) => browser.dashboards.get(uri)?.pendingConflicts;
+  try {
+    assert.equal(fetch.countOf('/api/v1/search/find'), 1);
+    assert.equal(status(wiki), false);
+
+    await act(async () =>
+      browser.actions.toggleExpand(
+        browser.rows.find((row) => row.uri === wiki),
+      ),
+    );
+    await settle();
+    assert.equal(fetch.countOf('/api/v1/search/find'), 1);
+    assert.equal(status(wiki), true);
+    assert.equal(status(file), true);
+
+    await act(async () => browser.refreshWikiConflicts());
+    await settle();
+    assert.equal(fetch.countOf('/api/v1/search/find'), 2);
+    assert.deepEqual(browser.rows.find((row) => row.uri === file)?.tags, [
+      'has_conflict=true',
+    ]);
+    assert.equal(status(wiki), false);
+    assert.equal(status(file), false);
+  } finally {
+    await view.unmount();
+  }
+});
