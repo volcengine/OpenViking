@@ -1149,6 +1149,8 @@ class TestMemoryUpdater:
                 "category": "person",
                 "name": "阿珍",
                 "custom_metadata": "keep",
+                "source_extraction_id": "old_extraction",
+                "last_update_trace_id": "old_trace",
                 "version": 3,
             },
             links=[
@@ -1200,6 +1202,9 @@ class TestMemoryUpdater:
                     memory_fields={"name": "陈静娴"} if rename else {"content": "近况更新。"},
                     memory_type="entities",
                     uris=[target_uri],
+                    source=MemoryOperationSource(
+                        extraction_id="new_extraction", trace_id="new_trace"
+                    ),
                 )
             ],
             delete_file_contents=[],
@@ -1217,6 +1222,8 @@ class TestMemoryUpdater:
         assert migrated.extra_fields["category"] == "person"
         assert migrated.extra_fields["name"] == ("陈静娴" if rename else "阿珍")
         assert migrated.extra_fields["custom_metadata"] == "keep"
+        assert migrated.extra_fields["source_extraction_id"] == "new_extraction"
+        assert migrated.extra_fields["last_update_trace_id"] == "new_trace"
         assert migrated.extra_fields["version"] == 4
         assert migrated.links[0]["from_uri"] == target_uri
         profile = MemoryFileUtils.read(store[profile_uri], uri=profile_uri)

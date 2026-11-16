@@ -1727,6 +1727,7 @@ class MemoryUpdater:
                 for key, val in old_content.extra_fields.items():
                     if (
                         key not in {"content", "memory_type"}
+                        and key not in resolved_op.memory_fields
                         and key not in metadata
                         and val is not None
                     ):
