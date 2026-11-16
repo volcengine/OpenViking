@@ -60,19 +60,28 @@ If OpenViking rejects the API key, the response is 401 `openviking_http_401`.
 
 ### Log records {#log-records}
 
-The log holds metadata only, never message content. A record is written when a request to a model provider finishes, and when a conversation's saving status changes (`kind` is `capture`). Requests the gateway rejects before reaching a provider are not logged. Every field except `time` is optional and is left out when it does not apply.
+The log holds metadata only, never message content, keys or error messages. Every request to a model route (except `.../models`) writes exactly one record, whichever way it ends: answered, refused by the gateway, failed at the provider, cut off mid-stream, or abandoned by the client. A conversation's saving status change writes one too (`kind` is `capture`). With the default `request_log_sink: store`, a request that failed before its key was confirmed has no account and is not stored; the `stdout` sink writes it with `account` and `user_id` set to `null`. Fields are left out when they do not apply.
 
 | Field | Meaning |
 | --- | --- |
 | `time` | When the record was written, in epoch seconds |
-| `request_id` | The gateway's ID for the request |
+| `event`, `schema` | `request` and `2` for a request record |
+| `request_id` | The gateway's ID for the request; error bodies on model routes carry it too |
+| `received_at`, `method`, `endpoint` | When the gateway received the request (epoch seconds), its HTTP method, and `messages`, `count_tokens`, `chat`, `responses`, `responses_item` or `other` |
 | `kind` | `user`, `continuation`, `auxiliary`, `subagent`, `count`, `passthrough` or `capture`; see [Requests](../gateway/10-overview-and-requests.md#requests) |
-| `model` | The model name the client sent |
-| `status` | The provider's HTTP status |
-| `upstream_id`, `credential_id` | The upstream that served the request, and the gateway key that sent it |
+| `model`, `stream` | The model name the client sent, and whether it asked for a stream |
+| `status` | The HTTP status the client received: the provider's when the gateway relayed it, the gateway's own for a gateway error, `499` when the client left before any response |
+| `upstream_attempted`, `upstream_status` | Whether the gateway sent a request to the provider (a compaction summary call included), and the provider's HTTP status when it answered |
+| `error_reason`, `error_origin`, `error_class` | For any failure, a stream that failed after `200` included: the [reason](#model-route-errors), where it came from (`gateway`, `openviking`, `upstream` or `client`), and a coarse class (`api_key_invalid`, `quota_or_order`, `openviking_unavailable`, `config_error`, `gateway_internal`, `timeout`, `model_error` or `client_cancelled`). A provider error the gateway relayed is `upstream_error` |
+| `upstream_error_code` | The `code` (else `type`) of the provider's error body, when it is a short identifier; never its message |
+| `stream_error`, `client_disconnected` | Why a response body that had started did not end normally, and `true` when the client went away |
+| `upstream_id`, `credential_id`, `openviking_account` | The upstream that served the request, the gateway key that sent it, and the OpenViking account behind that key |
 | `session`, `protocol` | The conversation and its protocol; use them to [reset saving](#gateway-keys) |
 | `peer` | The request's [peer](../gateway/03-connect-clients.md#peer), from `X-OpenViking-Actor-Peer` or the key's default |
 | `degradation` | Issue code; see [Issues on degraded requests](../gateway/12-troubleshooting.md#issues-on-degraded-requests) |
+| `degradations` | Every issue of the request, in order. It can also hold `recall_failed`: the memory search got no answer from OpenViking (`recall_reason` says why), which never becomes `degradation` |
+| `revocation_reason` | Why OpenViking could not confirm the key, with `revocation_check_unavailable` |
+| `session_source` | How the conversation was found: `header` (`X-OpenViking-Session`), `reply_match` (the history continues one conversation's reply) or `new` |
 | `recall_reason`, `recall_count`, `recall_ms` | Memory search result code, entries added and search time; see [No memory is added](../gateway/12-troubleshooting.md#no-memory-is-added) |
 | `replay_hits` | Earlier messages whose memory was replayed unchanged |
 | `capture_status`, `capture_reason`, `capture_retry_at` | Saving status (`active`, `disabled`, `retrying` or `paused`), its reason, and the next retry in epoch seconds; see [Saving status](../gateway/10-overview-and-requests.md#saving-status) |
@@ -82,6 +91,10 @@ The log holds metadata only, never message content. A record is written when a r
 | `context_tokens`, `context_window` | Estimated context size, and the window it was compared with |
 | `input_tokens`, `output_tokens`, `cached_tokens`, `cache_write_tokens` | Token usage summed over every provider call of the request, OpenViking tool rounds included. `input_tokens` includes cached and cache-write tokens. |
 | `duration_ms` | Time from sending the request to the provider until the reply finished |
+| `read_ms`, `auth_ms`, `route_ms`, `prepare_ms` | Time spent reading the body, checking the key (with OpenViking), choosing the upstream, and preparing memory (recall and compaction included) |
+| `added_ms`, `upstream_ttfb_ms`, `first_chunk_ms`, `total_ms` | Time from receipt until the provider request started, from that start until the provider's response headers, from receipt until the first streamed chunk reached the client, and from receipt until the record was written |
+| `compaction_ms` | Time spent on compaction, also when it failed |
+| `bookkeeping_failed` | Steps that failed after the reply was sent: `completed` (saving the turn), `responses` (remembering a Responses ID) or `capture_status` |
 
 Fields that start with `first_upstream_` and `hidden_upstream_` split the token usage between the first provider call and the OpenViking tool rounds; the first-call cache hit rate uses the first group.
 
@@ -260,6 +273,44 @@ Check `reason`, not the text of `detail`. When the server does not have the gate
 | 503 | `openviking_unavailable`, `openviking_unreachable` | The gateway cannot reach OpenViking. Check that OpenViking is running; for a standalone gateway, also check `openviking_url` (in `gateway.conf` or `OPENVIKING_GATEWAY_OPENVIKING_URL`). |
 | 503 | `openviking_version_mismatch` | Standalone gateways only: OpenViking Server is older than required. `required_version` in the response gives the minimum version. |
 
-Other HTTP errors from OpenViking are reported as `openviking_http_<status>`. The gateway's own generic HTTP errors are reported as `gateway_http_<status>`, for example 405 `gateway_http_405` for an unsupported method.
+Other HTTP errors from OpenViking are reported as `openviking_http_<status>`. The gateway's own generic HTTP errors are reported as `gateway_http_<status>`, for example 405 `gateway_http_405` for an unsupported method. These names apply to the management API, `/uploads` and `/downloads`; model routes use the reasons below.
+
+### Model route errors {#model-route-errors}
+
+An error the gateway produces on a model route (`/gateway/v1/*`, `/gateway/api/v3/*`, `/gateway/api/compatible/v1/*`) has the body `{"reason": "...", "detail": "...", "request_id": "..."}`; `openviking_version_mismatch` adds `required_version`. A provider's own error is relayed unchanged, with its status and body. The request record carries the same reason in `error_reason`.
+
+| Status | Reason | Origin | Meaning |
+| --- | --- | --- | --- |
+| 401 | `gateway_key_invalid` | gateway | The gateway key is missing, wrong or revoked. |
+| 401 | `openviking_key_invalid` | openviking | OpenViking rejected the OpenViking API key the client sent, or the one behind the gateway key. |
+| 401 | `openviking_identity_missing` | openviking | OpenViking returned no identity for the key. |
+| 402 | `openviking_not_ordered` | openviking | OpenViking service is not ordered for the key. |
+| 403 | `openviking_forbidden` | openviking | OpenViking refused the key. |
+| 403 | `root_key_not_allowed`, `trusted_mode_unsupported` | openviking | A root key cannot back a gateway key; the gateway does not support trusted authentication. |
+| 429 | `openviking_rate_limited` | openviking | OpenViking rate limited the key check. |
+| 503 | `openviking_unavailable` | openviking | OpenViking could not be reached, or failed, while the gateway checked a key for the first time. |
+| 503 | `openviking_version_mismatch` | openviking | OpenViking Server is older than the gateway requires. |
+| varies | `openviking_error` | openviking | Any other OpenViking error during that check, with OpenViking's status. |
+| 403 | `oauth_credential_unsupported` | gateway | The client or the upstream uses a Claude subscription token. |
+| 413 | `body_too_large` | gateway | The body exceeds `max_body_bytes`. |
+| 415 | `compressed_body_unsupported` | gateway | A key with allowed models received a content-encoded body. |
+| 400 | `model_missing` | gateway | A key with allowed models received a body without a model. |
+| 403 | `model_not_allowed` | gateway | The model is not among the key's allowed models. |
+| 400, 403 | `context_override_invalid`, `context_override_not_allowed` | gateway | `X-OpenViking-Context` is invalid, or the key's profile does not accept it. |
+| 400 | `peer_invalid` | gateway | `X-OpenViking-Actor-Peer` is not a valid peer ID. |
+| 403 | `policy_unavailable` | gateway | The key's context profile no longer exists. |
+| 403 | `upstream_url_not_allowed` | gateway | `X-OpenViking-Upstream-URL` names no upstream bound to the key. |
+| 404 | `no_matching_upstream` | gateway | No enabled upstream bound to the key serves this protocol and model. |
+| 404 | `upstream_endpoint_mismatch` | gateway | The upstream is an exact endpoint for another path. |
+| 404, 403 | `response_unknown`, `response_upstream_disallowed` | gateway | The stored Responses response is not this key's, or its upstream is no longer allowed. |
+| 401 | `upstream_key_missing` | gateway | No upstream API key is stored or sent in `X-OpenViking-Upstream-Key`. |
+| 403 | `coding_plan_disabled` | gateway | The upstream is a Coding Plan key that is not allowed through the gateway. |
+| 500 | `internal_error` | gateway | The gateway failed unexpectedly. The detail is generic; the gateway's log has the traceback. |
+| 502 | `upstream_unreachable` | upstream | The gateway could not get a reply from the provider. |
+| 502 | `tool_upstream_invalid`, `tool_upstream_incomplete`, `tool_upstream_stream_error`, `tool_call_invalid` | upstream | During OpenViking tool rounds, the provider's reply was unusable, incomplete or an error, or the model called a tool it may not use. |
+| 502 | `tool_loop_limit` | gateway | The OpenViking tool rounds reached a limit. |
+| 504 | `tool_loop_timeout` | gateway | The OpenViking tool rounds ran out of time. |
+
+A WebSocket request to a Responses route still gets an empty 426; its record says `websocket_unsupported`. A `gateway_http_<status>` reason on a model route would mean an error the gateway does not classify yet.
 
 A 401 that a model client receives is not a management API error. It means the gateway key is missing, wrong or revoked, or the OpenViking key bound to it is no longer valid; see [Clients get an error from the gateway](../gateway/12-troubleshooting.md#clients-get-an-error-from-the-gateway).

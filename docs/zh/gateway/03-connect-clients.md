@@ -321,7 +321,7 @@ client = Ark(base_url="https://ov.example.com/gateway/api/v3", api_key="<gateway
 
 如果结果不对：
 
-- **看不到任何请求。** 只有到达模型服务商的请求才会记录，说明客户端直接收到了网关返回的错误，见[客户端收到网关返回的错误](12-troubleshooting.md#clients-get-an-error-from-the-gateway)。
+- **看不到任何请求。** 默认的 `store` 存储不保留在密钥确认之前就失败的请求（例如 401、402、403）；其余请求都会出现在列表中，包括网关自身返回的错误，并带有错误原因，见[客户端收到网关返回的错误](12-troubleshooting.md#clients-get-an-error-from-the-gateway)。
 - **两个请求属于不同的对话。** 客户端没有发送会话请求头，且历史也没有匹配上，见[网关如何识别对话](#how-conversations-are-recognized)。
 - **记忆一栏一直是空的。** 全新账号本来就是这样。要完整验证记忆是否生效，按[确认记忆生效](02-quickstart.md#confirm-that-memory-works)操作。
 

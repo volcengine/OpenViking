@@ -28,6 +28,7 @@ from .compaction import (
 )
 from .models import Policy
 from .notices import recall_notice
+from .observe import degrade
 from .profile import build_profile
 from .protocols import (
     classify,
@@ -117,7 +118,9 @@ class MemoryKernel:
             return prepared.body, prepared, prepared.metrics
         except Exception:
             logger.exception("OpenViking Gateway preparation failed")
-            return self.degraded_body(body, protocol), None, {"degradation": "memory_store_failure"}
+            metrics = {}
+            degrade(metrics, "memory_store_failure")
+            return self.degraded_body(body, protocol), None, metrics
 
     async def sent_history(self, scope, messages, protocol):
         """The history as the gateway relayed it: thinking a client resent as text is dropped.
@@ -169,12 +172,14 @@ class MemoryKernel:
         ]
         owners = await self.store.replay.replies(scope, endpoints) if endpoints else {}
         anonymous = sid is None
+        source = "header"
         if anonymous:
             latest = next((owners[a] for a in reversed(endpoints) if a in owners), set())
             sid = next(iter(latest)) if len(latest) == 1 else "anonymous-" + uuid.uuid4().hex
+            source = "reply_match" if len(latest) == 1 else "new"
         # A reply two sessions produced, such as a greeting, proves no inheritance.
         ancestors = sorted({next(iter(o)) for o in owners.values() if len(o) == 1} - {sid})
-        return sid, anonymous, chain, body_chain, ancestors
+        return sid, anonymous, chain, body_chain, ancestors, source
 
     async def prepare(
         self,
@@ -201,7 +206,7 @@ class MemoryKernel:
         # Anchors, capture and recall read the history as the gateway relayed it;
         # the upstream still gets exactly what the client sent.
         messages, thinking = await self.sent_history(scope, sent, protocol)
-        sid, anonymous, chain, body_chain, ancestors = await self.identity(
+        sid, anonymous, chain, body_chain, ancestors, source = await self.identity(
             scope, messages, protocol, headers
         )
         as_text = (
@@ -280,6 +285,7 @@ class MemoryKernel:
                 "recall_count": 0,
                 "recall_ms": 0,
                 "session": sid,
+                "session_source": source,
                 "protocol": protocol,
                 "credential_id": credential["id"],
             },
@@ -464,9 +470,9 @@ class MemoryKernel:
         if reason:
             request.body[adapter.field] = strip_thinking(messages)
             request.strip_replayed_thinking = True
-            request.metrics["degradation"] = reason
+            degrade(request.metrics, reason)
         if request.disabled:
-            request.metrics["degradation"] = "plugin_present"
+            degrade(request.metrics, "plugin_present")
 
     async def recall(self, request, credential, policy):
         started = time.monotonic()
@@ -572,6 +578,9 @@ class MemoryKernel:
             return text, [*profile["parts"], *(["history"] if hint else [])]
 
         decision, (start, parts) = await asyncio.gather(retrieve(), opening())
+        if decision["reason"].startswith("openviking_") or decision["reason"] == "recall_timeout":
+            # Recall went on without OpenViking's answer; ``degradation`` keeps its meaning.
+            degrade(request.metrics, "recall_failed", primary=False)
         status, reminder = status_line(request, policy)
         recalled = block("gateway-recall", "\n\n".join(p for p in (decision["text"], status) if p))
         # The opening block is immutable with recall but has its own budget, and
@@ -754,7 +763,7 @@ class MemoryKernel:
             cleaned = adapter.omit_hidden_history(messages)
             if cleaned != messages:
                 messages = cleaned
-                request.metrics.setdefault("degradation", "hidden_tool_history_unavailable")
+                degrade(request.metrics, "hidden_tool_history_unavailable", keep=True)
         request.body[adapter.field] = messages
 
     @staticmethod
@@ -847,10 +856,12 @@ class MemoryKernel:
             if not summary:
                 raise SummaryError("summary_empty")
         except SummaryError as error:
+            request.metrics["compaction_ms"] = round((time.monotonic() - started) * 1000, 2)
             await self.compaction_failed(request, error.reason)
             return
         except Exception:
             logger.exception("OpenViking Gateway summary failed")
+            request.metrics["compaction_ms"] = round((time.monotonic() - started) * 1000, 2)
             await self.compaction_failed(request, "summary_failed")
             return
         anchor = request.capture_chain[cut]

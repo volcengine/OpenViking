@@ -34,10 +34,12 @@ def upstream(source, **headers):
 
 def passthrough(response):
     """The ProxyRequest fields observe_response reads."""
+    record = proxy.RequestRecord(None, None)
     return SimpleNamespace(
         response=response,
         capture=ResponseCapture("chat"),
-        metrics={},
+        record=record,
+        metrics=record.metrics,
         relay=AsyncMock(),
         finish=AsyncMock(),
     )
@@ -352,7 +354,8 @@ def hidden_tool_proxy(monkeypatch, tasks):
     request.body = {"stream": True, "store": False}
     request.response = response
     request.capture = capture
-    request.metrics = {}
+    request.record = proxy.RequestRecord(request.app, None)
+    request.metrics = request.record.metrics
     request.target = "https://upstream/v1/responses"
     request.headers = {}
     request.relay = AsyncMock()

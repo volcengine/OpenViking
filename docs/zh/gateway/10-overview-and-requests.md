@@ -46,7 +46,7 @@ description: 读懂 Studio 中 OpenViking 网关的“概览”和“请求日�
 
 **请求日志**标签页按时间倒序列出日志中最新的 1,000 条记录，停留在第一页时每 30 秒刷新一次。筛选和搜索也只覆盖这 1,000 条。
 
-只有到达模型服务商的请求才会记录。被网关先行拒绝的请求不记录，例如密钥无效、模型不在密钥允许的范围内、没有匹配的上游、请求体超限，这些情况下客户端直接收到错误，见[客户端收到网关返回的错误](12-troubleshooting.md#clients-get-an-error-from-the-gateway)。
+每个模型请求都会记录，包括网关自己拒绝的请求（例如模型不在密钥允许的范围内、没有匹配的上游、请求体超限），以及在服务商处失败、或因客户端离开而结束的请求。密钥确认之前就被拒绝的请求（例如网关密钥无效）不属于任何账户，不会列出。在准备记忆之前就被拒绝的请求显示为**直接转发**。见[客户端收到网关返回的错误](12-troubleshooting.md#clients-get-an-error-from-the-gateway)。
 
 ### 筛选和搜索 {#filter-and-search}
 
@@ -55,7 +55,7 @@ description: 读懂 Studio 中 OpenViking 网关的“概览”和“请求日�
 | **全部** | 所有记录 |
 | **新消息** | 以一条新用户消息开启一轮的请求 |
 | **工具步骤** | 延续同一轮的请求，例如带着工具结果继续 |
-| **异常** | 降级请求、对话保存处于**重试中**或**已暂停**的请求，以及服务商返回 HTTP 400 及以上状态码的请求（见[上游返回错误](12-troubleshooting.md#the-upstream-returned-an-error)） |
+| **异常** | 降级请求、对话保存处于**重试中**或**已暂停**的请求，以及状态码为 HTTP 400 及以上的请求，无论来自服务商（见[上游返回错误](12-troubleshooting.md#the-upstream-returned-an-error)）还是网关（见[客户端收到网关返回的错误](12-troubleshooting.md#clients-get-an-error-from-the-gateway)） |
 | **请求类型** | 某一种[请求类型](#request-types) |
 
 搜索范围包括模型、对话 ID、请求 ID、密钥名称或前缀，以及上游名称。日志只保存对话 ID 的哈希，所以 Studio 会先在浏览器里对粘贴的对话 ID 求哈希再匹配。这要求 Studio 通过 HTTPS 或 localhost 打开；用普通 HTTP 打开时，按对话 ID 搜索什么也找不到。
@@ -67,7 +67,7 @@ description: 读懂 Studio 中 OpenViking 网关的“概览”和“请求日�
 | **时间** | 请求到达的时间 |
 | **类型** | [请求类型](#request-types) |
 | **模型** | 客户端发送的模型名称 |
-| **状态** | 服务商返回的 HTTP 状态码 |
+| **状态** | 客户端收到的 HTTP 状态码：服务商的状态码，或者网关拒绝或处理失败时网关自己的状态码 |
 | **Token** | 输入 token、其中命中缓存的比例，以及输出 token |
 | **记忆** | 这次请求中[召回](../guides/15-gateway.md#key-terms)做了什么（见下表） |
 | **保存** | 所在对话的[保存状态](#saving-status)；鼠标悬停可以看到原因 |

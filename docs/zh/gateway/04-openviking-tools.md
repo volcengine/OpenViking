@@ -195,8 +195,8 @@ Token 预算只计算模型使用 OpenViking 工具时新增的调用、结果�
 | --- | --- |
 | 流式 | 流以错误事件结束：Responses 是 `response.failed`，Chat Completions 和 Anthropic Messages 是类型为 `gateway_tool_error` 的 `error`。此时 HTTP 状态码已经是 200。 |
 | 非流式，服务商拒绝了后续请求 | 原样返回服务商的错误内容和状态码。 |
-| 非流式，超时 | 504（`gateway_http_504`）。 |
-| 非流式，其他失败 | 502，响应体为 `{"reason": "gateway_http_502", "detail": "..."}`。 |
+| 非流式，超时 | 504 `tool_loop_timeout`。 |
+| 非流式，其他失败 | 502，响应体为 `{"reason": "...", "detail": "...", "request_id": "..."}`；原因为 `tool_upstream_invalid`、`tool_upstream_incomplete`、`tool_upstream_stream_error`、`tool_call_invalid`、`tool_loop_limit` 或 `upstream_unreachable`（见[模型路由的错误](../api/25-gateway.md#model-route-errors)）。 |
 
 另外两种情况：
 

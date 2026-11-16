@@ -59,6 +59,44 @@ async def test_requests_use_selected_sink(running_gateway, capsys):
     assert overview["requests"] == (0 if stdout else 3)
 
 
+async def test_failure_records_carry_no_secrets(running_gateway, capsys):
+    app, client, admin, issued, _, _ = running_gateway
+    stdout = app.state.config.request_log_sink == "stdout"
+
+    async def backend(request):
+        if request.path == "/v1/chat/completions":
+            return web.json_response({"error": {"message": "upstream private detail"}}, status=500)
+
+    app.state.test_backend["handler"] = backend
+    body = {"model": "model", "messages": [{"role": "user", "content": "private prompt"}]}
+    capsys.readouterr()
+    for headers, status in [
+        ({"Authorization": "Bearer ovgw_guessed-secret"}, 401),
+        ({"Authorization": "Bearer " + issued["key"], "X-OpenViking-Context": "{secret"}, 400),
+        ({"Authorization": "Bearer " + issued["key"]}, 500),
+    ]:
+        response = await client.post("/v1/chat/completions", headers=headers, json=body)
+        assert response.status_code == status, response.text
+    output = capsys.readouterr().out
+    stored = (await client.get("/admin/logs", headers=admin)).json()
+    found = [json.loads(line) for line in output.splitlines()] if stdout else stored
+    # Without an account, the store sink cannot keep the authentication failure.
+    expected = {"context_override_invalid", "upstream_error"}
+    assert {r["error_reason"] for r in found} == (
+        expected | {"gateway_key_invalid"} if stdout else expected
+    )
+    for secret in (
+        "guessed-secret",
+        issued["key"],
+        "user-key",
+        "model-secret",
+        "private prompt",
+        "{secret",
+        "upstream private detail",
+    ):
+        assert secret not in output + json.dumps(stored)
+
+
 async def test_capture_events_use_selected_sink(running_gateway, capsys):
     app, client, _, issued, _, writes = running_gateway
     response = await client.post(

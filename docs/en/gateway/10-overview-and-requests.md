@@ -46,7 +46,7 @@ When an upstream has not reported any cache hit lately, you see a note instead: 
 
 The **Requests** tab lists the latest 1,000 records of the request log, newest first, and refreshes every 30 seconds while you are on the first page. Filters and search cover those 1,000 records.
 
-Only requests that reached a model provider are logged. Requests the gateway rejects first are not, such as an invalid key, a model the key does not allow, no matching upstream or a body over the size limit; the client receives the error directly. See [Clients get an error from the gateway](12-troubleshooting.md#clients-get-an-error-from-the-gateway).
+Every model request is logged, including the ones the gateway refuses itself, such as a model the key does not allow, no matching upstream or a body over the size limit, and the ones that fail at the provider or end because the client went away. A request refused before its key was confirmed, such as an invalid gateway key, is not listed: it belongs to no account. A request refused before memory preparation shows as **Forwarded**. See [Clients get an error from the gateway](12-troubleshooting.md#clients-get-an-error-from-the-gateway).
 
 ### Filter and search {#filter-and-search}
 
@@ -55,7 +55,7 @@ Only requests that reached a model provider are logged. Requests the gateway rej
 | **All** | Every record |
 | **New messages** | Requests that start a turn with a new user message |
 | **Tool steps** | Requests that continue a turn, for example with tool results |
-| **Issues** | Degraded requests, requests whose conversation saving is **Retrying** or **Paused**, and requests where the provider returned HTTP 400 or above (see [The upstream returned an error](12-troubleshooting.md#the-upstream-returned-an-error)) |
+| **Issues** | Degraded requests, requests whose conversation saving is **Retrying** or **Paused**, and requests with HTTP 400 or above, from the provider (see [The upstream returned an error](12-troubleshooting.md#the-upstream-returned-an-error)) or from the gateway (see [Clients get an error from the gateway](12-troubleshooting.md#clients-get-an-error-from-the-gateway)) |
 | **Request type** | One of the [request types](#request-types) |
 
 Search matches the model, conversation ID, request ID, key name or prefix, and upstream name. The log stores only a hash of the conversation ID, so Studio hashes a pasted conversation ID in the browser before matching. This works only when Studio is opened over HTTPS or on localhost; over plain HTTP, searching by conversation ID finds nothing.
@@ -67,7 +67,7 @@ Search matches the model, conversation ID, request ID, key name or prefix, and u
 | **Time** | When the request arrived |
 | **Type** | The [request type](#request-types) |
 | **Model** | The model name the client sent |
-| **Status** | The HTTP status the provider returned |
+| **Status** | The HTTP status the client received: the provider's, or the gateway's own when the gateway refused or failed the request |
 | **Tokens** | Input tokens, the cached share and output tokens |
 | **Memory** | What [recall](../guides/15-gateway.md#key-terms) did in this request (see below) |
 | **Saving** | The conversation's [saving status](#saving-status); hover for the reason |

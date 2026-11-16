@@ -11,6 +11,7 @@ import orjson
 from .capture import CapturePipeline
 from .compaction import cut_messages
 from .notices import tool_tail
+from .observe import degrade
 from .protocols import SSEDecoder, replays_reasoning, usage_of
 from .records import RecordKind as K
 from .tool_catalog import notice_head
@@ -77,6 +78,7 @@ class HiddenToolLoop:
                 response.status,
                 await response.read(),
                 dict(response.headers),
+                code="upstream_error",
             )
         if response.headers.get("content-encoding"):
             raise ToolLoopError("Compressed tool responses are unsupported")
@@ -89,7 +91,9 @@ class HiddenToolLoop:
             async for chunk in response.content.iter_any():
                 received += len(chunk)
                 if received > 64 * 1024 * 1024:
-                    raise ToolLoopError("Model stream exceeds tool response budget")
+                    raise ToolLoopError(
+                        "Model stream exceeds tool response budget", code="tool_loop_limit"
+                    )
                 # Events that arrive together leave in one write, any before a failure included.
                 events = []
                 try:
@@ -98,7 +102,9 @@ class HiddenToolLoop:
                     if events:
                         yield b"".join(events)
             if decoder.buffer.strip():
-                raise ToolLoopError("Incomplete model event stream")
+                raise ToolLoopError(
+                    "Incomplete model event stream", code="tool_upstream_incomplete"
+                )
         self.round = adapter.end()
         response.close()
 
@@ -110,7 +116,9 @@ class HiddenToolLoop:
                 continue
             if "error" in value or value.get("type") == "error":
                 raise ToolLoopError(
-                    STREAM_ERROR_MESSAGE, event=public_stream_error(value)
+                    STREAM_ERROR_MESSAGE,
+                    event=public_stream_error(value),
+                    code="tool_upstream_stream_error",
                 )
             for event in self.adapter.event(value):
                 yield self.adapter.encode(event)
@@ -153,7 +161,9 @@ class HiddenToolLoop:
             or self.token_cost >= budget
         )
         if closed and self.refused:
-            raise ToolLoopError("Model exceeded the hidden tool round limit")
+            raise ToolLoopError(
+                "Model exceeded the hidden tool round limit", code="tool_loop_limit"
+            )
         self.refused = closed
         if not self.rounds:
             self.token_cost += added_tokens(calls)
@@ -248,7 +258,7 @@ class HiddenToolLoop:
                         {**value, "visible_count": len(dropped)},
                     )
         elif self.hidden:
-            self.prepared.metrics["degradation"] = "hidden_reply_without_anchor"
+            degrade(self.prepared.metrics, "hidden_reply_without_anchor")
         if self.window:
             await CapturePipeline(self.store.capture).confirm_cut(self.prepared, self.window[0])
         self.final = self.adapter.final(self.usage)
@@ -283,11 +293,16 @@ class HiddenToolLoop:
                             continue
                         name = call["function"]["name"]
                         if name.startswith(PREFIX) and name not in self.allowed:
-                            raise ToolLoopError("Model called an unavailable gateway tool")
+                            raise ToolLoopError(
+                                "Model called an unavailable gateway tool", code="tool_call_invalid"
+                            )
                         (owned if name in self.allowed else client).append(call)
                     if owned:
                         if not self.round.tool_stop:
-                            raise ToolLoopError("Gateway tool call has an invalid stop reason")
+                            raise ToolLoopError(
+                                "Gateway tool call has an invalid stop reason",
+                                code="tool_call_invalid",
+                            )
                         async for event in self.execute(owned):
                             yield event
                     for event in self.stream(self.adapter.publish_calls(client)):
@@ -303,6 +318,8 @@ class HiddenToolLoop:
         except (ValueError, TypeError, KeyError, IndexError) as error:
             raise ToolLoopError("Invalid model tool response") from error
         except asyncio.TimeoutError as error:
-            raise ToolLoopError("Hidden tool request timed out", 504) from error
+            raise ToolLoopError(
+                "Hidden tool request timed out", 504, code="tool_loop_timeout"
+            ) from error
         finally:
             response.close()

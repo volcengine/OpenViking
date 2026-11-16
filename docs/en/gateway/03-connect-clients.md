@@ -321,7 +321,7 @@ Check every new client setup once, with a short conversation. This matters most 
 
 If something is off:
 
-- **No requests appear.** Only requests that reach a model provider are logged; the client received the gateway's error directly. See [Clients get an error from the gateway](12-troubleshooting.md#clients-get-an-error-from-the-gateway).
+- **No requests appear.** The default `store` sink keeps no record of a request that failed before its key was confirmed (for example 401, 402 or 403); every other request appears, gateway errors included, with its error reason. See [Clients get an error from the gateway](12-troubleshooting.md#clients-get-an-error-from-the-gateway).
 - **The two requests have different conversations.** The client sends no session header and the history did not match; see [How conversations are recognized](#how-conversations-are-recognized).
 - **Memory stays empty.** That is expected on a brand-new account. To prove that memory works end to end, follow [Confirm that memory works](02-quickstart.md#confirm-that-memory-works).
 

@@ -14,7 +14,7 @@ description: 根据现象、Studio 标签或错误码，找到 OpenViking 网关
 | Studio 显示一张卡片，看不到网关标签页 | 网关没有开启、OpenViking API 密钥缺失或无效，或者网关连不上 OpenViking。 | [Studio 显示设置卡片](#studio-shows-a-setup-card) |
 | “上游”和“上下文配置”标签页只读 | 部署者设置了网关管理密钥。 | [解锁编辑](06-manage-in-studio.md#unlock-editing)；没人记得密钥时，见[忘记网关管理密钥](../guides/22-gateway-operations.md#lost-the-management-key) |
 | **无法签发密钥** | 新网关密钥要绑定的 OpenViking API 密钥没有通过校验。 | [签发密钥失败](#issuing-a-key-fails) |
-| 客户端报错，请求日志里却没有这条请求 | 请求在到达服务商之前就被网关拒绝了。 | [客户端收到网关返回的错误](#clients-get-an-error-from-the-gateway) |
+| 客户端收到的错误响应体里带有 `reason` | 网关自己拒绝了请求，大多发生在请求到达服务商之前。 | [客户端收到网关返回的错误](#clients-get-an-error-from-the-gateway) |
 | 请求日志中某条请求的状态码为 400 及以上 | 服务商拒绝了请求或调用失败。 | [上游返回错误](#the-upstream-returned-an-error) |
 | 某段对话没有召回，也没有保存 | 检测到 OpenViking 插件，网关把召回、保存和工具都让给了插件。 | 正常行为，避免同一份内容被补充、保存两次，见[两者同时使用时](../guides/15-gateway.md#when-both-are-in-use)。 |
 | 请求不带记忆 | OpenViking 无法访问或超时、预算用完、没有相关内容等。 | [没有补充记忆](#no-memory-is-added) |
@@ -74,28 +74,32 @@ Studio 无法为你加载网关时，会用一张设置卡片代替网关标签�
 
 ## 客户端收到网关返回的错误 {#clients-get-an-error-from-the-gateway}
 
-网关在转发每个客户端请求之前，会先检查网关密钥、模型和是否有匹配的上游。下面这些拒绝都发生在请求到达服务商之前，所以不会出现在请求日志里。服务商自己返回的错误见[上游返回错误](#the-upstream-returned-an-error)。
+网关在转发每个客户端请求之前，会先检查网关密钥、模型和是否有匹配的上游。网关自己产生的错误带有 JSON 响应体 `{"reason": ..., "detail": ..., "request_id": ...}`，全部原因见[模型路由的错误](../api/25-gateway.md#model-route-errors)。这些请求都会以同样的原因（`error_reason`）记入请求日志，只是默认的 store 输出无法保存密钥从未确认过的请求（见[请求日志](10-overview-and-requests.md#requests)）。服务商自己返回的错误见[上游返回错误](#the-upstream-returned-an-error)。
 
-| 状态码和提示 | 原因和处理 |
+| 状态码和原因 | 原因和处理 |
 | --- | --- |
-| 401 "Invalid gateway key. It may have been revoked, or removed because its OpenViking API key was regenerated…" | 客户端没有发送网关密钥，发送了已吊销的密钥或服务商的 API Key，或者用户的 OpenViking API 密钥重新生成后，网关删除了这把密钥。检查客户端实际发送的密钥，必要时[重新签发](09-gateway-keys.md#issue-a-key)。 |
-| 402 `openviking_http_402` "OpenViking service is not ordered for this API key."，403 `openviking_http_403` "OpenViking request failed." | 网关检查密钥时，OpenViking 拒绝了这把 OpenViking 密钥（或网关密钥背后的 OpenViking 密钥），例如服务未下单；请求不会转发。请恢复服务订购或密钥权限。 |
-| 403 "Claude subscription OAuth credentials are not supported" | 客户端发送了 Claude 订阅令牌，例如 Claude Code 用订阅账号登录且没有设置 `ANTHROPIC_AUTH_TOKEN`；或者上游保存的就是订阅令牌。请改用 API Key。 |
-| 403 "Model is not allowed by this key" | 模型不在密钥[允许的模型](09-gateway-keys.md#allowed-models)范围内。签发一把允许这个模型的密钥。 |
-| 400 "Request model is missing"、415 "Compressed request bodies are not supported" | 只出现在限定了模型的密钥上：请求体必须写明模型，且不能经过压缩编码。 |
-| 404 "This upstream is an exact endpoint for … only" | 密钥绑定的上游关闭了**拼接协议接口路径**（见[直接发往完整请求地址](07-upstreams.md#exact-endpoint)），只接受该协议的接口地址，而客户端调用了别的路径，例如 `/v1/models`。 |
-| 404 "No allowed upstream matches this protocol and model" | 密钥绑定的已启用上游中，没有一个使用客户端调用的 API 并提供所请求的模型。检查上游的协议、模型和别名、是否启用，以及密钥绑定了哪些上游。 |
-| 400 `peer_invalid` "X-OpenViking-Actor-Peer must be one path segment…" | 请求的 Peer 不是合法的 Peer ID，例如含有 `/` 或空格。见[按 Peer 区分记忆](03-connect-clients.md#peer)。 |
-| 403 "Upstream URL is not allowed" | `X-OpenViking-Upstream-URL` 与密钥绑定的任何上游的 Base URL 都不相同。见[按请求指定上游](07-upstreams.md#upstream-url-header)。 |
-| 401 "Upstream API key is missing" | 上游要求每个客户端在 `X-OpenViking-Upstream-Key` 中自带 API Key，或者由网关保管 API Key 的上游没有填写。见[凭证](07-upstreams.md#credentials)。 |
-| 403 "Coding Plan upstreams are disabled; configure a model API key" | 上游被标记为 [Coding Plan 密钥](07-upstreams.md#coding-plan-keys)。改用模型 API Key，或者有意勾选**允许通过网关使用这个套餐**。 |
-| 403 "Context policy is unavailable" | 密钥绑定的上下文配置已不存在。用现有的上下文配置重新签发密钥。 |
-| 404 "Unknown response for this key"、403 "Response upstream is no longer allowed" | 查询的 Responses 响应不是这把密钥创建的，或者创建它的上游已停用、不再绑定到这把密钥。 |
-| 413 "Request exceeds configured body limit" | 请求体超过了 `max_body_bytes`（见[请求大小上限](05-long-conversations.md#side-effects)），或者超过了代理自己的上限。 |
+| 401 `gateway_key_invalid` | 客户端没有发送网关密钥，发送了已吊销的密钥或服务商的 API Key，或者用户的 OpenViking API 密钥重新生成后，网关删除了这把密钥。检查客户端实际发送的密钥，必要时[重新签发](09-gateway-keys.md#issue-a-key)。 |
+| 401 `openviking_key_invalid` | OpenViking 拒绝了客户端发送的 OpenViking API 密钥，例如密钥已重新生成。请使用用户当前的 OpenViking API 密钥。 |
+| 402 `openviking_not_ordered`，403 `openviking_forbidden` | 网关检查密钥时，OpenViking 拒绝了这把 OpenViking 密钥（或网关密钥背后的 OpenViking 密钥），例如服务未下单；请求不会转发。请恢复服务订购或密钥权限。 |
+| 429 `openviking_rate_limited`，503 `openviking_unavailable`，`openviking_error` | 使用 OpenViking 密钥的第一个请求无法确认：OpenViking 对检查限流、无法访问或返回了错误。稍后重试，并检查 OpenViking。网关已经认识的密钥不会因此被拒绝，它的请求会带着 `revocation_check_unavailable` 继续处理。 |
+| 403 `oauth_credential_unsupported` | 客户端发送了 Claude 订阅令牌，例如 Claude Code 用订阅账号登录且没有设置 `ANTHROPIC_AUTH_TOKEN`；或者上游保存的就是订阅令牌。请改用 API Key。 |
+| 403 `model_not_allowed` | 模型不在密钥[允许的模型](09-gateway-keys.md#allowed-models)范围内。签发一把允许这个模型的密钥。 |
+| 400 `model_missing`、415 `compressed_body_unsupported` | 只出现在限定了模型的密钥上：请求体必须写明模型，且不能经过压缩编码。 |
+| 404 `upstream_endpoint_mismatch` | 密钥绑定的上游关闭了**拼接协议接口路径**（见[直接发往完整请求地址](07-upstreams.md#exact-endpoint)），只接受该协议的接口地址，而客户端调用了别的路径，例如 `/v1/models`。 |
+| 404 `no_matching_upstream` | 密钥绑定的已启用上游中，没有一个使用客户端调用的 API 并提供所请求的模型。检查上游的协议、模型和别名、是否启用，以及密钥绑定了哪些上游。 |
+| 400 `peer_invalid` | 请求的 Peer 不是合法的 Peer ID，例如含有 `/` 或空格。见[按 Peer 区分记忆](03-connect-clients.md#peer)。 |
+| 400 `context_override_invalid`、403 `context_override_not_allowed` | `X-OpenViking-Context` 不是合法的配置覆盖，或者密钥的上下文配置不接受覆盖。`detail` 会说明是哪一种。 |
+| 403 `upstream_url_not_allowed` | `X-OpenViking-Upstream-URL` 与密钥绑定的任何上游的 Base URL 都不相同。见[按请求指定上游](07-upstreams.md#upstream-url-header)。 |
+| 401 `upstream_key_missing` | 上游要求每个客户端在 `X-OpenViking-Upstream-Key` 中自带 API Key，或者由网关保管 API Key 的上游没有填写。见[凭证](07-upstreams.md#credentials)。 |
+| 403 `coding_plan_disabled` | 上游被标记为 [Coding Plan 密钥](07-upstreams.md#coding-plan-keys)。改用模型 API Key，或者有意勾选**允许通过网关使用这个套餐**。 |
+| 403 `policy_unavailable` | 密钥绑定的上下文配置已不存在。用现有的上下文配置重新签发密钥。 |
+| 404 `response_unknown`、403 `response_upstream_disallowed` | 查询的 Responses 响应不是这把密钥创建的，或者创建它的上游已停用、不再绑定到这把密钥。 |
+| 413 `body_too_large` | 请求体超过了 `max_body_bytes`（见[请求大小上限](05-long-conversations.md#side-effects)），或者超过了代理自己的上限。 |
 | 426 | 对 Responses API 发起了 WebSocket 连接。这是预期行为，Codex 会改用 HTTP。 |
-| 502 "Model upstream is unavailable" | 网关连不上服务商，或者服务商没有在 `upstream_timeout_seconds` 内开始回复。在上游上点**测试**（见[测试和删除](07-upstreams.md#test-and-delete)）。 |
+| 500 `internal_error` | 网关意外出错。调用栈在网关日志里；请求记录带有与响应相同的 `request_id`。 |
+| 502 `upstream_unreachable` | 网关连不上服务商，或者服务商没有在 `upstream_timeout_seconds` 内开始回复。在上游上点**测试**（见[测试和删除](07-upstreams.md#test-and-delete)）。 |
 
-"Hidden tool request timed out"（504）发生在调用服务商之后，会记入请求日志，见[失败处理](04-openviking-tools.md#failure-handling)。
+"Hidden tool request timed out"（504 `tool_loop_timeout`）和其他 `tool_*` 原因发生在调用服务商之后，见[失败处理](04-openviking-tools.md#failure-handling)。
 
 已经开始的流式回复不会因为时间长被切断，只有服务商超过 `upstream_timeout_seconds` 没有发送任何数据，或者使用 OpenViking 工具的请求用完了工具**总时长**时才会中断；这时流提前结束，使用 OpenViking 工具的请求会报 "Hidden tool request timed out"。
 

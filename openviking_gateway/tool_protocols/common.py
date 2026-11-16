@@ -31,10 +31,21 @@ SUMMARY_HEADROOM = 16000
 
 
 class ToolLoopError(Exception):
-    def __init__(self, reason, status=502, content=None, headers=None, event=None):
+    """``code`` is the request record's error reason; the message is what clients see."""
+
+    def __init__(
+        self,
+        reason,
+        status=502,
+        content=None,
+        headers=None,
+        event=None,
+        *,
+        code="tool_upstream_invalid",
+    ):
         super().__init__(reason)
         self.status, self.content, self.headers = status, content, headers or {}
-        self.event = event
+        self.event, self.code = event, code
 
 
 class SummaryError(Exception):

@@ -195,8 +195,8 @@ The client then receives an error, and the request log shows **OpenViking tools 
 | --- | --- |
 | Streaming | An error event at the end of the stream: `response.failed` in Responses, and an `error` of type `gateway_tool_error` in Chat Completions and Anthropic Messages. The HTTP status is already 200 by then. |
 | Non-streaming, the provider rejected a follow-up request | The provider's own error body and status. |
-| Non-streaming, timed out | 504 (`gateway_http_504`). |
-| Non-streaming, any other failure | 502 with body `{"reason": "gateway_http_502", "detail": "..."}`. |
+| Non-streaming, timed out | 504 `tool_loop_timeout`. |
+| Non-streaming, any other failure | 502 with body `{"reason": "...", "detail": "...", "request_id": "..."}`; the reason is `tool_upstream_invalid`, `tool_upstream_incomplete`, `tool_upstream_stream_error`, `tool_call_invalid`, `tool_loop_limit` or `upstream_unreachable` (see [Model route errors](../api/25-gateway.md#model-route-errors)). |
 
 Two more cases:
 

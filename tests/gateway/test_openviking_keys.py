@@ -134,7 +134,7 @@ async def test_revoked_openviking_key_deletes_the_record(running_gateway):
     # Without a record, OpenViking is asked again and still rejects the key.
     response = await client.get("/v1/models", headers=bearer(OV_KEY))
     assert response.status_code == 401
-    assert response.json()["reason"] == "openviking_http_401"
+    assert response.json()["reason"] == "openviking_key_invalid"
     assert await app.state.management.credential(RECORD) is None
 
 

@@ -14,7 +14,7 @@ Use this page when a client gets an error, memory or saving is missing, or Studi
 | Studio shows a card instead of the gateway tabs | The gateway is off, your OpenViking API key is missing or invalid, or the gateway cannot reach OpenViking. | [Studio shows a setup card](#studio-shows-a-setup-card) |
 | The Upstreams and Profiles tabs are read-only | The deployer set a gateway management key. | [Unlock editing](06-manage-in-studio.md#unlock-editing); if nobody has the key, [Lost the management key](../guides/22-gateway-operations.md#lost-the-management-key) |
 | **Couldn't issue the key** | The OpenViking API key behind the new gateway key did not pass the check. | [Issuing a key fails](#issuing-a-key-fails) |
-| A client gets an error and the request is not in the log | The gateway rejected the request before it reached a provider. | [Clients get an error from the gateway](#clients-get-an-error-from-the-gateway) |
+| A client gets an error with a `reason` in its body | The gateway refused the request itself, mostly before it reached a provider. | [Clients get an error from the gateway](#clients-get-an-error-from-the-gateway) |
 | A request in the log shows HTTP 400 or above | The provider rejected or failed the call. | [The upstream returned an error](#the-upstream-returned-an-error) |
 | A conversation gets no recall and is not saved | An OpenViking plugin was detected, and the gateway left recall, saving and tools to the plugin. | Expected: it keeps content from being added or saved twice. See [When both are in use](../guides/15-gateway.md#when-both-are-in-use). |
 | Requests go without memory | OpenViking unreachable or too slow, budget used up, nothing relevant, and so on. | [No memory is added](#no-memory-is-added) |
@@ -74,28 +74,32 @@ Before it issues a [gateway key](09-gateway-keys.md#issue-a-key), the gateway ch
 
 ## Clients get an error from the gateway {#clients-get-an-error-from-the-gateway}
 
-The gateway checks each client request before forwarding it: the gateway key, the model and a matching upstream. These rejections happen before the request reaches a provider, so they do not appear in the request log. For an error the provider itself returned, see [The upstream returned an error](#the-upstream-returned-an-error).
+The gateway checks each client request before forwarding it: the gateway key, the model and a matching upstream. An error the gateway produces itself has a JSON body `{"reason": ..., "detail": ..., "request_id": ...}`; the full list of reasons is in [Model route errors](../api/25-gateway.md#model-route-errors). The request is logged with the same reason in `error_reason`, except that the default store sink cannot keep a request whose key was never confirmed (see [Requests](10-overview-and-requests.md#requests)). For an error the provider itself returned, see [The upstream returned an error](#the-upstream-returned-an-error).
 
-| Status and message | Cause and fix |
+| Status and reason | Cause and fix |
 | --- | --- |
-| 401 "Invalid gateway key. It may have been revoked, or removed because its OpenViking API key was regenerated…" | The client sent no gateway key, a revoked key or its provider API key, or the gateway deleted the key after the user's OpenViking API key was regenerated. Check which key the client actually sends, and [issue a new one](09-gateway-keys.md#issue-a-key) if needed. |
-| 402 `openviking_http_402` "OpenViking service is not ordered for this API key.", 403 `openviking_http_403` "OpenViking request failed." | OpenViking refused the OpenViking key (or the one behind the gateway key) when the gateway checked it, for example because the service is not ordered; the request is not forwarded. Restore the subscription or the key's permission. |
-| 403 "Claude subscription OAuth credentials are not supported" | The client sent a Claude subscription token, for example Claude Code signed in with a subscription and no `ANTHROPIC_AUTH_TOKEN` set; or the upstream stores a subscription token. Use an API key. |
-| 403 "Model is not allowed by this key" | The model is not in the key's [allowed models](09-gateway-keys.md#allowed-models). Issue a key that allows it. |
-| 400 "Request model is missing", 415 "Compressed request bodies are not supported" | Only for keys that allow specific models: the request body must name a model and must not be content-encoded. |
-| 404 "This upstream is an exact endpoint for … only" | **Append protocol endpoint path** is off on the key's upstream ([Send to an exact endpoint](07-upstreams.md#exact-endpoint)), so it accepts only that protocol's endpoint, and the client called another path, such as `/v1/models`. |
-| 404 "No allowed upstream matches this protocol and model" | No enabled upstream bound to the key uses the API the client called and serves the requested model. Check the upstreams' protocol, models and aliases, whether they are enabled, and which upstreams the key is bound to. |
-| 400 `peer_invalid` "X-OpenViking-Actor-Peer must be one path segment…" | The request's peer is not a valid peer ID, for example it contains `/` or a space. See [Tell memory apart by peer](03-connect-clients.md#peer). |
-| 403 "Upstream URL is not allowed" | `X-OpenViking-Upstream-URL` does not equal the Base URL of any upstream bound to the key. See [Pick the upstream per request](07-upstreams.md#upstream-url-header). |
-| 401 "Upstream API key is missing" | The upstream expects each client to send its own key in `X-OpenViking-Upstream-Key`, or an upstream where the gateway holds the key has none stored. See [Credentials](07-upstreams.md#credentials). |
-| 403 "Coding Plan upstreams are disabled; configure a model API key" | The upstream is marked as a [Coding Plan key](07-upstreams.md#coding-plan-keys). Use a model API key, or deliberately check **Allow this plan through the gateway**. |
-| 403 "Context policy is unavailable" | The key's context profile no longer exists. Issue a new key with an existing context profile. |
-| 404 "Unknown response for this key", 403 "Response upstream is no longer allowed" | The Responses response being looked up was not created with this key, or the upstream that created it is now turned off or no longer bound to the key. |
-| 413 "Request exceeds configured body limit" | The request body is larger than `max_body_bytes` (see [the request size limit](05-long-conversations.md#side-effects)), or than your proxy's own limit. |
+| 401 `gateway_key_invalid` | The client sent no gateway key, a revoked key or its provider API key, or the gateway deleted the key after the user's OpenViking API key was regenerated. Check which key the client actually sends, and [issue a new one](09-gateway-keys.md#issue-a-key) if needed. |
+| 401 `openviking_key_invalid` | OpenViking rejected the OpenViking API key the client sent, for example because it was regenerated. Use the user's current OpenViking API key. |
+| 402 `openviking_not_ordered`, 403 `openviking_forbidden` | OpenViking refused the OpenViking key (or the one behind the gateway key) when the gateway checked it, for example because the service is not ordered; the request is not forwarded. Restore the subscription or the key's permission. |
+| 429 `openviking_rate_limited`, 503 `openviking_unavailable`, `openviking_error` | The first request with an OpenViking key could not be confirmed: OpenViking rate limited the check, could not be reached, or answered with an error. Retry later and check OpenViking. A key the gateway already knows is not refused this way; its request goes on with `revocation_check_unavailable`. |
+| 403 `oauth_credential_unsupported` | The client sent a Claude subscription token, for example Claude Code signed in with a subscription and no `ANTHROPIC_AUTH_TOKEN` set; or the upstream stores a subscription token. Use an API key. |
+| 403 `model_not_allowed` | The model is not in the key's [allowed models](09-gateway-keys.md#allowed-models). Issue a key that allows it. |
+| 400 `model_missing`, 415 `compressed_body_unsupported` | Only for keys that allow specific models: the request body must name a model and must not be content-encoded. |
+| 404 `upstream_endpoint_mismatch` | **Append protocol endpoint path** is off on the key's upstream ([Send to an exact endpoint](07-upstreams.md#exact-endpoint)), so it accepts only that protocol's endpoint, and the client called another path, such as `/v1/models`. |
+| 404 `no_matching_upstream` | No enabled upstream bound to the key uses the API the client called and serves the requested model. Check the upstreams' protocol, models and aliases, whether they are enabled, and which upstreams the key is bound to. |
+| 400 `peer_invalid` | The request's peer is not a valid peer ID, for example it contains `/` or a space. See [Tell memory apart by peer](03-connect-clients.md#peer). |
+| 400 `context_override_invalid`, 403 `context_override_not_allowed` | `X-OpenViking-Context` is not a valid profile override, or the key's context profile does not accept overrides. The `detail` says which. |
+| 403 `upstream_url_not_allowed` | `X-OpenViking-Upstream-URL` does not equal the Base URL of any upstream bound to the key. See [Pick the upstream per request](07-upstreams.md#upstream-url-header). |
+| 401 `upstream_key_missing` | The upstream expects each client to send its own key in `X-OpenViking-Upstream-Key`, or an upstream where the gateway holds the key has none stored. See [Credentials](07-upstreams.md#credentials). |
+| 403 `coding_plan_disabled` | The upstream is marked as a [Coding Plan key](07-upstreams.md#coding-plan-keys). Use a model API key, or deliberately check **Allow this plan through the gateway**. |
+| 403 `policy_unavailable` | The key's context profile no longer exists. Issue a new key with an existing context profile. |
+| 404 `response_unknown`, 403 `response_upstream_disallowed` | The Responses response being looked up was not created with this key, or the upstream that created it is now turned off or no longer bound to the key. |
+| 413 `body_too_large` | The request body is larger than `max_body_bytes` (see [the request size limit](05-long-conversations.md#side-effects)), or than your proxy's own limit. |
 | 426 | A WebSocket connection to the Responses API. Expected: Codex falls back to HTTP. |
-| 502 "Model upstream is unavailable" | The gateway could not reach the provider, or the provider did not start its reply within `upstream_timeout_seconds`. Choose **Test** on the upstream ([Test and delete](07-upstreams.md#test-and-delete)). |
+| 500 `internal_error` | The gateway failed unexpectedly. The gateway's log has the traceback; the request record carries the response's `request_id`. |
+| 502 `upstream_unreachable` | The gateway could not reach the provider, or the provider did not start its reply within `upstream_timeout_seconds`. Choose **Test** on the upstream ([Test and delete](07-upstreams.md#test-and-delete)). |
 
-"Hidden tool request timed out" (504) happens after the provider call and is logged; see [Failure handling](04-openviking-tools.md#failure-handling).
+"Hidden tool request timed out" (504 `tool_loop_timeout`) and the other `tool_*` reasons happen after the provider call; see [Failure handling](04-openviking-tools.md#failure-handling).
 
 A streamed reply that has started is not cut off for its length, only when the provider sends nothing for longer than `upstream_timeout_seconds` or, for a request that uses OpenViking tools, when the tool **Total time** runs out; the stream then ends early, with "Hidden tool request timed out" if the request uses OpenViking tools.
 

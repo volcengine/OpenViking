@@ -31,6 +31,7 @@ from .management import (
     register_management,
     request_credential,
 )
+from .observe import VIKING_DETAILS, GatewayError, RequestRecord, degrade
 from .protocols import configure_rules
 from .proxy import ProxyRequest, filtered_headers, resolve_binding
 from .storage import (
@@ -43,16 +44,6 @@ from .storage import (
 )
 
 logger = logging.getLogger(__name__)
-VIKING_DETAILS = {
-    "openviking_unavailable": "OpenViking is unreachable.",
-    "openviking_unreachable": "OpenViking is unreachable.",
-    "openviking_http_401": "OpenViking rejected the API key.",
-    "openviking_http_402": "OpenViking service is not ordered for this API key.",
-    "openviking_identity_missing": "OpenViking returned no identity for the API key.",
-    "trusted_mode_unsupported": "OpenViking Gateway does not support trusted authentication.",
-    "root_key_not_allowed": "A root API key cannot back a gateway key; use a user's API key.",
-    "openviking_version_mismatch": "OpenViking Server is older than this gateway requires.",
-}
 CAPTURE_DRAIN_SECONDS = DELIVERY_SECONDS
 
 
@@ -249,21 +240,31 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
         )
         return JSONResponse(detail, status_code=error.status_code, headers=error.headers)
 
-    async def authenticate(request):
+    async def authenticate(request, record):
         """Return the gateway key and a degradation when OV could not confirm it."""
         key = request_credential(request)
         if key.startswith("sk-ant-oat"):
-            raise HTTPException(403, "Claude subscription OAuth credentials are not supported")
+            raise GatewayError(
+                "oauth_credential_unsupported",
+                "Claude subscription OAuth credentials are not supported",
+            )
         if config.openviking_keys and key and not key.startswith("ovgw_"):
             credential = await openviking_credential(app, key)
-            invalid = "OpenViking rejected this API key. It may have been regenerated; use the user's current OpenViking API key."
+            invalid = GatewayError(
+                "openviking_key_invalid",
+                "OpenViking rejected this API key. It may have been regenerated; use the user's current OpenViking API key.",
+            )
         else:
             credential = await management.authenticate(key)
-            invalid = "Invalid gateway key. It may have been revoked, or removed because its OpenViking API key was regenerated. Issue a new key in OpenViking Studio → Gateway → Keys."
+            invalid = GatewayError(
+                "gateway_key_invalid",
+                "Invalid gateway key. It may have been revoked, or removed because its OpenViking API key was regenerated. Issue a new key in OpenViking Studio → Gateway → Keys.",
+            )
         if not credential:
-            raise HTTPException(401, invalid)
-        if app.state.viking.unavailable_reason:
+            raise invalid
+        if reason := app.state.viking.unavailable_reason:
             # Like recall, skip the check while OV is down instead of waiting for its timeout.
+            record.metrics["revocation_reason"] = reason
             return credential, "revocation_check_unavailable"
         try:
             identity = await app.state.viking.identify(credential["openviking_key"])
@@ -273,6 +274,7 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
             if error.reason != "openviking_http_401":
                 # Anything short of a refusal leaves revocation unconfirmed, including the
                 # missing identity OV reports when its account store fails.
+                record.metrics["revocation_reason"] = error.reason
                 return credential, "revocation_check_unavailable"
             identity = None
         # Dev identities are always default/default, so they say nothing about this key.
@@ -284,8 +286,12 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
                 or identity["user_id"] != credential["user_id"]
             )
         ):
-            await management.delete(credential["account"], "keys", credential["id"])
-            raise HTTPException(401, invalid)
+            try:
+                await management.delete(credential["account"], "keys", credential["id"])
+            except Exception:
+                # The refusal stands; the stale key is deleted on its next use.
+                logger.exception("OpenViking Gateway could not delete a revoked key")
+            raise invalid
         return credential, None
 
     if config.management_api:
@@ -295,8 +301,12 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
     @app.get("/api/v3/models")
     @app.get("/v1/models")
     async def models(request: Request):
-        credential, _ = await authenticate(request)
-        binding = await resolve_binding(management, config, credential)
+        record = RequestRecord(app, request, recorded=False)
+        try:
+            credential, _ = await authenticate(request, record)
+            binding = await resolve_binding(management, config, credential)
+        except Exception as error:
+            return record.error_response(error)
         names = sorted(
             {
                 model
@@ -377,13 +387,27 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
         "/api/compatible/v1/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"]
     )
     async def proxy(path: str, request: Request):
-        credential, degradation = await authenticate(request)
-        # The path below the host's mount, with its /v1, /api/v3 or /api/compatible/v1 prefix.
-        route_path = request.url.path.removeprefix(request.scope.get("root_path", ""))
-        proxied = ProxyRequest(app, request, route_path.lstrip("/"), credential)
-        if degradation:
-            proxied.metrics["degradation"] = degradation
-        return await proxied.run()
+        record = RequestRecord(app, request)
+        try:
+            with record.stage("auth"):
+                credential, degradation = await authenticate(request, record)
+            record.identify(credential)
+            # The path below the host's mount, with its /v1, /api/v3 or /api/compatible/v1 prefix.
+            route_path = request.url.path.removeprefix(request.scope.get("root_path", ""))
+            proxied = ProxyRequest(app, request, route_path.lstrip("/"), credential, record)
+            if degradation:
+                degrade(record.metrics, degradation)
+            response = await proxied.run()
+        except asyncio.CancelledError:
+            record.fail(499, "client_disconnected")
+            await asyncio.shield(record.emit())
+            raise
+        except Exception as error:
+            response = record.error_response(error)
+        if not record.deferred:
+            record.metrics.setdefault("status", response.status_code)
+            await record.emit()
+        return response
 
     return app
 

@@ -180,7 +180,9 @@ class ChatProtocol(ToolProtocol):
         if self.choices != 1:
             raise ToolLoopError("Tool mode requires one completion")
         if not self.finish:
-            raise ToolLoopError("Model response ended before finish_reason")
+            raise ToolLoopError(
+                "Model response ended before finish_reason", code="tool_upstream_incomplete"
+            )
         if self.fragments:
             self.message["tool_calls"] = [self.fragments[i] for i in sorted(self.fragments)]
         self.message.setdefault("content", None)
