@@ -84,3 +84,20 @@ test('Wiki conflict anchors exclude YAML frontmatter closed with a document end 
     status: 'missing',
   });
 });
+
+test('Wiki conflict anchors keep Markdown that only resembles YAML frontmatter', () => {
+  const matchText = 'two approvals';
+  for (const text of [
+    `This policy requires ${matchText}.`,
+    `policy: [${matchText}`,
+  ]) {
+    const markdown = `---\n${text}\n...\n# Body`;
+    const start = markdown.indexOf(matchText);
+    assert.deepEqual(locateWikiConflict(markdown, matchText), {
+      status: 'unique',
+      start,
+      end: start + matchText.length,
+      line: 2,
+    });
+  }
+});

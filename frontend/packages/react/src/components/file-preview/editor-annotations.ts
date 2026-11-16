@@ -14,7 +14,7 @@ import {
   tooltips,
   type Tooltip,
 } from '@codemirror/view';
-import { locateMarkdownAnchor } from '../../shared/markdown/locate-markdown-anchor.js';
+import { createMarkdownAnchorLocator } from '../../shared/markdown/locate-markdown-anchor.js';
 import type { FilePreviewEditorAnnotation } from './types.js';
 
 const lineClass = 'ov-file-preview__annotation-line';
@@ -30,13 +30,10 @@ function findAnnotatedLines(
   doc: Text,
   annotations: readonly FilePreviewEditorAnnotation[],
 ) {
-  const text = doc.toString();
+  const locate = createMarkdownAnchorLocator(doc.toString());
   const matches = new Map<number, FilePreviewEditorAnnotation[]>();
   for (const annotation of annotations) {
-    const location = locateMarkdownAnchor(
-      text,
-      annotation.matchText.replace(/\r\n?/g, '\n'),
-    );
+    const location = locate(annotation.matchText.replace(/\r\n?/g, '\n'));
     if (location.status !== 'unique') continue;
     const start = doc.lineAt(location.start).number;
     const end = doc.lineAt(location.end - 1).number;

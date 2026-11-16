@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /** Native CONFLICTS_CONTENT protocol. These IDs exist only in the view model. */
 import type { WikiConflict as WikiFileConflictRecord } from '../../components/wiki-dashboard/types.js';
-import { locateMarkdownAnchor as locateWikiConflict } from '../../shared/markdown/locate-markdown-anchor.js';
+import {
+  createMarkdownAnchorLocator,
+  locateMarkdownAnchor as locateWikiConflict,
+} from '../../shared/markdown/locate-markdown-anchor.js';
 import { splitWikiMetadata } from './wiki-metadata.js';
 export { locateWikiConflict };
 export type WikiFileConflicts =
@@ -34,6 +37,7 @@ export const parseWikiFileConflicts = (content: string): WikiFileConflicts => {
   if (!Array.isArray(parsed)) {
     return { status: 'invalid' };
   }
+  const locate = createMarkdownAnchorLocator(document);
   const records: WikiFileConflictRecord[] = [];
   for (const [index, raw] of parsed.entries()) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -61,7 +65,7 @@ export const parseWikiFileConflicts = (content: string): WikiFileConflicts => {
       return { status: 'invalid' };
     }
     const matchText = value.match_text;
-    const location = locateWikiConflict(document, matchText);
+    const location = locate(matchText);
     records.push({
       id: JSON.stringify([index, value.begin_time, matchText]),
       matchText,

@@ -52,6 +52,8 @@ test('the FileBrowser editor highlights pending Wiki anchors without including m
     await setEditor(editor, `New introduction\n${documentBody}`);
     assert.deepEqual(highlighted(), [body]);
     assert.equal(view.container.contains(tooltip), false);
+    await setEditor(editor, `---\n${body}\n...\n${fixedSentence}`);
+    assert.deepEqual(highlighted(), [body]);
     await setEditor(editor, `${body}\n${documentBody}`);
     assert.deepEqual(highlighted(), []);
     await setEditor(editor, 'The process requires three approvals.');
