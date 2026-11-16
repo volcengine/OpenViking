@@ -303,11 +303,15 @@ def test_self_hosted_test_containers_bootstrap_and_cleanup(file, name):
     )
 
 
-@pytest.mark.parametrize("container,host", [("", "127.0.0.1"), ("ubuntu:24.04", "mysql")])
-def test_database_services_use_container_dns_or_host_loopback(container, host):
+@pytest.mark.parametrize("container", ["", "ubuntu:24.04"])
+def test_database_services_use_container_dns_or_host_loopback(container):
     job = jobs("api_test.yml")["database-tests"]
     contexts = {"needs.native-runtime.outputs.test_container": container}
-    for variable in ["OV_TEST_MYSQL", "OPENVIKING_WATCH_MYSQL_PARAMS"]:
+    for variable, service in [
+        ("OV_TEST_POSTGRES", "postgres"),
+        ("OV_TEST_MYSQL", "mysql"),
+        ("OPENVIKING_WATCH_MYSQL_PARAMS", "mysql"),
+    ]:
         expression = job["env"][variable].strip().removeprefix("${{").removesuffix("}}")
         # GitHub format uses escaped braces, like Python's format.
         expression = expression.replace("format(", "gh_format(")
@@ -318,10 +322,10 @@ def test_database_services_use_container_dns_or_host_loopback(container, host):
         value = eval(
             expression, {"__builtins__": {}, "gh_format": lambda text, value: text.format(value)}
         )
-        assert json.loads(value)["host"] == host
+        assert json.loads(value)["host"] == (service if container else "127.0.0.1")
     redis = "redis://redis:6379" if container else "redis://127.0.0.1:6379"
     assert labels(job["env"]["OV_TEST_REDIS"], {}, contexts=contexts) == [redis]
-    for service, port in [("mysql", "3306"), ("redis", "6379")]:
+    for service, port in [("postgres", "5432"), ("mysql", "3306"), ("redis", "6379")]:
         assert labels(job["services"][service]["ports"][0], {}, contexts=contexts) == [
             port if container else f"{port}:{port}"
         ]
