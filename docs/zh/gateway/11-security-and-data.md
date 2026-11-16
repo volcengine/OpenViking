@@ -43,7 +43,7 @@ SQLite 文件只有运行网关的系统用户能读取；Redis 由网络和 ACL
 
 每个[上游](../guides/15-gateway.md#key-terms)都收到完整的模型输入，包括网关补充的记忆和 OpenViking 工具的结果。只添加你放心交出这些数据的服务商。
 
-也有一些内容不会离开网关：`X-OpenViking-*` 请求头、客户端凭证和 Cookie 从不转发给上游。上游设为由每个客户端提供自己的服务商密钥时，这把密钥只作为该上游的凭证发给服务商。
+也有一些内容不会离开网关：`X-OpenViking-*` 请求头、客户端凭证和 Cookie 从不转发给上游，服务商响应中的 `X-OpenViking-*` 响应头也从不传给客户端。上游设为由每个客户端提供自己的服务商密钥时，这把密钥只作为该上游的凭证发给服务商。
 
 ## 访问控制 {#access-control}
 
@@ -62,6 +62,10 @@ SQLite 文件只有运行网关的系统用户能读取；Redis 由网络和 ACL
 - **上传和下载链接。** 每个链接由 OpenViking 签发的一次性令牌授权，网关只把它转发到 OpenViking 的上传或下载接口。不要让它们的查询字符串出现在代理日志里。
 
 包括管理 API 在内的完整规则见[权限矩阵](../api/25-gateway.md#credentials-and-account-scope)；各角色在 Studio 中能做什么，见[谁能修改什么](06-manage-in-studio.md#who-can-change-what)。
+
+### 来自宿主的请求头 {#headers-from-a-host}
+
+`trusted_host_headers: true` 时，请求记录从请求头 `X-OpenViking-Resource-Id` 和 `X-OpenViking-Request-Source` 取得 `resource_id` 和 `request_source`。网关无法分辨这些请求头是谁设置的，能直接访问网关的客户端就可以往自己的记录里写入任意值。只有网络策略只允许网关前面的宿主访问网关时，才打开这个设置；并让宿主覆盖这些请求头，而不是透传客户端发来的值。`X-OpenViking-Request-Id` 对任何调用方都会采用，它只用于标识请求，不授予任何权限。
 
 ## 保留期限 {#retention}
 

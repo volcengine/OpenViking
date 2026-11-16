@@ -119,10 +119,11 @@ def filtered_headers(headers, request=False):
             "cookie",
             "accept-encoding",
         }
+    # Neither a client nor a provider may set the gateway's own headers on the other side.
     return {
         k: v
         for k, v in headers.items()
-        if k.lower() not in blocked and not (request and k.lower().startswith("x-openviking-"))
+        if k.lower() not in blocked and not k.lower().startswith("x-openviking-")
     }
 
 

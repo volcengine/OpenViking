@@ -378,9 +378,24 @@ A service in front of a headless gateway, such as one that picks the model endpo
 | `X-API-Key` or `Authorization: Bearer` | The client's OpenViking API key, passed through unchanged |
 | `X-OpenViking-Upstream-URL` | The chosen endpoint. It must equal the `base_url` of a `default_upstreams` entry; any other value returns 403 and nothing is sent. See [Pick the upstream per request](../gateway/07-upstreams.md#upstream-url-header) |
 | `X-OpenViking-Upstream-Key` | The provider API key, for an upstream with `auth_mode: passthrough` |
+| `X-OpenViking-Request-Id` | Optional: the host's own ID for the request, matching `[A-Za-z0-9._:/-]{1,128}`. The gateway uses it as its `request_id`, so the host's log and the gateway's record share one key. A missing value gets a generated ID; an invalid one is replaced and the record gets `request_id_rejected: true` |
+| `X-OpenViking-Resource-Id` | Optional: an ID the host wants on the record (`[A-Za-z0-9._:-]{1,128}`), recorded as `resource_id` only with `trusted_host_headers: true` |
+| `X-OpenViking-Request-Source` | Optional: the kind of caller (`[a-z0-9_-]{1,32}`), recorded as `request_source` only with `trusted_host_headers: true` |
 | Other headers | The client's own headers, such as `X-OpenViking-Session` and `X-OpenViking-Context`, passed through |
 
-The gateway removes every `X-OpenViking-*` header, the client's credentials and hop-by-hop headers before it forwards the request to the provider.
+Set the three optional headers so that they replace any value the client sent. The gateway removes every `X-OpenViking-*` header, the client's credentials and hop-by-hop headers before it forwards the request to the provider, and removes every `X-OpenViking-*` header from the provider's response, so a provider cannot set the headers below.
+
+Every response on a model route carries these headers back to the host:
+
+| Header | When | Value |
+| --- | --- | --- |
+| `X-OpenViking-Request-Id` | Every response: success, relayed provider error, gateway error, stream | The gateway's `request_id` |
+| `X-OpenViking-Error-Reason` | Only when the gateway produced the status and body itself | A reason from [Model route errors](../api/25-gateway.md#model-route-errors) |
+| `X-OpenViking-Error-Origin` | Same responses | `gateway`, `openviking` or `upstream` |
+| `X-OpenViking-Upstream-Attempted` | Same responses | `1` when the gateway had started a request to the provider, a compaction summary call included; else `0` |
+| `X-OpenViking-Degraded` | When the request was degraded by the time the response headers were sent | The issue codes joined with `,`, for example `revocation_check_unavailable,recall_failed` |
+
+A non-2xx response without `X-OpenViking-Error-Reason` is the provider's own error, relayed unchanged. A host may retry a request elsewhere only when it carries `X-OpenViking-Upstream-Attempted: 0`; with `1`, the provider may already have received it. OpenViking calls the gateway makes while serving a request carry the same ID in `X-Request-ID`.
 
 ## Redis memory policy {#redis-memory-policy}
 

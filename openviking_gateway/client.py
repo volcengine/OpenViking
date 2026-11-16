@@ -4,6 +4,8 @@
 
 import asyncio
 import hashlib
+from contextvars import ContextVar
+from dataclasses import dataclass
 from urllib.parse import urlencode
 
 import aiohttp
@@ -17,8 +19,25 @@ from .cache import TTLCache
 PEER_HEADER = "X-OpenViking-Actor-Peer"
 
 
+@dataclass
+class CallContext:
+    """What OpenViking calls made while serving one gateway request carry."""
+
+    request_id: str = ""
+
+
+# Set per request; tasks the request starts copy it, background work has none.
+CALL: ContextVar[CallContext | None] = ContextVar("openviking_call", default=None)
+
+
 def peer_header(peer):
     return {PEER_HEADER: peer} if peer else {}
+
+
+def call_headers():
+    """``X-Request-ID`` of the gateway request an OpenViking call is made for."""
+    call = CALL.get()
+    return {"X-Request-ID": call.request_id} if call and call.request_id else {}
 
 
 def peer_argument(peer):
@@ -47,7 +66,12 @@ class VikingClient:
                 method,
                 self.base_url + path,
                 json=body,
-                headers={"X-API-Key": key, "Accept-Encoding": "identity", **peer_header(peer)},
+                headers={
+                    "X-API-Key": key,
+                    "Accept-Encoding": "identity",
+                    **peer_header(peer),
+                    **call_headers(),
+                },
                 timeout=aiohttp.ClientTimeout(total=timeout),
                 allow_redirects=False,
             ) as response:
@@ -222,6 +246,7 @@ class VikingClient:
                     "MCP-Protocol-Version": "2025-06-18",
                     "Accept-Encoding": "identity",
                     **peer_header(peer),
+                    **call_headers(),
                 },
                 json={
                     "jsonrpc": "2.0",
@@ -258,7 +283,7 @@ class VikingClient:
             async with self.http.post(
                 self.base_url + "/api/v1/resources/temp_upload",
                 params={"token": token},
-                headers={"Accept-Encoding": "identity"},
+                headers={"Accept-Encoding": "identity", **call_headers()},
                 data=data,
                 timeout=aiohttp.ClientTimeout(total=120),
                 allow_redirects=False,

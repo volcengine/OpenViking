@@ -378,9 +378,24 @@ Redis 部署使用 `RollingUpdate`，配置 `maxUnavailable: 0`、`maxSurge: 1`�
 | `X-API-Key` 或 `Authorization: Bearer` | 客户端的 OpenViking API 密钥，原样透传 |
 | `X-OpenViking-Upstream-URL` | 选中的端点，必须与某个 `default_upstreams` 条目的 `base_url` 相同；其他值返回 403，且不发出任何请求。见[按请求指定上游](../gateway/07-upstreams.md#upstream-url-header) |
 | `X-OpenViking-Upstream-Key` | 服务商 API Key，用于 `auth_mode: passthrough` 的上游 |
+| `X-OpenViking-Request-Id` | 可选：宿主自己为请求分配的 ID，须匹配 `[A-Za-z0-9._:/-]{1,128}`。网关把它用作自己的 `request_id`，宿主日志和网关记录因此共用一个关联键。缺失时网关自行生成；不合法时替换为生成的 ID，记录中加上 `request_id_rejected: true` |
+| `X-OpenViking-Resource-Id` | 可选：宿主希望写入记录的 ID（`[A-Za-z0-9._:-]{1,128}`），仅在 `trusted_host_headers: true` 时记为 `resource_id` |
+| `X-OpenViking-Request-Source` | 可选：调用方类型（`[a-z0-9_-]{1,32}`），仅在 `trusted_host_headers: true` 时记为 `request_source` |
 | 其他请求头 | 客户端自己的请求头，例如 `X-OpenViking-Session` 和 `X-OpenViking-Context`，原样透传 |
 
-网关把请求转发给服务商之前，会去掉所有 `X-OpenViking-*` 请求头、客户端凭证和逐跳请求头。
+设置这三个可选请求头时，要覆盖客户端可能发来的同名值。网关把请求转发给服务商之前，会去掉所有 `X-OpenViking-*` 请求头、客户端凭证和逐跳请求头；也会去掉服务商响应中的所有 `X-OpenViking-*` 响应头，因此服务商无法伪造下面这些响应头。
+
+模型路由的每个响应都会给宿主带回这些响应头：
+
+| 响应头 | 何时出现 | 取值 |
+| --- | --- | --- |
+| `X-OpenViking-Request-Id` | 每个响应：成功、转发的服务商错误、网关错误、流式回复 | 网关的 `request_id` |
+| `X-OpenViking-Error-Reason` | 仅当状态码和响应体由网关自己产生时 | [模型路由的错误](../api/25-gateway.md#model-route-errors)中的原因 |
+| `X-OpenViking-Error-Origin` | 同上 | `gateway`、`openviking` 或 `upstream` |
+| `X-OpenViking-Upstream-Attempted` | 同上 | 网关已开始向服务商发送请求（包括压缩摘要请求）时为 `1`，否则为 `0` |
+| `X-OpenViking-Degraded` | 发送响应头时请求已经降级 | 用 `,` 连接的异常代码，例如 `revocation_check_unavailable,recall_failed` |
+
+非 2xx 响应如果没有 `X-OpenViking-Error-Reason`，就是服务商自己的错误，网关原样转发。只有带 `X-OpenViking-Upstream-Attempted: 0` 的响应，宿主才可以把请求改发到别处；为 `1` 时服务商可能已经收到了请求。网关处理请求时发给 OpenViking 的调用，在 `X-Request-ID` 中带上同一个 ID。
 
 ## Redis 内存策略 {#redis-memory-policy}
 

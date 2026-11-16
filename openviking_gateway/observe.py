@@ -94,6 +94,15 @@ VIKING_DETAILS = {
 }
 INTERNAL_DETAIL = "The gateway failed to handle this request."
 ERROR_CODE = re.compile(r"[A-Za-z0-9._-]{1,64}")
+REQUEST_ID = re.compile(r"[A-Za-z0-9._:/-]{1,128}")
+# Headers a fronting service sets, recorded only with ``trusted_host_headers``.
+HOST_HEADERS = {
+    "resource_id": ("x-openviking-resource-id", re.compile(r"[A-Za-z0-9._:-]{1,128}")),
+    "request_source": ("x-openviking-request-source", re.compile(r"[a-z0-9_-]{1,32}")),
+}
+# The cause is transient, so a client may retry at once. A host that would send the request
+# elsewhere reads X-OpenViking-Upstream-Attempted instead.
+RETRY_AFTER = {"store_unavailable", "gateway_overloaded"}
 
 
 class GatewayError(HTTPException):
@@ -200,9 +209,20 @@ class RequestRecord:
         self.account = self.user_id = None
         self.started, self.emitted = time.monotonic(), False
         self.metrics = {"request_id": uuid.uuid4().hex, "received_at": time.time()}
-        if request is not None:
-            path = request.url.path.removeprefix(request.scope.get("root_path", ""))
-            self.metrics.update(method=request.method, endpoint=endpoint(path))
+        if request is None:
+            return
+        inbound = request.headers.get("x-openviking-request-id")
+        if inbound is not None:
+            if REQUEST_ID.fullmatch(inbound):
+                self.metrics["request_id"] = inbound
+            else:
+                self.metrics["request_id_rejected"] = True
+        path = request.url.path.removeprefix(request.scope.get("root_path", ""))
+        self.metrics.update(method=request.method, endpoint=endpoint(path))
+        if app.state.config.trusted_host_headers:
+            for field, (name, pattern) in HOST_HEADERS.items():
+                if (value := request.headers.get(name)) and pattern.fullmatch(value):
+                    self.metrics[field] = value
 
     @contextlib.contextmanager
     def stage(self, name):
@@ -246,13 +266,36 @@ class RequestRecord:
             self.metrics["upstream_error_code"] = code
         self.fail(status, reason)
 
+    def headers(self, error=False):
+        """Response headers; ``error`` adds the ones of a status the gateway produced itself."""
+        headers = {"X-OpenViking-Request-Id": self.metrics["request_id"]}
+        if degradations := self.metrics.get("degradations"):
+            headers["X-OpenViking-Degraded"] = ",".join(degradations)
+        if error:
+            reason = self.metrics["error_reason"]
+            headers.update(
+                {
+                    "X-OpenViking-Error-Reason": reason,
+                    "X-OpenViking-Error-Origin": self.metrics["error_origin"],
+                    "X-OpenViking-Upstream-Attempted": "1" if self.attempted else "0",
+                }
+            )
+            if reason in RETRY_AFTER:
+                headers["Retry-After"] = "1"
+        return headers
+
+    def decorate(self, response):
+        """Add the request ID and the degradations so far to any response."""
+        response.headers.update(self.headers())
+        return response
+
     def error_response(self, error):
         status, reason, origin, detail, headers = classify(error)
         self.fail(status, reason, origin)
         body = {"reason": reason, "detail": detail, "request_id": self.metrics["request_id"]}
         if reason == "openviking_version_mismatch":
             body["required_version"] = self.app.state.config.min_server_version
-        return JSONResponse(body, status_code=status, headers=headers)
+        return JSONResponse(body, status_code=status, headers={**headers, **self.headers(True)})
 
     async def emit(self):
         """Write the record once; a failing sink is logged, never raised."""

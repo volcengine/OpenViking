@@ -43,7 +43,7 @@ The gateway writes no HTTP access log, and its error messages never repeat submi
 
 Every [upstream](../guides/15-gateway.md#key-terms) receives the full model input, including memory the gateway added and OpenViking tool results. Only add providers you trust with that data.
 
-Some things never leave the gateway: `X-OpenViking-*` headers, client credentials and cookies are never forwarded to upstreams. When an upstream takes each client's own provider key, that key reaches the provider only as the upstream's credential.
+Some things never leave the gateway: `X-OpenViking-*` headers, client credentials and cookies are never forwarded to upstreams, and `X-OpenViking-*` headers in a provider's response are never passed to the client. When an upstream takes each client's own provider key, that key reaches the provider only as the upstream's credential.
 
 ## Access control {#access-control}
 
@@ -62,6 +62,10 @@ Two of these need care:
 - **Upload and download links.** Each link is authorized by a one-time token signed by OpenViking, and the gateway only forwards it to OpenViking's upload or download endpoint. Keep their query strings out of proxy logs.
 
 The full rules, including the management API, are in the [access matrix](../api/25-gateway.md#credentials-and-account-scope). What each role can do in Studio is in [Who can change what](06-manage-in-studio.md#who-can-change-what).
+
+### Headers from a host {#headers-from-a-host}
+
+With `trusted_host_headers: true`, request records take `resource_id` and `request_source` from the `X-OpenViking-Resource-Id` and `X-OpenViking-Request-Source` request headers. The gateway cannot tell who set them, so a client that reaches the gateway directly could write any value into its own records. Turn the setting on only when a network policy admits nothing but the host in front of the gateway, and have the host replace these headers rather than pass the client's through. `X-OpenViking-Request-Id` is adopted from any caller; it only names the request and grants nothing.
 
 ## Retention {#retention}
 

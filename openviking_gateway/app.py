@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .capture import DELIVERY_SECONDS, CaptureWorker
-from .client import VikingClient, VikingError
+from .client import CALL, CallContext, VikingClient, VikingError
 from .config import PUBLIC_OPENVIKING_URLS, GatewayConfig, normalize_url
 from .kernel import MemoryKernel
 from .management import (
@@ -302,11 +302,12 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
     @app.get("/v1/models")
     async def models(request: Request):
         record = RequestRecord(app, request, recorded=False)
+        CALL.set(CallContext(record.metrics["request_id"]))
         try:
             credential, _ = await authenticate(request, record)
             binding = await resolve_binding(management, config, credential)
         except Exception as error:
-            return record.error_response(error)
+            return record.decorate(record.error_response(error))
         names = sorted(
             {
                 model
@@ -316,12 +317,17 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
                 if not binding.models or model in binding.models
             }
         )
-        return {
-            "object": "list",
-            "data": [
-                {"id": name, "object": "model", "owned_by": "openviking-gateway"} for name in names
-            ],
-        }
+        return record.decorate(
+            JSONResponse(
+                {
+                    "object": "list",
+                    "data": [
+                        {"id": name, "object": "model", "owned_by": "openviking-gateway"}
+                        for name in names
+                    ],
+                }
+            )
+        )
 
     @app.websocket("/api/v3/responses")
     @app.websocket("/v1/responses")
@@ -388,6 +394,8 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
     )
     async def proxy(path: str, request: Request):
         record = RequestRecord(app, request)
+        # Not reset: the response body runs in this task after the handler returns.
+        CALL.set(CallContext(record.metrics["request_id"]))
         try:
             with record.stage("auth"):
                 credential, degradation = await authenticate(request, record)
@@ -407,7 +415,7 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
         if not record.deferred:
             record.metrics.setdefault("status", response.status_code)
             await record.emit()
-        return response
+        return record.decorate(response)
 
     return app
 

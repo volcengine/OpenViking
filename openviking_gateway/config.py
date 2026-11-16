@@ -113,6 +113,8 @@ class GatewayConfig(BaseModel):
     session_ttl_seconds: int = Field(default=30 * 86400, ge=3600)
     response_ttl_seconds: int = Field(default=30 * 86400, ge=60)
     request_log_sink: Literal["store", "stdout"] = "store"
+    # Record X-OpenViking-Resource-Id and X-OpenViking-Request-Source from a fronting service.
+    trusted_host_headers: bool = False
     log_retention_days: int = Field(default=30, ge=1)
     max_body_bytes: int = Field(default=32 * 1024 * 1024, ge=1024)
     upstream_timeout_seconds: float = Field(default=600, gt=0)
