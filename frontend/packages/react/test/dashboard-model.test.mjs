@@ -66,3 +66,21 @@ test('native conflict strings may contain CLI flags and Markdown separators', ()
   assert.equal(parsed.records[0].location.status, 'unique');
   assert.equal(parsed.records[0].reason, value.reason);
 });
+
+test('Wiki conflict anchors exclude YAML frontmatter closed with a document end marker', () => {
+  const header = '\uFEFF--- \r\npolicy: two approvals\r\n... \r\n';
+  const beforeAnchor = `${header}\r\n---\r\n`;
+  const body = 'two approvals';
+  const parsed = parseWikiFileConflicts(
+    `${beforeAnchor}${body}\n<!-- CONFLICTS_CONTENT\n${JSON.stringify(record)}\n-->`,
+  );
+  assert.deepEqual(parsed.records[0].location, {
+    status: 'unique',
+    start: beforeAnchor.length,
+    end: beforeAnchor.length + body.length,
+    line: 6,
+  });
+  assert.deepEqual(locateWikiConflict(`${header}# Body`, body), {
+    status: 'missing',
+  });
+});
