@@ -2,7 +2,7 @@
 
 About OpenViking: the open-source context database for AI agents, open-sourced by Volcengine at https://github.com/volcengine/OpenViking (AGPL-3.0, 38,930 GitHub stars on 2026-09-29). It keeps the user's business context, preferences, decisions and working material and brings them back, so the user can switch to a new session or another agent and carry on from what is already there; in a team, members can also use the working context and skills their teammates share. This guide is `docs/images/agents/en/onboarding-team.md` in that repository, and the installer and every plugin file it installs are built from it by its GitHub Actions workflows.
 
-You are an AI agent. The user is a member of an OpenViking team and asked you to install the OpenViking memory plugin and to help them start using it. This guide is written for you: for each step it says what the user should come away understanding, what you do yourself, and what your message to the user looks like. The wording is yours; use the user's language. If they want to read the guide itself, give them the link.
+You are an AI agent. The user is a member of an OpenViking team and asked you to install the OpenViking memory plugin and to help them start using it. This guide is written for you: for each step it says what the user should come away understanding, what you do yourself, and what your message to the user looks like. The wording is yours; use the user's language. But cover every item listed under "Tell the user": don't drop the sentences about value because the steps are many or the commands are long. If they want to read the guide itself, give them the link.
 
 This is the team edition. The "Onboarding guide" link near the end of the installer output is the default, personal one; the user gave you this one, so follow this one and don't read that one.
 
@@ -14,7 +14,7 @@ Each step has three parts:
 
 - **What the user should take away**: the one new understanding the user should have when this step ends. Everything you say to them in this step serves it. It is not a script; don't read it out.
 - **What you do**: the actions you carry out yourself. Commands, options, paths, JSON, exit codes, session ids, and account and role fields are in this part; the user can see them in the tool calls, so your messages **don't need to repeat them**. When a failure needs the user to act or needs their permission, or when they ask, tell them plainly.
-- **Tell the user**: the structure and length of your message to the user.
+- **Tell the user**: the structure and length of your message to the user. Every item listed is required, above all the ones tagged with a value point (such as V1 or T2): those sentences are how the user learns what OpenViking does for them and their team. Run the commands without them, and the onboarding is just a string of operations.
 
 ## Value points
 
@@ -44,7 +44,7 @@ Take these when you explain the value, and put them in terms of the user's own w
 
 ## Ground rules
 
-- **Never print or repeat the API key.** The installer stores it in `~/.openviking/ovcli.conf` on this machine (backing up the old file when it changes it); the connection needs that. Apart from that, the key must not appear in rules, project files, the continuation message or a permanent command approval. Don't open, print or search `ovcli.conf`. When you need the server and identity, run `ov health` or call the OpenViking `health` tool.
+- **Never print or repeat the API key.** The installer stores it in `~/.openviking/ovcli.conf` on this machine (backing up the old file when it changes it); the connection needs that. Apart from that, the key must not appear in rules, project files, the continuation message or a permanent command approval. Don't open, print or search `ovcli.conf`. When you need the server and identity, run `ov health` or call the OpenViking `health` tool. Some hosts save this install conversation, key included, to the user's own space. That is known: tell them in one sentence as [Appendix A](#appendix-a-hosts) says, and the remedy is to replace the key afterwards; don't change the plugin's or the host's config or add exclusion rules because of it.
 - **Make only the changes this guide describes.** The installer installs into every supported agent it detects on this machine, which is expected. Don't edit other agents' configs or files in the user's projects yourself unless the user asks.
 - **Contributing to the team means publishing to the team.** Everything written to `viking://resources/` can be seen by the team's members. Contribute only what they confirmed, and check first that it contains no secrets, credentials or private personal information. Write only under their own subfolder `viking://resources/<user_id>/`: other members' folders are often writable too, but don't change or delete them. If a write is refused (`PERMISSION_DENIED`), don't write somewhere else; tell them to ask their team admin.
 - **Use the commands in this guide.** Don't go to GitHub and read the source to work out another way to install or configure; when unsure of an option, check the command's `--help`.
@@ -83,10 +83,13 @@ Read the installer's output. It may be in English or in Chinese; recognize both.
 
 **Tell the user**
 
-No separate message. Open the Step 2 message with two sentences:
+No separate message. This is the first time the user hears from you what OpenViking can do; open the Step 2 message with three short parts:
 
-1. You are connected to their team's OpenViking, and the plugin went into these agents (by product name, for example Codex, Claude Code). If it went into more than one, add the benefit: from now on they can carry on with the same context in any of these agents.
-2. T1: their memories and personal material are in their own space, which other members can't see; the team's shared folders hold the working material and agent skills teammates have contributed, which their agent can use directly, and they can contribute their own project progress and output there too; you'll show them shortly.
+1. **Connected**, one sentence: you are connected to their team's OpenViking, and the plugin went into these agents (by product name, for example Codex, Claude Code). If it went into more than one, add the benefit (V3): from now on they can carry on with the same context in any of these agents.
+2. **What OpenViking is**, one sentence (positioning): it is the agent's external context layer; their background, decisions and work output are kept there, outlive any one session, and carry over when they switch sessions or agents.
+3. **How the team works with it**, two or three sentences (T1, T2, T4): everyone has a private space, and their memories and conversations are visible only to them; the team has a shared folder where members put their projects' designs, decisions and progress in their own folders, so teammates' agents can find and build on that work when they need it, without anyone explaining it from scratch; the team's shared agent skills live there too. End with a preview of what comes next: first bring in their earlier work, then look at what the team has already shared, and finally agree how to work together from now on.
+
+Reference wording for part 3 (put it in their language, and use the team or project name if you have one): "In the team edition you have a private space: your memories and conversations are visible only to you. The team also has a shared folder, where everyone keeps their projects' designs, decisions and progress in their own folder, and a teammate's agent that runs into a related question finds it and picks it up, without anyone explaining from scratch. Next I'll bring in your earlier work, then show you what the team has already shared, and finally we'll agree how to work together from now on."
 
 Don't mention the account name, role, server URL or command names. Tell them which user they are connected as only if they have several OpenViking accounts or ask.
 
@@ -102,7 +105,7 @@ Don't mention the account name, role, server URL or command names. Tell them whi
 
 **Tell the user**
 
-After the Step 1 sentences, in two or three lines:
+After the three Step 1 parts, in two or three lines:
 
 1. V1: from now on, relevant background (including the team's shared material) is brought to the agent before each prompt, and each turn is saved to their own space automatically and builds up into background over time. The saved conversations are visible only to them and never go into the team folder. Give one example from their current project or request.
 2. Where they can see it at work, described the way the user will see it according to Appendix A, for example "an OV-Usage line will appear under answers".
@@ -232,65 +235,43 @@ Add only what they named; don't scan directories or upload anything on your own.
 
 **What you do**
 
-1. **See what the team already has.** List the first level of the shared folder, with each subfolder's abstract (L0):
+1. **See what the team already has.** List the first level of the shared folder and the shared skills, with abstracts (L0). The first level is usually split by member (the folder name is their user name) or by project; for folders related to their work, or whose abstract doesn't say what is inside, list one level further, and read the overview (L1) when you need more. Look at 10 folders at most; skip folders marked `permission denied` and don't mention them:
 
    ```bash
    ov ls viking://resources --include-abstract
-   ```
-
-   The first level is usually split by member (the folder name is their user name) or by project. For folders related to their work, or whose abstract doesn't say what is inside, list one level further; read the overview (L1) when you need more. Look at 10 folders at most:
-
-   ```bash
+   ov ls viking://agent/skills --include-abstract
    ov ls viking://resources/<folder> --include-abstract
    ov overview viking://resources/<folder>
    ```
 
-   Folders marked `permission denied` are ones they have no access to; skip them and don't mention them. Note who or which project contributed what. Then look at the team's shared skills, and note how many there are, their names and what each does:
+   Note who or which project contributed what, and how many shared skills there are, their names and what each does. If the shared folder is empty, note "nobody has contributed yet"; if it can't be read at all (an error or no permission), note why, skip contributing, and go straight to Step 5.
 
-   ```bash
-   ov ls viking://agent/skills --include-abstract
-   ```
+2. **Prepare what could be contributed**: one project's key designs, output and progress. Use the project imported in Step 3 (`<project directory>` is the `--cwd` value noted in 3c); if nothing was imported, use the project in the current directory (`$PWD`).
 
-   - The shared folder is empty: note "nobody has contributed yet".
-   - It can't be read at all (an error or no permission): note why, skip the contribution below, and go straight to Step 5.
-
-2. **Prepare what could be contributed.** The candidates are one project's key designs, output and progress. Use the project imported in Step 3, whose `<project directory>` is the `--cwd` value noted in 3c; if Step 3 imported nothing, use the project in the current directory (`$PWD`), which is then the `<project directory>`:
-
-   - Documents: in the project directory, find designs, research, requirements, design specs, reports and similar documents changed within the import's time range (the last 14 days if nothing was imported); list them only, don't upload. For example, the last 14 days:
+   - Documents: find designs, research, requirements, design specs and reports changed within the import's time range (the last 14 days if nothing was imported); list them only, don't upload, and pick at most 5, preferring the Step 3 gap and documents mentioned in the sessions. Leave out READMEs, changelogs, code docs, templates, and anything containing secrets, credentials or private personal information:
 
      ```bash
      find "<project directory>" -type f \( -name '*.md' -o -name '*.pdf' -o -name '*.docx' -o -name '*.pptx' -o -name '*.xlsx' \) -mtime -14 -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -path '*/build/*' | head -50
      ```
 
-     Pick at most 5, preferring the Step 3 gap and documents mentioned in the sessions. Leave out READMEs, changelogs, code docs, templates, and anything containing secrets, credentials or private personal information.
    - Files already saved to their personal space in Step 3 (see "Files" above): list them too, and don't upload another copy from the local disk.
-   - A progress summary: only if 3c read something back; it is the four things read back (the goal, where it left off, settled judgments with their reasons, what is still open). If nothing was read back, offer no progress summary, only documents; don't piece one together from local documents or import summaries.
+   - A progress summary: only if 3c read something back; it is the four things read back. If nothing was read back, offer none, and don't piece one together from local documents or import summaries.
 
    If the current directory isn't a project (for example the home directory), or there are no suitable documents and nothing was read back, there are no candidates.
 
-3. **Contribute once they agree.** Everything goes into their own subfolder of the team folder, one folder per project: `viking://resources/<user_id>/<project>/`. `<user_id>` is the user name you noted in Step 1; `<project>` is the repository name or what they call the project. The commands below create the folders if they don't exist.
+3. **Contribute once they agree**, into `viking://resources/<user_id>/<project>/` (`<user_id>` is the user name you noted in Step 1; `<project>` is the repository name or what they call the project):
 
-   - Add the documents one at a time:
+   ```bash
+   # Documents, one at a time (creates the folder if needed)
+   ov add-resource <document path> --parent-auto-create viking://resources/<user_id>/<project> --wait
+   # Files saved to their personal space in Step 3: move them so there is one copy. mv doesn't create folders, so mkdir first if the target doesn't exist; take the item name from ov ls viking://user/<user_id>/resources/<project>
+   ov mkdir viking://resources/<user_id>/<project>
+   ov mv viking://user/<user_id>/resources/<project>/<item> viking://resources/<user_id>/<project>/<item>
+   # Progress summary: write the Markdown in the temp directory first (first line "<project> progress, updated <date>", the four things as content); delete the temp file afterwards
+   ov write viking://resources/<user_id>/<project>/notes/progress.md --from-file "${TMPDIR:-/tmp}/ov-progress.md" --wait
+   ```
 
-     ```bash
-     ov add-resource <document path> --parent-auto-create viking://resources/<user_id>/<project> --wait
-     ```
-
-   - Files saved to their personal space in Step 3: move them into the team folder so there is only one copy. `mv` doesn't create folders, so if the target folder doesn't exist yet, run `ov mkdir` first; use the item name shown by `ov ls viking://user/<user_id>/resources/<project>`:
-
-     ```bash
-     ov mkdir viking://resources/<user_id>/<project>
-     ov mv viking://user/<user_id>/resources/<project>/<item> viking://resources/<user_id>/<project>/<item>
-     ```
-
-   - The progress summary: write a Markdown file in the temp directory whose first line is "<project> progress, updated <date>", with the four things as its content; delete the temp file after writing:
-
-     ```bash
-     ov write viking://resources/<user_id>/<project>/notes/progress.md --from-file "${TMPDIR:-/tmp}/ov-progress.md" --wait
-     ```
-
-   - Then run `ov ls viking://resources/<user_id>/<project>` to check everything is there.
-   - On `PERMISSION_DENIED`, stop contributing and don't write somewhere else. The content is still on their machine and in their own space, and can be contributed once they have access.
+   Then run `ov ls viking://resources/<user_id>/<project>` to check everything is there. On `PERMISSION_DENIED`, stop contributing and don't write somewhere else; the content is still on their machine and in their own space, and can be contributed once they have access.
 
 **Tell the user**
 
@@ -351,12 +332,9 @@ The default rule text:
 
 ### Where things go
 
-- By default my work goes into my own subfolder of the team folder, one folder per project: `viking://resources/<user_id>/<project>/`, which the team's members can see. `<project>` is the repository name or what I call this work; if a matching folder already exists in the team folder, use it.
-- What I said not to share, drafts still being explored, and anything only about me go into my personal space, `viking://user/<user_id>/resources/<project>/`, which other members can't see. Each piece of content is stored in one place only.
-- In the project folder, keep progress, decisions and next steps in `notes/`; work output such as designs, research and deliverables goes directly in the project folder, with subfolders when needed. Store text with `write`, and when it changes, overwrite the existing copy; add files such as PDFs, slide decks and images to the project folder with `add_resource`. After writing, read it back with `read` to check.
-- Files I give you also go into the project folder with `add_resource`, each as one item in it; don't use the project folder itself as an import target, and don't write anything into imported material: re-syncing imported material removes anything that isn't in the source files.
-- In the team folder, write only in my own subfolder; don't change or delete other members' content. If a write is refused, tell me; don't write somewhere else.
-- To share a skill with the team, ask me first, then use `add_skill` with `target_uri` set to `viking://agent/skills`; don't change or delete skills others shared.
+- By default my work goes into my own subfolder of the team folder, one folder per project: `viking://resources/<user_id>/<project>/`, which the team's members can see; what I said not to share, drafts still being explored, and anything only about me go into my personal space, `viking://user/<user_id>/resources/<project>/`. `<project>` is the repository name or what I call this work; if a matching folder exists, use it. Each piece of content is stored in one place only.
+- In the project folder, keep progress, decisions and next steps in `notes/`, and put designs, research and deliverables directly in the project folder. Store text with `write`, overwriting the existing copy when it changes; add PDFs, slide decks, images and files I give you to the project folder with `add_resource`, each as one item (don't use the project folder itself as an import target, and don't write into imported material: re-syncing removes it). After writing, read it back with `read` to check.
+- In the team folder, write only in my own subfolder, and don't change or delete other people's content or skills; if a write is refused, tell me and don't write somewhere else. To share a skill with the team, ask me first, then use `add_skill` with `target_uri` set to `viking://agent/skills`.
 <!-- openviking:end -->
 ```
 
@@ -372,18 +350,16 @@ The default rule text:
 
 **Tell the user**
 
-This turn lets them both understand the effect of the rule and check the exact text to be written: the summary first, then the text, both in the body of your last reply of this turn (not only in progress messages). Show the text by default; don't wait for them to ask for it.
-
-The message (following Step 4):
+In the body of your last reply of this turn, **give the four parts below, in order, with none left out**, and only then call the choice tool. Paste only the text without the recommended approach, and all the user sees is a block of config to be appended, with no idea why it is set up this way or what it does for them.
 
 1. **One bridging sentence**, using the gap noted in Step 3: "The sessions have the discussion, but the original <finished work> isn't in there." Leave it out if there was no read-back, or if that work was contributed in Step 4.
-2. **Say what this step does**: next, they and <the current agent's name> agree how to use OpenViking to keep and find working context and what goes into the team folder; the rule goes into <full path of the rules file>, applies to all their projects, is followed in all their work from now on, and can be changed at any time.
-3. **The approach we suggest**, four points, in the user's language, without folders or tool names:
-   - before starting work, bring back the relevant background from OpenViking, including the team's shared material and skills;
-   - when the work produces important decisions (with the reasons), progress and next steps, or output such as designs, research and deliverables, store them in OpenViking on its own: by default in their own folder in the team folder, where the team can see them; what they say not to share, drafts, and anything only about them stay in their personal space;
-   - in the team folder, write only in their own folder and never change teammates' content;
-   - whenever useful information from OpenViking was used, or something was stored, say so briefly at the end of the reply, including whether it went to the team folder or their personal space.
-4. **The text to be written**: right after the summary, say "Here is the text that will go into <full path of the rules file>:", then give the full text in a code block (with `<user_id>` replaced by their user name).
+2. **What this step does**, one sentence: next, they and <the current agent's name> agree how to use OpenViking to keep and find working context and what goes into the team folder; the rule goes into <full path of the rules file>, applies to all their projects, and can be changed at any time.
+3. **The approach we recommend**: first one sentence on why (V4, T4): automatic memory keeps only the gist of conversations, so designs, decisions and progress need a copy stored on purpose to come back intact later; and they go into the team folder by default so teammates' agents can pick up the work. Then four points, in the user's language, without folders or tool names. Reference wording:
+   - before starting work, I bring back the relevant background from OpenViking, including the team's shared material and skills;
+   - when the work produces important decisions (with the reasons), progress and next steps, or output such as designs, research and deliverables, I store them in OpenViking: by default in your own folder in the team folder, where the team can see them; what you say not to share, drafts, and anything only about you stay in your personal space;
+   - in the team folder, I write only in your own folder and never change teammates' content;
+   - when I used information from OpenViking or stored something, I say so in one sentence at the end of the reply, including whether it went to the team folder or your personal space.
+4. **The text to be written**: say "Here is the text that will go into <full path of the rules file>:", then give the default text above in a code block. **Give it exactly as written, replacing only `<user_id>` with their user name**; don't rewrite it, drop items or change the default storage location. Only after they ask for a change do you show a changed version.
 
 **Question (choice tool)**: The question text must make sense on its own, with the gist of the summary and the file path, for example "Work this way from now on? Bring back background (including the team's) before starting work; store important decisions, progress and output in OpenViking on my own, by default in your folder in the team folder, with drafts and anything you don't want shared in your personal space; tell you briefly when I used or stored something. Goes into <rules file path>, for all projects." Options:
 
@@ -391,14 +367,13 @@ The message (following Step 4):
 - Adjust for my role, with the description "Tell me your role, for example product, design, engineering or QA, and I'll suggest what to save"
 - Automatic memory only
 
-In the question or a description, mention that if they'd rather "store in my personal space by default and ask me before putting anything in the team folder", or want to change anything else in the text, they can say so directly in the free-text input.
+In a description, mention that if they want to change anything in the text, they can say so directly in the free-text input.
 
 Then:
 
 - **Work this way**: write it.
 - **Adjust for my role**: ask their role (one sentence in text is enough). Using the reference above, give the adjusted effect in four or five points, marking which ones are new, together with the adjusted text, then ask with the choice tool: Write this (recommended) / Adjust again / Automatic memory only.
-- **Personal space by default, ask before the team folder**: change the first two items under "Where things go" to "By default my work goes into my personal space, `viking://user/<user_id>/resources/<project>/`; for anything the team should see, ask me in one sentence first, and once I agree, store it in `viking://resources/<user_id>/<project>/`", change the second summary point to match, show the effect and the changed text, and ask again.
-- **They said directly what to change**: change the text as they want, show the effect and the changed text, and ask again.
+- **They said directly what to change**: change the text as they want, show the effect and the changed text, and ask again. For example, if they say "store in my personal space by default and ask me before putting anything in the team folder", change the first item under "Where things go" to "By default my work goes into my personal space, `viking://user/<user_id>/resources/<project>/`; for anything the team should see, ask me in one sentence first, and once I agree, store it in `viking://resources/<user_id>/<project>/`", and change the second summary point to match. Use this change only when they ask for it; don't offer it.
 - **Automatic memory only**: write nothing. Tell them they can still ask you to save or read material, or contribute it to the team, at any time.
 
 The summary must truthfully match the text to be written: anything in the text that the summary doesn't mention may only be implementation detail of behavior the summary describes (such as where things go).
@@ -422,7 +397,7 @@ Restarted. Continue the OpenViking team onboarding from "After the restart" in h
 **Tell the user**
 
 1. Where things stand, stated positively: connected to the team's OpenViking, which work was brought in, and what was contributed to the team. If the collaboration rule was written, list its four summary points again with the rules file path, and tell them that to read or change it later they can open that file or ask you; if it wasn't written, say so.
-2. **On hosts that need the hooks trusted (Codex, TraeCode CLI 2.0), ask them to trust the hooks before quitting**: in the Codex desktop app, click the hooks icon below the input box; in Codex CLI and TraeCode CLI, type `/hooks` in the session; trust all of OpenViking's hooks. Give the benefit in one sentence: after the restart it won't stop at a review prompt, and they can carry on with their work right away. Appendix A says what to tell the user after trusting (Codex saves this install conversation, key included, in their own space); cover that in one sentence too. If "Hooks need review" still appears after the restart, choose **Trust all and continue** as before.
+2. **On hosts that need the hooks trusted (Codex, TraeCode CLI 2.0), ask them to trust the hooks before quitting**: in the Codex desktop app, click the hooks icon below the input box; in Codex CLI and TraeCode CLI, type `/hooks` in the session; trust all of OpenViking's hooks. Give the benefit in one sentence: after the restart it won't stop at a review prompt, and they can carry on with their work right away. Appendix A says what to tell the user after trusting (Codex saves this install conversation, key included, in their own space); cover that in one sentence too: if it bothers them, they can replace the key afterwards, and you don't change any local config for it. If "Hooks need review" still appears after the restart, choose **Trust all and continue** as before.
 3. How to restart the current host.
 4. If the installer also set up other agents, add one line naming them: each takes effect after its own restart; see the "Next" lines in the installer output.
 5. What to do when they come back:
@@ -466,7 +441,7 @@ After the summary and directions, wait for them to choose; don't start changing 
 | Host | `--harness` | Restart or trust | After restart | Where to see it | History import | User-level rules file |
 |---|---|---|---|---|---|---|
 | Claude Code | `claude` | Quit and run `claude` again; don't use `/reload-plugins` | New session. Don't use `claude --continue` / `--resume` to go back to the install conversation: the plugin would save the whole install conversation, key included, to OpenViking | A source card under answers that used OpenViking (Claude Code 2.1.286 and later); `/openviking-memory:ov` for status | Supported | `~/.claude/CLAUDE.md` |
-| Codex | `codex` | **Trust the hooks before quitting**: in the desktop app, click the hooks icon below the input box; in the CLI, type `/hooks` in the session; trust all of OpenViking's hooks. The trust is recorded in `~/.codex/config.toml`, so there is no prompt after the restart. Then quit: in the CLI, run `codex resume --last` to come back to this conversation; in the desktop app, quit, reopen it and go back to this conversation. If "Hooks need review" still appears after the restart, choose **Trust all and continue**. Tell the user: once the hooks are trusted, this install conversation is saved to their own space (not the team folder), including the API key from the install command and the session previews listed for the import, whether they resume or start a new session; if that bothers them, they can replace the key in the workbench or console afterwards | Resume the original session (the command on the left) and send "restarted" | An OV-Usage line after each answer, for example `OpenViking · 3 sources · 1 past event · 2 team docs · 1 read` | Supported | `~/.codex/AGENTS.md`; if `AGENTS.override.md` exists in the same folder, Codex reads that instead |
+| Codex | `codex` | **Trust the hooks before quitting**: in the desktop app, click the hooks icon below the input box; in the CLI, type `/hooks` in the session; trust all of OpenViking's hooks. The trust is recorded in `~/.codex/config.toml`, so there is no prompt after the restart. Then quit: in the CLI, run `codex resume --last` to come back to this conversation; in the desktop app, quit, reopen it and go back to this conversation. If "Hooks need review" still appears after the restart, choose **Trust all and continue**. Tell the user: once the hooks are trusted, this install conversation is saved to their own space (not the team folder), including the API key from the install command and the session previews listed for the import, whether they resume or start a new session; if that bothers them, they can replace the key in the workbench or console afterwards. Just tell them; don't change the plugin's config, add exclusion rules or otherwise try to stop it being saved | Resume the original session (the command on the left) and send "restarted" | An OV-Usage line after each answer, for example `OpenViking · 3 sources · 1 past event · 2 team docs · 1 read` | Supported | `~/.codex/AGENTS.md`; if `AGENTS.override.md` exists in the same folder, Codex reads that instead |
 | TraeCode CLI 2.0 | `trae-cli` | **Trust the hooks before quitting**: type `/hooks` in the session and trust all of OpenViking's hooks. Then quit and run `trae-cli` (or `traecli`) again; if "Hooks need review" still appears, choose **Trust all and continue** | New session | An OV-Usage line, as in Codex | Convert to JSONL; sessions are in `~/.trae/cli/sessions/`, the same rollout format as Codex | Not confirmed |
 | Cursor | `cursor` | Quit Cursor completely and reopen it | New Agent session (**+**); don't continue in the restored install conversation | The OpenViking hook under Settings → Hooks; `openviking` connected under Settings → Tools & MCPs | Convert to JSONL; session location not confirmed | User Rules in Cursor settings; ask the user to paste |
 | TRAE / TRAE CN | `trae` / `trae-cn` | Quit the app completely and reopen it; no hook approval needed | New session | `openviking` connected in the MCP settings | Convert to JSONL; session location not confirmed | Personal rules in the app settings; ask the user to paste |
