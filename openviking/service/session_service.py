@@ -295,10 +295,6 @@ class SessionService:
         """
         self._record_lifecycle_metric("create", "attempt")
         try:
-            if session_id:
-                existing = self.session(ctx, session_id)
-                if await existing.exists():
-                    raise AlreadyExistsError(f"Session '{session_id}' already exists")
             session = self.session(ctx, session_id)
             if memory_policy is not None:
                 policy = MemoryPolicy.from_dict(memory_policy)
@@ -321,7 +317,9 @@ class SessionService:
                     event_tags,
                     discard_invalid=True,
                 )
-            await session.ensure_exists()
+            created = await session.ensure_exists()
+            if session_id and not created:
+                raise AlreadyExistsError(f"Session '{session_id}' already exists")
             self._record_lifecycle_metric("create", "ok")
             return session
         except Exception:

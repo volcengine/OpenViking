@@ -790,8 +790,8 @@ class Session:
                 raise
             return False
 
-    async def ensure_exists(self) -> None:
-        """Materialize session root and messages file if missing."""
+    async def ensure_exists(self) -> bool:
+        """Materialize session state and return whether this call created it."""
         # Initial state must not overwrite a concurrent append or commit.
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
         lease = await self._viking_fs._async_agfs.pathlock_acquire_exact(
@@ -799,7 +799,7 @@ class Session:
         )
         try:
             if await self.exists():
-                return
+                return False
             await self._viking_fs.mkdir(self._session_uri, exist_ok=True, ctx=self.ctx)
             await self._viking_fs.write_file(
                 f"{self._session_uri}/messages.jsonl",
@@ -807,6 +807,7 @@ class Session:
                 ctx=self.ctx,
             )
             await self._save_meta()
+            return True
         finally:
             await self._viking_fs._async_agfs.pathlock_release(lease)
 
