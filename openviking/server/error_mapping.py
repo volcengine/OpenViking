@@ -339,27 +339,12 @@ def _build_upstream_error(
     return OpenVikingError(display, code=code, details=details)
 
 
-_MODEL_ERROR_KIND_TO_PROTOCOL_CODE = {
-    ModelErrorKind.TRANSIENT_SERVICE_ERROR: "UNAVAILABLE",
-    ModelErrorKind.TRANSIENT_NETWORK_ERROR: "UNAVAILABLE",
-    ModelErrorKind.RATE_LIMIT_ERROR: "RESOURCE_EXHAUSTED",
-    ModelErrorKind.AUTHENTICATION_ERROR: "UNAUTHENTICATED",
-    ModelErrorKind.PERMISSION_DENIED: "PERMISSION_DENIED",
-    ModelErrorKind.QUOTA_EXHAUSTED: "RESOURCE_EXHAUSTED",
-    ModelErrorKind.MODEL_NOT_FOUND: "NOT_FOUND",
-    ModelErrorKind.UNSUPPORTED: "INVALID_ARGUMENT",
-    ModelErrorKind.INVALID_REQUEST: "INVALID_ARGUMENT",
-    ModelErrorKind.INPUT_TOO_LARGE: "INVALID_ARGUMENT",
-    ModelErrorKind.CONTENT_SAFETY: "INVALID_ARGUMENT",
-}
-
-
 def _map_structured_model_error(error: ModelError, *, context: Exception) -> OpenVikingError:
-    # Preserve transport status precision; kind is the fallback without a status.
-    code = error_code_from_http_status(
-        error.status_code,
-        default=_MODEL_ERROR_KIND_TO_PROTOCOL_CODE.get(error.kind, "INTERNAL"),
-    )
+    # An upstream status is the public fact when present. A status-less model
+    # error uses the complete protocol projection declared by its kind.
+    code = error.kind.protocol_code
+    if error.status_code is not None:
+        code = error_code_from_http_status(error.status_code, default=code)
     if (
         error.kind is ModelErrorKind.TRANSIENT_NETWORK_ERROR
         and error.status_code is None

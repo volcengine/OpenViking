@@ -12,18 +12,26 @@ from typing import Any, Callable, TypeVar, cast
 
 
 class ModelErrorKind(str, Enum):
-    TRANSIENT_SERVICE_ERROR = "transient_service_error"
-    TRANSIENT_NETWORK_ERROR = "transient_network_error"
-    RATE_LIMIT_ERROR = "rate_limit_error"
-    AUTHENTICATION_ERROR = "authentication_error"
-    PERMISSION_DENIED = "permission_denied"
-    QUOTA_EXHAUSTED = "quota_exhausted"
-    MODEL_NOT_FOUND = "model_not_found"
-    UNSUPPORTED = "unsupported"
-    INVALID_REQUEST = "invalid_request"
-    INPUT_TOO_LARGE = "input_too_large"
-    CONTENT_SAFETY = "content_safety"
-    UNKNOWN = "unknown"
+    protocol_code: str
+
+    def __new__(cls, value: str, protocol_code: str) -> "ModelErrorKind":
+        member = str.__new__(cls, value)
+        member._value_ = value
+        member.protocol_code = protocol_code
+        return member
+
+    TRANSIENT_SERVICE_ERROR = "transient_service_error", "UNAVAILABLE"
+    TRANSIENT_NETWORK_ERROR = "transient_network_error", "UNAVAILABLE"
+    RATE_LIMIT_ERROR = "rate_limit_error", "RESOURCE_EXHAUSTED"
+    AUTHENTICATION_ERROR = "authentication_error", "UNAUTHENTICATED"
+    PERMISSION_DENIED = "permission_denied", "PERMISSION_DENIED"
+    QUOTA_EXHAUSTED = "quota_exhausted", "RESOURCE_EXHAUSTED"
+    MODEL_NOT_FOUND = "model_not_found", "NOT_FOUND"
+    UNSUPPORTED = "unsupported", "INVALID_ARGUMENT"
+    INVALID_REQUEST = "invalid_request", "INVALID_ARGUMENT"
+    INPUT_TOO_LARGE = "input_too_large", "INVALID_ARGUMENT"
+    CONTENT_SAFETY = "content_safety", "INVALID_ARGUMENT"
+    UNKNOWN = "unknown", "INTERNAL"
 
 
 class ModelError(Exception):
