@@ -1020,6 +1020,7 @@ async def test_submit_plans_cross_session_writes_and_deletes_together(monkeypatc
         ("add_edit", 1, "merged"),
         ("edit_delete", 1, "merged"),
         ("forget", 1, None),
+        ("parse_error", 2, "old conflict"),
         ("unchanged", 0, "old conflict"),
         ("write_failure", 0, "old conflict"),
     ],
@@ -1031,7 +1032,7 @@ async def test_same_session_uri_conflicts(monkeypatch, case, calls, expected):
     monkeypatch.setattr("openviking.storage.viking_fs._base._instance", fs)
     monkeypatch.setattr(OpenVikingConfigSingleton, "_instance", OpenVikingConfig())
     monkeypatch.setattr(PatchMergeContextProvider, "search_files", AsyncMock(return_value=[]))
-    upserts = [edit] if case in {"edit_delete", "forget", "unchanged"} else [add]
+    upserts = [edit] if case in {"edit_delete", "forget", "unchanged", "parse_error"} else [add]
     deletes = [] if case == "add_edit" else [target]
     if case == "add_edit":
         upserts.append(edit)
@@ -1044,6 +1045,8 @@ async def test_same_session_uri_conflicts(monkeypatch, case, calls, expected):
     program = "notes_1.content.edit(search='old conflict', replace='merged')"
     if case == "forget":
         program = "notes_1.delete()"
+    elif case == "parse_error":
+        program = "invalid response!"
     resolver = _TestVLMResolver()
     resolver.get_completion_async = AsyncMock(return_value=program + "\nsdk.commit()")
     updater = StreamingMemoryUpdater(
@@ -1055,6 +1058,9 @@ async def test_same_session_uri_conflicts(monkeypatch, case, calls, expected):
         operations=ResolvedOperations(
             upsert_operations=upserts,
             delete_file_contents=deletes,
+            resolved_links=[StoredLink(from_uri=target.uri, to_uri=other.uri)]
+            if case == "parse_error"
+            else [],
             errors=[],
         ),
         messages=[],
@@ -1067,6 +1073,11 @@ async def test_same_session_uri_conflicts(monkeypatch, case, calls, expected):
         await updater.close()
     assert resolver.get_completion_async.await_count == calls
     assert bool(result.apply_result.errors) == (case == "write_failure")
+    if case == "parse_error":
+        assert not fs.writes
+        assert [op.reason_code for op in result.apply_result.skipped_operations] == [
+            MemoryOperationSkipCode.PARSE_ERROR
+        ]
     assert (other.uri in fs.files) == (case != "unchanged")
     raw = fs.files.get(target.uri)
     assert (MemoryFileUtils.read(raw).plain_content() if raw is not None else None) == expected

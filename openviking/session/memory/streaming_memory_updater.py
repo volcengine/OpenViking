@@ -26,6 +26,7 @@ from openviking.server.identity import RequestContext
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.session.memory.dataclass import (
     MemoryFile,
+    MemoryOperationSkipCode,
     MemoryOperationSource,
     MemoryTypeSchema,
     ResolvedOperation,
@@ -253,9 +254,21 @@ class StreamingMemoryUpdater:
         links = merge_link_lists(list(getattr(request.operations, "resolved_links", []) or []))
         if not links:
             return
+        skipped_uris = {
+            op.uri
+            for op in result.apply_result.skipped_operations
+            if op.reason_code == MemoryOperationSkipCode.PARSE_ERROR
+        }
         links = remap_stored_links(
             links, dict(getattr(result.operations, "delete_replacements", {}) or {})
         )
+        links = [
+            link
+            for link in links
+            if link.from_uri not in skipped_uris and link.to_uri not in skipped_uris
+        ]
+        if not links:
+            return
         viking_fs = safe_get_viking_fs()
         lock_paths = _uri_lock_paths(_link_endpoint_uri_set(links), viking_fs, request.ctx)
         async with self._apply_lock:
@@ -483,11 +496,28 @@ class StreamingMemoryUpdater:
         _check_template_batch_conflicts(batches, merged_batches)
         results = []
         for batch, merged_operations in zip(batches, merged_batches, strict=True):
-            apply_result = await self._apply_operations(
-                operations=merged_operations,
-                request=batch[0],
-                messages=_combined_request_messages(batch),
-            )
+            if merged_operations is None:
+                merged_operations = ResolvedOperations(
+                    upsert_operations=[], delete_file_contents=[], errors=[]
+                )
+                apply_result = MemoryUpdateResult()
+                for request in batch:
+                    for uri in sorted(_request_uri_set(request)):
+                        apply_result.add_skipped(
+                            SkippedMemoryOperation(
+                                uri=uri,
+                                memory_type=group_key.memory_type,
+                                reason_code=MemoryOperationSkipCode.PARSE_ERROR,
+                                reason="Memory merge response could not be parsed after format retries",
+                                source=memory_operation_source_from_request(request),
+                            )
+                        )
+            else:
+                apply_result = await self._apply_operations(
+                    operations=merged_operations,
+                    request=batch[0],
+                    messages=_combined_request_messages(batch),
+                )
             results.append(
                 StreamingMemoryUpdateResult(
                     operations=merged_operations,
@@ -547,8 +577,10 @@ class StreamingMemoryUpdater:
                 if lease is not None:
                     await viking_fs._async_agfs.pathlock_release(lease)
 
-    async def _merge_requests(self, requests: list[MemoryUpdateRequest]) -> ResolvedOperations:
-        """Reconcile conflicting writes within one peer, memory type and template batch."""
+    async def _merge_requests(
+        self, requests: list[MemoryUpdateRequest]
+    ) -> ResolvedOperations | None:
+        """Reconcile one peer/type/template batch, returning None for an unparseable plan."""
         operations = _combine_resolved_operations(request.operations for request in requests)
         if operations.has_errors():
             return operations
@@ -604,7 +636,7 @@ class StreamingMemoryUpdater:
                 ),
             )
 
-            if operations.has_errors():
+            if operations is None or operations.has_errors():
                 return operations
 
         # Independent patches on the same old file require a single final write.
@@ -656,7 +688,7 @@ class StreamingMemoryUpdater:
 
 def _check_template_batch_conflicts(
     batches: list[list[MemoryUpdateRequest]],
-    merged_batches: list[ResolvedOperations] | None = None,
+    merged_batches: list[ResolvedOperations | None] | None = None,
 ) -> None:
     """Reject cross-template file conflicts before any batch writes.
 
@@ -790,8 +822,8 @@ async def merge_memory_operations(
     force_merge: bool = False,
     vlm_resolver: VLMResolver | None = None,
     output_language_override: str | None = None,
-) -> ResolvedOperations:
-    """Merge resolved memory operations by memory type/URI using patch context."""
+) -> ResolvedOperations | None:
+    """Merge operations by memory type and URI. None denotes an exhausted parse retry."""
 
     if operations.has_errors():
         tracer.info(
@@ -868,6 +900,8 @@ async def merge_memory_operations(
         ops_list = upsert_groups.get(group_key, [])
         if not isinstance(merge_result, Exception):
             merged = merge_result
+            if merged is None:
+                return None
             if merged.has_errors():
                 return ResolvedOperations(
                     upsert_operations=[], delete_file_contents=[], errors=merged.errors
@@ -955,7 +989,8 @@ async def merge_one_memory_type_operations(
     force_merge: bool = False,
     vlm_resolver: VLMResolver | None = None,
     output_language_override: str | None = None,
-) -> ResolvedOperations:
+) -> ResolvedOperations | None:
+    """Resolve one memory type using its patches, returning None for an unparseable plan."""
     registry = registry or get_default_registry()
     schema = registry.get(memory_type)
     delete_files = list(delete_files or [])
@@ -1144,7 +1179,8 @@ async def merge_one_memory_type_operations(
         max_iterations=1,
     )
     merged, _ = await orchestrator.run()
-    merged = merged or ResolvedOperations(upsert_operations=[], delete_file_contents=[], errors=[])
+    if merged is None:
+        return None
     tracer.info(
         "[streaming_memory_updater] llm merge output "
         f"memory_type={memory_type} upserts={len(merged.upsert_operations)} "

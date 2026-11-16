@@ -356,8 +356,6 @@ async def test_commit_extracts_once_and_persists_precise_case_links(
 async def test_commit_finishes_other_training_groups_before_reporting_write_failure(
     commit_runtime, monkeypatch
 ):
-    from openviking.session.memory.memory_updater import MemoryUpdateError
-
     runtime = commit_runtime
     write_file = runtime.fs.write_file
     failed_uri = f"{runtime.trainer.policy_set.root_uri}/book.md"
@@ -377,8 +375,9 @@ async def test_commit_finishes_other_training_groups_before_reporting_write_fail
             ]
         )
     )
-    with pytest.raises(MemoryUpdateError, match="experience write failed"):
-        await _commit(runtime, [[("book", None)], [("cancel", None)]], evaluator=evaluator)
+    result, _ = await _commit(runtime, [[("book", None)], [("cancel", None)]], evaluator=evaluator)
+    assert "experience write failed" in result["error"]
+    assert result["submitted"] == 1
 
     assert len(runtime.trainer.calls) == 2
     assert failed_uri not in runtime.fs.files

@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -19,6 +20,7 @@ from openviking.server.identity import RequestContext
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
+from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
 from openviking.session.memory.memory_updater import (
     MemoryReadError,
     MemoryUpdateError,
@@ -48,6 +50,78 @@ async def _marker_exists(session, archive_uri: str, name: str) -> bool:
 
 class TestCommit:
     """Test commit"""
+
+    async def test_commit_completes_after_memory_parse_retries(
+        self, session_with_messages, monkeypatch
+    ):
+        from openviking.session.memory.session_extract_context_provider import (
+            SessionExtractContextProvider,
+        )
+
+        session = session_with_messages
+        completion = AsyncMock(return_value="invalid code!")
+        vlm = SimpleNamespace(model="local-test", max_tokens=4096, get_completion_async=completion)
+        resolver = session._session_compressor.vlm_resolver
+        monkeypatch.setattr(resolver, "get_vlm", AsyncMock(return_value=vlm))
+        monkeypatch.setattr(SessionExtractContextProvider, "prefetch", AsyncMock(return_value=[]))
+        result = await session.commit_async()
+        task = await _wait_for_task(result["task_id"])
+        assert task["status"] == "completed", task
+        assert not any(task["result"]["memories_extracted"].values())
+        assert completion.await_count >= 2
+        assert await _marker_exists(session, result["archive_uri"], ".done")
+        assert not await _marker_exists(session, result["archive_uri"], ".failed.json")
+
+    async def test_commit_completes_after_one_memory_write_fails(
+        self, session_with_messages, monkeypatch, caplog
+    ):
+        session = session_with_messages
+        fs = session._viking_fs
+        compressor = session._session_compressor
+        monkeypatch.setattr(
+            logging.getLogger("openviking.session.compressor_v3"), "handlers", [caplog.handler]
+        )
+        # Index workers are outside the file-only commit fixture.
+        monkeypatch.setattr(compressor, "vikingdb", None)
+        monkeypatch.setattr(
+            "openviking.utils.embedding_utils.vectorize_directory_meta", AsyncMock()
+        )
+        monkeypatch.setattr(compressor.vlm_resolver, "get_vlm", AsyncMock())
+        root = f"viking://user/{session.ctx.user.user_id}/memories/events"
+        a, b, c = [f"{root}/{name}.md" for name in "abc"]
+        operations = ResolvedOperations(
+            upsert_operations=[
+                ResolvedOperation(
+                    memory_type="events",
+                    uris=uris,
+                    memory_fields={"event_name": "meeting", "summary": "Review", "ranges": "0"},
+                )
+                for uris in ([a, b], [c])
+            ],
+            delete_file_contents=[],
+            errors=[],
+        )
+        run = AsyncMock(return_value=(operations, []))
+        react = SimpleNamespace(run=run)
+        monkeypatch.setattr(compressor, "_get_or_create_react", lambda **kw: react)
+        write = fs.write_file
+
+        async def write_except_b(uri, *args, **kwargs):
+            if uri == b:
+                raise OSError("injected write failure")
+            return await write(uri, *args, **kwargs)
+
+        monkeypatch.setattr(fs, "write_file", write_except_b)
+        commit = await session.commit_async()
+        task = await _wait_for_task(commit["task_id"])
+        assert task["status"] == "completed", task
+        assert task["result"]["memories_extracted"]["memory_write"] == 2
+        diff = json.loads(await fs.read_file(task["result"]["memory_diff_uri"], ctx=session.ctx))
+        assert {item["uri"] for item in diff["operations"]["adds"]} == {a, c}
+        assert await fs.exists(a, ctx=session.ctx) and await fs.exists(c, ctx=session.ctx)
+        assert not await fs.exists(b, ctx=session.ctx)
+        assert f"{b}: injected write failure" in caplog.text
+        run.assert_awaited_once()
 
     async def test_memory_apply_failure_does_not_reextract(
         self, session_with_messages, monkeypatch

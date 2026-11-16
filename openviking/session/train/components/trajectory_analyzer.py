@@ -319,8 +319,10 @@ class TrajectoryRolloutAnalyzer:
                 f"deleted={len(memory_result.deleted_uris)}, "
                 f"errors={len(memory_result.errors)}"
             )
-            if memory_result.errors:
+            if memory_result.errors and traj_ops.has_errors():
                 raise MemoryUpdateError(memory_result)
+            for uri, error in memory_result.errors:
+                logger.warning("Trajectory operation failed for %s: %s", uri, error)
             contexts = _contexts_from_memory_result(memory_result)
             return (
                 list(memory_result.written_uris),
