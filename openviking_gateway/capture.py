@@ -35,6 +35,7 @@ from .protocols import (
     unwrap_client,
 )
 from .records import RecordKind as K
+from .sinks import Stats
 from .tool_protocols import reply_chain
 
 logger = logging.getLogger(__name__)
@@ -277,9 +278,11 @@ class BranchChanged(Exception):
 
 
 class CaptureWorker:
-    def __init__(self, store, management, viking):
+    def __init__(self, store, management, viking, stats=None):
         self.queue, self.replay = store.capture, store.replay
         self.management, self.viking = management, viking
+        # The status line's delivery counters; a worker without one counts for nobody.
+        self.stats = stats or Stats()
 
     async def save(self, item, previous, value, written=None):
         """Merge worker-owned progress into a concurrently updated request tail.
@@ -336,6 +339,7 @@ class CaptureWorker:
         except Exception as error:
             old = await self.queue.get(item["scope"], item["session"])
             if old.value.get("ov_session") == item["document"].value.get("ov_session"):
+                self.stats.capture_failed += 1
                 previous = old.value.get("error", {})
                 attempts = previous.get("attempts", 0) + 1
                 reason = getattr(error, "reason", "delivery_failed")
@@ -411,6 +415,7 @@ class CaptureWorker:
                 item["scope"], item["session"], doc, state, None, owner=item["owner"]
             ):
                 raise BranchChanged
+            self.stats.capture_failed += 1
             await self.log(item, state, "paused", "gateway_key_revoked")
             return
         token, session = key["openviking_key"], state["ov_session"]
@@ -420,10 +425,12 @@ class CaptureWorker:
         await self.viking.create_session(token, session, policy.capture_memory_types)
         # A write or commit whose response is lost is sent again; the rare
         # duplicate in OpenViking is accepted.
+        wrote = False
         while state["pending"] and state["pending"][0]["ready"] <= time.time():
             turn = state["pending"][0]
             for offset in range(0, len(turn["messages"]), 100):
                 await self.viking.write(token, session, turn["messages"][offset : offset + 100])
+            wrote = True
             count = len(turn["messages"])
             if turn.get("continued") and state["retained"]:
                 # Commits keep whole turns, so a continuation joins its turn.
@@ -437,6 +444,8 @@ class CaptureWorker:
             state["idle"] = not turn["confirmed"]
             doc = await self.save(item, doc, state, turn["messages"][-1])
             state = copy.deepcopy(doc.value)
+        if wrote:
+            self.stats.capture_delivered += 1
         # Each save may merge a concurrent request, so continue from what it stored.
         if state.get("archive") and state["archive"]["status"] not in TERMINAL:
             state["archive"] = await observe_archive(self.viking, state["archive"], token)

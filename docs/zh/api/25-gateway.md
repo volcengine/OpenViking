@@ -60,7 +60,7 @@ OpenViking 拒绝 API 密钥时，返回 401 `openviking_http_401`。
 
 ### 日志记录 {#log-records}
 
-日志只记元数据，不含消息内容、密钥和错误信息。发往模型路由的每个请求（`.../models` 除外）无论怎样结束都恰好写一条记录：正常回复、被网关拒绝、服务商失败、流式回复中途断开，或者客户端提前离开。对话的保存状态变化时也写一条（`kind` 为 `capture`）。使用默认的 `request_log_sink: store` 时，密钥确认之前就失败的请求没有账户，不会保存；`stdout` 输出会照常写出，`account` 和 `user_id` 为 `null`。字段不适用时省略。
+日志只记元数据，不含消息内容、密钥和错误信息。发往模型路由的每个请求（`.../models` 除外）无论怎样结束都恰好写一条记录：正常回复、被网关拒绝、服务商失败、流式回复中途断开，或者客户端提前离开。对话的保存状态变化时也写一条（`kind` 为 `capture`）。使用默认的 `request_log_sink: store` 时，密钥确认之前就失败的请求没有账户，不会保存；`stdout` 和 `file` 输出会照常写出，`account` 和 `user_id` 为 `null`。字段不适用时省略。
 
 | 字段 | 含义 |
 | --- | --- |
@@ -99,6 +99,43 @@ OpenViking 拒绝 API 密钥时，返回 401 `openviking_http_401`。
 以 `first_upstream_` 和 `hidden_upstream_` 开头的字段把 token 用量拆成首次服务商调用和 OpenViking 工具轮次两部分，首次调用缓存命中率按前者计算。
 
 `/overview` 由这些记录汇总而来。除用量和缓存数据外，还返回 `degradations`（异常代码 → 次数）、`capture_issues`（正在重试或已暂停保存的对话数）、`cache_alerts`、`openviking`（OpenViking 的 `status`，降级时另有 `reason`）和 `log_retention_days`。
+
+### 状态行 {#status-line}
+
+`snapshot_interval_seconds` 大于零时，每个网关进程按这个间隔写一行 JSON；写到哪里见[状态行](../guides/22-gateway-operations.md#status-line)。使用 `store` 输出时，由 `openviking_gateway.snapshot` logger 以 INFO 级别输出，宿主没有配置日志 handler 时写到 stderr。计数覆盖同一进程距上一行的这段时间。状态行从不包含账户、用户、会话、模型或请求 ID。
+
+```json
+{"event": "snapshot", "schema": 1, "time": 1794787200.0, "interval_s": 60.0,
+ "uptime_s": 8640.2, "version": "0.5.6",
+ "inflight_requests": 12, "inflight_streams": 9,
+ "requests": 480, "errors": {"upstream_timeout": 2, "store_unavailable": 1},
+ "degradations": {"recall_failed": 4},
+ "stream_errors": {"client_disconnected": 3},
+ "rejected_overload": 0,
+ "records_unlogged": 0, "records_failed": 0, "records_dropped": 0,
+ "store_errors": 1,
+ "openviking": {"state": "ok", "reason": "", "open_circuits": 0},
+ "capture": {"delivered": 18, "failed": 0, "due": 3, "scheduled": 41,
+             "oldest_due_age_s": 12.5, "workers": 4}}
+```
+
+| 字段 | 含义 |
+| --- | --- |
+| `time`、`interval_s`、`uptime_s`、`version` | 写入时间（epoch 秒）、距上一行的秒数、进程已运行的秒数，以及安装的 OpenViking 版本 |
+| `inflight_requests`、`inflight_streams` | 写入时从收到到响应结束之间的模型请求数，以及其中正在流式回复的请求数 |
+| `requests` | 这段时间写出的请求记录数 |
+| `errors`、`degradations`、`stream_errors` | 这些记录按 `error_reason`、按 `degradations` 的每一项、按 `stream_error` 的计数 |
+| `rejected_overload` | 因进程过载被拒绝的请求 |
+| `records_unlogged` | 因请求没有账户而未被 `store` 输出保存的记录 |
+| `records_failed`、`records_dropped` | 输出写入失败的记录，以及 `file` 输出因队列已满而丢弃的记录 |
+| `store_errors` | 因状态存储出错而失败或失去记忆的请求（`store_unavailable`，或异常 `memory_store_failure`） |
+| `openviking.state`、`openviking.reason` | 网关最近一次 OpenViking 状态检查的结果：`ok`、`degraded` 或 `starting`，降级时附原因 |
+| `openviking.open_circuits` | 目前恒为 `0` |
+| `capture.delivered` | 本区间内本进程把待保存轮次写入 OpenViking 的对话数 |
+| `capture.failed` | 本区间内本进程失败的保存尝试次数。`capture.delivered` 和 `capture.failed` 按进程统计，可以跨进程相加 |
+| `capture.due`、`capture.scheduled` | 现在该保存的对话数，以及有任何待保存安排的对话数。读不到存储时与 `oldest_due_age_s` 一起省略。它们描述的是共享存储，从任意一个进程读取即可（使用 Redis 时把它们相加，积压会按副本数重复计算） |
+| `capture.oldest_due_age_s` | 已到期且带有计划时间的保存中，最早那条已等待的秒数；没有时为 `0`。与 `capture.due` 一样描述共享存储。保存在重试期间，它和 `capture.due` 都不会增长，因为重试被安排在之后的时间；判断保存是否卡住，看 `capture.failed` 与 `capture.delivered` 的对比 |
+| `capture.workers` | 本进程仍在运行的保存 worker 数；可以跨进程相加 |
 
 ## 上游和上下文配置 {#upstreams-and-context-profiles}
 

@@ -28,6 +28,7 @@ description: 查询 OpenViking 网关的配置字段、环境变量、上下文�
 | `host` | 独立 | `127.0.0.1` | | 监听地址 |
 | `port` | 独立 | `1935` | 1–65,535 | 监听端口 |
 | `workers` | 独立 | `1` | 1–64 | worker 进程数 |
+| `log_path` | 独立 | 空 | 文件路径 | 应用日志不再以文本写到 stderr，而是以 JSON 行写入这个轮转文件（256 MiB，保留四个旧文件）；需要 `workers: 1`。见[观测](../guides/22-gateway-operations.md#monitoring) |
 | `keep_alive_seconds` | 独立 | `75` | 大于 0 | 两次请求之间保留空闲 HTTP 连接的秒数；应大于负载均衡器的后端空闲超时 |
 | `public_url` | 两者 | 空 | HTTP(S) URL，不带 `/gateway` | 客户端访问的对外地址，`/gateway` 由网关自己加。为空时，嵌入网关沿用 Server 的对外地址；两者都没有时，接入指南使用请求来源地址，MCP 文件上传和下载也不可用（`mcp_file_links` 为 `direct` 时除外）。见[对外地址](../guides/22-gateway-operations.md#public-address) |
 | `mcp_file_links` | 两者 | `proxy` | `proxy`、`direct` | MCP 上传和下载工具返回的链接如何交给客户端。`proxy` 改写为 `public_url` 加 `/gateway/uploads` 或 `/gateway/downloads`，需要设置 `public_url`。`direct` 原样透传 OpenViking 的链接，需要 Server 的 `OPENVIKING_PUBLIC_BASE_URL`（或 `server.public_base_url`）是客户端能访问的地址 |
@@ -43,9 +44,12 @@ description: 查询 OpenViking 网关的配置字段、环境变量、上下文�
 | `min_server_version` | 两者 | `0.4.16` | 版本号 | 独立网关要求的 OpenViking Server 最低版本 |
 | `session_ttl_seconds` | 两者 | `2592000`（30 天） | 3600 及以上 | 对话闲置多少秒后过期；也决定缓存的 OpenViking 密钥及其用户记录的固定寿命 |
 | `response_ttl_seconds` | 两者 | `2592000`（30 天） | 60 及以上 | Responses 响应与上游的对应关系保留多少秒 |
-| `request_log_sink` | 两者 | `store` | `store`, `stdout` | 将请求和后台保存日志写入存储，或以每条一行 JSON 写到 stdout 并立即刷新；见[观测](../guides/22-gateway-operations.md#monitoring) |
+| `request_log_sink` | 两者 | `store` | `store`, `stdout`, `file` | 将请求和后台保存日志写入存储，或以每条一行 JSON 写到 stdout 并立即刷新，或由后台线程把同样的行写入 `request_log_path`；见[观测](../guides/22-gateway-operations.md#monitoring)。`file` 输出需要单个 worker 进程：独立网关设 `workers: 1`，嵌入式网关需要服务端只有一个 worker |
+| `request_log_path` | 两者 | 空 | 文件路径 | `file` 输出写入的文件；使用 `file` 时必填 |
+| `request_log_max_bytes` | 两者 | `268435456`（256 MiB） | 1,048,576 及以上 | `file` 输出的文件达到这个大小时轮转，保留四个旧文件 |
+| `snapshot_interval_seconds` | 两者 | `0` | 0 及以上 | 写一行本进程计数的[状态行](../guides/22-gateway-operations.md#status-line)的间隔秒数。`0` 表示不写 |
 | `trusted_host_headers` | 两者 | `false` | `true`, `false` | 把网关前置服务发来的 `X-OpenViking-Resource-Id` 和 `X-OpenViking-Request-Source` 记为 `resource_id` 和 `request_source`；见[宿主集成约定](../guides/22-gateway-operations.md#host-integration-contract)。只有客户端无法直接访问网关时才打开，见[来自宿主的请求头](11-security-and-data.md#headers-from-a-host) |
-| `log_retention_days` | 两者 | `30` | 1 及以上 | 存储中的请求日志保留天数；stdout 的保留期限由日志采集系统管理 |
+| `log_retention_days` | 两者 | `30` | 1 及以上 | 存储中的请求日志保留天数；stdout 和文件的保留期限由日志采集系统管理 |
 | `max_body_bytes` | 两者 | `33554432`（32 MiB） | 1,024 及以上 | 请求和上传的大小上限，单位为字节 |
 | `upstream_timeout_seconds` | 两者 | `600` | 大于 0 | 网关等待服务商的秒数：等回复开始（建立连接、发送请求、收到响应头），以及之后等回复的每一部分。持续有数据的回复不会被切断，无论持续多久。等待超时时，客户端收到 504 `upstream_timeout`；已经开始的流以一条错误事件结束 |
 | `prepare_timeout_seconds` | 两者 | `0` | 0 及以上 | 网关为请求补充记忆（查找会话、召回、画像、工具）最多花费的秒数，超过后不带记忆转发请求，并标记 `prepare_timeout`。压缩摘要请求的时间不计入。`0` 表示不限制 |

@@ -60,7 +60,7 @@ If OpenViking rejects the API key, the response is 401 `openviking_http_401`.
 
 ### Log records {#log-records}
 
-The log holds metadata only, never message content, keys or error messages. Every request to a model route (except `.../models`) writes exactly one record, whichever way it ends: answered, refused by the gateway, failed at the provider, cut off mid-stream, or abandoned by the client. A conversation's saving status change writes one too (`kind` is `capture`). With the default `request_log_sink: store`, a request that failed before its key was confirmed has no account and is not stored; the `stdout` sink writes it with `account` and `user_id` set to `null`. Fields are left out when they do not apply.
+The log holds metadata only, never message content, keys or error messages. Every request to a model route (except `.../models`) writes exactly one record, whichever way it ends: answered, refused by the gateway, failed at the provider, cut off mid-stream, or abandoned by the client. A conversation's saving status change writes one too (`kind` is `capture`). With the default `request_log_sink: store`, a request that failed before its key was confirmed has no account and is not stored; the `stdout` and `file` sinks write it with `account` and `user_id` set to `null`. Fields are left out when they do not apply.
 
 | Field | Meaning |
 | --- | --- |
@@ -99,6 +99,43 @@ The log holds metadata only, never message content, keys or error messages. Ever
 Fields that start with `first_upstream_` and `hidden_upstream_` split the token usage between the first provider call and the OpenViking tool rounds; the first-call cache hit rate uses the first group.
 
 `/overview` aggregates these records. Besides usage and cache figures, it returns `degradations` (issue code → count), `capture_issues` (conversations retrying or paused), `cache_alerts`, `openviking` (OpenViking's `status`, plus `reason` when degraded) and `log_retention_days`.
+
+### Status line {#status-line}
+
+With `snapshot_interval_seconds` above zero, each gateway process writes one JSON line at that interval; see [Status line](../guides/22-gateway-operations.md#status-line) for where it goes. With the `store` sink the line is logged at INFO by the `openviking_gateway.snapshot` logger, and goes to stderr when the host has configured no log handler. Counts cover the interval since the previous line of the same process. It never carries an account, user, session, model or request ID.
+
+```json
+{"event": "snapshot", "schema": 1, "time": 1794787200.0, "interval_s": 60.0,
+ "uptime_s": 8640.2, "version": "0.5.6",
+ "inflight_requests": 12, "inflight_streams": 9,
+ "requests": 480, "errors": {"upstream_timeout": 2, "store_unavailable": 1},
+ "degradations": {"recall_failed": 4},
+ "stream_errors": {"client_disconnected": 3},
+ "rejected_overload": 0,
+ "records_unlogged": 0, "records_failed": 0, "records_dropped": 0,
+ "store_errors": 1,
+ "openviking": {"state": "ok", "reason": "", "open_circuits": 0},
+ "capture": {"delivered": 18, "failed": 0, "due": 3, "scheduled": 41,
+             "oldest_due_age_s": 12.5, "workers": 4}}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `time`, `interval_s`, `uptime_s`, `version` | When the line was written (epoch seconds), seconds since the previous line, seconds since the process started, and the installed OpenViking version |
+| `inflight_requests`, `inflight_streams` | Model requests between receipt and the end of their response, and those of them whose response is streaming, when the line was written |
+| `requests` | Request records written in the interval |
+| `errors`, `degradations`, `stream_errors` | Those records counted by `error_reason`, by each entry of `degradations`, and by `stream_error` |
+| `rejected_overload` | Requests refused because the process was overloaded |
+| `records_unlogged` | Records the `store` sink did not keep because the request had no account |
+| `records_failed`, `records_dropped` | Records the sink failed to write, and records the `file` sink dropped because its queue was full |
+| `store_errors` | Requests that failed or lost their memory on a state store error (`store_unavailable`, or the issue `memory_store_failure`) |
+| `openviking.state`, `openviking.reason` | The gateway's last OpenViking status check: `ok`, `degraded` or `starting`, and the reason when degraded |
+| `openviking.open_circuits` | Always `0` for now |
+| `capture.delivered` | Conversations whose pending turns this process wrote to OpenViking in the interval |
+| `capture.failed` | Delivery attempts of this process that failed in the interval. `capture.delivered` and `capture.failed` are per process and can be summed across processes |
+| `capture.due`, `capture.scheduled` | Conversations whose saving is due now, and those with any saving scheduled. Left out, with `oldest_due_age_s`, when the store could not be read. They describe the shared store: read them from any one process (with Redis, summing them counts the backlog once per replica) |
+| `capture.oldest_due_age_s` | How long the oldest due saving with a scheduled time has waited; `0` when none. Describes the shared store, like `capture.due`. Neither grows while deliveries are retried, because a retry is scheduled in the future; watch `capture.failed` against `capture.delivered` for saving that is stuck |
+| `capture.workers` | Saving workers still running in this process; can be summed across processes |
 
 ## Upstreams and context profiles {#upstreams-and-context-profiles}
 

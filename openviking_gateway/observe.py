@@ -208,7 +208,10 @@ class RequestRecord:
     def __init__(self, app, request, *, recorded=True):
         self.app, self.recorded = app, recorded
         # Set right before the first upstream request, a compaction summary included.
-        self.attempted = False
+        self.attempted = self.streaming = False
+        self.stats = getattr(getattr(app, "state", None), "stats", None) if recorded else None
+        if self.stats:
+            self.stats.inflight_requests += 1
         # A response object calls ProxyRequest.finish(), which writes the record.
         self.deferred = False
         self.account = self.user_id = None
@@ -262,6 +265,12 @@ class RequestRecord:
         if reason == "client_disconnected":
             self.metrics["client_disconnected"] = True
 
+    def stream_started(self):
+        """Count the request as a stream in flight once its body starts."""
+        if self.stats and not self.streaming:
+            self.stats.inflight_streams += 1
+        self.streaming = True
+
     def stream_failed(self, status, reason, error=None):
         """Note why a response body that started did not end normally; the first reason wins."""
         if "stream_error" in self.metrics:
@@ -313,11 +322,19 @@ class RequestRecord:
             upstream_attempted=self.attempted,
             total_ms=elapsed_ms(self.started),
         )
+        if stats := self.stats:
+            stats.inflight_requests -= 1
+            stats.inflight_streams -= self.streaming
+            stats.recorded(self.metrics)
         state = self.app.state
         # The store keeps records per account; one before authentication has none.
         if self.account is None and state.config.request_log_sink == "store":
+            if stats:
+                stats.records_unlogged += 1
             return
         try:
             await state.management.log(self.account, self.metrics, user_id=self.user_id)
         except Exception:
             logger.exception("OpenViking Gateway request record failed")
+            if stats:
+                stats.records_failed += 1

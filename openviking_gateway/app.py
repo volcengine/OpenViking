@@ -34,6 +34,7 @@ from .management import (
 from .observe import VIKING_DETAILS, GatewayError, RequestRecord, degrade
 from .protocols import configure_rules
 from .proxy import ProxyRequest, filtered_headers, resolve_binding
+from .sinks import FileSink, Stats, snapshot_loop
 from .storage import (
     STORE_ERRORS,
     AsyncCodec,
@@ -107,8 +108,8 @@ async def capture_loop(app, stopped):
             pass
 
 
-def open_stores(config: GatewayConfig, encryptor):
-    """Construct storage ports and collect their resource cleanup."""
+def open_stores(config: GatewayConfig, encryptor, stats=None):
+    """Construct storage ports, the request-record file sink if any, and their cleanup."""
     close = contextlib.AsyncExitStack()
     settings = config.storage
     if "redis" in (settings.kernel, settings.management):
@@ -134,8 +135,12 @@ def open_stores(config: GatewayConfig, encryptor):
     else:
         management = SQLiteManagementStore(config.directory / "management.sqlite3", encryptor)
         close.push_async_callback(asyncio.to_thread, management.close)
-    log = stdout_log if config.request_log_sink == "stdout" else None
-    return store, CachedManagement(management, log=log), close.aclose
+    log, sink = stdout_log if config.request_log_sink == "stdout" else None, None
+    if config.request_log_sink == "file":
+        sink = FileSink(config.request_log_path, config.request_log_max_bytes, stats)
+        close.callback(sink.close)
+        log = sink.log
+    return store, CachedManagement(management, log=log), close.aclose, sink
 
 
 def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, encryptor=None):
@@ -149,7 +154,8 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
             "gateway.client_rules removes entries the packaged rules do not have: %s",
             "; ".join(unknown),
         )
-    store, management, close = open_stores(config, encryptor)
+    stats = Stats()
+    store, management, close, file_sink = open_stores(config, encryptor, stats)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -164,7 +170,7 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
                 app.state.http = http
                 app.state.viking = VikingClient(http, openviking_url, config.min_server_version)
                 app.state.kernel = MemoryKernel(store, app.state.viking)
-                app.state.worker = CaptureWorker(store, management, app.state.viking)
+                app.state.worker = CaptureWorker(store, management, app.state.viking, stats=stats)
                 # The first probe runs in the background: an embedded server is not listening yet.
                 app.state.health = {"status": "starting"}
                 stopped = asyncio.Event()
@@ -172,7 +178,11 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
                     asyncio.create_task(health_loop(app, config.health_interval_seconds)),
                     asyncio.create_task(cleanup_loop()),
                 ]
-                captures = [
+                if config.snapshot_interval_seconds:
+                    maintenance.append(
+                        asyncio.create_task(snapshot_loop(app, config.snapshot_interval_seconds))
+                    )
+                app.state.captures = captures = [
                     asyncio.create_task(capture_loop(app, stopped))
                     for _ in range(config.capture_concurrency)
                 ]
@@ -197,6 +207,7 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
         openapi_url=None,
     )
     app.state.store, app.state.management, app.state.config = store, management, config
+    app.state.stats, app.state.file_sink = stats, file_sink
     app.state.openviking_url = openviking_url.rstrip("/")
     app.state.vlm_source = vlm_source
     app.state.warnings = (

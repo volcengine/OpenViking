@@ -975,7 +975,7 @@ async def test_open_stores_shares_redis_and_reads_across_instances(provider, tmp
                 "redis": redis_settings(provider),
             },
         )
-        store, management, close = open_stores(config, None)
+        store, management, close, _ = open_stores(config, None)
         try:
             await store.initialize()
             await management.initialize()

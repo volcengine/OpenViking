@@ -112,7 +112,12 @@ class GatewayConfig(BaseModel):
     # The 3600 floor keeps sessions alive past capture's default 600-second idle tail.
     session_ttl_seconds: int = Field(default=30 * 86400, ge=3600)
     response_ttl_seconds: int = Field(default=30 * 86400, ge=60)
-    request_log_sink: Literal["store", "stdout"] = "store"
+    request_log_sink: Literal["store", "stdout", "file"] = "store"
+    # The file sink's JSON lines; it rotates at request_log_max_bytes and keeps four old files.
+    request_log_path: str = ""
+    request_log_max_bytes: int = Field(default=256 * 1024 * 1024, ge=1024 * 1024)
+    # Seconds between status lines with this process's counters; 0 writes none.
+    snapshot_interval_seconds: float = Field(default=0, ge=0)
     # Record X-OpenViking-Resource-Id and X-OpenViking-Request-Source from a fronting service.
     trusted_host_headers: bool = False
     log_retention_days: int = Field(default=30, ge=1)
@@ -131,6 +136,8 @@ class GatewayConfig(BaseModel):
     def validate_tenancy(self):
         if self.tenancy == "key" and self.management_api:
             raise ValueError("tenancy 'key' requires management_api: false")
+        if self.request_log_sink == "file" and not self.request_log_path:
+            raise ValueError("request_log_sink 'file' requires request_log_path")
         return self
 
     @model_validator(mode="before")
@@ -199,6 +206,8 @@ class StandaloneGatewayConfig(GatewayConfig):
     port: int = Field(default=1935, ge=1, le=65535)
     workers: int = Field(default=1, ge=1, le=64)
     keep_alive_seconds: float = Field(default=75, gt=0)
+    # Application log as JSON lines in this rotating file instead of text on stderr.
+    log_path: str = ""
     # Same schema as ov.conf's top-level "encryption"; absent or disabled stores plaintext.
     encryption: dict | None = Field(default=None, repr=False)
 
@@ -206,6 +215,13 @@ class StandaloneGatewayConfig(GatewayConfig):
     @classmethod
     def validate_openviking_url(cls, value: str) -> str:
         return normalize_url(value)
+
+    @model_validator(mode="after")
+    def validate_log_files(self):
+        # Worker processes would rotate the same file under each other.
+        if self.workers > 1 and (self.request_log_sink == "file" or self.log_path):
+            raise ValueError("request_log_sink 'file' and log_path require workers: 1")
+        return self
 
     @field_validator("encryption")
     @classmethod

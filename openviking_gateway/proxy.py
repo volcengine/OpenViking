@@ -677,6 +677,7 @@ class ProxyRequest:
         async def stream():
             nonlocal completed
             finished = False
+            self.record.stream_started()
             chunks = heartbeat(loop.run(response, send), HEARTBEAT_SECONDS)
             try:
                 async for chunk in chunks:
@@ -750,6 +751,7 @@ class ProxyRequest:
             headers = {k: v for k, v in headers.items() if k.lower() != "content-length"}
 
             async def stream():
+                self.record.stream_started()
                 decoder = SSEDecoder()
                 observe = not response.headers.get("content-encoding")
                 finished, opened = False, ""

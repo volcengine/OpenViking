@@ -421,9 +421,41 @@ The gateway exports no metrics such as Prometheus. By default, request logs are 
 
 Set `request_log_sink: "stdout"` in the gateway configuration, or `OPENVIKING_GATEWAY_REQUEST_LOG_SINK=stdout`, and restart to send new records only to stdout. Each model request, failed ones included, and each background saving status change produces one JSON line, flushed immediately even when stdout is a pipe. Each record includes `time` (Unix seconds when written), `account` and `user_id` (`null` for a request that failed before its key was confirmed, and possibly for older saving state), and the existing request metrics at the top level, such as `kind`, `status`, `input_tokens` and `cached_tokens`. Credentials, prompts and replies are not included. The collector controls retention and access to these records; `log_retention_days` applies only to stored logs.
 
+Set `request_log_sink: "file"` and `request_log_path` to write the same lines to a file instead. A background thread writes them, so a slow disk never holds up a request; when its queue of 10,000 lines is full, new lines are dropped and counted in the status line's `records_dropped`. The file rotates at `request_log_max_bytes` (default 256 MiB) and four old files are kept (`requests.jsonl.1` … `.4`). This sink needs one worker process: `workers: 1` standalone, one server worker embedded; run more replicas instead. On Kubernetes, put the file on a volume your collector reads, for example with the chart's `extraVolumes` and `extraVolumeMounts`:
+
+```yaml
+config:
+  request_log_sink: file
+  request_log_path: /var/log/openviking-gateway/$HOSTNAME.jsonl
+extraVolumes:
+  - name: gateway-logs
+    hostPath:
+      path: /var/log/openviking-gateway
+      type: DirectoryOrCreate
+extraVolumeMounts:
+  - name: gateway-logs
+    mountPath: /var/log/openviking-gateway
+```
+
+`$HOSTNAME` resolves from the environment to the pod name, so each pod writes its own file: replicas must never share a log file.
+
+Set `log_path` on a standalone gateway to write its application log (warnings, errors and tracebacks) to a rotating file as JSON lines with `time`, `level`, `logger`, `message`, `request_id` (when the line was written while serving a request) and `exc` (the traceback, when there is one), instead of text on stderr.
+
 When `management_api: false` disables Studio and the management endpoints, configure the stdout sink and collect process or container logs for monitoring. The same workflow applies with the stdout sink when management is enabled: the Requests page and Overview's request figures have no new records. Previously stored records remain visible until they expire.
 
-Aggregate reasons and first-call cache results from the request log's top-level fields. Alert on capture pauses (`kind: capture`), capture queue growth, `openviking_http_429`, Redis memory/evictions and HTTP error rates. Gateway errors are records too: count them by `error_reason` and `error_origin` (see [Log records](../api/25-gateway.md#log-records)). The store sink keeps no record for a request refused before its key was confirmed, so with that sink count those 401/402/403 responses in proxy access logs; use gateway stderr for the traceback of an `internal_error`. Proxy concurrent connections can approximate active streams. Confirm your platform collects stdout; a mounted directory alone does not redirect it to files.
+Aggregate reasons and first-call cache results from the request log's top-level fields. Alert on capture pauses (`kind: capture`), capture queue growth, `openviking_http_429`, Redis memory/evictions and HTTP error rates. Gateway errors are records too: count them by `error_reason` and `error_origin` (see [Log records](../api/25-gateway.md#log-records)). The store sink keeps no record for a request refused before its key was confirmed, so with that sink count those 401/402/403 responses in proxy access logs; use gateway stderr for the traceback of an `internal_error`. Confirm your platform collects stdout; a mounted directory alone does not redirect it to files.
+
+### Status line {#status-line}
+
+Set `snapshot_interval_seconds` (for example `60`) to have each gateway process write one status line at that interval. It goes where request records go with the `stdout` and `file` sinks; with `store` it is logged at INFO by the `openviking_gateway.snapshot` logger, and goes to stderr when the host has configured no log handler. It carries no account, user, session, model or request ID; the fields are listed in [Status line](../api/25-gateway.md#status-line). Each line covers the interval since the previous one. The interval counters (`capture.delivered` and `capture.failed` among them), `inflight_*` and `capture.workers` are per process and can be summed across processes; `capture.due`, `capture.scheduled` and `capture.oldest_due_age_s` describe the shared store and are read from any one process (with Redis, summing them counts the backlog once per replica). Useful alerts:
+
+- `errors.store_unavailable` or `store_errors` above zero: the state store (SQLite or Redis) is failing.
+- `errors.upstream_timeout`, `upstream_unreachable` or `upstream_disconnected` rising: a provider is slow or unreachable.
+- `openviking.state` other than `ok`, or `degradations.recall_failed` rising: OpenViking is not answering.
+- `inflight_requests` close to your capacity, `inflight_streams` for long-running streams.
+- `records_dropped` or `records_failed` above zero: request records are being lost.
+- `capture.oldest_due_age_s` growing or `capture.workers` below `capture_concurrency`: background saving is falling behind or has stopped.
+- `capture.failed` above zero while `capture.delivered` stays at zero: saving to OpenViking is stuck. `capture.due` and `capture.oldest_due_age_s` do not grow while deliveries are retried, because a retry is scheduled in the future.
 
 ### Routine checks {#day-to-day-operations}
 

@@ -421,9 +421,41 @@ appendfsync everysec
 
 在网关配置中设置 `request_log_sink: "stdout"`，或设置 `OPENVIKING_GATEWAY_REQUEST_LOG_SINK=stdout`，重启后新记录只写到 stdout。每个模型请求（包括失败的请求）和每次后台保存状态变更各产生一行 JSON，即使 stdout 接到管道也会立即刷新。每条记录包含 `time`（写入时的 Unix 秒数）、`account` 和 `user_id`（密钥确认之前就失败的请求为 `null`，旧保存状态也可能为 `null`），以及位于顶层的现有请求指标，如 `kind`、`status`、`input_tokens` 和 `cached_tokens`。不包含凭证、提示词或回复。采集系统负责这些记录的保留期限和访问权限；`log_retention_days` 只作用于存储中的日志。
 
+设置 `request_log_sink: "file"` 和 `request_log_path`，就把同样的行写到文件。写文件由后台线程完成，磁盘慢也不会拖住请求；它的队列（10,000 行）满了时，新行被丢弃，并计入状态行的 `records_dropped`。文件达到 `request_log_max_bytes`（默认 256 MiB）时轮转，保留四个旧文件（`requests.jsonl.1` … `.4`）。这种输出需要单个 worker 进程：独立网关设 `workers: 1`，嵌入式网关需要服务端只有一个 worker；需要扩容时增加副本。在 Kubernetes 上，把文件放在日志采集器能读到的卷上，例如用 chart 的 `extraVolumes` 和 `extraVolumeMounts`：
+
+```yaml
+config:
+  request_log_sink: file
+  request_log_path: /var/log/openviking-gateway/$HOSTNAME.jsonl
+extraVolumes:
+  - name: gateway-logs
+    hostPath:
+      path: /var/log/openviking-gateway
+      type: DirectoryOrCreate
+extraVolumeMounts:
+  - name: gateway-logs
+    mountPath: /var/log/openviking-gateway
+```
+
+`$HOSTNAME` 从环境变量解析为 Pod 名，每个 Pod 写自己的文件：副本之间绝不能共用一个日志文件。
+
+独立网关设置 `log_path` 后，应用日志（警告、错误和 traceback）不再以文本写到 stderr，而是以 JSON 行写入这个轮转文件，字段为 `time`、`level`、`logger`、`message`、`request_id`（处理请求时写下的行才有）和 `exc`（有 traceback 时）。
+
 当 `management_api: false` 关闭 Studio 和管理接口时，配置 stdout sink 并采集进程或容器日志进行观测。管理面开启但选择 stdout sink 时也采用同样流程：请求日志页和概览中的请求统计不会收到新记录。之前已存储的记录仍可见，直到过期。
 
-从请求日志的顶层字段统计 reason 和首调缓存结果。对 capture 暂停（`kind: capture`）、队列增长、`openviking_http_429`、Redis 内存/驱逐和 HTTP 错误率设置告警。网关自身的错误也会写入记录：按 `error_reason` 和 `error_origin` 统计（见[日志记录](../api/25-gateway.md#log-records)）。store 输出不保存密钥确认之前就被拒绝的请求，使用它时请从代理访问日志统计这些 401/402/403；`internal_error` 的 traceback 看网关 stderr。代理并发连接数可以近似表示在途流数。确认平台实际采集 stdout；只挂一个目录不会把它转成文件日志。
+从请求日志的顶层字段统计 reason 和首调缓存结果。对 capture 暂停（`kind: capture`）、队列增长、`openviking_http_429`、Redis 内存/驱逐和 HTTP 错误率设置告警。网关自身的错误也会写入记录：按 `error_reason` 和 `error_origin` 统计（见[日志记录](../api/25-gateway.md#log-records)）。store 输出不保存密钥确认之前就被拒绝的请求，使用它时请从代理访问日志统计这些 401/402/403；`internal_error` 的 traceback 看网关 stderr。确认平台实际采集 stdout；只挂一个目录不会把它转成文件日志。
+
+### 状态行 {#status-line}
+
+设置 `snapshot_interval_seconds`（例如 `60`）后，每个网关进程按这个间隔写一行状态。使用 `stdout` 和 `file` 输出时，它和请求记录写在同一处；使用 `store` 时，由 `openviking_gateway.snapshot` logger 以 INFO 级别输出，宿主没有配置日志 handler 时写到 stderr。状态行不含账户、用户、会话、模型或请求 ID，字段见[状态行](../api/25-gateway.md#status-line)。每行统计的是距上一行的这段时间。区间计数（包括 `capture.delivered` 和 `capture.failed`）、`inflight_*` 和 `capture.workers` 按进程统计，可以跨进程相加；`capture.due`、`capture.scheduled` 和 `capture.oldest_due_age_s` 描述的是共享存储，从任意一个进程读取即可（使用 Redis 时把它们相加，积压会按副本数重复计算）。建议的告警：
+
+- `errors.store_unavailable` 或 `store_errors` 大于零：状态存储（SQLite 或 Redis）出错。
+- `errors.upstream_timeout`、`upstream_unreachable` 或 `upstream_disconnected` 上升：服务商变慢或无法连接。
+- `openviking.state` 不是 `ok`，或 `degradations.recall_failed` 上升：OpenViking 没有应答。
+- `inflight_requests` 接近容量；`inflight_streams` 反映长时间运行的流。
+- `records_dropped` 或 `records_failed` 大于零：请求记录在丢失。
+- `capture.oldest_due_age_s` 持续增长，或 `capture.workers` 小于 `capture_concurrency`：后台保存落后或已停止。
+- `capture.failed` 大于零而 `capture.delivered` 一直为零：保存到 OpenViking 卡住了。保存在重试期间，`capture.due` 和 `capture.oldest_due_age_s` 不会增长，因为重试被安排在之后的时间。
 
 ### 例行检查 {#day-to-day-operations}
 

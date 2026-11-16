@@ -45,7 +45,7 @@ from redis.exceptions import TimeoutError as RedisTimeoutError
 from openviking.server.account_stores.redis_client import create_redis_client
 from openviking_cli.utils.config.agfs_config import RedisCacheConfig
 
-from .capture_store import Document, LeaseLost
+from .capture_store import Document, LeaseLost, backlog_counts
 from .records import RecordKind as K
 from .replay_store import INHERITED
 from .storage import AsyncCodec, digest
@@ -538,6 +538,14 @@ class RedisCaptureQueue:
                     "document": Document(await self.store.codec.decode(result[0]), int(result[1])),
                 }
         return None
+
+    async def backlog(self, now):
+        client, due = self.store.client, now * 1000
+        scheduled = await client.zcard(self.ready)
+        count = await client.zcount(self.ready, "-inf", due)
+        # Scores are ready times in ms, or 0 for a capture due at once.
+        oldest = await client.zrangebyscore(self.ready, "(0", due, start=0, num=1, withscores=True)
+        return backlog_counts(scheduled, count, oldest[0][1] / 1000 if oldest else 0, now)
 
     async def release(self, item):
         await self.store.script(

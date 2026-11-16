@@ -27,6 +27,16 @@ class CaptureQueue(Protocol):
     async def swap(self, scope, session, previous: Document, value, ready, owner=None) -> bool: ...
     async def claim(self, lease_seconds=120) -> dict | None: ...
     async def release(self, item) -> None: ...
+    async def backlog(self, now) -> dict: ...
+
+
+def backlog_counts(scheduled, due, oldest, now):
+    """``oldest`` is the earliest ready time of a due capture; 0 means "at once", not a time."""
+    return {
+        "due": due,
+        "scheduled": scheduled,
+        "oldest_due_age_s": round(max(now - oldest, 0), 3) if oldest else 0,
+    }
 
 
 class SQLiteCaptureQueue:
@@ -99,6 +109,17 @@ class SQLiteCaptureQueue:
                 }
 
         return await self.db.run(claim, write=True)
+
+    async def backlog(self, now):
+        def read():
+            with self.db.connect() as c:
+                return c.execute(
+                    "SELECT COUNT(ready), COALESCE(SUM(ready<=? AND lease<?), 0), "
+                    "MIN(CASE WHEN ready<=? AND lease<? AND ready>0 THEN ready END) FROM capture",
+                    (now, now, now, now),
+                ).fetchone()
+
+        return backlog_counts(*await self.db.run(read), now)
 
     async def release(self, item):
         def release():
