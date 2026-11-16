@@ -42,6 +42,7 @@
   gap: 8px;
   box-sizing: border-box;
   padding: 8px 8px 12px;
+  background-color: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
 }
 
 /*

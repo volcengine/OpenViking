@@ -76,6 +76,8 @@
   min-height: 0;
   height: 100%;
   max-width: 100%;
+  /* Share the opaque surface with sticky trailing cells during horizontal scroll. */
+  background-color: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
   color: var(--ov-ui-file-tree-text);
   font-family: inherit;
   font-size: 13px;
