@@ -1093,6 +1093,44 @@ async def test_submit_reconciles_same_session_uri_conflicts(monkeypatch, case):
         assert MemoryFileUtils.read(fs.files[uri]).plain_content() == expected
 
 
+@pytest.mark.asyncio
+async def test_unchanged_edit_keeps_target_and_applies_unrelated_delete(monkeypatch):
+    edit = _note_update_op("canonical")
+    edit.memory_fields["content"] = StrPatch(
+        blocks=[SearchReplaceBlock(search="old canonical", replace="old canonical")]
+    )
+    target = edit.old_memory_file_content
+    other = _note_delete_file("obsolete")
+    fs = InMemoryVikingFS({f.uri: MemoryFileUtils.write(f) for f in (target, other)})
+    monkeypatch.setattr("openviking.storage.viking_fs._base._instance", fs)
+    resolver = _TestVLMResolver()
+    resolver.get_completion_async = AsyncMock()
+    updater = StreamingMemoryUpdater(
+        registry=_registry(),
+        vlm_resolver=resolver,
+        config=StreamingMemoryUpdaterConfig(max_operations_per_update=1),
+    )
+    try:
+        result = await updater.submit(
+            MemoryUpdateRequest(
+                operations=ResolvedOperations(
+                    upsert_operations=[edit], delete_file_contents=[target, other], errors=[]
+                ),
+                messages=[],
+                ctx=_ctx(),
+                metadata={"session_id": "session-a"},
+            )
+        )
+    finally:
+        await updater.close()
+
+    resolver.get_completion_async.assert_not_awaited()
+    assert not result.apply_result.errors
+    assert result.apply_result.deleted_uris == [other.uri]
+    assert other.uri not in fs.files
+    assert MemoryFileUtils.read(fs.files[target.uri]).plain_content() == "old canonical"
+
+
 def test_scope_memory_update_result_to_submitter_filters_shared_batch_by_source():
     from openviking.session.memory.streaming_memory_updater import (
         scope_memory_update_result_to_submitter,

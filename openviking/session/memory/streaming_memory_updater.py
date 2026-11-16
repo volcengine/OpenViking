@@ -570,6 +570,19 @@ class StreamingMemoryUpdater:
         contested = replacements.keys() & (new_targets | edit_targets)
         cross_session = _requests_span_sessions(requests)
         mixed_edits = set() if cross_session else edit_targets & (new_targets | contested)
+        if mixed_edits and len(operations.upsert_operations) == 1:
+            registry = requests[0].memory_registry or self.registry or get_default_registry()
+            edit = operations.upsert_operations[0]
+            direct_apply, _ = await classify_memory_merge_mode(
+                [edit], schema=registry.get(edit.memory_type)
+            )
+            if direct_apply:
+                # An unchanged edit supersedes a pure delete. Link migrations still need a plan.
+                mixed_edits.intersection_update(
+                    disputed
+                    | operations.delete_replacements.keys()
+                    | detect_split_replacements(operations).keys()
+                )
         if cross_session or mixed_edits:
             # A dict can only express agreed replacements. Pass every alternative to the planner.
             for uri in disputed:
