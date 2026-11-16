@@ -57,6 +57,7 @@ const LOADERS = {
   zcode: { harness: "zcode", load: (cwd) => loadAgentHookConfig("zcode", cwd), options: { logFile: "zcode-hooks.log" }, owns: [] },
   kimicode: { harness: "kimicode", load: (cwd) => loadAgentHookConfig("kimicode", cwd), options: { logFile: "kimicode-hooks.log" }, owns: [] },
   codebuddy: { harness: "codebuddy", load: (cwd) => loadAgentHookConfig("codebuddy", cwd), options: { logFile: "codebuddy-hooks.log" }, owns: [] },
+  qoder: { harness: "qoder", load: (cwd) => loadAgentHookConfig("qoder", cwd), options: { logFile: "qoder-hooks.log" }, owns: [] },
 };
 
 // openclaw declares its own settings in TypeScript and still resolves them

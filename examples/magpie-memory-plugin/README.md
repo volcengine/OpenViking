@@ -25,7 +25,7 @@ The standalone `@openviking/magpie-models-plugin` is no longer packaged. For man
 
 See [Model management](models/README.md) for Root permissions, Bot detection, restart and recovery limits. Model management never enables Bot automatically.
 
-Version 0.2.0 has not been published. Install from source below; after publication:
+Version 0.2.1 has not been published. Install from source below; after publication:
 
 ```sh
 magpie plugin add @openviking/magpie-plugin
