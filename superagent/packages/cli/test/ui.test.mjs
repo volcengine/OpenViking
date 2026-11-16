@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and the OpenViking contributors.
 // SPDX-License-Identifier: AGPL-3.0
 
 import assert from 'node:assert/strict';
@@ -167,7 +167,7 @@ test('a code too big for the window waits for the window to grow, then draws its
   assert.equal(output.listenerCount('resize'), 0);
 });
 
-test('a link opens in a browser only where there is a desktop', () => {
-  assert.equal(urlOpenCommand({ DISPLAY: ':0' }), process.platform === 'win32' ? 'explorer.exe' : process.platform === 'darwin' ? 'open' : 'xdg-open');
-  assert.equal(urlOpenCommand({}), process.platform === 'win32' ? 'explorer.exe' : process.platform === 'darwin' ? 'open' : null);
+test('a link opens in a browser on a desktop or Android', () => {
+  assert.equal(urlOpenCommand({ DISPLAY: ':0' }), process.platform === 'win32' ? 'explorer.exe' : process.platform === 'darwin' ? 'open' : process.platform === 'android' ? 'termux-open-url' : 'xdg-open');
+  assert.equal(urlOpenCommand({}), process.platform === 'win32' ? 'explorer.exe' : process.platform === 'darwin' ? 'open' : process.platform === 'android' ? 'termux-open-url' : null);
 });

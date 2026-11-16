@@ -34,15 +34,18 @@ function machine(t) {
   fs.mkdirSync(home, { recursive: true });
   fs.mkdirSync(bin);
   fs.writeFileSync(path.join(bin, 'pm2'), `#!/bin/sh\necho "$@" >> "${root}/pm2-calls"\n`, { mode: 0o755 });
-  const archive = (version, { platform = PLATFORM, nodeWorks = true, ovWorks = true } = {}) => {
+  const archive = (version, { platform = PLATFORM, nodeWorks = true, ovWorks = true, badRuntime = null, bundledNode = false } = {}) => {
     const work = fs.mkdtempSync(path.join(root, 'build-'));
     const directory = path.join(work, `superagent-${version}-${platform}`);
     fs.mkdirSync(path.join(directory, 'packages', 'cli', 'bin'), { recursive: true });
     if (platform.startsWith('termux-')) {
       fs.mkdirSync(path.join(directory, 'packages/daemon/scripts'), { recursive: true });
-      for (const name of ['check-pi.mjs', 'check-durable.mjs']) fs.writeFileSync(path.join(directory, 'packages/daemon/scripts', name), '');
+      for (const name of ['check-pi.mjs', 'check-durable.mjs']) {
+        fs.writeFileSync(path.join(directory, 'packages/daemon/scripts', name), `process.exit(${badRuntime === name ? 1 : 0});`);
+      }
+      if (bundledNode) fs.mkdirSync(path.join(directory, 'node'));
       fs.mkdirSync(path.join(directory, 'node_modules/@larksuite/cli/bin'), { recursive: true });
-      fs.writeFileSync(path.join(directory, 'node_modules/@larksuite/cli/bin/lark-cli'), `#!${process.env.PREFIX}/bin/sh\nexit 0\n`, { mode: 0o755 });
+      fs.writeFileSync(path.join(directory, 'node_modules/@larksuite/cli/bin/lark-cli'), `#!${process.env.PREFIX}/bin/sh\nexit ${badRuntime === 'lark' ? 1 : 0}\n`, { mode: 0o755 });
     } else {
       fs.mkdirSync(path.join(directory, 'node', 'bin'), { recursive: true });
       fs.writeFileSync(path.join(directory, 'node', 'bin', 'node'), `#!/bin/sh
@@ -135,6 +138,19 @@ test('refuses a corrupted archive, another platform, or a Node that cannot run h
   assert.equal(fs.realpathSync(path.join(m.superagent, 'current')), fs.realpathSync(path.join(m.superagent, 'releases', '0.5.0')));
   assert.deepEqual(fs.readdirSync(path.join(m.superagent, 'releases')), ['0.5.0']);
   assert.equal(fs.existsSync(path.join(m.superagent, 'deploy.lock')), false);
+});
+
+test('Termux runtime failures and desktop Node contamination never replace an active release', { skip: !TERMUX }, t => {
+  const m = machine(t);
+  assert.equal(m.install('--file', m.archive('0.5.0')).status, 0);
+  const active = fs.realpathSync(path.join(m.superagent, 'current'));
+  for (const options of [{ badRuntime: 'check-pi.mjs' }, { badRuntime: 'check-durable.mjs' }, { badRuntime: 'lark' }, { bundledNode: true }]) {
+    const result = m.install('--file', m.archive('0.6.0', options));
+    assert.notEqual(result.status, 0, result.stderr);
+    assert.match(result.stderr, /runtime or bundled lark-cli check failed|must not bundle Node/);
+    assert.equal(fs.realpathSync(path.join(m.superagent, 'current')), active);
+    assert.deepEqual(fs.readdirSync(path.join(m.superagent, 'releases')), ['0.5.0']);
+  }
 });
 
 test('waits for a running upgrade instead of racing it', (t) => {

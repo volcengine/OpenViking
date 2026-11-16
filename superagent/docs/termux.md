@@ -10,6 +10,8 @@ or PRoot distribution installation.
 The archive contains production JS dependencies, PM2, the pinned managed
 runtimes and a native lark-cli. CI builds lark-cli for Android from a reviewed,
 immutable Go source commit, preserving its MIT license and build provenance.
+It uses the pinned Android NDK with cgo (API 24) so DNS uses Android libc,
+not a desktop Go resolver or an undocumented Termux toolchain patch.
 The desktop npm dependency remains mandatory and unchanged. **No npm, Go, git
 or compiler is needed on the device**, and package download hooks are not run
 there. Global Pi and lark-cli installations are not modified.
@@ -135,6 +137,9 @@ lark-cli and publishes a Termux archive alongside desktop POSIX archives.
 PR CI uploads a device-test artifact only; it does not publish releases.
 Updating the pinned lark npm version requires updating its reviewed Termux
 source commit too; a mismatch fails the build instead of silently omitting it.
+The build also pins the NDK revision and rejects archives containing desktop
+Node/Slack or a non-ARM64 ELF lark-cli. DNS-dependent HTTPS must be tested with
+the actual CI-produced binary; a Termux-patched native Go build is not equivalent.
 
 The existing POSIX installer tests cover activation, checksum/platform failure,
 OV refusal and rollback; Termux runs those same tests. Platform-independent

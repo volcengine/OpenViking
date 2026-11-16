@@ -21,6 +21,14 @@ function buildTermuxBinary({ packageDir, version, arch, execFileSyncImpl }) {
   if (version !== pin.version || !/^[a-f0-9]{40}$/.test(pin.commit)) {
     throw new Error('Update the reviewed Termux lark-cli source pin with the npm version');
   }
+  // Stock Go's pure-Go resolver cannot use Android's libc DNS. Cross-link
+  // against the pinned NDK instead of relying on Termux-specific Go patches.
+  const ndk = process.env.OV_SUPERAGENT_ANDROID_NDK;
+  if (!ndk) throw new Error('Set OV_SUPERAGENT_ANDROID_NDK to the pinned Linux Android NDK');
+  const revision = fs.readFileSync(path.join(ndk, 'source.properties'), 'utf8').match(/^Pkg.Revision\s*=\s*(.+)$/m)?.[1].trim();
+  if (revision !== pin.ndk) throw new Error(`Android NDK ${pin.ndk} is required`);
+  const compiler = path.join(ndk, 'toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang');
+  fs.accessSync(compiler, fs.constants.X_OK);
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-termux-lark-'));
   try {
     const run = (command, args, extra = {}) => execFileSyncImpl(command, args,
@@ -31,11 +39,11 @@ function buildTermuxBinary({ packageDir, version, arch, execFileSyncImpl }) {
     if (String(run('git', ['rev-parse', 'HEAD'])).trim() !== pin.commit) throw new Error('lark-cli source commit mismatch');
     const bin = path.join(packageDir, 'bin', 'lark-cli');
     fs.mkdirSync(path.dirname(bin), { recursive: true });
-    run('go', ['build', '-trimpath', '-ldflags', `-s -w -X github.com/larksuite/cli/internal/build.Version=${version}`,
-      '-o', bin, '.'], { env: { ...process.env, GOOS: 'android', GOARCH: arch, CGO_ENABLED: '0', GOTOOLCHAIN: 'local' } });
+    run('go', ['build', '-buildmode=pie', '-trimpath', '-ldflags', `-s -w -X github.com/larksuite/cli/internal/build.Version=${version}`,
+      '-o', bin, '.'], { env: { ...process.env, GOOS: 'android', GOARCH: arch, CGO_ENABLED: '1', CC: compiler, GOTOOLCHAIN: 'local' } });
     fs.chmodSync(bin, 0o755);
     fs.copyFileSync(path.join(work, 'LICENSE'), path.join(packageDir, 'LICENSE'));
-    fs.writeFileSync(path.join(packageDir, 'termux-build.json'), `${JSON.stringify({ ...pin, go: String(run('go', ['version'])).trim() }, null, 2)}\n`);
+    fs.writeFileSync(path.join(packageDir, 'termux-build.json'), `${JSON.stringify({ ...pin, go: String(run('go', ['version'])).trim(), cgo: true, androidApi: 24 }, null, 2)}\n`);
     return { bin, version, commit: pin.commit };
   } finally {
     fs.rmSync(work, { recursive: true, force: true });

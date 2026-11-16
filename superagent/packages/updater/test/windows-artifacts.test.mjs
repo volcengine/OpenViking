@@ -59,6 +59,14 @@ test('Termux prebuild pins native Go source without weakening the desktop npm de
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-termux-artifact-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ version: pin.version }));
+  const ndk = path.join(root, 'ndk');
+  const compiler = path.join(ndk, 'toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang');
+  fs.mkdirSync(path.dirname(compiler), { recursive: true });
+  fs.writeFileSync(compiler, '', { mode: 0o755 });
+  fs.writeFileSync(path.join(ndk, 'source.properties'), `Pkg.Revision = ${pin.ndk}\n`);
+  const previousNdk = process.env.OV_SUPERAGENT_ANDROID_NDK;
+  process.env.OV_SUPERAGENT_ANDROID_NDK = ndk;
+  t.after(() => { if (previousNdk === undefined) delete process.env.OV_SUPERAGENT_ANDROID_NDK; else process.env.OV_SUPERAGENT_ANDROID_NDK = previousNdk; });
   let compiled = false;
   const options = { packageDir: root, platformId: 'termux-arm64',
     execFileSyncImpl(command, args, settings) {
@@ -69,7 +77,9 @@ test('Termux prebuild pins native Go source without weakening the desktop npm de
       if (command === 'go' && args[0] === 'build') {
         assert.equal(settings.env.GOOS, 'android');
         assert.equal(settings.env.GOARCH, 'arm64');
-        assert.equal(settings.env.CGO_ENABLED, '0');
+        assert.equal(settings.env.CGO_ENABLED, '1');
+        assert.equal(settings.env.CC, compiler);
+        assert.ok(args.includes('-buildmode=pie'));
         fs.writeFileSync(args[args.indexOf('-o') + 1], 'native Bionic binary');
         compiled = true;
       }
@@ -81,6 +91,8 @@ test('Termux prebuild pins native Go source without weakening the desktop npm de
   assert.equal(fs.readFileSync(path.join(root, 'LICENSE'), 'utf8'), 'upstream MIT license');
   const metadata = JSON.parse(fs.readFileSync(path.join(root, 'termux-build.json'), 'utf8'));
   assert.equal(metadata.commit, pin.commit);
+  assert.equal(metadata.ndk, pin.ndk);
+  assert.equal(metadata.cgo, true);
   fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ version: '0.0.0' }));
   await assert.rejects(installLarkCliBinary(options), /source pin/);
 });

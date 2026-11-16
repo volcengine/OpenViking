@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd. and the OpenViking contributors.
 // SPDX-License-Identifier: AGPL-3.0
 
 import assert from 'node:assert/strict';
@@ -16,9 +16,10 @@ import { sanitizeClaudeEnv } from '../src/claude.mjs';
 import { sanitizePiEnv } from '../src/pi.mjs';
 import { sanitizeTraexEnv } from '../src/traex.mjs';
 import { sanitizeAgentChildEnv, sanitizeNonArkChildEnv } from '../src/process-utils.mjs';
-import { supportsShellScripts } from '../src/platform/index.mjs';
+import { findExecutable, supportsShellScripts } from '../src/platform/index.mjs';
 
-const posixShell = { skip: !supportsShellScripts && 'requires POSIX /bin/sh fixtures' };
+const nativeSh = findExecutable('sh');
+const posixShell = { skip: !supportsShellScripts && 'requires POSIX shell fixtures' };
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-agent-cli-'));
@@ -32,11 +33,11 @@ function fixture(t) {
 
 function executable(file, output) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `#!/bin/sh\nprintf '%s\\n' '${output}'\n`, { mode: 0o755 });
+  fs.writeFileSync(file, `#!${nativeSh}\nprintf '%s\\n' '${output}'\n`, { mode: 0o755 });
 }
 
 function shell(command, env, cwd) {
-  const result = spawnSync('/bin/sh', ['-c', command], { env, cwd, encoding: 'utf8' });
+  const result = spawnSync(nativeSh, ['-c', command], { env, cwd, encoding: 'utf8' });
   assert.ifError(result.error);
   return result;
 }

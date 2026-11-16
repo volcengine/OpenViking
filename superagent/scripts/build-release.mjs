@@ -132,6 +132,13 @@ async function buildPlatform({ stage, platformId, version, commit, nodeVersion, 
     say(run(path.join(root, 'node', 'bin', 'node'), [path.join(root, 'packages', 'daemon', 'scripts', 'check-agent-clis.mjs')]));
   }
 
+  if (systemNode) {
+    const elf = fs.readFileSync(lark.bin).subarray(0, 20);
+    if (fs.existsSync(path.join(root, 'node')) || fs.existsSync(path.join(root, 'bin/slack'))
+      || elf.length < 20 || elf.toString('hex', 0, 4) !== '7f454c46' || elf.readUInt16LE(18) !== 183) {
+      throw new Error('Termux archive must contain ARM64 ELF lark-cli and no desktop Node/Slack');
+    }
+  }
   const name = artifactName(version, platformId);
   const archive = path.join(out, name);
   execFileSync('tar', ['-czf', archive, '-C', path.join(out, 'work'), directory]);

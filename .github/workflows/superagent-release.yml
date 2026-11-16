@@ -82,6 +82,14 @@ jobs:
           go-version: '1.26.3'
           cache: false
 
+      - name: Prepare pinned Android NDK for native Termux DNS
+        if: github.event_name == 'pull_request' || github.event_name == 'push' || inputs.platforms == 'all'
+        run: |
+          NDK_VERSION="$(node -p "require('./scripts/release/lark-cli-source.json').ndk")"
+          NDK="${ANDROID_HOME}/ndk/${NDK_VERSION}"
+          if [ ! -d "$NDK" ]; then sdkmanager --install "ndk;${NDK_VERSION}"; fi
+          echo "OV_SUPERAGENT_ANDROID_NDK=$NDK" >> "$GITHUB_ENV"
+
       - run: npm ci --no-audit --no-fund
       - run: npm run check
       - run: npm test
