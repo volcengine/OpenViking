@@ -36,7 +36,7 @@ OpenCode 与其他记忆插件共用同一个安装器。它会询问要安装�
 curl -fsSL https://openviking.ai/install | bash
 ```
 
-安装器会把插件作为本地文件插件复制到 `~/.config/opencode/plugins/`，把 `openviking` MCP server 条目写进 `~/.config/opencode/opencode.json`，并配置 `~/.openviking/ovcli.conf`。
+安装器会把唯一的包装入口放入 `~/.config/opencode/plugins/`，把实现目录放入 `~/.config/opencode/openviking-plugin/`。它把 `openviking` MCP server 条目写进 `~/.config/opencode/opencode.json`，并配置 `~/.openviking/ovcli.conf`。
 
 ## 安装方式二：发布包安装
 
@@ -62,11 +62,12 @@ curl -fsSL https://openviking.ai/install | bash
 
 ```bash
 node examples/memory-plugin-shared/sync.mjs
-mkdir -p ~/.config/opencode/plugins/openviking
+mkdir -p ~/.config/opencode/plugins ~/.config/opencode/openviking-plugin
+cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/openviking-plugin/
+cp -r examples/opencode-plugin/lib ~/.config/opencode/openviking-plugin/
+cp -r examples/opencode-plugin/servers ~/.config/opencode/openviking-plugin/
 cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/openviking.js
-cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
-cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
-cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
+rm -rf ~/.config/opencode/plugins/openviking
 ```
 
 `sync.mjs` 会生成 `lib/shared/`，插件和 MCP 代理都从这里 import 共享模块。这个目录不在 git 里，所以复制前要先运行；之后每次 `git pull` 也要重新运行再复制。
@@ -74,9 +75,10 @@ cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
 安装后结构应类似：
 
 ```text
-~/.config/opencode/plugins/
-├── openviking.js
-└── openviking/
+~/.config/opencode/
+├── plugins/
+│   └── openviking.js
+└── openviking-plugin/
     ├── index.mjs
     ├── package.json
     ├── lib/
@@ -86,11 +88,11 @@ cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
 顶层 `openviking.js` 只负责把 OpenCode 能发现的一级 `.js` 入口转发到插件目录：
 
 ```js
-export { OpenVikingPlugin, default } from "./openviking/index.mjs"
+export { OpenVikingPlugin, default } from "../openviking-plugin/index.mjs"
 ```
 
 这个 wrapper 只用于上面这种源码安装目录结构。npm 包安装会通过 `package.json` 直接加载 `index.mjs`。
-源码安装请使用 `.js` wrapper；OpenCode 的本地插件扫描器会发现 JavaScript/TypeScript 插件文件。
+实现目录应放在 `plugins/` 外：v1 发现包装文件，v2 还会发现目录。两者放在扫描目录中会重复加载同一插件。替换已有安装后，请重启 OpenCode 及其后台服务。
 
 如果你使用 npm 包方式安装，也可以将 `examples/opencode-plugin` 作为一个普通 OpenCode 插件包使用。
 

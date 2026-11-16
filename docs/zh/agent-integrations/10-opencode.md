@@ -17,7 +17,7 @@ curl -fsSL https://openviking.ai/install | bash
 # AI agent 如不确定是否执行，可先阅读脚本头部，其中写明了它会做什么、如何核实。
 ```
 
-安装器会把插件作为本地文件插件复制到 `~/.config/opencode/plugins/`，把 `openviking` MCP server 条目写进 `~/.config/opencode/opencode.json`，并配置 `~/.openviking/ovcli.conf`。
+安装器会把唯一的包装入口放入 `~/.config/opencode/plugins/`，把实现目录放入 `~/.config/opencode/openviking-plugin/`。它把 `openviking` MCP server 条目写进 `~/.config/opencode/opencode.json`，并配置 `~/.openviking/ovcli.conf`。
 
 安装完成后，在 OpenCode 中新开一个会话，让它按 https://docs.openviking.net/agents/zh/onboarding.md 执行。它会检查连接，并带你完成首次使用，详见[一键接入](../getting-started/07-agent-onboarding.md)。
 
@@ -52,11 +52,12 @@ OpenCode 2 使用同一个包：v2 调用 `setup()`，OpenCode 1 调用 `server(
 git clone https://github.com/volcengine/OpenViking.git
 cd OpenViking
 node examples/memory-plugin-shared/sync.mjs
-mkdir -p ~/.config/opencode/plugins/openviking
+mkdir -p ~/.config/opencode/plugins ~/.config/opencode/openviking-plugin
+cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/openviking-plugin/
+cp -r examples/opencode-plugin/lib ~/.config/opencode/openviking-plugin/
+cp -r examples/opencode-plugin/servers ~/.config/opencode/openviking-plugin/
 cp examples/opencode-plugin/wrappers/openviking.js ~/.config/opencode/plugins/openviking.js
-cp examples/opencode-plugin/index.mjs examples/opencode-plugin/package.json ~/.config/opencode/plugins/openviking/
-cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
-cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
+rm -rf ~/.config/opencode/plugins/openviking
 ```
 
 `sync.mjs` 会生成 `lib/shared/`，插件和 MCP 代理都从这里 import 共享模块。这个目录不在 git 里，所以复制前要先运行；之后每次 `git pull` 也要重新运行再复制。
@@ -64,9 +65,10 @@ cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
 源码安装后，OpenCode 能发现的目录结构应类似：
 
 ```text
-~/.config/opencode/plugins/
-├── openviking.js
-└── openviking/
+~/.config/opencode/
+├── plugins/
+│   └── openviking.js
+└── openviking-plugin/
     ├── index.mjs
     ├── package.json
     ├── lib/
@@ -74,7 +76,7 @@ cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
 ```
 
 顶层 `openviking.js` 只是一个 wrapper，用来把 OpenCode 可发现的一级插件入口转发到实际安装目录。
-源码安装请使用 `.js` wrapper；OpenCode 的本地插件扫描器会发现 JavaScript/TypeScript 插件文件。
+实现目录应放在 `plugins/` 外：v1 发现包装文件，v2 还会发现目录。两者放在扫描目录中会重复加载同一插件。替换已有安装后，请重启 OpenCode 及其后台服务。
 
 ## 配置
 
