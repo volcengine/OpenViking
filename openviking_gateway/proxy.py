@@ -21,6 +21,7 @@ from openviking.core.peer_id import normalize_peer_id
 
 from .capture import CapturePipeline
 from .client import PEER_HEADER
+from .kernel import Budget
 from .models import KEY_PLACEHOLDER, Policy, validation_detail
 from .observe import GatewayError, RequestRecord, degrade, elapsed_ms, error_code
 from .protocols import HEARTBEAT_SECONDS, SSEDecoder, heartbeat, parse_body
@@ -48,6 +49,8 @@ PATH_PROTOCOL = {
     "/v1/chat/completions": "chat",
     "/v1/responses": "responses",
 }
+# Each bookkeeping step after a reply gets this long; the record is written either way.
+BOOKKEEPING_SECONDS = 30
 PRIMARY_PATH = {
     "anthropic": "/v1/messages",
     "chat": "/v1/chat/completions",
@@ -506,6 +509,7 @@ class ProxyRequest:
                 self.candidates,
                 self.summarize,
                 peer=self.peer,
+                budget=Budget(self.config.prepare_timeout_seconds),
             )
             self.record.merge(metrics)
             if self.prepared:
@@ -547,7 +551,10 @@ class ProxyRequest:
                 target,
                 data=orjson.dumps(body),
                 headers=headers,
-                timeout=aiohttp.ClientTimeout(total=self.config.upstream_timeout_seconds),
+                timeout=aiohttp.ClientTimeout(
+                    total=self.config.summary_timeout_seconds
+                    or self.config.upstream_timeout_seconds
+                ),
                 allow_redirects=False,
             ) as response:
                 if response.status >= 300:
@@ -579,16 +586,17 @@ class ProxyRequest:
                 self.record.fail(self.metrics["status"], "upstream_error")
             # Each step fails on its own: the record is written whatever happens here.
             try:
-                if (
-                    self.response.status < 300
-                    and self.prepared
-                    and await self.management.get(
-                        self.credential["account"], "keys", self.credential["id"]
-                    )
-                ):
-                    await self.app.state.kernel.completed(
-                        self.prepared, self.credential, self.capture
-                    )
+                async with async_timeout.timeout(BOOKKEEPING_SECONDS):
+                    if (
+                        self.response.status < 300
+                        and self.prepared
+                        and await self.management.get(
+                            self.credential["account"], "keys", self.credential["id"]
+                        )
+                    ):
+                        await self.app.state.kernel.completed(
+                            self.prepared, self.credential, self.capture
+                        )
             except Exception:
                 self.bookkeeping_failed("completed")
             try:
@@ -598,13 +606,17 @@ class ProxyRequest:
                     and self.body
                     and self.body.get("store") is not False
                 ):
-                    await self.management.save(
-                        self.credential["account"],
-                        "responses",
-                        digest(self.credential["id"] + self.capture.response_id),
-                        {"upstream_id": self.upstream["id"], "user_id": self.credential["user_id"]},
-                        ttl=self.config.response_ttl_seconds,
-                    )
+                    async with async_timeout.timeout(BOOKKEEPING_SECONDS):
+                        await self.management.save(
+                            self.credential["account"],
+                            "responses",
+                            digest(self.credential["id"] + self.capture.response_id),
+                            {
+                                "upstream_id": self.upstream["id"],
+                                "user_id": self.credential["user_id"],
+                            },
+                            ttl=self.config.response_ttl_seconds,
+                        )
             except Exception:
                 self.bookkeeping_failed("responses")
             if self.prepared:
@@ -612,9 +624,10 @@ class ProxyRequest:
                 # A worker row inserted between this read and the log below can still be
                 # older than this row; if the read fails, the prepare-time fields are kept.
                 try:
-                    capture = await self.store.capture.get(
-                        self.prepared.scope, self.prepared.session
-                    )
+                    async with async_timeout.timeout(BOOKKEEPING_SECONDS):
+                        capture = await self.store.capture.get(
+                            self.prepared.scope, self.prepared.session
+                        )
                     CapturePipeline.metrics(
                         replace(self.prepared, capture=capture, metrics=self.metrics),
                         Policy.model_validate(self.prepared.root["policy"]),

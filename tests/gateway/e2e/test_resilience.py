@@ -306,7 +306,7 @@ def stop_redis(harness, aof):
 
 
 def outage_requests(harness, pod):
-    counts = {"degraded": 0, "authentication_500": 0}
+    counts = {"degraded": 0, "store_unavailable_503": 0}
     for number in range(5):
         response = harness.request(
             pod,
@@ -320,10 +320,11 @@ def outage_requests(harness, pod):
         if response.status_code == 200:
             counts["degraded"] += 1
         else:
-            assert response.status_code == 500 and response.headers["content-type"].startswith(
-                "text/plain"
-            ), response.text
-            counts["authentication_500"] += 1
+            assert response.status_code == 503, response.text
+            assert response.headers["content-type"] == "application/json", response.text
+            assert response.json()["reason"] == "store_unavailable", response.text
+            assert response.headers["retry-after"], response.text
+            counts["store_unavailable_503"] += 1
     (harness.directory / "redis-outage.json").write_text(json.dumps(counts))
     if counts["degraded"]:
         assert "memory_store_failure" in harness.logs()

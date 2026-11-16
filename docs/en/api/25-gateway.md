@@ -79,7 +79,7 @@ The log holds metadata only, never message content, keys or error messages. Ever
 | `session`, `protocol` | The conversation and its protocol; use them to [reset saving](#gateway-keys) |
 | `peer` | The request's [peer](../gateway/03-connect-clients.md#peer), from `X-OpenViking-Actor-Peer` or the key's default |
 | `degradation` | Issue code; see [Issues on degraded requests](../gateway/12-troubleshooting.md#issues-on-degraded-requests) |
-| `degradations` | Every issue of the request, in order. It can also hold `recall_failed`: the memory search got no answer from OpenViking (`recall_reason` says why), which never becomes `degradation` |
+| `degradations` | Every issue of the request, in order. It can also hold `recall_failed`: the memory search got no answer from OpenViking (`recall_reason` says why), which never becomes `degradation`; and `prepare_timeout`: adding memory took longer than `prepare_timeout_seconds` |
 | `revocation_reason` | Why OpenViking could not confirm the key, with `revocation_check_unavailable` |
 | `session_source` | How the conversation was found: `header` (`X-OpenViking-Session`), `reply_match` (the history continues one conversation's reply) or `new` |
 | `recall_reason`, `recall_count`, `recall_ms` | Memory search result code, entries added and search time; see [No memory is added](../gateway/12-troubleshooting.md#no-memory-is-added) |
@@ -305,6 +305,7 @@ An error the gateway produces on a model route (`/gateway/v1/*`, `/gateway/api/v
 | 404, 403 | `response_unknown`, `response_upstream_disallowed` | gateway | The stored Responses response is not this key's, or its upstream is no longer allowed. |
 | 401 | `upstream_key_missing` | gateway | No upstream API key is stored or sent in `X-OpenViking-Upstream-Key`. |
 | 403 | `coding_plan_disabled` | gateway | The upstream is a Coding Plan key that is not allowed through the gateway. |
+| 503 | `store_unavailable` | gateway | The gateway's state store failed. The response carries `Retry-After: 1`. |
 | 500 | `internal_error` | gateway | The gateway failed unexpectedly. The detail is generic; the gateway's log has the traceback. |
 | 504 | `upstream_timeout` | upstream | The provider did not start its reply, or a non-streamed reply stopped arriving, within `upstream_timeout_seconds`. |
 | 502 | `upstream_unreachable` | upstream | The gateway could not connect to the provider (DNS, refused connection, TLS). |

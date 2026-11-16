@@ -32,6 +32,7 @@ import uuid
 from collections import OrderedDict, defaultdict
 from pathlib import Path
 
+import async_timeout
 import orjson
 from redis import VERSION
 from redis.asyncio.cluster import RedisCluster
@@ -39,8 +40,10 @@ from redis.asyncio.retry import Retry
 from redis.backoff import NoBackoff
 from redis.crc import key_slot
 from redis.exceptions import ResponseError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from openviking.server.account_stores.redis_client import create_redis_client
+from openviking_cli.utils.config.agfs_config import RedisCacheConfig
 
 from .capture_store import Document, LeaseLost
 from .records import RecordKind as K
@@ -71,10 +74,26 @@ def connect(settings):
     )
     # redis-py pools raise once ``pool_size`` connections are busy; queue commands instead.
     gate, execute = asyncio.Semaphore(settings["pool_size"]), handle.client.execute_command
+    # One deadline covers the whole command, the wait for a free slot included: redis-py
+    # opens connections one at a time under the pool lock, so a store that stopped
+    # answering would otherwise queue a command behind every other connect attempt.
+    # The client's own view of the settings, defaults filled in.
+    config = RedisCacheConfig.model_validate(settings)
+    command = config.command_timeout_ms / 1000
+    limit = config.connect_timeout_ms / 1000 + command if command > 0 else None
 
     async def execute_command(*args, **kwargs):
-        async with gate:
-            return await execute(*args, **kwargs)
+        acquired = False
+        try:
+            async with async_timeout.timeout(limit):
+                await gate.acquire()
+                acquired = True
+                return await execute(*args, **kwargs)
+        except asyncio.TimeoutError:
+            raise RedisTimeoutError("store command timed out") from None
+        finally:
+            if acquired:
+                gate.release()
 
     handle.client.execute_command = execute_command
     return handle

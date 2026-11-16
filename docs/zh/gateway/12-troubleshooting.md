@@ -96,6 +96,7 @@ Studio 无法为你加载网关时，会用一张设置卡片代替网关标签�
 | 404 `response_unknown`、403 `response_upstream_disallowed` | 查询的 Responses 响应不是这把密钥创建的，或者创建它的上游已停用、不再绑定到这把密钥。 |
 | 413 `body_too_large` | 请求体超过了 `max_body_bytes`（见[请求大小上限](05-long-conversations.md#side-effects)），或者超过了代理自己的上限。 |
 | 426 | 对 Responses API 发起了 WebSocket 连接。这是预期行为，Codex 会改用 HTTP。 |
+| 503 `store_unavailable` | 网关在鉴权或路由时状态存储出错。请求没有发给服务商；按 `Retry-After` 稍后重试。见 [Redis 不可用](#redis-unavailable)。 |
 | 500 `internal_error` | 网关意外出错。调用栈在网关日志里；请求记录带有与响应相同的 `request_id`。 |
 | 504 `upstream_timeout` | 服务商没有在 `upstream_timeout_seconds` 内开始回复，或者非流式回复中途这么久没有数据。检查服务商状态；对回答前思考很久的模型，可以调大 `upstream_timeout_seconds`。 |
 | 502 `upstream_unreachable` | 网关连不上服务商：地址无法解析、没有服务接受连接，或者 TLS 失败。检查上游的 Base URL，并在上游上点**测试**（见[测试和删除](07-upstreams.md#test-and-delete)）。 |
@@ -211,6 +212,7 @@ OpenViking 异常期间，请求照常发给模型，只是不带记忆；保存
 | 异常 | 发生了什么 | 怎么处理 |
 | --- | --- | --- |
 | 记忆不可用（`memory_store_failure`） | 网关无法读写自己的存储，或者该用户的网关数据刚被删除。请求不带记忆发给了模型；Claude 对话中之前的思考内容被去掉。 | 检查磁盘空间、权限和网关日志。刚[删除过该用户的网关数据](09-gateway-keys.md#delete-a-users-gateway-data)时出现属于正常。 |
+| 准备超时（`prepare_timeout`） | 补充记忆的时间超过了 `prepare_timeout_seconds`，例如 OpenViking 或状态存储响应慢。请求不带记忆发给了模型；Claude 对话中之前的思考内容被去掉。 | 检查 OpenViking 和状态存储。Studio 按代码显示这个问题。 |
 | 原样转发（`unsafe_json`） | 请求中有无法精确重新编码的数字或重复的键，网关逐字节原样转发，没有补充记忆。 | 通常只与某个客户端有关，网关这边无需调整。 |
 | 上游已切换（`upstream_changed`） | 对话原来的上游无法再服务，转到了另一个上游，造成一次缓存未命中，之前的 Claude 思考内容也被去掉。 | 重新启用这个上游，或者让客户端改用包含它的密钥；也可以接受这次切换。 |
 | 记忆记录缺失（`missing_injection_record`） | Claude 对话中，之前补充的记忆已经没有记录，之前的思考内容被去掉一次。 | 存储丢失后，或者在很久以前的对话里出现，都在预期之内。反复出现时，开始新对话。 |
@@ -224,7 +226,7 @@ OpenViking 异常期间，请求照常发给模型，只是不带记忆；保存
 
 ## Redis 不可用 {#redis-unavailable}
 
-启动在 Redis PING 处失败时，检查 `storage.redis.endpoints`、TLS 信任链和密码环境变量；官方镜像之外需要安装 `openviking[expiry]`。鉴权时返回纯文本 `Internal Server Error` 的 HTTP 500 也可能是 Redis 不可用，请查看 stderr。运行时 Redis 故障期间 `/health` 仍返回健康，不代表 Redis 连接正常。ACL 和超时配置见[存储后端](13-configuration.md#storage)，持久化配置见 [Redis 内存策略](../guides/22-gateway-operations.md#redis-memory-policy)。
+启动在 Redis PING 处失败时，检查 `storage.redis.endpoints`、TLS 信任链和密码环境变量；官方镜像之外需要安装 `openviking[expiry]`。运行时状态存储（Redis 或 SQLite）出故障期间，需要它来鉴权或路由的请求收到 503 `store_unavailable`，带 `Retry-After: 1` 和 `X-OpenViking-Upstream-Attempted: 0`；已经过了这一步的请求不带记忆发给模型（`memory_store_failure`）。请查看 stderr。OpenViking 拒绝的密钥仍然收到 401、402 或 403。每条 Redis 命令连同等待空闲连接的时间最长 `connect_timeout_ms + command_timeout_ms`，所以不再响应的 Redis 会让请求在这段时间内失败，而不是一直排队。运行时 Redis 故障期间 `/health` 仍返回健康，不代表 Redis 连接正常。ACL 和超时配置见[存储后端](13-configuration.md#storage)，持久化配置见 [Redis 内存策略](../guides/22-gateway-operations.md#redis-memory-policy)。
 
 ## 下一步 {#next-steps}
 

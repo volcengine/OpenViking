@@ -6,8 +6,10 @@ import asyncio
 import logging
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 
+import async_timeout
 import orjson
 
 from .blocks import RECALL_PROVENANCE_NOTE, block, gateway_note, history_hint, token_estimate
@@ -101,6 +103,39 @@ class Prepared:
     peer: str | None = None
 
 
+class Budget:
+    """A time limit for memory preparation that a compaction summary call does not use up."""
+
+    def __init__(self, seconds):
+        self.deadline = asyncio.get_running_loop().time() + seconds if seconds else None
+        self.timeout = None
+
+    def limit(self):
+        self.timeout = async_timeout.timeout_at(self.deadline)
+        return self.timeout
+
+    @property
+    def expired(self):
+        return self.timeout is not None and self.timeout.expired
+
+    @contextmanager
+    def paused(self):
+        """Lift the limit inside; on exit, push the deadline back by the time spent there."""
+        if self.deadline is None or self.timeout is None:
+            yield
+            return
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        # reject() and update() exist on async_timeout's Timeout on every Python;
+        # reschedule() only on 3.11+.
+        self.timeout.reject()
+        try:
+            yield
+        finally:
+            self.deadline += loop.time() - started
+            self.timeout.update(self.deadline)
+
+
 class MemoryKernel:
     def __init__(self, store: KernelStore, viking):
         self.store, self.viking = store, viking
@@ -112,14 +147,22 @@ class MemoryKernel:
             return {**body, adapter.field: strip_thinking(body.get(adapter.field, []))}
         return body
 
-    async def enhance(self, body, protocol, *args, **kwargs):
+    async def enhance(self, body, protocol, *args, budget=None, **kwargs):
+        budget = budget or Budget(0)
         try:
-            prepared = await self.prepare(body, protocol, *args, **kwargs)
+            async with budget.limit():
+                prepared = await self.prepare(body, protocol, *args, budget=budget, **kwargs)
             return prepared.body, prepared, prepared.metrics
-        except Exception:
-            logger.exception("OpenViking Gateway preparation failed")
+        except Exception as error:
             metrics = {}
-            degrade(metrics, "memory_store_failure")
+            if isinstance(error, asyncio.TimeoutError) and budget.expired:
+                logger.warning(
+                    "OpenViking Gateway preparation timed out; forwarding without memory"
+                )
+                degrade(metrics, "prepare_timeout")
+            else:
+                logger.exception("OpenViking Gateway preparation failed")
+                degrade(metrics, "memory_store_failure")
             return self.degraded_body(body, protocol), None, metrics
 
     async def sent_history(self, scope, messages, protocol):
@@ -193,8 +236,12 @@ class MemoryKernel:
         upstreams=(),
         summarize=None,
         peer=None,
+        budget=None,
     ):
-        """Build the upstream body; ``summarize(prepared, body)`` sends a summary request."""
+        """Build the upstream body; ``summarize(prepared, body)`` sends a summary request.
+
+        ``budget`` is the caller's preparation limit; a compaction does not count against it.
+        """
         adapter = tool_protocol(protocol)
         sent = adapter.messages(body)
         if not isinstance(sent, list) or not all(isinstance(m, dict) for m in sent):
@@ -308,7 +355,8 @@ class MemoryKernel:
                 and not disabled
                 and prepared.context_tokens >= policy.compaction_threshold * prepared.context_window
             ):
-                await self.compact(prepared, credential, policy, summarize)
+                with (budget or Budget(0)).paused():
+                    await self.compact(prepared, credential, policy, summarize)
         # Recall and window signals come after any new cut, so they describe the
         # context the model actually gets.
         if not disabled:

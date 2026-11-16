@@ -115,3 +115,46 @@ async def test_shutdown_stops_claiming_and_closes_after_delivery(
     assert len(claims) == claims_before_shutdown
     assert len(cancelled) == (2 if stuck else 0)
     assert len(completed) == (0 if stuck else 2)
+
+
+async def test_capture_worker_backs_off_while_the_store_fails(monkeypatch, caplog):
+    redis_exceptions = pytest.importorskip("redis.exceptions")
+    from types import SimpleNamespace
+
+    stopped, waits = asyncio.Event(), []
+    # Three store failures, an idle round, one more store failure, then another error.
+    outcomes = [
+        redis_exceptions.TimeoutError("store command timed out"),
+        redis_exceptions.TimeoutError("store command timed out"),
+        redis_exceptions.TimeoutError("store command timed out"),
+        False,
+        redis_exceptions.TimeoutError("store command timed out"),
+        ValueError("broken"),
+    ]
+
+    async def once():
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    async def wait_for(awaitable, timeout):
+        awaitable.close()
+        waits.append(timeout)
+        if not outcomes:
+            stopped.set()
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr(app_module.asyncio, "wait_for", wait_for)
+    app = SimpleNamespace(state=SimpleNamespace(worker=SimpleNamespace(once=once)))
+    with caplog.at_level("WARNING", logger=app_module.logger.name):
+        await app_module.capture_loop(app, stopped)
+    # Store failures back off 1, 2, 4 and start again at 1 after an attempt that did not raise.
+    assert waits == [1, 2, 4, 1, 1, 1]
+    store = [r for r in caplog.records if "capture store failed" in r.getMessage()]
+    assert [r.getMessage() for r in store] == [
+        "OpenViking Gateway capture store failed: TimeoutError"
+    ] * 4
+    assert all(r.exc_info is None for r in store)
+    (other,) = [r for r in caplog.records if r.getMessage() == "OpenViking Gateway capture failed"]
+    assert other.exc_info is not None

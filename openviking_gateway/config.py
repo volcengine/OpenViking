@@ -118,6 +118,11 @@ class GatewayConfig(BaseModel):
     log_retention_days: int = Field(default=30, ge=1)
     max_body_bytes: int = Field(default=32 * 1024 * 1024, ge=1024)
     upstream_timeout_seconds: float = Field(default=600, gt=0)
+    # Memory preparation past this many seconds is dropped and the request forwarded as it
+    # came; a compaction summary call does not count. 0 means no limit.
+    prepare_timeout_seconds: float = Field(default=0, ge=0)
+    # Total limit of one compaction summary call; 0 means upstream_timeout_seconds.
+    summary_timeout_seconds: float = Field(default=0, ge=0)
     health_interval_seconds: float = Field(default=60, ge=1)
     capture_concurrency: int = Field(default=1, ge=1)
     client_rules: ClientRules = Field(default_factory=ClientRules)

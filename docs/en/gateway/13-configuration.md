@@ -48,6 +48,8 @@ An embedded and a standalone gateway share most fields; they differ in which fil
 | `log_retention_days` | Both | `30` | 1 or more | Days to keep request logs in storage; stdout retention is managed by the log collector |
 | `max_body_bytes` | Both | `33554432` (32 MiB) | 1,024 or more | Size limit for requests and uploads, in bytes |
 | `upstream_timeout_seconds` | Both | `600` | More than 0 | Seconds the gateway waits on the provider: for a reply to start (connecting, sending the request, receiving the headers), and then for each further part of the reply. A reply that keeps arriving is not cut off, however long it runs. When the wait runs out the client gets 504 `upstream_timeout`, or an error event at the end of a stream that has started |
+| `prepare_timeout_seconds` | Both | `0` | 0 or more | Seconds the gateway may spend adding memory to a request (session lookup, recall, profile, tools) before it forwards the request without memory, flagged `prepare_timeout`. A compaction summary call does not count. `0` means no limit |
+| `summary_timeout_seconds` | Both | `0` | 0 or more | Total seconds for one compaction summary call; see [How the summary is written](05-long-conversations.md#how-the-summary-is-written). `0` means `upstream_timeout_seconds` |
 | `health_interval_seconds` | Both | `60` | 1 or more | Seconds between OpenViking status checks |
 | `capture_concurrency` | Both | `1` | 1 or more | Concurrent conversation deliveries per process; shutdown stops new claims and gives in-flight deliveries up to 100 seconds to finish |
 | `client_rules` | Both | `{}` (packaged rules only) | See [Client rules](#client-rules) | Text added to or removed from what the gateway recognizes as housekeeping requests and client-inserted messages |

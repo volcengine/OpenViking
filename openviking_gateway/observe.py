@@ -16,6 +16,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import ClientDisconnect
 
 from .client import VikingError
+from .storage import STORE_ERRORS
 from .tool_protocols.common import ToolLoopError
 
 logger = logging.getLogger(__name__)
@@ -93,6 +94,7 @@ VIKING_DETAILS = {
     "openviking_timeout": "OpenViking did not answer in time.",
 }
 INTERNAL_DETAIL = "The gateway failed to handle this request."
+STORE_DETAIL = "The gateway's state store is unavailable."
 ERROR_CODE = re.compile(r"[A-Za-z0-9._-]{1,64}")
 REQUEST_ID = re.compile(r"[A-Za-z0-9._:/-]{1,128}")
 # Headers a fronting service sets, recorded only with ``trusted_host_headers``.
@@ -141,6 +143,9 @@ def classify(error):
         return error.status, error.code, REASONS[error.code].origin, str(error), {}
     if isinstance(error, ClientDisconnect):
         return 499, "client_disconnected", "client", "The client closed the request.", {}
+    if isinstance(error, STORE_ERRORS):
+        logger.warning("OpenViking Gateway state store failed: %s", type(error).__name__)
+        return 503, "store_unavailable", "gateway", STORE_DETAIL, {}
     logger.error("OpenViking Gateway request failed", exc_info=error)
     return 500, "internal_error", "gateway", INTERNAL_DETAIL, {}
 

@@ -79,7 +79,7 @@ OpenViking 拒绝 API 密钥时，返回 401 `openviking_http_401`。
 | `session`、`protocol` | 对话及其协议，[重置保存](#gateway-keys)时要用 |
 | `peer` | 请求的 [Peer](../gateway/03-connect-clients.md#peer)，来自 `X-OpenViking-Actor-Peer` 或密钥的默认 Peer |
 | `degradation` | 异常代码，见[降级请求的异常](../gateway/12-troubleshooting.md#issues-on-degraded-requests) |
-| `degradations` | 请求的全部异常，按发生顺序。还可能含 `recall_failed`：记忆检索没有得到 OpenViking 的应答（原因见 `recall_reason`），它不会写入 `degradation` |
+| `degradations` | 请求的全部异常，按发生顺序。还可能含 `recall_failed`：记忆检索没有得到 OpenViking 的应答（原因见 `recall_reason`），它不会写入 `degradation`；以及 `prepare_timeout`：补充记忆超过了 `prepare_timeout_seconds` |
 | `revocation_reason` | 出现 `revocation_check_unavailable` 时，OpenViking 无法确认密钥的原因 |
 | `session_source` | 对话是怎样确定的：`header`（`X-OpenViking-Session`）、`reply_match`（历史延续了某个对话的回复）或 `new` |
 | `recall_reason`、`recall_count`、`recall_ms` | 记忆检索的结果代码、补充的条数和检索耗时，见[没有补充记忆](../gateway/12-troubleshooting.md#no-memory-is-added) |
@@ -305,6 +305,7 @@ OpenViking 返回的其他 HTTP 错误记为 `openviking_http_<status>`；网关
 | 404、403 | `response_unknown`、`response_upstream_disallowed` | gateway | 查询的 Responses 响应不属于这把密钥，或它的上游已不再允许使用。 |
 | 401 | `upstream_key_missing` | gateway | 上游没有保存 API Key，请求也没有在 `X-OpenViking-Upstream-Key` 中携带。 |
 | 403 | `coding_plan_disabled` | gateway | 上游是不允许通过网关使用的 Coding Plan 密钥。 |
+| 503 | `store_unavailable` | gateway | 网关的状态存储出错。响应带 `Retry-After: 1`。 |
 | 500 | `internal_error` | gateway | 网关意外出错。错误详情是通用文本，调用栈在网关日志里。 |
 | 504 | `upstream_timeout` | upstream | 服务商没有在 `upstream_timeout_seconds` 内开始回复，或者非流式回复中途这么久没有数据。 |
 | 502 | `upstream_unreachable` | upstream | 网关连不上服务商（DNS、连接被拒绝、TLS）。 |

@@ -166,7 +166,7 @@ chart 不创建 Ingress。把代理指向它的 Service，并保持 `fullnameOve
 
 ### 启动检查 {#startup-checks}
 
-选择 Redis 后端时，启动 PING 必须成功。地址、凭据错误或 Redis 不可达会使启动失败，Kubernetes 会重启容器；滚动发布使用 `maxUnavailable: 0`。运行时 Redis 故障不会改变 `/health`；鉴权阶段存储失败返回纯文本 HTTP 500，并在 stderr 输出异常栈。
+选择 Redis 后端时，启动 PING 必须成功。地址、凭据错误或 Redis 不可达会使启动失败，Kubernetes 会重启容器；滚动发布使用 `maxUnavailable: 0`。运行时 Redis 故障不会改变 `/health`；鉴权或路由阶段存储失败返回 JSON `503 store_unavailable`，带 `Retry-After: 1`，网关日志记一条写明错误类型的警告。
 
 独立网关开始监听前会先检查 OpenViking 的认证模式：
 
@@ -361,7 +361,7 @@ config:
 
 无管理面、按密钥隔离的部署再加上 `management_api: false`、`openviking_keys: true`、`tenancy: key`、`default_upstreams` 和 `request_log_sink: stdout`，见[直接使用 OpenViking API 密钥](../gateway/09-gateway-keys.md#openviking-keys)和[部署默认上游](../gateway/07-upstreams.md#deployment-default-upstreams)。没有管理 API 时，在 OpenViking 中删除用户不会通知网关，该用户的网关数据按[保留期限](../gateway/11-security-and-data.md#retention)过期。部署在它前面的服务遵循[宿主集成约定](#host-integration-contract)。
 
-Redis `mode: standalone` 用于单个端点，包括托管代理；`mode: cluster` 用 Redis Cluster 端点且数据库必须为 0。TLS 用 `rediss://`，端点 URL 中不要写凭证。`pool_size` 限制每个进程同时执行的 Redis 命令数，超出的命令等待空闲连接。保持 `pool_size >= capture_concurrency + 8`。Redis 位于鉴权路径，整体不可用时请求返回 HTTP 500；需要高可用时使用主从和自动切换，内存和持久化按 [Redis 内存策略](#redis-memory-policy)配置。
+Redis `mode: standalone` 用于单个端点，包括托管代理；`mode: cluster` 用 Redis Cluster 端点且数据库必须为 0。TLS 用 `rediss://`，端点 URL 中不要写凭证。`pool_size` 限制每个进程同时执行的 Redis 命令数，超出的命令等待空闲连接。每条命令连同这段等待最长 `connect_timeout_ms + command_timeout_ms`（`command_timeout_ms` 为 `0` 时不限）。保持 `pool_size >= capture_concurrency + 8`。Redis 位于鉴权路径，整体不可用时请求在 `connect_timeout_ms + command_timeout_ms` 内返回 `503 store_unavailable`（JSON），带 `Retry-After: 1` 和 `X-OpenViking-Upstream-Attempted: 0`。连不上存储的保存 worker 会退避，等待时间逐次翻倍、最长 30 秒，存储恢复后自行继续；需要高可用时使用主从和自动切换，内存和持久化按 [Redis 内存策略](#redis-memory-policy)配置。
 
 Redis 部署使用 `RollingUpdate`，配置 `maxUnavailable: 0`、`maxSurge: 1`；多副本时创建 `maxUnavailable: 1` 的 PDB。通过 `affinity` 把副本分散到不同节点。各进程缓存管理记录，所以修改管理配置或吊销签发密钥后，其他副本最多 **2 秒**后生效。
 
@@ -394,6 +394,7 @@ Redis 部署使用 `RollingUpdate`，配置 `maxUnavailable: 0`、`maxSurge: 1`�
 | `X-OpenViking-Error-Origin` | 同上 | `gateway`、`openviking` 或 `upstream` |
 | `X-OpenViking-Upstream-Attempted` | 同上 | 网关已开始向服务商发送请求（包括压缩摘要请求）时为 `1`，否则为 `0` |
 | `X-OpenViking-Degraded` | 发送响应头时请求已经降级 | 用 `,` 连接的异常代码，例如 `revocation_check_unavailable,recall_failed` |
+| `Retry-After` | `store_unavailable` 响应 | `1` |
 
 非 2xx 响应如果没有 `X-OpenViking-Error-Reason`，就是服务商自己的错误，网关原样转发。只有带 `X-OpenViking-Upstream-Attempted: 0` 的响应，宿主才可以把请求改发到别处；为 `1` 时服务商可能已经收到了请求。网关处理请求时发给 OpenViking 的调用，在 `X-Request-ID` 中带上同一个 ID。
 

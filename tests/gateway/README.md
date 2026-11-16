@@ -213,8 +213,8 @@ the supplied release tag. It does not rebuild native extensions or Studio.
 Assertions inspect raw mock calls, source message IDs, Redis keys, Pod lifecycle,
 and client completion markers. Missing SDKs, incomplete streams, and failed
 infrastructure are failures when the suite is opted in. A Redis outage may
-produce either a logged `memory_store_failure` passthrough or a plaintext
-HTTP 500 at authentication; scenario 6 records the observed proportions.
+produce either a logged `memory_store_failure` passthrough or a JSON HTTP 503
+`store_unavailable` with `Retry-After`; scenario 6 records the observed proportions.
 Scenario 7 asserts loss of an undelivered tail when persistence is disabled.
 
 The `gateway-e2e.yml` workflow runs nightly against `ghcr.io/volcengine/openviking:main`.

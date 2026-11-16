@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import aiohttp
+import async_timeout
 import pytest
 from aiohttp import web
 from test_app import enable_tools
@@ -295,6 +296,26 @@ async def test_bookkeeping_failure_keeps_the_record(running_gateway, capsys, mon
     assert response.status_code == 200
     record = only_record(capsys)
     assert record["status"] == 200 and "error_reason" not in record
+    assert record["bookkeeping_failed"] == ["completed"]
+
+
+async def test_bookkeeping_that_hangs_is_cut_off(running_gateway, capsys, monkeypatch):
+    app, client, _, issued, _, _ = running_gateway
+    monkeypatch.setattr(proxy, "BOOKKEEPING_SECONDS", 0.05)
+
+    async def hanging(*args):
+        await asyncio.sleep(5)
+
+    monkeypatch.setattr(app.state.kernel, "completed", hanging)
+    capsys.readouterr()
+    async with async_timeout.timeout(2):
+        response = await client.post(
+            "/v1/chat/completions",
+            headers=bearer(issued, **{"X-OpenViking-Session": "s"}),
+            json=CHAT,
+        )
+    assert response.status_code == 200
+    record = only_record(capsys)
     assert record["bookkeeping_failed"] == ["completed"]
 
 

@@ -35,6 +35,7 @@ from .observe import VIKING_DETAILS, GatewayError, RequestRecord, degrade
 from .protocols import configure_rules
 from .proxy import ProxyRequest, filtered_headers, resolve_binding
 from .storage import (
+    STORE_ERRORS,
     AsyncCodec,
     CachedManagement,
     SQLiteKernelStore,
@@ -82,6 +83,28 @@ async def health_loop(app, interval, sleep=asyncio.sleep):
         except Exception:
             logger.exception("OpenViking Gateway health check failed")
             await sleep(1)
+
+
+async def capture_loop(app, stopped):
+    # While the store keeps failing the wait doubles up to 30 s, so the workers neither
+    # flood the log nor hold the store's connection path that requests need.
+    backoff = 1
+    while not stopped.is_set():
+        wait = 1
+        try:
+            busy = await app.state.worker.once()
+            backoff = 1
+            if busy:
+                continue
+        except STORE_ERRORS as error:
+            logger.warning("OpenViking Gateway capture store failed: %s", type(error).__name__)
+            wait, backoff = backoff, min(backoff * 2, 30)
+        except Exception:
+            logger.exception("OpenViking Gateway capture failed")
+        try:
+            await asyncio.wait_for(stopped.wait(), timeout=wait)
+        except asyncio.TimeoutError:
+            pass
 
 
 def open_stores(config: GatewayConfig, encryptor):
@@ -193,18 +216,6 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
             except Exception:
                 logger.exception("OpenViking Gateway cleanup failed")
                 await asyncio.sleep(1)
-
-    async def capture_loop(app, stopped):
-        while not stopped.is_set():
-            try:
-                if await app.state.worker.once():
-                    continue
-            except Exception:
-                logger.exception("OpenViking Gateway capture failed")
-            try:
-                await asyncio.wait_for(stopped.wait(), timeout=1)
-            except asyncio.TimeoutError:
-                pass
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(_request, error):

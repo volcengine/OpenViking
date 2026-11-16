@@ -706,3 +706,31 @@ async def test_a_cut_that_moves_capture_to_a_new_session_names_it_first(
     )
     summary_block = cut.body["messages"][0]["content"].split("</openviking-context>")[0]
     assert summary_block.endswith("\n\n" + hint + "\n")
+
+
+@pytest.mark.parametrize(("configured", "total"), [(0, 600), (2.5, 2.5)])
+async def test_summary_call_is_limited_by_summary_timeout(configured, total):
+    from types import SimpleNamespace
+
+    import aiohttp
+
+    from openviking_gateway import proxy
+
+    timeouts = []
+
+    def post(url, *, timeout, **kwargs):
+        timeouts.append(timeout.total)
+        raise aiohttp.ClientConnectionError()
+
+    request = proxy.ProxyRequest.__new__(proxy.ProxyRequest)
+    request.app = SimpleNamespace(state=SimpleNamespace(http=SimpleNamespace(post=post)))
+    request.config = SimpleNamespace(
+        upstream_timeout_seconds=600, summary_timeout_seconds=configured
+    )
+    request.request = SimpleNamespace(headers={}, url=SimpleNamespace(query=""))
+    request.path, request.model, request.store = "/v1/chat/completions", "model", None
+    request.record = proxy.RequestRecord(None, None)
+    upstream = {"id": "chat", "protocol": "chat", "base_url": "http://u/v1", "api_key": "k"}
+    with pytest.raises(SummaryError, match="summary_unavailable"):
+        await request.summarize(SimpleNamespace(upstream=upstream), {"model": "model"})
+    assert timeouts == [total]

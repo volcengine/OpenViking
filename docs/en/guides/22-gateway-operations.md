@@ -166,7 +166,7 @@ Without an OpenViking address from either source, the gateway exits and asks you
 
 ### Startup checks {#startup-checks}
 
-When a Redis port is selected, startup PING must succeed. Wrong addresses or credentials, or an unavailable Redis service, fail startup; Kubernetes restarts the container. Use `maxUnavailable: 0` when rolling out. Runtime Redis failures do not change `/health`; failures during authentication return a plain-text HTTP 500 and a traceback in stderr.
+When a Redis port is selected, startup PING must succeed. Wrong addresses or credentials, or an unavailable Redis service, fail startup; Kubernetes restarts the container. Use `maxUnavailable: 0` when rolling out. Runtime Redis failures do not change `/health`; failures during authentication or routing return a JSON `503 store_unavailable` with `Retry-After: 1`, and the gateway log has one warning that names the error type.
 
 Before it starts listening, a standalone gateway checks OpenViking's authentication mode:
 
@@ -361,7 +361,7 @@ config:
 
 For a headless per-key deployment, add `management_api: false`, `openviking_keys: true`, `tenancy: key`, `default_upstreams` and `request_log_sink: stdout`; see [Use an OpenViking API key directly](../gateway/09-gateway-keys.md#openviking-keys) and [Deployment default upstreams](../gateway/07-upstreams.md#deployment-default-upstreams). Without the management API, deleting a user in OpenViking does not reach the gateway; that user's gateway data expires through [retention](../gateway/11-security-and-data.md#retention). A service in front of such a deployment follows the [host integration contract](#host-integration-contract).
 
-Redis `mode: standalone` covers a single endpoint, including a managed proxy; `mode: cluster` uses Redis Cluster endpoints and database 0. Use `rediss://` for TLS and never embed credentials in endpoint URLs. `pool_size` caps the Redis commands in flight per process; further commands wait for a free connection. Keep `pool_size >= capture_concurrency + 8`. Redis is in the authentication path: a total outage returns HTTP 500. Use replication and automatic failover for availability, and configure memory and persistence as described in [Redis memory policy](#redis-memory-policy).
+Redis `mode: standalone` covers a single endpoint, including a managed proxy; `mode: cluster` uses Redis Cluster endpoints and database 0. Use `rediss://` for TLS and never embed credentials in endpoint URLs. `pool_size` caps the Redis commands in flight per process; further commands wait for a free connection. Each command, that wait included, has at most `connect_timeout_ms + command_timeout_ms` (no limit when `command_timeout_ms` is `0`). Keep `pool_size >= capture_concurrency + 8`. Redis is in the authentication path: during a total outage requests get `503 store_unavailable` (JSON) with `Retry-After: 1` and `X-OpenViking-Upstream-Attempted: 0`, within `connect_timeout_ms + command_timeout_ms`. Capture workers that cannot reach the store back off, doubling their wait up to 30 seconds, and resume by themselves once it answers. Use replication and automatic failover for availability, and configure memory and persistence as described in [Redis memory policy](#redis-memory-policy).
 
 Redis deployments use `RollingUpdate` with `maxUnavailable: 0`, `maxSurge: 1`, and a PDB with `maxUnavailable: 1` when there are multiple replicas. Use `affinity` to spread replicas across nodes. Management changes and issued-key revocations can take up to **2 seconds** to reach another replica because each process caches management records.
 
@@ -394,6 +394,7 @@ Every response on a model route carries these headers back to the host:
 | `X-OpenViking-Error-Origin` | Same responses | `gateway`, `openviking` or `upstream` |
 | `X-OpenViking-Upstream-Attempted` | Same responses | `1` when the gateway had started a request to the provider, a compaction summary call included; else `0` |
 | `X-OpenViking-Degraded` | When the request was degraded by the time the response headers were sent | The issue codes joined with `,`, for example `revocation_check_unavailable,recall_failed` |
+| `Retry-After` | `store_unavailable` responses | `1` |
 
 A non-2xx response without `X-OpenViking-Error-Reason` is the provider's own error, relayed unchanged. A host may retry a request elsewhere only when it carries `X-OpenViking-Upstream-Attempted: 0`; with `1`, the provider may already have received it. OpenViking calls the gateway makes while serving a request carry the same ID in `X-Request-ID`.
 
