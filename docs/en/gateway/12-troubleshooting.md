@@ -93,9 +93,11 @@ The gateway checks each client request before forwarding it: the gateway key, th
 | 404 "Unknown response for this key", 403 "Response upstream is no longer allowed" | The Responses response being looked up was not created with this key, or the upstream that created it is now turned off or no longer bound to the key. |
 | 413 "Request exceeds configured body limit" | The request body is larger than `max_body_bytes` (see [the request size limit](05-long-conversations.md#side-effects)), or than your proxy's own limit. |
 | 426 | A WebSocket connection to the Responses API. Expected: Codex falls back to HTTP. |
-| 502 "Model upstream is unavailable" | The gateway could not reach the provider, or the call took longer than `upstream_timeout_seconds`. Choose **Test** on the upstream ([Test and delete](07-upstreams.md#test-and-delete)). |
+| 502 "Model upstream is unavailable" | The gateway could not reach the provider, or the provider did not start its reply within `upstream_timeout_seconds`. Choose **Test** on the upstream ([Test and delete](07-upstreams.md#test-and-delete)). |
 
 "Hidden tool request timed out" (504) happens after the provider call and is logged; see [Failure handling](04-openviking-tools.md#failure-handling).
+
+A streamed reply that has started is not cut off for its length, only when the provider sends nothing for longer than `upstream_timeout_seconds` or, for a request that uses OpenViking tools, when the tool **Total time** runs out; the stream then ends early, with "Hidden tool request timed out" if the request uses OpenViking tools.
 
 ## The upstream returned an error {#the-upstream-returned-an-error}
 
