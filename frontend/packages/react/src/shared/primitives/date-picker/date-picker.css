@@ -1,0 +1,187 @@
+/*
+ * 日期选择器样式，对齐控制台设计稿：32 高输入框、右侧日历图标、下方日历弹层。
+ * 取值来自火山版主题包的 DatePicker 规则（32 高、6 圆角、主色选中）。
+ *
+ * Date picker styles matching the console design: a 32-high field with a calendar icon
+ * and a popup grid below. Values come from the volcano theme's DatePicker rules.
+ */
+.ov-date-picker {
+  position: relative;
+  display: block;
+}
+
+.ov-date-picker__field {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: 32px;
+  border: 1px solid
+    var(--ov-ui-color-border-2, var(--ov-ui-border-2-default, #e1e4f2));
+  border-radius: 6px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #fff));
+}
+
+.ov-date-picker__field:focus-within {
+  border-color: var(
+    --ov-ui-color-primary,
+    var(--ov-ui-primary-default, #5252ff)
+  );
+  box-shadow: 0 0 0 2px
+    color-mix(
+      in srgb,
+      var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff)) 30%,
+      transparent
+    );
+}
+
+.ov-date-picker__input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+  font: inherit;
+  font-size: 13px;
+}
+
+.ov-date-picker__input:focus {
+  outline: none;
+}
+
+.ov-date-picker__input::placeholder {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+}
+
+.ov-date-picker__clear,
+.ov-date-picker__calendar {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-right: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+  cursor: pointer;
+}
+
+.ov-date-picker__clear:hover,
+.ov-date-picker__calendar:hover {
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default, #f7f8fd));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+}
+
+.ov-date-picker__clear {
+  width: 16px;
+  height: 16px;
+}
+
+.ov-date-picker__popup {
+  position: absolute;
+  z-index: 2;
+  /* 向上弹出：日期字段通常位于面板底部，向下展开会被面板的滚动容器裁掉。
+     向上展开在同样空间里完整可见，也不必让宿主为它留白。
+   *
+   * Opens upward: a date field usually sits at the bottom of its panel, where a
+   * downward popup would be clipped by the panel's scroll container. Opening upward
+   * stays fully visible in the same space without the host reserving room for it. */
+  bottom: calc(100% + 4px);
+  left: 0;
+  box-sizing: border-box;
+  width: 240px;
+  padding: 8px;
+  border: 1px solid
+    var(--ov-ui-color-border-2, var(--ov-ui-border-2-default, #e1e4f2));
+  border-radius: 8px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default, #fff));
+  box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
+}
+
+.ov-date-picker__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  height: 32px;
+}
+
+.ov-date-picker__title {
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.ov-date-picker__nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default, #3f3f51));
+  cursor: pointer;
+}
+
+.ov-date-picker__nav:hover {
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default, #f7f8fd));
+}
+
+.ov-date-picker__weekdays,
+.ov-date-picker__grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.ov-date-picker__weekdays {
+  margin-top: 4px;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+  font-size: 12px;
+  text-align: center;
+}
+
+.ov-date-picker__cell {
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default, #0b0b0f));
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ov-date-picker__cell:hover {
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default, #f7f8fd));
+}
+
+.ov-date-picker__cell--outside {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default, #6e718c));
+}
+
+.ov-date-picker__cell--today {
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+  font-weight: 500;
+}
+
+.ov-date-picker__cell--selected {
+  background: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+  color: var(
+    --ov-ui-color-text-on-primary,
+    var(--ov-ui-text-on-primary-default, #fff)
+  );
+}
+
+.ov-date-picker__cell--selected:hover {
+  background: var(--ov-ui-color-primary, var(--ov-ui-primary-default, #5252ff));
+}

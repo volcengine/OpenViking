@@ -27,7 +27,7 @@ OpenViking 是上下文数据库，FS 是源数据，VectorDB 是派生索引。
 运行时锁由 Rust RAGFS 的 `PathLockManager` 和 Provider 管理。Python 服务通过 binding 申请、续用、交接和释放 lease。后文的 `LockContext` 示例仅说明生命周期，不是当前 Python SDK 或运行时类接口。
 
 - **范围**：EXACT 保护路径本身，TREE 保护路径及其子树。
-- **Provider**：默认 filesystem 保存锁文件；cache 用 Redis 原子检查和写入 token；memory 只在当前进程内协调。
+- **Provider**：默认 filesystem 保存锁文件；SQLite 协调共享本地数据库的进程；PostgreSQL 提供共享数据库协调；cache 用 Redis 原子检查和写入 token；memory 只在当前进程内协调。
 - **lease**：记录 owner、覆盖路径、token 位置和续期状态。后台任务可以接收显式交接的 lease。
 - **失败处理**：释放前校验 owner，过期锁由后续获取时的 stale 检查清理；锁释放不会撤销已写入的数据。
 
@@ -223,7 +223,7 @@ Exact 和 Tree 表达操作范围，文件、目录或缺失路径表达目标�
 
 锁路径必须是绝对路径。Manager 在获取锁或检查租约覆盖范围前，对空路径、
 相对路径、重复 `/`、`.` 或 `..` 路径段及 NUL 返回 `InvalidRequest`。
-非根路径末尾的单个 `/` 会被移除。Redis 和 SQLite 的 token 操作要求路径
+非根路径末尾的单个 `/` 会被移除。Redis、SQLite 和 PostgreSQL 的 token 操作要求路径
 已完成这一规范化；Redis Lua 批量获取也会在修改 token 前校验全部请求。
 应使用 `/local/account-a/file`，避免 `/local/account-a/./file`、
 `/local/account-a//file` 等别名。
@@ -301,6 +301,17 @@ HASH key 按路径 scope 隔离：
 子树跨越 account 和 `_system` HASH。Tree 根路径应使用 `/local/<account>`、
 `/local/_system` 或其后代。`/` 和 `/local` 的 Exact 锁仍然支持，只保护
 对应路径本身。跨 scope batch 会被拒绝。
+
+### PostgreSQL Provider 锁协议
+
+`postgres` Provider 将 holder token 保存在 PostgreSQL 中，在 namespace 事务
+advisory lock 保护下检查 Exact/Tree 冲突、批量获取、续租和释放 holder。
+所有参与者使用同一可写主库、相同的顶层 `service_name` 和过期时长；
+锁时间戳与过期检查使用主库时钟。
+
+PostgreSQL 是独立于 Redis/CacheRuntime 的共享协调后端。它无需 Redis，
+不会启用读缓存，也不会把业务文件或 QueueFS 迁入 PostgreSQL。
+配置、权限和部署限制见 [PostgreSQL PathLock 配置](../configuration/01-server.md#postgresql-pathlock)。
 
 ### Filesystem 获取锁流程（EXACT 模式）
 
@@ -421,7 +432,9 @@ fencing token 校验通过的一方成功持有 `TreeLock(java-guide)`；失败�
 路径锁默认启用，并使用 `filesystem` Provider。多进程通过 Redis 协调时，
 设置 `storage.agfs.pathlock.provider=cache`。Cache PathLock 要求配置顶层
 Redis Cache Provider，并使用顶层 `service_name` 作为 Redis namespace。
-运行时等待超时固定为 `0.0` 秒。`storage.transaction` 仅保留为兼容旧配置：`lock_timeout`
+运行时等待超时固定为 `0.0` 秒。也可选择 `provider=postgres`，在不使用 Redis
+的情况下跨进程或主机共享锁；它使用自己的 DSN 和顶层 `service_name`，独立于缓存配置。
+`storage.transaction` 仅保留为兼容旧配置：`lock_timeout`
 已废弃且会被忽略，`lock_expire` 会在未显式配置新字段时自动映射，
 `redo_recovery_enabled` 已废弃且会被忽略。
 
@@ -463,13 +476,37 @@ Redis 配置：
 }
 ```
 
+PostgreSQL 的 `ov.conf` 配置片段：
+
+```json
+{
+  "service_name": "production",
+  "storage": {
+    "agfs": {
+      "pathlock": {
+        "provider": "postgres",
+        "postgres_dsn_env": "OV_POSTGRES_DSN",
+        "lock_expire_secs": 30.0
+      }
+    }
+  }
+}
+```
+
+```sh
+export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=openviking password=YOUR_PASSWORD sslmode=require'
+```
+
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
-| `provider` | str | `filesystem`、`memory`、`sqlite` 或 `cache` | `filesystem` |
+| `provider` | str | `filesystem`、`memory`、`sqlite`、`postgres` 或 `cache` | `filesystem` |
 | `sqlite_path` | str / null | 使用 `sqlite` 时可覆盖本地数据库绝对路径；见 [SQLite 配置](../configuration/01-server.md#storage) | 使用 `sqlite` 时为 `{storage.workspace}/_system/pathlock/pathlock.db` |
+| `postgres_dsn_env` | str / null | `postgres` 必填；保存连接 DSN 的环境变量名 | `null` |
 | `lock_expire_secs` | float | 未刷新的锁进入 stale 状态前的秒数 | `30.0` |
 
-跨容器或主机共享 EFS 的副本应使用 `provider="cache"`，连接共享 Redis。
+跨容器或主机共享 EFS 的副本可使用 `provider="postgres"` 连接共享 PostgreSQL
+主库，或使用 `provider="cache"` 连接共享 Redis。两者都不会改变 QueueFS
+或其他存储的并发要求。
 SQLite 仅支持同机共享同一个本地磁盘数据库文件，不支持 EFS/NFS/SMB
 或各容器独立的本地数据库。参见[部署限制与 Provider 选择](../configuration/01-server.md#storage)。
 
@@ -493,6 +530,14 @@ SQLite 仅支持同机共享同一个本地磁盘数据库文件，不支持 EFS
 ### QueueFS 持久化
 
 重启恢复要求队列内容已持久化。QueueFS 默认使用 SQLite；使用 cache 后端时，持久性取决于所配置的 Provider。memory 后端不保留进程退出后的任务。
+
+### 切换到 PostgreSQL {#switching-to-postgresql}
+
+filesystem → PostgreSQL 适用下面相同的停机切换流程：在第 3 步设置
+`provider="postgres"` 和 `postgres_dsn_env`，第 4 步验证重新取得 PostgreSQL 锁。
+PostgreSQL、Redis、SQLite 和 filesystem 是相互独立的锁协调域，
+新 Provider 不检查旧 Provider 的 token。任何 Provider 切换（包括 Redis ↔ PostgreSQL）
+都要先停止全部写入者。目标配置见 [PostgreSQL 配置](../configuration/01-server.md#postgresql-pathlock)。
 
 ### 单实例路径锁 Provider 切换：filesystem → Redis
 

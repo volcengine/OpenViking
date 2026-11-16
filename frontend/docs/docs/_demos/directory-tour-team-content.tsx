@@ -1,3 +1,4 @@
+import { Button } from '#demo-controls';
 import {
   ArrowUpRightIcon,
   DirectoryTourFolderIcon,
@@ -20,9 +21,9 @@ export function TeamTourContent({ locale, onDone, onAction }: Props) {
       title={title}
       onDone={onDone}
       media={
-        <button
+        <Button
           className="ov-directory-tour-team__video"
-          type="button"
+          htmlType="button"
           aria-label={
             zh ? '播放团队经验介绍视频' : 'Play team experiences introduction'
           }
@@ -34,7 +35,7 @@ export function TeamTourContent({ locale, onDone, onAction }: Props) {
             height={159}
             alt=""
           />
-        </button>
+        </Button>
       }
       description={
         zh ? (
@@ -65,14 +66,14 @@ export function TeamTourContent({ locale, onDone, onAction }: Props) {
           {zh
             ? '成员可编辑敏感信息的读取规则'
             : 'Members can edit sensitive-data access rules'}{' '}
-          <button
-            type="button"
+          <Button
+            htmlType="button"
             className="ov-directory-tour-team__edit"
             onClick={() => onAction('edit')}
           >
             {zh ? '编辑' : 'Edit'}
             <ArrowUpRightIcon />
-          </button>
+          </Button>
         </span>,
       ]}
     />

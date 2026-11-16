@@ -7,8 +7,8 @@
 import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
-import { FileBrowserEntries } from '@openviking/react/components/file-browser-entries';
-import '@openviking/react/components/file-browser-entries/style.css';
+import { FileBrowserActionBar } from '@openviking/react/components/file-browser-action-bar';
+import '@openviking/react/components/file-browser-action-bar/style.css';
 
 const cases = [
   'overflow-y: hidden;',
@@ -65,7 +65,7 @@ function Regression() {
           try {
             flushSync(() =>
               root.render(
-                <FileBrowserEntries
+                <FileBrowserActionBar
                   locale="en-US"
                   agentConnect={{ apiKey: 'demo-key', locale: 'en-US' }}
                 />,

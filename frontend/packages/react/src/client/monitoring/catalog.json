@@ -1,0 +1,822 @@
+[
+  {
+    "group": "render",
+    "name": "file_browser_action_bar_render_error",
+    "owner": "FileBrowserActionBar",
+    "profile": "RenderFault",
+    "region": null,
+    "zh": "最近的库内错误边界捕获 FileBrowserActionBar 所负责区域的渲染异常；同次捕获只报一次；不会因此捕获普通事件回调或任意异步异常。",
+    "en": "The nearest library boundary catches a render failure in the region owned by FileBrowserActionBar; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.",
+    "ts": "RenderFault"
+  },
+  {
+    "group": "render",
+    "name": "file_tree_render_error",
+    "owner": "FileTree",
+    "profile": "RenderFault",
+    "region": null,
+    "zh": "最近的库内错误边界捕获 FileTree 所负责区域的渲染异常；同次捕获只报一次；不会因此捕获普通事件回调或任意异步异常。",
+    "en": "The nearest library boundary catches a render failure in the region owned by FileTree; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.",
+    "ts": "RenderFault"
+  },
+  {
+    "group": "render",
+    "name": "context_picker_render_error",
+    "owner": "ContextPicker",
+    "profile": "RenderFault",
+    "region": null,
+    "zh": "最近的库内错误边界捕获 ContextPicker 所负责区域的渲染异常；同次捕获只报一次；不会因此捕获普通事件回调或任意异步异常。",
+    "en": "The nearest library boundary catches a render failure in the region owned by ContextPicker; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.",
+    "ts": "RenderFault"
+  },
+  {
+    "group": "render",
+    "name": "file_preview_render_error",
+    "owner": "FilePreview",
+    "profile": "RenderFault",
+    "region": null,
+    "zh": "最近的库内错误边界捕获 FilePreview 所负责区域的渲染异常；同次捕获只报一次；不会因此捕获普通事件回调或任意异步异常。",
+    "en": "The nearest library boundary catches a render failure in the region owned by FilePreview; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.",
+    "ts": "RenderFault"
+  },
+  {
+    "group": "render",
+    "name": "command_console_render_error",
+    "owner": "CommandConsole",
+    "profile": "RenderFault",
+    "region": null,
+    "zh": "最近的库内错误边界捕获 CommandConsole 所负责区域的渲染异常；同次捕获只报一次；不会因此捕获普通事件回调或任意异步异常。",
+    "en": "The nearest library boundary catches a render failure in the region owned by CommandConsole; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.",
+    "ts": "RenderFault"
+  },
+  {
+    "group": "render",
+    "name": "scope_switcher_render_error",
+    "owner": "ScopeSwitcher",
+    "profile": "RenderFault",
+    "region": null,
+    "zh": "最近的库内错误边界捕获 ScopeSwitcher 所负责区域的渲染异常；同次捕获只报一次；不会因此捕获普通事件回调或任意异步异常。",
+    "en": "The nearest library boundary catches a render failure in the region owned by ScopeSwitcher; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.",
+    "ts": "RenderFault"
+  },
+  {
+    "group": "render",
+    "name": "scope_selector_render_error",
+    "owner": "ScopeSelector",
+    "profile": "RenderFault",
+    "region": null,
+    "zh": "最近的库内错误边界捕获 ScopeSelector 所负责区域的渲染异常；同次捕获只报一次；不会因此捕获普通事件回调或任意异步异常。",
+    "en": "The nearest library boundary catches a render failure in the region owned by ScopeSelector; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.",
+    "ts": "RenderFault"
+  },
+  {
+    "group": "render",
+    "name": "agent_connect_render_error",
+    "owner": "AgentConnect",
+    "profile": "RenderFault",
+    "region": null,
+    "zh": "最近的库内错误边界捕获 AgentConnect 所负责区域的渲染异常；同次捕获只报一次；不会因此捕获普通事件回调或任意异步异常。",
+    "en": "The nearest library boundary catches a render failure in the region owned by AgentConnect; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.",
+    "ts": "RenderFault"
+  },
+  {
+    "group": "render",
+    "name": "viking_bot_render_error",
+    "owner": "VikingBot",
+    "profile": "RenderFault",
+    "region": null,
+    "zh": "最近的库内错误边界捕获 VikingBot 所负责区域的渲染异常；同次捕获只报一次；不会因此捕获普通事件回调或任意异步异常。",
+    "en": "The nearest library boundary catches a render failure in the region owned by VikingBot; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.",
+    "ts": "RenderFault"
+  },
+  {
+    "group": "render",
+    "name": "directory_tour_render_error",
+    "owner": "DirectoryTour",
+    "profile": "RenderFault",
+    "region": null,
+    "zh": "最近的库内错误边界捕获 DirectoryTour 所负责区域的渲染异常；同次捕获只报一次；不会因此捕获普通事件回调或任意异步异常。",
+    "en": "The nearest library boundary catches a render failure in the region owned by DirectoryTour; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.",
+    "ts": "RenderFault"
+  },
+  {
+    "group": "render",
+    "name": "wiki_dashboard_render_error",
+    "owner": "WikiDashboard",
+    "profile": "RenderFault",
+    "region": null,
+    "zh": "最近的库内错误边界捕获 WikiDashboard 所负责区域的渲染异常；同次捕获只报一次；不会因此捕获普通事件回调或任意异步异常。",
+    "en": "The nearest library boundary catches a render failure in the region owned by WikiDashboard; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.",
+    "ts": "RenderFault"
+  },
+  {
+    "group": "render",
+    "name": "experience_dashboard_render_error",
+    "owner": "ExperienceDashboard",
+    "profile": "RenderFault",
+    "region": null,
+    "zh": "最近的库内错误边界捕获 ExperienceDashboard 所负责区域的渲染异常；同次捕获只报一次；不会因此捕获普通事件回调或任意异步异常。",
+    "en": "The nearest library boundary catches a render failure in the region owned by ExperienceDashboard; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.",
+    "ts": "RenderFault"
+  },
+  {
+    "group": "render",
+    "name": "email_login_form_render_error",
+    "owner": "EmailLoginForm",
+    "profile": "RenderFault",
+    "region": null,
+    "zh": "最近的库内错误边界捕获 EmailLoginForm 所负责区域的渲染异常；同次捕获只报一次；不会因此捕获普通事件回调或任意异步异常。",
+    "en": "The nearest library boundary catches a render failure in the region owned by EmailLoginForm; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.",
+    "ts": "RenderFault"
+  },
+  {
+    "group": "render",
+    "name": "api_key_login_form_render_error",
+    "owner": "ApiKeyLoginForm",
+    "profile": "RenderFault",
+    "region": null,
+    "zh": "最近的库内错误边界捕获 ApiKeyLoginForm 所负责区域的渲染异常；同次捕获只报一次；不会因此捕获普通事件回调或任意异步异常。",
+    "en": "The nearest library boundary catches a render failure in the region owned by ApiKeyLoginForm; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.",
+    "ts": "RenderFault"
+  },
+  {
+    "group": "render",
+    "name": "password_reset_request_form_render_error",
+    "owner": "PasswordResetRequestForm",
+    "profile": "RenderFault",
+    "region": null,
+    "zh": "最近的库内错误边界捕获 PasswordResetRequestForm 所负责区域的渲染异常；同次捕获只报一次；不会因此捕获普通事件回调或任意异步异常。",
+    "en": "The nearest library boundary catches a render failure in the region owned by PasswordResetRequestForm; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.",
+    "ts": "RenderFault"
+  },
+  {
+    "group": "render",
+    "name": "password_setup_form_render_error",
+    "owner": "PasswordSetupForm",
+    "profile": "RenderFault",
+    "region": null,
+    "zh": "最近的库内错误边界捕获 PasswordSetupForm 所负责区域的渲染异常；同次捕获只报一次；不会因此捕获普通事件回调或任意异步异常。",
+    "en": "The nearest library boundary catches a render failure in the region owned by PasswordSetupForm; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.",
+    "ts": "RenderFault"
+  },
+  {
+    "group": "render",
+    "name": "login_method_selector_render_error",
+    "owner": "LoginMethodSelector",
+    "profile": "RenderFault",
+    "region": null,
+    "zh": "最近的库内错误边界捕获 LoginMethodSelector 所负责区域的渲染异常；同次捕获只报一次；不会因此捕获普通事件回调或任意异步异常。",
+    "en": "The nearest library boundary catches a render failure in the region owned by LoginMethodSelector; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.",
+    "ts": "RenderFault"
+  },
+  {
+    "group": "render",
+    "name": "invitation_confirmation_render_error",
+    "owner": "InvitationConfirmation",
+    "profile": "RenderFault",
+    "region": null,
+    "zh": "最近的库内错误边界捕获 InvitationConfirmation 所负责区域的渲染异常；同次捕获只报一次；不会因此捕获普通事件回调或任意异步异常。",
+    "en": "The nearest library boundary catches a render failure in the region owned by InvitationConfirmation; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.",
+    "ts": "RenderFault"
+  },
+  {
+    "group": "render",
+    "name": "file_browser_render_error",
+    "owner": "FileBrowser",
+    "profile": "RenderFault",
+    "region": null,
+    "zh": "最近的库内错误边界捕获 FileBrowser 所负责区域的渲染异常；同次捕获只报一次；不会因此捕获普通事件回调或任意异步异常。",
+    "en": "The nearest library boundary catches a render failure in the region owned by FileBrowser; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.",
+    "ts": "RenderFault"
+  },
+  {
+    "group": "render",
+    "name": "console_render_error",
+    "owner": "Console",
+    "profile": "RenderFault",
+    "region": null,
+    "zh": "最近的库内错误边界捕获 Console 所负责区域的渲染异常；同次捕获只报一次；不会因此捕获普通事件回调或任意异步异常。",
+    "en": "The nearest library boundary catches a render failure in the region owned by Console; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.",
+    "ts": "RenderFault"
+  },
+  {
+    "group": "render",
+    "name": "scope_cascade_render_error",
+    "owner": "ScopeCascade",
+    "profile": "RenderFault",
+    "region": null,
+    "zh": "最近的库内错误边界捕获 ScopeCascade 所负责区域的渲染异常；同次捕获只报一次；不会因此捕获普通事件回调或任意异步异常。",
+    "en": "The nearest library boundary catches a render failure in the region owned by ScopeCascade; report once per capture attempt. This does not capture ordinary event handlers or arbitrary async callbacks.",
+    "ts": "RenderFault"
+  },
+  {
+    "group": "resource",
+    "name": "file_preview_viewer_load_ready",
+    "owner": "FilePreview",
+    "profile": "CodeReady",
+    "region": ["viewer-loader"],
+    "zh": "当前加载尝试取得可用的预览渲染器代码导出；耗时从调用 import 到导出可用，不代表内容呈现。",
+    "en": "The current import attempt yields usable preview viewer code exports; time from import invocation to usable exports, excluding content rendering.",
+    "ts": "CodeReady"
+  },
+  {
+    "group": "resource",
+    "name": "file_preview_viewer_load_fail",
+    "owner": "FilePreview",
+    "profile": "CodeFault",
+    "region": ["viewer-loader"],
+    "zh": "当前预览渲染器代码加载拒绝或缺少所需导出；后续错误边界沿用该 incident，不再另立故障。",
+    "en": "The current preview viewer code load rejects or lacks the required export; a later boundary capture reuses this incident.",
+    "ts": "CodeFault"
+  },
+  {
+    "group": "resource",
+    "name": "file_preview_editor_load_ready",
+    "owner": "FilePreview",
+    "profile": "CodeReady",
+    "region": ["editor-loader"],
+    "zh": "当前加载尝试取得可用的代码编辑器代码导出；耗时从调用 import 到导出可用，不代表内容呈现。",
+    "en": "The current import attempt yields usable code editor code exports; time from import invocation to usable exports, excluding content rendering.",
+    "ts": "CodeReady"
+  },
+  {
+    "group": "resource",
+    "name": "file_preview_editor_load_fail",
+    "owner": "FilePreview",
+    "profile": "CodeFault",
+    "region": ["editor-loader"],
+    "zh": "当前代码编辑器代码加载拒绝或缺少所需导出；后续错误边界沿用该 incident，不再另立故障。",
+    "en": "The current code editor code load rejects or lacks the required export; a later boundary capture reuses this incident.",
+    "ts": "CodeFault"
+  },
+  {
+    "group": "resource",
+    "name": "viking_bot_composer_load_ready",
+    "owner": "VikingBot",
+    "profile": "CodeReady",
+    "region": ["composer"],
+    "zh": "当前加载尝试取得可用的输入器代码导出；耗时从调用 import 到导出可用，不代表内容呈现。",
+    "en": "The current import attempt yields usable composer code exports; time from import invocation to usable exports, excluding content rendering.",
+    "ts": "CodeReady"
+  },
+  {
+    "group": "resource",
+    "name": "viking_bot_composer_load_fail",
+    "owner": "VikingBot",
+    "profile": "CodeFault",
+    "region": ["composer"],
+    "zh": "当前输入器代码加载拒绝或缺少所需导出；后续错误边界沿用该 incident，不再另立故障。",
+    "en": "The current composer code load rejects or lacks the required export; a later boundary capture reuses this incident.",
+    "ts": "CodeFault"
+  },
+  {
+    "group": "resource",
+    "name": "viking_bot_message_list_load_ready",
+    "owner": "VikingBot",
+    "profile": "CodeReady",
+    "region": ["message-list"],
+    "zh": "当前加载尝试取得可用的消息列表代码导出；耗时从调用 import 到导出可用，不代表内容呈现。",
+    "en": "The current import attempt yields usable message list code exports; time from import invocation to usable exports, excluding content rendering.",
+    "ts": "CodeReady"
+  },
+  {
+    "group": "resource",
+    "name": "viking_bot_message_list_load_fail",
+    "owner": "VikingBot",
+    "profile": "CodeFault",
+    "region": ["message-list"],
+    "zh": "当前消息列表代码加载拒绝或缺少所需导出；后续错误边界沿用该 incident，不再另立故障。",
+    "en": "The current message list code load rejects or lacks the required export; a later boundary capture reuses this incident.",
+    "ts": "CodeFault"
+  },
+  {
+    "group": "resource",
+    "name": "file_preview_image_load_ready",
+    "owner": "FilePreview",
+    "profile": "MediaReady",
+    "region": ["image"],
+    "zh": "当前正文图片可用（load）；从为当前资源绑定 src 计时。缓存命中仍须确认当前元素有效。",
+    "en": "The active inline preview image is available (load). Time from assigning the active source; verify cached element readiness.",
+    "ts": "MediaReady"
+  },
+  {
+    "group": "resource",
+    "name": "file_preview_image_load_fail",
+    "owner": "FilePreview",
+    "profile": "MediaFault",
+    "region": ["image"],
+    "zh": "当前正文图片元素触发 error；关闭的大图弹窗、过渡后台层和过期资源不报；不据此推断 HTTP 状态。",
+    "en": "The active inline preview image element reports an error. Exclude closed dialogs, background transition layers and stale sources; do not infer HTTP status.",
+    "ts": "MediaFault"
+  },
+  {
+    "group": "resource",
+    "name": "file_preview_video_metadata_load_ready",
+    "owner": "FilePreview",
+    "profile": "MediaReady",
+    "region": ["video"],
+    "zh": "当前视频元数据可用（loadedmetadata）；从为当前资源绑定 src 计时。缓存命中仍须确认当前元素有效；视频不代表可连续播放。",
+    "en": "The active video metadata is available (loadedmetadata). Time from assigning the active source; verify cached element readiness. Video metadata does not establish continuous playback readiness.",
+    "ts": "MediaReady"
+  },
+  {
+    "group": "resource",
+    "name": "file_preview_video_metadata_load_fail",
+    "owner": "FilePreview",
+    "profile": "MediaFault",
+    "region": ["video"],
+    "zh": "当前视频元数据元素触发 error；关闭的大图弹窗、过渡后台层和过期资源不报；不据此推断 HTTP 状态。",
+    "en": "The active video metadata element reports an error. Exclude closed dialogs, background transition layers and stale sources; do not infer HTTP status.",
+    "ts": "MediaFault"
+  },
+  {
+    "group": "resource",
+    "name": "file_preview_image_dialog_ready",
+    "owner": "FilePreview",
+    "profile": "MediaReady",
+    "region": ["image-dialog"],
+    "zh": "当前大图弹窗图片可用（complete && naturalWidth > 0）；从打开弹窗计时。缓存命中仍须确认当前元素有效；视频不代表可连续播放。",
+    "en": "The active dialog image is available (complete && naturalWidth > 0). Time from dialog activation; verify cached element readiness. Video metadata does not establish continuous playback readiness.",
+    "ts": "MediaReady"
+  },
+  {
+    "group": "resource",
+    "name": "file_preview_image_dialog_fail",
+    "owner": "FilePreview",
+    "profile": "MediaFault",
+    "region": ["image-dialog"],
+    "zh": "当前大图弹窗图片元素触发 error；关闭的大图弹窗、过渡后台层和过期资源不报；不据此推断 HTTP 状态。",
+    "en": "The active dialog image element reports an error. Exclude closed dialogs, background transition layers and stale sources; do not infer HTTP status.",
+    "ts": "MediaFault"
+  },
+  {
+    "group": "request",
+    "name": "client_request_success",
+    "owner": "ComponentName",
+    "profile": "RequestReady",
+    "region": null,
+    "zh": "Provider 管理的单次非流式 Client 请求完成响应体读取和现有业务错误判定；JSON/envelope/blob 共用一次尝试，不在 fetch 返回时提前报。",
+    "en": "A Provider-owned non-streaming Client attempt finishes body consumption and existing business-error checks. JSON/envelope/blob share one attempt; fetch resolution alone is insufficient.",
+    "ts": "RequestReady"
+  },
+  {
+    "group": "request",
+    "name": "client_request_fail",
+    "owner": "ComponentName",
+    "profile": "RequestFault",
+    "region": null,
+    "zh": "同次请求在配置解析、传输、读体或既有业务错误判定失败；HTTP 200 错误外壳也失败。调用中止不报，合法非 JSON 响应不额外改判。",
+    "en": "The attempt fails during configuration, transport, body consumption or existing business-envelope checks, including HTTP 200 error envelopes. Exclude aborts; do not newly reject legitimate non-JSON responses.",
+    "ts": "RequestFault"
+  },
+  {
+    "group": "stream",
+    "name": "client_stream_connect_ready",
+    "owner": "ComponentName",
+    "profile": "StreamConnectReady",
+    "region": null,
+    "zh": "SSE 响应通过 HTTP、错误外壳、Content-Type 和 body 检查；从调用 stream 到连接可读，不代表首内容或正常结束。",
+    "en": "The SSE response passes HTTP, error-envelope, Content-Type and body checks. Time from stream invocation to a readable connection; neither first content nor completion.",
+    "ts": "StreamConnectReady"
+  },
+  {
+    "group": "stream",
+    "name": "client_stream_connect_fail",
+    "owner": "ComponentName",
+    "profile": "StreamConnectFault",
+    "region": null,
+    "zh": "连接阶段拒绝或协议条件不满足；主动取消排除。",
+    "en": "Connection fails or violates the existing stream contract; exclude deliberate cancellation.",
+    "ts": "StreamConnectFault"
+  },
+  {
+    "group": "stream",
+    "name": "client_stream_read_complete",
+    "owner": "ComponentName",
+    "profile": "StreamReadReady",
+    "region": null,
+    "zh": "消费者实际读流并正常到达 EOF；从首次迭代到 EOF，包含消费者背压。正常终止事件后主动结束消费时不伪造 EOF。",
+    "en": "The consumer reads to a normal EOF. Time from first iteration to EOF includes consumer backpressure. Do not fabricate EOF after the consumer stops on a terminal event.",
+    "ts": "StreamReadReady"
+  },
+  {
+    "group": "stream",
+    "name": "client_stream_read_fail",
+    "owner": "ComponentName",
+    "profile": "StreamReadFault",
+    "region": null,
+    "zh": "已建立流在读取中抛出非取消异常；与连接错误分开。",
+    "en": "An established stream throws a non-cancellation read error; distinct from connection failure.",
+    "ts": "StreamReadFault"
+  },
+  {
+    "group": "poll",
+    "name": "task_poll_request_fail",
+    "owner": "ComponentName",
+    "profile": "PollRequestFault",
+    "region": null,
+    "zh": "一次任务查询故障连续期内，每个请求类故障类别首次出现时记录；后续同类别失败累计，不每 3 秒再报同一故障。",
+    "en": "Record the first request-failure category in a contiguous polling outage; aggregate repeated failures of that category rather than reporting every poll.",
+    "ts": "PollRequestFault"
+  },
+  {
+    "group": "poll",
+    "name": "task_poll_protocol_fail",
+    "owner": "ComponentName",
+    "profile": "PollProtocolFault",
+    "region": null,
+    "zh": "查询结果 task id 不匹配或状态不在既有协议集合；同连续期同类别只记录首次，不改写任务状态。",
+    "en": "A returned task ID mismatches or status violates the existing protocol; once per category per outage, without rewriting task status.",
+    "ts": "PollProtocolFault"
+  },
+  {
+    "group": "poll",
+    "name": "task_poll_recovered",
+    "owner": "ComponentName",
+    "profile": "PollRecovered",
+    "region": null,
+    "zh": "连续查询故障后第一次取得有效响应；即使状态仍是 running 也算查询恢复。",
+    "en": "The first valid response after a polling outage; recovery applies even if the task is still running.",
+    "ts": "PollRecovered"
+  },
+  {
+    "group": "operation",
+    "name": "file_browser_directory_load_ready",
+    "owner": "FileBrowser",
+    "profile": "DirectoryReady",
+    "region": ["directory"],
+    "zh": "首轮或展开目录就绪；从实际发起目录加载，到当前目录结果规范化完成，首批行或空目录状态提交到对应 FileTree。",
+    "en": "Initial or expanded directory is ready; measure from when a real directory load begins until the current directory is normalized and its first rows or empty state commit to the matching FileTree.",
+    "ts": "DirectoryReady"
+  },
+  {
+    "group": "operation",
+    "name": "file_browser_directory_load_fail",
+    "owner": "FileBrowser",
+    "profile": "OperationFault",
+    "region": ["directory"],
+    "zh": "首轮或展开目录在上述尝试中发生可观察的非取消失败；已有底层故障时沿用 incident 和 causeEventId；纯展示宿主 error props 不另立故障。",
+    "en": "Initial or expanded directory has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.",
+    "ts": "OperationFault"
+  },
+  {
+    "group": "operation",
+    "name": "file_browser_preview_load_ready",
+    "owner": "FileBrowser",
+    "profile": "PreviewReady",
+    "region": ["preview"],
+    "zh": "资源预览就绪；从接受一次资源打开操作，到目标正文获取完成且前台 FilePreview 内容就绪。",
+    "en": "Resource preview is ready; measure from when a resource-open operation is accepted until content is fetched and the foreground FilePreview is ready.",
+    "ts": "PreviewReady"
+  },
+  {
+    "group": "operation",
+    "name": "file_browser_preview_load_fail",
+    "owner": "FileBrowser",
+    "profile": "OperationFault",
+    "region": ["preview"],
+    "zh": "资源预览在上述尝试中发生可观察的非取消失败；已有底层故障时沿用 incident 和 causeEventId；纯展示宿主 error props 不另立故障。",
+    "en": "Resource preview has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.",
+    "ts": "OperationFault"
+  },
+  {
+    "group": "operation",
+    "name": "file_browser_search_find_ready",
+    "owner": "FileBrowser",
+    "profile": "SearchReady",
+    "region": ["search"],
+    "zh": "find 检索就绪；从发起 find 查询，到当前 find 结果规范化并提交，零结果有效。",
+    "en": "Find search is ready; measure from when a find query starts until current find results normalize and commit; zero results are valid.",
+    "ts": "SearchReady"
+  },
+  {
+    "group": "operation",
+    "name": "file_browser_search_find_fail",
+    "owner": "FileBrowser",
+    "profile": "OperationFault",
+    "region": ["search"],
+    "zh": "find 检索在上述尝试中发生可观察的非取消失败；已有底层故障时沿用 incident 和 causeEventId；纯展示宿主 error props 不另立故障。",
+    "en": "Find search has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.",
+    "ts": "OperationFault"
+  },
+  {
+    "group": "operation",
+    "name": "file_browser_search_query_ready",
+    "owner": "FileBrowser",
+    "profile": "SearchReady",
+    "region": ["search"],
+    "zh": "上下文检索就绪；从发起 search/query 查询，到当前上下文检索结果规范化并提交。",
+    "en": "Contextual search is ready; measure from when a contextual query starts until current contextual search results normalize and commit.",
+    "ts": "SearchReady"
+  },
+  {
+    "group": "operation",
+    "name": "file_browser_search_query_fail",
+    "owner": "FileBrowser",
+    "profile": "OperationFault",
+    "region": ["search"],
+    "zh": "上下文检索在上述尝试中发生可观察的非取消失败；已有底层故障时沿用 incident 和 causeEventId；纯展示宿主 error props 不另立故障。",
+    "en": "Contextual search has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.",
+    "ts": "OperationFault"
+  },
+  {
+    "group": "operation",
+    "name": "file_browser_search_grep_ready",
+    "owner": "FileBrowser",
+    "profile": "SearchReady",
+    "region": ["search"],
+    "zh": "grep 检索就绪；从发起 grep 查询，到当前 grep 结果规范化并提交。",
+    "en": "Grep search is ready; measure from when a grep query starts until current grep results normalize and commit.",
+    "ts": "SearchReady"
+  },
+  {
+    "group": "operation",
+    "name": "file_browser_search_grep_fail",
+    "owner": "FileBrowser",
+    "profile": "OperationFault",
+    "region": ["search"],
+    "zh": "grep 检索在上述尝试中发生可观察的非取消失败；已有底层故障时沿用 incident 和 causeEventId；纯展示宿主 error props 不另立故障。",
+    "en": "Grep search has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.",
+    "ts": "OperationFault"
+  },
+  {
+    "group": "operation",
+    "name": "file_browser_search_glob_ready",
+    "owner": "FileBrowser",
+    "profile": "SearchReady",
+    "region": ["search"],
+    "zh": "glob 检索就绪；从发起 glob 查询，到当前 glob 匹配结果规范化并提交。",
+    "en": "Glob search is ready; measure from when a glob query starts until current glob matches normalize and commit.",
+    "ts": "SearchReady"
+  },
+  {
+    "group": "operation",
+    "name": "file_browser_search_glob_fail",
+    "owner": "FileBrowser",
+    "profile": "OperationFault",
+    "region": ["search"],
+    "zh": "glob 检索在上述尝试中发生可观察的非取消失败；已有底层故障时沿用 incident 和 causeEventId；纯展示宿主 error props 不另立故障。",
+    "en": "Glob search has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.",
+    "ts": "OperationFault"
+  },
+  {
+    "group": "operation",
+    "name": "file_browser_wiki_dashboard_load_ready",
+    "owner": "FileBrowser",
+    "profile": "DashboardReady",
+    "region": ["wiki-dashboard"],
+    "zh": "Wiki 看板就绪；从发起当前 Wiki 看板取数，到读取、既有格式检查与看板提交完成。",
+    "en": "Wiki dashboard is ready; measure from when the current Wiki dashboard query starts until reads, existing format checks and dashboard commit finish.",
+    "ts": "DashboardReady"
+  },
+  {
+    "group": "operation",
+    "name": "file_browser_wiki_dashboard_load_fail",
+    "owner": "FileBrowser",
+    "profile": "OperationFault",
+    "region": ["wiki-dashboard"],
+    "zh": "Wiki 看板在上述尝试中发生可观察的非取消失败；已有底层故障时沿用 incident 和 causeEventId；纯展示宿主 error props 不另立故障。",
+    "en": "Wiki dashboard has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.",
+    "ts": "OperationFault"
+  },
+  {
+    "group": "operation",
+    "name": "file_browser_experience_dashboard_load_ready",
+    "owner": "FileBrowser",
+    "profile": "DashboardReady",
+    "region": ["experience-dashboard"],
+    "zh": "经验看板就绪；从发起当前经验看板取数，到目录或单经验结果及统计提交完成。",
+    "en": "Experience dashboard is ready; measure from when the current experience dashboard query starts until directory or individual-experience results and statistics commit.",
+    "ts": "DashboardReady"
+  },
+  {
+    "group": "operation",
+    "name": "file_browser_experience_dashboard_load_fail",
+    "owner": "FileBrowser",
+    "profile": "OperationFault",
+    "region": ["experience-dashboard"],
+    "zh": "经验看板在上述尝试中发生可观察的非取消失败；已有底层故障时沿用 incident 和 causeEventId；纯展示宿主 error props 不另立故障。",
+    "en": "Experience dashboard has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.",
+    "ts": "OperationFault"
+  },
+  {
+    "group": "operation",
+    "name": "file_browser_experience_trajectory_load_ready",
+    "owner": "FileBrowser",
+    "profile": "TrajectoryReady",
+    "region": ["trajectory"],
+    "zh": "经验轨迹就绪；从发起所选经验的轨迹取数，到轨迹规范化并提交到当前轨迹视图。",
+    "en": "Experience trajectory is ready; measure from when the selected experience trajectory query starts until the trajectory normalizes and commits to the current trajectory view.",
+    "ts": "TrajectoryReady"
+  },
+  {
+    "group": "operation",
+    "name": "file_browser_experience_trajectory_load_fail",
+    "owner": "FileBrowser",
+    "profile": "OperationFault",
+    "region": ["trajectory"],
+    "zh": "经验轨迹在上述尝试中发生可观察的非取消失败；已有底层故障时沿用 incident 和 causeEventId；纯展示宿主 error props 不另立故障。",
+    "en": "Experience trajectory has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.",
+    "ts": "OperationFault"
+  },
+  {
+    "group": "operation",
+    "name": "console_session_list_load_ready",
+    "owner": "Console",
+    "profile": "SessionListReady",
+    "region": ["sessions"],
+    "zh": "会话列表就绪；从发起列表加载，到当前会话列表或空列表提交完成。",
+    "en": "Session list is ready; measure from when session listing starts until the current session list or empty state commits.",
+    "ts": "SessionListReady"
+  },
+  {
+    "group": "operation",
+    "name": "console_session_list_load_fail",
+    "owner": "Console",
+    "profile": "OperationFault",
+    "region": ["sessions"],
+    "zh": "会话列表在上述尝试中发生可观察的非取消失败；已有底层故障时沿用 incident 和 causeEventId；纯展示宿主 error props 不另立故障。",
+    "en": "Session list has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.",
+    "ts": "OperationFault"
+  },
+  {
+    "group": "operation",
+    "name": "console_session_create_success",
+    "owner": "Console",
+    "profile": "SessionReady",
+    "region": ["sessions"],
+    "zh": "会话创建完成；从内部创建会话调用开始，到按服务契约确认创建成功并安装当前会话身份，不等待后续刷新。",
+    "en": "Session creation completes; measure from when the internal session-create call starts until creation succeeds under the service contract and current session identity is installed; no later refresh is required.",
+    "ts": "SessionReady"
+  },
+  {
+    "group": "operation",
+    "name": "console_session_create_fail",
+    "owner": "Console",
+    "profile": "OperationFault",
+    "region": ["sessions"],
+    "zh": "会话创建在上述尝试中发生可观察的非取消失败；已有底层故障时沿用 incident 和 causeEventId；纯展示宿主 error props 不另立故障。",
+    "en": "Session creation has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.",
+    "ts": "OperationFault"
+  },
+  {
+    "group": "operation",
+    "name": "console_session_history_load_ready",
+    "owner": "Console",
+    "profile": "HistoryReady",
+    "region": ["sessions"],
+    "zh": "会话历史就绪；从接受会话切换并开始加载历史，到当前会话历史转换并提交完成。",
+    "en": "Session history is ready; measure from when a session switch starts history loading until the current session history normalizes and commits.",
+    "ts": "HistoryReady"
+  },
+  {
+    "group": "operation",
+    "name": "console_session_history_load_fail",
+    "owner": "Console",
+    "profile": "OperationFault",
+    "region": ["sessions"],
+    "zh": "会话历史在上述尝试中发生可观察的非取消失败；已有底层故障时沿用 incident 和 causeEventId；纯展示宿主 error props 不另立故障。",
+    "en": "Session history has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.",
+    "ts": "OperationFault"
+  },
+  {
+    "group": "operation",
+    "name": "console_session_delete_success",
+    "owner": "Console",
+    "profile": "SessionReady",
+    "region": ["sessions"],
+    "zh": "会话删除完成；从内部删除会话调用开始，到服务按契约返回成功且本地列表处理完成，不因后续刷新失败改判。",
+    "en": "Session deletion completes; measure from when the internal session-delete call starts until deletion succeeds under the service contract and local list handling finishes; later refresh errors do not reverse success.",
+    "ts": "SessionReady"
+  },
+  {
+    "group": "operation",
+    "name": "console_session_delete_fail",
+    "owner": "Console",
+    "profile": "OperationFault",
+    "region": ["sessions"],
+    "zh": "会话删除在上述尝试中发生可观察的非取消失败；已有底层故障时沿用 incident 和 causeEventId；纯展示宿主 error props 不另立故障。",
+    "en": "Session deletion has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.",
+    "ts": "OperationFault"
+  },
+  {
+    "group": "operation",
+    "name": "scope_cascade_libraries_load_ready",
+    "owner": "ScopeCascade",
+    "profile": "OptionsReady",
+    "region": ["libraries"],
+    "zh": "库选项就绪；从调用 loadLibraries，到当前祖先作用域下的库选项或空选项提交完成。",
+    "en": "Library options is ready; measure from when loadLibraries is invoked until library options or an empty list commit for the current ancestor scope.",
+    "ts": "OptionsReady"
+  },
+  {
+    "group": "operation",
+    "name": "scope_cascade_libraries_load_fail",
+    "owner": "ScopeCascade",
+    "profile": "OperationFault",
+    "region": ["libraries"],
+    "zh": "库选项在上述尝试中发生可观察的非取消失败；已有底层故障时沿用 incident 和 causeEventId；纯展示宿主 error props 不另立故障。",
+    "en": "Library options has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.",
+    "ts": "OperationFault"
+  },
+  {
+    "group": "operation",
+    "name": "scope_cascade_spaces_load_ready",
+    "owner": "ScopeCascade",
+    "profile": "OptionsReady",
+    "region": ["spaces"],
+    "zh": "空间选项就绪；从调用 loadSpaces，到当前库下的空间选项或空选项提交完成。",
+    "en": "Space options is ready; measure from when loadSpaces is invoked until space options or an empty list commit for the current library.",
+    "ts": "OptionsReady"
+  },
+  {
+    "group": "operation",
+    "name": "scope_cascade_spaces_load_fail",
+    "owner": "ScopeCascade",
+    "profile": "OperationFault",
+    "region": ["spaces"],
+    "zh": "空间选项在上述尝试中发生可观察的非取消失败；已有底层故障时沿用 incident 和 causeEventId；纯展示宿主 error props 不另立故障。",
+    "en": "Space options has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.",
+    "ts": "OperationFault"
+  },
+  {
+    "group": "operation",
+    "name": "scope_cascade_users_load_ready",
+    "owner": "ScopeCascade",
+    "profile": "OptionsReady",
+    "region": ["users"],
+    "zh": "用户选项就绪；从调用 loadUsers，到当前库和空间下的用户选项或空选项提交完成。",
+    "en": "User options is ready; measure from when loadUsers is invoked until user options or an empty list commit for the current library and space.",
+    "ts": "OptionsReady"
+  },
+  {
+    "group": "operation",
+    "name": "scope_cascade_users_load_fail",
+    "owner": "ScopeCascade",
+    "profile": "OperationFault",
+    "region": ["users"],
+    "zh": "用户选项在上述尝试中发生可观察的非取消失败；已有底层故障时沿用 incident 和 causeEventId；纯展示宿主 error props 不另立故障。",
+    "en": "User options has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.",
+    "ts": "OperationFault"
+  },
+  {
+    "group": "operation",
+    "name": "file_preview_content_prepare_ready",
+    "owner": "FilePreview",
+    "profile": "ContentReady",
+    "region": ["content", "source"],
+    "zh": "前台预览内容准备就绪；从当前有效来源进入正文渲染路径，到当前前台层收到明确 ready 且加载遮罩结束；空文件可就绪，错误、unsupported、cleanup 均不算。",
+    "en": "Foreground preview content preparation is ready; measure from when the current valid source enters content rendering until the foreground layer explicitly becomes ready and its loading overlay ends; empty files qualify, errors, unsupported states and cleanup do not.",
+    "ts": "ContentReady"
+  },
+  {
+    "group": "operation",
+    "name": "file_preview_content_prepare_fail",
+    "owner": "FilePreview",
+    "profile": "OperationFault",
+    "region": ["content", "source"],
+    "zh": "前台预览内容准备在上述尝试中发生可观察的非取消失败；已有底层故障时沿用 incident 和 causeEventId；纯展示宿主 error props 不另立故障。",
+    "en": "Foreground preview content preparation has an observable non-cancellation failure in that attempt; reuse the underlying incident and causeEventId. Merely displaying host error props does not create an incident.",
+    "ts": "OperationFault"
+  },
+  {
+    "group": "operation",
+    "name": "console_chat_first_content_ready",
+    "owner": "Console",
+    "profile": "FirstContentReady",
+    "region": ["chat"],
+    "zh": "从接受发送到收到并转换首段非空 text/reasoning/tool 内容；complete 携带首段正文也算。每次回复最多一次，不等于浏览器 paint。",
+    "en": "Time from accepted send to the first normalized nonempty text/reasoning/tool content, including first content carried by complete. Once per reply; not browser paint.",
+    "ts": "FirstContentReady"
+  },
+  {
+    "group": "operation",
+    "name": "console_chat_reply_complete",
+    "owner": "Console",
+    "profile": "ReplyReady",
+    "region": ["chat"],
+    "zh": "收到协议终态 complete 并合并回复完成；从接受发送计时。成功持久化不是前置条件；正常空回复不伪造首内容样本。",
+    "en": "A protocol complete terminal is received and the reply is reconciled. Time from accepted send; persistence is independent and empty replies do not fabricate a first-content sample.",
+    "ts": "ReplyReady"
+  },
+  {
+    "group": "operation",
+    "name": "console_chat_reply_fail",
+    "owner": "Console",
+    "profile": "ReplyFault",
+    "region": ["chat"],
+    "zh": "会话准备、事件转换或回复协议失败，包括 EOF 先于终态；已有传输故障时仅关联传播。主动取消和 interrupted 排除。",
+    "en": "Session preparation, event conversion or reply protocol fails, including EOF before a terminal. Link existing transport incidents. Exclude deliberate cancellation and interrupted terminals.",
+    "ts": "ReplyFault"
+  },
+  {
+    "group": "operation",
+    "name": "console_chat_history_save_fail",
+    "owner": "Console",
+    "profile": "PersistenceFault",
+    "region": ["persistence"],
+    "zh": "库本来会捕获的历史持久化失败；回复已完成仍保持完成。宿主接管的未知持久化不推断。",
+    "en": "History persistence fails at a library-observed persistence boundary. A completed reply stays complete. Do not infer failures inside opaque host persistence.",
+    "ts": "PersistenceFault"
+  }
+]

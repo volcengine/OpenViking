@@ -123,7 +123,7 @@ async def test_default_github_token_is_not_applied_to_ssh_preflight(monkeypatch,
 
     token_resolver.assert_not_awaited()
     service._preflight_git_source.assert_awaited_once_with(
-        source, auth_config=None, branch=None, commit=None
+        source, auth_config=None, request_validator=None, branch=None, commit=None
     )
     assert plan is not None
 

@@ -21,8 +21,9 @@ use similar::{Algorithm, TextDiff};
 use ragfs::core::FileSystem;
 use ragfs::git::{
     GitConfig, GitService, IndexStore, LocalIndexStore, LocalObjectStore, LocalRefStore,
-    ObjectStore, RefStore,
+    ObjectStore, RefStore, SnapshotLogError,
 };
+use tracing::warn;
 
 #[cfg(feature = "s3")]
 use ragfs::git::{CasMode, S3Config, S3IndexStore, S3ObjectStore, S3RefStore};
@@ -81,10 +82,104 @@ pub fn build_git_service(
         }
     };
 
-    Ok(Some(Arc::new(
-        GitService::with_index(vfs, object_store, ref_store, index_store)
-            .with_blob_exists_precheck(cfg.tuning.blob_exists_precheck_enabled),
-    )))
+    let snapshot_log_store = build_snapshot_log_store(cfg)?;
+
+    let svc = GitService::with_index(vfs, object_store, ref_store, index_store)
+        .with_blob_exists_precheck(cfg.tuning.blob_exists_precheck_enabled);
+    let svc = svc.with_snapshot_log(snapshot_log_store);
+
+    Ok(Some(Arc::new(svc)))
+}
+
+fn build_snapshot_log_store(
+    cfg: &GitConfig,
+) -> PyResult<Option<Arc<dyn ragfs::git::SnapshotLogStore>>> {
+    match cfg.snapshot.log.provider.as_str() {
+        "none" => Ok(None),
+        "sqlite" => {
+            let handle = tokio::runtime::Handle::try_current().map_err(|_| {
+                PyRuntimeError::new_err("build_snapshot_log_store must run inside a tokio runtime")
+            })?;
+            let path = cfg.snapshot.log.sqlite.path.clone().ok_or_else(|| {
+                PyValueError::new_err(
+                    "git.snapshot.log.sqlite.path is required for sqlite provider",
+                )
+            })?;
+            match handle
+                .block_on(async move { ragfs::git::SqliteSnapshotLogStore::connect(&path).await })
+            {
+                Ok(store) => Ok(Some(
+                    Arc::new(store) as Arc<dyn ragfs::git::SnapshotLogStore>
+                )),
+                Err(err) => snapshot_log_init_fallback("sqlite", err),
+            }
+        }
+        "mysql" => {
+            let mysql = cfg
+                .snapshot
+                .log
+                .mysql
+                .as_ref()
+                .ok_or_else(|| PyValueError::new_err("[git.snapshot.log.mysql] missing"))?;
+            let dsn = std::env::var(&mysql.dsn_env).map_err(|_| {
+                PyValueError::new_err(format!(
+                    "environment variable {} is required for snapshot log mysql provider",
+                    mysql.dsn_env
+                ))
+            })?;
+            let handle = tokio::runtime::Handle::try_current().map_err(|_| {
+                PyRuntimeError::new_err("build_snapshot_log_store must run inside a tokio runtime")
+            })?;
+            let max_connections = mysql.max_connections;
+            let connect_timeout_ms = mysql.connect_timeout_ms;
+            match handle.block_on(async move {
+                ragfs::git::MySqlSnapshotLogStore::connect(
+                    &dsn,
+                    max_connections,
+                    connect_timeout_ms,
+                )
+                .await
+            }) {
+                Ok(store) => Ok(Some(
+                    Arc::new(store) as Arc<dyn ragfs::git::SnapshotLogStore>
+                )),
+                Err(err) => snapshot_log_init_fallback("mysql", err),
+            }
+        }
+        other => Err(PyValueError::new_err(format!(
+            "unsupported snapshot log provider: {}",
+            other
+        ))),
+    }
+}
+
+fn snapshot_log_init_fallback(
+    provider: &str,
+    err: SnapshotLogError,
+) -> PyResult<Option<Arc<dyn ragfs::git::SnapshotLogStore>>> {
+    if let SnapshotLogError::Config(message) = err {
+        return Err(PyValueError::new_err(format!(
+            "{provider} snapshot log config error: {message}"
+        )));
+    }
+    warn!(
+        provider,
+        error_kind = snapshot_log_error_kind(&err),
+        "snapshot log store unavailable; falling back to git scan"
+    );
+    Ok(None)
+}
+
+fn snapshot_log_error_kind(err: &SnapshotLogError) -> &'static str {
+    match err {
+        SnapshotLogError::Sql(_) => "sql",
+        SnapshotLogError::Io(_) => "io",
+        SnapshotLogError::Config(_) => "config",
+        SnapshotLogError::StaleLatest { .. } => "stale_latest",
+        SnapshotLogError::EmptyRows => "empty_rows",
+        SnapshotLogError::TooManyRows { .. } => "too_many_rows",
+        SnapshotLogError::UnindexableRow(_) => "unindexable_row",
+    }
 }
 
 #[cfg(feature = "s3")]
@@ -666,6 +761,12 @@ mod tests {
             }),
             s3: None,
             tuning: Default::default(),
+            snapshot: ragfs::git::GitSnapshotConfig {
+                log: ragfs::git::GitSnapshotLogConfig {
+                    provider: "none".into(),
+                    ..Default::default()
+                },
+            },
         }
     }
 

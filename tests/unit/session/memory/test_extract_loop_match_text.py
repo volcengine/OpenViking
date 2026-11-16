@@ -438,7 +438,11 @@ class TestResolveOperations:
         assert raw_links == []
 
     @pytest.mark.asyncio
-    async def test_delete_with_ambiguous_new_replacement_page_id_is_skipped(self):
+    @pytest.mark.parametrize(
+        "case, replacement_id",
+        [("ambiguous", 100), ("unknown", 999), ("self", 1), ("alias", 100), ("valid", 100)],
+    )
+    async def test_resolve_delete_replacement(self, case, replacement_id):
         profile_schema = MemoryTypeSchema(
             memory_type="profile",
             directory="viking://user/{{ user_space }}/memories",
@@ -461,11 +465,16 @@ class TestResolveOperations:
         isolation_handler = Mock()
         isolation_handler.get_read_scope.return_value = None
         isolation_handler.fill_identity_fields.side_effect = lambda item, **kwargs: item
+        target = (
+            deleted_uri
+            if case == "alias"
+            else "viking://user/alice/memories/entities/replacement.md"
+        )
         isolation_handler.calculate_memory_uris.side_effect = lambda **kwargs: [
             (
                 "viking://user/alice/memories/profile.md"
                 if kwargs["memory_type_schema"].memory_type == "profile"
-                else "viking://user/alice/memories/entities/replacement.md"
+                else target
             )
         ]
 
@@ -479,14 +488,17 @@ class TestResolveOperations:
 
         operations, _ = await loop.resolve_operations(
             AttrDict(
-                profile=[{"summary": "profile", "page_id": 100}],
+                profile=[{"summary": "profile", "page_id": 100}] if case == "ambiguous" else [],
                 entities=[{"name": "replacement", "page_id": 100}],
-                delete_ids=[{"delete_page_id": 1, "replacement_page_id": 100}],
+                delete_ids=[{"delete_page_id": 1, "replacement_page_id": replacement_id}],
             )
         )
 
-        assert operations.delete_file_contents == []
-        assert operations.delete_replacements == {}
+        assert operations.delete_file_contents == ([deleted_file] if case == "valid" else [])
+        assert operations.delete_replacements == ({deleted_uri: target} if case == "valid" else {})
+        assert bool(operations.errors) == (case in {"unknown", "self"})
+        if case == "alias":
+            assert [op.uris for op in operations.upsert_operations] == [[deleted_uri]]
 
     @pytest.mark.asyncio
     async def test_existing_page_id_keeps_existing_uri_and_identity_fields(self):

@@ -1,4 +1,13 @@
+import type { ErrorFallback } from '../../shared/error-boundary/types.js';
+import type { FilePreviewActionSource } from './action-types.js';
+export type {
+  FilePreviewAction,
+  FilePreviewActionItems,
+  FilePreviewActionSource,
+} from './action-types.js';
 import type { Locale } from '../../shared/locale.js';
+import type { FilePreviewToolbarOptions } from './toolbar-types.js';
+export type { FilePreviewToolbarOptions } from './toolbar-types.js';
 import type {
   ConfirmSlotProps,
   DownloadSlotProps,
@@ -108,6 +117,8 @@ export interface FilePreviewTabBase {
    * Whether the tab is disabled.
    */
   disabled?: boolean;
+  /** 内置工具栏的逐项开关。Visibility of individual built-in toolbar controls. */
+  toolbar?: FilePreviewToolbarOptions;
   /**
    * 祖先导航成功打开后触发，参数为被点击那一级的完整 URI；失败时不触发。
    * Called after an ancestor opens, with the full URI of the clicked level;
@@ -141,6 +152,8 @@ export interface FilePreviewFileTab extends FilePreviewTabBase {
    * Tab kind discriminator, always `file`.
    */
   kind: 'file';
+  /** Injected commands; no copy/download/delete commands are supplied by default. */
+  actions?: FilePreviewActionSource;
   /**
    * 正文是否还在读取。为真时组件渲染加载态而不是正文，外壳（页签行、路径行）
    * 照常显示——宿主切换文件时外壳因此不闪，只有正文区在等。
@@ -188,19 +201,6 @@ export interface FilePreviewFileTab extends FilePreviewTabBase {
    * Header slots of a file tab, adding the three state fallbacks on top of the base ones.
    */
   slots?: FilePreviewFileTabSlots;
-  /**
-   * 正文复制成功后触发，参数为已复制的文本；复制失败时不触发。
-   * 省略回调不影响复制。仅文件页签提供正文复制，没有可复制文本时按钮禁用。
-   * Called after content copying succeeds, with the copied text; not called on
-   * failure. Omitting it does not affect copying. Only file tabs provide body
-   * copying; the button is disabled when no copyable text is available.
-   */
-  onCopyContent?: (text: string) => void;
-  /**
-   * 下载操作成功后触发，失败时不触发。
-   * Called after the download operation succeeds; not called on failure.
-   */
-  onDownload?: () => void;
   /**
    * 正文中的链接成功打开后触发，参数为被点击的 URI；失败时不触发。只有
    * Markdown 正文会触发。
@@ -280,6 +280,8 @@ export interface FilePreviewDirectoryTab extends FilePreviewTabBase {
    * Tab kind discriminator, always `directory`.
    */
   kind: 'directory';
+  /** Commands for the current summary level; content tabs do not have actions. */
+  actions?: FilePreviewActionSource;
   /**
    * 摘要是否还在读取。与文件页签同义：为真时正文区显示加载态，外壳照常。
    * Whether the summary is still being read. Same as a file tab: the body shows
@@ -362,8 +364,6 @@ export interface FilePreviewOperations {
    * the immediate parent of the current file.
    */
   openParent?: (uri: string) => Promise<void>;
-  /** 下载当前文件，完成后返回。Downloads the current file and resolves on completion. */
-  download?: () => Promise<void>;
   /**
    * 打开正文里被点击的链接，完成后返回。传入后由宿主接管导航，组件阻止默认
    * 跳转；相对路径的解析也归宿主，组件给出的是 Markdown 里的原始目标。
@@ -398,11 +398,21 @@ export interface FilePreviewEditing {
    */
   loadContent?: (source: FilePreviewSource) => Promise<string | undefined>;
   /**
-   * 保存草稿时调用。抛错或 reject 时组件展示失败提示并保留草稿。
-   * Invoked when the draft is saved. A thrown error or rejection keeps the draft
-   * and shows a failure message.
+   * 为 true 时，保存前弹出版本备注，确认后将备注传给 save。
+   * When true, prompt for a version note before saving and pass it to save.
    */
-  save: (value: string) => Promise<void>;
+  promptForVersionNote?: boolean;
+  /**
+   * 保存草稿。抛错或 reject 时保留草稿并显示失败提示；正文已保存但未创建版本时，
+   * 可返回 warning 让组件退出编辑并显示提示。
+   * Saves the draft. A thrown error or rejection keeps the draft and displays
+   * a failure message. Return a warning to leave editing and show that the
+   * file was saved without a new version.
+   */
+  save: (
+    value: string,
+    versionNote?: string,
+  ) => Promise<void | { warning: 'version-not-created' }>;
   /**
    * 保存成功后触发，参数为已保存的文本；失败时不触发。
    * Called after saving succeeds, with the saved text; not called on failure.
@@ -427,6 +437,9 @@ export interface FilePreviewEditing {
  * The default toolbar and host overrides in `slots.actions` share this context.
  */
 export interface FilePreviewActions {
+  /** Active source/path for host commands; changing levels updates these values. */
+  source?: FilePreviewSource;
+  path?: string;
   /** 当前视图模式。The current view mode. */
   viewMode: FilePreviewViewMode;
   /** 切换到指定视图模式。Switches to the given view mode. */
@@ -449,18 +462,10 @@ export interface FilePreviewActions {
   saveEditing: () => Promise<boolean>;
   /** 放弃草稿并退出编辑态。Discards the draft and leaves editing. */
   cancelEditing: () => void;
-  /** 该页签是否有可复制的正文。Whether the tab has copyable body text. */
-  canCopyContent: boolean;
-  /** 复制正文，成功返回 `true`。Copies the body, resolving to `true` on success. */
-  copyContent: () => Promise<boolean>;
   /** 该页签是否有可复制的路径。Whether the tab has a copyable path. */
   canCopyPath: boolean;
   /** 复制路径，成功返回 `true`。Copies the path, resolving to `true` on success. */
   copyPath: () => Promise<boolean>;
-  /** 该页签是否可下载。Whether the tab can be downloaded. */
-  canDownload: boolean;
-  /** 下载当前文件。Downloads the current file. */
-  download: () => void;
 }
 
 /**
@@ -503,21 +508,24 @@ export interface FilePreviewFileTabSlots extends FilePreviewHeaderSlots {
    */
   loadingFallback?: ReactNode;
   /**
-   * 读取失败时的兜底内容。不传时使用内置错误态与重试入口。
-   * Fallback when reading failed. A built-in error state with a retry entry is
-   * used when omitted.
+   * 替换读取失败或当前正文的渲染错误；渲染错误时优先于组件级配置。
+   * Replaces read failures or body-rendering errors; overrides the component
+   * slot for rendering errors.
+   * 渲染函数接收当前正文的重试方法：读取失败时重试读取，渲染异常时重试渲染。
+   * Render functions receive the current body's retry action: retry loading
+   * after a read failure, or retry rendering after a rendering failure.
    */
-  errorFallback?: ReactNode;
+  errorFallback?: ErrorFallback;
   /**
    * 格式不支持时的兜底内容。格式是否可预览由底座判定，因此这个节点会交给
    * 底座，而不是在组件这边提前判断。传了就由它接管整个不支持态（含底座原本
-   * 会给出的下载入口）；不传时使用内置提示。
+   * 会给出的下载入口）；有来源时不传则保留底座默认下载兜底。
    *
    * Fallback when the format cannot be previewed. Whether a format can be
    * previewed is the base component's call, so this node is handed to it rather
    * than decided here. Supplying it takes over the whole unsupported state,
    * including the download entry the base would otherwise offer; omit it for the
-   * built-in message.
+   * base download fallback when a source is available.
    */
   unsupportedFallback?: ReactNode;
   /**
@@ -544,20 +552,27 @@ export interface FilePreviewFileTabSlots extends FilePreviewHeaderSlots {
  * Replaceable copy with built-in Chinese and English defaults.
  */
 export interface FilePreviewLabels {
+  previewImage?: string;
+  closePreview?: string;
   /** 展开折叠路径层级的无障碍名称。Accessible name for hidden path levels. */
   showHiddenPath?: string;
   copyPath?: string;
-  copyContent?: string;
   copied?: string;
   copyFailed?: string;
+  moreActions?: string;
+  actionFailed?: string;
   previewMode?: string;
   sourceMode?: string;
   viewSwitch?: string;
   edit?: string;
   editFile?: string;
   save?: string;
-  /** 编辑区文本框的无障碍名称。Accessible name of the editor textarea. */
+  /** 编辑区文本框的无障碍名称。Accessible name of the editor. */
   editor?: string;
+  /** 编辑器加载失败时的提示。Message shown when the editor fails to load. */
+  editorLoadFailed?: string;
+  /** 语法高亮加载失败时的提示。Message shown when syntax highlighting fails to load. */
+  highlightFailed?: string;
   /** 读取失败后退出编辑态的按钮文案。Label of the button that leaves editing after a failed load. */
   leaveEditing?: string;
   /** 重试按钮文案。Retry button label. */
@@ -566,12 +581,16 @@ export interface FilePreviewLabels {
   loadFailed?: string;
   /** 保存失败时的提示。Message shown when saving failed. */
   saveFailed?: string;
+  versionNoteTitle?: string;
+  versionNoteLabel?: string;
+  versionNotePlaceholder?: string;
+  versionNoteCancel?: string;
+  versionNoteConfirm?: string;
+  versionNotCreated?: string;
   /** 无法预览该格式时的提示。Message shown when the format cannot be previewed. */
   unsupported?: string;
   /** 取回正文时的加载提示。Message shown while the text is being fetched. */
   loading?: string;
-  /** 下载按钮文案。Label of the download button. */
-  download?: string;
   /** 文件长度为 0 时的提示。Message shown when the file itself is empty. */
   fileEmpty?: string;
   /** 文件非空但没有可展示内容时的提示。Message shown for a non-empty file with nothing to render. */
@@ -635,11 +654,16 @@ export interface FilePreviewProps extends Omit<
    * Initial tab key when uncontrolled; the first tab is selected when omitted.
    */
   defaultActiveKey?: string;
+  /** Host visibility switches, true by default when supported. False hides the
+   * control for every tab, even when that tab enables it. */
+  toolbar?: FilePreviewToolbarOptions;
   /**
    * 当前页签变化后触发，参数为新的页签 key。
    * Called after the active tab changes, with the new tab key.
    */
   onActiveKeyChange?: (key: string) => void;
+  /** 渲染异常时的替代内容，省略时继承外层或使用内置展示。Render-failure content; inherits or uses the default when omitted. */
+  slots?: { errorFallback?: ErrorFallback };
   /**
    * 所有页签的默认文案，跟随 locale。页签可以逐项覆盖。
    * Default copy for every tab, following locale. A tab can override it field

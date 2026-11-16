@@ -1,111 +1,114 @@
-import { Button } from '../../shared/components/button/button.js';
-import { useState } from 'react';
+import { ArrowUpRightIcon, FileLinkIcon } from '../../icons/index.js';
+import { Tooltip } from '../../shared/primitives/tooltip/tooltip.js';
+import { ExperienceCopyAction } from './experience-copy-action.js';
 import type {
   ExperienceDashboardData,
   ExperienceDashboardLabels,
 } from './types.js';
 
-function CopyButton({
-  value,
-  labels: t,
-}: {
-  value: string;
-  labels: ExperienceDashboardLabels;
-}) {
-  const [result, setResult] = useState<{
-    value: string;
-    state: 'pending' | 'copied' | 'failed';
-  }>();
-  const state = result?.value === value ? result.state : undefined;
-  const copy = async () => {
-    setResult({ value, state: 'pending' });
-    try {
-      await navigator.clipboard.writeText(value);
-      setResult({ value, state: 'copied' });
-    } catch {
-      setResult({ value, state: 'failed' });
-    }
-  };
+/**
+ * 测试内容的一行。`User:` / `Assistant:` 前缀换成两种颜色，`# ` 开头的小标题
+ * 用弱化色——与火山版的渲染一致，其余行原样保留。
+ *
+ * One line of test content. A `User:` / `Assistant:` prefix splits into two colours
+ * and a `# ` heading takes the muted tone, matching the console; every other line
+ * stays as it is.
+ */
+function TestContent({ content }: { content: string }) {
   return (
-    <Button
-      size="small"
-      type="default"
-      htmlType="button"
-      disabled={!value || state === 'pending'}
-      aria-live="polite"
-      onClick={() => void copy()}
-    >
-      {state === 'copied'
-        ? t.copied
-        : state === 'failed'
-          ? t.copyFailed
-          : t.copy}
-    </Button>
+    <div className="ov-experience-dashboard__test-content">
+      {content.split('\n').map((line, index) => {
+        const role = line.match(/^(User|Assistant):(.*)$/);
+        if (role)
+          return (
+            <div key={index} className="ov-experience-dashboard__test-role">
+              <span className="ov-experience-dashboard__test-role-name">
+                {role[1]}:
+              </span>
+              <span className="ov-experience-dashboard__test-role-content">
+                {role[2]}
+              </span>
+            </div>
+          );
+        if (line.startsWith('# '))
+          return (
+            <div key={index} className="ov-experience-dashboard__test-heading">
+              {line}
+            </div>
+          );
+        return <div key={index}>{line || ' '}</div>;
+      })}
+    </div>
   );
 }
 
+/**
+ * 「测试」页签：每份测试材料一张卡片，卡片头是标题、来源轨迹与任务描述，右上角
+ * 是复制整段内容的按钮。
+ *
+ * The "test" tab: one card per test material, headed by its title, source
+ * trajectory and task, with a copy-everything button at the top right.
+ */
 export function ExperienceTests({
   items,
+  startIndex = 0,
   labels: t,
   onOpenUri,
 }: {
   items: NonNullable<ExperienceDashboardData['testMaterials']>;
+  startIndex?: number;
   labels: ExperienceDashboardLabels;
   onOpenUri?: (uri: string) => void;
 }) {
   return (
     <div className="ov-experience-dashboard__tests">
-      {items.map((item) => (
-        <article key={item.id}>
+      {items.map((item, index) => (
+        <article key={item.id} className="ov-experience-dashboard__test-card">
           <header>
-            <div className="ov-experience-dashboard__test-heading">
-              <strong>{item.title}</strong>
+            <div className="ov-experience-dashboard__test-card-heading">
+              <strong>
+                {t.testMessage.replace(
+                  '{index}',
+                  String(startIndex + index + 1),
+                )}
+              </strong>
               <div className="ov-experience-dashboard__test-meta">
-                <span>{t.sourceUri}</span>
+                <span className="ov-experience-dashboard__test-meta-label">
+                  {t.sourceUri}
+                </span>
+                <FileLinkIcon aria-hidden="true" width={12} height={12} />
                 <code title={item.uri}>{item.uri ?? '—'}</code>
-                {item.uri ? (
-                  <>
-                    <CopyButton value={item.uri} labels={t} />
-                    <Button
-                      size="small"
-                      type="default"
-                      htmlType="button"
-                      disabled={!onOpenUri}
+                <span className="ov-experience-dashboard__path-actions">
+                  <ExperienceCopyAction value={item.uri} labels={t} />
+                  <Tooltip content={t.open} placement="top">
+                    <button
+                      type="button"
+                      className="ov-experience-dashboard__icon-button"
+                      aria-label={t.open}
+                      disabled={!item.uri || !onOpenUri}
                       onClick={() => item.uri && onOpenUri?.(item.uri)}
                     >
-                      {t.open}
-                    </Button>
-                  </>
-                ) : null}
+                      <ArrowUpRightIcon width={12} height={12} />
+                    </button>
+                  </Tooltip>
+                </span>
               </div>
               {item.taskQuery ? (
-                <div className="ov-experience-dashboard__test-meta">
-                  <span>{t.task}</span>
-                  <p>{item.taskQuery}</p>
+                <div className="ov-experience-dashboard__test-meta ov-experience-dashboard__test-meta--task">
+                  <span className="ov-experience-dashboard__test-meta-label">
+                    {t.task}
+                  </span>
+                  <Tooltip content={item.taskQuery} placement="top">
+                    <span className="ov-experience-dashboard__test-task">
+                      {item.taskQuery}
+                    </span>
+                  </Tooltip>
                 </div>
               ) : null}
             </div>
-            <CopyButton value={item.content} labels={t} />
+            <ExperienceCopyAction value={item.content} labels={t} labelled />
           </header>
-          <div className="ov-experience-dashboard__test-content">
-            {item.content.split('\n').map((line, index) => {
-              const role = line.match(/^(User|Assistant):(.*)$/);
-              return (
-                <div key={index}>
-                  {role ? (
-                    <>
-                      <strong>{role[1]}:</strong>
-                      {role[2]}
-                    </>
-                  ) : line.startsWith('# ') ? (
-                    <strong>{line}</strong>
-                  ) : (
-                    line || '\u00a0'
-                  )}
-                </div>
-              );
-            })}
-          </div>
+          <TestContent content={item.content} />
         </article>
       ))}
     </div>

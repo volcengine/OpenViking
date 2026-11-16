@@ -278,6 +278,8 @@ async def test_shared_scheduler_drains_each_messages_embeddings_before_unlock(
     for module in ("semantic_processor", "semantic_executor", "semantic_lock"):
         monkeypatch.setattr(f"openviking.storage.queuefs.{module}.get_viking_fs", lambda: fs)
     agfs = _FakeAgfs()
+    agfs.revision_allocate_async = AsyncMock(return_value=1)
+    agfs.revision_publish_async = AsyncMock(return_value=1)
     tracker = TaskTracker(PersistentTaskStore(agfs))
     monkeypatch.setattr("openviking.service.task_tracker._instance", tracker)
     entered_embedding_drain = asyncio.Event()

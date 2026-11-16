@@ -263,8 +263,8 @@ class _SnapshotMixin:
         # parent chain (#4966). Nothing is read under a missing name; the
         # commit only records its deletion. If another writer recreates the
         # name meanwhile the snapshot may miss it or read a partially written
-        # file; the next commit records the final content. The cache (Redis)
-        # provider keeps tokens off the filesystem, so it takes Tree as usual.
+        # file; the next commit records the final content. Logical-path
+        # providers keep tokens off the filesystem and can lock missing targets.
         missing_kind = self._snapshot_missing_target_lock_kind()
         lock_requests: List[Dict[str, str]] = []
         tree_roots: List[str] = []
@@ -306,18 +306,14 @@ class _SnapshotMixin:
             if lease is not None:
                 await self._async_agfs.pathlock_release(lease)
 
-    @staticmethod
-    def _snapshot_missing_target_lock_kind() -> Optional[str]:
+    def _snapshot_missing_target_lock_kind(self) -> Optional[str]:
         """Logical-path providers can protect a missing commit target with a Tree lock."""
-        try:
-            from openviking_cli.utils.config.open_viking_config import get_openviking_config
-
-            provider = get_openviking_config().storage.agfs.pathlock.provider
-        except Exception:
-            provider = "filesystem"
-        # TODO: query the provider's LogicalPath capability through the binding
-        # instead of extending this list for each new logical-path backend.
-        return "tree" if provider in {"cache", "sqlite"} else None
+        mode = self._async_agfs.pathlock_handle_mode()
+        if mode == "logical_path":
+            return "tree"
+        if mode == "lock_path":
+            return None
+        raise ValueError(f"Unknown PathLock handle mode: {mode!r}")
 
     async def restore(
         self,

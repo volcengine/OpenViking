@@ -1,7 +1,7 @@
-import { Button } from '../../shared/components/button/button.js';
+import { Button } from '../../shared/primitives/button/button.js';
 import SearchIcon from '../../../../icons/svg/scope-switcher/search.svg?react';
 import type { ResolvedLabels } from './file-tree-row-context.js';
-import { Tooltip } from '../../shared/components/tooltip/index.js';
+import { Tooltip } from '../../shared/primitives/tooltip/index.js';
 import type { FileTreeProps } from './types.js';
 
 type ToolbarProps = Pick<

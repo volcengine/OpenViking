@@ -30,13 +30,21 @@ A partial commit starts from the branch's previous snapshot and preserves its ve
 
 For non-ROOT explicit-path commits, locks are selected from current target state before scope authorization and snapshot creation:
 
-| Target state | Filesystem PathLock | Cache (Redis) PathLock |
+| Target state | Filesystem PathLock | Logical-path PathLock (Redis / SQLite / PostgreSQL / memory) |
 | --- | --- | --- |
 | Existing file | Exact | Exact |
 | Existing directory | Tree | Tree |
 | Missing path | Skip locking this target | Tree |
 
 Filesystem skips missing targets to avoid creating a target directory or a missing parent chain just to store a lock token. The target still participates in snapshot deletion processing. A concurrent recreation may be missed or read before its write finishes; a later commit records the final state. ROOT bypasses this explicit-path locking flow.
+
+Snapshot selection queries the actual runtime Provider's handle mode through the
+native binding. Logical-path Providers request Tree locks for missing targets
+without creating business directories; memory coordinates only within one client.
+While the lease remains valid, a conflicting acquisition by another participant
+using the same lock authority fails. Paths may still change between the initial
+state check and lock acquisition. See [PostgreSQL PathLock configuration](../configuration/01-server.md#postgresql-pathlock)
+for shared database coordination.
 
 Snapshots are not a globally atomic view of arbitrary concurrent I/O. For a deterministic checkpoint, finish writes in the intended scope before committing. Locks coordinate only operations participating in the [PathLock protocol](../concepts/09-transaction.md).
 
@@ -65,6 +73,14 @@ Multi-version management is **enabled** by default (`git.enabled` defaults to `t
     "author_email": "bot@viking.local",
     "local": {
       "base_dir": ""
+    },
+    "snapshot": {
+      "log": {
+        "provider": "sqlite",
+        "sqlite": {
+          "path": "/data/openviking/_system/snapshot/log/snapshot_log.db"
+        }
+      }
     }
   }
 }
@@ -80,6 +96,8 @@ Configuration reference:
 | `git.author_name` | `viking-bot` | Default author name when callers omit `author_name` |
 | `git.author_email` | `bot@viking.local` | Default author email |
 | `git.local.base_dir` | `""` | Directory holding Git objects/refs. **When empty, defaults to `{storage.workspace}/.ovgit`** |
+| `git.snapshot.log.provider` | `sqlite` | Path history index provider for `snapshot/log?paths=...`: `sqlite`, `mysql`, or `none` |
+| `git.snapshot.log.sqlite.path` | `{storage.workspace}/_system/snapshot/log/snapshot_log.db` | Optional absolute SQLite database path. When omitted, each workspace gets its own index DB |
 
 > Usually leave `git.local.base_dir` empty so snapshot data lands in `.ovgit` under the workspace, making it easy to back up and migrate alongside resource data.
 
@@ -109,6 +127,16 @@ Stores Git objects and refs in S3-compatible object storage (e.g. Volcengine TOS
       "prefix": ".ovgit",
       "use_path_style": false,
       "cas_mode": "native"
+    },
+    "snapshot": {
+      "log": {
+        "provider": "mysql",
+        "mysql": {
+          "dsn_env": "OPENVIKING_SNAPSHOT_LOG_DSN",
+          "max_connections": 16,
+          "connect_timeout_ms": 3000
+        }
+      }
     }
   }
 }
@@ -125,6 +153,31 @@ Configuration reference:
 | `git.s3.access_key` / `git.s3.secret_key` | inherit the matching `storage.agfs.s3` fields, else `null` | Credentials read directly; empty falls back to the SDK default credentials chain |
 | `git.s3.use_path_style` | `true` | `true` uses path-style addressing (MinIO, etc.); `false` uses virtual-host style (TOS, etc.) |
 | `git.s3.cas_mode` | `native` | Ref CAS mode. `native` uses S3 conditional writes (If-Match) |
+| `git.snapshot.log.provider` | `sqlite` | Path history index provider for `snapshot/log?paths=...`. Use `mysql` for multi-instance deployments |
+| `git.snapshot.log.mysql.dsn_env` | `OPENVIKING_SNAPSHOT_LOG_DSN` | Environment variable containing the MySQL DSN |
+| `git.snapshot.log.mysql.max_connections` | `16` | Maximum MySQL pool connections |
+| `git.snapshot.log.mysql.connect_timeout_ms` | `3000` | MySQL connect timeout in milliseconds |
+
+### Path-Filtered Log Index
+
+`git.snapshot.log` controls the derived index used by `snapshot/log` when
+`paths` is provided. It does not change snapshot commits, stored file content,
+or API responses. It only reduces the storage work needed to find commits that
+touched a requested file or directory.
+
+Provider choices:
+
+| Provider | Use case |
+| --- | --- |
+| `sqlite` | Single-node deployments. By default the DB is stored at `{storage.workspace}/_system/snapshot/log/snapshot_log.db`; override with an absolute `git.snapshot.log.sqlite.path` if needed |
+| `mysql` | Multi-instance deployments. Set the DSN in the environment variable named by `git.snapshot.log.mysql.dsn_env` |
+| `none` | Disable the index and keep the original history scan path |
+
+For MySQL:
+
+```bash
+export OPENVIKING_SNAPSHOT_LOG_DSN='mysql://user:password@host:3306/openviking'
+```
 
 After editing the server config, restart the OpenViking service. Reinitializing an HTTP SDK client does not reload server configuration.
 
@@ -351,6 +404,7 @@ curl -X DELETE "http://localhost:1933/api/v1/snapshot/ignore" \
 
 - Restart the service after editing its `git` configuration.
 - With the `s3` backend, `git.s3.bucket` and `git.s3.region` are required; missing them causes initialization to fail.
+- `git.snapshot.log.sqlite.path` must be an absolute path. Use `provider: "none"` to disable the path index.
 - If a restore has vector side effects (files written/deleted), the response carries a `task_id` you can poll via `GET /api/v1/tasks/{task_id}` to track the background vector rebuild (see the [Observability guide](05-observability.md) and [API Overview](../api/01-overview.md)).
 - If `.ovgitignore` is too large (over 64 KiB) or contains unsupported syntax (`!` negation, backslash escaping), `commit` fails with an `invalid operation` error; `set_gitignore` validates the size up front.
 - Do not operate on the `.ovgit` directory with an external `git` tool; it is maintained by OpenViking.

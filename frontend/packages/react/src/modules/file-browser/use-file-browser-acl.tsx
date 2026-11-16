@@ -1,4 +1,4 @@
-import { Button } from '../../shared/components/button/button.js';
+import { Button } from '../../shared/primitives/button/button.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   useOvClient,
@@ -35,6 +35,7 @@ export function useFileBrowserAcl({
   refresh: () => Promise<void>;
 }) {
   const client = useOvClient();
+  const permissionClient = useOvClient('local');
   const identity = useOvIdentity(requestOptions);
   const inheritedSignal = useOvSignal();
   const signal = requestOptions?.signal ?? inheritedSignal;
@@ -75,13 +76,14 @@ export function useFileBrowserAcl({
   // and account changes that do not originate in a click. Abort on scope change
   // or unmount; aborted responses never publish a permission for the next scope.
   useEffect(() => {
-    if (!enabled || !uri || !context) return;
+    if (!enabled || !uri || !context || !permissionClient) return;
     const controller = new AbortController();
     const composed = signal
       ? AbortSignal.any([controller.signal, signal])
       : controller.signal;
     const request = {
       ...context,
+      client: permissionClient,
       requestOptions: { ...context.requestOptions, signal: composed },
     };
     const load = resolver
@@ -96,11 +98,21 @@ export function useFileBrowserAcl({
       },
     );
     return () => controller.abort();
-  }, [enabled, key, uri, resolver, signal, generation, context]);
+  }, [
+    enabled,
+    key,
+    uri,
+    resolver,
+    signal,
+    generation,
+    context,
+    permissionClient,
+  ]);
   const level =
     enabled && permission?.key === key ? permission.level : undefined;
   const text = aclLabels(locale, labels);
   return {
+    canDelete: !enabled || level === 'manage',
     canEdit: !enabled || level === 'write' || level === 'manage',
     titleExtra:
       enabled && permission?.key === key && permission.error ? (
@@ -116,20 +128,12 @@ export function useFileBrowserAcl({
           </Button>
         </span>
       ) : level ? (
-        <AclTag level={level} text={text} onManage={() => setOpened(key)} />
-      ) : null,
-    actions:
-      level === 'manage' ? (
-        <Button
-          size="small"
-          type="default"
-          ref={triggerRef}
-          htmlType="button"
-          className="ov-file-browser-acl__manage"
-          onClick={() => setOpened(key)}
-        >
-          {text.manage}
-        </Button>
+        <AclTag
+          level={level}
+          text={text}
+          triggerRef={triggerRef}
+          onManage={() => setOpened(key)}
+        />
       ) : null,
     drawer:
       enabled && uri && context && level === 'manage' ? (
@@ -142,6 +146,7 @@ export function useFileBrowserAcl({
           triggerRef={triggerRef}
           context={context}
           accountId={identity.accountId}
+          userId={identity.userId}
           options={options}
           onClose={() => setOpened(undefined)}
           onUpdated={(report) => {

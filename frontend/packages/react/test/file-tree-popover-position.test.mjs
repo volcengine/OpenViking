@@ -8,6 +8,65 @@ import { mount } from './helpers/module-dom.mjs';
 
 globalThis.MutationObserver = window.MutationObserver;
 
+test('row titles use entry names and trailing hover suppresses only the row card', async () => {
+  const tree = await mount(
+    createElement(FileTree, {
+      rows: ['directory', 'file'].map((type) => ({
+        kind: 'entry',
+        id: type,
+        type,
+        depth: 0,
+        uri: `viking://resources/${type}`,
+        name: `${type} name`,
+      })),
+      renderRowTooltip: (row) => `Information: ${row.name}`,
+      renderRowTrailing: () => createElement('button', null, 'Dashboard'),
+    }),
+  );
+  const hover = async (from, to) => {
+    await act(async () => {
+      from?.dispatchEvent(
+        new window.MouseEvent('mouseout', {
+          bubbles: true,
+          relatedTarget: to,
+        }),
+      );
+      to?.dispatchEvent(
+        new window.MouseEvent('mouseover', {
+          bubbles: true,
+          relatedTarget: from,
+        }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 330));
+    });
+  };
+  try {
+    const rows = tree.container.querySelectorAll('[role="treeitem"]');
+    for (const [index, type] of ['directory', 'file'].entries()) {
+      assert.equal(rows[index].title, `${type} name`);
+    }
+    const row = rows[0];
+    const label = row.querySelector('.ov-file-tree__label');
+    const button = row.querySelector('.ov-file-tree__trailing button');
+    assert.equal(button.closest('[title]').title, '');
+    await hover(null, button);
+    assert.equal(document.querySelector('.ov-popover'), null);
+    await hover(button, label);
+    assert.equal(
+      document.querySelector('.ov-popover')?.textContent,
+      'Information: directory name',
+    );
+    await hover(label, button);
+    assert.equal(document.querySelector('.ov-popover'), null);
+    await hover(button, document.body);
+    assert.equal(document.querySelector('.ov-popover'), null);
+    await hover(document.body, label);
+    assert.ok(document.querySelector('.ov-popover'));
+  } finally {
+    await tree.unmount();
+  }
+});
+
 test('a wide tree row anchors its popover to the visible scrollport', async () => {
   const tree = await mount(
     createElement(
@@ -85,13 +144,14 @@ test('other popovers and tooltips retain the full trigger geometry', async () =>
       clientHeight: { value: 300 },
     });
     const anchor = scrollport.querySelector('.ov-viking-bot__popover-anchor');
-    anchor.getBoundingClientRect = () => new window.DOMRect(28, 60, 625, 32);
     const button = anchor.querySelector('button');
-    const surface = document.getElementById(
-      button.getAttribute('aria-controls'),
-    );
-    surface.getBoundingClientRect = () => new window.DOMRect(0, 0, 200, 80);
+    button.getBoundingClientRect = () => new window.DOMRect(28, 60, 625, 32);
     await act(() => button.click());
+    const surface = document
+      .getElementById(button.getAttribute('aria-controls'))
+      .closest('.ov-dropdown');
+    surface.getBoundingClientRect = () => new window.DOMRect(0, 0, 200, 80);
+    await act(() => window.dispatchEvent(new window.Event('resize')));
     assert.equal(button.getAttribute('aria-expanded'), 'true');
     assert.equal(surface.style.left, '453px');
 

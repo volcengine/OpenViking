@@ -434,12 +434,16 @@ class ChannelsConfig(BaseModel):
 
 
 class CompileConfig(BaseModel):
-    """Per-task Compile batching and worker limits; unset concurrency inherits vlm.max_concurrent.
+    """Compile executor selection and complex-mode worker limits.
 
     Limits apply to direct model jobs and agent jobs. Model calls across Compile
     tasks also share the service-wide capacity from vlm.max_concurrent.
     """
 
+    mode: Literal["simple", "complex"] = Field(
+        default="simple",
+        description="Compile executor: single AgentLoop or the existing target-specific workflow.",
+    )
     map_concurrency: int | None = Field(
         default=None,
         ge=1,

@@ -284,7 +284,11 @@ class AGFSPathLockConfig(BaseModel):
 
     provider: str = Field(
         default="filesystem",
-        description="PathLock provider: 'filesystem' | 'memory' | 'sqlite' | 'cache'",
+        description="PathLock provider: 'filesystem' | 'memory' | 'sqlite' | 'postgres' | 'cache'",
+    )
+    postgres_dsn_env: Optional[str] = Field(
+        default=None,
+        description="Environment variable containing the PostgreSQL connection string.",
     )
     sqlite_path: Optional[str] = Field(
         default=None,
@@ -303,10 +307,14 @@ class AGFSPathLockConfig(BaseModel):
     @model_validator(mode="after")
     def validate_config(self):
         """Validate provider and timeout/expiry ranges."""
-        if self.provider not in {"filesystem", "memory", "sqlite", "cache"}:
+        if self.provider not in {"filesystem", "memory", "sqlite", "postgres", "cache"}:
             raise ValueError(
-                "pathlock provider must be one of: 'filesystem', 'memory', 'sqlite', 'cache'"
+                "pathlock provider must be one of: 'filesystem', 'memory', 'sqlite', 'postgres', 'cache'"
             )
+        if self.postgres_dsn_env is not None and not self.postgres_dsn_env.strip():
+            raise ValueError("pathlock postgres_dsn_env must be nonempty")
+        if self.provider == "postgres" and self.postgres_dsn_env is None:
+            raise ValueError("pathlock postgres_dsn_env is required for PostgreSQL")
         if (
             self.provider == "sqlite"
             and self.sqlite_path is not None
@@ -315,6 +323,37 @@ class AGFSPathLockConfig(BaseModel):
             raise ValueError("pathlock sqlite_path must be an absolute local file path")
         if not math.isfinite(self.lock_expire_secs) or self.lock_expire_secs < 1.0:
             raise ValueError("pathlock lock_expire_secs must be finite and >= 1.0")
+        return self
+
+
+class AGFSCoordinationConfig(BaseModel):
+    """Native coordination backend for leadership and revisions."""
+
+    provider: Literal["memory", "sqlite", "cache"] = Field(
+        default="memory",
+        description="memory: process-wide; sqlite: local cross-process; cache: distributed.",
+    )
+    sqlite_path: Optional[str] = Field(
+        default=None,
+        description="Absolute local SQLite file shared by participating processes. Required "
+        "for sqlite; independent of storage.workspace so it can stay off EFS/NFS.",
+    )
+    operation_timeout_ms: Optional[int] = Field(
+        default=None,
+        gt=0,
+        description="Deadline for one cache coordination operation in milliseconds. Defaults "
+        "to 5000 in Rust; independent of cache command timeouts and cannot be disabled.",
+    )
+
+    @model_validator(mode="after")
+    def validate_config(self):
+        if self.provider == "sqlite":
+            if not self.sqlite_path or not os.path.isabs(self.sqlite_path):
+                raise ValueError("coordination.sqlite_path must be an absolute local file path")
+        elif self.sqlite_path is not None:
+            raise ValueError("coordination.sqlite_path requires provider='sqlite'")
+        if self.provider != "cache" and self.operation_timeout_ms is not None:
+            raise ValueError("coordination.operation_timeout_ms requires provider='cache'")
         return self
 
 
@@ -387,6 +426,11 @@ class AGFSConfig(BaseModel):
     pathlock: AGFSPathLockConfig = Field(
         default_factory=AGFSPathLockConfig,
         description="Native RAGFS path lock configuration.",
+    )
+
+    coordination: AGFSCoordinationConfig = Field(
+        default_factory=AGFSCoordinationConfig,
+        description="Native coordination for leader leases and revisions; defaults to memory.",
     )
 
     retry_times: Any = Field(

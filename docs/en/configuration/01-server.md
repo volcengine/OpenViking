@@ -303,9 +303,10 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
 |---|---|---|---|
 | `workspace` | path | `"./data"` | OpenViking workspace |
 | `agfs.backend` | `local`, `memory`, `s3` | `local` | File and metadata backend |
-| `agfs.pathlock.provider` | `filesystem`, `memory`, `sqlite`, `cache` | `filesystem` | Path lock storage |
+| `agfs.pathlock.provider` | `filesystem`, `memory`, `sqlite`, `postgres`, `cache` | `filesystem` | Path lock storage; `postgres` uses PostgreSQL directly, `cache` uses Redis |
 | `agfs.pathlock.sqlite_path` | absolute local file path | `{workspace}/_system/pathlock/pathlock.db` for `sqlite` | Shared SQLite lock database; optional override |
-| `vectordb.backend` | `local`, `cuvs`, `http`, `volcengine`, `vikingdb` | `local` | Vector database backend |
+| `agfs.pathlock.postgres_dsn_env` | environment variable name / `null` | `null` | Required for `postgres`; names the server environment variable containing the PostgreSQL DSN |
+| `vectordb.backend` | `local`, `cuvs`, `http`, `volcengine`, `vikingdb`, `opengauss`, `pgvector` | `local` | Vector database backend; see [pgvector setup](../guides/25-pgvector.md) |
 | `vectordb.dimension` | integer | follows Embedding | Vector collection dimension |
 | `parse_output.mode` | `agfs`, `local` | `agfs` | Backend for intermediate parser artifacts |
 | `parse_output.local_root` | path or `null` | system temp directory | Root directory used by local parser artifacts |
@@ -333,7 +334,7 @@ retries still report Busy to the manager; logical lock Conflict is not retried. 
 additional synchronization I/O compared with `NORMAL`.
 Lease heartbeats refresh owned paths in one SQLite transaction (bounded batches
 for large leases). `stale_locks_removed` includes tokens recovered by committed
-atomic SQLite/Redis acquisitions; failed transactions do not increment the count.
+atomic SQLite/PostgreSQL/Redis acquisitions; failed transactions do not increment the count.
 
 SQLite acquisitions completely delete expired tokens belonging to other owners
 that conflict with the request: the target path, ancestor Tree locks, and all
@@ -348,16 +349,104 @@ updates also add synchronization I/O. If `storage.workspace` is on EFS, the
 default database path is on EFS too. Moving it to each container's local disk
 creates independent lock authorities and cannot coordinate replicas.
 
-For multiple containers or hosts sharing EFS, use shared Redis PathLock:
+#### PostgreSQL PathLock
+
+For multiple containers or hosts sharing EFS, use PostgreSQL PathLock or shared Redis PathLock.
+PostgreSQL coordinates participating processes directly without Redis or a top-level
+`cache` configuration. Merge this minimal fragment into your server's `ov.conf`:
+
+```json
+{
+  "service_name": "production",
+  "storage": {
+    "agfs": {
+      "pathlock": {
+        "provider": "postgres",
+        "postgres_dsn_env": "OV_POSTGRES_DSN",
+        "lock_expire_secs": 30.0
+      }
+    }
+  }
+}
+```
+
+Set the DSN in every server and worker environment before startup:
+
+```sh
+export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=openviking password=YOUR_PASSWORD sslmode=require'
+```
+
+Use PostgreSQL 13+ with UTF8 server encoding. All participants protecting the same
+files must use the same writable primary, database, top-level `service_name`, provider,
+and expiry duration. Different service names create independent lock namespaces;
+read replicas cannot coordinate lock operations. No PostgreSQL extension is required.
+`lock_expire_secs` must be at least `1.0` second and defaults to `30.0`.
+
+`postgres_dsn_env` is a nonempty environment variable name, not the DSN itself.
+Both PostgreSQL URLs and key/value DSNs are accepted. Credentials are read at
+initialization; restart every server and worker after rotating them.
+For remote connections, use `sslmode=require`; the native TLS connector verifies
+the certificate and hostname using the system trust store. Use `sslmode=disable`
+only for a disposable local test database.
+
+On first startup, the provider creates `public.ov_pathlock_tokens`,
+`public.path_prefix_2048(text)`, and lookup, expiry, and subtree indexes.
+The initialization role needs CONNECT to the database and USAGE/CREATE on the
+`public` schema. The runtime role needs SELECT, INSERT, UPDATE, DELETE on the
+table and EXECUTE on the helper. A migration role can pre-provision these objects
+and grant runtime permissions before startup. Pre-provision the helper with:
+
+```sql
+CREATE FUNCTION public.path_prefix_2048(text) RETURNS bytea
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+AS 'SELECT pg_catalog.substring(pg_catalog.convert_to($1, ''UTF8''), 1, 2048)';
+```
+
+Initialization creates the helper only when absent; an existing helper must use
+this definition. Upgrading the earlier `(namespace,path)` primary key requires
+the table owner and all old provider instances to be stopped. Index creation
+is transactional and subject to DDL timeouts; pre-provision indexes for large tables.
+Source installations must rebuild the Python native binding when upgrading its
+PostgreSQL support. Rust integrations enable `ragfs/postgres`.
+
+To verify coordination, start two processes with the same settings. Hold a Tree
+lease in one and request an Exact lease below that root in the other; the second
+acquisition must conflict until release or expiry takeover. PostgreSQL can lock
+nonexistent logical paths without creating business directories. Explicit-path
+snapshot commits use the runtime provider's handle mode to select Tree locks for
+missing PostgreSQL targets; see [snapshot semantics](../guides/15-snapshot.md).
+The primary's clock determines lock timestamps and expiry; batches commit in full
+or roll back, and holders renew and release independently.
+
+Operations within one namespace are serialized; measure acquisition and renewal
+at the intended concurrency. Prevent split brain and account for committed-lock
+loss during failover with asynchronous replication. PathLock does not provide
+storage-side fencing after lease loss or change CachedFileSystem's single-writer
+requirement, local vector storage's process lock, or other backend concurrency limits.
+
+| Symptom | Check |
+| --- | --- |
+| Unknown `postgres` provider | Rebuild or upgrade the native binding |
+| Missing DSN | Export the configured variable in every server and worker environment |
+| Schema initialization fails | Check UTF8 encoding, permissions, object ownership, and migration duration |
+| Participants do not conflict | Check primary, database, service name, provider, and expiry settings |
+| Database `Busy` | Check database contention and load; distinguish it from a logical path conflict |
+
+#### Redis PathLock
+
+For Redis coordination,
 set `storage.agfs.pathlock.provider="cache"` and top-level `cache.provider="redis"`.
 All replicas must use the same Redis deployment, top-level `service_name`, and
 lock expiry setting. See the [shared Redis configuration example](../guides/01-configuration.md).
-Shared QueueFS must also use a backend suitable for that deployment, such as
+With either PathLock provider, shared QueueFS must also use a backend suitable for that deployment, such as
 `storage.agfs.queuefs.backend="cache"`; changing PathLock alone does not change
 the default SQLite queue backend.
 
-Stop all participating processes before switching providers:
-SQLite and filesystem lock files do not share a protocol. Do not delete the database,
+#### Provider switches and upgrades
+
+Stop all participating processes and renewal tasks before switching providers:
+Filesystem, SQLite, PostgreSQL, and Redis maintain independent lock authorities.
+Do not mix providers for processes writing the same files. Do not delete the SQLite database,
 WAL, or SHM files while participants are running. Crashed owners' tokens become
 eligible for takeover after `lock_expire_secs` (default 30 seconds). This setting
 does not change the workspace process lock or other backend concurrency constraints.

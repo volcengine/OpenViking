@@ -20,10 +20,25 @@ pub(crate) enum AttrsCommands {
         /// Comma-separated k=v tags, e.g. env=prod,team=search
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Vec<String>,
-        /// Tag update mode: replace or append (append replaces existing values by key)
+        /// Tag update mode: replace, append, or clear; append supports k=v, k+=number, k-=number
         #[arg(long, default_value = "replace")]
         mode: String,
         /// Recursively update descendant files and semantic nodes when target is a directory
+        #[arg(long, default_value = "false")]
+        recursive: bool,
+    },
+    /// Update explicit retrieval tags metadata for multiple URIs
+    BatchSetTags {
+        /// Viking URIs
+        #[arg(value_name = "uri", required = true, num_args = 1..)]
+        uris: Vec<String>,
+        /// Comma-separated tag updates
+        #[arg(long = "tags", value_delimiter = ',')]
+        tags: Vec<String>,
+        /// Tag update mode: replace, append, or clear; append supports k=v, k+=number, k-=number
+        #[arg(long, default_value = "replace")]
+        mode: String,
+        /// Recursively update descendant files and semantic nodes for directory targets
         #[arg(long, default_value = "false")]
         recursive: bool,
     },

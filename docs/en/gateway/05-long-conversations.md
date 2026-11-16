@@ -108,7 +108,7 @@ Each reason and its fix are listed under [Long conversations hit the context lim
 
 ## Side effects {#side-effects}
 
-**No Working Memory summaries.** The summary comes from the conversation's own model, not from OpenViking's session summaries. New OpenViking sessions that the gateway creates have Working Memory turned off: commits still archive messages and extract memories, but no session summary is written.
+**No Working Memory summaries.** The gateway's own model generates its summaries. On OpenViking Server 0.5.0+, gateway commits set `enable_working_memory=false`: they still archive messages and extract memories under the resolved memory policy. New gateway sessions inherit the user's policy unless `capture_memory_types` explicitly sets a session policy. Older servers retain the legacy session-level Working Memory override. Existing sessions keep their stored policies; start a new conversation to inherit the user's policy.
 
 **The memory budget starts over.** **Budget per context window** (see [Recall memory](08-context-profiles.md#recall-memory)) resets after each compaction, so memory added before the cut may be added again.
 

@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /** Native CONFLICTS_CONTENT protocol. These IDs exist only in the view model. */
 import type { WikiConflict as WikiFileConflictRecord } from '../../components/wiki-dashboard/types.js';
+import { splitWikiMetadata } from './wiki-metadata.js';
 export type WikiFileConflicts =
   | { status: 'available'; document: string; records: WikiFileConflictRecord[] }
   | { status: 'missing' | 'invalid' };
-const prefix = '<!-- CONFLICTS_CONTENT';
 // Wire protocol sentinel must remain independent of the display locale.
 const manualResolutionBasis = '\u4eba\u5de5\u4fee\u590d';
 const timestamp = (value: unknown): value is number =>
@@ -39,16 +39,14 @@ export const locateWikiConflict = (
 };
 
 export const parseWikiFileConflicts = (content: string): WikiFileConflicts => {
-  const start = content.lastIndexOf(prefix);
-  if (start < 0) {
+  const { document, payloads, complete } = splitWikiMetadata(content);
+  if (payloads.length === 0) {
     return { status: 'missing' };
   }
-  const footer = content.slice(start).trimEnd();
-  if (!footer.endsWith('-->')) {
+  if (!complete) {
     return { status: 'invalid' };
   }
-  const document = content.slice(0, start);
-  const source = footer.slice(prefix.length, -3).trim();
+  const source = payloads.filter(Boolean).join(',');
   let parsed: unknown;
   try {
     parsed = source ? JSON.parse(`[${source}]`) : [];

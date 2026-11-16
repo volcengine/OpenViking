@@ -1,4 +1,10 @@
-import { Button } from '../../shared/components/button/button.js';
+import { MonitoringFlow } from '../../shared/monitoring/flow-context.js';
+import type { Workflow } from '../../shared/monitoring/workflow.js';
+import { scopeMonitoring } from './monitoring.js';
+import { withMonitoring } from '../../shared/monitoring/with-monitoring.js';
+import { useRenderErrors } from './labels.js';
+import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
+import { Button } from '../../shared/primitives/button/button.js';
 import { resolveScopeCascadeLabels } from './labels.js';
 import { useState } from 'react';
 import { useLocale } from '../../shared/locale-context.js';
@@ -51,7 +57,16 @@ type LevelProps = Pick<ScopeCascadeProps, 'labels' | 'retryLabel'> & {
 };
 function ConnectedLevel(props: LevelProps) {
   const state = useScopeCascadeLevel(props.level);
-  return <LevelView key={state.scopeKey} {...props} state={state} />;
+  const operation = (
+    props.level as ScopeCascadeLevel & {
+      [scopeMonitoring]?: () => Workflow | undefined;
+    }
+  )[scopeMonitoring]?.();
+  return (
+    <MonitoringFlow operation={operation}>
+      <LevelView key={state.scopeKey} {...props} state={state} />
+    </MonitoringFlow>
+  );
 }
 function LevelView({
   index,
@@ -120,7 +135,7 @@ function LevelView({
 }
 
 /** Only leaf selectors subscribe to request state; this wrapper resolves language. */
-export function ScopeCascade({
+function ScopeCascadeContent({
   locale: localeProp,
   loadLibraries,
   loadSpaces,
@@ -166,3 +181,18 @@ export function ScopeCascade({
     </ScopeSwitcher>
   );
 }
+
+function ScopeCascadeView(props: ScopeCascadeProps) {
+  const { slots, ...contentProps } = props;
+  return (
+    <ErrorBoundary
+      fallback={slots?.errorFallback}
+      message={useRenderErrors(props.locale).selector}
+      locale={props.locale}
+    >
+      <ScopeCascadeContent {...contentProps} />
+    </ErrorBoundary>
+  );
+}
+
+export const ScopeCascade = withMonitoring(ScopeCascadeView, 'ScopeCascade');

@@ -1,0 +1,103 @@
+.ov-viking-bot__reference-tags,
+.ov-viking-bot__reference-overflow {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.ov-viking-bot__reference-tags {
+  margin-bottom: 10px;
+}
+.ov-viking-bot__reference-row {
+  display: flex;
+  max-width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+.ov-viking-bot__reference-tag,
+.ov-viking-bot__reference-more {
+  display: inline-flex;
+  max-width: 100%;
+  height: 26px;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+  font-family: Roboto, 'PingFang SC', sans-serif;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 20px;
+  letter-spacing: 0.036px;
+}
+.ov-viking-bot__reference-tag {
+  min-width: 0;
+}
+.ov-viking-bot__reference-tag > svg {
+  flex-shrink: 0;
+}
+.ov-viking-bot__reference-icon {
+  color: var(--ov-ui-viking-bot-reference-icon-light);
+}
+.dark .ov-viking-bot__reference-icon {
+  color: var(--ov-ui-viking-bot-reference-icon-dark);
+}
+.ov-viking-bot__reference-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-viking-bot__reference-open {
+  display: inline-flex;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.ov-viking-bot__reference-open:hover {
+  color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+}
+.ov-viking-bot__reference-remove {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  cursor: pointer;
+}
+.ov-viking-bot__reference-more {
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.ov-viking-bot__reference-open:focus-visible,
+.ov-viking-bot__reference-more:focus-visible,
+.ov-viking-bot__reference-remove:focus-visible {
+  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
+  outline-offset: 2px;
+}
+.ov-viking-bot__reference-remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.ov-viking-bot__reference-overflow {
+  max-width: min(440px, calc(100vw - 48px));
+  max-height: min(360px, 50vh);
+  overflow-y: auto;
+}
