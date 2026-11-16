@@ -170,10 +170,13 @@ async def read(
     uri: str = Query(..., description="Viking URI"),
     offset: int = Query(0, description="Starting line number (0-indexed)"),
     limit: int = Query(-1, description="Number of lines to read, -1 means read to end"),
-    raw: bool = Query(False, description="Return raw stored content without memory-field cleanup"),
+    raw: bool = Query(
+        False,
+        description="Return stored content without memory-field cleanup or live tool execution",
+    ),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Read file content (L2)."""
+    """Read file content (L2), including the node definition before live tool results."""
     service = get_service()
     # If the argument is a raw 32-hex vector record id, skip URI validation
     # (id lookup + access check happens inside VikingFS.read_file).

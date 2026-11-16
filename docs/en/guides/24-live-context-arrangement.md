@@ -4,7 +4,7 @@ description: Connect remote MCP servers, mount tools as live context, and arrang
 
 # Live context integration and arrangement
 
-Live Context mounts a remote MCP tool as a Markdown node under `viking://resources/...`. An agent does not need to know the upstream address, credentials, or preset arguments. It reads the node like ordinary context; OpenViking calls the bound tool and transparently returns the upstream result.
+Live Context mounts a remote MCP tool as a Markdown node under `viking://resources/...`. An agent does not need to know the upstream address, credentials, or preset arguments. It reads the node like ordinary context; OpenViking calls the bound tool and returns the node definition followed by the upstream result.
 
 This page is for developers who implement and maintain context arrangements. It explains how MCP registration, the Tool Catalog, live nodes, the Agent Gateway, Studio, and Context as Code (CaC) fit together. For MCP client connection settings and the complete built-in tool list, see [MCP tools and protocol](06-mcp-integration.md).
 
@@ -233,11 +233,11 @@ Live execution occurs only on a complete read:
 
 - REST/CLI: `offset=0` and `limit=-1`.
 - MCP `read`: the default complete read.
-- The response is the upstream MCP tool result, without descriptor frontmatter or an extra label.
+- The response preserves the node definition, including YAML frontmatter, preset arguments, and any body guidance, then appends the upstream MCP tool result under `## Live Result`.
 - Tools without annotations are treated as read-only. A tool with `readOnlyHint: false` or `destructiveHint: true` is not executed by `read`; the error returns the mounted URI and arguments for explicit invocation through the current integration.
 - A paginated read returns the stored descriptor and does not call the upstream.
 - `find`, `search`, `list`, and `tree` never execute a live node implicitly.
-- REST `read?raw=true` returns the raw descriptor without executing the tool.
+- REST `read?raw=true` and MCP `read(raw=true)` return the raw descriptor without executing the tool. MCP supports this option for both single and batch reads.
 
 These rules keep retrieval and browsing free of side effects while still allowing write-capable tools to be mounted as agent guidance. An agent should retrieve a node first and call `read` for a live value; write-capable tools require the separately permissioned `invoke_mcp_tool`.
 

@@ -596,6 +596,91 @@ async def test_plain_listing_reads_only_requested_page_summaries(request_context
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("recursive", [False, True])
+@pytest.mark.parametrize("tags", [None, ["env=prod"]])
+async def test_listing_loads_file_abstracts_after_filtering_and_pagination(
+    request_context, monkeypatch, recursive, tags
+):
+    entries = [
+        {"uri": f"viking://resources/{name}.md", "isDir": False} for name in ("a", "b", "c", "d")
+    ]
+
+    async def fetch(_uri, show_all_hidden=False, node_limit=None, *, offset=0, **_kwargs):
+        page = entries[offset : offset + node_limit if node_limit else None]
+        return [dict(entry) for entry in page]
+
+    async def filter_tags(**_kwargs):
+        return [
+            {
+                **entry,
+                "level": 2,
+                "search_tags": ["env=dev" if index == 0 else "env=prod"],
+            }
+            for index, entry in enumerate(entries)
+        ]
+
+    selected = entries[2 if tags else 1]
+    lookup = AsyncMock(return_value={selected["uri"]: "Indexed file summary"})
+    store = SimpleNamespace(
+        get_l2_abstracts_by_uris=lookup, filter=AsyncMock(side_effect=filter_tags)
+    )
+    viking_fs = VikingFS(agfs=SimpleNamespace(), vector_store=store)
+    monkeypatch.setattr(viking_fs, "_ensure_access", AsyncMock())
+    monkeypatch.setattr(viking_fs, "_ls_original", fetch)
+    monkeypatch.setattr(viking_fs, "_tree_original", fetch)
+    service = FSService(viking_fs=viking_fs, vikingdb=store)
+
+    page = await service.ls(
+        "viking://resources",
+        ctx=request_context,
+        offset=1,
+        node_limit=1,
+        include_abstract=True,
+        include_overview=True,
+        tags=tags,
+        recursive=recursive,
+    )
+
+    assert page.has_more is True
+    assert len(page.entries) == 1
+    assert page.entries[0]["uri"] == selected["uri"]
+    assert page.entries[0]["abstract"] == "Indexed file summary"
+    assert page.entries[0]["overview"] == ""
+    lookup.assert_awaited_once_with([selected["uri"]], ctx=request_context)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"output": "original"},
+        {"output": "agent", "include_abstract": False},
+        {"output": "agent", "include_abstract": False, "include_overview": True},
+        {"simple": True, "include_abstract": True},
+    ],
+)
+async def test_listing_without_abstracts_does_not_query_vector_store(
+    request_context, monkeypatch, options
+):
+    entry = {"uri": "viking://resources/a.md", "isDir": False}
+    lookup = AsyncMock()
+    viking_fs = VikingFS(
+        agfs=SimpleNamespace(), vector_store=SimpleNamespace(get_l2_abstracts_by_uris=lookup)
+    )
+    monkeypatch.setattr(viking_fs, "_ensure_access", AsyncMock())
+    monkeypatch.setattr(viking_fs, "_ls_original", AsyncMock(return_value=[entry]))
+
+    page = await FSService(viking_fs=viking_fs).ls(
+        "viking://resources", ctx=request_context, **options
+    )
+
+    assert len(page.entries) == 1
+    if not options.get("simple"):
+        assert "abstract" not in page.entries[0]
+    lookup.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("method_name", ["ls", "tree"])
 @pytest.mark.parametrize(
     ("entry_count", "expected_has_more"),

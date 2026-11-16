@@ -29,8 +29,8 @@ List directory contents.
 | simple | bool | No | False | Return only relative paths |
 | recursive | bool | No | False | List all subdirectories recursively |
 | output | str | No | HTTP: `agent`; SDKs: `original` | Output format: `agent` or `original` |
-| abs_limit | int | No | 256 | Maximum returned abstract length |
-| include_abstract | bool | No | Unset | Include directory L0 abstracts. When unset, follows the legacy output behavior (`agent`: included; `original`: omitted) |
+| abs_limit | int | No | 2000 | Maximum returned abstract length in characters |
+| include_abstract | bool | No | Unset | Include file and directory abstracts. When unset, follows the legacy output behavior (`agent`: included; `original`: omitted) |
 | include_overview | bool | No | Unset | Include directory L1 overviews. Unset means omitted |
 | overview_limit | int | No | 4000 | Maximum returned overview length |
 | show_all_hidden | bool | No | False | Include hidden files like `-a` |
@@ -43,7 +43,7 @@ List directory contents.
 | include_tags | bool | No | False | Return tags without requiring a tag filter |
 | tags | string[] | No | Unset | Return only entries matching every supplied `k=v` retrieval tag |
 
-`tags` uses AND semantics and is applied before `offset` and `limit`. L0/L1 content is attached only to the selected page of directory entries and does not consume `node_limit`. An explicit `include_abstract=true|false` overrides the legacy behavior implied by `output`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
+`tags` uses AND semantics and is applied before `offset` and `limit`. Abstracts and overviews are attached only to the selected page of entries and do not consume `node_limit`. File abstracts come from the vector index's L2 `abstract` field; unindexed files or files without a stored abstract return an empty string. Listing does not generate missing abstracts. Directory abstracts come from `.abstract.md`; overviews remain directory-only and are empty for files. Abstracts are truncated to `abs_limit`. An explicit `include_abstract=true|false` overrides the legacy behavior implied by `output`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
 
 **Entry Structure**
 
@@ -160,6 +160,9 @@ curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&recursiv
 ov ls viking://resources/ [--simple] [--recursive] [--include-abstract[=true|false]] [--include-overview[=true|false]] [--tags team=search,env=prod] [-f FIELDS]
 ov tree viking://resources/my-project/ [--simple] [--tags team=search,env=prod] [-f FIELDS]
 ov glob "**/*.md" [--uri viking://resources/] [--simple] [--tags team=search,env=prod] [-f FIELDS]
+
+# Show file and directory abstracts
+ov list viking://resources/ --fields name,abstract
 ```
 
 `-f`/`--fields` accepts a comma-separated list of columns to display (ps `-o` style), producing a column-aligned table with a header row. Available fields: `name`, `uri`, `path`, `type`, `size`, `mode`, `mtime`, `locked`, `id`, `count`, `abstract`, `overview`, `tags`. Combining `--simple` with `-f` outputs comma-separated values (no header, no tree indentation), one entry per line — suitable for scripting pipelines. When `--simple` is used without `-f`, the previous behavior (bare URI per line) is preserved.
@@ -197,8 +200,8 @@ Get directory tree structure.
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI |
 | output | str | No | HTTP: `agent`; SDKs: `original` | Output format: `agent` or `original` |
-| abs_limit | int | No | HTTP: 256; SDKs: 128 | Maximum returned abstract length |
-| include_abstract | bool | No | Unset | Include directory L0 abstracts. When unset, follows the legacy output behavior (`agent`: included; `original`: omitted) |
+| abs_limit | int | No | 2000 | Maximum returned abstract length in characters |
+| include_abstract | bool | No | Unset | Include file and directory abstracts. When unset, follows the legacy output behavior (`agent`: included; `original`: omitted) |
 | include_overview | bool | No | Unset | Include directory L1 overviews. Unset means omitted |
 | overview_limit | int | No | 4000 | Maximum returned overview length |
 | show_all_hidden | bool | No | False | Include hidden files like `-a` |
@@ -211,7 +214,7 @@ Get directory tree structure.
 | include_tags | bool | No | False | Return tags without requiring a tag filter |
 | tags | string[] | No | Unset | Retain only nodes matching every supplied `k=v` retrieval tag |
 
-Directory filtering and `tags` are applied before `offset` and `limit`. Abstracts and overviews are attached to the selected directory nodes and do not count toward `node_limit`. Explicit `include_abstract=true|false` overrides the legacy behavior implied by `output`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
+Directory filtering and `tags` are applied before `offset` and `limit`. Abstracts and overviews do not count toward `node_limit`. As with `ls`, file abstracts come from the vector index's L2 records and are empty when unavailable; overviews remain directory-only. Explicit `include_abstract=true|false` overrides the legacy behavior implied by `output`. Tags are included for filtered responses; for an unfiltered response, request `include_tags=true` (CLI: `-f tags`).
 
 
 **Python SDK (HTTP)**

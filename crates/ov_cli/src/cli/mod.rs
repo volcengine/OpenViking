@@ -297,16 +297,16 @@ pub(crate) enum Commands {
         /// List all subdirectories recursively
         #[arg(short, long, help_heading = "Common options")]
         recursive: bool,
-        /// Abstract content limit (only for agent output)
+        /// Maximum returned abstract length
         #[arg(
             long = "abs-limit",
             short = 'l',
-            default_value = "256",
+            default_value = "2000",
             value_name = "n",
             help_heading = "Advanced options"
         )]
         abs_limit: i32,
-        /// Include directory L0 abstracts (defaults to the selected output mode)
+        /// Include file and directory abstracts (defaults to the selected output mode)
         #[arg(
             long = "include-abstract",
             default_missing_value = "true",
@@ -406,12 +406,12 @@ pub(crate) enum Commands {
         #[arg(
             long = "abs-limit",
             short = 'l',
-            default_value = "128",
+            default_value = "2000",
             value_name = "n",
             help_heading = "Advanced options"
         )]
         abs_limit: i32,
-        /// Include directory L0 abstracts (defaults to the selected output mode)
+        /// Include file and directory abstracts (defaults to the selected output mode)
         #[arg(
             long = "include-abstract",
             default_missing_value = "true",

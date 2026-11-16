@@ -278,6 +278,9 @@ func TestListAndTreePreserveOptionsAndPagination(t *testing.T) {
 					t.Fatalf("abs_limit = %q", got)
 				}
 			} else {
+				if got := r.URL.Query().Get("abs_limit"); got != "2000" {
+					t.Fatalf("abs_limit = %q", got)
+				}
 				if _, ok := r.URL.Query()["include_abstract"]; ok {
 					t.Fatal("default list request should omit include_abstract")
 				}
@@ -290,6 +293,9 @@ func TestListAndTreePreserveOptionsAndPagination(t *testing.T) {
 			}
 			listCalls++
 		case "/api/v1/fs/tree":
+			if got := r.URL.Query().Get("abs_limit"); got != "2000" {
+				t.Fatalf("abs_limit = %q", got)
+			}
 			if treeCalls == 0 {
 				if got := r.URL.Query().Get("level_limit"); got != "0" {
 					t.Fatalf("level_limit = %q, want 0", got)

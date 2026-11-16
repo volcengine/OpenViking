@@ -670,7 +670,7 @@ export class OpenVikingClient {
           simple: options.simple ?? false,
           recursive: options.recursive ?? false,
           output: options.output ?? "original",
-          abs_limit: options.absLimit ?? 256,
+          abs_limit: options.absLimit ?? 2000,
           include_abstract: options.includeAbstract,
           include_overview: options.includeOverview,
           overview_limit: options.overviewLimit ?? 4000,
@@ -704,7 +704,7 @@ export class OpenVikingClient {
         query: {
           uri: normalizeURI(uri),
           output: options.output ?? "original",
-          abs_limit: options.absLimit ?? 128,
+          abs_limit: options.absLimit ?? 2000,
           include_abstract: options.includeAbstract,
           include_overview: options.includeOverview,
           overview_limit: options.overviewLimit ?? 4000,

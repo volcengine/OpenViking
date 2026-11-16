@@ -2537,17 +2537,21 @@ async def test_write_and_live_context_read_roundtrip(service, monkeypatch):
         wait=True,
     )
 
-    assert json.loads(await read(uris=uri)) == {"temperature": 23}
+    definition = await service.fs.read_visible(uri, ctx=DEFAULT_CTX)
+    live_read = await read(uris=uri)
+    assert live_read.startswith(definition)
+    assert json.loads(live_read.split("\n\n## Live Result\n\n", 1)[1]) == {"temperature": 23}
     assert upstream.call_tool.await_count == 1
     assert upstream.call_tool.await_args.kwargs["arguments"] == {"city": "Beijing"}
     raw = await content_router.read(uri=uri, offset=0, limit=-1, raw=True, _ctx=DEFAULT_CTX)
     assert tool_uri in raw.result
+    assert await read(uri=uri, raw=True) == raw.result
     paged = await content_router.read(uri=uri, offset=1, limit=1, raw=False, _ctx=DEFAULT_CTX)
     assert paged.result == raw.result.splitlines(keepends=True)[1]
     assert await read(uris=uri, offset=1, limit=1) == paged.result
     assert upstream.call_tool.await_count == 1
     visible = await content_router.read(uri=uri, offset=0, limit=-1, raw=False, _ctx=DEFAULT_CTX)
-    assert json.loads(visible.result) == {"temperature": 23}
+    assert visible.result == live_read
 
     await service.fs.set_tags(uri, ["env=stg"], "replace", False, DEFAULT_CTX)
     mounts = await service.mcps.mounts("weather", None, DEFAULT_CTX, target_uri=tools_root)
@@ -2975,7 +2979,7 @@ async def test_tree_include_abstract_renders_directory_abstracts(service, monkey
     assert "\npr-review/\n  - name: pr-review description: Review a PR diff\n" in result
     assert "\n  SKILL.md (42 B)" in result
     assert captured["output"] == "agent"
-    assert captured["abs_limit"] == 1024
+    assert captured["abs_limit"] == 2000
 
 
 async def test_tree_include_abstract_skips_not_ready_placeholders(service, monkeypatch):

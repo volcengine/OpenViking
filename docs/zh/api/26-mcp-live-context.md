@@ -590,7 +590,7 @@ ov mcps mounts --mcp weather --tool current
 ov read viking://resources/live/weather-beijing.md
 ```
 
-实时读取支持 MCP 文本结果和 `structuredContent`。多个文本块用换行连接；只有结构化结果时返回格式化 JSON。上游 `isError=true`、只有图片或音频等非文本内容，或者工具显式声明为非只读或破坏性时，读取返回 `PROCESSING_ERROR`。直接调用 `/invoke` 可以执行写工具，并仍会保留原生 MCP 内容。
+实时读取保留节点定义（YAML frontmatter、预设参数和正文指引），然后在 `## Live Result` 下追加工具执行结果。支持 MCP 文本结果和 `structuredContent`：多个文本块用换行连接；只有结构化结果时，追加格式化 JSON。REST `read?raw=true` 和 MCP `read(raw=true)` 只返回已存储的定义，不调用工具；分页读取也不执行工具。上游 `isError=true`、只有图片或音频等非文本内容，或者工具显式声明为非只读或破坏性时，读取返回 `PROCESSING_ERROR`。直接调用 `/invoke` 可以执行写工具，并仍会保留原生 MCP 内容。
 
 ### 删除挂载
 

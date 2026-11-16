@@ -1039,8 +1039,9 @@ async def read(
     ] = None,
     offset: int = 0,
     limit: int = -1,
+    raw: bool = False,
 ) -> str | list[ContentBlock] | CallToolResult:
-    """Read viking:// files. Pass uri for one file, or uris with a list to read several files in one call. A complete read of an OpenViking Live Context node returns its evaluated text content; paginated reads only return stored descriptor text. Text reads accept line-based offset/limit. Raster images and supported audio return native MCP content blocks. For directory listing, use the list tool instead."""
+    """Read viking:// files. Pass uri for one file, or uris with a list to read several files in one call. A complete read of an OpenViking Live Context node returns its definition and guidance followed by the evaluated text under Live Result. Set raw=true to return stored text without memory-field cleanup or live tool execution; paginated reads also skip live execution. Text reads accept line-based offset/limit. Raster images and supported audio return native MCP content blocks. For directory listing, use the list tool instead."""
     import asyncio
 
     # `uri` matches every other tool. Both names accept a string or a list, so a
@@ -1157,13 +1158,14 @@ async def read(
                     if is_image:
                         return _mcp_image_content(data, mime_type)
                     return _mcp_audio_content(data, mime_type)
-                content = await service.fs.read_visible(
+                read_text = service.fs.read if raw else service.fs.read_visible
+                content = await read_text(
                     resolved_uri,
                     ctx=ctx,
                     offset=offset,
                     limit=limit,
                 )
-                if offset == 0 and limit == -1:
+                if not raw and offset == 0 and limit == -1:
                     result = await service.mcps.read_live_context(content, ctx)
                     if result is not None:
                         return result
@@ -1382,7 +1384,7 @@ async def ls(
 # -- tree ------------------------------------------------------------------
 
 # Long enough to keep a full skill description (the Agent Skills limit is 1024 chars).
-_TREE_ABSTRACT_LIMIT = 1024
+_TREE_ABSTRACT_LIMIT = 2000
 
 
 def _tree_abstract(entry: Dict[str, Any]) -> str:
@@ -1414,7 +1416,7 @@ async def tree(
         uri: Directory URI to traverse.
         level_limit: Maximum traversal depth.
         node_limit: Existing default result limit.
-        include_abstract: Whether to include directory summaries (a skill directory's
+        include_abstract: Whether to include file and directory summaries (a skill directory's
             summary is its name and description).
         offset: Number of visible nodes to skip.
         limit: Optional result limit that overrides node_limit.
