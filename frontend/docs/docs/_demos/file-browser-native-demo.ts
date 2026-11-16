@@ -90,15 +90,13 @@ export function nativePreviewDemoResponse(
     }
     case '/api/v1/snapshot/versions':
       return ok({
-        versions: [
-          {
-            version_id: 'demo-version',
-            version_number: 1,
-            snapshot_id: 'demo-snapshot',
-            snapshot_path: url.searchParams.get('uri'),
-            created_at: 1794268800,
-          },
-        ],
+        versions: [2, 1].map((version) => ({
+          version_id: `demo-version-${version}`,
+          version_number: version,
+          snapshot_id: `demo-snapshot-${version}`,
+          snapshot_path: url.searchParams.get('uri'),
+          created_at: 1794268800 + version * 3600,
+        })),
         next_before_version: null,
       });
     case '/api/v1/snapshot/show': {
@@ -109,9 +107,11 @@ export function nativePreviewDemoResponse(
         ?.find(({ info }) => info.oid === target);
       return new Response(
         snapshot?.content ??
-          '# Historical content\n\nThis revision is simulated.',
+          `# Historical content\n\nSimulated ${target ?? 'revision'}.`,
       );
     }
+    case '/api/v1/snapshot/restore':
+      return ok({ result: 'noop' });
     case '/api/v1/compile/config':
       return ok(config);
     case '/api/v1/compile/config/update':

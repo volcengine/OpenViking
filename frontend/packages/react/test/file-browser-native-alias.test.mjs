@@ -6,9 +6,10 @@ import {
   mount,
   openAction,
   workflow,
-  act,
   ok,
   settle,
+  click,
+  button,
 } from './helpers/preview-native-dom.mjs';
 
 test('a configuration dialog keeps its resolved target and success state while an alias refreshes', async () => {
@@ -44,12 +45,12 @@ test('a configuration dialog keeps its resolved target and success state while a
         .to,
       to,
     );
-    await act(async () =>
-      workflow()
-        .querySelector('form')
-        .dispatchEvent(
-          new window.Event('submit', { bubbles: true, cancelable: true }),
-        ),
+    await click(document.querySelector('[aria-label="Update schedule"]'));
+    await click(
+      button(
+        'Save',
+        document.querySelector('.ov-compile-config [role="dialog"]'),
+      ),
     );
     await settle(8);
     assert.equal(

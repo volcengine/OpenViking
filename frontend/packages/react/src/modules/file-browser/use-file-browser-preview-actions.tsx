@@ -158,7 +158,10 @@ export function useFileBrowserPreviewActions({
               policy.fileHistory &&
               !policy.versionedFile
             }
-            versioned={policy.versionedFile}
+            versioned={
+              policy.versionedFile || (!isFile && dashboard?.kind === 'wiki')
+            }
+            directory={!isFile && dashboard?.kind === 'wiki'}
             showContent={isFile && !isBinaryFile(uri)}
             text={text}
             locale={locale}

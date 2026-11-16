@@ -27,7 +27,7 @@ const cases = [
     `${rootUri}/guide.md`,
     false,
     [],
-    ['download', 'history', 'exportPack', 'delete'],
+    ['download', 'exportPack', 'delete'],
     true,
   ],
   [`${rootUri}/folder`, true, [], ['importPack', 'exportPack'], false],
@@ -79,7 +79,7 @@ const cases = [
     `${rootUri}/wiki-other/doc.md`,
     false,
     [{ to: target }],
-    ['download', 'history', 'exportPack', 'delete'],
+    ['download', 'exportPack', 'delete'],
     true,
   ],
   [
@@ -174,7 +174,7 @@ test('boolean visibility hides defaults without granting resources a capability 
     await view.render(tree(fetch, uri, { ...props, readOnly: true }));
     assert.deepEqual(
       context.defaultActions.flat().map((item) => item.key),
-      ['download', 'history', 'exportPack'],
+      ['download', 'exportPack'],
     );
     assert.equal(context.canEdit, false);
   } finally {

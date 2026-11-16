@@ -51,7 +51,13 @@ export function FileBrowserPreviewFooter({
         </span>
       ) : null}
       {modelNotice ? (
-        <span className="ov-file-browser__preview-model">{modelNotice}</span>
+        <span className="ov-file-browser__preview-model">
+          {modelNotice.split(/(\s+)/).map((part, index) => (
+            <span key={index} className="ov-file-browser__preview-model-name">
+              {part}
+            </span>
+          ))}
+        </span>
       ) : null}
     </>
   );

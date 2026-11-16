@@ -512,3 +512,6 @@ html.dark .ov-file-browser__empty-art {
   text-align: end;
   line-height: 20px;
 }
+.ov-file-browser__preview-model-name {
+  white-space: nowrap;
+}

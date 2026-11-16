@@ -129,6 +129,18 @@ export function useOverlayPosition(
     if (!open) return;
     const trigger = triggerRef.current;
     if (!trigger || !surface) return;
+    const originalZIndex = surface.style.zIndex;
+    const owner = trigger.closest('.ov-modal, .ov-popover');
+    if (owner) {
+      const ownerZIndex = Number.parseInt(
+        window.getComputedStyle(owner).zIndex,
+        10,
+      );
+      const surfaceZIndex =
+        Number.parseInt(window.getComputedStyle(surface).zIndex, 10) || 0;
+      if (Number.isFinite(ownerZIndex))
+        surface.style.zIndex = String(Math.max(surfaceZIndex, ownerZIndex + 1));
+    }
 
     // 浮层渲染到 `body`，拿不到宿主设在组件容器上的主题变量——CSS 变量沿 DOM
     // 树继承，跨 portal 就断了。把触发元素上的公开变量复制到浮层，宿主的局部
@@ -222,6 +234,7 @@ export function useOverlayPosition(
     window.addEventListener('scroll', update, true);
     window.addEventListener('resize', update);
     return () => {
+      surface.style.zIndex = originalZIndex;
       observer.disconnect();
       themeObserver.disconnect();
       written.forEach((name) => surface.style.removeProperty(name));
