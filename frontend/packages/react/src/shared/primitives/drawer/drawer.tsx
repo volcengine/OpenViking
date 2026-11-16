@@ -59,7 +59,7 @@ export function Drawer({
     if (layer) return lockBodyScroll(layer.ownerDocument.body);
   }, [layer]);
 
-  if (typeof document === 'undefined' || (!open && !present)) return null;
+  if (!open && !present) return null;
   return createPortal(
     <div
       ref={setLayer}

@@ -1,5 +1,12 @@
 import { useAnalyticsRef } from '../../shared/analytics/context.js';
 import { previewActionTarget } from '../../shared/analytics/preview-actions.js';
+import {
+  ErrorNotification,
+  errorMessage,
+} from '../../shared/feedback/error-notification.js';
+import type { FilePreviewLabels } from './types.js';
+import { LocaleProvider } from '../../shared/locale-context.js';
+import type { Locale } from '../../shared/locale.js';
 import { createContext, useContext, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FilePreviewAction } from './action-types.js';
@@ -7,7 +14,7 @@ import type { FilePreviewTab } from './types.js';
 
 interface CommandState {
   pending?: string;
-  failure?: { reason: unknown };
+  failure?: { reason: unknown; label: string };
 }
 const CommandContext = createContext<{
   pending: boolean;
@@ -19,8 +26,12 @@ const CommandContext = createContext<{
 export function FilePreviewCommandProvider({
   tab,
   children,
+  locale,
+  text,
 }: {
   tab: FilePreviewTab;
+  locale?: Locale;
+  text: Required<FilePreviewLabels>;
   children: ReactNode;
 }) {
   const analytics = useAnalyticsRef();
@@ -53,7 +64,8 @@ export function FilePreviewCommandProvider({
           () => ({}),
         );
     } catch (reason) {
-      failure = { reason };
+      if (!(reason instanceof Error && reason.name === 'AbortError'))
+        failure = { reason, label: action.label };
       if (target === 'copyContent')
         analytics.current?.emit('file_preview_copy_content_fail', () => ({}));
     } finally {
@@ -68,15 +80,27 @@ export function FilePreviewCommandProvider({
   };
   const state = states.get(scope);
   return (
-    <CommandContext.Provider
-      value={{
-        pending: state?.pending !== undefined,
-        failure: state?.failure,
-        execute,
-      }}
-    >
-      {children}
-    </CommandContext.Provider>
+    <LocaleProvider locale={locale}>
+      <CommandContext.Provider
+        value={{
+          pending: state?.pending !== undefined,
+          failure: state?.failure,
+          execute,
+        }}
+      >
+        {state?.failure ? (
+          <ErrorNotification
+            key={scope}
+            title={`${state.failure.label} · ${text.actionFailed}`}
+            identity={state.failure}
+            error={state.failure.reason}
+          >
+            {errorMessage(state.failure.reason)}
+          </ErrorNotification>
+        ) : null}
+        {children}
+      </CommandContext.Provider>
+    </LocaleProvider>
   );
 }
 

@@ -8,7 +8,7 @@ import {
   useState,
 } from 'react';
 import { createRoot } from 'react-dom/client';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { renderMarkup } from './helpers/csr-render.mjs';
 import {
   VikingBot,
   VikingBotSessionActions,
@@ -23,7 +23,7 @@ test('explicit null empty state suppresses welcome and custom message lists alwa
     { messageList: null },
     { emptyState: null, messageList: createElement('p', null, 'Host list') },
   ]) {
-    const html = renderToStaticMarkup(
+    const html = renderMarkup(
       createElement(VikingBot, { messages: [], ...props }),
     );
     assert.doesNotMatch(html, /Welcome to VikingBot/);

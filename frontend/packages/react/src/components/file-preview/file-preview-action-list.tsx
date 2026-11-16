@@ -14,14 +14,12 @@ export function FilePreviewActionList({
   disabled,
   text,
   pending,
-  failure,
   execute,
 }: {
   items: FilePreviewActionItems;
   disabled: boolean;
   text: Required<FilePreviewLabels>;
   pending: boolean;
-  failure?: { reason: unknown };
   execute: (action: FilePreviewAction) => Promise<void>;
 }) {
   const exposure = usePreviewActionExposure(items);
@@ -61,16 +59,6 @@ export function FilePreviewActionList({
           onSelect={(selected) => void execute(selected)}
         />
       )}
-      {failure ? (
-        <span className="ov-file-preview__action-error" role="alert">
-          {text.actionFailed}
-          {failure.reason instanceof Error
-            ? `: ${failure.reason.message}`
-            : typeof failure.reason === 'string'
-              ? `: ${failure.reason}`
-              : ''}
-        </span>
-      ) : null}
     </>
   );
 }

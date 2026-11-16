@@ -1,3 +1,7 @@
+import { MonitoringFlow } from '../../shared/monitoring/flow-context.js';
+import type { Workflow } from '../../shared/monitoring/workflow.js';
+import { scopeMonitoring } from './monitoring.js';
+import { withMonitoring } from '../../shared/monitoring/with-monitoring.js';
 import { useRenderErrors } from './labels.js';
 import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import { Button } from '../../shared/primitives/button/button.js';
@@ -53,7 +57,16 @@ type LevelProps = Pick<ScopeCascadeProps, 'labels' | 'retryLabel'> & {
 };
 function ConnectedLevel(props: LevelProps) {
   const state = useScopeCascadeLevel(props.level);
-  return <LevelView key={state.scopeKey} {...props} state={state} />;
+  const operation = (
+    props.level as ScopeCascadeLevel & {
+      [scopeMonitoring]?: () => Workflow | undefined;
+    }
+  )[scopeMonitoring]?.();
+  return (
+    <MonitoringFlow operation={operation}>
+      <LevelView key={state.scopeKey} {...props} state={state} />
+    </MonitoringFlow>
+  );
 }
 function LevelView({
   index,
@@ -169,7 +182,7 @@ function ScopeCascadeContent({
   );
 }
 
-export function ScopeCascade(props: ScopeCascadeProps) {
+function ScopeCascadeView(props: ScopeCascadeProps) {
   const { slots, ...contentProps } = props;
   return (
     <ErrorBoundary
@@ -181,3 +194,5 @@ export function ScopeCascade(props: ScopeCascadeProps) {
     </ErrorBoundary>
   );
 }
+
+export const ScopeCascade = withMonitoring(ScopeCascadeView, 'ScopeCascade');

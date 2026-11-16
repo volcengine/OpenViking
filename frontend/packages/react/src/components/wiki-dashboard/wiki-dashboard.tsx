@@ -1,3 +1,4 @@
+import { withMonitoring } from '../../shared/monitoring/with-monitoring.js';
 import { useTrack } from '../../shared/analytics/use-track.js';
 import { useExposure } from '../../shared/analytics/use-exposure.js';
 import { useRenderErrors } from './labels.js';
@@ -158,7 +159,7 @@ function WikiDashboardContent(props: WikiDashboardProps) {
   );
 }
 
-export function WikiDashboard(props: WikiDashboardProps) {
+function WikiDashboardView(props: WikiDashboardProps) {
   const { slots, ...contentProps } = props;
   return (
     <ErrorBoundary
@@ -171,3 +172,5 @@ export function WikiDashboard(props: WikiDashboardProps) {
     </ErrorBoundary>
   );
 }
+
+export const WikiDashboard = withMonitoring(WikiDashboardView, 'WikiDashboard');

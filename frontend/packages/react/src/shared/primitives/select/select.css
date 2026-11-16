@@ -74,8 +74,10 @@
   color: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
 }
 .ov-select--simple:focus-visible {
-  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
-  outline-offset: 2px;
+  outline: none;
+  box-shadow:
+    inset 0 0 0 1px var(--ov-ui-color-focus, var(--ov-ui-focus-default)),
+    0 0 0 2px var(--ov-ui-color-focus-ring, var(--ov-ui-focus-ring-default));
 }
 .ov-select--simple[aria-invalid='true'] {
   color: var(--ov-ui-color-error, var(--ov-ui-error-default));
@@ -143,7 +145,10 @@
   color: var(--ov-ui-color-text-disabled, var(--ov-ui-text-disabled-default));
 }
 .ov-select__tag button:focus-visible {
-  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
+  outline: none;
+  box-shadow:
+    inset 0 0 0 1px var(--ov-ui-color-focus, var(--ov-ui-focus-default)),
+    0 0 0 2px var(--ov-ui-color-focus-ring, var(--ov-ui-focus-ring-default));
 }
 .ov-select__trigger--tags {
   position: absolute;
@@ -167,6 +172,7 @@
   flex-direction: column;
   gap: 4px;
   max-height: min(256px, calc(100dvh - 100px));
+  padding: 2px;
   overflow: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--ov-ui-color-border-3, var(--ov-ui-border-3-default))
@@ -177,6 +183,11 @@
   position: relative;
   display: block;
   padding: 4px 4px 8px;
+}
+.ov-select__search:focus-within .ov-select__search-input.ov-input {
+  border-color: var(--ov-ui-input-focus);
+  box-shadow: 0 0 0 2px
+    var(--ov-ui-color-focus-ring, var(--ov-ui-input-focus-ring-default));
 }
 .ov-select__search-input.ov-input {
   padding-inline-end: 32px;
@@ -208,8 +219,7 @@
   background: var(--ov-ui-color-bg-5, var(--ov-ui-bg-5-default));
 }
 .ov-select__clear:focus-visible {
-  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
-  outline-offset: 1px;
+  outline: none;
 }
 .ov-select__empty {
   padding: 12px 10px;
@@ -255,8 +265,10 @@
   background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
 }
 .ov-select__option:focus-visible {
-  outline: 2px solid var(--ov-ui-color-focus, var(--ov-ui-focus-default));
-  outline-offset: -2px;
+  outline: none;
+  box-shadow:
+    inset 0 0 0 1px var(--ov-ui-color-focus, var(--ov-ui-focus-default)),
+    0 0 0 2px var(--ov-ui-color-focus-ring, var(--ov-ui-focus-ring-default));
 }
 .ov-select__option:disabled {
   color: var(--ov-ui-color-text-disabled, var(--ov-ui-text-disabled-default));
@@ -265,5 +277,15 @@
 @media (prefers-reduced-motion: reduce) {
   .ov-select__arrow {
     transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .ov-select--simple:focus-visible,
+  .ov-select__tag button:focus-visible,
+  .ov-select__search:focus-within .ov-select__search-input.ov-input,
+  .ov-select__option:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
   }
 }

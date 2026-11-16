@@ -2118,16 +2118,11 @@ func TestCompileAndListTasksRequests(t *testing.T) {
 	}))
 	defer closeServer()
 
-	compiled, err := client.Compile(
-		context.Background(),
-		[]string{"viking://resources/source"},
-		"viking://resources/output",
-		"viking://agent/skills/wiki",
-		&CompileOptions{
-			Instruction: "Keep supporting evidence.",
-			Args:        map[string]any{"model_name": "endpoint-1"},
-		},
-	)
+	compiled, err := client.Compile(context.Background(), CompileRequest{Input: &CompileInput{
+		FromURIs: []string{"viking://resources/source"},
+		To:       "viking://resources/output", Skill: "viking://agent/skills/wiki",
+		Instruction: "Keep supporting evidence.", Args: map[string]any{"model_name": "endpoint-1"},
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2432,5 +2427,67 @@ func TestSessionAPIsSendEventMemoryTags(t *testing.T) {
 		if !ok || value != nil {
 			t.Fatalf("auto_commit_policy = %#v, present = %v", value, ok)
 		}
+	}
+}
+
+func TestPersistentCompileRequests(t *testing.T) {
+	compileName := "research-summary"
+	args := map[string]any{"owner_user_id": "alice", "model_name": "ignored"}
+	namedRequests := 0
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		switch r.URL.Path {
+		case "/api/v1/compile/create":
+			if body["skill"] != "viking://agent/skills/wiki" || body["compile_name"] != compileName {
+				t.Fatalf("body = %#v", body)
+			}
+			writeOK(t, w, map[string]any{"compile_name": compileName})
+		case "/api/v1/compile":
+			namedRequests++
+			expected := map[string]any{"compile_name": compileName}
+			if namedRequests == 2 {
+				expected["args"] = args
+			}
+			if !reflect.DeepEqual(body, expected) {
+				t.Fatalf("body = %#v", body)
+			}
+			writeOK(t, w, map[string]any{"task_id": "cmp_1"})
+		default:
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+	}))
+	defer closeServer()
+	input := CompileInput{FromURIs: []string{"viking://resources/source"}, To: "viking://resources/output", Skill: "viking://agent/skills/wiki"}
+	if _, err := client.CreateCompileTask(context.Background(), "", input); err == nil {
+		t.Fatal("expected required compile_name error")
+	}
+	saved, err := client.CreateCompileTask(context.Background(), compileName, input)
+	if err != nil || saved["compile_name"] != compileName {
+		t.Fatalf("saved = %#v, err = %v", saved, err)
+	}
+	if _, err := client.Compile(context.Background(), CompileRequest{CompileName: compileName}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Compile(context.Background(), CompileRequest{CompileName: compileName, Args: args}); err != nil {
+		t.Fatal(err)
+	}
+	for _, request := range []CompileRequest{{}, {CompileName: compileName, Input: &input}, {Input: &input, Args: args}} {
+		if _, err := client.Compile(context.Background(), request); err == nil {
+			t.Fatal("expected invalid request error")
+		}
+	}
+}
+
+func TestMemoryCompileInputOmitsAbsentSources(t *testing.T) {
+	encoded, err := json.Marshal(CompileInput{To: "viking://~/memories", Skill: "memory"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(encoded, &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := body["from"]; exists {
+		t.Fatalf("absent sources must not be null: %s", encoded)
 	}
 }

@@ -107,3 +107,8 @@ React imports these SVG files directly during its build. This file records where
   (the menu and the deletion dialog designs). Paths and viewBoxes are
   retained; paints use `currentColor` for host theming. They follow the repository
   license and are bundled inline without a private icon runtime.
+
+- `svg/viking-bot/interaction-edit.svg` and `interaction-clock.svg` — original
+  16px artwork supplied in the OpenViking Console design (Figma component set
+  `8632:463133`). SVG geometry and viewBoxes are unchanged; HITL styles map paint
+  to the active theme. They follow this repository's license.

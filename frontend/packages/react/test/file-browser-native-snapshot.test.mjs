@@ -1,3 +1,4 @@
+import { notificationContent } from './helpers/feedback-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
@@ -64,7 +65,7 @@ test('ordinary file history saves a snapshot only on explicit request and retain
     });
     await click(save());
     assert.match(
-      workflow().querySelector('[role="alert"]')?.textContent ?? '',
+      notificationContent()?.textContent ?? '',
       /A snapshot path is being processed/,
     );
     assert.equal(note.value, ' Update guide ');
@@ -83,10 +84,7 @@ test('ordinary file history saves a snapshot only on explicit request and retain
     assert.equal(fetch.countOf('/api/v1/content/write'), 0);
     assert.equal(fetch.countOf('/api/v1/snapshot/log'), 2);
     assert.equal(note.value, '');
-    assert.equal(
-      workflow().querySelector('[role="alert"]')?.textContent,
-      undefined,
-    );
+    assert.equal(notificationContent()?.textContent, undefined);
     assert.match(workflow().textContent, /Update guide/);
   } finally {
     await view.unmount();

@@ -1,7 +1,13 @@
-import type { SetStateAction } from 'react';
+import { useLocalDraftValidation } from './use-local-draft-validation.js';
+import { ConversationFeedback } from './conversation-feedback.js';
+import { useLocale } from '../../shared/locale-context.js';
+import feedbackEn from './locales/feedback.en-US.js';
+import feedbackZh from './locales/feedback.zh-CN.js';
+import type { ReactNode, SetStateAction } from 'react';
 import { useEffect, useMemo, useRef } from 'react';
 import { useVikingBotChat } from './chat/use-viking-bot-chat.js';
 import { useVikingBotSessions } from './chat/use-viking-bot-sessions.js';
+import { useHitl } from './hitl/use-hitl.js';
 import { useAttachmentUpload } from './chat/use-attachment-upload.js';
 import type { VikingBotProps } from '../../components/viking-bot/types.js';
 import type { ConsoleProps } from './types.js';
@@ -17,7 +23,15 @@ export function useConversation(
     modes,
   }: ConsoleProps,
   setDraft: (value: SetStateAction<string>) => void,
-): Partial<VikingBotProps> {
+): Partial<VikingBotProps> & { feedback?: ReactNode } {
+  const feedbackLocale = useLocale(chatOptions?.locale ?? locale);
+  const feedbackText = { 'en-US': feedbackEn, 'zh-CN': feedbackZh }[
+    feedbackLocale
+  ];
+  const validation = useLocalDraftValidation(
+    !chatOptions?.service,
+    feedbackLocale,
+  );
   const enabled =
     (modes === undefined || modes.includes('conversation')) &&
     conversation?.messages === undefined &&
@@ -30,6 +44,12 @@ export function useConversation(
     requestOptions: chatOptions?.requestOptions ?? requestOptions,
   };
   const chat = useVikingBotChat(options);
+  const hitl = useHitl(
+    chat,
+    enabled && conversation?.interaction === undefined,
+    useLocale(options.locale),
+    chatOptions?.hitl,
+  );
   const uploads = useAttachmentUpload(
     enabled &&
       !conversation?.onFilesAdded &&
@@ -106,7 +126,8 @@ export function useConversation(
   return {
     ...conversation,
     ...uploads.props,
-    messages: chat.messages,
+    messages: hitl.messages,
+    interaction: conversation?.interaction ?? hitl.interaction,
     streaming: chat.streaming,
     listKey: `${scopeKey ?? ''}:${chat.sessionId ?? 'new'}`,
     isSending: chat.status === 'streaming' || chat.status === 'loading',
@@ -114,6 +135,7 @@ export function useConversation(
       chat.canSteer && chat.status === 'streaming' && Boolean(chat.sessionId),
     isSubmitting: chat.isSubmitting,
     onSend: (draft) => {
+      if (!validation.validate(draft)) return;
       const token = ++submission.current;
       const followingUp = chat.status === 'streaming';
       if (!followingUp && uploads.props) uploads.removeSent(draft.attachments);
@@ -163,15 +185,22 @@ export function useConversation(
         conversation?.sessions?.onNew?.();
       },
     },
-    footer:
-      error || conversation?.footer ? (
+    feedback:
+      error || validation.feedback ? (
         <>
           {error ? (
-            <p className="ov-console__error" role="alert">
-              {error.message}
-            </p>
+            <ConversationFeedback
+              key={`${scopeKey ?? ''}:${chat.sessionId ?? 'new'}`}
+              locale={feedbackLocale}
+              title={
+                error === chat.persistenceError
+                  ? feedbackText.persistFailed
+                  : feedbackText.requestFailed
+              }
+              error={error}
+            />
           ) : null}
-          {conversation?.footer}
+          {validation.feedback}
         </>
       ) : undefined,
   };

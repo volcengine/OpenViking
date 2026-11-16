@@ -1,3 +1,4 @@
+import { notificationError } from './helpers/feedback-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { act, createElement as h, StrictMode } from 'react';
@@ -95,7 +96,8 @@ test('Prism highlights edits without resetting history, locale, drafts or save s
     });
     assert.equal(editor.state.doc.toString(), draft);
     assert.equal(content.getAttribute('contenteditable'), 'true');
-    assert.match(view.container.textContent, /保存失败/);
+    assert.match(notificationError().textContent, /保存失败/);
+    assert.doesNotMatch(view.container.textContent, /保存失败/);
     fail = false;
     await act(async () => {
       saving = actions.saveEditing();
@@ -105,7 +107,7 @@ test('Prism highlights edits without resetting history, locale, drafts or save s
       await saving;
     });
     assert.deepEqual(saved, [draft, draft]);
-    assert.equal(view.container.querySelector('.cm-content'), null);
+    assert.equal(Boolean(view.container.querySelector('.cm-content')), false);
   } finally {
     await view.unmount();
   }
@@ -161,7 +163,8 @@ test('lazy grammars reuse Prism, honor format hints, and leave unknown files edi
           editor.contentDOM.querySelector(`.ov-file-preview__token--${token}`),
           source.fileName,
         );
-      else assert.equal(editor.contentDOM.querySelector('script'), null);
+      else
+        assert.equal(Boolean(editor.contentDOM.querySelector('script')), false);
       assert.equal(editor.state.doc.toString(), source.content);
       assert.equal(editor.contentDOM.getAttribute('contenteditable'), 'true');
     } finally {

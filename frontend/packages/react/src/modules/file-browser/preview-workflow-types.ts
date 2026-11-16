@@ -31,6 +31,10 @@ export interface FileBrowserWorkflowLabels {
   cancel: string;
   save: string;
   failed: string;
+  copyFailed: string;
+  sourcesRequired: string;
+  skillRequired: string;
+  failureTitle: (action: string) => string;
   sources: string;
   skill: string;
   instruction: string;

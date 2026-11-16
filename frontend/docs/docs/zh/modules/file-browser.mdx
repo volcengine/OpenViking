@@ -26,7 +26,7 @@ import '@openviking/react/modules/file-browser/style.css';
 
 ### 基础用法
 
-展示目录树、搜索和预览的联动，以及 Wiki 与经验看板。底部的按钮切换预览的资源类型，下拉框切换预览操作区的模式。
+展示目录树、搜索和预览的联动，以及 Wiki 与经验看板。底部的按钮切换预览的资源类型，下拉框切换预览操作区的模式。 看板入口固定在文件树可视区域右侧，横向滚动时保持可见。
 
 ```tsx file="../../_demos/file-browser-basic.tsx" preview
 
@@ -354,6 +354,38 @@ import '@openviking/react/modules/file-browser/style.css';
 | weekly            | 「每周」选项                       | `string` | `'每周'`                                       |
 | time              | 执行时间输入框的标签               | `string` | `'执行时间（北京时间）'`                       |
 | weekday           | 星期选择框的标签                   | `string` | `'星期'`                                       |
+| 参数              | 说明                               | 类型                         | 默认值                                |
+| ----------------- | ---------------------------------- | ---------------------------- | ------------------------------------- |
+| configure         | 编译配置操作的文案，也是弹窗的标题 | `string`                     | `'编译配置'`                          |
+| historyEmpty      | 没有历史版本时的提示               | `string`                     | `'暂无历史版本'`                      |
+| historyLimit      | 历史记录达到 500 条上限时的提示    | `string`                     | `'最多显示最近 500 条快照。'`         |
+| snapshotNote      | 快照备注输入框的标签               | `string`                     | `'描述这次快照'`                      |
+| saveSnapshot      | 保存快照按钮                       | `string`                     | `'保存快照'`                          |
+| snapshotSaved     | 快照保存成功的提示                 | `string`                     | `'快照已保存。'`                      |
+| snapshotUnchanged | 文件内容无变化时的提示             | `string`                     | `'文件内容没有变化，无需创建快照。'`  |
+| version           | Wiki 文件版本号前的文字            | `string`                     | `'版本'`                              |
+| importFile        | 导入弹窗里文件选择框的标签         | `string`                     | `'包文件'`                            |
+| importHint        | 导入弹窗里的说明                   | `string`                     | `'选择 .ovpack 包，导入到当前目录。'` |
+| importSubmit      | 导入按钮                           | `string`                     | `'导入'`                              |
+| imported          | 导入成功的提示                     | `string`                     | `'导入成功。'`                        |
+| saved             | 编译配置保存成功的提示             | `string`                     | `'配置已保存。'`                      |
+| cancel            | 取消按钮                           | `string`                     | `'取消'`                              |
+| save              | 保存按钮                           | `string`                     | `'保存'`                              |
+| failed            | 操作失败的提示前缀                 | `string`                     | `'操作失败。'`                        |
+| sources           | 来源目录输入框的标签               | `string`                     | `'来源目录（每行一个）'`              |
+| skill             | 技能输入框的标签                   | `string`                     | `'技能 URI'`                          |
+| instruction       | 指令输入框的标签                   | `string`                     | `'指令'`                              |
+| automatic         | 自动更新复选框的标签               | `string`                     | `'自动更新'`                          |
+| schedule          | 定时更新选择框的标签               | `string`                     | `'定时更新'`                          |
+| noSchedule        | 「不设置定时更新」选项             | `string`                     | `'不设置定时更新'`                    |
+| daily             | 「每天」选项                       | `string`                     | `'每天'`                              |
+| weekly            | 「每周」选项                       | `string`                     | `'每周'`                              |
+| time              | 执行时间输入框的标签               | `string`                     | `'执行时间（北京时间）'`              |
+| weekday           | 星期选择框的标签                   | `string`                     | `'星期'`                              |
+| failureTitle      | 操作失败通知的标题格式化函数       | `(action: string) => string` | `` action => `${action}失败` ``       |
+| copyFailed        | 剪贴板复制失败的 Toast 文案        | `string`                     | `'复制失败，请检查剪贴板权限后重试'`  |
+| sourcesRequired   | 未填写来源目录的 Toast 文案        | `string`                     | `'请至少填写一个来源目录'`            |
+| skillRequired     | 未填写技能 URI 的 Toast 文案       | `string`                     | `'请填写技能 URI'`                    |
 
 ### FileBrowserAclLabels
 
@@ -511,8 +543,6 @@ await browserRef.current?.openResource(directoryUri);
 - 保存期间不能重复提交或关闭弹窗；保存失败时保留上次成功的授权并显示服务端的原因。
 - 保存成功后刷新目录和预览；服务端的索引更新可能异步完成，以服务端的鉴权结果为准。
 - 目录列表（`fs/ls`）里 `access: 'denied'` 的节点不能选中或展开，`access: 'container'` 的节点只能展开以访问有权限的子节点、不能预览自身。
-- `access: 'read'` 的节点显示只读标记。
-- 以上节点标记来自目录列表，不依赖 `acl`。
 - 授权调用 `GET`、`PUT /api/v1/acl`，恢复继承时将 `acl_mode` 设为 `inherit` 并发送空的直接授权列表；成员目录调用账号的用户和用户组接口（用户每页 20 条，`include_credentials=false`），需要在 Provider 或 `requestOptions` 里提供 `accountId`。
 - 用户组目录需要账号管理权限，资源管理者无权读取时会显示失败和重试，可以用 `acl.listPrincipals` 接入自己的目录。
 - `acl.readOnly` 只禁止修改授权，与 `readOnly` 相互独立。
@@ -524,7 +554,7 @@ await browserRef.current?.openResource(directoryUri);
 - 标签优先于编译配置：配置里缺少该目标时仍显示看板。
 - 编译配置（`GET /api/v1/compile/configs`）按需读取：打开 Wiki 看板，或正文中的 Wiki 保留尾注需要确认归属时才请求，普通浏览不请求。
 - `dashboardKinds` 不含 `'wiki'` 时，不再识别 Wiki，也不读取编译配置，Wiki 资源不再提供编译配置和编译版本索引。
-- 文件树里带看板的行显示看板图标，点击直接打开；Wiki 有待处理冲突时图标不同。
+- 文件树里带看板的行显示看板图标，悬停或聚焦显示操作提示，点击直接打开；Wiki 有待处理冲突时图标不同。
 - 预览区的页签可以在正文和看板之间切换。
 - 普通资源没有 Wiki 页签，已识别的 Wiki 即使没有冲突也保留看板。
 - `viking://~/...` 别名和规范 URI 指向同一个资源时识别结果相同，传给 `renderDashboard` 的 `uri` 保持原来的写法。
@@ -541,6 +571,8 @@ await browserRef.current?.openResource(directoryUri);
 - 分页的 `offset` 从 0 开始，`limit` 为 20。时间参数采用 UTC `YYYY-MM-DD`，选择全部时间时省略日期。
 
 ### 失败状态
+
+- 操作失败通过浮层反馈：前端校验和剪贴板错误使用 Toast，接口错误使用可手动关闭的 Notification，标题说明失败的操作，正文保留服务端原始原因。失败时保留表单输入，允许重试。
 
 - 目录列表失败时，树里显示失败行和重试按钮，根目录失败也一样，不会显示成「没有文件」；失败行的「重试」只重新加载该目录。
 - 预览失败时，右侧显示失败状态：`labels.error` 是结论，服务端返回的原始消息是原因，`labels.retry` 是重试按钮，重试会同时重新加载目录树和当前预览。

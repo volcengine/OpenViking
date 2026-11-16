@@ -42,6 +42,7 @@ export type { ProbeStatus } from './level-transition-phase.js';
  * unmounts after the new one is on screen.
  */
 export interface TransitionLayer<T> {
+  targetKey?: string;
   tab: T;
   /** 这一层在后台加载，尚未显示。 This layer loads behind the scenes. */
   probe: boolean;
@@ -70,6 +71,7 @@ export interface TransitionLayer<T> {
 
 type SlotName = 'a' | 'b';
 interface Slot<T> {
+  targetKey?: string;
   identity: string;
   tab: T;
 }
@@ -84,18 +86,20 @@ const noop = () => {};
 export function FilePreviewTransition<T>({
   identity,
   tab,
+  targetKey,
   needsLoad,
   text,
   children,
 }: {
   identity: string;
   tab: T;
+  targetKey?: string;
   needsLoad: boolean;
   text: Pick<FilePreviewLabels, 'loading'>;
   children: (layer: TransitionLayer<T>) => ReactNode;
 }) {
   const [slots, setSlots] = useState<Record<SlotName, Slot<T> | null>>({
-    a: { identity, tab },
+    a: { identity, tab, targetKey },
     b: null,
   });
   const [visible, setVisible] = useState<SlotName>('a');
@@ -131,7 +135,10 @@ export function FilePreviewTransition<T>({
       loadingAt.current = null;
       return;
     }
-    setSlots((current) => ({ ...current, [hidden]: { identity, tab } }));
+    setSlots((current) => ({
+      ...current,
+      [hidden]: { identity, tab, targetKey },
+    }));
     setPhase(needsLoad ? 'grace' : 'idle');
     setProbeStatus('pending');
     setProbeLoading(false);
@@ -281,6 +288,10 @@ export function FilePreviewTransition<T>({
           >
             {children({
               tab: slotTab,
+              targetKey:
+                slots[name]?.identity === identity
+                  ? targetKey
+                  : slots[name]?.targetKey,
               probe: !onScreen,
               onProbeStatus: onScreen ? noop : setProbeStatus,
               onLoadingChange: onScreen ? noop : setProbeLoading,

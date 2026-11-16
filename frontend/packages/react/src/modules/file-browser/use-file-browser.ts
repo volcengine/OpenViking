@@ -46,7 +46,7 @@ export function useFileBrowser({
 }: UseFileBrowserOptions): FileBrowserApi {
   const locale = useLocale(localeProp);
   const text = resolveLabels(accessLabels, locale);
-  const client = useOvClient();
+  const client = useOvClient('local');
   const [pendingUri, setPendingUri] = useState<string | null>(currentUri);
   const [refreshing, setRefreshing] = useState(false);
   // External edits must refresh the directory and preview even if URI and client
@@ -160,7 +160,7 @@ export function useFileBrowser({
   });
 
   const { setActiveKey, ...preview } = useFsPreview({
-    client,
+    client: tree.isReady ? client : null,
     // 非受控模式下 currentUri 是 null，真正选中的是 pendingUri；预览要跟着
     // 实际选中的资源走，否则内部维护的选中永远不会加载预览。
     //
@@ -226,12 +226,10 @@ export function useFileBrowser({
       },
       toggleExpand,
       loadMore: async (row: FileTreeRow) => {
-        const parentId = 'parentId' in row ? row.parentId : undefined;
-        if (parentId) await loadMore(parentId);
+        if ('parentId' in row && row.parentId) await loadMore(row.parentId);
       },
       retry: async (row: FileTreeRow) => {
-        const parentId = 'parentId' in row ? row.parentId : undefined;
-        if (parentId) await retry(parentId);
+        if ('parentId' in row && row.parentId) await retry(row.parentId);
       },
       // Refresh the directory and preview together after external changes.
       refresh: async () => {
@@ -293,6 +291,8 @@ export function useFileBrowser({
     // selection, so a custom view or action reading `currentUri` would target a
     // different resource than the preview shows.
     currentUri: activeUri,
+    treeMonitoring: tree.monitoring,
+    previewMonitoring: preview.monitoring,
     isReady: tree.isReady,
     error: tree.error ?? previewError,
     treeError: tree.error,

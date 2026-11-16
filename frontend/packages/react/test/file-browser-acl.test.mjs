@@ -1,3 +1,4 @@
+import { notificationError } from './helpers/feedback-dom.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
@@ -166,10 +167,7 @@ test('save failure retains previous grants and the server reason', async () => {
   try {
     await open();
     await level('group:research', 'Can edit');
-    assert.match(
-      document.querySelector('.ov-file-browser-acl__failure').textContent,
-      /Membership changed/,
-    );
+    assert.match(notificationError().textContent, /Membership changed/);
     assert.ok(
       document.querySelector('button[aria-label="group:research: Can read"]'),
     );
@@ -193,8 +191,14 @@ test('ACL is opt-in and a 403 does not invent an effective read or write level',
     await view.render(tree(fetch, { acl: true }, { userId: 'default' }));
     await settle();
     assert.ok(fetch.countOf('/api/v1/acl') > 0);
-    assert.equal(document.querySelector('.ov-file-browser-acl__manage'), null);
-    assert.equal(document.querySelector('.ov-file-browser-acl__tag'), null);
+    assert.equal(
+      Boolean(document.querySelector('.ov-file-browser-acl__manage')),
+      false,
+    );
+    assert.equal(
+      Boolean(document.querySelector('.ov-file-browser-acl__tag')),
+      false,
+    );
   } finally {
     await view.unmount();
   }

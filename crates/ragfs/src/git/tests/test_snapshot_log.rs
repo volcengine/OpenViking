@@ -148,6 +148,7 @@ async fn test_snapshot_log_restore_indexes_project_dir_relative_paths() {
             branch: "main".into(),
             project_dir: Some("proj".into()),
             source_commit: c1.to_hex().to_string(),
+            allow_missing_source: false,
             dry_run: false,
             message: None,
             author_name: "tester".into(),

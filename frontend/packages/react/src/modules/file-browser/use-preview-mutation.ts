@@ -3,7 +3,8 @@ import {
   beginMutation,
   type MutationTarget,
 } from '../../shared/analytics/mutation.js';
-import { useEffect, useMemo, useState } from 'react';
+import { useContext, useEffect, useMemo, useState } from 'react';
+import { NotificationScopeContext } from '../../shared/feedback/notification-context.js';
 import { useOvClient, useOvSignal } from '../../client/provider.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { scopeKeyOf } from './fs-scope.js';
@@ -15,6 +16,7 @@ export function usePreviewMutation(
 ) {
   const analytics = useAnalyticsRef();
   const client = useOvClient();
+  const feedback = useContext(NotificationScopeContext);
   const inherited = useOvSignal();
   const signal = requestOptions?.signal ?? inherited;
   const key = scopeKeyOf(client, requestOptions, uri);
@@ -42,6 +44,7 @@ export function usePreviewMutation(
     ) => Promise<unknown>,
     onSuccess?: () => void,
     analyticsTarget?: MutationTarget,
+    onError?: (error: unknown) => void,
   ) => {
     if (
       !client ||
@@ -51,6 +54,7 @@ export function usePreviewMutation(
     )
       return;
     owner.pending = true;
+    feedback?.dismiss(state?.owner === owner ? state.error : undefined);
     const composed = signal
       ? AbortSignal.any([signal, owner.controller.signal])
       : owner.controller.signal;
@@ -69,7 +73,8 @@ export function usePreviewMutation(
     } catch (error) {
       if (!composed.aborted) {
         event?.fail(error);
-        setState({ owner, pending: false, error });
+        setState({ owner, pending: false, ...(onError ? {} : { error }) });
+        onError?.(error);
       }
     } finally {
       owner.pending = false;
@@ -78,7 +83,10 @@ export function usePreviewMutation(
   return {
     run,
     reset: () => {
-      if (!owner.pending) setState(undefined);
+      if (!owner.pending) {
+        feedback?.dismiss(state?.owner === owner ? state.error : undefined);
+        setState(undefined);
+      }
     },
     pending: state?.owner === owner && state.pending,
     error: state?.owner === owner ? state.error : undefined,

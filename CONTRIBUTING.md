@@ -219,6 +219,20 @@ control flow over comments that restate the code.
 For Rust, Go, TypeScript, documentation, and plugin changes, use the formatter,
 lint, type-check, and test commands defined by that component.
 
+For OpenViking-owned code, levels describe a record's purpose: `CRITICAL` means
+the process cannot continue, `ERROR` marks a final failure that needs a human,
+`WARNING` is reserved for audit events, `INFO` covers fallbacks, retries, lifecycle
+changes, and 4xx rejections, and other business detail belongs at `DEBUG`.
+Third-party dependencies retain their level semantics; audit routing uses
+`openviking.audit` and explicit event fields, not `WARNING` alone.
+
+Read the [developer logging guide](docs/repository/LOGGING.md) before adding or
+changing log output. Python runtime logs use stdlib logging through
+`get_logger(__name__)`; final failures are logged once at the deciding boundary.
+Server initialization owns the common output format. Interactive CLI display and
+protocol output have separate rules; do not mechanically replace every `print()`.
+The guide distinguishes target requirements from capabilities already implemented.
+
 ### Tests
 
 Validate the smallest meaningful public contract and major failure boundary affected

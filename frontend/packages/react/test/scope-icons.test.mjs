@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { renderMarkup } from './helpers/csr-render.mjs';
 import { readFileSync } from 'node:fs';
 import { LibraryIcon, SpaceIcon, UserIcon } from '@openviking/react/icons';
 import { ScopeCascade } from '@openviking/react/modules/scope-cascade';
@@ -36,10 +36,8 @@ const renderCascade = async (options) => {
 
 test('the level icons are public and render without a host theme', () => {
   // The library icon is a gradient swatch picked by name, not an SVG glyph.
-  const library = renderToStaticMarkup(
-    createElement(LibraryIcon, { name: 'a' }),
-  );
-  assert.match(library, /border-radius:50%/);
+  const library = renderMarkup(createElement(LibraryIcon, { name: 'a' }));
+  assert.match(library, /border-radius:\s*50%/);
   // Colours come from the theme baseline first, with a literal as the last
   // resort, so a host can re-swatch the icon without editing the component.
   assert.match(library, /var\(--ov-ui-color-library-swatch-\d,/);
@@ -47,11 +45,11 @@ test('the level icons are public and render without a host theme', () => {
   assert.match(library, /linear-gradient/);
   assert.equal(
     library,
-    renderToStaticMarkup(createElement(LibraryIcon, { name: 'a' })),
+    renderMarkup(createElement(LibraryIcon, { name: 'a' })),
   );
   // The other two are inline SVG painted with currentColor.
   for (const Icon of [SpaceIcon, UserIcon]) {
-    const html = renderToStaticMarkup(createElement(Icon));
+    const html = renderMarkup(createElement(Icon));
     assert.match(html, /<svg/);
     assert.match(html, /currentColor/);
     assert.match(html, /aria-hidden="true"/);
@@ -112,7 +110,7 @@ test('every library swatch is reachable and numbered from one', () => {
   // variable name, so it has to stay within the five declared in theme.css.
   const seen = new Set();
   for (const name of ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']) {
-    const html = renderToStaticMarkup(createElement(LibraryIcon, { name }));
+    const html = renderMarkup(createElement(LibraryIcon, { name }));
     const swatch = html.match(/--ov-ui-color-library-swatch-(\d),/)?.[1];
     assert.ok(swatch, `no swatch variable for ${name}`);
     assert.ok(['1', '2', '3', '4', '5'].includes(swatch));

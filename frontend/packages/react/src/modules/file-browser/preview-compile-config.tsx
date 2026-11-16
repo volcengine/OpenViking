@@ -1,3 +1,4 @@
+import { useToast } from '../../shared/primitives/toast/use-toast.js';
 import { TextArea, Input } from '../../shared/primitives/input/input.js';
 import { Checkbox } from '../../shared/primitives/checkbox/checkbox.js';
 import { useCallback, useId, useState } from 'react';
@@ -56,6 +57,7 @@ function CompileConfigForm({
 }: Props & { initial: CompileConfig }) {
   const id = useId();
   const [draft, setDraft] = useState(initial);
+  const [toast, toastHolder] = useToast({ locale });
   const [sources, setSources] = useState(initial.from.join('\n'));
   const mutation = usePreviewMutation(uri, requestOptions);
   const change = (value: Partial<CompileConfig>) => {
@@ -64,6 +66,7 @@ function CompileConfigForm({
   };
   return (
     <form
+      noValidate
       onSubmit={(event) => {
         event.preventDefault();
         if (!canWrite) return;
@@ -78,6 +81,16 @@ function CompileConfigForm({
           auto_update: draft.auto_update,
           update_schedule: draft.update_schedule,
         };
+        if (!body.from.length || !body.skill.trim()) {
+          toast.warning({
+            id: 'compile-validation',
+            content: !body.from.length
+              ? text.sourcesRequired
+              : text.skillRequired,
+          });
+          return;
+        }
+        toast.clear();
         void mutation.run(
           (client, options) =>
             client.request({
@@ -91,6 +104,7 @@ function CompileConfigForm({
         );
       }}
     >
+      {toastHolder}
       <fieldset disabled={!canWrite || mutation.pending}>
         <label htmlFor={`${id}-sources`}>{text.sources}</label>
         <TextArea
@@ -129,7 +143,11 @@ function CompileConfigForm({
           onChange={(update_schedule) => change({ update_schedule })}
         />
       </fieldset>
-      <PreviewMutationError error={mutation.error} text={text} />
+      <PreviewMutationError
+        error={mutation.error}
+        title={text.failureTitle(text.save)}
+        locale={locale}
+      />
       {mutation.succeeded ? <p role="status">{text.saved}</p> : null}
       <div className="ov-file-browser-workflow__actions">
         <Button size="small" htmlType="button" onClick={onClose}>

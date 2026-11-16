@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
+import { renderMarkup } from './helpers/csr-render.mjs';
 import { JSDOM } from 'jsdom';
 import { CommandConsole } from '@openviking/react/components/command-console';
 
 const render = (content, extra = {}) => {
-  const html = renderToStaticMarkup(
+  const html = renderMarkup(
     createElement(CommandConsole, {
       value: '',
       records: [{ id: 'one', command: 'custom', status: 'success', content }],

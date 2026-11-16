@@ -496,7 +496,7 @@ html.dark .ov-file-browser__empty-art {
   outline-offset: 1px;
 }
 
-.ov-file-browser__preview-action--danger {
+.ov-dropdown__item.ov-file-browser__preview-action--danger:not(:disabled) {
   color: var(--ov-ui-color-danger, var(--ov-ui-danger-default));
 }
 .ov-file-browser__preview-meta {

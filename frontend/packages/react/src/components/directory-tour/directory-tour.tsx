@@ -1,16 +1,13 @@
+import { withMonitoring } from '../../shared/monitoring/with-monitoring.js';
 import { TourStep } from './tour-step.js';
 import { useExposure } from '../../shared/analytics/use-exposure.js';
 import { useAnalyticsRef } from '../../shared/analytics/context.js';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { DirectoryTourProps } from './types.js';
 
 /** Data-free directory guidance. Unmounting a closed session resets its steps. */
-export function DirectoryTour(props: DirectoryTourProps) {
-  const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
-  // Resolve the external portal container after hydration, so the server and
-  // first client render agree. The body is document-owned and needs no cleanup.
-  useEffect(() => setPortalRoot(document.body), []);
-  if (!portalRoot || !props.open || props.steps.length === 0) return null;
+function DirectoryTourView(props: DirectoryTourProps) {
+  if (!props.open || props.steps.length === 0) return null;
   return <TourSession {...props} />;
 }
 
@@ -66,3 +63,5 @@ function TourSession(props: DirectoryTourProps) {
     />
   );
 }
+
+export const DirectoryTour = withMonitoring(DirectoryTourView, 'DirectoryTour');

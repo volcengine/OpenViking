@@ -1,3 +1,4 @@
+import { withMonitoring } from '../../../shared/monitoring/with-monitoring.js';
 import { useTrack } from '../../../shared/analytics/use-track.js';
 import { useExposure } from '../../../shared/analytics/use-exposure.js';
 import { useId } from 'react';
@@ -7,7 +8,7 @@ import { useAuthLabels } from '../../../shared/auth/use-auth-labels.js';
 import { useForm } from '../../../shared/auth/use-form.js';
 import type { ApiKeyLoginFormProps } from './types.js';
 
-export function ApiKeyLoginForm({
+function ApiKeyLoginFormView({
   alternateLogin,
   onSubmit,
   locale,
@@ -47,3 +48,8 @@ export function ApiKeyLoginForm({
     </FormFrame>
   );
 }
+
+export const ApiKeyLoginForm = withMonitoring(
+  ApiKeyLoginFormView,
+  'ApiKeyLoginForm',
+);

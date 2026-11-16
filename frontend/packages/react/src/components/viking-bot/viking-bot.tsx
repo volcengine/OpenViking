@@ -1,9 +1,10 @@
+import { withMonitoring } from '../../shared/monitoring/with-monitoring.js';
 import { useRenderErrors } from './labels.js';
 import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import { VikingBotContent } from './viking-bot-content.js';
 import type { VikingBotProps } from './types.js';
 
-export function VikingBot(props: VikingBotProps) {
+function VikingBotView(props: VikingBotProps) {
   const { slots, ...contentProps } = props;
   return (
     <ErrorBoundary
@@ -16,3 +17,5 @@ export function VikingBot(props: VikingBotProps) {
     </ErrorBoundary>
   );
 }
+
+export const VikingBot = withMonitoring(VikingBotView, 'VikingBot');
