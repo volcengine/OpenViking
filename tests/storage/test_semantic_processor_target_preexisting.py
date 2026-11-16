@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -455,6 +456,69 @@ async def test_parent_refresh_l2_read_failure_does_not_ack_unfinished_refresh(
         processor._generate_single_file_summary.assert_awaited_once()
         processor._generate_overview.assert_awaited_once()
         assert {path for path, _ in fs.writes} == {f"{root}/.abstract.md", f"{root}/.overview.md"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lock_conflict", [False, True])
+async def test_parent_refresh_child_abstract_failure_cannot_succeed(monkeypatch, lock_conflict):
+    from openviking.storage.errors import LockAcquisitionError
+    from openviking.storage.queuefs.process_result import ProcessResult
+    from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor
+    from tests.storage.test_semantic_executor_incremental import _FakeVikingFS
+
+    executors = []
+
+    def make_executor(**kwargs):
+        executor = SemanticTreeExecutor(**kwargs)
+        executors.append(executor)
+        return executor
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticTreeExecutor", make_executor
+    )
+    root = "viking://resources/repo"
+    child = f"{root}/child"
+    fs: Any = _FakeVikingFS({root: [{"name": "child", "isDir": True}]}, {})
+    fs.exists = AsyncMock(return_value=True)
+    error = LockAcquisitionError("busy") if lock_conflict else OSError("abstract unavailable")
+    fs.abstract = AsyncMock(side_effect=error)
+    for module in ("semantic_processor", "semantic_executor"):
+        monkeypatch.setattr(f"openviking.storage.queuefs.{module}.get_viking_fs", lambda: fs)
+    monkeypatch.setattr(
+        "openviking.storage.semantic_planning.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticLockScope.resolve",
+        AsyncMock(return_value=SimpleNamespace(lock=None, close=AsyncMock())),
+    )
+    processor = _processor()
+    processor._generate_overview = AsyncMock(return_value="incomplete overview")
+    processor._vectorize_directory = AsyncMock(return_value=set())
+    processor._enqueue_parent_refresh = AsyncMock()
+    processor._requeue_semantic_msg_after_error = AsyncMock(return_value=ProcessResult.requeued())
+    msg = SemanticMsg(
+        root,
+        "resource",
+        recursive=False,
+        changes={"modified": [child]},
+        generation_trigger="parent_refresh",
+        propagate_to_parent=False,
+    )
+
+    result = await processor.on_dequeue(msg.to_dict())
+
+    assert result.outcome.value == ("requeued" if lock_conflict else "failed")
+    if lock_conflict:
+        processor._requeue_semantic_msg_after_error.assert_awaited_once()
+        assert processor._requeue_semantic_msg_after_error.await_args.args[1] is error
+    else:
+        processor._requeue_semantic_msg_after_error.assert_not_awaited()
+    processor._generate_overview.assert_not_awaited()
+    processor._vectorize_directory.assert_not_awaited()
+    processor._enqueue_parent_refresh.assert_not_awaited()
+    assert fs.writes == []
+    assert executors[0].get_stats().done_nodes == 0
 
 
 @pytest.mark.asyncio

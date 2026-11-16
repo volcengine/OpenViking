@@ -3,6 +3,7 @@
 
 import re
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -1695,9 +1696,120 @@ async def test_skip_vectorization_survives_file_preparation_read_failure(monkeyp
     )
     await executor.run(root)
     fs.read_file.assert_awaited()
+    assert processor.summarized_files == [file_uri]
+    assert processor.vectorized_files == []
+    assert processor.vectorized_dirs == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("aggregate_directory", [False, True])
+async def test_skill_definition_refresh_survives_deferred_or_busy_aggregation(
+    monkeypatch, aggregate_directory
+):
+    root = "viking://user/alice/skills/demo"
+    definition, attachment = f"{root}/SKILL.md", f"{root}/notes.txt"
+    fs = _FakeVikingFS(
+        {root: [{"name": "SKILL.md"}, {"name": "notes.txt"}]},
+        {definition: b"definition", attachment: b"attachment"},
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
+    pending = AsyncMock(
+        side_effect=LockAcquisitionError("busy") if aggregate_directory else None, return_value=0
+    )
+    monkeypatch.setattr(
+        "openviking.storage.semantic_planning.read_abstract_overview_pending_snapshot", pending
+    )
+    processor: Any = _FakeProcessor(fs)
+    processor._skill_root_semantics = AsyncMock(
+        return_value=("new definition overview", "new definition abstract")
+    )
+    executor = SemanticTreeExecutor(
+        processor,
+        "skill",
+        1,
+        RequestContext(UserIdentifier("acc1", "alice"), Role(Role.USER)),
+        incremental_update=True,
+        target_uri=root,
+        recursive=False,
+        aggregate_directory=aggregate_directory,
+        changes={"modified": [definition]},
+        generation_trigger="content_write",
+    )
+
+    await executor.run(root)
+
+    assert pending.await_count == int(aggregate_directory)
+    assert processor.summarized_files == [definition]
+    assert processor.vectorized_files == [definition]
+    processor._skill_root_semantics.assert_awaited_once()
+    assert processor._skill_root_semantics.await_args.kwargs["regenerate"] is True
+    assert processor.vectorized_dirs == [root]
+    assert processor.generated_overviews == []
+    assert executor.get_stats().failures == []
+
+
+@pytest.mark.asyncio
+async def test_unreadable_cached_overview_regenerates_real_file_summary(monkeypatch):
+    root = "viking://resources/repo"
+    file_uri = f"{root}/a.py"
+    fs: Any = _FakeVikingFS({root: [{"name": "a.py"}]}, {file_uri: b"body"})
+    fs.read_file = AsyncMock(side_effect=OSError("cached overview unavailable"))
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
+    processor: Any = _FakeProcessor(fs)
+    vectorize = AsyncMock(wraps=processor._vectorize_single_file)
+    processor._vectorize_single_file = vectorize
+    executor = SemanticTreeExecutor(
+        processor,
+        "resource",
+        1,
+        RequestContext(UserIdentifier("acc1", "user1"), Role(Role.USER)),
+        target_uri=root,
+        incremental_update=True,
+        changes={},
+        recursive=True,
+        aggregate_directory=False,
+    )
+
+    await executor.run(root)
+
+    fs.read_file.assert_awaited_once_with(f"{root}/.overview.md", ctx=executor._ctx)
+    assert processor.summarized_files == [file_uri]
+    assert processor.file_contents[("summary", file_uri)] == b"body"
+    assert vectorize.await_args is not None
+    assert vectorize.await_args.kwargs["summary_dict"]["summary"] == "summary"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lock_conflict", [False, True])
+async def test_file_input_failure_cannot_publish_or_complete(monkeypatch, lock_conflict):
+    root = "viking://resources/repo"
+    file_uri = f"{root}/a.py"
+    fs: Any = _FakeVikingFS({root: [{"name": "a.py"}]}, {})
+    error = LockAcquisitionError("busy") if lock_conflict else OSError("body unavailable")
+    fs.read_file_bytes = AsyncMock(side_effect=error)
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
+    processor: Any = _FakeProcessor(fs)
+    executor = SemanticTreeExecutor(
+        processor,
+        "resource",
+        1,
+        RequestContext(UserIdentifier("acc1", "user1"), Role(Role.USER)),
+        target_uri=root,
+        incremental_update=True,
+        changes={"modified": [file_uri]},
+        recursive=False,
+        aggregate_directory=False,
+        generation_trigger="content_write",
+    )
+
+    with pytest.raises(type(error), match=str(error)):
+        await executor.run(root)
+
     assert processor.summarized_files == []
     assert processor.vectorized_files == []
     assert processor.vectorized_dirs == []
+    assert fs.writes == []
+    assert executor.get_stats().done_nodes == 0
 
 
 @pytest.mark.asyncio

@@ -650,12 +650,17 @@ class SemanticTreeExecutor:
             raise
         except Exception as e:
             self._record_summary_failure(parent_uri, file_path)
+            if prepared is None:
+                # Required input failures must reach processor failure/retry
+                # handling, never the model-error empty-summary fallback.
+                raise
             logger.warning(f"Failed to generate summary for {file_path}: {e}")
             self._record_skill_failure(file_path, e)
             summary_dict = {"name": file_name, "summary": ""}
             semantic_succeeded = False
         finally:
-            self._stats.done_nodes += 1
+            if prepared is not None:
+                self._stats.done_nodes += 1
             self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)
 
         prepared = self._preparation.files.pop(file_path)
@@ -873,8 +878,10 @@ class SemanticTreeExecutor:
         )
         sampled_inputs: List[tuple[str, Dict[str, str]]] = []
         sampled_entries = 0
+        prepared = None
         try:
-            prepared = await prepare_node(self._preparation, dir_uri, phase="overview")
+            async with node.lock:
+                prepared = await prepare_node(self._preparation, dir_uri, phase="overview")
             need_vectorize = prepared.vectorize
             children_changed = prepared.input_changed
             should_write = prepared.write_semantics
@@ -888,10 +895,10 @@ class SemanticTreeExecutor:
                     skill_content=self._source_contents.get((f"{dir_uri}/SKILL.md", 2)),
                 )
             if should_write and (overview is None or abstract is None):
-                async with node.lock:
-                    file_summaries, children_abstracts = await self._preparation.aggregation_inputs(
-                        dir_uri
-                    )
+                file_summaries = [item for item in prepared.file_summaries if item is not None]
+                children_abstracts = [
+                    item for item in prepared.children_abstracts if item is not None
+                ]
                 # Freshness describes the directory itself, including direct
                 # entries whose summaries failed. Those entries remain visible
                 # as unsampled coverage instead of disappearing from the count.
@@ -953,6 +960,10 @@ class SemanticTreeExecutor:
             logger.error(f"Failed to generate overview for {dir_uri}: {e}", exc_info=True)
             if aggregation := self._parent_aggregation_stats.get(dir_uri):
                 aggregation.status = "failed"
+            if prepared is None:
+                # No output can be published or acknowledged when preparation
+                # failed to read the directory's required inputs.
+                raise
             self._record_skill_failure(dir_uri, e)
         else:
             slots = {slot.level: slot for slot in prepared.binding.index_slots}
@@ -1032,7 +1043,8 @@ class SemanticTreeExecutor:
                 )
                 self._stats.indexed_records += len(enqueued_levels)
         finally:
-            self._stats.done_nodes += 1
+            if prepared is not None:
+                self._stats.done_nodes += 1
             self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)
 
         self._dir_change_status[dir_uri] = children_changed

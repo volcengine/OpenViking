@@ -138,7 +138,7 @@ def resolve_semantic_execution(
         {uri: (sorted(dirs), sorted(files)) for uri, (dirs, files) in children.items()},
         frozenset(active),
         fixed_actions=fixed,
-        fail_dispatch=fixed or refresh.generation_trigger == "content_copy",
+        fail_dispatch=fixed or refresh.context_type in {"resource", "skill"},
         fail_directory_write=fixed,
         record_failures=refresh.context_type == "skill",
         tolerate_index_failure=refresh.context_type == "skill",
@@ -400,14 +400,7 @@ class SemanticNodePreparation:
         if node := self.plan.bindings.get(uri.rstrip("/")):
             return node
         action = SemanticAction.GENERATE if kind == "file" else SemanticAction.REUSE
-        if kind == "directory" and (
-            self._aggregate_directory
-            or (
-                self.plan.context_type == "skill"
-                and classify_uri(uri).is_skill_root
-                and f"{uri}/SKILL.md" in self._changed_paths
-            )
-        ):
+        if kind == "directory" and self._aggregate_directory:
             action = SemanticAction.AGGREGATE
         return NodeInputBinding(uri, kind, action)
 
@@ -625,7 +618,15 @@ class SemanticNodePreparation:
         directory = self.directories[uri]
         binding = directory.binding
         result = ResolvedSemanticNode(binding, ingest_options=self._ingest_options_for_directory())
-        if binding.semantic_action is SemanticAction.REUSE:
+        changed_definition = f"{uri}/SKILL.md" in self._changed_paths
+        definition_source = (
+            self.plan.context_type == "skill"
+            and classify_uri(uri).is_skill_root
+            and (binding.semantic_action is not SemanticAction.REUSE or changed_definition)
+        )
+        # Definition refresh is independent of attachment aggregation admission.
+        # In particular, a busy parent or a low freshness debt cannot revoke it.
+        if binding.semantic_action is SemanticAction.REUSE and not definition_source:
             result.abstract = binding.abstract
             result.overview = binding.overview
             result.vectorize = not self.plan.refresh.skip_vectorization and any(
@@ -637,17 +638,18 @@ class SemanticNodePreparation:
         result.vectorize = not self.plan.refresh.skip_vectorization
         result.input_changed = True
         result.use_direct_media = not self.plan.ready_inputs_only
-        if self.plan.context_type == "skill" and classify_uri(uri).is_skill_root:
-            changed = f"{uri}/SKILL.md" in self._changed_paths
+        if definition_source:
             result.definition_source = True
             result.regenerate_definition = (
-                self.plan.refresh.generation_trigger == "reindex" or changed or binding.repair
+                self.plan.refresh.generation_trigger == "reindex"
+                or changed_definition
+                or binding.repair
             )
             result.write_semantics = False
             result.vectorize = result.vectorize and (
-                not self._incremental_update or changed or binding.repair
+                not self._incremental_update or changed_definition or binding.repair
             )
-            result.input_changed = changed or binding.repair
+            result.input_changed = changed_definition or binding.repair
         elif self.plan.ready_inputs_only:
             result.write_semantics = directory.write_semantics
             result.vectorize = result.vectorize and directory.vectorize
@@ -667,6 +669,10 @@ class SemanticNodePreparation:
             result.ingest_options = IngestOptions(
                 acl_update=self.plan.refresh.ingest_options.acl_update
             )
+        if result.write_semantics and (result.overview is None or result.abstract is None):
+            file_summaries, children_abstracts = await self.aggregation_inputs(uri)
+            result.file_summaries.extend(file_summaries)
+            result.children_abstracts.extend(children_abstracts)
         return result
 
     async def aggregation_inputs(
@@ -893,13 +899,11 @@ class SemanticNodePreparation:
             ):
                 return {"name": file_name, "summary": existing_summaries[file_name]}
 
+        except LockAcquisitionError:
+            raise
         except Exception as e:
-            if (
-                self.plan.context_type in {"resource", "skill"}
-                and not isinstance(e, (KeyError, AbstractOverviewFormatError))
-                and not is_not_found_error(e)
-            ):
-                raise
+            # An old overview is an optional cache. Regenerate from the source
+            # file when it cannot be read, rather than publishing an empty L2.
             logger.debug(f"Failed to read existing summary from overview.md for {file_path}: {e}")
 
         return None
