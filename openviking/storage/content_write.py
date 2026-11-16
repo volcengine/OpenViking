@@ -349,6 +349,7 @@ class ContentWriteCoordinator:
         tag_mode: str = "replace",
         acl: AclSpec | Dict[str, Any] | None = None,
         resolve_conflicts: bool = False,
+        defer_processing: bool = False,
     ) -> Dict[str, Any]:
         task = None
         task_id = None
@@ -384,6 +385,7 @@ class ContentWriteCoordinator:
                     tag_mode=tag_mode,
                     acl=acl,
                     resolve_conflicts=resolve_conflicts,
+                    defer_processing=defer_processing,
                     root_operation="content_write",
                     root_task_factory=create_root_task,
                 )
@@ -401,6 +403,31 @@ class ContentWriteCoordinator:
             result,
             ctx=ctx,
             wait=wait,
+        )
+
+    async def _complete_content_write_task_directly(
+        self,
+        *,
+        task_factory: Callable[[], Awaitable[Any]],
+        result: Dict[str, Any],
+        ctx: RequestContext,
+        resource_id: str,
+    ) -> None:
+        task = await task_factory()
+        tracker = get_task_tracker()
+        await tracker.start(
+            task.task_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
+        terminal_result = deepcopy(result)
+        terminal_result.setdefault("task_id", task.task_id)
+        await tracker.complete(
+            task.task_id,
+            terminal_result,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+            resource_id=resource_id,
         )
 
     async def _fail_content_write_task(
@@ -550,6 +577,7 @@ class ContentWriteCoordinator:
         tag_mode: str = "replace",
         acl: AclSpec | Dict[str, Any] | None = None,
         resolve_conflicts: bool = False,
+        defer_processing: bool = False,
         root_operation: str = "content_write",
         root_task_factory: Callable[[], Awaitable[Any]] | None = None,
     ) -> Dict[str, Any]:
@@ -581,6 +609,10 @@ class ContentWriteCoordinator:
                 ingest_options,
                 acl_update=await self._viking_fs.prepare_acl_update(normalized_uri, acl, ctx),
             )
+        if defer_processing and ingest_options != IngestOptions():
+            raise InvalidArgumentError("defer_processing does not support tags or ACL updates")
+        if defer_processing and resolve_conflicts:
+            raise InvalidArgumentError("defer_processing does not support resolve_conflicts")
 
         # ``create`` is an upsert alias for ``replace``: it overwrites an existing
         # file or materializes a missing one, never conflicting. Normalize it away
@@ -614,6 +646,20 @@ class ContentWriteCoordinator:
             validate_storage=False,
         )
         telemetry_id = get_current_telemetry().telemetry_id
+
+        if defer_processing:
+            return await self._write_file_only(
+                uri=normalized_uri,
+                root_uri=root_uri,
+                content=content,
+                mode=mode,
+                response_mode=response_mode,
+                context_type=context_type,
+                ctx=ctx,
+                root_operation=root_operation,
+                root_task_factory=root_task_factory,
+                defer_processing=True,
+            )
 
         if context_type == "memory" and not is_abstract_overview_uri(normalized_uri):
             return await self._write_memory_with_refresh(
@@ -1033,6 +1079,17 @@ class ContentWriteCoordinator:
                 else:
                     lock_handoff = None
                     refresh = {"kind": "none"}
+                if defer_processing and not file_only:
+                    await self._complete_content_write_task_directly(
+                        task_factory=root_task_factory,
+                        result=result,
+                        ctx=ctx,
+                        resource_id=normalized_root,
+                    )
+                    await lock_guard.close()
+                    lock_settled = True
+                    return result
+
                 await root_task_factory()
                 root_dispatched = False
 
@@ -2406,6 +2463,7 @@ class ContentWriteCoordinator:
         ctx: RequestContext,
         root_operation: str = "content_write",
         root_task_factory: Callable[[], Awaitable[Any]] | None = None,
+        defer_processing: bool = False,
     ) -> Dict[str, Any]:
         lock_path = self._viking_fs._uri_to_path(uri, ctx=ctx)
         lock_guard = PathLockGuard(self._viking_fs._async_agfs)
@@ -2436,6 +2494,7 @@ class ContentWriteCoordinator:
                     is_new_file=target_state.is_new_file,
                 ),
             )
+            processing_status = "deferred" if defer_processing else "skipped"
             result = self._build_write_result(
                 uri=uri,
                 root_uri=root_uri,
@@ -2443,10 +2502,19 @@ class ContentWriteCoordinator:
                 mode=response_mode,
                 written_bytes=len(final_bytes),
                 queue_status=None,
-                semantic_status="skipped",
-                vector_status="skipped",
+                semantic_status=processing_status,
+                vector_status=processing_status,
             )
             if root_task_factory is not None:
+                if defer_processing:
+                    await self._complete_content_write_task_directly(
+                        task_factory=root_task_factory,
+                        result=result,
+                        ctx=ctx,
+                        resource_id=uri,
+                    )
+                    await lock_guard.close()
+                    return result
                 await root_task_factory()
                 root_dispatched = False
 

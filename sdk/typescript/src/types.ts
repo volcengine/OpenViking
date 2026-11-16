@@ -175,6 +175,7 @@ export interface WriteOptions extends WaitOptions {
   tags?: string[];
   tagMode?: "replace" | "append" | "clear";
   resolveConflicts?: boolean;
+  deferProcessing?: boolean;
   extra?: JsonObject;
 }
 /** One file write in a batch. */

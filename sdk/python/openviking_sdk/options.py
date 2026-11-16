@@ -101,6 +101,7 @@ class WriteOptions(_ExtraOptions, total=False):
     tags: List[str]
     tag_mode: Literal["replace", "append", "clear"]
     resolve_conflicts: bool
+    defer_processing: bool
 
 
 class _BatchWriteOperationOptional(TypedDict, total=False):

@@ -910,6 +910,47 @@ func TestWriteSendsProcessingModeAndExtra(t *testing.T) {
 	}
 }
 
+func TestWriteSendsDeferProcessingWithoutMetadataUpdates(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		if !reflect.DeepEqual(body, map[string]any{
+			"uri": "viking://resources/a.md", "content": "draft", "mode": "replace",
+			"wait": false, "defer_processing": true, "use_snapshot": true,
+		}) {
+			t.Fatalf("body = %#v", body)
+		}
+		writeOK(t, w, map[string]any{"uri": "viking://resources/a.md"})
+	}))
+	defer closeServer()
+
+	if _, err := client.Write(context.Background(), "resources/a.md", "draft", &WriteOptions{
+		DeferProcessing: true,
+		UseSnapshot:     true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBatchWriteSendsDeferProcessingWithoutMetadataUpdates(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		if !reflect.DeepEqual(body, map[string]any{
+			"root_uri": "viking://resources/project", "defer_processing": true, "use_snapshot": true,
+			"operations": []any{map[string]any{"uri": "viking://resources/project/a.md", "content": "draft"}},
+		}) {
+			t.Fatalf("body = %#v", body)
+		}
+		writeOK(t, w, map[string]any{"created": []string{"viking://resources/project/a.md"}})
+	}))
+	defer closeServer()
+
+	if _, err := client.BatchWrite(context.Background(), "resources/project", []BatchWriteOperation{
+		{URI: "resources/project/a.md", Content: String("draft")},
+	}, &BatchWriteOptions{DeferProcessing: true, UseSnapshot: true}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestBatchWriteSendsConditionalAndConflictFields(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body := readJSONBody(t, r)
@@ -1028,7 +1069,7 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 			} else if body["wait"] != *wait {
 				t.Errorf("wait = %#v, want %v", body["wait"], *wait)
 			}
-			if body["root_uri"] != "viking://resources/project" || body["future_flag"] != float64(0) || body["processing_mode"] != "vectors_only" || body["defer_processing"] != true {
+			if body["root_uri"] != "viking://resources/project" || body["future_flag"] != float64(0) || body["processing_mode"] != "vectors_only" || body["defer_processing"] != false {
 				t.Fatalf("body = %#v", body)
 			}
 			operations, ok := body["operations"].([]any)
@@ -1072,7 +1113,7 @@ func TestBatchWriteAndDownloadBytes(t *testing.T) {
 		},
 	}
 	for _, wait = range []*bool{nil, Bool(false), Bool(true)} {
-		opts := &BatchWriteOptions{Wait: wait, ProcessingMode: "vectors_only", DeferProcessing: true, Extra: map[string]any{"future_flag": 0}}
+		opts := &BatchWriteOptions{Wait: wait, ProcessingMode: "vectors_only", Extra: map[string]any{"future_flag": 0}}
 		if _, err := client.BatchWrite(context.Background(), "resources/project", operations, opts); err != nil {
 			t.Fatal(err)
 		}

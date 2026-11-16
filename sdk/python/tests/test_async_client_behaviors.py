@@ -1773,6 +1773,28 @@ async def test_write_serializes_official_conflict_options_and_preserves_extra_co
 
 
 @pytest.mark.asyncio
+async def test_write_serializes_defer_processing_without_metadata_updates():
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    client._request = AsyncMock(return_value=object())
+    client._handle_response_data = lambda _response: {"result": {}}
+
+    await client.write(
+        "viking://resources/wiki/a.md",
+        "draft",
+        options={"defer_processing": True, "use_snapshot": True},
+    )
+
+    assert client._request.await_args.kwargs["json"] == {
+        "uri": "viking://resources/wiki/a.md",
+        "content": "draft",
+        "mode": "replace",
+        "wait": False,
+        "defer_processing": True,
+        "use_snapshot": True,
+    }
+
+
+@pytest.mark.asyncio
 async def test_watch_routes_support_uri_lookup_and_normalization():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(

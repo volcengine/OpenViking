@@ -59,6 +59,7 @@ class WriteContentRequest(BaseModel):
     acl: AclSpec | None = None
     # Mark this edit as conflict resolution.
     resolve_conflicts: bool = False
+    defer_processing: bool = False
 
 
 class BatchWriteOperation(BaseModel):
@@ -320,6 +321,7 @@ async def write(
             acl=request.acl,
             resolve_conflicts=request.resolve_conflicts,
             use_snapshot=request.use_snapshot,
+            defer_processing=request.defer_processing,
         ),
     )
     return Response(

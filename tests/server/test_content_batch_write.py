@@ -10,8 +10,8 @@ import pytest
 import openviking.storage.content_write as content_write_module
 from openviking.server.identity import RequestContext, Role
 from openviking.service.fs_service import FSService
-from openviking.service.task_store import PersistentTaskStore
-from openviking.service.task_tracker import TaskTracker
+from openviking.service.task_store import PersistentTaskStore, TaskStatus
+from openviking.service.task_tracker import TaskTracker, get_task_tracker
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils import MemoryFileUtils
 from openviking.storage.acl import AclSpec, AclUpdate
@@ -134,8 +134,10 @@ class _VFS:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("defer_processing", [False, True])
 async def test_system_write_is_file_only_without_queue_work(
     _coordinator_queue_for_unit_tests,
+    defer_processing,
 ):
     root = "viking://system/memory/memory_templates/custom/demo"
     uri = f"{root}/template.md"
@@ -148,6 +150,7 @@ async def test_system_write_is_file_only_without_queue_work(
         content="template",
         ctx=ctx,
         wait=False,
+        defer_processing=defer_processing,
     )
 
     assert vfs.files[uri] == "template"
@@ -163,8 +166,10 @@ async def test_system_write_is_file_only_without_queue_work(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("defer_processing", [False, True])
 async def test_system_batch_write_is_file_only_without_queue_work(
     _coordinator_queue_for_unit_tests,
+    defer_processing,
 ):
     root = "viking://system/memory/memory_templates/custom/demo"
     first = f"{root}/first.md"
@@ -181,6 +186,7 @@ async def test_system_batch_write_is_file_only_without_queue_work(
         ],
         ctx=ctx,
         wait=False,
+        defer_processing=defer_processing,
     )
 
     assert result["updated"] == [first]
@@ -378,8 +384,97 @@ async def test_deferred_batch_versions_content_before_dispatch_without_refresh(
     commit_batch.assert_awaited_once_with(lease_ref={"lease_ref": "lock-1"})
     assert vfs.writes == [uri]
     assert result["semantic_status"] == result["vector_status"] == "deferred"
-    assert _last_content_write_refresh(_coordinator_queue_for_unit_tests) == {"kind": "none"}
+    _coordinator_queue_for_unit_tests.content_write.enqueue.assert_not_awaited()
+    task = await get_task_tracker().get(
+        result["task_id"], account_id=ctx.account_id, user_id=ctx.user.user_id
+    )
+    assert task is not None and task.status is TaskStatus.COMPLETED
+    assert task.result["semantic_status"] == task.result["vector_status"] == "deferred"
     assert vfs._async_agfs.releases == 1 and vfs._async_agfs.handoffs == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_snapshot", [False, True])
+@pytest.mark.parametrize("wait", [False, True])
+async def test_deferred_single_write_completes_task_without_queue(
+    _coordinator_queue_for_unit_tests,
+    use_snapshot,
+    wait,
+):
+    root = "viking://resources/wiki"
+    uri = f"{root}/page.md"
+    vfs = _VFS(root)
+
+    async def snapshot(**kwargs):
+        assert vfs._async_agfs.held
+        assert vfs.files[uri] == "deferred"
+        return {"commit_oid": "a" * 40}
+
+    vfs.commit = AsyncMock(side_effect=snapshot)
+    coordinator = FSService(viking_fs=vfs)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+
+    result = await coordinator.write(
+        uri=uri,
+        content="deferred",
+        ctx=ctx,
+        wait=wait,
+        use_snapshot=use_snapshot,
+        defer_processing=True,
+    )
+
+    assert vfs.files[uri] == "deferred"
+    assert result["semantic_status"] == result["vector_status"] == "deferred"
+    assert result["queue_status"] is None
+    _coordinator_queue_for_unit_tests.content_write.enqueue.assert_not_awaited()
+    _coordinator_queue_for_unit_tests.semantic.enqueue.assert_not_awaited()
+    tasks = await get_task_tracker().list_tasks(
+        resource_id=uri, account_id=ctx.account_id, user_id=ctx.user.user_id
+    )
+    assert len(tasks) == 1 and tasks[0].status is TaskStatus.COMPLETED
+    assert ("task_id" in result) is (not wait)
+    assert tasks[0].result["task_id"] == tasks[0].task_id
+    if use_snapshot:
+        vfs.commit.assert_awaited_once_with(
+            message="content write", paths=[uri], ctx=ctx, lease_ref={"lease_ref": "lock-1"}
+        )
+    else:
+        vfs.commit.assert_not_awaited()
+    assert vfs._async_agfs.releases == 1 and vfs._async_agfs.handoffs == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"tags": ["team=search"]},
+        {"tag_mode": "clear"},
+        {"acl": {"acl_mode": "restricted", "entries": []}},
+        {"resolve_conflicts": True},
+    ],
+)
+async def test_deferred_single_write_rejects_processing_metadata(kwargs):
+    root = "viking://resources/wiki"
+    uri = f"{root}/page.md"
+    vfs = _VFS(root)
+    if "acl" in kwargs:
+        vfs.prepare_acl_update = AsyncMock(
+            return_value=AclUpdate(uri=uri, acl=AclSpec(acl_mode="restricted", entries=()))
+        )
+    coordinator = ContentWriteCoordinator(vfs)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+
+    with pytest.raises(InvalidArgumentError, match="defer_processing"):
+        await coordinator.write(
+            uri=uri,
+            content="deferred",
+            ctx=ctx,
+            wait=False,
+            defer_processing=True,
+            **kwargs,
+        )
+
+    assert vfs.writes == []
 
 
 @pytest.mark.asyncio
@@ -510,9 +605,12 @@ async def test_batch_revision_guard_preserves_conflicts_and_unchanged_results(
     assert [conflict["uri"] for conflict in result["conflicts"]] == [stale]
     assert vfs.writes == [changed]
     assert vfs.files[stale] == "newer"
-    assert _last_content_write_payload(_coordinator_queue_for_unit_tests)["result"][
-        "unchanged"
-    ] == [same]
+    _coordinator_queue_for_unit_tests.content_write.enqueue.assert_not_awaited()
+    task = await get_task_tracker().get(
+        result["task_id"], account_id=ctx.account_id, user_id=ctx.user.user_id
+    )
+    assert task is not None and task.status is TaskStatus.COMPLETED
+    assert task.result["unchanged"] == [same]
 
 
 @pytest.mark.asyncio
@@ -1033,9 +1131,7 @@ async def test_batch_resolve_conflicts_updates_content_and_tags(
     conflict = {"state": "unfixed", "match_text": "Conflicting content"}
     previous = (
         "# Original\n\nConflicting content\n\nAdditional context.\n\n"
-        "<!-- CONFLICTS_CONTENT\n"
-        + json.dumps(conflict)
-        + "\n-->"
+        "<!-- CONFLICTS_CONTENT\n" + json.dumps(conflict) + "\n-->"
     )
     edited = "# Updated\n\nResolved content.\n\nAdditional context.\n"
     vfs = _VFS(root, {uri: previous})
@@ -1063,12 +1159,46 @@ async def test_batch_resolve_conflicts_updates_content_and_tags(
     resolution = json.loads(stored.split("<!-- CONFLICTS_CONTENT", 1)[1].split("-->", 1)[0])
     assert resolution["state"] == "fixed"
     assert resolution["resolution_basis"] == "人工修复"
+    assert resolution["resolved_by"] == ctx.user.user_id
     refresh = _last_content_write_refresh(_coordinator_queue_for_unit_tests)
     assert set(refresh["file_ingest_options"][uri]["search_tags"]) == {
         "team=search",
         "has_conflict=false",
         "conflict_num=0",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["replace", "create"])
+@pytest.mark.parametrize("content", ["", " \n"])
+async def test_batch_resolve_conflicts_clears_tags_for_blank_content(
+    _coordinator_queue_for_unit_tests,
+    mode,
+    content,
+):
+    root = "viking://resources/wiki"
+    uri = f"{root}/a.md"
+    conflict = {"state": "unfixed", "match_text": "Conflicting content"}
+    previous = "Conflicting content\n<!-- CONFLICTS_CONTENT\n" + json.dumps(conflict) + "\n-->"
+    vfs = _VFS(root, {uri: previous})
+    coordinator = ContentWriteCoordinator(vfs)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+
+    async def update_tags(**kwargs):
+        assert vfs.files[uri] == content
+        assert vfs._async_agfs.held
+
+    coordinator._upsert_uri_tags = AsyncMock(side_effect=update_tags)
+    await coordinator.batch_write(
+        root_uri=root,
+        operations=[{"uri": uri, "content": content, "mode": mode, "resolve_conflicts": True}],
+        ctx=ctx,
+        wait=False,
+    )
+
+    coordinator._upsert_uri_tags.assert_awaited_once_with(
+        uri=uri, tags=["has_conflict=false", "conflict_num=0"], mode="append", ctx=ctx
+    )
 
 
 @pytest.mark.asyncio
@@ -1080,9 +1210,7 @@ async def test_batch_resolve_conflicts_is_not_skipped_when_content_matches(
     conflict = {"state": "unfixed", "match_text": "Conflicting content"}
     previous = (
         "# Original\n\nConflicting content\n\n"
-        "<!-- CONFLICTS_CONTENT\n"
-        + json.dumps(conflict)
-        + "\n-->"
+        "<!-- CONFLICTS_CONTENT\n" + json.dumps(conflict) + "\n-->"
     )
     vfs = _VFS(root, {uri: previous})
     coordinator = ContentWriteCoordinator(vfs)

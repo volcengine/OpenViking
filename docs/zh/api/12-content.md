@@ -219,6 +219,7 @@ ov read viking://resources/docs/api.md
 | mode | str | 否 | `replace` | `replace` 覆盖已有文件、缺失时创建；`append` 追加已有文件、缺失时创建；`create` 是 `replace` 的兼容别名 |
 | wait | bool | 否 | `false` | 是否等待后台语义/向量刷新完成 |
 | use_snapshot | bool | 否 | `false` | 在内容锁内为写入文件保存快照|
+| defer_processing | bool | 否 | `false` | 对支持索引的命名空间，只保存正文，不派发语义或向量处理；FILE_ONLY 处理行为不变 |
 | timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
 | tags | string[] | 否 | 未设置 | 写入文件的显式检索标签，例如 `["team=search", "env=prod"]` |
 | tag_mode | string | 否 | `replace` | 标签更新方式：`replace` 覆盖、`append` 按 key 合并、`clear` 清空已有标签且不要求传 `tags` |
@@ -230,6 +231,8 @@ ov read viking://resources/docs/api.md
 - 使用任意模式创建缺失文件时，都只允许以下文本类扩展名：`.md`、`.txt`、`.json`、`.yaml`、`.yml`、`.toml`、`.py`、`.js`、`.ts`。所有写入模式都会自动创建父目录。
 - 已存在的 `.abstract.md` / `.overview.md` 可以修改正文，但不能通过公共 API 创建；只提交正文时会保留现有 OKF metadata，提交完整 OKF 时 metadata 必须与存量值一致。未知 metadata 字段会静默丢弃。sidecar 正文写入只重建该目录实际存在的 L0/L1 向量，不触发语义重新生成。
 - 文件内容会在 API 返回前完成更新；`wait` 只控制是否等待语义/向量刷新完成。
+- 对支持索引的命名空间，设置 `defer_processing=true` 后仍会保存正文；同时设置 `use_snapshot=true` 时，会在同一写锁内记录快照。`semantic_status` / `vector_status` 返回 `deferred`，但不会向 QueueFS 派发 `ContentWrite`、`Semantic` 或 `Embedding` 消息。持久化 Task 会被直接完成：`wait=false` 返回已经处于终态的 `task_id`，`wait=true` 读取终态结果并移除 `task_id`。依赖搜索前，应对该 URI 执行 `reindex()`。延迟处理不能与实际的 tags/ACL 更新或 `resolve_conflicts=true` 同时使用。
+- `viking://system/` 等 FILE_ONLY 命名空间在 `defer_processing` 为 true 或 false 时都保持原有处理行为：语义/向量状态为 `skipped`，仍通过一条 `ContentWrite` 根消息完成 Task，不执行索引处理。`wait=false` 在入队后返回，`wait=true` 等待该 Task 完成。FILE_ONLY 命名空间不支持 reindex；原有命名空间及参数校验仍然生效。
 - 正文提交后，如果后续语义/向量任务入队失败，不会回滚已写正文；接口会返回错误，调用方应重试同一次 write 以重新派发派生维护。显式 write 始终重新提交最终字节，因此在向量索引暂时落后于文件时也能安全重试。
 - 公共 API 已不再接受 `regenerate_semantics` 或 `revectorize`；写入后会自动调度相关语义与向量处理。
 - 资源写入附带的父目录 L0/L1 刷新采用尽力更新：父目录锁冲突时跳过本次目录刷新，保留原文写入及文件自身的摘要、向量处理。跳过 L0/L1 写回时也跳过目录向量更新，不保证自动补刷；原文文件本身的锁冲突仍报错。提交任务前发现冲突时返回 `semantic_status: "skipped"`；后台运行期间的跳过记录在日志中，`wait=true` 也不保证父目录摘要更新。
@@ -353,9 +356,8 @@ ov write viking://resources/docs/api.md \
 | timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
 | `telemetry` | boolean/object | 否 | `false` | 是否返回操作遥测信息 |
 | `processing_mode` | string | 否 | `semantic_and_vectors` | 整批统一的处理模式：`semantic_and_vectors` 或 `vectors_only` |
-| `defer_processing` | boolean | 否 | `false` | 只保存文件，不派发语义和向量处理；后处理由调用方安排 |
+| `defer_processing` | boolean | 否 | `false` | 对支持索引的命名空间，只保存文件，不派发语义和向量处理；后处理由调用方安排。FILE_ONLY 处理行为不变 |
 | `skip_conflicts` | boolean | 否 | `false` | 保留 revision 或存在性校验冲突的目标，返回冲突详情，同时继续执行兼容的 operation |
-| `edit_source` | string | 否 | `manual` | 整批写入的版本来源：`manual`、`agent` 或 `compile` |
 
 每个 operation 包含：
 
@@ -387,7 +389,9 @@ ov write viking://resources/docs/api.md \
 - 底层 I/O 中途失败时，本批次较早完成的写入仍可能已经可见。
 - 已存在的 `.abstract.md` / `.overview.md` 可以 replace 或 append；系统会保留并校验受保护的 OKF metadata，并只重建对应目录实际存在的 L0/L1 向量。
 - 响应体中，通过 `semantic_status`（`queued`、`complete`、`deferred` 或 `skipped`）表达按直接父目录聚合的状态；只有所有父目录都未入队时才为 `skipped`，某一个目录因锁冲突跳过不会掩盖其他目录已入队的工作。`vector_status` 表达变化文件的向量维护状态。
-- 每个请求会创建一个 `content_batch_write` Task，并向 QueueFS 的 `ContentWrite` 队列写入一条根消息。默认 SQLite QueueFS 会持久化消息；显式配置 `backend=memory` 时进程退出后不保留。`wait=false` 在消息入队后返回 `task_id`，可通过 `GET /api/v1/tasks/{task_id}` 查询；`wait=true` 同样入队，但会等待 Task 终态，并在成功结果中移除 `task_id`。
+- 每个成功请求都会创建一个持久化 `content_batch_write` Task。未启用延迟处理时，会向 QueueFS 的 `ContentWrite` 队列写入一条根消息；默认 SQLite QueueFS 会持久化该消息，显式配置 `backend=memory` 时进程退出后不保留。`wait=false` 在入队后返回 `task_id`，`wait=true` 等待 Task 终态并移除 `task_id`。
+- 对支持索引的命名空间，设置 `defer_processing=true` 后不会产生 `ContentWrite`、`Semantic` 或 `Embedding` QueueFS 消息；正文提交后 Task 会被直接完成。`wait=false` 返回已经处于终态的 `task_id`，`wait=true` 读取相同终态结果并移除 `task_id`。同时设置 `use_snapshot=true` 时，会在 Task 完成前为成功写入的文件生成一次快照。调用方需另行安排后处理，例如执行 `reindex()`；该模式拒绝实际的 tags/ACL 更新及 `resolve_conflicts=true`。
+- FILE_ONLY 批写在 `defer_processing` 为 true 或 false 时都保持原有行为：语义/向量状态为 `skipped`，仍通过一条 `ContentWrite` 根消息完成 Task，不执行索引处理。`wait=false` 在入队后返回，`wait=true` 等待该 Task 完成。命名空间及参数校验仍然生效，FILE_ONLY 目标不支持 reindex。
 - 若正文已提交但异步刷新入队失败，正文不会回滚。可使用相同最终正文通过 `replace`、`create` 或 `upsert` 重写；不要直接重放已经成功过的 `append`，否则会重复追加。
 
 **Python SDK**

@@ -461,8 +461,8 @@ fn cli_parses_clear_tag_mode_without_tags() {
     .expect("write clear mode should parse");
     assert!(matches!(
         write.command,
-        Commands::Write { tag_mode, tags, .. }
-            if tag_mode == "clear" && tags.is_empty()
+        Commands::Write { tag_mode, tags, defer_processing, .. }
+            if tag_mode == "clear" && tags.is_empty() && !defer_processing
     ));
 
     let reindex = Cli::try_parse_from([
@@ -476,6 +476,25 @@ fn cli_parses_clear_tag_mode_without_tags() {
     assert!(matches!(
         reindex.command,
         Commands::Reindex { tag_mode, tags, .. } if tag_mode == "clear" && tags.is_empty()
+    ));
+}
+
+#[test]
+fn cli_parses_write_defer_processing_without_metadata_updates() {
+    let cli = Cli::try_parse_from([
+        "ov",
+        "write",
+        "viking://resources/demo.md",
+        "--content",
+        "draft",
+        "--defer-processing",
+        "--use-snapshot",
+    ])
+    .expect("deferred write should parse");
+    assert!(matches!(
+        cli.command,
+        Commands::Write { defer_processing, use_snapshot, tags, tag_mode, acl, .. }
+            if defer_processing && use_snapshot && tags.is_empty() && tag_mode == "replace" && acl.is_none()
     ));
 }
 

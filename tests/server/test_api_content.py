@@ -107,7 +107,7 @@ async def test_batch_write_forwards_processing_mode_and_operation_metadata(monke
         BatchWriteRequest(
             root_uri="viking://resources/demo",
             processing_mode="vectors_only",
-            defer_processing=True,
+            use_snapshot=True,
             operations=[
                 BatchWriteOperation(
                     uri="viking://resources/demo/a.md",
@@ -123,7 +123,8 @@ async def test_batch_write_forwards_processing_mode_and_operation_metadata(monke
     )
 
     assert seen["processing_mode"] == "vectors_only"
-    assert seen["defer_processing"] is True
+    assert seen["defer_processing"] is False
+    assert seen["use_snapshot"] is True
     operation = seen["operations"][0]
     assert operation["resolve_conflicts"] is True
     assert operation["tags"] == ["team=search"]
@@ -148,12 +149,16 @@ async def test_write_forwards_processing_mode_to_service(monkeypatch):
             uri="viking://resources/demo.md",
             content="updated",
             processing_mode="vectors_only",
+            defer_processing=True,
+            use_snapshot=True,
         ),
         ctx,
     )
 
     assert response["status"] == "ok"
     assert seen["processing_mode"] == "vectors_only"
+    assert seen["defer_processing"] is True
+    assert seen["use_snapshot"] is True
 
 
 async def test_write_forwards_tags_and_tag_mode_to_service(monkeypatch):

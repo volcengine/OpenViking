@@ -852,6 +852,7 @@ export class OpenVikingClient {
       wait: options.wait,
       telemetry: options.telemetry,
       resolve_conflicts: options.resolveConflicts,
+      defer_processing: options.deferProcessing,
     });
     return this.request("POST", "/api/v1/content/write", {
       body: mergeExtra(body, options.extra),

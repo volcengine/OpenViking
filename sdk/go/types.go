@@ -300,6 +300,7 @@ type WriteOptions struct {
 	TagMode          string
 	UseSnapshot      bool
 	ResolveConflicts bool
+	DeferProcessing  bool
 	Extra            map[string]any
 }
 

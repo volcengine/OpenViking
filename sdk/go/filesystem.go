@@ -287,6 +287,9 @@ func (c *Client) Write(ctx context.Context, uri string, content string, opts *Wr
 	if opts.ResolveConflicts {
 		payload["resolve_conflicts"] = true
 	}
+	if opts.DeferProcessing {
+		payload["defer_processing"] = true
+	}
 	if opts.ACL != nil {
 		payload["acl"] = opts.ACL
 	}

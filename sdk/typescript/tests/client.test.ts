@@ -449,6 +449,8 @@ describe("OpenVikingClient", () => {
     await client.write("resources/demo.md", "updated", {
       processingMode: "vectors_only",
       wait: true,
+      deferProcessing: true,
+      useSnapshot: true,
     });
 
     const [url, init] = fetcher.mock.calls[0]!;
@@ -458,6 +460,8 @@ describe("OpenVikingClient", () => {
       content: "updated",
       processing_mode: "vectors_only",
       wait: true,
+      defer_processing: true,
+      use_snapshot: true,
     });
   });
 
@@ -563,7 +567,6 @@ describe("OpenVikingClient", () => {
       ],
       {
         processingMode: "vectors_only",
-        deferProcessing: true,
         extra: { future_flag: 0 },
       },
     );
@@ -594,13 +597,36 @@ describe("OpenVikingClient", () => {
       },
     ]);
     expect(batchWriteBody.processing_mode).toBe("vectors_only");
-    expect(batchWriteBody.defer_processing).toBe(true);
+    expect(batchWriteBody.defer_processing).toBeUndefined();
     expect(
       new URL(String(fetcher.mock.calls[1]![0])).searchParams.get("uri"),
     ).toBe("viking://resources/project/a.txt");
     expect(JSON.parse(String(fetcher.mock.calls[2]![1]?.body))).toMatchObject({
       create_parent: false,
       future_flag: false,
+    });
+  });
+
+  it("sends batch defer_processing without metadata updates", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(ok({}));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.batchWrite(
+      "resources/project",
+      [{ uri: "resources/project/a.md", content: "draft" }],
+      { deferProcessing: true, useSnapshot: true },
+    );
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
+      root_uri: "viking://resources/project",
+      operations: [
+        { uri: "viking://resources/project/a.md", content: "draft" },
+      ],
+      defer_processing: true,
+      use_snapshot: true,
     });
   });
 
