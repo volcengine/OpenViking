@@ -1,5 +1,147 @@
 # @openviking/react
 
+## 0.1.13
+
+### Patch Changes
+
+<!-- release-note:en-US -->
+
+- ae0ce7a: Add the named compile workflow and its CLI guide. FileBrowser now reports selected tree entries so hosts can add directory references to VikingBot, whose send button uses a rounded square.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- ae0ce7a: 新增按名称创建和执行编译的流程及 CLI 指引。FileBrowser 支持上报选中的目录树条目，宿主可将目录引用传给 VikingBot，发送按钮采用圆角方形。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 62d5cd5: Support switching named compilation configurations through directory-style tabs, native Git snapshot history, and Wiki edits with explicit snapshots.
+
+  Propagate pending Wiki conflicts from deeply nested files to every ancestor directory, including collapsed subtrees, and refresh cleared markers. Preserve conflict tags loaded after an older empty index, and let refreshed conflict results override historical compilation counts. Skip inaccessible directory placeholders while traversing containers with readable descendants. Respect write-permission changes in open configuration editors, compare the first version against an empty baseline, and refresh the current version after a restore conflict before allowing another confirmation.
+
+  Align compilation settings with directory and Skill pickers, full-path tooltips, frequency radio cards and time selection. Add file selection, historical comparison and file restore to Wiki history in a full-width document panel with the FileViewer diff renderer, hide history for ordinary resource files and while editing, improve pack upload, and keep model names and dashboard tooltips readable.
+
+  Keep history loading indicators centred, show initial picker loading immediately, reuse an Arco-derived Switch, keep target paths on one line and hide view switching while editing. Fix the selected background of the history Preview / Markdown tabs.
+
+  Complete theme fallbacks on migrated workflow roots, align dark surfaces, schedule selection borders, history badges and diff legends, and apply the console theme to Switch sizes and unavailable states. Preserve the FileViewer's native diff colours. Show the empty state when a selected directory file has no historical versions, including after retrying a failed request.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 62d5cd5: 支持通过目录风格的页签切换编译配置、原生 Git 快照历史，以及显式保留 Wiki 编辑快照。
+
+  Wiki 深层文件的待处理冲突沿祖先目录逐级显示，目录折叠时保留，刷新后清除已解决的标记；旧空索引不覆盖后来加载到的冲突标签，刷新结果优先于历史编译统计；跳过无权限目录占位，保留可展开目录的可读后代遍历。已打开的配置编辑器响应写权限变化，首个版本默认与空内容比较，版本回滚冲突后刷新当前版本，供用户再次确认。
+
+  编译配置使用目录和 Skill 选择器，补充完整路径提示、频次单选卡片与时间选择。Wiki 历史使用全宽文档面板和 FileViewer 差异视图，支持文件选择、历史版本对比和文件回滚；普通资源文件及编辑状态隐藏历史入口，优化 pack 上传界面、模型名称换行与看板提示位置。
+
+  历史加载状态保留内容高度并显示居中图标，目录和 Skill 选择器打开即进入加载态；查看变更复用迁移自 Arco 的共享 Switch，目标路径保持单行，编辑时隐藏视图切换。修复历史正文「预览 / Markdown」页签的选中背景色。
+
+  在迁入流程的根节点补齐主题兜底，对齐暗色背景、更新频次选中边框、历史标记与差异图例，并让 Switch 的尺寸和不可用状态采用控制台主题；差异正文保留 FileViewer 原生配色；目录内文件暂无历史版本时展示空态，加载失败后重试同样正确展示。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- a08cec9: Fix Console showing a command-unavailable warning during execution. CommandConsole now accepts `busy` to lock input and submission while pending result cards show progress; `disabled` retains its unavailable message.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- a08cec9: 修复 Console 执行命令时误显示不可用提示的问题。CommandConsole 新增 `busy`，在等待结果时锁定输入与提交，由执行中的结果卡片展示进度；`disabled` 保留不可用提示。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 63da276: Align the typography and colors of CommandConsole and VikingBot with the console design. Simplify completed resource import cards and add a result action to CLI completion notifications.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 63da276: 对齐 CommandConsole 和 VikingBot 与控制台的字体及配色，精简资源导入完成卡片，并在 CLI 完成通知中添加查看结果入口。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 63da276: Updating a mounted `FileBrowser`'s controlled `uri` opens the preview and reveals the resource in the directory tree. Hosts that need a preview-only update can call `openResource(uri, { reveal: false })`. Use `defaultExpandedUri` to set the initial tree expansion.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 63da276: 更新已挂载的 `FileBrowser` 的受控 `uri` 时，区块会打开预览并在目录树中定位资源。需要仅更新预览的宿主可调用 `openResource(uri, { reveal: false })`。用 `defaultExpandedUri` 设置初始展开位置。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- a4c0257: Allow FileBrowser hosts to override individual experience dashboard requests while retaining the built-in UI, pagination, retries, and cancellation.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- a4c0257: FileBrowser 支持由宿主替换经验看板的单项请求，并沿用内置界面、分页、重试和请求取消。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 0a7197c: After saving an editable ordinary file in FileBrowser, choose whether to keep a snapshot, then enter a description and save it. Snapshot failures retain the description for retry and do not undo the file save. Wiki compile files retain their automatic version history.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 0a7197c: FileBrowser 保存普通可编辑文件后，可选择是否保留快照，再填写描述并保存。快照失败会保留描述以供重试，不影响已保存的文件；Wiki 编译文件沿用自动版本历史。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 41108b0: Hide the Preview / Source switch during editing. FileBrowser keeps version history available and copies the current editor draft.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 41108b0: 编辑态隐藏「预览 / 源码」切换。文件浏览区块保留版本历史，复制正文时取当前编辑草稿。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 62d5cd5: Use the same theme background for the file tree panel, FileBrowser directory pane and sticky trailing actions. Keep normal, hover and selected surfaces consistent in light and dark themes without host-specific overrides, while preserving text masking during horizontal scrolling.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 62d5cd5: 统一文件树面板、FileBrowser 目录面板与行尾吸附操作区的主题背景，浅色、深色、悬停和选中态保持一致，无需宿主额外适配，并保留横向滚动时对文字的遮挡。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 41108b0: Replace the file path in Wiki conflict rows with a compact pencil button. File Browser opens the editor directly for pending conflicts when editing is allowed.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 41108b0: Wiki 冲突列表将文件路径替换为铅笔图标按钮。有编辑权限时，可从文件浏览器的待确认冲突直接进入编辑。
+
+<!-- /release-note:zh-CN -->
+<!-- release-note:en-US -->
+
+- 41108b0: Use tagged data-plane search to list Wiki conflicts and mark directories with pending conflicts, even when the matching files are collapsed. Refresh conflict status after saving a Wiki file. Accept the current and legacy Compile registry response fields.
+
+<!-- /release-note:en-US -->
+
+<!-- release-note:zh-CN -->
+
+- 41108b0: 通过数据面标签检索列出 Wiki 冲突，即使冲突文件所在分支处于收起状态，也能标记待确认冲突目录。保存 Wiki 文件后更新冲突状态，同时兼容当前和旧版的编译配置响应字段。
+
+<!-- /release-note:zh-CN -->
+
 ## 0.1.12
 
 ### Patch Changes
