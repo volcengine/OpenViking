@@ -288,8 +288,10 @@ export class Store {
 
       -- One model decision per accepted inbound event: a final delivery
       -- ('delivered') or an explicit stay_silent ('silent'). Not a side effect:
-      -- no outbox or journal row, never synced to OpenViking. A decision on the
-      -- newest input of a scope covers the earlier ones there.
+      -- no outbox or journal row, never synced to OpenViking. Every input needs
+      -- its own row: a decision on a newer input settles an earlier one only
+      -- when it names it (covers), and that row's covered_by is the deciding
+      -- event's id.
       CREATE TABLE IF NOT EXISTS decisions (
         connector_instance TEXT NOT NULL,
         event_id TEXT NOT NULL,
@@ -297,11 +299,14 @@ export class Store {
         scope_key TEXT NOT NULL,
         outcome TEXT NOT NULL,
         decided_at_ms INTEGER NOT NULL,
+        covered_by TEXT,
         PRIMARY KEY (connector_instance, event_id)
       );
 
       CREATE INDEX IF NOT EXISTS decisions_scope_seq
         ON decisions(scope_key, seq);
+      CREATE INDEX IF NOT EXISTS decisions_seq
+        ON decisions(seq);
 
       CREATE TABLE IF NOT EXISTS activities (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -386,6 +391,8 @@ export class Store {
       UPDATE cognition_journal SET status = 'UNCERTAIN' WHERE status = 'PENDING';
       UPDATE outbox SET status = 'UNCERTAIN' WHERE status = 'PENDING';
     `);
+    const decisionColumns = new Set(this.db.prepare('PRAGMA table_info(decisions)').all().map(({ name }) => name));
+    if (!decisionColumns.has('covered_by')) this.db.exec('ALTER TABLE decisions ADD COLUMN covered_by TEXT');
     migrateMeetingStore(this.db);
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS activities_source
@@ -1660,18 +1667,19 @@ export class Store {
 
   // Records the model's decision on one accepted event (a connector_events
   // row). A delivery always wins and replaces an earlier silence; silence never
-  // replaces anything. `created` is false when the row was already there with
-  // this outcome (or silence met a delivery).
-  recordDecision({ row, outcome }, now = Date.now()) {
+  // replaces anything. `coveredBy` is the event id of the decision that
+  // settled this one through covers (null for its own). `created` is false when
+  // the row was already there with this outcome (or silence met a delivery).
+  recordDecision({ row, outcome, coveredBy = null }, now = Date.now()) {
     if (!['silent', 'delivered'].includes(outcome)) throw new Error(`unknown decision outcome: ${outcome}`);
     const previous = this.decisionFor(row.connector_instance, row.event_id);
     const result = this.db.prepare(`
-      INSERT INTO decisions(connector_instance, event_id, seq, scope_key, outcome, decided_at_ms)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO decisions(connector_instance, event_id, seq, scope_key, outcome, decided_at_ms, covered_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(connector_instance, event_id) DO UPDATE SET
-        outcome = excluded.outcome, decided_at_ms = excluded.decided_at_ms
+        outcome = excluded.outcome, decided_at_ms = excluded.decided_at_ms, covered_by = excluded.covered_by
       WHERE excluded.outcome = 'delivered' AND decisions.outcome = 'silent'
-    `).run(row.connector_instance, row.event_id, number(row.seq), row.scope_key, outcome, now);
+    `).run(row.connector_instance, row.event_id, number(row.seq), row.scope_key, outcome, now, coveredBy);
     return {
       created: number(result.changes) > 0,
       previous: previous?.outcome ?? null,
@@ -1684,12 +1692,11 @@ export class Store {
     return row ? { ...row, seq: number(row.seq), decided_at_ms: number(row.decided_at_ms) } : null;
   }
 
-  // The outcome of a decision in the scope that covers seq ('delivered' over
-  // 'silent'), or null: one on that input or on a newer one there, as
-  // attribution lets the newest input answer earlier ones.
-  coveringDecision(scopeKey, seq) {
-    return this.db.prepare(`SELECT outcome FROM decisions WHERE scope_key = ? AND seq >= ?
-      ORDER BY outcome = 'delivered' DESC LIMIT 1`).get(scopeKey, seq)?.outcome ?? null;
+  // The outcome of the decision recorded for this one input ('delivered' or
+  // 'silent'), or null. A decision on a newer input does not count unless it
+  // covered this one.
+  decisionOutcome(seq) {
+    return this.db.prepare('SELECT outcome FROM decisions WHERE seq = ?').get(seq)?.outcome ?? null;
   }
 
   // Which connector a message or chat id belongs to, as far as this daemon has

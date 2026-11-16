@@ -39,6 +39,16 @@ const DECISION = {
   type: 'string', pattern: REF, maxLength: REF_MAX_LENGTH,
   description: 'The input this action decides on: event= (never msg=) of the newest daemon-authenticated input you have seen in that chat/thread, or about that subject for a non-chat event. Copy the value exactly. Freshness fence: the action is blocked if anything newer has arrived there.',
 };
+// On a delivery or silence decision_id is only the freshness fence; covers
+// is exactly what the action settles, decision_id alone when left out.
+const FENCE = {
+  ...DECISION,
+  description: 'Freshness fence: event= (never msg=) of the newest daemon-authenticated input you have seen in that chat/thread, or about that subject for a non-chat event, copied exactly. The action is blocked if anything newer has arrived there. It proves you saw the newest input; which inputs the action settles is covers.',
+};
+const COVERS = {
+  type: 'array', maxItems: 50, items: { type: 'string', pattern: REF, maxLength: REF_MAX_LENGTH },
+  description: 'The event= values of the inputs this action handles and settles, decision_id included only if it handles that one too. Leave it out when you handle decision_id alone. Each must be from the same chat/thread or subject as decision_id and no newer; any other, an unknown one, or an empty list refuses the whole call. An input not settled here still needs its own decision.',
+};
 const DECISION_INSTANCE = {
   type: 'string', pattern: '^[a-z][a-z0-9-]{0,63}$',
   description: 'Optional instance that received the decision input: its instance= value, or its source= value when it has none. Not the delivery target. Needed only when decision_id is reported ambiguous across instances.',
@@ -48,6 +58,7 @@ const RESPONSE_TO = {
   description: 'Optional event= of the earlier input this delivery fulfills. Defaults to decision_id. Attribution only; it must be from the same chat/thread or subject and no newer than decision_id.',
 };
 const DECISION_FIELDS = { decision_id: DECISION, decision_instance: DECISION_INSTANCE, response_to_id: RESPONSE_TO };
+const DELIVERY_FIELDS = { ...DECISION_FIELDS, decision_id: FENCE, covers: COVERS };
 const INTERIM = {
   interim: {
     type: 'boolean', default: false,
@@ -96,7 +107,7 @@ export const TOOLS = [
       source: SOURCE,
       chat_id: { type: 'string', pattern: ID, description: 'Full chat id (the chat= value). Never guess or shorten.' },
       ...CONTENT_PROPERTIES, ...MENTIONS,
-      ...DECISION_FIELDS, idempotency_key: IDEMPOTENCY,
+      ...DELIVERY_FIELDS, idempotency_key: IDEMPOTENCY,
     }, ['chat_id', 'decision_id']),
     stagedInput: INTERIM,
     annotations: WRITE,
@@ -112,7 +123,7 @@ export const TOOLS = [
         description: 'Only when the decision is a chat message in which the owner explicitly named the IM to be told on (for example lark). Omit it otherwise: the daemon picks the IM.',
       },
       ...CONTENT_PROPERTIES,
-      ...DECISION_FIELDS, idempotency_key: IDEMPOTENCY,
+      ...DELIVERY_FIELDS, idempotency_key: IDEMPOTENCY,
     }, ['decision_id']),
     annotations: WRITE,
   },
@@ -126,7 +137,7 @@ export const TOOLS = [
       message_id: { type: 'string', pattern: ID, description: 'Full message id (msg= or card=) to reply to. Never guess or shorten.' },
       ...CONTENT_PROPERTIES, ...MENTIONS,
       reply_in_thread: { type: 'boolean', default: false, description: 'Lark and Slack: reply inside the message thread. Set it on every reply to a message that has thread=.' },
-      ...DECISION_FIELDS, idempotency_key: IDEMPOTENCY,
+      ...DELIVERY_FIELDS, idempotency_key: IDEMPOTENCY,
     }, ['message_id', 'decision_id']),
     stagedInput: INTERIM,
     annotations: WRITE,
@@ -142,7 +153,7 @@ export const TOOLS = [
       message_id: { type: 'string', pattern: ID, description: 'Full message id to react to.' },
       emoji_type: { type: 'string', pattern: '^[A-Za-z][A-Za-z0-9_]{0,63}$', description: 'Exact emoji type, such as OK, THUMBSUP, DONE, THANKS, OnIt, or LGTM.' },
       temporary: { type: 'boolean', default: false, description: 'Transient OnIt working indicator, not a final response.' },
-      ...DECISION_FIELDS,
+      ...DELIVERY_FIELDS,
     }, ['message_id', 'emoji_type', 'decision_id']),
     annotations: WRITE,
   },
@@ -156,8 +167,9 @@ export const TOOLS = [
       message_id: { type: 'string', pattern: ID, description: 'Full id of the bot message to retract.' },
     }, ['message_id']),
     silenceInput: {
-      decision_id: { ...DECISION, description: 'event= (never msg=) of the input that asked for this retraction, copied exactly. Records the retraction as your decision on it, so no stay_silent or reply is needed for that input. Freshness fence: blocked if anything newer has arrived there.' },
+      decision_id: { ...DECISION, description: 'event= (never msg=) of the input that asked for this retraction, copied exactly. Records the retraction as your decision on it (or on the inputs in covers), so no stay_silent or reply is needed for that input. Freshness fence: blocked if anything newer has arrived there.' },
       decision_instance: DECISION_INSTANCE,
+      covers: COVERS,
     },
     annotations: { ...WRITE, destructiveHint: true },
   },
@@ -167,10 +179,11 @@ export const TOOLS = [
     name: 'stay_silent',
     explicitSilence: true,
     title: 'Decide not to respond',
-    description: 'Record that you read an input and deliberately deliver nothing for it: no message, reply, reaction or owner notice. Call it instead of a delivery tool whenever the policy says to stay silent, once per chat/thread (or non-chat subject), with the event= of the newest input you have seen there; that covers the earlier inputs there. It sends nothing, notifies no one, and removes your temporary OnIt in that chat/thread. Repeating it changes nothing: never call it twice for the same input.',
+    description: 'Record that you read an input and deliberately deliver nothing for it: no message, reply, reaction or owner notice. Call it instead of a delivery tool whenever the policy says to stay silent. decision_id is the newest input you have seen in that chat/thread (or non-chat subject); covers lists the inputs you stay silent on, and left out means decision_id alone. Each input needs its own decision. It sends nothing, notifies no one, and removes your temporary OnIt in that chat/thread. Repeating it changes nothing: never call it twice for the same input.',
     inputSchema: schema({
       decision_id: { type: 'string', pattern: REF, maxLength: REF_MAX_LENGTH, description: 'event= (never msg=) of the newest daemon-authenticated input you have seen in that chat/thread, or about that subject. Copy it exactly. If newer input has arrived, silence is still recorded for this one.' },
       decision_instance: DECISION_INSTANCE,
+      covers: { ...COVERS, description: 'The event= values of the inputs you stay silent on, decision_id included only if it is one of them. Leave it out to settle decision_id alone. Each must be from the same chat/thread or subject as decision_id and no newer; any other, an unknown one, or an empty list refuses the whole call.' },
       reason: { type: 'string', maxLength: 120, description: 'Optional short private reason, e.g. "chatter between others", "waiting for another bot", "newsletter". Kept only in the local Activity log; never sent.' },
     }, ['decision_id']),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },

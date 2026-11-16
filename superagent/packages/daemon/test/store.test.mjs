@@ -605,12 +605,12 @@ describe('decision ledger', () => {
     const row = store.db.prepare("SELECT * FROM connector_events WHERE event_id = 'evt-kept'").get();
     assert.equal(store.recordDecision({ row, outcome: 'silent' }, 1_000).created, true);
     assert.equal(store.recordDecision({ row, outcome: 'silent' }, 1_000).created, false);
-    assert.equal(store.coveringDecision(row.scope_key, row.seq), 'silent');
-    assert.equal(store.coveringDecision(row.scope_key, row.seq + 1), null);
+    assert.equal(store.decisionOutcome(row.seq), 'silent');
+    assert.equal(store.decisionOutcome(row.seq + 1), null);
     const upgraded = store.recordDecision({ row, outcome: 'delivered' }, 2_000);
     assert.deepEqual([upgraded.created, upgraded.previous, upgraded.row.outcome], [true, 'silent', 'delivered']);
     assert.equal(store.recordDecision({ row, outcome: 'silent' }, 3_000).created, false);
-    assert.equal(store.coveringDecision(row.scope_key, row.seq), 'delivered');
+    assert.equal(store.decisionOutcome(row.seq), 'delivered');
 
     assert.equal(store.prune(1_000, 2_500).decisions, 0);
     assert.equal(store.prune(1_000, 3_500).decisions, 1);

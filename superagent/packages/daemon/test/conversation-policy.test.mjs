@@ -68,7 +68,7 @@ describe('conversation policy assemble', () => {
       const text = assembleConversationPolicy({ connectors, soulText: role('assistant') });
       assert.match(text, /^## OneBot$/m);
       assert.match(text, /source=onebot/);
-      assert.match(text, /decide once, on the newest/);
+      assert.match(text, /the newest is `decision_id`, and `covers` lists the lines your reply or silence handles/);
       assert.match(text, /On `source=onebot`, `sender=bot` lines appear in groups only, and every one was sent from this same account/);
       assert.match(text, /`owner=1` still marks the owner's/);
       assert.match(text, /plain text: no Markdown/);
@@ -379,8 +379,8 @@ describe('explicit silence is opt-in per instance', () => {
       assert.equal(on.split('## Explicit silence').length, 2, label);
       const section = on.slice(off.length);
       assert.match(section, /call(?:ing)? `stay_silent` once with that line's `event=` as `decision_id`/, label);
-      assert.match(section, /need one decision, on the newest `event=`/, label);
-      assert.match(section, /`undecided=1` field means you ended your previous turn without deciding on that line\. Decide on it now, once: reply, or call `stay_silent`\. It is not a request to reply\./, label);
+      assert.match(section, /answer every open question among them: the newest `event=` is `decision_id` \(the freshness fence\), and `covers` lists the lines the reply or silence handles \(left out, `decision_id` alone\); a line not covered needs its own decision/, label);
+      assert.match(section, /`undecided=1` field means you ended your previous turn without deciding on that line\. Decide on it now, once: reply, or call `stay_silent`\. If newer input has arrived there, pass the newest as `decision_id` and this line's `event=` in `covers`\. It is not a request to reply\./, label);
       assert.match(section, /take precedence over anything above that says to stay silent/, label);
       assert.match(section, /`decision_id` of `retract_message`/, label);
     }

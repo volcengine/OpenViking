@@ -124,15 +124,25 @@ describe('configuration safety', { concurrency: false }, () => {
     setEnv('OV_SUPERAGENT_EXPLICIT_SILENCE', 'true');
     assert.equal(getConfig().explicitSilence, true);
   });
-  it('offers an undecided input three times by default, with a bounded override', () => {
+  it('offers an undecided input twice by default, with a bounded override', () => {
     setEnv('OV_SUPERAGENT_DECISION_REMINDER_LIMIT', undefined);
-    assert.equal(getConfig().decisionReminderLimit, 3);
+    assert.equal(getConfig().decisionReminderLimit, 2);
     setEnv('OV_SUPERAGENT_DECISION_REMINDER_LIMIT', '5');
     assert.equal(getConfig().decisionReminderLimit, 5);
     setEnv('OV_SUPERAGENT_DECISION_REMINDER_LIMIT', '0');
     assert.equal(getConfig().decisionReminderLimit, 0);
     setEnv('OV_SUPERAGENT_DECISION_REMINDER_LIMIT', '-1');
     assert.throws(() => getConfig(), /OV_SUPERAGENT_DECISION_REMINDER_LIMIT/);
+  });
+  it('reminds about a fence-blocked input after a minute by default, with a bounded override', () => {
+    setEnv('OV_SUPERAGENT_DECISION_REMINDER_LIMIT', undefined);
+    setEnv('OV_SUPERAGENT_DECISION_REMINDER_DELAY_MS', undefined);
+    assert.equal(getConfig().decisionReminderDelayMs, 60_000);
+    setEnv('OV_SUPERAGENT_DECISION_REMINDER_DELAY_MS', '5000');
+    assert.equal(getConfig().decisionReminderDelayMs, 5_000);
+    setEnv('OV_SUPERAGENT_DECISION_REMINDER_DELAY_MS', '10');
+    assert.throws(() => getConfig(), /OV_SUPERAGENT_DECISION_REMINDER_DELAY_MS/);
+    setEnv('OV_SUPERAGENT_DECISION_REMINDER_DELAY_MS', undefined);
   });
   it('keeps staged replies off unless the instance opts in', () => {
     setEnv('OV_SUPERAGENT_STAGED_REPLIES', undefined);
