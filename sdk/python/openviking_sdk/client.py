@@ -593,8 +593,7 @@ class AsyncHTTPClient:
         extra = dict(option_values.pop("extra", {}) or {})
         payload = dict(fixed or {})
         protected_fields = set(payload) | set(protected or ())
-        official_fields = allowed - {"extra"}
-        conflicts = sorted(set(extra) & (official_fields | protected_fields))
+        conflicts = sorted(set(extra) & (set(option_values) | protected_fields))
         if conflicts:
             raise ValueError(f"extra cannot override '{conflicts[0]}'")
 

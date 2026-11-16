@@ -174,6 +174,7 @@ export interface WriteOptions extends WaitOptions {
   processingMode?: ProcessingMode;
   tags?: string[];
   tagMode?: "replace" | "append" | "clear";
+  resolveConflicts?: boolean;
   extra?: JsonObject;
 }
 /** One file write in a batch. */
@@ -182,6 +183,9 @@ export interface BatchWriteOperation {
   content?: string;
   contentBase64?: string;
   mode?: "replace" | "append" | "create" | "upsert";
+  expectedSha256?: string;
+  ifAbsent?: boolean;
+  resolveConflicts?: boolean;
   tags?: string[];
   tagMode?: "replace" | "append" | "clear";
   acl?: AclSpec;
@@ -191,6 +195,7 @@ export interface BatchWriteOptions extends WaitOptions {
   useSnapshot?: boolean;
   deferProcessing?: boolean;
   processingMode?: ProcessingMode;
+  skipConflicts?: boolean;
   extra?: JsonObject;
 }
 /** Full compilation inputs; creation accepts scheduling controls in args. */

@@ -890,7 +890,7 @@ func TestSearchContextSendsContextOptionsAndRejectsModeOverride(t *testing.T) {
 func TestWriteSendsProcessingModeAndExtra(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body := readJSONBody(t, r)
-		if body["processing_mode"] != "vectors_only" || body["future_flag"] != float64(0) || body["wait"] != true || !reflect.DeepEqual(body["tags"], []any{}) || body["tag_mode"] != "replace" {
+		if body["processing_mode"] != "vectors_only" || body["future_flag"] != float64(0) || body["wait"] != true || !reflect.DeepEqual(body["tags"], []any{}) || body["tag_mode"] != "replace" || body["use_snapshot"] != true || body["resolve_conflicts"] != true {
 			t.Fatalf("body = %#v", body)
 		}
 		writeOK(t, w, map[string]any{"uri": "viking://resources/a.md"})
@@ -898,11 +898,44 @@ func TestWriteSendsProcessingModeAndExtra(t *testing.T) {
 	defer closeServer()
 
 	if _, err := client.Write(context.Background(), "resources/a.md", "", &WriteOptions{
-		ProcessingMode: "vectors_only",
-		Tags:           []string{},
-		TagMode:        "replace",
-		Wait:           true,
-		Extra:          map[string]any{"future_flag": 0},
+		ProcessingMode:   "vectors_only",
+		Tags:             []string{},
+		TagMode:          "replace",
+		Wait:             true,
+		UseSnapshot:      true,
+		ResolveConflicts: true,
+		Extra:            map[string]any{"future_flag": 0},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBatchWriteSendsConditionalAndConflictFields(t *testing.T) {
+	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := readJSONBody(t, r)
+		if body["skip_conflicts"] != true || body["use_snapshot"] != true {
+			t.Fatalf("body = %#v", body)
+		}
+		operations := body["operations"].([]any)
+		first := operations[0].(map[string]any)
+		second := operations[1].(map[string]any)
+		if first["expected_sha256"] != strings.Repeat("a", 64) || first["resolve_conflicts"] != true {
+			t.Fatalf("first operation = %#v", first)
+		}
+		if second["if_absent"] != true {
+			t.Fatalf("second operation = %#v", second)
+		}
+		writeOK(t, w, map[string]any{"updated": 1})
+	}))
+	defer closeServer()
+
+	operations := []BatchWriteOperation{
+		{URI: "resources/project/a.md", Content: String("resolved"), ExpectedSHA256: String(strings.Repeat("a", 64)), ResolveConflicts: true},
+		{URI: "resources/project/b.md", Content: String("created"), IfAbsent: true},
+	}
+	if _, err := client.BatchWrite(context.Background(), "resources/project", operations, &BatchWriteOptions{
+		SkipConflicts: true,
+		UseSnapshot:   true,
 	}); err != nil {
 		t.Fatal(err)
 	}

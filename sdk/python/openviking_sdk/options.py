@@ -100,6 +100,23 @@ class WriteOptions(_ExtraOptions, total=False):
     processing_mode: ProcessingMode
     tags: List[str]
     tag_mode: Literal["replace", "append", "clear"]
+    resolve_conflicts: bool
+
+
+class _BatchWriteOperationOptional(TypedDict, total=False):
+    content: str
+    content_base64: str
+    mode: Literal["replace", "append", "create", "upsert"]
+    expected_sha256: str
+    if_absent: bool
+    resolve_conflicts: bool
+    tags: List[str]
+    tag_mode: Literal["replace", "append", "clear"]
+    acl: Dict[str, Any]
+
+
+class BatchWriteOperation(_BatchWriteOperationOptional):
+    uri: str
 
 
 class BatchWriteOptions(_ExtraOptions, total=False):

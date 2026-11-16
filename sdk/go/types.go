@@ -293,24 +293,28 @@ type WriteOptions struct {
 	Mode string
 	Wait bool
 	// Deprecated: Timeout is accepted for compatibility and ignored.
-	Timeout        *float64
-	Telemetry      any
-	ProcessingMode string
-	Tags           []string
-	TagMode        string
-	UseSnapshot    bool
-	Extra          map[string]any
+	Timeout          *float64
+	Telemetry        any
+	ProcessingMode   string
+	Tags             []string
+	TagMode          string
+	UseSnapshot      bool
+	ResolveConflicts bool
+	Extra            map[string]any
 }
 
 // BatchWriteOperation is one file write in a batch.
 type BatchWriteOperation struct {
-	URI           string   `json:"uri"`
-	Content       *string  `json:"content,omitempty"`
-	ContentBase64 *string  `json:"content_base64,omitempty"`
-	Mode          string   `json:"mode,omitempty"`
-	Tags          []string `json:"tags,omitempty"`
-	TagMode       string   `json:"tag_mode,omitempty"`
-	ACL           *ACLSpec `json:"acl,omitempty"`
+	URI              string   `json:"uri"`
+	Content          *string  `json:"content,omitempty"`
+	ContentBase64    *string  `json:"content_base64,omitempty"`
+	Mode             string   `json:"mode,omitempty"`
+	ExpectedSHA256   *string  `json:"expected_sha256,omitempty"`
+	IfAbsent         bool     `json:"if_absent,omitempty"`
+	ResolveConflicts bool     `json:"resolve_conflicts,omitempty"`
+	Tags             []string `json:"tags,omitempty"`
+	TagMode          string   `json:"tag_mode,omitempty"`
+	ACL              *ACLSpec `json:"acl,omitempty"`
 }
 
 // BatchWriteOptions controls BatchWrite.
@@ -322,6 +326,7 @@ type BatchWriteOptions struct {
 	Timeout        *float64
 	Telemetry      any
 	ProcessingMode string
+	SkipConflicts  bool
 	Extra          map[string]any
 }
 

@@ -604,6 +604,74 @@ describe("OpenVikingClient", () => {
     });
   });
 
+  it("serializes write conflict options and batch conditional fields", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => ok({}));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+
+    await client.write("resources/project/a.md", "resolved", {
+      useSnapshot: true,
+      resolveConflicts: true,
+    });
+    await client.batchWrite(
+      "resources/project",
+      [
+        {
+          uri: "resources/project/a.md",
+          content: "resolved",
+          expectedSha256: "a".repeat(64),
+          resolveConflicts: true,
+        },
+        {
+          uri: "resources/project/b.md",
+          content: "created",
+          ifAbsent: true,
+        },
+      ],
+      { skipConflicts: true, useSnapshot: true },
+    );
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toMatchObject({
+      use_snapshot: true,
+      resolve_conflicts: true,
+    });
+    const batchBody = JSON.parse(String(fetcher.mock.calls[1]![1]?.body));
+    expect(batchBody).toMatchObject({
+      skip_conflicts: true,
+      use_snapshot: true,
+    });
+    expect(batchBody.operations).toEqual([
+      {
+        uri: "viking://resources/project/a.md",
+        content: "resolved",
+        expected_sha256: "a".repeat(64),
+        resolve_conflicts: true,
+      },
+      {
+        uri: "viking://resources/project/b.md",
+        content: "created",
+        if_absent: true,
+      },
+    ]);
+
+    await client.write("resources/project/a.md", "resolved", {
+      extra: { resolve_conflicts: true },
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[2]![1]?.body))).toMatchObject({
+      resolve_conflicts: true,
+    });
+    expect(() =>
+      client.write("resources/project/a.md", "resolved", {
+        resolveConflicts: false,
+        extra: { resolve_conflicts: true },
+      }),
+    ).toThrow("extra cannot override resolve_conflicts");
+  });
+
   it("maps response envelopes to typed errors", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(
