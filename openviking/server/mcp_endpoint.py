@@ -609,8 +609,6 @@ def _resolve_mcp_search_filter(
 
 def _format_tags(tags: Optional[List[str]]) -> str:
     normalized = normalize_search_tags(tags, discard_invalid=True)
-    if not normalized:
-        return ""
     return f" tags={json.dumps(normalized, ensure_ascii=False)}"
 
 
@@ -624,11 +622,10 @@ async def find(
     level: Optional[List[int]] = None,
     context_type: Optional[Union[str, List[str]]] = None,
     tags: Optional[List[str]] = None,
-    include_tags: bool = False,
     read_content: bool = False,
     events_time_decay_protection: Optional[str] = None,
 ) -> str:
-    """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, and score. tags requires every supplied k=v tag; include_tags adds matched tags to each result. context_type="skill" returns one hit per skill package, pointing at its SKILL.md, and without target_uri searches both the user's own and the account-shared skills. read_content only expands stored content; use read explicitly to execute a Live Context node."""
+    """Fast semantic retrieval without session context. Returns ranked memories, resources, and skills with URI, abstract, tags, and score. tags requires every supplied k=v tag. context_type="skill" returns one hit per skill package, pointing at its SKILL.md, and without target_uri searches both the user's own and the account-shared skills. read_content only expands stored content; use read explicitly to execute a Live Context node."""
     try:
         validate_event_time_decay_request(events_time_decay_protection)
     except ValueError as exc:
@@ -673,7 +670,6 @@ async def find(
         service=service,
         ctx=ctx,
         read_content=read_content,
-        include_tags=include_tags,
     )
 
 
@@ -697,7 +693,6 @@ async def search(
     level: Optional[List[int]] = None,
     context_type: Optional[Union[str, List[str]]] = None,
     tags: Optional[List[str]] = None,
-    include_tags: bool = False,
     mode: Literal["list", "context"] = "list",
     query_expansion: Literal["off", "auto"] = "auto",
     max_tokens: Annotated[int, Field(ge=64, le=32000)] = DEFAULT_MAX_TOKENS,
@@ -721,8 +716,8 @@ async def search(
     abstract, and score. ``mode="context"`` returns an injection-ready,
     token-budgeted context block and supports category quotas, purpose presets,
     detail tiers, cross-turn deduplication, peer scoping, and optional rewriting.
-    ``tags`` requires every supplied k=v tag in both modes; ``include_tags`` adds
-    matched tags to list results and is not supported in context mode.
+    ``tags`` requires every supplied k=v tag in both modes. List results include
+    matched tags; context mode uses tags only to filter assembled context.
     ``target_uri`` is only supported in list mode. ``read_content`` only expands
     stored content; use ``read`` explicitly to execute a Live Context node.
     """
@@ -738,8 +733,6 @@ async def search(
     if mode == "context":
         if read_content:
             raise InvalidArgumentError("read_content is only supported in mode='list'")
-        if include_tags:
-            raise InvalidArgumentError("include_tags is only supported in mode='list'")
         if target_uri:
             raise InvalidArgumentError("target_uri is not supported in mode='context'")
         if detail != "auto" and detail_by_category:
@@ -845,7 +838,6 @@ async def search(
         service=service,
         ctx=ctx,
         read_content=read_content,
-        include_tags=include_tags,
     )
 
 
@@ -928,7 +920,6 @@ async def _format_search_result(
     service,
     ctx,
     read_content: bool = False,
-    include_tags: bool = False,
 ) -> str:
     items: List[Dict[str, Any]] = []
     seen: dict[str, int] = {}
@@ -982,7 +973,7 @@ async def _format_search_result(
     for item in items:
         abstract = (item["abstract"] or "(no abstract)").strip()
         uri = item["uri"]
-        tag_suffix = _format_tags(item["tags"]) if include_tags else ""
+        tag_suffix = _format_tags(item["tags"])
         line = f"- [{item['type']} {item['score'] * 100:.0f}%] {uri}{tag_suffix}\n    {abstract}"
         origin_score = item["origin_score"]
         time_score = item["time_score"]
@@ -2464,7 +2455,8 @@ async def grep(
     lines = [f"Found {total} match(es) across {len(patterns)} pattern(s):"]
     for m_uri, hits in merged.items():
         hits.sort(key=lambda x: int(x[0]) if str(x[0]).isdigit() else 0)
-        lines.append(f"\n{m_uri}" + _format_tags(tags_by_uri.get(m_uri)))
+        tag_suffix = _format_tags(tags_by_uri.get(m_uri)) if include_tags else ""
+        lines.append(f"\n{m_uri}{tag_suffix}")
         for line_no, content, p in hits:
             lines.append(f"  L{line_no} [{p}]: {content}")
     if failures:

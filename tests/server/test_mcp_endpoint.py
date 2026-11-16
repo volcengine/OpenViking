@@ -430,7 +430,7 @@ async def test_search_tools_expose_only_context_type_parameter():
         properties = tools[tool_name].inputSchema["properties"]
         assert "context_type" in properties
         assert properties["tags"]["type"] == "array"
-        assert properties["include_tags"]["default"] is False
+        assert "include_tags" not in properties
         assert "filter" not in properties
 
 
@@ -441,6 +441,9 @@ async def test_retrieval_tools_expose_tag_parameters_with_compatible_defaults():
         properties = tools[tool_name].inputSchema["properties"]
         assert properties["tags"]["type"] == "array"
         assert "tags" not in tools[tool_name].inputSchema.get("required", [])
+
+    for tool_name in ("list", "tree", "grep"):
+        properties = tools[tool_name].inputSchema["properties"]
         assert properties["include_tags"]["type"] == "boolean"
         assert properties["include_tags"]["default"] is False
 
@@ -581,7 +584,6 @@ async def test_find_tool_combines_context_type_and_tag_filters(service, monkeypa
         query="guide",
         context_type="resource",
         tags=["Team=Search", "env=prod"],
-        include_tags=True,
     )
 
     assert captured["filter"] == {
@@ -722,6 +724,7 @@ async def test_find_tool_collapses_several_hits_from_one_skill_package(service, 
 
     assert "Found 1 item(s)" in result
     assert "- [skill 71%] viking://agent/skills/deploy/SKILL.md" in result
+    assert "tags=[]" in result
     assert "How the deploy skill works" in result
 
 
@@ -1079,11 +1082,6 @@ async def test_search_context_mode_rejects_target_uri():
             mode="context",
             target_uri="viking://resources",
         )
-
-
-async def test_search_context_mode_rejects_include_tags():
-    with pytest.raises(InvalidArgumentError, match="include_tags.*mode='list'"):
-        await search(query="what happened", mode="context", include_tags=True)
 
 
 async def test_search_mode_defaults_preserve_list_threshold_but_not_context_threshold(
@@ -1676,7 +1674,13 @@ async def test_list_forwards_and_renders_tags(service, monkeypatch):
                     "uri": "viking://resources/guide.md",
                     "isDir": False,
                     "tags": ["team=search"],
-                }
+                },
+                {
+                    "name": "untagged.md",
+                    "uri": "viking://resources/untagged.md",
+                    "isDir": False,
+                    "tags": [],
+                },
             ],
             has_more=False,
         )
@@ -1687,7 +1691,7 @@ async def test_list_forwards_and_renders_tags(service, monkeypatch):
 
     assert captured["tags"] == ["team=search"]
     assert captured["include_tags"] is True
-    assert result == '[file] guide.md tags=["team=search"]'
+    assert result == '[file] guide.md tags=["team=search"]\n[file] untagged.md tags=[]'
 
 
 # ---------------------------------------------------------------------------
