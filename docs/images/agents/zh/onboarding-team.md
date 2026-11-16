@@ -45,7 +45,8 @@
 
 ## 基本规则
 
-- **不打印、不复述 API key。** 安装器把 key 存进本机的 `~/.openviking/ovcli.conf`（更新时会先备份旧文件），这是连接必需的；除此之外，key 不能出现在规则、项目文件、续接消息或永久命令批准里。不要打开、打印或搜索 `ovcli.conf`。需要服务地址和身份时，运行 `ov health` 或调用 OpenViking 的 `health` 工具。有的宿主会把这段安装对话（含 key）存进他自己的空间，这是已知情况，只在步骤 6 用一句话告诉他，之后可以换一个新 key。**不要为此采取任何别的措施**：不要关闭自动保存或召回，不要建议「继续但不信任」hooks，不要因此把「先不导入」设为推荐，也不要往约定里加排除条款。这些都会让他体验不到 OpenViking 的作用。
+- **不打印、不复述 API key。** 安装器把 key 存进本机的 `~/.openviking/ovcli.conf`（更新时会先备份旧文件），这是连接必需的；除此之外，key 不能出现在规则、项目文件、续接消息或永久命令批准里。不要打开、打印或搜索 `ovcli.conf`。需要服务地址和身份时，运行 `ov health` 或调用 OpenViking 的 `health` 工具。
+- **不要削弱接入本身。** 不要关闭自动保存或召回，不要建议「继续但不信任」hooks，不要把「先不导入」设为推荐，也不要往约定里加排除条款。这些都会让他体验不到 OpenViking 的作用。
 - **只做本指南描述的改动。** 安装器会给本机检测到的每个受支持的 Agent 都装上插件，这是预期行为。你自己不要改其他 Agent 的配置，也不要改用户项目里的文件，除非用户明确要求。
 - **贡献到团队就是对团队公开。** 写进 `viking://resources/` 的内容，团队成员都能看到。只贡献他确认过的内容；贡献前检查里面没有密钥、账号和个人隐私。只写他自己的子目录 `viking://resources/<user_id>/`：其他成员的目录权限上往往也能写，但不要改、不要删。写入被拒（`PERMISSION_DENIED`）时不要换位置写，告诉他找团队管理员。
 - **用本指南给出的命令。** 不要去 GitHub 读源码另找安装或配置的方法；参数不确定时看命令的 `--help`。
@@ -54,11 +55,12 @@
 
 ## 从哪一步开始
 
+- **用户给了安装命令**：原样运行它，再从步骤 1 开始。本机已经有 `ov` 命令或 `~/.openviking/ovcli.conf` 不算已安装，插件可能还没装上；安装器可以重复运行，会先备份旧配置。不要改用宿主自己的插件命令（例如 `codex plugin add`）另行安装。命令里还留着 `<API_KEY>` 这类占位符时，先请他换成真实值，不要原样运行。
 - **安装器是你在当前对话里运行的**：从步骤 1 开始。
 - **用户说「已重启」，而这段对话里已经走过本指南前面的步骤**：用户退出后恢复了原来的会话。直接跳到[重启之后](#重启之后)，前面的选择都在对话里，不要重问。
 - **新会话里，用户发来一条「从……「重启之后」继续」的消息**：跳到[重启之后](#重启之后)，以消息里写的结果为准。
 - **用户只说了「已重启」，但这段对话里没有前面的接入过程**（例如 `codex resume --last` 回到了别的会话，或者他开了新会话）：同样跳到[重启之后](#重启之后)，在第 2 步先问清导入、团队贡献和协作约定做到了哪一步，缺的逐个补上。
-- **OpenViking 在这段对话之前就已安装**（能看到 `<openviking-context>` 块，或者有 `health` 等 OpenViking 工具）：先用 `ov health` 或 `health` 工具查连接，记下返回的用户名，告诉用户连的是哪个服务、哪个用户，问他沿用还是更换。
+- **OpenViking 在这段对话之前就已安装**（能看到 `<openviking-context>` 块，或者有 `health` 等 OpenViking 工具；只有 `ov` 命令不算），用户也没给安装命令：先用 `ov health` 或 `health` 工具查连接，记下返回的用户名，告诉用户连的是哪个服务、哪个用户，问他沿用还是更换。
   - 沿用：做步骤 2 到 5，然后直接进入[重启之后](#重启之后)。不需要重启。
   - 更换：插件正在保存这段对话，所以不要让用户把新 key 发到这里。请他在自己的终端里运行工作台给的安装命令（或下面那条），再开一个新会话把工作台的一键提示词发给 Agent。旧配置会被备份，云端数据不会被清空。
 - **还没有任何连接，用户也没给安装命令**：请用户提供服务地址和他自己的 API key（团队成员在 OpenViking 工作台的「接入 Agent」里取，管理员在 OpenViking 控制台的用户管理 → API Key 里取），然后运行下面的命令，`<值>` 取[附录 A](#附录-a各宿主说明)的 `--harness` 列，再从步骤 1 开始。`cli` 一定要带上：后面检查连接、读回内容和添加文件都要用 `ov` 命令。
@@ -384,7 +386,7 @@ ov add-resource ./docs/design.md --parent-auto-create viking://user/<user_id>/re
 
 1. 现状，用肯定的说法：连上了团队的 OpenViking、带进了哪项工作、给团队贡献了什么。协作约定写了的话，一句话说写进了哪个文件，以后想看或想改，打开它或直接让你改；没写就说没写。
 2. 一句预告：「回来后可以接着 <工作> 做，也可以先看看团队共享了什么，你来选。」没带入工作时说：「回来后直接告诉我你要做的事，或者先看看团队共享了什么。」
-3. **需要信任 hook 的宿主（Codex、TraeCode CLI 2.0），请他在退出前先信任**：Codex 桌面版点输入框下方的 hooks 图标，Codex CLI 和 TraeCode CLI 在会话里输入 `/hooks`，信任 OpenViking 的**全部** hooks。说一句好处：信任之后每次提问才会自动带上背景、对话才会自动积累，重启后也不会停在审阅提示上。重启后如果还是出现「Hooks need review」，照旧选 **Trust all and continue**。关于 key 只说一句：信任后这段安装对话（含 key）会存进他自己的空间，介意的话之后换一个新 key。
+3. **需要信任 hook 的宿主（Codex、TraeCode CLI 2.0），请他在退出前先信任**：Codex 桌面版点输入框下方的 hooks 图标，Codex CLI 和 TraeCode CLI 在会话里输入 `/hooks`，信任 OpenViking 的**全部** hooks。说一句好处：信任之后每次提问才会自动带上背景、对话才会自动积累，重启后也不会停在审阅提示上。重启后如果还是出现「Hooks need review」，照旧选 **Trust all and continue**。
 4. 当前宿主怎么重启。
 5. 安装器还装进了其他 Agent 时，加一行点出名字：各自重启后生效，具体看安装器输出里的「下一步」。
 6. 回来之后做什么：
@@ -426,8 +428,8 @@ ov add-resource ./docs/design.md --parent-auto-create viking://user/<user_id>/re
 
 | 宿主 | `--harness` | 重启或信任 | 重启后 | 在哪里能看到 | 历史导入 | 用户级规则文件 |
 |---|---|---|---|---|---|---|
-| Claude Code | `claude` | 退出后重新运行 `claude`；不要用 `/reload-plugins` | 开新会话。不要用 `claude --continue` / `--resume` 回到安装对话：插件会把整段安装对话连同里面的 key 补存到 OpenViking | 用到 OpenViking 的回答下方有来源卡片（Claude Code 2.1.286 及以上）；`/openviking-memory:ov` 查看状态 | 支持 | `~/.claude/CLAUDE.md` |
-| Codex | `codex` | **退出前先信任 hooks**：桌面版点输入框下方的 hooks 图标，CLI 在会话里输入 `/hooks`，信任 OpenViking 的全部 hooks；信任记录存在 `~/.codex/config.toml`，重启后不会再提示。然后退出：CLI 运行 `codex resume --last` 回到这段对话；桌面版退出后重新打开，回到这段对话。重启后如果仍出现「Hooks need review」，选 **Trust all and continue**。信任之后这段安装对话（含 key）会存进他自己的空间（不进团队目录），回到原会话或开新会话都一样；按[基本规则](#基本规则)只在步骤 6 说一句，不采取别的措施 | 回到原会话（就是左边那条命令），发「已重启」 | 回答后有一行 OV-Usage，例如 `OpenViking · 3 sources · 1 past event · 2 team docs · 1 read` | 支持 | `~/.codex/AGENTS.md`；同目录有 `AGENTS.override.md` 时 Codex 读的是它 |
+| Claude Code | `claude` | 退出后重新运行 `claude`；不要用 `/reload-plugins` | 开新会话。不要用 `claude --continue` / `--resume` 回到安装对话 | 用到 OpenViking 的回答下方有来源卡片（Claude Code 2.1.286 及以上）；`/openviking-memory:ov` 查看状态 | 支持 | `~/.claude/CLAUDE.md` |
+| Codex | `codex` | **退出前先信任 hooks**：桌面版点输入框下方的 hooks 图标，CLI 在会话里输入 `/hooks`，信任 OpenViking 的全部 hooks；信任记录存在 `~/.codex/config.toml`，重启后不会再提示。然后退出：CLI 运行 `codex resume --last` 回到这段对话；桌面版退出后重新打开，回到这段对话。重启后如果仍出现「Hooks need review」，选 **Trust all and continue** | 回到原会话（就是左边那条命令），发「已重启」 | 回答后有一行 OV-Usage，例如 `OpenViking · 3 sources · 1 past event · 2 team docs · 1 read` | 支持 | `~/.codex/AGENTS.md`；同目录有 `AGENTS.override.md` 时 Codex 读的是它 |
 | TraeCode CLI 2.0 | `trae-cli` | **退出前先信任 hooks**：在会话里输入 `/hooks`，信任 OpenViking 的全部 hooks。然后退出，重新运行 `trae-cli`（或 `traecli`）；仍出现「Hooks need review」时选 **Trust all and continue** | 开新会话 | 回答后有一行 OV-Usage，与 Codex 相同 | 转成 JSONL；会话在 `~/.trae/cli/sessions/`，和 Codex 相同的 rollout 格式 | 未确认 |
 | Cursor | `cursor` | 完全退出 Cursor 后重新打开 | 开新会话（**+**），不要在恢复出来的安装对话里继续 | 设置 → Hooks 里的 OpenViking hook；设置 → Tools & MCPs 里 `openviking` 显示已连接 | 转成 JSONL；会话位置未确认 | Cursor 设置里的 User Rules，请用户粘贴 |
 | TRAE / TRAE CN | `trae` / `trae-cn` | 完全退出应用后重新打开；无需批准 hook | 开新会话 | MCP 设置里 `openviking` 显示已连接 | 转成 JSONL；会话位置未确认 | 应用设置里的个人规则，请用户粘贴 |
