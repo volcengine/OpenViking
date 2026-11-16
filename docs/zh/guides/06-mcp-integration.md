@@ -133,7 +133,7 @@ claude mcp add --transport http openviking \
 | `rule_search` | 检索适用于具体任务上下文的已启用 Rule。调用方仍需依据已知事实判断每条 Rule 的 `applies_when` 与 `exception` | `task_context`, `rule_probability_threshold`（可选，默认 `0.65`） |
 | `read` | 读取一个或多个 `viking://` URI 的内容。PNG、JPEG、GIF、WebP 返回 MCP 原生图片内容；WAV、MP3、FLAC、OGG、M4A 返回原生音频内容。MCP 没有标准视频内容块，因此暂不支持视频；需要原始字节时用 `download` | `uri`（读一个文件）或 `uris`（数组，一次读多个文件）, `offset`, `limit`（文本行数） |
 | `download` | 返回一个短时有效、只能使用一次的 URL，用 `curl` 获取单个文件的原始字节（任意类型，包括 PDF、图片、压缩包、音频和视频）；不返回文件内容。不支持目录 | `uri` |
-| `list` | 列出 `viking://` 目录下的条目 | `uri`, `recursive`(可选) |
+| `list` | 列出 `viking://` 目录下的条目，附带已有的文件和目录摘要（每条最多 2000 字符） | `uri`, `recursive`, `offset`, `limit`, `sort_by`, `sort_order`(可选) |
 | `tree` | 以缩进形式展示 `viking://` URI 下的递归目录树——当需要全面了解文件树结构时使用（单层列表用 `list`，按文件名查找用 `glob`） | `uri`(可选), `level_limit`(默认 3), `node_limit`(默认 1000), `include_abstract`(可选——同时展示文件和目录的摘要；skill 目录的摘要就是它的名字和描述) |
 | `remember` | 提交消息做长期记忆提取；立即返回后台任务的 `task_id`，提取结果可能什么都不保留 | `messages`（`{role, content}` 列表） |
 | `write` | 向 `viking://` 文件写入文本（创建/覆盖/追加）。自动创建缺失的父目录；覆盖前请先用 `read` 查看当前内容；只改文件局部时优先用 `edit`。skill 包不要用它维护：调用方自己的 `skills/` 子树会被拒绝，写 `viking://agent/skills` 则生成绕过安装流程的普通文件，请改用 `add_skill` | `uri`, `content`, `mode`(可选:默认 `replace` — 覆盖或在缺失时创建,`append` — 追加或在缺失时创建,`create` — `replace` 的兼容别名), `wait`(可选,阻塞直到重建索引完成), `acl`(可选) |

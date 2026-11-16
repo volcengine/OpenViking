@@ -1577,6 +1577,82 @@ async def test_list_reports_more_entries(service):
     assert "(more entries available;" in result
 
 
+@pytest.mark.parametrize("recursive", [False, True])
+@pytest.mark.parametrize("as_object", [False, True])
+async def test_list_renders_summaries_and_preserves_page_options(
+    service, monkeypatch, recursive, as_object
+):
+    uri = "viking://resources/list_summaries"
+    entries = [
+        {"name": "guide", "uri": f"{uri}/guide", "isDir": True, "abstract": "Guide\n summary"},
+        {
+            "name": "note.md",
+            "uri": f"{uri}/guide/note.md",
+            "isDir": False,
+            "abstract": "File summary",
+        },
+        {"name": "missing.md", "uri": f"{uri}/missing.md", "isDir": False},
+        {
+            "name": "pending",
+            "uri": f"{uri}/pending",
+            "isDir": True,
+            "abstract": "[.abstract.md is not ready]",
+        },
+    ]
+    if as_object:
+        entries = [SimpleNamespace(**{**entry, "is_dir": entry["isDir"]}) for entry in entries]
+    ls = AsyncMock(return_value=ListingPage(entries=entries, has_more=True))
+    monkeypatch.setattr(service.fs, "ls", ls)
+
+    result = await list_tool(
+        uri, recursive=recursive, offset=2, limit=4, sort_by="name", sort_order="desc"
+    )
+
+    guide = f"{uri}/guide" if recursive else "guide"
+    note = f"{uri}/guide/note.md" if recursive else "note.md"
+    missing = f"{uri}/missing.md" if recursive else "missing.md"
+    pending = f"{uri}/pending" if recursive else "pending"
+    assert result == (
+        f"[dir] {guide}\n  - Guide summary\n"
+        f"[file] {note}\n  - File summary\n"
+        f"[file] {missing}\n[dir] {pending}\n"
+        "(more entries available; use offset and limit to view the next page)"
+    )
+    ls.assert_awaited_once_with(
+        uri,
+        ctx=DEFAULT_CTX,
+        recursive=recursive,
+        output="original",
+        include_abstract=True,
+        offset=2,
+        node_limit=4,
+        sort_by="name",
+        sort_order="desc",
+    )
+
+
+async def test_list_loads_directory_summary_with_default_length(service):
+    uri = "viking://resources/list_summary_limit"
+    await service.viking_fs.mkdir(f"{uri}/guide", ctx=DEFAULT_CTX, exist_ok=True)
+    await service.viking_fs.write_file(f"{uri}/guide/.abstract.md", "a" * 2100, ctx=DEFAULT_CTX)
+
+    result = await list_tool(uri)
+
+    assert result == f"[dir] guide\n  - {'a' * 1997}..."
+
+
+async def test_list_system_namespace_keeps_plain_listing(service, monkeypatch):
+    ls = AsyncMock(
+        return_value=ListingPage(entries=[{"name": "memory", "isDir": True}], has_more=False)
+    )
+    monkeypatch.setattr(service.fs, "ls", ls)
+
+    result = await list_tool("viking://system")
+
+    assert result == "[dir] memory"
+    assert ls.await_args.kwargs["include_abstract"] is False
+
+
 # ---------------------------------------------------------------------------
 # store tool
 # ---------------------------------------------------------------------------

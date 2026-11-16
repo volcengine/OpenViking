@@ -44,6 +44,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from openviking.core.namespace_policy import NamespaceProcessingMode, namespace_policy_for_uri
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.retrieval_targets import default_target_directories
 from openviking.core.retrieval_types import SearchType
@@ -1339,7 +1340,7 @@ async def ls(
         sort_order: Ascending or descending order.
 
     Returns:
-        A line-oriented directory listing.
+        A line-oriented directory listing with available file and directory summaries.
     """
     if offset < 0:
         raise InvalidArgumentError("offset must be greater than or equal to 0")
@@ -1354,6 +1355,10 @@ async def ls(
         "ctx": ctx,
         "recursive": recursive,
         "output": "original",
+        "include_abstract": (
+            namespace_policy_for_uri(resolved_uri).processing_mode
+            is NamespaceProcessingMode.INDEXED
+        ),
     }
     if offset:
         options["offset"] = offset
@@ -1376,6 +1381,11 @@ async def ls(
             lines.append(f"[{'dir' if is_dir else 'file'}] {entry_uri}")
         else:
             lines.append(f"[{'dir' if is_dir else 'file'}] {name}")
+        abstract = _listing_abstract(
+            e if isinstance(e, dict) else {"uri": entry_uri, "abstract": getattr(e, "abstract", "")}
+        )
+        if abstract:
+            lines.append(f"  - {abstract}")
     if page.has_more:
         lines.append("(more entries available; use offset and limit to view the next page)")
     return "\n".join(lines)
@@ -1387,7 +1397,7 @@ async def ls(
 _TREE_ABSTRACT_LIMIT = 2000
 
 
-def _tree_abstract(entry: Dict[str, Any]) -> str:
+def _listing_abstract(entry: Dict[str, Any]) -> str:
     abstract = (entry.get("abstract") or "").strip()
     # A directory with no generated .abstract.md (a skill's scripts/, say) comes back as a
     # placeholder that carries no summary.
@@ -1462,7 +1472,7 @@ async def tree(
             lines.append(f"{indent}{name}/")
         else:
             lines.append(f"{indent}{name} ({e.get('size', 0)} B)")
-        abstract = _tree_abstract(e)
+        abstract = _listing_abstract(e)
         if include_abstract and abstract:
             lines.append(f"{indent}  - {abstract}")
     if page is not None and page.has_more:
