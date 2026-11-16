@@ -2573,7 +2573,7 @@ install_codex() {
 # Cursor / TRAE lifecycle hooks
 # ---------------------------------------------------------------------------
 
-AGENT_HOOK_HOSTS="cursor trae zcode kimicode codebuddy qoder"
+AGENT_HOOK_HOSTS="cursor trae zcode kimicode codebuddy qoder antigravity"
 
 copy_agent_integration() { # copy_agent_integration <host> <dest-name> [destination]
   local host="$1" dest_name="$2" explicit_dest="${3:-}" source dest tmp other

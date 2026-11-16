@@ -76,6 +76,38 @@ curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harnes
 
 安装完成后，在 Kimi Code 中新开一个会话，让它按 https://docs.openviking.net/agents/zh/onboarding.md 执行。它会检查连接，并带你完成首次使用，详见[一键接入](../getting-started/07-agent-onboarding.md)。
 
+## Antigravity 记忆集成
+
+源码：[examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
+
+Antigravity 集成同时服务 Antigravity 桌面 app 与 `agy` CLI，两者从 `~/.gemini/config/plugins/` 加载同一批插件：
+
+- **SessionStart** 注入用户画像。
+- **PreInvocation** 在每轮的第一次模型调用时召回相关记忆。Antigravity 在每次模型调用前都会运行这个 Hook，工具循环中的后续调用会跳过召回。
+- **Stop** 在后台进程中采集对话 transcript 里已完成的步骤，然后 commit OpenViking 会话。
+
+Antigravity 的 `hooks.json` 格式与 Claude Code 不同：顶层 key 是 Hook 名，上下文以 `injectSteps` 系统消息返回，因此不能直接复用 Claude Code 的 `hooks.json`。
+
+### 安装
+
+前置条件：Node.js 18+、运行中的 OpenViking 服务、OpenViking 仓库 checkout，以及 Antigravity app 或 `agy`。安装脚本暂不支持 Antigravity，请在 checkout 根目录运行：
+
+```bash
+dest=~/.gemini/config/plugins/openviking-memory
+mkdir -p "$dest"
+cp examples/agent-hook-plugin/hosts/antigravity/plugin.json "$dest/"
+sed -e "s#__OPENVIKING_PLUGIN_ROOT__#$PWD/examples/agent-hook-plugin#g" \
+    -e "s#__OPENVIKING_CLIENT_ID__#antigravity#g" \
+    examples/agent-hook-plugin/hosts/antigravity/hooks.json > "$dest/hooks.json"
+```
+
+连接配置与其他集成一样读取 `~/.openviking/ovcli.conf`。如果希望 Agent 主动检索记忆，另外在 `~/.gemini/config/mcp_config.json` 中添加 OpenViking MCP 服务。
+
+重启 Antigravity app 或开启新的 `agy` 会话后，确认：
+
+- `~/.gemini/antigravity-cli/log/` 下的 `agy` 日志出现 `loaded 1 named hooks`；
+- 一轮对话结束后，`~/.openviking/hook-state/antigravity/<conversation-id>.json` 记录了 `lastStep`。
+
 ## AstrBot 插件
 
 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 是一个多平台 IM Bot 框架，支持 QQ、Telegram、Discord、飞书等 20+ 平台。
