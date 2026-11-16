@@ -2,12 +2,17 @@
  * Antigravity adapter (the Antigravity desktop app and the `agy` CLI share it).
  *
  * Antigravity calls PreInvocation before every model call, including each call
- * inside a tool loop, so recall runs only on a turn's first call
- * (`invocationNum` 0). Injected context goes back as a `systemMessage` step,
- * which stays in the conversation. Stop carries no message text: capture reads
- * the finished steps of `transcriptPath` after the last captured step.
+ * inside a tool loop (`invocationNum` > 0) and each reactive wakeup for a
+ * background task, subagent message, or Stop continuation (`invocationNum` 0
+ * with a higher `initialNumSteps`). Recall runs only when `invocationNum` is 0
+ * and no `MODEL` step has run since the latest `USER_INPUT` step in
+ * `transcriptPath`, keyed by that user step so a turn injects once. Injected
+ * context goes back as a `systemMessage` step, which stays in the conversation.
+ * Stop carries no message text: capture reads the finished steps of
+ * `transcriptPath` after the last captured step.
  */
 
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 
 import { addAgentMessages, commitAgentSession } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
@@ -26,6 +31,37 @@ export function cleanAntigravityText(text) {
 function userRequestText(text) {
   const raw = String(text || "");
   return cleanAntigravityText(raw.match(USER_REQUEST)?.[1] ?? raw);
+}
+
+/**
+ * Return `step_index + 1` of the unanswered `USER_INPUT` step before
+ * `initialNumSteps`, `null` when a `MODEL` step has already run since the last
+ * user step (a background-task, subagent, or Stop wakeup), or `undefined` when
+ * the transcript has no parsed steps yet.
+ */
+export function resolveAntigravityTurnStep(jsonl, initialNumSteps) {
+  const limit = Number.isInteger(initialNumSteps) && initialNumSteps > 0 ? initialNumSteps : Infinity;
+  let lastUserStep = -1;
+  let modelRanSinceUser = false;
+  let sawStep = false;
+  for (const line of String(jsonl || "").split("\n")) {
+    if (!line.trim()) continue;
+    let step;
+    try { step = JSON.parse(line); } catch { break; }
+    const index = Number(step.step_index);
+    if (!Number.isInteger(index)) continue;
+    if (index >= limit) break;
+    sawStep = true;
+    if (step.type === "USER_INPUT" && step.source === "USER_EXPLICIT") {
+      lastUserStep = index;
+      modelRanSinceUser = false;
+    } else if (lastUserStep >= 0 && step.source === "MODEL") {
+      modelRanSinceUser = true;
+    }
+  }
+  if (!sawStep) return undefined;
+  if (lastUserStep < 0 || modelRanSinceUser) return null;
+  return lastUserStep + 1;
 }
 
 /** The user requests and text replies of finished steps after `afterStep`. */
@@ -61,10 +97,24 @@ export const antigravity = {
   normalizeInput: (input) => ({
     ...input,
     session_id: input.conversationId,
-    // One id per user turn, so concurrent or repeated first calls recall once.
-    prompt_id: `${input.conversationId}:${input.initialNumSteps}`,
   }),
-  prompt: (input) => (Number(input.invocationNum || 0) === 0 ? cleanAntigravityText(input.lastUserInput) : ""),
+  prompt(input) {
+    if (Number(input.invocationNum || 0) !== 0) return "";
+    const text = cleanAntigravityText(input.lastUserInput);
+    if (!text) return "";
+    let turnStep;
+    if (input.transcriptPath) {
+      try {
+        turnStep = resolveAntigravityTurnStep(readFileSync(input.transcriptPath, "utf8"), input.initialNumSteps);
+      } catch {
+        turnStep = undefined;
+      }
+    }
+    if (turnStep === null) return "";
+    // Key by the user step rather than initialNumSteps, which advances on wakeups.
+    input.prompt_id = `${input.conversationId}:${turnStep ?? input.initialNumSteps}`;
+    return text;
+  },
   async capture(ctx, state) {
     const afterStep = Number.isInteger(state.lastStep) ? state.lastStep : -1;
     const jsonl = ctx.input.transcriptPath ? await readFile(ctx.input.transcriptPath, "utf8").catch(() => "") : "";
