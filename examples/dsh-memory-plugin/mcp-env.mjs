@@ -35,5 +35,19 @@ export function buildMcpConfig(config) {
     args: [PROXY_PATH],
     env,
     toolCallTimeoutMs: config.mcpToolCallTimeoutMs,
+    // OpenViking needs the better part of a minute to come up: the models warm
+    // up first, and only then does the listener bind. The proxy, by contrast,
+    // starts instantly and fails fast while the HTTP endpoint is unreachable,
+    // so the bridge burns its default ten attempts — about 150 s — before the
+    // server has had a chance to answer. That budget is not just too short,
+    // it is final: once spent, the bridge unregisters every tool and never
+    // schedules another attempt, and the memory surface stays dark until the
+    // host restarts. Give recovery a window wide enough to outlast a restart.
+    reconnect: {
+      enabled: true,
+      initialDelayMs: 1000,
+      maxDelayMs: 30000,
+      maxAttempts: 60,
+    },
   };
 }

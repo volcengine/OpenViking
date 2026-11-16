@@ -50,6 +50,30 @@ test("the mount config validates against the pinned bridge's own schema", () => 
   assert.equal(parsed.reconnect.enabled, true);
 });
 
+test("reconnecting survives a server restart instead of giving up first", () => {
+  const config = resolveConfig({
+    endpoint: "http://127.0.0.1:1933",
+    workspacePeer: false,
+  }, {});
+  const { reconnect } = Config(buildMcpConfig(config));
+
+  // The bridge stops for good once this budget runs out: no timer, no retry,
+  // every tool unregistered. The default ten attempts from a 500 ms start
+  // under a 30 s ceiling add up to roughly 150 s, which a cold OpenViking
+  // server can outlast — model warm-up plus binding the port. A restart would
+  // then leave the memory surface disconnected until the host is restarted
+  // too. Assert the width recovery actually needs, not just that it is on.
+  const delays = Array.from({ length: reconnect.maxAttempts }, (_, index) =>
+    Math.min(reconnect.maxDelayMs, reconnect.initialDelayMs * 2 ** index));
+  const budgetMs = delays.reduce((total, delay) => total + delay, 0);
+  assert.ok(budgetMs >= 15 * 60 * 1000, `reconnect budget ${budgetMs}ms must outlast a slow server restart`);
+  // A server that is back must not be hammered while it settles.
+  assert.ok(reconnect.maxDelayMs >= 30000);
+  // The transport is a local stdio proxy that starts instantly, so the first
+  // attempt should not be delayed.
+  assert.ok(reconnect.initialDelayMs <= 5000);
+});
+
 test("the shipped proxy entrypoint exists at the mounted path", () => {
   assert.equal(existsSync(PROXY_PATH), true);
 });
