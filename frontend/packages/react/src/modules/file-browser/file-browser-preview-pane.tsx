@@ -185,13 +185,6 @@ export function FileBrowserPreviewPane(
     JSON.stringify([props.rootUri, props.browser.currentUri]),
   );
   return (
-    <ErrorBoundary
-      message={useRenderErrors(props.locale).preview}
-      locale={props.locale}
-      resetKeys={[props.browser.currentUri]}
-    >
-      <FileBrowserPreviewPaneContent key={key} {...props} />
-    </ErrorBoundary>
     <MonitoringFlow operation={props.browser.previewMonitoring}>
       <ErrorBoundary
         monitoringRegion="preview"
@@ -199,7 +192,7 @@ export function FileBrowserPreviewPane(
         locale={props.locale}
         resetKeys={[props.browser.currentUri]}
       >
-        <FileBrowserPreviewPaneContent {...props} />
+        <FileBrowserPreviewPaneContent key={key} {...props} />
       </ErrorBoundary>
     </MonitoringFlow>
   );

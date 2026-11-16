@@ -42,7 +42,6 @@ export function useExperienceTrajectories({
   dataSource?: FileBrowserExperienceDataSource;
   refreshGeneration?: number;
 }) {
-  const client = useOvClient();
   const client = useOvClient('local');
   const loadPage = dataSource?.trajectories;
   const inheritedSignal = useOvSignal();
@@ -142,7 +141,6 @@ export function useExperienceTrajectories({
               has_more: hasMore,
             }))
           : await readExperienceTrajectoryPage(
-              client!,
               monitoring?.client(client!) ?? client!,
               uri,
               days,

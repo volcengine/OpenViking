@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { notificationContent } from './helpers/feedback-dom.mjs';
 import {
   fixture,
   tree,
@@ -91,10 +92,7 @@ test('save succeeds before snapshot choice; conflict retains description and ret
     assert.equal(button('Save snapshot', workflow()).disabled, true);
     const input = await note(' Update guide ');
     await click(button('Save snapshot', workflow()));
-    assert.match(
-      workflow().querySelector('[role="alert"]').textContent,
-      /being processed/,
-    );
+    assert.match(notificationContent()?.textContent ?? '', /being processed/);
     assert.equal(input.value, ' Update guide ');
     assert.equal(body, '# Updated');
     assert.equal(fetch.countOf('/api/v1/content/write'), 1);
