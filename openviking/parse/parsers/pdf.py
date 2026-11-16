@@ -850,7 +850,7 @@ class PDFParser(BaseParser):
         def clean_cell(cell):
             if cell is None:
                 return ""
-            return str(cell).strip().replace("|", "\\|")  # Escape pipe characters
+            return "<br>".join(str(cell).strip().replace("|", "\\|").splitlines())
 
         lines = []
 
